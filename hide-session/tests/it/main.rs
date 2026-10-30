@@ -9,5 +9,6 @@ mod cursor;
 mod environment;
 mod links;
 mod opencode_2;
+mod thread;
 mod usage;
 mod user_turns;

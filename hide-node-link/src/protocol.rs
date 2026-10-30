@@ -266,11 +266,16 @@ use crate::error::HostError;
 /// to its upstream, keeping the base's own commits on a new branch
 /// (`Call::BaseSync`, [`crate::branch::BaseSyncOutcome`]). A helper on 62
 /// would refuse it, so it is refused at Hello and upgraded.
-/// 64: a device pane's hook reports its agent's turn and subagent counts to
+/// 64: the open pull requests' facts query also reads each reviewer's latest
+/// review, whom each review request named and the base branch's classic
+/// approval count, and a node reads the approvals a branch's rulesets ask
+/// for (`gh::required_approvals_arguments`; PRD pr-review-status). A helper on
+/// 63 would refuse both reads, so it is refused at Hello and upgraded.
+/// 65: a device pane's hook reports its agent's turn and subagent counts to
 /// the core through its node (`panes::HookCommand::Status`) instead of to
-/// the device's Herdr. A helper on 63 would refuse the command, so it is
+/// the device's Herdr. A helper on 64 would refuse the command, so it is
 /// refused at Hello and upgraded.
-pub const PROTOCOL_VERSION: u32 = 64;
+pub const PROTOCOL_VERSION: u32 = 65;
 
 /// What agy's index held in a checkout before Hide typed `/fork`
 /// ([`Call::AntigravityForkMark`]).

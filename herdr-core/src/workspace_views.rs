@@ -47,7 +47,7 @@ pub const MAX_WORKSPACES: usize = 256;
 pub const MAX_WIDTH: u32 = 8192;
 
 /// The tool the lane's tool column shows (PRD lane-two-columns D-03, D-07,
-/// D-14): the Project's status and its Memory, then the checkout's Explorer
+/// D-14): the Project's status, its Memory and its missions, then the checkout's Explorer
 /// (the file tree) and History, in the rail's order. Memory is a tool of its
 /// own, no longer a tab of the Project tool (operator decision 2026-10-23,
 /// replacing D-20). The documents are no tool: they are the viewing column's
@@ -59,6 +59,8 @@ pub enum Tool {
     Project,
     /// The Project's Memory.
     Memory,
+    /// The Project's missions (PRD mission-tool D-01).
+    Mission,
     /// The file tree.
     Explorer,
     /// History, the checkout's changes.
@@ -70,6 +72,7 @@ impl Tool {
         match value {
             "project" => Some(Self::Project),
             "memory" => Some(Self::Memory),
+            "mission" => Some(Self::Mission),
             "explorer" => Some(Self::Explorer),
             "changes" => Some(Self::Changes),
             _ => None,

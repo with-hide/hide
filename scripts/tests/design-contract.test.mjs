@@ -11,7 +11,7 @@ test('the public staged gate carries checker imports and logo registries without
   const scripts = path.join(root, 'scripts');
   fs.mkdirSync(scripts);
   fs.copyFileSync(new URL('../check-design-contract.mjs', import.meta.url), path.join(scripts, 'check-design-contract.mjs'));
-  for (const name of ['check-token-contrast']) {
+  for (const name of ['check-token-contrast', 'check-ui-parts']) {
     fs.writeFileSync(path.join(scripts, `${name}.mjs`), 'process.exitCode = 0;\n');
   }
   fs.writeFileSync(path.join(scripts, 'check-web-tokens.mjs'), "import {value} from './token-policy.mjs';\nif (value !== 'staged') throw new Error('wrong token policy');\n");

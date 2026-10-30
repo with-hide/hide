@@ -47,6 +47,7 @@ pub mod session_activity;
 mod sightings;
 mod sqlite;
 pub mod stamp;
+pub mod thread;
 pub mod tools;
 pub mod turns;
 pub mod usage;

@@ -657,6 +657,31 @@ Grok keeps the Basic tier: its hook carries the spawn guard and subagent count, 
 It carries no new operator prompt's letters or Memory.
 A new agent follows [Adding an agent](#adding-an-agent), which starts from these facts; the web shell reads the generated `contracts/agent-adapters.json` rather than maintaining its own order, names or links.
 
+### ACP servers
+
+The [Agent Client Protocol](https://agentclientprotocol.com) is how an editor drives a coding agent over stdio and receives its conversation as typed updates (messages, tool calls with their kind, diffs and output, plans).
+Hide drives no agent over ACP: it runs each agent in a Herdr pane and reads the agent's own session files (`hide-session/`).
+An agent's ACP server is still the vendor's own answer to how its conversation is shaped, so it is the reference to read before mapping that agent's session records onto a conversation view.
+
+Find an agent's server in the ACP registry: [zed.dev/acp](https://zed.dev/acp) lists every registered agent with its page, and the machine-readable list is `https://cdn.agentclientprotocol.com/registry/v1/latest/registry.json`, which names each server's version, launch command and per-system download with its sha256.
+A server built into the CLI can be missing from the registry, so also read the CLI's own help.
+
+As measured on 2026-10-30:
+
+| Agent | ACP server |
+| --- | --- |
+| Claude Code | `@agentclientprotocol/claude-agent-acp` (registry `claude-acp`), a separate package |
+| Codex | `@agentclientprotocol/codex-acp` (registry `codex-acp`), a separate package |
+| OpenCode | built in, `opencode acp` (registry `opencode`, `opencode-v2`) |
+| Pi | `pi-acp` (registry `pi-acp`), a separate package |
+| omp | built in, `omp acp`; not in the registry |
+| Grok | built in, `grok agent stdio` (registry `grok-build`); the top-level `grok --help` does not name ACP |
+| Antigravity | `agy_acp_server.par` (registry `antigravity-acp`), a separate program Google publishes for macOS, Linux and Windows, not part of the `agy` CLI |
+
+`session/load` is not a read-only way to look at a session: on 2026-10-30 claude-agent-acp 0.97.0 appended a `cost-state` record and codex-acp 2.3.0 a `thread_settings_applied` record to the session file it loaded, and codex-acp refuses to load a sub-agent's session without its parent.
+Replay quality differs by server: pi-acp 0.0.34 replayed tool calls titled only `bash`, `read` or `edit`, with no input, location, diff or command output, all of which Pi's own session file keeps.
+An ACP server can keep sessions of its own: Antigravity's `agy_acp_server.par` 1.4.5 looks for `~/.gemini/antigravity-acp/conversations/<id>.db` and refused a conversation the `agy` CLI wrote under `~/.gemini/antigravity-cli/brain/`, and it asks for a sign-in of its own (its `authenticate` method or `auth.type` in `~/.gemini/antigravity-acp/settings.json`) rather than the CLI's.
+
 ### Adding an agent
 
 Prove it on the real agent first, before any code, and pin what you measure with a test:
@@ -677,28 +702,30 @@ Each line says what to add, where, and the check that fails while it is missing;
 
 1. Herdr target: the pinned Herdr lists one for the agent (`herdr integration status`) and says which folder it needs; the journey contract, against `contracts/herdr-api.schema.json`.
 2. Vendor facts: the page that names the skills folder and the program the installer puts down, and a published mark (`docs/BRAND.md`) or a monogram; no check, so the row's `doc_url` cites that page.
+   Note its ACP server too, from the registry or the CLI's help, in [ACP servers](#acp-servers); no check.
 3. Declaration: an `AgentId` variant and one row of `ADAPTERS` in `hide-agent-adapter/src/declarations.rs`, with a canonical id that stays stable across records, hook commands and device reports, and the aliases on the row; the compiler and `declarations_match_independent_support_samples`.
 4. Capabilities: `guidance`, `memory` and `titles` as `Support::Supported` with the typed route or reader, or `Support::Unsupported(CapabilityAbsence)` with a reason, evidence and what would close it, and prompt intake, spawn refusal, subagent counts, bell and `observation` each declared on its own; `context_and_title_support_require_matching_routes_or_documented_absences` and the bell assertions of `declarations_match_independent_support_samples`.
 5. Hook, plugin or extension: a `HookDialect` or `PluginDialect` implemented in `hide-agent-hooks`, with its Windows form, its installed-command fixtures and, for native observation, its row in `hide-agent-hooks/tests/fixtures/observation-native.json`; the compiler's exhaustive matches, `adapter_contract` and `windows_hook_command`.
 6. Session reader: a `SessionFormat` implemented in `hide-session`, and the agent's hook and session samples (or an absence reason) and feature list in `hide-agent-adapter/tests/fixtures/support.json`; `declarations_match_independent_support_samples` and the core's `all_core_gates_accept_the_same_aliases_without_enabling_other_agents`.
-7. Composer: its declaration and six captures in `hide-agent-adapter/tests/fixtures/composer/`; `tests/it/composer.rs`.
-8. Usage: every cell of its `UsageDeclaration`, then `contracts/usage-coverage.json` regenerated; `every_usage_cell_has_an_independent_declaration_and_unshipped_absences` and `usage_coverage_is_generated_from_the_complete_registry`.
-9. Launch, resume, fork and sleep: a `LaunchDialect` in its owners, with its folder-trust answer (`LaunchDialect::trusts_worktrees`, [Folder trust for the worktrees Hide makes](#folder-trust-for-the-worktrees-hide-makes)); the compiler, the start-dialect tests of `hide-agent-adapter/tests/it/contract.rs`, the core gates test, and the fake-model journey's `start_untrusted` cell.
-10. Title measurement: automatic or operator-named for its session format, in the exhaustive match of `hide-agent-adapter/src/journey.rs`; the compiler.
-11. Skills folder and kit case: a `SkillLocation`, and the agent's expected features in `hide-kit/src/tests/agent_cases.rs`; the compiler and the kit tests, which list every id.
-12. Program: the vendor's program names in `executables`, found only through `hide_platform::programs`, with a vendor install folder outside the usual ones added there; `no_product_code_outside_the_platform_looks_for_a_program_on_its_own` refuses a search of its own, and no check sees a missing folder, so install the CLI the vendor's way on each system and see Settings find it.
-13. Minimum version: `minimum` with its evidence on the row, proven on macOS, Linux and Windows; `every_supported_agent_declares_a_comparable_minimum_version_with_its_proof`, and the journey contract for its row in [The oldest version of each agent](#the-oldest-version-of-each-agent).
+7. Thread: a converter for its `SessionFormat` in `hide-session/src/thread/` that draws the session as ACP session updates, mapping each tool's kind, title and content as the agent's ACP server does ([ACP servers](#acp-servers)); `thread` on the row as `Support::Supported(ThreadReading)`, which lists each part (an image, a file change, a command's output) its records cannot show with the reason, or `Support::Unsupported` with its absence; and a sample of the same task every agent records (read an image, write a new file, edit a file, run a command with output, and keep a plan where the agent has one) under `hide-session/tests/fixtures/thread/<agent>-<version>/`, registered in `SAMPLES` of `hide-session/tests/it/thread.rs`; the compiler (the exhaustive match of `thread::reader`), `every_declaration_matches_its_converter_and_has_a_sample` and `every_agents_sample_reads_to_the_task_it_recorded`.
+8. Composer: its declaration and six captures in `hide-agent-adapter/tests/fixtures/composer/`; `tests/it/composer.rs`.
+9. Usage: every cell of its `UsageDeclaration`, then `contracts/usage-coverage.json` regenerated; `every_usage_cell_has_an_independent_declaration_and_unshipped_absences` and `usage_coverage_is_generated_from_the_complete_registry`.
+10. Launch, resume, fork and sleep: a `LaunchDialect` in its owners, with its folder-trust answer (`LaunchDialect::trusts_worktrees`, [Folder trust for the worktrees Hide makes](#folder-trust-for-the-worktrees-hide-makes)); the compiler, the start-dialect tests of `hide-agent-adapter/tests/it/contract.rs`, the core gates test, and the fake-model journey's `start_untrusted` cell.
+11. Title measurement: automatic or operator-named for its session format, in the exhaustive match of `hide-agent-adapter/src/journey.rs`; the compiler.
+12. Skills folder and kit case: a `SkillLocation`, and the agent's expected features in `hide-kit/src/tests/agent_cases.rs`; the compiler and the kit tests, which list every id.
+13. Program: the vendor's program names in `executables`, found only through `hide_platform::programs`, with a vendor install folder outside the usual ones added there; `no_product_code_outside_the_platform_looks_for_a_program_on_its_own` refuses a search of its own, and no check sees a missing folder, so install the CLI the vendor's way on each system and see Settings find it.
+14. Minimum version: `minimum` with its evidence on the row, proven on macOS, Linux and Windows; `every_supported_agent_declares_a_comparable_minimum_version_with_its_proof`, and the journey contract for its row in [The oldest version of each agent](#the-oldest-version-of-each-agent).
     Its `updates` name each documented way of installing the CLI that Hide can tell from the program's path, with the vendor's update command and the page it is from ([Updating an agent that is too old](#updating-an-agent-that-is-too-old)); the journey contract, for the declaration and for its rows in that section.
-14. Logo and links: its entry in `web/src/assets/agents/manifest.json`, and an `https` `doc_url` and `install_url`; `generated_web_contract_and_logo_document_sources_are_current`.
-15. Generated contracts: `contracts/agent-adapters.json` with the `export_web_contract` example and `contracts/agent-journey.json` with `export_journey_contract` ([contracts/README.md](../contracts/README.md#agent-adapters)); their drift checks in `hide-agent-adapter/tests/it/contract.rs`.
-16. CLI pin: its row in `contracts/agent-clis.json`, at or above the minimum, with an installer `scripts/install-agent-clis.py` runs on Linux, macOS and Windows; the journey contract, `test_the_installed_cli_set_matches_the_registered_agents`, `scripts/tests/test_agent_clis.py`, and the `agent CLIs` lane on all three systems.
-17. Canary: a latest-release source for its installer in `scripts/agent_journey/latest.py`; `test_every_pinned_cli_has_a_latest_source`.
-18. Journey routes: local isolation (`scripts/agent_journey/local.py`, `ROUTES`), the disposable CI home (`ci.py`, `AGENT_ENV`) and the fake model (`fake_lane.py`, `PROVIDERS`); the journey contract, then the fake-model lane, which fails a missing row or a declared cell that did not pass on any system ([VERIFICATION.md: The CI lanes](VERIFICATION.md#the-ci-lanes)).
-19. Operator watch: the agent's folder in `scripts/agent_journey/fake_private.py`, in `WATCH` or as its files in `CONFIGURATION`; the journey contract.
-20. Live check: `scripts/agent_live_check/recipes/<id>.json`; the recipe coverage check of `scripts/tests/test_agent_live_results.py`.
-21. Hide AI: its row in `PROVIDERS` and `DESCRIPTORS` and its arm in `build_backend` (`hide-ai/src/registry.rs`, [AI_PROVIDERS.md](AI_PROVIDERS.md)); `every_supported_agent_is_a_hide_ai_provider_in_the_adapter_order` in `adapter_contract`. Whether first run checks its sign-in (`SIGN_IN_CHECKED`, `web/src/firstRun.ts`) waits on its login files being measured; no check.
-22. Guides: its row in [Support table](#support-table) and its column in that section's feature table, its row in [The oldest version of each agent](#the-oldest-version-of-each-agent), and, in [INSTALL.md: What each system supports](INSTALL.md#what-each-system-supports), its name in the agents row and its own row under Letters to an agent while it works; the journey contract. The other sentences that name each agent (this guide's program names, Herdr folders, hook reviews, folder trust and guardrails, and INSTALL.md's other rows) have no check; read them through for the agent.
-23. Every system: a Windows or Linux gap only as a cell of INSTALL.md, What each system supports, with its reason and what would close it ([AGENTS.md](../AGENTS.md)); no check.
+15. Logo and links: its entry in `web/src/assets/agents/manifest.json`, and an `https` `doc_url` and `install_url`; `generated_web_contract_and_logo_document_sources_are_current`.
+16. Generated contracts: `contracts/agent-adapters.json` with the `export_web_contract` example and `contracts/agent-journey.json` with `export_journey_contract` ([contracts/README.md](../contracts/README.md#agent-adapters)); their drift checks in `hide-agent-adapter/tests/it/contract.rs`.
+17. CLI pin: its row in `contracts/agent-clis.json`, at or above the minimum, with an installer `scripts/install-agent-clis.py` runs on Linux, macOS and Windows; the journey contract, `test_the_installed_cli_set_matches_the_registered_agents`, `scripts/tests/test_agent_clis.py`, and the `agent CLIs` lane on all three systems.
+18. Canary: a latest-release source for its installer in `scripts/agent_journey/latest.py`; `test_every_pinned_cli_has_a_latest_source`.
+19. Journey routes: local isolation (`scripts/agent_journey/local.py`, `ROUTES`), the disposable CI home (`ci.py`, `AGENT_ENV`) and the fake model (`fake_lane.py`, `PROVIDERS`); the journey contract, then the fake-model lane, which fails a missing row or a declared cell that did not pass on any system ([VERIFICATION.md: The CI lanes](VERIFICATION.md#the-ci-lanes)).
+20. Operator watch: the agent's folder in `scripts/agent_journey/fake_private.py`, in `WATCH` or as its files in `CONFIGURATION`; the journey contract.
+21. Live check: `scripts/agent_live_check/recipes/<id>.json`; the recipe coverage check of `scripts/tests/test_agent_live_results.py`.
+22. Hide AI: its row in `PROVIDERS` and `DESCRIPTORS` and its arm in `build_backend` (`hide-ai/src/registry.rs`, [AI_PROVIDERS.md](AI_PROVIDERS.md)); `every_supported_agent_is_a_hide_ai_provider_in_the_adapter_order` in `adapter_contract`. Whether first run checks its sign-in (`SIGN_IN_CHECKED`, `web/src/firstRun.ts`) waits on its login files being measured; no check.
+23. Guides: its row in [Support table](#support-table) and its column in that section's feature table, its row in [The oldest version of each agent](#the-oldest-version-of-each-agent), and, in [INSTALL.md: What each system supports](INSTALL.md#what-each-system-supports), its name in the agents row and its own row under Letters to an agent while it works; the journey contract. The other sentences that name each agent (this guide's program names, Herdr folders, hook reviews, folder trust and guardrails, and INSTALL.md's other rows) have no check; read them through for the agent.
+24. Every system: a Windows or Linux gap only as a cell of INSTALL.md, What each system supports, with its reason and what would close it ([AGENTS.md](../AGENTS.md)); no check.
 
 What some lines take on:
 

@@ -5,6 +5,7 @@ edition = "2024"
 publish = false
 
 [dependencies]
+agent-client-protocol-schema = { version = "=1.14.0", default-features = false }
 hide-agent-adapter = { path = "../hide-agent-adapter" }
 libc = "=0.2.190"
 anyhow = "=1.0.104"

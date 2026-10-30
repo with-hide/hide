@@ -5912,6 +5912,38 @@ pub enum ReviewAsk {
     Team,
 }
 
+/// Where one reviewer of an open pull request stands (PRD pr-review-status
+/// B2, B6): their latest submitted review, or `Requested` while a review is
+/// still asked of them, which wins over an earlier review (D-13).
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PrReviewerState {
+    ChangesRequested,
+    Approved,
+    Requested,
+    /// Reviewed with comments only: not counted as an approval.
+    Commented,
+    /// The review was dismissed: drawn muted, not counted.
+    Dismissed,
+}
+
+/// One person or team a pull request's review involves.
+#[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
+pub struct PrReviewer {
+    /// A login, or a team's slug when `team`.
+    pub login: String,
+    #[serde(default)]
+    pub team: bool,
+    pub state: PrReviewerState,
+    /// When the review was submitted, or for `Requested` when it was asked;
+    /// absent when GitHub's answer did not carry it.
+    pub at_unix_ms: Option<u64>,
+}
+
+/// The most reviewers one pull request carries on the wire; the rest are
+/// counted in [`PullRequestWork::reviewers_more`] (PRD pr-review-status B17).
+pub const PR_REVIEWER_LIMIT: usize = 20;
+
 /// A pull request's place in its base branch's merge queue, as far as GitHub
 /// has said.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Deserialize, Serialize)]
@@ -5938,6 +5970,10 @@ pub enum ExtraQuery {
     ReviewRequests,
     /// The merge queue place and review request time (`gh api graphql`).
     MergeQueue,
+    /// Each reviewer's latest review and the base branch's approval count,
+    /// asked in the same query as the merge queue (PRD pr-review-status
+    /// D-12): when it fails the reviewers are unknown, never "none".
+    Reviews,
 }
 
 /// The GitHub values the PRs tool's list and the card read beyond the
@@ -5969,6 +6005,22 @@ pub struct PullRequestWork {
     /// When the latest review request on it was made, which `리뷰 · N시간째`
     /// counts from.
     pub review_requested_at_unix_ms: Option<u64>,
+    /// Each reviewer and where they stand, approvals and change requests
+    /// first; `None` while the facts query has not answered for an open pull
+    /// request, which the screen draws as nothing rather than as nobody
+    /// (PRD pr-review-status B15). Settled pull requests have none.
+    #[serde(default)]
+    pub reviewers: Option<Vec<PrReviewer>>,
+    /// Reviewers past [`PR_REVIEWER_LIMIT`] or past GitHub's page, counted
+    /// only (`+N`).
+    #[serde(default)]
+    pub reviewers_more: u32,
+    /// The approvals the base branch requires, from its rulesets or its
+    /// classic protection, whichever asks more (D-07). `None` when review is
+    /// not required or the count could not be read: no `n/m` is drawn then
+    /// (D-05).
+    #[serde(default)]
+    pub required_approvals: Option<u32>,
     /// The sessions the link record says made or worked on it, and the
     /// checkouts (paths) they ran in. Core only: the runtime attaches them
     /// from the record (`runtime/links.rs`), the grouping reads them.
@@ -7814,6 +7866,25 @@ mod wire_enum_tests {
         assert_wire(&contract, "review_decision", &decisions);
         checked.insert("review_decision");
 
+        let reviewer_states = [
+            PrReviewerState::ChangesRequested,
+            PrReviewerState::Approved,
+            PrReviewerState::Requested,
+            PrReviewerState::Commented,
+            PrReviewerState::Dismissed,
+        ];
+        for variant in reviewer_states {
+            match variant {
+                PrReviewerState::ChangesRequested
+                | PrReviewerState::Approved
+                | PrReviewerState::Requested
+                | PrReviewerState::Commented
+                | PrReviewerState::Dismissed => {}
+            }
+        }
+        assert_wire(&contract, "pr_reviewer_state", &reviewer_states);
+        checked.insert("pr_reviewer_state");
+
         let checks = [
             PullRequestChecks::Unknown,
             PullRequestChecks::None,
@@ -8783,10 +8854,14 @@ mod wire_enum_tests {
         assert_wire(&contract, "link_issue_source", &sources);
         checked.insert("link_issue_source");
 
-        let roles = [SessionRole::Created, SessionRole::Worked];
+        let roles = [
+            SessionRole::Created,
+            SessionRole::Worked,
+            SessionRole::Reviewed,
+        ];
         for variant in roles {
             match variant {
-                SessionRole::Created | SessionRole::Worked => {}
+                SessionRole::Created | SessionRole::Worked | SessionRole::Reviewed => {}
             }
         }
         assert_wire(&contract, "link_session_role", &roles);

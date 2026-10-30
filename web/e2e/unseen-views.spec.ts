@@ -42,7 +42,8 @@ test("an agent's open the operator has not looked at waits on its row until the 
     await hide(["file", "open", "login.md"]);
     await expect(mark).toHaveAttribute("data-agent-status-mark", "look");
     await expect(row).toContainText("login.md");
-    // B10: the pane's View list marks the View the operator has not looked at.
+    // B10: the pane's View list marks the View the operator has not looked at, and so does its `N views` chip.
+    await expect(page.locator(`[data-pane-views="${pane}"]`)).toHaveAttribute("data-pane-views-unseen", "true");
     await page.locator(`[data-pane-views="${pane}"]`).click();
     await expect(page.locator(`[data-pane-views-list="${pane}"] [data-pane-view-unseen]`)).toHaveCount(1);
     await page.keyboard.press("Escape");
@@ -52,6 +53,7 @@ test("an agent's open the operator has not looked at waits on its row until the 
     await row.locator(`[data-agent-open="${pane}"]`).click();
     await expect(front(page)).toHaveAttribute("aria-label", /\/login\.md/);
     await expect(mark).not.toHaveAttribute("data-agent-status-mark", "look");
+    await expect(page.locator(`[data-pane-views="${pane}"]`)).not.toHaveAttribute("data-pane-views-unseen", "true");
 
     // B5: an open from the pane the operator is in comes to the front and is seen at once.
     await expect(page.locator(`[data-pane-view="${pane}"]`)).toHaveAttribute("data-focused", "true");

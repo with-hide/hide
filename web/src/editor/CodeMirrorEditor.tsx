@@ -11,7 +11,7 @@
 // selection and scroll, remembered by display across remounts.
 //
 // Markdown Live draws a document's leading frontmatter in its own pane above
-// the body (D-11), so that document is held by two views that partition it:
+// the body as a list of properties (D-11, `frontmatterLive.ts`), so that document is held by two views that partition it:
 // the pane scrolls inside its fixed height while the body keeps the rest. The
 // split and the merge are not user events and never enter either history, so
 // undo stays inside the half it happened in.
@@ -44,19 +44,16 @@ import { languageLoader } from "./languages";
 import { markdownLive, type LiveFiles } from "./markdownLivePlugin";
 import { editorPhrases } from "./phrases";
 import { echoDecision, joinDocument, minimalChange, peerState, type PeerState } from "./sync";
-import { baseTheme, liveTheme, scaleTheme } from "./theme";
+import { frontmatterLive } from "./frontmatterLive";
+import { baseTheme, liveDocumentTheme, liveFrontColumn, liveTheme, scaleTheme } from "./theme";
 
 const languageConf = new Compartment();
 const readonlyConf = new Compartment();
 const wrapConf = new Compartment();
 const scaleConf = new Compartment();
 const liveConf = new Compartment();
+const numbersConf = new Compartment();
 const phrasesConf = new Compartment();
-
-/** How many lines of frontmatter the pane shows before it scrolls (D-11). */
-const FRONTMATTER_LINES = 8;
-/** The editor's line height, from `theme.ts`. */
-const LINE_HEIGHT = 1.5;
 
 /** A display's place in its document: its selection and the first line it shows. */
 type Place = { anchor: number; head: number; top: number };
@@ -88,6 +85,10 @@ function applyText(view: EditorView, text: string): void {
   const change = minimalChange(view.state.doc.toString(), text);
   if (change) view.dispatch({ changes: change, annotations: Transaction.addToHistory.of(false) });
 }
+
+// Live reads as a page and numbers no lines; the comment gutter stays beside the text.
+const liveExtensions = (live: boolean, files: LiveFiles): Extension => (live ? [markdownLive({ files }), liveTheme, liveDocumentTheme] : []);
+const numberExtensions = (live: boolean): Extension => (live ? [] : [lineNumbers(), highlightActiveLineGutter()]);
 
 function readonlyExtensions(readonly: boolean): Extension {
   return readonly ? [EditorState.readOnly.of(true), EditorView.editable.of(false)] : [];
@@ -251,13 +252,12 @@ export function CodeMirrorEditor({
         extensions: [
           ...shared,
           viewComments(commentHost),
-          lineNumbers(),
-          highlightActiveLineGutter(),
+          numbersConf.of(numberExtensions(live)),
           search({ top: true }),
           save,
           keymap.of([...defaultKeymap, ...historyKeymap, ...searchKeymap, indentWithTab]),
           languageConf.of([]),
-          liveConf.of(live ? [markdownLive({ files }), liveTheme] : []),
+          liveConf.of(liveExtensions(live, files)),
           listeners("body"),
         ],
       }),
@@ -274,6 +274,8 @@ export function CodeMirrorEditor({
             ...shared,
             save,
             keymap.of([...defaultKeymap, ...historyKeymap, indentWithTab]),
+            frontmatterLive,
+            liveFrontColumn,
             listeners("front"),
           ],
         }),
@@ -406,7 +408,7 @@ export function CodeMirrorEditor({
   }, [scale]);
 
   useEffect(() => {
-    bodyView.current?.dispatch({ effects: liveConf.reconfigure(live ? [markdownLive({ files }), liveTheme] : []) });
+    bodyView.current?.dispatch({ effects: [liveConf.reconfigure(liveExtensions(live, files)), numbersConf.reconfigure(numberExtensions(live))] });
   }, [live, files]);
 
   // A request is an increment: the counter survives a display switch, so only
@@ -422,12 +424,8 @@ export function CodeMirrorEditor({
   return (
     <div className="flex min-h-0 flex-1 flex-col overflow-hidden" data-editor-codemirror="true">
       {split ? (
-        <div
-          className="shrink-0 overflow-hidden border-b border-border bg-secondary"
-          data-editor-frontmatter="true"
-          style={{ height: `calc(var(--text-editor-document) * ${scale} * ${FRONTMATTER_LINES * LINE_HEIGHT})` }}
-        >
-          <div ref={frontHost} className="h-full" data-editor-frontmatter-editor="true" />
+        <div className="shrink-0 overflow-hidden border-b border-border" data-editor-frontmatter="true">
+          <div ref={frontHost} data-editor-frontmatter-editor="true" />
         </div>
       ) : null}
       <div ref={bodyHost} className="min-h-0 flex-1 overflow-hidden" data-editor-body="true" />

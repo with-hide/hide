@@ -268,7 +268,7 @@ export function PrDelegateDialog({ actions, workspace, pr, intent, onClose }: { 
   const submit = () => {
     if (working || !branch || agent.kind === "terminal") return;
     setRequest({ afterId: actions.taskIdNow(), at: Date.now(), newWorktree: checkout === null });
-    actions.delegatePullRequest(workspace, pr.number, agent.kind, modelToSend(agent), prompt, checkout === null ? "worktree_create" : "agent_start");
+    actions.delegatePullRequest(workspace, pr.number, agent.kind, modelToSend(agent), prompt, checkout === null ? "worktree_create" : "agent_start", intent);
   };
   return (
     <Dialog open onOpenChange={(next) => { if (!next) onClose(); }}>

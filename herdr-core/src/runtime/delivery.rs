@@ -256,6 +256,7 @@ impl Runtime {
         // A woken pane is first seen here; the session projection that
         // follows publishes whatever this settles.
         self.settle_dormant_registrations();
+        self.follow_resumed_conductors(device);
     }
 
     /// Continue a registration only when this host still reports its terminal

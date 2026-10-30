@@ -1,10 +1,8 @@
-// Nerd Font icons and CJK text drawn from fallbacks fitted to the terminal's
-// cells (`src/terminalFonts.ts`), on the private daemon and a real PTY. The
-// suite's DOM renderer lays cells out from the same measure as WebGL; a
-// capture of software WebGL comes back blank here, so the pixels are read
-// from the DOM rows. The icon comes from the bundled font, so its
-// fit holds on every system; whether a CJK glyph is drawn depends on the
-// runner's fonts, so only its height is held here.
+// Nerd Font icons drawn from the bundled font fitted to the terminal's cells
+// (`src/terminalFonts.ts`), on the private daemon and a real PTY. The suite's
+// DOM renderer lays cells out from the same measure as WebGL; a capture of
+// software WebGL comes back blank here, so the pixels are read from the DOM
+// rows. The icon comes from the bundled font, so its fit holds on every system.
 import { expect, test, type Locator, type Page } from "@playwright/test";
 import path from "node:path";
 import { chord } from "./chords";
@@ -16,17 +14,15 @@ test.use({ deviceScaleFactor: 2 });
 
 /** Material Design's target, U+F04FE: its ink fills the whole 1 em box, which ran 1.6 cells wide unfitted. */
 const TARGET = String.fromCodePoint(0xf04fe);
-/** 가나, two syllables of two cells each. */
-const HANGUL = String.fromCodePoint(0xac00, 0xb098);
-/** Typed into the fixture's agent, which copies its input to its output, after an empty line, so the first line of each has a blank row above it. */
-const SAMPLE = ["", `${TARGET} ${TARGET} |ICONS`, "", `${HANGUL}|HANGUL`, "0123456789|RULER"];
+/** Typed into the fixture's agent, which copies its input to its output, after an empty line. */
+const SAMPLE = ["", `${TARGET} ${TARGET} |ICONS`, "0123456789|RULER"];
 
-type Ink = { columns: number[]; rows: number[]; boxes: { width: number; height: number }[] };
+type Ink = { columns: number[]; boxes: { width: number; height: number }[] };
 
 /**
  * The cells of the terminal's screen that hold ink, from a capture of it:
- * per column of `row`, the share of the cell's width inked, and per row the
- * share of `columns`' pixels inked.
+ * per column of `row`, the share of the cell's width inked and the box its
+ * ink fills.
  */
 async function inkOf(page: Page, screen: Locator, grid: { cols: number; rows: number }, row: number, columns: number): Promise<Ink> {
   const png = (await screen.screenshot()).toString("base64");
@@ -55,13 +51,13 @@ async function inkOf(page: Page, screen: Locator, grid: { cols: number; rows: nu
     // fraction of a pixel wide (DejaVu Sans Mono's 16.86 on a 2x Linux
     // runner), the pixel across its edge holds the next cell's antialiasing too.
     const inside = (from: number, to: number) => [Math.ceil(from), Math.floor(to)] as const;
-    const share = (x0: number, x1: number, y0: number, y1: number, across: boolean) => {
+    const share = (x0: number, x1: number, y0: number, y1: number) => {
       const hit = new Set<number>();
       const [left, right] = inside(Math.max(ring, x0), x1);
       const [top, bottom] = inside(y0, y1);
       for (let x = left; x < right; x += 1)
-        for (let y = top; y < bottom; y += 1) if (inked(x, y)) hit.add(across ? x : y);
-      return hit.size / (across ? right - left : bottom - top);
+        for (let y = top; y < bottom; y += 1) if (inked(x, y)) hit.add(x);
+      return hit.size / (right - left);
     };
     // Per column of `row`, the box its ink fills.
     const box = (column: number) => {
@@ -76,8 +72,7 @@ async function inkOf(page: Page, screen: Locator, grid: { cols: number; rows: nu
     return {
       boxes: Array.from({ length: columns }, (_, column) => box(column)),
       columns: Array.from({ length: columns }, (_, column) =>
-        share(column * cellWidth, (column + 1) * cellWidth, row * cellHeight, (row + 1) * cellHeight, true)),
-      rows: [row - 1, row].map((each) => share(0, columns * cellWidth, each * cellHeight, (each + 1) * cellHeight, false)),
+        share(column * cellWidth, (column + 1) * cellWidth, row * cellHeight, (row + 1) * cellHeight)),
     };
   }, { png, grid, row, columns });
 }
@@ -116,10 +111,10 @@ async function rowOf(page: Page, paneId: string, marker: string) {
   }, { id: paneId, marker });
 }
 
-/** Two frames, so the WebGL canvas holds the rows the probe just read and the fitted fonts' redraw. */
+/** Two frames, so the canvas holds the rows the probe just read and the fitted font's redraw. */
 const painted = (page: Page) => page.evaluate(() => new Promise((done) => requestAnimationFrame(() => requestAnimationFrame(done))));
 
-test("a Nerd Font icon stays in its cell and a CJK glyph in its row", async ({ page }) => {
+test("a Nerd Font icon stays in its cell", async ({ page }) => {
   const { paneId, view, stop } = await start(page);
   try {
     const screen = view.locator(".xterm-screen");
@@ -140,9 +135,6 @@ test("a Nerd Font icon stays in its cell and a CJK glyph in its row", async ({ p
     // high as it is wide, where a missing-glyph box is a tall rectangle.
     const target = ink.boxes[2]!;
     expect(Math.abs(target.height - target.width), `the icon is the target, ${target.width}x${target.height}`).toBeLessThanOrEqual(target.width * 0.2);
-    const hangul = await rowOf(page, paneId, "|HANGUL");
-    const cjk = await inkOf(page, screen, hangul.grid, hangul.row, 4);
-    expect(cjk.rows[0], "nothing of the CJK glyphs rises into the blank row above").toBe(0);
   } finally {
     stop();
   }

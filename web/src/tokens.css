@@ -168,12 +168,13 @@
   --text-terminal-base: 14px;
   --text-editor-base: 12px;
   --text-editor-document: 15px;
-  --text-editor-heading-1: 28px;
-  --text-editor-heading-2: 24px;
-  --text-editor-heading-3: 20px;
-  --text-editor-heading-4: 17px;
+  --text-editor-heading-1: 26px;
+  --text-editor-heading-2: 20px;
+  --text-editor-heading-3: 17px;
+  --text-editor-heading-4: 15px;
   --text-editor-heading-5: 15px;
   --text-editor-heading-6: 15px;
+  --text-editor-property: 13px;
   --text-preview-slant: 12;
   --proposed-conversation-measure: 640px;
   --proposed-conversation-time-rail: 64px;
@@ -259,6 +260,8 @@
   --size-editor-document-line-spacing: 5px;
   --size-editor-memory-min: 160px;
   --size-editor-quote-rule: 2px;
+  --size-editor-measure: 680px;
+  --size-editor-property-key: 128px;
   --ratio-editor-italic-skew: 0.2;
   --size-hint-gap: 4px;
   --size-hint-window-inset: 8px;

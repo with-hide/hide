@@ -95,8 +95,8 @@ async function unfold(card: Locator, section: "files"): Promise<void> {
 test("the PR list groups by whose move it is and says why on each row", async ({ page }) => {
   await openWork(page, async ({ work }) => {
     // The rail is the documents button, then Project · Memory | Explorer · Changes; the list is the sidebar's (PRD lane-two-columns B25, B41).
-    await expect(page.locator("[data-lane-tool]")).toHaveCount(5);
-    await expect(page.locator('[data-sidebar-lens-option="prs"]')).toHaveAttribute("aria-pressed", "true");
+    await expect(page.locator("[data-lane-tool]")).toHaveCount(6);
+    await expect(page.locator('[data-sidebar-lens-option="prs"]')).toHaveAttribute("aria-checked", "true");
     // The Project icon counts its to-do: the three Needs You PRs (B35, B38).
     await expect(page.locator('[data-lane-tool="project"] [data-lane-todo-count]')).toHaveText("3");
 
@@ -195,7 +195,7 @@ test("unreadable review requests keep the list and judge a team's ask only as un
   );
 });
 
-test("an unreadable merge queue keeps the list and holds back only the pull requests a queue could hold", async ({ page }) => {
+test("an unreadable facts query keeps the list, holds back only the pull requests a queue could hold, and names the merge queue and the reviews", async ({ page }) => {
   await openWork(
     page,
     async ({ work }) => {
@@ -209,13 +209,14 @@ test("an unreadable merge queue keeps the list and holds back only the pull requ
         await expect(reasonOf(work, number)).toContainText("Unsorted · can't tell if it is in the merge queue");
       }
       await expect(page.locator('[data-lane-tool="project"] [data-lane-todo-count]')).toHaveText("1");
-      await warnsWith(page, work, "GitHub read incomplete · could not read the merge queue", "work-prs-unread-merge-queue-light");
+      // The facts query that failed carries the reviewers too (PRD pr-review-status B15).
+      await warnsWith(page, work, "GitHub read incomplete · could not read the merge queue, reviews", "work-prs-unread-merge-queue-light");
     },
     { failing: ["merge_queue"] },
   );
 });
 
-test("all three extra questions failing still lists every pull request and names all three", async ({ page }) => {
+test("all four extra questions failing still lists every pull request and names all four", async ({ page }) => {
   await openWork(
     page,
     async ({ work }) => {
@@ -225,7 +226,7 @@ test("all three extra questions failing still lists every pull request and names
       await expect(reasonOf(work, 31)).toContainText("Unsorted · can't tell if it is yours");
       // Plain Waiting says nothing of whose move it is, so the rail's Project icon carries no number.
       await expect(page.locator('[data-lane-tool="project"] [data-lane-todo-count]')).toHaveCount(0);
-      await warnsWith(page, work, "GitHub read incomplete · could not read the signed-in account, review requests, the merge queue", "work-prs-unread-all-light");
+      await warnsWith(page, work, "GitHub read incomplete · could not read the signed-in account, review requests, the merge queue, reviews", "work-prs-unread-all-light");
     },
     { failing: ["account", "review_requests", "merge_queue"], teamAsk: true },
   );
@@ -243,13 +244,15 @@ test("the card opens in the 보기 slot and Merge goes out on the head it showed
     // The rail's slot button draws the card's PR mark in its state and stands
     // apart from the tools by one rule (B46).
     const rail = await page.locator("[data-tool-rail] > [data-lane-tool], [data-tool-rail] > [data-tool-rail-divider]").evaluateAll((nodes) => nodes.map((node) => node.getAttribute("data-lane-tool") ?? "divider"));
-    expect(rail).toEqual(["detail", "documents", "divider", "project", "memory", "divider", "explorer", "changes"]);
+    expect(rail).toEqual(["detail", "documents", "divider", "project", "memory", "mission", "divider", "explorer", "changes"]);
     await expect(page.locator('[data-lane-tool="detail"] [data-detail-mark]')).toHaveAttribute("data-detail-mark", "mergeable");
     await expect(card.locator('[data-pr-card-reason="merge"]')).toBeVisible();
     // Issue linking lives in the menu and hands focus to its picker.
-    // The other actions still assign, create an issue or copy the branch.
+    // The other actions still assign, create an issue or copy the branch; with
+    // no review block on the card the agent pre-check is here too (PRD
+    // pr-review-status B12).
     await card.locator('[data-pr-card-menu="31"]').click();
-    await expect(page.getByRole("menuitem")).toHaveText(["Link issue", "Assign", "Create new issue", "Copy branch name"]);
+    await expect(page.getByRole("menuitem")).toHaveText(["Link issue", "Assign", "Pre-check with an agent", "Create new issue", "Copy branch name"]);
     await page.getByRole("menuitem", { name: "Link issue", exact: true }).click();
     await expect(page.locator('[data-pr-link-picker="31"]').getByRole("combobox")).toBeFocused();
     await page.keyboard.press("Escape");

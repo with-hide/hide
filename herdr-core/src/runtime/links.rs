@@ -16,7 +16,7 @@ use crate::links::worker::{
 };
 use crate::links::{
     IssueSource, LinkPanelSnapshot, LinkSummariesSnapshot, LinkTarget, LinkedPr, OutputFact,
-    PaneFact, ParentFact, PrFact, ProjectFacts, ProjectLinkSummary, WorktreeFact,
+    PaneFact, ParentFact, PrFact, ProjectFacts, ProjectLinkSummary, ReviewFact, WorktreeFact,
 };
 use std::collections::BTreeMap;
 use std::hash::{Hash, Hasher};
@@ -29,11 +29,44 @@ pub(super) struct LinksWork {
     panes: Arc<Vec<PaneFact>>,
     parents: Arc<Vec<ParentFact>>,
     parents_print: Option<u64>,
+    /// Pull request pre-checks whose session is not known yet (PRD
+    /// pr-review-status D-11), oldest first, at most [`PRE_CHECK_LIMIT`].
+    pub(super) pre_checks: Vec<PreCheck>,
+    /// The pre-check sessions handed to the worker, newest last, at most
+    /// [`REVIEW_FACT_LIMIT`]: handed whole, so one that arrives before the
+    /// worker took the last is not lost.
+    reviews: Arc<Vec<ReviewFact>>,
     generation: u64,
     record_generation: u64,
     search_generation: u64,
     pub(super) connection_epochs: BTreeMap<String, u64>,
 }
+
+/// A pre-check started from a pull request's card, followed from its start
+/// request to its pane and from the pane to the session the agent opened.
+#[derive(Debug)]
+pub(super) struct PreCheck {
+    pub(super) request_id: String,
+    pub(super) repo_name: String,
+    pub(super) number: u64,
+    /// The pane the start made, once the start's answer named it.
+    pub(super) pane_id: Option<String>,
+    /// Whether the session list has shown that pane: the start can name it
+    /// before Herdr's next update lists it, and only a pane that was listed
+    /// can have closed.
+    pub(super) pane_seen: bool,
+    pub(super) asked_at: std::time::Instant,
+}
+
+/// Pre-checks followed at once; a new one past this drops the oldest.
+pub(super) const PRE_CHECK_LIMIT: usize = 8;
+
+/// How long a pre-check is followed before its session is given up on: an
+/// agent opens its session within seconds of starting.
+pub(super) const PRE_CHECK_WAIT: std::time::Duration = std::time::Duration::from_secs(10 * 60);
+
+/// Pre-check sessions kept to hand the worker again.
+const REVIEW_FACT_LIMIT: usize = 32;
 
 #[derive(Clone, Debug, serde::Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -192,6 +225,17 @@ pub(crate) fn spawn_worker(
     guard.restore_pending_backlog();
     guard.restore_plans();
     Ok(worker)
+}
+
+fn pre_check_dropped(pre_check: &PreCheck, reason: &str) {
+    crate::diagnostic!(serde_json::json!({
+        "component": "links",
+        "kind": "pre_check.dropped",
+        "reason": reason,
+        "request": pre_check.request_id,
+        "pr": pre_check.number,
+        "pane_id": pre_check.pane_id,
+    }));
 }
 
 /// A session file's agent name for a Hide agent kind.
@@ -483,6 +527,133 @@ impl Runtime {
             client.panes(Arc::clone(&self.links_work.panes));
         }
         self.feed_link_parents();
+        self.feed_link_reviews();
+    }
+
+    /// Starts following a pre-check of pull request `number` of `repo_name`
+    /// asked with `request_id` (PRD pr-review-status D-11).
+    pub(super) fn follow_pre_check(&mut self, request_id: String, repo_name: String, number: u64) {
+        let pre_checks = &mut self.links_work.pre_checks;
+        // A repeated request is the same start: its following stands.
+        if pre_checks.iter().any(|held| held.request_id == request_id) {
+            return;
+        }
+        if pre_checks.len() >= PRE_CHECK_LIMIT {
+            let dropped = pre_checks.remove(0);
+            pre_check_dropped(&dropped, "capped");
+        }
+        pre_checks.push(PreCheck {
+            request_id,
+            repo_name,
+            number,
+            pane_id: None,
+            pane_seen: false,
+            asked_at: std::time::Instant::now(),
+        });
+    }
+
+    /// Moves each followed pre-check on: to its pane once the start named
+    /// it, and to a review fact for the worker once the pane's agent has a
+    /// session. A start that failed, a pane that closed first, or a wait
+    /// past [`PRE_CHECK_WAIT`] ends the following, and the log says which.
+    pub(super) fn feed_link_reviews(&mut self) {
+        if self.links_work.pre_checks.is_empty() {
+            return;
+        }
+        let mut pre_checks = std::mem::take(&mut self.links_work.pre_checks);
+        if let Some(operation) = self.snapshot.task_operation.as_ref() {
+            pre_checks.retain_mut(|pre_check| {
+                if operation.request_id.as_deref() != Some(&pre_check.request_id) {
+                    return true;
+                }
+                if operation.phase == "failed" || operation.agent_phase.as_deref() == Some("failed")
+                {
+                    pre_check_dropped(pre_check, "start_failed");
+                    return false;
+                }
+                if pre_check.pane_id.is_none() {
+                    pre_check.pane_id = operation.pane_id.clone();
+                }
+                true
+            });
+        }
+        // Until a start names its pane there is no pane or session to look
+        // up, and the session updates that call this read nothing more.
+        let (devices, sessions) = if pre_checks
+            .iter()
+            .any(|pre_check| pre_check.pane_id.is_some())
+        {
+            let wanted = pre_checks
+                .iter()
+                .filter_map(|pre_check| pre_check.pane_id.as_deref())
+                .collect::<HashSet<_>>();
+            let devices = self
+                .catalog_workspaces()
+                .flat_map(|workspace| {
+                    workspace.checkouts.iter().flat_map(|checkout| {
+                        checkout.tabs.iter().flat_map(|tab| {
+                            tab.panes
+                                .iter()
+                                .filter(|pane| wanted.contains(pane.id.as_str()))
+                                .map(|pane| (pane.id.clone(), workspace.device_id.clone()))
+                        })
+                    })
+                })
+                .collect::<HashMap<_, _>>();
+            let sessions = self
+                .link_lineage_agents()
+                .filter(|agent| wanted.contains(agent.pane_id.as_str()))
+                .filter_map(|agent| {
+                    Some((
+                        agent.pane_id.clone(),
+                        (session_agent(&agent.agent_kind)?, agent.session_id.clone()?),
+                    ))
+                })
+                .collect::<HashMap<_, _>>();
+            (devices, sessions)
+        } else {
+            Default::default()
+        };
+        let mut facts = Vec::new();
+        pre_checks.retain_mut(|pre_check| {
+            if let Some(pane_id) = &pre_check.pane_id {
+                let device = devices.get(pane_id);
+                if device.is_none() && pre_check.pane_seen {
+                    pre_check_dropped(pre_check, "pane_closed");
+                    return false;
+                }
+                pre_check.pane_seen |= device.is_some();
+                if let Some(device) = device
+                    && let Some((agent, session)) = sessions.get(pane_id)
+                {
+                    facts.push(ReviewFact {
+                        device_id: device.clone(),
+                        agent: (*agent).to_owned(),
+                        session_id: session.clone(),
+                        repo_name: pre_check.repo_name.clone(),
+                        number: pre_check.number,
+                    });
+                    return false;
+                }
+            }
+            if pre_check.asked_at.elapsed() > PRE_CHECK_WAIT {
+                pre_check_dropped(pre_check, "timed_out");
+                return false;
+            }
+            true
+        });
+        self.links_work.pre_checks = pre_checks;
+        if facts.is_empty() {
+            return;
+        }
+        let mut reviews = self.links_work.reviews.as_ref().clone();
+        reviews.extend(facts);
+        let past = reviews.len().saturating_sub(REVIEW_FACT_LIMIT);
+        reviews.drain(..past);
+        self.links_work.reviews = Arc::new(reviews);
+        if let Some(client) = self.links_work.client.as_ref() {
+            client.reviews(Arc::clone(&self.links_work.reviews));
+        }
     }
 
     /// What the project facts are built from, without building them.

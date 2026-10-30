@@ -117,6 +117,8 @@ export function toggledFold(folds: readonly string[], fold: string): string[] {
 
 /** The Hide AI tool's two tabs (PRD hide-ai-suggestions D-01). */
 export type HideAiTab = "suggestions" | "memory";
+/** The Mission tool's two pages: the missions, or the defaults a new mission starts with (PRD mission-tool B9). */
+export type MissionToolPage = "list" | "settings";
 
 export type Overlay = "none" | "shortcuts" | "find" | "add_project" | "file_palette" | "diff_palette" | "search" | "settings" | "project_settings";
 
@@ -245,6 +247,17 @@ type UiStore = {
   openSuggestion: string | null;
   /** Shows the Hide AI tool's tab, with `row` open in 제안 or none. */
   showHideAiTab: (tab: HideAiTab, row?: string | null) => void;
+  /**
+   * The Mission tool's page, its start guide unfolded above the list and its
+   * 끝남 group opened whole (PRD mission-tool B7-B9). Page-local and never
+   * sent: the defaults it edits are the core's Settings › Conductor values.
+   */
+  missionToolPage: MissionToolPage;
+  missionGuideOpen: boolean;
+  missionClosedAll: boolean;
+  setMissionToolPage: (page: MissionToolPage) => void;
+  setMissionGuideOpen: (open: boolean) => void;
+  setMissionClosedAll: (open: boolean) => void;
   /** The column in front while a narrow pinned lane stacks its two (PRD lane-two-columns B19): a call or the rail's top buttons bring the viewing column, a tool its own. Never sent. */
   stackFront: LaneSide;
   /** What the page has read of the core's lane calls (`laneCalls.ts`). */
@@ -422,6 +435,9 @@ export const useUiStore = create<UiStore>((set, get) => ({
   laneExpanded: false,
   hideAiTab: "suggestions",
   openSuggestion: null,
+  missionToolPage: "list",
+  missionGuideOpen: false,
+  missionClosedAll: false,
   stackFront: "view",
   laneCallsSeen: NO_CALLS_SEEN,
   pageWiden: null,
@@ -490,6 +506,9 @@ export const useUiStore = create<UiStore>((set, get) => ({
     for (const key of gone) delete next[key];
     set({ browserDevices: next });
   },
+  setMissionToolPage: (missionToolPage) => set({ missionToolPage }),
+  setMissionGuideOpen: (missionGuideOpen) => set({ missionGuideOpen }),
+  setMissionClosedAll: (missionClosedAll) => set({ missionClosedAll }),
   showHideAiTab: (hideAiTab, row) => set(row === undefined ? { hideAiTab } : { hideAiTab, openSuggestion: row }),
   setLaneExpanded: (laneExpanded) => {
     if (get().laneExpanded !== laneExpanded) set({ laneExpanded });

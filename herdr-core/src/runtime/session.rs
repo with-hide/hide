@@ -2192,6 +2192,8 @@ impl Runtime {
         }
         changed |= self.refresh_browser_inventory_scope();
         changed |= self.refresh_agent_scopes();
+        // A device pre-check's pane may now name its agent's session.
+        self.feed_link_reviews();
         changed
     }
     /// Reconciles the pane and checkout ids loaded from disk against the first
@@ -3169,6 +3171,8 @@ impl Runtime {
         changed |= self.follow_start(None);
         changed |= self.refresh_sessions_after_catalog_change(catalog_changed);
         changed |= self.refresh_browser_inventory_scope();
+        // A pre-check's pane may now name its agent's session.
+        self.feed_link_reviews();
         changed | self.refresh_pet()
     }
     /// Moves the navigator to the checkout that owns a pane without emitting
@@ -3971,6 +3975,8 @@ impl Runtime {
         {
             return Err("Another task operation is still running".into());
         }
+        // A pre-check takes its pane from the slot before the slot is replaced.
+        self.feed_link_reviews();
         self.next_task_operation_id = self.next_task_operation_id.wrapping_add(1).max(1);
         let id = self.next_task_operation_id;
         self.capture_task_start_focus(id, kind);
@@ -5201,6 +5207,8 @@ impl Runtime {
                     && operation.agent_phase.as_deref() != Some("starting")
             })
         {
+            // A pre-check takes its pane from the slot before it is cleared.
+            self.feed_link_reviews();
             self.snapshot.task_operation = None;
             true
         } else {
