@@ -925,7 +925,7 @@ The core derives the counts and the 할 일 only on a publish whose inputs moved
 ## Desk
 
 Desk (`◆ Desk` in the sidebar, PRD Desk 1차) is a room where the operator talks to an agent they choose, and that agent starts and follows real sessions through the `hide` CLI.
-The core decides every state below and sends it as the `desk` and `desk_live` sections; the screen words them and sends one `desk_*` event per action.
+The core decides every state below and sends it as the `desk`, `desk_live`, `desk_jobs` and `desk_mentions` sections; the screen words them and sends one `desk_*` event per action.
 Core owner: `herdr-core/src/runtime/desk.rs`, `herdr-core/src/model/desk.rs`; the process and its rules are in [ARCHITECTURE.md: Desk](ARCHITECTURE.md#desk).
 
 The selector lists Claude, Codex and Pi with each one's state:
@@ -946,7 +946,9 @@ Switching agents shows a line saying whether the conversation went with it, and 
 
 What the agent runs is decided by Hide, never by the agent's own settings:
 
-- A file read, and a `hide` command from the list Desk uses (`hide agent list`, `show`, `spawn`, `hide request`, `hide inbox`, `hide watch`, `hide ps` among them), run without asking.
+- A file read, and a `hide` command from the list Desk uses (`hide agent list`, `show`, `spawn`, `hide request`, `hide inbox`, `hide watch`, `hide ps` among them), run without asking; the Workspace, View, Memory, mission and plan commands are not on it, because the core refuses them to Desk.
+- A `hide agent spawn` that passes words after `--` to the agent's own CLI asks first, since those words can lift the new session's permissions; its card shows the whole command.
+- A spawn under a parent (`--parent`) is refused: Desk's sessions are the operator's own, and one under Desk would skip its places.
 - Claude's and Pi's shell commands, reading ones included, always ask. Codex, once Desk offers it, runs in its read-only sandbox, which refuses writes and the network, so a reading shell command inside it (`ls`, `git log`) counts as a file read and runs without asking.
 - Any other command, a file edit, and `hide agent archive` wait on an approval card that shows the command or files, the folder and the agent's reason, with `한 번 허용` and `거절`; nothing is ever allowed for good.
 - A request Hide cannot read does not run, and the conversation says `막힘` with what the agent asked.
@@ -965,7 +967,7 @@ The session is a chip: its agent and the mark its sidebar row shows now, drawn w
 A reply that names a session writes it as `@session(<pane> <name>)`, as Desk's instructions ask, and draws it as the same chip; a reply carries 16 at most, and the newest 64 lines' chips follow their rows, while an older line's chip and one whose session has no row show no mark.
 Where a task works follows Settings › Desk: per task (the default, a new `desk/<task name>` branch for work that touches code another session is changing or ends in a pull request), always a new branch, or always the checkout's current branch; Desk is told the setting with its first message and again when it changes, and a place the operator names for a task wins for that task.
 
-Each job is a card in the `desk` section's `jobs`, newest first and at most 64, keyed by its spawn's intent; `pane_id` is its thread's key.
+Each job is a card in the `desk_jobs` section, newest first and at most 64, keyed by its spawn's intent; `pane_id` is its thread's key.
 A card with a row carries the row's own mark, drawn with the sidebar's `StatusMark`, and whether its ask was read; reading the card or its thread in Desk reads the row as the sidebar does, so the two never disagree.
 Its outputs are every View its session opened that is still open (32 at most), each marked seen or not, then its pull requests, each with its PR mark's state.
 A job whose session conducts a mission carries it as a `미션 k/n` chip: the mission's status (`planning`, `running`, `merge_wait`, `done` or `cancelled`), its nodes done out of those not dropped, a tone, and whether it waits on the operator's decision; the card draws no node rows.

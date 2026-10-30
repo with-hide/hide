@@ -13,7 +13,7 @@
 mod jobs;
 mod worker;
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 use std::sync::{Arc, Mutex, Weak};
 
 use serde::Deserialize;
@@ -49,6 +49,9 @@ pub(super) struct Desk {
     turn: Option<Turn>,
     next_tag: u64,
     approvals: Vec<Approval>,
+    /// Watch asks for Desk's sessions that have no watch yet, by intent;
+    /// only sessions the ledger still holds are kept.
+    watch_asks: HashMap<String, jobs::WatchAsk>,
 }
 
 #[derive(Default)]
@@ -182,7 +185,7 @@ impl Runtime {
     pub(crate) fn install_desk_store(&mut self, store: DeskStore, stored: Stored) {
         self.desk.store = Some(store);
         self.desk.stored = stored;
-        self.compose_desk();
+        self.compose_desk_sections();
     }
 
     /// Starts Desk's worker with what `hided` provides, and looks at the
@@ -208,7 +211,7 @@ impl Runtime {
                 "error": error.to_string(),
             })),
         }
-        self.compose_desk();
+        self.compose_desk_sections();
     }
 
     pub(super) fn desk_event(&mut self, event: DeskEvent) -> bool {
@@ -237,6 +240,7 @@ impl Runtime {
         if changed {
             self.save_desk();
             self.compose_desk();
+            self.compose_desk_jobs();
         }
         changed
     }
@@ -946,9 +950,14 @@ impl Runtime {
             },
             approvals_waiting: desk.approvals.len(),
             settings: desk.stored.settings,
-            jobs: self.desk_jobs(),
-            mentions: self.desk_mentions(),
         }));
+    }
+
+    /// Every Desk section but the reply being written.
+    pub(in crate::runtime) fn compose_desk_sections(&mut self) {
+        self.compose_desk();
+        self.compose_desk_jobs();
+        self.compose_desk_mentions();
     }
 
     fn compose_desk_live(&mut self) {
@@ -969,7 +978,7 @@ impl Runtime {
     pub(in crate::runtime) fn start_test_desk(&mut self) {
         let (orders, _unread) = std::sync::mpsc::channel();
         self.desk.worker = Some(worker::Handle { orders });
-        self.compose_desk();
+        self.compose_desk_sections();
     }
 }
 

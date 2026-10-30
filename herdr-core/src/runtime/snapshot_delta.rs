@@ -41,6 +41,10 @@ pub(super) struct DeltaState {
     last_desk: Option<Arc<crate::model::DeskSnapshot>>,
     desk_live_revision: u64,
     last_desk_live: Option<Arc<crate::model::DeskLiveSnapshot>>,
+    desk_jobs_revision: u64,
+    last_desk_jobs: Option<Arc<crate::model::DeskJobsSnapshot>>,
+    desk_mentions_revision: u64,
+    last_desk_mentions: Option<Arc<crate::model::DeskMentionsSnapshot>>,
     link_summaries_revision: u64,
     last_link_summaries: Option<Arc<crate::links::LinkSummariesSnapshot>>,
     link_panel_revision: u64,
@@ -194,6 +198,28 @@ impl Runtime {
             self.delta.desk_live_revision = self.delta.revision;
             self.delta.last_desk_live = Some(Arc::clone(live));
         }
+        if let Some(jobs) = &self.snapshot.desk_jobs
+            && self
+                .delta
+                .last_desk_jobs
+                .as_ref()
+                .is_none_or(|last| !Arc::ptr_eq(last, jobs))
+        {
+            self.delta.revision += 1;
+            self.delta.desk_jobs_revision = self.delta.revision;
+            self.delta.last_desk_jobs = Some(Arc::clone(jobs));
+        }
+        if let Some(mentions) = &self.snapshot.desk_mentions
+            && self
+                .delta
+                .last_desk_mentions
+                .as_ref()
+                .is_none_or(|last| !Arc::ptr_eq(last, mentions))
+        {
+            self.delta.revision += 1;
+            self.delta.desk_mentions_revision = self.delta.revision;
+            self.delta.last_desk_mentions = Some(Arc::clone(mentions));
+        }
         if let Some(summaries) = &self.snapshot.link_summaries
             && self.delta.last_link_summaries.as_deref() != Some(summaries)
         {
@@ -306,6 +332,18 @@ impl Runtime {
                 .last_desk_live
                 .as_ref()
                 .filter(|_| self.delta.desk_live_revision > have_revision)
+                .map(Arc::clone),
+            desk_jobs: self
+                .delta
+                .last_desk_jobs
+                .as_ref()
+                .filter(|_| self.delta.desk_jobs_revision > have_revision)
+                .map(Arc::clone),
+            desk_mentions: self
+                .delta
+                .last_desk_mentions
+                .as_ref()
+                .filter(|_| self.delta.desk_mentions_revision > have_revision)
                 .map(Arc::clone),
             link_summaries: self
                 .delta

@@ -2051,7 +2051,7 @@ Desk (PRD Desk 1차) is a room where the operator talks to an agent they choose 
 Three parts hold it, each with one job.
 
 - `hide-desk` is the ACP boundary and keeps no state: the ndjson JSON-RPC connection (`rpc.rs`, a line capped at 8 MiB and 16 calls waiting), the session in each adapter's ask mode (`session.rs`), the adapters and their pins (`adapter.rs`, `contracts/desk-adapters/`), their install (`install.rs`), the process (`host.rs`) and the permission rule (`permission.rs`).
-- The core owns the room: the conversation, the choices, the approval cards and the one Desk process (`herdr-core/src/runtime/desk.rs`, its worker in `desk/worker.rs`), its store `~/.hide/state/desk/desk.json` written off the lock (`herdr-core/src/desk.rs`), and the `desk` and `desk_live` snapshot sections.
+- The core owns the room: the conversation, the choices, the approval cards and the one Desk process (`herdr-core/src/runtime/desk.rs`, its worker in `desk/worker.rs`), its store `~/.hide/state/desk/desk.json` written off the lock (`herdr-core/src/desk.rs`), and the `desk`, `desk_live`, `desk_jobs` and `desk_mentions` snapshot sections.
 - hided gives the process its identity (`hided/src/desk_host.rs`): a capability bound to the process's pid and start time (`Binding::Desk` in `pane_auth.rs`), whose reference file is all the process's `HIDE_CAP_REF` names.
 
 The worker is the process's one owner (engineering practice: resident processes).
@@ -2079,7 +2079,8 @@ They go before the first message of a session that starts new, with the conversa
 The ACP session id is kept, so the next start loads it (`session/load`) when the adapter can; one that cannot be loaded starts new with the conversation carried, and says so.
 
 The conversation keeps 500 items and 2 MiB of text, dropping the oldest; a message is at most 64 KiB and a reply 256 KiB.
-The reply being written is its own section, `desk_live`, so a streamed chunk resends that text alone and never the conversation.
+The reply being written is its own section, `desk_live`, so a streamed chunk resends that text alone and never the conversation; the cards (`desk_jobs`) and the `@` menu (`desk_mentions`) are sections of their own for the same reason, so a session's change moves only them.
+A publish whose rows moved builds the cards once, from one index of the archive, rows, devices, plans, missions and open Views, and sends a section only when it differs.
 
 ## The bundled Herdr runtime
 

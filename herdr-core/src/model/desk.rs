@@ -1,10 +1,11 @@
-//! The `desk` and `desk_live` snapshot sections (PRD Desk 1차 B1-B13): the
-//! Desk room's agent, conversation, approval cards and settings, and the
-//! reply being written. The core decides every state here; the shell words
-//! them and dispatches the actions.
+//! The Desk snapshot sections (PRD Desk 1차): `desk`, the room's agent,
+//! conversation, approval cards and settings; `desk_live`, the reply being
+//! written; `desk_jobs`, the sessions Desk started; and `desk_mentions`, the
+//! `@` menu. The core decides every state here; the shell words them and
+//! dispatches the actions.
 //!
-//! The reply being written is its own section so a streamed chunk resends
-//! that reply alone, never the conversation above it.
+//! Each moves on its own, so a streamed chunk or a card's change never
+//! resends the conversation.
 
 use hide_desk::AdapterId;
 use serde::{Deserialize, Serialize};
@@ -20,11 +21,13 @@ pub struct DeskSnapshot {
     /// Approval cards waiting for the operator.
     pub approvals_waiting: usize,
     pub settings: DeskSettings,
-    /// The sessions Desk started and the ones waiting in its queue, newest
-    /// first (B20-B24, B36-B39).
+}
+
+/// The `desk_jobs` section: the sessions Desk started and the ones waiting
+/// in its queue, newest first (B20-B24, B36-B39).
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct DeskJobsSnapshot {
     pub jobs: Vec<DeskJobSnapshot>,
-    /// What the `@` menu offers (B18).
-    pub mentions: DeskMentionsSnapshot,
 }
 
 /// One session Desk started, or one waiting to start.
@@ -250,7 +253,8 @@ impl DeskJobFailure {
     }
 }
 
-/// The `@` menu: recent sessions, then projects.
+/// The `desk_mentions` section, the `@` menu: recent sessions, then
+/// projects (B18).
 #[derive(Clone, Debug, Default, Eq, PartialEq, Serialize)]
 pub struct DeskMentionsSnapshot {
     pub sessions: Vec<DeskMentionSession>,

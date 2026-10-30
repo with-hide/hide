@@ -541,11 +541,12 @@ A new spawn of a kind with no home is refused `task_kind_unknown`, and the first
 Its `hide` presents a capability hided binds to that process's pid and start time (`Binding::Desk`), recorded with the caller id `hide:desk` (`workspace_control::DESK_CALLER`) and the context `desk_context`: this machine, workspace and checkout `hide:desk`, no path.
 A delivery command on it (`hide agent`, `hide request`, `hide inbox`, `hide watch`) acts as `Actor::hide("desk")` while the core says Desk runs a session (`desk_authority`), and on this machine only; with Desk ended it is refused `desk_not_running`, and the capability is revoked with the process.
 Every Workspace, View, Memory, mission or plan command refuses it `desk_has_no_checkout`, so Desk opens nothing on the operator's screen and reads no Project's Memory.
-A spawn Desk makes without `--parent` is a handoff whose origin is `hide:desk`: the agent is the operator's own, and `hide_started` leaves it out of Hide AI's work.
+A spawn Desk makes without `--parent` is a handoff whose origin is `hide:desk`: the agent is the operator's own, and `hide_started` leaves it out of Hide AI's work; one with `--parent` is refused `invalid_request`, since it would skip Desk's places and send its asks to Desk, which no screen shows.
 `hide:desk` is in `code_owned_authority_current` while this daemon runs Desk, so a spawn waiting in its queue starts after a restart; its capability still holds only while its process runs.
 A spawn of Desk's past its places (Settings › Desk, 8 at most) is taken into Desk's queue in `desk.json` and answered `{"queued":true,"intent","position","next_action"}` without running; asking again with the same intent answers the same place.
 The core starts the first waiting spawn as `hide:desk` on a thread of its own when a place frees, and a spawn whose start failed waits in the queue as failed until the operator retries it; a retry resumes the same intent, so the ledger's unfinished record converges.
 The core watches each session Desk started with `hide:desk` as its observer once its spawn completed; its warnings are code-owned and reach no person's notification.
+The job counts as watched once the watch's answer came back; a refused ask is logged (`desk.watch_refused`) and asked again on a later publish, three times at most.
 
 ## The operator's View feedback
 

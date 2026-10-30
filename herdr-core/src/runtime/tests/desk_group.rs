@@ -55,7 +55,7 @@ fn groups(runtime: &Runtime) -> (Option<String>, Vec<AgentGroupSnapshot>) {
 }
 
 fn job_state(runtime: &Runtime) -> DeskJobState {
-    runtime.snapshot.desk.as_ref().unwrap().jobs[0].state
+    runtime.snapshot.desk_jobs.as_ref().unwrap().jobs[0].state
 }
 
 fn move_tab(runtime: &mut Runtime, group: Option<&str>) {
@@ -104,7 +104,7 @@ fn a_tab_moved_out_of_the_desk_group_reads_moved_out_and_stays_out() {
     move_tab(&mut runtime, None);
     runtime.refresh_desk_jobs();
     assert_eq!(job_state(&runtime), DeskJobState::MovedOut);
-    assert_eq!(runtime.snapshot.desk.as_ref().unwrap().jobs.len(), 1);
+    assert_eq!(runtime.snapshot.desk_jobs.as_ref().unwrap().jobs.len(), 1);
 
     // Desk does not put it back.
     runtime.refresh_desk_jobs();

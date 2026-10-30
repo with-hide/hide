@@ -4,15 +4,15 @@
 //! ledger does not hold (`crate::desk::JobMark`). A spawn past Desk's
 //! places waits in the queue and starts, as `hide:desk`, when one frees.
 
+use std::collections::{HashMap, HashSet};
+
 use serde_json::{Value, json};
 
 use super::super::Runtime;
+use crate::agent_state::RowMark;
 use crate::coordination::Command as AgentCommand;
 use crate::delivery::{Actor, Command, HIDE_DESK_ROLE};
 use crate::desk::{MAX_QUEUE, QueuedJob, QueuedState};
-use std::collections::HashMap;
-
-use crate::agent_state::RowMark;
 use crate::model::{DeskJobState, SidebarAgentSnapshot};
 
 impl Runtime {
@@ -22,7 +22,8 @@ impl Runtime {
 
     /// Takes a spawn of Desk's into its queue when every place is taken or
     /// others wait before it, and answers with its place; any other command
-    /// runs as it is.
+    /// runs as it is. A spawn under a parent is refused: it would skip
+    /// Desk's places, and its asks would rise to Desk, which no screen shows.
     pub(in crate::runtime) fn desk_spawn_admission(
         &mut self,
         actor: &Actor,
@@ -32,16 +33,14 @@ impl Runtime {
             return Ok(None);
         }
         let Command::Agents {
-            command:
-                spawn @ AgentCommand::Spawn {
-                    parent: None,
-                    intent,
-                    ..
-                },
+            command: spawn @ AgentCommand::Spawn { parent, intent, .. },
         } = command
         else {
             return Ok(None);
         };
+        if parent.is_some() {
+            return Err("invalid_request".into());
+        }
         if let Some(position) = self.desk_queue_position(intent) {
             return Ok(Some(queued_answer(intent, position)));
         }
@@ -101,19 +100,7 @@ impl Runtime {
     /// Jobs that hold one of Desk's places: starting from the queue, or in
     /// the ledger and starting, working or asking.
     pub(super) fn desk_places_taken(&self) -> usize {
-        let starting = self
-            .desk
-            .stored
-            .queue
-            .iter()
-            .filter(|job| job.state == QueuedState::Starting)
-            .count();
-        starting
-            + self
-                .desk_job_states()
-                .iter()
-                .filter(|(_, state)| state.holds_place())
-                .count()
+        places_in(&self.desk_cards())
     }
 
     /// Whether the ledger holds a spawn of Desk's with this intent.
@@ -252,7 +239,7 @@ impl Runtime {
             job_id: intent,
         });
         self.save_desk();
-        self.compose_desk();
+        self.compose_desk_jobs();
         true
     }
 
@@ -333,10 +320,20 @@ impl Runtime {
     /// Starts the first waiting spawn when a place is free, on a thread of
     /// its own, as `hide:desk`; its answer comes back to the queue.
     pub(super) fn desk_start_queued(&mut self) -> bool {
+        if self.desk_waiting() == 0 {
+            return false;
+        }
+        let places = self.desk_places_taken();
+        self.desk_start_next(places)
+    }
+
+    /// Starts the first waiting job when fewer than the cap's places are
+    /// taken.
+    fn desk_start_next(&mut self, places: usize) -> bool {
         let Some(handle) = self.desk.handle.clone() else {
             return false;
         };
-        if self.desk_places_taken() >= usize::from(self.desk.stored.settings.cap) {
+        if places >= usize::from(self.desk.stored.settings.cap) {
             return false;
         }
         let Ok((client, authority, actor)) = self.hide_delivery(HIDE_DESK_ROLE) else {
@@ -402,18 +399,21 @@ impl Runtime {
         }
         self.save_desk();
         self.desk_start_queued();
-        self.compose_desk();
+        self.compose_desk_jobs();
         true
     }
-
-    /// Each Desk job's intent and state, from the ledger and the queue.
-    pub(super) fn desk_job_states(&self) -> Vec<(String, DeskJobState)> {
-        self.desk_jobs()
-            .into_iter()
-            .map(|job| (job.id, job.state))
-            .collect()
-    }
 }
+
+/// A watch Desk asked for one of its sessions: whether an ask runs now,
+/// and how many were refused.
+#[derive(Debug, Default)]
+pub(super) struct WatchAsk {
+    pub asking: bool,
+    pub refused: u8,
+}
+
+/// Refused watch asks after which Desk stops asking for that session.
+const MAX_WATCH_REFUSALS: u8 = 3;
 
 /// The newest conversation lines whose session chips follow the rows.
 const FOLLOWED_CHIPS: usize = 64;
@@ -473,14 +473,85 @@ impl DeskHandle {
     }
 }
 
-/// Cards the `desk` section lists, newest first; older ones stay in the
-/// ledger and the sidebar.
+/// Cards the `desk_jobs` section lists, newest first; older ones stay in
+/// the ledger and the sidebar.
 pub(crate) const MAX_CARDS: usize = 64;
 
+/// The places the cards' jobs hold.
+fn places_in(cards: &[crate::model::DeskJobSnapshot]) -> usize {
+    cards.iter().filter(|card| card.state.holds_place()).count()
+}
+
+/// What every card reads, gathered once per build of the cards rather than
+/// once per card.
+struct CardIndex<'a> {
+    /// Registration ids the session archive holds.
+    archived: HashSet<&'a str>,
+    rows: HashMap<&'a str, &'a SidebarAgentSnapshot>,
+    /// Devices whose link is connected.
+    connected: HashSet<&'a str>,
+    plans: HashMap<&'a str, &'a crate::plans::PlanView>,
+    /// The missions each pane conducts.
+    missions: HashMap<&'a str, Vec<&'a crate::runtime::missions::MissionView>>,
+    displays: Vec<&'a crate::view_layout::Display>,
+}
+
 impl Runtime {
-    /// Desk's jobs as cards, newest first: the queue's, then the ledger's.
+    fn desk_card_index(&self) -> CardIndex<'_> {
+        let mut missions: HashMap<&str, Vec<_>> = HashMap::new();
+        for mission in &self.snapshot.missions.items {
+            missions
+                .entry(mission.conductor.pane_id.as_str())
+                .or_default()
+                .push(mission);
+        }
+        CardIndex {
+            archived: self
+                .snapshot
+                .ui_state
+                .session_archive
+                .records
+                .values()
+                .flat_map(|record| &record.members)
+                .filter_map(|member| member.registration.as_ref())
+                .map(|registration| registration.id.as_str())
+                .collect(),
+            rows: self
+                .agent_rows()
+                .map(|row| (row.pane_id.as_str(), row))
+                .collect(),
+            connected: self
+                .snapshot
+                .status
+                .remote
+                .iter()
+                .filter(|remote| remote.state == "connected")
+                .map(|remote| remote.target_id.as_str())
+                .collect(),
+            plans: self
+                .snapshot
+                .plans
+                .items
+                .iter()
+                .map(|plan| (plan.pane_id.as_str(), plan))
+                .collect(),
+            missions,
+            displays: self.open_displays(),
+        }
+    }
+
+    /// Desk's jobs as the `desk_jobs` section lists them.
     pub(super) fn desk_jobs(&self) -> Vec<crate::model::DeskJobSnapshot> {
+        let mut cards = self.desk_cards();
+        cards.truncate(MAX_CARDS);
+        cards
+    }
+
+    /// Desk's jobs as cards, newest first: the queue's, then the newest
+    /// [`MAX_CARDS`] of the ledger's, before the section's cap.
+    fn desk_cards(&self) -> Vec<crate::model::DeskJobSnapshot> {
         use crate::model::{DeskJobFailure, DeskJobReason, DeskJobSnapshot};
+        let index = self.desk_card_index();
         let mut cards: Vec<DeskJobSnapshot> = Vec::new();
         let ledger = self.delivery_state().ok();
         let spawns = self.desk_spawns();
@@ -512,7 +583,7 @@ impl Runtime {
                     .find(|agent| &agent.id == child)
                     .cloned()
             });
-            cards.push(self.desk_card(spawn, registration.as_ref()));
+            cards.push(self.desk_card(spawn, registration.as_ref(), &index));
         }
         let mut position = 0;
         for job in &self.desk.stored.queue {
@@ -565,7 +636,6 @@ impl Runtime {
             card.queue_position = (state == DeskJobState::Queued).then_some(position);
             cards.insert(0, card);
         }
-        cards.truncate(MAX_CARDS);
         cards
     }
 
@@ -652,6 +722,7 @@ impl Runtime {
         &self,
         spawn: &crate::coordination::SpawnRecord,
         registration: Option<&crate::coordination::AgentRecord>,
+        index: &CardIndex<'_>,
     ) -> crate::model::DeskJobSnapshot {
         use crate::model::{AgentStatusCode, DeskAskKind, DeskJobPlan, DeskJobReason};
         let mut card = self.desk_blank_card(
@@ -670,35 +741,21 @@ impl Runtime {
         let pane = registration.map(|registration| registration.actor.pane_id.clone());
         let row = pane
             .as_deref()
-            .and_then(|pane| self.agent_row(pane))
+            .and_then(|pane| index.rows.get(pane).copied())
             .filter(|row| {
                 registration.is_some_and(|registration| {
                     row.lineage_session.is_none()
                         || row.lineage_session == registration.actor.session
                 })
             });
-        card.disconnected = spawn.machine.as_deref().is_some_and(|machine| {
-            !self
-                .snapshot
-                .status
-                .remote
-                .iter()
-                .any(|remote| remote.target_id == machine && remote.state == "connected")
-        });
-        let archived = spawn.child.as_ref().is_some_and(|child| {
-            self.snapshot
-                .ui_state
-                .session_archive
-                .records
-                .values()
-                .flat_map(|record| &record.members)
-                .any(|member| {
-                    member
-                        .registration
-                        .as_ref()
-                        .is_some_and(|registration| &registration.id == child)
-                })
-        });
+        card.disconnected = spawn
+            .machine
+            .as_deref()
+            .is_some_and(|machine| !index.connected.contains(machine));
+        let archived = spawn
+            .child
+            .as_deref()
+            .is_some_and(|child| index.archived.contains(child));
         card.state = if archived {
             DeskJobState::Archived
         } else if mark.is_some_and(|mark| mark.closed) {
@@ -775,7 +832,7 @@ impl Runtime {
                 })
                 .collect();
             card.outputs = self
-                .session_displays(&row.pane_id)
+                .session_displays_among(&row.pane_id, &index.displays)
                 .into_iter()
                 .take(MAX_OUTPUTS)
                 .map(|display| crate::model::DeskJobOutput {
@@ -797,77 +854,58 @@ impl Runtime {
                 .collect();
         }
         if let Some(pane) = &pane {
-            card.plan = self
-                .snapshot
-                .plans
-                .items
-                .iter()
-                .find(|plan| &plan.pane_id == pane)
-                .map(|plan| DeskJobPlan {
-                    done: plan.progress.done as usize,
-                    total: plan.progress.total as usize,
-                });
-            card.mission = self.desk_job_mission(pane);
-            card.workers = self
-                .snapshot
-                .missions
-                .items
-                .iter()
-                .filter(|mission| &mission.conductor.pane_id == pane)
+            card.plan = index.plans.get(pane.as_str()).map(|plan| DeskJobPlan {
+                done: plan.progress.done as usize,
+                total: plan.progress.total as usize,
+            });
+            let missions = index.missions.get(pane.as_str());
+            card.mission = missions
+                .and_then(|missions| missions.first())
+                .map(|mission| desk_job_mission(mission));
+            card.workers = missions
+                .into_iter()
+                .flatten()
                 .flat_map(|mission| &mission.nodes)
                 .filter_map(|node| node.pane_id.clone())
                 .collect();
         }
         card
     }
+}
 
-    /// The mission a job conducts, as its card's `미션 k/n` chip (B34).
-    fn desk_job_mission(&self, pane: &str) -> Option<crate::model::DeskJobMission> {
-        use crate::missions::NodeStatus;
-        let mission = self
-            .snapshot
-            .missions
-            .items
-            .iter()
-            .find(|mission| mission.conductor.pane_id == pane)?;
-        let counted = mission
-            .nodes
-            .iter()
-            .filter(|node| node.status != NodeStatus::Dropped);
-        Some(crate::model::DeskJobMission {
-            id: mission.id.clone(),
-            title: mission.title.clone(),
-            status: mission.status,
-            done: counted
-                .clone()
-                .filter(|node| node.status == NodeStatus::Done)
-                .count(),
-            total: counted.count(),
-            tone: match mission.status {
-                crate::missions::MissionStatus::Cancelled => "cancelled",
-                crate::missions::MissionStatus::Done => "done",
-                _ if mission.question.is_some() || mission.decision.is_some() => "hold",
-                _ if mission
-                    .nodes
-                    .iter()
-                    .any(|node| node.status == NodeStatus::Failed) =>
-                {
-                    "failed"
-                }
-                _ if mission
-                    .nodes
-                    .iter()
-                    .any(|node| node.status == NodeStatus::Review) =>
-                {
-                    "review"
-                }
-                _ => "working",
-            }
-            .into(),
-            deciding: mission.question.is_some(),
-        })
+/// The mission a job conducts, as its card's `미션 k/n` chip (B34).
+fn desk_job_mission(
+    mission: &crate::runtime::missions::MissionView,
+) -> crate::model::DeskJobMission {
+    use crate::missions::{MissionStatus, NodeStatus};
+    let counted = mission
+        .nodes
+        .iter()
+        .filter(|node| node.status != NodeStatus::Dropped);
+    let any = |status: NodeStatus| mission.nodes.iter().any(|node| node.status == status);
+    crate::model::DeskJobMission {
+        id: mission.id.clone(),
+        title: mission.title.clone(),
+        status: mission.status,
+        done: counted
+            .clone()
+            .filter(|node| node.status == NodeStatus::Done)
+            .count(),
+        total: counted.count(),
+        tone: match mission.status {
+            MissionStatus::Cancelled => "cancelled",
+            MissionStatus::Done => "done",
+            _ if mission.question.is_some() || mission.decision.is_some() => "hold",
+            _ if any(NodeStatus::Failed) => "failed",
+            _ if any(NodeStatus::Review) => "review",
+            _ => "working",
+        }
+        .into(),
+        deciding: mission.question.is_some(),
     }
+}
 
+impl Runtime {
     /// The `@` menu: the sessions in the sidebar's order, then the
     /// projects (B18).
     pub(super) fn desk_mentions(&self) -> crate::model::DeskMentionsSnapshot {
@@ -887,6 +925,7 @@ impl Runtime {
                 detail: row.detail.clone(),
             })
             .collect();
+        let with_rows: HashSet<&str> = self.agent_rows().map(|row| row.pane_id.as_str()).collect();
         let projects = self
             .catalog_workspaces()
             .filter(|workspace| !workspace.is_home)
@@ -898,7 +937,7 @@ impl Runtime {
                     .iter()
                     .flat_map(|checkout| &checkout.tabs)
                     .flat_map(|tab| &tab.panes)
-                    .filter(|pane| self.agent_row(&pane.id).is_some())
+                    .filter(|pane| with_rows.contains(pane.id.as_str()))
                     .map(|pane| pane.id.clone())
                     .collect(),
             })
@@ -1042,7 +1081,7 @@ impl Runtime {
                 }
             }
             if !mark.watched && spawn.completed && !registration.ended {
-                next.watched = self.desk_watch(&registration.actor);
+                self.desk_watch(&spawn.intent, &registration.actor);
             }
             if next != mark {
                 next.changed_at_ms = crate::links::now_ms();
@@ -1050,8 +1089,12 @@ impl Runtime {
                 marked = true;
             }
         }
-        marked |= self.desk_letters_read();
+        let letters_read = self.desk_letters_read();
+        marked |= letters_read;
         let spawns = self.desk_spawns();
+        self.desk
+            .watch_asks
+            .retain(|intent, _| spawns.iter().any(|spawn| &spawn.intent == intent));
         let before = self.desk.stored.queue.len();
         self.desk.stored.queue.retain(|job| {
             !spawns
@@ -1059,20 +1102,58 @@ impl Runtime {
                 .any(|spawn| spawn.intent == job.intent && spawn.completed)
         });
         marked |= self.desk.stored.queue.len() != before;
-        let started = self.desk_start_queued();
-        let jobs = self.desk_jobs();
-        let moved = self
-            .snapshot
-            .desk
-            .as_ref()
-            .is_none_or(|desk| desk.jobs != jobs)
-            || self.desk_chips_moved();
+        // The cards are built once a publish, and again only when a queued
+        // job started.
+        let mut cards = self.desk_cards();
+        let started = self.desk_waiting() > 0 && self.desk_start_next(places_in(&cards));
+        if started {
+            cards = self.desk_cards();
+        }
+        cards.truncate(MAX_CARDS);
         if marked || started {
             self.save_desk();
         }
-        if marked || started || moved {
+        self.publish_desk_jobs(cards);
+        self.compose_desk_mentions();
+        if letters_read || self.desk_chips_moved() {
             self.compose_desk();
         }
+    }
+
+    /// The `desk_jobs` section, built again.
+    pub(in crate::runtime) fn compose_desk_jobs(&mut self) {
+        if self.desk.worker.is_none() {
+            return;
+        }
+        let jobs = self.desk_jobs();
+        self.publish_desk_jobs(jobs);
+    }
+
+    /// Sends the cards as the `desk_jobs` section when they moved, so a
+    /// card's change never resends the conversation.
+    fn publish_desk_jobs(&mut self, jobs: Vec<crate::model::DeskJobSnapshot>) {
+        if self
+            .snapshot
+            .desk_jobs
+            .as_ref()
+            .is_some_and(|section| section.jobs == jobs)
+        {
+            return;
+        }
+        self.snapshot.desk_jobs =
+            Some(std::sync::Arc::new(crate::model::DeskJobsSnapshot { jobs }));
+    }
+
+    /// The `desk_mentions` section, sent again when the `@` menu moved.
+    pub(in crate::runtime) fn compose_desk_mentions(&mut self) {
+        if self.desk.worker.is_none() {
+            return;
+        }
+        let mentions = self.desk_mentions();
+        if self.snapshot.desk_mentions.as_deref() == Some(&mentions) {
+            return;
+        }
+        self.snapshot.desk_mentions = Some(std::sync::Arc::new(mentions));
     }
 
     /// Fills the session chips of the newest conversation lines with each
@@ -1249,11 +1330,20 @@ impl Runtime {
         moved
     }
 
-    /// Starts a watch on a Desk session with `hide:desk` as its observer,
-    /// off the lock.
-    fn desk_watch(&mut self, target: &Actor) -> bool {
+    /// Asks for a watch on a Desk session with `hide:desk` as its observer,
+    /// off the lock; its answer marks the job watched. One ask runs at a
+    /// time, and a session refused [`MAX_WATCH_REFUSALS`] times is not
+    /// asked again.
+    fn desk_watch(&mut self, intent: &str, target: &Actor) {
+        let ask = self.desk.watch_asks.entry(intent.to_owned()).or_default();
+        if ask.asking || ask.refused >= MAX_WATCH_REFUSALS {
+            return;
+        }
+        let Some(handle) = self.desk.handle.clone() else {
+            return;
+        };
         let Ok((client, authority, actor)) = self.hide_delivery(HIDE_DESK_ROLE) else {
-            return false;
+            return;
         };
         let observed = self.delivery_observations.get(&target.pane_id).cloned();
         let prepared = crate::delivery::worker::Prepared::new(
@@ -1268,19 +1358,55 @@ impl Runtime {
             },
         );
         let pane = target.pane_id.clone();
-        std::thread::Builder::new()
+        let asked = intent.to_owned();
+        let started = std::thread::Builder::new()
             .name("herdr-core-desk-watch".into())
             .spawn(move || {
-                if let Err(code) = prepared.run(std::time::Duration::from_secs(5)) {
-                    crate::diagnostic!(json!({
-                        "component": "desk",
-                        "kind": "desk.watch_refused",
-                        "pane": pane,
-                        "code": code,
-                    }));
-                }
+                let result = prepared.run(std::time::Duration::from_secs(5)).map(|_| ());
+                handle.apply(move |runtime| runtime.desk_watch_answered(&asked, &pane, result));
             })
-            .is_ok()
+            .is_ok();
+        if let Some(ask) = self.desk.watch_asks.get_mut(intent) {
+            ask.asking = started;
+        }
+    }
+
+    /// A watch ask answered: the job is watched, or the refusal is logged
+    /// and the next publish asks again until its refusals run out.
+    pub(super) fn desk_watch_answered(
+        &mut self,
+        intent: &str,
+        pane: &str,
+        result: Result<(), String>,
+    ) -> bool {
+        let Some(ask) = self.desk.watch_asks.get_mut(intent) else {
+            return false;
+        };
+        ask.asking = false;
+        match result {
+            Ok(()) => {
+                self.desk.watch_asks.remove(intent);
+                let mark = self.desk_mark_mut(intent);
+                if !mark.watched {
+                    mark.watched = true;
+                    mark.changed_at_ms = crate::links::now_ms();
+                    self.save_desk();
+                }
+            }
+            Err(code) => {
+                ask.refused += 1;
+                crate::diagnostic!(json!({
+                    "component": "desk",
+                    "kind": "desk.watch_refused",
+                    "intent": intent,
+                    "pane": pane,
+                    "code": code,
+                    "refused": ask.refused,
+                    "asks_again": ask.refused < MAX_WATCH_REFUSALS,
+                }));
+            }
+        }
+        false
     }
 }
 
@@ -1399,6 +1525,50 @@ mod tests {
     }
 
     #[test]
+    fn a_spawn_of_desk_s_under_a_parent_is_refused_and_queues_nothing() {
+        let root = tempfile::tempdir().unwrap();
+        let mut runtime = desk(root.path(), 2, &["a", "b"]);
+        let actor = runtime.desk_actor();
+        let mut spawn = spawn_command("c", None);
+        if let AgentCommand::Spawn { parent, .. } = &mut spawn {
+            *parent = Some("here".into());
+        }
+        let answer = runtime.desk_spawn_admission(&actor, &Command::Agents { command: spawn });
+        assert_eq!(answer, Err("invalid_request".into()));
+        assert!(runtime.desk.stored.queue.is_empty());
+    }
+
+    #[test]
+    fn a_job_is_watched_only_once_its_watch_answered_and_a_refusal_asks_again() {
+        let root = tempfile::tempdir().unwrap();
+        let mut runtime = desk(root.path(), 2, &["a"]);
+        let ask = |runtime: &mut Runtime| {
+            runtime.desk.watch_asks.insert(
+                "intent-a".into(),
+                WatchAsk {
+                    asking: true,
+                    refused: 0,
+                },
+            );
+        };
+        let watched = |runtime: &Runtime| {
+            runtime
+                .desk_mark("intent-a")
+                .is_some_and(|mark| mark.watched)
+        };
+        ask(&mut runtime);
+        runtime.desk_watch_answered("intent-a", "p0", Err("target_unavailable".into()));
+        assert!(!watched(&runtime));
+        let refused = &runtime.desk.watch_asks["intent-a"];
+        assert_eq!((refused.asking, refused.refused), (false, 1));
+
+        runtime.desk.watch_asks.get_mut("intent-a").unwrap().asking = true;
+        runtime.desk_watch_answered("intent-a", "p0", Ok(()));
+        assert!(watched(&runtime));
+        assert!(!runtime.desk.watch_asks.contains_key("intent-a"));
+    }
+
+    #[test]
     fn a_spawn_under_the_cap_runs_at_once() {
         let root = tempfile::tempdir().unwrap();
         let mut runtime = desk(root.path(), 2, &["a"]);
@@ -1438,17 +1608,21 @@ mod tests {
     fn a_tab_the_operator_closed_reads_closed_and_frees_its_place() {
         let root = tempfile::tempdir().unwrap();
         let mut runtime = desk(root.path(), 2, &["a", "b"]);
+        runtime.compose_desk_sections();
+        let room = runtime.snapshot.desk.clone().unwrap();
         runtime.panes_closing.insert("p0".into());
         runtime.refresh_desk_jobs();
         assert_eq!(card(&runtime, "a").state, DeskJobState::Closed);
         assert_eq!(runtime.desk_places_taken(), 1);
-        // The section was sent again with the card that moved.
-        let sent = runtime.snapshot.desk.as_ref().unwrap();
+        // The cards' section was sent again with the card that moved, and
+        // the room's section with its conversation was not.
+        let sent = runtime.snapshot.desk_jobs.as_ref().unwrap();
         assert!(
             sent.jobs
                 .iter()
                 .any(|job| job.state == DeskJobState::Closed)
         );
+        assert!(Arc::ptr_eq(&room, runtime.snapshot.desk.as_ref().unwrap()));
     }
 
     #[test]

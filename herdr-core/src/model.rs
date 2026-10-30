@@ -163,6 +163,15 @@ pub struct Snapshot {
     #[serde(skip_serializing_if = "Option::is_none")]
     #[serde(serialize_with = "serialize_optional_shared")]
     pub desk_live: Option<Arc<DeskLiveSnapshot>>,
+    /// The sessions Desk started, its own section so a card's change never
+    /// resends the conversation.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(serialize_with = "serialize_optional_shared")]
+    pub desk_jobs: Option<Arc<DeskJobsSnapshot>>,
+    /// Desk's `@` menu, its own section for the same reason.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(serialize_with = "serialize_optional_shared")]
+    pub desk_mentions: Option<Arc<DeskMentionsSnapshot>>,
     /// Each project's link counts and session chips (PRD link-graph D-45),
     /// absent until the link worker first answers. Its own revisioned
     /// section, off `rest`, so an agent row's change never resends it.
@@ -7451,6 +7460,8 @@ impl Snapshot {
             suggestions: None,
             desk: None,
             desk_live: None,
+            desk_jobs: None,
+            desk_mentions: None,
             link_summaries: None,
             link_panel: None,
             session_record: None,
@@ -7521,6 +7532,8 @@ pub struct SnapshotDeltaPayload {
     pub suggestions: Option<Arc<SuggestionsSnapshot>>,
     pub desk: Option<Arc<DeskSnapshot>>,
     pub desk_live: Option<Arc<DeskLiveSnapshot>>,
+    pub desk_jobs: Option<Arc<DeskJobsSnapshot>>,
+    pub desk_mentions: Option<Arc<DeskMentionsSnapshot>>,
     pub link_summaries: Option<Arc<crate::links::LinkSummariesSnapshot>>,
     pub link_panel: Option<Arc<crate::links::LinkPanelSnapshot>>,
     pub session_record: Option<Arc<crate::links::ledger::SessionRecordSnapshot>>,
@@ -7575,6 +7588,10 @@ pub struct SnapshotDeltaWire<'a> {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub desk_live: Option<&'a DeskLiveSnapshot>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub desk_jobs: Option<&'a DeskJobsSnapshot>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub desk_mentions: Option<&'a DeskMentionsSnapshot>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub link_summaries: Option<&'a crate::links::LinkSummariesSnapshot>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub link_panel: Option<&'a crate::links::LinkPanelSnapshot>,
@@ -7628,6 +7645,8 @@ impl<'a> SnapshotDeltaWire<'a> {
             suggestions: payload.suggestions.as_deref(),
             desk: payload.desk.as_deref(),
             desk_live: payload.desk_live.as_deref(),
+            desk_jobs: payload.desk_jobs.as_deref(),
+            desk_mentions: payload.desk_mentions.as_deref(),
             link_summaries: payload.link_summaries.as_deref(),
             link_panel: payload.link_panel.as_deref(),
             session_record: payload.session_record.as_deref(),

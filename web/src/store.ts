@@ -98,6 +98,8 @@ export type Frame = {
     suggestions?: import("./snapshot").SuggestionsSection;
     desk?: import("./snapshot").DeskSection;
     desk_live?: import("./snapshot").DeskLive;
+    desk_jobs?: import("./snapshot").DeskJobsSection;
+    desk_mentions?: import("./snapshot").DeskMentions;
     link_panel?: import("./snapshot").LinkPanel;
     link_summaries?: import("./snapshot").LinkSummaries;
     session_record?: import("./snapshot").SessionRecordSection | null;
@@ -184,6 +186,9 @@ type Store = {
   desk: import("./snapshot").DeskSection | null;
   /** The Desk reply being written (`desk_live`), apart so a chunk never resends the conversation. */
   deskLive: import("./snapshot").DeskLive | null;
+  /** Desk's cards (`desk_jobs`) and `@` menu (`desk_mentions`), each its own section. */
+  deskJobs: import("./snapshot").DeskJobsSection | null;
+  deskMentions: import("./snapshot").DeskMentions | null;
   /** The link record of the open PR or issue panel (`link_panel`); null until one opens. */
   linkPanel: import("./snapshot").LinkPanel | null;
   /** Each Project's link counts and chips (`link_summaries`). */
@@ -330,6 +335,8 @@ export const useShellStore = create<Store>((set, get) => ({
   suggestions: null,
   desk: null,
   deskLive: null,
+  deskJobs: null,
+  deskMentions: null,
   linkPanel: null,
   linkSummaries: null,
   sessionRecord: null,
@@ -427,6 +434,8 @@ export const useShellStore = create<Store>((set, get) => ({
         suggestions: payload.suggestions ?? null,
         desk: payload.desk ?? null,
         deskLive: payload.desk_live ?? null,
+        deskJobs: payload.desk_jobs ?? null,
+        deskMentions: payload.desk_mentions ?? null,
         linkPanel: payload.link_panel ?? null,
         linkSummaries: payload.link_summaries ?? null,
         sessionRecord: payload.session_record ?? null,
@@ -439,6 +448,7 @@ export const useShellStore = create<Store>((set, get) => ({
       payload.memory !== undefined ||
       payload.suggestions !== undefined ||
       payload.desk !== undefined || payload.desk_live !== undefined ||
+      payload.desk_jobs !== undefined || payload.desk_mentions !== undefined ||
       payload.link_panel !== undefined || payload.link_summaries !== undefined ||
       payload.session_record !== undefined || payload.session_work_search !== undefined
     ) {
@@ -450,6 +460,8 @@ export const useShellStore = create<Store>((set, get) => ({
         suggestions: payload.suggestions ? share(get().suggestions, payload.suggestions) : get().suggestions,
         desk: payload.desk ? share(get().desk, payload.desk) : get().desk,
         deskLive: payload.desk_live ?? get().deskLive,
+        deskJobs: payload.desk_jobs ? share(get().deskJobs, payload.desk_jobs) : get().deskJobs,
+        deskMentions: payload.desk_mentions ? share(get().deskMentions, payload.desk_mentions) : get().deskMentions,
         linkPanel: payload.link_panel ? share(get().linkPanel, payload.link_panel) : get().linkPanel,
         linkSummaries: payload.link_summaries ? share(get().linkSummaries, payload.link_summaries) : get().linkSummaries,
         sessionRecord: payload.session_record !== undefined ? payload.session_record && share(get().sessionRecord, payload.session_record) : get().sessionRecord,

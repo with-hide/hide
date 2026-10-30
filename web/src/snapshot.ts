@@ -2693,7 +2693,7 @@ export type DeskJob = {
   /** The panes of a Conductor's workers. */
   workers: string[];
 };
-/** The `@` menu: recent sessions, then projects with their running sessions' panes. */
+/** The `desk_mentions` section, the `@` menu: recent sessions, then projects with their running sessions' panes. */
 export type DeskMentions = {
   sessions: { id: string; name: string; agent_kind: string; mark: RowMark; detail: string | null }[];
   projects: { id: string; name: string; sessions: string[] }[];
@@ -2708,10 +2708,10 @@ export type DeskSection = {
   conversation: { generation: number; items: DeskItem[]; dropped: number };
   approvals_waiting: number;
   settings: { default_agent: DeskAgentId | null; location: DeskLocation; cap: number };
-  /** Newest first, at most 64. */
-  jobs: DeskJob[];
-  mentions: DeskMentions;
 };
+
+/** The `desk_jobs` section: Desk's sessions as cards, newest first and at most 64, apart so a card's change never resends the conversation. */
+export type DeskJobsSection = { jobs: DeskJob[] };
 
 /** The `desk_live` section: the reply being written, `null` between turns. */
 export type DeskLive = { text: string | null; started_at_ms: number | null };
