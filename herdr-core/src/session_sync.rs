@@ -440,10 +440,10 @@ pub(crate) use replica::{remote_pane_id, remote_tab_id};
 #[cfg(test)]
 pub(crate) use subscription::connect_failure_from_api;
 pub(crate) use subscription::{
-    Connected, connect, fetch_agent_launch, fetch_agents, fetch_pane_cwd,
+    Connected, connect, fetch_agent_launch, fetch_agents, fetch_focused_workspace, fetch_pane_cwd,
     fetch_workspace_active_tab, log_sync_failure, stop_subscription,
 };
-use sync_reads::{SyncRead, SyncReadAnswer, SyncReader};
+use sync_reads::{ActiveTabRead, SyncRead, SyncReadAnswer, SyncReader};
 
 /// A worker's authoritative read uses the same device projection as the replica.
 pub(crate) fn project_remote_read(

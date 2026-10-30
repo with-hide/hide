@@ -48,6 +48,14 @@ pub(crate) struct SessionReplica {
     pending_creation_focuses: BTreeSet<String>,
     pub(crate) pending_workspace_closures: BTreeSet<String>,
     pub(crate) pending_active_tab_focuses: BTreeSet<String>,
+    /// The workspace that held Herdr's focus when it closed, while other
+    /// workspaces remain. Herdr 0.9.5 moves its focus to one of them without
+    /// an event (`tab.close` of the focused workspace's only tab emits
+    /// `workspace_closed` and `tab_closed`, nothing else), so the replica
+    /// holds that close until a focus event or a `workspace.list` read names
+    /// the workspace in focus (`settle_focus`). Published without it, the
+    /// device has no focused checkout and its screen loses the Workspace.
+    pending_focus_after_close: Option<String>,
     /// Workspace, tab and pane ids this replica removed on an event, newest
     /// last. Herdr 0.9.1 can name an id after the event that removed it:
     /// `tab.close` of a workspace's last tab emits `workspace_closed` then
@@ -169,6 +177,7 @@ impl SessionReplica {
             pending_creation_focuses: BTreeSet::new(),
             pending_workspace_closures: BTreeSet::new(),
             pending_active_tab_focuses: BTreeSet::new(),
+            pending_focus_after_close: None,
             retired_ids: VecDeque::new(),
             early_focuses: Vec::new(),
             early_children: Vec::new(),
@@ -201,6 +210,7 @@ impl SessionReplica {
             .pending_workspace_closures
             .iter()
             .chain(self.pending_active_tab_focuses.iter())
+            .chain(self.pending_focus_after_close.iter())
         {
             blocked.insert(workspace_id.clone());
         }
@@ -826,6 +836,50 @@ impl SessionReplica {
         true
     }
 
+    /// The closed workspace whose successor in Herdr's focus the replica
+    /// waits to read (`pending_focus_after_close`).
+    pub(crate) fn awaiting_focus(&self) -> Option<&str> {
+        self.pending_focus_after_close.as_deref()
+    }
+
+    /// Applies a `workspace.list` answer, the workspace Herdr has in focus or
+    /// none, to a replica waiting for it, and reports whether that wait
+    /// ended. A wait a focus event already ended changes nothing. A workspace
+    /// the event stream has not delivered means the read ran ahead of the
+    /// cursor, so the wait stays for the next read. The focused pane follows
+    /// from that workspace's active tab layout (`restore_missing_pane_focus`).
+    pub(crate) fn settle_focus(&mut self, focused_workspace_id: Option<&str>) -> bool {
+        if self.pending_focus_after_close.is_none() {
+            return false;
+        }
+        match focused_workspace_id {
+            Some(workspace_id)
+                if !self
+                    .state
+                    .workspaces
+                    .iter()
+                    .any(|workspace| workspace.workspace_id == workspace_id) =>
+            {
+                false
+            }
+            Some(workspace_id) => {
+                self.focus_workspace(workspace_id.to_owned());
+                true
+            }
+            None => {
+                self.pending_focus_after_close = None;
+                true
+            }
+        }
+    }
+
+    /// Herdr's focus is in `workspace_id`: an event or a read named it, which
+    /// ends a wait for the successor of a closed focused workspace.
+    fn focus_workspace(&mut self, workspace_id: String) {
+        self.state.focused_workspace_id = Some(workspace_id);
+        self.pending_focus_after_close = None;
+    }
+
     /// Panes whose cwd came from their creation event and has not been
     /// read back from Herdr yet.
     pub(crate) fn panes_awaiting_cwd(&self) -> Vec<String> {
@@ -935,6 +989,7 @@ impl SessionReplica {
         self.pending_layouts.is_empty()
             && self.pending_workspace_closures.is_empty()
             && self.pending_active_tab_focuses.is_empty()
+            && self.pending_focus_after_close.is_none()
     }
 
     /// Replaces the agent list and reports where agents stopped working.
@@ -1192,7 +1247,7 @@ impl SessionReplica {
                 {
                     return Err(malformed_event(event, "focused workspace does not exist"));
                 }
-                self.state.focused_workspace_id = Some(input_workspace_id);
+                self.focus_workspace(input_workspace_id);
             }
             ReplicaEvent::WorktreeCreated {
                 workspace: input_workspace,
@@ -1276,7 +1331,7 @@ impl SessionReplica {
                         .find(|workspace| workspace.workspace_id == input_tab.workspace_id)
                         .expect("created tab workspace was validated");
                     workspace.active_tab_id = input_tab.tab_id.clone();
-                    self.state.focused_workspace_id = Some(input_tab.workspace_id.clone());
+                    self.focus_workspace(input_tab.workspace_id.clone());
                     self.pending_active_tab_focuses
                         .remove(&input_tab.workspace_id);
                     self.record_creation_focus(&input_tab);
@@ -1422,7 +1477,7 @@ impl SessionReplica {
                     tab_id: input_tab_id,
                     revision: self.applied_events.saturating_add(1),
                 });
-                self.state.focused_workspace_id = Some(input_workspace_id.clone());
+                self.focus_workspace(input_workspace_id.clone());
                 self.pending_active_tab_focuses.remove(&input_workspace_id);
             }
             ReplicaEvent::PaneCreated { pane: input_pane } => {
@@ -1562,7 +1617,7 @@ impl SessionReplica {
                 self.state.focused_pane_id = Some(input_pane_id.clone());
                 self.early_focuses
                     .retain(|held| !matches!(held, ReplicaEvent::PaneFocused { .. }));
-                self.state.focused_workspace_id = Some(input_workspace_id.clone());
+                self.focus_workspace(input_workspace_id.clone());
                 if let Some(layout) = self.state.layouts.iter_mut().find(|layout| {
                     layout
                         .panes
@@ -1885,6 +1940,9 @@ impl SessionReplica {
             .retain(|workspace| workspace.workspace_id != workspace_id);
         if self.state.focused_workspace_id.as_deref() == Some(workspace_id) {
             self.state.focused_workspace_id = None;
+            if !self.state.workspaces.is_empty() {
+                self.pending_focus_after_close = Some(workspace_id.to_owned());
+            }
         }
         self.state
             .tabs

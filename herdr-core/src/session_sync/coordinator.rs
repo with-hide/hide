@@ -981,8 +981,8 @@ fn run_coordinator(
                         let current = replica
                             .as_mut()
                             .expect("active subscription always has a replica");
-                        let settled = result.and_then(|tabs| {
-                            settle_active_tabs(&context, current, &mut active_tab_reads, tabs)
+                        let settled = result.and_then(|read| {
+                            settle_active_tabs(&context, current, &mut active_tab_reads, read)
                         });
                         match settled {
                             Ok(true) => {
@@ -1191,39 +1191,55 @@ fn ask_active_tabs(
     attempts: &mut BTreeMap<String, u32>,
 ) -> Result<(), SessionFetchError> {
     let waiting = replica.workspaces_awaiting_active_tab();
-    attempts.retain(|workspace_id, _| waiting.contains(workspace_id));
-    if waiting.is_empty() {
+    // The focus wait counts its reads under the closed workspace's id, which
+    // no active tab wait can hold: the close removed that workspace.
+    let focus = replica.awaiting_focus().map(str::to_owned);
+    attempts.retain(|workspace_id, _| {
+        waiting.contains(workspace_id) || focus.as_ref() == Some(workspace_id)
+    });
+    if waiting.is_empty() && focus.is_none() {
         return Ok(());
     }
     if let Some((workspace_id, _)) = attempts
         .iter()
         .find(|(_, attempt)| **attempt >= ACTIVE_TAB_READ_ATTEMPT_LIMIT)
     {
-        return Err(SessionFetchError::Stale(format!(
-            "workspace {workspace_id} named no active tab the event stream knows in {ACTIVE_TAB_READ_ATTEMPT_LIMIT} reads"
-        )));
+        return Err(SessionFetchError::Stale(
+            if focus.as_ref() == Some(workspace_id) {
+                format!(
+                    "Herdr named no focused workspace the event stream knows in {ACTIVE_TAB_READ_ATTEMPT_LIMIT} reads after workspace {workspace_id} closed"
+                )
+            } else {
+                format!(
+                    "workspace {workspace_id} named no active tab the event stream knows in {ACTIVE_TAB_READ_ATTEMPT_LIMIT} reads"
+                )
+            },
+        ));
     }
-    let workspace_ids = waiting.to_vec();
-    if reader.ask(generation, SyncRead::ActiveTabs(workspace_ids)) {
-        for workspace_id in waiting {
+    let read = SyncRead::ActiveTabs {
+        workspace_ids: waiting.clone(),
+        focus: focus.is_some(),
+    };
+    if reader.ask(generation, read) {
+        for workspace_id in waiting.into_iter().chain(focus) {
             *attempts.entry(workspace_id).or_insert(0) += 1;
         }
     }
     Ok(())
 }
 
-/// Settles the replica with the active tabs the worker read. A read that
-/// names a tab the event stream has not delivered keeps its workspace
-/// waiting for the next ask. Returns whether the published projection
+/// Settles the replica with the active tabs and the focus the worker read.
+/// A read that names a tab or a workspace the event stream has not delivered
+/// keeps its wait for the next ask. Returns whether the published projection
 /// changed.
 fn settle_active_tabs(
     context: &SessionSyncContext,
     replica: &mut SessionReplica,
     attempts: &mut BTreeMap<String, u32>,
-    tabs: Vec<(String, String)>,
+    read: ActiveTabRead,
 ) -> Result<bool, SessionFetchError> {
     let mut settled = false;
-    for (workspace_id, active_tab_id) in tabs {
+    for (workspace_id, active_tab_id) in read.tabs {
         let settled_now = replica.settle_active_tab(&workspace_id, &active_tab_id);
         crate::diagnostic!(json!({
             "component": "session_sync",
@@ -1236,6 +1252,24 @@ fn settle_active_tabs(
         }));
         if settled_now {
             attempts.remove(&workspace_id);
+            settled = true;
+        }
+    }
+    if let Some(focused) = read.focus
+        && let Some(closed) = replica.awaiting_focus().map(str::to_owned)
+    {
+        let settled_now = replica.settle_focus(focused.as_deref());
+        crate::diagnostic!(json!({
+            "component": "session_sync",
+            "kind": "focus.read",
+            "target": context.log_target(),
+            "closed_workspace_id": closed,
+            "workspace_id": focused,
+            "attempt": attempts.get(&closed).copied().unwrap_or(0),
+            "settled": settled_now,
+        }));
+        if settled_now {
+            attempts.remove(&closed);
             settled = true;
         }
     }
@@ -4050,5 +4084,132 @@ mod catalog_path_tests {
             &registrations,
         );
         assert!(Arc::ptr_eq(&chosen, &before));
+    }
+}
+
+#[cfg(test)]
+mod focus_read_tests {
+    use super::*;
+    use crate::fake_herdr::FakeHerdr;
+
+    /// w1 holds a tab, w2 held Herdr's focus and has just closed with its
+    /// only tab, the order Herdr 0.9.5 sends for `tab.close`.
+    fn replica_after_closing_the_focused_workspace() -> SessionReplica {
+        let workspace = |id: &str, focused: bool| {
+            json!({
+                "workspace_id": id, "label": id, "agent_status": "idle", "focused": focused,
+                "number": 1, "pane_count": 1, "tab_count": 1, "active_tab_id": format!("{id}:t1")
+            })
+        };
+        let tab = |id: &str| {
+            json!({
+                "workspace_id": id, "tab_id": format!("{id}:t1"), "agent_status": "idle",
+                "focused": false, "number": 1, "pane_count": 1, "label": "1"
+            })
+        };
+        let pane = |id: &str| {
+            json!({
+                "workspace_id": id, "tab_id": format!("{id}:t1"), "pane_id": format!("{id}:p1"),
+                "terminal_id": format!("{id}-terminal"), "focused": false, "revision": 0,
+                "agent_status": "idle", "cwd": "/fixture"
+            })
+        };
+        let layout = |id: &str| {
+            json!({
+                "workspace_id": id, "tab_id": format!("{id}:t1"), "zoomed": false,
+                "area": {"x": 0, "y": 0, "width": 120, "height": 60},
+                "focused_pane_id": format!("{id}:p1"),
+                "panes": [{"pane_id": format!("{id}:p1"), "focused": true,
+                    "rect": {"x": 0, "y": 0, "width": 120, "height": 60}}],
+                "splits": []
+            })
+        };
+        let mut replica = SessionReplica::from_snapshot(&json!({
+            "version": "0.9.5",
+            "protocol": hide_herdr_client::HERDR_PROTOCOL_REVISION,
+            "focused_workspace_id": "w2",
+            "focused_pane_id": "w2:p1",
+            "workspaces": [workspace("w1", false), workspace("w2", true)],
+            "tabs": [tab("w1"), tab("w2")],
+            "panes": [pane("w1"), pane("w2")],
+            "layouts": [layout("w1"), layout("w2")],
+            "agents": []
+        }))
+        .expect("two-workspace snapshot");
+        for (kind, data) in [
+            (
+                "workspace_closed",
+                json!({"type": "workspace_closed", "workspace_id": "w2"}),
+            ),
+            (
+                "tab_closed",
+                json!({"type": "tab_closed", "tab_id": "w2:t1", "workspace_id": "w2"}),
+            ),
+        ] {
+            let line = json!({"event": kind, "data": data}).to_string();
+            let SubscriptionLine::Event(event) = parse_subscription_line(&line).unwrap() else {
+                unreachable!()
+            };
+            replica
+                .apply(event, ApplyMode::Strict)
+                .expect("close applies");
+        }
+        replica
+    }
+
+    fn context_for(herdr: &FakeHerdr) -> SessionSyncContext {
+        SessionSyncContext::local(
+            &LiveContext {
+                socket_path: herdr.socket_path().to_path_buf(),
+                runtime: Weak::new(),
+                notifier: ChangeNotifier::noop(),
+                api_connector: Arc::new(herdr.connector()),
+                node: Arc::new(hide_node::Local::of_process()),
+            },
+            std::sync::Arc::new(hide_node::Local::of_process()),
+        )
+    }
+
+    /// The focus a closed workspace left is read from `workspace.list`, and
+    /// the replica publishes the workspace Herdr names with its pane.
+    #[test]
+    fn a_workspace_list_read_names_the_focus_a_closed_workspace_left() {
+        let herdr = FakeHerdr::start("focus-after-close", |method, _| match method {
+            "workspace.list" => json!({"type": "workspace_list", "workspaces": [{
+                "workspace_id": "w1", "label": "w1", "agent_status": "idle", "focused": true,
+                "number": 1, "pane_count": 1, "tab_count": 1, "active_tab_id": "w1:t1"
+            }]}),
+            other => panic!("unexpected {other}"),
+        });
+        let context = context_for(&herdr);
+        let mut replica = replica_after_closing_the_focused_workspace();
+        assert_eq!(replica.awaiting_focus(), Some("w2"));
+
+        let read = ActiveTabRead {
+            tabs: Vec::new(),
+            focus: Some(fetch_focused_workspace(&context).expect("workspace.list read")),
+        };
+        let mut attempts = BTreeMap::from([("w2".to_owned(), 1)]);
+        assert!(settle_active_tabs(&context, &mut replica, &mut attempts, read).unwrap());
+        assert!(attempts.is_empty());
+        assert!(replica.ready_to_publish());
+        assert_eq!(replica.project().focused_pane_id.as_deref(), Some("w1:p1"));
+    }
+
+    /// A focus wait that never converges ends the subscription for a fresh
+    /// snapshot, as an active tab wait does.
+    #[test]
+    fn a_focus_wait_past_its_read_limit_is_stale() {
+        let herdr = FakeHerdr::start("focus-after-close-limit", |method, _| {
+            panic!("unexpected {method}")
+        });
+        let replica = replica_after_closing_the_focused_workspace();
+        let (sender, _receiver) = std::sync::mpsc::channel();
+        let mut reader = SyncReader::start(&context_for(&herdr), sender).expect("reader");
+        let mut attempts = BTreeMap::from([("w2".to_owned(), ACTIVE_TAB_READ_ATTEMPT_LIMIT)]);
+        let error = ask_active_tabs(&mut reader, 1, &replica, &mut attempts).unwrap_err();
+        assert!(
+            matches!(error, SessionFetchError::Stale(message) if message.contains("after workspace w2 closed"))
+        );
     }
 }

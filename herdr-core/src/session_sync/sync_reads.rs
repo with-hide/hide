@@ -1,5 +1,5 @@
 //! The socket reads the coordinator needs besides the event stream: the agent
-//! list, a new pane's cwd, a workspace's replacement active tab, and the
+//! list, a new pane's cwd, a workspace's replacement active tab or focus, and the
 //! agent of a start Herdr still holds open while the agent is at rest
 //! (`launch_settle.rs`).
 //!
@@ -16,7 +16,12 @@ use super::*;
 pub(crate) enum SyncRead {
     Agents,
     PaneCwds(Vec<String>),
-    ActiveTabs(Vec<String>),
+    /// Each workspace's active tab, and with `focus` the workspace in focus:
+    /// what Herdr moved on a close without an event.
+    ActiveTabs {
+        workspace_ids: Vec<String>,
+        focus: bool,
+    },
     /// `agent.get` of each pane, which is what lets Herdr settle its start
     /// (herdrdev/herdr#3853, `launch_settle.rs`).
     Launches(Vec<String>),
@@ -28,7 +33,7 @@ pub(crate) enum SyncReadAnswer {
         result: Result<Vec<ProjectedAgent>, SessionFetchError>,
     },
     PaneCwds(Result<Vec<(String, Option<String>)>, SessionFetchError>),
-    ActiveTabs(Result<Vec<(String, String)>, SessionFetchError>),
+    ActiveTabs(Result<ActiveTabRead, SessionFetchError>),
     /// Each pane read, with the reason a read failed.
     Launches(Vec<(String, Result<(), SessionFetchError>)>),
 }
@@ -38,10 +43,17 @@ impl SyncRead {
         match self {
             Self::Agents => 0,
             Self::PaneCwds(_) => 1,
-            Self::ActiveTabs(_) => 2,
+            Self::ActiveTabs { .. } => 2,
             Self::Launches(_) => 3,
         }
     }
+}
+
+/// What an `ActiveTabs` read found: each workspace's active tab, and, when
+/// it was asked, the workspace in focus (`None` inside when Herdr names none).
+pub(crate) struct ActiveTabRead {
+    pub(crate) tabs: Vec<(String, String)>,
+    pub(crate) focus: Option<Option<String>>,
 }
 
 impl SyncReadAnswer {
@@ -217,15 +229,24 @@ fn run(context: &SessionSyncContext, read: SyncRead) -> SyncReadAnswer {
                 .map(|pane_id| fetch_pane_cwd(context, &pane_id).map(|cwd| (pane_id, cwd)))
                 .collect(),
         ),
-        SyncRead::ActiveTabs(workspace_ids) => SyncReadAnswer::ActiveTabs(
-            workspace_ids
+        SyncRead::ActiveTabs {
+            workspace_ids,
+            focus,
+        } => SyncReadAnswer::ActiveTabs((|| {
+            let tabs = workspace_ids
                 .into_iter()
                 .map(|workspace_id| {
                     fetch_workspace_active_tab(context, &workspace_id)
                         .map(|tab_id| (workspace_id, tab_id))
                 })
-                .collect(),
-        ),
+                .collect::<Result<Vec<_>, _>>()?;
+            let focus = if focus {
+                Some(fetch_focused_workspace(context)?)
+            } else {
+                None
+            };
+            Ok(ActiveTabRead { tabs, focus })
+        })()),
         SyncRead::Launches(pane_ids) => SyncReadAnswer::Launches(
             pane_ids
                 .into_iter()
