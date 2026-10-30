@@ -326,7 +326,7 @@ const zhCN = {
   "work.reason.mergeFailing": "合并 · {{name}} 失败（非必需）",
   "work.reason.update": "更新 · 落后于 {{base}}",
   "work.reason.assign_reviewer": "指定审查者 · 未请求任何人",
-  "work.reason.assign_reviewer_optional": "指定审查者 · 缺少必需的审查",
+  "work.reason.assign_reviewer_optional": "指定审查者 · 无必需审查",
   "work.reason.review": "审查 · {{name}} 已等待 {{time}}",
   "work.reason.reviewAnon": "审查 · 已等待 {{time}}",
   "work.reason.team_review": "审查 · 请求 {{name}} · {{time}}",

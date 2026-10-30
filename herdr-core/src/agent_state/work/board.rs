@@ -313,10 +313,10 @@ fn standing(pr: &PullRequestSnapshot) -> Option<Placed> {
                 if !work.review_requests.is_empty() {
                     return Some(place("waiting", waiting_review(pr)));
                 }
-                // With no review decision GitHub's block is not review's, so
-                // the row does not say nobody was asked (PRD
-                // pr-review-status B4).
-                let kind = if pr.review.is_some() {
+                // Unless GitHub says review is still required its block is
+                // not review's, so the row does not say nobody was asked
+                // (PRD pr-review-status B4).
+                let kind = if pr.review == Some(ReviewDecision::ReviewRequired) {
                     "assign_reviewer"
                 } else {
                     "assign_reviewer_optional"
@@ -743,6 +743,10 @@ mod tests {
         // GitHub blocks it with no review decision: a block that is not review's.
         let mut unrequired = pr(6);
         unrequired.work.merge_state = MergeState::Blocked;
+        // Approved and still blocked: by a rule that is not review's.
+        let mut approved = pr(7);
+        approved.work.merge_state = MergeState::Blocked;
+        approved.review = Some(ReviewDecision::Approved);
         let mut asked = pr(5);
         asked.work.merge_state = MergeState::Blocked;
         asked.work.review_requests = vec![ReviewRequest {
@@ -750,7 +754,9 @@ mod tests {
             name: "ann".into(),
         }];
         let board = board(
-            vec![dirty, behind, running, unreviewed, asked, unrequired],
+            vec![
+                dirty, behind, running, unreviewed, asked, unrequired, approved,
+            ],
             &[],
         );
         let place = |n| (row(&board, n).group, row(&board, n).reason.kind);
@@ -761,6 +767,7 @@ mod tests {
         assert_eq!(place(4), ("needs_you", "assign_reviewer"));
         assert_eq!(place(5), ("waiting", "waiting_review"));
         assert_eq!(place(6), ("needs_you", "assign_reviewer_optional"));
+        assert_eq!(place(7), ("needs_you", "assign_reviewer_optional"));
     }
 
     #[test]

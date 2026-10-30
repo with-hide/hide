@@ -534,7 +534,10 @@ impl Runtime {
     /// asked with `request_id` (PRD pr-review-status D-11).
     pub(super) fn follow_pre_check(&mut self, request_id: String, repo_name: String, number: u64) {
         let pre_checks = &mut self.links_work.pre_checks;
-        pre_checks.retain(|held| held.request_id != request_id);
+        // A repeated request is the same start: its following stands.
+        if pre_checks.iter().any(|held| held.request_id == request_id) {
+            return;
+        }
         if pre_checks.len() >= PRE_CHECK_LIMIT {
             let dropped = pre_checks.remove(0);
             pre_check_dropped(&dropped, "capped");
@@ -557,43 +560,62 @@ impl Runtime {
         if self.links_work.pre_checks.is_empty() {
             return;
         }
-        let operation = self.snapshot.task_operation.as_ref();
-        let devices = self
-            .catalog_workspaces()
-            .flat_map(|workspace| {
-                workspace.checkouts.iter().flat_map(|checkout| {
-                    checkout.tabs.iter().flat_map(|tab| {
-                        tab.panes
-                            .iter()
-                            .map(|pane| (pane.id.clone(), workspace.device_id.clone()))
-                    })
-                })
-            })
-            .collect::<HashMap<_, _>>();
-        let sessions = self
-            .link_lineage_agents()
-            .filter_map(|agent| {
-                Some((
-                    agent.pane_id.clone(),
-                    (session_agent(&agent.agent_kind)?, agent.session_id.clone()?),
-                ))
-            })
-            .collect::<HashMap<_, _>>();
-        let mut facts = Vec::new();
         let mut pre_checks = std::mem::take(&mut self.links_work.pre_checks);
-        pre_checks.retain_mut(|pre_check| {
-            if pre_check.pane_id.is_none()
-                && let Some(operation) = operation.filter(|operation| {
-                    operation.request_id.as_deref() == Some(&pre_check.request_id)
-                })
-            {
+        if let Some(operation) = self.snapshot.task_operation.as_ref() {
+            pre_checks.retain_mut(|pre_check| {
+                if operation.request_id.as_deref() != Some(&pre_check.request_id) {
+                    return true;
+                }
                 if operation.phase == "failed" || operation.agent_phase.as_deref() == Some("failed")
                 {
                     pre_check_dropped(pre_check, "start_failed");
                     return false;
                 }
-                pre_check.pane_id = operation.pane_id.clone();
-            }
+                if pre_check.pane_id.is_none() {
+                    pre_check.pane_id = operation.pane_id.clone();
+                }
+                true
+            });
+        }
+        // Until a start names its pane there is no pane or session to look
+        // up, and the session updates that call this read nothing more.
+        let (devices, sessions) = if pre_checks
+            .iter()
+            .any(|pre_check| pre_check.pane_id.is_some())
+        {
+            let wanted = pre_checks
+                .iter()
+                .filter_map(|pre_check| pre_check.pane_id.as_deref())
+                .collect::<HashSet<_>>();
+            let devices = self
+                .catalog_workspaces()
+                .flat_map(|workspace| {
+                    workspace.checkouts.iter().flat_map(|checkout| {
+                        checkout.tabs.iter().flat_map(|tab| {
+                            tab.panes
+                                .iter()
+                                .filter(|pane| wanted.contains(pane.id.as_str()))
+                                .map(|pane| (pane.id.clone(), workspace.device_id.clone()))
+                        })
+                    })
+                })
+                .collect::<HashMap<_, _>>();
+            let sessions = self
+                .link_lineage_agents()
+                .filter(|agent| wanted.contains(agent.pane_id.as_str()))
+                .filter_map(|agent| {
+                    Some((
+                        agent.pane_id.clone(),
+                        (session_agent(&agent.agent_kind)?, agent.session_id.clone()?),
+                    ))
+                })
+                .collect::<HashMap<_, _>>();
+            (devices, sessions)
+        } else {
+            Default::default()
+        };
+        let mut facts = Vec::new();
+        pre_checks.retain_mut(|pre_check| {
             if let Some(pane_id) = &pre_check.pane_id {
                 let device = devices.get(pane_id);
                 if device.is_none() && pre_check.pane_seen {

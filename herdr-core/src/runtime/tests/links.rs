@@ -1994,6 +1994,20 @@ fn a_pre_check_reaches_the_record_as_its_session_and_a_failed_or_closed_start_is
     assert!(runtime.links_work.pre_checks.is_empty());
     assert_eq!(client.review_facts_for_test().unwrap().len(), 1);
 
+    // A repeated request keeps its following, and an agent that fails after
+    // its pane was named ends it.
+    runtime.follow_pre_check("r-4".into(), "acme/app".into(), 11);
+    runtime.snapshot.task_operation = Some(pre_check_operation("r-4", Some("p-late"), "starting"));
+    runtime.feed_link_reviews();
+    runtime.follow_pre_check("r-4".into(), "acme/app".into(), 11);
+    assert_eq!(
+        runtime.links_work.pre_checks[0].pane_id.as_deref(),
+        Some("p-late")
+    );
+    runtime.snapshot.task_operation = Some(pre_check_operation("r-4", Some("p-late"), "failed"));
+    runtime.feed_link_reviews();
+    assert!(runtime.links_work.pre_checks.is_empty());
+
     // The followed starts are capped.
     for index in 0..crate::runtime::links::PRE_CHECK_LIMIT + 2 {
         runtime.follow_pre_check(format!("r-cap-{index}"), "acme/app".into(), 10);
