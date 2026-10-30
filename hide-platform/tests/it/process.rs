@@ -1019,15 +1019,16 @@ fn a_process_that_has_ended_holds_no_file_it_had_open() {
 }
 
 /// A capture returns only once each process of its tree has let go of what
-/// it held, in the two orders a list of the tree read once at its end
-/// missed on Windows: a holder started after the owner had looked at the
-/// tree, and one that ended on its own, by its exit code, before the owner
-/// began to end the tree. Windows counts a process out of its job and sets
-/// its exit code before it closes the process's handles, so the second
-/// still held its file when the job counted nothing running
-/// (with-hide/hide-private#327).
+/// it held: a holder started after the child, while the tree ran, and one
+/// that ended on its own, by its exit code, before the owner began to end
+/// the tree. Windows counts a process out of its job and sets its exit code
+/// before it closes the process's handles, so the second can still hold its
+/// file when the job counts nothing running (with-hide/hide-private#327).
+/// The test orders the starts and the ending against the end; when the
+/// system closes a handle is its own, so the test fails only when that
+/// close is late, and a pass does not prove the order inside the system.
 #[test]
-fn a_capture_waits_for_a_holder_started_after_the_owner_looked_and_one_that_ended_before_its_end() {
+fn a_capture_waits_for_a_holder_started_while_the_tree_ran_and_one_that_ended_before_its_end() {
     let _serial = serial();
     let folder = tempfile::tempdir().unwrap();
     let replies = folder.path().join("replies");
@@ -1038,8 +1039,6 @@ fn a_capture_waits_for_a_holder_started_after_the_owner_looked_and_one_that_ende
         .stdin(Stdio::piped());
     let mut child = OwnedChild::spawn(&mut command).unwrap();
     let mut stdin = child.take_stdin().unwrap();
-    // The owner looks at the tree before any holder exists.
-    assert!(child.try_wait().unwrap().is_none());
     let mut ask = |line: &str, answer: &str| {
         writeln!(stdin, "{line}").unwrap();
         stdin.flush().unwrap();

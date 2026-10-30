@@ -4337,17 +4337,17 @@ mod sys {
         K32GetProcessMemoryInfo, PROCESS_MEMORY_COUNTERS,
     };
     use windows_sys::Win32::System::SystemServices::{
+        JOB_OBJECT_MSG_ABNORMAL_EXIT_PROCESS, JOB_OBJECT_MSG_EXIT_PROCESS,
         JOB_OBJECT_MSG_NEW_PROCESS, JOB_OBJECT_QUERY,
     };
     use windows_sys::Win32::System::Threading::INFINITE;
 
-    use std::collections::HashMap;
-    use std::sync::atomic::AtomicUsize;
+    use std::collections::{HashMap, VecDeque};
     use std::sync::{Arc, Mutex, MutexGuard, OnceLock, PoisonError};
     use windows_sys::Win32::System::Threading::{
         CREATE_NEW_PROCESS_GROUP, CREATE_NO_WINDOW, CREATE_SUSPENDED, DETACHED_PROCESS,
-        GetCurrentProcess, GetExitCodeProcess, GetProcessId, GetProcessTimes, OpenProcess,
-        OpenThread, PROCESS_QUERY_LIMITED_INFORMATION, PROCESS_SYNCHRONIZE, PROCESS_TERMINATE,
+        GetCurrentProcess, GetExitCodeProcess, GetProcessTimes, OpenProcess, OpenThread,
+        PROCESS_QUERY_LIMITED_INFORMATION, PROCESS_SYNCHRONIZE, PROCESS_TERMINATE,
         QueryFullProcessImageNameW, ResumeThread, THREAD_SUSPEND_RESUME, TerminateProcess,
         WaitForSingleObject,
     };
@@ -4415,18 +4415,20 @@ mod sys {
     /// The job announces each process that joins it, before it can run, on
     /// the one completion port of this process, set on the job before the
     /// child is started; one thread reads that port for the life of the
-    /// process as each notice arrives (`serve`), so nothing waits there for
-    /// an owner to ask. It holds each announced process until it is
-    /// signalled. A pid that no longer opens, or opens as a process outside
-    /// the job, had its object deleted, which happens only after its handles
-    /// were closed, so it has ended whole. Microsoft does not guarantee a
-    /// job's notices arrive, so the notices are counted against the job's own
-    /// count of the processes it ever ran: an end is not confirmed while one
-    /// is missing. A process that could not be followed (one that refuses to
-    /// be held or waited on, or one past [`HELD_LIMIT`]) is kept as the
+    /// process (`serve`), and each notice costs it a fixed amount of work. It
+    /// holds each announced process until it is signalled, and lets go of
+    /// those the job says exited as they signal. A pid that no longer opens,
+    /// or opens as a process outside the job, had its object deleted, which
+    /// happens only after its handles were closed, so it has ended whole.
+    /// Microsoft does not guarantee a job's notices arrive, so the notices are
+    /// counted against the job's own count of the processes it ever ran: an
+    /// end is not confirmed while one is owed. A process that could not be
+    /// followed (one that refuses to be held or waited on, or one past
+    /// [`HELD_LIMIT`]), and the port no longer being read, is kept as the
     /// reason, and every later question about the end answers with it.
     pub(super) struct Members {
         key: usize,
+        notices: &'static Notices,
         followed: Arc<Mutex<Followed>>,
     }
 
@@ -4436,18 +4438,26 @@ mod sys {
         /// against it after the owner's handle is closed.
         job: Owned,
         announced: u64,
-        held: Vec<Owned>,
+        /// Each announced process not yet seen signalled, by pid.
+        held: HashMap<u32, Owned>,
+        /// Held pids the job said exited, oldest first.
+        exited: VecDeque<u32>,
         lost: Option<String>,
     }
 
-    /// The completion port every child's job announces its processes on,
-    /// and the jobs it is read for.
+    /// The completion port the jobs of this process announce their
+    /// processes on.
     struct Notices {
         port: Owned,
-        jobs: Mutex<HashMap<usize, Arc<Mutex<Followed>>>>,
-        next: AtomicUsize,
-        /// Why the port stopped being read, once it has.
-        down: Mutex<Option<String>>,
+        registry: Mutex<Registry>,
+    }
+
+    /// The jobs a port is read for and whether it still is, changed under
+    /// one lock, so no job joins a port once it is no longer read.
+    struct Registry {
+        jobs: HashMap<usize, Arc<Mutex<Followed>>>,
+        next: usize,
+        down: Option<String>,
     }
 
     pub(super) fn spawn(
@@ -4892,41 +4902,32 @@ mod sys {
     /// left to end cannot be followed, which is its end's answer.
     const HELD_LIMIT: usize = 4096;
 
-    /// The notices of this process, started with the first child.
+    /// The most children whose jobs are followed at once; another child is
+    /// refused at its start.
+    const JOB_LIMIT: usize = 1024;
+
+    /// How many held processes the job said exited one notice checks for
+    /// their signal, so a notice costs the same however many are held.
+    const EXITED_CHECKS: usize = 2;
+
+    /// The notices of this process, started with the first child. A thread
+    /// that cannot start stops them, so every child after is refused.
     fn notices() -> io::Result<&'static Notices> {
-        static NOTICES: OnceLock<Result<Notices, String>> = std::sync::OnceLock::new();
-        NOTICES
-            .get_or_init(|| {
-                // SAFETY: a new port that no file handle is tied to.
-                let port = unsafe {
-                    CreateIoCompletionPort(INVALID_HANDLE_VALUE, std::ptr::null_mut(), 0, 1)
-                };
-                if port.is_null() {
-                    return Err(io::Error::last_os_error().to_string());
-                }
-                Ok(Notices {
-                    port: Owned(port),
-                    jobs: Mutex::new(HashMap::new()),
-                    next: AtomicUsize::new(1),
-                    down: Mutex::new(None),
-                })
-            })
+        static NOTICES: OnceLock<Result<Notices, String>> = OnceLock::new();
+        let notices = NOTICES
+            .get_or_init(|| Notices::open().map_err(|error| error.to_string()))
             .as_ref()
-            .map_err(|reason| io::Error::other(format!("job notices cannot be read: {reason}")))
-            .and_then(|notices| {
-                static SERVED: std::sync::Once = std::sync::Once::new();
-                let mut started = Ok(());
-                SERVED.call_once(|| {
-                    started = std::thread::Builder::new()
-                        .name("hide-job-notices".into())
-                        .spawn(move || serve(notices))
-                        .map(drop);
-                    if let Err(error) = &started {
-                        notices.stop(format!("its thread could not start: {error}"));
-                    }
-                });
-                started.map(|()| notices)
-            })
+            .map_err(|reason| io::Error::other(format!("job notices cannot be read: {reason}")))?;
+        static SERVED: std::sync::Once = std::sync::Once::new();
+        SERVED.call_once(|| {
+            if let Err(error) = std::thread::Builder::new()
+                .name("hide-job-notices".into())
+                .spawn(move || serve(notices))
+            {
+                notices.stop(format!("its thread could not start: {error}"));
+            }
+        });
+        Ok(notices)
     }
 
     /// Reads the port as long as this process lives, one notice at a time.
@@ -4947,12 +4948,12 @@ mod sys {
                 notices.stop(io::Error::last_os_error().to_string());
                 return;
             }
-            let followed = lock(&notices.jobs).get(&key).cloned();
+            let followed = lock(&notices.registry).jobs.get(&key).cloned();
             // A job whose owner has let it go has nothing left to follow.
-            if let (Some(followed), JOB_OBJECT_MSG_NEW_PROCESS) = (followed, message) {
+            if let Some(followed) = followed {
                 // The notice carries the pid where an overlapped pointer
                 // would be.
-                lock(&followed).announce(overlapped as usize as u32);
+                lock(&followed).notice(message, overlapped as usize as u32);
             }
         }
     }
@@ -4964,25 +4965,80 @@ mod sys {
     }
 
     impl Notices {
-        /// The port is no longer read: every job's end is unconfirmable
-        /// from now on.
-        fn stop(&self, reason: String) {
-            diagnose(&format!("process.job_notices_down reason={reason}\n"));
-            for followed in lock(&self.jobs).values() {
-                lock(followed).lose(format!("job notices stopped: {reason}"));
+        fn open() -> io::Result<Self> {
+            // SAFETY: a new port that no file handle is tied to.
+            let port =
+                unsafe { CreateIoCompletionPort(INVALID_HANDLE_VALUE, std::ptr::null_mut(), 0, 1) };
+            if port.is_null() {
+                return Err(io::Error::last_os_error());
             }
-            *lock(&self.down) = Some(reason);
+            Ok(Self {
+                port: Owned(port),
+                registry: Mutex::new(Registry {
+                    jobs: HashMap::new(),
+                    next: 1,
+                    down: None,
+                }),
+            })
         }
+
+        /// The port is no longer read: every job followed now keeps the
+        /// reason and stops sending notices to it, and no job joins it after.
+        fn stop(&self, reason: String) {
+            let mut registry = lock(&self.registry);
+            if registry.down.is_some() {
+                return;
+            }
+            diagnose(&format!("process.job_notices_down reason={reason}\n"));
+            for followed in registry.jobs.values() {
+                let mut followed = lock(followed);
+                followed.lose(format!("job notices stopped: {reason}"));
+                if let Err(error) = associate(&followed.job, std::ptr::null_mut(), 0) {
+                    diagnose(&format!("process.job_notices_left_set error={error}\n"));
+                }
+            }
+            registry.down = Some(reason);
+        }
+
+        /// Why the port is no longer read, once it is not.
+        fn down(&self) -> Option<String> {
+            lock(&self.registry).down.clone()
+        }
+    }
+
+    /// Points `job`'s notices at `port` with `key`; a null port takes them
+    /// away (Windows 8 and later).
+    fn associate(job: &Owned, port: HANDLE, key: usize) -> io::Result<()> {
+        let association = JOBOBJECT_ASSOCIATE_COMPLETION_PORT {
+            CompletionKey: key as *mut core::ffi::c_void,
+            CompletionPort: port,
+        };
+        // SAFETY: the job handle is open and `association` is valid for the
+        // size passed.
+        let set = unsafe {
+            SetInformationJobObject(
+                job.0,
+                JobObjectAssociateCompletionPortInformation,
+                (&association as *const JOBOBJECT_ASSOCIATE_COMPLETION_PORT).cast(),
+                std::mem::size_of::<JOBOBJECT_ASSOCIATE_COMPLETION_PORT>() as u32,
+            )
+        };
+        if set == 0 {
+            return Err(io::Error::last_os_error());
+        }
+        Ok(())
     }
 
     impl Members {
         /// Follows `job`'s processes: its notices go to this process's port
         /// from before anything joins it.
         fn follow(job: &Owned) -> io::Result<Self> {
-            let notices = notices()?;
-            if let Some(reason) = lock(&notices.down).clone() {
-                return Err(io::Error::other(format!("job notices stopped: {reason}")));
-            }
+            Self::follow_on(notices()?, job)
+        }
+
+        /// Follows `job` on `notices`. Joining and the port's stop share
+        /// one lock, so a job joins only a port that is still read.
+        fn follow_on(notices: &'static Notices, job: &Owned) -> io::Result<Self> {
             let mut copy = std::ptr::null_mut();
             // SAFETY: both process handles are this process's, the job's is
             // open, and `copy` is writable.
@@ -5003,65 +5059,67 @@ mod sys {
             let followed = Arc::new(Mutex::new(Followed {
                 job: Owned(copy),
                 announced: 0,
-                held: Vec::new(),
+                held: HashMap::new(),
+                exited: VecDeque::new(),
                 lost: None,
             }));
-            let key = notices
-                .next
-                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-            lock(&notices.jobs).insert(key, Arc::clone(&followed));
-            // Registered before the job can announce anything, and let go
-            // of on any failure below.
-            let members = Self { key, followed };
-            let association = JOBOBJECT_ASSOCIATE_COMPLETION_PORT {
-                CompletionKey: key as *mut core::ffi::c_void,
-                CompletionPort: notices.port.0,
-            };
-            // SAFETY: both handles are open and `association` is valid for
-            // the size passed.
-            let set = unsafe {
-                SetInformationJobObject(
-                    job.0,
-                    JobObjectAssociateCompletionPortInformation,
-                    (&association as *const JOBOBJECT_ASSOCIATE_COMPLETION_PORT).cast(),
-                    std::mem::size_of::<JOBOBJECT_ASSOCIATE_COMPLETION_PORT>() as u32,
-                )
-            };
-            if set == 0 {
-                return Err(io::Error::last_os_error());
+            let mut registry = lock(&notices.registry);
+            if let Some(reason) = &registry.down {
+                return Err(io::Error::other(format!("job notices stopped: {reason}")));
             }
-            Ok(members)
+            if registry.jobs.len() >= JOB_LIMIT {
+                return Err(io::Error::other(format!(
+                    "more than {JOB_LIMIT} children are followed at once"
+                )));
+            }
+            let key = registry.next;
+            registry.next += 1;
+            registry.jobs.insert(key, Arc::clone(&followed));
+            // Registered before the job can announce anything.
+            if let Err(error) = associate(job, notices.port.0, key) {
+                registry.jobs.remove(&key);
+                return Err(error);
+            }
+            Ok(Self {
+                key,
+                notices,
+                followed,
+            })
         }
     }
 
     impl Drop for Members {
         fn drop(&mut self) {
-            if let Ok(notices) = notices() {
-                lock(&notices.jobs).remove(&self.key);
-            }
+            lock(&self.notices.registry).jobs.remove(&self.key);
         }
     }
 
     impl Followed {
-        /// A process joined the job.
-        fn announce(&mut self, pid: u32) {
-            self.announced += 1;
-            if self.lost.is_none()
-                && let Err(error) = self.hold(pid)
-            {
-                self.lose(format!("process {pid}: {error}"));
+        /// One notice of the job's, at a fixed cost.
+        fn notice(&mut self, message: u32, pid: u32) {
+            match message {
+                JOB_OBJECT_MSG_NEW_PROCESS => {
+                    self.announced += 1;
+                    if self.lost.is_none()
+                        && let Err(error) = self.hold(pid)
+                    {
+                        self.lose(format!("process {pid}: {error}"));
+                    }
+                }
+                JOB_OBJECT_MSG_EXIT_PROCESS | JOB_OBJECT_MSG_ABNORMAL_EXIT_PROCESS
+                    if self.held.contains_key(&pid) && self.exited.len() < HELD_LIMIT =>
+                {
+                    self.exited.push_back(pid);
+                }
+                _ => {}
             }
+            self.let_go_of_exited();
         }
 
         /// Holds the process `pid` names while it is this job's and has not
         /// ended.
         fn hold(&mut self, pid: u32) -> io::Result<()> {
-            // SAFETY: each handle is open while it is held.
-            if self
-                .held
-                .iter()
-                .any(|process| unsafe { GetProcessId(process.0) } == pid)
-            {
+            if self.held.contains_key(&pid) {
                 return Ok(());
             }
             let process = match open(pid, PROCESS_SYNCHRONIZE | PROCESS_QUERY_LIMITED_INFORMATION) {
@@ -5080,30 +5138,52 @@ mod sys {
                 return Ok(());
             }
             if self.held.len() >= HELD_LIMIT {
-                self.let_go_of_ended();
-            }
-            if self.held.len() >= HELD_LIMIT {
                 return Err(io::Error::other(format!(
                     "more than {HELD_LIMIT} processes left to end"
                 )));
             }
-            self.held.push(process);
+            self.held.insert(pid, process);
             Ok(())
         }
 
-        /// Lets go of every held process that has ended; one whose wait
-        /// fails stays held, and the failure is kept.
+        /// Lets go of the oldest processes the job said exited once they
+        /// are signalled, at most [`EXITED_CHECKS`] of them.
+        fn let_go_of_exited(&mut self) {
+            for _ in 0..EXITED_CHECKS {
+                let Some(&pid) = self.exited.front() else {
+                    return;
+                };
+                if let Some(process) = self.held.get(&pid) {
+                    match signalled(process) {
+                        Ok(true) => {}
+                        Ok(false) => return,
+                        Err(error) => {
+                            self.lose(format!("process {pid} could not be waited on: {error}"));
+                            return;
+                        }
+                    }
+                    self.held.remove(&pid);
+                }
+                self.exited.pop_front();
+            }
+        }
+
+        /// Lets go of every held process that has ended, for the owner
+        /// asking about the end; one whose wait fails stays held, and the
+        /// failure is kept.
         fn let_go_of_ended(&mut self) {
             let mut failure = None;
-            self.held.retain(|process| match signalled(process) {
+            self.held.retain(|pid, process| match signalled(process) {
                 Ok(ended) => !ended,
                 Err(error) => {
-                    failure.get_or_insert(error);
+                    failure.get_or_insert(format!("process {pid} could not be waited on: {error}"));
                     true
                 }
             });
-            if let Some(error) = failure {
-                self.lose(format!("a held process could not be waited on: {error}"));
+            let held = &self.held;
+            self.exited.retain(|pid| held.contains_key(pid));
+            if let Some(reason) = failure {
+                self.lose(reason);
             }
         }
 
@@ -5134,6 +5214,11 @@ mod sys {
     /// announced by then or still owed. A process that could not be followed
     /// is the error, now and every time after.
     fn left_running(tie: &Tie) -> io::Result<usize> {
+        if let Some(reason) = tie.3.notices.down() {
+            return Err(io::Error::other(format!(
+                "the job's processes could not all be followed: job notices stopped: {reason}"
+            )));
+        }
         let (active, total) = accounting(tie)?;
         let mut followed = lock(&tie.3.followed);
         if followed.lost.is_none() {
@@ -5570,6 +5655,73 @@ mod sys {
             child.kill().unwrap();
             child.wait().unwrap();
             held.end().unwrap();
+        }
+
+        /// A job of this process's own, with nothing in it.
+        fn empty_job() -> Owned {
+            // SAFETY: attributes and name may be null.
+            let job = unsafe { CreateJobObjectW(std::ptr::null(), std::ptr::null()) };
+            assert!(!job.is_null(), "{}", io::Error::last_os_error());
+            Owned(job)
+        }
+
+        /// Notices of the test's own, which no thread reads.
+        fn own_notices() -> &'static Notices {
+            Box::leak(Box::new(Notices::open().unwrap()))
+        }
+
+        /// Once its notices stop being read, a job followed before answers
+        /// every question about its end with why, and no job joins after,
+        /// whichever side of the stop it asked from.
+        #[test]
+        fn a_job_followed_before_the_notices_stopped_answers_why_and_none_joins_after() {
+            let notices = own_notices();
+            let before = empty_job();
+            let members = Members::follow_on(notices, &before).unwrap();
+            notices.stop("the test stopped them".into());
+            let refused = Members::follow_on(notices, &empty_job())
+                .err()
+                .expect("a job joins notices that are no longer read");
+            assert!(
+                refused.to_string().contains("the test stopped them"),
+                "{refused}"
+            );
+            assert!(
+                lock(&notices.registry).jobs.len() == 1,
+                "the refused job was registered"
+            );
+            let tie = Tie(before, true, None, members);
+            let answer = left_running(&tie).unwrap_err();
+            assert!(
+                answer.to_string().contains("the test stopped them"),
+                "{answer}"
+            );
+            assert!(
+                lock(&tie.3.followed).lost.is_some(),
+                "the followed job was not told"
+            );
+        }
+
+        /// The jobs followed at once have a cap: one more child is refused
+        /// at its start, and one that ends frees its place.
+        #[test]
+        fn a_child_past_the_followed_jobs_cap_is_refused_and_an_ended_one_frees_its_place() {
+            let notices = own_notices();
+            let jobs: Vec<Owned> = (0..JOB_LIMIT).map(|_| empty_job()).collect();
+            let mut followed: Vec<Members> = jobs
+                .iter()
+                .map(|job| Members::follow_on(notices, job).unwrap())
+                .collect();
+            let extra = empty_job();
+            let refused = Members::follow_on(notices, &extra)
+                .err()
+                .expect("a job past the cap was followed");
+            assert!(
+                refused.to_string().contains(&JOB_LIMIT.to_string()),
+                "{refused}"
+            );
+            followed.pop();
+            Members::follow_on(notices, &extra).unwrap();
         }
     }
 }
