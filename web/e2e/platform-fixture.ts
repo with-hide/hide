@@ -146,10 +146,14 @@ const powershell = (script: string, env: NodeJS.ProcessEnv = {}): string =>
 
 /**
  * What holds TCP connections on this Windows machine now: the total, the
- * count in each state, and the ten process names holding the most. Chromium's
- * `ERR_NO_BUFFER_SPACE` (WSAENOBUFS) on a loopback connect to a test's hided
- * left nothing saying who held the sockets; `windows-sockets-reporter.ts`
- * prints this when a test attempt fails.
+ * count in each state, the ten process names holding the most, the dynamic
+ * port range those connections draw from, and the kernel's nonpaged pool
+ * beside the memory still available. Chromium's `ERR_NO_BUFFER_SPACE`
+ * (WSAENOBUFS) on a loopback connect to a test's hided left nothing saying
+ * who held the sockets, and when the count turned out far below the port range
+ * (with-hide/hide-private#296), nothing saying whether the kernel's own buffer
+ * memory ran short; `windows-sockets-reporter.ts` prints this when a test
+ * attempt fails.
  */
 export function windowsTcpSummary(): string[] {
   return powershell(`
@@ -160,6 +164,10 @@ export function windowsTcpSummary(): string[] {
     "by state: " + (($connections | Group-Object State | Sort-Object Count -Descending | ForEach-Object { "$($_.Name) $($_.Count)" }) -join ', ')
     "by process: " + (($connections | ForEach-Object { $name = $names[[int]$_.OwningProcess]; if ($name) { $name } else { "pid $($_.OwningProcess)" } } |
       Group-Object | Sort-Object Count -Descending | Select-Object -First 10 | ForEach-Object { "$($_.Name) $($_.Count)" }) -join ', ')
+    $ports = Get-NetTCPSetting -SettingName Internet
+    "dynamic ports: $($ports.DynamicPortRangeStartPort)-$($ports.DynamicPortRangeStartPort + $ports.DynamicPortRangeNumberOfPorts - 1)"
+    $memory = Get-CimInstance Win32_PerfFormattedData_PerfOS_Memory
+    "memory: nonpaged pool $([math]::Round($memory.PoolNonpagedBytes / 1MB)) MB, available $($memory.AvailableMBytes) MB"
   `).split(/\r?\n/).filter(Boolean);
 }
 
