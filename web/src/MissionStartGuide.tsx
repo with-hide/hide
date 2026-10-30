@@ -44,7 +44,7 @@ function Call({ kind, call, runtime }: { kind: string; call: string; runtime: st
     <span className="flex min-w-0 items-center gap-xs" data-mission-start-call={call}>
       <AgentMark kind={kind} />
       <span aria-hidden="true" className="text-subtle-foreground">&gt;</span>
-      <span className="font-semibold text-primary">{call}</span>
+      <span className="font-semibold text-foreground">{call}</span>
       <span className="min-w-0 truncate text-subtle-foreground">{runtime}</span>
     </span>
   );
@@ -93,6 +93,8 @@ const CHECKS = [
   { n: 5, cx: 195, cy: 160, from: 184, kind: "claude" },
 ] as const;
 const CHECK_R = 8;
+/** The labels' size in the drawing's units, so they keep to their boxes at every text size. */
+const LABEL = 10;
 
 /**
  * The picture itself (B3, B4): an SVG in its own coordinates, so it scales
@@ -115,7 +117,7 @@ function MissionPicture() {
       <g>
         <rect className="msg-box msg-conductor" x="89" y="6" width="112" height="26" rx="13" />
         <Mark kind="claude" x={103} y={13} />
-        <text className="msg-label" x="119" y="23">{t("missionTool.node.conductor")}</text>
+        <text className="msg-label" x="119" y="23" fontSize={LABEL}>{t("missionTool.node.conductor")}</text>
       </g>
       {WORKERS.map((worker) => (
         <Worker key={worker.n} n={worker.n} x={worker.x} y={WORKER_Y} width={WORKER_W} kind={worker.kind} label={t(worker.label)} />
@@ -123,19 +125,19 @@ function MissionPicture() {
       <Worker n={4} x={98} y={134} width={84} kind="claude" label={t("missionTool.node.demo")} />
       <g className="msg-ask" aria-hidden="true">
         <circle cx="203" cy="62" r="7" />
-        <text x="203" y="66" textAnchor="middle">!</text>
+        <text x="203" y="66" textAnchor="middle" fontSize={LABEL}>!</text>
       </g>
       {CHECKS.map((check) => (
         <g key={check.n}>
           <line className={`msg-tether msg-l${check.n}`} x1={check.from} y1={check.cy} x2={check.cx - CHECK_R} y2={check.cy} />
           <circle className={`msg-ring msg-r${check.n}`} cx={check.cx} cy={check.cy} r={CHECK_R} />
           <Mark kind={check.kind} x={check.cx - 5} y={check.cy - 5} size={10} />
-          <text className={`msg-tick msg-t${check.n}`} x={check.cx + 5} y={check.cy + 11}>✓</text>
+          <text className={`msg-tick msg-t${check.n}`} x={check.cx + 5} y={check.cy + 11} fontSize={LABEL}>✓</text>
         </g>
       ))}
       <g>
         <rect className="msg-box msg-main" x="110" y="198" width="70" height="24" rx="12" />
-        <text className="msg-label msg-main-label" x="145" y="214" textAnchor="middle">⎇ {t("missionTool.node.main")}</text>
+        <text className="msg-label msg-main-label" x="145" y="214" textAnchor="middle" fontSize={LABEL}>⎇ {t("missionTool.node.main")}</text>
       </g>
     </svg>
   );
@@ -146,7 +148,7 @@ function Worker({ n, x, y, width, kind, label }: { n: number; x: number; y: numb
     <g>
       <rect className={`msg-box msg-worker msg-w${n}`} x={x} y={y} width={width} height={BOX_H} rx="7" />
       <Mark kind={kind} x={x + 6} y={y + 6} />
-      <text className="msg-label" x={x + 21} y={y + 16}>{label}</text>
+      <text className="msg-label" x={x + 21} y={y + 16} fontSize={LABEL}>{label}</text>
       <rect className="msg-track" x={x + 6} y={y + 24} width={width - 12} height="3" rx="1.5" />
       <rect className={`msg-fill msg-f${n}`} x={x + 6} y={y + 24} width={width - 12} height="3" rx="1.5" />
     </g>

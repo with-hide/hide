@@ -6,7 +6,9 @@
  * check the demo, and main lights. The plain rules below are the finished
  * frame, which a reduced-motion setting keeps; the loop runs only under
  * `no-preference`, and only while the picture is on screen
- * (`data-playing`, MissionStartGuide.tsx). Colours are the mission tokens.
+ * (`data-playing`, MissionStartGuide.tsx). Colours are the mission tokens;
+ * sizes, type included, are the drawing's own coordinates, so the picture
+ * scales as one image with the tool's width.
  */
 
 .msg-box {
@@ -16,7 +18,6 @@
 }
 .msg-label {
   fill: var(--foreground);
-  font-size: var(--text-micro);
   font-weight: 600;
 }
 .msg-track {
@@ -52,7 +53,6 @@
 }
 .msg-tick {
   fill: var(--mission-done);
-  font-size: var(--text-micro);
   font-weight: 700;
 }
 .msg-ask {
@@ -63,7 +63,6 @@
 }
 .msg-ask text {
   fill: var(--background);
-  font-size: var(--text-micro);
   font-weight: 700;
 }
 .msg-main {
