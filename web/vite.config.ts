@@ -23,7 +23,7 @@ export default defineConfig({
   },
   test: {
     environment: "node",
-    setupFiles: ["./src/failureTiming.setup.ts"],
+    reporters: ["default", "./e2e/unit-failure-reporter.ts"],
     include: ["src/**/*.test.{ts,tsx}", "e2e/windows-sockets.unit.ts", "e2e/platform-program.unit.ts", "e2e/bounded-child.unit.ts"],
   },
 });

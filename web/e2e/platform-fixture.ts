@@ -171,6 +171,22 @@ export function windowsTcpSummary(): string[] {
   `).split(/\r?\n/).filter(Boolean);
 }
 
+/**
+ * The eight processes that have used the most processor time on this Windows
+ * machine, with their seconds and resident memory, and the memory still
+ * available. A unit test that ran in half a second on every other run timed
+ * out at 5 s on a Windows runner beside the files running with it
+ * (with-hide/hide-private issue 354); `unit-failure-reporter.ts` prints this
+ * when a unit test fails, so the next one says what else held the machine.
+ */
+export function windowsBusiestProcesses(): string[] {
+  return powershell(`
+    "busiest: " + ((Get-Process | Sort-Object CPU -Descending | Select-Object -First 8 | ForEach-Object {
+      "$($_.ProcessName) $([math]::Round($_.CPU)) s $([math]::Round($_.WorkingSet64 / 1MB)) MB" }) -join ', ')
+    "available memory: $((Get-CimInstance Win32_OperatingSystem).FreePhysicalMemory / 1KB -as [int]) MB"
+  `).split(/\r?\n/).filter(Boolean);
+}
+
 /** `pid` and its live descendants, as the fixtures' `hide-processes` lists them (`listWindowsTree`). */
 export function windowsProcessTree(pid: number): WindowsProcess[] {
   return listWindowsTree(fixtureShimPath("hide-processes"), pid);
