@@ -12,14 +12,9 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 const STORE_TIMEOUT: Duration = Duration::from_secs(5);
-/// How long Herdr gets to take the brief once the agent takes input.
-pub(super) const BRIEF_PROMPT_TIMEOUT: Duration = Duration::from_secs(10);
-/// How long a spawn waits for its started agent to show its session before
-/// it leaves the registration to an identity wait.
-pub(super) const IDENTITY_WAIT: Duration = Duration::from_secs(5);
 /// Herdr runs `git worktree add` inside `worktree.create`, which on a large
 /// repository under load takes longer than the 5 s every other call gets.
-pub(super) const WORKTREE_CREATE_TIMEOUT: Duration = Duration::from_secs(30);
+const WORKTREE_CREATE_TIMEOUT: Duration = Duration::from_secs(30);
 /// The refusal for a `worktree.create` whose answer never came: Herdr may
 /// still finish the worktree, and asking the same intent again continues it.
 pub(crate) const WORKTREE_UNCONFIRMED: &str = "worktree_unconfirmed";
@@ -117,7 +112,7 @@ fn wait_native_identity(
     // The agent runs by now, so a read Herdr did not answer says nothing of
     // it: the wait reads again, and at its deadline the spawn leaves the
     // registration to an identity wait rather than an agent nothing tracks.
-    let deadline = Instant::now() + IDENTITY_WAIT;
+    let deadline = Instant::now() + Duration::from_secs(5);
     loop {
         let remaining = deadline.saturating_duration_since(Instant::now());
         if remaining.is_zero() {
@@ -197,7 +192,7 @@ fn submit_brief(
         connector,
         "agent.prompt",
         crate::wire::delivery_prompt_params(pane, brief)?,
-        BRIEF_PROMPT_TIMEOUT,
+        Duration::from_secs(10),
     )
     .map_err(|error| refused("brief.prompt_refused", format!("{error}")))?;
     crate::wire::delivery_prompted(submitted)

@@ -26,6 +26,12 @@ const TIMEOUT: Duration = Duration::from_secs(10);
 /// Longer than the daemon's own Factory answer limit, so the daemon's reason
 /// arrives rather than a local timeout.
 const REMOTE_BOOTSTRAP_TIMEOUT: Duration = Duration::from_secs(25);
+/// A spawn on this machine: a Codex start with its brief commonly takes
+/// 10 to 15 seconds, past the 10 every other command gets.
+const SPAWN_TIMEOUT: Duration = Duration::from_secs(30);
+/// A spawn on another device: its checks, worktree, tab and agent start are
+/// each a round trip over SSH.
+const REMOTE_SPAWN_TIMEOUT: Duration = Duration::from_secs(60);
 /// The catalog's own wait for a model-list read is 10 seconds; the exchange
 /// outlives it.
 const CATALOG_TIMEOUT: Duration = Duration::from_secs(20);
@@ -652,14 +658,20 @@ pub fn request_delivery(
     command: herdr_core::delivery::Command,
     hint: Option<&str>,
 ) -> Result<Value, String> {
-    // A spawn creates a worktree, starts an agent and hands it its brief, on
-    // this machine or over SSH, so its answer has as long as the core's own
-    // steps may take; running it again after a timeout returns the same
-    // agent either way.
+    // A spawn creates a worktree, starts an agent and hands it its brief,
+    // which takes longer than a local command, and one on another device
+    // makes several calls over SSH besides; running it again after a timeout
+    // returns the same agent either way.
     let timeout = match &command {
         herdr_core::delivery::Command::Agents {
-            command: herdr_core::coordination::Command::Spawn { .. },
-        } => herdr_core::coordination::SPAWN_ANSWER_WITHIN,
+            command: herdr_core::coordination::Command::Spawn { machine, .. },
+        } => {
+            if machine.is_some() {
+                REMOTE_SPAWN_TIMEOUT
+            } else {
+                SPAWN_TIMEOUT
+            }
+        }
         _ => TIMEOUT,
     };
     credential.run(|path, after| {
