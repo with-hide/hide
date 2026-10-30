@@ -457,3 +457,25 @@ fn catch_up_refused_by_the_operators_files_shows_their_count_and_a_late_answer_i
         "the answer for the first target leaves the second's run alone"
     );
 }
+
+#[test]
+fn catch_up_in_a_checkout_mid_merge_says_so_and_a_landed_run_ends_when_reads_fail() {
+    use crate::checkout_git::CatchUpView;
+    use hide_node_link::branch::CatchUpOutcome;
+    let mut runtime = runtime();
+    let target = target(&runtime, 1);
+    header_with(&mut runtime, &target, behind('a', 0, 5));
+    running(&mut runtime, &target, 'a');
+    assert!(runtime.ingest_checkout_catch_up(&target, Ok(CatchUpOutcome::InProgress)));
+    assert_eq!(shown_catch_up(&runtime), Some(CatchUpView::Busy));
+    running(&mut runtime, &target, 'a');
+    runtime.ingest_checkout_catch_up(
+        &target,
+        Ok(CatchUpOutcome::Updated {
+            commit: "b".repeat(40),
+        }),
+    );
+    assert_eq!(shown_catch_up(&runtime), Some(CatchUpView::Running));
+    runtime.ingest_checkout_git((target, Err("git did not answer".into())), Instant::now());
+    assert_eq!(shown_catch_up(&runtime), None);
+}

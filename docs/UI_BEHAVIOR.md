@@ -25,7 +25,7 @@ With the background fetch turned off in Project settings the project is not fetc
 `herdr-core/src/runtime/fetch.rs` owns the schedule, `herdr-core/src/fetch.rs` runs it, and `hide-host/src/worktrees.rs` (`fetch_remote`) is the node's fetch.
 Only the ↑ arrow uses the existing success green and only the ↓ arrow uses warning orange; both counts and the file count remain neutral, including when the branch is ahead and behind at once.
 While the branch has commits to receive and none to send, the detail ends with `받기`, which moves the branch and its files to the tracking branch as Hide last fetched it, on the machine that holds the checkout: fast-forward only, with no fetch, merge commit, rebase or push, and only from the HEAD the detail showed.
-While it runs the button reads `받는 중` and stays until the Git read shows the new HEAD, or until a Git read fails; then the counts are what changed, and no message says it worked.
+While it runs the button reads `받는 중` and stays until the Git read shows the new HEAD (once the node has moved it, a failed Git read ends the wait too); then the counts are what changed, and no message says it worked.
 When uncommitted, untracked or ignored files would be overwritten, nothing moves and the detail says `커밋 안 한 파일 N개가 겹쳐서 못 받았어요` with `다시 받기`; a checkout partway through a merge, rebase, cherry-pick or revert says `진행 중인 머지나 리베이스를 먼저 끝내야 받을 수 있어요`; any other failure says `받지 못했어요` with the same button, and its reason goes to the diagnostic log.
 When the branch also has commits to send, the detail has no button and says `양쪽에 커밋이 있어 직접 합쳐야 해요`, because choosing between a merge and a rebase is the operator's.
 A failing fetch leaves the button, which then takes the tracking branch as last received.

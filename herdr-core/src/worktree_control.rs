@@ -915,10 +915,22 @@ fn newest_start(
         return base;
     };
     let remote_commit = remote_commit.trim().to_owned();
+    // A base only origin has starts from origin's commit.
+    if git
+        .run(
+            repository_root,
+            GitCommand::HasLocalBranch {
+                branch: branch.clone(),
+            },
+        )
+        .is_err()
+    {
+        return Some(remote_commit);
+    }
     // The comparison is against the commit read above, so a fetch landing
     // between the two reads cannot start the branch somewhere unchecked.
-    // One that cannot be made (no local branch of that name, a link that
-    // stopped answering) starts from the base as given, as before.
+    // One that cannot be made (a link that stopped answering) starts from
+    // the base as given, as before.
     match git.run(
         repository_root,
         GitCommand::CountCommits {
@@ -5009,8 +5021,7 @@ mod tests {
     }
 
     #[test]
-    fn a_local_base_with_unpushed_commits_no_fetched_copy_or_no_local_branch_is_started_from_as_given()
-     {
+    fn a_local_base_with_unpushed_commits_or_no_fetched_copy_is_started_from_as_given() {
         let folder = tempfile::tempdir().unwrap();
         let (clone, _, _) = clone_behind_origin(folder.path());
         let host = OwnHost(hide_host::serve::Env::standalone(None));
@@ -5026,13 +5037,13 @@ mod tests {
             new_branch_start(&host, root, Some("local-only".into())),
             Some("local-only".into())
         );
-        // A base only origin has cannot be compared and is handed on as given.
+        // A base only origin has starts from origin's commit.
         let origin = folder.path().join("origin");
         git_in(&origin, &["branch", "-q", "remote-only"]);
         git_in(&clone, &["fetch", "-q", "origin"]);
         assert_eq!(
             new_branch_start(&host, root, Some("remote-only".into())),
-            Some("remote-only".into())
+            Some(git_in(&clone, &["rev-parse", "origin/remote-only"]))
         );
         assert_eq!(
             new_branch_start(&host, root, Some("HEAD".into())),
