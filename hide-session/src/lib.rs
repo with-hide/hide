@@ -1602,6 +1602,7 @@ fn parse_lines_at(
                 continue;
             }
         };
+        found.begin_record();
         link(&value, line_offset, found);
         if let Some(turn) = turn {
             match turn(&value) {
@@ -1660,8 +1661,8 @@ fn parse_lines_at(
                 parsed.custom_title = Some(custom_title);
             }
             LineResult::TitleSnapshot { .. } => {}
-            LineResult::Sightings(sightings) => {
-                found.sightings(&sightings.prs);
+            LineResult::Sightings(mut sightings) => {
+                found.sightings(&mut sightings.prs);
                 found.issue_sightings(&sightings.issues);
                 parsed.pr_sightings.extend(sightings.prs);
                 parsed.issue_sightings.extend(sightings.issues);
@@ -1818,7 +1819,7 @@ fn claude_tool_outputs(content: Option<&Value>) -> Option<Vec<&str>> {
 }
 
 /// A tool output's text, whether a string or blocks carrying `text`.
-fn collect_text<'a>(value: Option<&'a Value>, into: &mut Vec<&'a str>) {
+pub(crate) fn collect_text<'a>(value: Option<&'a Value>, into: &mut Vec<&'a str>) {
     match value {
         Some(Value::String(text)) => into.push(text),
         Some(Value::Array(blocks)) => {
@@ -1863,6 +1864,7 @@ fn address_sightings(
                     repository,
                     number,
                     at_unix_ms,
+                    made: false,
                 });
             }
         }

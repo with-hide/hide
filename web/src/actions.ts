@@ -1406,6 +1406,10 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
     connectHerdrProfile(profileId: string) {
       dispatch({ schema_version: 2, kind: "herdr_profile_connect", payload: { profile_id: profileId, host_consent: true } });
     },
+    /** The Devices step went away: the sign-ins its own Connect started end, as a closed screen's do (B8). */
+    withdrawFirstRunSignIns() {
+      dispatch({ schema_version: 2, kind: "first_run_sign_in_withdraw", payload: {} });
+    },
 
     /** Needs You, with an optional Done choice for the reopened wizard's Not now. */
     setProductAnalytics(enabled: boolean) {
@@ -1624,6 +1628,14 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
      */
     lookForFetch() {
       dispatch({ schema_version: 2, kind: "fetch_look", payload: {} });
+    },
+
+    /**
+     * `받기`: moves the checkout's branch to its upstream as Hide last fetched
+     * it, fast-forward only, from the commit the header showed.
+     */
+    catchUpCheckout(deviceId: string, path: string, headSha: string) {
+      dispatch({ schema_version: 2, kind: "checkout_catch_up", payload: { device_id: deviceId, path, head_sha: headSha } });
     },
 
     /** Reads each of these local Git projects' GitHub answer again (General's GitHub row, Check again). */
@@ -2964,15 +2976,6 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
       this.closeOverview();
       this.openWorkspace(deviceId, workspaceId, checkoutId);
       dispatch({ schema_version: 2, kind: "detail_open", payload: { item: { kind: "record", session } } });
-    },
-    openRecordedIssue(session: import("./snapshot").WorkSession, repository: string, number: number) {
-      const project = catalogWorkspaces(rest()).find((row) => row.device_id === session.device_id && row.tasks?.source?.name?.toLowerCase() === repository.toLowerCase());
-      if (project) this.openBacklogItem(project.device_id, project.id, `github:${repository.toLowerCase()}#${number}`);
-      else this.openLink(`https://github.com/${repository}/issues/${number}`, true);
-    },
-    openRecordedOutput(output: import("./snapshot").WorkOutput) {
-      if (output.kind === "pr") this.openSessionPullRequest({ workspace_id: null, number: output.number, url: output.url });
-      else this.openRecordedIssue(output.source, output.repository, output.number);
     },
     /**
      * A tile of the record's 결과물 gallery (PRD session-docs-and-assistant

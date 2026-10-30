@@ -184,8 +184,6 @@ function DeviceMenu({ device, focused, place, actions, handlers }: { device: Dev
 /** The lines under a device that something needs the operator for; a healthy device has none. */
 function DeviceAttention({ device, actions, onAct, onAllow }: { device: Device; actions: Actions; onAct: () => void; onAllow: (device: Device) => void }) {
   const { t, i18n } = useInterfaceTranslation();
-  // ssh runs on the core's machine, so that system says how to install it (B20).
-  const corePlatform = useShellStore((s) => s.rest?.navigator?.devices?.find((row) => row.kind !== "remote")?.host?.platform ?? null);
   // SSH trust, sign-in and helper consent belong to a device this core dials, not to a node that dials in.
   const remote = device.kind === "remote" && device.dials_in !== true;
   const signIn = remote ? (device.sign_in ?? null) : null;
@@ -199,30 +197,11 @@ function DeviceAttention({ device, actions, onAct, onAllow }: { device: Device; 
   // reached or a sign-in is its line, said once below.
   const linkSays = signIn !== null || device.problem != null;
   const helper = remote && (device.state === "ready" || needsAllow || ((host?.state === "unavailable" || host?.state === "unsupported") && !linkSays)) && host && host.consent !== "this_machine" && host.state !== "ready" ? hostLine(host, t) : null;
-  // An attempt waiting on the operator shows that wait, not the last one's failure.
-  const problem = remote && device.state !== "ready" && !signIn ? deviceProblemLine(device.problem, device.ssh_alias, t, corePlatform) : null;
-  // A connection that could not be made shows ssh's last line under its
-  // headline, and a failure that is not ssh's keeps its own words; a sign-in
-  // or a changed server key needs none of ssh's, which stay in the log.
-  const sshLine = problem && device.problem === "cannot_connect" ? device.message : null;
   const ownWords = remote && device.state !== "ready" && !signIn && device.message && !device.problem && !(helper && device.message === host?.message) ? device.message : null;
   const kit = device.kit;
   const kitShown = kit !== undefined && (Boolean(kit.unavailable) || Boolean(kit.refused) || kit.busy || kitProblems(kit).length > 0);
   const rows = [
-    signIn ? <DeviceSignIn key={`sign-in-${signIn.question}`} deviceId={device.id} wait={signIn} actions={actions} /> : null,
-    problem ? (
-      <div key="problem" className="space-y-xxs" data-device-problem={`${device.id}:${device.problem}`}>
-        <Status tone="warn">{problem.headline}</Status>
-        {problem.note ? <Note tone="warn">{problem.note}</Note> : null}
-        {sshLine ? <p className="break-words font-mono text-caption text-muted-foreground" data-device-message={device.id}>{sshLine}</p> : null}
-        {problem.command ? (
-          <div className="flex flex-wrap items-center gap-x-sm gap-y-xxs">
-            <span className="text-caption text-muted-foreground">{t("devices.problem.checkInTerminal")}</span>
-            <FixCommand command={problem.command} what="ssh check command" actions={actions} data-device-problem-command={device.id} />
-          </div>
-        ) : null}
-      </div>
-    ) : null,
+    deviceLinkShown(device) ? <DeviceLink key="link" device={device} actions={actions} /> : null,
     ownWords ? (
       <p key="message" className="break-words font-mono text-caption text-muted-foreground" data-device-message={device.id}>
         {ownWords}
@@ -282,6 +261,49 @@ function DeviceAttention({ device, actions, onAct, onAllow }: { device: Device; 
     device.test ? <DeviceTest key="test" test={device.test} language={requireInterfaceLanguage(i18n.language)} /> : null,
   ].filter((row) => row !== null);
   return rows.length === 0 ? null : <div className="space-y-xs">{rows}</div>;
+}
+
+/** Whether a device's ssh asks the operator something now, or stopped on why it did not connect. */
+export function deviceLinkShown(device: Device): boolean {
+  const remote = device.kind === "remote" && device.dials_in !== true;
+  return remote && (device.sign_in != null || (device.state !== "ready" && device.problem != null));
+}
+
+/**
+ * What a dialed device's ssh asks the operator now, or, once an attempt
+ * stopped, one of its three states (PRD system-ssh-device-link B4-B13): a
+ * sign-in, a changed server key with the `ssh <alias>` a terminal checks it
+ * with, or a connection that could not be made over ssh's last line. The
+ * device's row and the first-run step's row each draw it; the action beside
+ * it (Sign in, Retry, none for a changed key) is the row's own.
+ */
+export function DeviceLink({ device, actions }: { device: Device; actions: Actions }) {
+  const { t } = useInterfaceTranslation();
+  // ssh runs on the core's machine, so that system says how to install it (B20).
+  const corePlatform = useShellStore((s) => s.rest?.navigator?.devices?.find((row) => row.kind !== "remote")?.host?.platform ?? null);
+  const remote = device.kind === "remote" && device.dials_in !== true;
+  const signIn = remote ? (device.sign_in ?? null) : null;
+  // An attempt waiting on the operator shows that wait, not the last one's failure.
+  if (signIn) return <DeviceSignIn key={`sign-in-${signIn.question}`} deviceId={device.id} wait={signIn} actions={actions} />;
+  const problem = remote && device.state !== "ready" ? deviceProblemLine(device.problem, device.ssh_alias, t, corePlatform) : null;
+  if (!problem) return null;
+  // A connection that could not be made shows ssh's last line under its
+  // headline, and a failure that is not ssh's keeps its own words; a sign-in
+  // or a changed server key needs none of ssh's, which stay in the log.
+  const sshLine = device.problem === "cannot_connect" ? device.message : null;
+  return (
+    <div className="space-y-xxs" data-device-problem={`${device.id}:${device.problem}`}>
+      <Status tone="warn">{problem.headline}</Status>
+      {problem.note ? <Note tone="warn">{problem.note}</Note> : null}
+      {sshLine ? <p className="break-words font-mono text-caption text-muted-foreground" data-device-message={device.id}>{sshLine}</p> : null}
+      {problem.command ? (
+        <div className="flex flex-wrap items-center gap-x-sm gap-y-xxs">
+          <span className="text-caption text-muted-foreground">{t("devices.problem.checkInTerminal")}</span>
+          <FixCommand command={problem.command} what="ssh check command" actions={actions} data-device-problem-command={device.id} />
+        </div>
+      ) : null}
+    </div>
+  );
 }
 
 function DeviceTest({ test, language }: { test: NonNullable<Device["test"]>; language: ReturnType<typeof requireInterfaceLanguage> }) {

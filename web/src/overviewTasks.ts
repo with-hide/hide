@@ -7,8 +7,9 @@
 
 import type { TaskCardScope } from "./agentScope";
 import { frontDeviceId } from "./devices";
+import { rowPulls } from "./prMark";
 import type { BoardProject } from "./projectBoard";
-import type { AgentRow, AgentStatusCode, PrState, RaiseVerb, SnapshotRest, Workspace } from "./snapshot";
+import type { AgentRow, AgentStatusCode, PrState, RaiseVerb, SessionPull, SnapshotRest, Workspace } from "./snapshot";
 
 /**
  * The device the Overview shows (PRD overview-device-tasks D-02): the one its
@@ -61,25 +62,10 @@ export function projectOrder(projects: readonly BoardProject[], only: string | n
     });
 }
 
-/** One pull request of a task, the worst state any member's mark gives it. */
-export type CardPull = { number: number; url: string; state: PrState };
-
-const PR_WORST: readonly PrState[] = ["failed", "pending", "mergeable", "draft", "merged", "closed"];
-
-/** The task's pull requests: every one a member's request names, once, worst state kept (B10). */
-export function cardPulls(card: Pick<TaskCardScope, "members">, rows: ReadonlyMap<string, AgentRow>): CardPull[] {
-  const pulls = new Map<string, CardPull>();
-  for (const pane of card.members) {
-    const agent = rows.get(pane);
-    const listed = agent?.request?.pull_requests ?? [];
-    for (const own of agent?.state.pr?.pulls ?? []) {
-      const pull = listed[own.index];
-      if (!pull) continue;
-      const held = pulls.get(pull.url);
-      if (!held || PR_WORST.indexOf(own.state) < PR_WORST.indexOf(held.state)) pulls.set(pull.url, { number: pull.number, url: pull.url, state: own.state });
-    }
-  }
-  return [...pulls.values()];
+/** The task's pull requests (B10): its root's list, which holds every member's, live or ended, once each. */
+export function cardPulls(card: Pick<TaskCardScope, "root">, rows: ReadonlyMap<string, AgentRow>): SessionPull[] {
+  const root = rows.get(card.root);
+  return root ? rowPulls(root) : [];
 }
 
 /** The issue and memo chips a task wears (`#N`/`L-N`, B8): its checkouts' issue links, once each. */

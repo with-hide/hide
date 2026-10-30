@@ -1279,6 +1279,9 @@ pub fn handle_with_progress(
             &base,
             &path,
         )?),
+        Call::BranchCatchUp { root, head } => {
+            to_value(crate::branch_merge::catch_up(&absolute(&root)?, &head)?)
+        }
         Call::BranchDiscard { root, branch, tip } => to_value(crate::branch_merge::discard(
             &absolute(&root)?,
             &branch,

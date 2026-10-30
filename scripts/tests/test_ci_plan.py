@@ -354,7 +354,7 @@ class Selection(unittest.TestCase):
         # New helper names stay conservative until their readers are established.
         self.assertEqual(plan("desktop/scripts/new-helper.mjs")["lanes"], PACKAGED)
         self.assertEqual(plan("desktop/scripts/installers.mjs", "herdr-core/src/lib.rs")["lanes"],
-                         ["policy", "rust", "checks", "os-contract", "windows-check", "windows-e2e",
+                         ["policy", "rust", "checks", "os-contract", "agent-journey", "windows-check", "windows-e2e",
                           "windows-desktop", "web-e2e", "remote-mailbox", "package"])
 
     def test_fuses_keep_the_desktop_suites_that_apply_them_in_global_setup(self):
@@ -391,13 +391,13 @@ class Selection(unittest.TestCase):
         # The desktop suite waits in the macOS queue, so a crate-only pull
         # request leaves it to main's full run; anything under desktop/ or the
         # web shell still plans it, and every full plan keeps it.
-        crate_only = ["policy", "rust", "os-contract", "windows-check", "windows-e2e", "windows-desktop", "web-e2e",
-                      "remote-mailbox"]
+        crate_only = ["policy", "rust", "os-contract", "agent-journey", "windows-check", "windows-e2e", "windows-desktop",
+                      "web-e2e", "remote-mailbox"]
         for paths, lanes in (
             (("herdr-core/src/lib.rs",), crate_only),
             (("herdr-core/src/lib.rs", "desktop/src/main/index.ts"),
-             ["policy", "rust", "checks", "os-contract", "windows-check", "windows-e2e", "windows-desktop", "web-e2e",
-              "remote-mailbox", "desktop-e2e"]),
+             ["policy", "rust", "checks", "os-contract", "agent-journey", "windows-check", "windows-e2e",
+              "windows-desktop", "web-e2e", "remote-mailbox", "desktop-e2e"]),
             (("web/src/Overview.tsx",), ["policy", "rust", "checks", "web-e2e", "desktop-e2e"]),
             (("docs/TESTING.md",), ["policy"]),
             (("mystery/file.txt",), FULL),
@@ -596,11 +596,37 @@ class NamedPaths(unittest.TestCase):
                 self.assertEqual(self.lanes(path), {"policy", "web-e2e", "agent-journey"})
         self.assertEqual(self.lanes("scripts/tests/test_agent_live_windows.py"), {"policy", "agent-journey"})
         self.assertEqual(self.lanes("scripts/tests/test_agent_live_protection.py"), {"policy"})
-        self.assertNotIn("agent-journey", self.lanes("hide-session/src/lib.rs"))
+
+    def test_the_product_code_the_journey_runs_plans_the_journey_lane(self):
+        # #1816 aged Memory cards out of the start guidance and broke
+        # `guidance_memory` for every agent; its pull request never ran the
+        # journey, and the nightly canary blamed five agent releases for it
+        # (with-hide/hide-private#358). Every crate builds into a program the
+        # journey runs, so its product code plans the lane.
+        for path in (
+            "hide-memory/src/store/upkeep.rs", "hide-agent-hooks/src/guidance.rs", "herdr-core/src/memory_hook.rs",
+            "herdr-core/src/runtime/memory_analysis.rs", "herdr-core/src/coordination/started.rs",
+            "herdr-core/src/delivery/mod.rs", "herdr-core/src/agent_sleep.rs", "hide-session/src/lib.rs",
+            "hide-agent-adapter/src/lib.rs", "hided/src/spawn.rs", "hided/build.rs", "hide-memory/Cargo.toml",
+        ):
+            with self.subTest(path=path):
+                self.assertIn("agent-journey", self.lanes(path))
+        for directory in CRATES:
+            with self.subTest(crate=directory):
+                self.assertIn("agent-journey", self.lanes(f"{directory}/src/lib.rs"))
+        # A crate's tests, test modules and other examples build into none of them.
+        for path in (
+            "hided/tests/it/remote_delivery.rs", "herdr-core/src/runtime/tests/agent_sleep.rs",
+            "herdr-core/src/runtime/tests.rs", "herdr-core/src/checkout_start_tests.rs",
+            "hide-agent-hooks/tests/fixtures/bell-prompt-identity.json", "hide-memory/benches/x.rs",
+        ):
+            with self.subTest(path=path):
+                self.assertNotIn("agent-journey", self.lanes(path))
 
     def test_the_shared_prompt_identity_examples_run_the_hooks_and_policy_readers(self):
         result = plan("hide-agent-hooks/tests/fixtures/bell-prompt-identity.json")
-        self.assertEqual(set(result["lanes"]), self.lanes("hide-agent-hooks/src/delivery.rs"))
+        # The journey runs the hook program, which the test fixture is not part of.
+        self.assertEqual(set(result["lanes"]), self.lanes("hide-agent-hooks/src/delivery.rs") - {"agent-journey"})
         self.assertIn("hide-agent-hooks", result["rust_packages"])
         self.assertIn("policy", result["lanes"])
 

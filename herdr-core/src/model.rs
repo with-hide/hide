@@ -1480,6 +1480,10 @@ pub struct SidebarAgentSnapshot {
     pub letters_waiting: Option<u32>,
     /// On a lineage root: every raised descendant, lead first (PRD D-10, D-27).
     pub raised: Vec<crate::agent_state::escalation::RaisedAsk>,
+    /// The pull requests this row's session holds or made and every
+    /// descendant's, live or ended (`agent_state::work::family`): the one
+    /// list every PR mark of the row draws. Laid with the lineage pass.
+    pub pulls: Option<crate::agent_state::work::family::SessionPulls>,
     /// The one mark this row wears for its descendants while folded (PRD D-40).
     pub descendant_mark: Option<crate::agent_state::escalation::DescendantMark>,
     /// The label line of the most recently changed working descendant, the
@@ -6702,6 +6706,10 @@ impl Default for HerdrProfilesSnapshot {
     }
 }
 
+/// One machine the first-run Devices step offers: a saved Herdr profile, a
+/// Host of the account's ssh config (Add device's list), or both when the
+/// profile's target is that Host or leads to the same `user@host:port`, or
+/// this PC's default WSL distribution.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct HerdrProfileSnapshot {
     pub id: String,
@@ -6709,6 +6717,13 @@ pub struct HerdrProfileSnapshot {
     /// The SSH target, or the distribution of a WSL row.
     pub target: String,
     pub session: String,
+    /// Herdr saved this machine (`herdr machine list`).
+    pub herdr: bool,
+    /// The ssh config Host the row is, or the one the profile's target is.
+    pub ssh_host: Option<String>,
+    /// `user@host:port` as `ssh -G` resolved the Host, read without
+    /// connecting.
+    pub address: Option<String>,
     /// Set on the one row that is not a saved Herdr profile: this PC's
     /// default WSL distribution (PRD wsl-device B1), which connects as a
     /// WSL device.

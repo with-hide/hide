@@ -12,7 +12,7 @@ import type { AgentRow, Checkout, Device, EditorDocumentSnapshot, EditorTabSnaps
 import type { MobileState } from "../mobileSettings";
 import { EMPTY_GALLERY_SCOPE } from "./agentScopes";
 import { overviewWorld, type OverviewWorld } from "./overviewSceneData";
-import { REFERENCE_FOLDS, sidebarScene } from "./sceneData";
+import { listedPull, REFERENCE_FOLDS, sidebarScene } from "./sceneData";
 
 /** A pull request or issue reference as the page writes it. */
 const ref = (number: number) => `#${number}`;
@@ -98,6 +98,9 @@ const STORY_PULLS: Record<string, [number, string, PrState] | null> = {
  */
 const LABEL_PULLS = new Set([438, 439]);
 
+/** The lead's workers that keep a pull request in the story: the lead's list holds theirs beside its own. */
+const LEAD_WORKERS = ["a1c3", "a1c6"];
+
 /**
  * The roots whose question only Hide AI found, in the turn's plain text, and
  * that the operator has read: on, they wait under Revisit; off, text alone
@@ -114,7 +117,7 @@ function storyPull(row: AgentRow, [number, title, state]: [number, string, PrSta
     head_branch: `agents/${number}`, closing_issues: [], live: true, duty: true, created: true, settled_at_unix_ms: state === "merged" ? 0 : null,
   };
   const request = { verb: "working" as const, verb_since_unix_ms: 0, line: undefined, request: null, later_by: null, ...row.request, pull_requests: [pull] };
-  return { ...row, request, state: { ...row.state, pr: { count: 1, worst: state, pulls: [{ index: 0, state }] } } };
+  return { ...row, request, pulls: { pulls: [listedPull(number, title, state, null, pull.url)] } };
 }
 
 /** Keeps the story's pull requests on a row and drops the fixture's others, and with Hide AI off the ones only it linked. */
@@ -122,7 +125,7 @@ function trimPulls(row: AgentRow, ai: boolean): AgentRow {
   if (!(row.pane_id in STORY_PULLS)) return row;
   const kept = STORY_PULLS[row.pane_id];
   if (kept && (ai || !LABEL_PULLS.has(kept[0]))) return storyPull(row, kept);
-  return { ...row, request: row.request ? { ...row.request, pull_requests: [] } : row.request, state: { ...row.state, pr: null } };
+  return { ...row, request: row.request ? { ...row.request, pull_requests: [] } : row.request, pulls: null };
 }
 
 /** The roots the operator starred to come back to: the Tasks list's Revisit group (docs/status-model.md, `revisit`). */
@@ -162,11 +165,15 @@ function reword(fixture: AgentRow, ai: boolean): AgentRow {
     ? { ...row.request, pull_requests: row.request.pull_requests.map((pull) => ({ ...pull, number: words.pull![0], title: words.pull![1], url: `https://example.invalid/billing-app/pull/${words.pull![0]}`, head_branch: `agents/${words.pull![0]}` })) }
     : row.request;
   const line = row.state.line && words.detail !== undefined ? { ...row.state.line, text: words.detail } : row.state.line;
+  // The row's own pull request under the story's number; the lead's list of its workers' is laid in `landingSidebar`.
+  const own = row.pulls?.pulls.filter((pull) => pull.own) ?? [];
+  const pulls = words.pull ? own.map((pull) => listedPull(words.pull![0], words.pull![1], pull.state, null, `https://example.invalid/billing-app/pull/${words.pull![0]}`)) : own;
   return {
     ...row,
     agent_kind: words.kind,
     identity_label: words.title,
     request,
+    pulls: pulls.length ? { pulls } : null,
     state: { ...row.state, line },
   };
 }
@@ -216,7 +223,14 @@ export function landingSidebar(nowMs: number, expanded: string[], width: number,
   };
   // The lead waits on its workers whatever Hide AI does: a proven wait (docs/status-model.md, `wait`).
   const waits = (row: AgentRow): AgentRow => (row.pane_id === "a1" ? { ...row, wait: "children", state: { ...row.state, line: { text: "", mode: "waiting", tone: { kind: "working", read: true } } } } : row);
-  return { rest, agents: reworded(base.agents.map((row) => waits(revisit(reword(row, ai)))).map((row) => (ai ? withLines(row) : row))) };
+  const rows = base.agents.map((row) => waits(revisit(reword(row, ai))));
+  // The lead's list, as the core lays it: its own and its workers' (`LEAD_WORKERS`).
+  const held = LEAD_WORKERS.flatMap((pane) => {
+    const worker = rows.find((row) => row.pane_id === pane);
+    return (worker?.pulls?.pulls ?? []).map((pull) => ({ ...pull, own: false, holders: [worker!.identity_label] }));
+  });
+  const listed = rows.map((row) => (row.pane_id === "a1" ? { ...row, pulls: { pulls: [...(row.pulls?.pulls ?? []), ...held] } } : row));
+  return { rest, agents: reworded(listed.map((row) => (ai ? withLines(row) : row))) };
 }
 
 /** What each kind of agent is called when nothing better names it: the provider fallback of Task identity. */
@@ -324,7 +338,7 @@ export function landingWorkspace(nowMs: number, width: number, expanded: string[
   const project = navigator.workspaces!.find((row) => row.id === "hide")!;
   const main = project.checkouts[0]!;
   const tab = main.tabs[0]!;
-  const story = scene.agents.flatMap((row) => (row.request?.pull_requests ?? []).map((pull, index) => ({ pull, row, state: row.state.pr?.pulls.find((one) => one.index === index)?.state })));
+  const story = scene.agents.flatMap((row) => (row.request?.pull_requests ?? []).map((pull) => ({ pull, row, state: row.pulls?.pulls.find((one) => one.own && one.url === pull.url)?.state })));
   const listed = story.flatMap(({ pull, row, state }) => {
     const group = state ? HERO_PULL_GROUPS[state] : null;
     return state && group ? [{ pull, state, group, agent: HERO_PULL_AGENTS[pull.number] ?? row.pane_id }] : [];

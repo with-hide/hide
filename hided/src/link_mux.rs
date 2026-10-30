@@ -990,22 +990,34 @@ mod tests {
         }
     }
 
-    /// Reads what reached `socket` until its end, which must come.
-    fn drained(mut socket: TcpStream) {
-        socket
-            .set_read_timeout(Some(Duration::from_secs(15)))
-            .unwrap();
-        let mut buffer = vec![0_u8; MAX_FRAME];
-        loop {
-            match socket.read(&mut buffer) {
-                Ok(0) => return,
-                Ok(_) => {}
-                Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
-                    panic!("the stream never ended at the server")
+    /// Reads what reached `socket` until its end, which must come. The read
+    /// runs on a thread of its own rather than under a read timeout: macOS
+    /// refuses `SO_RCVTIMEO` once the stream ended at the server, which is
+    /// the very end this waits for. When the end does not come, the socket
+    /// is shut here, which ends the read, and the thread is joined before
+    /// the test fails.
+    fn drained(socket: TcpStream) {
+        let held = socket.try_clone().unwrap();
+        let (ended, end) = mpsc::channel();
+        let reading = std::thread::spawn(move || {
+            let mut socket = socket;
+            let mut buffer = vec![0_u8; MAX_FRAME];
+            loop {
+                match socket.read(&mut buffer) {
+                    Ok(0) | Err(_) => break,
+                    Ok(_) => {}
                 }
-                Err(_) => return,
             }
+            let _ = ended.send(());
+        });
+        let heard = end.recv_timeout(Duration::from_secs(15)).is_ok();
+        if !heard {
+            let _ = held.shutdown(Shutdown::Both);
+            end.recv_timeout(Duration::from_secs(15))
+                .expect("the read outlived its own socket's shutdown");
         }
+        reading.join().unwrap();
+        assert!(heard, "the stream never ended at the server");
     }
 
     /// A server on the core machine that never reads: the stream falls

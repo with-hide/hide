@@ -363,7 +363,7 @@ function WorkspaceTitleBar({ checkout, view, actions }: { checkout: Checkout; vi
           </Hint>
         </nav>
       </EntryContextMenu>
-      {git ? <><CheckoutFileCount header={view.git} actions={actions} /><CheckoutUpstream header={view.git} /></> : null}
+      {git ? <><CheckoutFileCount header={view.git} actions={actions} /><CheckoutUpstream header={view.git} onCatchUp={(headSha) => actions.catchUpCheckout(view.device_id, view.path, headSha)} /></> : null}
       <div className="min-w-0 flex-1" data-window-drag="true" />
       {git ? <CheckoutCommit key={`${view.device_id}:${view.path}`} header={view.git} view={view} actions={actions} title={headerWidth >= tokenPx("--size-checkout-header-commit-min")} time={headerWidth >= tokenPx("--size-checkout-header-time-min")} /> : null}
       <div className="flex shrink-0 items-center gap-xxs" data-workspace-actions="true">

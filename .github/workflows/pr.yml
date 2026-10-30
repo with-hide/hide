@@ -436,6 +436,14 @@ jobs:
         run: |
           bash scripts/verify-cargo.sh nextest --profile ci $TEST_TARGETS -E 'package(hided) & kind(lib) & test(/^boundary::windows_tests::/)'
           bash scripts/verify-cargo.sh nextest --profile ci $TEST_TARGETS -E 'binary_id(hide-host::it) & test(=register::a_confirmed_link_to_a_network_share_is_refused_like_the_share)'
+      - name: A checkout catches up to its fetched upstream and a new branch starts from origin
+        # Real git repositories on this system: the node's fast-forward with
+        # its refusals, and where a new worktree's branch starts.
+        if: ${{ !cancelled() && steps.tests.outcome == 'success' }}
+        timeout-minutes: 5
+        run: |
+          bash scripts/verify-cargo.sh nextest --profile ci $TEST_TARGETS -E 'binary_id(hide-host::it) & test(/^branch_merge::.*(catch|upstream)/)'
+          bash scripts/verify-cargo.sh nextest --profile ci $TEST_TARGETS -E 'package(herdr-core) & kind(lib) & test(/worktree_control::tests::a_(new_branch_starts|local_base_with_unpushed)/)'
       - name: Install kit and its Windows command shim
         if: ${{ !cancelled() && steps.tests.outcome == 'success' }}
         timeout-minutes: 10
@@ -667,8 +675,9 @@ jobs:
 
   # The agent journey on the compiled Claude and Codex stand-ins, keyless, on
   # Linux, and its process jobs, private files and pane commands on Windows,
-  # for a change to the journey's code or the stand-ins; the nightly and a
-  # release run it on every system, with the signed-in lane.
+  # for a change to the journey's code, the stand-ins or a crate's product
+  # code, which every cell judges (scripts/ci-plan.py); the nightly and a
+  # release run it on every system, with the fake model lane.
   agent-journey:
     name: agent journey
     needs: plan

@@ -293,7 +293,6 @@ fn tasks_stand_by_state_and_fold_a_merged_worktree_as_cleanup() {
         later_by: None,
         pull_requests: vec![pull],
     });
-    row.state.pr = crate::agent_state::sessions::own_prs(row);
     assert!(runtime.refresh_agent_scopes());
     let tasks = &runtime.snapshot.navigator.workspaces[0].agent_scope.tasks;
     assert_eq!(
@@ -333,12 +332,6 @@ fn tasks_stand_by_state_and_fold_a_merged_worktree_as_cleanup() {
         .unwrap()
         .pull_requests
         .push(provisional);
-    row.state.pr = crate::agent_state::sessions::own_prs(row);
-    assert_eq!(
-        row.state.pr.as_ref().unwrap().count,
-        2,
-        "history is displayed"
-    );
     runtime.refresh_agent_scopes();
     let card = runtime.snapshot.navigator.workspaces[0]
         .agent_scope
@@ -358,18 +351,8 @@ fn tasks_stand_by_state_and_fold_a_merged_worktree_as_cleanup() {
     let set_live = |runtime: &mut crate::runtime::Runtime, live: bool| {
         let row = &mut runtime.snapshot.navigator.agents[1];
         row.request.as_mut().unwrap().pull_requests[0].live = live;
-        row.state.pr = crate::agent_state::sessions::own_prs(row);
     };
     set_live(&mut runtime, false);
-    assert_eq!(
-        runtime.snapshot.navigator.agents[1]
-            .state
-            .pr
-            .as_ref()
-            .unwrap()
-            .count,
-        2
-    );
     runtime.refresh_agent_scopes();
     let card = runtime.snapshot.navigator.workspaces[0]
         .agent_scope
@@ -1551,6 +1534,7 @@ fn a_record_s_open_ask_stands_in_the_to_do_list_until_it_is_answered() {
         subtree_open_missed: 0,
         missed: Vec::new(),
         open_asks: asks,
+        parent: None,
     };
     let record = |runtime: &mut Runtime, asks: usize| {
         let project = crate::links::ProjectLinkSummary {

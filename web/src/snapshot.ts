@@ -41,14 +41,19 @@ export type AgentState = {
   ask: { verb: RaiseVerb; what: string | null; more: number; subject?: AskSubject } | null;
   /** Where the row stands among its siblings in a tree: asking, working, finished unread, the rest. */
   tree_rank: number;
-  /** The row's own PRs, worst first; never its descendants'. `index` points into `request.pull_requests`. */
-  pr: { count: number; worst: PrState; pulls: { index: number; state: PrState }[] } | null;
 };
 
 /** What the operator does about a raised descendant, in lead order (`escalation::Verb`). */
 export type RaiseVerb = "approval" | "answer" | "confirm" | "draft";
 /** The one state every PR mark draws, worst first (`model::PrState`, docs/status-model.md, Pull request visual states). */
 export type PrState = "failed" | "pending" | "mergeable" | "draft" | "merged" | "closed";
+/**
+ * One pull request of a session's list (`family::SessionPull`): `own` when the session itself holds or made it,
+ * `holders` naming who does, `stale` when GitHub could not be read again or its list no longer holds it.
+ */
+export type SessionPull = { url: string; number: number; title: string; state: PrState; own: boolean; holders: string[]; stale: boolean; last_read_at_unix_ms: number | null };
+/** A session's pull requests and every descendant's, worst first; `omitted` counts those past the core's cap. */
+export type SessionPulls = { pulls: SessionPull[]; omitted?: number };
 
 /** One raised descendant as its lineage root shows it (`escalation::RaisedAsk`). */
 export type RaisedAsk = {
@@ -110,6 +115,8 @@ export type AgentRow = {
   raised?: RaisedAsk[];
   /** The one mark a folded parent wears for its descendants: raised, else working, else none. */
   descendant_mark?: { kind: "raised" | "working"; count: number } | null;
+  /** The pull requests this row's session holds or made and every descendant's, live or ended (`agent_state::work::family`); every PR mark of the row draws this list. */
+  pulls?: SessionPulls | null;
   state: AgentState;
   id: string;
   pane_id: string;
@@ -1827,8 +1834,15 @@ export type FirstRunProjectForm = { view?: "add" | "clone" | "create" | ""; url?
 export type FirstRunChoices = { agents?: string[] | null; /** Null until a device row is checked or unchecked (PRD wsl-device B1). */ devices?: string[] | null; project_device?: string | null; project_path?: string; project_form?: FirstRunProjectForm; notifications_answered?: boolean };
 export type HerdrProfileRefusal = "no_consent" | "disabled" | "invalid_target" | "discovery_pending" | "device_limit" | "profile_moved";
 
+/** A machine the first-run Devices step offers: a saved Herdr profile, an ssh config Host, both as one row, or this PC's WSL. */
 export type HerdrProfile = {
   id: string; label: string; target: string; session: string; enabled: boolean;
+  /** Herdr saved it. */
+  herdr: boolean;
+  /** The ssh config Host the row is, or the one the profile's target is. */
+  ssh_host: string | null;
+  /** `user@host:port` as `ssh -G` resolved the Host. */
+  address: string | null;
   /** Set on the one row that is this PC's default WSL distribution, not a saved profile (PRD wsl-device B1). */
   wsl_distro?: string | null;
   added_as: string | null; problem: string | null; device_id: string | null;
@@ -2675,13 +2689,13 @@ export type FlowResult =
   | ({ kind: "settled" } & PrSettlement);
 /** One goal flow, oldest first in the record; the last is the current one (D-03, D-05, D-11). */
 export type WorkFlow = { id: string; name: string; at_unix_ms: number; requests: WorkRequest[]; request_count: number; result: FlowResult | null };
-/** Pull requests of this session (`child` null) or of one direct child's whole subtree (D-14). */
-export type PrGroup = { child: WorkSession | null; name: string; outputs: WorkOutput[] };
+/** Pull requests of this session (`child` null) or of one direct child's whole subtree (D-14), from the list its row draws. */
+export type PrGroup = { child: WorkSession | null; name: string; pulls: SessionPull[] };
 export type SessionRecord = {
   session: WorkSession; title: string; fallback_title: string; native_title: string | null; manual_title: string | null; state: string | null;
   cwd: string | null; project?: string | null; repository?: string | null; path: string | null; started_at_unix_ms: number | null; ended_at_unix_ms: number | null;
   status: RecordStatus | null; asks: MissedWork[]; flows: WorkFlow[]; omitted_requests: number;
-  outputs: WorkOutput[]; pr_groups: PrGroup[]; artifacts: string[]; children: SessionRecord[];
+  outputs: WorkOutput[]; pr_groups: PrGroup[]; pr_omitted?: number; artifacts: string[]; children: SessionRecord[];
   /** The session's own plan, kept after it ends (PRD hide-plan B9, B21); its `pane_id` is empty. */
   plan?: PlanView;
 };

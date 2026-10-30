@@ -1005,7 +1005,7 @@ an active menu or plan approval, or an unread AI question, is `answer`; an unrea
 Reading an AI question skips only the demand step; another applicable duty, such as failed CI, still wins at its later step.
 Only the label gives `stopped` and `blocked` (D-33); `waiting` comes from `wait` alone: with summaries off, without a provider or after a failed analysis no row stops.
 The block also carries the label's `line` and `end` when there is one: the request view shows the line in place of the reply (B18) and both as the expanded row's verdict (B6); `end` is pinned as `label_end` in `contracts/snapshot-wire-enums.json`.
-A row's pull requests are its checkout branch's and those its session made: a tool in the session printed the address within thirty seconds of GitHub's `createdAt` (D-31), judged once by the label worker and kept with the session's facts.
+A row's pull requests are its checkout branch's and those its session made, judged once by the label worker and kept with the session's facts (D-31): a tool printed the address from 2 s before to 30 s after GitHub's `createdAt`, or from 10 s before when the output of a successful call that makes a pull request (`gh pr create`, a `gh api` POST to `repos/<owner>/<name>/pulls`, a `create_pull_request` tool, with no `||` in the call) gave it back.
 An address in a reply or a request is a mention and links nothing.
 A pull request on several rows gives its duty to one row, so `fix` and `review` appear once: on its branch's checkout the row nearest its lineage root (`lineage_depth`), then the one whose session printed it, then the lowest pane id; with no row there, the row whose session printed it first.
 Activity never decides, so agents on one checkout that take turns working never trade a pull request; an Observer and the implementor it spawned there keep it on the Observer's row, the one the 태스크 list draws, even when the implementor's session printed it.
@@ -1027,7 +1027,7 @@ A blocked menu takes Approval before an unread AI question's Answer.
 A current native `user_turn.kind = question` instead takes Answer while its session holds for a reply, including after it is read and when its content is absent.
 Native plan approval keeps Approval; the typed native wait, rather than a provider name or an AI question label, distinguishes these cases.
 Reading an AI question skips its demand rung and leaves a dimmed question; menu and plan approval stay in Needs You until answered.
-`row.state.pr` is the row's own PR summary (PRD D-18, D-39): the live PRs it holds the duty of and every merged one however long ago it merged, never a descendant's, with the count, the worst state and each PR worst first, each state the one rule of Pull request visual states decides; a closed PR is not counted.
+A row's pull requests are its session's list, `row.pulls` (PRD D-18, D-39; One list per session below): the ones it holds the duty of or made and every descendant's, each state the one rule of Pull request visual states decides.
 A merged pull request keeps its mark after the operator's next request, because the mark says what the row made; the verb's `result`, the `live` flag and a task's stage still follow D-43, so an earlier merge never reads as the current request's progress.
 Without a label line the row keeps its outline but carries no invented line.
 Delegated children are never tasks of their own: they are drawn under their root through every row the operator expands, at any depth (`sessions_expanded_agent_pane_ids` in core UI state holds each expanded pane).
@@ -1043,6 +1043,24 @@ A resolved task rests, folded under the 태스크 list's `쉬는 중`; resolutio
 The existing runtime tick advances that window without adding a timer or per-snapshot clock read.
 Closing a pane prunes its resolution and input record.
 Regression owners: `runtime::tests::session_state`, `request_view::tests`, `web/src/TaskLens.test.tsx` and `web/e2e/session-panel.spec.ts`.
+
+### One list per session
+
+Every surface that draws a session's pull requests reads one list the core lays on its row, `row.pulls` (`agent_state::work::family`): the 태스크 row, the pane header, the 프로젝트 tree, the Overview task card and the session record's PR section.
+The list holds the pull requests the session holds the duty of or made, and every descendant's, live or ended.
+A live descendant is found by Herdr's lineage; an ended one by the link record's parent edges, which the link worker's summary carries (`SessionWorkSummary.parent`) beside the pull requests each recorded session made (`ProjectLinkSummary.creators`), so a child that ends leaves its pull requests on its parent's list.
+Each pull request is listed once by URL with every session that holds or made it (`holders`); `own` marks the ones the session itself holds or made, and a 프로젝트 tree child row and a tree popover child draw only those, under a root that already draws the family.
+A 태스크 child row draws its session's whole list, as its pane header and its record do, so a middle session in A -> B -> C shows C's pull requests on its row too.
+Every merged pull request is listed, however long ago it merged, and a closed one stays listed after the merged ones, drawn dimmed; the list runs worst first by Pull request visual states, then by number, newest first.
+A pull request's state is GitHub's read while the project's list holds it.
+When this machine and a device both read it, the list takes a fresh read over a stale one, then the later read by each machine's own clock, then the worse state, so the order the reads arrive in never decides; two machines' clocks only order two reads GitHub gave within one poll of each other.
+That list holds only the 200 newest pull requests, so one past it keeps the state the link record last read (`merged`, `closed`, `ci_failed`, else pending), marked stale with that read's time, instead of leaving the list.
+Only a stale pull request carries its read time; a fresh one carries none, so GitHub answering the same again changes no list.
+A list holds at most 200 pull requests and counts the rest in `omitted`; crossing that writes one `pulls.capacity` diagnostic for the row.
+A list follows at most 2,000 recorded sessions down its lineage; past that it stops, and the same diagnostic says `lineage_capped`.
+The record's `pr_groups` is laid from the same capped list, with the same `pr_omitted`: each direct child's subtree says which of the list falls in its group, and one reached through no named child stays in the session's own group, so the section holds exactly what the row holds; a record past either cap writes one `record_pulls.capacity` diagnostic when it is laid.
+The record reads the link worker's summaries, as the rows do, and then its own tree for a session no summary holds.
+The lists are laid in the pass that settles every row's cross-row facts, in memory: the recorded side is rebuilt only when the link worker's summaries change, a row is published only when its list changed, and an open record's groups are copied only when they changed, so a GitHub read or a summary that moves nothing publishes nothing.
 
 ### The session work record
 
@@ -1089,7 +1107,7 @@ moving to the next flow answers the asks before it (fact-status D-03, B6): the r
 Records written before `context_label.v10` may still hold a `leftover` item.
 
 A pull request is a session's output when the link reader saw it printed around GitHub's creation time, or when the label judged that the session made it (`created_prs`, recorded as a `pr` sighting), which finds the ones the reader's window missed (D-14, B21).
-The record's `pr_groups` holds this session's own pull requests, then one group per direct child, named by the child's title, holding the pull requests of that child and all its descendants, each pull request once (B18); `outputs` keeps every output of the tree for the screen's marks, and `artifacts` the tree's other outputs, each once, at most 24: this session's newest first, then each direct child's in the same order, a child's own before its descendants' (B22).
+The record's `pr_groups` is laid by the runtime from the session's list (One list per session): this session's own pull requests, then one group per direct child, named by the child's title, holding the pull requests of that child and all its descendants, each pull request once in the state the session's list gives it (B18); `outputs` keeps every output of the tree for the screen's marks, and `artifacts` the tree's other outputs, each once, at most 24: this session's newest first, then each direct child's in the same order, a child's own before its descendants' (B22).
 A backlog item made from a missed line names, as where it came from, the flow that holds the line's turn (B31); History matches flow names as kind `flow` when titles and flows are asked for (B32).
 
 With summaries Off, the record shows the native or manual title, native status, every saved request as sent in time order, the pull requests and the children; it shows no flow name, result, summary, ask or end word, and turning summaries on shows the earlier judgments again (D-20, B28).
@@ -1134,7 +1152,7 @@ The duplicate `외 N건` is absent when the children button supplies raised-tree
 An Approval band carries no reason: the core reads no approval command and a generated sentence is not one, so the band shows the ask's own default words.
 What Hide could not read, such as an approval command, is not written on the band, since the operator cannot act on its absence (design principle #13).
 The band and progress row overlay the terminal so state changes never resize its PTY grid.
-The identity row reads the ancestor path, the status mark, the agent's logo, title, the letters-waiting pill from `row.letters_waiting`, the pane's own PR mark from `row.state.pr`, the Not connected chip and the existing controls; the ancestors' names drop first when narrow, leaving `›` and the accessible name.
+The identity row reads the ancestor path, the status mark, the agent's logo, title, the letters-waiting pill from `row.letters_waiting`, the pane's PR mark from `row.pulls`, the same list its 태스크 row draws, the Not connected chip and the existing controls; the ancestors' names drop first when narrow, leaving `›` and the accessible name.
 A parent's second row keeps the children button at its left, the first three marked direct children's status marks with `+N` for the rest and the chevron (the count alone with a device away or no child to mark); without a band the rest of the row shows its own valid Working progress, its wait on working children, or no text when it has neither.
 Child names and states remain in the tree popover, while the button's accessible name and tooltip describe the live count and state counts.
 An unavailable device anywhere in that known subtree preserves the last topology count and connection reason in the button's name and tooltip; without a band, it also shows that reason beside any progress.

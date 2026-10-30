@@ -67,6 +67,29 @@ pub(super) struct SigningIn {
 }
 
 impl SigningIn {
+    fn new(
+        link: ChildLink,
+        desk: Option<askpass::Desk>,
+        sign_in: Arc<dyn SignIn>,
+        wake: Wake,
+        cancel: &Cancel,
+    ) -> Self {
+        Self {
+            link,
+            desk,
+            sign_in,
+            wake,
+            cancel: cancel.clone(),
+            stderr: std::collections::VecDeque::new(),
+            signed_in: false,
+            browser: None,
+            browser_expired: false,
+            withdrawn: false,
+            held: Duration::ZERO,
+            tick: Instant::now(),
+        }
+    }
+
     fn operator_turn(&self) -> bool {
         self.desk.as_ref().is_some_and(askpass::Desk::operator_turn)
             || (self.browser.is_some() && self.wake == Wake::Allowed)
@@ -86,6 +109,18 @@ impl SigningIn {
             self.stderr.pop_front();
         }
         self.stderr.push_back(openssh::kept_line(&line));
+    }
+
+    /// Reads what ssh still says until its output ends, or `until` passes:
+    /// a write failed, so ssh has ended or is being ended.
+    fn read_to_end(&mut self, until: Instant) {
+        loop {
+            match self.link.next(until + self.held) {
+                ChildOutput::Error(line) => self.error_line(line),
+                ChildOutput::Line(_) => {}
+                ChildOutput::Quiet | ChildOutput::Ended(_) => return,
+            }
+        }
     }
 
     /// The sign-in is over: the connection reached the device's shell.
@@ -124,9 +159,18 @@ impl Pipe for SigningIn {
         if self.cancel.is_cancelled() {
             return Err(ENDED.to_owned());
         }
-        self.link
+        let sent = self
+            .link
             .send(bytes, until + self.held)
-            .map_err(|error| error.to_string())
+            .map_err(|error| error.to_string());
+        // An ssh that ended before it read the script, such as a proxy that
+        // printed a sign-in link and failed, said why on its error output:
+        // that is read to its end before the failure is answered, so the
+        // link reaches the row and the failure is classified on ssh's words.
+        if sent.is_err() && !self.signed_in {
+            self.read_to_end(until);
+        }
+        sent
     }
 
     fn line(&mut self, until: Instant) -> Result<Vec<u8>, Stop> {
@@ -291,20 +335,7 @@ pub(super) fn sign_in(
     // once ssh is reaped.
     let link = ChildLink::start(dial.target, child, Some(cancel))
         .map_err(|error| EstablishError::Helper(format!("ssh's link could not start: {error}")))?;
-    let mut pipe = SigningIn {
-        link,
-        desk,
-        sign_in,
-        wake,
-        cancel: cancel.clone(),
-        stderr: std::collections::VecDeque::new(),
-        signed_in: false,
-        browser: None,
-        browser_expired: false,
-        withdrawn: false,
-        held: Duration::ZERO,
-        tick: Instant::now(),
-    };
+    let mut pipe = SigningIn::new(link, desk, sign_in, wake, cancel);
     stage("sign_in");
     let facts = match bootstrap::probe(&mut pipe, Instant::now() + SIGN_IN_TIMEOUT) {
         Ok(facts) => facts,
@@ -763,5 +794,50 @@ mod tests {
         for record in &records {
             assert!(!record.to_string().contains(TOKEN), "{record}");
         }
+    }
+
+    /// An ssh that ended before the start script was written to it: the
+    /// write fails, and the sign-in link it printed on its way out still
+    /// reaches the row and the kept lines before the failure is answered.
+    #[test]
+    fn a_write_to_an_ssh_that_already_ended_still_shows_the_link_it_printed() {
+        let link = "https://team.cloudflareaccess.com/cdn-cgi/access/cli?token=t";
+        let mut command = std::process::Command::new("/bin/sh");
+        command
+            .args([
+                "-c",
+                &format!("echo 'Log in with your Cloudflare account: {link}' >&2; exit 255"),
+            ])
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped());
+        let child = hide_platform::process::OwnedChild::spawn_tied(&mut command).unwrap();
+        let cancel = Cancel::default();
+        let mut ssh = ChildLink::start("ssh:studio", child, Some(&cancel)).unwrap();
+        // The test decides the order: ssh's output has ended, so nothing
+        // reads its input any more, before the script is written. What it
+        // said on its error output stays unread.
+        let ended = ssh.bytes(1, Instant::now() + Duration::from_secs(30));
+        assert!(matches!(ended, Err(Stop::Ended(_))), "{ended:?}");
+        let row = Arc::new(Row::default());
+        let mut pipe = SigningIn::new(
+            ssh,
+            None,
+            Arc::clone(&row) as Arc<dyn SignIn>,
+            Wake::Allowed,
+            &cancel,
+        );
+        let sent = pipe.send(b"script\n", Instant::now() + SIGN_IN_TIMEOUT);
+        assert!(sent.is_err(), "nothing reads the input of an ended ssh");
+        assert_eq!(
+            *lock_recover(&row.0),
+            [SignInWait::Browser {
+                url: link.to_owned()
+            }]
+        );
+        assert_eq!(
+            pipe.stderr,
+            ["Log in with your Cloudflare account: https://team.cloudflareaccess.com/…"]
+        );
     }
 }

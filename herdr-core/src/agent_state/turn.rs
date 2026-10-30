@@ -110,8 +110,6 @@ pub struct RowState {
     /// Where the row stands among its siblings in a tree (PRD B11): asking or
     /// raised (itself or below it), working, finished unread, then the rest.
     pub tree_rank: u8,
-    /// The row's own PRs (PRD D-18, D-39).
-    pub pr: Option<super::sessions::PrSummary>,
 }
 
 /// A Needs You row's second line: a verb and what to do, nothing else (PRD
@@ -437,7 +435,6 @@ pub(crate) fn row_state(agent: &SidebarAgentSnapshot) -> RowState {
         } else {
             3
         },
-        pr: super::sessions::own_prs(agent),
     }
 }
 

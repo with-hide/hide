@@ -65,8 +65,11 @@ test("@platform a native session's record groups its requests by goal flow and k
     await expect(flows.first().locator("[data-record-flow-name]")).toHaveText(FIRST_GOAL);
     await expect(record.locator("[data-record-request]").first()).toContainText("기록 화면 구현 요청", { timeout: 45_000 });
     await expect(record.locator("[data-record-artifact]")).toHaveText(["세션 기록 화면 시안"]);
-    // This session's PR and its child's, each in its own group; both merged, so folded (B18, B19).
-    await expect(record.locator('[data-record-prs="2"]')).toBeVisible({ timeout: 45_000 });
+    // The record reads the session's one list, the one its row's mark draws (status-model, One list per session):
+    // this session's PR, #32 its pane holds on the checkout's branch (the fixture opens every PR on main), and its
+    // child's in its own group; the two merged ones fold (B18, B19).
+    await expect(record.locator('[data-record-prs="3"]')).toBeVisible({ timeout: 45_000 });
+    await expect(root.locator("[data-agent-pr]")).toHaveAttribute("aria-label", /^PR 3 · /);
     await record.locator('[data-record-settled="2"]').click();
     await expect(record.locator('[data-record-pr-group="own"] [data-record-pr-row="31"]')).toBeVisible();
     await expect(record.locator(`[data-record-pr-group="${child}"] [data-record-pr-row="34"]`)).toBeVisible();

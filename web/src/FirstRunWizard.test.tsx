@@ -287,6 +287,21 @@ it("reopened from Help, starts from the agents switched on now, closes with Esca
   await unmount();
 });
 
+it("reopened from Help, walks to Devices when the device list was cut short and past it only when it read empty", async () => {
+  const enabled = AGENTS.map((entry) => ({ ...entry, enabled: entry.id === "codex" }));
+  window.hideHost = { kind: "electron", platform: "darwin", notificationPermission: async () => "not_determined" } as never;
+  for (const [truncated, after] of [[true, "devices"], [false, "notifications"]] as const) {
+    const next = state(false, enabled);
+    Object.assign(next.rest.status, { herdr_profiles: { state: "ready", error: null, profiles: [], truncated } });
+    const { unmount } = await mount(next);
+    await act(async () => { useSetupWalk.getState().open(); });
+    await act(async () => { continueButton().click(); });
+    expect(useSetupWalk.getState().step).toBe(after);
+    await act(async () => { useSetupWalk.getState().close(); });
+    await unmount();
+  }
+});
+
 it("reopened from Help while the kit cannot run, stays on its first step with the reason and only has the agents read again (B12, B44)", async () => {
   const next = state(false, []);
   (next.rest.navigator.devices[0]!.kit as { unavailable?: string }).unavailable = "unreadable";

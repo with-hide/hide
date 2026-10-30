@@ -7,10 +7,15 @@
 # for a release that changes nothing.
 #
 # A day on which no version moved since the record's last run starts no
-# journey. The `record` job keeps one issue, "Agent CLI support record", with
-# each agent's latest version checked and the last one that passed, and opens
-# an issue for an agent whose latest release fails, comments on it when a
-# later release still fails, and closes it when one passes
+# journey. An agent whose latest release misses a cell is measured again at
+# its pin on the same commit (`reruns`, `pinned`), so a break of Hide's own
+# is not filed against the releases that met it (with-hide/hide-private#358:
+# #1816's Memory aging failed `guidance_memory` for every agent, and five
+# releases were blamed). The `record` job keeps one issue, "Agent CLI support
+# record", with each agent's latest version checked and the last one that
+# passed; it opens an issue for an agent whose latest release misses what its
+# pin does not, comments on it when a later release still fails, and closes it
+# when one passes, and keeps one issue against Hide for what the pins miss too
 # (scripts/agent-canary-record.py). These issues live in
 # with-hide/hide-private with the development issues, read and written with
 # that App's token (docs/TESTING.md). A fix moves the pin in its own pull
@@ -99,17 +104,67 @@ jobs:
     permissions:
       contents: read
     with:
+      # The pinned rerun measures this same commit.
+      source-sha: ${{ github.sha }}
       systems: '["linux","macos","windows"]'
       fake: true
       stand-ins: false
       clis-table: ${{ needs.latest.outputs.table }}
 
+  reruns:
+    name: agents to measure at their pins
+    needs: [latest, journey]
+    if: ${{ always() && needs.latest.result == 'success' && (needs.journey.result == 'success' || needs.journey.result == 'failure') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    outputs:
+      agents: ${{ steps.reruns.outputs.agents }}
+      systems: ${{ steps.reruns.outputs.systems }}
+    steps:
+      - uses: actions/checkout@v7
+        timeout-minutes: 5
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@v8
+        timeout-minutes: 3
+        with:
+          pattern: agent-journey-fake-*
+          path: ${{ runner.temp }}/reports
+      - name: Each agent whose latest release missed a cell, unless that release is its pin
+        id: reruns
+        timeout-minutes: 2
+        env:
+          VERSIONS: ${{ needs.latest.outputs.versions }}
+        run: |
+          set -o pipefail
+          printf '%s\n' "$VERSIONS" > "$RUNNER_TEMP/versions.json"
+          python3 scripts/agent-canary-record.py reruns --versions "$RUNNER_TEMP/versions.json" \
+            --reports "$RUNNER_TEMP/reports" | tee -a "$GITHUB_OUTPUT"
+
+  pinned:
+    name: agent journey at the pins
+    needs: reruns
+    if: ${{ needs.reruns.outputs.agents != '' }}
+    uses: ./.github/workflows/agent-journey.yml
+    permissions:
+      contents: read
+    with:
+      source-sha: ${{ github.sha }}
+      systems: ${{ needs.reruns.outputs.systems }}
+      fake: true
+      stand-ins: false
+      agents: ${{ needs.reruns.outputs.agents }}
+      report-name: agent-journey-pinned
+
   record:
     name: support record
-    needs: [latest, journey]
+    needs: [latest, journey, reruns, pinned]
     # A failed journey is what the record is for; a skipped one measured
-    # nothing, and a cancelled one is no verdict.
-    if: ${{ always() && needs.latest.result == 'success' && (needs.journey.result == 'success' || needs.journey.result == 'failure') }}
+    # nothing, and a cancelled one is no verdict. A failed or skipped pinned
+    # rerun leaves the misses it was to judge `unknown`, blaming no one.
+    if: ${{ always() && needs.latest.result == 'success' && (needs.journey.result == 'success' || needs.journey.result == 'failure') && needs.pinned.result != 'cancelled' }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
@@ -122,7 +177,8 @@ jobs:
       - uses: actions/download-artifact@v8
         timeout-minutes: 3
         with:
-          pattern: agent-journey-fake-*
+          # The latest releases' reports and the pinned rerun's.
+          pattern: agent-journey-*
           path: ${{ runner.temp }}/reports
       - name: Mint the development issues token
         id: issues-token
@@ -142,4 +198,4 @@ jobs:
         run: |
           printf '%s\n' "$VERSIONS" > "$RUNNER_TEMP/versions.json"
           python3 scripts/agent-canary-record.py record --versions "$RUNNER_TEMP/versions.json" \
-            --reports "$RUNNER_TEMP/reports" --run-url "$RUN_URL"
+            --reports "$RUNNER_TEMP/reports" --run-url "$RUN_URL" --commit "$GITHUB_SHA"

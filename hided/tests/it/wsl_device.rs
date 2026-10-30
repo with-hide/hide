@@ -612,10 +612,125 @@ fn a_wsl_distribution_connects_works_and_ends_with_its_link() {
     woken.node.host.close("the test is done");
 }
 
+/// The journey's own hang guard: past the slowest green run (42 to 65 s on
+/// GitHub's Windows runner) and short of the lane's 120 s, which ends the
+/// test saying nothing of where it stood (with-hide/hide-private#339).
+const JOURNEY_GUARD: Duration = Duration::from_secs(105);
+/// How long the distribution's process list may take once the guard fired.
+const PROBE_GUARD: Duration = Duration::from_secs(10);
+/// The most lines of the journey's record kept; the oldest go first.
+const RECORD_CAP: usize = 256;
+
+/// What the journey did, kept in memory and printed only when it fails: its
+/// steps and the Hide AI request's progress, each with its time since the
+/// start. A failed assertion prints the record as the test unwinds; a
+/// journey still running at [`JOURNEY_GUARD`] fails there, printing the
+/// record and what the distribution runs, read by an owned `ps` bounded by
+/// [`PROBE_GUARD`], and ends the test process. A journey that ends in time
+/// prints nothing.
+struct Journey {
+    started: Instant,
+    record: Arc<Mutex<std::collections::VecDeque<String>>>,
+    done: Option<mpsc::Sender<()>>,
+    watch: Option<std::thread::JoinHandle<()>>,
+}
+
+impl Journey {
+    fn start(distro: &str) -> Self {
+        let started = Instant::now();
+        let record = Arc::new(Mutex::new(std::collections::VecDeque::new()));
+        let (done, ended) = mpsc::channel::<()>();
+        let kept = Arc::clone(&record);
+        let distro = distro.to_owned();
+        let watch = std::thread::spawn(move || {
+            if ended.recv_timeout(JOURNEY_GUARD) != Err(mpsc::RecvTimeoutError::Timeout) {
+                return;
+            }
+            eprintln!("the journey still ran at {JOURNEY_GUARD:?}");
+            print_record(&kept);
+            eprintln!("processes in {distro}: {}", processes(&distro));
+            std::process::exit(101);
+        });
+        Self {
+            started,
+            record,
+            done: Some(done),
+            watch: Some(watch),
+        }
+    }
+
+    fn step(&self, name: &str) {
+        self.note(&format!("step {name}"));
+    }
+
+    fn note(&self, what: &str) {
+        let line = format!("{what} at {} ms", self.started.elapsed().as_millis());
+        let mut record = self.record.lock().unwrap();
+        if record.len() == RECORD_CAP {
+            record.pop_front();
+        }
+        record.push_back(line);
+    }
+}
+
+impl Drop for Journey {
+    fn drop(&mut self) {
+        // Ends the watch's wait at once; a watch past its guard is already
+        // ending the process within PROBE_GUARD.
+        self.done.take();
+        if let Some(watch) = self.watch.take() {
+            let _ = watch.join();
+        }
+        if std::thread::panicking() {
+            print_record(&self.record);
+        }
+    }
+}
+
+fn print_record(record: &Mutex<std::collections::VecDeque<String>>) {
+    let record = record
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    eprintln!("the journey's record:");
+    for line in record.iter() {
+        eprintln!("  {line}");
+    }
+}
+
+/// What the distribution runs, read by a `ps` this test owns and ends
+/// within [`PROBE_GUARD`].
+fn processes(distro: &str) -> String {
+    let mut command = Command::new("wsl.exe");
+    command
+        .args(["-d", distro, "-u", "root", "-e", "ps", "-eo"])
+        .arg("pid,ppid,stat,etime,args")
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    match hide_platform::process::OwnedChild::spawn(&mut command) {
+        Ok(mut child) => match child.capture_until(Instant::now() + PROBE_GUARD, 64 * 1024) {
+            Ok(output) => format!(
+                "\n{}{}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            ),
+            // A capture whose cleanup was not confirmed leaves the child
+            // ours: end it and reap it before saying why nothing was read.
+            Err(error) if error.cleanup.is_some() => {
+                let ended = child.kill_tree().and_then(|_| child.wait());
+                format!("unread: {error}; its end: {ended:?}")
+            }
+            Err(error) => format!("unread: {error}"),
+        },
+        Err(error) => format!("unread: {error}"),
+    }
+}
+
 #[test]
 #[ignore = "a real WSL 2 distribution of the runner's own; the windows wsl lane sets it up"]
 fn a_wsl_device_keeps_a_windows_drive_project_its_page_and_hide_ai_across_a_reconnect() {
     let distro = std::env::var("HIDE_E2E_WSL_DISTRO").expect("set HIDE_E2E_WSL_DISTRO");
+    let journey = Journey::start(&distro);
     let sink = Arc::new(Sink::default());
     let connector = connector(sink.clone());
     let transport = connector.wsl_transport("wsl-journey", &distro).unwrap();
@@ -638,6 +753,7 @@ fn a_wsl_device_keeps_a_windows_drive_project_its_page_and_hide_ai_across_a_reco
     let project = format!("{SCENARIO_WSL}/app");
 
     // B2: consent, install, connect.
+    journey.step("first connection");
     let (first, closed) = establish(&*transport, &consent(None), Wake::Allowed);
     let first = first.unwrap_or_else(|error| panic!("connection: {error}"));
     assert_eq!(first.node.hello.os, "linux");
@@ -655,6 +771,7 @@ fn a_wsl_device_keeps_a_windows_drive_project_its_page_and_hide_ai_across_a_reco
     );
     let link = Arc::clone(&first.node.host);
 
+    journey.step("the Windows drive project");
     // B8, D-02: a folder outside the distribution's home is a project only
     // with the operator's confirmation of it, and its files read through
     // the link.
@@ -703,6 +820,7 @@ fn a_wsl_device_keeps_a_windows_drive_project_its_page_and_hide_ai_across_a_reco
 
     // B9: the project's own server, started in its pane inside WSL, is
     // previewed through a forward on the link.
+    journey.step("the page server in its pane");
     let created = herdr(
         &*transport,
         "workspace.create",
@@ -728,14 +846,17 @@ fn a_wsl_device_keeps_a_windows_drive_project_its_page_and_hide_ai_across_a_reco
         1,
     );
     let runtime = tokio::runtime::Runtime::new().unwrap();
+    journey.step("the page through the link");
     page_over(&runtime, &link);
 
     // B12: Hide AI answered by a CLI inside WSL, as the distribution's user.
     let answer = json!({"summary": format!("Linux {USER}")});
-    assert_eq!(ask_ai(&*link, 1), answer);
+    journey.step("Hide AI");
+    assert_eq!(ask_ai(&*link, 1, &journey), answer);
 
     // B26: after a reconnection the same server still answers in its pane,
     // the project is still registrable and Hide AI answers again.
+    journey.step("the reconnection");
     link.close("the journey reconnects");
     closed
         .recv_timeout(TIMEOUT)
@@ -750,8 +871,10 @@ fn a_wsl_device_keeps_a_windows_drive_project_its_page_and_hide_ai_across_a_reco
     assert!(!again.installed);
     let link = Arc::clone(&again.node.host);
     assert_eq!(registrable(&*link, &project).root, project);
+    journey.step("the page again");
     page_over(&runtime, &link);
-    assert_eq!(ask_ai(&*link, 2), answer);
+    journey.step("Hide AI again");
+    assert_eq!(ask_ai(&*link, 2, &journey), answer);
     link.close("the journey is done");
 }
 
@@ -809,7 +932,7 @@ fn page_over(runtime: &tokio::runtime::Runtime, link: &Arc<dyn NodeLink>) {
 
 /// One Hide AI request to the device's Pi backend `instance`, which runs
 /// the stand-in.
-fn ask_ai(link: &dyn NodeLink, instance: u64) -> Value {
+fn ask_ai(link: &dyn NodeLink, instance: u64, journey: &Journey) -> Value {
     let request: AiRequest = serde_json::from_value(json!({
         "feature_id": "wsl_journey",
         "request_id": format!("wsl-journey-{instance}"),
@@ -833,9 +956,13 @@ fn ask_ai(link: &dyn NodeLink, instance: u64) -> Value {
             request,
         },
         TIMEOUT,
-        |_| true,
+        |progress: Value| {
+            journey.note(&format!("Hide AI progress {progress}"));
+            true
+        },
     )
     .expect("the device answers Hide AI");
+    journey.note("Hide AI answered");
     answer
         .value
         .unwrap_or_else(|error| panic!("the stand-in's answer: {error:?}"))

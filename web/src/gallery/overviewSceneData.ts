@@ -7,7 +7,7 @@ import type { AgentScope, TaskCardScope } from "../agentScope";
 import type { AgentPullRequest, AgentRow, AgentState, BacklogItem, RowMark, Checkout, IssueWork, LinkSummaries, ProjectDisk, SessionRecord, SnapshotRest, Task, TaskSource, WorkSession, Workspace, WorktreeDisk } from "../snapshot";
 import { EMPTY_GALLERY_SCOPE } from "./agentScopes";
 import states from "./agentStates.json";
-import { checkout, REFERENCE_FOLDS, workspace } from "./sceneData";
+import { checkout, listedPull, REFERENCE_FOLDS, workspace } from "./sceneData";
 
 const MINUTE = 60_000;
 /** The hide project's issue key and the way a request names it, built from the number. */
@@ -54,7 +54,6 @@ function agent(spec: AgentSpec, now: number): AgentRow {
     root: spec.parent === undefined,
     ask: spec.ask ?? null,
     line: spec.now ? { text: spec.now, mode: "quiet", tone: { kind: "subtle", read: false } } : preset.line,
-    pr: pulls.length ? { count: pulls.length, worst: pulls[0]!.state, pulls: pulls.map((one, index) => ({ index, state: one.state })) } : null,
     request_since: now - spec.ago,
   };
   return {
@@ -77,6 +76,8 @@ function agent(spec: AgentSpec, now: number): AgentRow {
     lineage_depth: spec.parent ? 1 : 0,
     lineage_child_pane_ids: spec.children ?? [],
     request: { verb: spec.look === "working" ? "working" : "idle", verb_since_unix_ms: now - spec.ago, request: null, later_by: null, pull_requests: pulls.map((one) => one.pr) },
+    // The core's list; in this scene only roots hold pull requests, so each holds its own.
+    pulls: pulls.length ? { pulls: pulls.map((one) => listedPull(one.pr.number, one.pr.title, one.state, null, one.pr.url)) } : null,
   } as AgentRow;
 }
 
@@ -298,7 +299,7 @@ export function overviewWorld(now: number): OverviewWorld {
       request_count: 9,
     }],
     outputs: [output],
-    pr_groups: [{ child: null, name: "사이드바 가독성 개선", outputs: [output] }],
+    pr_groups: [{ child: null, name: "사이드바 가독성 개선", pulls: [listedPull(output.number, output.title, "pending", null, output.url)] }],
     artifacts: ["사이드바 가독성 점검표"],
     children: [child("h-a1c1", "컴포넌트 구조 정리"), child("h-a1c2", "한글 가독성 확인")],
   };

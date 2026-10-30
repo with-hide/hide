@@ -55,7 +55,7 @@ function state(kind: "working" | "asking" | "done" | "quiet", root: boolean, sin
     chip_tone: tone("working"), mark_tone: tone("working"),
     line: null, branch_badge: null, bucket: "working", attention_rank: 3, link_rank: 1, search_tone: "working", subtree: "working", link: "working",
     descendant_asking: 0, verb: "working", request_todo: false, request_since: since,
-    session: { group: "working", line: null, unfinished: false }, ask: null, tree_rank: 1, pr: null,
+    session: { group: "working", line: null, unfinished: false }, ask: null, tree_rank: 1,
   };
   if (kind === "asking") {
     Object.assign(base, {

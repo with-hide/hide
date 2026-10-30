@@ -93,8 +93,11 @@ static int live_check(int argc, char **argv) {
 /* The agent journey's keyless lane (`scripts/agent-journey-check.py --mode ci
    --fixture-bin`): a Claude or Codex stand-in that runs the hook commands
    Hide's kit installed for it, keeps a session file in its agent's own
-   format and answers each turn with the JOURNEY token its prompt or its hook
-   context carries. `HIDE_E2E_JOURNEY` names the run's configuration: tab
+   format and answers each turn as the journey's fake model does
+   (scripts/agent_journey/fake_model.py, `answer`): with the last JOURNEY
+   token its prompt or its prompt hook's context carries outside Project
+   Memory's blocks, or else with the one in the Memory index its start hook
+   gave it. `HIDE_E2E_JOURNEY` names the run's configuration: tab
    separated lines `shell <program>`, `index <folder>`, `log <file>`, where
    each hook's stderr and exit status go, `app_server <script>`, the
    app-server stand-in `codex app-server` runs, and `hook <event> <command>`.
@@ -115,6 +118,8 @@ static const char *journey_shell, *journey_index, *journey_log, *journey_app_ser
 static const char *journey_events[JOURNEY_HOOKS], *journey_commands[JOURNEY_HOOKS];
 static int journey_hook_count, journey_codex;
 static char journey_id[64], journey_file[4096], journey_cwd[4096];
+/* What the session's start hooks printed: the guidance and its Memory index. */
+static char journey_start[JOURNEY_OUTPUT];
 
 static int journey_load(const char *path) {
   FILE *file = fopen(path, "rb");
@@ -329,6 +334,40 @@ static int journey_token(const char *text, char *token, size_t size) {
   return 1;
 }
 
+/* Removes Project Memory's blocks (`<hide-memory-index ...>` and
+   `<hide-memory-context ...>`) from `text`, as the fake model reads a turn:
+   a card's token there is not the turn's question. */
+static void journey_strip_memory(char *text) {
+  static const char *const names[] = {"index", "context"};
+  for (int i = 0; i < 2; i++) {
+    char open[32], close[32];
+    snprintf(open, sizeof open, "<hide-memory-%s", names[i]);
+    snprintf(close, sizeof close, "</hide-memory-%s>", names[i]);
+    char *start;
+    while ((start = strstr(text, open)) != NULL) {
+      char *end = strstr(start, close);
+      if (!end) { *start = 0; break; }
+      end += strlen(close);
+      memmove(start, end, strlen(end) + 1);
+    }
+  }
+}
+
+/* The last JOURNEY token inside the last Memory index block of `text`. */
+static int journey_index_token(const char *text, char *token, size_t size) {
+  static const char open[] = "<hide-memory-index", close[] = "</hide-memory-index>";
+  static char block[JOURNEY_OUTPUT];
+  const char *start = NULL;
+  for (const char *at = text; (at = strstr(at, open)) != NULL; at++) start = at;
+  if (!start) return 0;
+  const char *end = strstr(start, close);
+  size_t length = end ? (size_t)(end - start) : strlen(start);
+  if (length >= sizeof block) length = sizeof block - 1;
+  memcpy(block, start, length);
+  block[length] = 0;
+  return journey_token(block, token, size);
+}
+
 static void journey_screen(const char *text) {
   live_screen(text);
 }
@@ -355,8 +394,9 @@ static int journey_turn(const char *prompt) {
   struct timespec working = {3, 0};
   nanosleep(&working, NULL);
   char token[64];
+  journey_strip_memory(output);
   const char *answer = journey_token(output, token, sizeof token) || journey_token(prompt, token, sizeof token)
-    ? token : "no token in this turn";
+    || journey_index_token(journey_start, token, sizeof token) ? token : "no token in this turn";
   if (journey_message("assistant", answer)) return 1;
   if (journey_codex && journey_record("{\"type\":\"event_msg\",\"payload\":{\"type\":\"token_count\"}}")) return 1;
   if (journey_lifecycle("task_complete")) return 1;
@@ -474,18 +514,18 @@ static int journey(int argc, char **argv) {
   } else if (journey_new_id()) return 2;
   if (journey_open_session(resume != NULL)) { fputs("journey fixture: session file unavailable\n", stderr); return 2; }
   raw_terminal();
-  static char payload[16384], output[JOURNEY_OUTPUT];
-  journey_payload(payload, sizeof payload, "SessionStart", resume ? ",\"source\":\"resume\"" : ",\"source\":\"startup\"");
-  journey_hooks("SessionStart", payload, output, sizeof output);
   journey_screen(journey_composer());
-  /* A real CLI takes seconds to start before it reads its first prompt
-     (Claude Code and Codex took 2 to 4 here); a turn that ended before Hide
-     learned the session would never read working on its row. */
-  if (prompt && !resume) {
-    struct timespec boot = {JOURNEY_BOOT_SECONDS, 0};
-    nanosleep(&boot, NULL);
-    if (journey_turn(prompt)) return 2;
-  }
+  /* A real CLI takes seconds to start before it runs its start hooks and
+     reads its first prompt (Claude Code and Codex took 2 to 4 here). A start
+     hook run at once asks Hide before it has connected the pane and gets no
+     Memory (`pane_not_connected`), and a turn that ended before Hide learned
+     the session would never read working on its row. */
+  struct timespec boot = {JOURNEY_BOOT_SECONDS, 0};
+  nanosleep(&boot, NULL);
+  static char payload[16384];
+  journey_payload(payload, sizeof payload, "SessionStart", resume ? ",\"source\":\"resume\"" : ",\"source\":\"startup\"");
+  journey_hooks("SessionStart", payload, journey_start, sizeof journey_start);
+  if (prompt && !resume && journey_turn(prompt)) return 2;
   static char line[1 << 16];
   size_t used = 0;
   int escape = 0;

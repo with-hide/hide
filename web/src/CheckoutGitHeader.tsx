@@ -48,7 +48,26 @@ function useRemoteCheck(header: Header | null | undefined) {
   return { checked, failure, failing };
 }
 
-export function CheckoutUpstream({ header }: { header: Header | null | undefined }) {
+/**
+ * `받기` under the counts: offered while there is something to receive and
+ * nothing to send, and replaced by why not when both sides have commits.
+ */
+function CatchUp({ header, onCatchUp }: { header: Header; onCatchUp: (headSha: string) => void }) {
+  const { t } = useInterfaceTranslation();
+  const facts = header.facts;
+  if (!facts || facts.upstream_state !== "tracked" || !facts.behind || !facts.head_sha) return null;
+  const head = facts.head_sha;
+  const catchUp = header.catch_up ?? null;
+  if (catchUp?.state !== "running" && facts.ahead) return <p className="border-t border-border pt-xs text-muted-foreground" data-checkout-catch-up="diverged">{t("checkoutGit.catchUpDiverged")}</p>;
+  if (facts.ahead !== 0 && catchUp?.state !== "running") return null;
+  const note = catchUp?.state === "refused" ? t("checkoutGit.catchUpRefused", { count: catchUp.files }) : catchUp?.state === "busy" ? t("checkoutGit.catchUpBusy") : catchUp?.state === "failed" ? t("checkoutGit.catchUpFailed") : null;
+  return <div className="flex items-center justify-between gap-sm border-t border-border pt-xs" data-checkout-catch-up={catchUp?.state ?? "offered"}>
+    {note ? <p role="status" className="min-w-0 text-destructive">{note}</p> : <span />}
+    <Button variant="outline" size="sm" className="shrink-0 gap-xs" disabled={catchUp?.state === "running"} onClick={() => onCatchUp(head)}>{catchUp?.state === "running" ? <><LoaderCircleIcon className={`${iconClass} animate-spin`} />{t("checkoutGit.catchingUp")}</> : note ? t("checkoutGit.catchUpAgain") : t("checkoutGit.catchUp")}</Button>
+  </div>;
+}
+
+export function CheckoutUpstream({ header, onCatchUp }: { header: Header | null | undefined; onCatchUp: (headSha: string) => void }) {
   const { t } = useInterfaceTranslation();
   const live = useShellStore((state) => state.connection === "live");
   const remote = useRemoteCheck(header);
@@ -63,7 +82,7 @@ export function CheckoutUpstream({ header }: { header: Header | null | undefined
   // remote was last seen (B7); a failing fetch dims the counts (B5).
   const quiet = !tracked || (!facts.ahead && !facts.behind);
   return <Detail label={[label, remote.failure, git].filter(Boolean).join(" · ")} className={remote.failing || header.state === "stale" ? "opacity-50" : ""} data-checkout-upstream={facts.upstream_state} data-checkout-remote={remote.failing ? "failing" : "ok"} mark={quiet ? <GitCompareArrowsIcon className={`${iconClass} ${tracked ? "text-muted-foreground" : ""}`} /> : <>{facts.ahead ? <><ArrowUpIcon className={`${iconClass} text-success`} /><span>{facts.ahead}</span></> : null}{facts.behind ? <><ArrowDownIcon className={`${iconClass} text-warning`} /><span>{facts.behind}</span></> : null}</>}>
-    <p>{label}</p>{facts.upstream ? <p className="font-mono">{facts.upstream}</p> : null}<p className="text-muted-foreground" data-checkout-remote-checked="true">{remote.checked}</p>{remote.failure ? <p className="text-muted-foreground" role="status">{remote.failure}</p> : null}{git ? <p className="text-muted-foreground" role="status" data-checkout-git-age="true">{git}</p> : null}
+    <p>{label}</p>{facts.upstream ? <p className="font-mono">{facts.upstream}</p> : null}<p className="text-muted-foreground" data-checkout-remote-checked="true">{remote.checked}</p>{remote.failure ? <p className="text-muted-foreground" role="status">{remote.failure}</p> : null}{git ? <p className="text-muted-foreground" role="status" data-checkout-git-age="true">{git}</p> : null}<CatchUp header={header} onCatchUp={onCatchUp} />
   </Detail>;
 }
 

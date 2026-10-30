@@ -2,7 +2,7 @@ import { legacyAgentRow } from "../test/legacyAgentRow";
 import type { BoardProject } from "./projectBoard";
 import { expect, it } from "vitest";
 import type { MissedWork, SessionWorkSummary } from "./snapshot";
-import { holdsRequest, openMissedWork, outputPrState, recordTitle, requestPreview, sessionPlace, settledOutput } from "./sessionWork";
+import { holdsRequest, openMissedWork, recordTitle, requestPreview, sessionPlace, settledOutput } from "./sessionWork";
 
 const missed = (id: string, at: number, status: MissedWork["status"] = "open"): MissedWork => ({ id, kind: "problem", text: id, status, at_unix_ms: at, turn_offset: 1, issue_repository: null, issue_number: null, creating: false, backlog_key: null });
 const work = (id: string, cwd: string, items: MissedWork[]): SessionWorkSummary => ({
@@ -33,10 +33,6 @@ it("shows a request's summary, else its first 120 characters on one line with `â
 
 it("reads merged and closed PRs as settled and every other state as still moving (B19)", () => {
   expect(["merged", "closed", "open", "review", "ci_failed"].map((state) => settledOutput({ state }))).toEqual([true, true, false, false, false]);
-});
-
-it("maps a recorded PR state to the PR mark's state", () => {
-  expect(["ci_failed", "review", "merged", "closed"].map(outputPrState)).toEqual(["failed", "pending", "merged", "closed"]);
 });
 
 it("resolves the live pane by device, provider and native session together", () => {
