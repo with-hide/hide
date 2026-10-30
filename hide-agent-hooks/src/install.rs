@@ -129,12 +129,16 @@ pub fn status(runtime: AgentRuntime, home: &Path) -> HookStatus {
     for event in runtime.events() {
         let groups = hooks.get(event.name()).and_then(Value::as_array);
         // An entry of Hide's that selects other tools than the ones Hide
-        // writes today is outdated whatever its version says: the file does
-        // not hold what an install would write.
+        // writes today, or gives the helper another time, is outdated
+        // whatever its version says: the file does not hold what an install
+        // would write.
         missing_event |= groups.is_some_and(|groups| {
             groups.iter().any(|group| {
                 group_marker_version(group).is_some()
-                    && group.get("matcher").and_then(Value::as_str) != hook_matcher(runtime, event)
+                    && (group.get("matcher").and_then(Value::as_str)
+                        != hook_matcher(runtime, event)
+                        || group["hooks"][0]["timeout"].as_u64()
+                            != Some(hook_timeout(runtime, event)))
             })
         });
         let version = groups
@@ -417,7 +421,7 @@ fn posix_hook<'a>(
     serde_json::json!({
         "type": "command",
         "command": posix_command(helper, runtime, event),
-        "timeout": 8,
+        "timeout": hook_timeout(runtime, event),
     })
 }
 
@@ -452,13 +456,23 @@ fn windows_hook<'a>(
             "type": "command",
             "command": "powershell.exe",
             "args": ["-NoProfile", "-NonInteractive", "-Command", guard],
-            "timeout": 8,
+            "timeout": hook_timeout(runtime, event),
         }),
         AgentRuntime::Codex => serde_json::json!({
             "type": "command",
             "command": guard,
-            "timeout": 8,
+            "timeout": hook_timeout(runtime, event),
         }),
+    }
+}
+
+/// The seconds an entry gives the helper. Codex runs an `Interrupt` hook for
+/// at most three seconds and warns at its start when an entry asks for more
+/// (Codex 0.166.0); the helper's report there ends well inside it.
+pub(crate) fn hook_timeout(runtime: AgentRuntime, event: HookEvent) -> u64 {
+    match (runtime, event) {
+        (AgentRuntime::Codex, HookEvent::Interrupt) => 3,
+        _ => 8,
     }
 }
 

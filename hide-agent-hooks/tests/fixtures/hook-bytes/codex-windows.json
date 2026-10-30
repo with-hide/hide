@@ -107,7 +107,7 @@
           {
             "type": "command",
             "command": "if (Test-Path -LiteralPath 'C:\\kit path\\it''s\\hide-agent-hooks.exe' -PathType Leaf) { & 'C:\\kit path\\it''s\\hide-agent-hooks.exe' hook --runtime codex --event Interrupt --source hide-subagents@11 }",
-            "timeout": 8
+            "timeout": 3
           }
         ]
       }

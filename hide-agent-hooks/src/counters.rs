@@ -75,6 +75,11 @@ struct Record {
     /// The turn the last report said, so a tool event reports only a move.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     turn: Option<HookTurn>,
+    /// The tool call a waiting turn waits on ([`ToolCall::key`]), when the
+    /// permission request named it: only that call's end moves the turn
+    /// back to working, so a call that runs beside it does not.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    waiting_call: Option<String>,
 }
 
 impl Record {
@@ -340,18 +345,137 @@ pub fn every_pane(home: &Path, limit: usize) -> Vec<(String, Vec<SessionRecord>)
     panes
 }
 
-/// The session a tool event moves back to working, when it does: the
-/// runtime's last session in the pane, whose last report said its turn ended,
-/// waited or rested. A session with no turn yet is left to its prompt's
-/// report, so an ordinary tool call reads one small file and starts no
-/// process. The inner `None` is a session that never named itself.
-pub fn resumes(home: &Path, pane_id: &str, who: Reporter<'_>) -> Option<Option<String>> {
+/// What the pane's record says of `who`'s session: the runtime's last
+/// session in the pane, read without a change.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct SessionState {
+    /// `None` for a session that never named itself.
+    pub session: Option<String>,
+    /// The turn its last report said.
+    pub turn: Option<HookTurn>,
+    /// The call a waiting turn waits on, when its request named one.
+    pub waiting_call: Option<String>,
+}
+
+impl SessionState {
+    /// Whether a tool event `call` of this session moves its turn back to
+    /// working: a turn that ended, rested or waits on nothing named does at
+    /// any of the session's own calls, and one that waits on a named call
+    /// only at that call's end. A session with no turn yet is left to its
+    /// prompt's report, and a subagent's call is the subagent's, which only
+    /// its counts follow; so an ordinary tool call reads one small file and
+    /// starts no process.
+    pub fn resumed_by(&self, event: HookEvent, call: Option<&ToolCall>) -> bool {
+        if call.is_some_and(|call| call.subagent) {
+            return false;
+        }
+        match (self.turn, &self.waiting_call) {
+            (None | Some(HookTurn::Working), _) => false,
+            (Some(HookTurn::Waiting), Some(waited)) => {
+                matches!(
+                    event,
+                    HookEvent::PostToolUse | HookEvent::PostToolUseFailure
+                ) && call.is_some_and(|call| call.ends(waited))
+            }
+            _ => true,
+        }
+    }
+}
+
+pub fn session_state(home: &Path, pane_id: &str, who: Reporter<'_>) -> Option<SessionState> {
     let file = read_file(home, pane_id).ok()?;
     let record = file.sessions.iter().rev().find(|record| record.is(who))?;
-    record
-        .turn
-        .is_some_and(|turn| turn != HookTurn::Working)
-        .then(|| record.session.clone())
+    Some(SessionState {
+        session: record.session.clone(),
+        turn: record.turn,
+        waiting_call: record.waiting_call.clone(),
+    })
+}
+
+/// One tool event's call, as far as its input was read: whether a subagent
+/// made it, and which call it is (`key`), the tool's name and a digest of its
+/// input. An input cut at the read limit names its tool and its subagent from
+/// the bytes that arrived, which come before the large parts.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct ToolCall {
+    pub subagent: bool,
+    name: Option<String>,
+    input: Option<String>,
+}
+
+impl ToolCall {
+    pub fn read(payload: &[u8], truncated: bool) -> Self {
+        #[derive(Deserialize)]
+        struct Input {
+            agent_id: Option<String>,
+            tool_name: Option<String>,
+            tool_input: Option<serde_json::Value>,
+        }
+        if !truncated && let Ok(input) = serde_json::from_slice::<Input>(payload) {
+            return Self {
+                subagent: input.agent_id.is_some_and(|id| !id.is_empty()),
+                name: input.tool_name,
+                input: input.tool_input.as_ref().map(digest),
+            };
+        }
+        Self {
+            subagent: prefix_string(payload, "agent_id").is_some_and(|id| !id.is_empty()),
+            name: prefix_string(payload, "tool_name").map(str::to_owned),
+            input: None,
+        }
+    }
+
+    /// `name:digest`, or `name:` when the input was not read whole; `None`
+    /// for an input that named no tool.
+    pub fn key(&self) -> Option<String> {
+        let name = self.name.as_deref()?;
+        Some(format!(
+            "{name}:{}",
+            self.input.as_deref().unwrap_or_default()
+        ))
+    }
+
+    /// Whether this is the call `waited` names: the same tool, with the same
+    /// input when both were read whole.
+    fn ends(&self, waited: &str) -> bool {
+        let Some((name, input)) = waited.split_once(':') else {
+            return false;
+        };
+        self.name.as_deref() == Some(name)
+            && (input.is_empty() || self.input.as_deref().is_none_or(|own| own == input))
+    }
+}
+
+fn digest(input: &serde_json::Value) -> String {
+    use sha2::Digest;
+    let bytes = serde_json::to_vec(input).unwrap_or_default();
+    sha2::Sha256::digest(&bytes)[..8]
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect()
+}
+
+/// The tool an input cut at the read limit names, from the bytes that arrived.
+pub fn prefix_tool(payload: &[u8]) -> Option<&str> {
+    prefix_string(payload, "tool_name")
+}
+
+/// The string value of the first `"key":"…"` in `payload`, for an input cut
+/// at the read limit. A value with an escape in it is not read.
+fn prefix_string<'a>(payload: &'a [u8], key: &str) -> Option<&'a str> {
+    let text = match std::str::from_utf8(payload) {
+        Ok(text) => text,
+        Err(error) => std::str::from_utf8(&payload[..error.valid_up_to()]).ok()?,
+    };
+    let after = &text[text.find(&format!("\"{key}\""))? + key.len() + 2..];
+    let value = after
+        .trim_start()
+        .strip_prefix(':')?
+        .trim_start()
+        .strip_prefix('"')?;
+    let end = value.find('"')?;
+    let value = &value[..end];
+    (!value.contains('\\')).then_some(value)
 }
 
 fn read_file(home: &Path, pane_id: &str) -> io::Result<PaneFile> {
@@ -376,11 +500,13 @@ pub fn change(
     change: Change<'_>,
     who: Reporter<'_>,
 ) -> io::Result<PaneCounters> {
-    apply(home, pane_id, change, who, None).map(|applied| applied.counters)
+    apply(home, pane_id, change, who, None, None).map(|applied| applied.counters)
 }
 
 /// Applies one [`Change`] to `who`'s record, and notes `turn` as the one its
-/// next report says.
+/// next report says, with the call (`ToolCall::key`) a waiting turn waits
+/// on. A later wait that names none, such as Claude Code's notification of
+/// the same request, keeps the call the request named.
 ///
 /// The record is read, changed and written while the lock is held, so two
 /// events of one pane never both start from the same count. The write is not
@@ -393,6 +519,7 @@ pub fn apply(
     change: Change<'_>,
     who: Reporter<'_>,
     turn: Option<HookTurn>,
+    call: Option<&str>,
 ) -> io::Result<Applied> {
     let path = record_path(home, pane_id);
     if let Some(parent) = path.parent() {
@@ -415,6 +542,7 @@ pub fn apply(
                 record = Record::default();
             }
             record.turn = None;
+            record.waiting_call = None;
         }
         Change::Started(Some(subagent)) => {
             if let Some(at) = record.finished.iter().position(|id| id == subagent) {
@@ -460,6 +588,12 @@ pub fn apply(
             record.running = listed;
         }
         Change::None => {}
+    }
+    match turn {
+        Some(HookTurn::Waiting) if call.is_none() && previous_turn == Some(HookTurn::Waiting) => {}
+        Some(HookTurn::Waiting) => record.waiting_call = call.map(str::to_owned),
+        Some(_) => record.waiting_call = None,
+        None => {}
     }
     if turn.is_some() {
         record.turn = turn;
@@ -627,6 +761,89 @@ pub fn retain<'a>(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_call_cut_at_the_read_limit_still_names_its_tool_and_its_subagent() {
+        let whole = br#"{"session_id":"s","agent_id":"a1","tool_name":"WebFetch","tool_input":{"url":"u"},"tool_response":"long"}"#;
+        let call = ToolCall::read(whole, false);
+        assert!(call.subagent);
+        let key = call.key().unwrap();
+        assert!(key.starts_with("WebFetch:") && key.len() == "WebFetch:".len() + 16);
+        let cut = ToolCall::read(&whole[..80], true);
+        assert!(cut.subagent);
+        assert_eq!(cut.key().as_deref(), Some("WebFetch:"));
+        // A cut call matches the waited one by its tool, and a whole one by
+        // its input too.
+        assert!(cut.ends(&key));
+        let other = ToolCall::read(
+            br#"{"tool_name":"WebFetch","tool_input":{"url":"v"}}"#,
+            false,
+        );
+        assert!(!other.ends(&key));
+        assert!(!ToolCall::read(br#"{"tool_name":"Read","tool_input":{}}"#, false).ends(&key));
+    }
+
+    #[test]
+    fn a_wait_keeps_the_call_its_request_named_through_a_notification_of_it() {
+        let root = home("waited-call");
+        let pane = "w1:p1";
+        apply(
+            &root,
+            pane,
+            Change::None,
+            WHO,
+            Some(HookTurn::Working),
+            None,
+        )
+        .unwrap();
+        apply(
+            &root,
+            pane,
+            Change::None,
+            WHO,
+            Some(HookTurn::Waiting),
+            Some("Bash:ab"),
+        )
+        .unwrap();
+        apply(
+            &root,
+            pane,
+            Change::None,
+            WHO,
+            Some(HookTurn::Waiting),
+            None,
+        )
+        .unwrap();
+        let state = session_state(&root, pane, WHO).unwrap();
+        assert_eq!(state.waiting_call.as_deref(), Some("Bash:ab"));
+        let sibling = ToolCall {
+            subagent: false,
+            name: Some("Read".to_owned()),
+            input: Some("cd".to_owned()),
+        };
+        let waited = ToolCall {
+            name: Some("Bash".to_owned()),
+            input: Some("ab".to_owned()),
+            ..sibling.clone()
+        };
+        assert!(!state.resumed_by(HookEvent::PreToolUse, Some(&sibling)));
+        assert!(!state.resumed_by(HookEvent::PostToolUse, Some(&sibling)));
+        assert!(!state.resumed_by(HookEvent::PreToolUse, Some(&waited)));
+        assert!(state.resumed_by(HookEvent::PostToolUseFailure, Some(&waited)));
+        // Any other turn forgets the call.
+        apply(&root, pane, Change::None, WHO, Some(HookTurn::Idle), None).unwrap();
+        let state = session_state(&root, pane, WHO).unwrap();
+        assert_eq!(state.waiting_call, None);
+        assert!(state.resumed_by(HookEvent::PreToolUse, Some(&sibling)));
+        assert!(!state.resumed_by(
+            HookEvent::PreToolUse,
+            Some(&ToolCall {
+                subagent: true,
+                ..sibling
+            })
+        ));
+        fs::remove_dir_all(&root).ok();
+    }
 
     const WHO: Reporter<'static> = Reporter {
         agent: Some("claude-code"),
@@ -946,12 +1163,20 @@ mod tests {
     fn a_session_notes_the_turn_its_report_said_and_a_session_start_forgets_it() {
         let root = home("turn");
         let pane = "w7B:pM";
-        let first = apply(&root, pane, Change::None, WHO, Some(HookTurn::Working)).unwrap();
+        let first = apply(
+            &root,
+            pane,
+            Change::None,
+            WHO,
+            Some(HookTurn::Working),
+            None,
+        )
+        .unwrap();
         assert_eq!(first.previous_turn, None);
-        let again = apply(&root, pane, Change::None, WHO, Some(HookTurn::Done)).unwrap();
+        let again = apply(&root, pane, Change::None, WHO, Some(HookTurn::Done), None).unwrap();
         assert_eq!(again.previous_turn, Some(HookTurn::Working));
-        apply(&root, pane, Change::SessionStarted, WHO, None).unwrap();
-        let after = apply(&root, pane, Change::None, WHO, None).unwrap();
+        apply(&root, pane, Change::SessionStarted, WHO, None, None).unwrap();
+        let after = apply(&root, pane, Change::None, WHO, None, None).unwrap();
         assert_eq!(after.previous_turn, None);
         fs::remove_dir_all(&root).unwrap();
     }

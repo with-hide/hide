@@ -515,7 +515,7 @@ fn turn(home: &Path, agent: &Agent, input: Input, started: Instant) -> Value {
     }
     let who = reporter(agent, &input);
     let counted = agent.adapter.subagent_counts.is_some();
-    let outcome = counters::apply(home, &pane, counters::Change::None, who, Some(turn))
+    let outcome = counters::apply(home, &pane, counters::Change::None, who, Some(turn), None)
         .map_err(|error| format!("the pane's record could not be changed: {error}"))
         .and_then(|applied| {
             report::report(

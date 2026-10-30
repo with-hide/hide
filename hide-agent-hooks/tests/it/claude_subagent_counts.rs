@@ -182,7 +182,8 @@ fn a_new_session_in_the_pane_starts_its_own_counts_and_a_resume_of_the_same_one_
 }
 
 /// D-10: the turn each event says, and a tool event that reports only a
-/// turn it moves, so an ordinary tool call starts no `hide` at all.
+/// turn it moves, so an ordinary tool call starts no `hide` at all; a wait
+/// on a named call ends only at that call's end.
 #[test]
 fn each_event_reports_the_turn_it_says_and_a_tool_call_reports_only_a_resumed_turn() {
     let machine = Machine::new("registered");
@@ -212,13 +213,32 @@ fn each_event_reports_the_turn_it_says_and_a_tool_call_reports_only_a_resumed_tu
     );
     tool("PreToolUse");
     tool("PostToolUse");
+    let bash = |event: &str| {
+        pane.event(
+            event,
+            json!({"session_id": s, "hook_event_name": event, "tool_name": "Bash",
+                   "tool_input": {"command": "rm -rf build"}, "tool_use_id": "toolu_1",
+                   "tool_response": {"stdout": ""}}),
+        );
+    };
+    bash("PreToolUse");
     pane.event(
         "PermissionRequest",
         json!({"session_id": s, "hook_event_name": "PermissionRequest", "tool_name": "Bash",
                "tool_input": {"command": "rm -rf build"}}),
     );
-    // The approved tool runs: the turn goes on, once.
+    // A call that runs beside the one waiting, and a subagent's call, leave
+    // the wait standing while its dialog is open.
+    tool("PreToolUse");
     tool("PostToolUse");
+    pane.event(
+        "PreToolUse",
+        json!({"session_id": s, "agent_id": "a1", "agent_type": "general-purpose",
+               "hook_event_name": "PreToolUse", "tool_name": "Grep",
+               "tool_input": {"pattern": "x"}}),
+    );
+    // The approved call ends: the turn goes on, once.
+    bash("PostToolUse");
     tool("PreToolUse");
     notification("permission_prompt");
     // The operator interrupts: no Stop comes, the idle prompt does.

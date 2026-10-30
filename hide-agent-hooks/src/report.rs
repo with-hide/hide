@@ -133,6 +133,21 @@ pub fn record_outcome(
                     .map(|elapsed| elapsed.as_millis() as u64)
                     .unwrap_or(0),
             };
+            // The file holds the hook's state now, which the next success
+            // clears; the log keeps every report that did not arrive.
+            let _ = crate::spawn_guard::append_line(
+                &crate::spawn_guard::log_path(home),
+                &serde_json::json!({
+                    "component": "agent_hooks",
+                    "kind": "report.failed",
+                    "pane": failure.pane_id,
+                    "agent": failure.agent,
+                    "event": failure.event,
+                    "cause": failure.error,
+                    "at_unix_ms": failure.at_unix_ms,
+                })
+                .to_string(),
+            );
             if let Some(parent) = path.parent() {
                 hide_platform::fs::private::create_dir_all(parent)?;
             }
@@ -246,6 +261,18 @@ mod tests {
         assert!(failure.message().contains("w1:p1"));
         record_outcome(&root, "w1:p1", "claude", "Stop", &Ok(())).expect("clear");
         assert_eq!(last_failure(&root), None);
+        // The log keeps the failure the success cleared from the record.
+        let log = fs::read_to_string(crate::spawn_guard::log_path(&root)).unwrap();
+        let line: serde_json::Value = serde_json::from_str(log.lines().last().unwrap()).unwrap();
+        assert_eq!(
+            (&line["kind"], &line["pane"], &line["event"], &line["cause"]),
+            (
+                &json!("report.failed"),
+                &json!("w1:p1"),
+                &json!("Stop"),
+                &json!("unavailable")
+            )
+        );
         fs::remove_dir_all(&root).ok();
     }
 

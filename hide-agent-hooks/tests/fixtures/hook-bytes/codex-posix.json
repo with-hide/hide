@@ -107,7 +107,7 @@
           {
             "type": "command",
             "command": "if [ -x '/kit path/it'\\''s/hide-agent-hooks' ]; then exec '/kit path/it'\\''s/hide-agent-hooks' hook --runtime codex --event Interrupt --source hide-subagents@11; fi",
-            "timeout": 8
+            "timeout": 3
           }
         ]
       }
