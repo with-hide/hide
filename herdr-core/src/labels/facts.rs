@@ -31,11 +31,6 @@ pub(crate) const MAX_TEXT_BYTES: usize = 8 * 1024;
 pub(crate) const MAX_SIGHTINGS: usize = 20;
 /// Pull requests one session is recorded as having made.
 const MAX_CREATED: usize = 20;
-/// How far from GitHub's creation time a tool's printing of the address may
-/// be and still be the creation (D-31): a little before, for clock skew, and
-/// up to thirty seconds after, for a tool that prints when it returns.
-const CREATED_BEFORE_MS: u64 = 2_000;
-const CREATED_AFTER_MS: u64 = 30_000;
 
 /// When GitHub made each pull request this daemon has read, by lowercase
 /// `owner/name` and number.
@@ -223,8 +218,7 @@ impl SessionFacts {
                 continue;
             };
             let at = sighting.at_unix_ms;
-            let made_then = at.saturating_add(CREATED_BEFORE_MS) >= created
-                && at <= created.saturating_add(CREATED_AFTER_MS);
+            let made_then = crate::links::printed_at_creation(at, created);
             let known = self
                 .created_prs
                 .iter()
@@ -672,13 +666,19 @@ mod tests {
                 sighting(1, 100_000),
                 sighting(2, 100_000),
                 sighting(3, 200_000),
+                sighting(4, 300_000),
+                sighting(5, 400_000),
             ],
             &LOG,
         );
+        // GitHub's time is another clock's: a print before it is the same
+        // making as a print after it.
         let times = PullRequestTimes::from([
             (("acme/app".to_owned(), 1), 90_000), // printed 10 s after: made here
             (("acme/app".to_owned(), 2), 40_000), // printed a minute after: looked at
             (("acme/app".to_owned(), 3), 201_000), // printed a second before: made here
+            (("acme/app".to_owned(), 4), 303_400), // printed 3.4 s before: made here
+            (("acme/app".to_owned(), 5), 431_000), // printed 31 s before: looked at
         ]);
         assert!(facts.judge_created(&times));
         assert_eq!(
@@ -687,7 +687,7 @@ mod tests {
                 .iter()
                 .map(|pr| pr.number)
                 .collect::<Vec<_>>(),
-            [1, 3]
+            [1, 3, 4]
         );
         assert!(!facts.judge_created(&times), "judged once");
     }

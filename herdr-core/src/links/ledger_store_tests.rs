@@ -1386,6 +1386,8 @@ fn the_durable_issue_intent_keeps_the_original_attempt_and_closes_without_an_out
     );
 }
 
+/// The creation window is thirty seconds either side of GitHub's time
+/// (`links::CREATED_WITHIN_MS`): its first value inside and outside on each.
 #[test]
 fn issue_creation_uses_both_window_edges_and_late_facts_attach_only_the_resolving_turn() {
     let directory = tempfile::tempdir().unwrap();
@@ -1424,8 +1426,8 @@ fn issue_creation_uses_both_window_edges_and_late_facts_attach_only_the_resolvin
     );
     for (number, at, created) in [
         (1, 2300, 2300),
-        (2, 8000, 10000),
-        (3, 7999, 10000),
+        (2, 10000, 40000),
+        (3, 9999, 40000),
         (4, 40000, 10000),
         (5, 40001, 10000),
     ] {
@@ -2542,6 +2544,37 @@ fn a_pull_request_the_label_judged_made_here_is_an_output_outside_the_reader_win
     assert_eq!(record.pr_groups[0].child, None);
     assert_eq!(record.pr_groups[0].outputs[0].number, 41);
     assert_eq!(record.pr_groups[0].outputs[0].state, "open");
+}
+
+/// The printing and GitHub's `createdAt` are read on two clocks, this
+/// machine's and GitHub's: mission-13's #1810 was printed 2.7 s before the
+/// time GitHub gave it, and its session's record lost it. A print within
+/// thirty seconds either way is the making; one further off is a look.
+#[test]
+fn a_pull_request_printed_before_githubs_creation_time_is_still_the_sessions_output() {
+    let directory = tempfile::tempdir().unwrap();
+    let (mut store, _) = LinkStore::open(&directory.path().join("links.sqlite3")).unwrap();
+    request(&mut store, 1, "PR 올려줘");
+    chapter(&mut store);
+    store
+        .connection
+        .execute_batch(
+            "INSERT INTO repo_names VALUES('acme/app','id:1');
+             INSERT INTO prs VALUES('id:1',41,'project:app','feat/x','Made here','https://github.com/acme/app/pull/41',100000000,NULL,NULL,1);
+             INSERT INTO prs VALUES('id:1',42,'project:app','feat/y','Looked at','https://github.com/acme/app/pull/42',100000000,NULL,NULL,1);
+             INSERT INTO session_prs VALUES('device-a','codex','session-a','/s.jsonl','acme/app',41,99997256,NULL);
+             INSERT INTO session_prs VALUES('device-a','codex','session-a','/s.jsonl','acme/app',42,99969999,NULL);",
+        )
+        .unwrap();
+    store.refresh_ledger_outputs().unwrap();
+    let record = store.ledger_record(&session()).unwrap();
+    let numbers: Vec<u64> = record
+        .pr_groups
+        .iter()
+        .flat_map(|group| &group.outputs)
+        .map(|output| output.number)
+        .collect();
+    assert_eq!(numbers, [41]);
 }
 
 /// D-12, D-13: an ask waits on the operator in its session's record, and
