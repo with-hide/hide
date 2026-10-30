@@ -109,7 +109,7 @@ impl Runtime {
     /// Jobs that hold one of Desk's places: starting from the queue, or in
     /// the ledger and starting, working or asking.
     pub(super) fn desk_places_taken(&self) -> usize {
-        places_in(&self.desk_cards())
+        places_in(&self.desk_cards(&self.desk_card_index()))
     }
 
     /// Whether the ledger holds a spawn of Desk's with this intent.
@@ -565,16 +565,15 @@ impl Runtime {
 
     /// Desk's jobs as the `desk_jobs` section lists them.
     pub(super) fn desk_jobs(&self) -> Vec<crate::model::DeskJobSnapshot> {
-        let mut cards = self.desk_cards();
+        let mut cards = self.desk_cards(&self.desk_card_index());
         cards.truncate(MAX_CARDS);
         cards
     }
 
     /// Desk's jobs as cards, newest first: the queue's, then the newest
     /// [`MAX_CARDS`] of the ledger's, before the section's cap.
-    fn desk_cards(&self) -> Vec<crate::model::DeskJobSnapshot> {
+    fn desk_cards(&self, index: &CardIndex<'_>) -> Vec<crate::model::DeskJobSnapshot> {
         use crate::model::{AgentStatusCode, DeskJobFailure, DeskJobReason, DeskJobSnapshot};
-        let index = self.desk_card_index();
         let mut cards: Vec<DeskJobSnapshot> = Vec::new();
         let ledger = self.delivery_state().ok();
         let spawns = self.desk_spawns();
@@ -606,7 +605,7 @@ impl Runtime {
                     .find(|agent| &agent.id == child)
                     .cloned()
             });
-            cards.push(self.desk_card(spawn, registration.as_ref(), &index));
+            cards.push(self.desk_card(spawn, registration.as_ref(), index));
         }
         let mut position = 0;
         for job in &self.desk.stored.queue {
@@ -1189,18 +1188,19 @@ impl Runtime {
                 .any(|spawn| spawn.intent == job.intent && spawn.completed)
         });
         marked |= self.desk.stored.queue.len() != before;
-        // The cards are built once a publish, and again only when a queued
-        // job started.
-        let mut cards = self.desk_cards();
-        let started = self.desk_waiting() > 0 && self.desk_start_next(places_in(&cards));
-        if started {
-            cards = self.desk_cards();
-        }
-        cards.truncate(MAX_CARDS);
+        // The cards and the workers' cards share one index a publish; a
+        // queue that waits counts its places from cards of their own first.
+        let started = self.desk_waiting() > 0 && {
+            let places = places_in(&self.desk_cards(&self.desk_card_index()));
+            self.desk_start_next(places)
+        };
         if marked || started {
             self.save_desk();
         }
-        let workers = self.desk_workers(&cards);
+        let index = self.desk_card_index();
+        let mut cards = self.desk_cards(&index);
+        cards.truncate(MAX_CARDS);
+        let workers = self.desk_workers(&cards, &index);
         self.publish_desk_jobs(cards, workers);
         self.compose_desk_mentions();
         if letters_read || self.desk_chips_moved() {
@@ -1213,8 +1213,10 @@ impl Runtime {
         if self.desk.worker.is_none() {
             return;
         }
-        let jobs = self.desk_jobs();
-        let workers = self.desk_workers(&jobs);
+        let index = self.desk_card_index();
+        let mut jobs = self.desk_cards(&index);
+        jobs.truncate(MAX_CARDS);
+        let workers = self.desk_workers(&jobs, &index);
         self.publish_desk_jobs(jobs, workers);
     }
 
@@ -1224,6 +1226,7 @@ impl Runtime {
     fn desk_workers(
         &self,
         jobs: &[crate::model::DeskJobSnapshot],
+        index: &CardIndex<'_>,
     ) -> Vec<crate::model::DeskJobSnapshot> {
         let panes: HashSet<&str> = jobs
             .iter()
@@ -1236,7 +1239,6 @@ impl Runtime {
         let Ok(ledger) = self.delivery_state() else {
             return Vec::new();
         };
-        let index = self.desk_card_index();
         ledger
             .spawns
             .iter()
@@ -1253,7 +1255,7 @@ impl Runtime {
                     .child
                     .as_ref()
                     .and_then(|child| ledger.agents.iter().find(|agent| &agent.id == child));
-                self.desk_card(spawn, registration, &index)
+                self.desk_card(spawn, registration, index)
             })
             .collect()
     }
@@ -1760,7 +1762,7 @@ mod tests {
         conductor.workers = vec!["p1".into()];
         // PRD session-docs-and-assistant B28, B34: the Threads list opens a
         // Conductor to its workers, each with its own state and pane.
-        let workers = runtime.desk_workers(&[conductor]);
+        let workers = runtime.desk_workers(&[conductor], &runtime.desk_card_index());
         assert_eq!(
             workers
                 .iter()
@@ -1768,7 +1770,11 @@ mod tests {
                 .collect::<Vec<_>>(),
             [("intent-worker", Some("p1"))]
         );
-        assert!(runtime.desk_workers(&[card(&runtime, "other")]).is_empty());
+        assert!(
+            runtime
+                .desk_workers(&[card(&runtime, "other")], &runtime.desk_card_index())
+                .is_empty()
+        );
     }
 
     #[test]

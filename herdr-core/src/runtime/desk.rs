@@ -249,6 +249,9 @@ impl Runtime {
                 | DeskEvent::JobRead(_)
                 | DeskEvent::OutputSeen(_)
         );
+        // An output seen moves the View's seen state, which the core keeps
+        // with the View, not in Desk's store.
+        let stored = !matches!(event, DeskEvent::OutputSeen(_));
         let changed = match event {
             DeskEvent::Send(payload) => self.desk_send(payload),
             DeskEvent::Stop => self.desk_stop(),
@@ -273,7 +276,9 @@ impl Runtime {
             DeskEvent::Lane(payload) => self.desk_lane(payload),
         };
         if changed {
-            self.save_desk();
+            if stored {
+                self.save_desk();
+            }
             if room {
                 self.compose_desk();
             }
