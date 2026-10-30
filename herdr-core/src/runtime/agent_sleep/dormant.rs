@@ -232,7 +232,7 @@ impl Runtime {
 
     pub(crate) fn dormant_close_effect_is_current(
         &self,
-        effect: &live::CloseEffectRequest,
+        effect: &crate::recent_closed::capture::CloseEffectRequest,
     ) -> bool {
         effect.connection_generation == self.live_generation
             && self
@@ -613,7 +613,8 @@ impl Runtime {
                         continue;
                     };
                     if let Some(effect) = self.prepare_captured_close_effect(key)
-                        && let Err(reason) = live::spawn_saved_close_effect(context, effect)
+                        && let Err(reason) =
+                            crate::recent_closed::capture::spawn_saved_close_effect(context, effect)
                     {
                         self.cancel_close_before_effect(key, reason.clone());
                         self.fail_dormant(&id, &reason);
@@ -909,7 +910,7 @@ impl Runtime {
             Ok(observed) => {
                 let old_present = Self::close_operation_target_present(
                     &observed.snapshot,
-                    &live::CloseCaptureTarget::Pane { pane_id: next.old_pane_id.clone() },
+                    &crate::recent_closed::capture::CloseCaptureTarget::Pane { pane_id: next.old_pane_id.clone() },
                     &next.context.tab_id,
                 );
                 self.ingest_session(Ok(observed.snapshot));

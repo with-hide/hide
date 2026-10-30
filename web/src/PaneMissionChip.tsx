@@ -173,7 +173,7 @@ function OpenBody({ mission, onConversation }: { mission: Mission; onConversatio
             {mission.decision}
           </span>
           <button type="button" className="shrink-0 rounded-xs px-xs py-xxs text-foreground outline-none hover:bg-accent focus-visible:ring-1 focus-visible:ring-ring" onClick={onConversation} data-mission-mini-conversation="true">
-            {t("mission.mini.conversation")}
+            {t("mission.toTerminal")}
           </button>
         </div>
       ) : null}

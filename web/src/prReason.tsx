@@ -1,4 +1,4 @@
-import type { HTMLAttributes } from "react";
+import type { HTMLAttributes, ReactNode } from "react";
 import { useElapsed } from "./components/elapsed";
 import { useInterfaceTranslation } from "./i18n/client";
 import type { PrGroupId, PrReason } from "./agentScope";
@@ -31,6 +31,8 @@ export function reasonText(t: ReturnType<typeof useInterfaceTranslation>["t"], r
       return t("work.reason.update", { base: reason.base ?? "" });
     case "assign_reviewer":
       return t("work.reason.assign_reviewer");
+    case "assign_reviewer_optional":
+      return t("work.reason.assign_reviewer_optional");
     case "review":
       return reason.name ? t("work.reason.review", { name: reason.name, time: when }) : t("work.reason.reviewAnon", { time: when });
     case "team_review":
@@ -84,15 +86,20 @@ function split(text: string): [string, string] {
  * One reason as a line: the leading word in the text colour, the rest in the
  * group's tone. `noAgent` appends `맡은 에이전트 없음` for a blocked row (B10).
  */
-export function ReasonLine({ reason, group, noAgent = false, className, ...rest }: { reason: PrReason; group: PrGroupId; noAgent?: boolean; className?: string } & HTMLAttributes<HTMLSpanElement>) {
+export function ReasonLine({ reason, group, noAgent = false, approvals = null, className, ...rest }: { reason: PrReason; group: PrGroupId; noAgent?: boolean; approvals?: ReactNode; className?: string } & HTMLAttributes<HTMLSpanElement>) {
   const { t } = useInterfaceTranslation();
   const time = useElapsed(reason.since_unix_ms);
   const [lead, tail] = split(reasonText(t, reason, time));
   const tone = reason.kind === "checking" || reason.kind === "unjudged" ? "text-muted-foreground" : GROUP_TONE[group];
+  // `승인 n/m` follows the leading word of a review wait, whose rest is who
+  // and how long, and closes every other reason (PRD pr-review-status B3).
+  const early = approvals !== null && lead !== "" && reason.kind === "waiting_review";
   return (
     <span className={cn("min-w-0 truncate text-micro", className)} data-pr-reason={reason.kind} {...rest}>
       {lead ? <span className="font-medium text-foreground">{lead}</span> : null}
+      {early ? <> · {approvals}</> : null}
       <span className={tone}>{tail}</span>
+      {approvals !== null && !early ? <> · {approvals}</> : null}
       {noAgent ? <span className="text-muted-foreground"> · {t("work.noAgent")}</span> : null}
     </span>
   );

@@ -706,7 +706,7 @@ fn pane_focus_request_moves_to_the_checkout_that_owns_the_target() {
         socket_path: socket_path.clone().into(),
         runtime: std::sync::Weak::new(),
         notifier: crate::handle::ChangeNotifier::noop(),
-        api_connector: Arc::new(hide_herdr_client::LocalSocketConnector::new(&socket_path)),
+        engine: crate::engine::herdr::local(&socket_path),
         node: Arc::new(hide_node::Local::of_process()),
     });
     let payload = |focused_workspace_id: &str, focused_pane_id: &str| {
@@ -3041,7 +3041,7 @@ fn tab_strip_reorder_asks_herdr_and_lands_only_once_herdr_reports_the_order() {
         socket_path: herdr.socket_path().to_path_buf(),
         runtime: std::sync::Weak::new(),
         notifier: crate::handle::ChangeNotifier::noop(),
-        api_connector: Arc::new(herdr.connector()),
+        engine: herdr.engine(),
         node: Arc::new(hide_node::Local::of_process()),
     });
 
@@ -3121,7 +3121,7 @@ fn tab_strip_reorder_indexes_a_move_in_the_whole_workspace_not_one_checkout() {
         socket_path: herdr.socket_path().to_path_buf(),
         runtime: std::sync::Weak::new(),
         notifier: crate::handle::ChangeNotifier::noop(),
-        api_connector: Arc::new(herdr.connector()),
+        engine: herdr.engine(),
         node: Arc::new(hide_node::Local::of_process()),
     });
 
@@ -3251,7 +3251,7 @@ fn tab_strip_reorder_a_refused_drag_can_simply_be_dragged_again() {
         socket_path: herdr.socket_path().to_path_buf(),
         runtime: std::sync::Weak::new(),
         notifier: crate::handle::ChangeNotifier::noop(),
-        api_connector: Arc::new(herdr.connector()),
+        engine: herdr.engine(),
         node: Arc::new(hide_node::Local::of_process()),
     });
 
@@ -4131,7 +4131,7 @@ fn protocol_mismatch_exposes_typed_diagnostics_and_recovery_reports_the_connecte
     let connected = &runtime.snapshot().status.herdr;
     assert_eq!(connected.state, "connected");
     // A healthy Herdr reports its real version and the revision that matched (B5).
-    let revision = u64::from(crate::herdr_contract::HERDR_PROTOCOL_REVISION);
+    let revision = u64::from(crate::engine::herdr::contract::HERDR_PROTOCOL_REVISION);
     assert_eq!(connected.expected_protocol, Some(revision));
     assert_eq!(connected.received_protocol, Some(revision));
     assert_eq!(connected.received_version.as_deref(), Some("0.9.1"));
@@ -4203,7 +4203,7 @@ fn tab_strip_reorder_a_drag_within_one_workspace_uses_that_workspaces_index() {
         socket_path: herdr.socket_path().to_path_buf(),
         runtime: std::sync::Weak::new(),
         notifier: crate::handle::ChangeNotifier::noop(),
-        api_connector: Arc::new(herdr.connector()),
+        engine: herdr.engine(),
         node: Arc::new(hide_node::Local::of_process()),
     });
 
@@ -4299,7 +4299,7 @@ fn tab_strip_reorder_a_drag_that_interleaves_two_workspaces_still_lands() {
         socket_path: herdr.socket_path().to_path_buf(),
         runtime: std::sync::Weak::new(),
         notifier: crate::handle::ChangeNotifier::noop(),
-        api_connector: Arc::new(herdr.connector()),
+        engine: herdr.engine(),
         node: Arc::new(hide_node::Local::of_process()),
     });
 
@@ -4772,7 +4772,7 @@ fn tab_rename_keeps_the_committed_name_on_failure_and_ignores_old_receipts() {
         socket_path: herdr.socket_path().to_owned(),
         runtime: std::sync::Weak::new(),
         notifier: crate::handle::ChangeNotifier::noop(),
-        api_connector: Arc::new(herdr.connector()),
+        engine: herdr.engine(),
         node: Arc::new(hide_node::Local::of_process()),
     });
     runtime.rename_tab(request("slow", "First"));

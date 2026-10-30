@@ -165,7 +165,7 @@ fn spawner() -> Spawner {
         name: "lead".into(),
         kind: "codex".into(),
         device_id: DEVICE.into(),
-        session: crate::wire::session_digest("native-lead"),
+        session: crate::engine::tokens::session_digest("native-lead"),
     };
     let device = Arc::new(Mutex::new(Device {
         caller: CALLER.into(),
@@ -224,7 +224,7 @@ fn spawner() -> Spawner {
         );
         guard.install_remote_control(RemoteControlContext::new(
             DEVICE,
-            Arc::new(herdr.connector()),
+            herdr.engine(),
             Arc::downgrade(&runtime),
             ChangeNotifier::noop(),
         ));
@@ -520,7 +520,7 @@ fn local_spawner() -> Spawner {
         .unwrap_or_else(|e| e.into_inner());
     let root = tempfile::tempdir().unwrap();
     let (runtime, mut actor, _, path) = crate::runtime::delivery::tests::fixture(root.path());
-    actor.session = crate::wire::session_digest("native-parent");
+    actor.session = crate::engine::tokens::session_digest("native-parent");
     let device = Arc::new(Mutex::new(Device {
         caller: "sender".into(),
         checkout: LOCAL_CHECKOUT.into(),
@@ -548,7 +548,7 @@ fn local_spawner() -> Spawner {
             socket_path: herdr.socket_path().to_owned(),
             runtime: std::sync::Weak::new(),
             notifier: ChangeNotifier::noop(),
-            api_connector: Arc::new(herdr.connector()),
+            engine: herdr.engine(),
             node: Arc::new(Node),
         });
         guard.own_node = Arc::new(Node);

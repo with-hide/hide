@@ -1,16 +1,14 @@
 name: herdr pin update
 
-# GitHub delivers no event across repository boundaries, so an upstream Herdr
-# release cannot trigger this. It polls instead, daily, and can be run by hand.
-# Herdr has shipped stable releases on consecutive days (v0.9.4 on 2026-10-13,
-# v0.9.5 on 2026-10-14); a weekly poll left the pin a week behind one of them.
-#
-# This repository is public, so GitHub disables a scheduled workflow after 60
-# days with no repository activity. If this job stops appearing, re-enable it
-# in the Actions tab rather than looking for a bug here.
+# Runs only by hand. Hide is moving from Herdr to its own engine (PRD
+# own-terminal-engine, engine-bundle-1 D-15), so the pin holds at the release
+# the engine boundary was built and tested against, and a daily proposal of a
+# new upstream release would only ask for a bump nobody should take. The daily
+# schedule is off, not deleted: a security fix upstream is still proposed by
+# running this workflow from the Actions tab, and it goes through the same
+# contract and runtime checks. Bundle 4 (the switch release) deletes this
+# workflow with the bundled Herdr.
 on:
-  schedule:
-    - cron: "17 6 * * *"
   workflow_dispatch:
 
 permissions:
@@ -50,7 +48,7 @@ jobs:
           # A preview pin reports "0.8.2-preview.<date>-<sha>": newer than the
           # 0.8.2 stable it was cut after, older than a 0.8.3 stable. Comparing
           # only the numeric prefix, and proposing only a strictly newer
-          # stable, is what stops a daily proposal to move back to 0.8.2.
+          # stable, is what stops a proposal to move back to 0.8.2.
           pinned_numeric=${pinned%%-*}
           highest=$(printf '%s\n%s\n' "$pinned_numeric" "$latest" | sort -V | tail -n 1)
           if [ "$latest_tag" = "$pinned_tag" ] || [ "$highest" = "$pinned_numeric" ]; then
@@ -77,8 +75,8 @@ jobs:
           set -euo pipefail
           branch="herdr-bump/v${{ steps.upstream.outputs.latest }}"
           echo "branch=$branch" >> "$GITHUB_OUTPUT"
-          # The schedule fires again long before a bump gets reviewed, so the
-          # second run must find the first one's PR instead of duplicating it.
+          # A second run can come before a bump gets reviewed, so it must find
+          # the first one's PR instead of duplicating it.
           open=$(gh pr list --head "$branch" --state open --json number --jq 'length')
           if [ "$open" != "0" ]; then
             echo "herdr.pin.proposal_open branch=$branch" >&2
@@ -189,7 +187,7 @@ jobs:
           The core carries behavior assumptions about a specific Herdr build - that
           \`pane.close\` removes an emptied tab without a separate event
           (\`session_sync/coordinator.rs\`), that \`terminal.scroll\` publishes no new attach frame on
-          its own (\`live.rs\`), and the tab reorder ordering a live server was observed
+          its own (\`find/pane.rs\`), and the tab reorder ordering a live server was observed
           to answer with (\`runtime.rs\`). Every test covering those feeds fixtures this
           repository wrote, so a green suite says the code is self-consistent, not that
           v${latest} still behaves that way.
@@ -204,7 +202,7 @@ jobs:
           echo "Opened a bump proposal for v${latest}." >> "$GITHUB_STEP_SUMMARY"
 
   # A protocol change can reach a preview before a stable release, so the
-  # newest preview's protocol is read daily: one that differs from the pin's opens one issue, which is the
+  # newest preview's protocol is read on each run: one that differs from the pin's opens one issue, which is the
   # warning to prepare the bump before operators can update into the held
   # screen. Nothing is pinned or proposed here.
   watch-preview:
@@ -256,7 +254,7 @@ jobs:
           pinned_protocol="${{ steps.preview.outputs.pinned_protocol }}"
           tag="${{ steps.preview.outputs.tag }}"
           title="Herdr previews speak protocol ${protocol}; the pin speaks ${pinned_protocol}"
-          # One issue per protocol: the daily run finds the open one by title
+          # One issue per protocol: a later run finds the open one by title
           # rather than opening another.
           open=$(gh issue list --state open --search "in:title \"${title}\"" --json title --jq "[.[] | select(.title == \"${title}\")] | length")
           if [ "$open" != "0" ]; then

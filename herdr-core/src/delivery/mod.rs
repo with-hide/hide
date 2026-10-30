@@ -78,7 +78,7 @@ impl Actor {
             name: name.clone(),
             kind: HIDE_KIND.into(),
             device_id: node.into(),
-            session: crate::wire::session_digest(&name),
+            session: crate::engine::tokens::session_digest(&name),
         }
     }
 
@@ -91,7 +91,7 @@ impl Actor {
             name: OPERATOR_NAME.into(),
             kind: OPERATOR_KIND.into(),
             device_id: node.into(),
-            session: crate::wire::session_digest(&pane_id),
+            session: crate::engine::tokens::session_digest(&pane_id),
         }
     }
 

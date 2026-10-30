@@ -435,7 +435,7 @@ fn protected_close_and_reopen_at_capacity_refuse_before_any_worker_or_selection_
     let context = runtime.close_context(&tab).unwrap();
     assert!(context.replacement_shell);
     runtime.start_close_capture(
-        live::CloseCaptureTarget::Tab {
+        crate::recent_closed::capture::CloseCaptureTarget::Tab {
             tab_id: "w-order:t1".into(),
         },
         tab.clone(),
@@ -626,14 +626,14 @@ fn replacement_retry_with_missing_shell_at_capacity_sends_no_effect() {
         .clone();
     let mut context = runtime.close_context(&tab).unwrap();
     context.replacement_shell = true;
-    let request = live::CloseCaptureRequest {
+    let request = crate::recent_closed::capture::CloseCaptureRequest {
         failed_terminals: Vec::new(),
         retain_for_reopen: true,
         key: "retained-close".into(),
         connection_generation: runtime.live_generation,
         context,
         panes: runtime.closed_panes(&tab),
-        target: live::CloseCaptureTarget::Tab {
+        target: crate::recent_closed::capture::CloseCaptureTarget::Tab {
             tab_id: "w-order:t1".into(),
         },
     };
@@ -651,7 +651,10 @@ fn replacement_retry_with_missing_shell_at_capacity_sends_no_effect() {
     assert!(runtime.panes_closing.is_empty());
 }
 
-fn capacity_close_request(runtime: &Runtime, key: &str) -> live::CloseCaptureRequest {
+fn capacity_close_request(
+    runtime: &Runtime,
+    key: &str,
+) -> crate::recent_closed::capture::CloseCaptureRequest {
     let tab = runtime
         .snapshot
         .navigator
@@ -663,14 +666,14 @@ fn capacity_close_request(runtime: &Runtime, key: &str) -> live::CloseCaptureReq
         .unwrap();
     let mut context = runtime.close_context(tab).unwrap();
     context.replacement_shell = true;
-    live::CloseCaptureRequest {
+    crate::recent_closed::capture::CloseCaptureRequest {
         failed_terminals: Vec::new(),
         retain_for_reopen: true,
         key: key.into(),
         connection_generation: runtime.live_generation,
         context,
         panes: runtime.closed_panes(tab),
-        target: live::CloseCaptureTarget::Tab {
+        target: crate::recent_closed::capture::CloseCaptureTarget::Tab {
             tab_id: "w-order:t1".into(),
         },
     }
@@ -691,7 +694,7 @@ fn replacement_unknown_claim_survives_refusal_and_dismissal() {
     operation.phase = "transmitting".into();
     operation.replacement_effect_started = true;
     runtime.ingest_close_effect_result(
-        &live::CloseEffectRequest {
+        &crate::recent_closed::capture::CloseEffectRequest {
             safety: None,
             failed_terminals: Vec::new(),
             retain_for_reopen: true,
@@ -701,7 +704,7 @@ fn replacement_unknown_claim_survives_refusal_and_dismissal() {
             replacement: Some(request.context.clone()),
             allow_replacement_create: true,
         },
-        Err(hide_herdr_client::ApiError::Remote {
+        Err(crate::engine::EngineError::Refused {
             code: "replacement_failed".into(),
             message: "created but acknowledgement lost".into(),
         }),
@@ -747,7 +750,7 @@ fn reopen_unknown_claim_survives_error_and_retry_launch_failure_then_transfers_t
         },
     };
     runtime.push_recent_closed(item.clone());
-    let request = live::ReopenRequest {
+    let request = crate::recent_closed::reopen::ReopenRequest {
         codex_daemon: Default::default(),
         item,
         workspace_exists: true,
@@ -768,13 +771,17 @@ fn reopen_unknown_claim_survives_error_and_retry_launch_failure_then_transfers_t
     runtime.reopen_in_flight = Some(close.key);
     runtime.ingest_reopen_result(
         &request,
-        Ok(live::FileReopenResultOrHerdr::Herdr(live::ReopenOutcome {
-            tab_id: Some("w-order:restored".into()),
-            consumed: true,
-            focused_pane_id: None,
-            notices: vec![],
-            agents: Vec::new(),
-        })),
+        Ok(
+            crate::recent_closed::reopen::FileReopenResultOrHerdr::Herdr(
+                crate::recent_closed::reopen::ReopenOutcome {
+                    tab_id: Some("w-order:restored".into()),
+                    consumed: true,
+                    focused_pane_id: None,
+                    notices: vec![],
+                    agents: Vec::new(),
+                },
+            ),
+        ),
     );
     assert_eq!(
         runtime
@@ -1031,7 +1038,7 @@ fn close_tab(runtime: &mut Runtime, tab_id: &str) {
 
 /// Herdr's answer to the close's `layout.export`, which captures the tab as
 /// a reopen item, and then to its close.
-fn answer_close(runtime: &mut Runtime, result: Result<(), hide_herdr_client::ApiError>) {
+fn answer_close(runtime: &mut Runtime, result: Result<(), crate::engine::EngineError>) {
     let request = runtime
         .close_operations
         .values()
@@ -1039,7 +1046,7 @@ fn answer_close(runtime: &mut Runtime, result: Result<(), hide_herdr_client::Api
         .expect("a close in progress")
         .request
         .clone();
-    let live::CloseCaptureTarget::Tab { tab_id } = &request.target else {
+    let crate::recent_closed::capture::CloseCaptureTarget::Tab { tab_id } = &request.target else {
         panic!("a tab close");
     };
     let item = ClosedItem::Tab {
@@ -1060,8 +1067,10 @@ fn answer_close(runtime: &mut Runtime, result: Result<(), hide_herdr_client::Api
             },
         },
     };
-    let (_, effects) = runtime
-        .ingest_close_capture_result(&request, Ok(live::CloseCaptureOutcome { item: Some(item) }));
+    let (_, effects) = runtime.ingest_close_capture_result(
+        &request,
+        Ok(crate::recent_closed::capture::CloseCaptureOutcome { item: Some(item) }),
+    );
     let [effect] = effects.as_slice() else {
         panic!("one close effect, got {effects:?}");
     };
@@ -1094,7 +1103,7 @@ fn a_closing_tab_leaves_its_area_at_once_and_a_refusal_puts_it_and_the_operator_
 
     answer_close(
         &mut runtime,
-        Err(hide_herdr_client::ApiError::Remote {
+        Err(crate::engine::EngineError::Refused {
             code: "tab_not_closable".into(),
             message: "refused".into(),
         }),
@@ -1295,7 +1304,7 @@ fn entered_from_elsewhere(tabs: &[&str]) -> (Runtime, String, String) {
 fn refuse_close(runtime: &mut Runtime) {
     answer_close(
         runtime,
-        Err(hide_herdr_client::ApiError::Remote {
+        Err(crate::engine::EngineError::Refused {
             code: "tab_not_closable".into(),
             message: "refused".into(),
         }),
@@ -1501,7 +1510,7 @@ fn a_reopen_waiting_for_a_refused_close_is_dropped_and_never_reopens_an_older_cl
     reopen(&mut runtime);
     answer_close(
         &mut runtime,
-        Err(hide_herdr_client::ApiError::Remote {
+        Err(crate::engine::EngineError::Refused {
             code: "tab_not_closable".into(),
             message: "refused".into(),
         }),
@@ -1549,7 +1558,7 @@ fn a_followed_reopen_seed_that_goes_leaves_the_operator_on_the_restored_tab() {
     reopen(&mut runtime);
     assert!(runtime.reopen_in_flight.is_some(), "the reopen started");
     runtime.ingest_reopen_result(
-        &live::ReopenRequest {
+        &crate::recent_closed::reopen::ReopenRequest {
             codex_daemon: Default::default(),
             item,
             workspace_exists: true,
@@ -1557,13 +1566,17 @@ fn a_followed_reopen_seed_that_goes_leaves_the_operator_on_the_restored_tab() {
             fallback_pane_id: None,
             owner: None,
         },
-        Ok(live::FileReopenResultOrHerdr::Herdr(live::ReopenOutcome {
-            tab_id: Some("w-order:t4".into()),
-            consumed: true,
-            focused_pane_id: Some("w-order:t4:p".into()),
-            notices: vec![],
-            agents: Vec::new(),
-        })),
+        Ok(
+            crate::recent_closed::reopen::FileReopenResultOrHerdr::Herdr(
+                crate::recent_closed::reopen::ReopenOutcome {
+                    tab_id: Some("w-order:t4".into()),
+                    consumed: true,
+                    focused_pane_id: Some("w-order:t4:p".into()),
+                    notices: vec![],
+                    agents: Vec::new(),
+                },
+            ),
+        ),
     );
 
     // The seed's creation and its focus reach the core after that answer.
@@ -2342,13 +2355,13 @@ fn fork_worker_panic_and_runtime_teardown_discard_the_node_request() {
             socket_path: Default::default(),
             runtime: Arc::downgrade(&runtime),
             notifier: crate::handle::ChangeNotifier::noop(),
-            api_connector: Arc::new(hide_herdr_client::LocalSocketConnector::new(
-                std::path::PathBuf::new(),
-            )),
+            engine: crate::engine::herdr::local(std::path::PathBuf::new()),
             node: Arc::new(hide_node::Local::of_process()),
         };
         if panic_worker {
-            live::finish_fork_worker(&context, source, || panic!("fixture worker exit"));
+            crate::fork::worker::finish_fork_worker(&context, source, || {
+                panic!("fixture worker exit")
+            });
             let state = runtime.lock().unwrap();
             assert!(state.forks_in_flight.is_empty());
             assert_eq!(
@@ -2357,7 +2370,7 @@ fn fork_worker_panic_and_runtime_teardown_discard_the_node_request() {
             );
         } else {
             drop(runtime);
-            live::finish_fork_worker(&context, source, || Ok("w-order:t3:p".into()));
+            crate::fork::worker::finish_fork_worker(&context, source, || Ok("w-order:t3:p".into()));
         }
         assert!(terminals.take().iter().any(|control| matches!(control,
             TerminalControl::RequestDiscard { request, .. } if request == "fork-owner"

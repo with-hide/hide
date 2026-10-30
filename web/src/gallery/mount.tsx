@@ -25,10 +25,12 @@ import { AddDeviceScene } from "./AddDeviceScene";
 import { HideAiSettingsScene } from "./HideAiSettingsScene";
 import { SessionWorkScene } from "./SessionWorkScene";
 import { PrCardScene } from "./PrCardScene";
+import { PrListScene } from "./PrListScene";
 import { CloseTreeScene } from "./CloseTreeScene";
 import { ViewsCloseScene } from "./ViewsCloseScene";
 import { MissionScene } from "./MissionScene";
 import { PlanScene } from "./PlanScene";
+import { SharedPartsScene } from "./SharedPartsScene";
 import { PracticeScene, practiceSceneParams } from "./PracticeScene";
 import { PALETTE_HIDE_CLASS } from "../theme";
 
@@ -78,6 +80,10 @@ export function mountGallery(root: Root) {
       root.render(<StrictMode><PrCardScene params={params} /></StrictMode>);
       return;
     }
+    if (scene === "pr-list") {
+      root.render(<StrictMode><PrListScene params={params} /></StrictMode>);
+      return;
+    }
     if (scene === "mission") {
       document.title = "hide · Mission scene";
       root.render(<StrictMode><MissionScene params={params} /></StrictMode>);
@@ -85,6 +91,11 @@ export function mountGallery(root: Root) {
     }
     if (scene === "practice") {
       root.render(<StrictMode><PracticeScene {...practiceSceneParams(params)} /></StrictMode>);
+      return;
+    }
+    if (scene === "shared-parts") {
+      document.title = "hide · Shared parts scene";
+      root.render(<StrictMode><SharedPartsScene params={params} /></StrictMode>);
       return;
     }
     if (scene === "plan") {

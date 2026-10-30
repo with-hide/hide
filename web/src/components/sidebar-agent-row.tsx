@@ -25,6 +25,7 @@ import { Elapsed } from "./elapsed";
 import { MissionChip } from "./mission-chip";
 import { EntryContextMenu, type MenuEntry } from "./entry-menu";
 import { DeviceChip } from "./device-chip";
+import { SessionRowBody } from "./session-row";
 import { StatusMark } from "./status-mark";
 import { beginAgentDrag } from "../agentReference";
 import { Badge } from "./ui/badge";
@@ -210,69 +211,70 @@ export const SidebarAgentRow = memo(function SidebarAgentRow({
       </Hint>
       {tree ? <TreeRails place={tree.place} /> : null}
       {tree && tree.open !== null && depth > 0 ? <span className="absolute inset-y-0 flex w-(--size-agent-mark)" style={{ left: `calc(${inset} + var(--size-lineage-indent) * ${depth - 1})` }}><RowChevron agent={agent} tree={tree} returnFocus={() => main.current?.focus()} /></span> : null}
-      <span className={cn("flex min-w-0 flex-1 items-start gap-xs", tree && "py-xs")}>
-        <span className="pointer-events-none flex min-h-(--size-sidebar-line) shrink-0 items-center gap-xs">
+      <SessionRowBody
+        className={cn(tree && "py-xs")}
+        markClassName="pointer-events-none"
+        mark={<>
           <StatusMark mark={unreachable ? null : agent.mark} className={markTone(agent)} data-agent-status-mark={unreachable ? "none" : agent.mark} data-agent-status={agent.status_code} />
           {/* A Hide AI row is never in a tree; the Hide owl stands beside the status mark (PRD agent-mark-quiet D-04). The provider's logo follows the view mode or an ⌥ hold, with the owl as its badge (PRD agent-logo-view-mode D-04, D-09). */}
           <AgentRowMark kind={agent.agent_kind} hideAi={agent.hide_ai && !tree ? "sidebar" : null} />
-        </span>
-        <span className="flex min-w-0 flex-1 flex-col">
-          <span className="flex min-h-(--size-sidebar-line) min-w-0 items-center gap-xs">
-            {/* The row button's name already reads all of this out. */}
-            <AgentRecordTitle agent={agent} className={cn("pointer-events-none", titleTone)} />
-            <AgentForkMark agent={agent} />
-            {starred(agent) ? <RevisitStar /> : null}
-            {closing ? (
-              <span aria-hidden="true" className="pointer-events-none shrink-0 text-caption text-muted-foreground" data-agent-closing="true">
-                {closingProgress ? t("agents.closingProgress", { progress: closingProgress }) : t("agents.closing")}
-              </span>
-            ) : null}
-            {branch ? (
-              <Badge aria-hidden="true" variant="secondary" className="pointer-events-none min-w-0 max-w-2/5 shrink font-mono" data-branch-chip={branch}>
-                <span className="truncate">{branch}</span>
-              </Badge>
-            ) : null}
-            {device ? (
-              <DeviceChip label={device} className="pointer-events-none max-w-2/5" />
-            ) : null}
-            {ask ? null : <AgentPrHover agent={agent} pulls={pulls} card={(icon) => <PrHoverCard agent={agent} pulls={pulls} staleness={staleness} onOpenPullRequest={onOpenPullRequest}>{icon}</PrHoverCard>} />}
-            {agent.letters_waiting ? <RowLetterMark /> : null}
-            {/* The row whose question is its mission's decision keeps the chip that says which mission (needs-you-cleanup D-12). */}
-            {onOpenMission && (!ask || agent.state.ask?.subject?.cause === "mission_decision") ? <MissionChip agent={agent} onOpen={onOpenMission} /> : null}
-            {/* A time the core never measured draws nothing, and nothing stands in for it. */}
-            <Elapsed since={agent.last_prompt_at_unix_ms} aria-hidden="true" className="pointer-events-none shrink-0 font-mono text-caption text-muted-foreground" data-agent-elapsed="true" />
-            {/* Every row ends in the fold slot, so every time ends on one column (sidebar-readability D-3). */}
-            <FoldLane />
+        </>}
+        head={<>
+          {/* The row button's name already reads all of this out. */}
+          <AgentRecordTitle agent={agent} className={cn("pointer-events-none", titleTone)} />
+          <AgentForkMark agent={agent} />
+          {starred(agent) ? <RevisitStar /> : null}
+          {closing ? (
+            <span aria-hidden="true" className="pointer-events-none shrink-0 text-caption text-muted-foreground" data-agent-closing="true">
+              {closingProgress ? t("agents.closingProgress", { progress: closingProgress }) : t("agents.closing")}
+            </span>
+          ) : null}
+          {branch ? (
+            <Badge aria-hidden="true" variant="secondary" className="pointer-events-none min-w-0 max-w-2/5 shrink font-mono" data-branch-chip={branch}>
+              <span className="truncate">{branch}</span>
+            </Badge>
+          ) : null}
+          {device ? (
+            <DeviceChip label={device} className="pointer-events-none max-w-2/5" />
+          ) : null}
+          {ask ? null : <AgentPrHover agent={agent} pulls={pulls} card={(icon) => <PrHoverCard agent={agent} pulls={pulls} staleness={staleness} onOpenPullRequest={onOpenPullRequest}>{icon}</PrHoverCard>} />}
+          {agent.letters_waiting ? <RowLetterMark /> : null}
+          {/* The row whose question is its mission's decision keeps the chip that says which mission (needs-you-cleanup D-12). */}
+          {onOpenMission && (!ask || agent.state.ask?.subject?.cause === "mission_decision") ? <MissionChip agent={agent} onOpen={onOpenMission} /> : null}
+          {/* A time the core never measured draws nothing, and nothing stands in for it. */}
+          <Elapsed since={agent.last_prompt_at_unix_ms} aria-hidden="true" className="pointer-events-none shrink-0 font-mono text-caption text-muted-foreground" data-agent-elapsed="true" />
+          {/* Every row ends in the fold slot, so every time ends on one column (sidebar-readability D-3). */}
+          <FoldLane />
+        </>}
+      >
+        {offline ? (
+          <span aria-hidden="true" data-agent-line="disconnected" className="pointer-events-none truncate text-caption leading-(--size-sidebar-line-detail) text-subtle-foreground">
+            {offline}
           </span>
-          {offline ? (
-            <span aria-hidden="true" data-agent-line="disconnected" className="pointer-events-none truncate text-caption leading-(--size-sidebar-line-detail) text-subtle-foreground">
-              {offline}
-            </span>
-          ) : ask && agent.state.ask ? <span aria-hidden="true" className="pointer-events-none flex min-w-0 leading-(--size-sidebar-line-detail)"><AskLine ask={agent.state.ask} className="flex-1" /></span> : ask && agent.hide_ai?.turn && !(line && agent.status_code === "error") ? (
-            // What the row's home waits for, after the agent's own ask or block cause (PRD hide-ai-work-home D-14, D-16).
-            <span aria-hidden="true" data-agent-home-turn={agent.hide_ai.turn.kind} className="pointer-events-none truncate text-caption leading-(--size-sidebar-line-detail) text-warning">
-              {homeTurnLine(t, agent.hide_ai.turn)}
-            </span>
-          ) : line ? (
-            <RowLineText aria-hidden="true" data-agent-line={line.mode} parts={lineParts(t, agent, line)} className={cn("pointer-events-none text-caption leading-(--size-sidebar-line-detail)", lineTone(line, agent))} />
-          ) : null}
-          {tree && agent.hide_ai ? (
-            <span aria-hidden="true" data-agent-task={originLine(t, agent.hide_ai)} className="pointer-events-none truncate text-caption leading-(--size-sidebar-line-detail) text-muted-foreground">
-              {originLine(t, agent.hide_ai)}
-            </span>
-          ) : null}
-          {remote && !offline ? (
-            <span aria-hidden="true" data-agent-remote={remote.label} className="pointer-events-none flex min-w-0 pt-xxs">
-              <DeviceChip label={remote.label} />
-            </span>
-          ) : null}
-          {place ? (
-            <span aria-hidden="true" data-agent-place={place} className="pointer-events-none truncate text-caption leading-(--size-sidebar-line-detail) text-muted-foreground">
-              {place}
-            </span>
-          ) : null}
-        </span>
-      </span>
+        ) : ask && agent.state.ask ? <span aria-hidden="true" className="pointer-events-none flex min-w-0 leading-(--size-sidebar-line-detail)"><AskLine ask={agent.state.ask} className="flex-1" /></span> : ask && agent.hide_ai?.turn && !(line && agent.status_code === "error") ? (
+          // What the row's home waits for, after the agent's own ask or block cause (PRD hide-ai-work-home D-14, D-16).
+          <span aria-hidden="true" data-agent-home-turn={agent.hide_ai.turn.kind} className="pointer-events-none truncate text-caption leading-(--size-sidebar-line-detail) text-warning">
+            {homeTurnLine(t, agent.hide_ai.turn)}
+          </span>
+        ) : line ? (
+          <RowLineText aria-hidden="true" data-agent-line={line.mode} parts={lineParts(t, agent, line)} className={cn("pointer-events-none text-caption leading-(--size-sidebar-line-detail)", lineTone(line, agent))} />
+        ) : null}
+        {tree && agent.hide_ai ? (
+          <span aria-hidden="true" data-agent-task={originLine(t, agent.hide_ai)} className="pointer-events-none truncate text-caption leading-(--size-sidebar-line-detail) text-muted-foreground">
+            {originLine(t, agent.hide_ai)}
+          </span>
+        ) : null}
+        {remote && !offline ? (
+          <span aria-hidden="true" data-agent-remote={remote.label} className="pointer-events-none flex min-w-0 pt-xxs">
+            <DeviceChip label={remote.label} />
+          </span>
+        ) : null}
+        {place ? (
+          <span aria-hidden="true" data-agent-place={place} className="pointer-events-none truncate text-caption leading-(--size-sidebar-line-detail) text-muted-foreground">
+            {place}
+          </span>
+        ) : null}
+      </SessionRowBody>
       {tree && depth === 0 && tree.open !== null ? <button type="button" tabIndex={-1} aria-expanded={tree.open} aria-label={t(tree.open ? "agentSessions.tree.collapse" : "agentSessions.tree.expand", { name: agent.identity_label })} data-tree-chevron={agent.pane_id} className="absolute top-xs right-xs flex h-(--size-sidebar-line) w-(--size-lineage-chevron) items-center justify-center rounded-xs text-muted-foreground outline-none hover:text-foreground focus-visible:ring-1 focus-visible:ring-ring" onClick={tree.onToggle}>
         {tree.open ? <ChevronDownIcon aria-hidden="true" className="size-(--size-icon-sm)" /> : <ChevronRightIcon aria-hidden="true" className="size-(--size-icon-sm)" />}
       </button> : null}

@@ -21,6 +21,7 @@ use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::time::{Duration, Instant};
 
+use herdr_core::engine::EngineHandle;
 use herdr_core::workspace_control::{Caller, Context, Query, checkout_caller_id};
 use hide_node::pane_proof::{PaneIdentity, caller_directory, descends_from, process_start};
 use hide_node::ssh::RemoteHost;
@@ -146,6 +147,8 @@ pub(crate) struct RemoteGrant {
 
 /// How long a device's node may take to re-read a pane for a command.
 const PANE_INSPECT_TIMEOUT: Duration = Duration::from_secs(10);
+/// The whole local pane proof: three engine reads of up to two seconds each.
+const PANE_PROOF_TIMEOUT: Duration = Duration::from_secs(6);
 
 /// What a device's node proved about the process that opened a command's
 /// stream (`NodeEvent::StreamOpen`), with the node and link it came over.
@@ -564,7 +567,7 @@ impl Registry {
     pub fn validate(
         &self,
         token: &str,
-        herdr_socket: Option<&Path>,
+        herdr: Option<&EngineHandle>,
         core: &CoreHandle,
         attested: Option<&StreamAttestation>,
     ) -> Result<Capability, &'static str> {
@@ -612,15 +615,14 @@ impl Registry {
                 match core.workspace_query(&cap.context.device_id, &cap.pane_id, Query::Info) {
                     Ok(actual) => (cap.pane_id.clone(), actual.context),
                     Err(_) => {
-                        let connector = core
-                            .remote_herdr_api(&cap.context.device_id)
+                        let current = core
+                            .device_engine(&cap.context.device_id)
                             .map_err(|_| "remote_unavailable")?
-                            .ok_or("pane_not_connected")?;
-                        let current = hide_node::pane_proof::current_address(
-                            connector.as_ref(),
-                            &remote.source_pane_id,
-                            Instant::now() + PANE_INSPECT_TIMEOUT,
-                        )?;
+                            .ok_or("pane_not_connected")?
+                            .current_pane(
+                                &remote.source_pane_id,
+                                Instant::now() + PANE_INSPECT_TIMEOUT,
+                            )?;
                         let pane = format!("remote:{}:pane:{current}", cap.context.device_id);
                         let context = core
                             .workspace_query(&cap.context.device_id, &pane, Query::Info)
@@ -635,8 +637,8 @@ impl Registry {
                 binding,
             }
         } else {
-            let socket = herdr_socket.ok_or("pane_unavailable")?;
-            inspect_pane(&cap.pane_id, socket, core).inspect_err(|_| self.revoke(token))?
+            let engine = herdr.ok_or("pane_unavailable")?;
+            inspect_pane(&cap.pane_id, engine, core).inspect_err(|_| self.revoke(token))?
         };
         if actual.context != cap.context || actual.binding != cap.binding {
             self.revoke(token);
@@ -779,7 +781,7 @@ impl Attestation {
 fn attest_bootstrap(
     peer: i32,
     request: &BootstrapRequest,
-    herdr_socket: Option<&Path>,
+    herdr: Option<&EngineHandle>,
     core: &CoreHandle,
 ) -> Result<(Attestation, Option<&'static str>), &'static str> {
     // The encoded checkout caller is hided's own key for the core; a request
@@ -790,8 +792,8 @@ fn attest_bootstrap(
     let pane = if request.pane_id.is_empty() {
         Err("pane_not_connected")
     } else {
-        match herdr_socket {
-            Some(socket) => attest_local(peer, &request.pane_id, socket, core),
+        match herdr {
+            Some(engine) => attest_local(peer, &request.pane_id, engine, core),
             None => Err("pane_unavailable"),
         }
     };
@@ -876,15 +878,11 @@ pub fn attest_remote(
     let context = match core.workspace_query(device_id, &pane_id, Query::Info) {
         Ok(actual) => actual.context,
         Err(_) => {
-            let connector = core
-                .remote_herdr_api(device_id)
+            let current = core
+                .device_engine(device_id)
                 .map_err(|_| "remote_unavailable")?
-                .ok_or("pane_not_connected")?;
-            let current = hide_node::pane_proof::current_address(
-                connector.as_ref(),
-                source_pane_id,
-                Instant::now() + PANE_INSPECT_TIMEOUT,
-            )?;
+                .ok_or("pane_not_connected")?
+                .current_pane(source_pane_id, Instant::now() + PANE_INSPECT_TIMEOUT)?;
             pane_id = format!("remote:{device_id}:pane:{current}");
             core.workspace_query(device_id, &pane_id, Query::Info)
                 .map_err(|_| "pane_not_connected")?
@@ -937,10 +935,10 @@ pub fn attest_remote_checkout(
 pub fn attest_local(
     peer: i32,
     pane_id: &str,
-    herdr_socket: &Path,
+    engine: &EngineHandle,
     core: &CoreHandle,
 ) -> Result<Attestation, &'static str> {
-    let mut attestation = inspect_pane(pane_id, herdr_socket, core)?;
+    let mut attestation = inspect_pane(pane_id, engine, core)?;
     let Binding::Pane { shell_pid, .. } = &attestation.binding else {
         return Err("pane_unavailable");
     };
@@ -953,22 +951,26 @@ pub fn attest_local(
     Ok(attestation)
 }
 
+/// Proves the pane an inherited caller reference names now: its engine says
+/// whose pane it is and which shell runs there, asked without the core's
+/// owner thread, and the kernel says when that shell started.
 fn inspect_pane(
     pane_id: &str,
-    herdr_socket: &Path,
+    engine: &EngineHandle,
     core: &CoreHandle,
 ) -> Result<Attestation, &'static str> {
-    let (pane_id, identity) = hide_node::pane_proof::inspect_address(herdr_socket, pane_id)?;
+    let proof = engine.pane_identity(pane_id, Instant::now() + PANE_PROOF_TIMEOUT)?;
+    let shell_started = process_start(proof.shell_pid).ok_or("pane_unavailable")?;
     let context = core
-        .workspace_query(core.node().as_str(), &pane_id, Query::Info)
+        .workspace_query(core.node().as_str(), &proof.pane_id, Query::Info)
         .map_err(|_| "pane_not_connected")?;
     Ok(Attestation {
-        pane_id,
+        pane_id: proof.pane_id,
         context: context.context,
         binding: Binding::Pane {
-            terminal_id: identity.terminal_id,
-            shell_pid: identity.shell_pid,
-            shell_started: identity.shell_started,
+            terminal_id: proof.terminal_id,
+            shell_pid: proof.shell_pid,
+            shell_started,
         },
     })
 }
@@ -989,7 +991,7 @@ pub async fn serve(
     listener: BootstrapListener,
     registry: Arc<Registry>,
     core: Arc<CoreHandle>,
-    herdr_socket: Option<PathBuf>,
+    herdr: Option<EngineHandle>,
     port: u16,
     shutdown: crate::ending::Ending,
     desktop_renderers: Arc<AtomicUsize>,
@@ -1056,7 +1058,7 @@ pub async fn serve(
         };
         let registry = Arc::clone(&registry);
         let core = Arc::clone(&core);
-        let herdr_socket = herdr_socket.clone();
+        let herdr = herdr.clone();
         let desktop_renderers = Arc::clone(&desktop_renderers);
         tokio::task::spawn_blocking(move || {
             let _permit = permit;
@@ -1064,7 +1066,7 @@ pub async fn serve(
                 stream,
                 &registry,
                 &core,
-                herdr_socket.as_deref(),
+                herdr.as_ref(),
                 port,
                 desktop_renderers.load(Ordering::SeqCst) > 0,
             );
@@ -1102,7 +1104,7 @@ fn answer_bootstrap(
     mut stream: hide_platform::ipc::LocalStream,
     registry: &Registry,
     core: &CoreHandle,
-    herdr_socket: Option<&Path>,
+    herdr: Option<&EngineHandle>,
     port: u16,
     desktop: bool,
 ) {
@@ -1139,7 +1141,7 @@ fn answer_bootstrap(
             if request.one_shot != hook.command.one_shot() || !crate::hook_request::valid(&hook) {
                 return Err("invalid_request");
             }
-            let (attestation, _) = attest_bootstrap(peer, &request, herdr_socket, core)?;
+            let (attestation, _) = attest_bootstrap(peer, &request, herdr, core)?;
             let holder = if request.one_shot {
                 Some((peer, process_start(peer).ok_or("caller_unavailable")?))
             } else {
@@ -1148,11 +1150,11 @@ fn answer_bootstrap(
             let (path, issued_new, token) =
                 registry.issue_with_token(&attestation, &request.nonce, port, holder)?;
             let token = crate::hook_request::Token(registry, token, issued_new);
-            let cap = registry.validate(&token.1, herdr_socket, core, None)?;
+            let cap = registry.validate(&token.1, herdr, core, None)?;
             if let Some(named) = hook.token.as_deref()
                 && registry.get(named).is_some()
             {
-                let prior = registry.validate(named, herdr_socket, core, None)?;
+                let prior = registry.validate(named, herdr, core, None)?;
                 if !cap.same_identity(&prior) {
                     return Err("pane_changed");
                 }
@@ -1197,7 +1199,7 @@ fn answer_bootstrap(
             serde_json::from_str::<BootstrapRequest>(&line).map_err(|_| "invalid_request")
         })
         .and_then(|request| {
-            let (attestation, pane_reason) = attest_bootstrap(peer, &request, herdr_socket, core)?;
+            let (attestation, pane_reason) = attest_bootstrap(peer, &request, herdr, core)?;
             let holder = if request.one_shot {
                 Some((peer, process_start(peer).ok_or("caller_unavailable")?))
             } else {

@@ -232,7 +232,7 @@ it("leads with the decision and its way to the conversation, which brings the Co
     await act(async () => view.actions.togglePlanChip());
     const map = view.popover()!;
     expect(map.querySelector("[data-mission-mini-head]")?.textContent).toBe("Mission1/3");
-    expect(map.querySelector("[data-mission-mini-decision]")?.textContent).toBe("! Which base for the screen PR?To conversation");
+    expect(map.querySelector("[data-mission-mini-decision]")?.textContent).toBe("! Which base for the screen PR?Go to terminal");
     await view.press("[data-mission-mini-conversation]");
     expect(view.events.at(-1)).toMatchObject({ kind: "focus_pane", payload: { pane_id: "p1" } });
     expect(view.popover()).toBeNull();

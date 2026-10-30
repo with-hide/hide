@@ -403,7 +403,19 @@ export type PullRequestWork = {
   /** Its place in the base branch's merge queue; `unknown` while the queue could not be read. */
   queue: { state: "unknown" | "not_queued" } | { state: "at"; position: number };
   review_requested_at_unix_ms: number | null;
+  /** Each reviewer and where they stand, approvals and change requests first; null while unknown (never "nobody"). Settled pull requests have none (PRD pr-review-status). */
+  reviewers?: PrReviewer[] | null;
+  /** Reviewers past the list's cap, counted only (`+N`). */
+  reviewers_more?: number;
+  /** The approvals the base requires; null when review is not required or the count could not be read (no `n/m` then). */
+  required_approvals?: number | null;
 };
+
+/** Where one reviewer stands (`PrReviewerState`): a pending request wins over an earlier review. */
+export type PrReviewerState = "changes_requested" | "approved" | "requested" | "commented" | "dismissed";
+
+/** One person or team a pull request's review involves (`PrReviewer`). */
+export type PrReviewer = { login: string; team: boolean; state: PrReviewerState; at_unix_ms: number | null };
 
 /** What a pull request's card reads beyond the list, per head commit (`PrCardSnapshot`). */
 export type PrCard = {
@@ -450,8 +462,8 @@ export type GithubStatus = {
   unread_queries?: ExtraQuery[];
 };
 
-/** A question the pull request read asks beside the list: the signed-in account, the review requests, the merge queue. */
-export type ExtraQuery = "account" | "review_requests" | "merge_queue";
+/** A question the pull request read asks beside the list: the signed-in account, the review requests, the merge queue, each reviewer's latest review. */
+export type ExtraQuery = "account" | "review_requests" | "merge_queue" | "reviews";
 
 export type IssueReference = { repository: string; number: number };
 
@@ -2394,8 +2406,6 @@ export type ProjectMemory = {
   loading: boolean;
   enabled: boolean;
   capacity_reached: boolean;
-  /** True when the Project already has 5 branches waiting for a decision: `N개 문서에 반영` starts nothing until one is decided. Absent on older daemons. */
-  branches_full?: boolean;
   /** Cards forgotten automatically to make room for new ones since the tab last said so. */
   evicted_cards: number;
   /** When the newest of those was forgotten; the tab names it back once it said so. */
@@ -2531,7 +2541,7 @@ export type SuggestionRow = {
   /** Hide applied it by itself (`자동`, D-29). */
   auto: boolean;
   /** `suggestion_hold`: why a new suggestion waits instead of being applied. */
-  hold: "github_needed" | "branches_full" | "auto_pr_unreviewed" | null;
+  hold: "github_needed" | "auto_pr_unreviewed" | null;
   /** The problem came back after its fix merged (`문서로는 안 됐어요`); level 1 is a script or a check, 2 a hook. */
   escalated: { level: number; previous_pr_url: string | null } | null;
   /** It rose again after a skip because new evidence piled up as much as before (`넘어갔지만 다시 생겼어요`, D-43). */
@@ -2720,8 +2730,8 @@ export type SuggestionSettingsPatch = { suggestions_enabled?: boolean; quantity?
 
 /** Where a pull request's issue link comes from: GitHub's closing reference or Hide's branch link. */
 export type LinkIssueSource = "closes" | "hide";
-/** `created`: the session printed the pull request's address when GitHub made it. */
-export type LinkSessionRole = "created" | "worked";
+/** `created`: the session printed the pull request's address when GitHub made it; `reviewed`: a pre-check of the pull request started it. */
+export type LinkSessionRole = "created" | "worked" | "reviewed";
 /** Whether the session's own file is still there; `unknown` for a device's file. */
 export type LinkFileState = "present" | "missing" | "unknown";
 export type LinkTarget = { kind: "pr"; number: number } | { kind: "issue"; key: string };

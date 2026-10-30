@@ -3,7 +3,7 @@ import type { TFunction } from "i18next";
 import type { ReactNode } from "react";
 import { AgentMark } from "./AgentMark";
 import { formatElapsed } from "./components/elapsed";
-import { PrMark } from "./components/pr-mark";
+import { MissionPrMark } from "./components/mission-pr";
 import { useInterfaceTranslation } from "./i18n/client";
 import { requireInterfaceLanguage } from "./i18n/locale";
 import { cn } from "./lib/utils";
@@ -26,7 +26,7 @@ export function ResultTail({ result, stale, full = false }: { result: NodeResult
   const { t } = useInterfaceTranslation();
   switch (result.kind) {
     case "pr":
-      return result.state ? <PrMark state={result.state} number={result.number} stale={stale} data-node-pr={result.number} /> : <span className="shrink-0 font-mono text-caption text-subtle-foreground" data-node-pr={result.number}>#{result.number}</span>;
+      return <MissionPrMark number={result.number} state={result.state} stale={stale} data-node-pr={result.number} />;
     case "commit":
       return <span className="shrink-0 font-mono text-caption text-mission-done" title={result.commit} data-node-commit={result.commit}>{t("mission.result.main", { commit: shortCommit(result.commit) })}</span>;
     case "verdict":

@@ -1460,13 +1460,15 @@ impl Runtime {
         if let Some(launch) = self.task_agent_launch.as_mut() {
             launch.resume_reference = member.source_reference.clone();
         }
-        if let Err(message) = live::spawn_task_agent_start(context, id) {
+        if let Err(message) = crate::worktree_control::spawn_task_agent_start(context, id) {
             self.ingest_task_agent_result(
                 id,
-                live::TaskAgentOutcome::Failed(live::AgentFailure::with_detail(
-                    "agent_start.worker_unavailable",
-                    message,
-                )),
+                crate::worktree_control::TaskAgentOutcome::Failed(
+                    crate::worktree_control::AgentFailure::with_detail(
+                        "agent_start.worker_unavailable",
+                        message,
+                    ),
+                ),
             );
         }
         Ok(id)

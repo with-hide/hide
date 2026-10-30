@@ -3,7 +3,7 @@ use std::fmt;
 
 use serde::{Deserialize, Serialize};
 
-pub use crate::herdr_contract::HERDR_PROTOCOL_REVISION;
+use crate::engine::herdr::contract::HERDR_PROTOCOL_REVISION;
 
 /// Shared environment contract shape used by every process boundary.
 ///

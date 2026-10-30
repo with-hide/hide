@@ -155,7 +155,7 @@ fn removing_devices_retires_only_their_pane_reads_and_rejects_late_publications(
             pane_id: format!("remote:{id}:pane:child"),
             name: format!("child-{index}"),
             device_id: id.clone(),
-            session: crate::wire::session_digest(&format!("child-native-{index}")),
+            session: crate::engine::tokens::session_digest(&format!("child-native-{index}")),
             ..parent.clone()
         };
         ledger.agents.push(crate::coordination::AgentRecord {

@@ -359,11 +359,11 @@ fn a_node_s_agents_are_reached_only_through_its_link() {
             socket_path: socket.clone().into(),
             runtime: std::sync::Weak::new(),
             notifier: crate::handle::ChangeNotifier::noop(),
-            api_connector: Arc::new(hide_herdr_client::LocalSocketConnector::new(&socket)),
+            engine: crate::engine::herdr::local(&socket),
             node: Arc::new(hide_node::Local::of_process()),
         });
         let own = runtime.node.as_str().to_owned();
-        assert!(runtime.delivery_connector(&own).is_some());
+        assert!(runtime.delivery_engine(&own).is_some());
     }
     let (link, release) = held_link();
     shared
@@ -372,7 +372,7 @@ fn a_node_s_agents_are_reached_only_through_its_link() {
         .accept_inbound_node(NODE, "MacBook", link)
         .expect("the link");
     assert!(
-        shared.lock().unwrap().delivery_connector(NODE).is_none(),
+        shared.lock().unwrap().delivery_engine(NODE).is_none(),
         "a link still connecting reaches no Herdr"
     );
     drop(release);
@@ -381,7 +381,7 @@ fn a_node_s_agents_are_reached_only_through_its_link() {
     });
     let runtime = shared.lock().unwrap();
     assert!(
-        runtime.delivery_connector(NODE).is_none(),
+        runtime.delivery_engine(NODE).is_none(),
         "a node whose link is down is reached through nothing"
     );
 }

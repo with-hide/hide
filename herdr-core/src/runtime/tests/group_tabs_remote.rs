@@ -72,7 +72,7 @@ fn a_new_terminal_on_either_device_link_keeps_its_group_while_an_agent_start_is_
             .unwrap()
             .install_remote_control(RemoteControlContext::new(
                 DEVICE,
-                Arc::new(herdr.connector()),
+                herdr.engine(),
                 Arc::downgrade(&shared),
                 ChangeNotifier::noop(),
             ));
@@ -269,7 +269,7 @@ fn remote_terminal_clicks_reserve_capacity_and_only_replays_are_deduplicated() {
             .unwrap()
             .install_remote_control(RemoteControlContext::new(
                 DEVICE,
-                Arc::new(herdr.connector()),
+                herdr.engine(),
                 Arc::downgrade(&shared),
                 ChangeNotifier::noop(),
             ));
@@ -514,9 +514,9 @@ fn a_global_remote_start_follows_checkout_and_home_once_across_result_and_catalo
         let requests = Arc::new(Mutex::new(Vec::new()));
         runtime.install_remote_control(RemoteControlContext::new(
             DEVICE,
-            Arc::new(RecordingHerdr {
+            crate::engine::herdr::HerdrEngine::shared(Arc::new(RecordingHerdr {
                 requests: requests.clone(),
-            }),
+            })),
             Weak::new(),
             ChangeNotifier::noop(),
         ));
@@ -550,7 +550,7 @@ fn a_global_remote_start_follows_checkout_and_home_once_across_result_and_catalo
         }
         runtime.ingest_task_operation_result(
             task,
-            Ok(live::WorktreeTaskOutcome {
+            Ok(crate::worktree_control::WorktreeTaskOutcome {
                 path: t.main.clone(),
                 pane_id: "t3".into(),
                 created_tab_id: Some("t3".into()),
@@ -623,9 +623,9 @@ fn an_archived_remote_root_keeps_its_pending_follow_before_automatic_descendants
         let requests = Arc::new(Mutex::new(Vec::new()));
         runtime.install_remote_control(RemoteControlContext::new(
             DEVICE,
-            Arc::new(RecordingHerdr {
+            crate::engine::herdr::HerdrEngine::shared(Arc::new(RecordingHerdr {
                 requests: requests.clone(),
-            }),
+            })),
             Weak::new(),
             ChangeNotifier::noop(),
         ));
@@ -666,7 +666,7 @@ fn an_archived_remote_root_keeps_its_pending_follow_before_automatic_descendants
             .unwrap();
         runtime.ingest_task_operation_result(
             task,
-            Ok(live::WorktreeTaskOutcome {
+            Ok(crate::worktree_control::WorktreeTaskOutcome {
                 path: t.main.clone(),
                 pane_id: "t3".into(),
                 created_tab_id: Some("t3".into()),
@@ -676,7 +676,7 @@ fn an_archived_remote_root_keeps_its_pending_follow_before_automatic_descendants
                 shell: crate::agent_start::ShellStart::Plain,
             }),
         );
-        runtime.ingest_task_agent_result(task, live::TaskAgentOutcome::Started);
+        runtime.ingest_task_agent_result(task, crate::worktree_control::TaskAgentOutcome::Started);
         runtime.advance_session_archive();
         assert!(matches!(
             runtime.snapshot.ui_state.session_archive.records[&id].members[0].resume,
@@ -802,7 +802,7 @@ fn a_first_local_home_result_waits_for_its_catalog_and_respects_a_newer_visit() 
             }
             runtime.ingest_task_operation_result(
                 task,
-                Ok(live::WorktreeTaskOutcome {
+                Ok(crate::worktree_control::WorktreeTaskOutcome {
                     path: home.into(),
                     pane_id: "w-home:t1:p".into(),
                     created_tab_id: Some("w-home:t1".into()),
@@ -1006,7 +1006,7 @@ fn a_global_start_respects_a_later_external_tab_or_pane_visit() {
         let visited = runtime.snapshot.focused.pane_id.clone();
         runtime.ingest_task_operation_result(
             task,
-            Ok(live::WorktreeTaskOutcome {
+            Ok(crate::worktree_control::WorktreeTaskOutcome {
                 path: t.main.clone(),
                 pane_id: "w-order:t3:p".into(),
                 created_tab_id: Some("w-order:t3".into()),
@@ -1079,7 +1079,7 @@ fn an_added_pane_waits_for_its_final_tab_before_following_focus() {
         }
         runtime.ingest_task_operation_result(
             task,
-            Ok(live::WorktreeTaskOutcome {
+            Ok(crate::worktree_control::WorktreeTaskOutcome {
                 path: t.main.clone(),
                 pane_id: "w-order:t3:p".into(),
                 created_tab_id: Some("w-order:t1".into()),
@@ -1159,7 +1159,7 @@ fn a_local_start_from_an_empty_checkout_keeps_its_visit_through_catalog_restore(
             .unwrap();
         runtime.ingest_task_operation_result(
             task,
-            Ok(live::WorktreeTaskOutcome {
+            Ok(crate::worktree_control::WorktreeTaskOutcome {
                 path: t.main.clone(),
                 pane_id: "w-order:t4:p".into(),
                 created_tab_id: Some("w-order:t4".into()),
@@ -1238,7 +1238,7 @@ fn a_local_worktree_result_waits_for_its_catalog_before_it_comes_forward() {
             .unwrap();
         runtime.ingest_task_operation_result(
             task,
-            Ok(live::WorktreeTaskOutcome {
+            Ok(crate::worktree_control::WorktreeTaskOutcome {
                 path: t.linked.clone(),
                 pane_id: "w-linked:t1:p".into(),
                 created_tab_id: Some("w-linked:t1".into()),
@@ -1327,7 +1327,7 @@ fn a_first_local_home_catalog_does_not_supersede_its_start_result() {
     );
     runtime.ingest_task_operation_result(
         task,
-        Ok(live::WorktreeTaskOutcome {
+        Ok(crate::worktree_control::WorktreeTaskOutcome {
             path: t.main.clone(),
             pane_id: "w-order:t4:p".into(),
             created_tab_id: Some("w-order:t4".into()),
@@ -1398,7 +1398,7 @@ fn a_global_local_start_brings_its_device_forward_from_a_remote_screen() {
         .unwrap();
     runtime.ingest_task_operation_result(
         task,
-        Ok(live::WorktreeTaskOutcome {
+        Ok(crate::worktree_control::WorktreeTaskOutcome {
             path: t.main.clone(),
             pane_id: "w-order:t4:p".into(),
             created_tab_id: Some("w-order:t4".into()),
@@ -1432,9 +1432,9 @@ fn successful_remote_checkout_pane_and_tab_visits_supersede_a_global_start() {
         let (mut runtime, _saved) = setup(LinkOrigin::Inbound, &t.main);
         runtime.install_remote_control(RemoteControlContext::new(
             DEVICE,
-            Arc::new(RecordingHerdr {
+            crate::engine::herdr::HerdrEngine::shared(Arc::new(RecordingHerdr {
                 requests: Arc::new(Mutex::new(Vec::new())),
-            }),
+            })),
             Weak::new(),
             ChangeNotifier::noop(),
         ));
@@ -1601,9 +1601,9 @@ fn inbound_and_ssh_explicit_agent_navigation_reveals_its_group_and_releases_hidd
         let requests = Arc::new(Mutex::new(Vec::new()));
         runtime.install_remote_control(RemoteControlContext::new(
             DEVICE,
-            Arc::new(RecordingHerdr {
+            crate::engine::herdr::HerdrEngine::shared(Arc::new(RecordingHerdr {
                 requests: requests.clone(),
-            }),
+            })),
             Weak::new(),
             ChangeNotifier::noop(),
         ));

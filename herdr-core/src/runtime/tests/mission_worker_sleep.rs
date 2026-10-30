@@ -19,7 +19,7 @@ const WORKER: &str = "w-order:t2:p";
 
 /// The agent's conversation id in `pane`, in the shape Claude Code's are.
 fn native(pane: &str) -> String {
-    let digest = crate::wire::session_digest(pane).unwrap();
+    let digest = crate::engine::tokens::session_digest(pane).unwrap();
     format!(
         "{}-{}-{}-{}-{}",
         &digest[..8],
@@ -36,7 +36,7 @@ fn actor(pane: &str) -> Actor {
         name: format!("{pane}-agent"),
         kind: "claude".into(),
         device_id: crate::node::TEST_NODE.into(),
-        session: crate::wire::session_digest(&native(pane)),
+        session: crate::engine::tokens::session_digest(&native(pane)),
     }
 }
 
@@ -77,14 +77,14 @@ fn session(front: &str, worker: Option<&str>) -> SessionSnapshotPayload {
         "id": "lead", "pane_id": LEAD, "agent": "claude", "agent_status": "working",
         "state_change_seq": 1, "cwd": CHECKOUT,
         "agent_session": {"kind": "id", "value": native(LEAD)},
-        "lineage_session": crate::wire::session_digest(&native(LEAD)),
+        "lineage_session": crate::engine::tokens::session_digest(&native(LEAD)),
     })];
     if let Some(status) = worker {
         agents.push(serde_json::json!({
             "id": "worker", "pane_id": WORKER, "agent": "claude", "agent_status": status,
             "state_change_seq": 4, "cwd": CHECKOUT,
             "agent_session": {"kind": "id", "value": native(WORKER)},
-            "lineage_session": crate::wire::session_digest(&native(WORKER)),
+            "lineage_session": crate::engine::tokens::session_digest(&native(WORKER)),
             "tokens": {"task": "Fix the parser"}
         }));
     }

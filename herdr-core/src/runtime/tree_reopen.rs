@@ -345,7 +345,7 @@ impl Runtime {
     pub(super) fn tree_member_settled(
         &mut self,
         member_key: &str,
-        agents: Option<&[live::ReopenedAgent]>,
+        agents: Option<&[crate::recent_closed::reopen::ReopenedAgent]>,
     ) {
         let Some(run) = self.tree_reopen.as_mut() else {
             return;
@@ -373,7 +373,7 @@ impl Runtime {
                 agent
                     .session_id
                     .as_deref()
-                    .and_then(crate::wire::session_digest)
+                    .and_then(crate::engine::tokens::session_digest)
                     .is_some_and(|digest| registration.actor.session.as_deref() == Some(&digest))
             });
             match pane {
@@ -414,7 +414,7 @@ impl Runtime {
         if remaining == 0 {
             self.consume_recent_closed(&run.key);
         } else {
-            self.set_reopen_notices(vec![live::ReopenNotice {
+            self.set_reopen_notices(vec![crate::recent_closed::reopen::ReopenNotice {
                 pane_id: None,
                 message: format!(
                     "{remaining} of {} closed agents could not be reopened, with the agents under them; reopen again to retry",

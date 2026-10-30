@@ -186,7 +186,9 @@ function SessionLineView({ entry, project, checkoutBranch, opener, actions }: { 
   const remote = useShellStore((s) => s.rest?.status?.remote);
   const node = useShellStore((s) => localDeviceId(s.rest));
   const { line, live } = entry;
-  const title = useSessionTitle(line, live, project.id);
+  const recorded = useSessionTitle(line, live, project.id);
+  // A pre-check's session reads as the agent's review, never as a GitHub approval (PRD pr-review-status B14).
+  const title = line.role === "reviewed" ? t("links.agentReview", { agent: agentProductName(line.agent) }) : recorded;
   const checkout = resumeCheckout(line, catalogOf(workspaces, remote), checkoutBranch, node);
   const viewOff = viewBlock(line, devices, node);
   const resumeOff = resumeBlock(line, checkout, devices, node);

@@ -1161,6 +1161,17 @@ pub(super) struct PrDelegatePayload {
     /// The id the page follows this start's answer by, as for any start.
     #[serde(default)]
     pub(super) request_id: Option<String>,
+    /// What the agent is asked to do. `review` is the card's pre-check: the
+    /// session it starts is recorded as the pull request's agent review
+    /// (PRD pr-review-status D-11); absent is any other work.
+    #[serde(default)]
+    pub(super) intent: Option<PrDelegateIntent>,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "snake_case")]
+pub(super) enum PrDelegateIntent {
+    Review,
 }
 
 /// `issue_set_open`: close or reopen a Local issue.
@@ -2520,7 +2531,7 @@ impl Runtime {
                         return false;
                     }
                     let path = payload.path.clone();
-                    let result = live::spawn_workspace_creation(
+                    let result = crate::checkout_owner::open::spawn_workspace_creation(
                         context,
                         self.node.clone(),
                         payload.path,
@@ -3399,7 +3410,7 @@ impl Runtime {
                 }
                 self.sync_input_requests();
                 self.push_diagnostic("pane.fork.requested", format!("Forking pane {pane_id}"));
-                if let Err(message) = live::spawn_agent_fork(context, request) {
+                if let Err(message) = crate::fork::worker::spawn_agent_fork(context, request) {
                     // A worker that never started is a fork that failed, and
                     // the operator is owed the same notice and the same
                     // stderr diagnostic either way.
@@ -3851,7 +3862,7 @@ impl Runtime {
                 } else {
                     0
                 };
-                let request = live::PaneFindRequest {
+                let request = crate::find::pane::PaneFindRequest {
                     term: payload.term.clone(),
                     options: crate::find::PaneFindOptions {
                         case_sensitive: payload.case_sensitive,
@@ -3861,7 +3872,7 @@ impl Runtime {
                     step: payload.step,
                     current_index,
                 };
-                if let Err(message) = live::spawn_pane_find(route, request) {
+                if let Err(message) = crate::find::pane::spawn_pane_find(route, request) {
                     self.set_error("pane.find_worker_failed", message, true);
                 }
                 false

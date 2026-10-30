@@ -2498,7 +2498,7 @@ mod tests {
         // its session by digest.
         let actor = |index: usize, machine: &str| {
             json!({"pane_id": panes[index], "name": "a", "kind": "claude",
-            "device_id": machine, "session": crate::wire::session_digest(&format!("s{index}"))})
+            "device_id": machine, "session": crate::engine::tokens::session_digest(&format!("s{index}"))})
         };
         // `native_machine` is the machine's own node id, as its agent hooks report it.
         let agent = |index: usize, machine: &str, native: &str, scope: &str, root: &str| {
@@ -2653,7 +2653,7 @@ mod tests {
                 format!("remote:{machine}:pane:{pane}")
             };
             json!({"pane_id": pane_id, "name": format!("a{index}"), "kind": "claude",
-                   "device_id": machine, "session": crate::wire::session_digest(&format!("s{index}"))})
+                   "device_id": machine, "session": crate::engine::tokens::session_digest(&format!("s{index}"))})
         };
         let agents: Vec<Value> = rows
             .iter()

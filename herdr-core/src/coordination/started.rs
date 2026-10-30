@@ -101,7 +101,7 @@ pub(crate) mod tests {
             name: name.into(),
             kind: "claude".into(),
             device_id: machine.into(),
-            session: crate::wire::session_digest(session),
+            session: crate::engine::tokens::session_digest(session),
         }
     }
 

@@ -396,6 +396,50 @@ fn a_mission_is_taken_over_only_once_its_conductor_is_gone() {
     );
 }
 
+/// 이어받기 resumes the gone Conductor's conversation in a new pane (PRD
+/// mission-tool D-11, B14): once that pane is seen running the same
+/// session, it conducts the mission without a `take`, and a pane running
+/// another session is not mistaken for it.
+#[test]
+fn a_conductors_conversation_resumed_in_another_pane_conducts_its_mission() {
+    let fixture = conducting();
+    let mut runtime = fixture.runtime.lock().unwrap();
+    runtime.snapshot.navigator.agents = vec![conductor_row()];
+    command(
+        &mut runtime,
+        "sender",
+        json!({"op": "create", "title": "Fix the bug"}),
+    )
+    .unwrap();
+
+    // The Conductor's pane closed.
+    runtime.delivery_observations.remove("sender");
+    runtime.snapshot.navigator.agents.clear();
+    runtime.refresh_missions();
+    assert!(!runtime.snapshot.missions.items[0].conductor.present);
+
+    let seen = |runtime: &mut Runtime, pane: &str, session: &str| {
+        let mut row = conductor_row();
+        row.pane_id = pane.into();
+        row.session_id = Some(session.into());
+        runtime.snapshot.navigator.agents = vec![row];
+        let payload: SessionSnapshotPayload = serde_json::from_value(json!({"agents":[
+            {"id": pane, "pane_id": pane, "agent": "codex", "agent_status": "idle",
+             "state_change_seq": 1, "lineage_session": format!("{pane}-lineage")},
+        ]}))
+        .unwrap();
+        runtime.observe_delivery(crate::node::TEST_NODE, &payload, None, None);
+        runtime.refresh_missions();
+    };
+    seen(&mut runtime, "stranger", "another-session");
+    assert!(!runtime.snapshot.missions.items[0].conductor.present);
+
+    seen(&mut runtime, "resumed", "sender-session");
+    let conductor = &runtime.snapshot.missions.items[0].conductor;
+    assert!(conductor.present);
+    assert_eq!(conductor.pane_id, "resumed");
+}
+
 #[test]
 fn a_cancelled_mission_is_over() {
     let fixture = conducting();

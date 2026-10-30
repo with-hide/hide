@@ -9,7 +9,7 @@ https://github.com/herdrdev/herdr/releases/tag/v0.9.5
 BEGIN HERDR PROVENANCE
 This application distributes the upstream Herdr release v0.9.5 from herdrdev/herdr.
 The bundled binary's code is not modified by hide; on macOS a release replaces only its ad-hoc signature with hide's Developer ID one, which notarization requires.
-hide monitors upstream stable through herdr-update.yml; updates must pass contract and runtime checks.
+hide proposes an upstream stable release through herdr-update.yml only when it is run by hand; updates must pass contract and runtime checks.
 END HERDR PROVENANCE
 
 herdr is distributed under the Apache License, Version 2.0.

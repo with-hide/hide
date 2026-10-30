@@ -44,7 +44,7 @@ fn runtime_on(herdr: &FakeHerdr, checkout_path: &str) -> (Runtime, String) {
         socket_path: herdr.socket_path().to_path_buf(),
         runtime: std::sync::Weak::new(),
         notifier: crate::handle::ChangeNotifier::noop(),
-        api_connector: Arc::new(herdr.connector()),
+        engine: herdr.engine(),
         node: Arc::new(hide_node::Local::of_process()),
     });
     let tabs = ["w-order:t1", "w-order:t2", "w-order:t3"];
