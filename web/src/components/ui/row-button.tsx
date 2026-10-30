@@ -1,7 +1,9 @@
 import type { ComponentProps } from "react";
 import { cn } from "../../lib/utils";
 
-const row = "rounded-xs outline-none transition-colors hover:bg-accent focus-visible:ring-1 focus-visible:ring-ring disabled:pointer-events-none disabled:opacity-(--opacity-disabled)";
+// The ring is drawn inside: a row meets the edges of a scrolling list, which
+// would clip a ring drawn outside it.
+const row = "rounded-xs outline-none transition-colors focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-ring disabled:pointer-events-none disabled:opacity-(--opacity-disabled)";
 
 /**
  * A whole row that is one action (open, pick, expand): it spans its line,
@@ -10,7 +12,7 @@ const row = "rounded-xs outline-none transition-colors hover:bg-accent focus-vis
  * since a button cannot hold another.
  */
 function RowButton({ className, type = "button", ...props }: ComponentProps<"button">) {
-  return <button data-slot="row-button" type={type} className={cn("flex w-full min-w-0 items-center gap-xs px-xs py-xs text-left", row, className)} {...props} />;
+  return <button data-slot="row-button" type={type} className={cn("flex w-full min-w-0 items-center gap-xs px-xs py-xs text-left hover:bg-accent", row, className)} {...props} />;
 }
 
 /**
@@ -18,10 +20,11 @@ function RowButton({ className, type = "button", ...props }: ComponentProps<"but
  * the content and fills the row, so a press anywhere else is the row's. Put it
  * first in a `relative` container and give the content `pointer-events-none
  * relative`, with `pointer-events-auto` on each control inside; it has no
- * text, so `aria-label` names the row's action.
+ * text, so `aria-label` names the row's action. `hover={false}` leaves the
+ * hover and selected fills to a container that already draws them.
  */
-function RowOverlayButton({ className, type = "button", ...props }: ComponentProps<"button"> & { "aria-label": string }) {
-  return <button data-slot="row-overlay-button" type={type} className={cn("absolute inset-0", row, className)} {...props} />;
+function RowOverlayButton({ className, type = "button", hover = true, ...props }: ComponentProps<"button"> & { "aria-label": string; hover?: boolean }) {
+  return <button data-slot="row-overlay-button" type={type} className={cn("absolute inset-0", hover && "hover:bg-accent", row, className)} {...props} />;
 }
 
 export { RowButton, RowOverlayButton };
