@@ -37,7 +37,8 @@ class JourneyCap(unittest.TestCase):
         self.assertEqual(len(steps), 2)
         for step in steps:
             with self.subTest(step=step["name"]):
-                named = re.search(r"--agents (\S+)", step["run"])
+                # A hand-written selection; the caller's `$AGENTS` can be every agent.
+                named = re.search(r'--agents (?!"\$AGENTS")(\S+)', step["run"])
                 fixture = "--fixture-bin" in step["run"]
                 # With no --agents, a run measures every registered agent, the stand-ins only theirs.
                 agents = (len(named.group(1).split(",")) if named else
@@ -52,7 +53,10 @@ class JourneyCap(unittest.TestCase):
         jobs = yaml.safe_load((ROOT / WORKFLOWS[0]).read_text())["jobs"]
         steps = [step for job in jobs.values() for step in job["steps"]]
         fake = next(step["run"] for step in steps if "--fake-model" in step.get("run", ""))
-        self.assertNotIn("--agents", fake)
+        # The only selection is the caller's `agents` input, empty for every agent.
+        self.assertEqual(re.findall(r'--agents ("\$AGENTS"|\S+)', fake), ['"$AGENTS"'])
+        self.assertEqual(yaml.safe_load((ROOT / WORKFLOWS[0]).read_text())[True]["workflow_call"]["inputs"]
+                         ["agents"]["default"], "")
         installer = [step["run"] for step in steps if "install-agent-clis.py --all" in step.get("run", "")]
         self.assertEqual(len(installer), 1)
 

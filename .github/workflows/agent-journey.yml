@@ -40,6 +40,12 @@ on:
         description: Also run the real CLIs against the journey's fake model, with no key.
         type: boolean
         default: false
+      # The jobs read it as `!= false`, which an absent input (null) fails in
+      # an expression, so a hand run names it too.
+      stand-ins:
+        description: Run the stand-ins and the Windows forms, which measure Hide and no agent CLI.
+        type: boolean
+        default: true
   workflow_call:
     inputs:
       source-sha:
@@ -64,6 +70,18 @@ on:
           of the pins; the daily agent canary passes each CLI's latest release (agent-canary.yml).
         type: string
         default: ''
+      agents:
+        description: >-
+          Comma-separated adapter IDs the fake lane measures, every active adapter when empty; the
+          agent canary reruns only the agents whose latest release failed, at their pins.
+        type: string
+        default: ''
+      report-name:
+        description: >-
+          The fake lane's artifact name before `-<system>`, so a second call in one run keeps its
+          reports apart from the first's.
+        type: string
+        default: agent-journey-fake
 
 permissions:
   contents: read
@@ -204,6 +222,8 @@ jobs:
     env:
       HERDR_PLATFORM: ${{ fromJSON('{"linux":"linux-x86_64","macos":"macos-aarch64","windows":"windows-x86_64"}')[matrix.system] }}
       RUN_DIR: agents/runs/agent-journey-fake-${{ matrix.system }}
+      # Every active adapter unless the caller named some (agent-canary.yml's pinned rerun).
+      AGENTS: ${{ inputs.agents }}
       # The journey needs Python 3.12; Windows names it python.
       PYTHON: ${{ matrix.system == 'windows' && 'python' || 'python3' }}
     steps:
@@ -283,19 +303,25 @@ jobs:
         timeout-minutes: 85
         run: |
           set +e
-          "$PYTHON" scripts/agent-journey-check.py --mode ci --fake-model \
+          selection=()
+          if [[ -n "$AGENTS" ]]; then selection=(--agents "$AGENTS"); fi
+          "$PYTHON" scripts/agent-journey-check.py --mode ci --fake-model "${selection[@]}" \
             --controller-provider "${{ steps.controller.outputs.provider }}" \
             --herdr-bin "${{ steps.herdr.outputs.bin }}" --run-dir "$RUN_DIR"
           echo "journey exit $?"
       - name: The lane's verdict
         timeout-minutes: 2
-        run: '"$PYTHON" scripts/agent-journey-lane.py "$RUN_DIR/report.json" --lane fake'
+        run: |
+          selection=()
+          if [[ -n "$AGENTS" ]]; then selection=(--agents "$AGENTS"); fi
+          "$PYTHON" scripts/agent-journey-lane.py "$RUN_DIR/report.json" --lane fake "${selection[@]}"
       - name: Keep the report
         timeout-minutes: 5
         if: ${{ !cancelled() }}
         uses: actions/upload-artifact@v7
         with:
-          name: agent-journey-fake-${{ matrix.system }}
+          # A hand run has no `report-name` input.
+          name: ${{ inputs.report-name || 'agent-journey-fake' }}-${{ matrix.system }}
           path: |
             ${{ env.RUN_DIR }}/report.*
             ${{ env.RUN_DIR }}/*.json
