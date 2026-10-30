@@ -1,0 +1,239 @@
+{
+  "web/src/AddProjectDialog.tsx": {
+    "button": 2
+  },
+  "web/src/AgentGroupControls.tsx": {
+    "button": 1
+  },
+  "web/src/AgentMessagePopover.tsx": {
+    "button": 1
+  },
+  "web/src/AgentTabStart.tsx": {
+    "textarea": 1
+  },
+  "web/src/AreaTree.tsx": {
+    "button": 2
+  },
+  "web/src/BacklogTab.tsx": {
+    "button": 6
+  },
+  "web/src/BranchCard.tsx": {
+    "button": 1
+  },
+  "web/src/BrowserDisplay.tsx": {
+    "button": 1
+  },
+  "web/src/CheckoutGitHeader.tsx": {
+    "button": 2
+  },
+  "web/src/CreateProjectView.tsx": {
+    "button": 1
+  },
+  "web/src/DiskCleanupSheet.tsx": {
+    "button": 1
+  },
+  "web/src/DraftRecovery.tsx": {
+    "button": 1
+  },
+  "web/src/FirstRunWizard.tsx": {
+    "button": 4
+  },
+  "web/src/HideAiSettings.tsx": {
+    "button": 1
+  },
+  "web/src/HistoryList.tsx": {
+    "button": 2
+  },
+  "web/src/IssueDialogs.tsx": {
+    "button": 1,
+    "textarea": 1
+  },
+  "web/src/LinkSessions.tsx": {
+    "button": 2
+  },
+  "web/src/MemoryTab.tsx": {
+    "button": 12
+  },
+  "web/src/MissionDecision.tsx": {
+    "button": 1
+  },
+  "web/src/MissionMap.tsx": {
+    "button": 2
+  },
+  "web/src/MissionNodePanel.tsx": {
+    "button": 2
+  },
+  "web/src/MissionTurn.tsx": {
+    "button": 1
+  },
+  "web/src/OverviewGraph.tsx": {
+    "button": 5,
+    "input": 1
+  },
+  "web/src/OverviewHistory.tsx": {
+    "button": 3,
+    "select": 4
+  },
+  "web/src/OverviewProjectHome.tsx": {
+    "button": 1
+  },
+  "web/src/Palette.tsx": {
+    "button": 2
+  },
+  "web/src/PaneConnection.tsx": {
+    "layer": 1
+  },
+  "web/src/PaneHeaderBand.tsx": {
+    "button": 7
+  },
+  "web/src/PaneMissionChip.tsx": {
+    "button": 2
+  },
+  "web/src/PanePlanChip.tsx": {
+    "button": 2
+  },
+  "web/src/PaneRelations.tsx": {
+    "button": 1
+  },
+  "web/src/PaneTurnCard.tsx": {
+    "button": 1
+  },
+  "web/src/PaneView.tsx": {
+    "button": 1
+  },
+  "web/src/PlanGraph.tsx": {
+    "button": 1
+  },
+  "web/src/PrCard.tsx": {
+    "button": 7,
+    "select": 1,
+    "layer": 1
+  },
+  "web/src/PrLinks.tsx": {
+    "button": 2
+  },
+  "web/src/PrList.tsx": {
+    "button": 4
+  },
+  "web/src/ProjectDetail.tsx": {
+    "button": 2
+  },
+  "web/src/ProjectGuardrails.tsx": {
+    "button": 1
+  },
+  "web/src/ProjectTool.tsx": {
+    "button": 6
+  },
+  "web/src/ProjectsTab.tsx": {
+    "button": 8
+  },
+  "web/src/QuickAdd.tsx": {
+    "input": 1
+  },
+  "web/src/RecordGallery.tsx": {
+    "button": 3
+  },
+  "web/src/SearchPalette.tsx": {
+    "button": 2
+  },
+  "web/src/SessionRecord.tsx": {
+    "button": 9
+  },
+  "web/src/SidebarProjectFilter.tsx": {
+    "button": 3
+  },
+  "web/src/StartPanel.tsx": {
+    "input": 1,
+    "layer": 1
+  },
+  "web/src/SuggestionsTab.tsx": {
+    "button": 9
+  },
+  "web/src/TaskLens.tsx": {
+    "button": 12
+  },
+  "web/src/Tools.tsx": {
+    "button": 4
+  },
+  "web/src/ViewComments.tsx": {
+    "button": 3,
+    "textarea": 1
+  },
+  "web/src/WorkspaceDialogs.tsx": {
+    "button": 3
+  },
+  "web/src/WorkspaceScreen.tsx": {
+    "button": 1
+  },
+  "web/src/components/agent-tree-popover.tsx": {
+    "button": 2
+  },
+  "web/src/components/agent-tree.tsx": {
+    "button": 1
+  },
+  "web/src/components/device-rail.tsx": {
+    "button": 2
+  },
+  "web/src/components/letter-mark.tsx": {
+    "button": 1
+  },
+  "web/src/components/mission-chip.tsx": {
+    "button": 1
+  },
+  "web/src/components/pr-card.tsx": {
+    "button": 3
+  },
+  "web/src/components/pr-mark.tsx": {
+    "button": 3
+  },
+  "web/src/components/practice-invite.tsx": {
+    "button": 1
+  },
+  "web/src/components/sidebar-agent-row.tsx": {
+    "button": 3
+  },
+  "web/src/components/sidebar-header.tsx": {
+    "button": 4
+  },
+  "web/src/components/subtree-list.tsx": {
+    "button": 1
+  },
+  "web/src/components/usage-comparison-chart.tsx": {
+    "button": 1
+  },
+  "web/src/components/usage-history-table.tsx": {
+    "button": 2
+  },
+  "web/src/components/usage-history.tsx": {
+    "button": 1
+  },
+  "web/src/gallery/AreaFocusScene.tsx": {
+    "textarea": 1
+  },
+  "web/src/mobile/App.tsx": {
+    "button": 4
+  },
+  "web/src/mobile/Detail.tsx": {
+    "button": 1,
+    "input": 1
+  },
+  "web/src/mobile/StartSheet.tsx": {
+    "select": 3,
+    "textarea": 1
+  },
+  "web/src/overviewGraphNodes.tsx": {
+    "button": 4
+  },
+  "web/src/practice/PracticeApp.tsx": {
+    "button": 3
+  },
+  "web/src/practice/PracticeCoach.tsx": {
+    "button": 11
+  },
+  "web/src/settings/PartialChip.tsx": {
+    "button": 1
+  },
+  "web/src/sidebar.tsx": {
+    "button": 14
+  }
+}

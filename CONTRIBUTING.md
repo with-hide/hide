@@ -74,7 +74,7 @@ The rest of this file is for the people who open pull requests.
 hide is a macOS app over the [Herdr](https://herdr.dev) runtime.
 The Rust core in `herdr-core/` owns every piece of state; the `hided` daemon serves a snapshot of it to the web shell in `web/`, which the Electron host in `desktop/` shows in its own window and dispatches typed events back from.
 `AGENTS.md` keeps the rules; [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) owns the architecture and the Herdr wire boundary with their reasons, [docs/BUILD.md](docs/BUILD.md) the build output and worktree rules, and [docs/PERFORMANCE_TESTING.md](docs/PERFORMANCE_TESTING.md) the performance rules that came out of real incidents.
-Read `AGENTS.md` and the architecture guide before changing anything under `herdr-core/`, `hided/` or `desktop/`; [docs/UI_BEHAVIOR.md](docs/UI_BEHAVIOR.md) before changing anything a user looks at, and [docs/DESIGN_WORKFLOW.md](docs/DESIGN_WORKFLOW.md) before making a design change.
+Read `AGENTS.md` and the architecture guide before changing anything under `herdr-core/`, `hided/` or `desktop/`; [docs/UI_BEHAVIOR.md](docs/UI_BEHAVIOR.md) before changing anything a user looks at, [docs/DESIGN_GUIDE.md](docs/DESIGN_GUIDE.md) before changing a screen or a token, and [docs/DESIGN_WORKFLOW.md](docs/DESIGN_WORKFLOW.md) before making a design change.
 Use [docs/README.md](docs/README.md) to find current guides and distinguish historical/reference-only material.
 
 ## Before you open a pull request
@@ -280,9 +280,8 @@ It starts only private Herdr servers and a loopback SSH account, with no externa
 
 The additional gates that read an existing Herdr server, drive an installed app, or reach an external device are local steps and are not required in CI.
 They are listed under "Local gates" below; every script in `scripts/` is either a required gate above, a local gate there, or a generator named in [docs/DESIGN_WORKFLOW.md](docs/DESIGN_WORKFLOW.md).
-The separate `design-contract.yml` workflow runs `node scripts/check-design-contract.mjs` and `node --test scripts/tests/token-contrast.test.mjs`.
-The shared entrypoint checks public web token usage, token contrast and bundled agent marks through `check-web-tokens.mjs`, `check-token-contrast.mjs` and `check-agent-logos.mjs`.
-Original design boards and their authoring tools are maintained separately with their own checks.
+The separate `design-contract.yml` workflow runs `node scripts/check-design-contract.mjs` and `node --test scripts/tests/token-contrast.test.mjs scripts/tests/ui-parts.test.mjs`.
+The shared entrypoint checks public web token usage, token contrast, bundled agent marks and raw controls outside the parts through `check-web-tokens.mjs`, `check-token-contrast.mjs`, `check-agent-logos.mjs` and `check-ui-parts.mjs`.
 Public builds and contribution checks require no private repository or design-tool login.
 These are static checks; [docs/DESIGN_WORKFLOW.md](docs/DESIGN_WORKFLOW.md) owns visual review with the production gallery and isolated app captures.
 
