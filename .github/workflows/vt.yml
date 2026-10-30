@@ -80,7 +80,8 @@ jobs:
       - name: Build with the network denied
         # The build runs Zig with package fetching off, so a reachable network
         # proves nothing: each wrapper first shows that it denies the network,
-        # then the build must still pass from the prepared inputs alone.
+        # then the build must still pass from the prepared inputs alone, with
+        # empty Zig caches so every package is read again.
         if: matrix.system != 'windows'
         timeout-minutes: 15
         run: |
@@ -97,7 +98,8 @@ jobs:
             exit 1
           fi
           touch hide-vt/build.rs
-          "${offline[@]}" bash scripts/verify-cargo.sh build -p hide-vt
+          HIDE_VT_ZIG_CACHE="$RUNNER_TEMP/vt-zig-offline" "${offline[@]}" bash scripts/verify-cargo.sh build -p hide-vt
+          rm -rf "$RUNNER_TEMP/vt-zig-offline"
       - name: A wrong input stops the build with its reason
         timeout-minutes: 15
         run: bash scripts/check-vt-build-refusals.sh
