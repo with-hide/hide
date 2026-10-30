@@ -127,6 +127,18 @@ fn child_role() {
             println!("OWNED {}", pids.join(" "));
             thread::sleep(Duration::from_secs(60));
         }
+        // Holds the file `READY_FILE` names open, on Windows shared with no
+        // one, so nothing can remove it while this process holds it.
+        "hold_file" => {
+            let path = std::env::var_os(READY_FILE).unwrap();
+            let mut options = std::fs::OpenOptions::new();
+            options.write(true).create(true);
+            #[cfg(windows)]
+            std::os::windows::fs::OpenOptionsExt::share_mode(&mut options, 0);
+            let _held = options.open(path).unwrap();
+            println!("READY {}", std::process::id());
+            thread::sleep(Duration::from_secs(60));
+        }
         "sleep" => {
             println!("READY {}", std::process::id());
             write_ready_file();
@@ -861,6 +873,40 @@ impl Drop for FixtureProcess {
                 self.pid
             );
         }
+    }
+}
+
+/// A process `is_alive` says has ended holds nothing of its own: a file it
+/// held open, shared with no one, can be removed at once. Windows ends a
+/// process after `TerminateProcess` returns and documents the wait on its
+/// object as the way to know it has ended; a test that read the exit code
+/// instead and then removed the folder an ended process had used was refused
+/// it (with-hide/hide-private#327). Each round ends the holder from outside,
+/// as an owner's end does, and removes the file the moment it no longer
+/// counts.
+#[test]
+fn a_process_that_has_ended_holds_no_file_it_had_open() {
+    let _serial = serial();
+    let folder = tempfile::tempdir().unwrap();
+    for round in 0..8 {
+        let held = folder.path().join(format!("held-{round}"));
+        let mut command = role_command("hold_file");
+        command.env(READY_FILE, &held);
+        let mut child = command.spawn().unwrap();
+        let pid = ready_number(child.stdout.take().unwrap());
+        let process = FixtureProcess::live(pid);
+        assert!(
+            std::fs::remove_file(&held).is_err() || cfg!(not(windows)),
+            "the holder shares the file with no one"
+        );
+        terminate(pid).unwrap();
+        assert!(gone_within(pid, HANG_LIMIT), "the holder never ended");
+        let removed = std::fs::remove_file(&held);
+        child.wait().unwrap();
+        drop(process);
+        removed.unwrap_or_else(|error| {
+            panic!("round {round}: the file of a process that ended is held: {error}")
+        });
     }
 }
 

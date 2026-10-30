@@ -5015,11 +5015,12 @@ mod sys {
         Ok((u64::from(created.dwHighDateTime) << 32) | u64::from(created.dwLowDateTime))
     }
 
-    /// A process has ended once its object is signalled. Its exit code is
-    /// set before that, while the kernel is still closing the handles it
-    /// held, so a caller told by the exit code that it ended could still be
-    /// refused a file it held (with-hide/hide-private#327). Only a process
-    /// that refuses to be waited on is read by its exit code.
+    /// A process has ended once its object is signalled: the system ends a
+    /// process after `TerminateProcess` returns, closes its handles, and
+    /// signals its object last, and Microsoft documents the wait on it as the
+    /// way to be sure. A test told by the exit code that a process had ended
+    /// was refused a folder it had used (with-hide/hide-private#327). Only a
+    /// process that refuses to be waited on is read by its exit code.
     pub(super) fn is_alive(pid: u32) -> bool {
         match open(pid, PROCESS_QUERY_LIMITED_INFORMATION | PROCESS_SYNCHRONIZE) {
             // SAFETY: the handle is open with the access a wait needs.

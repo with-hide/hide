@@ -457,7 +457,19 @@ fn real_sdk_preserves_the_background_provider_boundary() {
         request_path,
         Path::new(body["auth_cache"].as_str().unwrap()),
     ] {
-        std::fs::remove_dir_all(path.parent().unwrap()).unwrap();
+        let folder = path.parent().unwrap();
+        if let Err(error) = std::fs::remove_dir_all(folder) {
+            // Names what could still hold it (with-hide/hide-private#327).
+            let running: Vec<u64> = lines(&children)
+                .iter()
+                .filter_map(|child| child["pid"].as_u64())
+                .filter(|pid| hide_platform::process::is_alive(*pid as u32))
+                .collect();
+            panic!(
+                "{}: {error}; recorded children still running: {running:?}",
+                folder.display()
+            );
+        }
     }
 
     // Unproven packages and missing exports fail before paid inference.
