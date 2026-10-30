@@ -217,7 +217,7 @@ fn read_lines(
     let (updates, skipped) = thread.into_parts();
     Ok(ThreadPage {
         updates,
-        before: (start > 0).then(|| ThreadCursor {
+        before: (start > 0).then_some(ThreadCursor {
             position: start,
             incarnation,
         }),

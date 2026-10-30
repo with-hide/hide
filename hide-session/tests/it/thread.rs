@@ -268,12 +268,6 @@ fn json_of(page: &ThreadPage) -> Vec<Value> {
         .collect()
 }
 
-fn of_kind<'a>(updates: &'a [Value], kind: &'a str) -> impl Iterator<Item = &'a Value> {
-    updates
-        .iter()
-        .filter(move |update| update["sessionUpdate"] == kind)
-}
-
 /// The content blocks of every message chunk and tool result.
 fn blocks(updates: &[Value]) -> Vec<&Value> {
     let mut found = Vec::new();
