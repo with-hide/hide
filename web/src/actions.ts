@@ -220,6 +220,7 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
       sidebar_width: _width,
       font_size: _fontSize,
       terminal_font_size: _terminalFontSize,
+      terminal_font_family: _terminalFontFamily,
       interface_language: _language,
       collapsed_workspace_ids: _projectFolds,
       expanded_checkout_ids: _checkoutFolds,
@@ -235,6 +236,7 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
     void _width;
     void _fontSize;
     void _terminalFontSize;
+    void _terminalFontFamily;
     void _language;
     void _projectFolds;
     void _checkoutFolds;
@@ -1268,6 +1270,11 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
 
     setTerminalFontSize(size: number) {
       updateUiState({ terminal_font_size: size });
+    },
+
+    /** General's Terminal font, trimmed; empty returns every terminal to the `--font-mono` token. */
+    setTerminalFontFamily(family: string) {
+      updateUiState({ terminal_font_family: family.trim() });
     },
 
     /** The width a sidebar drag or its reset lands on, sent once per gesture (PRD sidebar-typography D-09). */

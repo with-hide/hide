@@ -1,5 +1,6 @@
-import { useEffect, useState, type ReactNode } from "react";
+import { useEffect, useMemo, useState, type ReactNode } from "react";
 import type { Actions } from "../actions";
+import { Input } from "../components/ui/input";
 import { RadioGroup, RadioGroupItem } from "../components/ui/radio-group";
 import { Slider } from "../components/ui/slider";
 import { ToggleGroup, ToggleGroupItem } from "../components/ui/toggle-group";
@@ -9,7 +10,8 @@ import { ACCENT_STORED_HEX } from "../generated/accents";
 import { useInterfaceTranslation } from "../i18n/client";
 import { INTERFACE_LANGUAGES, LANGUAGE_NAMES, isInterfaceLanguage } from "../i18n/locale";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../components/ui/select";
-import { ACCENT_CHOICES, FONT_SIZE_BASE, FONT_SIZE_MAX, FONT_SIZE_MIN, TERMINAL_FONT_SIZE_BASE, TERMINAL_FONT_SIZE_MAX, TERMINAL_FONT_SIZE_MIN, usableAccent, usableFontSize, usableTerminalFontSize } from "../settings";
+import { ACCENT_CHOICES, FONT_SIZE_BASE, FONT_SIZE_MAX, FONT_SIZE_MIN, TERMINAL_FONT_SIZE_BASE, TERMINAL_FONT_SIZE_MAX, TERMINAL_FONT_FAMILY_MAX_CHARS, TERMINAL_FONT_SIZE_MIN, usableAccent, usableFontSize, usableTerminalFontFamily, usableTerminalFontSize } from "../settings";
+import { fontInstalled } from "../terminalFonts";
 import { commandLabel } from "../shortcutLabels";
 import { useShellStore } from "../store";
 import { COLOR_THEMES, THEME_CHOICES, accentNameOf, readColorTheme, readTheme, type AccentName, type ThemeChoice } from "../theme";
@@ -90,6 +92,57 @@ function TextSizeRow({ label, sliderLabel, row, marker, size, min, max, detail, 
         onValueCommit={([next]) => next !== undefined && next !== size && onCommit(next)}
       />
       <Value>{t("settings.fontPoints", { size: draft })}</Value>
+    </Row>
+  );
+}
+
+/**
+ * The installed font terminals draw in, by name: it is sent when the field
+ * is left or Enter is pressed, and Escape puts the stored name back. A name
+ * this machine does not have says so, since the terminals then draw in the
+ * default font; otherwise the note says the CJK fit follows the chosen font.
+ */
+function TerminalFontRow({ actions, onCommit }: { actions: Actions; onCommit: () => void }) {
+  const { t } = useInterfaceTranslation();
+  const stored = useShellStore((s) => usableTerminalFontFamily(s.rest?.ui_state?.terminal_font_family));
+  const connected = useShellStore((s) => s.connection === "live");
+  const [draft, setDraft] = useState(stored);
+  useEffect(() => setDraft(stored), [stored]);
+  const missing = useMemo(() => stored !== "" && !fontInstalled(stored), [stored]);
+  const commit = () => {
+    const family = draft.trim();
+    if (family === stored) {
+      setDraft(stored);
+      return;
+    }
+    onCommit();
+    actions.setTerminalFontFamily(family);
+  };
+  return (
+    <Row
+      label={t("settings.terminalFont")}
+      data-appearance-row="terminal-font"
+      detail={missing
+        ? <Note tone="warn" data-terminal-font-missing="true">{t("settings.terminalFontMissing")}</Note>
+        : <Note>{t("settings.terminalFontDescription")}</Note>}
+    >
+      <Input
+        mono
+        value={draft}
+        disabled={!connected}
+        maxLength={TERMINAL_FONT_FAMILY_MAX_CHARS}
+        spellCheck={false}
+        placeholder={t("settings.terminalFontDefault")}
+        aria-label={t("settings.terminalFont")}
+        className="w-(--size-settings-control-w)"
+        data-terminal-font="true"
+        onChange={(event) => setDraft(event.target.value)}
+        onBlur={commit}
+        onKeyDown={(event) => {
+          if (event.key === "Enter" && !event.nativeEvent.isComposing) commit();
+          if (event.key === "Escape") setDraft(stored);
+        }}
+      />
     </Row>
   );
 }
@@ -208,6 +261,7 @@ export function AppearanceGroup({ actions }: { actions: Actions }) {
           actions.setTerminalFontSize(size);
         }}
       />
+      <TerminalFontRow actions={actions} onCommit={() => setChangedAt(Date.now())} />
     </Group>
   );
 }

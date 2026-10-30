@@ -178,6 +178,10 @@ struct StoredUiState {
     /// terminal keeps the size it drew.
     #[serde(default = "default_terminal_font_size")]
     terminal_font_size: f32,
+    /// Absent in a store from before the Terminal font: every terminal keeps
+    /// the `--font-mono` token.
+    #[serde(default)]
+    terminal_font_family: String,
     #[serde(default)]
     pane_text_scales: BTreeMap<String, f32>,
     /// Absent in a store written while the editor's zoom still lived in
@@ -615,6 +619,7 @@ fn decode(bytes: &[u8]) -> (UiStateSnapshot, PaneTerminalSizes, LoadDisposition)
             sidebar_width: stored.sidebar_width,
             font_size: stored.font_size,
             terminal_font_size: stored.terminal_font_size,
+            terminal_font_family: stored.terminal_font_family,
             pane_text_scales: stored.pane_text_scales,
             editor_text_scale: stored.editor_text_scale,
             conversation_pane_ids: Default::default(),
@@ -799,6 +804,7 @@ pub fn save(
         sidebar_width: state.sidebar_width,
         font_size: state.font_size,
         terminal_font_size: state.terminal_font_size,
+        terminal_font_family: state.terminal_font_family.clone(),
         pane_text_scales: state.pane_text_scales.clone(),
         editor_text_scale: state.editor_text_scale,
         pane_read_records: state.pane_read_records.clone(),

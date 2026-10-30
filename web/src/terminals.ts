@@ -21,6 +21,7 @@
 // assembled here (`selection.ts`), not by xterm.
 
 import { FitAddon } from "@xterm/addon-fit";
+import { Unicode11Addon } from "@xterm/addon-unicode11";
 import { Terminal, type IDisposable, type ITheme } from "@xterm/xterm";
 import "@xterm/xterm/css/xterm.css";
 import { submitExplorerImage, submitFiles } from "./attachments";
@@ -31,6 +32,7 @@ import { keySystem } from "./host";
 import { terminalKey } from "./keys";
 import { noteWriteComplete, probeEnabled } from "./probe";
 import { loadTerminalRenderer } from "./terminalRenderer";
+import { holdTerminalFont, setTerminalFontFamily, watchPixelRatio, type TerminalFont } from "./terminalFonts";
 import { remoteControl, remoteTargetOfPane } from "./remote";
 import { keyPayload, noteTerminalFocus } from "./keyTarget";
 import { bufferRow, followScroll, movedSelection, selectionToText, type CellRow } from "./selection";
@@ -63,6 +65,8 @@ type Instance = {
   /** Whether the pointer is over a link. */
   link: LinkState;
   scale: number;
+  /** The fonts for its size, held while it lives (`terminalFonts.ts`). */
+  font: TerminalFont;
   /** The element the terminal was opened in; it moves between a host and the parking lot. */
   element: HTMLDivElement;
   /** The pane host it is shown in, or null while parked. */
@@ -252,12 +256,69 @@ function fontSizeAt(scale: number): number {
 export function applyTerminalFontSize(size: number | null) {
   if (baseFontSize === size) return;
   baseFontSize = size;
-  for (const [paneId, instance] of instances) {
-    const next = fontSizeAt(instance.scale);
-    if (instance.term.options.fontSize === next) continue;
-    instance.term.options.fontSize = next;
-    sendGrid(paneId, instance, false);
+  warmTerminalFonts();
+  for (const instance of instances.values()) {
+    if (instance.term.options.fontSize === fontSizeAt(instance.scale)) continue;
+    applyFont(instance, false);
   }
+}
+
+/**
+ * Applies General's Terminal font, the installed font every terminal draws
+ * in ahead of the `--font-mono` token; empty is the token alone. A pane
+ * whose cell it changes sends its new fit.
+ */
+export function applyTerminalFontFamily(family: string) {
+  if (!setTerminalFontFamily(family)) return;
+  warmTerminalFonts();
+  for (const instance of instances.values()) applyFont(instance, true);
+}
+
+/** Fits the fallbacks for the base size before a terminal asks for them, so the first one draws its icons and CJK at once. */
+function warmTerminalFonts() {
+  holdTerminalFont(fontSizeAt(1), token("--font-mono")).release();
+}
+
+let pixelRatioWatched = false;
+
+/** The fallbacks are fitted in device pixels, so another display or the browser's zoom fits them again. */
+function watchFontPixelRatio() {
+  if (pixelRatioWatched) return;
+  pixelRatioWatched = true;
+  watchPixelRatio(() => {
+    for (const instance of instances.values()) applyFont(instance, true);
+  });
+}
+
+/**
+ * Points the terminal at the fonts for its size: it holds the fitted set for
+ * that size, the Terminal font and the pixel ratio, draws in its family, and
+ * sends the fit (only a changed one with `onlyChanged`).
+ */
+function applyFont(instance: Instance, onlyChanged: boolean) {
+  const size = fontSizeAt(instance.scale);
+  const previous = instance.font;
+  instance.font = holdTerminalFont(size, token("--font-mono"));
+  previous.release();
+  instance.term.options.fontSize = size;
+  instance.term.options.fontFamily = instance.font.family();
+  sendGrid(instance.paneId, instance, false, onlyChanged);
+  followFont(instance);
+}
+
+/**
+ * Once the fallbacks for the held size are fitted, draws in them. xterm
+ * measures its cell again on the family change, so the fit that goes out
+ * is measured with every font loaded; only a changed grid is sent.
+ */
+function followFont(instance: Instance) {
+  const font = instance.font;
+  void font.ready.then(() => {
+    if (instance.font !== font || instances.get(instance.paneId) !== instance) return;
+    if (instance.term.options.fontFamily === font.family()) return;
+    instance.term.options.fontFamily = font.family();
+    sendGrid(instance.paneId, instance, false, true);
+  });
 }
 
 function decodeChunk(chunk: TerminalChunk): Uint8Array | null {
@@ -363,6 +424,7 @@ export function attachedPaneIds(): string[] {
 
 function disposeInstance(paneId: string, instance: Instance) {
   instance.disposeHandlers();
+  instance.font.release();
   instance.renderer?.dispose();
   instance.term.dispose();
   instance.element.remove();
@@ -415,8 +477,7 @@ export function setTextScale(paneId: string, scale: number) {
   const instance = instances.get(paneId);
   if (!instance || instance.scale === scale) return;
   instance.scale = scale;
-  instance.term.options.fontSize = fontSizeAt(scale);
-  sendGrid(paneId, instance, false);
+  applyFont(instance, false);
 }
 
 function screenRows(term: Terminal): string[] {
@@ -788,8 +849,10 @@ function createInstance(paneId: string, dispatch: DispatchFn, actions: TerminalA
   element.className = "absolute inset-0 isolate";
   element.dataset.terminal = paneId;
   const link: LinkState = { hovered: false };
+  watchFontPixelRatio();
+  const font = holdTerminalFont(fontSizeAt(scale), token("--font-mono"));
   const term = new Terminal({
-    fontFamily: token("--font-mono"),
+    fontFamily: font.family(),
     fontSize: fontSizeAt(scale),
     theme: terminalTheme(),
     // Herdr owns the history; the pane shows the viewport the core sends.
@@ -804,6 +867,10 @@ function createInstance(paneId: string, dispatch: DispatchFn, actions: TerminalA
   });
   const fit = new FitAddon();
   term.loadAddon(fit);
+  // Herdr lays its frames out with current Unicode widths; xterm's default
+  // Unicode 6 tables give many emoji one cell where Herdr gave two.
+  term.loadAddon(new Unicode11Addon());
+  term.unicode.activeVersion = "11";
   const instance: Instance = {
     paneId,
     identity: terminalIdentity(paneId),
@@ -814,6 +881,7 @@ function createInstance(paneId: string, dispatch: DispatchFn, actions: TerminalA
     actions,
     link,
     scale,
+    font,
     element,
     host: null,
     observer: null,
@@ -908,6 +976,7 @@ function createInstance(paneId: string, dispatch: DispatchFn, actions: TerminalA
     if (instance.wheel.frame !== null) cancelAnimationFrame(instance.wheel.frame);
     linkProvider.dispose();
   };
+  followFont(instance);
   return instance;
 }
 

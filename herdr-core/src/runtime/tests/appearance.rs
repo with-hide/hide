@@ -1034,3 +1034,75 @@ fn the_terminal_font_size_is_kept_and_an_out_of_range_one_is_refused() {
         18.0
     );
 }
+
+/// General's Terminal font: a name is kept across a restart and a save that
+/// does not name it, empty returns to the default font, and a name the field
+/// could not have sent is refused into the diagnostic log while the rest of
+/// the event applies.
+#[test]
+fn the_terminal_font_is_kept_and_a_name_the_field_cannot_send_is_refused() {
+    let (_state, path) = state_path("terminal-font-family");
+    let mut runtime = runtime_at(&path);
+    assert_eq!(runtime.snapshot().ui_state.terminal_font_family, "");
+    let event = ui_state_update(
+        &runtime,
+        serde_json::json!({"terminal_font_family": "JetBrains Mono"}),
+    );
+    assert!(runtime.dispatch_json(&event));
+    let other = ui_state_update(&runtime, serde_json::json!({"font_size": 15.0}));
+    runtime.dispatch_json(&other);
+    assert_eq!(
+        runtime.snapshot().ui_state.terminal_font_family,
+        "JetBrains Mono",
+        "a save without it keeps it"
+    );
+    let error_before = runtime.snapshot().status.last_error.clone();
+    for family in [
+        " JetBrains Mono".to_owned(),
+        "Mono\nFont".to_owned(),
+        "M".repeat(129),
+    ] {
+        let event = ui_state_update(
+            &runtime,
+            serde_json::json!({"terminal_font_family": family, "font_size": 16.0}),
+        );
+        runtime.dispatch_json(&event);
+        assert_eq!(
+            runtime.snapshot().ui_state.terminal_font_family,
+            "JetBrains Mono",
+            "{family:?} is refused"
+        );
+        assert!(
+            runtime
+                .snapshot()
+                .status
+                .diagnostics
+                .iter()
+                .any(|entry| entry.kind == "ui_state.terminal_font_family_invalid"),
+            "{family:?} is recorded"
+        );
+    }
+    assert_eq!(
+        runtime.snapshot().ui_state.font_size,
+        16.0,
+        "the rest of the event applies"
+    );
+    assert_eq!(
+        runtime.snapshot().status.last_error,
+        error_before,
+        "nothing is presented"
+    );
+    drop(runtime);
+    let mut runtime = runtime_at(&path);
+    assert_eq!(
+        runtime.snapshot().ui_state.terminal_font_family,
+        "JetBrains Mono"
+    );
+    let reset = ui_state_update(&runtime, serde_json::json!({"terminal_font_family": ""}));
+    assert!(runtime.dispatch_json(&reset));
+    drop(runtime);
+    assert_eq!(
+        runtime_at(&path).snapshot().ui_state.terminal_font_family,
+        ""
+    );
+}

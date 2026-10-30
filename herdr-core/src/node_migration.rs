@@ -2073,6 +2073,7 @@ mod tests {
         "sidebar_width",
         "font_size",
         "terminal_font_size",
+        "terminal_font_family",
         "editor_text_scale",
         "agent_sleep_after_hours",
         "issue_settings",

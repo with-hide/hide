@@ -2905,6 +2905,8 @@ export type SnapshotRest = {
     font_size?: number;
     /** Every terminal's base size in pixels, 10 to 24, that a pane's own text scale multiplies. */
     terminal_font_size?: number;
+    /** The installed font every terminal draws in ahead of the `--font-mono` token, as typed; empty for the token alone (`terminalFonts.ts`). */
+    terminal_font_family?: string;
     /** The sidebar's width in CSS pixels, 220 to 440; the core refuses anything else (PRD sidebar-typography D-09). */
     sidebar_width?: number;
     /** The desktop app's macOS pane chords, in the removed native app's format. */

@@ -166,6 +166,14 @@ export function usableTerminalFontSize(value: unknown): number | null {
   return typeof value === "number" && Number.isFinite(value) && value >= TERMINAL_FONT_SIZE_MIN && value <= TERMINAL_FONT_SIZE_MAX ? value : null;
 }
 
+/** The longest Terminal font name the core keeps, in characters (`TERMINAL_FONT_FAMILY_MAX_CHARS`). */
+export const TERMINAL_FONT_FAMILY_MAX_CHARS = 128;
+
+/** The stored Terminal font name, empty for the default; anything the core could not have kept reads as the default. */
+export function usableTerminalFontFamily(value: unknown): string {
+  return typeof value === "string" && value.trim() === value && [...value].length <= TERMINAL_FONT_FAMILY_MAX_CHARS && !/\p{Cc}/u.test(value) ? value : "";
+}
+
 const isReported = (value: string | number | null | undefined): value is string | number => value !== null && value !== undefined && value !== "";
 
 /** A value the daemon or core did not report reads as unavailable, never as a guess; the copied diagnostics keep that word as data. */

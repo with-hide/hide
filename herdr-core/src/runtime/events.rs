@@ -751,6 +751,10 @@ pub(super) struct UiStateUpdatePayload {
     /// Absent keeps the size: only Appearance's Terminal text slider sends it.
     #[serde(default)]
     pub(super) terminal_font_size: Option<f32>,
+    /// Absent keeps the font: only General's Terminal font sends it, empty
+    /// for the default.
+    #[serde(default)]
+    pub(super) terminal_font_family: Option<String>,
     /// Ephemeral observation hints for the core-owned provider usage timer.
     /// They ride the existing UI-state event but are never persisted.
     #[serde(default)]
@@ -4469,6 +4473,23 @@ impl Runtime {
                             current.terminal_font_size
                         }
                         None => current.terminal_font_size,
+                    },
+                    // A name the field could not have sent (untrimmed, too
+                    // long, a control character) keeps the last one.
+                    terminal_font_family: match payload.terminal_font_family {
+                        Some(family) if crate::model::terminal_font_family_fits(&family) => family,
+                        Some(family) => {
+                            self.push_diagnostic(
+                                "ui_state.terminal_font_family_invalid",
+                                format!(
+                                    "A terminal font name of {} characters is not trimmed, longer than {} or holds a control character; kept the last one",
+                                    family.chars().count(),
+                                    crate::model::TERMINAL_FONT_FAMILY_MAX_CHARS
+                                ),
+                            );
+                            current.terminal_font_family
+                        }
+                        None => current.terminal_font_family,
                     },
                     // The zoom chords own this map; a navigator or keyboard
                     // save must not erase it, for the same reason the pet

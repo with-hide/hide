@@ -2209,6 +2209,25 @@ impl Runtime {
             });
             snapshot.ui_state.terminal_font_size = crate::model::default_terminal_font_size();
         }
+        // And a stored terminal font name the field could not have sent.
+        if !crate::model::terminal_font_family_fits(&snapshot.ui_state.terminal_font_family) {
+            let message = format!(
+                "Stored terminal font name of {} characters is not trimmed, longer than {} or holds a control character; the default font was used",
+                snapshot.ui_state.terminal_font_family.chars().count(),
+                crate::model::TERMINAL_FONT_FAMILY_MAX_CHARS
+            );
+            crate::diagnostic!(serde_json::json!({
+                "component": "ui_state",
+                "kind": "ui_state.terminal_font_family_invalid",
+                "message": message,
+            }));
+            snapshot.status.diagnostics.push(DiagnosticSnapshot {
+                kind: "ui_state.terminal_font_family_invalid".to_owned(),
+                message,
+                occurred_at: unix_milliseconds(),
+            });
+            snapshot.ui_state.terminal_font_family = String::new();
+        }
         let workspace_views = options.workspace_views_path.as_ref().map(|path| {
             let (store, diagnostics) = WorkspaceViewStore::open(
                 PathBuf::from(path),
