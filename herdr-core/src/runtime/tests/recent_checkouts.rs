@@ -252,7 +252,7 @@ fn a_failed_worktree_removal_keeps_the_record() {
     });
     assert!(runtime.ingest_worktree_removal_result(
         1,
-        Err(crate::live::RemovalFailure::new(
+        Err(crate::worktree_control::RemovalFailure::new(
             crate::model::WorktreeRemovalNotice::ResultUnknown,
             "dirty"
         ))

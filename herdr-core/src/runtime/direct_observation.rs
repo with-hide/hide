@@ -81,7 +81,7 @@ impl Runtime {
                     .filter(|endpoint| match &target.native_session {
                         Some(native) => {
                             target.terminal_id.as_deref() == Some(endpoint.terminal.as_str())
-                                && crate::wire::session_digest(&native.value)
+                                && crate::engine::tokens::session_digest(&native.value)
                                     == endpoint.actor.session
                                 && hide_agent_adapter::canonical_kind(&native.agent)
                                     == hide_agent_adapter::canonical_kind(&endpoint.actor.kind)
@@ -95,8 +95,8 @@ impl Runtime {
             ),
             None => (None, None),
         };
-        let connector = self
-            .delivery_connector(device)
+        let engine = self
+            .delivery_engine(device)
             .ok_or("observation_server_unavailable")?;
         let (_, node) = self
             .linked_node(device)
@@ -110,7 +110,7 @@ impl Runtime {
             recipient,
             start,
             seen_before,
-            connector,
+            engine,
             node,
             source_server,
             runtime: std::sync::Weak::new(),
@@ -216,8 +216,8 @@ impl Runtime {
                     .as_ref()
                     .is_none_or(|value| !current(value)))
             || !self
-                .delivery_connector(device)
-                .is_some_and(|now| Arc::ptr_eq(&now, &prepared.connector))
+                .delivery_engine(device)
+                .is_some_and(|now| crate::engine::same_engine(&now, &prepared.engine))
             || !self
                 .linked_node(device)
                 .is_ok_and(|(_, now)| Arc::ptr_eq(&now, &prepared.node))
@@ -284,10 +284,10 @@ mod tests {
     ) -> crate::sidebar::SessionSnapshotPayload {
         serde_json::from_value(json!({"agents":[
             {"id":"sender","pane_id":"sender","agent":kind,"agent_status":"working","state_change_seq":1,
-             "lineage_session":crate::wire::session_digest("sender-native"),
+             "lineage_session":crate::engine::tokens::session_digest("sender-native"),
              "agent_session":{"source":format!("herdr:{kind}"),"agent":kind,"kind":"id","value":"sender-native"}},
             {"id":"recipient-name","pane_id":"recipient","agent":kind,"agent_status":"working","state_change_seq":1,
-             "lineage_session":crate::wire::session_digest("recipient-native"),
+             "lineage_session":crate::engine::tokens::session_digest("recipient-native"),
              "agent_session":{"source":format!("herdr:{kind}"),"agent":kind,"kind":"id","value":"recipient-native"}}
         ],"panes":[{"pane_id":"sender","terminal_id":"terminal-sender"},
             {"pane_id":"recipient","terminal_id":recipient_terminal}]})).unwrap()
@@ -354,7 +354,7 @@ mod tests {
                 socket_path: herdr.socket_path().to_owned(),
                 runtime: Arc::downgrade(&runtime),
                 notifier: crate::handle::ChangeNotifier::noop(),
-                api_connector: Arc::new(herdr.connector()),
+                engine: herdr.engine(),
                 node: guard.own_node(),
             });
         }

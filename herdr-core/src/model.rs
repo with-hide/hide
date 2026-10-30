@@ -1959,7 +1959,7 @@ pub struct WorkspaceSnapshot {
     pub disk: ProjectDiskSnapshot,
     /// The disk cleanup review or run of this project, while there is one.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub cleanup: Option<crate::live::cleanup::CleanupSnapshot>,
+    pub cleanup: Option<crate::worktree_cleanup::CleanupSnapshot>,
 }
 
 /// What a project's agents are doing, decided by the core so the shell only
@@ -7254,7 +7254,7 @@ pub struct RemoteSessionSnapshot {
     /// issue link from them (`Runtime::project_node_issues`), so they are not
     /// sent to the shell either.
     #[serde(skip)]
-    pub issue_tokens: crate::wire::IssueTokens,
+    pub issue_tokens: crate::engine::tokens::IssueTokens,
     /// The GitHub issues a node project's checkouts link to, by project
     /// root, made with its rows (`Runtime::project_node_issues`) for the
     /// node's GitHub read to bring the ones its open list leaves out; empty

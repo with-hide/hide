@@ -261,6 +261,17 @@ describe("the Hide AI tool", () => {
     ]);
   });
 
+  it("words a start Memory refused by its code, and shows the core's sentence only under a code it has no words for", async () => {
+    const refused = (failure: string) => ({ source: "memory" as const, group: "choose" as const, state: "my_turn" as const, cause: "Merge or discard a waiting branch before starting another",
+      attempt: { phase: "failed" as const, started_at_unix_ms: 1, pr_number: null, url: null, agent_pane: null, failure, purpose: "branch" as const } });
+    await render(suggestionsProject({ rows: [suggestionRow("m1", refused("branches_full")), suggestionRow("m2", refused("not_started"))] }));
+    expect(q('[data-suggestion="m1"] [data-suggestion-attempt]')?.textContent).toContain("Didn't start · five branches are waiting for a decision");
+    expect(q('[data-suggestion="m1"] [data-suggestion-failure-detail]')).toBeNull();
+    expect(q('[data-suggestion="m2"] [data-suggestion-attempt]')?.textContent).toContain("Didn't start");
+    expect(q('[data-suggestion="m2"] [data-suggestion-failure-detail]')?.textContent).toBe("Merge or discard a waiting branch before starting another");
+    expect(q('[data-suggestion-retry="m1"]')).not.toBeNull();
+  });
+
   /** A ready branch as the core sends it, under 고를 것 as the operator's turn (PRD hide-ai-branch-first-apply B3). */
   const ready = (failure: string | null, files = 2, push: "allowed" | "pr_only" | "unknown" = "allowed", base: { base_unpushed?: number | null; moved_to?: string | null; base_unsaved?: string[]; agent_pane?: string | null } = {}) => ({
     group: "choose" as const,

@@ -13,14 +13,13 @@ use std::sync::{Arc, Mutex, Weak};
 use std::thread;
 use std::time::Duration;
 
-use hide_herdr_client::{ApiConnector, request_small_response};
 use hide_session::turns::Waiting;
-use serde_json::{Value, json};
+use serde_json::json;
 
+use crate::engine::{Engine, EngineError, Readiness, Wait};
 use crate::runtime::Runtime;
 use crate::runtime::delivery::Observation;
 use crate::runtime::mission_events::SendFailure;
-use crate::wire::{self, Readiness};
 
 use super::ledger::{Ledger, Letter, State};
 use super::worker::{Client, Effect, now};
@@ -420,11 +419,11 @@ impl Doorbell {
                 continue;
             }
             // The bell is worded in the operator's language, read with the
-            // connector from what the runtime already holds.
-            let Some((connector, language)) = owner.lock().ok().and_then(|guard| {
+            // engine from what the runtime already holds.
+            let Some((engine, language)) = owner.lock().ok().and_then(|guard| {
                 guard
-                    .delivery_connector(&letter.recipient.device_id)
-                    .map(|connector| (connector, guard.interface_language()))
+                    .delivery_engine(&letter.recipient.device_id)
+                    .map(|engine| (engine, guard.interface_language()))
             }) else {
                 self.link_lost(&letter.id);
                 self.hold(&letter.id, pane, Hold::Absent);
@@ -460,7 +459,7 @@ impl Doorbell {
             match deliver(
                 owner,
                 client,
-                connector.as_ref(),
+                engine.as_ref(),
                 &letter.id,
                 &observed,
                 (&line, &sender, &letter.kind),
@@ -566,10 +565,10 @@ impl Doorbell {
                     continue;
                 }
             };
-            let Some(connector) = owner
+            let Some(engine) = owner
                 .lock()
                 .ok()
-                .and_then(|guard| guard.delivery_connector(&work.conductor.device_id))
+                .and_then(|guard| guard.delivery_engine(&work.conductor.device_id))
             else {
                 self.answer_hold(owner, &work, Hold::Absent);
                 continue;
@@ -583,7 +582,7 @@ impl Doorbell {
                 continue;
             }
             *count += 1;
-            match type_answer(owner, connector.as_ref(), &work, &observed, stop) {
+            match type_answer(owner, engine.as_ref(), &work, &observed, stop) {
                 Ok(Outcome::Rung) => {
                     self.answer_tried.remove(&work.mission);
                     self.answer_held.remove(&work.mission);
@@ -737,8 +736,24 @@ fn record(client: &Client, id: &str, observed: &Observation, sent: bool) {
     }
 }
 
-fn rpc(connector: &dyn ApiConnector, method: &str, params: Value) -> Result<Value, &'static str> {
-    request_small_response(connector, method, params, RPC_TIMEOUT).map_err(|_| "herdr_call_failed")
+/// A delivery call's failure as the code its hold records.
+fn call_failure(error: EngineError) -> &'static str {
+    match error {
+        EngineError::Request(_) => "herdr_parameters",
+        EngineError::Answer(_) => "herdr_format",
+        _ => "herdr_call_failed",
+    }
+}
+
+/// Submits `line` to the agent in `pane`: once asked, a failure may follow
+/// a typed line.
+fn prompt(engine: &dyn Engine, pane: &str, line: &str) -> Result<(), SendFailure> {
+    engine
+        .prompt_agent(Wait::Small(PROMPT_TIMEOUT), pane, line)
+        .map_err(|error| match error {
+            EngineError::Request(_) => SendFailure::NotTyped("herdr_parameters"),
+            error => SendFailure::MaybeTyped(call_failure(error)),
+        })
 }
 
 /// Whether Herdr still reports the agent the verdict was read for, at the
@@ -748,16 +763,15 @@ fn rpc(connector: &dyn ApiConnector, method: &str, params: Value) -> Result<Valu
 /// the quiet period, it is the same agent and native session, and hide holds
 /// no draft or recent key for it.
 fn native_current(
-    connector: &dyn ApiConnector,
+    engine: &dyn Engine,
     observed: &Observation,
 ) -> Result<Result<(), Hold>, &'static str> {
     if observed.actor.require_native_identity().is_err() {
         return Ok(Err(Hold::Session));
     }
-    let parameters =
-        wire::agent_target_params(&observed.raw_pane_id).map_err(|_| "herdr_parameters")?;
-    let agent = wire::delivery_agent(rpc(connector, "agent.get", parameters)?)
-        .map_err(|_| "herdr_format")?;
+    let agent = engine
+        .delivery_agent(Wait::Small(RPC_TIMEOUT), &observed.raw_pane_id)
+        .map_err(call_failure)?;
     Ok(match agent.readiness {
         readiness if !readiness.accepts_input() => Err(if readiness == Readiness::Launching {
             Hold::Launching
@@ -790,7 +804,7 @@ fn native_current(
 fn deliver(
     owner: &Mutex<Runtime>,
     client: &Client,
-    connector: &dyn ApiConnector,
+    engine: &dyn Engine,
     id: &str,
     observed: &Observation,
     (line, sender, kind): (&str, &str, &str),
@@ -799,7 +813,7 @@ fn deliver(
     if stop.load(Ordering::Acquire) {
         return Ok(Outcome::Stopped);
     }
-    if let Err(reason) = native_current(connector, observed).map_err(SendFailure::NotTyped)? {
+    if let Err(reason) = native_current(engine, observed).map_err(SendFailure::NotTyped)? {
         return Ok(Outcome::Held(reason));
     }
     let reservation = client
@@ -828,7 +842,7 @@ fn deliver(
     if stop.load(Ordering::Acquire) {
         return Ok(Outcome::Stopped);
     }
-    if let Err(reason) = native_current(connector, observed).map_err(SendFailure::NotTyped)? {
+    if let Err(reason) = native_current(engine, observed).map_err(SendFailure::NotTyped)? {
         return Ok(Outcome::Held(reason));
     }
     if stop.load(Ordering::Acquire) {
@@ -845,8 +859,6 @@ fn deliver(
     // turn it opens is recognized by it (`mailbox::rang`).
     // Herdr owns submission for each input reader, including Windows paste
     // bursts (herdrdev/herdr#3187). Raw pane input bypasses that contract.
-    let parameters = wire::delivery_prompt_params(&observed.raw_pane_id, line)
-        .map_err(|_| SendFailure::NotTyped("herdr_parameters"))?;
     // The message the bell writes into the conversation is the letter's,
     // never the operator's request (PRD session-record-goal-flow D-19): the
     // label reads it as a letter from `sender` by this record, as it reads
@@ -855,9 +867,7 @@ fn deliver(
         .lock()
         .map_err(|_| SendFailure::NotTyped("runtime_unavailable"))?
         .record_bell(&observed.actor.pane_id, line, (sender, kind));
-    let submitted = request_small_response(connector, "agent.prompt", parameters, PROMPT_TIMEOUT)
-        .map_err(|_| SendFailure::MaybeTyped("herdr_call_failed"))?;
-    wire::delivery_prompted(submitted).map_err(|_| SendFailure::MaybeTyped("herdr_format"))?;
+    prompt(engine, &observed.raw_pane_id, line)?;
     // Arrival is not intake. Only a flushed prompt-hook confirmation clears it.
     Ok(Outcome::Rung)
 }
@@ -870,7 +880,7 @@ fn deliver(
 /// read may follow a typed answer, so it is never typed again on its own.
 fn type_answer(
     owner: &Mutex<Runtime>,
-    connector: &dyn ApiConnector,
+    engine: &dyn Engine,
     work: &crate::runtime::mission_events::AnswerWork,
     observed: &Observation,
     stop: &AtomicBool,
@@ -878,11 +888,9 @@ fn type_answer(
     if stop.load(Ordering::Acquire) {
         return Ok(Outcome::Stopped);
     }
-    if let Err(reason) = native_current(connector, observed).map_err(SendFailure::NotTyped)? {
+    if let Err(reason) = native_current(engine, observed).map_err(SendFailure::NotTyped)? {
         return Ok(Outcome::Held(reason));
     }
-    let parameters = wire::delivery_prompt_params(&observed.raw_pane_id, &work.line)
-        .map_err(|_| SendFailure::NotTyped("herdr_parameters"))?;
     {
         let mut guard = owner
             .lock()
@@ -893,9 +901,7 @@ fn type_answer(
         // From here the answer may reach the conversation.
         guard.mission_answer_typing(&work.mission, work.key);
     }
-    let submitted = request_small_response(connector, "agent.prompt", parameters, PROMPT_TIMEOUT)
-        .map_err(|_| SendFailure::MaybeTyped("herdr_call_failed"))?;
-    wire::delivery_prompted(submitted).map_err(|_| SendFailure::MaybeTyped("herdr_format"))?;
+    prompt(engine, &observed.raw_pane_id, &work.line)?;
     Ok(Outcome::Rung)
 }
 
@@ -903,6 +909,7 @@ fn type_answer(
 mod tests {
     use super::*;
     use crate::delivery::Actor;
+    use serde_json::Value;
 
     const NOW: u64 = 1_000_000;
     /// A letter whose wait is over, or that never had one: the bell's
@@ -963,7 +970,7 @@ mod tests {
             json!({"type": "agent_info", "agent": agent})
         });
         let mut observed = at_rest(" CLAUDE_CODE ");
-        observed.actor.session = wire::session_digest("session");
+        observed.actor.session = crate::engine::tokens::session_digest("session");
         for (kind, canonical) in [
             (" CLAUDE-CODE ", "claude"),
             (" CLAUDE ", "claude"),
@@ -973,7 +980,7 @@ mod tests {
             observed.actor.kind = kind.into();
             *flags.lock().unwrap() = json!({"agent": canonical});
             assert_eq!(
-                native_current(&herdr.connector(), &observed),
+                native_current(herdr.engine().as_ref(), &observed),
                 Ok(Ok(())),
                 "{kind}"
             );
@@ -996,14 +1003,14 @@ mod tests {
         ] {
             *flags.lock().unwrap() = change;
             assert_eq!(
-                native_current(&herdr.connector(), &observed),
+                native_current(herdr.engine().as_ref(), &observed),
                 Ok(Err(expected))
             );
         }
         observed.actor.kind = "future-agent".into();
         *flags.lock().unwrap() = json!({"agent": "FUTURE-AGENT"});
         assert_eq!(
-            native_current(&herdr.connector(), &observed),
+            native_current(herdr.engine().as_ref(), &observed),
             Ok(Err(Hold::Identity))
         );
     }

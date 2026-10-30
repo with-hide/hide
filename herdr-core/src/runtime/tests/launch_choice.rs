@@ -73,7 +73,7 @@ fn hosting(
         if let Some(session) = session {
             row["agent_session"] = json!({"kind": "id", "value": session});
             // The core proves the session it hosts by this digest, as `wire.rs` does.
-            row["lineage_session"] = json!(crate::wire::session_digest(session));
+            row["lineage_session"] = json!(crate::engine::tokens::session_digest(session));
         }
         let owned: SessionSnapshotPayload =
             crate::sidebar::owned_label_fixture(json!({"agents": [row]})).unwrap();
@@ -169,7 +169,7 @@ fn sleep(runtime: &mut Runtime, folder: &tempfile::TempDir, kind: &str) {
 }
 
 fn wake(runtime: &mut Runtime, herdr: &FakeHerdr) {
-    runtime.live.as_mut().unwrap().api_connector = Arc::new(herdr.connector());
+    runtime.live.as_mut().unwrap().engine = herdr.engine();
     assert!(runtime.dispatch_json(&event("agent_wake", json!({"pane_id": AGENT}))));
 }
 
@@ -316,7 +316,7 @@ fn a_fork_starts_with_the_model_and_effort_its_source_was_started_with() {
         {
             let mut runtime = shared.lock().unwrap();
             let live = runtime.live.as_mut().unwrap();
-            live.api_connector = Arc::new(herdr.connector());
+            live.engine = herdr.engine();
             live.runtime = shared.weak();
             assert!(runtime.dispatch_json(&event(
                 "fork_pane",
@@ -371,7 +371,7 @@ fn a_fork_on_a_choice_its_agent_does_not_take_is_refused_before_a_pane_is_made()
     };
     let (mut runtime, _folder) = started("codex", Some(&launch));
     let (herdr, starts) = starting_herdr("launch-choice-fork-refused");
-    runtime.live.as_mut().unwrap().api_connector = Arc::new(herdr.connector());
+    runtime.live.as_mut().unwrap().engine = herdr.engine();
     runtime.dispatch_json(&event(
         "fork_pane",
         json!({"pane_id": AGENT, "placement": "side", "origin": "operator"}),
@@ -413,7 +413,7 @@ fn a_closed_agent_takes_its_choice_to_the_pane_its_reopen_makes() {
     let item = closed_file("closed", "/repo/closed.rs");
     runtime.push_recent_closed(item.clone());
     runtime.reopen_in_flight = Some("closed".to_owned());
-    let request = live::ReopenRequest {
+    let request = crate::recent_closed::reopen::ReopenRequest {
         codex_daemon: Default::default(),
         item,
         workspace_exists: true,
@@ -423,19 +423,23 @@ fn a_closed_agent_takes_its_choice_to_the_pane_its_reopen_makes() {
     };
     assert!(runtime.ingest_reopen_result(
         &request,
-        Ok(live::FileReopenResultOrHerdr::Herdr(live::ReopenOutcome {
-            tab_id: None,
-            consumed: true,
-            focused_pane_id: None,
-            notices: vec![],
-            agents: vec![live::ReopenedAgent {
-                pane_id: "w-order:t3:p".into(),
-                kind: "claude".into(),
-                name: "reopen-closed-0".into(),
-                launch: launch.clone(),
-                session_id: Some(SESSION.into()),
-            }],
-        })),
+        Ok(
+            crate::recent_closed::reopen::FileReopenResultOrHerdr::Herdr(
+                crate::recent_closed::reopen::ReopenOutcome {
+                    tab_id: None,
+                    consumed: true,
+                    focused_pane_id: None,
+                    notices: vec![],
+                    agents: vec![crate::recent_closed::reopen::ReopenedAgent {
+                        pane_id: "w-order:t3:p".into(),
+                        kind: "claude".into(),
+                        name: "reopen-closed-0".into(),
+                        launch: launch.clone(),
+                        session_id: Some(SESSION.into()),
+                    }],
+                }
+            )
+        ),
     ));
     assert_eq!(
         runtime

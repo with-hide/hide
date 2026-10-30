@@ -1,4 +1,6 @@
 import { MailIcon } from "lucide-react";
+import type { ReactNode } from "react";
+import { cn } from "../lib/utils";
 import { useInterfaceTranslation } from "../i18n/client";
 import { Hint } from "./ui/tooltip";
 
@@ -41,4 +43,19 @@ export function PaneLetterButton({ paneId, letters, onDeliver }: { paneId: strin
  */
 export function RowLetterMark() {
   return <MailIcon aria-hidden="true" className="pointer-events-none size-(--size-icon-sm) shrink-0 text-muted-foreground" data-agent-letters="true" />;
+}
+
+/**
+ * A letter's envelope and who it is between, at the head of the letter's
+ * line (PRD session-docs-and-assistant D-72): the session record's request
+ * from a sender. `who` is the name, or a mention chip where the line names a
+ * session; `label` is what assistive technology reads for the pair.
+ */
+export function LetterTag({ who, label, className }: { who: ReactNode; label: string; className?: string }) {
+  return (
+    <span className={cn("inline-flex shrink-0 items-center gap-xxs text-micro", className)} aria-label={label} data-letter-tag="true">
+      <MailIcon aria-hidden="true" className="size-(--size-icon-sm) self-center" />
+      {who}
+    </span>
+  );
 }

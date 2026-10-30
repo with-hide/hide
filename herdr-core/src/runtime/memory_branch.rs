@@ -49,9 +49,9 @@ pub(super) struct BatchBranchFacts {
     pub(super) purpose: Option<BatchPurpose>,
 }
 
-/// How a batch's machine is reached: its Herdr and its node.
+/// How a batch's machine is reached: its engine and its node.
 pub(super) type BatchReach = (
-    Arc<dyn hide_herdr_client::ApiConnector>,
+    Arc<dyn crate::engine::Engine>,
     Arc<dyn crate::node_access::NodeLink>,
 );
 
@@ -378,7 +378,7 @@ impl Runtime {
         let Ok(link) = self.node_link(node.as_str()) else {
             return refused("node_unavailable");
         };
-        let connector = self.delivery_connector(node.as_str());
+        let engine = self.delivery_engine(node.as_str());
         let facts = self.project_memory.promotions.branches.get(&key).cloned();
         let base = facts
             .as_ref()
@@ -436,7 +436,7 @@ impl Runtime {
             move || {
                 decide(
                     decision,
-                    connector,
+                    engine,
                     link,
                     &place,
                     &own,
@@ -588,7 +588,7 @@ type Unseen = Option<((String, u64, u32), PromotionStart)>;
 #[allow(clippy::too_many_arguments)]
 fn decide(
     decision: BatchDecision,
-    connector: Option<Arc<dyn hide_herdr_client::ApiConnector>>,
+    engine: Option<Arc<dyn crate::engine::Engine>>,
     link: Arc<dyn crate::node_access::NodeLink>,
     place: &BranchPlace,
     own: &[String],
@@ -601,7 +601,7 @@ fn decide(
     let mut learned = None;
     let unseen = decide_batch(
         decision,
-        connector,
+        engine,
         link,
         place,
         own,
@@ -618,7 +618,7 @@ fn decide(
 #[allow(clippy::too_many_arguments)]
 fn decide_batch(
     decision: BatchDecision,
-    connector: Option<Arc<dyn hide_herdr_client::ApiConnector>>,
+    engine: Option<Arc<dyn crate::engine::Engine>>,
     link: Arc<dyn crate::node_access::NodeLink>,
     place: &BranchPlace,
     own: &[String],
@@ -683,7 +683,7 @@ fn decide_batch(
             let push = decision == BatchDecision::MergePush;
             let kind = if push { "merge_push" } else { "merge" };
             let (landing, base) =
-                branch_decision::land(connector.as_deref(), link.as_ref(), place, own, tip, push);
+                branch_decision::land(engine.as_deref(), link.as_ref(), place, own, tip, push);
             *learned = base;
             match landing {
                 branch_decision::Landing::Merged(_) => {
@@ -723,10 +723,8 @@ fn decide_batch(
             None
         }
         BatchDecision::Discard => {
-            let discarded = match connector.as_deref() {
-                Some(connector) => {
-                    branch_decision::discard(connector, link.as_ref(), place, own, tip)
-                }
+            let discarded = match engine.as_deref() {
+                Some(engine) => branch_decision::discard(engine, link.as_ref(), place, own, tip),
                 None => Err("herdr_unavailable".to_owned()),
             };
             match discarded {
@@ -743,9 +741,9 @@ fn decide_batch(
         }
         BatchDecision::OpenPr | BatchDecision::Rebase => {
             let mut start = start?;
-            if let Some(connector) = connector.as_deref() {
+            if let Some(engine) = engine.as_deref() {
                 for pane in own {
-                    if branch_decision::end_agent(connector, link.as_ref(), pane).is_err() {
+                    if branch_decision::end_agent(engine, link.as_ref(), pane).is_err() {
                         crate::diagnostic!(json!({
                             "component": "memory", "kind": "promotion.previous_agent_kept",
                             "project_id": place.project_id,

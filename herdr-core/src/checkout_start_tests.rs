@@ -1,7 +1,11 @@
 //! Controller regressions at the typed socket and node boundaries.
 use super::*;
 use crate::fake_herdr::FakeHerdr;
-use hide_herdr_client::{ApiError, ApiStream, ConnectionShutdown, LocalSocketConnector};
+use crate::live::ControlFailure;
+use crate::worktree_control::{CheckoutStart, CheckoutTabRequest, WorktreeTaskOutcome};
+use hide_herdr_client::{
+    ApiConnector, ApiError, ApiStream, ConnectionShutdown, LocalSocketConnector,
+};
 use hide_node_link::{LinkAnswer, LinkError, NodeLink};
 use serde_json::{Value, json};
 use std::collections::BTreeMap;
@@ -134,7 +138,7 @@ impl State {
                     })
                     .collect();
                 json!({"type":"session_snapshot","snapshot":{
-                    "version":"fixture", "protocol":crate::herdr_contract::HERDR_PROTOCOL_REVISION,
+                    "version":"fixture", "protocol":crate::engine::herdr::contract::HERDR_PROTOCOL_REVISION,
                     "workspaces":[{"workspace_id":"w1","number":1,"label":"fixture","focused":true,
                         "pane_count":panes.len(),"tab_count":tabs.len(),"active_tab_id":"w1:t1","agent_status":"unknown"}],
                     "tabs":tabs,"panes":panes,"layouts":[],"agents":[],
@@ -348,12 +352,12 @@ impl Fixture {
         launch: Option<&ShellLaunch>,
         lost: Option<&'static str>,
     ) -> Result<WorktreeTaskOutcome, ControlFailure> {
-        let plain = self.server.connector();
-        let lossy = LostAnswer {
+        let plain = self.server.engine();
+        let lossy = crate::engine::herdr::HerdrEngine::shared(Arc::new(LostAnswer {
             inner: self.server.connector(),
             method: lost.unwrap_or(""),
             stopped: self.stopped.clone(),
-        };
+        }));
         let node = IdentityNode(self.state.clone());
         let save = |effect: &Effect| {
             let mut state = self.state.lock().unwrap();
@@ -372,7 +376,11 @@ impl Fixture {
         };
         let result = run(
             &Control {
-                connector: if lost.is_some() { &lossy } else { &plain },
+                engine: if lost.is_some() {
+                    lossy.as_ref()
+                } else {
+                    plain.as_ref()
+                },
                 node: &node,
                 save: &save,
                 check: &check,

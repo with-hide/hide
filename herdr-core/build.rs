@@ -3,7 +3,8 @@ use std::fs;
 use std::path::PathBuf;
 
 fn main() {
-    // `wire.rs` is the only module that names the types generated here, from
+    // `src/engine/herdr/wire.rs`, inside the engine's Herdr implementation, is
+    // the only module that names the types generated here, from
     // the contract the pinned Herdr binary reports for `api schema --json`
     // (scripts/bump-herdr.sh writes it beside the pin). The client crate reads
     // the same file for the protocol revision only.

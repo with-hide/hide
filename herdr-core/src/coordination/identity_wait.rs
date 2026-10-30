@@ -186,13 +186,12 @@ pub(crate) fn settle(
     // nothing tracking its agent, as the spawn's own answer does; only once
     // the wait ended here, so a child a retry bound keeps its pane.
     if let Some((spawn, pane, reason)) = refused.as_ref().filter(|_| answer["ended"].is_string()) {
-        super::executor::close_refused_pane(context.connector.as_ref(), spawn, pane, reason);
+        super::executor::close_refused_pane(context.engine.as_ref(), spawn, pane, reason);
     }
     if let Some(agent) = answer["bound"].as_str() {
         // The lineage writer's own plan writes the same tokens when this
         // first write fails; the registration it describes is made.
-        if let Err(error) =
-            super::executor::publish_tokens(&client, context.connector.as_ref(), agent)
+        if let Err(error) = super::executor::publish_tokens(&client, context.engine.as_ref(), agent)
         {
             crate::diagnostic!(json!({
                 "component": "lineage", "kind": "write_failed", "agent_id": agent, "message": error,
@@ -426,7 +425,7 @@ mod tests {
             name: pane.into(),
             kind: "codex".into(),
             device_id: NODE.into(),
-            session: crate::wire::session_digest(session),
+            session: crate::engine::tokens::session_digest(session),
         }
     }
 
@@ -493,7 +492,7 @@ mod tests {
             spawned_from_pane_id: None,
             spawned_from_machine_id: None,
             declared_parent_session: None,
-            lineage_session: session.and_then(crate::wire::session_digest),
+            lineage_session: session.and_then(crate::engine::tokens::session_digest),
             state_change_seq: 1,
             completion_seq: None,
             launch_pending: false,

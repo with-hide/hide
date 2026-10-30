@@ -600,7 +600,7 @@ impl Runtime {
             .filter(|registration| registration.id != self.node.as_str())
             .map(|registration| {
                 let id = registration.id.as_str();
-                let reachable = self.remote_herdr_api(id).is_some() && !self.device_host_ended(id);
+                let reachable = self.device_engine(id).is_some() && !self.device_host_ended(id);
                 (registration.id.clone(), reachable)
             })
             .collect()
@@ -1048,7 +1048,7 @@ impl Runtime {
                 if !crate::delivery::valid_session(session) {
                     return Err("session_invalid".into());
                 }
-                let own = crate::wire::session_digest(session) == actor.session;
+                let own = crate::engine::tokens::session_digest(session) == actor.session;
                 // A tool event's ask submits nothing: the composer may hold
                 // a draft while the agent works (D-09). It must come from
                 // the pane's own session, since it hands letters over.
@@ -1489,14 +1489,11 @@ impl Runtime {
             .is_some_and(|observation| observation.actor.same_identity(actor))
     }
 
-    pub(crate) fn delivery_connector(
-        &self,
-        device: &str,
-    ) -> Option<Arc<dyn hide_herdr_client::ApiConnector>> {
+    pub(crate) fn delivery_engine(&self, device: &str) -> Option<crate::engine::SharedEngine> {
         if self.node == device {
-            self.live.as_ref().map(|live| live.api_connector.clone())
+            self.live.as_ref().map(|live| live.engine.clone())
         } else {
-            self.remote_herdr_api(device)
+            self.device_engine(device)
         }
     }
 
@@ -1733,7 +1730,7 @@ impl Runtime {
         let (connector, scope, machine) = if on_node {
             let live = self.live.as_ref().ok_or("herdr_unavailable")?;
             (
-                live.api_connector.clone(),
+                live.engine.clone(),
                 live.socket_path
                     .to_str()
                     .ok_or("host_scope_unavailable")?
@@ -1742,7 +1739,7 @@ impl Runtime {
             )
         } else {
             (
-                self.remote_herdr_api(device).ok_or("device_unavailable")?,
+                self.device_engine(device).ok_or("device_unavailable")?,
                 device.to_owned(),
                 self.device_machine_ids
                     .get(device)
@@ -1758,7 +1755,7 @@ impl Runtime {
                 .find_map(|(ready, node)| (ready == device).then_some(node))
         };
         Ok(CoordinationContext {
-            connector,
+            engine: connector,
             host_scope: scope,
             machine,
             codex: self.codex_daemon(device),
@@ -1816,7 +1813,7 @@ impl Runtime {
 
 /// What a coordination command needs of the machine it acts on.
 pub(crate) struct CoordinationContext {
-    pub(crate) connector: Arc<dyn hide_herdr_client::ApiConnector>,
+    pub(crate) engine: crate::engine::SharedEngine,
     pub(crate) host_scope: String,
     pub(crate) machine: String,
     pub(crate) codex: crate::codex_launch::CodexDaemon,
@@ -1904,13 +1901,13 @@ pub(crate) mod tests {
     pub(crate) fn coordinator_bootstrap(
         runtime: &mut Runtime,
         device: &str,
-        connector: &Arc<dyn hide_herdr_client::ApiConnector>,
+        connector: &crate::engine::SharedEngine,
     ) {
         let control = runtime
             .remote_controls
             .get(device)
             .expect("installed owner");
-        assert!(Arc::ptr_eq(&control.api_connector(), connector));
+        assert!(Arc::ptr_eq(&control.engine(), connector));
         let status = runtime
             .snapshot
             .status
@@ -2094,7 +2091,7 @@ pub(crate) mod tests {
         let payload: SessionSnapshotPayload = serde_json::from_value(json!({"agents":[
             {"id":"sender","pane_id":"sender","agent":"codex","agent_status":"working","state_change_seq":1,"lineage_session":"sender-session"},
             {"id":"recipient","pane_id":"recipient","agent":"codex","agent_status":"idle","state_change_seq":2,
-             "lineage_session":crate::wire::session_digest(native)},
+             "lineage_session":crate::engine::tokens::session_digest(native)},
         ]})).unwrap();
         runtime.observe_delivery(crate::node::TEST_NODE, &payload, None, None);
         let observation = runtime.delivery_observations.get_mut("recipient").unwrap();
@@ -2108,7 +2105,7 @@ pub(crate) mod tests {
             socket_path: herdr.socket_path().to_path_buf(),
             runtime: std::sync::Weak::new(),
             notifier: ChangeNotifier::noop(),
-            api_connector: Arc::new(herdr.connector()),
+            engine: herdr.engine(),
             node: Arc::new(hide_node::Local::of_process()),
         });
         observation
@@ -2194,7 +2191,7 @@ pub(crate) mod tests {
             socket_path: herdr.socket_path().to_path_buf(),
             runtime: std::sync::Weak::new(),
             notifier: ChangeNotifier::noop(),
-            api_connector: Arc::new(herdr.connector()),
+            engine: herdr.engine(),
             node: Arc::new(hide_node::Local::of_process()),
         });
     }
@@ -2870,7 +2867,7 @@ pub(crate) mod tests {
         .unwrap();
         let mut guard = runtime.lock().unwrap();
         guard.install_delivery_client(client);
-        let own = crate::wire::session_digest("hook-session");
+        let own = crate::engine::tokens::session_digest("hook-session");
         let payload: SessionSnapshotPayload = serde_json::from_value(json!({"agents":[
             {"id":"sender","pane_id":"sender","agent":"codex","agent_status":"working","state_change_seq":1,"lineage_session":"sender-session"},
             {"id":"recipient","pane_id":"recipient","agent":"codex","agent_status":"idle","state_change_seq":2,"lineage_session":own},
@@ -2990,7 +2987,7 @@ pub(crate) mod tests {
         .unwrap();
         let mut guard = runtime.lock().unwrap();
         guard.install_delivery_client(client);
-        let own = crate::wire::session_digest("hook-session");
+        let own = crate::engine::tokens::session_digest("hook-session");
         let payload: SessionSnapshotPayload = serde_json::from_value(json!({"agents":[
             {"id":"sender","pane_id":"sender","agent":"codex","agent_status":"working","state_change_seq":1,"lineage_session":"sender-session"},
             {"id":"recipient","pane_id":"recipient","agent":"opencode","agent_status":"working","state_change_seq":2,"lineage_session":own},
@@ -3563,9 +3560,9 @@ pub(crate) mod tests {
     fn registered_pair(runtime: &mut Runtime) -> Ledger {
         let payload: SessionSnapshotPayload = serde_json::from_value(json!({"agents":[
             {"id":"lead","pane_id":"lead","agent":"claude","agent_status":"idle","state_change_seq":1,
-             "lineage_session":crate::wire::session_digest("lead-native")},
+             "lineage_session":crate::engine::tokens::session_digest("lead-native")},
             {"id":"child","pane_id":"child","agent":"codex","agent_status":"working","state_change_seq":1,
-             "lineage_session":crate::wire::session_digest("child-native")},
+             "lineage_session":crate::engine::tokens::session_digest("child-native")},
         ]}))
         .unwrap();
         runtime.observe_delivery(crate::node::TEST_NODE, &payload, Some("scope"), None);
@@ -3637,9 +3634,9 @@ pub(crate) mod tests {
             "panes":[{"pane_id":"moved-child","terminal_id":"terminal-child"}],
             "agents":[
                 {"id":"lead","pane_id":"lead","agent":"claude","agent_status":"idle",
-                    "lineage_session":crate::wire::session_digest("lead-native")},
+                    "lineage_session":crate::engine::tokens::session_digest("lead-native")},
                 {"id":"child","pane_id":"moved-child","agent":"codex","agent_status":"working",
-                    "lineage_session":crate::wire::session_digest("child-native")}
+                    "lineage_session":crate::engine::tokens::session_digest("child-native")}
             ]}))
             .unwrap();
             guard.observe_delivery(crate::node::TEST_NODE, &payload, Some("scope"), None);
@@ -3683,7 +3680,7 @@ pub(crate) mod tests {
             let payload = serde_json::from_value(json!({
                 "panes":[{"pane_id":"moved-child","terminal_id":terminal}],
                 "agents":[{"id":"child","pane_id":"moved-child","agent":"codex",
-                    "agent_status":"working","lineage_session":crate::wire::session_digest(session)}]
+                    "agent_status":"working","lineage_session":crate::engine::tokens::session_digest(session)}]
             })).unwrap();
             guard.observe_delivery(crate::node::TEST_NODE, &payload, Some(scope), None);
             assert!(
@@ -3721,7 +3718,7 @@ pub(crate) mod tests {
             let payload = serde_json::from_value(json!({
                 "panes":[{"pane_id":"moved-child","terminal_id":"terminal-child"}],
                 "agents":[{"id":"child","pane_id":"moved-child","agent":"codex","agent_status":"working",
-                    "lineage_session":crate::wire::session_digest("child-native")}]
+                    "lineage_session":crate::engine::tokens::session_digest("child-native")}]
             })).unwrap();
             // This is the Remote coordinator's actual calling convention.
             guard.observe_delivery("device", &payload, None, None);
@@ -3750,7 +3747,7 @@ pub(crate) mod tests {
     fn only_lead() -> SessionSnapshotPayload {
         serde_json::from_value(json!({"agents":[
             {"id":"lead","pane_id":"lead","agent":"claude","agent_status":"idle","state_change_seq":1,
-             "lineage_session":crate::wire::session_digest("lead-native")},
+             "lineage_session":crate::engine::tokens::session_digest("lead-native")},
         ]}))
         .unwrap()
     }
@@ -4077,9 +4074,9 @@ pub(crate) mod tests {
             set_live(&mut guard, Some(&herdr));
             let payload: SessionSnapshotPayload = serde_json::from_value(json!({"agents":[
                 {"id":"sender","pane_id":"sender","agent":"codex","agent_status":"working","state_change_seq":1,
-                    "lineage_session":crate::wire::session_digest("writer-session")},
+                    "lineage_session":crate::engine::tokens::session_digest("writer-session")},
                 {"id":"recipient","pane_id":"recipient","agent":"codex","agent_status":"working","state_change_seq":1,
-                    "lineage_session":crate::wire::session_digest("reader-session")},
+                    "lineage_session":crate::engine::tokens::session_digest("reader-session")},
             ]})).unwrap();
             guard.observe_delivery(crate::node::TEST_NODE, &payload, None, None);
         }

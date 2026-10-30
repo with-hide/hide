@@ -201,7 +201,7 @@ fn device_runtime(herdr: &FakeHerdr, machine: &Machine) -> SharedRuntime {
     let mut runtime = shared.lock().unwrap();
     runtime.install_remote_control(RemoteControlContext::new(
         DEVICE,
-        Arc::new(herdr.connector()),
+        herdr.engine(),
         shared.weak(),
         ChangeNotifier::noop(),
     ));
@@ -220,7 +220,7 @@ fn local_runtime(herdr: &FakeHerdr, machine: &Machine) -> SharedRuntime {
         socket_path: herdr.socket_path().to_owned(),
         runtime: shared.weak(),
         notifier: ChangeNotifier::noop(),
-        api_connector: Arc::new(herdr.connector()),
+        engine: herdr.engine(),
         node: Arc::new(hide_node::Local::of_process()),
     });
     runtime.install_worker_context(shared.weak(), ChangeNotifier::noop());

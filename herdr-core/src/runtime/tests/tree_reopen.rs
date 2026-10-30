@@ -126,7 +126,8 @@ fn capture_started(runtime: &mut Runtime) {
         .map(|operation| operation.request.clone())
         .collect::<Vec<_>>();
     for request in requests {
-        let live::CloseCaptureTarget::Pane { pane_id } = &request.target else {
+        let crate::recent_closed::capture::CloseCaptureTarget::Pane { pane_id } = &request.target
+        else {
             panic!("a tree node here is a pane");
         };
         let pane = request
@@ -156,7 +157,7 @@ fn capture_started(runtime: &mut Runtime) {
         };
         runtime.ingest_close_capture_result(
             &request,
-            Ok(live::CloseCaptureOutcome { item: Some(item) }),
+            Ok(crate::recent_closed::capture::CloseCaptureOutcome { item: Some(item) }),
         );
     }
 }
@@ -216,7 +217,7 @@ fn reopen_answering(runtime: &mut Runtime, fail: &[&str]) -> Vec<String> {
             .expect("the reopen in flight is a member");
         let old = member_pane(member).to_owned();
         order.push(old.clone());
-        let request = live::ReopenRequest {
+        let request = crate::recent_closed::reopen::ReopenRequest {
             codex_daemon: Default::default(),
             item: member.item.clone(),
             workspace_exists: true,
@@ -228,19 +229,23 @@ fn reopen_answering(runtime: &mut Runtime, fail: &[&str]) -> Vec<String> {
             Err("layout.apply timed out".to_owned())
         } else {
             let pane = reopened(&old);
-            Ok(live::FileReopenResultOrHerdr::Herdr(live::ReopenOutcome {
-                tab_id: Some(pane.replace(":p", ":t")),
-                consumed: true,
-                focused_pane_id: Some(pane.clone()),
-                notices: Vec::new(),
-                agents: vec![live::ReopenedAgent {
-                    pane_id: pane,
-                    kind: "claude".into(),
-                    name: registration_of(&old).into(),
-                    launch: Default::default(),
-                    session_id: Some(session_of(&old)),
-                }],
-            }))
+            Ok(
+                crate::recent_closed::reopen::FileReopenResultOrHerdr::Herdr(
+                    crate::recent_closed::reopen::ReopenOutcome {
+                        tab_id: Some(pane.replace(":p", ":t")),
+                        consumed: true,
+                        focused_pane_id: Some(pane.clone()),
+                        notices: Vec::new(),
+                        agents: vec![crate::recent_closed::reopen::ReopenedAgent {
+                            pane_id: pane,
+                            kind: "claude".into(),
+                            name: registration_of(&old).into(),
+                            launch: Default::default(),
+                            session_id: Some(session_of(&old)),
+                        }],
+                    },
+                ),
+            )
         };
         assert!(runtime.ingest_reopen_result(&request, result));
     }

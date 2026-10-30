@@ -21,7 +21,7 @@ pub(super) struct PendingClose {
     /// the shell went into the closing tab (`replacement_in_tab`).
     pub(super) replacement_id: Option<String>,
     pub(super) allow_replacement_create: bool,
-    pub(super) request: live::CloseCaptureRequest,
+    pub(super) request: crate::recent_closed::capture::CloseCaptureRequest,
     pub(super) target_id: String,
     pub(super) scope_id: String,
     /// The full pane set observed when the user approved this close. A later
@@ -33,7 +33,7 @@ pub(super) struct PendingClose {
     /// A newly protected pane invalidates the approval even when the tab's
     /// pane set itself is unchanged.
     pub(super) protected_agent_pane_ids: Vec<String>,
-    pub(super) approved_peer_terminals: Vec<live::ClosePeer>,
+    pub(super) approved_peer_terminals: Vec<crate::recent_closed::capture::ClosePeer>,
     pub(super) label: String,
     pub(super) item: Option<ClosedItem>,
     pub(super) phase: String,
@@ -65,8 +65,8 @@ impl PendingClose {
     /// that shell exists.
     pub(super) fn leaving_tab(&self) -> Option<&str> {
         let whole_tab = match &self.request.target {
-            live::CloseCaptureTarget::Tab { .. } => true,
-            live::CloseCaptureTarget::Pane { pane_id } => {
+            crate::recent_closed::capture::CloseCaptureTarget::Tab { .. } => true,
+            crate::recent_closed::capture::CloseCaptureTarget::Pane { pane_id } => {
                 matches!(self.scope_pane_ids.as_slice(), [only] if only == pane_id)
             }
         };
@@ -183,10 +183,10 @@ pub(super) struct CloseSelectionRestore {
     pub(super) after: CloseSelectionState,
 }
 
-pub(super) fn close_target_id(target: &live::CloseCaptureTarget) -> &str {
+pub(super) fn close_target_id(target: &crate::recent_closed::capture::CloseCaptureTarget) -> &str {
     match target {
-        live::CloseCaptureTarget::Pane { pane_id } => pane_id,
-        live::CloseCaptureTarget::Tab { tab_id } => tab_id,
+        crate::recent_closed::capture::CloseCaptureTarget::Pane { pane_id } => pane_id,
+        crate::recent_closed::capture::CloseCaptureTarget::Tab { tab_id } => tab_id,
     }
 }
 
@@ -1483,7 +1483,7 @@ impl Runtime {
                     ) && operation.leaving_tab().is_none()
                 })
                 .filter_map(|operation| match &operation.request.target {
-                    live::CloseCaptureTarget::Pane { pane_id } => {
+                    crate::recent_closed::capture::CloseCaptureTarget::Pane { pane_id } => {
                         let (started, sequence) = self
                             .close_line_places
                             .get(&operation.request.key)
@@ -1497,7 +1497,7 @@ impl Runtime {
                             },
                         ))
                     }
-                    live::CloseCaptureTarget::Tab { .. } => None,
+                    crate::recent_closed::capture::CloseCaptureTarget::Tab { .. } => None,
                 }),
         );
         ordered.sort_by_key(|(started, sequence, _)| (*started, *sequence));

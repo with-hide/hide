@@ -821,7 +821,10 @@ impl Runtime {
         true
     }
 
-    pub(super) fn set_reopen_notices(&mut self, notices: Vec<live::ReopenNotice>) {
+    pub(super) fn set_reopen_notices(
+        &mut self,
+        notices: Vec<crate::recent_closed::reopen::ReopenNotice>,
+    ) {
         self.snapshot.recent_closed.notices = notices
             .into_iter()
             .map(|notice| crate::model::RecentClosedNoticeSnapshot {
@@ -928,20 +931,24 @@ impl Runtime {
             .collect()
     }
 
-    pub(super) fn close_operation_kind(target: &live::CloseCaptureTarget) -> &'static str {
+    pub(super) fn close_operation_kind(
+        target: &crate::recent_closed::capture::CloseCaptureTarget,
+    ) -> &'static str {
         match target {
-            live::CloseCaptureTarget::Pane { .. } => "pane.close",
-            live::CloseCaptureTarget::Tab { .. } => "tab.close",
+            crate::recent_closed::capture::CloseCaptureTarget::Pane { .. } => "pane.close",
+            crate::recent_closed::capture::CloseCaptureTarget::Tab { .. } => "tab.close",
         }
     }
 
     pub(super) fn close_operation_pane_ids(
-        target: &live::CloseCaptureTarget,
+        target: &crate::recent_closed::capture::CloseCaptureTarget,
         panes: &[ClosedPane],
     ) -> Vec<String> {
         match target {
-            live::CloseCaptureTarget::Pane { pane_id } => vec![pane_id.clone()],
-            live::CloseCaptureTarget::Tab { .. } => {
+            crate::recent_closed::capture::CloseCaptureTarget::Pane { pane_id } => {
+                vec![pane_id.clone()]
+            }
+            crate::recent_closed::capture::CloseCaptureTarget::Tab { .. } => {
                 panes.iter().map(|pane| pane.pane_id.clone()).collect()
             }
         }
@@ -949,11 +956,11 @@ impl Runtime {
 
     pub(super) fn close_operation_target_present(
         payload: &SessionSnapshotPayload,
-        target: &live::CloseCaptureTarget,
+        target: &crate::recent_closed::capture::CloseCaptureTarget,
         scope_id: &str,
     ) -> bool {
         match target {
-            live::CloseCaptureTarget::Pane { pane_id } => {
+            crate::recent_closed::capture::CloseCaptureTarget::Pane { pane_id } => {
                 if let Some(layout) = payload
                     .layouts
                     .iter()
@@ -970,7 +977,7 @@ impl Runtime {
                 // gone because pane closes never move a pane to another tab.
                 payload.tabs.iter().any(|tab| tab.tab_id == scope_id)
             }
-            live::CloseCaptureTarget::Tab { tab_id } => {
+            crate::recent_closed::capture::CloseCaptureTarget::Tab { tab_id } => {
                 payload.tabs.iter().any(|tab| tab.tab_id == *tab_id)
             }
         }
@@ -978,7 +985,7 @@ impl Runtime {
 
     pub(super) fn close_target_present_in_projection(&self, operation: &PendingClose) -> bool {
         match &operation.request.target {
-            live::CloseCaptureTarget::Pane { pane_id } => self
+            crate::recent_closed::capture::CloseCaptureTarget::Pane { pane_id } => self
                 .snapshot
                 .navigator
                 .workspaces
@@ -987,7 +994,7 @@ impl Runtime {
                 .flat_map(|checkout| checkout.tabs.iter())
                 .find(|tab| tab.id.as_deref() == Some(operation.scope_id.as_str()))
                 .is_some_and(|tab| tab.panes.iter().any(|pane| pane.id == *pane_id)),
-            live::CloseCaptureTarget::Tab { tab_id } => self
+            crate::recent_closed::capture::CloseCaptureTarget::Tab { tab_id } => self
                 .snapshot
                 .navigator
                 .workspaces
@@ -1034,8 +1041,10 @@ impl Runtime {
         }
         let activity_status_unknown = self.snapshot.navigator.agents.iter().any(|agent| {
             let in_target = match &operation.request.target {
-                live::CloseCaptureTarget::Pane { pane_id } => agent.pane_id == *pane_id,
-                live::CloseCaptureTarget::Tab { .. } => operation
+                crate::recent_closed::capture::CloseCaptureTarget::Pane { pane_id } => {
+                    agent.pane_id == *pane_id
+                }
+                crate::recent_closed::capture::CloseCaptureTarget::Tab { .. } => operation
                     .scope_pane_ids
                     .iter()
                     .any(|pane_id| pane_id == &agent.pane_id),
@@ -1073,8 +1082,10 @@ impl Runtime {
             .iter()
             .filter(|agent| {
                 let in_target = match &operation.request.target {
-                    live::CloseCaptureTarget::Pane { pane_id } => agent.pane_id == *pane_id,
-                    live::CloseCaptureTarget::Tab { .. } => operation
+                    crate::recent_closed::capture::CloseCaptureTarget::Pane { pane_id } => {
+                        agent.pane_id == *pane_id
+                    }
+                    crate::recent_closed::capture::CloseCaptureTarget::Tab { .. } => operation
                         .scope_pane_ids
                         .iter()
                         .any(|pane_id| pane_id == &agent.pane_id),
@@ -1118,10 +1129,10 @@ impl Runtime {
         }
         self.clear_close_guards(&operation);
         self.restore_close_selection(operation.selection_restore.as_ref());
-        self.set_reopen_notices(vec![live::ReopenNotice {
+        self.set_reopen_notices(vec![crate::recent_closed::reopen::ReopenNotice {
             pane_id: matches!(
                 &operation.request.target,
-                live::CloseCaptureTarget::Pane { .. }
+                crate::recent_closed::capture::CloseCaptureTarget::Pane { .. }
             )
             .then_some(operation.target_id.clone()),
             message: operation.message.clone().unwrap_or_else(|| message.clone()),
@@ -1239,7 +1250,7 @@ impl Runtime {
 
     pub(super) fn start_close_capture(
         &mut self,
-        target: live::CloseCaptureTarget,
+        target: crate::recent_closed::capture::CloseCaptureTarget,
         tab: TabSnapshot,
     ) -> bool {
         let target_id = close_target_id(&target).to_owned();
@@ -1248,16 +1259,19 @@ impl Runtime {
         if self.close_operations.len() + self.tree_close_reserved_slots()
             >= crate::recent_closed::RECENT_CLOSED_LIMIT
         {
-            self.set_reopen_notices(vec![live::ReopenNotice {
+            self.set_reopen_notices(vec![crate::recent_closed::reopen::ReopenNotice {
                 pane_id: None,
                 message: "Resolve or dismiss an earlier close before closing another item".into(),
             }]);
             return true;
         }
         let Some(scope_id) = tab.id.clone() else {
-            self.set_reopen_notices(vec![live::ReopenNotice {
-                pane_id: matches!(&target, live::CloseCaptureTarget::Pane { .. })
-                    .then_some(target_id.clone()),
+            self.set_reopen_notices(vec![crate::recent_closed::reopen::ReopenNotice {
+                pane_id: matches!(
+                    &target,
+                    crate::recent_closed::capture::CloseCaptureTarget::Pane { .. }
+                )
+                .then_some(target_id.clone()),
                 message: "The close target has no tab identity, so it was not closed".to_owned(),
             }]);
             return true;
@@ -1279,8 +1293,8 @@ impl Runtime {
                         && !self.pumping_geometry))
             })
         {
-            self.set_reopen_notices(vec![live::ReopenNotice {
-                pane_id: matches!(&target, live::CloseCaptureTarget::Pane { .. })
+            self.set_reopen_notices(vec![crate::recent_closed::reopen::ReopenNotice {
+                pane_id: matches!(&target, crate::recent_closed::capture::CloseCaptureTarget::Pane { .. })
                     .then_some(target_id.clone()),
                 message: "This tab already has a close in progress; no second close was sent"
                     .to_owned(),
@@ -1289,17 +1303,22 @@ impl Runtime {
             return false;
         }
         let Some(mut context) = self.close_context(&tab) else {
-            self.set_reopen_notices(vec![live::ReopenNotice {
-                pane_id: matches!(&target, live::CloseCaptureTarget::Pane { .. })
-                    .then_some(target_id.clone()),
+            self.set_reopen_notices(vec![crate::recent_closed::reopen::ReopenNotice {
+                pane_id: matches!(
+                    &target,
+                    crate::recent_closed::capture::CloseCaptureTarget::Pane { .. }
+                )
+                .then_some(target_id.clone()),
                 message:
                     "The closed item could not be recorded because its local context is incomplete"
                         .into(),
             }]);
             return true;
         };
-        context.replacement_shell &=
-            matches!(target, live::CloseCaptureTarget::Tab { .. }) || tab.panes.len() == 1;
+        context.replacement_shell &= matches!(
+            target,
+            crate::recent_closed::capture::CloseCaptureTarget::Tab { .. }
+        ) || tab.panes.len() == 1;
         // A failed last terminal must remain explicitly closable even when
         // its folder cannot launch a replacement shell. The project registration stays.
         context.replacement_shell &= !tab
@@ -1328,20 +1347,25 @@ impl Runtime {
             return true;
         }
         let Some(live_context) = self.live.as_ref().cloned() else {
-            self.set_reopen_notices(vec![live::ReopenNotice {
-                pane_id: matches!(&target, live::CloseCaptureTarget::Pane { .. })
-                    .then_some(target_id.clone()),
+            self.set_reopen_notices(vec![crate::recent_closed::reopen::ReopenNotice {
+                pane_id: matches!(
+                    &target,
+                    crate::recent_closed::capture::CloseCaptureTarget::Pane { .. }
+                )
+                .then_some(target_id.clone()),
                 message: "Closing this item requires the local Herdr connection".into(),
             }]);
             return true;
         };
-        let request = live::CloseCaptureRequest {
+        let request = crate::recent_closed::capture::CloseCaptureRequest {
             failed_terminals: tab
                 .panes
                 .iter()
                 .filter(|pane| match &target {
-                    live::CloseCaptureTarget::Pane { pane_id } => &pane.id == pane_id,
-                    live::CloseCaptureTarget::Tab { .. } => true,
+                    crate::recent_closed::capture::CloseCaptureTarget::Pane { pane_id } => {
+                        &pane.id == pane_id
+                    }
+                    crate::recent_closed::capture::CloseCaptureTarget::Tab { .. } => true,
                 })
                 .filter_map(|pane| {
                     pane.failed_terminal_id
@@ -1378,8 +1402,10 @@ impl Runtime {
             .iter()
             .filter(|agent| {
                 let in_target = match &request.target {
-                    live::CloseCaptureTarget::Pane { pane_id } => agent.pane_id == *pane_id,
-                    live::CloseCaptureTarget::Tab { .. } => scope_pane_ids
+                    crate::recent_closed::capture::CloseCaptureTarget::Pane { pane_id } => {
+                        agent.pane_id == *pane_id
+                    }
+                    crate::recent_closed::capture::CloseCaptureTarget::Tab { .. } => scope_pane_ids
                         .iter()
                         .any(|pane_id| pane_id == &agent.pane_id),
                 };
@@ -1394,29 +1420,31 @@ impl Runtime {
             .iter()
             .filter(|pane| protected_agent_pane_ids.contains(&pane.id))
             .filter_map(|pane| {
-                pane.terminal_id.as_ref().map(|terminal| live::ClosePeer {
-                    pane_id: pane.id.clone(),
-                    terminal_id: terminal.clone(),
-                    session: self
-                        .snapshot
-                        .navigator
-                        .agents
-                        .iter()
-                        .find(|agent| agent.pane_id == pane.id)
-                        .and_then(|agent| agent.close_session.clone()),
-                })
+                pane.terminal_id
+                    .as_ref()
+                    .map(|terminal| crate::recent_closed::capture::ClosePeer {
+                        pane_id: pane.id.clone(),
+                        terminal_id: terminal.clone(),
+                        session: self
+                            .snapshot
+                            .navigator
+                            .agents
+                            .iter()
+                            .find(|agent| agent.pane_id == pane.id)
+                            .and_then(|agent| agent.close_session.clone()),
+                    })
             })
             .collect();
         let restore_checkout_id = tab.checkout_id.clone();
         let selection_before = self.close_selection_state(restore_checkout_id.as_deref());
         let label = match &request.target {
-            live::CloseCaptureTarget::Pane { pane_id } => tab
+            crate::recent_closed::capture::CloseCaptureTarget::Pane { pane_id } => tab
                 .panes
                 .iter()
                 .find(|pane| pane.id == *pane_id)
                 .and_then(|pane| pane.herdr_label.clone().or(pane.terminal_title.clone()))
                 .unwrap_or_else(|| pane_id.clone()),
-            live::CloseCaptureTarget::Tab { .. } => {
+            crate::recent_closed::capture::CloseCaptureTarget::Tab { .. } => {
                 tab.label.clone().unwrap_or_else(|| "Tab".to_owned())
             }
         };
@@ -1452,7 +1480,8 @@ impl Runtime {
         self.bind_dormant_close(&target_id, &request.key);
         // A pane closing beside others is drawn gone at once (D-07).
         self.request_republish();
-        if let live::CloseCaptureTarget::Pane { pane_id } = &request.target {
+        if let crate::recent_closed::capture::CloseCaptureTarget::Pane { pane_id } = &request.target
+        {
             self.begin_op_timing(
                 &super::op_timing::pane_close_op_id(&request.key),
                 "pane.close",
@@ -1490,7 +1519,9 @@ impl Runtime {
             });
         }
         self.sync_recent_closed_snapshot();
-        if let Err(message) = live::spawn_close_capture(live_context, request.clone()) {
+        if let Err(message) =
+            crate::recent_closed::capture::spawn_close_capture(live_context, request.clone())
+        {
             self.fail_close_operation(
                 &request.key,
                 format!("The close worker could not start: {message}"),
@@ -1508,7 +1539,7 @@ impl Runtime {
     /// were in before (`leave_emptied_checkout`).
     pub(super) fn move_from_closing_target(
         &mut self,
-        target: &live::CloseCaptureTarget,
+        target: &crate::recent_closed::capture::CloseCaptureTarget,
         tab: &TabSnapshot,
         may_leave_checkout: bool,
     ) {
@@ -1518,7 +1549,7 @@ impl Runtime {
         if self.snapshot.navigator.focused_checkout_id.as_deref() != Some(checkout_id) {
             return;
         }
-        if let live::CloseCaptureTarget::Pane { pane_id } = target
+        if let crate::recent_closed::capture::CloseCaptureTarget::Pane { pane_id } = target
             && tab.panes.iter().any(|pane| pane.id != *pane_id)
         {
             let replacement = tab
@@ -1743,10 +1774,10 @@ impl Runtime {
         // Nothing was closed, so the tab returns to its place and so does the
         // operator, as after a refusal.
         self.restore_close_selection(operation.selection_restore.as_ref());
-        self.set_reopen_notices(vec![live::ReopenNotice {
+        self.set_reopen_notices(vec![crate::recent_closed::reopen::ReopenNotice {
             pane_id: matches!(
                 &operation.request.target,
-                live::CloseCaptureTarget::Pane { .. }
+                crate::recent_closed::capture::CloseCaptureTarget::Pane { .. }
             )
             .then_some(operation.target_id.clone()),
             message: operation.message.clone().unwrap_or_else(|| message.clone()),
@@ -1762,7 +1793,7 @@ impl Runtime {
 
     pub(super) fn ensure_pending_close_from_request(
         &mut self,
-        request: &live::CloseCaptureRequest,
+        request: &crate::recent_closed::capture::CloseCaptureRequest,
     ) {
         if self.close_operations.contains_key(&request.key) {
             return;
@@ -1812,17 +1843,17 @@ impl Runtime {
 
     pub(crate) fn ingest_close_capture_result(
         &mut self,
-        request: &live::CloseCaptureRequest,
-        result: Result<live::CloseCaptureOutcome, String>,
-    ) -> (bool, Vec<live::CloseEffectRequest>) {
+        request: &crate::recent_closed::capture::CloseCaptureRequest,
+        result: Result<crate::recent_closed::capture::CloseCaptureOutcome, String>,
+    ) -> (bool, Vec<crate::recent_closed::capture::CloseEffectRequest>) {
         self.with_close_geometry(|runtime| runtime.apply_close_capture_result(request, result))
     }
 
     fn apply_close_capture_result(
         &mut self,
-        request: &live::CloseCaptureRequest,
-        result: Result<live::CloseCaptureOutcome, String>,
-    ) -> (bool, Vec<live::CloseEffectRequest>) {
+        request: &crate::recent_closed::capture::CloseCaptureRequest,
+        result: Result<crate::recent_closed::capture::CloseCaptureOutcome, String>,
+    ) -> (bool, Vec<crate::recent_closed::capture::CloseEffectRequest>) {
         if !request.retain_for_reopen && !self.close_operations.contains_key(&request.key) {
             return (false, Vec::new());
         }
@@ -1880,7 +1911,7 @@ impl Runtime {
     pub(super) fn prepare_captured_close_effect(
         &mut self,
         key: &str,
-    ) -> Option<live::CloseEffectRequest> {
+    ) -> Option<crate::recent_closed::capture::CloseEffectRequest> {
         let operation = self.close_operations.get_mut(key)?;
         let request = &operation.request;
         operation.replacement_effect_started |= request.context.replacement_shell;
@@ -1895,18 +1926,20 @@ impl Runtime {
                 CLOSE_STAGE_TIMEOUT_MS
             },
         ));
-        let effect = live::CloseEffectRequest {
-            safety: (!request.failed_terminals.is_empty()).then(|| live::CloseSafety {
-                approved_peers: operation.approved_peer_terminals.clone(),
-                pane_ids: operation.scope_pane_ids.clone(),
-                deadline: std::time::Instant::now()
-                    + std::time::Duration::from_millis(
-                        operation
-                            .deadline_at_unix_ms
-                            .unwrap_or_default()
-                            .saturating_sub(unix_milliseconds())
-                            .min(CLOSE_STAGE_TIMEOUT_MS),
-                    ),
+        let effect = crate::recent_closed::capture::CloseEffectRequest {
+            safety: (!request.failed_terminals.is_empty()).then(|| {
+                crate::recent_closed::capture::CloseSafety {
+                    approved_peers: operation.approved_peer_terminals.clone(),
+                    pane_ids: operation.scope_pane_ids.clone(),
+                    deadline: std::time::Instant::now()
+                        + std::time::Duration::from_millis(
+                            operation
+                                .deadline_at_unix_ms
+                                .unwrap_or_default()
+                                .saturating_sub(unix_milliseconds())
+                                .min(CLOSE_STAGE_TIMEOUT_MS),
+                        ),
+                }
             }),
             failed_terminals: request.failed_terminals.clone(),
             retain_for_reopen: request.retain_for_reopen,
@@ -1915,8 +1948,10 @@ impl Runtime {
             connection_generation: request.connection_generation,
             target: request.target.clone(),
             replacement: (request.context.replacement_shell
-                && (matches!(request.target, live::CloseCaptureTarget::Tab { .. })
-                    || request.panes.len() == 1))
+                && (matches!(
+                    request.target,
+                    crate::recent_closed::capture::CloseCaptureTarget::Tab { .. }
+                ) || request.panes.len() == 1))
                 .then(|| request.context.clone()),
         };
         self.push_diagnostic(
@@ -1928,16 +1963,16 @@ impl Runtime {
 
     pub(crate) fn ingest_close_effect_result(
         &mut self,
-        request: &live::CloseEffectRequest,
-        result: Result<(), hide_herdr_client::ApiError>,
+        request: &crate::recent_closed::capture::CloseEffectRequest,
+        result: Result<(), crate::engine::EngineError>,
     ) -> bool {
         self.with_close_geometry(|runtime| runtime.apply_close_effect_result(request, result))
     }
 
     fn apply_close_effect_result(
         &mut self,
-        request: &live::CloseEffectRequest,
-        result: Result<(), hide_herdr_client::ApiError>,
+        request: &crate::recent_closed::capture::CloseEffectRequest,
+        result: Result<(), crate::engine::EngineError>,
     ) -> bool {
         if !request.retain_for_reopen && !self.close_operations.contains_key(&request.key) {
             return false;
@@ -1948,34 +1983,38 @@ impl Runtime {
             // confirmed stack, then let the same identity checks and
             // topology gate handle the result.
             let tab_id = match &request.target {
-                live::CloseCaptureTarget::Pane { pane_id } => pane_id.clone(),
-                live::CloseCaptureTarget::Tab { tab_id } => tab_id.clone(),
+                crate::recent_closed::capture::CloseCaptureTarget::Pane { pane_id } => {
+                    pane_id.clone()
+                }
+                crate::recent_closed::capture::CloseCaptureTarget::Tab { tab_id } => tab_id.clone(),
             };
-            self.ensure_pending_close_from_request(&live::CloseCaptureRequest {
-                failed_terminals: request.failed_terminals.clone(),
-                retain_for_reopen: request.retain_for_reopen,
-                key: request.key.clone(),
-                connection_generation: request.connection_generation,
-                context: ClosedContext {
-                    workspace_id: String::new(),
-                    workspace_label: String::new(),
-                    workspace_ids_before_close: Vec::new(),
-                    tab_ids_before_close: Vec::new(),
-                    pane_ids_before_close: Vec::new(),
-                    checkout_id: String::new(),
-                    checkout_path: String::new(),
-                    tab_id,
-                    tab_label: request.key.clone(),
-                    tab_index: 0,
-                    agent_area: None,
-                    agent_group: None,
-                    replacement_shell: false,
-                    replacement_in_tab: false,
-                    tab_name: ClosedTabName::Unnamed,
+            self.ensure_pending_close_from_request(
+                &crate::recent_closed::capture::CloseCaptureRequest {
+                    failed_terminals: request.failed_terminals.clone(),
+                    retain_for_reopen: request.retain_for_reopen,
+                    key: request.key.clone(),
+                    connection_generation: request.connection_generation,
+                    context: ClosedContext {
+                        workspace_id: String::new(),
+                        workspace_label: String::new(),
+                        workspace_ids_before_close: Vec::new(),
+                        tab_ids_before_close: Vec::new(),
+                        pane_ids_before_close: Vec::new(),
+                        checkout_id: String::new(),
+                        checkout_path: String::new(),
+                        tab_id,
+                        tab_label: request.key.clone(),
+                        tab_index: 0,
+                        agent_area: None,
+                        agent_group: None,
+                        replacement_shell: false,
+                        replacement_in_tab: false,
+                        tab_name: ClosedTabName::Unnamed,
+                    },
+                    panes: Vec::new(),
+                    target: request.target.clone(),
                 },
-                panes: Vec::new(),
-                target: request.target.clone(),
-            });
+            );
             let item = self
                 .recent_closed
                 .iter()
@@ -2004,7 +2043,7 @@ impl Runtime {
             .deadline_at_unix_ms
             .is_some_and(|deadline| deadline <= unix_milliseconds())
         {
-            Err(hide_herdr_client::ApiError::Transport(
+            Err(crate::engine::EngineError::Transport(
                 "close result arrived after its deadline".to_owned(),
             ))
         } else {
@@ -2018,7 +2057,7 @@ impl Runtime {
                 super::op_timing::Stage::HerdrAck,
                 std::time::Instant::now(),
             ),
-            Err(hide_herdr_client::ApiError::Remote { .. }) => {
+            Err(crate::engine::EngineError::Refused { .. }) => {
                 self.op_timings.finish(&timing_id, "refused")
             }
             Err(_) => self.op_timings.finish(&timing_id, "unknown"),
@@ -2041,7 +2080,7 @@ impl Runtime {
                     format!("Captured user close {}", request.key),
                 );
             }
-            Err(hide_herdr_client::ApiError::Remote { code, message }) => {
+            Err(crate::engine::EngineError::Refused { code, message }) => {
                 if let Some(operation) = self.close_operations.get_mut(&request.key) {
                     operation.phase = "refused".to_owned();
                     operation.stage = if code == "replacement_failed" {
@@ -2065,8 +2104,8 @@ impl Runtime {
                     self.clear_close_guards(operation);
                     self.restore_close_selection(operation.selection_restore.as_ref());
                 }
-                self.set_reopen_notices(vec![live::ReopenNotice {
-                    pane_id: matches!(&request.target, live::CloseCaptureTarget::Pane { .. })
+                self.set_reopen_notices(vec![crate::recent_closed::reopen::ReopenNotice {
+                    pane_id: matches!(&request.target, crate::recent_closed::capture::CloseCaptureTarget::Pane { .. })
                         .then_some(close_target_id(&request.target).to_owned()),
                     message: operation
                         .and_then(|operation| operation.message)
@@ -2087,9 +2126,12 @@ impl Runtime {
                     operation.deadline_at_unix_ms =
                         Some(unix_milliseconds().saturating_add(CLOSE_STAGE_TIMEOUT_MS));
                 }
-                self.set_reopen_notices(vec![live::ReopenNotice {
-                    pane_id: matches!(&request.target, live::CloseCaptureTarget::Pane { .. })
-                        .then_some(close_target_id(&request.target).to_owned()),
+                self.set_reopen_notices(vec![crate::recent_closed::reopen::ReopenNotice {
+                    pane_id: matches!(
+                        &request.target,
+                        crate::recent_closed::capture::CloseCaptureTarget::Pane { .. }
+                    )
+                    .then_some(close_target_id(&request.target).to_owned()),
                     message: format!(
                         "Close result is unknown; the reopen reservation was kept: {error}"
                     ),
@@ -2210,10 +2252,10 @@ impl Runtime {
         }
         self.clear_close_guards(&operation);
         if operation.item.is_none() {
-            self.set_reopen_notices(vec![live::ReopenNotice {
+            self.set_reopen_notices(vec![crate::recent_closed::reopen::ReopenNotice {
                 pane_id: matches!(
                     &operation.request.target,
-                    live::CloseCaptureTarget::Pane { .. }
+                    crate::recent_closed::capture::CloseCaptureTarget::Pane { .. }
                 )
                 .then_some(operation.target_id),
                 message: "The item was already closed; Hide synchronized this view without creating a reopen entry".to_owned(),
@@ -2317,7 +2359,7 @@ impl Runtime {
             .filter_map(|key| {
                 let operation = self.close_operations.get(key)?;
                 (operation.phase == "unknown" && !self.close_status_checks_in_flight.contains(key))
-                    .then(|| live::CloseStatusCheckRequest {
+                    .then(|| crate::recent_closed::capture::CloseStatusCheckRequest {
                         key: key.clone(),
                         target: operation.request.target.clone(),
                     })
@@ -2353,9 +2395,11 @@ impl Runtime {
                 operation.retryable = true;
             }
         }
-        if let Err(message) =
-            live::spawn_close_status_checks(context, self.live_generation, requests)
-        {
+        if let Err(message) = crate::recent_closed::capture::spawn_close_status_checks(
+            context,
+            self.live_generation,
+            requests,
+        ) {
             for key in &request_keys {
                 self.close_status_checks_in_flight.remove(key);
                 if let Some(operation) = self.close_operations.get_mut(key) {
@@ -2370,10 +2414,10 @@ impl Runtime {
                 .iter()
                 .filter_map(|key| {
                     let operation = self.close_operations.get(key)?;
-                    Some(live::ReopenNotice {
+                    Some(crate::recent_closed::reopen::ReopenNotice {
                         pane_id: matches!(
                             &operation.request.target,
-                            live::CloseCaptureTarget::Pane { .. }
+                            crate::recent_closed::capture::CloseCaptureTarget::Pane { .. }
                         )
                         .then_some(operation.target_id.clone()),
                         message: operation.message.clone().unwrap_or_default(),
@@ -2391,7 +2435,7 @@ impl Runtime {
     pub(crate) fn ingest_close_status_results(
         &mut self,
         connection_generation: u64,
-        requests: &[live::CloseStatusCheckRequest],
+        requests: &[crate::recent_closed::capture::CloseStatusCheckRequest],
         result: Result<SessionSnapshotPayload, SessionFetchError>,
     ) -> bool {
         self.with_close_geometry(|runtime| {
@@ -2402,7 +2446,7 @@ impl Runtime {
     fn apply_close_status_results(
         &mut self,
         connection_generation: u64,
-        requests: &[live::CloseStatusCheckRequest],
+        requests: &[crate::recent_closed::capture::CloseStatusCheckRequest],
         result: Result<SessionSnapshotPayload, SessionFetchError>,
     ) -> bool {
         let valid_requests = requests
@@ -2457,10 +2501,10 @@ impl Runtime {
                         );
                         operation.retryable = true;
                         operation.deadline_at_unix_ms = None;
-                        notices.push(live::ReopenNotice {
+                        notices.push(crate::recent_closed::reopen::ReopenNotice {
                             pane_id: matches!(
                                 &operation.request.target,
-                                live::CloseCaptureTarget::Pane { .. }
+                                crate::recent_closed::capture::CloseCaptureTarget::Pane { .. }
                             )
                             .then_some(operation.target_id.clone()),
                             message: operation.message.clone().unwrap_or_default(),
@@ -2488,10 +2532,10 @@ impl Runtime {
                         ));
                         operation.retryable = true;
                         operation.deadline_at_unix_ms = None;
-                        notices.push(live::ReopenNotice {
+                        notices.push(crate::recent_closed::reopen::ReopenNotice {
                             pane_id: matches!(
                                 &operation.request.target,
-                                live::CloseCaptureTarget::Pane { .. }
+                                crate::recent_closed::capture::CloseCaptureTarget::Pane { .. }
                             )
                             .then_some(operation.target_id.clone()),
                             message: operation.message.clone().unwrap_or_default(),
@@ -2516,17 +2560,17 @@ impl Runtime {
 
     pub(crate) fn check_close_status(&mut self, key: &str) -> bool {
         let Some(operation) = self.close_operations.get(key) else {
-            self.set_reopen_notices(vec![live::ReopenNotice {
+            self.set_reopen_notices(vec![crate::recent_closed::reopen::ReopenNotice {
                 pane_id: None,
                 message: "That close is no longer pending".to_owned(),
             }]);
             return true;
         };
         if operation.phase != "unknown" {
-            self.set_reopen_notices(vec![live::ReopenNotice {
+            self.set_reopen_notices(vec![crate::recent_closed::reopen::ReopenNotice {
                 pane_id: matches!(
                     &operation.request.target,
-                    live::CloseCaptureTarget::Pane { .. }
+                    crate::recent_closed::capture::CloseCaptureTarget::Pane { .. }
                 )
                 .then_some(operation.target_id.clone()),
                 message: "This close is still awaiting its normal confirmation".to_owned(),
@@ -2613,7 +2657,7 @@ impl Runtime {
                 "component": "recent_closed",
                 "kind": "recent_closed.reopen_waits_for_tree_close",
             }));
-            self.set_reopen_notices(vec![live::ReopenNotice {
+            self.set_reopen_notices(vec![crate::recent_closed::reopen::ReopenNotice {
                 pane_id: None,
                 message: "Close is still being confirmed; reopening is temporarily unavailable"
                     .to_owned(),
@@ -2646,10 +2690,10 @@ impl Runtime {
                 "key": key,
                 "phase": operation.phase,
             }));
-            self.set_reopen_notices(vec![live::ReopenNotice {
+            self.set_reopen_notices(vec![crate::recent_closed::reopen::ReopenNotice {
                 pane_id: matches!(
                     &operation.request.target,
-                    live::CloseCaptureTarget::Pane { .. }
+                    crate::recent_closed::capture::CloseCaptureTarget::Pane { .. }
                 )
                 .then_some(operation.target_id.clone()),
                 message: if operation.phase == "unknown" {
@@ -2698,12 +2742,14 @@ impl Runtime {
             self.consume_recent_closed(item.key());
             match self.focus_editor_tab_context(&tab_id) {
                 Ok(()) => self.snapshot.recent_closed.notices.clear(),
-                Err(message) => self.set_reopen_notices(vec![live::ReopenNotice {
-                    pane_id: None,
-                    message: format!(
-                        "The file reopened, but its project context was unavailable: {message}"
-                    ),
-                }]),
+                Err(message) => {
+                    self.set_reopen_notices(vec![crate::recent_closed::reopen::ReopenNotice {
+                        pane_id: None,
+                        message: format!(
+                            "The file reopened, but its project context was unavailable: {message}"
+                        ),
+                    }])
+                }
             }
             self.sync_recent_closed_snapshot();
             return true;
@@ -2775,7 +2821,7 @@ impl Runtime {
                             .map(|checkout| (workspace, checkout))
                     });
                 let Some((workspace, checkout)) = located else {
-                    self.set_reopen_notices(vec![live::ReopenNotice {
+                    self.set_reopen_notices(vec![crate::recent_closed::reopen::ReopenNotice {
                         pane_id: None,
                         message: format!(
                             "{} can't reopen: its checkout {} is no longer listed",
@@ -2840,12 +2886,12 @@ impl Runtime {
         }
         let key = item.key().to_owned();
         self.reopen_in_flight = Some(key.clone());
-        self.set_reopen_notices(vec![live::ReopenNotice {
+        self.set_reopen_notices(vec![crate::recent_closed::reopen::ReopenNotice {
             pane_id: fallback_pane_id.clone(),
             message: format!("Reopening {}…", item.label()),
         }]);
         self.sync_recent_closed_snapshot();
-        let request = live::ReopenRequest {
+        let request = crate::recent_closed::reopen::ReopenRequest {
             item,
             workspace_exists,
             tab_exists,
@@ -2868,7 +2914,7 @@ impl Runtime {
                     .cloned()
                     .ok_or_else(|| "the file worker is unavailable".to_owned())
                     .and_then(|worker| {
-                        live::spawn_file_reopen(
+                        crate::recent_closed::reopen::spawn_file_reopen(
                             worker.runtime,
                             worker.notifier,
                             request,
@@ -2884,14 +2930,14 @@ impl Runtime {
                 .ok_or_else(|| {
                     "the local Herdr connection is unavailable; retry when it returns".to_owned()
                 })
-                .and_then(|context| live::spawn_reopen(context, request))
+                .and_then(|context| crate::recent_closed::reopen::spawn_reopen(context, request))
         };
         if let Err(message) = spawned {
             if !prior_admission && let Some((path, claim)) = admission {
                 self.finish_agent_effect(&path, &claim);
             }
             self.reopen_in_flight = None;
-            self.set_reopen_notices(vec![live::ReopenNotice {
+            self.set_reopen_notices(vec![crate::recent_closed::reopen::ReopenNotice {
                 pane_id: None,
                 message: format!("Reopen could not start; retry is available: {message}"),
             }]);
@@ -2902,8 +2948,8 @@ impl Runtime {
 
     pub fn ingest_reopen_result(
         &mut self,
-        request: &live::ReopenRequest,
-        result: Result<live::FileReopenResultOrHerdr, String>,
+        request: &crate::recent_closed::reopen::ReopenRequest,
+        result: Result<crate::recent_closed::reopen::FileReopenResultOrHerdr, String>,
     ) -> bool {
         let key = request.item.key();
         if self.reopen_in_flight.as_deref() != Some(key) {
@@ -2929,14 +2975,14 @@ impl Runtime {
                 } else {
                     ""
                 };
-                self.set_reopen_notices(vec![live::ReopenNotice {
+                self.set_reopen_notices(vec![crate::recent_closed::reopen::ReopenNotice {
                     pane_id: request.fallback_pane_id.clone(),
                     message: format!("Reopen failed; retry is available: {message}.{reservation}"),
                 }]);
             }
-            Ok(live::FileReopenResultOrHerdr::File(file)) => {
+            Ok(crate::recent_closed::reopen::FileReopenResultOrHerdr::File(file)) => {
                 match file {
-                    live::FileReopenResult::Opened(opened) => {
+                    crate::recent_closed::reopen::FileReopenResult::Opened(opened) => {
                         let (document, place) = *opened;
                         if let ClosedItem::File {
                             workspace_id,
@@ -2962,7 +3008,7 @@ impl Runtime {
                                     .last_error
                                     .as_ref()
                                     .map_or_else(String::new, |error| error.message.clone());
-                                self.set_reopen_notices(vec![live::ReopenNotice {
+                                self.set_reopen_notices(vec![crate::recent_closed::reopen::ReopenNotice {
                                     pane_id: None,
                                     message: format!(
                                         "The file could not be reopened; retry is available: {reason}"
@@ -2972,7 +3018,7 @@ impl Runtime {
                                 return true;
                             }
                             if let Err(message) = self.focus_editor_tab_context(&tab_id) {
-                                self.set_reopen_notices(vec![live::ReopenNotice {
+                                self.set_reopen_notices(vec![crate::recent_closed::reopen::ReopenNotice {
                                 pane_id: None,
                                 message: format!("The file reopened, but its project context was unavailable: {message}"),
                             }]);
@@ -2982,15 +3028,15 @@ impl Runtime {
                             self.consume_recent_closed(key);
                         }
                     }
-                    live::FileReopenResult::Missing => {
+                    crate::recent_closed::reopen::FileReopenResult::Missing => {
                         self.consume_recent_closed(key);
-                        self.set_reopen_notices(vec![live::ReopenNotice {
+                        self.set_reopen_notices(vec![crate::recent_closed::reopen::ReopenNotice {
                         pane_id: None,
                         message: "The file was deleted. Restore it from Finder Trash to open it again.".into(),
                     }]);
                     }
-                    live::FileReopenResult::Failed(message) => {
-                        self.set_reopen_notices(vec![live::ReopenNotice {
+                    crate::recent_closed::reopen::FileReopenResult::Failed(message) => {
+                        self.set_reopen_notices(vec![crate::recent_closed::reopen::ReopenNotice {
                             pane_id: None,
                             message: format!(
                                 "The file could not be reopened; retry is available: {message}"
@@ -2999,7 +3045,7 @@ impl Runtime {
                     }
                 }
             }
-            Ok(live::FileReopenResultOrHerdr::Herdr(outcome)) => {
+            Ok(crate::recent_closed::reopen::FileReopenResultOrHerdr::Herdr(outcome)) => {
                 // Only this machine's closes reopen, so each pane id is the
                 // core's own.
                 for agent in &outcome.agents {
@@ -3144,7 +3190,10 @@ impl Runtime {
             return true;
         }
         self.push_diagnostic("tab.close.requested", format!("Closing tab {tab_id}"));
-        self.start_close_capture(live::CloseCaptureTarget::Tab { tab_id }, tab)
+        self.start_close_capture(
+            crate::recent_closed::capture::CloseCaptureTarget::Tab { tab_id },
+            tab,
+        )
     }
 
     /// `close_pane` on this machine, and the same step a tree close takes for
@@ -3239,7 +3288,7 @@ impl Runtime {
                 // One pane among several: its tab stays, so it empties no
                 // checkout until its turn starts the close.
                 self.move_from_closing_target(
-                    &live::CloseCaptureTarget::Pane { pane_id },
+                    &crate::recent_closed::capture::CloseCaptureTarget::Pane { pane_id },
                     &tab,
                     false,
                 );
@@ -3248,6 +3297,9 @@ impl Runtime {
         }
         self.retain_project_before_last_pane_closes(&pane_id);
         self.push_diagnostic("pane.close.requested", format!("Closing pane {pane_id}"));
-        self.start_close_capture(live::CloseCaptureTarget::Pane { pane_id }, tab)
+        self.start_close_capture(
+            crate::recent_closed::capture::CloseCaptureTarget::Pane { pane_id },
+            tab,
+        )
     }
 }

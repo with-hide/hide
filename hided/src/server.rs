@@ -81,7 +81,6 @@ pub struct AppState {
     /// The operator's Comment mode on browser Views (PRD
     /// view-opener-feedback B9).
     pub browser_comments: Arc<crate::browser_page::comment::CommentSessions>,
-    pub herdr_socket: Option<PathBuf>,
     pub allowed_origins: Arc<HashSet<String>>,
     pub clients: Arc<AtomicUsize>,
     /// Authenticated shell windows, distinct from CLI and non-rendering clients.
@@ -1711,7 +1710,6 @@ async fn scoped_client_loop(
                         let renderers = Arc::clone(&state.renderers);
                         let desktop_renderers = Arc::clone(&state.desktop_renderers);
                         let browser_control = Arc::clone(&state.browser_control);
-                        let herdr_socket = state.herdr_socket.clone();
                         let query_token = token.clone();
                         let command_request_id = request_id.clone();
                         let caller_node = source.as_ref().map(|(node, _)| node.clone());
@@ -1722,7 +1720,7 @@ async fn scoped_client_loop(
                             Ok(Err(((*reason).to_owned(), *next_action)))
                         } else {
                             tokio::task::spawn_blocking(move || {
-                            let cap = registry.validate(&query_token, herdr_socket.as_deref(), &core, attested.as_deref())
+                            let cap = registry.validate(&query_token, core.engine(), &core, attested.as_deref())
                                 .map_err(|reason| (reason.to_owned(), crate::pane_auth::refusal_next_action(reason)))?;
                             if command.needs_renderer() && renderers.load(Ordering::SeqCst) == 0 {
                                 return Err((
@@ -4611,7 +4609,7 @@ pub fn mount(seat: &crate::seat::SeatParts, state: AppState) -> tokio::task::Joi
             clients: Arc::clone(&state.clients),
             last_client_gone: Arc::clone(&state.last_client_gone),
             shutdown,
-            herdr_socket: state.herdr_socket.clone(),
+            herdr: state.core.engine().cloned(),
         },
         // Mobile on with a phone paired: the phone may come back at any
         // time and push has to keep going (PRD D-10). The idle clock starts
@@ -4629,7 +4627,8 @@ pub(crate) struct Idle {
     pub clients: Arc<AtomicUsize>,
     pub last_client_gone: Arc<Mutex<Instant>>,
     pub shutdown: crate::ending::Ending,
-    pub herdr_socket: Option<PathBuf>,
+    /// This machine's engine; `None` when the daemon runs without one.
+    pub herdr: Option<herdr_core::engine::EngineHandle>,
 }
 
 /// Ends the daemon once it had no screen for `idle_secs` while `held` was
@@ -4661,11 +4660,11 @@ pub(crate) fn watch_idle(
             // only while the server is unreachable, so a restart or a live
             // handoff, which brings it back within the idle window, never
             // ends the daemon.
-            if let Some(socket) = idle.herdr_socket.clone()
+            if let Some(engine) = idle.herdr.clone()
                 && herdr_probed.is_none_or(|at| at.elapsed() >= HERDR_PROBE_INTERVAL)
             {
                 herdr_probed = Some(Instant::now());
-                herdr_up = tokio::task::spawn_blocking(move || herdr_reachable(&socket))
+                herdr_up = tokio::task::spawn_blocking(move || herdr_reachable(&engine))
                     .await
                     .unwrap_or(false);
             }
@@ -4686,12 +4685,12 @@ pub(crate) fn watch_idle(
 const HERDR_PROBE_INTERVAL: Duration = Duration::from_secs(30);
 const HERDR_PROBE_TIMEOUT: Duration = Duration::from_secs(2);
 
-/// Whether the Herdr server at `socket` answers; a refusal is an answer.
-pub(crate) fn herdr_reachable(socket: &std::path::Path) -> bool {
-    matches!(
-        hide_herdr_client::request_with_timeout(socket, "ping", json!({}), HERDR_PROBE_TIMEOUT),
-        Ok(_) | Err(hide_herdr_client::ApiError::Remote { .. })
-    )
+/// Whether the engine answers; a refusal is an answer.
+pub(crate) fn herdr_reachable(engine: &herdr_core::engine::EngineHandle) -> bool {
+    match engine.ping(HERDR_PROBE_TIMEOUT) {
+        Ok(_) => true,
+        Err(error) => error.answered(),
+    }
 }
 
 pub async fn bind(addr: SocketAddr) -> Result<tokio::net::TcpListener, String> {

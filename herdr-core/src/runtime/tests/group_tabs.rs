@@ -62,7 +62,7 @@ fn a_global_start_in_the_front_checkout_keeps_its_navigation_through_snapshot_sy
         assert_eq!(runtime.group_start_should_focus(task), !stays_behind);
         runtime.ingest_task_operation_result(
             task,
-            Ok(live::WorktreeTaskOutcome {
+            Ok(crate::worktree_control::WorktreeTaskOutcome {
                 path: PATH.into(),
                 pane_id: "w-order:t4:p".into(),
                 created_tab_id: Some("w-order:t4".into()),
@@ -106,7 +106,7 @@ fn settled_global_start_after_group_change(dissolve: bool) {
             false,
         )
         .unwrap();
-    let outcome = || live::WorktreeTaskOutcome {
+    let outcome = || crate::worktree_control::WorktreeTaskOutcome {
         path: PATH.into(),
         pane_id: "w-order:t4:p".into(),
         created_tab_id: Some("w-order:t4".into()),
@@ -1333,7 +1333,7 @@ fn first_owner_before_catalog(named: bool) -> Runtime {
     assert!(runtime.owner_workspace_of_path(PATH).is_none());
     assert!(runtime.ingest_task_operation_result(
         task,
-        Ok(live::WorktreeTaskOutcome {
+        Ok(crate::worktree_control::WorktreeTaskOutcome {
             path: PATH.into(),
             pane_id: "w-new:t1:p".into(),
             created_tab_id: Some("w-new:t1".into()),

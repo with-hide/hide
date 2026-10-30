@@ -133,9 +133,7 @@ fn device_runtime_with_host(
     let shared = SharedRuntime::new(runtime);
     let mut runtime = shared.lock().unwrap();
     // No pane sits in the worktree, so the deletion never reaches Herdr.
-    let connector: Arc<dyn hide_herdr_client::ApiConnector> = Arc::new(
-        hide_herdr_client::LocalSocketConnector::new("/tmp/herdr-core-never-connect.sock"),
-    );
+    let connector = crate::engine::herdr::local("/tmp/herdr-core-never-connect.sock");
     runtime.install_remote_control(RemoteControlContext::new(
         DEVICE,
         connector,
