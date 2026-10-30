@@ -1177,7 +1177,9 @@ pub struct LeftRunning {
 /// another account counts while it runs. One that has ended has ended before
 /// anything reaps it: a Unix zombie answers signal 0 until its parent, or init
 /// once it is orphaned, waits for it, and a Windows process stays open while
-/// any handle to it does, and neither counts.
+/// any handle to it does, and neither counts. A Windows process counts until
+/// the system has closed every handle it held, so a file it held can be
+/// removed once it no longer counts.
 pub fn is_alive(pid: u32) -> bool {
     pid != 0 && sys::is_alive(pid)
 }
@@ -4306,8 +4308,9 @@ mod sys {
     use windows_sys::Win32::System::Threading::{
         CREATE_NEW_PROCESS_GROUP, CREATE_NO_WINDOW, CREATE_SUSPENDED, DETACHED_PROCESS,
         GetCurrentProcess, GetExitCodeProcess, GetProcessTimes, OpenProcess, OpenThread,
-        PROCESS_QUERY_LIMITED_INFORMATION, PROCESS_TERMINATE, QueryFullProcessImageNameW,
-        ResumeThread, THREAD_SUSPEND_RESUME, TerminateProcess, WaitForSingleObject,
+        PROCESS_QUERY_LIMITED_INFORMATION, PROCESS_SYNCHRONIZE, PROCESS_TERMINATE,
+        QueryFullProcessImageNameW, ResumeThread, THREAD_SUSPEND_RESUME, TerminateProcess,
+        WaitForSingleObject,
     };
 
     use super::*;
@@ -5012,12 +5015,32 @@ mod sys {
         Ok((u64::from(created.dwHighDateTime) << 32) | u64::from(created.dwLowDateTime))
     }
 
+    /// A process has ended once its object is signalled. Its exit code is
+    /// set before that, while the kernel is still closing the handles it
+    /// held, so a caller told by the exit code that it ended could still be
+    /// refused a file it held (with-hide/hide-private#327). Only a process
+    /// that refuses to be waited on is read by its exit code.
     pub(super) fn is_alive(pid: u32) -> bool {
-        let process = match open(pid, PROCESS_QUERY_LIMITED_INFORMATION) {
-            Ok(process) => process,
-            // A process of another account refuses the query and exists.
-            Err(error) => return error.kind() == io::ErrorKind::PermissionDenied,
-        };
+        match open(pid, PROCESS_QUERY_LIMITED_INFORMATION | PROCESS_SYNCHRONIZE) {
+            // SAFETY: the handle is open with the access a wait needs.
+            Ok(process) => match unsafe { WaitForSingleObject(process.0, 0) } {
+                WAIT_OBJECT_0 => false,
+                WAIT_TIMEOUT => true,
+                _ => still_active(&process),
+            },
+            Err(error) if error.kind() == io::ErrorKind::PermissionDenied => {
+                match open(pid, PROCESS_QUERY_LIMITED_INFORMATION) {
+                    Ok(process) => still_active(&process),
+                    // A process of another account refuses the query and exists.
+                    Err(error) => error.kind() == io::ErrorKind::PermissionDenied,
+                }
+            }
+            Err(_) => false,
+        }
+    }
+
+    /// Whether the exit code `process` reads says it has not ended.
+    fn still_active(process: &Owned) -> bool {
         let mut code = 0u32;
         // SAFETY: the handle is open and `code` is writable.
         let read = unsafe { GetExitCodeProcess(process.0, &mut code) };
