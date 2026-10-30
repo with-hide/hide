@@ -20,7 +20,8 @@ export type ComposerAttachment = { id: string; name: string; image: boolean };
  * The box the operator writes in, for Desk and for a thread alike (B7, B29):
  * the words, the attached files as chips above them, 📎, and send, which
  * becomes stop while Desk answers. `menu` is the `@` menu, opened above the
- * box while `menuOpen`; `children` draws under the box (Desk's bar).
+ * box while `menuOpen`; `children` sits in the box's foot between 📎 and
+ * send (Desk's bar).
  */
 export function DeskComposer({ value, label, placeholder, attachments = [], answering = false, focused = false, menu = null, menuOpen = false, onChange, onSend, onStop, onAttach, onRemoveAttachment, onMenuOpenChange, children }: {
   value: string;
@@ -47,7 +48,7 @@ export function DeskComposer({ value, label, placeholder, attachments = [], answ
     <div className="flex min-w-0 flex-col gap-xs" data-desk-composer={answering ? "answering" : "idle"}>
       <Popover open={menuOpen} onOpenChange={onMenuOpenChange}>
         <PopoverAnchor asChild>
-          <div className={cn("flex min-w-0 flex-col gap-xs rounded-lg border bg-background px-sm py-xs", focused || menuOpen ? "border-ring ring-1 ring-ring" : "border-input")} data-desk-composer-frame={focused ? "focused" : "rest"}>
+          <div className={cn("flex min-w-0 flex-col gap-xs rounded-xl border bg-background px-sm py-xs", focused || menuOpen ? "border-ring ring-1 ring-ring" : "border-input")} data-desk-composer-frame={focused ? "focused" : "rest"}>
             {attachments.length > 0 ? (
               <ul className="flex min-w-0 flex-wrap gap-xs" data-desk-attachments={attachments.length}>
                 {attachments.map((attachment) => (
@@ -59,18 +60,19 @@ export function DeskComposer({ value, label, placeholder, attachments = [], answ
                 ))}
               </ul>
             ) : null}
-            <div className="flex min-w-0 items-end gap-xs">
-              <Textarea bare rows={1} value={value} aria-label={label} placeholder={placeholder} className="max-h-(--size-search-sheet-h) min-h-(--size-control-sm) py-xxs" autoFocus={focused} onChange={(event) => onChange(event.target.value)} />
+            <Textarea bare rows={1} value={value} aria-label={label} placeholder={placeholder} className="max-h-(--size-search-sheet-h) min-h-(--size-control-sm) py-xxs" autoFocus={focused} onChange={(event) => onChange(event.target.value)} />
+            <div className="flex min-w-0 items-center gap-xs">
               <Hint label={t("desk.composer.attach")}>
-                <Button variant="ghost" size="icon-sm" className="text-muted-foreground" aria-label={t("desk.composer.attach")} onClick={onAttach}><PaperclipIcon /></Button>
+                <Button variant="ghost" size="icon-sm" className="-ml-xxs text-muted-foreground" aria-label={t("desk.composer.attach")} onClick={onAttach}><PaperclipIcon /></Button>
               </Hint>
+              <span className="flex min-w-0 flex-1 items-center justify-end">{children}</span>
               {answering ? (
                 <Hint label={t("desk.composer.stopHint")}>
-                  <Button variant="secondary" size="icon-sm" aria-label={t("desk.composer.stop")} data-desk-composer-stop="true" onClick={onStop}><SquareIcon className="fill-current" /></Button>
+                  <Button variant="secondary" size="icon-sm" className="rounded-full" aria-label={t("desk.composer.stop")} data-desk-composer-stop="true" onClick={onStop}><SquareIcon className="fill-current" /></Button>
                 </Hint>
               ) : (
                 <Hint label={t("desk.composer.send")} shortcut="↵">
-                  <Button variant="soft" size="icon-sm" aria-label={t("desk.composer.send")} disabled={empty} data-desk-composer-send="true" onClick={onSend}><ArrowUpIcon /></Button>
+                  <Button variant="secondary" size="icon-sm" className="rounded-full" aria-label={t("desk.composer.send")} disabled={empty} data-desk-composer-send="true" onClick={onSend}><ArrowUpIcon /></Button>
                 </Hint>
               )}
             </div>
@@ -82,7 +84,6 @@ export function DeskComposer({ value, label, placeholder, attachments = [], answ
           </PopoverContent>
         ) : null}
       </Popover>
-      {children}
     </div>
   );
 }

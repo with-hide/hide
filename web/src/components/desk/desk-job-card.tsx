@@ -1,24 +1,34 @@
-import { CheckIcon, CircleXIcon, GlobeIcon, HandIcon, ImageIcon } from "lucide-react";
+import { ChevronRightIcon, GitBranchIcon, GlobeIcon, ImageIcon } from "lucide-react";
 import type { ReactNode } from "react";
-import type { DeskJob, DeskMission, DeskOutput } from "../../desk";
+import type { DeskAsk, DeskJob, DeskMission, DeskOutput, DeskSessionRef } from "../../desk";
 import { jobMark } from "../../desk";
+import { AgentMark } from "../../AgentMark";
 import { fileIcon } from "../../fileIcons";
 import { useInterfaceTranslation } from "../../i18n/client";
 import { cn } from "../../lib/utils";
 import type { MessageKey } from "../../i18n/catalogs";
+import type { CellTone } from "../../missions";
+import { PlanChipFace, planChipLook } from "../../PanePlanChip";
+import { DeviceChip } from "../device-chip";
 import { FileMark } from "../file-mark";
 import { MissionChipView } from "../mission-chip";
-import { TONE_FILL } from "../mission-tone";
 import { PrMark } from "../pr-mark";
 import { StatusMark } from "../status-mark";
 import { Badge } from "../ui/badge";
 import { Button } from "../ui/button";
 import { RowOverlayButton } from "../ui/row-button";
-import { Hint } from "../ui/tooltip";
 
 type T = ReturnType<typeof useInterfaceTranslation>["t"];
 
-/** A job's state in its words (B21-B24, B36-B39): what the card's second line and the Threads row say first. */
+/** The verb an asking job's line starts with (D-75): every wait for the operator reads `<verb> · …`. */
+const ASK_VERB: Record<DeskAsk, MessageKey> = {
+  question: "desk.ask.question",
+  permission: "desk.ask.permission",
+  decision: "desk.ask.decision",
+  plan_review: "desk.ask.plan_review",
+};
+
+/** A job's state in its words (B21-B24, B36-B39): what the second line says when nothing more specific does. */
 export function jobStateWords(t: T, job: DeskJob): string {
   switch (job.state) {
     case "queued":
@@ -28,9 +38,11 @@ export function jobStateWords(t: T, job: DeskJob): string {
     case "working":
       return t("desk.job.working");
     case "asking":
-      return t("desk.job.asking");
+      return t(ASK_VERB[job.ask ?? "question"]);
     case "done":
       return t("desk.job.done");
+    case "asleep":
+      return t("desk.job.asleep");
     case "failed":
       return t("desk.job.failed");
     case "cancelled":
@@ -57,37 +69,96 @@ export function jobReasonWords(t: T, reason: string | null | undefined): string 
   return key ? t(key) : null;
 }
 
-/**
- * The line under a job's title (B24): what it is doing now and its plan while
- * it works, its question while it asks, its last turn's summary when done, a
- * failure's reason, otherwise its state.
- */
-export function jobLine(t: T, job: DeskJob): string {
-  const plan = job.plan ? t("desk.job.plan", { done: job.plan.done, total: job.plan.total }) : null;
+/** The second line's words after the place (B24): the verb and what follows it. */
+function jobWords(t: T, job: DeskJob): { verb: string | null; words: string | null; tone: "warning" | "destructive" | null; mono: boolean } {
+  if (job.disconnected) return { verb: t("desk.job.disconnected"), words: job.now ?? null, tone: null, mono: false };
   switch (job.state) {
     case "working":
-      return [job.now ?? t("desk.job.working"), plan].filter(Boolean).join(" · ");
+      return { verb: null, words: job.now ?? t("desk.job.working"), tone: null, mono: false };
     case "asking":
-      return [t("desk.job.asking"), job.question].filter(Boolean).join(" · ");
+      return { verb: jobStateWords(t, job), words: job.question ?? null, tone: "warning", mono: job.ask === "permission" };
     case "done":
-      return job.summary ?? t("desk.job.done");
+      return { verb: t("desk.job.done"), words: job.summary ?? null, tone: null, mono: false };
     case "failed":
-      return [t("desk.job.failed"), jobReasonWords(t, job.reason)].filter(Boolean).join(" · ");
+      return { verb: t("desk.job.failed"), words: jobReasonWords(t, job.reason), tone: "destructive", mono: false };
     default:
-      return jobStateWords(t, job);
+      return { verb: jobStateWords(t, job), words: null, tone: null, mono: false };
   }
 }
 
-/** The mark at a job's left: its status, or a failure's cross, which no status mark draws. */
-export function JobMark({ job }: { job: DeskJob }) {
-  if (job.state === "failed") return <CircleXIcon aria-hidden="true" className="size-(--size-agent-mark) shrink-0 text-destructive" data-desk-job-mark="failed" />;
-  return <StatusMark mark={jobMark(job)} data-desk-job-mark={job.state} />;
+/** The second line as one string, for a hint or a list that takes text. */
+export function jobLine(t: T, job: DeskJob): string {
+  const { verb, words } = jobWords(t, job);
+  return [verb, words].filter(Boolean).join(" · ");
 }
 
-/** The dot on an output not looked at yet, named for a screen reader. */
+/**
+ * A job's second line (B24, B28, D-75), the sidebar row's words: where it
+ * runs (a worktree's branch, else the project), then its verb and words, a
+ * wait for the operator in the warning colour and a failure in the
+ * destructive one. `place` is left out under a Conductor, whose workers share
+ * its project.
+ */
+export function JobLine({ job, place = true, className }: { job: DeskJob; place?: boolean; className?: string }) {
+  const { t } = useInterfaceTranslation();
+  const { verb, words, tone, mono } = jobWords(t, job);
+  const toned = tone === "warning" ? "text-warning" : tone === "destructive" ? "text-destructive" : null;
+  return (
+    <span className={cn("flex min-w-0 items-center gap-xxs text-caption text-muted-foreground", className)} title={jobLine(t, job)} data-desk-job-line="true">
+      {place ? (
+        <span className="flex min-w-0 max-w-1/2 shrink-0 items-center gap-xxs">
+          {job.location.kind === "worktree" ? <GitBranchIcon aria-hidden="true" className="size-(--size-icon-sm) shrink-0" /> : null}
+          <span className="truncate">{job.location.kind === "worktree" ? job.location.label : job.project.label}</span>
+          <span aria-hidden="true">·</span>
+        </span>
+      ) : null}
+      <span className={cn("min-w-0 truncate", toned)}>
+        {verb}
+        {verb && words ? " · " : null}
+        {words ? <span className={cn(mono && "font-mono")}>{words}</span> : null}
+      </span>
+    </span>
+  );
+}
+
+/** The mark at a job's left (D-75): the sidebar's status mark; a job with no session yet, a failed one and an ended one leave the slot empty. */
+export function JobMark({ job }: { job: DeskJob }) {
+  return <StatusMark mark={jobMark(job)} read={job.state === "asking" && job.read === true} data-desk-job-mark={job.state} />;
+}
+
+/** Whether a job has a session behind it to show the agent of: not one still queued, and not one that failed before it started. */
+function hasSession(job: DeskJob): boolean {
+  return job.state !== "queued" && !(job.state === "failed" && job.reason === "spawn_failed");
+}
+
+/** How a session starts wherever it is drawn (D-75): its status and its agent. */
+export function JobLead({ job }: { job: DeskJob }) {
+  return (
+    <>
+      <JobMark job={job} />
+      {hasSession(job) ? <AgentMark kind={job.agent_kind ?? null} /> : <span aria-hidden="true" className="size-(--size-agent-mark) shrink-0" />}
+    </>
+  );
+}
+
+/** A session named inside a line (a letter's other side, a task handed on): its status, its agent and its name, on the chip ground (B26, D-75). */
+export function SessionChip({ session, onPress, className }: { session: DeskSessionRef; onPress?: () => void; className?: string }) {
+  const { t } = useInterfaceTranslation();
+  const lead = <><StatusMark mark={session.mark} /><AgentMark kind={session.agent_kind} /></>;
+  const look = cn("inline-flex max-w-full min-w-0 items-center gap-xxs rounded-xs bg-secondary px-xxs align-middle text-foreground", className);
+  if (!onPress) return <span className={look} data-desk-session-chip={session.name}>{lead}<span className="truncate">{session.name}</span></span>;
+  return (
+    <Button variant="text" size="inline" className={cn(look, "hover:bg-accent hover:text-foreground")} aria-label={t("desk.mention.open", { name: session.name })} data-desk-session-chip={session.name} onClick={onPress}>
+      {lead}
+      <span className="truncate">{session.name}</span>
+    </Button>
+  );
+}
+
+/** The dot on an output not looked at yet (the Views chip's unseen dot, D-64), named for a screen reader. */
 export function UnseenDot({ className }: { className?: string }) {
   const { t } = useInterfaceTranslation();
-  return <span role="img" aria-label={t("desk.outputs.unseen")} className={cn("size-(--size-tab-status-dot) shrink-0 rounded-full bg-primary", className)} data-desk-output-unseen="true" />;
+  return <span role="img" aria-label={t("desk.outputs.unseen")} className={cn("size-(--size-tab-status-dot) shrink-0 rounded-full bg-foreground", className)} data-desk-output-unseen="true" />;
 }
 
 /** The mark of an output's kind: an image, a page, a PR, or the document's file type. */
@@ -102,20 +173,28 @@ export function OutputMark({ output, className }: { output: DeskOutput; classNam
   return <FileMark icon={fileIcon(output.label)} className={size} />;
 }
 
-/** An output as a chip on a card (B31): pressing it opens it in the lane's 보기 column, as from the thread. */
-export function OutputChip({ output, selected = false, onOpen }: { output: DeskOutput; selected?: boolean; onOpen: (output: DeskOutput) => void }) {
+/**
+ * A job's outputs as one chip (B31, D-75): the selected or first one, `+N`
+ * for the rest, and a dot while any is unseen. Pressing it opens them in the
+ * lane's 보기 column.
+ */
+export function OutputsChip({ outputs, selected = null, onOpen }: { outputs: readonly DeskOutput[]; selected?: string | null; onOpen: (output: DeskOutput) => void }) {
+  const shown = outputs.find((output) => output.id === selected) ?? outputs[0];
+  if (!shown) return null;
+  const more = outputs.length - 1;
   return (
     <Button
-      variant="outline"
-      size="sm"
-      className={cn("pointer-events-auto relative h-(--size-badge-height) max-w-full gap-xxs bg-transparent px-xs text-micro font-normal text-subtle-foreground", selected && "border-ring")}
-      aria-pressed={selected}
-      data-desk-output-chip={output.id}
-      onClick={() => onOpen(output)}
+      variant="text"
+      size="inline"
+      className={cn("relative h-(--size-badge-height) max-w-full gap-xxs rounded-xs bg-secondary px-xs text-micro text-subtle-foreground hover:bg-accent hover:text-foreground", selected === shown.id && "ring-1 ring-ring")}
+      aria-label={outputs.map((output) => output.label).join(", ")}
+      data-desk-output-chip={shown.id}
+      onClick={() => onOpen(shown)}
     >
-      <OutputMark output={output} />
-      <span className="truncate">{output.label}</span>
-      {!output.seen ? <UnseenDot /> : null}
+      <OutputMark output={shown} />
+      <span className="truncate">{shown.label}</span>
+      {more > 0 ? <span className="shrink-0 text-muted-foreground" data-desk-job-more-outputs={more}>+{more}</span> : null}
+      {outputs.some((output) => !output.seen) ? <UnseenDot /> : null}
     </Button>
   );
 }
@@ -134,15 +213,14 @@ export function DeskMissionChip({ mission, onOpen }: { mission: DeskMission; onO
   return <MissionChipView id={mission.id} title={mission.title} words={t(MISSION_WORDS[mission.status])} counts={mission.status === "running" ? `${mission.done}/${mission.total}` : null} tone={mission.tone} deciding={mission.deciding} status={mission.status} onOpen={onOpen} />;
 }
 
-/** A mission's nodes as a row of cells in their state colours, each named in its hint (B34). */
-export function MissionNodeCells({ mission }: { mission: DeskMission }) {
+/** A job's plan as the pane head's plan chip draws it (B24): its cells, `n/m`, and `검토` while it waits for review. */
+export function DeskPlanChip({ plan }: { plan: NonNullable<DeskJob["plan"]> }) {
+  const review = plan.review === true;
+  const finished = !review && plan.done >= plan.total;
+  const tones: CellTone[] = Array.from({ length: plan.total }, (_, index) => (index < plan.done ? "done" : index === plan.done ? (review ? "hold" : "working") : "waiting"));
   return (
-    <span className="flex items-center gap-xxs" data-desk-mission-nodes={mission.nodes.length}>
-      {mission.nodes.map((node) => (
-        <Hint key={node.key} label={node.title}>
-          <span role="img" className={cn("size-(--size-status-mark) rounded-xs", TONE_FILL[node.tone], node.tone === "waiting" && "border border-border")} aria-label={node.title} data-desk-mission-node={node.tone} />
-        </Hint>
-      ))}
+    <span className={planChipLook(review, finished)} data-desk-plan-chip={review ? "review" : finished ? "finished" : "running"}>
+      <PlanChipFace tones={tones} count={`${plan.done}/${plan.total}`} proposed={review} finished={finished} />
     </span>
   );
 }
@@ -157,110 +235,77 @@ export type DeskJobCardActions = {
   onMission: (missionId: string) => void;
 };
 
-/** What a card offers for its state (B21, B22, B29): the one action the operator would take, as a grey button. */
+/**
+ * The one chip at a card's or a row's right end (D-75): what matters most in
+ * its state, in this order: its mission, its plan, the device it runs on,
+ * the operator joining it, its outputs, its PR.
+ */
+export function JobChip({ job, selectedOutput = null, onOutput, onMission }: { job: DeskJob; selectedOutput?: string | null; onOutput: (output: DeskOutput) => void; onMission: (missionId: string) => void }) {
+  const { t } = useInterfaceTranslation();
+  if (job.mission) return <DeskMissionChip mission={job.mission} onOpen={onMission} />;
+  if (job.plan && (job.state === "working" || job.ask === "plan_review")) return <DeskPlanChip plan={job.plan} />;
+  if (job.machine) return <DeviceChip label={job.machine} />;
+  if (job.joined) return <Badge variant="outline" data-desk-job-joined="true">{t("desk.job.joined")}</Badge>;
+  if (job.outputs.length) return <OutputsChip outputs={job.outputs} selected={selectedOutput} onOpen={onOutput} />;
+  const pr = job.pull_requests[0];
+  return pr ? <PrMark state={pr.state} number={pr.number} /> : null;
+}
+
+/** The words at the second line's end (D-75): the one thing the operator would do, as words; a card with nothing to do has none. */
 function action(t: T, job: DeskJob, actions: DeskJobCardActions): ReactNode {
-  const button = (kind: string, words: string, onPress: () => void) => (
-    <Button variant="soft" size="sm" className="pointer-events-auto relative font-normal" data-desk-job-action={kind} onClick={onPress}>{words}</Button>
+  const words = (kind: string, label: string, onPress: () => void, more = true) => (
+    <Button variant="text" size="inline" className="pointer-events-auto relative shrink-0 gap-0 text-caption text-foreground" data-desk-job-action={kind} onClick={onPress}>
+      {label}
+      {more ? <ChevronRightIcon aria-hidden="true" className="size-(--size-icon-sm)" /> : null}
+    </Button>
   );
   switch (job.state) {
     case "asking":
-      return button("answer", t("desk.job.answer"), () => actions.onAnswer(job));
-    case "done":
-      return button("open", t("desk.job.viewThread"), () => actions.onOpen(job));
-    case "queued":
-      return button("cancel", t("desk.job.cancel"), () => actions.onCancel(job));
-    case "cancelled":
-      return button("requeue", t("desk.job.requeue"), () => actions.onRequeue(job));
+      return words("answer", t("desk.job.answer"), () => actions.onAnswer(job));
     case "failed":
-      return button("retry", t("desk.action.retry"), () => actions.onRetry(job));
+      return words("retry", t("desk.action.retry"), () => actions.onRetry(job));
+    case "queued":
+      return words("cancel", t("desk.job.cancel"), () => actions.onCancel(job), false);
+    case "cancelled":
+      return words("requeue", t("desk.job.requeue"), () => actions.onRequeue(job));
     default:
       return null;
   }
 }
 
-/** A card's one coloured mark (D-39): ✋ while it asks, a check when done, a cross when it failed, else its status. */
-function CardMark({ job }: { job: DeskJob }) {
-  if (job.state === "asking") return <HandIcon aria-hidden="true" className="size-(--size-icon) shrink-0 text-warning" data-desk-job-mark="asking" />;
-  if (job.state === "done") return <CheckIcon aria-hidden="true" className="size-(--size-icon) shrink-0 text-success" data-desk-job-mark="done" />;
-  return <JobMark job={job} />;
-}
-
-/** The card's second line (B24): the question, what it does now, its summary or its state, then where it runs. */
-function cardLine(t: T, job: DeskJob): string {
-  const what = job.state === "asking" ? (job.question ?? t("desk.job.asking"))
-    : job.state === "working" ? (job.now ?? t("desk.job.working"))
-    : job.state === "failed" ? jobLine(t, job)
-    : job.state === "done" ? (job.summary ?? t("desk.job.done"))
-    : jobStateWords(t, job);
-  const place = job.location.kind === "worktree" ? `${job.project.label} · ${job.location.label}` : job.project.label;
-  return [what, place, job.machine].filter(Boolean).join(" · ");
-}
-
 /**
- * One job Desk started, as a card in the chat (D-39, B21-B24, B36-B39): an
- * unfilled card with a thin line, the one coloured mark of its state, its
- * title with its mission and PRs, an output at the top right, one quiet
- * line of what it asks, does or left and where, and the one grey action its
- * state offers. Pressing the card opens its thread (B25). An ended job is
- * dimmed; a job on a device that dropped is dimmed and says so (B23).
+ * One job Desk started, as a card in the chat (D-39, D-75, B21-B24,
+ * B36-B39): an unfilled card of two lines. The first is the session (its
+ * status, its agent, its title) and the one chip that matters most; the
+ * second is where it runs and what it does, asks or left, and the one thing
+ * to do, as words at its end. Pressing the card opens its thread (B25); the
+ * selected card sits on the selection ground. An ended job and a job on a
+ * device that dropped are dimmed.
  */
 export function DeskJobCard({ job, selected = false, selectedOutput = null, ...actions }: { job: DeskJob; selected?: boolean; selectedOutput?: string | null } & DeskJobCardActions) {
   const { t } = useInterfaceTranslation();
   const ended = job.state === "cancelled" || job.state === "closed" || job.state === "moved_out" || job.state === "archived";
-  const button = action(t, job, actions);
-  const plan = job.state === "working" && job.plan ? `${job.plan.done}/${job.plan.total}` : null;
-  // One output stands at the top right, the selected one if any; the rest are counted and listed in the thread's 결과물.
-  const shown = job.outputs.find((output) => output.id === selectedOutput) ?? job.outputs[0] ?? null;
-  const more = job.outputs.filter((output) => output !== shown);
   return (
     <article
-      className={cn("relative min-w-0 rounded-lg border border-border", selected && "border-ring")}
+      className={cn("relative min-w-0 rounded-lg border border-border", selected ? "bg-accent" : "hover:bg-accent/50")}
       aria-label={job.title}
       data-desk-job={job.state}
       data-desk-job-selected={selected ? "true" : undefined}
     >
-      {job.state !== "moved_out" ? <RowOverlayButton className="rounded-lg" aria-label={t("desk.job.open", { title: job.title })} onClick={() => actions.onOpen(job)} /> : null}
-      <div className={cn("pointer-events-none relative grid min-w-0 grid-cols-[auto_minmax(0,1fr)_auto] items-start gap-x-sm gap-y-xxs px-md py-sm", (ended || job.disconnected) && "opacity-(--opacity-dimmed)")}>
-        <span className="flex h-(--size-control-sm) items-center"><CardMark job={job} /></span>
-        <span className="flex h-(--size-control-sm) min-w-0 items-center gap-xs">
-          <span className={cn("min-w-0 truncate font-medium", ended ? "text-subtle-foreground" : "text-foreground")}>{job.title}</span>
-          {job.mission ? <span className="pointer-events-auto relative"><DeskMissionChip mission={job.mission} onOpen={actions.onMission} /></span> : null}
-          {job.pull_requests.map((pr) => <PrMark key={pr.number} state={pr.state} number={pr.number} />)}
-          {job.joined ? <Badge variant="outline" data-desk-job-joined="true">{t("desk.job.joined")}</Badge> : null}
-        </span>
-        <span className="flex h-(--size-control-sm) min-w-0 items-center justify-end gap-xxs">
-          {plan ? <span className="inline-flex h-(--size-badge-height) shrink-0 items-center rounded-sm border border-border px-xs font-mono text-micro text-muted-foreground" data-desk-job-plan={plan}>{plan}</span> : null}
-          {shown ? <OutputChip output={shown} selected={selectedOutput === shown.id} onOpen={actions.onOutput} /> : null}
-          {more.length ? <span className="shrink-0 text-micro text-muted-foreground" title={more.map((output) => output.label).join(", ")} data-desk-job-more-outputs={more.length}>+{more.length}</span> : null}
-        </span>
-        <p className="col-span-2 col-start-2 min-w-0 truncate text-caption text-muted-foreground" title={cardLine(t, job)} data-desk-job-line="true">
-          {job.disconnected ? <span className="text-warning" data-desk-job-disconnected="true">{t("desk.job.disconnected")} · </span> : null}
-          {cardLine(t, job)}
-        </p>
-        {job.mission ? <span className="col-span-2 col-start-2 pt-xxs"><MissionNodeCells mission={job.mission} /></span> : null}
-        {button ? <span className="col-span-2 col-start-2 pt-xs">{button}</span> : null}
-      </div>
-    </article>
-  );
-}
-
-/**
- * A task Desk handed to a session that was already doing it (D-24, B16): a
- * notice, not a job, so it never changes state and holds no cap place;
- * pressing it opens that session's thread.
- */
-export function DeskHandedCard({ name, project, onOpen }: { name: string; project: string; onOpen: () => void }) {
-  const { t } = useInterfaceTranslation();
-  const title = t("desk.handed.title", { name });
-  return (
-    <article className="relative min-w-0 rounded-lg border border-border" aria-label={title} data-desk-handed="true">
-      <RowOverlayButton className="rounded-lg" aria-label={t("desk.job.open", { title: name })} onClick={onOpen} />
-      <div className="pointer-events-none relative flex min-w-0 flex-col gap-xxs px-md py-sm">
-        <div className="flex min-w-0 items-center gap-xs">
-          <StatusMark mark={null} />
-          <span className="min-w-0 truncate font-medium text-subtle-foreground">{title}</span>
+      {job.state !== "moved_out" ? <RowOverlayButton className="rounded-lg" hover={false} aria-label={t("desk.job.open", { title: job.title })} onClick={() => actions.onOpen(job)} /> : null}
+      <div className={cn("pointer-events-none relative flex min-w-0 flex-col gap-xxs px-md py-sm", (ended || job.disconnected) && "opacity-(--opacity-dimmed)")}>
+        <div className="flex min-h-(--size-sidebar-line) min-w-0 items-center gap-xs">
+          <JobLead job={job} />
+          <span className="min-w-0 flex-1 truncate font-medium text-foreground">{job.title}</span>
+          <span className="pointer-events-auto relative flex shrink-0 items-center gap-xxs">
+            <JobChip job={job} selectedOutput={selectedOutput} onOutput={actions.onOutput} onMission={actions.onMission} />
+          </span>
         </div>
-        <span className="ml-xs min-w-0 truncate pl-(--size-agent-mark) text-micro text-muted-foreground">{project}</span>
+        <div className="flex min-w-0 items-center gap-xs">
+          <span aria-hidden="true" className="w-(--size-agent-mark) shrink-0" />
+          <JobLine job={job} className="flex-1" />
+          {action(t, job, actions)}
+        </div>
       </div>
     </article>
   );

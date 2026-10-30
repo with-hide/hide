@@ -1,15 +1,13 @@
 import { ChevronDownIcon, ChevronRightIcon } from "lucide-react";
-import type { DeskJob, ThreadGroupKey } from "../../desk";
+import type { DeskJob, DeskOutput, ThreadGroupKey } from "../../desk";
 import { threadGroups } from "../../desk";
-import { AgentMark } from "../../AgentMark";
 import { useInterfaceTranslation } from "../../i18n/client";
 import type { MessageKey } from "../../i18n/catalogs";
 import { cn } from "../../lib/utils";
 import { Elapsed } from "../elapsed";
-import { PrMark } from "../pr-mark";
 import { SessionRow } from "../session-row";
 import { Button } from "../ui/button";
-import { DeskMissionChip, JobMark, jobLine } from "./desk-job-card";
+import { JobChip, JobLead, JobLine, jobLine } from "./desk-job-card";
 
 const GROUP: Record<ThreadGroupKey, MessageKey> = {
   turn: "desk.threads.group.turn",
@@ -17,14 +15,20 @@ const GROUP: Record<ThreadGroupKey, MessageKey> = {
   done: "desk.threads.group.done",
 };
 
-/** One thread as the sidebar's task row (D-71, B28): its marks, title, mission and PRs, time, and the project with its state words under it. */
-export function ThreadRow({ job, selected, expanded, worker = false, onOpen, onMission, onToggle }: {
+/**
+ * One thread as the sidebar's task row (D-71, D-75, B28): its status and
+ * agent, its title, the one chip a card shows and its time; under it where it
+ * runs and what it does, as a card's second line. A worker under its
+ * Conductor leaves out the place they share.
+ */
+export function ThreadRow({ job, selected, expanded, worker = false, onOpen, onMission, onOutput, onToggle }: {
   job: DeskJob;
   selected: boolean;
   expanded?: boolean;
   worker?: boolean;
   onOpen: (job: DeskJob) => void;
   onMission: (missionId: string) => void;
+  onOutput: (output: DeskOutput) => void;
   onToggle?: () => void;
 }) {
   const { t } = useInterfaceTranslation();
@@ -37,21 +41,14 @@ export function ThreadRow({ job, selected, expanded, worker = false, onOpen, onM
             {expanded ? <ChevronDownIcon /> : <ChevronRightIcon />}
           </Button>
         ) : null}
-        <JobMark job={job} />
-        <AgentMark kind={job.agent_kind ?? null} />
+        <JobLead job={job} />
       </>}
       title={job.title}
       titleClassName={ended ? "text-subtle-foreground" : "text-foreground"}
-      chips={<>
-        {job.mission ? <DeskMissionChip mission={job.mission} onOpen={onMission} /> : null}
-        {job.pull_requests.map((pr) => <PrMark key={pr.number} state={pr.state} number={pr.number} />)}
-      </>}
+      chips={<span className="relative flex shrink-0 items-center"><JobChip job={job} onOutput={onOutput} onMission={onMission} /></span>}
       right={<Elapsed since={job.changed_at_unix_ms} className="font-mono text-caption text-muted-foreground" />}
-      line={{
-        text: worker ? jobLine(t, job) : `${job.project.label} · ${jobLine(t, job)}`,
-        className: job.state === "asking" ? "text-warning" : job.state === "failed" ? "text-destructive" : undefined,
-        wrap: job.state === "asking",
-      }}
+      hint={jobLine(t, job)}
+      below={<JobLine job={job} place={!worker} />}
       onPress={() => onOpen(job)}
       pressLabel={t("desk.job.open", { title: job.title })}
       className={cn(selected && "bg-accent", worker && "pl-(--size-tree-indent)", job.disconnected && "opacity-(--opacity-dimmed)")}
@@ -68,12 +65,13 @@ export function ThreadRow({ job, selected, expanded, worker = false, onOpen, onM
  * indented under it. A thread pulled into the operator's tabs is gone from
  * it (B37). `expanded` holds the Conductors shown open.
  */
-export function ThreadList({ jobs, selected = null, expanded, onOpen, onMission, onToggle }: {
+export function ThreadList({ jobs, selected = null, expanded, onOpen, onMission, onOutput, onToggle }: {
   jobs: readonly DeskJob[];
   selected?: string | null;
   expanded: ReadonlySet<string>;
   onOpen: (job: DeskJob) => void;
   onMission: (missionId: string) => void;
+  onOutput: (output: DeskOutput) => void;
   onToggle: (jobId: string) => void;
 }) {
   const { t } = useInterfaceTranslation();
@@ -90,8 +88,8 @@ export function ThreadList({ jobs, selected = null, expanded, onOpen, onMission,
               const workers = (job.workers ?? []).map((id) => byId.get(id)).filter((one): one is DeskJob => one !== undefined);
               const open = expanded.has(job.id);
               return [
-                <ThreadRow key={job.id} job={job} selected={selected === job.id} expanded={open} onOpen={onOpen} onMission={onMission} onToggle={workers.length ? () => onToggle(job.id) : undefined} />,
-                ...(open ? workers.map((worker) => <ThreadRow key={worker.id} job={worker} selected={selected === worker.id} worker onOpen={onOpen} onMission={onMission} />) : []),
+                <ThreadRow key={job.id} job={job} selected={selected === job.id} expanded={open} onOpen={onOpen} onMission={onMission} onOutput={onOutput} onToggle={workers.length ? () => onToggle(job.id) : undefined} />,
+                ...(open ? workers.map((worker) => <ThreadRow key={worker.id} job={worker} selected={selected === worker.id} worker onOpen={onOpen} onMission={onMission} onOutput={onOutput} />) : []),
               ];
             })}
           </ol>

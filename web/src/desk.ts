@@ -9,6 +9,7 @@
 // the cards and the list need to draw B24, B28 and B34; the desk node adds
 // them or the parts drop them.
 
+import type { CellTone } from "./missions";
 import type { PlanView, PrState, RowMark } from "./snapshot";
 
 // The conversation's values are the `desk` section exactly as `snapshot.ts`
@@ -37,7 +38,14 @@ export type DeskAgent = {
 
 export type DeskSelection = { agent: DeskAgentId | null; model: string | null; effort: string | null };
 
-export type DeskMention = { kind: "session" | "project"; id: string; name: string };
+export type DeskMention = {
+  kind: "session" | "project";
+  id: string;
+  name: string;
+  /** A session's status and agent, so its chip reads as a session does everywhere. wire gap */
+  mark?: RowMark | null;
+  agent_kind?: string | null;
+};
 
 export type DeskNoticeKind = "blocked" | "preparing" | "host_stopped" | "resume_failed" | "login_needed" | "install_failed" | "no_ask_mode" | "turn_failed";
 
@@ -58,9 +66,15 @@ export type DeskItem =
   /** wire gap: a job Desk started, drawn as its card. */
   | { kind: "job"; id: number; job_id: string }
   /** wire gap: a task handed to a session already doing it. */
-  | { kind: "handed"; id: number; agent_id: string; name: string; project: string };
+  | { kind: "handed"; id: number; agent_id: string; session: DeskSessionRef; read: boolean };
 
-export type DeskJobState = "queued" | "starting" | "working" | "asking" | "done" | "failed" | "cancelled" | "closed" | "moved_out" | "archived";
+export type DeskJobState = "queued" | "starting" | "working" | "asking" | "done" | "asleep" | "failed" | "cancelled" | "closed" | "moved_out" | "archived";
+
+/** What an asking job waits on, each said with its own verb (B20): a question, a terminal's permission, a mission's decision, a plan to review. wire gap */
+export type DeskAsk = "question" | "permission" | "decision" | "plan_review";
+
+/** A session as a chip names it: its status, its agent and its name (B26). */
+export type DeskSessionRef = { name: string; mark: RowMark | null; agent_kind: string };
 
 /** What a thread made, as the session's View list holds it (D-65): only these kinds are shown. */
 export type DeskOutputKind = "image" | "page" | "doc" | "pr";
@@ -82,11 +96,8 @@ export type SessionViewKind = "image" | "page" | "pr" | "markdown" | "pdf" | "ht
 
 export type DeskPullRequest = { number: number; state: PrState };
 
-/** A mission node as the Conductor's card and row show it (B34). wire gap */
-export type DeskMissionNode = { key: string; title: string; tone: "done" | "review" | "working" | "hold" | "failed" | "waiting" | "cancelled" };
-
-/** The mission a Conductor thread runs (B34). wire gap */
-export type DeskMission = { id: string; title: string; status: "planning" | "running" | "merge_wait" | "done" | "cancelled"; done: number; total: number; tone: DeskMissionNode["tone"]; deciding: boolean; nodes: DeskMissionNode[] };
+/** The mission a Conductor thread runs, as its `미션 n/m` chip draws it (B34). wire gap */
+export type DeskMission = { id: string; title: string; status: "planning" | "running" | "merge_wait" | "done" | "cancelled"; done: number; total: number; tone: CellTone; deciding: boolean };
 
 export type DeskJob = {
   id: string;
@@ -98,7 +109,11 @@ export type DeskJob = {
   state: DeskJobState;
   queue_position?: number | null;
   now?: string | null;
-  plan?: { done: number; total: number } | null;
+  /** `review` while the plan waits for the operator (B24). */
+  plan?: { done: number; total: number; review?: boolean } | null;
+  /** What an asking job waits on. wire gap */
+  ask?: DeskAsk | null;
+  /** The question, the command asking permission, the decision or the plan's step count, as the second line says it. */
   question?: string | null;
   summary?: string | null;
   pull_requests: DeskPullRequest[];
@@ -108,6 +123,8 @@ export type DeskJob = {
   reason?: string | null;
   machine?: string | null;
   disconnected: boolean;
+  /** The model the session runs, for the thread's head. wire gap */
+  model?: string | null;
   /** The agent's runtime, for its mark in the Threads list. wire gap */
   agent_kind?: string | null;
   /** When the state last changed, for the list's time. wire gap */
@@ -183,9 +200,11 @@ export type AcpSessionUpdate =
 export type ThreadHidePart =
   | { kind: "plan"; plan: PlanView }
   | { kind: "spawn"; job: DeskJob }
-  | { kind: "letter"; to: string; body: string }
+  /** A letter this session sent or got, with the other session and its first line. */
+  | { kind: "letter"; direction: "sent" | "received"; peer: DeskSessionRef; body: string }
   | { kind: "view"; output: DeskOutput }
-  | { kind: "mission"; mission: DeskMission };
+  | { kind: "mission"; mission: DeskMission }
+  | { kind: "pr"; number: number; state: PrState };
 
 /** One drawn line of a thread, after chunks are joined and call updates folded into their call. */
 export type ThreadLine =
@@ -319,6 +338,7 @@ export function threadGroupOf(job: DeskJob): ThreadGroupKey | null {
     case "working":
       return "working";
     case "done":
+    case "asleep":
     case "cancelled":
     case "closed":
     case "archived":
@@ -360,18 +380,20 @@ export function unseenOutputs(jobs: readonly DeskJob[]): number {
   return jobs.reduce((sum, job) => sum + job.outputs.filter((output) => !output.seen).length, 0);
 }
 
-/** A job's status mark (docs/status-model.md): whose move is next; an ended job keeps the slot empty. */
+/** A job's status mark (docs/status-model.md): whose move is next; a job with no session yet, a failed one and an ended one keep the slot empty and say it in words. */
 export function jobMark(job: DeskJob): RowMark | null {
   switch (job.state) {
-    case "queued":
     case "starting":
       return "waiting";
     case "working":
       return "going";
     case "asking":
       return "turn";
+    case "asleep":
+      return "asleep";
     case "done":
       return job.read ? "quiet" : "done";
+    case "queued":
     case "failed":
     case "cancelled":
     case "closed":
@@ -417,4 +439,58 @@ export const namedMention = (mention: DeskMention) => `@${mention.name}`;
 /** An agent Desk cannot be given (D-53, B4): one that cannot ask before acting. One not installed or signed in can be picked and says so (B6). */
 export function agentPickable(agent: DeskAgent): boolean {
   return agent.state !== "no_ask_mode";
+}
+
+/** One turn of a thread (B25): the words that started it, the work, the answer, and the parts the work made. */
+export type ThreadTurn = {
+  key: string;
+  /** The message that began the turn; the first turn may have none. */
+  user: Extract<ThreadLine, { kind: "user" }> | null;
+  /** The work before the answer: thoughts, calls, plans and every Hide part. */
+  work: ThreadLine[];
+  /** The agent's words after its last piece of work. */
+  answer: Extract<ThreadLine, { kind: "agent" }>[];
+  /** The Hide parts the work made that lead somewhere: they stay in view while the work is folded (B26). */
+  parts: Extract<ThreadLine, { kind: "hide" }>[];
+  files: number;
+  commands: number;
+};
+
+/**
+ * A thread's lines as turns (B25): each message starts one, and its work
+ * folds into one line, `파일 n · 명령 m`, above the answer. A new session, a
+ * letter, an output, a mission or a PR it made stays in view under the
+ * folded line; a plan change does not.
+ */
+export function threadTurns(lines: readonly ThreadLine[]): ThreadTurn[] {
+  const turns: ThreadTurn[] = [];
+  let open: { user: ThreadTurn["user"]; body: ThreadLine[]; key: string } | null = null;
+  const close = () => {
+    if (!open) return;
+    let lastWork = open.body.length - 1;
+    while (lastWork >= 0 && open.body[lastWork]!.kind === "agent") lastWork -= 1;
+    const work = open.body.slice(0, lastWork + 1);
+    const answer = open.body.slice(lastWork + 1) as Extract<ThreadLine, { kind: "agent" }>[];
+    const tools = work.filter((line): line is Extract<ThreadLine, { kind: "tool" }> => line.kind === "tool");
+    turns.push({
+      key: open.key,
+      user: open.user,
+      work,
+      answer,
+      parts: work.filter((line): line is Extract<ThreadLine, { kind: "hide" }> => line.kind === "hide" && line.part.kind !== "plan"),
+      files: tools.filter((line) => line.toolKind === "edit" || line.toolKind === "delete" || line.toolKind === "move").length,
+      commands: tools.filter((line) => line.toolKind === "execute").length,
+    });
+  };
+  for (const line of lines) {
+    if (line.kind === "user") {
+      close();
+      open = { user: line, body: [], key: line.id };
+      continue;
+    }
+    open ??= { user: null, body: [], key: line.id };
+    open.body.push(line);
+  }
+  close();
+  return turns;
 }

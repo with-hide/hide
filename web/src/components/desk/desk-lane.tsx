@@ -7,19 +7,26 @@ import { Hint } from "../ui/tooltip";
 
 const RAIL_BUTTON = "relative size-(--size-tool-rail-button) rounded-md [&_svg:not([class*='size-'])]:size-(--size-icon-lg)";
 
-/** A rail button's count, in the corner, as the project lane's rail draws its own. */
-function RailCount({ count, tone, ...data }: { count: number; tone: "warning" | "primary" } & Record<`data-${string}`, string>) {
+/** ☰'s count of threads asking, in the corner, as the project lane's rail draws its own. */
+function RailCount({ count, ...data }: { count: number } & Record<`data-${string}`, string>) {
   if (count === 0) return null;
   return (
-    <span aria-hidden="true" className={cn("absolute right-0 top-0 flex h-(--size-icon) min-w-(--size-icon) items-center justify-center rounded-full px-xxs text-micro tabular-nums", tone === "warning" ? "bg-warning text-background" : "bg-primary text-primary-foreground")} {...data}>
+    <span aria-hidden="true" className="absolute right-0 top-0 flex h-(--size-icon) min-w-(--size-icon) items-center justify-center rounded-full bg-warning px-xxs text-micro tabular-nums text-background" {...data}>
       {count}
     </span>
   );
 }
 
+/** ▣'s dot while an output waits unseen, as the Views chip draws its own (D-64). */
+function RailDot({ on, ...data }: { on: boolean } & Record<`data-${string}`, string>) {
+  if (!on) return null;
+  return <span aria-hidden="true" className="absolute right-xxs top-xxs size-(--size-tab-status-dot) rounded-full bg-foreground" {...data} />;
+}
+
 /**
  * Desk's rail at the right edge, always drawn (D-64, D-73, B1, B28, B31): ☰
- * Threads with the threads asking, ▣ 결과물 with the outputs not seen. Each
+ * Threads with the count of threads asking, ▣ 결과물 with a dot while an
+ * output is unseen. Each
  * is pressed while its column shows and opens or closes it; the pin lives in
  * the columns' heads, not here.
  */
@@ -36,8 +43,8 @@ export function DeskRail({ asking, unseen, threads, outputs, onThreads, onOutput
   );
   return (
     <nav className="flex w-(--size-tool-rail) shrink-0 flex-col items-center gap-xxs border-l border-border bg-sidebar py-xs" aria-label={t("desk.lane.rail")} data-desk-rail-nav="true">
-      {item(t("desk.threads.title"), asking ? t("desk.lane.threadsCount", { count: asking }) : null, threads, onThreads, <ListIcon aria-hidden="true" />, <RailCount count={asking} tone="warning" data-desk-rail-count="threads" />, "threads")}
-      {item(t("desk.outputs.title"), unseen ? t("desk.lane.outputsCount", { count: unseen }) : null, outputs, onOutputs, <ImagesIcon aria-hidden="true" />, <RailCount count={unseen} tone="primary" data-desk-rail-count="outputs" />, "outputs")}
+      {item(t("desk.threads.title"), asking ? t("desk.lane.threadsCount", { count: asking }) : null, threads, onThreads, <ListIcon aria-hidden="true" />, <RailCount count={asking} data-desk-rail-count="threads" />, "threads")}
+      {item(t("desk.outputs.title"), unseen ? t("desk.lane.outputsCount", { count: unseen }) : null, outputs, onOutputs, <ImagesIcon aria-hidden="true" />, <RailDot on={unseen > 0} data-desk-rail-dot="outputs" />, "outputs")}
     </nav>
   );
 }
@@ -105,12 +112,14 @@ export function DeskViewColumn({ tabs, active, onTab, onKeep, onCloseTab, childr
 /**
  * Desk's room (D-64, B1, B32): the chat in the middle and, at the right,
  * the lane's columns and the rail. Unpinned, the columns float over the
- * chat and the chat keeps its width; pinned, they dock beside it and the
- * chat narrows. `view` is the 보기 column, `tool` the Threads column; either
+ * chat and the chat moves left out from under them, keeping its width while
+ * the room has it; pinned, they dock beside it and the chat narrows. `view` is the 보기 column, `tool` the Threads column; either
  * may be absent.
  */
 export function DeskRoom({ chat, view = null, tool = null, pinned, expanded = false, rail }: { chat: ReactNode; view?: ReactNode; tool?: ReactNode; pinned: boolean; expanded?: boolean; rail: ReactNode }) {
   const up = view !== null || tool !== null;
+  const over = up && !pinned && !expanded;
+  const covered = view !== null && tool !== null ? "pr-[calc(var(--size-lane-panel-ideal)*2)]" : "pr-(--size-lane-panel-ideal)";
   const columns = up ? (
     <div className={cn("flex min-h-0 min-w-0", pinned && !expanded ? "flex-[2]" : "absolute inset-y-0 right-0 z-10 border-l border-border bg-background shadow-lg", expanded && "left-0")} data-desk-lane={pinned ? "pinned" : "over"}>
       {view !== null ? <div className={cn("flex min-h-0 min-w-0 flex-col", expanded || pinned ? "flex-1" : "w-(--size-lane-panel-ideal)")} data-desk-lane-column="view">{view}</div> : null}
@@ -120,7 +129,7 @@ export function DeskRoom({ chat, view = null, tool = null, pinned, expanded = fa
   return (
     <div className="flex min-h-0 min-w-0 flex-1" data-desk-room={up ? (pinned ? "pinned" : "over") : "closed"}>
       <div className="relative flex min-h-0 min-w-0 flex-1">
-        <main className={cn("flex min-h-0 min-w-(--size-lane-min) flex-col", pinned && up && !expanded ? "flex-1 border-r border-border" : "flex-1")} data-desk-chat-column="true">{chat}</main>
+        <main className={cn("flex min-h-0 min-w-(--size-lane-min) flex-1 flex-col", pinned && up && !expanded && "border-r border-border", over && covered)} data-desk-chat-column="true">{chat}</main>
         {columns}
       </div>
       {rail}

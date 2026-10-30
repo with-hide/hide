@@ -1,8 +1,8 @@
 // Invented Desk values for the gallery's Desk scenes (PRD
-// session-docs-and-assistant, Desk 1차): agents, a conversation, jobs in every
+// session-docs-and-assistant, Desk 1차): agents, conversations, jobs in every
 // state, threads as ACP updates and outputs. Names, counts and paths are
 // made up; nothing here is read from a machine.
-import type { AcpSessionUpdate, DeskAgent, DeskItem, DeskJob, DeskMention, DeskMission, DeskOutput, ThreadHidePart } from "../desk";
+import type { AcpSessionUpdate, DeskAgent, DeskItem, DeskJob, DeskMention, DeskMission, DeskOutput, DeskSessionRef, SessionViewKind, ThreadHidePart } from "../desk";
 import type { MentionProject, MentionSession } from "../components/desk/desk-mention-menu";
 import { planFixture } from "./PlanScene";
 
@@ -33,234 +33,299 @@ export const AGENTS_PREPARING: DeskAgent[] = AGENTS.map((agent) => (agent.id ===
 const output = (id: string, kind: DeskOutput["kind"], label: string, seen: boolean, thumb: string | null = null): DeskOutput => ({ id, kind, label, seen, thumb });
 
 export const OUTPUTS = {
+  light1: output("o-light-1", "image", "light-1.png", true, PICTURES.light),
+  light2: output("o-light-2", "image", "light-2.png", true, PICTURES.light),
+  light3: output("o-light-3", "image", "light-3.png", false, PICTURES.light),
   compareLight: output("o-compare-light", "image", "compare-light.png", false, PICTURES.light),
   compareDark: output("o-compare-dark", "image", "compare-dark.png", false, PICTURES.dark),
   notes: output("o-notes", "doc", "notes.md", true),
-  beforeAfter: output("o-before-after", "doc", "before-after.md", false),
   galleryPage: output("o-gallery-page", "page", "gallery · desk", true, PICTURES.page),
   pr: { ...output("o-pr-41", "pr", "PR #41 자막 수정", true), pr_state: "merged" as const },
-  reelCover: output("o-reel-cover", "image", "cover.png", true, PICTURES.light),
 };
 
-export const MISSION: DeskMission = {
-  id: "mission-desk", title: "Desk 1차", status: "running", done: 2, total: 4, tone: "working", deciding: false,
-  nodes: [
-    { key: "1a", title: "1a Desk 방 · 리뷰 대기", tone: "review" },
-    { key: "1b", title: "1b 스레드 화면 · 작업 중", tone: "working" },
-    { key: "1d", title: "1d lane · 1b 기다림", tone: "waiting" },
-    { key: "docs", title: "문서 정리 · 대기", tone: "waiting" },
-  ],
+export const MISSION: DeskMission = { id: "mission-desk", title: "Desk 1차", status: "running", done: 2, total: 6, tone: "working", deciding: false };
+
+/** Sessions as the chips inside a line name them. */
+export const SESSIONS = {
+  recordNow: { name: "record-now", mark: "going", agent_kind: "codex" } satisfies DeskSessionRef,
+  gallery: { name: "갤러리 캡처 비교", mark: "turn", agent_kind: "claude" } satisfies DeskSessionRef,
+  review: { name: "캡처 차이 리뷰", mark: "going", agent_kind: "codex" } satisfies DeskSessionRef,
+  room: { name: "1a-desk-room", mark: "done", agent_kind: "codex" } satisfies DeskSessionRef,
 };
 
 const base = (now: number) => (id: string, title: string, extra: Partial<DeskJob>): DeskJob => ({
   id, title, agent_id: `agent-${id}`, pane_id: `w1:${id}`,
-  project: { workspace_id: "hide", label: "hide" },
-  location: { kind: "checkout", label: "hide" },
+  project: { workspace_id: "herdr-ide", label: "herdr-ide" },
+  location: { kind: "checkout", label: "herdr-ide" },
   state: "working", pull_requests: [], outputs: [], joined: false, disconnected: false,
   agent_kind: "claude", changed_at_unix_ms: now - 5 * MINUTE, read: false,
   ...extra,
 });
 
-/** The jobs of the room's main story (scenes 2-9). */
+const MENTION_BRANCH = { kind: "worktree", label: "desk/mention-button" } as const;
+
+/** The jobs of the room's story (scenes 1, 2, 2-1 and 4-7). */
 export function storyJobs(now: number): Record<string, DeskJob> {
   const job = base(now);
   const jobs: DeskJob[] = [
-    job("mention", "mention 버튼 정리", { location: { kind: "worktree", label: "desk/mention-button" }, now: "버튼 정리 → 테스트 돌리는 중", plan: { done: 6, total: 14 }, pull_requests: [{ number: 1903, state: "pending" }], outputs: [OUTPUTS.compareLight, OUTPUTS.compareDark, OUTPUTS.beforeAfter], changed_at_unix_ms: now - 12 * MINUTE }),
-    job("gallery", "갤러리 캡처 비교", { state: "asking", question: "다크 모드도 찍을까요?", outputs: [OUTPUTS.compareLight], changed_at_unix_ms: now - 3 * MINUTE }),
-    job("release", "release 노트 초안", { state: "done", summary: "초안을 notes.md에 썼어요", outputs: [OUTPUTS.notes], agent_kind: "codex", changed_at_unix_ms: now - 62 * MINUTE }),
-    job("reel", "reel 자막 수정", { state: "done", read: true, project: { workspace_id: "studio", label: "studio" }, location: { kind: "checkout", label: "studio" }, summary: "자막 싱크를 고치고 PR을 올렸어요", pull_requests: [{ number: 41, state: "merged" }], outputs: [OUTPUTS.reelCover, OUTPUTS.pr], agent_kind: "codex", changed_at_unix_ms: now - 125 * MINUTE }),
-    job("conductor", "Desk 1차", { now: "Conductor · 1a 리뷰 중, 1b 작업 중", mission: MISSION, workers: ["1a", "1b"], changed_at_unix_ms: now - 22 * MINUTE }),
-    job("1a", "1a Desk 방", { state: "done", read: true, location: { kind: "worktree", label: "feat/desk-host" }, summary: "PR 리뷰 대기", pull_requests: [{ number: 1905, state: "pending" }], agent_kind: "codex", changed_at_unix_ms: now - 30 * MINUTE }),
-    job("1b", "1b 스레드 화면", { location: { kind: "worktree", label: "feat/desk-thread" }, now: "스레드 화면 그리기 → 테스트", plan: { done: 3, total: 9 }, changed_at_unix_ms: now - 4 * MINUTE }),
+    job("mention", "mention 버튼 정리", { location: MENTION_BRANCH, now: "테스트 돌리는 중", plan: { done: 6, total: 14 }, pull_requests: [{ number: 1903, state: "pending" }], model: "Opus 5.5", changed_at_unix_ms: now - 12 * MINUTE }),
+    job("gallery", "갤러리 캡처 비교", { state: "asking", ask: "question", question: "다크 모드도 찍을까요?", outputs: [OUTPUTS.compareLight, OUTPUTS.light1, OUTPUTS.light2], model: "Opus 5.5", changed_at_unix_ms: now - 9 * MINUTE }),
+    job("release", "release 노트 초안", { state: "done", summary: "초안을 notes.md에 썼어요", outputs: [OUTPUTS.notes], model: "Opus 5.5", changed_at_unix_ms: now - 62 * MINUTE }),
+    job("record", "record-now", { state: "asking", ask: "permission", question: "rm -rf web/dist", agent_kind: "codex", model: "GPT-6", changed_at_unix_ms: now - 2 * MINUTE }),
+    job("conductor", "Desk 1차", { now: "Conductor · ui 다듬기 외 1", mission: MISSION, workers: ["1a", "1b"], changed_at_unix_ms: now - 22 * MINUTE }),
+    job("1a", "1a Desk 방", { state: "done", read: true, location: { kind: "worktree", label: "feat/desk-host" }, summary: "리뷰 기다림", pull_requests: [{ number: 1905, state: "pending" }], agent_kind: "codex" }),
+    job("1b", "1b 스레드 화면", { location: { kind: "worktree", label: "feat/desk-thread" }, now: "ThreadView 턴 묶기", changed_at_unix_ms: now - 6 * MINUTE }),
+    job("reel", "reel 자막 수정", { project: { workspace_id: "creator", label: "creator" }, location: { kind: "checkout", label: "creator" }, machine: "mini", disconnected: true, now: "자막 타이밍 맞추는 중", agent_kind: "codex", changed_at_unix_ms: now - 31 * MINUTE }),
   ];
   return Object.fromEntries(jobs.map((one) => [one.id, one]));
 }
 
-/** One card per state the cards draw (B16-B24, B36-B39). */
-export function everyStateJobs(now: number): DeskJob[] {
+/** The card scene: every state a card draws, each with the one chip that matters in it (B16-B24, B36-B39). */
+export function everyStateJobs(now: number): { label: string; job: DeskJob }[] {
   const job = base(now);
   return [
-    job("s-queued", "문서 정리", { state: "queued", queue_position: 2 }),
-    job("s-starting", "릴리스 체크리스트", { state: "starting", location: { kind: "worktree", label: "desk/release-checklist" } }),
-    job("s-working", "mention 버튼 정리", { location: { kind: "worktree", label: "desk/mention-button" }, now: "버튼 정리 → 테스트 돌리는 중", plan: { done: 6, total: 14 }, pull_requests: [{ number: 1903, state: "pending" }], outputs: [OUTPUTS.compareLight, OUTPUTS.beforeAfter] }),
-    job("s-asking", "갤러리 캡처 비교", { state: "asking", question: "다크 모드도 찍을까요? 찍는다면 라이트와 같은 크기로 잘라 둘지도 알려 주세요", outputs: [OUTPUTS.compareLight] }),
-    job("s-done", "release 노트 초안", { state: "done", summary: "초안을 notes.md에 썼어요. 바뀐 화면 세 개와 고친 버그 두 개를 정리했어요", pull_requests: [{ number: 1910, state: "mergeable" }], outputs: [OUTPUTS.notes, OUTPUTS.galleryPage], agent_kind: "codex" }),
-    job("s-failed", "로그 정리", { state: "failed", reason: "spawn_failed" }),
-    job("s-exited", "의존성 올리기", { state: "failed", reason: "exited", location: { kind: "worktree", label: "desk/bump-deps" } }),
-    job("s-cancelled", "아이콘 크기 맞추기", { state: "cancelled" }),
-    job("s-closed", "설정 화면 문구", { state: "closed" }),
-    job("s-moved", "단축키 표 정리", { state: "moved_out" }),
-    job("s-archived", "README 고치기", { state: "archived", summary: "README의 설치 절을 고쳤어요" }),
-    job("s-joined", "PaneHeader 아이콘", { joined: true, now: "아이콘을 14로 줄이는 중", plan: { done: 2, total: 3 } }),
-    job("s-mini", "mini에서 e2e 돌리기", { machine: "mini", disconnected: true, now: "e2e 돌리는 중", plan: { done: 4, total: 7 } }),
-    job("s-mini-failed", "mini에서 캡처", { state: "failed", reason: "device_disconnected", machine: "mini", disconnected: true }),
-    job("s-conductor", "Desk 1차", { now: "Conductor · 1a 리뷰 중, 1b 작업 중", mission: MISSION }),
+    { label: "작업 중 · 계획 칩", job: job("c-working", "mention 버튼 정리", { location: MENTION_BRANCH, now: "테스트 돌리는 중", plan: { done: 6, total: 14 } }) },
+    { label: "물어봄 · 결과물 칩", job: job("c-asking", "갤러리 캡처 비교", { state: "asking", ask: "question", question: "다크 모드도 찍을까요?", outputs: [OUTPUTS.compareLight, OUTPUTS.light1, OUTPUTS.light2] }) },
+    { label: "허락 기다림 (터미널의 권한 질문)", job: job("c-permission", "record-now", { state: "asking", ask: "permission", question: "rm -rf web/dist", agent_kind: "codex" }) },
+    { label: "끝남 · PR", job: job("c-done", "pane header @ hover", { state: "done", location: { kind: "worktree", label: "desk/pane-mention" }, summary: "PR을 열었고 CI 통과", pull_requests: [{ number: 1910, state: "mergeable" }] }) },
+    { label: "미션 (Conductor)", job: job("c-conductor", "Desk 1차", { now: "Conductor · 지금 ui 다듬기 외 1", mission: MISSION }) },
+    { label: "미션 판단", job: job("c-decision", "Desk 1차", { state: "asking", ask: "decision", question: "1b를 공용 부품 머지 전에 시작할까요?", mission: { ...MISSION, deciding: true } }) },
+    { label: "계획 검토 (hide-plan)", job: job("c-review", "문서 정리", { state: "asking", ask: "plan_review", question: "5단계", plan: { done: 0, total: 5, review: true }, agent_kind: "codex" }) },
+    { label: "다른 기기", job: job("c-mini", "reel 자막 수정", { project: { workspace_id: "creator", label: "creator" }, machine: "mini", now: "자막 타이밍 맞추는 중", agent_kind: "codex" }) },
+    { label: "다른 기기, 연결 끊김 (흐림)", job: job("c-mini-off", "reel 자막 수정", { project: { workspace_id: "creator", label: "creator" }, machine: "mini", disconnected: true, now: "12분 전까지의 기록", agent_kind: "codex" }) },
+    { label: "나도 참여 중", job: job("c-joined", "mention 버튼 정리", { location: MENTION_BRANCH, joined: true, now: "아이콘 14로 줄이는 중" }) },
+    { label: "대기", job: job("c-queued", "로그 정리", { state: "queued", queue_position: 2 }) },
+    { label: "실패", job: job("c-failed", "릴스 썸네일 3안", { state: "failed", reason: "spawn_failed", project: { workspace_id: "creator", label: "creator" }, agent_kind: "codex" }) },
+    { label: "끝까지 못 감", job: job("c-exited", "의존성 올리기", { state: "failed", reason: "exited", location: { kind: "worktree", label: "desk/bump-deps" } }) },
+    { label: "취소됨", job: job("c-cancelled", "아이콘 크기 맞추기", { state: "cancelled" }) },
+    { label: "잠듦", job: job("c-asleep", "문서 정리", { state: "asleep", agent_kind: "codex" }) },
+    { label: "보관됨 (흐림)", job: job("c-archived", "로그 정리", { state: "archived" }) },
   ];
 }
 
 export const MENTIONS: DeskMention[] = [
-  { kind: "session", name: "record-now", id: "agent-record-now" },
-  { kind: "session", name: "1a-desk-room", id: "agent-1a" },
-  { kind: "project", name: "hide", id: "~/projects/hide" },
-  { kind: "project", name: "studio", id: "~/creator/studio" },
+  { kind: "session", name: "record-now", id: "agent-record-now", mark: "going", agent_kind: "codex" },
+  { kind: "session", name: "1a-desk-room", id: "agent-1a", mark: "done", agent_kind: "codex" },
+  { kind: "project", name: "herdr-ide", id: "~/projects/herdr-ide" },
+  { kind: "project", name: "creator", id: "~/creator" },
 ];
 
 const at = (now: number, minutes: number) => now - minutes * MINUTE;
 
-/** Scene 1-1: a conversation that changed agents and then model. */
-export function switchedItems(now: number): DeskItem[] {
-  return [
-    { kind: "user", id: 1, text: "오늘 끝난 거 정리해줘", at_ms: at(now, 30), mentions: [] },
-    { kind: "reply", agent: "claude", id: 2, text: "세 개 끝났어요: release 노트, 갤러리 비교, reel 자막. 갤러리 비교는 다크 캡처가 남았어요.", at_ms: at(now, 29), state: "done" },
-    { kind: "switch", id: 3, from: "claude", to: "codex", carried: "all" },
-    { kind: "user", id: 4, text: "그럼 다크 캡처는 이어서 맡겨줘", at_ms: at(now, 20), mentions: [] },
-    { kind: "reply", agent: "codex", id: 5, text: "갤러리 비교 스레드에 다크 모드 캡처를 이어서 하라고 전했어요.", at_ms: at(now, 19), state: "done" },
-    { kind: "model", id: 6, model: "gpt-mini", effort: "medium" },
-  ];
-}
-
-/** Scene 2: a hand-off that started three threads. */
+/** Scene 2: a hand-off that started three threads, a task handed to a session already on it, and Desk thinking. */
 export function handoffItems(now: number): DeskItem[] {
   return [
-    { kind: "user", id: 7, text: "@project(~/projects/hide hide) mention 버튼 정리, 갤러리 캡처 비교, release 노트 초안 맡겨줘", at_ms: at(now, 15), mentions: [MENTIONS[2]!] },
-    { kind: "reply", agent: "claude", id: 8, text: "스레드 세 개를 띄웠어요. mention 버튼은 PR로 낼 일이라 새 워크트리에서 해요.", at_ms: at(now, 15), state: "done" },
-    { kind: "job", id: 9, job_id: "mention" },
-    { kind: "job", id: 10, job_id: "gallery" },
-    { kind: "job", id: 11, job_id: "release" },
+    { kind: "user", id: 1, text: "@project(~/projects/herdr-ide herdr-ide) mention 버튼 정리하고 PR까지, 갤러리 캡처 라이트·다크 비교, release 노트 초안도 맡겨줘", at_ms: at(now, 15), mentions: [MENTIONS[2]!] },
+    { kind: "reply", agent: "claude", id: 2, text: "스레드 세 개를 띄웠어요. mention 버튼은 PR로 낼 일이라 새 worktree에서 해요.", at_ms: at(now, 15), state: "done" },
+    { kind: "job", id: 3, job_id: "mention" },
+    { kind: "job", id: 4, job_id: "gallery" },
+    { kind: "job", id: 5, job_id: "release" },
+    { kind: "user", id: 6, text: "@session(agent-record-now record-now) 갤러리 숫자 줄인 거 다크에서도 확인해줘", at_ms: at(now, 6), mentions: [MENTIONS[0]!] },
+    { kind: "handed", id: 7, agent_id: "agent-record-now", session: SESSIONS.recordNow, read: true },
+    { kind: "user", id: 8, text: "mention 버튼 PR 올라갔어?", at_ms: at(now, 0), mentions: [] },
   ];
 }
 
-/** Scenes 3-1 and 3-2: a task handed to a session already on it. */
+/** Scene 2-1: asking how things go. Desk answers in words; only its own thread waiting on the operator comes as a card. */
+export function statusItems(now: number): DeskItem[] {
+  return [
+    { kind: "user", id: 11, text: "지금 작업들 잘 되고 있어?", at_ms: at(now, 8), mentions: [] },
+    {
+      kind: "reply", agent: "claude", id: 12, at_ms: at(now, 8), state: "done",
+      text: "9개 중 **2개가 답을 기다리고**, 하나는 꼬일 수 있어요.\n\n- **꼬일 수 있어요** · record-now와 갤러리 캡처 비교가 둘 다 `scripts/capture-gallery.mjs`를 고쳐요. 맞춰 줄까요?\n- **미션 판단** · Desk 1차가 1b를 공용 부품 머지 전에 시작할지 물어요.\n- **잘 돌고 있어요** · mention 버튼 정리(6/14), reel 자막 수정(mini) 외 4개. PR 1905는 초록이라 머지만 남았어요.",
+    },
+    { kind: "job", id: 13, job_id: "gallery" },
+    { kind: "user", id: 14, text: "응 맞춰줘", at_ms: at(now, 4), mentions: [] },
+    { kind: "handed", id: 15, agent_id: "agent-record-now", session: SESSIONS.recordNow, read: true },
+    { kind: "handed", id: 16, agent_id: "agent-gallery", session: SESSIONS.gallery, read: false },
+    { kind: "reply", agent: "claude", id: 17, text: "양쪽에 알렸어요. 갤러리 캡처 비교는 아직 질문에 답을 기다리고 있어요.", at_ms: at(now, 4), state: "done" },
+  ];
+}
+
+/** The agent menu scene: a conversation that changed agents and then model. */
+export function switchedItems(now: number): DeskItem[] {
+  return [
+    { kind: "user", id: 21, text: "오늘 끝난 거 정리해줘", at_ms: at(now, 30), mentions: [] },
+    { kind: "reply", agent: "claude", id: 22, text: "세 개 끝났어요: release 노트, 갤러리 비교, reel 자막. 갤러리 비교는 다크 캡처가 남았어요.", at_ms: at(now, 29), state: "done" },
+    { kind: "switch", id: 23, from: "claude", to: "codex", carried: "all" },
+    { kind: "user", id: 24, text: "그럼 다크 캡처는 이어서 맡겨줘", at_ms: at(now, 20), mentions: [] },
+    { kind: "reply", agent: "codex", id: 25, text: "갤러리 비교 스레드에 다크 모드 캡처를 이어서 하라고 전했어요.", at_ms: at(now, 19), state: "done" },
+    { kind: "model", id: 26, model: "gpt-mini", effort: "medium" },
+  ];
+}
+
+/** The @ menu scenes: a mention typed into the composer. */
 export function mentionItems(now: number): DeskItem[] {
   return [
-    { kind: "user", id: 12, text: "@session(agent-record-now record-now) 갤러리 숫자 줄인 거 다크에서도 확인해줘", at_ms: at(now, 6), mentions: [MENTIONS[0]!] },
-    { kind: "reply", agent: "claude", id: 13, text: "record-now에 편지로 맡겼어요.", at_ms: at(now, 6), state: "done" },
-    { kind: "handed", id: 14, agent_id: "agent-record-now", name: "record-now", project: "hide" },
-    { kind: "user", id: 15, text: "@project(~/creator/studio studio) 릴스 썸네일 3안 만들어줘", at_ms: at(now, 2), mentions: [MENTIONS[3]!] },
+    { kind: "user", id: 31, text: "@session(agent-record-now record-now) 갤러리 숫자 줄인 거 다크에서도 확인해줘", at_ms: at(now, 6), mentions: [MENTIONS[0]!] },
+    { kind: "handed", id: 32, agent_id: "agent-record-now", session: SESSIONS.recordNow, read: false },
   ];
 }
 
-/** Scene 9: the mission hand-off. */
+/** The mission scene: the mission hand-off. */
 export function missionItems(now: number): DeskItem[] {
   return [
-    { kind: "user", id: 16, text: "Desk 1차를 미션으로 돌려줘", at_ms: at(now, 25), mentions: [] },
-    { kind: "reply", agent: "claude", id: 17, text: "Conductor 스레드를 띄워 미션으로 돌려요. 노드 네 개, PR 모드예요.", at_ms: at(now, 25), state: "done" },
-    { kind: "job", id: 18, job_id: "conductor" },
+    { kind: "user", id: 41, text: "Desk 1차를 미션으로 돌려줘", at_ms: at(now, 25), mentions: [] },
+    { kind: "reply", agent: "claude", id: 42, text: "Conductor 스레드를 띄워 미션으로 돌려요. 노드 여섯 개, PR 모드예요.", at_ms: at(now, 25), state: "done" },
+    { kind: "job", id: 43, job_id: "conductor" },
+  ];
+}
+
+/** The lines of the card scene that change no state, and Desk's own approval card asked and answered. */
+export function cardSceneItems(): DeskItem[] {
+  return [
+    { kind: "switch", id: 51, from: "claude", to: "codex", carried: "all" },
+    { kind: "notice", id: 52, notice: "blocked", agent: "claude", detail: null },
+    { kind: "approval", id: 53, card: "command", command: "git worktree add ../desk-mention -b desk/mention-button", folder: "~/projects/herdr-ide", reason: "PR로 낼 일이라 새 worktree에서 하려고 해요.", state: "waiting" },
+    { kind: "approval", id: 54, card: "command", command: "git worktree add ../desk-mention -b desk/mention-button", folder: "~/projects/herdr-ide", reason: null, state: "allowed" },
   ];
 }
 
 /** The chat's other states (B5-B8, B11, B13-B15): approvals in each answer and every notice. */
 export function stateItems(now: number): DeskItem[] {
   return [
-    { kind: "user", id: 19, text: "mention 버튼 브랜치 정리하고 테스트 다시 돌려줘", at_ms: at(now, 9), mentions: [] },
-    { kind: "approval", id: 20, card: "command", command: "git -C ~/projects/hide/.worktrees/desk-mention-button rebase --abort && bash scripts/verify-web.sh --filter PaneHeader", folder: "~/projects/hide/.worktrees/desk-mention-button", reason: "멈춘 리베이스를 정리해야 테스트를 다시 돌릴 수 있어요", state: "waiting" },
-    { kind: "approval", id: 21, card: "edit", command: "edit web/src/PaneHeader.tsx", folder: "~/projects/hide", reason: "hover 조건을 고쳐야 해요", state: "allowed" },
-    { kind: "approval", id: 22, card: "command", command: "rm -rf web/dist", folder: "~/projects/hide", reason: "빌드 결과를 지우고 새로 만들게요", state: "rejected" },
-    { kind: "approval", id: 23, card: "command", command: "pnpm --dir web test", folder: "~/projects/hide", reason: "테스트를 돌려 볼게요", state: "closed" },
-    { kind: "model", id: 24, model: "sonnet", effort: "low" },
-    { kind: "switch", id: 25, from: "claude", to: "codex", carried: "trimmed" },
-    { kind: "switch", id: 26, from: "codex", to: "claude", carried: "none" },
-    { kind: "notice", id: 27, notice: "preparing", agent: "codex", detail: null },
-    { kind: "notice", id: 28, notice: "install_failed", agent: "codex", detail: "네트워크에 연결할 수 없어요" },
-    { kind: "notice", id: 29, notice: "login_needed", agent: "codex", detail: "codex login" },
-    { kind: "notice", id: 30, notice: "blocked", agent: "claude", detail: null },
-    { kind: "notice", id: 31, notice: "host_stopped", agent: "claude", detail: null },
-    { kind: "notice", id: 32, notice: "resume_failed", agent: "claude", detail: null },
-    { kind: "notice", id: 33, notice: "no_ask_mode", agent: "pi", detail: null },
-    { kind: "notice", id: 34, notice: "turn_failed", agent: "claude", detail: null },
-    { kind: "reply", agent: "claude", id: 35, text: "정리하고 테스트를 다시 돌렸어요. 실패 하나는", at_ms: at(now, 1), state: "stopped" },
-    { kind: "user", id: 36, text: "지금 돌고 있는 일들 어디까지 왔어요?", at_ms: at(now, 0), mentions: [] },
+    { kind: "user", id: 61, text: "mention 버튼 브랜치 정리하고 테스트 다시 돌려줘", at_ms: at(now, 9), mentions: [] },
+    { kind: "approval", id: 62, card: "edit", command: "edit web/src/PaneHeader.tsx", folder: "~/projects/herdr-ide", reason: "hover 조건을 고쳐야 해요", state: "allowed" },
+    { kind: "approval", id: 63, card: "command", command: "rm -rf web/dist", folder: "~/projects/herdr-ide", reason: "빌드 결과를 지우고 새로 만들게요", state: "rejected" },
+    { kind: "approval", id: 64, card: "command", command: "pnpm --dir web test", folder: "~/projects/herdr-ide", reason: "테스트를 돌려 볼게요", state: "closed" },
+    { kind: "model", id: 65, model: "sonnet", effort: "low" },
+    { kind: "switch", id: 66, from: "claude", to: "codex", carried: "trimmed" },
+    { kind: "switch", id: 67, from: "codex", to: "claude", carried: "none" },
+    { kind: "notice", id: 68, notice: "preparing", agent: "codex", detail: null },
+    { kind: "notice", id: 69, notice: "install_failed", agent: "codex", detail: "네트워크에 연결할 수 없어요" },
+    { kind: "notice", id: 70, notice: "login_needed", agent: "codex", detail: "codex login" },
+    { kind: "notice", id: 71, notice: "host_stopped", agent: "claude", detail: null },
+    { kind: "notice", id: 72, notice: "resume_failed", agent: "claude", detail: null },
+    { kind: "notice", id: 73, notice: "no_ask_mode", agent: "pi", detail: null },
+    { kind: "notice", id: 74, notice: "turn_failed", agent: "claude", detail: null },
+    { kind: "reply", agent: "claude", id: 75, text: "정리하고 테스트를 다시 돌렸어요. 실패 하나는", at_ms: at(now, 1), state: "stopped" },
+    { kind: "user", id: 76, text: "지금 돌고 있는 일들 어디까지 왔어요?", at_ms: at(now, 0), mentions: [] },
   ];
 }
 
 const text = (sessionUpdate: "user_message_chunk" | "agent_message_chunk" | "agent_thought_chunk", words: string): AcpSessionUpdate => ({ sessionUpdate, content: { type: "text", text: words } });
+const call = (id: string, title: string, kind: "read" | "edit" | "execute", status: "completed" | "in_progress", extra: Record<string, unknown> = {}): AcpSessionUpdate => ({ sessionUpdate: "tool_call", toolCallId: id, title, kind, status, ...extra });
+const hideCall = (id: string, command: string): AcpSessionUpdate => call(id, "Bash", "execute", "completed", { rawInput: { command } });
 
-/** Scene 4: the mention-button thread, as the session's record reads. */
-export const MENTION_THREAD: AcpSessionUpdate[] = [
-  text("user_message_chunk", "PaneHeader의 @ 버튼이 늘 보여서 거슬려요. hover에서만 보이게 정리하고 PR까지 내 주세요"),
-  text("agent_thought_chunk", "showMention 상태는 pane hover 상태로 대신할 수 있다. 테스트는 PaneHeader 필터로 충분하다."),
-  text("agent_message_chunk", "PaneHeader의 @ 버튼을 hover에서만 보이게 바꿀게요."),
-  { sessionUpdate: "plan", entries: [
-    { content: "버튼 조건 바꾸기", priority: "high", status: "completed" },
-    { content: "테스트 돌리기", priority: "high", status: "in_progress" },
-    { content: "PR 내기", priority: "medium", status: "pending" },
-  ] },
-  { sessionUpdate: "tool_call", toolCallId: "t-edit", title: "web/src/PaneHeader.tsx", kind: "edit", status: "pending", content: [{ type: "diff", path: "web/src/PaneHeader.tsx", oldText: "  <TitleLine />\n  {showMention && <MentionButton />}\n  <PaneMenu />", newText: "  <TitleLine />\n  {hovered && <MentionButton />}\n  <PaneMenu />" }], locations: [{ path: "web/src/PaneHeader.tsx" }] },
-  { sessionUpdate: "tool_call_update", toolCallId: "t-edit", status: "completed" },
-  { sessionUpdate: "tool_call", toolCallId: "t-read", title: "web/src/PaneHeader.test.tsx", kind: "read", status: "completed" },
-  { sessionUpdate: "tool_call", toolCallId: "t-test", title: "Bash", kind: "execute", status: "in_progress", rawInput: { command: "bash scripts/verify-web.sh --filter PaneHeader" } },
-  { sessionUpdate: "tool_call_update", toolCallId: "t-test", content: [{ type: "content", content: { type: "text", text: "✓ PaneHeader shows @ on hover (12 ms)\n✓ PaneHeader hides @ at rest (8 ms)\n… running 14 more" } }] },
+/** The gallery thread's first turn: the task Desk handed it, the light captures and its question. */
+const GALLERY_FIRST_TURN: AcpSessionUpdate[] = [
+  text("user_message_chunk", "gallery 캡처를 라이트·다크로 찍어서 나란히 비교해줘. 차이는 notes.md에 정리."),
+  text("agent_thought_chunk", "capture-gallery.mjs가 테마를 하나만 받는다. 라이트부터 찍고 다크를 물어본다."),
+  call("g-read", "scripts/capture-gallery.mjs", "read", "completed"),
+  call("g-edit-1", "scripts/capture-gallery.mjs", "edit", "completed", { content: [{ type: "diff", path: "scripts/capture-gallery.mjs", oldText: "const out = dir", newText: "const out = `${dir}/light`" }] }),
+  call("g-edit-2", "scripts/capture-gallery.css", "edit", "completed", { content: [{ type: "diff", path: "scripts/capture-gallery.css", oldText: "a", newText: "b" }] }),
+  call("g-edit-3", "notes.md", "edit", "completed", { content: [{ type: "diff", path: "notes.md", oldText: null, newText: "# 갤러리 비교" }] }),
+  call("g-run-1", "Bash", "execute", "completed", { rawInput: { command: "pnpm --dir web build" } }),
+  call("g-run-2", "Bash", "execute", "completed", { rawInput: { command: "node scripts/capture-gallery.mjs --theme light" } }),
+  call("g-run-3", "Bash", "execute", "completed", { rawInput: { command: "ls agents/runs/compare/light" } }),
+  call("g-run-4", "Bash", "execute", "completed", { rawInput: { command: "du -sh agents/runs/compare" } }),
+  hideCall("g-view-1", "hide file open agents/runs/compare/light/1.png"),
+  hideCall("g-view-2", "hide file open agents/runs/compare/light/2.png"),
+  hideCall("g-view-3", "hide file open agents/runs/compare/light/3.png"),
+  text("agent_message_chunk", "라이트 캡처 6장을 찍었어요. 다크도 찍을까요?"),
 ];
 
-/** Scene 4-1: a Conductor's thread, its `hide` calls read into Hide's parts. */
+const GALLERY_FIRST_PARTS: Record<string, ThreadHidePart> = {
+  "g-view-1": { kind: "view", output: OUTPUTS.light1 },
+  "g-view-2": { kind: "view", output: OUTPUTS.light2 },
+  "g-view-3": { kind: "view", output: OUTPUTS.light3 },
+};
+
+/** Scene 4: the gallery thread at work on its second turn, its `hide` calls read into Hide's parts. */
+export function galleryThread(jobs: Record<string, DeskJob>): { updates: AcpSessionUpdate[]; parts: Record<string, ThreadHidePart> } {
+  return {
+    updates: [
+      ...GALLERY_FIRST_TURN,
+      text("user_message_chunk", "응 다크도"),
+      call("g2-read", "capture-gallery.mjs", "read", "completed"),
+      call("g2-edit", "scripts/capture-gallery.mjs", "edit", "completed", { content: [{ type: "diff", path: "scripts/capture-gallery.mjs", oldText: "const themes = [\"light\"]\nfor (const theme of themes) {", newText: "const themes = [\"light\", \"dark\"]\nconst out = `${dir}/${theme}`\nfor (const theme of themes) {" }] }),
+      hideCall("g2-letter", "hide request send record-now --intent dark-path --body …"),
+      hideCall("g2-spawn", "hide agent spawn --parent here …"),
+      call("g2-run", "Bash", "execute", "in_progress", { rawInput: { command: "node scripts/capture-gallery.mjs --theme dark" } }),
+    ],
+    parts: {
+      ...GALLERY_FIRST_PARTS,
+      "g2-letter": { kind: "letter", direction: "sent", peer: SESSIONS.recordNow, body: "다크 캡처 경로가 바뀌어요" },
+      "g2-spawn": { kind: "spawn", job: { ...jobs.mention!, id: "review", title: "캡처 차이 리뷰", agent_kind: "codex", state: "working" } },
+    },
+  };
+}
+
+/** Scene 7: the gallery thread done, its outputs at the end. */
+export const GALLERY_DONE_THREAD: { updates: AcpSessionUpdate[]; parts: Record<string, ThreadHidePart> } = {
+  updates: [
+    ...GALLERY_FIRST_TURN,
+    text("user_message_chunk", "응 다크도"),
+    call("g3-edit", "scripts/capture-gallery.mjs", "edit", "completed", { content: [{ type: "diff", path: "scripts/capture-gallery.mjs", oldText: "a", newText: "b" }] }),
+    call("g3-run", "Bash", "execute", "completed", { rawInput: { command: "node scripts/capture-gallery.mjs --theme dark" } }),
+    text("agent_message_chunk", "라이트와 다크를 나란히 비교했어요. 차이는 세 곳이고 notes.md에 정리했어요."),
+  ],
+  parts: GALLERY_FIRST_PARTS,
+};
+
+/** Scene 5: record-now, asking to run a command. */
+export const RECORD_THREAD: AcpSessionUpdate[] = [
+  text("user_message_chunk", "갤러리 숫자 표시를 줄여 주세요"),
+  call("r-edit-1", "web/src/gallery/Gallery.tsx", "edit", "completed", { content: [{ type: "diff", path: "web/src/gallery/Gallery.tsx", oldText: "{count} items", newText: "{count}" }] }),
+  call("r-run-1", "Bash", "execute", "completed", { rawInput: { command: "pnpm --dir web test gallery" } }),
+  text("agent_message_chunk", "갤러리 숫자 표시를 줄였어요. 다크 모드에서 다시 확인하려면 빌드를 지우고 새로 돌려야 해요."),
+];
+
+/** The Hide parts scene: a Conductor's thread, each `hide` call it made read into Hide's part. */
 export function conductorThread(jobs: Record<string, DeskJob>): { updates: AcpSessionUpdate[]; parts: Record<string, ThreadHidePart> } {
   const plan = planFixture("running", Date.now());
   return {
     updates: [
       text("user_message_chunk", "Desk 1차를 미션으로 돌려줘"),
       text("agent_message_chunk", "계획을 올리고 @1a-desk-room에 첫 층을 맡길게요."),
-      { sessionUpdate: "tool_call", toolCallId: "h-plan", title: "Bash", kind: "execute", status: "completed", rawInput: { command: "hide plan set …" } },
-      { sessionUpdate: "tool_call", toolCallId: "h-spawn", title: "Bash", kind: "execute", status: "completed", rawInput: { command: "hide agent spawn …" } },
-      { sessionUpdate: "tool_call", toolCallId: "h-letter", title: "Bash", kind: "execute", status: "completed", rawInput: { command: "hide request send …" } },
-      { sessionUpdate: "tool_call", toolCallId: "h-view", title: "Bash", kind: "execute", status: "completed", rawInput: { command: "hide browser open …" } },
-      { sessionUpdate: "tool_call", toolCallId: "h-mission", title: "Bash", kind: "execute", status: "completed", rawInput: { command: "hide mission show …" } },
+      hideCall("h-plan", "hide plan set …"),
+      hideCall("h-spawn", "hide agent spawn --parent here …"),
+      hideCall("h-letter", "hide request send 1a-desk-room …"),
+      hideCall("h-reply", "hide inbox"),
+      hideCall("h-view", "hide browser open …"),
+      hideCall("h-mission", "hide mission show …"),
+      hideCall("h-pr", "gh pr view 1905"),
       text("agent_message_chunk", "1b가 끝나면 lane 노드를 띄울게요."),
     ],
     parts: {
       "h-plan": { kind: "plan", plan },
-      "h-spawn": { kind: "spawn", job: { ...jobs["1b"]!, now: "시작 중", state: "starting" } },
-      "h-letter": { kind: "letter", to: "1a-desk-room", body: "리뷰 지적 2개 반영해서 다시 올려줘" },
+      "h-spawn": { kind: "spawn", job: { ...jobs["1b"]!, state: "starting" } },
+      "h-letter": { kind: "letter", direction: "sent", peer: SESSIONS.room, body: "리뷰 지적 2개 반영해서 다시 올려줘" },
+      "h-reply": { kind: "letter", direction: "received", peer: SESSIONS.room, body: "반영했어요. CI 기다리는 중" },
       "h-view": { kind: "view", output: OUTPUTS.galleryPage },
       "h-mission": { kind: "mission", mission: MISSION },
+      "h-pr": { kind: "pr", number: 1905, state: "pending" },
     },
   };
 }
 
-/** Scene 7: the gallery thread, asking. */
-export const GALLERY_THREAD: AcpSessionUpdate[] = [
-  text("user_message_chunk", "갤러리 캡처를 라이트·다크로 비교해 주세요"),
-  { sessionUpdate: "tool_call", toolCallId: "g-capture", title: "Bash", kind: "execute", status: "completed", rawInput: { command: "node scripts/capture-gallery.mjs --theme light" }, content: [{ type: "content", content: { type: "text", text: "6 captures → agents/runs/compare/light/" } }] },
-  text("agent_message_chunk", "라이트 모드 캡처 6장을 찍었어요."),
-  text("agent_message_chunk", "\n다크 모드도 찍을까요?"),
-];
-
-/** Scenes 5 and 6: the release-notes thread, done. */
-export const RELEASE_THREAD: AcpSessionUpdate[] = [
-  text("user_message_chunk", "v1.0.5 release 노트 초안을 써 주세요"),
-  { sessionUpdate: "tool_call", toolCallId: "r-write", title: "notes.md", kind: "edit", status: "completed", content: [{ type: "diff", path: "notes.md", oldText: null, newText: "# v1.0.5 노트 초안\n\n- 스레드 입력칸 추가\n- 결과물은 세션의 View 목록에서 모음" }] },
-  text("agent_message_chunk", "초안을 notes.md에 썼어요."),
-];
-
-/** Scene 9: the worker thread beside the map. */
+/** The mission scene: the worker thread beside the map. */
 export const WORKER_THREAD: AcpSessionUpdate[] = [
   { sessionUpdate: "user_message_chunk", content: { type: "text", text: "1b 스레드 화면을 맡아 주세요. 공용 부품은 shared PR에 있어요." }, _meta: { hide: { origin: "letter" } } },
-  text("agent_message_chunk", "ACP 업데이트를 태스크 줄 부품으로 그리는 중이에요."),
-  { sessionUpdate: "tool_call", toolCallId: "w-edit", title: "web/src/desk/ThreadView.tsx", kind: "edit", status: "in_progress" },
+  call("w-edit", "web/src/desk/ThreadView.tsx", "edit", "in_progress"),
 ];
 
-export const NOTES_MD = "# v1.0.5 노트 초안\n\n- 스레드 입력칸 추가\n- 결과물은 세션의 View 목록에서 사실로 모음\n- Desk 방의 rail에 Threads와 결과물\n";
-
 export const MENU_SESSIONS: MentionSession[] = [
-  { id: "agent-record-now", name: "record-now", agent_kind: "claude", mark: "going", detail: "hide · 작업 중" },
-  { id: "agent-release", name: "release 노트 초안", agent_kind: "codex", mark: "done", detail: "hide · 끝남" },
-  { id: "agent-reel-review", name: "reel 자막 리뷰", agent_kind: "codex", mark: "turn", detail: "studio · 질문" },
+  { id: "agent-record-now", name: "record-now", agent_kind: "codex", mark: "going", detail: "herdr-ide · 작업 중" },
+  { id: "agent-release", name: "release 노트 초안", agent_kind: "claude", mark: "done", detail: "herdr-ide · 끝남" },
+  { id: "agent-reel-review", name: "reel 자막 리뷰", agent_kind: "codex", mark: "turn", detail: "creator · 질문" },
 ];
 
 export const MENU_PROJECTS: MentionProject[] = [
-  { id: "hide", name: "hide", sessions: 5 },
-  { id: "studio", name: "studio", sessions: 2 },
+  { id: "herdr-ide", name: "herdr-ide", sessions: 5 },
+  { id: "creator", name: "creator", sessions: 2 },
 ];
 
 export const ENTERED_SESSIONS: MentionSession[] = [
-  { id: "agent-record-now", name: "record-now", agent_kind: "claude", mark: "going", detail: "작업 중" },
+  { id: "agent-record-now", name: "record-now", agent_kind: "codex", mark: "going", detail: "작업 중" },
   { id: "agent-mention", name: "mention 버튼 정리", agent_kind: "claude", mark: "going", detail: "계획 6/14" },
   { id: "agent-gallery", name: "갤러리 캡처 비교", agent_kind: "claude", mark: "turn", detail: "질문" },
   { id: "agent-plan", name: "hide-plan 위임", agent_kind: "codex", mark: "waiting", detail: "대기 · 미션 1/3" },
-  { id: "agent-release", name: "release 노트 초안", agent_kind: "codex", mark: "done", detail: "끝남" },
+  { id: "agent-release", name: "release 노트 초안", agent_kind: "claude", mark: "done", detail: "끝남" },
 ];
 
 /** The 결과물 기준 scene: a session's View list, and what Desk keeps of it. */
-export const SESSION_VIEWS: { label: string; kind: import("../desk").SessionViewKind }[] = [
+export const SESSION_VIEWS: { label: string; kind: SessionViewKind }[] = [
   { label: "compare.png", kind: "image" },
   { label: "localhost:5173/gallery", kind: "page" },
   { label: "notes.md", kind: "markdown" },

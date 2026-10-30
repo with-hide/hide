@@ -19,9 +19,6 @@ const buttonVariants = cva(
         destructive: "bg-destructive text-destructive-foreground hover:bg-destructive/90",
         outline: "border border-border bg-background text-foreground hover:bg-accent hover:text-accent-foreground",
         secondary: "border border-border bg-secondary text-secondary-foreground hover:bg-accent",
-        // A card's or a list's own action: grey and rounded, so the state
-        // colours stay the loudest thing on the screen.
-        soft: "rounded-md bg-accent text-accent-foreground hover:bg-accent/70",
         ghost: "text-subtle-foreground hover:bg-accent hover:text-accent-foreground",
         link: "text-primary underline-offset-4 hover:underline",
         text: "font-normal text-subtle-foreground hover:text-foreground",

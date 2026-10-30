@@ -1,65 +1,63 @@
 // Desk 1차 (PRD session-docs-and-assistant) for the operator's review before
-// any of it is wired: every scene of the approved mockup drawn from the real
-// Desk parts in `components/desk` over invented values (`deskSceneData.ts`),
-// plus the states the mockup leaves out (every card, every chat notice, a
-// thread that cannot be read, Settings › Desk) and the one question for the
-// operator (`row-sizes`). The sidebar column is a stand-in built from the
-// shared row parts; the real sidebar is not changed. Nothing leaves the page.
+// any of it is wired: every scene of the final design (proposal-v2: 1, 2,
+// 2-1, 3-7) drawn from the real Desk parts in `components/desk` over
+// invented values (`deskSceneData.ts`), plus the states it leaves out (the
+// agent and @ menus, Hide's parts in a thread, the pane's way back, a
+// mission, every chat notice, a thread that cannot be read, Settings ›
+// Desk). The sidebar column is a stand-in built from the shared row parts;
+// the real sidebar is not changed. Nothing leaves the page.
 import { DiamondIcon, FileTextIcon, ImageIcon, MapIcon, PlusIcon } from "lucide-react";
 import { useLayoutEffect, useMemo, useState, type ReactNode } from "react";
 import { createActions } from "../actions";
 import { AgentMark } from "../AgentMark";
 import { DeskAgentBar, DeskComposer, type ComposerAttachment } from "../components/desk/desk-composer";
-import { DeskChat, DeskEmpty, type DeskChatActions } from "../components/desk/desk-chat";
+import { DeskChat, DeskEmpty, DeskHandedLine, type DeskChatActions } from "../components/desk/desk-chat";
 import { DeskPaneReturn, DeskSidebarRow } from "../components/desk/desk-entry";
-import { DeskHandedCard, DeskJobCard, JobMark, OutputMark, jobLine } from "../components/desk/desk-job-card";
+import { DeskJobCard, JobMark, OutputMark } from "../components/desk/desk-job-card";
 import { DeskChatColumn, DeskRail, DeskRoom, DeskViewColumn, LaneColumnHead, type ViewTab } from "../components/desk/desk-lane";
 import { DeskMentionMenu } from "../components/desk/desk-mention-menu";
 import { DeskOutputs } from "../components/desk/desk-outputs";
 import { DeskSettingsTab } from "../components/desk/desk-settings";
 import { ThreadList } from "../components/desk/thread-list";
-import { ThreadHead, ThreadView, type ThreadPathStep } from "../components/desk/thread-view";
-import { SessionRow, SessionRowBody } from "../components/session-row";
+import { ThreadHead, ThreadView, type ThreadConductor } from "../components/desk/thread-view";
+import { SessionRow } from "../components/session-row";
 import { StatusMark } from "../components/status-mark";
 import { Button } from "../components/ui/button";
-import { RowButton } from "../components/ui/row-button";
 import { TooltipProvider } from "../components/ui/tooltip";
 import { askingCount, outputKindOf, threadLines, unseenOutputs, type DeskAgent, type DeskItem, type DeskJob, type DeskOutput, type DeskSelection, type ThreadReadFailure } from "../desk";
 import { useInterfaceTranslation } from "../i18n/client";
 import { requireInterfaceLanguage } from "../i18n/locale";
 import { useFollowInterfaceLanguage } from "../i18n/translator";
-import { MarkdownText } from "../MarkdownText";
 import { MissionMap } from "../MissionMap";
 import { cn } from "../lib/utils";
 import { useShellStore } from "../store";
 import type { SnapshotRest } from "../snapshot";
 import { missionFixture } from "./MissionScene";
 import {
-  AGENTS, AGENTS_PREPARING, conductorThread, ENTERED_SESSIONS, everyStateJobs, GALLERY_THREAD, handoffItems, MENTION_THREAD, MENTIONS, MENU_PROJECTS, MENU_SESSIONS,
-  mentionItems, missionItems, NOTES_MD, OUTPUTS, PICTURES, RELEASE_THREAD, SESSION_VIEWS, stateItems, storyJobs, switchedItems, WORKER_THREAD,
+  AGENTS, AGENTS_PREPARING, cardSceneItems, conductorThread, ENTERED_SESSIONS, everyStateJobs, GALLERY_DONE_THREAD, galleryThread, handoffItems, MENTIONS, MENU_PROJECTS, MENU_SESSIONS,
+  mentionItems, missionItems, OUTPUTS, PICTURES, RECORD_THREAD, SESSION_VIEWS, SESSIONS, stateItems, statusItems, storyJobs, switchedItems, WORKER_THREAD,
 } from "./deskSceneData";
 
-/** Each scene, with the mockup's section it draws (desk-thread.html) or the PRD behaviors it adds. */
+/** Each scene, with the proposal-v2 scene it pairs with or the PRD behaviors it adds. */
 export const DESK_SCENES = [
-  { state: "s1", label: "1 처음 Desk (B1-B4)" },
-  { state: "s1b", label: "1-1 에이전트 고르기 · 새 대화 (B4, B8, B9)" },
-  { state: "s2", label: "2 맡기기 (B16, B17, B20, B24)" },
-  { state: "s3", label: "3 스레드 목록, 핀 안 됨 (B28)" },
-  { state: "s3b", label: "3-1 @ 메뉴 (B16, B18)" },
-  { state: "s3c", label: "3-2 @ 프로젝트에서 ⇥ (B18)" },
-  { state: "s4", label: "4 스레드 하나 (B25, B29)" },
-  { state: "s4b", label: "4-1 Hide 부품으로 그리는 줄 (B26)" },
-  { state: "s5", label: "5 결과물 미리보기, 핀 안 됨 (B30, B31)" },
-  { state: "s6", label: "6 핀 고정, 남긴 탭 (B31, B32)" },
-  { state: "s7", label: "7 질문에 답 (B29)" },
-  { state: "s8", label: "8 터미널로 ⌘J, 나도 참여 중 (B35, B36)" },
-  { state: "s9", label: "9 미션: 지도 + Conductor 스레드 (B34)" },
+  { state: "s1", label: "1 빈 Desk (B1-B4)" },
+  { state: "s2", label: "2 대화: 맡기기 (B7, B16, B24)" },
+  { state: "s2b", label: "2-1 현황 묻기 (B7, D-24)" },
+  { state: "s3", label: "3 카드 상태 모음 (B16-B24, B36-B39)" },
+  { state: "s4", label: "4 스레드 하나, 핀 고정 (B25, B26, B29)" },
+  { state: "s5", label: "5 스레드가 물을 때 (B20, B25, B29)" },
+  { state: "s6", label: "6 Threads 목록, 핀 안 됨 (B28)" },
+  { state: "s7", label: "7 결과물이 스레드 옆에 (B30, B31)" },
+  { state: "agent", label: "에이전트 고르기 · 바꿈 (B4, B8, B9)" },
+  { state: "mention", label: "@ 메뉴 (B16, B18)" },
+  { state: "mention-project", label: "@ 프로젝트에서 ⇥ (B18)" },
+  { state: "parts", label: "스레드 속 Hide 부품 (B26)" },
+  { state: "pane", label: "터미널로 ⌘J, 나도 참여 중 (B35, B36)" },
+  { state: "mission", label: "미션: 지도 + 워커 스레드 (B34)" },
   { state: "outputs", label: "결과물 기준 (B30)" },
-  { state: "cards", label: "일 카드 모든 상태 (B16, B21-B24, B36-B39)" },
-  { state: "chat-states", label: "채팅 상태: 승인 카드, 알림 줄, 생각 중 · 중단 (B5-B8, B11, B13-B15)" },
+  { state: "chat-states", label: "채팅 상태: 승인 답, 알림 줄, 생각 중 · 중단 (B5-B8, B11, B13-B15)" },
   { state: "thread-states", label: "스레드 읽기 실패 · 읽는 중 · 빈 · 연결 안 됨 (B23, B27)" },
   { state: "settings", label: "Settings › Desk (B4, B19, B21)" },
-  { state: "row-sizes", label: "운영자 질문: 태스크 줄 두 크기" },
 ] as const;
 
 type SceneState = (typeof DESK_SCENES)[number]["state"];
@@ -84,10 +82,10 @@ function SceneSidebar({ jobs, selected }: { jobs: readonly DeskJob[]; selected: 
         const rows = jobs.filter((job) => job.project.label === project && job.state !== "moved_out");
         return (
           <section key={project} className="flex min-w-0 flex-col">
-            <h3 className="px-xs pb-xxs pt-sm text-caption font-semibold text-muted-foreground">{project}</h3>
-            <p className="flex items-center gap-xs px-xs py-xxs text-caption text-subtle-foreground"><DiamondIcon aria-hidden="true" className="size-(--size-icon-sm) fill-current" />{t("desk.name")} · {rows.length}</p>
+            <h3 className="px-xs pb-xxs pt-sm text-caption text-muted-foreground">{project}</h3>
+            <p className="flex items-center gap-xs px-xs py-xxs text-caption text-subtle-foreground"><DiamondIcon aria-hidden="true" className="size-(--size-icon-sm) fill-current" /><span className="flex-1">{t("desk.name")}</span>{rows.length}</p>
             <ol className="flex min-w-0 flex-col pl-(--size-tree-indent)">
-              {rows.map((job) => <SessionRow key={job.id} mark={<><JobMark job={job} /><AgentMark kind={job.agent_kind ?? null} /></>} title={job.title} line={{ text: jobLine(t, job) }} className={cn(selected === job.id && "bg-sidebar-accent")} />)}
+              {rows.map((job) => <SessionRow key={job.id} mark={<JobMark job={job} />} title={job.title} className={cn(selected === job.id && "bg-sidebar-accent")} />)}
             </ol>
           </section>
         );
@@ -96,16 +94,16 @@ function SceneSidebar({ jobs, selected }: { jobs: readonly DeskJob[]; selected: 
   );
 }
 
+/** The chat column's head: its name and `＋ 새 대화`; ◆ stays in the sidebar (D-38). */
 function ChatHead() {
   const { t } = useInterfaceTranslation();
   return <>
-    <DiamondIcon aria-hidden="true" className="size-(--size-icon-sm) fill-current text-subtle-foreground" />
     <span className="flex-1 font-semibold text-foreground">{t("desk.name")}</span>
     <Button variant="ghost" size="sm" className="h-(--size-control-compact) gap-xxs px-xs text-caption font-normal text-subtle-foreground"><PlusIcon />{t("desk.newConversation")}</Button>
   </>;
 }
 
-/** Desk's composer and the bar under it, as a scene sets them. */
+/** Desk's composer with its bar in the box's foot, as a scene sets them. */
 function ChatComposer({ agents = AGENTS, selection, menuOpen = null, value = "", answering = false, mention = null }: { agents?: DeskAgent[]; selection: DeskSelection; menuOpen?: "agent" | null; value?: string; answering?: boolean; mention?: ReactNode }) {
   const { t } = useInterfaceTranslation();
   const [text, setText] = useState(value);
@@ -119,10 +117,13 @@ function ChatComposer({ agents = AGENTS, selection, menuOpen = null, value = "",
 const CLAUDE: DeskSelection = { agent: "claude", model: "opus", effort: "high" };
 const CODEX: DeskSelection = { agent: "codex", model: "gpt", effort: "medium" };
 
-function Thread({ job, updates, parts, reading = false, failure = null, outputs = job.outputs, selectedOutput = null, focused = false, draft = "", attachments = [] }: {
+/** A thread in the lane's tool column: its head, read as a pane's, and the thread under it. */
+function ThreadColumn({ job, updates, parts, pinned = false, conductor = null, reading = false, failure = null, outputs = job.outputs, selectedOutput = null, focused = false, draft = "", attachments = [] }: {
   job: DeskJob;
   updates: Parameters<typeof threadLines>[0];
   parts?: Parameters<typeof threadLines>[1];
+  pinned?: boolean;
+  conductor?: ThreadConductor | null;
   reading?: boolean;
   failure?: ThreadReadFailure | null;
   outputs?: readonly DeskOutput[];
@@ -133,25 +134,14 @@ function Thread({ job, updates, parts, reading = false, failure = null, outputs 
 }) {
   const [text, setText] = useState(draft);
   const lines = useMemo(() => threadLines(updates, parts), [updates, parts]);
-  return (
+  return <>
+    <ThreadHead job={job} conductor={conductor} pinned={pinned} onBack={noop} onTerminal={noop} onPin={noop} onClose={noop} />
     <ThreadView
-      job={job} lines={lines} reading={reading} failure={failure} mentions={MENTIONS} outputs={outputs} selectedOutput={selectedOutput}
+      job={job} lines={lines} reading={reading} failure={failure} mentions={MENTIONS} startedByDesk outputs={outputs} selectedOutput={selectedOutput}
       composer={{ value: text, attachments, focused, onChange: setText, onSend: noop, onAttach: noop, onRemoveAttachment: noop }}
       onTerminal={noop} {...PART_ACTIONS}
     />
-  );
-}
-
-function ToolColumn({ head, pinned, children }: { head: ReactNode; pinned: boolean; children: ReactNode }) {
-  return <>
-    <LaneColumnHead pinned={pinned} onExpand={noop} onPin={noop} onClose={noop}>{head}</LaneColumnHead>
-    <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-y-auto">{children}</div>
   </>;
-}
-
-function ThreadsTitle() {
-  const { t } = useInterfaceTranslation();
-  return <span className="font-semibold text-foreground">{t("desk.threads.title")}</span>;
 }
 
 /** An image output in the 보기 column: the picture, fitted as the image viewer fits it. */
@@ -173,7 +163,7 @@ export function DeskScene({ params }: { params: URLSearchParams }) {
   const mission = useMemo(() => missionFixture("running", now), [now]);
   const [expanded, setExpanded] = useState<ReadonlySet<string>>(() => new Set(["conductor"]));
   useLayoutEffect(() => {
-    // Scene 9's map is Hide's own mission map, drawn from the store as the mission scene draws it.
+    // The mission scene's map is Hide's own mission map, drawn from the store as the mission scene draws it.
     const missions = (mission.rest as { missions: { items: { title: string }[] } }).missions.items.map((one) => ({ ...one, title: "Desk 1차" }));
     useShellStore.setState({ rest: { ...mission.rest, missions: { items: missions } } as unknown as SnapshotRest, agents: [], connection: "live" });
     document.documentElement.classList.toggle("dark", theme === "dark");
@@ -182,80 +172,97 @@ export function DeskScene({ params }: { params: URLSearchParams }) {
   }, [mission, theme, params]);
 
   const story = Object.values(jobs);
-  const rail = (threads: boolean, outputs: boolean) => <DeskRail asking={askingCount(story)} unseen={unseenOutputs(story)} threads={threads} outputs={outputs} onThreads={noop} onOutputs={noop} />;
-  const sidebarJobs = (ids: string[]) => ids.map((id) => jobs[id]!);
-  const threadPath = (...labels: string[]): ThreadPathStep[] => [{ label: t("desk.threads.title"), onPress: noop }, ...labels.map((label, index) => ({ label, onPress: index < labels.length - 1 ? noop : undefined }))];
-  const chat = (items: DeskItem[], composer: ReactNode, selectedJob: string | null = null, selectedOutput: string | null = null, extra: Partial<Parameters<typeof DeskChat>[0]> = {}) => (
+  const pick = (...ids: string[]) => ids.map((id) => jobs[id]!);
+  const rail = (threads: boolean, outputs: boolean, shown: readonly DeskJob[] = story) => <DeskRail asking={askingCount(shown)} unseen={unseenOutputs(shown)} threads={threads} outputs={outputs} onThreads={noop} onOutputs={noop} />;
+  const chat = (items: DeskItem[], composer: ReactNode, options: { jobs?: Record<string, DeskJob>; selectedJob?: string | null; selectedOutput?: string | null; live?: string | null; thinking?: boolean } = {}) => (
     <DeskChatColumn head={<ChatHead />} composer={composer}>
-      <DeskChat items={items} jobs={jobs} agents={AGENTS} selectedJob={selectedJob} selectedOutput={selectedOutput} {...CHAT_ACTIONS} {...extra} />
+      <DeskChat items={items} jobs={options.jobs ?? jobs} agents={AGENTS} selectedJob={options.selectedJob ?? null} selectedOutput={options.selectedOutput ?? null} live={options.live ?? null} thinking={options.thinking ?? false} {...CHAT_ACTIONS} />
     </DeskChatColumn>
   );
+  const threads = (pinned: boolean, shown: readonly DeskJob[], selected: string | null = null) => (
+    <>
+      <LaneColumnHead pinned={pinned} onExpand={noop} onPin={noop} onClose={noop}><span className="font-semibold text-foreground">{t("desk.threads.title")}</span></LaneColumnHead>
+      <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-y-auto">
+        <ThreadList jobs={shown} selected={selected} expanded={expanded} onOpen={noop} onMission={noop} onOutput={noop} onToggle={(id) => setExpanded((open) => { const next = new Set(open); if (next.has(id)) next.delete(id); else next.add(id); return next; })} />
+      </div>
+    </>
+  );
 
-  let sidebar: ReactNode = <SceneSidebar jobs={sidebarJobs(["mention", "gallery", "release"])} selected={null} />;
+  let sidebar: ReactNode = <SceneSidebar jobs={pick("mention", "gallery", "release")} selected={null} />;
   let body: ReactNode;
   switch (state) {
     case "s1": {
-      // A new conversation while three threads from before still run: the sidebar, the rail and the empty Desk count the same three.
-      const running = sidebarJobs(["mention", "gallery", "release"]);
+      // A new conversation while threads from before still run: the sidebar, the rail and the empty Desk count the same ones.
+      const running = pick("mention", "gallery", "release");
       sidebar = <SceneSidebar jobs={running} selected={null} />;
-      body = <DeskRoom pinned={false} rail={<DeskRail asking={askingCount(running)} unseen={unseenOutputs(running)} threads={false} outputs={false} onThreads={noop} onOutputs={noop} />}
+      body = <DeskRoom pinned={false} rail={rail(false, false, running)}
         chat={<DeskChatColumn head={<ChatHead />} composer={<ChatComposer selection={CLAUDE} />}><DeskEmpty working={running.filter((job) => job.state === "working").length} asking={askingCount(running)} onExample={noop} onShowThreads={noop} /></DeskChatColumn>} />;
       break;
     }
-    case "s1b":
-      body = <DeskRoom pinned={false} rail={rail(false, false)} chat={chat(switchedItems(now), <ChatComposer selection={CODEX} menuOpen="agent" />)} />;
-      break;
     case "s2":
-      body = <DeskRoom pinned={false} rail={rail(false, false)} chat={chat(handoffItems(now), <ChatComposer selection={CLAUDE} />)} />;
+      body = <DeskRoom pinned={false} rail={rail(false, false, pick("mention", "gallery", "release"))} chat={chat(handoffItems(now), <ChatComposer selection={CLAUDE} />, { thinking: true, selectedJob: "gallery" })} />;
+      break;
+    case "s2b":
+      body = <DeskRoom pinned={false} rail={rail(false, false)} chat={chat(statusItems(now), <ChatComposer selection={CLAUDE} />)} />;
       break;
     case "s3":
-      sidebar = <SceneSidebar jobs={story.filter((job) => job.project.label === "hide").slice(0, 3)} selected={null} />;
-      body = <DeskRoom pinned={false} rail={rail(true, false)} chat={chat(handoffItems(now).slice(0, 4), <ChatComposer selection={CLAUDE} />)}
-        tool={<ToolColumn pinned={false} head={<ThreadsTitle />}><ThreadList jobs={story} expanded={expanded} onOpen={noop} onMission={noop} onToggle={(id) => setExpanded((open) => { const next = new Set(open); if (next.has(id)) next.delete(id); else next.add(id); return next; })} /></ToolColumn>} />;
+      sidebar = null;
+      body = <CardStates />;
       break;
-    case "s3b":
-    case "s3c": {
-      const entered = state === "s3c" ? { project: MENU_PROJECTS[0]!, sessions: ENTERED_SESSIONS } : null;
-      const menu = <DeskMentionMenu sessions={MENU_SESSIONS} projects={MENU_PROJECTS} entered={entered} active="session:agent-record-now" onActive={noop} onSession={noop} onProject={noop} onBack={noop} />;
-      body = <DeskRoom pinned={false} rail={rail(false, false)} chat={chat(mentionItems(now), <ChatComposer selection={CLAUDE} value={state === "s3c" ? "@hide " : "@re"} mention={menu} />)} />;
-      break;
-    }
-    case "s4":
-      body = <DeskRoom pinned={false} rail={rail(true, false)} chat={chat(handoffItems(now), <ChatComposer selection={CLAUDE} />, "mention")}
-        tool={<ToolColumn pinned={false} head={<ThreadHead path={threadPath("mention 버튼 정리")} onTerminal={noop} />}><Thread job={jobs.mention!} updates={MENTION_THREAD} /></ToolColumn>} />;
-      break;
-    case "s4b": {
-      const thread = conductorThread(jobs);
-      body = <DeskRoom pinned={false} rail={rail(true, false)} chat={chat(missionItems(now), <ChatComposer selection={CLAUDE} />, "conductor")}
-        tool={<ToolColumn pinned={false} head={<ThreadHead path={threadPath("Desk 1차")} onTerminal={noop} />}><Thread job={jobs.conductor!} updates={thread.updates} parts={thread.parts} outputs={[]} /></ToolColumn>} />;
+    case "s4": {
+      const gallery: DeskJob = { ...jobs.gallery!, state: "working", ask: null, question: null, now: "다크 모드 찍는 중", plan: { done: 3, total: 5 } };
+      const thread = galleryThread(jobs);
+      const items: DeskItem[] = [
+        { kind: "user", id: 1, text: "갤러리 캡처 라이트·다크로 비교해줘", at_ms: now, mentions: [] },
+        { kind: "reply", agent: "claude", id: 2, text: "갤러리 비교를 새 스레드로 띄웠어요.", at_ms: now, state: "done" },
+        { kind: "job", id: 3, job_id: "gallery" },
+      ];
+      body = <DeskRoom pinned rail={rail(true, false)} chat={chat(items, <ChatComposer selection={CLAUDE} />, { jobs: { gallery }, selectedJob: "gallery" })}
+        tool={<ThreadColumn job={gallery} updates={thread.updates} parts={thread.parts} pinned outputs={[]} />} />;
       break;
     }
     case "s5": {
-      const done: DeskJob = { ...jobs.gallery!, state: "done", summary: "라이트와 다크 캡처를 비교했어요", outputs: [OUTPUTS.compareLight, OUTPUTS.compareDark, OUTPUTS.notes] };
-      const items: DeskItem[] = [{ kind: "job", id: 1, job_id: "gallery-done" }];
-      body = <DeskRoom pinned={false} rail={rail(true, true)}
-        chat={<DeskChatColumn head={<ChatHead />} composer={<ChatComposer selection={CLAUDE} />}><DeskChat items={items} jobs={{ "gallery-done": done }} agents={AGENTS} selectedJob="gallery-done" selectedOutput={OUTPUTS.compareLight.id} {...CHAT_ACTIONS} /></DeskChatColumn>}
-        view={<DeskViewColumn tabs={[tab("compare", "compare-light.png", true, <ImageIcon aria-hidden="true" className="size-(--size-icon-sm)" />)]} active="compare" onTab={noop} onKeep={noop} onCloseTab={noop}><PictureView src={PICTURES.light} label="compare-light.png" /></DeskViewColumn>}
-        tool={<ToolColumn pinned={false} head={<ThreadHead path={threadPath("갤러리 캡처 비교")} onTerminal={noop} />}><Thread job={done} updates={GALLERY_THREAD.slice(0, 3)} selectedOutput={OUTPUTS.compareLight.id} /></ToolColumn>} />;
+      const items: DeskItem[] = [{ kind: "job", id: 1, job_id: "record" }, { kind: "job", id: 2, job_id: "gallery" }];
+      body = <DeskRoom pinned rail={rail(true, false)} chat={chat(items, <ChatComposer selection={CLAUDE} />, { selectedJob: "record" })}
+        tool={<ThreadColumn job={jobs.record!} updates={RECORD_THREAD} pinned outputs={[]} focused draft="응 지우고 다시 빌드해" />} />;
       break;
     }
     case "s6": {
-      const release = jobs.release!;
-      const items: DeskItem[] = [{ kind: "job", id: 1, job_id: "gallery" }, { kind: "job", id: 2, job_id: "release" }];
-      body = <DeskRoom pinned rail={rail(true, true)}
-        chat={chat(items, <ChatComposer selection={CLAUDE} />, "release", OUTPUTS.notes.id)}
-        view={<DeskViewColumn tabs={[tab("compare", "compare-light.png", false, <ImageIcon aria-hidden="true" className="size-(--size-icon-sm)" />), tab("notes", "notes.md", true, <FileTextIcon aria-hidden="true" className="size-(--size-icon-sm)" />)]} active="notes" onTab={noop} onKeep={noop} onCloseTab={noop}><div className="p-lg"><MarkdownText text={NOTES_MD} /></div></DeskViewColumn>}
-        tool={<ToolColumn pinned head={<ThreadHead path={threadPath("release 노트 초안")} onTerminal={noop} />}><Thread job={release} updates={RELEASE_THREAD} selectedOutput={OUTPUTS.notes.id} /></ToolColumn>} />;
+      const items: DeskItem[] = [
+        { kind: "user", id: 1, text: "오늘 herdr-ide에서 돌던 거 어디까지 왔어?", at_ms: now, mentions: [] },
+        { kind: "reply", agent: "claude", id: 2, text: "지금 다섯 개가 돌고 있고 둘이 답을 기다려요.", at_ms: now, state: "done" },
+      ];
+      const listed = [{ ...jobs.gallery!, read: true }, ...pick("record", "conductor", "1a", "1b", "mention", "reel", "release")];
+      body = <DeskRoom pinned={false} rail={rail(true, false)} chat={chat(items, <ChatComposer selection={CLAUDE} />)} tool={threads(false, listed, "record")} />;
       break;
     }
     case "s7": {
+      const done: DeskJob = { ...jobs.gallery!, state: "done", ask: null, question: null, summary: "차이 3곳", plan: { done: 5, total: 5 }, outputs: [OUTPUTS.compareLight, OUTPUTS.compareDark, OUTPUTS.notes] };
       const items: DeskItem[] = [{ kind: "job", id: 1, job_id: "gallery" }];
-      body = <DeskRoom pinned={false} rail={rail(true, false)} chat={chat(items, <ChatComposer selection={CLAUDE} />, "gallery")}
-        tool={<ToolColumn pinned={false} head={<ThreadHead path={threadPath("갤러리 캡처 비교")} onTerminal={noop} />}><Thread job={jobs.gallery!} updates={GALLERY_THREAD} outputs={[]} focused draft="응 다크도, 이 그림처럼 잘라줘" attachments={[{ id: "ref", name: "ref.png", image: true }]} /></ToolColumn>} />;
+      body = <DeskRoom pinned rail={rail(false, true)}
+        chat={chat(items, <ChatComposer selection={CLAUDE} />, { jobs: { gallery: done }, selectedJob: "gallery", selectedOutput: OUTPUTS.compareDark.id })}
+        view={<DeskViewColumn tabs={[tab("notes", "notes.md", false, <FileTextIcon aria-hidden="true" className="size-(--size-icon-sm)" />), tab("compare", "compare-dark.png", true, <ImageIcon aria-hidden="true" className="size-(--size-icon-sm)" />)]} active="compare" onTab={noop} onKeep={noop} onCloseTab={noop}><PictureView src={PICTURES.dark} label="compare-dark.png" /></DeskViewColumn>}
+        tool={<ThreadColumn job={done} updates={GALLERY_DONE_THREAD.updates} parts={GALLERY_DONE_THREAD.parts} pinned selectedOutput={OUTPUTS.compareDark.id} />} />;
       break;
     }
-    case "s8":
-      sidebar = <SceneSidebar jobs={sidebarJobs(["mention", "gallery", "release"])} selected="mention" />;
+    case "agent":
+      body = <DeskRoom pinned={false} rail={rail(false, false)} chat={chat(switchedItems(now), <ChatComposer selection={CODEX} menuOpen="agent" />)} />;
+      break;
+    case "mention":
+    case "mention-project": {
+      const entered = state === "mention-project" ? { project: MENU_PROJECTS[0]!, sessions: ENTERED_SESSIONS } : null;
+      const menu = <DeskMentionMenu sessions={MENU_SESSIONS} projects={MENU_PROJECTS} entered={entered} active="session:agent-record-now" onActive={noop} onSession={noop} onProject={noop} onBack={noop} />;
+      body = <DeskRoom pinned={false} rail={rail(false, false)} chat={chat(mentionItems(now), <ChatComposer selection={CLAUDE} value={state === "mention-project" ? "@herdr-ide " : "@re"} mention={menu} />)} />;
+      break;
+    }
+    case "parts": {
+      const thread = conductorThread(jobs);
+      body = <DeskRoom pinned rail={rail(true, false)} chat={chat(missionItems(now), <ChatComposer selection={CLAUDE} />, { selectedJob: "conductor" })}
+        tool={<ThreadColumn job={jobs.conductor!} updates={thread.updates} parts={thread.parts} pinned outputs={[]} />} />;
+      break;
+    }
+    case "pane":
+      sidebar = <SceneSidebar jobs={pick("mention", "gallery", "release")} selected="mention" />;
       body = (
         <div className="flex min-h-0 min-w-0 flex-1 flex-col" data-desk-scene-pane="true">
           <div className="flex h-(--size-pane-header) shrink-0 items-center gap-xs border-b border-border bg-muted px-sm text-caption">
@@ -268,39 +275,29 @@ export function DeskScene({ params }: { params: URLSearchParams }) {
         </div>
       );
       break;
-    case "s9":
-      body = <DeskRoom pinned={false} rail={rail(false, true)} chat={chat(missionItems(now), <ChatComposer selection={CLAUDE} />, "conductor")}
+    case "mission":
+      body = <DeskRoom pinned={false} rail={rail(false, true)} chat={chat(missionItems(now), <ChatComposer selection={CLAUDE} />, { selectedJob: "conductor" })}
         view={<DeskViewColumn tabs={[tab("map", t("desk.lane.missionMap", { title: "Desk 1차" }), true, <MapIcon aria-hidden="true" className="size-(--size-icon-sm)" />)]} active="map" onTab={noop} onKeep={noop} onCloseTab={noop}><MissionMap missionId="mission-1" actions={actions} /></DeskViewColumn>}
-        tool={<ToolColumn pinned={false} head={<ThreadHead path={threadPath("Desk 1차", "1b 스레드 화면")} onTerminal={noop} />}><Thread job={jobs["1b"]!} updates={WORKER_THREAD} outputs={[]} /></ToolColumn>} />;
+        tool={<ThreadColumn job={jobs["1b"]!} updates={WORKER_THREAD} conductor={{ title: "Desk 1차", onOpen: noop }} outputs={[]} />} />;
       break;
     case "outputs":
       body = <OutputsCriteria />;
       break;
-    case "cards":
-      body = (
-        <div className="grid min-h-0 flex-1 grid-cols-2 content-start gap-md overflow-y-auto p-lg" data-desk-scene-cards="true">
-          {everyStateJobs(now).map((job) => <DeskJobCard key={job.id} job={job} {...CHAT_ACTIONS} />)}
-          <DeskHandedCard name="record-now" project="hide" onOpen={noop} />
-        </div>
-      );
-      break;
     case "chat-states":
-      body = <DeskRoom pinned={false} rail={rail(false, false)} chat={chat(stateItems(now), <ChatComposer agents={AGENTS_PREPARING} selection={CODEX} answering />, null, null, { live: "지금 돌고 있는 일은 세 개예요. mention 버튼 정리는 테스트를 돌리는 중이고" })} />;
+      body = <DeskRoom pinned={false} rail={rail(false, false)} chat={chat(stateItems(now), <ChatComposer agents={AGENTS_PREPARING} selection={CODEX} answering />, { live: "지금 돌고 있는 일은 세 개예요. mention 버튼 정리는 테스트를 돌리는 중이고" })} />;
       break;
     case "thread-states": {
-      const fresh: DeskJob = { ...jobs.gallery!, id: "fresh", title: "로그 정리", state: "starting", question: null, outputs: [] };
-      const mini = everyStateJobs(now).find((job) => job.id === "s-mini")!;
-      const column = (key: string, job: DeskJob, thread: ReactNode) => (
-        <div key={key} className="flex min-h-0 min-w-0 flex-1 flex-col border-r border-border" data-desk-scene-thread-state={key}>
-          <ToolColumn pinned={false} head={<ThreadHead path={threadPath(job.title)} onTerminal={noop} />}>{thread}</ToolColumn>
-        </div>
+      const fresh: DeskJob = { ...jobs.mention!, id: "fresh", title: "로그 정리", state: "starting", now: null, plan: null, pull_requests: [], outputs: [] };
+      const off: DeskJob = jobs.reel!;
+      const column = (key: string, thread: ReactNode) => (
+        <div key={key} className="flex min-h-0 min-w-0 flex-1 flex-col border-r border-border" data-desk-scene-thread-state={key}>{thread}</div>
       );
       body = (
         <div className="flex min-h-0 min-w-0 flex-1">
-          {column("failed", jobs.release!, <Thread job={jobs.release!} updates={[]} failure="no_record" />)}
-          {column("reading", jobs.release!, <Thread job={jobs.release!} updates={[]} reading />)}
-          {column("empty", fresh, <Thread job={fresh} updates={[]} />)}
-          {column("disconnected", mini, <Thread job={mini} updates={MENTION_THREAD.slice(0, 4)} outputs={[]} />)}
+          {column("failed", <ThreadColumn job={jobs.release!} updates={[]} failure="no_record" />)}
+          {column("reading", <ThreadColumn job={jobs.release!} updates={[]} reading />)}
+          {column("empty", <ThreadColumn job={fresh} updates={[]} />)}
+          {column("disconnected", <ThreadColumn job={off} updates={RECORD_THREAD} outputs={[]} />)}
         </div>
       );
       break;
@@ -308,10 +305,6 @@ export function DeskScene({ params }: { params: URLSearchParams }) {
     case "settings":
       sidebar = null;
       body = <div className="w-(--size-settings-sheet-w) max-w-full p-xl"><DeskSettingsTab settings={{ default_agent: "claude", location: "desk", cap: 8 }} agents={AGENTS} onChange={noop} /></div>;
-      break;
-    case "row-sizes":
-      sidebar = null;
-      body = <RowSizes />;
       break;
   }
   return (
@@ -321,6 +314,31 @@ export function DeskScene({ params }: { params: URLSearchParams }) {
         {body}
       </div>
     </TooltipProvider>
+  );
+}
+
+/**
+ * Scene 3: every card state at the chat's width, each under the name of the
+ * state it shows, then the lines that change no state and Desk's own
+ * approval card, asked and answered.
+ */
+function CardStates() {
+  const now = useMemo(() => Date.now(), []);
+  return (
+    <div className="flex min-h-0 flex-1 justify-center overflow-y-auto p-lg" data-desk-scene-cards="true">
+      <div className="flex w-full max-w-(--size-editor-measure) min-w-0 flex-col gap-xs">
+        {everyStateJobs(now).map(({ label, job }) => (
+          <section key={job.id} className="flex min-w-0 flex-col gap-xxs">
+            <h3 className="pt-xs text-micro text-muted-foreground">{label}</h3>
+            <DeskJobCard job={job} {...CHAT_ACTIONS} />
+          </section>
+        ))}
+        <h3 className="pt-sm text-micro text-muted-foreground">기존 세션에 맡김 (상태가 안 바뀜: 상자 없음)</h3>
+        <DeskHandedLine session={SESSIONS.recordNow} read onOpen={noop} />
+        <h3 className="pt-sm text-micro text-muted-foreground">에이전트 바꿈 · 막힘 · Desk 자신의 승인 (로고 없는 유일한 ! 카드) · 답한 승인</h3>
+        <DeskChat items={cardSceneItems()} jobs={{}} agents={AGENTS} {...CHAT_ACTIONS} />
+      </div>
+    </div>
   );
 }
 
@@ -348,43 +366,6 @@ function OutputsCriteria() {
       <section className="flex min-w-0 flex-col gap-xs">
         <h3 className="text-caption font-medium text-muted-foreground">{t("desk.outputs.title")}</h3>
         <DeskOutputs outputs={kept} onOpen={noop} />
-      </section>
-    </div>
-  );
-}
-
-/**
- * The operator's question: the session record's child rows (`size="record"`)
- * and the sidebar's rows (`size="row"`) draw the same session differently.
- * Both sizes, side by side, for the same three sessions.
- */
-function RowSizes() {
-  const now = useMemo(() => Date.now(), []);
-  const jobs = Object.values(storyJobs(now)).slice(0, 3);
-  const { t } = useInterfaceTranslation();
-  return (
-    <div className="grid min-h-0 flex-1 grid-cols-2 content-start gap-xl p-xl" data-desk-scene-row-sizes="true">
-      <section className="flex w-(--size-sidebar-ideal) min-w-0 flex-col gap-xs">
-        <h3 className="text-caption font-semibold text-foreground">A · size=row</h3>
-        <p className="text-micro text-muted-foreground">사이드바 · Threads 목록</p>
-        <ol className="flex min-w-0 flex-col rounded-md bg-sidebar p-xs">
-          {jobs.map((job) => <SessionRow key={job.id} mark={<><JobMark job={job} /><AgentMark kind={job.agent_kind ?? null} /></>} title={job.title} line={{ text: `${job.project.label} · ${jobLine(t, job)}` }} />)}
-        </ol>
-      </section>
-      <section className="flex w-(--size-lane-panel-ideal) min-w-0 flex-col gap-xs">
-        <h3 className="text-caption font-semibold text-foreground">B · size=record</h3>
-        <p className="text-micro text-muted-foreground">세션 기록의 자식 줄</p>
-        <ol className="flex min-w-0 flex-col rounded-md bg-card px-sm">
-          {jobs.map((job) => (
-            <li key={job.id}>
-              <RowButton className="items-start gap-sm px-0 py-sm">
-                <SessionRowBody size="record" mark={<JobMark job={job} />} head={<span className="block truncate text-caption font-medium">{job.title}</span>}>
-                  <span className="mt-xs flex min-w-0 flex-wrap items-center gap-x-xs gap-y-xxs text-micro text-muted-foreground"><AgentMark kind={job.agent_kind ?? null} />{job.agent_kind === "codex" ? "Codex" : "Claude Code"} · <span>{jobLine(t, job)}</span></span>
-                </SessionRowBody>
-              </RowButton>
-            </li>
-          ))}
-        </ol>
       </section>
     </div>
   );
