@@ -454,7 +454,9 @@ impl Runtime {
         else {
             return refused("not_ready");
         };
-        if decision == BranchDecision::Merge && !self.local_merge_allowed(&project.node, &project.path) {
+        if decision == BranchDecision::Merge
+            && !self.local_merge_allowed(&project.node, &project.path)
+        {
             return refused("github_connected");
         }
         let deciding = (attempt.project_id.clone(), line);

@@ -930,14 +930,21 @@ fn a_ready_branch_is_read_from_git_and_merged_into_its_base_only_without_github(
             crate::runtime::suggestion_apply::BranchDecision::Merge,
         )
     };
-    assert!(!merge(), "GitHub not known to be missing reads as connected");
+    assert!(
+        !merge(),
+        "GitHub not known to be missing reads as connected"
+    );
     assert!(
         commands.recv_timeout(Duration::from_millis(200)).is_err(),
         "a refused merge hands the worker nothing"
     );
     let main = git(&["rev-parse", "main"]);
     assert_ne!(main, tip, "main is left as it was");
-    assert_eq!(git(&["rev-parse", "hide-suggestion-s2-x"]), tip, "the branch stays");
+    assert_eq!(
+        git(&["rev-parse", "hide-suggestion-s2-x"]),
+        tip,
+        "the branch stays"
+    );
 
     shared
         .lock()
