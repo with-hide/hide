@@ -135,7 +135,7 @@ it("asks for the page before once per state the core shows, a failed read includ
   await reachTop();
   await reachTop();
   expect(actions.readOlderThread).toHaveBeenCalledTimes(1);
-  await act(async () => useShellStore.setState({ sessionThread: section({ has_older: true, older: "reading" }) }));
+  await act(async () => useShellStore.setState({ sessionThread: section({ has_older: true, older: "loading" }) }));
   await reachTop();
   await act(async () => useShellStore.setState({ sessionThread: section({ has_older: true, older: "failed" }) }));
   await reachTop();
