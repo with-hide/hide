@@ -30,6 +30,7 @@ fn header_fences_late_git_ci_and_reconnect_results_and_ages_without_false_clean(
         remote: None,
         commit_links: Vec::new(),
         commit_pages: false,
+        catch_up: None,
         observed: None,
     });
     let facts = CheckoutGit {
@@ -112,6 +113,7 @@ fn header_keeps_provider_identity_without_exposing_origin_credentials_to_the_ren
         remote: None,
         commit_links: Vec::new(),
         commit_pages: false,
+        catch_up: None,
         observed: None,
     });
     let facts = CheckoutGit {
@@ -160,6 +162,7 @@ fn history_ci_is_fenced_by_every_ordered_sha_and_all_links_expire() {
         remote: None,
         commit_links: Vec::new(),
         commit_pages: false,
+        catch_up: None,
         observed: None,
     });
     let mut facts = CheckoutGit {
@@ -284,6 +287,7 @@ fn commits_whose_remote_is_unknown_get_no_page_and_the_reason_stays_off_the_wire
         remote: None,
         commit_links: Vec::new(),
         commit_pages: false,
+        catch_up: None,
         observed: None,
     });
     let commit = hide_node_link::worktrees::CheckoutCommit {
@@ -321,4 +325,157 @@ fn commits_whose_remote_is_unknown_get_no_page_and_the_reason_stays_off_the_wire
     assert_eq!(header.facts.as_ref().unwrap().changed_files, 2);
     assert!(header.commit_links.is_empty());
     assert!(!serde_json::to_string(&header).unwrap().contains("rev-list"));
+}
+
+/// The front header with `facts` read for `target`.
+fn header_with(runtime: &mut Runtime, target: &GitRequest, facts: CheckoutGit) {
+    runtime.checkout_header.target = Some(target.clone());
+    runtime.checkout_header.header = Some(Header {
+        state: GitState::Loading,
+        facts: None,
+        reason: None,
+        ci: None,
+        recent_ci: Vec::new(),
+        remote: None,
+        commit_links: Vec::new(),
+        commit_pages: false,
+        catch_up: None,
+        observed: None,
+    });
+    runtime.ingest_checkout_git((target.clone(), Ok(facts)), Instant::now());
+}
+
+fn behind(head: char, ahead: u32, behind: u32) -> CheckoutGit {
+    CheckoutGit {
+        head_sha: Some(head.to_string().repeat(40)),
+        upstream: Some("origin/main".into()),
+        upstream_state: "tracked".into(),
+        ahead: Some(ahead),
+        behind: Some(behind),
+        ..Default::default()
+    }
+}
+
+fn shown_catch_up(runtime: &Runtime) -> Option<crate::checkout_git::CatchUpView> {
+    runtime
+        .checkout_header_snapshot(&(crate::node::TEST_NODE.into(), "/fixture".into()))
+        .unwrap()
+        .catch_up
+}
+
+fn press(runtime: &mut Runtime, head: char) -> bool {
+    runtime.catch_up_checkout(super::super::checkout_git::CatchUpPayload {
+        device_id: crate::node::TEST_NODE.into(),
+        path: "/fixture".into(),
+        head_sha: head.to_string().repeat(40),
+    })
+}
+
+fn running(runtime: &mut Runtime, target: &GitRequest, head: char) {
+    runtime.checkout_header.catch_up = Some(super::super::checkout_git::CatchUp {
+        target: target.clone(),
+        head: head.to_string().repeat(40),
+        phase: super::super::checkout_git::CatchUpPhase::Running,
+    });
+}
+
+#[test]
+fn catch_up_is_not_started_from_a_header_that_does_not_offer_it() {
+    let mut runtime = runtime();
+    let target = target(&runtime, 1);
+    header_with(&mut runtime, &target, behind('a', 2, 5));
+    assert!(!press(&mut runtime, 'a'), "commits to send");
+    header_with(&mut runtime, &target, behind('a', 0, 5));
+    assert!(
+        !press(&mut runtime, 'b'),
+        "a HEAD the operator was not shown"
+    );
+    assert_eq!(shown_catch_up(&runtime), None);
+}
+
+#[test]
+fn catch_up_that_cannot_start_shows_failed_until_head_moves() {
+    use crate::checkout_git::CatchUpView;
+    let mut runtime = runtime();
+    let target = target(&runtime, 1);
+    header_with(&mut runtime, &target, behind('a', 0, 5));
+    // The test runtime has no live Herdr connection to run it with.
+    assert!(press(&mut runtime, 'a'));
+    assert_eq!(shown_catch_up(&runtime), Some(CatchUpView::Failed));
+    runtime.ingest_checkout_git((target.clone(), Ok(behind('a', 0, 5))), Instant::now());
+    assert_eq!(shown_catch_up(&runtime), Some(CatchUpView::Failed));
+    runtime.ingest_checkout_git((target, Ok(behind('b', 0, 5))), Instant::now());
+    assert_eq!(shown_catch_up(&runtime), None);
+}
+
+#[test]
+fn catch_up_shows_running_until_the_git_read_shows_the_new_head() {
+    use crate::checkout_git::CatchUpView;
+    use hide_node_link::branch::CatchUpOutcome;
+    let mut runtime = runtime();
+    let target = target(&runtime, 1);
+    header_with(&mut runtime, &target, behind('a', 0, 5));
+    running(&mut runtime, &target, 'a');
+    assert!(!press(&mut runtime, 'a'), "one at a time");
+    assert!(runtime.ingest_checkout_catch_up(
+        &target,
+        Ok(CatchUpOutcome::Updated {
+            commit: "b".repeat(40)
+        })
+    ));
+    assert_eq!(shown_catch_up(&runtime), Some(CatchUpView::Running));
+    assert!(runtime.ingest_checkout_git((target, Ok(behind('b', 0, 0))), Instant::now()));
+    assert_eq!(shown_catch_up(&runtime), None);
+}
+
+#[test]
+fn catch_up_refused_by_the_operators_files_shows_their_count_and_a_late_answer_is_dropped() {
+    use crate::checkout_git::CatchUpView;
+    use hide_node_link::branch::CatchUpOutcome;
+    let mut runtime = runtime();
+    let first = target(&runtime, 1);
+    header_with(&mut runtime, &first, behind('a', 0, 5));
+    running(&mut runtime, &first, 'a');
+    assert!(runtime.ingest_checkout_catch_up(
+        &first,
+        Ok(CatchUpOutcome::Dirty {
+            files: vec!["a.rs".into()],
+            total: 3
+        })
+    ));
+    assert_eq!(
+        shown_catch_up(&runtime),
+        Some(CatchUpView::Refused { files: 3 })
+    );
+    let second = target(&runtime, 2);
+    header_with(&mut runtime, &second, behind('a', 0, 5));
+    running(&mut runtime, &second, 'a');
+    assert!(!runtime.ingest_checkout_catch_up(&first, Err("late".into())));
+    assert_eq!(
+        shown_catch_up(&runtime),
+        Some(CatchUpView::Running),
+        "the answer for the first target leaves the second's run alone"
+    );
+}
+
+#[test]
+fn catch_up_in_a_checkout_mid_merge_says_so_and_a_landed_run_ends_when_reads_fail() {
+    use crate::checkout_git::CatchUpView;
+    use hide_node_link::branch::CatchUpOutcome;
+    let mut runtime = runtime();
+    let target = target(&runtime, 1);
+    header_with(&mut runtime, &target, behind('a', 0, 5));
+    running(&mut runtime, &target, 'a');
+    assert!(runtime.ingest_checkout_catch_up(&target, Ok(CatchUpOutcome::InProgress)));
+    assert_eq!(shown_catch_up(&runtime), Some(CatchUpView::Busy));
+    running(&mut runtime, &target, 'a');
+    runtime.ingest_checkout_catch_up(
+        &target,
+        Ok(CatchUpOutcome::Updated {
+            commit: "b".repeat(40),
+        }),
+    );
+    assert_eq!(shown_catch_up(&runtime), Some(CatchUpView::Running));
+    runtime.ingest_checkout_git((target, Err("git did not answer".into())), Instant::now());
+    assert_eq!(shown_catch_up(&runtime), None);
 }

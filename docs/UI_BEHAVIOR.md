@@ -24,6 +24,12 @@ A failed fetch keeps the last counts dimmed and says since when they are old; a 
 With the background fetch turned off in Project settings the project is not fetched and the detail shows the last `FETCH_HEAD` time, the operator's own fetch.
 `herdr-core/src/runtime/fetch.rs` owns the schedule, `herdr-core/src/fetch.rs` runs it, and `hide-host/src/worktrees.rs` (`fetch_remote`) is the node's fetch.
 Only the ↑ arrow uses the existing success green and only the ↓ arrow uses warning orange; both counts and the file count remain neutral, including when the branch is ahead and behind at once.
+While the branch has commits to receive and none to send, the detail ends with `받기`, which moves the branch and its files to the tracking branch as Hide last fetched it, on the machine that holds the checkout: fast-forward only, with no fetch, merge commit, rebase or push, and only from the HEAD the detail showed.
+While it runs the button reads `받는 중` and stays until the Git read shows the new HEAD (once the node has moved it, a failed Git read ends the wait too); then the counts are what changed, and no message says it worked.
+When uncommitted, untracked or ignored files would be overwritten, nothing moves and the detail says `커밋 안 한 파일 N개가 겹쳐서 못 받았어요` with `다시 받기`; a checkout partway through a merge, rebase, cherry-pick or revert says `진행 중인 머지나 리베이스를 먼저 끝내야 받을 수 있어요`; any other failure says `받지 못했어요` with the same button, and its reason goes to the diagnostic log.
+When the branch also has commits to send, the detail has no button and says `양쪽에 커밋이 있어 직접 합쳐야 해요`, because choosing between a merge and a rebase is the operator's.
+A failing fetch leaves the button, which then takes the tracking branch as last received.
+`herdr-core/src/runtime/checkout_git.rs` owns the run, and `hide-host/src/branch_merge.rs` (`catch_up`) is the node's fast-forward.
 At the right, the current HEAD's subject and relative age open a compact history popover directly below that trigger, with up to five newest commits from the captured HEAD; no commit is invented for an unborn branch.
 Above them, dimmed and marked `들어올 커밋`, sit up to five of the tracking branch's commits not yet in HEAD, with `+N개 더` when more are behind; while the fetch fails they are the ones last received and the list says since when.
 A local commit no remote has is marked `푸시하지 않음` when `origin` is on GitHub.
@@ -2461,6 +2467,7 @@ A newer page visit cancels that pending presentation; the answer never sends a s
 An agent that fails to start after its tab opened puts its text back in the draft with the reason, unless a new draft took its place, so the next ⌘N shows both; the reason stays until the text changes.
 A start with no answer in 90 seconds, the core's own limit for one, says so inside the panel.
 New worktree, Start from an issue and 맡기기 carry the same kind and model menus with the remembered choice preselected, and what they start becomes the next default; New worktree's kind menu starts with `Terminal only`, which is never remembered.
+A new worktree's branch starts from `origin/<base>` as Hide last fetched it when the local base has no commits of its own, so a base the operator fetched but never pulled is not where new work begins; a local base with unpushed commits, or with no fetched copy, is started from as it is, and the new branch tracks no upstream either way ([ARCHITECTURE.md](ARCHITECTURE.md), `live::new_branch_start`).
 Settings > Agents > Starting work has no default agent of its own.
 
 ## Usage

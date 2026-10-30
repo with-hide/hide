@@ -71,6 +71,22 @@ impl NodeLink for Node {
                 self.trusted.lock().unwrap().push((agent, path));
                 Value::Null
             }
+            // Where a new branch starts: the device's repository is on
+            // `main` and has no fetched `origin/main`, so the start is left
+            // to Herdr.
+            Call::Git {
+                command: hide_node_link::git::GitCommand::CurrentBranch,
+                ..
+            } => json!("main"),
+            Call::Git {
+                command: hide_node_link::git::GitCommand::RefCommit { .. },
+                ..
+            } => {
+                return Err(LinkError::Refused(hide_node_link::HostError::new(
+                    hide_node_link::ErrorCode::NotFound,
+                    "no such ref",
+                )));
+            }
             // The catalog's reads of the device's folders, which a session
             // pass of the device asks for, are no part of a spawn.
             Call::Project { .. } | Call::Worktrees { .. } => {

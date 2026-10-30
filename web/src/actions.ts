@@ -1626,6 +1626,14 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
       dispatch({ schema_version: 2, kind: "fetch_look", payload: {} });
     },
 
+    /**
+     * `받기`: moves the checkout's branch to its upstream as Hide last fetched
+     * it, fast-forward only, from the commit the header showed.
+     */
+    catchUpCheckout(deviceId: string, path: string, headSha: string) {
+      dispatch({ schema_version: 2, kind: "checkout_catch_up", payload: { device_id: deviceId, path, head_sha: headSha } });
+    },
+
     /** Reads each of these local Git projects' GitHub answer again (General's GitHub row, Check again). */
     refreshGithub(workspaceIds: readonly string[]) {
       for (const workspaceId of workspaceIds) dispatch({ schema_version: 2, kind: "github_request", payload: { workspace_id: workspaceId, refresh: true } });
