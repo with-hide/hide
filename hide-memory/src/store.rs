@@ -40,7 +40,7 @@ pub use reinforcement::words_digest;
 pub use repeats::{RepeatRequest, RepeatScope, RepeatSource, instruction_line};
 pub use upkeep::{Aging, AgingReport, CHANGE_LIMIT, CardChange, ChangeKind};
 
-const SCHEMA_VERSION: i64 = 24;
+const SCHEMA_VERSION: i64 = 25;
 /// Version 2 names where analysis can go: the agent Hide AI runs on and any
 /// agent the operator added under its fallback list (PRD settings-cleanup
 /// D-26), which now includes vendors other than the two it was limited to.
@@ -3246,7 +3246,7 @@ impl MemoryStore {
               WHERE rii.item_id=i.id AND ir.turn_id='show' AND ir.created_at_ms>=?2) AS pulled \
              FROM memory_items i JOIN memory_revisions r ON r.item_id=i.id AND r.revision=i.current_revision \
              LEFT JOIN card_promotions p ON p.item_id=i.id AND (p.revision=i.current_revision OR p.state IN ('running','pr_open','building','ready')) \
-             WHERE i.project_id=?1 AND i.lifecycle='active' AND r.kind IN ('rule','lesson','decision') AND r.verified_at_ms IS NOT NULL AND NOT {} \
+             WHERE i.project_id=?1 AND i.lifecycle='active' AND i.planned=0 AND r.kind IN ('rule','lesson','decision') AND r.verified_at_ms IS NOT NULL AND NOT {} \
              AND NOT EXISTS(SELECT 1 FROM card_comparisons c WHERE c.item_id=i.id AND c.revision=i.current_revision) AND ((i.promotion_ok_revision IS i.current_revision)=?6) \
              AND (?6 OR i.reverify_at_ms IS NULL OR i.reverify_at_ms<=?7) \
              AND (p.item_id IS NULL OR p.state='outdated' OR (p.state='dismissed' AND p.revision!=i.current_revision))) \
@@ -4461,6 +4461,22 @@ COMMIT;"#,
     // restore.
     if version == 23 {
         migrate_version_twenty_three(connection)?;
+        version = 24;
+    }
+    // Version 25 marks the cards that describe a plan not built yet, which
+    // are never offered for the documents. New cards are not made from
+    // plans, so only the cards from before carry the mark: the analysis
+    // that wrote them said so in their text as `(계획`, and this one pass
+    // reads that once; from here on only the column decides. Only a new
+    // column and its value change, so there is nothing a backup would
+    // restore.
+    if version == 24 {
+        let marked = migrate_version_twenty_four(connection)?;
+        if marked > 0 {
+            diagnostic(serde_json::json!({
+                "component": "memory_store", "kind": "migration.planned_cards", "cards": marked,
+            }));
+        }
         version = SCHEMA_VERSION;
     }
     if version != SCHEMA_VERSION {
@@ -4481,7 +4497,7 @@ fn migrate_version_twenty_three(connection: &Connection) -> Result<(), MemoryErr
         let actual: i64 = connection.pragma_query_value(None, "user_version", |row| row.get(0))?;
         match actual {
             23 => add_branch_decision(connection),
-            SCHEMA_VERSION => Ok(()),
+            24..=SCHEMA_VERSION => Ok(()),
             found => Err(MemoryError::WrongSchema {
                 found,
                 expected: SCHEMA_VERSION,
@@ -4496,6 +4512,54 @@ fn migrate_version_twenty_three(connection: &Connection) -> Result<(), MemoryErr
         }
     }
     Ok(())
+}
+
+/// Adds `memory_items.planned` and marks the cards whose current text says
+/// `(계획`; answers how many it marked, none when another opener upgraded the
+/// store first.
+fn migrate_version_twenty_four(connection: &Connection) -> Result<usize, MemoryError> {
+    connection.execute_batch("BEGIN IMMEDIATE")?;
+    let result = (|| -> Result<usize, MemoryError> {
+        let actual: i64 = connection.pragma_query_value(None, "user_version", |row| row.get(0))?;
+        match actual {
+            24 => {
+                // A store an unreleased build made has the column already.
+                let has: bool = connection.query_row(
+                    "SELECT EXISTS(SELECT 1 FROM pragma_table_info('memory_items') WHERE name='planned')",
+                    [],
+                    |row| row.get(0),
+                )?;
+                if !has {
+                    connection.execute_batch(
+                        "ALTER TABLE memory_items ADD COLUMN planned INTEGER NOT NULL DEFAULT 0;",
+                    )?;
+                }
+                let marked = connection.execute(
+                    "UPDATE memory_items SET planned=1 WHERE EXISTS(SELECT 1 FROM memory_revisions r \
+                     WHERE r.item_id=memory_items.id AND r.revision=memory_items.current_revision \
+                     AND (instr(r.title,'(계획')>0 OR instr(r.body,'(계획')>0))",
+                    [],
+                )?;
+                connection.execute_batch("PRAGMA user_version=25;")?;
+                Ok(marked)
+            }
+            SCHEMA_VERSION => Ok(0),
+            found => Err(MemoryError::WrongSchema {
+                found,
+                expected: SCHEMA_VERSION,
+            }),
+        }
+    })();
+    match result {
+        Ok(marked) => {
+            connection.execute_batch("COMMIT")?;
+            Ok(marked)
+        }
+        Err(error) => {
+            let _ = connection.execute_batch("ROLLBACK");
+            Err(error)
+        }
+    }
 }
 
 fn add_branch_decision(connection: &Connection) -> Result<(), MemoryError> {
@@ -5223,7 +5287,7 @@ CREATE TABLE session_sources(id TEXT NOT NULL,project_id TEXT NOT NULL REFERENCE
 CREATE TABLE session_cursors(project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,provider TEXT NOT NULL,session_id TEXT NOT NULL,byte_offset INTEGER NOT NULL,pending_bytes BLOB NOT NULL,last_content_hash TEXT,updated_at_ms INTEGER NOT NULL,operator_events INTEGER NOT NULL DEFAULT 0,PRIMARY KEY(project_id,provider,session_id));
 CREATE TABLE receipt_cursors(project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,provider TEXT NOT NULL,session_id TEXT NOT NULL,byte_offset INTEGER NOT NULL,pending_bytes BLOB NOT NULL,last_content_hash TEXT,updated_at_ms INTEGER NOT NULL,operator_events INTEGER NOT NULL DEFAULT 0,PRIMARY KEY(project_id,provider,session_id));
 CREATE TABLE analysis_batches(id TEXT PRIMARY KEY,project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,provider TEXT NOT NULL,analysis_provider TEXT NOT NULL,session_id TEXT NOT NULL,content_hash TEXT NOT NULL,created_at_ms INTEGER NOT NULL,UNIQUE(project_id,provider,session_id,content_hash));
-CREATE TABLE memory_items(id TEXT PRIMARY KEY,project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,lifecycle TEXT NOT NULL CHECK(lifecycle IN('active','superseded','conflicting','tombstoned')),current_revision INTEGER NOT NULL,confidence REAL NOT NULL,salience REAL NOT NULL,created_at_ms INTEGER NOT NULL,updated_at_ms INTEGER NOT NULL,number INTEGER NOT NULL DEFAULT 0,pull_count INTEGER NOT NULL DEFAULT 0,last_used_at_ms INTEGER,reverify_at_ms INTEGER,promotion_ok_revision INTEGER,evidence_checked_at_ms INTEGER,outdated_reason TEXT);
+CREATE TABLE memory_items(id TEXT PRIMARY KEY,project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,lifecycle TEXT NOT NULL CHECK(lifecycle IN('active','superseded','conflicting','tombstoned')),current_revision INTEGER NOT NULL,confidence REAL NOT NULL,salience REAL NOT NULL,created_at_ms INTEGER NOT NULL,updated_at_ms INTEGER NOT NULL,number INTEGER NOT NULL DEFAULT 0,pull_count INTEGER NOT NULL DEFAULT 0,last_used_at_ms INTEGER,reverify_at_ms INTEGER,promotion_ok_revision INTEGER,evidence_checked_at_ms INTEGER,outdated_reason TEXT,planned INTEGER NOT NULL DEFAULT 0);
 CREATE INDEX memory_items_project_state ON memory_items(project_id,lifecycle,updated_at_ms DESC);
 CREATE UNIQUE INDEX memory_items_project_number ON memory_items(project_id,number);
 CREATE TABLE memory_revisions(id TEXT PRIMARY KEY,item_id TEXT NOT NULL REFERENCES memory_items(id) ON DELETE CASCADE,revision INTEGER NOT NULL,body TEXT NOT NULL,kind TEXT NOT NULL,lifecycle TEXT NOT NULL,created_at_ms INTEGER NOT NULL,batch_id TEXT NOT NULL,title TEXT NOT NULL DEFAULT '',aliases TEXT NOT NULL DEFAULT '[]',cited_paths TEXT NOT NULL DEFAULT '[]',verified_at_ms INTEGER,docs_compared INTEGER NOT NULL DEFAULT 1 CHECK(docs_compared IN (0,1)),UNIQUE(item_id,revision));
@@ -11194,6 +11258,67 @@ PRAGMA user_version=14;"#,
                 .unwrap(),
             None,
             "an hour from the correction, not an hour past the wrong time"
+        );
+    }
+
+    /// A card the analysis wrote as a plan (`(계획` in its text) is marked
+    /// once, as the store is upgraded, and is never offered for the
+    /// documents; it stays a card agents are given.
+    #[test]
+    fn a_version_twenty_four_store_marks_its_plan_cards_and_never_offers_them_for_the_documents() {
+        let (temp, mut store, project) = store();
+        let path = temp.path().join("memory.sqlite3");
+        let decision = |text: &str| Candidate {
+            kind: CandidateKind::Decision,
+            ..candidate(text, CandidateRelation::New)
+        };
+        store
+            .apply_candidates(
+                &sourced_batch(&project, "b1", "s1"),
+                &[
+                    decision("Ship weekly on Monday"),
+                    decision("(계획, 아직 미구현) Desk splits what it hears into three"),
+                ],
+            )
+            .unwrap();
+        for number in [1, 2] {
+            let card = store.item_by_number(&project, number).unwrap().unwrap();
+            store
+                .apply_candidates(
+                    &sourced_batch(&project, &format!("again-{number}"), "s2"),
+                    &[decision("again").with_relation(CandidateRelation::Same {
+                        target_id: card.id.clone(),
+                    })],
+                )
+                .unwrap();
+            assert!(store.mark_promotion_checked(&project, number, 1).unwrap());
+        }
+        store
+            .connection
+            .execute_batch("UPDATE memory_items SET planned=0; PRAGMA user_version=24;")
+            .unwrap();
+        drop(store);
+        let store = MemoryStore::open(&path).unwrap();
+        let planned: Vec<u64> = store
+            .connection
+            .prepare("SELECT number FROM memory_items WHERE planned=1")
+            .unwrap()
+            .query_map([], |row| row.get(0))
+            .unwrap()
+            .collect::<rusqlite::Result<_>>()
+            .unwrap();
+        assert_eq!(planned, [2]);
+        let suggested: Vec<u64> = store
+            .promotion_suggestions(&project, 30 * 86_400_000, 3)
+            .unwrap()
+            .into_iter()
+            .map(|suggestion| suggestion.number)
+            .collect();
+        assert_eq!(suggested, [1]);
+        assert_eq!(
+            store.item_by_number(&project, 2).unwrap().unwrap().lifecycle,
+            MemoryLifecycle::Active,
+            "the plan card stays for the agents that build it later"
         );
     }
 

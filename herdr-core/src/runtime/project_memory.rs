@@ -1398,9 +1398,21 @@ fn load_opened_memory(
     let promotions = store
         .promotions(&identity.id)
         .map_err(|error| error.to_string())?;
-    let previewed = promotions
+    let suggestions = store
+        .promotion_suggestions(
+            &identity.id,
+            super::memory::now_ms(),
+            // The 제안 tab's cap on new suggestions replaces Memory's own
+            // (PRD hide-ai-suggestions D-42); it keeps as many as it stores.
+            crate::suggestions::policy::STORED_NEW_CAP,
+        )
+        .map_err(|error| error.to_string())?;
+    // A card on its way into the documents, and one offered for them, whose
+    // text the 제안 row shows when it opens.
+    let previewed = suggestions
         .iter()
-        .filter_map(|(number, promotion)| {
+        .map(|suggestion| suggestion.number)
+        .chain(promotions.iter().filter_map(|(number, promotion)| {
             matches!(
                 promotion.state,
                 hide_memory::PromotionState::Running
@@ -1409,7 +1421,7 @@ fn load_opened_memory(
                     | hide_memory::PromotionState::Ready
             )
             .then_some(*number)
-        })
+        }))
         .collect::<std::collections::HashSet<_>>();
     let mut revisions = HashMap::new();
     let rows = store
@@ -1484,15 +1496,6 @@ fn load_opened_memory(
         }),
         None => None,
     };
-    let suggestions = store
-        .promotion_suggestions(
-            &identity.id,
-            super::memory::now_ms(),
-            // The 제안 tab's cap on new suggestions replaces Memory's own
-            // (PRD hide-ai-suggestions D-42); it keeps as many as it stores.
-            crate::suggestions::policy::STORED_NEW_CAP,
-        )
-        .map_err(|error| error.to_string())?;
     let archived = store
         .archived_cards(&identity.id)
         .map_err(|error| error.to_string())?

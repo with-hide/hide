@@ -232,8 +232,12 @@ pub struct SuggestionRowSnapshot {
     pub discomfort: Option<String>,
     /// 놓친 것, one sentence.
     pub cause: Option<String>,
-    /// 고칠 것.
+    /// 고칠 것 in one text: an issue's, and a document fix written before
+    /// fixes carried a plan.
     pub fix: Option<String>,
+    /// A document fix as the row shows it before the press: its result
+    /// title, its file and the words it writes.
+    pub plan: Option<crate::suggestions::notebook::FixPlan>,
     /// A pull request (`PR 만들기`) or an issue (`이슈 만들기`).
     pub outcome: Outcome,
     pub basis: Option<SuggestionBasisSnapshot>,
@@ -258,6 +262,22 @@ pub struct SuggestionRowSnapshot {
     /// names `정정 N개 문서에 반영` (PRD hide-ai-branch-first-apply B20);
     /// empty for a notebook line.
     pub memory_cards: Vec<u64>,
+    /// A Memory card offered for the documents: what it says and how much
+    /// the operator leaned on it; none for other rows.
+    pub memory: Option<SuggestionMemorySnapshot>,
+}
+
+/// A Memory card offered for the documents, as its row opens: the card's
+/// text and its evidence. The document it goes into is the agent's choice,
+/// shown as a branch before it merges.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct SuggestionMemorySnapshot {
+    /// The card's text, cut as the Memory list cuts it.
+    pub body: Option<String>,
+    /// Sessions that carried the operator's own words for it.
+    pub human_sessions: usize,
+    /// Sessions whose agent read it in full.
+    pub pulled_sessions: usize,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
@@ -349,8 +369,14 @@ pub struct SuggestionAttemptSnapshot {
     pub started_at_unix_ms: u64,
     pub pr_number: Option<u32>,
     pub url: Option<String>,
-    /// The agent's registration id while it lives, which opens its pane.
+    /// The agent's coordination id, which the runtime resolves to its pane;
+    /// the shell never sees it, since no list names an agent by it.
+    #[serde(skip)]
     pub agent_id: Option<String>,
+    /// The pane of the agent while it lives, as the agent lists name it:
+    /// `에이전트 ↗` opens it, and the row reads the agent's own question
+    /// from that list's row.
+    pub agent_pane: Option<String>,
     /// Why a failed attempt failed, or why a ready branch's merge did not
     /// happen (`merge_dirty`, `merge_conflict`), as a code the shell words.
     pub failure: Option<String>,

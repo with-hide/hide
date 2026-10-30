@@ -174,11 +174,11 @@ pub(crate) fn outgrew_skip(
 
 /// D-11's three questions, as the core can answer them: the line names one
 /// cause, it actually hurt (something counted), and it is one pull request
-/// or one issue.
+/// or one issue, whose change the row can show before the press.
 pub fn answers_the_questions(line: &Line, score: &Score) -> bool {
     line.struck.is_none()
         && line.has_cause()
-        && line.outcome.is_some()
+        && line.names_its_fix()
         && (score.points > 0.0 || score.ignored > 0)
 }
 
@@ -295,7 +295,16 @@ mod tests {
                 NOW,
             )
             .unwrap();
-        notebook.line(applied.created.unwrap()).unwrap().clone()
+        let mut line = notebook.line(applied.created.unwrap()).unwrap().clone();
+        // As an investigation leaves a document line it kept: with what its
+        // press changes, which an offered line needs.
+        line.plan = Some(crate::suggestions::notebook::FixPlan {
+            title: "Build before the tests".into(),
+            path: "scripts/test.sh".into(),
+            new_file: false,
+            draft: "cargo build --workspace".into(),
+        });
+        line
     }
 
     /// PRD memory-self-improve D-37, B13, B14: four times in one session is

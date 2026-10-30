@@ -90,8 +90,13 @@ pub struct Line {
     pub discomfort: Option<String>,
     /// What was missed, one sentence (`놓친 것`, D-05).
     pub cause: Option<String>,
-    /// What to change.
+    /// What to change, in one text: an issue's, and a document fix written
+    /// before fixes carried a [`FixPlan`], which the row still shows as it is.
     pub fix: Option<String>,
+    /// A document fix as the row shows it before the press: what changes,
+    /// in which file, and the words it writes.
+    #[serde(default)]
+    pub plan: Option<FixPlan>,
     pub outcome: Option<Outcome>,
     /// The signal and tag a line the deterministic grouping wrote rests on;
     /// the screen words a line with no text from it.
@@ -106,6 +111,21 @@ pub struct Line {
     pub updated_at_unix_ms: u64,
 }
 
+/// What a document fix changes, written by the investigation once it has
+/// looked: the result in a few words, the file and the draft.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FixPlan {
+    /// What changes, as a result (`머지 절차를 문서에 적어 두기`).
+    pub title: String,
+    /// The file the fix edits, from the repository root.
+    pub path: String,
+    /// The repository has no such file yet, so the fix makes it; checked on
+    /// the Project's machine when the plan was written.
+    pub new_file: bool,
+    /// The words to add or change, as they would be written.
+    pub draft: String,
+}
+
 impl Line {
     fn new(id: LineId, now: u64) -> Self {
         Self {
@@ -113,6 +133,7 @@ impl Line {
             discomfort: None,
             cause: None,
             fix: None,
+            plan: None,
             outcome: None,
             basis: None,
             records: Vec::new(),
@@ -128,6 +149,19 @@ impl Line {
     /// words or by the tag it rests on.
     pub(crate) fn has_cause(&self) -> bool {
         self.cause.is_some() || self.basis.is_some()
+    }
+
+    /// Whether the line says what its press changes, which a suggestion
+    /// needs before it is offered: a document fix its plan (or, written
+    /// before plans, its fix), an issue and a global instruction line their
+    /// own words. A line grouped by its tag alone waits for an
+    /// investigation to write it.
+    pub(crate) fn names_its_fix(&self) -> bool {
+        match self.outcome {
+            Some(Outcome::Pr) => self.plan.is_some() || self.fix.is_some(),
+            Some(Outcome::Issue | Outcome::Local) => true,
+            None => false,
+        }
     }
 }
 
@@ -171,11 +205,24 @@ pub enum NotebookEdit {
         line: LineId,
         reason: Option<String>,
     },
+    /// A document fix (`pr`) names its result `title`, the `path` of the
+    /// file and the `draft`; an issue names what was seen in `fix`.
     WriteCause {
         line: LineId,
         cause: String,
-        fix: String,
         outcome: Outcome,
+        #[serde(default)]
+        fix: Option<String>,
+        #[serde(default)]
+        title: Option<String>,
+        #[serde(default)]
+        path: Option<String>,
+        #[serde(default)]
+        draft: Option<String>,
+        /// Set by Hide after it looked for `path` on the Project's machine,
+        /// never by the model.
+        #[serde(default, skip_deserializing)]
+        new_file: bool,
     },
     Pass {
         records: Vec<RecordId>,
@@ -226,6 +273,14 @@ pub enum EditRefused {
     },
     /// At the line cap with no struck or ended line to make room (D-46).
     NotebookFull,
+    /// A cause names a global instruction line, which only the operator's
+    /// words write.
+    LocalOutcome,
+    /// The fix's file could not be looked for on the Project's machine, so
+    /// whether it exists is not known.
+    TargetUnchecked,
+    /// The fix's file is outside the repository or is one Hide never reads.
+    TargetRefused,
 }
 
 /// What an edit changed, which is exactly what the store writes.
@@ -262,6 +317,22 @@ fn required(value: String, field: &'static str, limit: usize) -> Result<String, 
     Ok(trimmed
         .chars()
         .map(|c| if c.is_control() { ' ' } else { c })
+        .collect())
+}
+
+/// A draft as it is written: several lines kept, other control characters
+/// made spaces.
+fn draft_text(value: String) -> Result<String, EditRefused> {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        return Err(EditRefused::EmptyText { field: "draft" });
+    }
+    if trimmed.chars().count() > policy::DRAFT_CHARS {
+        return Err(EditRefused::TooLong { field: "draft" });
+    }
+    Ok(trimmed
+        .chars()
+        .map(|c| if c.is_control() && c != '\n' { ' ' } else { c })
         .collect())
 }
 
@@ -474,14 +545,46 @@ impl Notebook {
             NotebookEdit::WriteCause {
                 line,
                 cause,
-                fix,
                 outcome,
+                fix,
+                title,
+                path,
+                draft,
+                new_file,
             } => {
                 let cause = required(cause, "cause", policy::CAUSE_CHARS)?;
-                let fix = required(fix, "fix", policy::FIX_CHARS)?;
+                let given = |value: Option<String>, field: &'static str| {
+                    value.ok_or(EditRefused::EmptyText { field })
+                };
+                let (fix, plan) = match outcome {
+                    Outcome::Pr => {
+                        let title = required(
+                            given(title, "title")?,
+                            "title",
+                            policy::PLAN_TITLE_CHARS,
+                        )?;
+                        let path = required(given(path, "path")?, "path", policy::READ_PATH_CHARS)?;
+                        let draft = draft_text(given(draft, "draft")?)?;
+                        let plan = FixPlan {
+                            title,
+                            path,
+                            new_file,
+                            draft,
+                        };
+                        (None, Some(plan))
+                    }
+                    Outcome::Issue => (
+                        Some(required(given(fix, "fix")?, "fix", policy::FIX_CHARS)?),
+                        None,
+                    ),
+                    // A global instruction line is the operator's own words,
+                    // never an investigation's.
+                    Outcome::Local => return Err(EditRefused::LocalOutcome),
+                };
                 let target = self.line_mut(line)?;
                 target.cause = Some(cause);
-                target.fix = Some(fix);
+                target.fix = fix;
+                target.plan = plan;
                 target.outcome = Some(outcome);
                 target.updated_at_unix_ms = now;
                 applied.touched.insert(line);
@@ -519,6 +622,79 @@ mod tests {
                 })
                 .collect(),
         }
+    }
+
+    /// A cause on line 1 with a document fix's title and path, and `draft`.
+    fn write_cause(cause: &str, outcome: Outcome, draft: Option<&str>) -> NotebookEdit {
+        NotebookEdit::WriteCause {
+            line: LineId(1),
+            cause: cause.into(),
+            outcome,
+            fix: None,
+            title: Some("Run the linter before the tests".into()),
+            path: Some("AGENTS.md".into()),
+            draft: draft.map(Into::into),
+            new_file: false,
+        }
+    }
+
+    #[test]
+    fn a_document_fix_keeps_its_title_file_and_draft_and_an_issue_its_words() {
+        let index = index(1..=1);
+        let mut notebook = Notebook::default();
+        notebook.apply(new_line(&[1]), &index, 1).unwrap();
+        notebook
+            .apply(
+                write_cause("lint", Outcome::Pr, Some("+ Run the linter first.\n+ Then the tests.")),
+                &index,
+                2,
+            )
+            .unwrap();
+        let line = notebook.line(LineId(1)).unwrap();
+        assert_eq!(
+            line.plan,
+            Some(FixPlan {
+                title: "Run the linter before the tests".into(),
+                path: "AGENTS.md".into(),
+                new_file: false,
+                draft: "+ Run the linter first.\n+ Then the tests.".into(),
+            })
+        );
+        assert_eq!(line.fix, None);
+        assert!(line.names_its_fix());
+        let issue = NotebookEdit::WriteCause {
+            line: LineId(1),
+            cause: "lint".into(),
+            outcome: Outcome::Issue,
+            fix: Some("The lint job fails on main".into()),
+            title: None,
+            path: None,
+            draft: None,
+            new_file: false,
+        };
+        notebook.apply(issue, &index, 3).unwrap();
+        let line = notebook.line(LineId(1)).unwrap();
+        assert_eq!(line.plan, None, "an issue writes no document");
+        assert_eq!(line.fix.as_deref(), Some("The lint job fails on main"));
+    }
+
+    #[test]
+    fn a_document_line_grouped_by_its_tag_alone_does_not_name_its_fix() {
+        let index = index(1..=1);
+        let mut notebook = Notebook::default();
+        notebook
+            .apply(
+                NotebookEdit::NewLine {
+                    discomfort: None,
+                    records: vec![RecordId(1)],
+                    basis: Some((Signal::RepeatedRequest, "머지 전 절차".into())),
+                    outcome: Some(Outcome::Pr),
+                },
+                &index,
+                1,
+            )
+            .unwrap();
+        assert!(!notebook.line(LineId(1)).unwrap().names_its_fix());
     }
 
     fn new_line(records: &[u64]) -> NotebookEdit {
@@ -606,22 +782,25 @@ mod tests {
                 },
             ),
             (
-                NotebookEdit::WriteCause {
-                    line: LineId(1),
-                    cause: " ".into(),
-                    fix: "x".into(),
-                    outcome: Outcome::Pr,
-                },
+                write_cause(" ", Outcome::Pr, Some("+ Run the linter first.")),
                 EditRefused::EmptyText { field: "cause" },
             ),
             (
-                NotebookEdit::WriteCause {
-                    line: LineId(1),
-                    cause: "x".repeat(policy::CAUSE_CHARS + 1),
-                    fix: "x".into(),
-                    outcome: Outcome::Pr,
-                },
+                write_cause(
+                    &"x".repeat(policy::CAUSE_CHARS + 1),
+                    Outcome::Pr,
+                    Some("+ Run the linter first."),
+                ),
                 EditRefused::TooLong { field: "cause" },
+            ),
+            (
+                // A document fix says which file and what it writes.
+                write_cause("x", Outcome::Pr, None),
+                EditRefused::EmptyText { field: "draft" },
+            ),
+            (
+                write_cause("x", Outcome::Issue, Some("+ Run the linter first.")),
+                EditRefused::EmptyText { field: "fix" },
             ),
             (
                 NotebookEdit::Merge {

@@ -1138,6 +1138,28 @@ impl Runtime {
 
     /// The sidebar row of the live agent with coordination id `id`, on this
     /// machine or a device.
+    /// The opened Project's attempt agents that live, each by its
+    /// coordination id with the pane its row in the agent lists names: the
+    /// shell knows an agent by that row, never by the coordination id.
+    pub(super) fn attempt_agent_panes(&self) -> Vec<(String, String)> {
+        let Some(opened) = self.suggestions_work.opened.as_ref() else {
+            return Vec::new();
+        };
+        self.suggestions_work
+            .apply
+            .followed
+            .iter()
+            .filter(|attempt| {
+                attempt.location.node == opened.node.as_str() && attempt.location.path == opened.root
+            })
+            .filter_map(|attempt| {
+                let id = attempt.agent_id.as_deref()?;
+                let row = self.suggestion_agent_row(id)?;
+                Some((id.to_owned(), row.pane_id.clone()))
+            })
+            .collect()
+    }
+
     fn suggestion_agent_row(&self, id: &str) -> Option<&crate::model::SidebarAgentSnapshot> {
         let ledger = self.delivery_state().ok()?;
         let record = ledger
@@ -1444,6 +1466,17 @@ fn prompt(
     if let Some(fix) = &brief.fix {
         facts.push(format!("what to change: {fix}"));
     }
+    // What the operator saw on the row before pressing: the change to make,
+    // in this file, starting from this draft.
+    if let Some(plan) = &brief.plan {
+        facts.push(format!("the change the operator chose: {}", plan.title));
+        facts.push(if plan.new_file {
+            format!("file: {} (not in the repository yet; create it)", plan.path)
+        } else {
+            format!("file: {}", plan.path)
+        });
+        facts.push(format!("draft of the words to write:\n{}", plan.draft));
+    }
     if let Some((signal, tag)) = &brief.basis {
         facts.push(format!(
             "seen as {} `{tag}` in {} records",
@@ -1680,6 +1713,7 @@ mod tests {
             discomfort: Some("세션에서 나온 말".into()),
             cause: Some("a session's words".into()),
             fix: Some("quarantine it".into()),
+            plan: None,
             basis: Some((Signal::CheckFailed, "e2e (shard 3)".into())),
             level: 0,
             prs: vec![12, 9],
