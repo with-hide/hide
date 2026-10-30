@@ -6,7 +6,7 @@ import { TOUR_WORLD, type TourModel } from "../worlds/tour";
 export default chapter<TourModel>({
   id: "overview",
   number: 0,
-  version: 1,
+  version: 2,
   world: TOUR_WORLD,
   quest: false,
   steps: [
@@ -16,7 +16,7 @@ export default chapter<TourModel>({
     { id: "search", target: "[data-sidebar-search]", side: "right" },
     { id: "center", target: "[data-agent-area]", side: "right" },
     { id: "lane", target: "[data-lane-slot]", side: "left" },
-    { id: "todo", target: "[data-project-todo]", side: "left" },
+    { id: "results", target: "[data-project-status]", side: "left" },
     { id: "tools", target: "[data-lane-tool]", side: "left" },
     { id: "devices", target: "[data-device-rail]", side: "right" },
     { id: "end", zones: true, side: "center" },

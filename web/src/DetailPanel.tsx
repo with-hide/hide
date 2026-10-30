@@ -1,4 +1,4 @@
-import { ArrowLeftIcon, CoinsIcon, ExternalLinkIcon, FileTextIcon, FolderGit2Icon, GitBranchIcon, GitPullRequestIcon, ListChecksIcon, SettingsIcon, WaypointsIcon, XIcon } from "lucide-react";
+import { ArrowLeftIcon, CoinsIcon, ExternalLinkIcon, FileDiffIcon, FileTextIcon, FolderGit2Icon, GitBranchIcon, GitPullRequestIcon, ListChecksIcon, SettingsIcon, WaypointsIcon, XIcon } from "lucide-react";
 import { cn } from "./lib/utils";
 import { PR_LOOK } from "./prMark";
 import type { Actions } from "./actions";
@@ -7,7 +7,7 @@ import { Hint } from "./components/ui/tooltip";
 import { useInterfaceTranslation } from "./i18n/client";
 import { MissionMap } from "./MissionMap";
 import { PlanMap } from "./PlanMap";
-import { ProjectCostView, WorktreesView } from "./ProjectDetail";
+import { ProjectCostView, RemainsView, WorktreesView } from "./ProjectDetail";
 import { missionOf } from "./missions";
 import { BranchCardView } from "./BranchCard";
 import { PrCardView } from "./PrCard";
@@ -59,6 +59,10 @@ function useItemTitle(item: DetailItem | null): string {
       const project = catalogWorkspaces(s.rest).find((row) => row.id === item.workspace_id)?.label ?? "";
       return t(item.kind === "worktrees" ? "projectTool.worktrees.title" : "projectTool.cost.title", { project });
     }
+    if (item.kind === "remains") {
+      const checkout = catalogWorkspaces(s.rest).find((row) => row.id === item.workspace_id)?.checkouts.find((row) => row.id === item.checkout_id);
+      return t("projectTool.remains.title", { name: checkout?.branch ?? checkout?.label ?? "" });
+    }
     const title = sessionTitle(s, item.session);
     if (item.kind === "plan") return title ? t("detail.plan", { title }) : t("detail.planUntitled");
     return title ? t("detail.record", { title }) : t("detail.recordUntitled");
@@ -79,6 +83,7 @@ export function DetailIcon({ item, className }: { item: DetailItem; className?: 
   if (item.kind === "plan") return <ListChecksIcon aria-hidden="true" className={className} data-detail-mark="plan" />;
   if (item.kind === "worktrees") return <FolderGit2Icon aria-hidden="true" className={className} data-detail-mark="worktrees" />;
   if (item.kind === "cost") return <CoinsIcon aria-hidden="true" className={className} data-detail-mark="cost" />;
+  if (item.kind === "remains") return <FileDiffIcon aria-hidden="true" className={className} data-detail-mark="remains" />;
   if (item.kind === "branch") return <GitBranchIcon aria-hidden="true" className={className} data-detail-mark="branch" />;
   if (item.kind !== "pull_request") return <FileTextIcon aria-hidden="true" className={className} />;
   const look = state ? PR_LOOK[state] : null;
@@ -154,7 +159,9 @@ export function DetailPanel({ actions }: { actions: Actions }) {
                 ? <WorktreesView workspaceId={item.workspace_id} actions={actions} />
                 : item.kind === "cost"
                   ? <ProjectCostView workspaceId={item.workspace_id} actions={actions} />
-                  : item.kind === "branch"
+                  : item.kind === "remains"
+                    ? <RemainsView workspaceId={item.workspace_id} checkoutId={item.checkout_id} actions={actions} />
+                    : item.kind === "branch"
                     ? <BranchCardView workspaceId={item.workspace_id} rowId={item.row} path={item.path ?? null} actions={actions} />
                     : <SlotSessionRecord actions={actions} target={item.session} />}
       </div>

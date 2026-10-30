@@ -1921,6 +1921,11 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
      * its item opens in the viewing column, and pressed again while the
      * column shows it, the column folds.
      */
+    /** An item in the viewing column, whatever it showed (PRD project-panel-results B9, B22, B25). */
+    openDetail(item: import("./snapshot").DetailItem) {
+      openDetail(item);
+    },
+
     toggleDetailItem(item: import("./snapshot").DetailItem) {
       if (detailShown() && viewUp("detail") && sameDetailItem(rest()?.ui_state?.detail?.items.at(-1), item)) {
         return dispatch({ schema_version: 2, kind: "detail_show", payload: { shown: false } });
@@ -2227,6 +2232,32 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
     /** An agent chosen on an Overview or in the Agents list: its Workspace and pane (B12). */
     resolveSession(paneId: string) {
       dispatch({ schema_version: 2, kind: "resolve_session", payload: { pane_id: paneId } });
+    },
+
+    /**
+     * 마무리 맡기기 on a 흘린 것 row (PRD project-panel-results B11, B12): one
+     * request, which the core sends once however often it arrives.
+     */
+    handOffStray(workspaceId: string, checkoutId: string, requestId: string) {
+      dispatch({ schema_version: 2, kind: "stray_hand_off", payload: { workspace_id: workspaceId, checkout_id: checkoutId, request_id: requestId } });
+    },
+
+    /** 놔두기 on a 흘린 것 row, until a new commit or CI failure (B15). */
+    dismissStray(workspaceId: string, checkoutId: string) {
+      dispatch({ schema_version: 2, kind: "stray_dismiss", payload: { workspace_id: workspaceId, checkout_id: checkoutId } });
+    },
+
+    /** 되돌리기 after 놔두기 (B15). */
+    restoreStray(workspaceId: string, checkoutId: string) {
+      dispatch({ schema_version: 2, kind: "stray_restore", payload: { workspace_id: workspaceId, checkout_id: checkoutId } });
+    },
+
+    /** The Hide AI tool's 제안 tab for a Project, no row open (PRD project-panel-results B26). */
+    openSuggestions(deviceId: string, workspaceId: string) {
+      this.memoryOpen(workspaceId);
+      this.openProjectById(deviceId, workspaceId);
+      useUiStore.getState().showHideAiTab("suggestions");
+      showTool("memory");
     },
 
     /** ★ a task so it waits in 다시 볼 것 while quiet (PRD revisit-group D-03). */

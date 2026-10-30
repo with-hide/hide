@@ -222,13 +222,17 @@ export interface NodeUsage {
   agents: AgentUsage[];
   history: UsageHistory | null;
   /**
-   * Each of the node's projects' last seven days of cost (PRD lane-two-columns B31): absent until the first build succeeds, so a cost not read yet is not drawn as zero (B33); a project that ran no priced call is not listed. Amounts are millionths of a dollar.
+   * Each of the node's projects' last seven days of cost and tasks (PRD lane-two-columns B31, project-panel-results B21-B34): absent until the first build succeeds, so a cost not read yet is not drawn as zero (B33); a project that ran no call is not listed. Amounts are millionths of a dollar.
    */
   projects?: ProjectCost[];
   /**
    * The latest build of projects failed; the last built list stays. Absent otherwise.
    */
   projects_failed?: boolean;
+  /**
+   * What Hide AI's own calls cost in the seven days, kept apart from every task (PRD project-panel-results D-10, B24); absent until a build succeeded.
+   */
+  hide_ai_week_micro_usd?: number;
 }
 export interface AgentUsage {
   agent: string;
@@ -437,6 +441,10 @@ export interface ProjectCost {
   workspace_id: string;
   micro_usd: number;
   /**
+   * New tokens of the seven days' calls: input, output and cache writes.
+   */
+  tokens: number;
+  /**
    * @maxItems 7
    */
   days: {
@@ -451,14 +459,6 @@ export interface ProjectCost {
     model: string | null;
     micro_usd: number;
   }[];
-  /**
-   * @maxItems 3
-   */
-  sessions: {
-    agent: string;
-    session_id: string;
-    micro_usd: number;
-  }[];
   agents: {
     agent: string;
     micro_usd: number;
@@ -468,6 +468,111 @@ export interface ProjectCost {
   waiting: boolean;
   stale: boolean;
   limited: boolean;
+  /**
+   * The seven days' tasks, costliest first, at most 200 (PRD project-panel-results D-09, B27-B34): a top-level session with its children and grandchildren, a child that opened its own pull request standing as its own task, and a mission as one task.
+   *
+   * @maxItems 200
+   */
+  tasks: TaskCost[];
+  /**
+   * Every task of the seven days, the ones past the cap included (B34).
+   */
+  tasks_total: number;
+  week: ProjectWeek;
+}
+export interface TaskCost {
+  id: string;
+  kind: "task" | "mission";
+  root: {
+    agent: string;
+    session_id: string;
+  };
+  mission?: TaskMission;
+  micro_usd: number;
+  tokens: number;
+  /**
+   * Some of its calls had no price, so its amount is a lower bound.
+   */
+  unpriced: boolean;
+  started_at_unix_ms: number;
+  ended_at_unix_ms: number;
+  /**
+   * From its first session's first call to its pull request's merge, else to its last call (D-11).
+   */
+  elapsed_ms: number;
+  /**
+   * Every session's working time added up, parallel ones included (D-11).
+   */
+  worked_ms: number;
+  /**
+   * Its sessions, the root first and each child under its parent, at most 32.
+   *
+   * @maxItems 32
+   */
+  sessions: {
+    agent: string;
+    session_id: string;
+    depth: number;
+    micro_usd: number;
+    tokens: number;
+    worked_ms: number;
+    unpriced: boolean;
+  }[];
+  sessions_total: number;
+  result: TaskResult;
+  /**
+   * What it said last, for a task with no result (B32): the record's turn line, else its conversation's last answer; absent when neither is left.
+   */
+  last_line?: string | null;
+}
+export interface TaskMission {
+  id: string;
+  title: string;
+  prs: number;
+  merged: number;
+  reopened: number;
+  /**
+   * @maxItems 64
+   */
+  nodes: {
+    key: string;
+    title: string;
+    pr: number | null;
+    attempts: number;
+    reopened: number;
+    micro_usd: number;
+    tokens: number;
+    worked_ms: number;
+  }[];
+}
+/**
+ * What a task left (B30): `working` while one of its sessions works, else its pull request, else changes left in its worktree, else a commit in the default branch, else none.
+ */
+export interface TaskResult {
+  kind: "working" | "pr" | "changes" | "commit" | "none";
+  number?: number;
+  state?: "open" | "merged" | "closed";
+}
+/**
+ * The seven days' results (PRD project-panel-results B21, B22): pull requests merged and open, missions and how often they were opened again, merged pull requests per day under the day bars, the averages over the tasks whose pull request merged, and the tasks that ended with no result.
+ */
+export interface ProjectWeek {
+  merged_prs: number;
+  open_prs: number;
+  missions: number;
+  mission_reopened: number;
+  /**
+   * @maxItems 7
+   */
+  merged_by_day: number[];
+  per_pr: {
+    micro_usd: number;
+    tokens: number;
+    elapsed_ms: number;
+    worked_ms: number;
+  } | null;
+  no_result_tasks: number;
+  no_result_micro_usd: number;
 }
 export interface ClientEvent {
   schema_version: 2;

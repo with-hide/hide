@@ -264,7 +264,7 @@
           ]
         },
         "projects": {
-          "description": "Each of the node's projects' last seven days of cost (PRD lane-two-columns B31): absent until the first build succeeds, so a cost not read yet is not drawn as zero (B33); a project that ran no priced call is not listed. Amounts are millionths of a dollar.",
+          "description": "Each of the node's projects' last seven days of cost and tasks (PRD lane-two-columns B31, project-panel-results B21-B34): absent until the first build succeeds, so a cost not read yet is not drawn as zero (B33); a project that ran no call is not listed. Amounts are millionths of a dollar.",
           "type": "array",
           "items": {
             "$ref": "#/$defs/projectCost"
@@ -273,16 +273,22 @@
         "projects_failed": {
           "description": "The latest build of projects failed; the last built list stays. Absent otherwise.",
           "type": "boolean"
+        },
+        "hide_ai_week_micro_usd": {
+          "description": "What Hide AI's own calls cost in the seven days, kept apart from every task (PRD project-panel-results D-10, B24); absent until a build succeeded.",
+          "type": "integer",
+          "minimum": 0
         }
       }
     },
     "projectCost": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["workspace_id", "micro_usd", "days", "models", "sessions", "agents", "unpriced_agents", "partial", "waiting", "stale", "limited"],
+      "required": ["workspace_id", "micro_usd", "tokens", "days", "models", "agents", "unpriced_agents", "partial", "waiting", "stale", "limited", "tasks", "tasks_total", "week"],
       "properties": {
         "workspace_id": { "type": "string" },
         "micro_usd": { "type": "integer", "minimum": 0 },
+        "tokens": { "description": "New tokens of the seven days' calls: input, output and cache writes.", "type": "integer", "minimum": 0 },
         "days": {
           "type": "array",
           "maxItems": 7,
@@ -303,16 +309,6 @@
             "properties": { "agent": { "type": "string" }, "model": { "type": ["string", "null"] }, "micro_usd": { "type": "integer", "minimum": 0 } }
           }
         },
-        "sessions": {
-          "type": "array",
-          "maxItems": 3,
-          "items": {
-            "type": "object",
-            "additionalProperties": false,
-            "required": ["agent", "session_id", "micro_usd"],
-            "properties": { "agent": { "type": "string" }, "session_id": { "type": "string" }, "micro_usd": { "type": "integer", "minimum": 0 } }
-          }
-        },
         "agents": {
           "type": "array",
           "items": {
@@ -326,7 +322,133 @@
         "partial": { "type": "boolean" },
         "waiting": { "type": "boolean" },
         "stale": { "type": "boolean" },
-        "limited": { "type": "boolean" }
+        "limited": { "type": "boolean" },
+        "tasks": {
+          "description": "The seven days' tasks, costliest first, at most 200 (PRD project-panel-results D-09, B27-B34): a top-level session with its children and grandchildren, a child that opened its own pull request standing as its own task, and a mission as one task.",
+          "type": "array",
+          "maxItems": 200,
+          "items": { "$ref": "#/$defs/taskCost" }
+        },
+        "tasks_total": { "description": "Every task of the seven days, the ones past the cap included (B34).", "type": "integer", "minimum": 0 },
+        "week": { "$ref": "#/$defs/projectWeek" }
+      }
+    },
+    "projectWeek": {
+      "description": "The seven days' results (PRD project-panel-results B21, B22): pull requests merged and open, missions and how often they were opened again, merged pull requests per day under the day bars, the averages over the tasks whose pull request merged, and the tasks that ended with no result.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["merged_prs", "open_prs", "missions", "mission_reopened", "merged_by_day", "per_pr", "no_result_tasks", "no_result_micro_usd"],
+      "properties": {
+        "merged_prs": { "type": "integer", "minimum": 0 },
+        "open_prs": { "type": "integer", "minimum": 0 },
+        "missions": { "type": "integer", "minimum": 0 },
+        "mission_reopened": { "type": "integer", "minimum": 0 },
+        "merged_by_day": { "type": "array", "maxItems": 7, "items": { "type": "integer", "minimum": 0 } },
+        "per_pr": {
+          "anyOf": [
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["micro_usd", "tokens", "elapsed_ms", "worked_ms"],
+              "properties": {
+                "micro_usd": { "type": "integer", "minimum": 0 },
+                "tokens": { "type": "integer", "minimum": 0 },
+                "elapsed_ms": { "type": "integer", "minimum": 0 },
+                "worked_ms": { "type": "integer", "minimum": 0 }
+              }
+            },
+            { "type": "null" }
+          ]
+        },
+        "no_result_tasks": { "type": "integer", "minimum": 0 },
+        "no_result_micro_usd": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "taskCost": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "kind", "root", "micro_usd", "tokens", "unpriced", "started_at_unix_ms", "ended_at_unix_ms", "elapsed_ms", "worked_ms", "sessions", "sessions_total", "result"],
+      "properties": {
+        "id": { "type": "string" },
+        "kind": { "type": "string", "enum": ["task", "mission"] },
+        "root": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["agent", "session_id"],
+          "properties": { "agent": { "type": "string" }, "session_id": { "type": "string" } }
+        },
+        "mission": { "$ref": "#/$defs/taskMission" },
+        "micro_usd": { "type": "integer", "minimum": 0 },
+        "tokens": { "type": "integer", "minimum": 0 },
+        "unpriced": { "description": "Some of its calls had no price, so its amount is a lower bound.", "type": "boolean" },
+        "started_at_unix_ms": { "type": "integer", "minimum": 0 },
+        "ended_at_unix_ms": { "type": "integer", "minimum": 0 },
+        "elapsed_ms": { "description": "From its first session's first call to its pull request's merge, else to its last call (D-11).", "type": "integer", "minimum": 0 },
+        "worked_ms": { "description": "Every session's working time added up, parallel ones included (D-11).", "type": "integer", "minimum": 0 },
+        "sessions": {
+          "description": "Its sessions, the root first and each child under its parent, at most 32.",
+          "type": "array",
+          "maxItems": 32,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["agent", "session_id", "depth", "micro_usd", "tokens", "worked_ms", "unpriced"],
+            "properties": {
+              "agent": { "type": "string" },
+              "session_id": { "type": "string" },
+              "depth": { "type": "integer", "minimum": 0 },
+              "micro_usd": { "type": "integer", "minimum": 0 },
+              "tokens": { "type": "integer", "minimum": 0 },
+              "worked_ms": { "type": "integer", "minimum": 0 },
+              "unpriced": { "type": "boolean" }
+            }
+          }
+        },
+        "sessions_total": { "type": "integer", "minimum": 0 },
+        "result": { "$ref": "#/$defs/taskResult" },
+        "last_line": { "description": "What it said last, for a task with no result (B32): the record's turn line, else its conversation's last answer; absent when neither is left.", "type": ["string", "null"] }
+      }
+    },
+    "taskMission": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "title", "prs", "merged", "reopened", "nodes"],
+      "properties": {
+        "id": { "type": "string" },
+        "title": { "type": "string" },
+        "prs": { "type": "integer", "minimum": 0 },
+        "merged": { "type": "integer", "minimum": 0 },
+        "reopened": { "type": "integer", "minimum": 0 },
+        "nodes": {
+          "type": "array",
+          "maxItems": 64,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["key", "title", "pr", "attempts", "reopened", "micro_usd", "tokens", "worked_ms"],
+            "properties": {
+              "key": { "type": "string" },
+              "title": { "type": "string" },
+              "pr": { "type": ["integer", "null"] },
+              "attempts": { "type": "integer", "minimum": 0 },
+              "reopened": { "type": "integer", "minimum": 0 },
+              "micro_usd": { "type": "integer", "minimum": 0 },
+              "tokens": { "type": "integer", "minimum": 0 },
+              "worked_ms": { "type": "integer", "minimum": 0 }
+            }
+          }
+        }
+      }
+    },
+    "taskResult": {
+      "description": "What a task left (B30): `working` while one of its sessions works, else its pull request, else changes left in its worktree, else a commit in the default branch, else none.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind"],
+      "properties": {
+        "kind": { "type": "string", "enum": ["working", "pr", "changes", "commit", "none"] },
+        "number": { "type": "integer", "minimum": 0 },
+        "state": { "type": "string", "enum": ["open", "merged", "closed"] }
       }
     },
     "agentUsage": {

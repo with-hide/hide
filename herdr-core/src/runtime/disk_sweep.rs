@@ -3,7 +3,10 @@
 //! measured one at a time, in the order the tab shows them, on the
 //! coordinator's sweep reader beside the lane card's. A measurement is kept
 //! by path while the app runs and is fresh for ten minutes; leaving the tab
-//! starts nothing new. A device the core dials is never measured.
+//! starts nothing new and stops the project being measured unless the
+//! cleanup sheet asked for it. The Project tool watches its one project the
+//! same way while it shows (PRD project-panel-results D-15, B20). A device
+//! the core dials is never measured.
 
 use super::*;
 use crate::model::{DiskUsageSnapshot, ProjectDiskSnapshot};
@@ -31,6 +34,8 @@ pub(super) struct Sweep {
     first: Option<String>,
     /// The project being measured.
     current: Option<String>,
+    /// `current` was asked by the cleanup sheet, which no watch stops.
+    current_first: bool,
     /// Measured or refused since the tab was opened; not asked again until
     /// it is opened again.
     done: HashSet<String>,
@@ -38,6 +43,24 @@ pub(super) struct Sweep {
 }
 
 pub(super) type Sweeps = HashMap<Option<String>, Sweep>;
+
+/// Stops the project being measured once no watch shows it, unless the
+/// cleanup sheet asked for it: the reader's next generation ends the running
+/// read before its next checkout, and the project is measured again when a
+/// watch shows it (PRD project-panel-results B20).
+fn stop_unwatched(node: Option<&str>, sweep: &mut Sweep) {
+    let Some(path) = sweep.current.as_ref() else {
+        return;
+    };
+    if sweep.current_first || sweep.order.contains(path) {
+        return;
+    }
+    crate::diagnostic!(serde_json::json!({
+        "component": "disk", "kind": "sweep.stopped", "node": node, "project": path,
+    }));
+    sweep.current = None;
+    sweep.generation = sweep.generation.wrapping_add(1);
+}
 
 /// Lays newly measured rows over the held ones by path. A row that could
 /// not be measured keeps the size it had with the reason beside it (B55).
@@ -146,6 +169,7 @@ impl Runtime {
         for (node, sweep) in &mut self.disk_sweeps {
             if !sweep.order.is_empty() && machine.as_ref() != Some(node) {
                 sweep.order.clear();
+                stop_unwatched(node.as_deref(), sweep);
                 moved.push(node.clone());
             }
         }
@@ -161,6 +185,7 @@ impl Runtime {
                     sweep.done.retain(|path| order.contains(path));
                 }
                 sweep.order = order;
+                stop_unwatched(node.as_deref(), sweep);
             }
             moved.push(node.clone());
             self.advance_disk_sweep(node.as_deref());
@@ -261,7 +286,7 @@ impl Runtime {
         let Some(sweep) = self.disk_sweeps.get_mut(&node.map(str::to_owned)) else {
             return;
         };
-        sweep.first = None;
+        sweep.current_first = sweep.first.take().is_some() && next.is_some();
         if let Some(path) = &next {
             crate::diagnostic!(serde_json::json!({
                 "component": "disk", "kind": "sweep.measure", "node": node, "project": path,
@@ -317,6 +342,7 @@ impl Runtime {
             if let Some(path) = sweep.current.take() {
                 sweep.done.insert(path);
             }
+            sweep.current_first = false;
             self.advance_disk_sweep(node);
             changed = true;
         }

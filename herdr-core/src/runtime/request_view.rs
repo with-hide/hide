@@ -38,9 +38,52 @@ impl Runtime {
     }
 
     fn refresh_agent_scopes_at(&mut self, now: u64) -> bool {
+        self.read_worktrees_after_turns();
         self.agent_scope_cache.refresh(&mut self.snapshot, now)
             | self.refresh_pane_headers()
             | self.refresh_overview_graph_sessions()
+    }
+
+    /// Reads a project's worktrees again once an agent in it stops working,
+    /// so changes it left unstaged reach the Project tool's 흘린 것 (PRD
+    /// project-panel-results D-21, B17): one read per project per refresh.
+    fn read_worktrees_after_turns(&mut self) {
+        let working: HashSet<String> = self
+            .snapshot
+            .navigator
+            .agents
+            .iter()
+            .filter(|agent| agent.activity == "working")
+            .map(|agent| agent.pane_id.clone())
+            .collect();
+        let stopped: HashSet<&str> = self
+            .turn_working_panes
+            .difference(&working)
+            .map(String::as_str)
+            .collect();
+        let projects: Vec<String> = if stopped.is_empty() {
+            Vec::new()
+        } else {
+            self.snapshot
+                .navigator
+                .workspaces
+                .iter()
+                .filter(|workspace| workspace.remote_target_id.is_none() && workspace.is_git)
+                .filter(|workspace| {
+                    workspace
+                        .checkouts
+                        .iter()
+                        .flat_map(|checkout| &checkout.tabs)
+                        .flat_map(|tab| &tab.panes)
+                        .any(|pane| stopped.contains(pane.id.as_str()))
+                })
+                .map(|workspace| workspace.path.clone())
+                .collect()
+        };
+        for path in projects {
+            self.refresh_project_worktrees(&path);
+        }
+        self.turn_working_panes = working;
     }
 
     /// Lays the block on this Mac's rows, whose pull requests come from

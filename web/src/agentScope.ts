@@ -4,17 +4,8 @@ import type { AgentRow, DescendantCounts, MarkCounts, RequestVerb, SnapshotRest 
 export type AgentRef = { pane_id: string; occurrence: number };
 
 
-/** One row of a project's 할 일 (B34, B35): an agent by its pane, or a pull request by its number. */
-/** `record`: an open ask the session's record holds, which no 태스크 card shows (PRD lane-two-columns B34). */
-export type ProjectTodo = { kind: "ask" | "revisit"; pane_id: string; record?: true } | { kind: "pr"; number: number };
-
-/** A project's 현황 tiles' counts and its 할 일 as the core derived them (`agent_state/tally/project_status.rs`). */
+/** A project's counts, worktrees and 흘린 것 as the core derived them (`agent_state/tally/project_status.rs`). */
 export type ProjectStatus = {
-  todo: ProjectTodo[];
-  /** Every 할 일 row, the ones the core left off past its cap included: the rail's number (B38). */
-  todo_total: number;
-  /** How many of `todo_total` are agents' rows, the rest pull requests: where the rows past the core's cap are (B37). */
-  todo_agents: number;
   prs: { open: number; mergeable: number; failed: number; review: number; checking: number };
   git: {
     worktrees: number;
@@ -24,6 +15,24 @@ export type ProjectStatus = {
     removable: number;
     dots: { checkout_id: string; state: "changed" | "unpushed" | "removable" | "clean" }[];
   };
+  /** 흘린 것: worktrees where work ended unfinished, the latest left first, capped (PRD project-panel-results B6-B8). */
+  strays: ProjectStray[];
+  /** Every such worktree, the ones past the core's cap included: the rail's number. */
+  strays_total: number;
+};
+
+/** One 흘린 것 row as the core derived it (`project_status::Stray`). */
+export type ProjectStray = {
+  checkout_id: string;
+  branch?: string | null;
+  /** The task that last worked there, absent when nothing names it. */
+  name?: string;
+  /** The live pane of the session that last worked there. */
+  pane_id?: string;
+  changed_files: number;
+  unpushed: number;
+  failed_pr?: number;
+  since_unix_ms?: number;
 };
 
 export type AgentScope = {

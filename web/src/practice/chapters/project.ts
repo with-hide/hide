@@ -1,4 +1,4 @@
-// Chapter 6: the right lane beside the agent: the project's 현황 and 할 일,
+// Chapter 6: the right lane beside the agent: the project's counts and its week,
 // the checkout's files and what changed in them, and the project's Memory.
 
 import { chapter } from "../chapter";
@@ -7,14 +7,14 @@ import { laneDrawn, PROJECT_WORLD, showsTool, type ProjectModel } from "../world
 export default chapter<ProjectModel>({
   id: "project",
   number: 6,
-  version: 1,
+  version: 2,
   world: PROJECT_WORLD,
   quest: true,
   steps: [
     // The Project tool's own icon, not ⌘E: ⌘E brings the lane back on whatever tool the learner last showed.
     { id: "lane", quest: true, target: '[data-lane-tool="project"]', side: "left", command: "toggle_lane_project", done: (model) => showsTool(model, "project") },
-    { id: "status", target: "[data-project-tiles]", side: "left" },
-    { id: "todo", target: "[data-project-todo]", side: "left" },
+    { id: "counts", target: "[data-project-counts]", side: "left" },
+    { id: "week", target: "[data-project-week]", side: "left" },
     { id: "explorer", quest: true, target: '[data-lane-tool="explorer"]', side: "left", command: "toggle_lane_explorer", done: (model) => showsTool(model, "explorer") },
     { id: "changes", target: "[data-explorer-tree]", side: "left" },
     // ⏎ presses the icon, which toggles: ⇧⌘L alone sends nothing while Memory already shows, and ⏎ would stay put.

@@ -68,7 +68,7 @@ function useScope(checkout: Checkout | null): (tool: Tool | "documents") => stri
  * folding the column when pressed again; below it one icon per tool, its
  * name, scope and chord in its hint, pressed while the tool column shows
  * it, opening the tool column on it or closing the column when it already
- * shows it. The Project tool counts its project's 할 일 (B38) and the Hide AI
+ * shows it. The Project tool counts its project's 흘린 것 and the Hide AI
  * tool what its two tabs ask of the operator, each no number at 0. With no document the documents button is off and says so.
  * At the bottom the pin and the `…` stay in place whether the lane is up or
  * not and whichever column it shows (B15).
@@ -78,7 +78,7 @@ export function ToolRail({ actions }: { actions: Actions }) {
   const checkout = useShellStore((s) => frontCheckout(s.rest));
   const views = useShellStore((s) => (s.rest?.workspace_view as WorkspaceView | undefined)?.layout?.display_count ?? 0);
   const drawn = useUiStore((s) => s.drawnLane);
-  const todo = useShellStore((s) => frontProject(s.rest)?.agent_scope.status?.todo_total ?? 0);
+  const strays = useShellStore((s) => frontProject(s.rest)?.agent_scope.status?.strays_total ?? 0);
   // The Hide AI tool's number is the core's: its 제안 and its Memory tab's own, none while its switch is off (PRD hide-ai-suggestions D-01, B3).
   const hideAi = useShellStore((s) => {
     const project = frontProject(s.rest);
@@ -122,9 +122,9 @@ export function ToolRail({ actions }: { actions: Actions }) {
         const Icon = TOOL_ICONS[tool];
         const pressed = up && drawn.tool === tool;
         const name = t(TOOL_NAMES[tool]);
-        const needs = tool === "project" ? todo : tool === "memory" ? (hideAi?.rail ?? 0) : 0;
+        const needs = tool === "project" ? strays : tool === "memory" ? (hideAi?.rail ?? 0) : 0;
         // What the number counts, in the hint and for a reader.
-        const needsWords = needs === 0 ? "" : tool === "project" ? t("projectTool.todoCount", { count: needs }) : t("hideAiTool.railCount", { suggestions: hideAi?.suggestions ?? 0, memory: hideAi ? memoryTabCount({ counts: hideAi }) : 0 });
+        const needsWords = needs === 0 ? "" : tool === "project" ? t("projectTool.railCount", { count: needs }) : t("hideAiTool.railCount", { suggestions: hideAi?.suggestions ?? 0, memory: hideAi ? memoryTabCount({ counts: hideAi }) : 0 });
         // One short rule where the Project's tools end and the checkout's begin (D-37).
         const before = TOOLS[index - 1];
         const boundary = before !== undefined && TOOL_SCOPES[before] !== TOOL_SCOPES[tool];

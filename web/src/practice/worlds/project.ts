@@ -98,14 +98,15 @@ function board(nowMs: number): Workspace["agent_scope"]["prs"] {
   return { rows: [row(REVIEW, "review", nowMs - 2 * HOUR_MS), row(MERGE, "merge", nowMs - HOUR_MS)], groups: [{ group: "needs_you", numbers: [REVIEW, MERGE] }], needs_you: 2 };
 }
 
-/** The 현황 and 할 일 as the core derives them from the board and the checkout (`tally/project_status.rs`). */
+/** The counts and 흘린 것 as the core derives them from the board and the checkout (`tally/project_status.rs`). */
 function status(checkoutId: string): ProjectStatus {
   return {
-    todo: [{ kind: "pr", number: REVIEW }, { kind: "pr", number: MERGE }], todo_total: 2, todo_agents: 0,
     // One pending with checks passed (a review to come) and one mergeable.
     prs: { open: 2, mergeable: 1, failed: 0, review: 1, checking: 0 },
     // The main checkout holds the agent's uncommitted changes.
     git: { worktrees: 1, changed: 1, unpushed: 0, removable: 0, dots: [{ checkout_id: checkoutId, state: "changed" }] },
+    // Changes on the main checkout are the agent's own work under way, not 흘린 것.
+    strays: [], strays_total: 0,
   };
 }
 
@@ -118,9 +119,11 @@ function usage(nowMs: number): NodeUsage {
   return {
     node: "local", agents: [], history: null,
     projects: [{
-      workspace_id: PLACE.project, micro_usd: total, days, models: [], sessions: [],
+      workspace_id: PLACE.project, micro_usd: total, tokens: 6_200_000, days, models: [],
       agents: [{ agent: "claude", micro_usd: total - codex }, { agent: "codex", micro_usd: codex }],
       unpriced_agents: [], partial: false, waiting: false, stale: false, limited: false,
+      tasks: [], tasks_total: 0,
+      week: { merged_prs: 3, open_prs: 2, missions: 0, mission_reopened: 0, merged_by_day: [0, 1, 0, 0, 1, 0, 1], per_pr: { micro_usd: Math.round(total / 3), tokens: 1_400_000, elapsed_ms: 3 * HOUR_MS, worked_ms: 2 * HOUR_MS }, no_result_tasks: 0, no_result_micro_usd: 0 },
     }],
   };
 }

@@ -25,6 +25,8 @@ struct StoredUiState {
     #[serde(default)]
     revisit_sessions: BTreeMap<String, crate::agent_state::sessions::RevisitMark>,
     #[serde(default)]
+    stray_dismissals: BTreeMap<String, crate::agent_state::tally::project_status::StrayDismissal>,
+    #[serde(default)]
     session_resolution_inputs: BTreeMap<String, u64>,
     #[serde(default)]
     session_collapsed_checkout_ids: Vec<String>,
@@ -558,6 +560,7 @@ fn decode(bytes: &[u8]) -> (UiStateSnapshot, PaneTerminalSizes, LoadDisposition)
         UiStateSnapshot {
             resolved_sessions: stored.resolved_sessions,
             revisit_sessions: stored.revisit_sessions,
+            stray_dismissals: stored.stray_dismissals,
             session_resolution_inputs: stored.session_resolution_inputs,
             session_collapsed_checkout_ids: stored.session_collapsed_checkout_ids,
             session_open_folds: stored.session_open_folds,
@@ -736,6 +739,7 @@ pub fn save(
     let stored = StoredUiState {
         resolved_sessions: state.resolved_sessions.clone(),
         revisit_sessions: state.revisit_sessions.clone(),
+        stray_dismissals: state.stray_dismissals.clone(),
         session_resolution_inputs: state.session_resolution_inputs.clone(),
         session_collapsed_checkout_ids: state.session_collapsed_checkout_ids.clone(),
         session_open_folds: state.session_open_folds.clone(),

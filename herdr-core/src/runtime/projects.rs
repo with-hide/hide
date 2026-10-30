@@ -297,8 +297,12 @@ impl Runtime {
     /// The device and folder the changes view is about now, the fence every
     /// answer passes.
     pub(crate) fn changes_key(&self) -> Option<crate::changes::ChangesKey> {
-        self.changes_target()?;
-        self.front_changes_key()
+        let (workspace_id, checkout_id, root_path) = self.changes_target()?;
+        let (workspace, _) = self.catalog_checkout(&workspace_id, &checkout_id)?;
+        Some(crate::changes::ChangesKey {
+            device_id: workspace.device_id.clone(),
+            root_path,
+        })
     }
 
     /// The device and folder History describes for the checkout in front,
@@ -343,7 +347,18 @@ impl Runtime {
             && self.visible_view_diffs().is_empty()
             && !self.new_tab_visible()
         {
-            return None;
+            // The 보기 slot showing a worktree's 흘린 것 reads that worktree,
+            // in front or not (PRD project-panel-results B9).
+            let detail = &self.snapshot.ui_state.detail;
+            let Some(crate::model::DetailItem::Remains {
+                workspace_id,
+                checkout_id,
+            }) = detail.shown.then(|| detail.top()).flatten()
+            else {
+                return None;
+            };
+            let root_path = self.changes_root_path(workspace_id, checkout_id)?;
+            return Some((workspace_id.clone(), checkout_id.clone(), root_path));
         }
         let (workspace_id, checkout_id) = self.front_checkout_owned()?;
         let root_path = self.focused_changes_root_path()?;
@@ -379,6 +394,12 @@ impl Runtime {
     /// Linked worktree rows use their own checkout root.
     pub(super) fn focused_changes_root_path(&self) -> Option<String> {
         let (workspace_id, checkout_id) = self.front_checkout()?;
+        self.changes_root_path(workspace_id, checkout_id)
+    }
+
+    /// The folder a checkout's changes are read under: the registered
+    /// project's folder when the checkout holds it, else the checkout's own.
+    fn changes_root_path(&self, workspace_id: &str, checkout_id: &str) -> Option<String> {
         let (workspace, checkout) = self.catalog_checkout(workspace_id, checkout_id)?;
         if workspace.registered
             && let Some(registered) = self
@@ -402,7 +423,7 @@ impl Runtime {
         // The same folder on another device is another checkout: a projection
         // read on the one left behind is dropped in this same frame rather
         // than shown under the new device until the next read lands (B22).
-        let front = self.front_changes_key();
+        let front = self.changes_key().or_else(|| self.front_changes_key());
         if self.changes_published_key.is_some() && self.changes_published_key != front {
             self.snapshot
                 .changes

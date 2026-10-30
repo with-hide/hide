@@ -245,6 +245,13 @@ type UiStore = {
   openSuggestion: string | null;
   /** Shows the Hide AI tool's tab, with `row` open in 제안 or none. */
   showHideAiTab: (tab: HideAiTab, row?: string | null) => void;
+  /**
+   * The 작업 비용 table's filter and the task it shows unfolded (PRD
+   * project-panel-results D-14, B22, B25): the panel opens the table on one,
+   * and the table's own filter and folds move it. Page-local and never sent.
+   */
+  taskTable: { filter: import("./projectStatus").TaskFilter; task: string | null };
+  showTaskTable: (filter: import("./projectStatus").TaskFilter, task: string | null) => void;
   /** The column in front while a narrow pinned lane stacks its two (PRD lane-two-columns B19): a call or the rail's top buttons bring the viewing column, a tool its own. Never sent. */
   stackFront: LaneSide;
   /** What the page has read of the core's lane calls (`laneCalls.ts`). */
@@ -491,6 +498,8 @@ export const useUiStore = create<UiStore>((set, get) => ({
     set({ browserDevices: next });
   },
   showHideAiTab: (hideAiTab, row) => set(row === undefined ? { hideAiTab } : { hideAiTab, openSuggestion: row }),
+  taskTable: { filter: "all", task: null },
+  showTaskTable: (filter, task) => set({ taskTable: { filter, task } }),
   setLaneExpanded: (laneExpanded) => {
     if (get().laneExpanded !== laneExpanded) set({ laneExpanded });
   },

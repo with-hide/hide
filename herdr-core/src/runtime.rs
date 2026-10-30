@@ -80,6 +80,7 @@ mod session_archive;
 mod session_state;
 mod snapshot_delta;
 mod ssh_hosts;
+mod strays;
 mod suggestion_apply;
 mod suggestion_evidence;
 mod suggestion_memory;
@@ -1865,6 +1866,11 @@ pub struct Runtime {
     /// project counter; equal generations reuse the cached answer indefinitely.
     github_generations: HashMap<String, u64>,
     worktree_project_generations: HashMap<String, u64>,
+    /// This machine's panes whose agent was working at the last scope
+    /// refresh: one that stops has its project's worktrees read again, since
+    /// Git's watch does not see an edit left unstaged (PRD
+    /// project-panel-results D-21, B17).
+    turn_working_panes: HashSet<String>,
     /// Where each local project is in the re-read cycle: five minutes after a
     /// good answer, sooner after a failed read (`reread_stale_github`).
     github_clock: HashMap<String, projects::GithubClock>,
@@ -2534,6 +2540,7 @@ impl Runtime {
             disk_usage: Vec::new(),
             github_generations: HashMap::new(),
             worktree_project_generations: HashMap::new(),
+            turn_working_panes: HashSet::new(),
             github_clock: HashMap::new(),
             github_wanted: HashSet::new(),
             github_sighted: HashMap::new(),

@@ -91,7 +91,7 @@ pub struct DiskRequest {
 
 #[cfg(test)]
 fn read(request: &DiskRequest) -> Vec<DiskUsage> {
-    read_with(request, |_| {})
+    read_with(request, |_| true)
 }
 
 /// Bytes free to an unprivileged writer on the volume holding `path`.
@@ -114,10 +114,14 @@ struct Item {
     rules: Option<Rc<IgnoreRules>>,
 }
 
-/// Measures every requested root, calling `finished` with each as it is done.
-/// Each root has its own entry and time limit; one that runs out is the only
-/// one without a total.
-pub fn read_with(request: &DiskRequest, finished: impl FnMut(&DiskUsage)) -> Vec<DiskUsage> {
+/// Measures every requested root, calling `finished` with each as it is done;
+/// `finished` answering `false` stops before the next root, which the caller
+/// no longer wants. Each root has its own entry and time limit; one that runs
+/// out is the only one without a total.
+pub fn read_with(
+    request: &DiskRequest,
+    finished: impl FnMut(&DiskUsage) -> bool,
+) -> Vec<DiskUsage> {
     read_limited(
         request,
         RequestBudget::new(REQUEST_ENTRY_LIMIT, REQUEST_SEEN_LIMIT, REQUEST_TIME_LIMIT),
@@ -128,7 +132,7 @@ pub fn read_with(request: &DiskRequest, finished: impl FnMut(&DiskUsage)) -> Vec
 fn read_limited(
     request: &DiskRequest,
     mut budget: RequestBudget,
-    mut finished: impl FnMut(&DiskUsage),
+    mut finished: impl FnMut(&DiskUsage) -> bool,
 ) -> Vec<DiskUsage> {
     // The deepest explicitly requested root owns its subtree. Shared Git and
     // nested linked worktrees are therefore excluded from the main component.
@@ -164,8 +168,11 @@ fn read_limited(
             volume_total_bytes: total,
             ..row
         };
-        finished(&row);
+        let go_on = finished(&row);
         result.push(row);
+        if !go_on {
+            break;
+        }
     }
     // Preserve caller order for stable identities and unchanged snapshot reuse.
     result.sort_by_key(|row| {
@@ -616,7 +623,10 @@ mod tests {
                 paths: vec![root.join("a"), root.join("missing")],
                 ..Default::default()
             },
-            |row| order.push((row.path.clone().unwrap(), row.total_bytes.is_some())),
+            |row| {
+                order.push((row.path.clone().unwrap(), row.total_bytes.is_some()));
+                true
+            },
         );
         assert_eq!(order.len(), 2);
         assert_eq!(order.iter().filter(|(_, measured)| *measured).count(), 1);
@@ -638,12 +648,34 @@ mod tests {
                 ..Default::default()
             },
             RequestBudget::new(8, 1_000, Duration::from_secs(60)),
-            |_| {},
+            |_| true,
         );
         let measured = rows.iter().filter(|row| row.total_bytes.is_some()).count();
         assert!(measured < 3, "the request stopped: {measured} measured");
         let cut = rows.iter().find(|row| row.total_bytes.is_none()).unwrap();
         assert!(cut.layers.is_none() && cut.unavailable_reason.is_some());
+    }
+
+    /// PRD project-panel-results B20: a caller that no longer wants the
+    /// measurement stops it before the next checkout.
+    #[test]
+    fn a_caller_that_stops_wanting_the_measurement_ends_it_before_the_next_checkout() {
+        let (_folder, root) = fixture("stop");
+        for name in ["a", "b", "c"] {
+            write(&root.join(name).join("file"), 4096);
+        }
+        let mut reported = 0;
+        let rows = read_with(
+            &DiskRequest {
+                paths: vec![root.join("a"), root.join("b"), root.join("c")],
+                ..Default::default()
+            },
+            |_| {
+                reported += 1;
+                false
+            },
+        );
+        assert_eq!((reported, rows.len()), (1, 1));
     }
 
     #[test]

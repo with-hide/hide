@@ -150,6 +150,7 @@ section!(StatusSections, StatusSnapshot, s, {
     pane_move_preview: Option<PaneMovePreviewSnapshot> => s.pane_move_preview,
     pane_focus_request: Option<PaneFocusRequestSnapshot> => s.pane_focus_request,
     browser_opens: Vec<BrowserOpenReceiptSnapshot> => s.browser_opens,
+    stray_hand_offs: Vec<StrayHandOffSnapshot> => s.stray_hand_offs,
 }, {});
 
 section!(RestSections, Snapshot, s, {

@@ -4,6 +4,7 @@
 //! measurement.
 
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -38,6 +39,10 @@ pub struct DiskReader {
     finished: Arc<Mutex<Vec<DiskUsageSnapshot>>>,
     /// The last answer with the rows finished since laid over it.
     current: Vec<DiskUsageSnapshot>,
+    /// The generation asked for last: a running read of another one stops at
+    /// its next finished checkout, so a measurement nothing shows any more
+    /// ends (PRD project-panel-results B20).
+    wanted: Arc<AtomicU64>,
 }
 
 impl DiskReader {
@@ -45,16 +50,20 @@ impl DiskReader {
     pub fn new(node: Arc<dyn NodeLink>) -> Self {
         let finished = Arc::new(Mutex::new(Vec::new()));
         let sink = Arc::clone(&finished);
+        let wanted = Arc::new(AtomicU64::new(0));
+        let asked = Arc::clone(&wanted);
         Self {
             inner: BackgroundRead::on_change(Duration::ZERO, move |request| {
                 read_with(node.as_ref(), request, |row| {
                     sink.lock()
                         .unwrap_or_else(|poisoned| poisoned.into_inner())
                         .push(row.clone());
+                    asked.load(Ordering::Acquire) == request.generation
                 })
             }),
             finished,
             current: Vec::new(),
+            wanted,
         }
     }
 
@@ -68,6 +77,7 @@ impl DiskReader {
     /// [`Self::read_if_due`], saying whether the rows are a finished read's
     /// whole answer (`true`) or a running read's rows so far.
     pub fn poll(&mut self, request: DiskRequest) -> Option<(Vec<DiskUsageSnapshot>, bool)> {
+        self.wanted.store(request.generation, Ordering::Release);
         if let Some(answer) = self.inner.poll(request) {
             self.finished
                 .lock()
@@ -97,7 +107,7 @@ impl DiskReader {
 
 #[cfg(test)]
 pub(crate) fn read(node: &dyn NodeLink, request: &DiskRequest) -> Vec<DiskUsageSnapshot> {
-    read_with(node, request, |_| {})
+    read_with(node, request, |_| true)
 }
 
 /// Bytes free to an unprivileged writer on the volume holding `path`, as
@@ -123,12 +133,13 @@ pub(crate) fn volume_free_bytes(node: &dyn NodeLink, path: &Path) -> Option<u64>
 }
 
 /// Measures every requested root on `node`, calling `finished` with each as
-/// it is done. A node that cannot be asked leaves every root unavailable
-/// with its reason.
+/// it is done; `finished` answering `false` stops the node before its next
+/// root. A node that cannot be asked leaves every root unavailable with its
+/// reason.
 fn read_with(
     node: &dyn NodeLink,
     request: &DiskRequest,
-    mut finished: impl FnMut(&DiskUsageSnapshot),
+    mut finished: impl FnMut(&DiskUsageSnapshot) -> bool,
 ) -> Vec<DiskUsageSnapshot> {
     if request.paths.is_empty() {
         return Vec::new();
@@ -145,8 +156,7 @@ fn read_with(
     };
     let answer =
         call_as_with_progress::<Vec<DiskUsage>, DiskUsage>(node, call, MEASURE_TIMEOUT, |row| {
-            finished(&snapshot(row));
-            true
+            finished(&snapshot(row))
         });
     match answer {
         Ok(rows) => {
@@ -253,6 +263,7 @@ mod tests {
         let mut arrived = Vec::new();
         let rows = read_with(&Measuring { refuse: false }, &request(), |row| {
             arrived.push(row.path.clone().unwrap());
+            true
         });
         assert_eq!(arrived, ["/repo", "/repo.worktrees/a"]);
         assert!(rows.iter().all(|row| row.total_bytes == Some(4096)));

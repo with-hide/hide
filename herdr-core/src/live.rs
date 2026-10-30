@@ -3299,6 +3299,34 @@ pub(crate) fn spawn_agent_find(
     )
 }
 
+/// Submits a 마무리 맡기기's words to the session's agent as the operator's
+/// own message (PRD project-panel-results B11), through the input gate so a
+/// sleeping agent's shell never takes them as a command. The request runs
+/// on this thread, never under the runtime mutex.
+pub(crate) fn spawn_stray_prompt(
+    route: PaneApiRoute,
+    request_id: String,
+    text: String,
+    gate: Arc<crate::input_gate::PaneInputGate>,
+) -> Result<(), String> {
+    let core_pane_id = route.pane_id.clone();
+    route.spawn(
+        "herdr-core-stray-prompt",
+        move |connector, herdr_pane_id| {
+            let _admission = gate
+                .admit(&core_pane_id)
+                .map_err(|_| "The agent is asleep".to_owned())?;
+            let answer = control_request(
+                connector,
+                "agent.prompt",
+                wire::delivery_prompt_params(herdr_pane_id, &text)?,
+            )?;
+            wire::delivery_prompted(answer)
+        },
+        move |runtime, pane_id, result| runtime.ingest_stray_prompt(pane_id, &request_id, result),
+    )
+}
+
 fn open_agent_find(
     connector: &dyn ApiConnector,
     pane_id: &str,

@@ -90,9 +90,9 @@ export function RightLaneScene({ theme, scale, content, state }: SceneParams & {
       device_id: "local", path: root, open, documents: lane.documents, tool: lane.tool, pinned: lane.pinned, document_width: null, detail_width: null, explorer_width: null, panel_width: null, lane_called: 0, lane_calls: 0, lane_called_side: "view",
       layout: { root: { area: { id: "a1", active: displays[0]?.id ?? null, displays } }, active_area: "a1", limits: { areas: 4, depth: 3, displays: 32 }, display_count: displays.length },
     };
-    // The project's 현황 as the core derives it: one pull request to do, so 할 일 draws its head, a group and a row.
+    // The project's counts as the core derives them, and one worktree left with changes nobody works on.
     workspace.agent_scope = { ...workspace.agent_scope, status: {
-      todo: [{ kind: "pr", number: 842 }], todo_total: 1, todo_agents: 0,
+      strays: [{ checkout_id: checkout.id, branch: checkout.branch, name: "Retry failed invoice emails", changed_files: 4, unpushed: 0, since_unix_ms: Date.now() - 2 * 3_600_000 }], strays_total: 1,
       prs: { open: 3, mergeable: 1, failed: 1, review: 1, checking: 0 },
       git: { worktrees: 1, changed: 0, unpushed: 0, removable: 0, dots: [{ checkout_id: checkout.id, state: "clean" }] },
     } };
