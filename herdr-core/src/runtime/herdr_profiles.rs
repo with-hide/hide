@@ -977,7 +977,7 @@ mod tests {
     fn a_host_only_machine_keeps_the_step_and_connects_as_add_device_does() {
         let mut runtime = at_devices(
             &[],
-            vec![host("Config.Ubuntu", "ubuntu", "config-ubuntu")],
+            vec![host("Config.Ubuntu", "ubuntu", "config-ubuntu.example")],
             false,
         );
         assert_eq!(step(&runtime), Some(crate::model::FirstRunStep::Devices));
@@ -986,7 +986,7 @@ mod tests {
         assert_eq!(rows[0].id, "ssh:Config.Ubuntu");
         assert!(!rows[0].herdr);
         assert_eq!(rows[0].ssh_host.as_deref(), Some("Config.Ubuntu"));
-        assert_eq!(rows[0].address.as_deref(), Some("ubuntu@config-ubuntu:22"));
+        assert_eq!(rows[0].address.as_deref(), Some("ubuntu@config-ubuntu.example:22"));
         connect(&mut runtime, "ssh:Config.Ubuntu", true);
         let registrations = &runtime.snapshot.ui_state.device_registrations;
         assert_eq!(registrations.len(), 1);
@@ -1011,14 +1011,14 @@ mod tests {
     fn a_profile_that_is_a_host_is_one_row_in_the_configs_order() {
         let runtime = at_devices(
             &[
-                ("gpu", "me@gpu-box", "me@gpu-box:22"),
-                ("mini-main", "mini", "grab@mini.ts.net:22"),
-                ("box", "grab@Box.local", "grab@box.local:22"),
+                ("gpu", "me@gpu-box.example", "me@gpu-box.example:22"),
+                ("mini-main", "mini", "alice@mini.example:22"),
+                ("box", "alice@Box.example", "alice@box.example:22"),
             ],
             vec![
-                host("config-ubuntu", "ubuntu", "config-ubuntu"),
-                host("mini", "grab", "mini.ts.net"),
-                host("box-alias", "grab", "BOX.local"),
+                host("config-ubuntu", "ubuntu", "config-ubuntu.example"),
+                host("mini", "alice", "mini.example"),
+                host("box-alias", "alice", "BOX.example"),
             ],
             false,
         );

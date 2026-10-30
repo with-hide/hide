@@ -195,7 +195,7 @@ it("titles the step the same with or without Herdr, and starts every row uncheck
   await view.unmount();
 });
 
-const host = (alias: string, patch: Partial<HerdrProfile> = {}) => profile(`ssh:${alias}`, { label: alias, target: alias, session: "default", herdr: false, ssh_host: alias, address: `me@${alias}.lan:22`, ...patch });
+const host = (alias: string, patch: Partial<HerdrProfile> = {}) => profile(`ssh:${alias}`, { label: alias, target: alias, session: "default", herdr: false, ssh_host: alias, address: `me@${alias}.example:22`, ...patch });
 const device = (id: string, patch: Record<string, unknown> = {}) => ({ id, label: id, kind: "remote", state: "unavailable", message: null, ssh_alias: id, agent_count: 0, test: null, problem: null, sign_in: null, ...patch });
 /** The store as the core reports it after the step's Connect added `rows`' devices. */
 const after = async (rows: HerdrProfile[], devices: ReturnType<typeof device>[], remote: { target_id: string; state: string }[]) => act(async () => useShellStore.setState((current) => ({
@@ -208,7 +208,7 @@ it("shows a machine only the ssh config names, with its address and source, and 
   try {
     expect(view.next).not.toHaveBeenCalled();
     const row = document.querySelector('[data-first-run-device="ssh:config-ubuntu"]')!;
-    expect(row.textContent).toContain("me@config-ubuntu.lan:22");
+    expect(row.textContent).toContain("me@config-ubuntu.example:22");
     expect([...row.querySelectorAll("[data-first-run-device-source]")].map((chip) => chip.textContent)).toEqual(["ssh config"]);
     await act(async () => document.querySelector<HTMLButtonElement>("#herdr-profile-ssh\\:config-ubuntu")!.click());
     await act(async () => button("device-connect").click());
@@ -219,7 +219,7 @@ it("shows a machine only the ssh config names, with its address and source, and 
 });
 
 it("draws a machine that is both a Host and a saved profile as one row with both sources", async () => {
-  const view = await mount({ state: "ready", error: null, truncated: false, profiles: [profile("mini-main", { label: "mini", target: "mini", session: "main", ssh_host: "mini", address: "grab@mini.ts.net:22" })] }, null);
+  const view = await mount({ state: "ready", error: null, truncated: false, profiles: [profile("mini-main", { label: "mini", target: "mini", session: "main", ssh_host: "mini", address: "alice@mini.example:22" })] }, null);
   const chips = [...document.querySelectorAll('[data-first-run-device="mini-main"] [data-first-run-device-source]')].map((chip) => chip.textContent);
   expect(chips).toEqual(["ssh config", "Saved in Herdr · Session main"]);
   expect(document.querySelectorAll("[data-first-run-device]")).toHaveLength(1);
@@ -230,7 +230,7 @@ it("answers what ssh asks on the row, and a failure shows the device row's state
   const rows = [host("office", { device_id: "office", added_as: "office", connect_state: "connecting" }), host("lab", { device_id: "lab", added_as: "lab", connect_state: "failed" }), host("nas", { device_id: "nas", added_as: "nas", connect_state: "failed" }), host("old", { device_id: "old", added_as: "old", connect_state: "failed" })];
   const view = await mount({ state: "ready", error: null, truncated: false, profiles: rows }, rows.map((row) => row.id));
   await after(rows, [
-    device("office", { sign_in: { question: 4, key_command: null, kind: "secret", prompt: "dev@office's password:" } }),
+    device("office", { sign_in: { question: 4, key_command: null, kind: "secret", prompt: "dev@office.example's password:" } }),
     device("lab", { problem: "host_key_changed" }),
     device("nas", { problem: "cannot_connect", message: "ssh: connect to host nas port 22: Operation timed out" }),
     device("old", { problem: "sign_in_needed" }),

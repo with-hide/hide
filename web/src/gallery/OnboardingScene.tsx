@@ -47,9 +47,9 @@ function sshDevices(state: string, kit: unknown) {
   if (state === "devices-signin") {
     return [
       device("mini", { state: "ready" }),
-      device("config-ubuntu", { sign_in: { question: 1, key_command: null, kind: "browser", url: "https://login.tailscale.com/a/1f2e3d4c" } }),
-      device("office", { sign_in: { question: 2, key_command: null, kind: "secret", prompt: "dev@10.0.0.7's password:" } }),
-      device("lab", { sign_in: { question: 3, key_command: null, kind: "host_key", host: "lab.local (192.168.0.21)", fingerprint: "SHA256:Xk3vQ8m2Lr7aZ0bN4cD1eF6gH9iJ2kpT9fQ" } }),
+      device("config-ubuntu", { sign_in: { question: 1, key_command: null, kind: "browser", url: "https://login.example/a/1f2e3d4c" } }),
+      device("office", { sign_in: { question: 2, key_command: null, kind: "secret", prompt: "dev@office.example's password:" } }),
+      device("lab", { sign_in: { question: 3, key_command: null, kind: "host_key", host: "lab.example (192.0.2.21)", fingerprint: "SHA256:Xk3vQ8m2Lr7aZ0bN4cD1eF6gH9iJ2kpT9fQ" } }),
       device("home-nas", { state: "ready", kit: { agents: [], components: [], busy: true } }),
     ];
   }
@@ -57,7 +57,7 @@ function sshDevices(state: string, kit: unknown) {
     return [
       device("office", { problem: "sign_in_needed" }),
       device("lab", { problem: "host_key_changed" }),
-      device("home-nas", { problem: "cannot_connect", message: "ssh: connect to host nas port 22: Operation timed out" }),
+      device("home-nas", { problem: "cannot_connect", message: "ssh: connect to host nas.example port 22: Operation timed out" }),
     ];
   }
   return [];
@@ -316,10 +316,10 @@ function sceneRest(state: OnboardingState, system: OnboardingSystem): SnapshotRe
     // This PC's default WSL distribution, which the core lists first (PRD wsl-device B1, B29).
     : state === "devices-wsl" ? [profile("wsl:Ubuntu", "WSL Ubuntu", { target: "Ubuntu", session: "default", wsl_distro: "Ubuntu" }), profile("build", "Build server")]
     : state === "devices-wsl1" ? [profile("wsl:Ubuntu-20.04", "WSL Ubuntu-20.04", { target: "Ubuntu-20.04", session: "default", wsl_distro: "Ubuntu-20.04", problem: "wsl1" }), profile("build", "Build server")]
-    : state === "devices-signin" ? [host("mini", "grab@mini.tail56d7a2.ts.net:22", linked("mini", "connected")), host("config-ubuntu", "ubuntu@config-ubuntu:22", linked("config-ubuntu", "connecting")), host("office", "dev@10.0.0.7:22", linked("office", "connecting")), host("lab", "hoyeon@lab.local:22", linked("lab", "connecting")), host("home-nas", "me@nas:22", linked("home-nas", "connecting"))]
-    : state === "devices-ssh-failed" ? [host("office", "dev@10.0.0.7:22", linked("office", "failed")), host("lab", "hoyeon@lab.local:22", linked("lab", "failed")), host("home-nas", "me@nas:22", linked("home-nas", "failed"))]
+    : state === "devices-signin" ? [host("mini", "me@mini.example:22", linked("mini", "connected")), host("config-ubuntu", "ubuntu@config-ubuntu.example:22", linked("config-ubuntu", "connecting")), host("office", "dev@office.example:22", linked("office", "connecting")), host("lab", "me@lab.example:22", linked("lab", "connecting")), host("home-nas", "me@nas.example:22", linked("home-nas", "connecting"))]
+    : state === "devices-ssh-failed" ? [host("office", "dev@office.example:22", linked("office", "failed")), host("lab", "me@lab.example:22", linked("lab", "failed")), host("home-nas", "me@nas.example:22", linked("home-nas", "failed"))]
     // The account's ssh config Hosts beside Herdr's profiles: one row per machine, a chip for where it came from.
-    : [host("config-ubuntu", "ubuntu@config-ubuntu:22"), profile("mini", "mini", { target: "mini", session: "main", ssh_host: "mini", address: "grab@mini.tail56d7a2.ts.net:22" }), host("office", "dev@10.0.0.7:22"), profile("gpu-box", "gpu-box", { target: "me@gpu-box", session: "default", address: null, added_as: "gpu-box", device_id: "gpu-box", connect_state: "added" })];
+    : [host("config-ubuntu", "ubuntu@config-ubuntu.example:22"), profile("mini", "mini", { target: "mini", session: "main", ssh_host: "mini", address: "me@mini.example:22" }), host("office", "dev@office.example:22"), profile("gpu-box", "gpu-box", { target: "me@gpu-box.example", session: "default", address: null, added_as: "gpu-box", device_id: "gpu-box", connect_state: "added" })];
   const deviceStep = state.startsWith("devices");
   return {
     revision: 1,
