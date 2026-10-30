@@ -249,9 +249,9 @@ mod tests {
 
     #[test]
     fn an_omp_blob_is_named_beside_its_sessions() {
-        let session = Path::new("/home/user/.omp/agent/sessions/-work-app/1_abc.jsonl");
+        let session = Path::new("/work/home/.omp/agent/sessions/-work-app/1_abc.jsonl");
         let hash = "3203ebae6246af7400f28a78c7ae071feb6735f393367ce13a1c6bceb3c5822c";
-        let expected = Path::new("/home/user/.omp/agent/blobs").join(hash);
+        let expected = Path::new("/work/home/.omp/agent/blobs").join(hash);
         assert_eq!(blob(session, hash).as_deref(), expected.to_str());
         assert_eq!(blob(session, "../../etc/passwd"), None);
     }
