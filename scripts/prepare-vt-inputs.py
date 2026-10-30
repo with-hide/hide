@@ -44,6 +44,8 @@ KEEP_ENTRIES = 3
 # A temporary folder this old belongs to a run that died before its rename.
 STALE_TMP_SECONDS = 24 * 60 * 60
 DOWNLOAD_ATTEMPTS = 3
+# Up to 28 s for a scanner to let go of a file just written (move_into_place).
+RENAME_ATTEMPTS = 8
 DOWNLOAD_TIMEOUT_SECONDS = 120
 
 
@@ -202,6 +204,23 @@ def fetch_packages(zig: Path, packages: list[dict[str, str]], work: Path, dest: 
     fetched.rename(dest)
 
 
+def move_into_place(staged: Path, final: Path) -> None:
+    for attempt in range(1, RENAME_ATTEMPTS + 1):
+        try:
+            staged.rename(final)
+            return
+        except OSError as error:
+            if (final / "ready.json").is_file():
+                # Another checkout finished the same entry first; its copy is the same pin.
+                return
+            # Windows refuses to rename a folder while another process holds a
+            # file in it open, as a malware scanner does with the Zig binary
+            # just written; that hold ends on its own, so wait for it, boundedly.
+            if not isinstance(error, PermissionError) or attempt == RENAME_ATTEMPTS:
+                raise Refused(f"could not move the prepared inputs into {final}: {error}") from error
+            time.sleep(attempt)
+
+
 def prune(vt_root: Path, keep: Path) -> None:
     now = time.time()
     ready = []
@@ -281,12 +300,7 @@ def prepare(quiet: bool, manifest_path: Path = MANIFEST) -> Path:
         if final.exists() and not (final / "ready.json").is_file():
             # What a run that died during its rename left behind.
             shutil.rmtree(final)
-        try:
-            staged.rename(final)
-        except OSError:
-            # Another checkout finished the same entry first; its copy is the same pin.
-            if not (final / "ready.json").is_file():
-                raise
+        move_into_place(staged, final)
     finally:
         shutil.rmtree(work, ignore_errors=True)
     prune(vt_root, final)
