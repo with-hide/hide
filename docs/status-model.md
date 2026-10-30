@@ -278,7 +278,8 @@ Activity, completion and approval are judged in one order: the agent's hook firs
 1. The turn the hook of the pane's own session last reported (`working`, `done`, `waiting` or `idle`; [agent-hooks.md](agent-hooks.md#the-turn-the-hook-reports)), which the core keeps per pane and session (`agent_hooks::facts`) and lays on the agent as `SessionAgentPayload.hook`, never on the wire.
    `working` is Working; `done` is stopped with a completion; `waiting` is stopped with an approval demand; `idle` is stopped with no completion, the turn an interrupt ended.
    It stands until the same session's next hook event, so Herdr's reading of the screen never overrides it: a turn waiting on a background command that Herdr reads as finished (#348) stays Working.
-   No timer ends it (design principle 13); a turn no hook reports the end of is ended by the signal the agent does give, and the facts go when Herdr lists no agent in the pane or the pane closes.
+   No timer ends it (design principle 13); a turn no hook reports the end of is ended by the signal the agent does give, or by the session file: a read under a later Herdr state than the one the turn was first laid under, with Herdr reading the agent at rest, that finds the turn interrupted (Claude Code's Esc, which sends no `Stop`) or completed ends it as resting or done ([agent-hooks.md](agent-hooks.md#the-turn-the-hook-reports)).
+   The facts go when Herdr lists no agent in the pane or the pane closes; an agent started again in its pane is followed by its new session's hook even while Herdr still names the session that ended ([agent-hooks.md](agent-hooks.md#which-session-is-the-panes)).
 2. The session file, for the waits no hook reports: a plan waiting for approval (below), with the hook's `working` standing in for Herdr's `working` when the session has a hook turn.
 3. Herdr's `agent_status` and `completion_seq`, only for a session whose hook has reported no turn: `working` is Working, `idle` and `done` are stopped, `done` or `idle` with a `completion_seq` reports a completion, and any other value reads as unknown rather than idle.
 
@@ -286,7 +287,7 @@ An agent-list transport failure makes the retained telemetry unconfirmed while t
 Until a successful agent list or bootstrap snapshot confirms it again, the agent keeps its identity and task title but has Unknown activity, no completion or current demand, and requires a status check before closing.
 An identical successful list restores the confirmed state; a topology event alone does not confirm the entire agent list.
 No pane token is read for any of these.
-Regression owners: `sidebar::tests::a_hook_turn_decides_the_axes_ahead_of_herdrs_state`, `agent_hooks::facts::tests`.
+Regression owners: `sidebar::tests::a_hook_turn_decides_the_axes_ahead_of_herdrs_state`, `agent_hooks::facts::tests`, `runtime::tests::labels::a_hook_turn_ends_when_the_session_file_reads_an_interruption_after_it`, `runtime::tests::agent_connection::an_agent_started_again_in_its_pane_follows_its_hook_over_herdrs_earlier_session`.
 Demand has these sources:
 
 - A question is the core's label verdict on the agent's last message (`label.question`, see Task identity below).
