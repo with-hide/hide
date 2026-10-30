@@ -11,7 +11,10 @@ use std::path::{Path, PathBuf};
 
 use hide_agent_adapter::usage::Support;
 use hide_agent_adapter::{ADAPTERS, SessionFormat, ThreadPart, ThreadReading};
-use hide_session::thread::{THREAD_PAGE_BYTES, ThreadCursor, ThreadPage, read_thread, reads};
+use hide_session::thread::{
+    THREAD_PAGE_BYTES, THREAD_TAIL_BYTES, ThreadCursor, ThreadPage, ThreadRead, ThreadRequest,
+    read_pane_thread, read_thread, read_thread_from, reads,
+};
 use hide_session::{Agent, SessionReadScope};
 use serde_json::{Value, json};
 
@@ -228,6 +231,10 @@ impl Placed {
             path,
             scope,
         }
+    }
+
+    fn read_from(&self, from: &ThreadCursor) -> Result<ThreadPage, hide_session::ReadRefusal> {
+        read_thread_from(&self.home, self.agent, Some(&self.path), &self.scope, from)
     }
 
     fn read(&self, before: Option<&ThreadCursor>) -> Result<ThreadPage, hide_session::ReadRefusal> {
@@ -721,6 +728,20 @@ fn an_opencode_1_session_reads_from_its_parts() {
     )
     .unwrap();
     let updates = json_of(&page);
+    let forward = read_thread_from(
+        &root,
+        Agent::OpenCode,
+        None,
+        &scope("ses_0a1b2c3d4e5f60718293a4b5c6", cwd),
+        &page.start,
+    )
+    .unwrap();
+    assert_eq!(
+        json_of(&forward),
+        updates,
+        "a forward read from the page's start"
+    );
+    assert!(forward.after.is_none());
     assert_eq!(
         updates[0]["content"]["text"],
         "요청 보기를 만들어줘\n긴 요청의 둘째 줄"
@@ -744,4 +765,188 @@ fn an_opencode_1_session_reads_from_its_parts() {
         .find(|update| update["content"]["text"] == "Summarize the conversation so far")
         .unwrap();
     assert_eq!(synthetic["_meta"]["hide"]["origin"], "injected");
+}
+
+fn texts(page: &ThreadPage) -> Vec<String> {
+    json_of(page)
+        .iter()
+        .map(|update| update["content"]["text"].as_str().unwrap().to_owned())
+        .collect()
+}
+
+/// A session still being written is read forward from its newest page's
+/// start: what it wrote since is added after the page, and a line without
+/// its newline yet waits for the next read.
+#[test]
+fn a_working_session_read_forward_from_its_page_adds_only_whole_new_records() {
+    let placed = Placed::new(&SAMPLES[0]);
+    std::fs::write(
+        &placed.path,
+        [claude_line("one"), claude_line("two")].concat(),
+    )
+    .unwrap();
+    let newest = placed.read(None).unwrap();
+    assert_eq!(texts(&newest), ["one", "two"]);
+
+    let half = claude_line("four");
+    let mut file = std::fs::OpenOptions::new()
+        .append(true)
+        .open(&placed.path)
+        .unwrap();
+    std::io::Write::write_all(&mut file, claude_line("three").as_bytes()).unwrap();
+    std::io::Write::write_all(&mut file, &half.as_bytes()[..half.len() / 2]).unwrap();
+    let grown = placed.read_from(&newest.start).unwrap();
+    assert_eq!(texts(&grown), ["one", "two", "three"]);
+    assert!(grown.after.is_none(), "the page reached the session's end");
+
+    std::io::Write::write_all(&mut file, &half.as_bytes()[half.len() / 2..]).unwrap();
+    assert_eq!(
+        texts(&placed.read_from(&newest.start).unwrap()),
+        ["one", "two", "three", "four"]
+    );
+}
+
+/// A forward page ends once it passed the tail size, and the cursor it
+/// names reads on from there: the pages together are the session, once.
+#[test]
+fn forward_pages_end_past_the_tail_size_and_together_read_the_session_once() {
+    let placed = Placed::new(&SAMPLES[0]);
+    let line = claude_line(&"가".repeat(4096));
+    let count = (THREAD_TAIL_BYTES as usize / line.len()) * 3;
+    let lines = (0..count)
+        .map(|index| claude_line(&format!("{index}:{}", "가".repeat(4096))))
+        .collect::<String>();
+    std::fs::write(&placed.path, &lines).unwrap();
+    let newest = placed.read(None).unwrap();
+    assert!(
+        newest.start.at_start(),
+        "the session fits one backward page"
+    );
+
+    let mut read = Vec::new();
+    let mut pages = 0;
+    let mut from = newest.start.clone();
+    loop {
+        let page = placed.read_from(&from).unwrap();
+        pages += 1;
+        assert!(
+            page.updates.len() < count,
+            "a forward page holds less than the session"
+        );
+        read.extend(texts(&page));
+        match page.after {
+            Some(after) => from = after,
+            None => break,
+        }
+    }
+    assert!(pages >= 3, "{pages} pages");
+    assert_eq!(read, texts(&newest));
+    assert_eq!(read.len(), count);
+}
+
+/// A record bigger than the tail size makes a forward page of its own, so
+/// the next record starts the next page; a cursor into a file replaced at
+/// the same path is refused.
+#[test]
+fn a_record_past_the_tail_size_is_a_forward_page_and_a_replaced_file_refuses_its_cursor() {
+    let placed = Placed::new(&SAMPLES[0]);
+    let big =
+        |name: &str| claude_line(&format!("{name}{}", "x".repeat(THREAD_TAIL_BYTES as usize)));
+    let contents = [big("a"), big("b"), claude_line("last")].concat();
+    std::fs::write(&placed.path, &contents).unwrap();
+    let mut from = placed.read(None).unwrap().start;
+    let mut firsts = Vec::new();
+    let mut afters = Vec::new();
+    loop {
+        let page = placed.read_from(&from).unwrap();
+        firsts.push(texts(&page).first().map(|text| text[..1].to_owned()));
+        match page.after {
+            Some(after) => {
+                afters.push(after.clone());
+                from = after;
+            }
+            None => break,
+        }
+    }
+    assert_eq!(
+        firsts,
+        [
+            Some("a".to_owned()),
+            Some("b".to_owned()),
+            Some("l".to_owned())
+        ]
+    );
+
+    let replacement = placed.path.with_extension("new");
+    std::fs::write(&replacement, &contents).unwrap();
+    std::fs::rename(&replacement, &placed.path).unwrap();
+    assert_eq!(
+        placed.read_from(&afters[0]).unwrap_err().reason(),
+        "thread_cursor_stale"
+    );
+}
+
+/// A pane's session is named as Herdr reports it; the read proves its owner
+/// the way the label read does and answers the same page.
+#[test]
+fn a_pane_thread_is_read_by_the_session_reference_herdr_reports() {
+    for sample in SAMPLES
+        .iter()
+        .filter(|sample| sample.format != SessionFormat::OpenCode)
+    {
+        let placed = Placed::new(sample);
+        let request = |read| ThreadRequest {
+            agent: placed.agent,
+            reference_kind: "path".to_owned(),
+            reference_value: placed.path.to_str().unwrap().to_owned(),
+            cwd: Some(placed.scope.cwd.clone()),
+            read,
+        };
+        let newest = read_pane_thread(&placed.home, &request(ThreadRead::Newest)).unwrap();
+        assert_eq!(
+            json_of(&newest),
+            json_of(&placed.read(None).unwrap()),
+            "{:?}",
+            sample.format
+        );
+        let forward = read_pane_thread(
+            &placed.home,
+            &request(ThreadRead::From(newest.start.clone())),
+        )
+        .unwrap();
+        assert_eq!(json_of(&forward), json_of(&newest), "{:?}", sample.format);
+    }
+}
+
+#[test]
+fn a_pane_thread_refuses_an_unsafe_id_and_an_agent_without_a_converter() {
+    let placed = Placed::new(&SAMPLES[0]);
+    let request = |agent, value: &str| ThreadRequest {
+        agent,
+        reference_kind: "id".to_owned(),
+        reference_value: value.to_owned(),
+        cwd: Some(placed.scope.cwd.clone()),
+        read: ThreadRead::Newest,
+    };
+    assert_eq!(
+        read_pane_thread(&placed.home, &request(placed.agent, "../escape"))
+            .unwrap_err()
+            .reason(),
+        "label_session_id_invalid"
+    );
+    assert_eq!(
+        read_pane_thread(&placed.home, &request(Agent::Cursor, &placed.scope.id))
+            .unwrap_err()
+            .reason(),
+        "thread_unsupported"
+    );
+    assert_eq!(
+        read_pane_thread(
+            &placed.home,
+            &request(placed.agent, "00000000-0000-4000-8000-000000000000")
+        )
+        .unwrap_err()
+        .reason(),
+        "session_file_missing"
+    );
 }

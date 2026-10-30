@@ -13,7 +13,7 @@ use rusqlite::{Connection, params};
 use serde_json::Value;
 
 use super::build::{Call, FileDiff, Origin, Outcome, Part, Step, Thread};
-use super::{THREAD_PAGE_BYTES, ThreadCursor, ThreadPage};
+use super::{THREAD_PAGE_BYTES, THREAD_TAIL_BYTES, ThreadCursor, ThreadPage, ThreadRead};
 use crate::opencode::{Owner, Schema, prove, sql_refusal, with_read};
 use crate::{ReadRefusal, SessionReadScope};
 
@@ -36,10 +36,14 @@ struct Message {
 pub(super) fn read(
     home: &std::path::Path,
     scope: &SessionReadScope,
-    before: Option<&ThreadCursor>,
+    read: &ThreadRead,
 ) -> Result<ThreadPage, ReadRefusal> {
     let incarnation = format!("opencode:{}", scope.id);
-    if before.is_some_and(|cursor| cursor.incarnation != incarnation) {
+    let stale = match read {
+        ThreadRead::Newest => false,
+        ThreadRead::Before(cursor) | ThreadRead::From(cursor) => cursor.incarnation != incarnation,
+    };
+    if stale {
         return Err(ReadRefusal::from("thread_cursor_stale"));
     }
     with_read(home, |connection, schema| {
@@ -51,7 +55,20 @@ pub(super) fn read(
                 cwd: Some(&scope.cwd),
             },
         )?;
-        let (start, messages) = page(connection, schema, &scope.id, before.map(|c| c.position))?;
+        let (start, messages, after) = match read {
+            ThreadRead::Newest => {
+                let (start, messages) = page(connection, schema, &scope.id, None)?;
+                (start, messages, None)
+            }
+            ThreadRead::Before(cursor) => {
+                let (start, messages) = page(connection, schema, &scope.id, Some(cursor.position))?;
+                (start, messages, None)
+            }
+            ThreadRead::From(cursor) => {
+                let (messages, after) = page_from(connection, schema, &scope.id, cursor.position)?;
+                (cursor.position, messages, after)
+            }
+        };
         let mut thread = Thread::default();
         for message in &messages {
             draw(message, schema, &mut thread);
@@ -59,16 +76,44 @@ pub(super) fn read(
         if thread.nothing_readable() {
             return Err(ReadRefusal::from("thread_records_unreadable"));
         }
-        let (updates, skipped) = thread.into_parts();
-        Ok(ThreadPage {
-            updates,
-            before: (start > 0).then(|| ThreadCursor {
-                position: start,
-                incarnation: incarnation.clone(),
-            }),
-            skipped,
-        })
+        let cursor = |position| ThreadCursor {
+            position,
+            incarnation: incarnation.clone(),
+        };
+        Ok(super::page_of(thread, cursor(start), after.map(cursor)))
     })?
+}
+
+/// The messages from index `start` on, oldest first, ending past
+/// [`THREAD_TAIL_BYTES`] or at the page's message cap, and the index of the
+/// first message left out when the page ended before the session's end.
+fn page_from(
+    connection: &Connection,
+    schema: Schema,
+    session: &str,
+    start: u64,
+) -> Result<(Vec<Message>, Option<u64>), ReadRefusal> {
+    let total = count(connection, schema, session)?;
+    let start = start.min(total);
+    let end = total.min(start.saturating_add(MESSAGES_PER_PAGE));
+    let mut messages = rows(connection, schema, session, start, end)?;
+    let mut bytes = 0u64;
+    let mut kept = 0;
+    for message in &messages {
+        if bytes >= THREAD_TAIL_BYTES {
+            break;
+        }
+        bytes = bytes.saturating_add(message.bytes);
+        kept += 1;
+    }
+    messages.truncate(kept);
+    let next = start + kept as u64;
+    if schema == Schema::V1 {
+        for message in &mut messages {
+            message.parts = parts(connection, &message.id)?;
+        }
+    }
+    Ok((messages, (next < total).then_some(next)))
 }
 
 /// The messages that end at index `end` (the newest without one), as many
@@ -79,51 +124,10 @@ fn page(
     session: &str,
     end: Option<u64>,
 ) -> Result<(u64, Vec<Message>), ReadRefusal> {
-    let (count, rows) = match schema {
-        Schema::V1 => (
-            "SELECT count(*) FROM message WHERE session_id = ?1",
-            "SELECT id, CASE WHEN length(data) <= ?2 THEN data END, length(data) \
-             + (SELECT coalesce(sum(length(data)), 0) FROM part WHERE part.message_id = message.id) \
-             FROM message WHERE session_id = ?1 ORDER BY time_created, id LIMIT ?3 OFFSET ?4",
-        ),
-        Schema::V2 => (
-            "SELECT count(*) FROM session_message WHERE session_id = ?1",
-            "SELECT id, CASE WHEN length(data) <= ?2 THEN json_set(data, '$.type', type) END, \
-             length(data) FROM session_message WHERE session_id = ?1 ORDER BY seq LIMIT ?3 OFFSET ?4",
-        ),
-    };
-    let total: u64 = connection
-        .query_row(count, params![session], |row| row.get::<_, i64>(0))
-        .map_err(|error| sql_refusal(&error))?
-        .try_into()
-        .unwrap_or(0);
+    let total = count(connection, schema, session)?;
     let end = end.unwrap_or(total).min(total);
     let window = end.saturating_sub(MESSAGES_PER_PAGE);
-    let mut statement = connection
-        .prepare(rows)
-        .map_err(|error| sql_refusal(&error))?;
-    let mut messages = statement
-        .query_map(
-            params![
-                session,
-                THREAD_PAGE_BYTES as i64,
-                (end - window) as i64,
-                window as i64
-            ],
-            |row| {
-                Ok(Message {
-                    id: row.get(0)?,
-                    data: row
-                        .get::<_, Option<String>>(1)?
-                        .and_then(|data| serde_json::from_str(&data).ok()),
-                    parts: Vec::new(),
-                    bytes: row.get::<_, i64>(2)?.try_into().unwrap_or(u64::MAX),
-                })
-            },
-        )
-        .map_err(|error| sql_refusal(&error))?
-        .collect::<Result<Vec<_>, _>>()
-        .map_err(|error| sql_refusal(&error))?;
+    let mut messages = rows(connection, schema, session, window, end)?;
     // Newest first until the page is full; the newest message always comes,
     // so a page past the cap still moves the cursor.
     let mut bytes = 0u64;
@@ -143,6 +147,66 @@ fn page(
         }
     }
     Ok((start, messages))
+}
+
+/// How many messages the session holds.
+fn count(connection: &Connection, schema: Schema, session: &str) -> Result<u64, ReadRefusal> {
+    let count = match schema {
+        Schema::V1 => "SELECT count(*) FROM message WHERE session_id = ?1",
+        Schema::V2 => "SELECT count(*) FROM session_message WHERE session_id = ?1",
+    };
+    Ok(connection
+        .query_row(count, params![session], |row| row.get::<_, i64>(0))
+        .map_err(|error| sql_refusal(&error))?
+        .try_into()
+        .unwrap_or(0))
+}
+
+/// The session's messages from index `start` up to `end`, oldest first,
+/// each row past the page cap without its data.
+fn rows(
+    connection: &Connection,
+    schema: Schema,
+    session: &str,
+    start: u64,
+    end: u64,
+) -> Result<Vec<Message>, ReadRefusal> {
+    let rows = match schema {
+        Schema::V1 => {
+            "SELECT id, CASE WHEN length(data) <= ?2 THEN data END, length(data) \
+             + (SELECT coalesce(sum(length(data)), 0) FROM part WHERE part.message_id = message.id) \
+             FROM message WHERE session_id = ?1 ORDER BY time_created, id LIMIT ?3 OFFSET ?4"
+        }
+        Schema::V2 => {
+            "SELECT id, CASE WHEN length(data) <= ?2 THEN json_set(data, '$.type', type) END, \
+             length(data) FROM session_message WHERE session_id = ?1 ORDER BY seq LIMIT ?3 OFFSET ?4"
+        }
+    };
+    let mut statement = connection
+        .prepare(rows)
+        .map_err(|error| sql_refusal(&error))?;
+    statement
+        .query_map(
+            params![
+                session,
+                THREAD_PAGE_BYTES as i64,
+                end.saturating_sub(start) as i64,
+                start as i64
+            ],
+            |row| {
+                Ok(Message {
+                    id: row.get(0)?,
+                    data: row
+                        .get::<_, Option<String>>(1)?
+                        .and_then(|data| serde_json::from_str(&data).ok()),
+                    parts: Vec::new(),
+                    bytes: row.get::<_, i64>(2)?.try_into().unwrap_or(u64::MAX),
+                })
+            },
+        )
+        .map_err(|error| sql_refusal(&error))?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|error| sql_refusal(&error))
 }
 
 fn parts(connection: &Connection, message: &str) -> Result<Vec<Option<Value>>, ReadRefusal> {
