@@ -8,7 +8,7 @@ import { enterWorkspace, showTasks } from "../../web/e2e/wire";
 import { fitWindow, isolate, launchShell, test } from "./fixture";
 import { captureNativeWindow } from "./native-window";
 
-test("the 태스크 list and a raised child's ask on the pane head preserve native terminal geometry in both themes", async () => {
+test("the 태스크 list and raised-child pane bands preserve native terminal geometry in both themes", async () => {
   const herdr = await startHerdr();
   const run = isolate(herdr, "session-workflow");
   let app: ElectronApplication | undefined;
@@ -26,9 +26,7 @@ test("the 태스크 list and a raised child's ask on the pane head preserve nati
     await enterWorkspace(page, "fixture");
     const pane = page.locator(`[data-pane-view="${parent}"]`);
     const host = pane.locator(`[data-terminal-host="${parent}"]`);
-    // One line, the default, says the raised ask on the pane's head; nothing is drawn over the terminal.
-    await expect(pane.locator('[data-pane-head-turn="raised"]')).toBeVisible({ timeout: 30_000 });
-    await expect(pane.locator("[data-pane-header-band]")).toHaveCount(0);
+    await expect(pane.locator('[data-pane-header-band="raised"]')).toBeVisible({ timeout: 30_000 });
     const treeButton = pane.locator(`[data-pane-tree="${parent}"]`);
     await expect(treeButton).toBeVisible();
     // One child: its status mark stands in for the count, with no `+N`.
@@ -36,7 +34,7 @@ test("the 태스크 list and a raised child's ask on the pane head preserve nati
     await expect(treeButton).toHaveText("");
     await expect(pane.locator(`[data-pane-child-name]`)).toHaveCount(0);
     await expect(pane.locator(`[data-pane-own-progress="${parent}"]`)).toHaveCount(0);
-    const raisedRow = pane.locator('[data-pane-head-turn="raised"]');
+    const raisedRow = pane.locator('[data-pane-header-band="raised"]');
     const raisedVerb = raisedRow.locator('[data-verb="approval"]');
     const raisedWho = raisedRow.locator(`[data-pane-band-who="${child}"]`);
     await expect(raisedVerb).toHaveText("Approval");
@@ -46,8 +44,8 @@ test("the 태스크 list and a raised child's ask on the pane head preserve nati
       const who = verb.parentElement?.querySelector(`[data-pane-band-who="${childPaneId}"]`);
       return !!who && !!(verb.compareDocumentPosition(who) & Node.DOCUMENT_POSITION_FOLLOWING);
     }, child)).toBe(true);
-    // The head leaves the parent's request to its card, its own first line while the label gave no summary, and names it on the trigger (PRD pane-last-request B1, B3).
-    await expect(raisedRow.locator(`[data-pane-turn-trigger="${parent}"]`)).toHaveAttribute("aria-label", /Request: 한국어 입력과 세션 복귀 경계를 검토하는 긴 작업 제목 진행해줘/);
+    // The raised ask leads with the parent's request, its own first line while the label gave no summary (PRD pane-last-request B1, B3).
+    await expect(raisedRow.locator(`[data-pane-turn-request="${parent}"]`)).toContainText("한국어 입력과 세션 복귀 경계를 검토하는 긴 작업 제목 진행해줘");
     const terminal = await host.boundingBox();
     const facts = { head: execFileSync("git", ["rev-parse", "HEAD"], { cwd: path.resolve(__dirname, "../.."), encoding: "utf8" }).trim(), parent, child, home: run.env.HOME, socket: herdr.socket, state: run.env.HIDE_STATE_DIR, provider: "synthetic agent transcript and lifecycle" };
     for (const theme of ["light", "dark"] as const) {
@@ -73,13 +71,13 @@ test("the 태스크 list and a raised child's ask on the pane head preserve nati
       await expect(page.locator('[data-sidebar-lens="projects"]')).toBeVisible();
     }
     await setFixtureLifecycle(herdr, child, "working");
-    await expect(pane.locator('[data-pane-head-turn="raised"]')).toHaveCount(0);
+    await expect(pane.locator('[data-pane-header-band="raised"]')).toHaveCount(0);
     continueFixtureTranscript(herdr, parentSession, { task: "한국어 입력과 세션 복귀 경계를 검토하는 긴 작업 제목", progress: "자식 검토 결과를 기다리는 중", request: "자식 검토 결과 정리와 세션 복귀 확인" });
     await setFixtureLifecycle(herdr, parent, "working");
     await expect(pane.locator(`[data-pane-own-progress="${parent}"]`)).toHaveText("자식 검토 결과를 기다리는 중", { timeout: 25_000 });
-    // The working turn's progress names the label's summary of the new request, and a press opens its card under it (B1, B2, B6).
-    const request = pane.locator(`[data-pane-turn-trigger="${parent}"]`);
-    await expect(request).toHaveAttribute("aria-label", /Request: 자식 검토 결과 정리와 세션 복귀 확인/);
+    // The working turn leads with the label's summary of the new request, and a press opens its card under it (B1, B2, B6).
+    const request = pane.locator(`[data-pane-turn-request="${parent}"]`);
+    await expect(request).toContainText("자식 검토 결과 정리와 세션 복귀 확인");
     await request.click();
     await expect(page.locator(`[data-pane-turn-card="${parent}"] [data-turn-card-original]`)).toContainText("이어서 진행해줘");
     await captureNativeWindow(app, "session-turn-card", { ...facts, terminal });

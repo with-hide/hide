@@ -1049,11 +1049,11 @@ export type PaneHeader = {
   working: boolean;
   /** Why the terminal is not live, drawn in the pane's body. */
   notice: PaneNotice | null;
-  /** What waits on the operator in this pane, drawn as its turn's ask. */
+  /** What waits on the operator in this pane, drawn on its second row. */
   band: PaneBand | null;
   /** The current pane agent's own live working sentence, or a finished turn's result sentence, selected by the core. */
   progress?: string | null;
-  /** The turn's request, which two lines lead the second row with, present only while the turn shows (PRD pane-last-request B1). */
+  /** The request the second row leads with, present only while the row shows the turn (PRD pane-last-request B1). */
   request?: PaneTurnRequest;
   /** The turn finished and the operator has not looked at the pane since (B10). */
   finished?: boolean;
