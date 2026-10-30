@@ -143,10 +143,11 @@ test("the Conductor's first plan shows on its pane, the map follows the record, 
     await expect(map).toBeVisible();
     await expect(map.locator("[data-mission-node]")).toHaveCount(4);
 
-    // The map head's gear opens Settings on its Conductor page, which writes the cap the Conductor reads.
+    // The map head's gear opens the rail's Mission tool on its defaults, Settings › Conductor's own
+    // controls, which write the cap the Conductor reads (PRD mission-tool B9).
     await map.locator("[data-detail-conductor-settings]").click();
-    const sheet = page.locator('[data-settings="true"]');
-    await expect(sheet.locator('[data-settings-page-title="conductor"]')).toBeVisible();
+    const sheet = page.locator('[data-mission-tool-page="settings"]');
+    await expect(sheet).toBeVisible();
     await sheet.locator("[data-conductor-cap]").click();
     await page.getByRole("option", { name: "6", exact: true }).click();
     await expect(sheet.locator("[data-conductor-cap]")).toHaveAttribute("data-conductor-cap", "6");
