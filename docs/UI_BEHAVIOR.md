@@ -2862,6 +2862,9 @@ Settings opens on General unless the way in names a page: Explorer's and a devic
 General has the Appearance group.
 Appearance contains Language, Color theme, Mode, Accent, Interface text and Terminal text; Accent shows its swatches and no hex value (PRD settings-left-nav B5; hide-color-theme B1).
 Interface text, 11 to 17 pt with 13 the default, sizes every text outside the terminals and the editor's code, the sidebar included.
+Text outside the terminals and the editor's code is drawn in faces the app ships, so every system draws the same letters: Inter for Latin, and Pretendard, made to sit beside Inter, for Hangul only.
+Kana and Han characters, and any character neither face has, come from the system's own face for the language Language chose, so a Han character takes the form its reader expects.
+On macOS that text is drawn with grayscale smoothing, so light text on a dark ground keeps the face's weight; the terminals keep the system's smoothing.
 Terminal text, 10 to 24 pt with 14 the default, is every terminal's size; it carries one note that a single pane is sized with Larger text and Smaller text in that pane (⌘= and ⌘- on macOS) and the editor's text with the same keys in a document.
 A pane's own size multiplies Terminal text, so moving the slider resizes every terminal and keeps a zoomed pane that much larger than the rest; each terminal takes its new rows and columns at once.
 The core keeps both sizes in its ui state, where they survive a reload and a relaunch, and refuses a size outside its range into the diagnostic log, keeping the last one.
