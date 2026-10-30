@@ -114,7 +114,8 @@
   "desk_location": ["desk", "worktree", "checkout"],
   "desk_mention_kind": ["session", "project"],
   "desk_carried": ["all", "trimmed", "none"],
-  "desk_job_state": ["queued", "starting", "working", "asking", "done", "failed", "cancelled", "closed", "moved_out", "archived"],
+  "desk_job_state": ["queued", "starting", "working", "asking", "done", "failed", "cancelled", "closed", "moved_out", "sleeping", "archived"],
+  "desk_ask_kind": ["question", "approval", "decision", "plan_review", "blocked"],
   "desk_job_reason": ["spawn_failed", "exited", "device_disconnected"],
   "desk_output_kind": ["image", "page", "doc", "pr"],
   "desk_job_location": ["checkout", "worktree"]

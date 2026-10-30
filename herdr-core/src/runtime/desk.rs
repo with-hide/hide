@@ -64,6 +64,9 @@ struct Turn {
     agent: AdapterId,
     text: String,
     cut: bool,
+    started_at_ms: u64,
+    first_text_at_ms: Option<u64>,
+    steps: crate::model::DeskSteps,
 }
 
 /// A card waiting for the operator, and how to answer the agent.
@@ -313,6 +316,9 @@ impl Runtime {
             agent,
             text: String::new(),
             cut: false,
+            started_at_ms: crate::links::now_ms(),
+            first_text_at_ms: None,
+            steps: Default::default(),
         });
         let resume = self
             .desk
@@ -585,6 +591,10 @@ impl Runtime {
                 } else {
                     state
                 },
+                thought_ms: turn
+                    .first_text_at_ms
+                    .map(|at| at.saturating_sub(turn.started_at_ms)),
+                steps: turn.steps,
             });
         }
         self.compose_desk_live();
@@ -695,6 +705,8 @@ impl Runtime {
                 let Some(turn) = self.desk.turn.as_mut().filter(|turn| turn.tag == tag) else {
                     return false;
                 };
+                turn.first_text_at_ms
+                    .get_or_insert_with(crate::links::now_ms);
                 if turn.cut {
                     return false;
                 }
@@ -711,6 +723,14 @@ impl Runtime {
                 }
                 self.compose_desk_live();
                 return true;
+            }
+            Report::Steps { tag, steps } => {
+                if let Some(turn) = self.desk.turn.as_mut().filter(|turn| turn.tag == tag) {
+                    for step in steps {
+                        turn.steps.count(step);
+                    }
+                }
+                return false;
             }
             Report::TurnEnded { tag, outcome } => {
                 if self.desk.turn.as_ref().is_none_or(|turn| turn.tag != tag) {
@@ -910,8 +930,10 @@ impl Runtime {
         if self.desk.worker.is_none() {
             return;
         }
+        let turn = self.desk.turn.as_ref();
         self.snapshot.desk_live = Some(Arc::new(DeskLiveSnapshot {
-            text: self.desk.turn.as_ref().map(|turn| turn.text.clone()),
+            text: turn.map(|turn| turn.text.clone()),
+            started_at_ms: turn.map(|turn| turn.started_at_ms),
         }));
     }
 }
@@ -1040,6 +1062,15 @@ mod tests {
         });
         let live = runtime.snapshot.desk_live.as_ref().unwrap();
         assert_eq!(live.text.as_deref(), Some("two sessions"));
+        assert!(live.started_at_ms.is_some());
+        runtime.desk_report(Report::Steps {
+            tag: send.tag,
+            steps: vec![
+                hide_desk::permission::Step::Sessions,
+                hide_desk::permission::Step::Sessions,
+                hide_desk::permission::Step::Letter,
+            ],
+        });
         runtime.desk_report(Report::TurnEnded {
             tag: send.tag,
             outcome: TurnOutcome::Done,
@@ -1047,10 +1078,19 @@ mod tests {
 
         let desk = runtime.snapshot.desk.as_ref().unwrap();
         assert_eq!(desk.host.state, DeskHostState::Ready);
-        assert!(matches!(
-            desk.conversation.items.last(),
-            Some(DeskItem::Reply { text, state: DeskReplyState::Done, .. }) if text == "two sessions"
-        ));
+        let Some(DeskItem::Reply {
+            text,
+            state: DeskReplyState::Done,
+            thought_ms,
+            steps,
+            ..
+        }) = desk.conversation.items.last()
+        else {
+            panic!("no reply");
+        };
+        assert_eq!(text, "two sessions");
+        assert!(thought_ms.is_some());
+        assert_eq!((steps.sessions, steps.letters), (2, 1));
         assert_eq!(runtime.snapshot.desk_live.as_ref().unwrap().text, None);
     }
 

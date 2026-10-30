@@ -9729,10 +9729,23 @@ mod wire_enum_tests {
                 DeskJobState::Cancelled,
                 DeskJobState::Closed,
                 DeskJobState::MovedOut,
+                DeskJobState::Sleeping,
                 DeskJobState::Archived,
             ],
         );
         checked.insert("desk_job_state");
+        assert_wire(
+            &contract,
+            "desk_ask_kind",
+            &[
+                DeskAskKind::Question,
+                DeskAskKind::Approval,
+                DeskAskKind::Decision,
+                DeskAskKind::PlanReview,
+                DeskAskKind::Blocked,
+            ],
+        );
+        checked.insert("desk_ask_kind");
         assert_wire(
             &contract,
             "desk_job_reason",

@@ -2619,19 +2619,24 @@ export type DeskAgent = {
 /** One line of the Desk conversation. A message's text holds a mention as `@session(<id> <name>)` or `@project(<path> <name>)`. */
 export type DeskItem =
   | { kind: "user"; id: number; text: string; at_ms: number; mentions: DeskMention[] }
-  | { kind: "reply"; id: number; agent: DeskAgentId; text: string; at_ms: number; state: "done" | "stopped" }
+  /** `thought_ms` and `steps` fold the turn into one line: `생각 8초 · 세션 4개 읽음`. */
+  | { kind: "reply"; id: number; agent: DeskAgentId; text: string; at_ms: number; state: "done" | "stopped"; thought_ms: number | null; steps: DeskSteps }
   | { kind: "switch"; id: number; from: DeskAgentId | null; to: DeskAgentId; carried: "all" | "trimmed" | "none" }
   | { kind: "model"; id: number; model: string | null; effort: string | null }
   | { kind: "approval"; id: number; card: "command" | "edit" | "other"; command: string; folder: string | null; reason: string | null; state: DeskApprovalState }
   /** `detail` is the install's last line, the sign-in command for `login_needed`, or the blocked call. */
   | { kind: "notice"; id: number; notice: DeskNotice; agent: DeskAgentId | null; detail: string | null }
-  /** Desk handed work to a session that already runs (B16): no state, no place. */
-  | { kind: "handed"; id: number; agent_id: string; name: string; project: string | null }
+  /** A letter Desk sent a running session (B16): handed work when `letter_kind` is `request`; no state, no place. `read` once its runtime took it in. */
+  | { kind: "handed"; id: number; agent_id: string; pane_id: string; name: string; project: string | null; letter_kind: string; line: string; letter_id: string | null; read: boolean }
   /** Desk started or queued a job; its card is `jobs`' entry `job_id`. */
   | { kind: "job"; id: number; job_id: string };
 
 /** `contracts/snapshot-wire-enums.json` `desk_job_state`. */
-export type DeskJobState = "queued" | "starting" | "working" | "asking" | "done" | "failed" | "cancelled" | "closed" | "moved_out" | "archived";
+export type DeskJobState = "queued" | "starting" | "working" | "asking" | "done" | "failed" | "cancelled" | "closed" | "moved_out" | "sleeping" | "archived";
+/** `desk_ask_kind`: the verb an asking job's line starts with. */
+export type DeskAskKind = "question" | "approval" | "decision" | "plan_review" | "blocked";
+/** What Desk's agent did in a turn, counted from its tool calls. */
+export type DeskSteps = { sessions: number; files: number; letters: number; starts: number; other: number };
 /** `desk_job_reason`. */
 export type DeskJobReason = "spawn_failed" | "exited" | "device_disconnected";
 /** `desk_output_kind`. */
@@ -2660,6 +2665,12 @@ export type DeskJob = {
   outputs: DeskOutput[];
   joined: boolean;
   reason: DeskJobReason | null;
+  /** The code a failed start ended with. */
+  failure: string | null;
+  ask: DeskAskKind | null;
+  /** The sidebar row's mark, drawn with `StatusMark`; `mark_read` is its hollow read ask. */
+  mark: RowMark | null;
+  mark_read: boolean;
   machine: string | null;
   disconnected: boolean;
   changed_at_unix_ms: number;
@@ -2689,7 +2700,7 @@ export type DeskSection = {
 };
 
 /** The `desk_live` section: the reply being written, `null` between turns. */
-export type DeskLive = { text: string | null };
+export type DeskLive = { text: string | null; started_at_ms: number | null };
 
 /** The `suggestions` section: absent until the Hide AI tool opens a Project. */
 export type SuggestionsSection = { project: ProjectSuggestions | null };

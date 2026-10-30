@@ -361,6 +361,69 @@ fn tool_action(call: &Value, announced: Option<&Value>) -> Option<Action> {
     }
 }
 
+/// What one of Desk's tool calls did, as its turn's folded line counts it.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum Step {
+    /// A `hide` command that reads what runs: sessions, letters, plans.
+    Sessions,
+    /// A file read or search.
+    Files,
+    /// `hide request send` or `reply`: a letter.
+    Letter,
+    /// `hide agent spawn`: a new session.
+    Start,
+    /// Any other command or tool.
+    Other,
+}
+
+/// What an announced tool call (`tool_call`, merged with its updates) did.
+pub fn step(call: &Value) -> Step {
+    match tool_action(call, None) {
+        Some(Action::Read) => Step::Files,
+        Some(Action::Command { command, .. }) => hide_step(&command),
+        _ => Step::Other,
+    }
+}
+
+fn hide_step(line: &str) -> Step {
+    let parsed = hide_shell::shell_line(line);
+    let mut step = None;
+    for words in &parsed.commands {
+        let Some((program, rest)) = words.split_first() else {
+            continue;
+        };
+        if Path::new(program)
+            .file_stem()
+            .and_then(|stem| stem.to_str())
+            != Some("hide")
+        {
+            return Step::Other;
+        }
+        let rest: Vec<&str> = rest.iter().map(String::as_str).collect();
+        let this = match rest.as_slice() {
+            ["request", "send" | "reply", ..] => Step::Letter,
+            ["agent", "spawn", ..] => Step::Start,
+            ["agent", "list" | "show", ..]
+            | ["ps", ..]
+            | ["inbox", ..]
+            | ["request", "show", ..]
+            | ["watch", "list", ..]
+            | ["plan", "show", ..]
+            | ["mission", "show" | "list", ..]
+            | ["view", "list" | "status", ..] => Step::Sessions,
+            _ => Step::Other,
+        };
+        // A line of several commands counts as its most telling one.
+        step = Some(match (step, this) {
+            (Some(Step::Start), _) | (_, Step::Start) => Step::Start,
+            (Some(Step::Letter), _) | (_, Step::Letter) => Step::Letter,
+            (Some(Step::Sessions), _) | (_, Step::Sessions) => Step::Sessions,
+            _ => Step::Other,
+        });
+    }
+    step.unwrap_or(Step::Other)
+}
+
 /// The confirm Desk's own Pi extension sends for each tool call it holds:
 /// its message carries the tool and its input.
 fn pi_action(call: &Value) -> Option<Action> {
@@ -400,6 +463,25 @@ mod tests {
     use serde_json::json;
 
     const HIDE: &str = "/Applications/hide.app/Contents/Resources/hide";
+
+    #[test]
+    fn a_turns_tool_calls_count_as_sessions_read_letters_and_starts() {
+        let run =
+            |command: &str| step(&json!({"kind": "execute", "rawInput": {"command": command}}));
+        assert_eq!(run("hide agent show agent-3"), Step::Sessions);
+        assert_eq!(run("hide ps && hide agent list"), Step::Sessions);
+        assert_eq!(
+            run("hide request send agent-3 --intent k --body hi"),
+            Step::Letter
+        );
+        assert_eq!(run("hide agent spawn --name a --intent k"), Step::Start);
+        assert_eq!(run("hide agent archive agent-3"), Step::Other);
+        assert_eq!(run("ls -la"), Step::Other);
+        assert_eq!(
+            step(&json!({"kind": "read", "locations": [{"path": "/a"}]})),
+            Step::Files
+        );
+    }
 
     fn options() -> Value {
         json!([

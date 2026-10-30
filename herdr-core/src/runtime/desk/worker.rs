@@ -89,6 +89,11 @@ pub(super) enum Report {
         tag: u64,
         text: String,
     },
+    /// What the turn's tool calls did, sent just before it ends.
+    Steps {
+        tag: u64,
+        steps: Vec<hide_desk::permission::Step>,
+    },
     TurnEnded {
         tag: u64,
         outcome: TurnOutcome,
@@ -181,6 +186,8 @@ struct Running {
     announced: HashMap<String, Value>,
     announced_order: Vec<String>,
     turn: Option<u64>,
+    /// The tool calls announced in the turn running now, in order.
+    turn_calls: Vec<String>,
     /// The work placement this session was last told; none for a session
     /// resumed from an earlier run.
     placement: Option<hide_desk::Placement>,
@@ -371,7 +378,10 @@ impl Worker {
             &text,
             send.tag,
         ) {
-            Ok(()) => running.turn = Some(send.tag),
+            Ok(()) => {
+                running.turn = Some(send.tag);
+                running.turn_calls.clear();
+            }
             Err(error) => {
                 self.report(Report::TurnEnded {
                     tag: send.tag,
@@ -480,6 +490,7 @@ impl Worker {
                 announced: HashMap::new(),
                 announced_order: Vec::new(),
                 turn: None,
+                turn_calls: Vec::new(),
                 placement: None,
             },
             opened.resume_failed,
@@ -551,7 +562,15 @@ impl Worker {
                             self.report(Report::Text { tag, text });
                         }
                     }
-                    Update::Tool { id, call } => running.remember(id, call),
+                    Update::Tool { id, call } => {
+                        if running.turn.is_some()
+                            && running.turn_calls.len() < MAX_ANNOUNCED
+                            && !running.turn_calls.contains(&id)
+                        {
+                            running.turn_calls.push(id.clone());
+                        }
+                        running.remember(id, call);
+                    }
                     Update::Choices(choices) => {
                         let adapter = running.adapter;
                         self.report(Report::Choices { adapter, choices });
@@ -575,6 +594,12 @@ impl Worker {
             Incoming::Reply { tag, result } => {
                 if running.turn == Some(tag) {
                     running.turn = None;
+                    let steps = std::mem::take(&mut running.turn_calls)
+                        .iter()
+                        .filter_map(|id| running.announced.get(id))
+                        .map(hide_desk::permission::step)
+                        .collect();
+                    self.report(Report::Steps { tag, steps });
                 }
                 let outcome = match result {
                     Ok(answer) => match session::stop_reason(&answer) {

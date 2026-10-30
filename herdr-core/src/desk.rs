@@ -199,9 +199,9 @@ pub(crate) struct QueuedJob {
     pub command: crate::coordination::Command,
     pub queued_at_ms: u64,
     pub state: QueuedState,
-    /// Its start failed because its device was not connected (B23).
+    /// The code its start failed with.
     #[serde(default)]
-    pub disconnected: bool,
+    pub code: Option<String>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -363,6 +363,8 @@ mod tests {
             text: "two sessions".into(),
             at_ms: 0,
             state: DeskReplyState::Done,
+            thought_ms: None,
+            steps: Default::default(),
         });
         let carried = conversation.carried().unwrap();
         assert_eq!(carried, "Operator: what runs now?\nCodex: two sessions");

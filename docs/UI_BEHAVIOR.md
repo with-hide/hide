@@ -937,6 +937,7 @@ The selector lists Claude, Codex and Pi with each one's state:
 - `no_ask_mode`: Hide could not hold the agent in its ask mode, so it is not used.
 
 A message goes to the chosen agent, model and effort; while a reply is being written, the next message waits and `중지` ends the turn.
+While it thinks, the conversation shows the time since the message (`생각 중 · 3초`), and each reply carries its turn folded into one line: the time to its first words and what the agent did, counted from its tool calls (sessions read, letters, sessions started, files read, other commands), such as `생각 8초 · 세션 4개 읽음`.
 The models and efforts are the ones the agent's last session offered, and a change shows as a line in the conversation.
 Switching agents shows a line saying whether the conversation went with it, and the new agent's first session receives it.
 `새 대화` clears the conversation and starts the next session new; `다시 시작` ends the process and the next message loads the last session, or says it could not and started a new one.
@@ -956,15 +957,18 @@ The Desk agent is no session in a pane: it is not in the sidebar, Sessions, Need
 ### Desk's jobs
 
 A session Desk starts is the operator's own: a real Agent tab in its checkout, which the core puts in the checkout's `◆ Desk` group (made when missing) once, without changing the screen in front or the keyboard; a job on another device keeps the tab where that device made it.
-Work Desk hands to a session that already runs is a letter, and the conversation shows a `기존 세션에 맡김` line with the session and its project; it changes no state and takes no place.
+Work Desk hands to a session that already runs is a letter, and every letter Desk sends leaves a line with the session, its project, the letter's kind and first line, and `읽음` once the session's runtime took it in: a `request` is work handed (`편지로 맡김`), any other kind word passed on (`보냄`). It changes no state and takes no place.
 Where a task works follows Settings › Desk: per task (the default, a new `desk/<task name>` branch for work that touches code another session is changing or ends in a pull request), always a new branch, or always the checkout's current branch; Desk is told the setting with its first message and again when it changes, and a place the operator names for a task wins for that task.
 
 Each job is a card in the `desk` section's `jobs`, newest first and at most 64, keyed by its spawn's intent; `pane_id` is its thread's key.
+A card with a row carries the row's own mark, drawn with the sidebar's `StatusMark`, and whether its ask was read; reading the card or its thread in Desk reads the row as the sidebar does, so the two never disagree.
+Its outputs are every View its session opened that is still open (32 at most), each marked seen or not, then its pull requests, each with its PR mark's state.
 Its state comes from the ledger and the row the sidebar draws for it, never from a model call:
 
 - `queued` with its place (`대기 중 · n번째`): Desk's places (Settings, 8 at most) are taken; it starts by itself when one frees, and the queue survives a restart. `취소` leaves it `cancelled` and moves the ones behind it up; `다시 맡기기` puts it at the back.
-- `starting`, `working` (now line, plan n/m, outputs), `asking` (the question and `답하기`), `done` (the last turn's summary line, its pull requests with their PR mark state, outputs).
-- `failed` with its reason: `spawn_failed`, `exited`, or `device_disconnected` for a job asked of a device whose link was down; `다시 시도` queues it again. A failed job takes no place, and nothing times out.
+- `starting`, `working` (now line, plan n/m, outputs), `asking` (the question and `답하기`, with what it asks: `question`, `approval`, `decision` for a Conductor's mission, `plan_review`, or `blocked`), `done` (the last turn's summary line, its pull requests with their PR mark state, outputs).
+- `sleeping` while Hide holds it asleep (`hide agent sleep`); it takes no place.
+- `failed` with its reason: `spawn_failed` with the code the start failed with, `exited`, or `device_disconnected` for a job asked of a device whose link was down; `다시 시도` queues it again. A failed job takes no place, and nothing times out.
 - A job on a device whose link drops dims and says `연결 안 됨` while it keeps working.
 - `joined` once the operator types into its terminal (`나도 참여 중`); Desk keeps following it.
 - `moved_out` once the operator drags its tab out of the `◆ Desk` group (`내 탭으로 옮김`), and `closed` once they close it (`내가 닫음`); neither takes a place, and Desk never starts it again. A closed tab reopened with `세션 복구하기` or ⇧⌘T comes back to its place in the group and is followed again.

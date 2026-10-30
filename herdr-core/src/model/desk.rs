@@ -54,6 +54,15 @@ pub struct DeskJobSnapshot {
     /// The operator typed into its terminal (B36).
     pub joined: bool,
     pub reason: Option<DeskJobReason>,
+    /// The code its start failed with, for the failed card's words.
+    pub failure: Option<String>,
+    /// What the operator's turn is about while it is `asking`.
+    pub ask: Option<DeskAskKind>,
+    /// The sidebar row's own mark, drawn by the same `StatusMark`; absent
+    /// while it has no row (queued, failed, closed).
+    pub mark: Option<crate::agent_state::RowMark>,
+    /// The ask its mark shows was read and is still unanswered (hollow `!`).
+    pub mark_read: bool,
     /// The device it runs on, when not this machine (B23).
     pub machine: Option<String>,
     pub disconnected: bool,
@@ -152,7 +161,22 @@ pub enum DeskJobState {
     Closed,
     /// The operator moved its tab out of the `◆ Desk` group (B37).
     MovedOut,
+    /// Hide put it to sleep (`hide agent sleep`); a letter wakes it.
+    Sleeping,
     Archived,
+}
+
+/// What an asking job waits on the operator for (D-75).
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DeskAskKind {
+    Question,
+    Approval,
+    /// A Conductor's mission waits on a decision.
+    Decision,
+    PlanReview,
+    /// The agent stopped on an error.
+    Blocked,
 }
 
 impl DeskJobState {
@@ -292,6 +316,12 @@ pub enum DeskItem {
         text: String,
         at_ms: u64,
         state: DeskReplyState,
+        /// From the message to the reply's first words: `생각 8초`.
+        #[serde(default)]
+        thought_ms: Option<u64>,
+        /// What the agent did in the turn, folded into one line.
+        #[serde(default)]
+        steps: DeskSteps,
     },
     /// The operator switched agents; `carried` says how much of the
     /// conversation went with the switch.
@@ -301,13 +331,28 @@ pub enum DeskItem {
         to: AdapterId,
         carried: DeskCarried,
     },
-    /// Desk handed the work to a session that already runs it (B16): it
-    /// changes no state and holds no place.
+    /// A letter Desk sent a session that already runs (B16): work it
+    /// handed (`kind` `request`) or word it passed on. It changes no state
+    /// and holds no place.
     Handed {
         id: u64,
         agent_id: String,
+        /// The recipient's pane, where its row and status mark are.
+        #[serde(default)]
+        pane_id: String,
         name: String,
         project: Option<String>,
+        /// The letter's kind: `request`, `block`, `progress` or `report`.
+        #[serde(default)]
+        letter_kind: String,
+        /// The letter's first line.
+        #[serde(default)]
+        line: String,
+        #[serde(default)]
+        letter_id: Option<String>,
+        /// The recipient's runtime took the letter in (`읽음`).
+        #[serde(default)]
+        read: bool,
     },
     /// Desk started a job; its card is `jobs`' entry `job_id`.
     Job { id: u64, job_id: String },
@@ -381,8 +426,9 @@ impl DeskItem {
                 name,
                 agent_id,
                 project,
+                line,
                 ..
-            } => name.len() + agent_id.len() + project.as_ref().map_or(0, String::len),
+            } => name.len() + agent_id.len() + project.as_ref().map_or(0, String::len) + line.len(),
             Self::Job { job_id, .. } => job_id.len(),
             Self::Switch { .. } => 0,
         }
@@ -500,4 +546,31 @@ pub const DESK_CAP_MAX: u8 = 8;
 #[derive(Clone, Debug, Default, Eq, PartialEq, Serialize)]
 pub struct DeskLiveSnapshot {
     pub text: Option<String>,
+    /// When the turn being answered started, for `생각 중 · 3초`.
+    pub started_at_ms: Option<u64>,
+}
+
+/// What Desk's agent did in a turn, counted from its tool calls.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
+pub struct DeskSteps {
+    /// `hide` commands that read sessions, letters and plans.
+    pub sessions: u32,
+    pub files: u32,
+    pub letters: u32,
+    pub starts: u32,
+    pub other: u32,
+}
+
+impl DeskSteps {
+    pub(crate) fn count(&mut self, step: hide_desk::permission::Step) {
+        use hide_desk::permission::Step;
+        let slot = match step {
+            Step::Sessions => &mut self.sessions,
+            Step::Files => &mut self.files,
+            Step::Letter => &mut self.letters,
+            Step::Start => &mut self.starts,
+            Step::Other => &mut self.other,
+        };
+        *slot = slot.saturating_add(1);
+    }
 }

@@ -66,7 +66,7 @@ impl Runtime {
             command: spawn.clone(),
             queued_at_ms: crate::links::now_ms(),
             state: QueuedState::Waiting,
-            disconnected: false,
+            code: None,
         });
         self.desk_line(crate::model::DeskItem::Job {
             id: 0,
@@ -165,7 +165,12 @@ impl Runtime {
                     handle.apply(move |runtime| runtime.desk_spawn_answered(spawn, result));
                 }));
             }
-            Command::Send { target: key, .. } => {
+            Command::Send {
+                target: key,
+                body,
+                kind,
+                ..
+            } => {
                 let observed = target?;
                 let agent_id = self
                     .delivery_state()
@@ -181,16 +186,26 @@ impl Runtime {
                 crate::model::DeskItem::Handed {
                     id: 0,
                     agent_id,
+                    pane_id: observed.actor.pane_id.clone(),
                     name: observed.actor.name.clone(),
                     project: self.desk_pane_project(&observed.actor.pane_id),
+                    letter_kind: kind.clone(),
+                    line: first_line(body),
+                    letter_id: None,
+                    read: false,
                 }
             }
             _ => return None,
         };
         Some(Box::new(move |result: &Result<Value, String>| {
-            if result.is_ok() {
-                handle.apply(move |runtime| runtime.desk_line(line));
+            let Ok(answer) = result else {
+                return;
+            };
+            let mut line = line;
+            if let crate::model::DeskItem::Handed { letter_id, .. } = &mut line {
+                *letter_id = answer.get("id").and_then(Value::as_str).map(str::to_owned);
             }
+            handle.apply(move |runtime| runtime.desk_line(line));
         }))
     }
 
@@ -223,7 +238,7 @@ impl Runtime {
                     command: spawn,
                     queued_at_ms: crate::links::now_ms(),
                     state: QueuedState::Failed,
-                    disconnected: device_failure(&code),
+                    code: Some(code),
                 });
             }
         }
@@ -304,7 +319,7 @@ impl Runtime {
         };
         let mut job = queue.remove(index);
         job.state = QueuedState::Waiting;
-        job.disconnected = false;
+        job.code = None;
         job.queued_at_ms = crate::links::now_ms();
         queue.push(job);
         true
@@ -377,7 +392,7 @@ impl Runtime {
                     "code": code,
                 }));
                 queue[index].state = QueuedState::Failed;
-                queue[index].disconnected = device_failure(&code);
+                queue[index].code = Some(code);
             }
         }
         self.save_desk();
@@ -393,6 +408,21 @@ impl Runtime {
             .map(|job| (job.id, job.state))
             .collect()
     }
+}
+
+/// A letter's first line, as its conversation line shows it.
+fn first_line(body: &str) -> String {
+    const MAX: usize = 200;
+    let line = body
+        .lines()
+        .find(|line| !line.trim().is_empty())
+        .unwrap_or_default()
+        .trim();
+    let mut end = line.len().min(MAX);
+    while !line.is_char_boundary(end) {
+        end -= 1;
+    }
+    line[..end].to_owned()
 }
 
 /// Whether a spawn failed because its device was not connected.
@@ -488,7 +518,7 @@ impl Runtime {
                 }
                 QueuedState::Starting => (DeskJobState::Starting, None),
                 QueuedState::Cancelled => (DeskJobState::Cancelled, None),
-                QueuedState::Failed if job.disconnected => (
+                QueuedState::Failed if job.code.as_deref().is_some_and(device_failure) => (
                     DeskJobState::Failed,
                     Some(DeskJobReason::DeviceDisconnected),
                 ),
@@ -518,6 +548,7 @@ impl Runtime {
             );
             card.state = state;
             card.reason = reason;
+            card.failure = job.code.clone();
             card.queue_position = (state == DeskJobState::Queued).then_some(position);
             cards.insert(0, card);
         }
@@ -582,6 +613,10 @@ impl Runtime {
             outputs: Vec::new(),
             joined: mark.is_some_and(|mark| mark.joined),
             reason: None,
+            failure: None,
+            ask: None,
+            mark: None,
+            mark_read: false,
             machine: machine.map(str::to_owned),
             disconnected: false,
             changed_at_unix_ms: mark.map_or(at, |mark| mark.changed_at_ms.max(at)),
@@ -605,7 +640,7 @@ impl Runtime {
         spawn: &crate::coordination::SpawnRecord,
         registration: Option<&crate::coordination::AgentRecord>,
     ) -> crate::model::DeskJobSnapshot {
-        use crate::model::{AgentStatusCode, DeskJobPlan, DeskJobReason};
+        use crate::model::{AgentStatusCode, DeskAskKind, DeskJobPlan, DeskJobReason};
         let mut card = self.desk_blank_card(
             &spawn.intent,
             &spawn.name,
@@ -657,6 +692,8 @@ impl Runtime {
             DeskJobState::Closed
         } else if mark.is_some_and(|mark| mark.moved_out) {
             DeskJobState::MovedOut
+        } else if row.is_some_and(|row| row.sleep.is_some()) {
+            DeskJobState::Sleeping
         } else if !spawn.completed {
             DeskJobState::Starting
         } else if card.disconnected {
@@ -682,6 +719,19 @@ impl Runtime {
             DeskJobState::Working
         };
         if let Some(row) = row {
+            card.mark = Some(row.mark);
+            card.mark_read = row.state.mark_tone.read;
+            card.read = !row.unread;
+            let ask = match (&row.ask_subject, row.status_code) {
+                (Some(crate::model::AskSubject::PlanReview { .. }), _) => DeskAskKind::PlanReview,
+                (Some(crate::model::AskSubject::MissionDecision { .. }), _) => {
+                    DeskAskKind::Decision
+                }
+                (None, AgentStatusCode::Approval) => DeskAskKind::Approval,
+                (None, AgentStatusCode::Error) => DeskAskKind::Blocked,
+                (None, _) => DeskAskKind::Question,
+            };
+            card.ask = (card.state == DeskJobState::Asking).then_some(ask);
             card.now = row.detail.clone();
             card.question = (card.state == DeskJobState::Asking)
                 .then(|| {
@@ -711,15 +761,16 @@ impl Runtime {
                     state: pull.state,
                 })
                 .collect();
-            card.outputs = row
-                .unseen_views
-                .iter()
-                .map(|view| crate::model::DeskJobOutput {
-                    id: view.view_id.clone(),
-                    kind: output_kind(&view.path),
-                    label: view.label.clone(),
+            card.outputs = self
+                .session_displays(&row.pane_id)
+                .into_iter()
+                .take(MAX_OUTPUTS)
+                .map(|display| crate::model::DeskJobOutput {
+                    id: display.id.clone(),
+                    kind: output_kind(display),
+                    label: super::super::view_areas::display_label(display),
                     thumb: None,
-                    seen: false,
+                    seen: display.unseen.is_none(),
                     pr_state: None,
                 })
                 .chain(pulls.iter().map(|pull| crate::model::DeskJobOutput {
@@ -868,8 +919,27 @@ impl Runtime {
         crate::model::DeskMentionsSnapshot { sessions, projects }
     }
 
-    /// The operator saw an ended job's card.
+    /// The operator read a job's card or thread. A job with a row is read
+    /// as the sidebar reads it, so the two never disagree; one without a row
+    /// keeps its read on its mark.
     pub(super) fn desk_job_read(&mut self, intent: &str) -> bool {
+        let pane = self
+            .desk_jobs()
+            .into_iter()
+            .find(|job| job.id == intent)
+            .and_then(|job| job.pane_id);
+        if let Some(agent) = pane.and_then(|pane| self.agent_row(&pane).cloned()) {
+            let mut records = std::mem::take(&mut self.snapshot.ui_state.pane_read_records);
+            let change =
+                crate::agent_state::read_now(&agent, &mut records, &self.local_read_connection);
+            self.snapshot.ui_state.pane_read_records = records;
+            let Some(change) = change else {
+                return false;
+            };
+            self.record_read_record_changes(&[change]);
+            self.refresh_pane_read_state();
+            return true;
+        }
         let mark = self.desk_mark_mut(intent);
         if mark.read {
             return false;
@@ -895,16 +965,27 @@ impl Runtime {
     }
 }
 
-fn output_kind(path: &str) -> crate::model::DeskOutputKind {
+/// Outputs one card lists; a session that opened more shows its newest.
+const MAX_OUTPUTS: usize = 32;
+
+fn output_kind(display: &crate::view_layout::Display) -> crate::model::DeskOutputKind {
     use crate::model::DeskOutputKind;
+    use crate::view_layout::DisplayKind;
+    let path = match display.kind {
+        DisplayKind::Browser => return DeskOutputKind::Page,
+        DisplayKind::Diff => return DeskOutputKind::Doc,
+        DisplayKind::External => display
+            .external
+            .as_ref()
+            .map_or("", |file| file.name.as_str()),
+        _ => display.path.as_str(),
+    };
     let extension = path
         .rsplit('.')
         .next()
         .unwrap_or_default()
         .to_ascii_lowercase();
-    if path.starts_with("http://") || path.starts_with("https://") {
-        DeskOutputKind::Page
-    } else if ["png", "jpg", "jpeg", "gif", "webp", "svg"].contains(&extension.as_str()) {
+    if ["png", "jpg", "jpeg", "gif", "webp", "svg"].contains(&extension.as_str()) {
         DeskOutputKind::Image
     } else if ["html", "htm"].contains(&extension.as_str()) {
         DeskOutputKind::Page
@@ -980,6 +1061,7 @@ impl Runtime {
                 marked = true;
             }
         }
+        marked |= self.desk_letters_read();
         let spawns = self.desk_spawns();
         let before = self.desk.stored.queue.len();
         self.desk.stored.queue.retain(|job| {
@@ -1001,6 +1083,44 @@ impl Runtime {
         if marked || started || moved {
             self.compose_desk();
         }
+    }
+
+    /// Marks Desk's letter lines read once their recipient took them in.
+    /// Only the newest lines are followed; an older one keeps what it said.
+    fn desk_letters_read(&mut self) -> bool {
+        const FOLLOWED: usize = 64;
+        let Ok(ledger) = self.delivery_state() else {
+            return false;
+        };
+        let mut changed = false;
+        for item in self
+            .desk
+            .stored
+            .conversation
+            .items
+            .iter_mut()
+            .rev()
+            .take(FOLLOWED)
+        {
+            let crate::model::DeskItem::Handed {
+                letter_id: Some(letter_id),
+                read: read @ false,
+                ..
+            } = item
+            else {
+                continue;
+            };
+            let taken = ledger.letters.iter().any(|letter| {
+                &letter.id == letter_id
+                    && (letter.hook_confirmed == Some(true)
+                        || letter.state == crate::delivery::ledger::State::Acknowledged)
+            });
+            if taken {
+                *read = true;
+                changed = true;
+            }
+        }
+        changed
     }
 
     /// Whether the operator is closing or closed the pane.
@@ -1288,6 +1408,52 @@ mod tests {
     }
 
     #[test]
+    fn a_letter_line_reads_read_once_its_recipient_took_the_letter_in() {
+        let root = tempfile::tempdir().unwrap();
+        let mut runtime = desk(root.path(), 2, &[]);
+        let mut ledger = (*runtime.delivery_state().unwrap()).clone();
+        let desk = Actor::hide(HIDE_DESK_ROLE, NODE);
+        let recipient = crate::coordination::started::tests::pane_on(NODE, "p9", "s9");
+        let letter = crate::delivery::mailbox::send(
+            &mut ledger,
+            &desk,
+            &recipient,
+            "k",
+            "check it\nmore",
+            "request",
+            None,
+            1,
+        )
+        .unwrap();
+        runtime.delivery_ledger = Ok(Arc::new(ledger.clone()));
+        runtime.desk_line(DeskItem::Handed {
+            id: 0,
+            agent_id: "agent-9".into(),
+            pane_id: "p9".into(),
+            name: "p9".into(),
+            project: None,
+            letter_kind: "request".into(),
+            line: first_line("check it\nmore"),
+            letter_id: Some(letter.id.clone()),
+            read: false,
+        });
+        let read = |runtime: &Runtime| {
+            runtime.desk.stored.conversation.items.iter().any(
+                |item| matches!(item, DeskItem::Handed { read: true, line, .. } if line == "check it"),
+            )
+        };
+        runtime.refresh_desk_jobs();
+        assert!(!read(&runtime));
+
+        for held in &mut ledger.letters {
+            held.hook_confirmed = Some(true);
+        }
+        runtime.delivery_ledger = Ok(Arc::new(ledger));
+        runtime.refresh_desk_jobs();
+        assert!(read(&runtime));
+    }
+
+    #[test]
     fn a_job_line_is_added_once_and_a_handoff_line_each_time() {
         let root = tempfile::tempdir().unwrap();
         let mut runtime = desk(root.path(), 2, &[]);
@@ -1300,8 +1466,13 @@ mod tests {
         let handed = || DeskItem::Handed {
             id: 0,
             agent_id: "agent-3".into(),
+            pane_id: "p3".into(),
             name: "fixer".into(),
             project: Some("herdr-ide".into()),
+            letter_kind: "request".into(),
+            line: "check the dark capture".into(),
+            letter_id: None,
+            read: false,
         };
         assert!(runtime.desk_line(handed()));
         assert!(runtime.desk_line(handed()));
