@@ -67,7 +67,10 @@ export function ThreadPanel({ job, actions, conductor = null, pinned, mentions =
   const words = (reason: string) => (INPUT_WORDS.has(reason) ? t(`desk.thread.input.${reason}` as MessageKey) : refusalText(reason, t));
 
   // The words stay in the box until the pane took them, so a refused send loses nothing.
-  const input = thread?.input ?? null;
+  // The answer names its request, so it is read from whichever thread the core
+  // holds: an input that arrived after another pane's thread opened is
+  // answered there, as closed.
+  const input = useShellStore((s) => s.sessionThread?.input ?? null);
   useEffect(() => {
     if (!sent || input?.request_id !== sent || input.state === "sending") return;
     setSent(null);
@@ -98,8 +101,17 @@ export function ThreadPanel({ job, actions, conductor = null, pinned, mentions =
     const read = await Promise.all([...(picked ?? [])].map(async (file, index) => ({ id: `${Date.now()}-${index}-${file.name}`, name: file.name, image: file.type.startsWith("image/"), bytes: new Uint8Array(await file.arrayBuffer()) })));
     setFiles((current) => [...current, ...read]);
   };
+  // One ask per state the core shows: scroll events at the top come faster
+  // than its answer, and a read that failed is asked again only after the
+  // core moved.
+  const askedOlder = useRef(false);
+  useEffect(() => {
+    askedOlder.current = false;
+  }, [thread?.generation, thread?.older]);
   const reachTop = () => {
-    if (thread?.has_older && (thread.older === "idle" || thread.older === "failed")) actions.readOlderThread(thread.generation);
+    if (askedOlder.current || !thread?.has_older || (thread.older !== "idle" && thread.older !== "failed")) return;
+    askedOlder.current = true;
+    actions.readOlderThread(thread.generation);
   };
 
   return (

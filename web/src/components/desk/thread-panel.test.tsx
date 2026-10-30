@@ -113,3 +113,33 @@ it("keeps the words and says why when the pane refused them, and holds send whil
   await enter();
   expect(events).toHaveLength(1);
 });
+
+it("gets its words back when the core answers them as closed on another pane's thread", async () => {
+  const { container, box, type, enter } = await mount();
+  await act(async () => useShellStore.setState({ sessionThread: section() }));
+  await type("계속");
+  await enter();
+  const request = events[0]!.payload.request_id as string;
+  // Another window opened another pane's thread before the core took the words.
+  await act(async () => useShellStore.setState({ sessionThread: section({ generation: 5, pane_id: "w1:p9", input: { request_id: request, state: "refused", reason: "closed" } }) }));
+  expect(box().value).toBe("계속");
+  expect(container.querySelector('[data-desk-composer-notice="true"]')?.textContent).toBe("This thread is not open");
+});
+
+it("asks for the page before once per state the core shows, a failed read included", async () => {
+  const { actions, container } = await mount();
+  await act(async () => useShellStore.setState({ sessionThread: section({ has_older: true, older: "failed" }) }));
+  const conversation = container.querySelector('[data-desk-thread-conversation="true"]')!;
+  const reachTop = () => act(async () => { conversation.dispatchEvent(new Event("scroll")); });
+  await reachTop();
+  await reachTop();
+  await reachTop();
+  expect(actions.readOlderThread).toHaveBeenCalledTimes(1);
+  await act(async () => useShellStore.setState({ sessionThread: section({ has_older: true, older: "reading" }) }));
+  await reachTop();
+  await act(async () => useShellStore.setState({ sessionThread: section({ has_older: true, older: "failed" }) }));
+  await reachTop();
+  await reachTop();
+  expect(actions.readOlderThread).toHaveBeenCalledTimes(2);
+  expect(actions.readOlderThread).toHaveBeenLastCalledWith(4);
+});

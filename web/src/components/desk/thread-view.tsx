@@ -431,7 +431,7 @@ export function ThreadView({ job, lines, reading = false, failure = null, mentio
   const running = job.state === "working" || job.state === "starting";
   return (
     <div className="flex min-h-0 min-w-0 flex-1 flex-col" data-desk-thread={job.id}>
-      <div ref={scroller.ref} onScroll={scroller.onScroll} className="flex min-h-0 min-w-0 flex-1 flex-col gap-md overflow-y-auto px-md py-md">
+      <div ref={scroller.ref} onScroll={scroller.onScroll} data-desk-thread-conversation="true" className="flex min-h-0 min-w-0 flex-1 flex-col gap-md overflow-y-auto px-md py-md">
         {failure ? (
           <p role="alert" className="flex min-w-0 flex-wrap items-center gap-x-sm gap-y-xxs text-caption" data-desk-thread-failure={failure}>
             <CircleAlertIcon aria-hidden="true" className="size-(--size-icon-sm) shrink-0 text-warning" />

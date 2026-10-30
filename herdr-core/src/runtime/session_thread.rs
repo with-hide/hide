@@ -452,6 +452,9 @@ impl Runtime {
     }
 
     pub(super) fn send_session_thread_input(&mut self, payload: ThreadInputPayload) -> bool {
+        if !ingress::valid_request_id(&payload.request_id) {
+            return false;
+        }
         let Some(open) = self.session_thread.open.as_ref().filter(|open| {
             open.generation == payload.generation && open.pane_id == payload.pane_id
         }) else {
@@ -459,22 +462,13 @@ impl Runtime {
                 "kind": "session_thread.input_stale", "pane_id": payload.pane_id,
                 "generation": payload.generation,
             }));
-            return false;
+            // The screen keeps its words until an answer names them; a
+            // closed thread keeps its section, so there is always one to
+            // answer on.
+            return self.settle_thread_input(&payload.request_id, Err("closed"));
         };
-        if !ingress::valid_request_id(&payload.request_id) {
-            return false;
-        }
-        let pane = self
-            .snapshot
-            .session_thread
-            .as_ref()
-            .map_or(ThreadPane::Gone, |thread| thread.pane);
         let refusal = input_problem(&payload.text, &payload.paths)
-            .or(match pane {
-                ThreadPane::Same => None,
-                ThreadPane::Changed => Some("pane_changed"),
-                ThreadPane::Gone => Some("pane_gone"),
-            })
+            .or(self.thread_input_target(open.generation).err())
             .or(open.inputting.then_some("in_flight"));
         if let Some(reason) = refusal {
             return self.settle_thread_input(&payload.request_id, Err(reason));
@@ -511,32 +505,37 @@ impl Runtime {
             });
         });
         let core_pane = payload.pane_id.clone();
-        let write = move || -> Result<(), &'static str> {
-            let text = input_text(
-                &payload.text,
-                &payload.paths,
-                on_device,
-                own_node.as_ref(),
-                staging,
-                &payload.request_id,
-            )?;
-            wait_permit(terminals.as_ref(), &core_pane, text.len() + 1)?;
-            let _admission = gate.admit(&core_pane).map_err(|_| "asleep")?;
-            engine
-                .submit_text(crate::engine::Wait::Each(SEND_TIMEOUT), &raw_pane, &text)
-                .map_err(|error| match error {
-                    crate::engine::EngineError::Refused { code, .. }
-                        if code.contains("not_found") =>
-                    {
-                        "pane_gone"
-                    }
-                    // No answer: the words may have landed.
-                    crate::engine::EngineError::Unanswered(_) => "uncertain",
-                    _ => "unavailable",
-                })
-        };
+        let write =
+            move |still: &dyn Fn() -> Result<(), &'static str>| -> Result<(), &'static str> {
+                let text = input_text(
+                    &payload.text,
+                    &payload.paths,
+                    on_device,
+                    own_node.as_ref(),
+                    staging,
+                    &payload.request_id,
+                )?;
+                wait_permit(terminals.as_ref(), &core_pane, text.len() + 1)?;
+                let _admission = gate.admit(&core_pane).map_err(|_| "asleep")?;
+                // The pane may have moved on while the words waited for staging,
+                // their permit or the pane's admission: ask once more, last.
+                still()?;
+                engine
+                    .submit_text(crate::engine::Wait::Each(SEND_TIMEOUT), &raw_pane, &text)
+                    .map_err(|error| match error {
+                        crate::engine::EngineError::Refused { code, .. }
+                            if code.contains("not_found") =>
+                        {
+                            "pane_gone"
+                        }
+                        // No answer: the words may have landed.
+                        crate::engine::EngineError::Unanswered(_) => "uncertain",
+                        _ => "unavailable",
+                    })
+            };
         let Some(context) = self.worker_context.clone() else {
-            let sent = write();
+            // Nothing moves between here and the write without a worker.
+            let sent = write(&|| Ok(()));
             return self.ingest_thread_input(generation, &request_id, sent);
         };
         let spawned = thread::Builder::new()
@@ -544,7 +543,12 @@ impl Runtime {
             .spawn({
                 let request_id = request_id.clone();
                 move || {
-                    let sent = write();
+                    let still = || {
+                        let runtime = context.runtime.upgrade().ok_or("closed")?;
+                        let runtime = runtime.lock().map_err(|_| "unavailable")?;
+                        runtime.thread_input_target(generation)
+                    };
+                    let sent = write(&still);
                     apply_in(&context, move |runtime| {
                         runtime.ingest_thread_input(generation, &request_id, sent)
                     });
@@ -850,6 +854,30 @@ impl Runtime {
             }));
         }
         self.settle_thread_input(request_id, sent)
+    }
+
+    /// Whether an input for thread `generation` may still reach its pane:
+    /// the thread is still open and its pane still runs the session it was
+    /// opened for.
+    fn thread_input_target(&self, generation: u64) -> Result<(), &'static str> {
+        if self
+            .session_thread
+            .open
+            .as_ref()
+            .is_none_or(|open| open.generation != generation)
+        {
+            return Err("closed");
+        }
+        match self
+            .snapshot
+            .session_thread
+            .as_ref()
+            .map_or(ThreadPane::Gone, |thread| thread.pane)
+        {
+            ThreadPane::Same => Ok(()),
+            ThreadPane::Changed => Err("pane_changed"),
+            ThreadPane::Gone => Err("pane_gone"),
+        }
     }
 
     fn settle_thread_input(&mut self, request_id: &str, sent: Result<(), &'static str>) -> bool {
@@ -1172,11 +1200,14 @@ mod tests {
         }
     }
 
-    /// A pane node that grants every input permit, and remembers how many
-    /// bytes each asked for.
+    /// A pane node that grants every input permit, or holds it for the test
+    /// to grant once `hold` is set, and remembers how many bytes each asked
+    /// for.
     #[derive(Default)]
     struct GrantingTerminals {
         permits: Mutex<Vec<(String, usize)>>,
+        hold: AtomicBool,
+        held: Mutex<Option<hide_node_link::terminal::InputPermitReply>>,
     }
 
     impl hide_node_link::terminal::TerminalNode for GrantingTerminals {
@@ -1195,7 +1226,11 @@ mod tests {
             reply: hide_node_link::terminal::InputPermitReply,
         ) {
             self.permits.lock().unwrap().push((pane.to_owned(), bytes));
-            reply(Ok(()));
+            if self.hold.load(std::sync::atomic::Ordering::SeqCst) {
+                *self.held.lock().unwrap() = Some(reply);
+            } else {
+                reply(Ok(()));
+            }
         }
     }
 
@@ -1511,6 +1546,146 @@ mod tests {
                 .input
                 .map(|input| (input.state, input.reason)),
             Some((ThreadInputState::Refused, Some("pane_changed".to_owned())))
+        );
+    }
+
+    /// A pane Herdr no longer knows refuses the words as gone; once the core
+    /// has seen the pane close, nothing is typed and Herdr is not asked.
+    #[test]
+    fn input_to_a_gone_pane_is_refused_as_pane_gone_and_a_closed_pane_is_never_asked() {
+        let node = Arc::new(ScriptedNode::default());
+        let mut runtime = runtime(&node);
+        runtime.set_terminals(Arc::new(GrantingTerminals::default()) as _);
+        let herdr = crate::fake_herdr::FakeHerdr::start_with_errors("thread-gone", |method, _| {
+            assert_eq!(method, "pane.send_input");
+            Err(("pane_not_found".to_owned(), "no such pane".to_owned()))
+        });
+        crate::runtime::delivery::tests::set_live(&mut runtime, Some(&herdr));
+        observe(&mut runtime, "idle", 1, "t1", true);
+        node.answer(Ok(page(0, 100, false, vec![said("무엇을 할까요")])));
+        open(&mut runtime);
+        let generation = thread(&runtime).generation;
+        let send = |runtime: &mut Runtime| {
+            runtime.send_session_thread_input(ThreadInputPayload {
+                generation,
+                pane_id: "w1:p1".to_owned(),
+                request_id: INPUT.to_owned(),
+                text: "계속".to_owned(),
+                paths: Vec::new(),
+            });
+        };
+        let refusal = |runtime: &Runtime| {
+            thread(runtime)
+                .input
+                .map(|input| (input.state, input.reason))
+        };
+        let gone = Some((ThreadInputState::Refused, Some("pane_gone".to_owned())));
+
+        // The core still sees the pane, Herdr does not.
+        send(&mut runtime);
+        assert_eq!(herdr.requests().len(), 1);
+        assert_eq!(refusal(&runtime), gone);
+
+        // Herdr's next read has no such pane.
+        let payload: SessionSnapshotPayload =
+            serde_json::from_value(json!({"agents": [], "panes": []})).unwrap();
+        runtime.observe_delivery(crate::node::TEST_NODE, &payload, None, None);
+        assert_eq!(thread(&runtime).pane, ThreadPane::Gone);
+        send(&mut runtime);
+        assert_eq!(herdr.requests().len(), 1, "a closed pane is not asked");
+        assert_eq!(refusal(&runtime), gone);
+    }
+
+    /// The pane is asked once more under the lock just before the words go:
+    /// a terminal that changed while they waited for their permit gets
+    /// nothing.
+    #[test]
+    fn input_whose_pane_changes_while_it_waits_for_its_permit_is_never_typed() {
+        let node = Arc::new(ScriptedNode::default());
+        let mut runtime = runtime(&node);
+        let terminals = Arc::new(GrantingTerminals::default());
+        terminals
+            .hold
+            .store(true, std::sync::atomic::Ordering::SeqCst);
+        runtime.set_terminals(Arc::clone(&terminals) as _);
+        let herdr = crate::fake_herdr::FakeHerdr::start("thread-moved", |method, _| {
+            assert_eq!(method, "pane.send_input");
+            json!({"type": "ok"})
+        });
+        crate::runtime::delivery::tests::set_live(&mut runtime, Some(&herdr));
+        observe(&mut runtime, "idle", 1, "t1", true);
+        node.answer(Ok(page(0, 100, false, vec![said("무엇을 할까요")])));
+        open(&mut runtime);
+        let generation = thread(&runtime).generation;
+        let shared = crate::runtime::tests::SharedRuntime::new(runtime);
+        {
+            let mut runtime = shared.lock().unwrap();
+            runtime.worker_context = Some(RuntimeWorkerContext {
+                runtime: shared.weak(),
+                notifier: crate::handle::ChangeNotifier::noop(),
+            });
+            runtime.send_session_thread_input(ThreadInputPayload {
+                generation,
+                pane_id: "w1:p1".to_owned(),
+                request_id: INPUT.to_owned(),
+                text: "계속".to_owned(),
+                paths: Vec::new(),
+            });
+        }
+        crate::runtime::tests::wait_for("the input's permit ask", || {
+            terminals.held.lock().unwrap().is_some()
+        });
+        observe(&mut shared.lock().unwrap(), "idle", 1, "t2", true);
+        let grant = terminals.held.lock().unwrap().take().unwrap();
+        grant(Ok(()));
+        crate::runtime::tests::wait_for("the input's answer", || {
+            thread(&shared.lock().unwrap())
+                .input
+                .is_some_and(|input| input.state != ThreadInputState::Sending)
+        });
+        assert!(herdr.requests().is_empty(), "{:?}", herdr.requests());
+        assert_eq!(
+            thread(&shared.lock().unwrap())
+                .input
+                .map(|input| (input.state, input.reason)),
+            Some((ThreadInputState::Refused, Some("pane_changed".to_owned())))
+        );
+    }
+
+    /// An input that arrives after its thread closed, or after another
+    /// pane's opened, types nothing and is answered as closed, so the screen
+    /// that sent it gets its words back.
+    #[test]
+    fn input_for_a_thread_that_is_no_longer_open_is_answered_as_closed() {
+        let node = Arc::new(ScriptedNode::default());
+        let mut runtime = runtime(&node);
+        runtime.set_terminals(Arc::new(GrantingTerminals::default()) as _);
+        let herdr = crate::fake_herdr::FakeHerdr::start("thread-closed", |method, _| {
+            panic!("nothing reaches Herdr, asked {method}");
+        });
+        crate::runtime::delivery::tests::set_live(&mut runtime, Some(&herdr));
+        observe(&mut runtime, "idle", 1, "t1", true);
+        node.answer(Ok(page(0, 100, false, vec![said("무엇을 할까요")])));
+        open(&mut runtime);
+        let generation = thread(&runtime).generation;
+        runtime.close_session_thread();
+        runtime.send_session_thread_input(ThreadInputPayload {
+            generation,
+            pane_id: "w1:p1".to_owned(),
+            request_id: INPUT.to_owned(),
+            text: "계속".to_owned(),
+            paths: Vec::new(),
+        });
+        assert!(herdr.requests().is_empty());
+        assert_eq!(
+            thread(&runtime)
+                .input
+                .map(|input| (input.request_id, input.state, input.reason)),
+            Some((
+                INPUT.to_owned(),
+                ThreadInputState::Refused,
+                Some("closed".to_owned())
+            ))
         );
     }
 
