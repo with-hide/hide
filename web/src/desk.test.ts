@@ -2,8 +2,10 @@ import { describe, expect, it } from "vitest";
 import { askingCount, markedMention, mentionParts, outputKindOf, threadGroups, threadLines, threadTurns, unseenOutputs, type AcpSessionUpdate, type DeskJob } from "./desk";
 
 const job = (id: string, state: DeskJob["state"], extra: Partial<DeskJob> = {}): DeskJob => ({
-  id, title: id, project: { workspace_id: "w", label: "w" }, location: { kind: "checkout", label: "w" },
-  state, pull_requests: [], outputs: [], joined: false, disconnected: false, ...extra,
+  id, agent_id: null, pane_id: `pane-${id}`, title: id, agent_kind: "claude", project: { workspace_id: "w", label: "w" }, location: { kind: "checkout", label: "w" },
+  state, queue_position: null, now: null, plan: null, question: null, summary: null, pull_requests: [], outputs: [], joined: false,
+  reason: null, failure: null, ask: null, mark: null, mark_read: false, machine: null, disconnected: false, changed_at_unix_ms: 0, read: false, mission: null, workers: [],
+  ...extra,
 });
 
 const text = (sessionUpdate: "user_message_chunk" | "agent_message_chunk", words: string): AcpSessionUpdate => ({ sessionUpdate, content: { type: "text", text: words } });
@@ -19,13 +21,13 @@ describe("the Threads list (B28)", () => {
   });
 
   it("keeps a mission's workers under their Conductor and leaves out a thread pulled into the operator's tabs (B37)", () => {
-    const groups = threadGroups([job("conductor", "working", { workers: ["w1", "w2"] }), job("w1", "done"), job("w2", "asking"), job("mine", "moved_out")]);
+    const groups = threadGroups([job("conductor", "working", { workers: ["pane-w1", "pane-w2"] }), job("w1", "done"), job("w2", "asking"), job("mine", "moved_out")]);
     expect(groups.map((group) => [group.key, group.jobs.map((one) => one.id)])).toEqual([["working", ["conductor"]]]);
   });
 
   it("counts the threads asking for ☰ and the outputs not seen for ▣", () => {
-    const seen = { id: "o1", kind: "image" as const, label: "a.png", seen: true };
-    const unseen = { id: "o2", kind: "doc" as const, label: "b.md", seen: false };
+    const seen = { id: "o1", kind: "image" as const, label: "a.png", thumb: null, seen: true, pr_state: null };
+    const unseen = { id: "o2", kind: "doc" as const, label: "b.md", thumb: null, seen: false, pr_state: null };
     const jobs = [job("a", "asking", { outputs: [seen, unseen] }), job("b", "asking"), job("c", "done", { outputs: [unseen] })];
     expect([askingCount(jobs), unseenOutputs(jobs)]).toEqual([2, 2]);
   });

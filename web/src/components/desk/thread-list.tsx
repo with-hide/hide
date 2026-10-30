@@ -76,7 +76,7 @@ export function ThreadList({ jobs, selected = null, expanded, onOpen, onMission,
 }) {
   const { t } = useInterfaceTranslation();
   const groups = threadGroups(jobs);
-  const byId = new Map(jobs.map((job) => [job.id, job]));
+  const byPane = new Map(jobs.flatMap((job) => (job.pane_id === null ? [] : [[job.pane_id, job] as const])));
   if (groups.length === 0) return <p className="px-md py-lg text-caption text-muted-foreground" data-desk-threads-empty="true">{t("desk.threads.empty")}</p>;
   return (
     <div className="flex min-w-0 flex-col gap-sm px-xs py-xs" data-desk-threads={jobs.length}>
@@ -85,7 +85,7 @@ export function ThreadList({ jobs, selected = null, expanded, onOpen, onMission,
           <h3 className={cn("px-xs pb-xxs text-caption font-medium", group.key === "turn" ? "text-warning" : "text-muted-foreground")}>{t(GROUP[group.key], { count: group.jobs.length })}</h3>
           <ol className="flex min-w-0 flex-col">
             {group.jobs.map((job) => {
-              const workers = (job.workers ?? []).map((id) => byId.get(id)).filter((one): one is DeskJob => one !== undefined);
+              const workers = job.workers.map((pane) => byPane.get(pane)).filter((one): one is DeskJob => one !== undefined);
               const open = expanded.has(job.id);
               return [
                 <ThreadRow key={job.id} job={job} selected={selected === job.id} expanded={open} onOpen={onOpen} onMission={onMission} onOutput={onOutput} onToggle={workers.length ? () => onToggle(job.id) : undefined} />,

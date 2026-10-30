@@ -1,13 +1,15 @@
 import { ArrowLeftRightIcon, ChevronRightIcon, CopyIcon, CornerDownLeftIcon, MailIcon, SlidersHorizontalIcon, SquareTerminalIcon, TerminalIcon } from "lucide-react";
 import type { ReactNode } from "react";
 import { Trans } from "react-i18next";
-import type { DeskAgent, DeskItem, DeskJob, DeskMention, DeskNoticeKind, DeskSessionRef } from "../../desk";
+import type { DeskAgent, DeskItem, DeskJob, DeskMention, DeskNoticeKind, DeskSessionRef, DeskSteps } from "../../desk";
 import { markedMention, mentionParts, namedMention } from "../../desk";
 import { AgentMark } from "../../AgentMark";
 import { useInterfaceTranslation } from "../../i18n/client";
+import { requireInterfaceLanguage } from "../../i18n/locale";
 import type { MessageKey } from "../../i18n/catalogs";
 import { cn } from "../../lib/utils";
 import { MarkdownText } from "../../MarkdownText";
+import { Elapsed, formatElapsed } from "../elapsed";
 import { MentionChip } from "../mention-chip";
 import { StatusMark } from "../status-mark";
 import { Button } from "../ui/button";
@@ -54,10 +56,35 @@ export function DeskReply({ text, stopped = false, live = false }: { text: strin
   );
 }
 
-/** `생각 중` from the moment a message is sent until the answer starts (B7): words alone, since a ring is always a session's state (D-75). */
-export function DeskThinking() {
+/** `생각 중 · 3초` from the moment a message is sent until the answer starts (B7): words alone, since a ring is always a session's state (D-75). */
+export function DeskThinking({ startedAt = null }: { startedAt?: number | null }) {
   const { t } = useInterfaceTranslation();
-  return <p role="status" className="animate-pulse text-caption text-muted-foreground" data-desk-item="thinking">{t("desk.thinking")}</p>;
+  return (
+    <p role="status" className="text-caption text-muted-foreground" data-desk-item="thinking">
+      <span className="animate-pulse">{t("desk.thinking")}</span>
+      {startedAt !== null ? <> · <Elapsed since={startedAt} /></> : null}
+    </p>
+  );
+}
+
+const STEP_WORDS: Record<keyof DeskSteps, MessageKey> = {
+  sessions: "desk.steps.sessions",
+  files: "desk.steps.files",
+  letters: "desk.steps.letters",
+  starts: "desk.steps.starts",
+  other: "desk.steps.other",
+};
+
+/** A Desk turn folded into one line above its answer (D-75): how long it thought and what it did, counted; a turn that did nothing has none. */
+export function DeskReplySteps({ thoughtMs, steps }: { thoughtMs: number | null; steps: DeskSteps }) {
+  const { t, i18n } = useInterfaceTranslation();
+  const language = requireInterfaceLanguage(i18n.language);
+  const words = [
+    thoughtMs !== null ? t("desk.steps.thought", { time: formatElapsed(language, thoughtMs) }) : null,
+    ...(Object.keys(STEP_WORDS) as (keyof DeskSteps)[]).map((key) => (steps[key] > 0 ? t(STEP_WORDS[key], { count: steps[key] }) : null)),
+  ].filter(Boolean);
+  if (words.length === 0) return null;
+  return <p className="text-caption text-muted-foreground" data-desk-reply-steps="true">{words.join(" · ")}</p>;
 }
 
 /** A line between messages that changes no state: the agent or its model changed (B8, B9). */
@@ -185,21 +212,23 @@ export function DeskApprovalCard({ item, onAnswer }: { item: Extract<DeskItem, {
 }
 
 /**
- * A task Desk handed to a session already doing it (D-24, B16), one line
- * with no box since it changes no state (D-75): the session's chip, how it
- * was handed, and whether it read it. The chip keeps the session's own
- * status; pressing it opens that session's thread.
+ * A letter Desk sent a running session (D-24, B16), one line with no box
+ * since it changes no state (D-75): the session's chip, `편지로 맡김` for
+ * handed work and `보냄` for any other letter, its first line, and whether
+ * the session took it in. The chip keeps the session's own status; pressing
+ * it opens that session's thread.
  */
-export function DeskHandedLine({ session, read, onOpen }: { session: DeskSessionRef; read: boolean; onOpen: () => void }) {
+export function DeskHandedLine({ session, handed, line, read, onOpen }: { session: DeskSessionRef; handed: boolean; line: string; read: boolean; onOpen: () => void }) {
   const { t, i18n } = useInterfaceTranslation();
   return (
-    <p className="flex min-w-0 flex-wrap items-center gap-xs text-caption text-muted-foreground" data-desk-item="handed" data-desk-handed-read={read ? "true" : "false"}>
+    <p className="flex min-w-0 items-center gap-xs text-caption text-muted-foreground" data-desk-item="handed" data-desk-handed={handed ? "request" : "letter"} data-desk-handed-read={read ? "true" : "false"}>
       <MailIcon aria-hidden="true" className="size-(--size-icon-sm) shrink-0" />
-      <span className="min-w-0">
-        <Trans i18n={i18n} t={t} i18nKey="desk.handed.line" components={{ who: <SessionChip session={session} className="mr-xxs" onPress={onOpen} /> }} />
+      <span className="shrink-0">
+        <Trans i18n={i18n} t={t} i18nKey={handed ? "desk.handed.line" : "desk.handed.sent"} components={{ who: <SessionChip session={session} className="mr-xxs" onPress={onOpen} /> }} />
       </span>
+      {line ? <><span aria-hidden="true">·</span><span className="min-w-0 truncate" title={line}>{line}</span></> : null}
       <span aria-hidden="true">·</span>
-      <span>{t(read ? "desk.handed.read" : "desk.handed.unread")}</span>
+      <span className="shrink-0">{t(read ? "desk.handed.read" : "desk.handed.unread")}</span>
     </p>
   );
 }
@@ -209,7 +238,7 @@ export type DeskChatActions = DeskJobCardActions & {
   onNoticeAction: (action: DeskNoticeAction) => void;
   onCopy: (text: string) => void;
   onMention: (mention: DeskMention) => void;
-  onHanded: (agentId: string) => void;
+  onHanded: (paneId: string) => void;
 };
 
 /** A job card's job: an item naming a job the snapshot does not carry is a broken snapshot, not an empty card. */
@@ -226,14 +255,18 @@ function jobOf(jobs: Readonly<Record<string, DeskJob>>, id: string): DeskJob {
  * each job Desk started. `live` is the answer still arriving; `thinking`
  * shows until it starts.
  */
-export function DeskChat({ items, jobs, agents, live = null, thinking = false, selectedJob = null, selectedOutput = null, ...actions }: {
+export function DeskChat({ items, jobs, sessions = {}, agents, live = null, thinking = false, startedAt = null, selectedJob = null, selectedOutput = null, ...actions }: {
   items: readonly DeskItem[];
   jobs: Readonly<Record<string, DeskJob>>;
+  /** The sessions Desk wrote to, by pane, so a letter's chip carries their marks; one not listed has its name alone. */
+  sessions?: Readonly<Record<string, DeskSessionRef>>;
   /** The agents, whose choices name a model line's model and effort. */
   agents: readonly DeskAgent[];
   /** The answer streaming now, after the last item. */
   live?: string | null;
   thinking?: boolean;
+  /** When the turn started (`desk_live.started_at_ms`), for `생각 중 · 3초`. */
+  startedAt?: number | null;
   selectedJob?: string | null;
   selectedOutput?: string | null;
 } & DeskChatActions) {
@@ -245,16 +278,16 @@ export function DeskChat({ items, jobs, agents, live = null, thinking = false, s
       {items.map((item) => (
         <li key={item.id} className="flex min-w-0 flex-col">
           {item.kind === "user" ? <DeskUserMessage text={item.text} mentions={item.mentions} onMention={actions.onMention} />
-            : item.kind === "reply" ? <DeskReply text={item.text} stopped={item.state === "stopped"} />
+            : item.kind === "reply" ? <div className="flex min-w-0 flex-col gap-xs"><DeskReplySteps thoughtMs={item.thought_ms} steps={item.steps} /><DeskReply text={item.text} stopped={item.state === "stopped"} /></div>
             : item.kind === "switch" ? <MarkerLine icon={<ArrowLeftRightIcon aria-hidden="true" className="size-(--size-icon-sm) shrink-0" />} data-desk-item="switch">{item.from === null ? t("desk.switch.start", { to: deskAgentName(t, item.to) }) : t(SWITCH_WORDS[item.carried], { from: deskAgentName(t, item.from), to: deskAgentName(t, item.to) })}</MarkerLine>
             : item.kind === "model" ? <MarkerLine icon={<SlidersHorizontalIcon aria-hidden="true" className="size-(--size-icon-sm) shrink-0" />} data-desk-item="model">{t("desk.model", { model: choice(item.model, "models"), effort: choice(item.effort, "efforts") })}</MarkerLine>
             : item.kind === "approval" ? <DeskApprovalCard item={item} onAnswer={(allow) => actions.onApproval(item.id, allow)} />
             : item.kind === "notice" ? <DeskNotice item={item} onAction={actions.onNoticeAction} onCopy={actions.onCopy} />
-            : item.kind === "handed" ? <DeskHandedLine session={item.session} read={item.read} onOpen={() => actions.onHanded(item.agent_id)} />
+            : item.kind === "handed" ? <DeskHandedLine session={sessions[item.pane_id] ?? { name: item.name, mark: null, agent_kind: null }} handed={item.letter_kind === "request"} line={item.line} read={item.read} onOpen={() => actions.onHanded(item.pane_id)} />
             : <DeskJobCard job={jobOf(jobs, item.job_id)} selected={selectedJob === item.job_id} selectedOutput={selectedOutput} {...actions} />}
         </li>
       ))}
-      {live !== null ? <li className="flex min-w-0 flex-col"><DeskReply text={live} live /></li> : thinking ? <li><DeskThinking /></li> : null}
+      {live !== null ? <li className="flex min-w-0 flex-col"><DeskReply text={live} live /></li> : thinking ? <li><DeskThinking startedAt={startedAt} /></li> : null}
     </ol>
   );
 }

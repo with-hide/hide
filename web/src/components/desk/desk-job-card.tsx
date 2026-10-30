@@ -1,7 +1,6 @@
 import { ChevronRightIcon, GitBranchIcon, GlobeIcon, ImageIcon } from "lucide-react";
 import type { ReactNode } from "react";
 import type { DeskAsk, DeskJob, DeskMission, DeskOutput, DeskSessionRef } from "../../desk";
-import { jobMark } from "../../desk";
 import { AgentMark } from "../../AgentMark";
 import { fileIcon } from "../../fileIcons";
 import { useInterfaceTranslation } from "../../i18n/client";
@@ -23,9 +22,10 @@ type T = ReturnType<typeof useInterfaceTranslation>["t"];
 /** The verb an asking job's line starts with (D-75): every wait for the operator reads `<verb> · …`. */
 const ASK_VERB: Record<DeskAsk, MessageKey> = {
   question: "desk.ask.question",
-  permission: "desk.ask.permission",
+  approval: "desk.ask.approval",
   decision: "desk.ask.decision",
   plan_review: "desk.ask.plan_review",
+  blocked: "desk.ask.blocked",
 };
 
 /** A job's state in its words (B21-B24, B36-B39): what the second line says when nothing more specific does. */
@@ -41,8 +41,8 @@ export function jobStateWords(t: T, job: DeskJob): string {
       return t(ASK_VERB[job.ask ?? "question"]);
     case "done":
       return t("desk.job.done");
-    case "asleep":
-      return t("desk.job.asleep");
+    case "sleeping":
+      return t("desk.job.sleeping");
     case "failed":
       return t("desk.job.failed");
     case "cancelled":
@@ -76,7 +76,7 @@ function jobWords(t: T, job: DeskJob): { verb: string | null; words: string | nu
     case "working":
       return { verb: null, words: job.now ?? t("desk.job.working"), tone: null, mono: false };
     case "asking":
-      return { verb: jobStateWords(t, job), words: job.question ?? null, tone: "warning", mono: job.ask === "permission" };
+      return { verb: jobStateWords(t, job), words: job.question ?? null, tone: "warning", mono: job.ask === "approval" };
     case "done":
       return { verb: t("desk.job.done"), words: job.summary ?? null, tone: null, mono: false };
     case "failed":
@@ -121,9 +121,9 @@ export function JobLine({ job, place = true, className }: { job: DeskJob; place?
   );
 }
 
-/** The mark at a job's left (D-75): the sidebar's status mark; a job with no session yet, a failed one and an ended one leave the slot empty. */
+/** The mark at a job's left (D-75): its sidebar row's status mark, hollow for an ask already read; a job with no row leaves the slot empty. */
 export function JobMark({ job }: { job: DeskJob }) {
-  return <StatusMark mark={jobMark(job)} read={job.state === "asking" && job.read === true} data-desk-job-mark={job.state} />;
+  return <StatusMark mark={job.mark} read={job.mark_read} data-desk-job-mark={job.state} />;
 }
 
 /** Whether a job has a session behind it to show the agent of: not one still queued, and not one that failed before it started. */
@@ -136,15 +136,15 @@ export function JobLead({ job }: { job: DeskJob }) {
   return (
     <>
       <JobMark job={job} />
-      {hasSession(job) ? <AgentMark kind={job.agent_kind ?? null} /> : <span aria-hidden="true" className="size-(--size-agent-mark) shrink-0" />}
+      {hasSession(job) ? <AgentMark kind={job.agent_kind} /> : <span aria-hidden="true" className="size-(--size-agent-mark) shrink-0" />}
     </>
   );
 }
 
-/** A session named inside a line (a letter's other side, a task handed on): its status, its agent and its name, on the chip ground (B26, D-75). */
+/** A session named inside a line (a letter's other side, a task handed on): its status, its agent and its name, on the chip ground (B26, D-75); a session whose state Hide does not know shows its name alone. */
 export function SessionChip({ session, onPress, className }: { session: DeskSessionRef; onPress?: () => void; className?: string }) {
   const { t } = useInterfaceTranslation();
-  const lead = <><StatusMark mark={session.mark} /><AgentMark kind={session.agent_kind} /></>;
+  const lead = session.agent_kind === null ? null : <><StatusMark mark={session.mark} /><AgentMark kind={session.agent_kind} /></>;
   const look = cn("inline-flex max-w-full min-w-0 items-center gap-xxs rounded-xs bg-secondary px-xxs align-middle text-foreground", className);
   if (!onPress) return <span className={look} data-desk-session-chip={session.name}>{lead}<span className="truncate">{session.name}</span></span>;
   return (
@@ -214,8 +214,7 @@ export function DeskMissionChip({ mission, onOpen }: { mission: DeskMission; onO
 }
 
 /** A job's plan as the pane head's plan chip draws it (B24): its cells, `n/m`, and `검토` while it waits for review. */
-export function DeskPlanChip({ plan }: { plan: NonNullable<DeskJob["plan"]> }) {
-  const review = plan.review === true;
+export function DeskPlanChip({ plan, review }: { plan: NonNullable<DeskJob["plan"]>; review: boolean }) {
   const finished = !review && plan.done >= plan.total;
   const tones: CellTone[] = Array.from({ length: plan.total }, (_, index) => (index < plan.done ? "done" : index === plan.done ? (review ? "hold" : "working") : "waiting"));
   return (
@@ -243,7 +242,7 @@ export type DeskJobCardActions = {
 export function JobChip({ job, selectedOutput = null, onOutput, onMission }: { job: DeskJob; selectedOutput?: string | null; onOutput: (output: DeskOutput) => void; onMission: (missionId: string) => void }) {
   const { t } = useInterfaceTranslation();
   if (job.mission) return <DeskMissionChip mission={job.mission} onOpen={onMission} />;
-  if (job.plan && (job.state === "working" || job.ask === "plan_review")) return <DeskPlanChip plan={job.plan} />;
+  if (job.plan && (job.state === "working" || job.ask === "plan_review")) return <DeskPlanChip plan={job.plan} review={job.ask === "plan_review"} />;
   if (job.machine) return <DeviceChip label={job.machine} />;
   if (job.joined) return <Badge variant="outline" data-desk-job-joined="true">{t("desk.job.joined")}</Badge>;
   if (job.outputs.length) return <OutputsChip outputs={job.outputs} selected={selectedOutput} onOpen={onOutput} />;

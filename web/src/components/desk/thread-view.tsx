@@ -2,7 +2,7 @@ import { CheckIcon, ChevronDownIcon, ChevronLeftIcon, ChevronRightIcon, CircleAl
 import { useState, type ReactNode } from "react";
 import { Trans } from "react-i18next";
 import type { AcpContentBlock, AcpPlanEntry, AcpToolKind, DeskJob, DeskMention, DeskOutput, DeskSessionRef, ThreadHidePart, ThreadLine, ThreadReadFailure, ThreadTurn } from "../../desk";
-import { jobMark, threadTurns } from "../../desk";
+import { threadTurns } from "../../desk";
 import { useInterfaceTranslation } from "../../i18n/client";
 import { cn } from "../../lib/utils";
 import { PlanChecklist } from "../plan-checklist";
@@ -25,8 +25,10 @@ export type ThreadConductor = { title: string; onOpen: () => void };
  * second is the sidebar row's second line, with the plan chip and the model
  * at its end. The thread's state is said here once.
  */
-export function ThreadHead({ job, conductor = null, pinned, onBack, onTerminal, onPin, onClose }: {
+export function ThreadHead({ job, model = null, conductor = null, pinned, onBack, onTerminal, onPin, onClose }: {
   job: DeskJob;
+  /** The model the session runs, read from its record. wire gap: the threads node's */
+  model?: string | null;
   conductor?: ThreadConductor | null;
   pinned: boolean;
   onBack: () => void;
@@ -68,8 +70,8 @@ export function ThreadHead({ job, conductor = null, pinned, onBack, onTerminal, 
       </div>
       <div className="flex min-w-0 items-center gap-xs pl-(--size-control-sm)">
         <JobLine job={job} className="flex-1" />
-        {job.plan ? <DeskPlanChip plan={job.plan} /> : null}
-        {job.model ? <span className="shrink-0 text-micro text-muted-foreground" data-desk-thread-model="true">{job.model}</span> : null}
+        {job.plan ? <DeskPlanChip plan={job.plan} review={job.ask === "plan_review"} /> : null}
+        {model ? <span className="shrink-0 text-micro text-muted-foreground" data-desk-thread-model="true">{model}</span> : null}
       </div>
     </header>
   );
@@ -176,7 +178,7 @@ export type ThreadPartActions = {
 
 /** A spawned job as its chip names it: its status, its agent and its title. */
 function sessionOf(job: DeskJob): DeskSessionRef {
-  return { name: job.title, mark: jobMark(job), agent_kind: job.agent_kind ?? "unknown" };
+  return { name: job.title, mark: job.mark, agent_kind: job.agent_kind };
 }
 
 /** A line a Hide part takes in the thread: an icon and its words, with no box. */
@@ -330,11 +332,11 @@ function FoldedParts({ parts, actions }: { parts: ThreadTurn["parts"]; actions: 
  */
 function ThreadAsk({ job }: { job: DeskJob }) {
   const { t } = useInterfaceTranslation();
-  const permission = job.ask === "permission";
+  const permission = job.ask === "approval";
   return (
     <section className="flex min-w-0 flex-col gap-xs" aria-label={jobStateWords(t, job)} data-desk-thread-ask={job.ask ?? "question"}>
       <p className="flex min-w-0 items-start gap-xs text-body text-foreground">
-        <StatusMark mark="turn" read={job.read === true} />
+        <StatusMark mark="turn" read={job.mark_read} />
         <span className="min-w-0 whitespace-normal break-keep [overflow-wrap:anywhere]">{permission ? t("desk.thread.askPermission") : (job.question ?? jobStateWords(t, job))}</span>
       </p>
       {permission && job.question ? <pre className="ml-(--size-agent-mark) min-w-0 whitespace-pre-wrap break-all rounded-sm bg-secondary px-sm py-xs font-mono text-caption text-foreground">{job.question}</pre> : null}

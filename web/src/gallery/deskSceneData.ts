@@ -2,7 +2,8 @@
 // session-docs-and-assistant, Desk 1차): agents, conversations, jobs in every
 // state, threads as ACP updates and outputs. Names, counts and paths are
 // made up; nothing here is read from a machine.
-import type { AcpSessionUpdate, DeskAgent, DeskItem, DeskJob, DeskMention, DeskMission, DeskOutput, DeskSessionRef, SessionViewKind, ThreadHidePart } from "../desk";
+import type { AcpSessionUpdate, DeskAgent, DeskItem, DeskJob, DeskMention, DeskMission, DeskOutput, DeskSessionRef, DeskSteps, SessionViewKind, ThreadHidePart } from "../desk";
+import type { RowMark } from "../snapshot";
 import type { MentionProject, MentionSession } from "../components/desk/desk-mention-menu";
 import { planFixture } from "./PlanScene";
 
@@ -30,7 +31,7 @@ export const AGENTS: DeskAgent[] = [
 
 export const AGENTS_PREPARING: DeskAgent[] = AGENTS.map((agent) => (agent.id === "codex" ? { ...agent, state: "preparing" } : agent));
 
-const output = (id: string, kind: DeskOutput["kind"], label: string, seen: boolean, thumb: string | null = null): DeskOutput => ({ id, kind, label, seen, thumb });
+const output = (id: string, kind: DeskOutput["kind"], label: string, seen: boolean, thumb: string | null = null): DeskOutput => ({ id, kind, label, seen, thumb, pr_state: null });
 
 export const OUTPUTS = {
   light1: output("o-light-1", "image", "light-1.png", true, PICTURES.light),
@@ -40,7 +41,7 @@ export const OUTPUTS = {
   compareDark: output("o-compare-dark", "image", "compare-dark.png", false, PICTURES.dark),
   notes: output("o-notes", "doc", "notes.md", true),
   galleryPage: output("o-gallery-page", "page", "gallery · desk", true, PICTURES.page),
-  pr: { ...output("o-pr-41", "pr", "PR #41 자막 수정", true), pr_state: "merged" as const },
+  pr: { ...output("o-pr-41", "pr", "PR #41 자막 수정", true), pr_state: "merged" },
 };
 
 export const MISSION: DeskMission = { id: "mission-desk", title: "Desk 1차", status: "running", done: 2, total: 6, tone: "working", deciding: false };
@@ -53,14 +54,42 @@ export const SESSIONS = {
   room: { name: "1a-desk-room", mark: "done", agent_kind: "codex" } satisfies DeskSessionRef,
 };
 
-const base = (now: number) => (id: string, title: string, extra: Partial<DeskJob>): DeskJob => ({
-  id, title, agent_id: `agent-${id}`, pane_id: `w1:${id}`,
+/** The mark the sidebar row would carry for a state: hided sends it with the job; the gallery invents it the same way. */
+function markOf(job: DeskJob): RowMark | null {
+  switch (job.state) {
+    case "starting":
+      return "waiting";
+    case "working":
+      return "going";
+    case "asking":
+      return "turn";
+    case "done":
+      return job.read ? "quiet" : "done";
+    case "sleeping":
+      return "asleep";
+    default:
+      return null;
+  }
+}
+
+/** A job as the wire sends it; `mark` follows its state unless given. */
+export function deskJob(job: DeskJob, extra: Partial<DeskJob>): DeskJob {
+  const next = { ...job, ...extra };
+  return { ...next, mark: extra.mark !== undefined ? extra.mark : markOf(next) };
+}
+
+/** The panes of the sessions Desk writes to, and their chips by pane, as the screen resolves a letter's session. */
+const PANES: Record<string, string> = { "record-now": "w1:record-now", "갤러리 캡처 비교": "w1:gallery" };
+export const SESSION_CHIPS: Record<string, DeskSessionRef> = { "w1:record-now": SESSIONS.recordNow, "w1:gallery": SESSIONS.gallery };
+
+const base = (now: number) => (id: string, title: string, extra: Partial<DeskJob>): DeskJob => deskJob({
+  id, title, agent_id: `agent-${id}`, pane_id: `w1:${id}`, agent_kind: "claude",
   project: { workspace_id: "herdr-ide", label: "herdr-ide" },
   location: { kind: "checkout", label: "herdr-ide" },
-  state: "working", pull_requests: [], outputs: [], joined: false, disconnected: false,
-  agent_kind: "claude", changed_at_unix_ms: now - 5 * MINUTE, read: false,
-  ...extra,
-});
+  state: "working", queue_position: null, now: null, plan: null, question: null, summary: null,
+  pull_requests: [], outputs: [], joined: false, reason: null, failure: null, ask: null, mark: null, mark_read: false,
+  machine: null, disconnected: false, changed_at_unix_ms: now - 5 * MINUTE, read: false, mission: null, workers: [],
+}, extra);
 
 const MENTION_BRANCH = { kind: "worktree", label: "desk/mention-button" } as const;
 
@@ -68,11 +97,11 @@ const MENTION_BRANCH = { kind: "worktree", label: "desk/mention-button" } as con
 export function storyJobs(now: number): Record<string, DeskJob> {
   const job = base(now);
   const jobs: DeskJob[] = [
-    job("mention", "mention 버튼 정리", { location: MENTION_BRANCH, now: "테스트 돌리는 중", plan: { done: 6, total: 14 }, pull_requests: [{ number: 1903, state: "pending" }], model: "Opus 5.5", changed_at_unix_ms: now - 12 * MINUTE }),
-    job("gallery", "갤러리 캡처 비교", { state: "asking", ask: "question", question: "다크 모드도 찍을까요?", outputs: [OUTPUTS.compareLight, OUTPUTS.light1, OUTPUTS.light2], model: "Opus 5.5", changed_at_unix_ms: now - 9 * MINUTE }),
-    job("release", "release 노트 초안", { state: "done", summary: "초안을 notes.md에 썼어요", outputs: [OUTPUTS.notes], model: "Opus 5.5", changed_at_unix_ms: now - 62 * MINUTE }),
-    job("record", "record-now", { state: "asking", ask: "permission", question: "rm -rf web/dist", agent_kind: "codex", model: "GPT-6", changed_at_unix_ms: now - 2 * MINUTE }),
-    job("conductor", "Desk 1차", { now: "Conductor · ui 다듬기 외 1", mission: MISSION, workers: ["1a", "1b"], changed_at_unix_ms: now - 22 * MINUTE }),
+    job("mention", "mention 버튼 정리", { location: MENTION_BRANCH, now: "테스트 돌리는 중", plan: { done: 6, total: 14 }, pull_requests: [{ number: 1903, state: "pending" }], changed_at_unix_ms: now - 12 * MINUTE }),
+    job("gallery", "갤러리 캡처 비교", { state: "asking", ask: "question", question: "다크 모드도 찍을까요?", outputs: [OUTPUTS.compareLight, OUTPUTS.light1, OUTPUTS.light2], changed_at_unix_ms: now - 9 * MINUTE }),
+    job("release", "release 노트 초안", { state: "done", summary: "초안을 notes.md에 썼어요", outputs: [OUTPUTS.notes], changed_at_unix_ms: now - 62 * MINUTE }),
+    job("record", "record-now", { state: "asking", ask: "approval", question: "rm -rf web/dist", agent_kind: "codex", changed_at_unix_ms: now - 2 * MINUTE }),
+    job("conductor", "Desk 1차", { now: "Conductor · ui 다듬기 외 1", mission: MISSION, workers: ["w1:1a", "w1:1b"], changed_at_unix_ms: now - 22 * MINUTE }),
     job("1a", "1a Desk 방", { state: "done", read: true, location: { kind: "worktree", label: "feat/desk-host" }, summary: "리뷰 기다림", pull_requests: [{ number: 1905, state: "pending" }], agent_kind: "codex" }),
     job("1b", "1b 스레드 화면", { location: { kind: "worktree", label: "feat/desk-thread" }, now: "ThreadView 턴 묶기", changed_at_unix_ms: now - 6 * MINUTE }),
     job("reel", "reel 자막 수정", { project: { workspace_id: "creator", label: "creator" }, location: { kind: "checkout", label: "creator" }, machine: "mini", disconnected: true, now: "자막 타이밍 맞추는 중", agent_kind: "codex", changed_at_unix_ms: now - 31 * MINUTE }),
@@ -86,11 +115,11 @@ export function everyStateJobs(now: number): { label: string; job: DeskJob }[] {
   return [
     { label: "작업 중 · 계획 칩", job: job("c-working", "mention 버튼 정리", { location: MENTION_BRANCH, now: "테스트 돌리는 중", plan: { done: 6, total: 14 } }) },
     { label: "물어봄 · 결과물 칩", job: job("c-asking", "갤러리 캡처 비교", { state: "asking", ask: "question", question: "다크 모드도 찍을까요?", outputs: [OUTPUTS.compareLight, OUTPUTS.light1, OUTPUTS.light2] }) },
-    { label: "허락 기다림 (터미널의 권한 질문)", job: job("c-permission", "record-now", { state: "asking", ask: "permission", question: "rm -rf web/dist", agent_kind: "codex" }) },
+    { label: "허락 기다림 (터미널의 권한 질문)", job: job("c-permission", "record-now", { state: "asking", ask: "approval", question: "rm -rf web/dist", agent_kind: "codex" }) },
     { label: "끝남 · PR", job: job("c-done", "pane header @ hover", { state: "done", location: { kind: "worktree", label: "desk/pane-mention" }, summary: "PR을 열었고 CI 통과", pull_requests: [{ number: 1910, state: "mergeable" }] }) },
     { label: "미션 (Conductor)", job: job("c-conductor", "Desk 1차", { now: "Conductor · 지금 ui 다듬기 외 1", mission: MISSION }) },
     { label: "미션 판단", job: job("c-decision", "Desk 1차", { state: "asking", ask: "decision", question: "1b를 공용 부품 머지 전에 시작할까요?", mission: { ...MISSION, deciding: true } }) },
-    { label: "계획 검토 (hide-plan)", job: job("c-review", "문서 정리", { state: "asking", ask: "plan_review", question: "5단계", plan: { done: 0, total: 5, review: true }, agent_kind: "codex" }) },
+    { label: "계획 검토 (hide-plan)", job: job("c-review", "문서 정리", { state: "asking", ask: "plan_review", question: "5단계", plan: { done: 0, total: 5 }, agent_kind: "codex" }) },
     { label: "다른 기기", job: job("c-mini", "reel 자막 수정", { project: { workspace_id: "creator", label: "creator" }, machine: "mini", now: "자막 타이밍 맞추는 중", agent_kind: "codex" }) },
     { label: "다른 기기, 연결 끊김 (흐림)", job: job("c-mini-off", "reel 자막 수정", { project: { workspace_id: "creator", label: "creator" }, machine: "mini", disconnected: true, now: "12분 전까지의 기록", agent_kind: "codex" }) },
     { label: "나도 참여 중", job: job("c-joined", "mention 버튼 정리", { location: MENTION_BRANCH, joined: true, now: "아이콘 14로 줄이는 중" }) },
@@ -98,7 +127,7 @@ export function everyStateJobs(now: number): { label: string; job: DeskJob }[] {
     { label: "실패", job: job("c-failed", "릴스 썸네일 3안", { state: "failed", reason: "spawn_failed", project: { workspace_id: "creator", label: "creator" }, agent_kind: "codex" }) },
     { label: "끝까지 못 감", job: job("c-exited", "의존성 올리기", { state: "failed", reason: "exited", location: { kind: "worktree", label: "desk/bump-deps" } }) },
     { label: "취소됨", job: job("c-cancelled", "아이콘 크기 맞추기", { state: "cancelled" }) },
-    { label: "잠듦", job: job("c-asleep", "문서 정리", { state: "asleep", agent_kind: "codex" }) },
+    { label: "잠듦", job: job("c-asleep", "문서 정리", { state: "sleeping", agent_kind: "codex" }) },
     { label: "보관됨 (흐림)", job: job("c-archived", "로그 정리", { state: "archived" }) },
   ];
 }
@@ -112,16 +141,21 @@ export const MENTIONS: DeskMention[] = [
 
 const at = (now: number, minutes: number) => now - minutes * MINUTE;
 
+const NO_STEPS: DeskSteps = { sessions: 0, files: 0, letters: 0, starts: 0, other: 0 };
+
+/** A letter Desk sent: handed work (`request`) or another letter, with its first line. */
+const letter = (id: number, session: DeskSessionRef, kind: string, line: string, read: boolean): DeskItem => ({ kind: "handed", id, agent_id: `agent-${id}`, pane_id: PANES[session.name]!, name: session.name, project: "herdr-ide", letter_kind: kind, line, letter_id: `letter-${id}`, read });
+
 /** Scene 2: a hand-off that started three threads, a task handed to a session already on it, and Desk thinking. */
 export function handoffItems(now: number): DeskItem[] {
   return [
     { kind: "user", id: 1, text: "@project(~/projects/herdr-ide herdr-ide) mention 버튼 정리하고 PR까지, 갤러리 캡처 라이트·다크 비교, release 노트 초안도 맡겨줘", at_ms: at(now, 15), mentions: [MENTIONS[2]!] },
-    { kind: "reply", agent: "claude", id: 2, text: "스레드 세 개를 띄웠어요. mention 버튼은 PR로 낼 일이라 새 worktree에서 해요.", at_ms: at(now, 15), state: "done" },
+    { kind: "reply", agent: "claude", id: 2, text: "스레드 세 개를 띄웠어요. mention 버튼은 PR로 낼 일이라 새 worktree에서 해요.", at_ms: at(now, 15), state: "done", thought_ms: null, steps: NO_STEPS },
     { kind: "job", id: 3, job_id: "mention" },
     { kind: "job", id: 4, job_id: "gallery" },
     { kind: "job", id: 5, job_id: "release" },
     { kind: "user", id: 6, text: "@session(agent-record-now record-now) 갤러리 숫자 줄인 거 다크에서도 확인해줘", at_ms: at(now, 6), mentions: [MENTIONS[0]!] },
-    { kind: "handed", id: 7, agent_id: "agent-record-now", session: SESSIONS.recordNow, read: true },
+    letter(7, SESSIONS.recordNow, "request", "갤러리 숫자 줄인 거 다크에서도 확인해줘", true),
     { kind: "user", id: 8, text: "mention 버튼 PR 올라갔어?", at_ms: at(now, 0), mentions: [] },
   ];
 }
@@ -131,14 +165,14 @@ export function statusItems(now: number): DeskItem[] {
   return [
     { kind: "user", id: 11, text: "지금 작업들 잘 되고 있어?", at_ms: at(now, 8), mentions: [] },
     {
-      kind: "reply", agent: "claude", id: 12, at_ms: at(now, 8), state: "done",
+      kind: "reply", agent: "claude", id: 12, at_ms: at(now, 8), state: "done", thought_ms: 5_000, steps: { ...NO_STEPS, sessions: 9 },
       text: "9개 중 **2개가 답을 기다리고**, 하나는 꼬일 수 있어요.\n\n- **꼬일 수 있어요** · record-now와 갤러리 캡처 비교가 둘 다 `scripts/capture-gallery.mjs`를 고쳐요. 맞춰 줄까요?\n- **미션 판단** · Desk 1차가 1b를 공용 부품 머지 전에 시작할지 물어요.\n- **잘 돌고 있어요** · mention 버튼 정리(6/14), reel 자막 수정(mini) 외 4개. PR 1905는 초록이라 머지만 남았어요.",
     },
     { kind: "job", id: 13, job_id: "gallery" },
     { kind: "user", id: 14, text: "응 맞춰줘", at_ms: at(now, 4), mentions: [] },
-    { kind: "handed", id: 15, agent_id: "agent-record-now", session: SESSIONS.recordNow, read: true },
-    { kind: "handed", id: 16, agent_id: "agent-gallery", session: SESSIONS.gallery, read: false },
-    { kind: "reply", agent: "claude", id: 17, text: "양쪽에 알렸어요. 갤러리 캡처 비교는 아직 질문에 답을 기다리고 있어요.", at_ms: at(now, 4), state: "done" },
+    letter(15, SESSIONS.recordNow, "fyi", "다크 출력은 dark/로 맞춰요", true),
+    letter(16, SESSIONS.gallery, "fyi", "record-now가 같은 파일을 고쳐요, 먼저 받아서 하세요", false),
+    { kind: "reply", agent: "claude", id: 17, text: "양쪽에 알렸어요. 갤러리 캡처 비교는 아직 질문에 답을 기다리고 있어요.", at_ms: at(now, 4), state: "done", thought_ms: null, steps: NO_STEPS },
   ];
 }
 
@@ -146,10 +180,10 @@ export function statusItems(now: number): DeskItem[] {
 export function switchedItems(now: number): DeskItem[] {
   return [
     { kind: "user", id: 21, text: "오늘 끝난 거 정리해줘", at_ms: at(now, 30), mentions: [] },
-    { kind: "reply", agent: "claude", id: 22, text: "세 개 끝났어요: release 노트, 갤러리 비교, reel 자막. 갤러리 비교는 다크 캡처가 남았어요.", at_ms: at(now, 29), state: "done" },
+    { kind: "reply", agent: "claude", id: 22, text: "세 개 끝났어요: release 노트, 갤러리 비교, reel 자막. 갤러리 비교는 다크 캡처가 남았어요.", at_ms: at(now, 29), state: "done", thought_ms: null, steps: NO_STEPS },
     { kind: "switch", id: 23, from: "claude", to: "codex", carried: "all" },
     { kind: "user", id: 24, text: "그럼 다크 캡처는 이어서 맡겨줘", at_ms: at(now, 20), mentions: [] },
-    { kind: "reply", agent: "codex", id: 25, text: "갤러리 비교 스레드에 다크 모드 캡처를 이어서 하라고 전했어요.", at_ms: at(now, 19), state: "done" },
+    { kind: "reply", agent: "codex", id: 25, text: "갤러리 비교 스레드에 다크 모드 캡처를 이어서 하라고 전했어요.", at_ms: at(now, 19), state: "done", thought_ms: null, steps: NO_STEPS },
     { kind: "model", id: 26, model: "gpt-mini", effort: "medium" },
   ];
 }
@@ -158,7 +192,7 @@ export function switchedItems(now: number): DeskItem[] {
 export function mentionItems(now: number): DeskItem[] {
   return [
     { kind: "user", id: 31, text: "@session(agent-record-now record-now) 갤러리 숫자 줄인 거 다크에서도 확인해줘", at_ms: at(now, 6), mentions: [MENTIONS[0]!] },
-    { kind: "handed", id: 32, agent_id: "agent-record-now", session: SESSIONS.recordNow, read: false },
+    letter(32, SESSIONS.recordNow, "request", "갤러리 숫자 줄인 거 다크에서도 확인해줘", false),
   ];
 }
 
@@ -166,7 +200,7 @@ export function mentionItems(now: number): DeskItem[] {
 export function missionItems(now: number): DeskItem[] {
   return [
     { kind: "user", id: 41, text: "Desk 1차를 미션으로 돌려줘", at_ms: at(now, 25), mentions: [] },
-    { kind: "reply", agent: "claude", id: 42, text: "Conductor 스레드를 띄워 미션으로 돌려요. 노드 여섯 개, PR 모드예요.", at_ms: at(now, 25), state: "done" },
+    { kind: "reply", agent: "claude", id: 42, text: "Conductor 스레드를 띄워 미션으로 돌려요. 노드 여섯 개, PR 모드예요.", at_ms: at(now, 25), state: "done", thought_ms: null, steps: NO_STEPS },
     { kind: "job", id: 43, job_id: "conductor" },
   ];
 }
@@ -198,7 +232,7 @@ export function stateItems(now: number): DeskItem[] {
     { kind: "notice", id: 72, notice: "resume_failed", agent: "claude", detail: null },
     { kind: "notice", id: 73, notice: "no_ask_mode", agent: "pi", detail: null },
     { kind: "notice", id: 74, notice: "turn_failed", agent: "claude", detail: null },
-    { kind: "reply", agent: "claude", id: 75, text: "정리하고 테스트를 다시 돌렸어요. 실패 하나는", at_ms: at(now, 1), state: "stopped" },
+    { kind: "reply", agent: "claude", id: 75, text: "정리하고 테스트를 다시 돌렸어요. 실패 하나는", at_ms: at(now, 1), state: "stopped", thought_ms: null, steps: NO_STEPS },
     { kind: "user", id: 76, text: "지금 돌고 있는 일들 어디까지 왔어요?", at_ms: at(now, 0), mentions: [] },
   ];
 }
@@ -312,8 +346,8 @@ export const MENU_SESSIONS: MentionSession[] = [
 ];
 
 export const MENU_PROJECTS: MentionProject[] = [
-  { id: "herdr-ide", name: "herdr-ide", sessions: 5 },
-  { id: "creator", name: "creator", sessions: 2 },
+  { id: "herdr-ide", name: "herdr-ide", sessions: ["w1:mention", "w1:gallery", "w1:release", "w1:record", "w1:1b"] },
+  { id: "creator", name: "creator", sessions: ["w1:reel", "w1:cover"] },
 ];
 
 export const ENTERED_SESSIONS: MentionSession[] = [

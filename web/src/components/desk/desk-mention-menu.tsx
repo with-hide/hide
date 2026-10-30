@@ -8,10 +8,10 @@ import { Button } from "../ui/button";
 import { Kbd } from "../ui/kbd";
 
 /** A session the @ menu offers (B18): Desk's or not, on this device or another. */
-export type MentionSession = { id: string; name: string; agent_kind: string; mark: RowMark | null; detail: string };
+export type MentionSession = { id: string; name: string; agent_kind: string; mark: RowMark | null; detail: string | null };
 
-/** A project the @ menu offers, with how many sessions run in it now. */
-export type MentionProject = { id: string; name: string; sessions: number };
+/** A project the @ menu offers, with the panes of the sessions running in it now. */
+export type MentionProject = { id: string; name: string; sessions: string[] };
 
 /**
  * The `@` menu (D-70, B18): recent sessions above, projects below, both
@@ -70,7 +70,7 @@ export function DeskMentionMenu({ sessions, projects, entered = null, active, on
                   <CommandItem key={project.id} value={`project:${project.id}`} onSelect={() => onProject(project)} data-desk-mention-project={project.id}>
                     <FolderIcon aria-hidden="true" />
                     <span className="min-w-0 flex-1 truncate">{project.name}</span>
-                    <span className="shrink-0 text-micro text-muted-foreground">{t("desk.mention.projectSessions", { count: project.sessions })}</span>
+                    <span className="shrink-0 text-micro text-muted-foreground">{t("desk.mention.projectSessions", { count: project.sessions.length })}</span>
                     <Kbd>⇥</Kbd>
                   </CommandItem>
                 ))}
