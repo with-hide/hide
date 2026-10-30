@@ -73,7 +73,7 @@ const PANE_HEADER_CASES: [string, string, Omit<PaneHeader, "working">][] = [
   ["finished", "10 · 작업 완료 · 자식 있음", NO_NOTICE],
   ["popover", "11 · 자식 목록 열기", { ...NO_NOTICE, progress: "검토 결과를 정리하고 있어요" }],
   ["narrow", "12 · 좁은 패널 · 긴 progress", { ...NO_NOTICE, progress: "헤더 상태별 표시와 요청 우선순위를 검토하고 있어요" }],
-  // PRD pane-last-request: the row leads with the turn's request (state=turn).
+  // PRD pane-last-request: one line says the turn on the head (state=turn); two lines lead the row with its request (state=turn-two-lines).
   ["turn-question", "13 · 요청 → 질문", { ...NO_NOTICE, request: TURN_REQUEST, band: { kind: "answer", reason: "1~3번을 한 PR로 묶어 진행할지 답해 주세요.", since_unix_ms: null, read: false, action: null, more: 0 } }],
   ["turn-working", "14 · 요청 → 작업 중", { ...NO_NOTICE, request: { text: "탭을 넘는 종합 뷰 + AI 작업 구상", images: 0 }, progress: "종합 뷰의 구성 요소를 고민하고 있어요" }],
   ["turn-finished", "15 · 끝났는데 아직 안 봄", { ...NO_NOTICE, request: { text: "원격 조회 3초로 바꿔 PR·머지", images: 0 }, finished: true, progress: "원격 조회 주기를 3초로 바꾸고 머지함" }],

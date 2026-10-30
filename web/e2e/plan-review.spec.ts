@@ -60,9 +60,9 @@ test("a plan put up for review asks on the pane, the agent's approval clears it,
     const chip = page.locator("[data-pane-plan-chip]");
     await expect(chip).toHaveAttribute("data-plan-chip-state", "review");
     await expect(chip).toHaveText("Review");
-    // The review is the agent's question: the pane's ask band says it, in
-    // the interface language, from the subject the core sent (B14).
-    await expect(page.locator('[data-pane-header-band="answer"]')).toContainText("Plan review · 4 steps");
+    // The review is the agent's question: the pane's head says it, in the
+    // interface language, from the subject the core sent (B14).
+    await expect(page.locator('[data-pane-head-turn="answer"]')).toContainText("Plan review · 4 steps");
     // The sidebar's second line asks the same.
     const sidebar = page.locator("[data-sidebar-content]").first();
     await expect(sidebar).toContainText("Plan review · 4 steps");
@@ -72,11 +72,11 @@ test("a plan put up for review asks on the pane, the agent's approval clears it,
     await plan(agent, ["approve"]);
     await expect(chip).toHaveAttribute("data-plan-chip-state", "running");
     await expect(chip).toHaveText("Plan1/4");
-    await expect(page.locator('[data-pane-header-band="answer"]')).toHaveCount(0);
+    await expect(page.locator('[data-pane-head-turn="answer"]')).toHaveCount(0);
     await expect(sidebar).not.toContainText("Plan review");
 
     await plan(agent, ["node", "core", "--status", "working", "--line", "이벤트 쓰는 중"]);
-    // The working step and its line take the pane's second line (B7).
+    // The working step and its line take the pane's progress place on its head (B7).
     await expect(page.locator("[data-pane-own-progress]")).toHaveText("Core events · 이벤트 쓰는 중");
     // A step whose step above is not done cannot be done (B2).
     const refused = JSON.parse((await agent(["plan", "node", "web", "--status", "done"])).out.trim().split("\n").at(-1)!) as Answer;

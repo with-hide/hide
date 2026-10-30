@@ -26,10 +26,11 @@ export type TurnCardTrigger = {
 /**
  * The pane's turn card (PRD pane-last-request D-05, B6-B9): what the
  * operator asked, what the agent is doing about it and the turns before,
- * under the request on the pane's second row, its only trigger. A press or
- * the keyboard's focus on the request opens it, never the pointer passing
- * over, which kept raising it in the way of the terminal; a second press or
- * Esc closes it. Opening never takes the keyboard from the terminal.
+ * under its one trigger: the turn's words on the pane's head, or the request
+ * on the second row in two lines. A press or the keyboard's focus opens it,
+ * never the pointer passing over, which kept raising it in the way of the
+ * terminal; a second press or Esc closes it. Opening never takes the keyboard
+ * from the terminal.
  */
 export function PaneTurnCard({ paneId, actions, trigger }: { paneId: string; actions: Actions; trigger: (state: TurnCardTrigger) => ReactNode }) {
   const [focused, setFocused] = useState(false);

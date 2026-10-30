@@ -57,8 +57,8 @@ test("an agent slept from the pane menu keeps its row and wakes in the same pane
     // Sleeping with Wake agent instead of showing that shell.
     await expect(pane.locator('[data-pane-sleep="sleeping"]')).toBeVisible({ timeout: 30_000 });
     await expect(pane.locator(`[data-agent-wake="${sleeper}"]`)).toBeVisible();
-    // The body says it once; nothing waits on the operator, so no second row.
-    await expect(pane.locator("[data-pane-header-band]")).toHaveCount(0);
+    // The body says it once; nothing waits on the operator, so no turn on the head or over the terminal.
+    await expect(pane.locator("[data-pane-header-band], [data-pane-head-turn]")).toHaveCount(0);
     const slept = processInfo();
     expect(slept.foreground_process_group_id).toBe(slept.shell_pid);
 
