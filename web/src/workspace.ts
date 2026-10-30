@@ -104,6 +104,8 @@ export type CheckoutGitHeader = {
   commit_links?: { sha: string; url: string }[];
   /** The origin is a GitHub repository, so a commit with no page is not pushed. */
   commit_pages?: boolean;
+  /** The operator's `받기` while it runs, or why it did not; absent otherwise and from an older core. */
+  catch_up?: { state: "running" } | { state: "refused"; files: number } | { state: "failed" } | null;
 };
 
 export type CheckoutCommitRecord = { sha: string; subject: string; commit_unix_seconds: number | null };

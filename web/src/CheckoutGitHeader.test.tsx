@@ -32,7 +32,7 @@ it("removes retained upstream claims offline, restores them live, and names the 
   const showTool = vi.fn();
   try {
     useShellStore.setState({ connection: "live" });
-    await act(async () => root.render(<TooltipProvider><CheckoutFileCount header={header} actions={{ showTool } as unknown as Actions} /><CheckoutUpstream header={header} /></TooltipProvider>));
+    await act(async () => root.render(<TooltipProvider><CheckoutFileCount header={header} actions={{ showTool } as unknown as Actions} /><CheckoutUpstream header={header} onCatchUp={vi.fn()} /></TooltipProvider>));
     expect(container.querySelector('[data-checkout-upstream]')?.getAttribute('aria-label')).toBe('origin/main: 3 to send, 1 to receive');
     const count = container.querySelector<HTMLButtonElement>('[data-checkout-files]')!;
     expect(count.textContent).toBe('5');
@@ -69,7 +69,7 @@ it("opens the upstream detail at 0/0 and says when the remote was checked, dimmi
   useShellStore.setState({ connection: "live" });
   const now = Date.now();
   const header: CheckoutGitHeader = { state: "fresh", reason: null, ci: null, facts: facts({}), remote: { auto: true, observed: null } };
-  const { container, root } = await render(<CheckoutUpstream header={header} />);
+  const { container, root } = await render(<CheckoutUpstream header={header} onCatchUp={vi.fn()} />);
   try {
     const detail = container.querySelector<HTMLButtonElement>("[data-checkout-upstream]")!;
     expect(detail).not.toBeNull();
@@ -78,7 +78,7 @@ it("opens the upstream detail at 0/0 and says when the remote was checked, dimmi
     expect(document.querySelector("[data-checkout-remote-checked]")?.textContent).toBe("Remote not checked yet");
 
     const failing: CheckoutGitHeader = { ...header, facts: facts({ behind: 2 }), remote: { auto: true, observed: { freshness: "failed", read_at_unix_ms: now - 3 * 60_000 } } };
-    await act(async () => root.render(<TooltipProvider><CheckoutUpstream header={failing} /></TooltipProvider>));
+    await act(async () => root.render(<TooltipProvider><CheckoutUpstream header={failing} onCatchUp={vi.fn()} /></TooltipProvider>));
     const dimmed = container.querySelector<HTMLButtonElement>("[data-checkout-upstream]")!;
     expect(dimmed.getAttribute("data-checkout-remote")).toBe("failing");
     expect(dimmed.className).toContain("opacity-50");
@@ -86,7 +86,7 @@ it("opens the upstream detail at 0/0 and says when the remote was checked, dimmi
 
     // With the fetch turned off, the time is the operator's own fetch.
     const off: CheckoutGitHeader = { ...header, remote: { auto: false, observed: null } };
-    await act(async () => root.render(<TooltipProvider><CheckoutUpstream header={off} /></TooltipProvider>));
+    await act(async () => root.render(<TooltipProvider><CheckoutUpstream header={off} onCatchUp={vi.fn()} /></TooltipProvider>));
     expect(container.querySelector("[data-checkout-upstream]")?.getAttribute("data-checkout-remote")).toBe("ok");
     expect(document.querySelector("[data-checkout-remote-checked]")?.textContent).toContain("Last remote fetch:");
   } finally {
@@ -151,7 +151,7 @@ it("keeps the last CI answer and ↑↓ counts dimmed with their age when a read
     await act(async () => root.unmount());
   }
   const stale: CheckoutGitHeader = { ...header, state: "stale", observed: { freshness: "failed", read_at_unix_ms: Date.now() - 2 * 60_000 } };
-  const upstream = await render(<CheckoutUpstream header={stale} />);
+  const upstream = await render(<CheckoutUpstream header={stale} onCatchUp={vi.fn()} />);
   try {
     const counts = upstream.container.querySelector<HTMLElement>("[data-checkout-upstream]")!;
     expect(counts.className).toContain("opacity-50");
@@ -160,3 +160,38 @@ it("keeps the last CI answer and ↑↓ counts dimmed with their age when a read
     await act(async () => upstream.root.unmount());
   }
 });
+
+it("offers 받기 only with nothing to send, says why not when both sides have commits, and shows a run and its refusal", async () => {
+  useShellStore.setState({ connection: "live" });
+  const onCatchUp = vi.fn();
+  const header: CheckoutGitHeader = { state: "fresh", reason: null, ci: null, facts: facts({ behind: 59 }), remote: { auto: true, observed: null } };
+  const { container, root } = await render(<CheckoutUpstream header={header} onCatchUp={onCatchUp} />);
+  const open = async (next: CheckoutGitHeader) => {
+    await act(async () => root.render(<TooltipProvider><CheckoutUpstream header={next} onCatchUp={onCatchUp} /></TooltipProvider>));
+    if (!document.querySelector("[data-checkout-remote-checked]")) await act(async () => container.querySelector<HTMLButtonElement>("[data-checkout-upstream]")!.click());
+    return document.querySelector<HTMLElement>("[data-checkout-catch-up]");
+  };
+  try {
+    const offered = (await open(header))!;
+    expect(offered.dataset.checkoutCatchUp).toBe("offered");
+    await act(async () => offered.querySelector("button")!.click());
+    expect(onCatchUp).toHaveBeenCalledWith(sha("a"));
+
+    const running = (await open({ ...header, catch_up: { state: "running" } }))!;
+    expect(running.querySelector("button")!.disabled).toBe(true);
+    expect(running.textContent).toBe("Pulling");
+
+    const refused = (await open({ ...header, catch_up: { state: "refused", files: 3 } }))!;
+    expect(refused.querySelector("[role=status]")!.textContent).toBe("3 uncommitted files are in the way");
+    expect(refused.querySelector("button")!.textContent).toBe("Pull again");
+
+    const diverged = (await open({ ...header, facts: facts({ ahead: 2, behind: 59 }) }))!;
+    expect(diverged.dataset.checkoutCatchUp).toBe("diverged");
+    expect(diverged.querySelector("button")).toBeNull();
+
+    expect(await open({ ...header, facts: facts({}) })).toBeNull();
+  } finally {
+    await act(async () => root.unmount());
+  }
+});
+
