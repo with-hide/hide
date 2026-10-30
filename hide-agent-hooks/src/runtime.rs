@@ -25,11 +25,15 @@ pub const HELPER_BINARY_NAME: &str = if cfg!(windows) {
 /// The pane's `hide_hooks` reporting protocol. Raise it only when older
 /// reports cannot be interpreted: changing an installed command must not
 /// disconnect an already-running pane whose reports are still valid.
+/// Version 8's reports still read the same when they reach the core through
+/// hided instead of through Herdr, so moving the path kept it.
 pub const HOOK_VERSION: u32 = 8;
 
 /// The installed Claude Code and Codex command version, independent of the
-/// pane reporting protocol. Version 10 adds passive Post observation slots.
-pub const HOOK_ENTRY_VERSION: u32 = 10;
+/// pane reporting protocol. Version 10 adds passive Post observation slots;
+/// version 11 adds the permission and interrupt events (PRD engine-bundle-1
+/// D-10).
+pub const HOOK_ENTRY_VERSION: u32 = 11;
 
 /// The intent table at the front of `PURPOSE_CONTEXT`, as a literal so the
 /// `hide` skill (`hide_kit::agents::GUIDE_SKILL`) carries the very same text.
@@ -72,7 +76,10 @@ pub fn hook_stdout_with_context(
         | HookEvent::Stop
         | HookEvent::PreToolUse
         | HookEvent::PostToolUse
-        | HookEvent::PostToolUseFailure => return None,
+        | HookEvent::PostToolUseFailure
+        | HookEvent::PermissionRequest
+        | HookEvent::Notification
+        | HookEvent::Interrupt => return None,
     };
     let output = match runtime {
         AgentRuntime::ClaudeCode | AgentRuntime::Codex => serde_json::json!({
@@ -270,11 +277,17 @@ pub enum AgentRuntime {
 impl AgentRuntime {
     pub const ALL: [AgentRuntime; 2] = [Self::ClaudeCode, Self::Codex];
 
-    /// Codex reports nonzero outcomes in PostToolUse. It has no declared
-    /// PostToolUseFailure event, so never write one into its configuration.
+    /// The events each runtime declares: Codex reports nonzero outcomes in
+    /// PostToolUse and has no PostToolUseFailure or Notification, and only
+    /// Codex declares Interrupt, so neither is given an event it would not
+    /// send.
     pub fn events(self) -> impl Iterator<Item = HookEvent> {
-        HookEvent::ALL.into_iter().filter(move |event| {
-            self == Self::ClaudeCode || *event != HookEvent::PostToolUseFailure
+        HookEvent::ALL.into_iter().filter(move |event| match self {
+            Self::ClaudeCode => *event != HookEvent::Interrupt,
+            Self::Codex => !matches!(
+                event,
+                HookEvent::PostToolUseFailure | HookEvent::Notification
+            ),
         })
     }
 
@@ -405,10 +418,20 @@ pub enum HookEvent {
     PreToolUse,
     PostToolUse,
     PostToolUseFailure,
+    /// The agent is about to ask the operator for a permission (Claude Code
+    /// and Codex): the pane's agent waits for them (PRD engine-bundle-1
+    /// D-10). Hide's entry decides nothing, so the agent's own prompt runs.
+    PermissionRequest,
+    /// Claude Code tells the operator something; a permission or input
+    /// prompt is a wait, and its idle prompt is the rest an interrupted turn
+    /// ends in, which no `Stop` reports.
+    Notification,
+    /// The operator interrupted the turn (Codex), which no `Stop` reports.
+    Interrupt,
 }
 
 impl HookEvent {
-    pub const ALL: [HookEvent; 8] = [
+    pub const ALL: [HookEvent; 11] = [
         Self::SessionStart,
         Self::UserPromptSubmit,
         Self::SubagentStart,
@@ -417,6 +440,9 @@ impl HookEvent {
         Self::PreToolUse,
         Self::PostToolUse,
         Self::PostToolUseFailure,
+        Self::PermissionRequest,
+        Self::Notification,
+        Self::Interrupt,
     ];
 
     pub fn name(self) -> &'static str {
@@ -429,6 +455,9 @@ impl HookEvent {
             Self::PreToolUse => "PreToolUse",
             Self::PostToolUse => "PostToolUse",
             Self::PostToolUseFailure => "PostToolUseFailure",
+            Self::PermissionRequest => "PermissionRequest",
+            Self::Notification => "Notification",
+            Self::Interrupt => "Interrupt",
         }
     }
 

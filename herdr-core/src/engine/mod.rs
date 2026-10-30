@@ -167,14 +167,6 @@ pub(crate) trait Engine: Send + Sync {
     /// This engine, with every call first passing `gate`.
     fn gated<'a>(&'a self, gate: Gate<'a>) -> Box<dyn Engine + 'a>;
 
-    /// The connection the hook token restorer (`coordination::hook_tokens`)
-    /// still reports a hook's tokens on itself, for an engine that has one.
-    /// Temporary: hooks-status deletes the restorer and this with it (PRD
-    /// engine-bundle-1 D-8).
-    fn hook_token_link(&self) -> Option<Arc<dyn std::any::Any + Send + Sync>> {
-        None
-    }
-
     // The session as a whole.
 
     /// Every workspace, tab, pane, layout and agent, with the focus.

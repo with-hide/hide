@@ -2,7 +2,6 @@
 //! store is the sole writer; native I/O is performed by request workers.
 
 mod executor;
-pub(crate) mod hook_tokens;
 pub(crate) mod identity_wait;
 pub(crate) mod lineage;
 pub(crate) mod naming;

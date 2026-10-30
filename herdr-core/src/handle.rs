@@ -363,6 +363,20 @@ impl Core {
                 crate::github_store::GithubStore::new(hide_kit::layout::github_snapshot(directory));
             let restored = store.restore();
             lock_recover(&runtime).install_github_store(store, restored);
+            // Before any coordinator lays them, so a pane whose agent last
+            // reported before this start keeps its connection and counts.
+            let hook_facts = crate::agent_hooks::facts::HookFacts::restore(
+                hide_kit::layout::hook_facts(directory),
+                || {
+                    environment_home.as_deref().map_or_else(Vec::new, |home| {
+                        hide_agent_hooks::counters::every_pane(
+                            home,
+                            crate::agent_hooks::facts::PANE_LIMIT,
+                        )
+                    })
+                },
+            );
+            lock_recover(&runtime).install_hook_facts(hook_facts);
             let composers = crate::composer_store::ComposerStore::new(
                 hide_kit::layout::composer_marks(directory),
             );
@@ -658,6 +672,21 @@ impl Core {
             return None;
         }
         lock_recover(&self.runtime).plan_context(device, caller)
+    }
+
+    /// What the agent hook in `caller`'s pane on `device` reported
+    /// (`HookCommand::Status`). A short admission that records it in memory;
+    /// the coordinator it wakes publishes what changed.
+    pub fn hook_status(
+        &self,
+        device: &str,
+        caller: &str,
+        report: &hide_node_link::panes::HookStatusReport,
+    ) -> Result<(), &'static str> {
+        if !check_owner_thread(self, "hook.status") {
+            return Err("hook_status_unavailable");
+        }
+        lock_recover(&self.runtime).ingest_hook_status(device, caller, report)
     }
 
     /// `hide agent catalog`: the agents, models and efforts of `machine`, or

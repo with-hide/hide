@@ -538,8 +538,8 @@ test("a letter Hide is confirming is not written again by the next prompt", asyn
   assert.equal(written.length, 1, JSON.stringify(host.synthetic.map((item) => item.payload.text)));
 });
 
-test("a subagent's run moves the counts of the pane showing its root, and the root's rest reports them again", async (t) => {
-  answer({ subagents: { reported: true } });
+test("a subagent's run moves the counts of the pane showing its root, and the root's turn carries them", async (t) => {
+  answer({ subagents: { reported: true }, turn: { reported: true } });
   const host = await opencode(t);
   host.create("ses_a");
   const view = host.terminal("w1:p1", { type: "session", sessionID: "ses_a" });
@@ -553,10 +553,17 @@ test("a subagent's run moves the counts of the pane showing its root, and the ro
   host.running.delete("ses_child");
   host.publish("session.execution.succeeded", { sessionID: "ses_child" });
   await until("subagents", 1, (input) => input.working === 0 && input.done === 1);
-  const before = calls("subagents").length;
+  // The root's run is a turn: working, then done once it ends; an interrupt rests without finishing.
+  host.publish("session.execution.started", { sessionID: "ses_a" });
+  await until("turn", 1, (input) => input.turn === "working");
   host.publish("session.execution.succeeded", { sessionID: "ses_a" });
-  await until("subagents", before + 1);
-  // Only the pane showing the child's root counted it.
+  await until("turn", 1, (input) => input.turn === "done");
+  host.publish("session.execution.started", { sessionID: "ses_a" });
+  host.publish("session.execution.interrupted", { sessionID: "ses_a" });
+  await until("turn", 1, (input) => input.turn === "idle");
+  // Only the pane showing the child's root counted it and reported its turns.
   const counted = calls("subagents").filter((call) => call.input.working > 0 || call.input.done > 0);
   assert.ok(counted.every((call) => call.env.HERDR_PANE_ID === "w1:p1"), JSON.stringify(counted));
+  const turns = calls("turn");
+  assert.ok(turns.every((call) => call.env.HERDR_PANE_ID === "w1:p1" && call.input.session_id === "ses_a"), JSON.stringify(turns));
 });
