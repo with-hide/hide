@@ -4957,11 +4957,9 @@ mod tests {
         let origin = folder.join("origin");
         std::fs::create_dir_all(&origin).unwrap();
         git_in(&origin, &["init", "-q", "-b", "main"]);
-        for dir in [&origin] {
-            git_in(dir, &["config", "user.name", "Fixture"]);
-            git_in(dir, &["config", "user.email", "fixture@example.invalid"]);
-            git_in(dir, &["config", "commit.gpgsign", "false"]);
-        }
+        git_in(&origin, &["config", "user.name", "Fixture"]);
+        git_in(&origin, &["config", "user.email", "fixture@example.invalid"]);
+        git_in(&origin, &["config", "commit.gpgsign", "false"]);
         let local_head = commit_in(&origin, "a");
         let clone = folder.join("clone");
         git_in(
