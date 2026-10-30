@@ -173,6 +173,22 @@ pub(crate) fn fetch_workspace_active_tab(
     wire::workspace_active_tab(result).map_err(SessionFetchError::Malformed)
 }
 
+/// Reads the workspace Herdr has in focus now, the answer a replica waits
+/// for once the focused workspace closed and Herdr moved its focus without an
+/// event (`SessionReplica::settle_focus`).
+pub(crate) fn fetch_focused_workspace(
+    context: &SessionSyncContext,
+) -> Result<Option<String>, SessionFetchError> {
+    let result = hide_herdr_client::request_with_connector(
+        context.api_connector.as_ref(),
+        "workspace.list",
+        wire::workspace_list_params().map_err(SessionFetchError::Malformed)?,
+        context.request_timeout(),
+    )
+    .map_err(session_error_from_api)?;
+    wire::listed_focused_workspace(result).map_err(SessionFetchError::Malformed)
+}
+
 /// Reads the cwd Herdr holds for a pane now, the confirmation a pane
 /// announced by `pane_created` waits for (`SessionReplica::confirm_pane_cwd`).
 /// A pane closed before the read answers no cwd; its `pane_closed` event

@@ -1850,6 +1850,131 @@ fn active_tab_close_settles_from_a_workspace_read_when_no_focus_follows() {
     assert_remote_replacement_focus(&replica);
 }
 
+/// Two workspaces, w2 in focus: a device checkout whose tabs Herdr keeps in
+/// two workspaces, the shell's own and the agent's.
+fn two_workspace_snapshot() -> Value {
+    let mut value = snapshot();
+    value["focused_workspace_id"] = json!("w2");
+    value["focused_pane_id"] = json!("w2:p1");
+    value["workspaces"][0]["focused"] = json!(false);
+    let mut workspace = value["workspaces"][0].clone();
+    workspace["workspace_id"] = json!("w2");
+    workspace["number"] = json!(2);
+    workspace["focused"] = json!(true);
+    workspace["active_tab_id"] = json!("w2:t1");
+    value["workspaces"].as_array_mut().unwrap().push(workspace);
+    for (list, id) in [
+        ("tabs", "tab_id"),
+        ("panes", "pane_id"),
+        ("layouts", "tab_id"),
+    ] {
+        let mut item = value[list][0].clone();
+        item["workspace_id"] = json!("w2");
+        item["tab_id"] = json!("w2:t1");
+        item[id] = json!(if id == "pane_id" { "w2:p1" } else { "w2:t1" });
+        if list == "layouts" {
+            item["focused_pane_id"] = json!("w2:p1");
+            item["panes"][0]["pane_id"] = json!("w2:p1");
+        }
+        value[list].as_array_mut().unwrap().push(item);
+    }
+    value
+}
+
+/// Herdr 0.9.5 closes the focused workspace's only tab with `workspace_closed`
+/// and `tab_closed` and moves its focus to another workspace without an
+/// event: its own snapshot then names w1 and w1:p1. Published without a
+/// focus, a device has no checkout in front and its screen shows the
+/// Overview while a tab is left; the replica keeps the close until a read
+/// says where the focus went.
+#[test]
+fn closing_the_focused_workspace_waits_for_a_read_of_herdrs_focus() {
+    let mut replica =
+        SessionReplica::from_snapshot(&two_workspace_snapshot()).expect("two-workspace snapshot");
+    let before = remote_focus(&replica);
+    assert_eq!(before.2.as_deref(), Some("remote:mini:pane:w2:p1"));
+    for (kind, body) in [
+        (
+            "workspace_closed",
+            json!({"type": "workspace_closed", "workspace_id": "w2"}),
+        ),
+        (
+            "tab_closed",
+            json!({"type": "tab_closed", "tab_id": "w2:t1", "workspace_id": "w2"}),
+        ),
+    ] {
+        replica
+            .apply(event(kind, body), ApplyMode::Strict)
+            .expect("close event");
+    }
+    assert!(!replica.ready_to_publish());
+    assert_eq!(replica.awaiting_focus(), Some("w2"));
+    replica.refresh_published_state().unwrap();
+    assert_eq!(
+        remote_focus(&replica),
+        before,
+        "hold the close until focus is known"
+    );
+
+    // A read that ran ahead of the stream names a workspace it has not delivered.
+    assert!(!replica.settle_focus(Some("w9")));
+    assert!(!replica.ready_to_publish());
+
+    assert!(replica.settle_focus(Some("w1")));
+    assert!(replica.ready_to_publish());
+    assert!(replica.refresh_published_state().unwrap());
+    assert_eq!(
+        remote_focus(&replica),
+        (
+            Some("remote:mini:checkout:w1".to_owned()),
+            Some("remote:mini:tab:w1:t1".to_owned()),
+            Some("remote:mini:pane:w1:p1".to_owned()),
+        )
+    );
+    assert!(
+        replica
+            .project()
+            .workspaces
+            .iter()
+            .all(|workspace| workspace.workspace_id != "w2")
+    );
+}
+
+/// A focus event that names the successor ends the wait without a read, and
+/// a read that answers after it changes nothing.
+#[test]
+fn a_focus_event_after_the_focused_workspace_closes_ends_the_wait() {
+    let mut replica =
+        SessionReplica::from_snapshot(&two_workspace_snapshot()).expect("two-workspace snapshot");
+    replica
+        .apply(
+            event(
+                "workspace_closed",
+                json!({"type": "workspace_closed", "workspace_id": "w2"}),
+            ),
+            ApplyMode::Strict,
+        )
+        .expect("workspace close event");
+    assert_eq!(replica.awaiting_focus(), Some("w2"));
+    replica
+        .apply(
+            event(
+                "workspace_focused",
+                json!({"type": "workspace_focused", "workspace_id": "w1"}),
+            ),
+            ApplyMode::Strict,
+        )
+        .expect("workspace focus event");
+    assert_eq!(replica.awaiting_focus(), None);
+    assert!(replica.ready_to_publish());
+    replica.refresh_published_state().unwrap();
+    assert_eq!(
+        remote_focus(&replica).2.as_deref(),
+        Some("remote:mini:pane:w1:p1")
+    );
+    assert!(!replica.settle_focus(Some("w1")));
+}
+
 #[test]
 fn a_replacement_tab_keeps_its_selected_split_pane_after_either_close() {
     let mut value = two_tab_snapshot();

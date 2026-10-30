@@ -960,6 +960,19 @@ pub(crate) fn listed_workspace_tokens(
     }
 }
 
+/// The workspace a `workspace.list` answer says Herdr has in focus, or none
+/// when it names none.
+pub(crate) fn listed_focused_workspace(value: Value) -> Result<Option<String>, String> {
+    let missing = "workspace.list response is missing workspaces";
+    match response(value, missing)? {
+        res::ResponseResult::WorkspaceList { workspaces } => Ok(workspaces
+            .into_iter()
+            .find(|workspace| workspace.focused)
+            .map(|workspace| workspace.workspace_id)),
+        _ => Err(missing.into()),
+    }
+}
+
 pub(crate) fn workspace_rename_params(workspace_id: &str, label: &str) -> Result<Value, String> {
     params(req::WorkspaceRenameParams {
         workspace_id: workspace_id.into(),
