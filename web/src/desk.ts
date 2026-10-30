@@ -11,38 +11,54 @@
 
 import type { PlanView, PrState, RowMark } from "./snapshot";
 
-export type DeskAgentState = "ready" | "preparing" | "install_failed" | "node_missing" | "login_needed" | "not_installed" | "no_ask_mode";
+// The conversation's values are the `desk` section exactly as `snapshot.ts`
+// declares it on the desk node's branch; once that lands these become its
+// imports. `job` and `handed` items are the jobs node's (wire gap).
+
+/** An agent Desk talks to over ACP; its name is the screen's (`desk.agentName.*`). */
+export type DeskAgentId = "claude" | "codex" | "pi";
+
+export type DeskAgentState = "checking" | "ready" | "preparing" | "not_installed" | "install_failed" | "node_missing" | "cli_missing" | "login_needed" | "no_ask_mode";
+
+export type DeskChoice = { id: string; label: string };
 
 export type DeskAgent = {
-  id: string;
+  id: DeskAgentId;
   label: string;
   state: DeskAgentState;
-  /** A code for the failure, worded by the screen (`desk.reason.*`). */
-  reason?: string | null;
-  login_command?: string | null;
-  models: { id: string; label: string }[];
-  efforts: string[];
+  /** What the state names: the Node version found, the install's last line, the missing CLI. */
+  detail: string | null;
+  /** Shown with `login_needed`. */
+  login_command: string;
+  /** What the agent's last session offered; empty until one opened. */
+  models: DeskChoice[];
+  efforts: DeskChoice[];
 };
 
-export type DeskSelection = { agent: string; model: string; effort: string };
+export type DeskSelection = { agent: DeskAgentId | null; model: string | null; effort: string | null };
 
-export type DeskMention = { kind: "session" | "project"; name: string; id: string };
+export type DeskMention = { kind: "session" | "project"; id: string; name: string };
 
 export type DeskNoticeKind = "blocked" | "preparing" | "host_stopped" | "resume_failed" | "login_needed" | "install_failed" | "no_ask_mode" | "turn_failed";
 
 export type DeskApprovalState = "waiting" | "allowed" | "rejected" | "closed";
 
+export type DeskLocation = "desk" | "worktree" | "checkout";
+
+/** One line of the Desk conversation. A message's text holds a mention as `@session(<id> <name>)` or `@project(<path> <name>)`. */
 export type DeskItem =
-  | { kind: "user"; id: string; text: string; at: number; mentions: DeskMention[] }
-  | { kind: "reply"; id: string; text: string; at: number; state: "done" | "stopped" }
+  | { kind: "user"; id: number; text: string; at_ms: number; mentions: DeskMention[] }
+  | { kind: "reply"; id: number; agent: DeskAgentId; text: string; at_ms: number; state: "done" | "stopped" }
   /** How much of the conversation the new agent was handed. */
-  | { kind: "switch"; id: string; from: string; to: string; carried: "all" | "trimmed" | "none" }
-  | { kind: "model"; id: string; model: string; effort: string }
-  | { kind: "approval"; id: string; title: string; command: string; folder: string; reason: string; state: DeskApprovalState }
+  | { kind: "switch"; id: number; from: DeskAgentId | null; to: DeskAgentId; carried: "all" | "trimmed" | "none" }
+  | { kind: "model"; id: number; model: string | null; effort: string | null }
+  | { kind: "approval"; id: number; card: "command" | "edit" | "other"; command: string; folder: string | null; reason: string | null; state: DeskApprovalState }
   /** `detail` is the install's last line, the sign-in command for `login_needed`, or the blocked call. */
-  | { kind: "notice"; id: string; notice: DeskNoticeKind; agent: string | null; detail: string | null }
-  | { kind: "job"; id: string; job_id: string }
-  | { kind: "handed"; id: string; agent_id: string; name: string; project: string };
+  | { kind: "notice"; id: number; notice: DeskNoticeKind; agent: DeskAgentId | null; detail: string | null }
+  /** wire gap: a job Desk started, drawn as its card. */
+  | { kind: "job"; id: number; job_id: string }
+  /** wire gap: a task handed to a session already doing it. */
+  | { kind: "handed"; id: number; agent_id: string; name: string; project: string };
 
 export type DeskJobState = "queued" | "starting" | "working" | "asking" | "done" | "failed" | "cancelled" | "closed" | "moved_out" | "archived";
 
@@ -103,7 +119,7 @@ export type DeskJob = {
   workers?: string[];
 };
 
-export type DeskSettings = { default_agent: string; location: "desk" | "worktree" | "checkout"; cap: number };
+export type DeskSettings = { default_agent: DeskAgentId | null; location: DeskLocation; cap: number };
 
 // ---------- the thread (B25-B27) ----------
 
@@ -364,6 +380,39 @@ export function jobMark(job: DeskJob): RowMark | null {
       return null;
   }
 }
+
+/**
+ * A message split at its mentions (B18): each mention's own token in the
+ * text (`@session(<id> <name>)` for a Desk message, `@name` in a session's
+ * words) becomes the mention, the longest token first, so a name with spaces
+ * or a path in it is read whole.
+ */
+export function mentionParts(text: string, mentions: readonly DeskMention[], token: (mention: DeskMention) => string): (string | DeskMention)[] {
+  const tokens = mentions.map((mention) => ({ mention, token: token(mention) })).sort((a, b) => b.token.length - a.token.length);
+  const parts: (string | DeskMention)[] = [];
+  let plain = "";
+  let at = 0;
+  while (at < text.length) {
+    const hit = text[at] === "@" ? tokens.find((one) => text.startsWith(one.token, at)) : undefined;
+    if (!hit) {
+      plain += text[at];
+      at += 1;
+      continue;
+    }
+    if (plain) parts.push(plain);
+    plain = "";
+    parts.push(hit.mention);
+    at += hit.token.length;
+  }
+  if (plain) parts.push(plain);
+  return parts;
+}
+
+/** A mention as a Desk message's text holds it. */
+export const markedMention = (mention: DeskMention) => `@${mention.kind}(${mention.id} ${mention.name})`;
+
+/** A mention as a session's own words say it. */
+export const namedMention = (mention: DeskMention) => `@${mention.name}`;
 
 /** An agent Desk cannot be given (D-53, B4): one that cannot ask before acting. One not installed or signed in can be picked and says so (B6). */
 export function agentPickable(agent: DeskAgent): boolean {

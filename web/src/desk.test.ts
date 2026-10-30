@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { askingCount, outputKindOf, threadGroups, threadLines, unseenOutputs, type AcpSessionUpdate, type DeskJob } from "./desk";
+import { askingCount, markedMention, mentionParts, outputKindOf, threadGroups, threadLines, unseenOutputs, type AcpSessionUpdate, type DeskJob } from "./desk";
 
 const job = (id: string, state: DeskJob["state"], extra: Partial<DeskJob> = {}): DeskJob => ({
   id, title: id, project: { workspace_id: "w", label: "w" }, location: { kind: "checkout", label: "w" },
@@ -73,5 +73,14 @@ describe("a thread's lines (B25, B26)", () => {
   it("keeps a letter apart from the operator's own words by its origin", () => {
     const lines = threadLines([text("user_message_chunk", "내 말"), { sessionUpdate: "user_message_chunk", content: { type: "text", text: "편지" }, _meta: { hide: { origin: "letter" } } }]);
     expect(lines.map((line) => line.kind === "user" && line.origin)).toEqual(["operator", "letter"]);
+  });
+});
+
+describe("a Desk message's mentions (B18)", () => {
+  it("reads each mention by its own marked token, so a path or a name with spaces stays whole", () => {
+    const project = { kind: "project" as const, id: "~/work/my app", name: "my app" };
+    const session = { kind: "session" as const, id: "agent-7", name: "mention 버튼 정리" };
+    const parts = mentionParts("@project(~/work/my app my app) 정리하고 @session(agent-7 mention 버튼 정리)에 알려줘 @me", [project, session], markedMention);
+    expect(parts).toEqual([project, " 정리하고 ", session, "에 알려줘 @me"]);
   });
 });

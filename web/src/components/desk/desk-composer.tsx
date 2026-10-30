@@ -1,11 +1,12 @@
 import { ArrowUpIcon, ChevronDownIcon, ImageIcon, PaperclipIcon, SquareIcon, XIcon } from "lucide-react";
 import type { ReactNode } from "react";
-import type { DeskAgent, DeskSelection } from "../../desk";
+import type { DeskAgent, DeskAgentId, DeskChoice, DeskSelection } from "../../desk";
 import { agentPickable } from "../../desk";
 import { useInterfaceTranslation } from "../../i18n/client";
 import type { MessageKey } from "../../i18n/catalogs";
 import { cn } from "../../lib/utils";
 import { AgentMark } from "../../AgentMark";
+import { deskAgentName } from "./desk-agent-name";
 import { Button } from "../ui/button";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuLabel, DropdownMenuRadioGroup, DropdownMenuRadioItem, DropdownMenuSeparator, DropdownMenuTrigger } from "../ui/dropdown-menu";
 import { Popover, PopoverAnchor, PopoverContent } from "../ui/popover";
@@ -87,6 +88,8 @@ export function DeskComposer({ value, label, placeholder, attachments = [], answ
 }
 
 const AGENT_STATE: Record<DeskAgent["state"], MessageKey> = {
+  checking: "desk.agentState.checking",
+  cli_missing: "desk.agentState.cli_missing",
   ready: "desk.agentState.ready",
   preparing: "desk.agentState.preparing",
   install_failed: "desk.agentState.install_failed",
@@ -117,33 +120,35 @@ function BarMenu({ name, value, open, onOpenChange, highlight = false, children,
  * Under Desk's composer (D-66, B4, B5): the agent, its model and its effort,
  * each a menu. An agent that cannot ask before acting is listed dim with its
  * reason and cannot be picked; one that is preparing or failed says so;
- * switching keeps the conversation (B9). `open` opens one menu, for review.
+ * switching keeps the conversation (B9). Before an agent is chosen only the
+ * agent menu shows; before its first session the model and effort read as
+ * the agent's default. `open` opens one menu, for review.
  */
 export function DeskAgentBar({ agents, selection, open = null, onAgent, onModel, onEffort }: {
   agents: readonly DeskAgent[];
   selection: DeskSelection;
   open?: "agent" | "model" | "effort" | null;
-  onAgent: (agent: string) => void;
+  onAgent: (agent: DeskAgentId) => void;
   onModel: (model: string) => void;
   onEffort: (effort: string) => void;
 }) {
   const { t } = useInterfaceTranslation();
-  const agent = agents.find((one) => one.id === selection.agent);
-  if (!agent) throw new Error(`Desk selection names an unknown agent ${selection.agent}`);
-  const model = agent.models.find((one) => one.id === selection.model)?.label ?? selection.model;
+  const agent = selection.agent === null ? null : agents.find((one) => one.id === selection.agent);
+  if (agent === undefined) throw new Error(`Desk selection names an unknown agent ${selection.agent}`);
+  const choice = (choices: readonly DeskChoice[], id: string | null) => (id === null ? t("desk.bar.default") : (choices.find((one) => one.id === id)?.label ?? id));
   return (
     <div className="flex min-w-0 items-center justify-end gap-xxs" data-desk-agent-bar="true">
-      {agent.state !== "ready" ? <span className={cn("mr-auto truncate text-micro", agent.state === "preparing" ? "text-muted-foreground" : "text-warning")} data-desk-agent-bar-state={agent.state}>{t(AGENT_STATE[agent.state])}</span> : null}
-      <BarMenu name={t("desk.bar.agent")} value={<><AgentMark kind={agent.id} />{agent.label}</>} open={open === "agent" ? true : undefined} highlight={open === "agent"} data-desk-bar="agent">
+      {agent && agent.state !== "ready" ? <span className={cn("mr-auto truncate text-micro", agent.state === "preparing" || agent.state === "checking" ? "text-muted-foreground" : "text-warning")} data-desk-agent-bar-state={agent.state}>{t(AGENT_STATE[agent.state])}</span> : null}
+      <BarMenu name={t("desk.bar.agent")} value={agent ? <><AgentMark kind={agent.id} />{deskAgentName(t, agent.id)}</> : t("desk.bar.agent")} open={open === "agent" ? true : undefined} highlight={open === "agent"} data-desk-bar="agent">
         <DropdownMenuLabel>{t("desk.bar.agent")}</DropdownMenuLabel>
-        <DropdownMenuRadioGroup value={selection.agent} onValueChange={onAgent}>
+        <DropdownMenuRadioGroup value={selection.agent ?? undefined} onValueChange={(value) => onAgent(value as DeskAgentId)}>
           {agents.map((one) => {
             const pickable = agentPickable(one);
             const item = (
               <DropdownMenuRadioItem key={one.id} value={one.id} disabled={!pickable} className="gap-sm" data-desk-agent={one.id} data-desk-agent-state={one.state}>
                 <AgentMark kind={one.id} />
-                <span className="flex-1">{one.label}</span>
-                <span className={cn("text-micro", one.state === "ready" ? "text-muted-foreground" : one.state === "preparing" ? "text-muted-foreground" : "text-warning")}>{t(AGENT_STATE[one.state])}</span>
+                <span className="flex-1">{deskAgentName(t, one.id)}</span>
+                <span className={cn("text-micro", one.state === "ready" || one.state === "preparing" || one.state === "checking" ? "text-muted-foreground" : "text-warning")}>{t(AGENT_STATE[one.state])}</span>
               </DropdownMenuRadioItem>
             );
             return pickable ? item : <Hint key={one.id} label={t("desk.agentState.noAskModeHint")} side="left"><span>{item}</span></Hint>;
@@ -152,16 +157,20 @@ export function DeskAgentBar({ agents, selection, open = null, onAgent, onModel,
         <DropdownMenuSeparator />
         <DropdownMenuLabel className="font-normal text-muted-foreground">{t("desk.bar.carries")}</DropdownMenuLabel>
       </BarMenu>
-      <BarMenu name={t("desk.bar.model")} value={model} open={open === "model" ? true : undefined} data-desk-bar="model">
-        <DropdownMenuRadioGroup value={selection.model} onValueChange={onModel}>
-          {agent.models.map((one) => <DropdownMenuRadioItem key={one.id} value={one.id}>{one.label}</DropdownMenuRadioItem>)}
-        </DropdownMenuRadioGroup>
-      </BarMenu>
-      <BarMenu name={t("desk.bar.effort")} value={selection.effort} open={open === "effort" ? true : undefined} data-desk-bar="effort">
-        <DropdownMenuRadioGroup value={selection.effort} onValueChange={onEffort}>
-          {agent.efforts.map((one) => <DropdownMenuRadioItem key={one} value={one}>{one}</DropdownMenuRadioItem>)}
-        </DropdownMenuRadioGroup>
-      </BarMenu>
+      {agent ? (
+        <>
+          <BarMenu name={t("desk.bar.model")} value={choice(agent.models, selection.model)} open={open === "model" ? true : undefined} data-desk-bar="model">
+            <DropdownMenuRadioGroup value={selection.model ?? undefined} onValueChange={onModel}>
+              {agent.models.map((one) => <DropdownMenuRadioItem key={one.id} value={one.id}>{one.label}</DropdownMenuRadioItem>)}
+            </DropdownMenuRadioGroup>
+          </BarMenu>
+          <BarMenu name={t("desk.bar.effort")} value={choice(agent.efforts, selection.effort)} open={open === "effort" ? true : undefined} data-desk-bar="effort">
+            <DropdownMenuRadioGroup value={selection.effort ?? undefined} onValueChange={onEffort}>
+              {agent.efforts.map((one) => <DropdownMenuRadioItem key={one.id} value={one.id}>{one.label}</DropdownMenuRadioItem>)}
+            </DropdownMenuRadioGroup>
+          </BarMenu>
+        </>
+      ) : null}
     </div>
   );
 }

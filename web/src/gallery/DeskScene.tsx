@@ -187,7 +187,7 @@ export function DeskScene({ params }: { params: URLSearchParams }) {
   const threadPath = (...labels: string[]): ThreadPathStep[] => [{ label: t("desk.threads.title"), onPress: noop }, ...labels.map((label, index) => ({ label, onPress: index < labels.length - 1 ? noop : undefined }))];
   const chat = (items: DeskItem[], composer: ReactNode, selectedJob: string | null = null, selectedOutput: string | null = null, extra: Partial<Parameters<typeof DeskChat>[0]> = {}) => (
     <DeskChatColumn head={<ChatHead />} composer={composer}>
-      <DeskChat items={items} jobs={jobs} selectedJob={selectedJob} selectedOutput={selectedOutput} {...CHAT_ACTIONS} {...extra} />
+      <DeskChat items={items} jobs={jobs} agents={AGENTS} selectedJob={selectedJob} selectedOutput={selectedOutput} {...CHAT_ACTIONS} {...extra} />
     </DeskChatColumn>
   );
 
@@ -232,16 +232,16 @@ export function DeskScene({ params }: { params: URLSearchParams }) {
     }
     case "s5": {
       const done: DeskJob = { ...jobs.gallery!, state: "done", summary: "라이트와 다크 캡처를 비교했어요", outputs: [OUTPUTS.compareLight, OUTPUTS.compareDark, OUTPUTS.notes] };
-      const items: DeskItem[] = [{ kind: "job", id: "c1", job_id: "gallery-done" }];
+      const items: DeskItem[] = [{ kind: "job", id: 1, job_id: "gallery-done" }];
       body = <DeskRoom pinned={false} rail={rail(true, true)}
-        chat={<DeskChatColumn head={<ChatHead />} composer={<ChatComposer selection={CLAUDE} />}><DeskChat items={items} jobs={{ "gallery-done": done }} selectedJob="gallery-done" selectedOutput={OUTPUTS.compareLight.id} {...CHAT_ACTIONS} /></DeskChatColumn>}
+        chat={<DeskChatColumn head={<ChatHead />} composer={<ChatComposer selection={CLAUDE} />}><DeskChat items={items} jobs={{ "gallery-done": done }} agents={AGENTS} selectedJob="gallery-done" selectedOutput={OUTPUTS.compareLight.id} {...CHAT_ACTIONS} /></DeskChatColumn>}
         view={<DeskViewColumn tabs={[tab("compare", "compare-light.png", true, <ImageIcon aria-hidden="true" className="size-(--size-icon-sm)" />)]} active="compare" onTab={noop} onKeep={noop} onCloseTab={noop}><PictureView src={PICTURES.light} label="compare-light.png" /></DeskViewColumn>}
         tool={<ToolColumn pinned={false} head={<ThreadHead path={threadPath("갤러리 캡처 비교")} onTerminal={noop} />}><Thread job={done} updates={GALLERY_THREAD.slice(0, 3)} selectedOutput={OUTPUTS.compareLight.id} /></ToolColumn>} />;
       break;
     }
     case "s6": {
       const release = jobs.release!;
-      const items: DeskItem[] = [{ kind: "job", id: "c1", job_id: "gallery" }, { kind: "job", id: "c2", job_id: "release" }];
+      const items: DeskItem[] = [{ kind: "job", id: 1, job_id: "gallery" }, { kind: "job", id: 2, job_id: "release" }];
       body = <DeskRoom pinned rail={rail(true, true)}
         chat={chat(items, <ChatComposer selection={CLAUDE} />, "release", OUTPUTS.notes.id)}
         view={<DeskViewColumn tabs={[tab("compare", "compare-light.png", false, <ImageIcon aria-hidden="true" className="size-(--size-icon-sm)" />), tab("notes", "notes.md", true, <FileTextIcon aria-hidden="true" className="size-(--size-icon-sm)" />)]} active="notes" onTab={noop} onKeep={noop} onCloseTab={noop}><div className="p-lg"><MarkdownText text={NOTES_MD} /></div></DeskViewColumn>}
@@ -249,7 +249,7 @@ export function DeskScene({ params }: { params: URLSearchParams }) {
       break;
     }
     case "s7": {
-      const items: DeskItem[] = [{ kind: "job", id: "c1", job_id: "gallery" }];
+      const items: DeskItem[] = [{ kind: "job", id: 1, job_id: "gallery" }];
       body = <DeskRoom pinned={false} rail={rail(true, false)} chat={chat(items, <ChatComposer selection={CLAUDE} />, "gallery")}
         tool={<ToolColumn pinned={false} head={<ThreadHead path={threadPath("갤러리 캡처 비교")} onTerminal={noop} />}><Thread job={jobs.gallery!} updates={GALLERY_THREAD} outputs={[]} focused draft="응 다크도, 이 그림처럼 잘라줘" attachments={[{ id: "ref", name: "ref.png", image: true }]} /></ToolColumn>} />;
       break;

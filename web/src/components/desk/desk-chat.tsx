@@ -1,49 +1,34 @@
 import { ArrowLeftRightIcon, CircleAlertIcon, CopyIcon, HandIcon, LoaderCircleIcon, SlidersHorizontalIcon, TerminalIcon } from "lucide-react";
 import type { ReactNode } from "react";
-import type { DeskItem, DeskJob, DeskMention, DeskNoticeKind } from "../../desk";
+import type { DeskAgent, DeskItem, DeskJob, DeskMention, DeskNoticeKind } from "../../desk";
+import { markedMention, mentionParts, namedMention } from "../../desk";
 import { useInterfaceTranslation } from "../../i18n/client";
 import type { MessageKey } from "../../i18n/catalogs";
 import { cn } from "../../lib/utils";
 import { MentionChip } from "../mention-chip";
 import { Button } from "../ui/button";
 import { Hint } from "../ui/tooltip";
+import { deskAgentName } from "./desk-agent-name";
 import { DeskHandedCard, DeskJobCard, type DeskJobCardActions } from "./desk-job-card";
 
 /**
- * Words with their `@name`s drawn as chips (B18, B26): a session and a
+ * Words with their mentions drawn as chips (B18, B26): a session and a
  * project read apart by colour; a chip with a press opens what it names.
+ * `token` is how the words spell a mention: a session's own words say
+ * `@name`, a Desk message holds `@session(<id> <name>)`.
  */
-export function MentionText({ text, mentions, onMention }: { text: string; mentions: readonly DeskMention[]; onMention?: (mention: DeskMention) => void }) {
+export function MentionText({ text, mentions, token = namedMention, onMention }: { text: string; mentions: readonly DeskMention[]; token?: (mention: DeskMention) => string; onMention?: (mention: DeskMention) => void }) {
   const { t } = useInterfaceTranslation();
-  if (mentions.length === 0) return <>{text}</>;
-  const names = [...mentions].sort((a, b) => b.name.length - a.name.length);
-  const parts: ReactNode[] = [];
-  let rest = text;
-  let key = 0;
-  while (rest.length > 0) {
-    const at = rest.indexOf("@");
-    if (at < 0) break;
-    const mention = names.find((one) => rest.startsWith(`@${one.name}`, at));
-    if (!mention) {
-      parts.push(rest.slice(0, at + 1));
-      rest = rest.slice(at + 1);
-      continue;
-    }
-    if (at > 0) parts.push(rest.slice(0, at));
-    parts.push(onMention
-      ? <MentionChip key={key++} kind={mention.kind} name={mention.name} label={t("desk.mention.open", { name: mention.name })} onPress={() => onMention(mention)} />
-      : <MentionChip key={key++} kind={mention.kind} name={mention.name} />);
-    rest = rest.slice(at + 1 + mention.name.length);
-  }
-  parts.push(rest);
-  return <>{parts}</>;
+  return <>{mentionParts(text, mentions, token).map((part, index) => typeof part === "string" ? part
+    : onMention ? <MentionChip key={index} kind={part.kind} name={part.name} label={t("desk.mention.open", { name: part.name })} onPress={() => onMention(part)} />
+    : <MentionChip key={index} kind={part.kind} name={part.name} />)}</>;
 }
 
 /** The operator's own words, at the right (B7). */
 export function DeskUserMessage({ text, mentions, onMention }: { text: string; mentions: readonly DeskMention[]; onMention?: (mention: DeskMention) => void }) {
   return (
     <p className="max-w-(--size-pr-popover) self-end whitespace-pre-wrap break-keep rounded-lg bg-secondary px-md py-xs text-body text-foreground [overflow-wrap:anywhere]" data-desk-item="user">
-      <MentionText text={text} mentions={mentions} onMention={onMention} />
+      <MentionText text={text} mentions={mentions} token={markedMention} onMention={onMention} />
     </p>
   );
 }
@@ -126,7 +111,7 @@ export function DeskNotice({ item, onAction, onCopy }: { item: Extract<DeskItem,
   const { t } = useInterfaceTranslation();
   const failed = item.notice === "blocked" || item.notice === "host_stopped" || item.notice === "install_failed" || item.notice === "turn_failed";
   const action = NOTICE_ACTION[item.notice];
-  const words = t(NOTICE[item.notice], { agent: item.agent ?? "", detail: item.detail ?? "" });
+  const words = t(NOTICE[item.notice], { agent: item.agent ? deskAgentName(t, item.agent) : t("desk.name"), detail: item.detail ?? "" });
   return (
     <div className="flex min-w-0 flex-wrap items-center gap-x-sm gap-y-xxs text-caption" role={failed ? "alert" : "status"} data-desk-item="notice" data-desk-notice={item.notice}>
       {item.notice === "preparing" ? <LoaderCircleIcon aria-hidden="true" className="size-(--size-icon-sm) shrink-0 animate-spin text-muted-foreground" /> : <CircleAlertIcon aria-hidden="true" className={cn("size-(--size-icon-sm) shrink-0", failed ? "text-destructive" : "text-warning")} />}
@@ -145,6 +130,12 @@ export function DeskNotice({ item, onAction, onCopy }: { item: Extract<DeskItem,
   );
 }
 
+const APPROVAL_CARD: Record<Extract<DeskItem, { kind: "approval" }>["card"], MessageKey> = {
+  command: "desk.approval.card.command",
+  edit: "desk.approval.card.edit",
+  other: "desk.approval.card.other",
+};
+
 /**
  * Desk asking before it runs a command or changes code (D-52, B14): the
  * command whole, the folder, Desk's one-line reason and two answers. An
@@ -155,18 +146,20 @@ export function DeskApprovalCard({ item, onAnswer }: { item: Extract<DeskItem, {
   const waiting = item.state === "waiting";
   const answered = item.state === "allowed" ? t("desk.approval.allowed") : item.state === "rejected" ? t("desk.approval.rejected") : item.state === "closed" ? t("desk.approval.closed") : null;
   return (
-    <section className="flex min-w-0 flex-col gap-xs rounded-lg border border-border px-md py-sm" aria-label={item.title} data-desk-item="approval" data-desk-approval={item.state}>
+    <section className="flex min-w-0 flex-col gap-xs rounded-lg border border-border px-md py-sm" aria-label={t(APPROVAL_CARD[item.card])} data-desk-item="approval" data-desk-approval={item.state}>
       <p className="flex min-w-0 items-center gap-xs text-caption">
         {waiting ? <HandIcon aria-hidden="true" className="size-(--size-icon) shrink-0 text-warning" /> : null}
         <span className={cn("font-medium", waiting ? "text-foreground" : item.state === "allowed" ? "text-success" : "text-muted-foreground")} data-desk-approval-answered={waiting ? undefined : item.state}>{waiting ? t("desk.approval.title") : answered}</span>
-        <span className="min-w-0 truncate text-muted-foreground">{item.title}</span>
+        <span className="min-w-0 truncate text-muted-foreground">{t(APPROVAL_CARD[item.card])}</span>
       </p>
       <pre className={cn("min-w-0 whitespace-pre-wrap break-all rounded-sm bg-secondary px-sm py-xs font-mono text-caption text-foreground", !waiting && "opacity-(--opacity-dimmed)")} data-desk-approval-command="true">{item.command}</pre>
-      <p className="flex min-w-0 items-baseline gap-xs text-micro text-muted-foreground">
-        <span className="shrink-0">{t("desk.approval.folder")}</span>
-        <span className="min-w-0 truncate font-mono text-subtle-foreground" title={item.folder}>{item.folder}</span>
-      </p>
-      <p className="min-w-0 whitespace-normal break-keep text-caption text-subtle-foreground [overflow-wrap:anywhere]">{item.reason}</p>
+      {item.folder ? (
+        <p className="flex min-w-0 items-baseline gap-xs text-micro text-muted-foreground">
+          <span className="shrink-0">{t("desk.approval.folder")}</span>
+          <span className="min-w-0 truncate font-mono text-subtle-foreground" title={item.folder}>{item.folder}</span>
+        </p>
+      ) : null}
+      {item.reason ? <p className="min-w-0 whitespace-normal break-keep text-caption text-subtle-foreground [overflow-wrap:anywhere]">{item.reason}</p> : null}
       {waiting ? (
         <div className="flex items-center justify-end gap-xs pt-xxs">
           <Button variant="soft" size="sm" className="font-normal" data-desk-approval-answer="reject" onClick={() => onAnswer(false)}>{t("desk.approval.reject")}</Button>
@@ -178,7 +171,7 @@ export function DeskApprovalCard({ item, onAnswer }: { item: Extract<DeskItem, {
 }
 
 export type DeskChatActions = DeskJobCardActions & {
-  onApproval: (id: string, allow: boolean) => void;
+  onApproval: (id: number, allow: boolean) => void;
   onNoticeAction: (action: DeskNoticeAction) => void;
   onCopy: (text: string) => void;
   onMention: (mention: DeskMention) => void;
@@ -198,9 +191,11 @@ function jobOf(jobs: Readonly<Record<string, DeskJob>>, id: string): DeskJob {
  * approval cards, the switch and model lines and the notices, in order;
  * `thinking` and `live` draw the answer under way.
  */
-export function DeskChat({ items, jobs, live = null, thinking = false, selectedJob = null, selectedOutput = null, ...actions }: {
+export function DeskChat({ items, jobs, agents, live = null, thinking = false, selectedJob = null, selectedOutput = null, ...actions }: {
   items: readonly DeskItem[];
   jobs: Readonly<Record<string, DeskJob>>;
+  /** The agents, whose choices name a model line's model and effort. */
+  agents: readonly DeskAgent[];
   /** The answer streaming now, after the last item. */
   live?: string | null;
   thinking?: boolean;
@@ -208,14 +203,16 @@ export function DeskChat({ items, jobs, live = null, thinking = false, selectedJ
   selectedOutput?: string | null;
 } & DeskChatActions) {
   const { t } = useInterfaceTranslation();
+  // A model line holds the choice's id; its words are the choice's label, or the id an agent no longer offers.
+  const choice = (id: string | null, of: "models" | "efforts") => id === null ? t("desk.bar.default") : (agents.flatMap((agent) => agent[of]).find((one) => one.id === id)?.label ?? id);
   return (
     <ol className="mx-auto flex w-full max-w-(--size-editor-measure) min-w-0 flex-col gap-md px-lg py-lg" aria-label={t("desk.name")} data-desk-chat={items.length}>
       {items.map((item) => (
         <li key={item.id} className="flex min-w-0 flex-col">
           {item.kind === "user" ? <DeskUserMessage text={item.text} mentions={item.mentions} onMention={actions.onMention} />
             : item.kind === "reply" ? <DeskReply text={item.text} stopped={item.state === "stopped"} />
-            : item.kind === "switch" ? <MarkerLine icon={<ArrowLeftRightIcon aria-hidden="true" className="size-(--size-icon-sm) shrink-0" />} data-desk-item="switch">{t(SWITCH_WORDS[item.carried], { from: item.from, to: item.to })}</MarkerLine>
-            : item.kind === "model" ? <MarkerLine icon={<SlidersHorizontalIcon aria-hidden="true" className="size-(--size-icon-sm) shrink-0" />} data-desk-item="model">{t("desk.model", { model: item.model, effort: item.effort })}</MarkerLine>
+            : item.kind === "switch" ? <MarkerLine icon={<ArrowLeftRightIcon aria-hidden="true" className="size-(--size-icon-sm) shrink-0" />} data-desk-item="switch">{item.from === null ? t("desk.switch.start", { to: deskAgentName(t, item.to) }) : t(SWITCH_WORDS[item.carried], { from: deskAgentName(t, item.from), to: deskAgentName(t, item.to) })}</MarkerLine>
+            : item.kind === "model" ? <MarkerLine icon={<SlidersHorizontalIcon aria-hidden="true" className="size-(--size-icon-sm) shrink-0" />} data-desk-item="model">{t("desk.model", { model: choice(item.model, "models"), effort: choice(item.effort, "efforts") })}</MarkerLine>
             : item.kind === "approval" ? <DeskApprovalCard item={item} onAnswer={(allow) => actions.onApproval(item.id, allow)} />
             : item.kind === "notice" ? <DeskNotice item={item} onAction={actions.onNoticeAction} onCopy={actions.onCopy} />
             : item.kind === "handed" ? <DeskHandedCard name={item.name} project={item.project} onOpen={() => actions.onHanded(item.agent_id)} />

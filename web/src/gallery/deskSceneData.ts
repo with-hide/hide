@@ -20,11 +20,12 @@ export const PICTURES = {
   page: picture("aliceblue", "lightcyan", "cadetblue"),
 };
 
+const EFFORTS = [{ id: "low", label: "low" }, { id: "medium", label: "medium" }, { id: "high", label: "high" }];
+
 export const AGENTS: DeskAgent[] = [
-  { id: "claude", label: "Claude", state: "ready", models: [{ id: "opus", label: "Opus 5.5" }, { id: "sonnet", label: "Sonnet 5.5" }], efforts: ["low", "medium", "high"] },
-  { id: "codex", label: "Codex", state: "ready", models: [{ id: "gpt", label: "GPT-6" }, { id: "gpt-mini", label: "GPT-6 mini" }], efforts: ["low", "medium", "high"] },
-  { id: "opencode", label: "OpenCode", state: "login_needed", login_command: "opencode auth login", models: [{ id: "default", label: "기본" }], efforts: ["medium"] },
-  { id: "pi", label: "Pi", state: "no_ask_mode", models: [{ id: "default", label: "기본" }], efforts: ["medium"] },
+  { id: "claude", label: "Claude", state: "ready", detail: null, login_command: "claude /login", models: [{ id: "opus", label: "Opus 5.5" }, { id: "sonnet", label: "Sonnet 5.5" }], efforts: EFFORTS },
+  { id: "codex", label: "Codex", state: "ready", detail: null, login_command: "codex login", models: [{ id: "gpt", label: "GPT-6" }, { id: "gpt-mini", label: "GPT-6 mini" }], efforts: EFFORTS },
+  { id: "pi", label: "Pi", state: "no_ask_mode", detail: null, login_command: "pi login", models: [], efforts: [] },
 ];
 
 export const AGENTS_PREPARING: DeskAgent[] = AGENTS.map((agent) => (agent.id === "codex" ? { ...agent, state: "preparing" } : agent));
@@ -100,8 +101,8 @@ export function everyStateJobs(now: number): DeskJob[] {
 export const MENTIONS: DeskMention[] = [
   { kind: "session", name: "record-now", id: "agent-record-now" },
   { kind: "session", name: "1a-desk-room", id: "agent-1a" },
-  { kind: "project", name: "hide", id: "hide" },
-  { kind: "project", name: "studio", id: "studio" },
+  { kind: "project", name: "hide", id: "~/projects/hide" },
+  { kind: "project", name: "studio", id: "~/creator/studio" },
 ];
 
 const at = (now: number, minutes: number) => now - minutes * MINUTE;
@@ -109,66 +110,66 @@ const at = (now: number, minutes: number) => now - minutes * MINUTE;
 /** Scene 1-1: a conversation that changed agents and then model. */
 export function switchedItems(now: number): DeskItem[] {
   return [
-    { kind: "user", id: "i1", text: "오늘 끝난 거 정리해줘", at: at(now, 30), mentions: [] },
-    { kind: "reply", id: "i2", text: "세 개 끝났어요: release 노트, 갤러리 비교, reel 자막. 갤러리 비교는 다크 캡처가 남았어요.", at: at(now, 29), state: "done" },
-    { kind: "switch", id: "i3", from: "Claude", to: "Codex", carried: "all" },
-    { kind: "user", id: "i4", text: "그럼 다크 캡처는 이어서 맡겨줘", at: at(now, 20), mentions: [] },
-    { kind: "reply", id: "i5", text: "갤러리 비교 스레드에 다크 모드 캡처를 이어서 하라고 전했어요.", at: at(now, 19), state: "done" },
-    { kind: "model", id: "i6", model: "GPT-6 mini", effort: "medium" },
+    { kind: "user", id: 1, text: "오늘 끝난 거 정리해줘", at_ms: at(now, 30), mentions: [] },
+    { kind: "reply", agent: "claude", id: 2, text: "세 개 끝났어요: release 노트, 갤러리 비교, reel 자막. 갤러리 비교는 다크 캡처가 남았어요.", at_ms: at(now, 29), state: "done" },
+    { kind: "switch", id: 3, from: "claude", to: "codex", carried: "all" },
+    { kind: "user", id: 4, text: "그럼 다크 캡처는 이어서 맡겨줘", at_ms: at(now, 20), mentions: [] },
+    { kind: "reply", agent: "codex", id: 5, text: "갤러리 비교 스레드에 다크 모드 캡처를 이어서 하라고 전했어요.", at_ms: at(now, 19), state: "done" },
+    { kind: "model", id: 6, model: "gpt-mini", effort: "medium" },
   ];
 }
 
 /** Scene 2: a hand-off that started three threads. */
 export function handoffItems(now: number): DeskItem[] {
   return [
-    { kind: "user", id: "h1", text: "@hide mention 버튼 정리, 갤러리 캡처 비교, release 노트 초안 맡겨줘", at: at(now, 15), mentions: [MENTIONS[2]!] },
-    { kind: "reply", id: "h2", text: "스레드 세 개를 띄웠어요. mention 버튼은 PR로 낼 일이라 새 워크트리에서 해요.", at: at(now, 15), state: "done" },
-    { kind: "job", id: "h3", job_id: "mention" },
-    { kind: "job", id: "h4", job_id: "gallery" },
-    { kind: "job", id: "h5", job_id: "release" },
+    { kind: "user", id: 7, text: "@project(~/projects/hide hide) mention 버튼 정리, 갤러리 캡처 비교, release 노트 초안 맡겨줘", at_ms: at(now, 15), mentions: [MENTIONS[2]!] },
+    { kind: "reply", agent: "claude", id: 8, text: "스레드 세 개를 띄웠어요. mention 버튼은 PR로 낼 일이라 새 워크트리에서 해요.", at_ms: at(now, 15), state: "done" },
+    { kind: "job", id: 9, job_id: "mention" },
+    { kind: "job", id: 10, job_id: "gallery" },
+    { kind: "job", id: 11, job_id: "release" },
   ];
 }
 
 /** Scenes 3-1 and 3-2: a task handed to a session already on it. */
 export function mentionItems(now: number): DeskItem[] {
   return [
-    { kind: "user", id: "m1", text: "@record-now 갤러리 숫자 줄인 거 다크에서도 확인해줘", at: at(now, 6), mentions: [MENTIONS[0]!] },
-    { kind: "reply", id: "m2", text: "record-now에 편지로 맡겼어요.", at: at(now, 6), state: "done" },
-    { kind: "handed", id: "m3", agent_id: "agent-record-now", name: "record-now", project: "hide" },
-    { kind: "user", id: "m4", text: "@studio 릴스 썸네일 3안 만들어줘", at: at(now, 2), mentions: [MENTIONS[3]!] },
+    { kind: "user", id: 12, text: "@session(agent-record-now record-now) 갤러리 숫자 줄인 거 다크에서도 확인해줘", at_ms: at(now, 6), mentions: [MENTIONS[0]!] },
+    { kind: "reply", agent: "claude", id: 13, text: "record-now에 편지로 맡겼어요.", at_ms: at(now, 6), state: "done" },
+    { kind: "handed", id: 14, agent_id: "agent-record-now", name: "record-now", project: "hide" },
+    { kind: "user", id: 15, text: "@project(~/creator/studio studio) 릴스 썸네일 3안 만들어줘", at_ms: at(now, 2), mentions: [MENTIONS[3]!] },
   ];
 }
 
 /** Scene 9: the mission hand-off. */
 export function missionItems(now: number): DeskItem[] {
   return [
-    { kind: "user", id: "x1", text: "Desk 1차를 미션으로 돌려줘", at: at(now, 25), mentions: [] },
-    { kind: "reply", id: "x2", text: "Conductor 스레드를 띄워 미션으로 돌려요. 노드 네 개, PR 모드예요.", at: at(now, 25), state: "done" },
-    { kind: "job", id: "x3", job_id: "conductor" },
+    { kind: "user", id: 16, text: "Desk 1차를 미션으로 돌려줘", at_ms: at(now, 25), mentions: [] },
+    { kind: "reply", agent: "claude", id: 17, text: "Conductor 스레드를 띄워 미션으로 돌려요. 노드 네 개, PR 모드예요.", at_ms: at(now, 25), state: "done" },
+    { kind: "job", id: 18, job_id: "conductor" },
   ];
 }
 
 /** The chat's other states (B5-B8, B11, B13-B15): approvals in each answer and every notice. */
 export function stateItems(now: number): DeskItem[] {
   return [
-    { kind: "user", id: "a1", text: "mention 버튼 브랜치 정리하고 테스트 다시 돌려줘", at: at(now, 9), mentions: [] },
-    { kind: "approval", id: "a2", title: "셸 명령", command: "git -C ~/projects/hide/.worktrees/desk-mention-button rebase --abort && bash scripts/verify-web.sh --filter PaneHeader", folder: "~/projects/hide/.worktrees/desk-mention-button", reason: "멈춘 리베이스를 정리해야 테스트를 다시 돌릴 수 있어요", state: "waiting" },
-    { kind: "approval", id: "a3", title: "파일 수정", command: "edit web/src/PaneHeader.tsx", folder: "~/projects/hide", reason: "hover 조건을 고쳐야 해요", state: "allowed" },
-    { kind: "approval", id: "a4", title: "셸 명령", command: "rm -rf web/dist", folder: "~/projects/hide", reason: "빌드 결과를 지우고 새로 만들게요", state: "rejected" },
-    { kind: "approval", id: "a5", title: "셸 명령", command: "pnpm --dir web test", folder: "~/projects/hide", reason: "테스트를 돌려 볼게요", state: "closed" },
-    { kind: "model", id: "a6", model: "Sonnet 5.5", effort: "low" },
-    { kind: "switch", id: "a7", from: "Claude", to: "Codex", carried: "trimmed" },
-    { kind: "switch", id: "a7b", from: "Codex", to: "Claude", carried: "none" },
-    { kind: "notice", id: "n1", notice: "preparing", agent: "Codex", detail: null },
-    { kind: "notice", id: "n2", notice: "install_failed", agent: "Codex", detail: "네트워크에 연결할 수 없어요" },
-    { kind: "notice", id: "n3", notice: "login_needed", agent: "OpenCode", detail: "opencode auth login" },
-    { kind: "notice", id: "n4", notice: "blocked", agent: "Claude", detail: null },
-    { kind: "notice", id: "n5", notice: "host_stopped", agent: "Claude", detail: null },
-    { kind: "notice", id: "n6", notice: "resume_failed", agent: "Claude", detail: null },
-    { kind: "notice", id: "n7", notice: "no_ask_mode", agent: "Pi", detail: null },
-    { kind: "notice", id: "n8", notice: "turn_failed", agent: "Claude", detail: null },
-    { kind: "reply", id: "a8", text: "정리하고 테스트를 다시 돌렸어요. 실패 하나는", at: at(now, 1), state: "stopped" },
-    { kind: "user", id: "a9", text: "지금 돌고 있는 일들 어디까지 왔어요?", at: at(now, 0), mentions: [] },
+    { kind: "user", id: 19, text: "mention 버튼 브랜치 정리하고 테스트 다시 돌려줘", at_ms: at(now, 9), mentions: [] },
+    { kind: "approval", id: 20, card: "command", command: "git -C ~/projects/hide/.worktrees/desk-mention-button rebase --abort && bash scripts/verify-web.sh --filter PaneHeader", folder: "~/projects/hide/.worktrees/desk-mention-button", reason: "멈춘 리베이스를 정리해야 테스트를 다시 돌릴 수 있어요", state: "waiting" },
+    { kind: "approval", id: 21, card: "edit", command: "edit web/src/PaneHeader.tsx", folder: "~/projects/hide", reason: "hover 조건을 고쳐야 해요", state: "allowed" },
+    { kind: "approval", id: 22, card: "command", command: "rm -rf web/dist", folder: "~/projects/hide", reason: "빌드 결과를 지우고 새로 만들게요", state: "rejected" },
+    { kind: "approval", id: 23, card: "command", command: "pnpm --dir web test", folder: "~/projects/hide", reason: "테스트를 돌려 볼게요", state: "closed" },
+    { kind: "model", id: 24, model: "sonnet", effort: "low" },
+    { kind: "switch", id: 25, from: "claude", to: "codex", carried: "trimmed" },
+    { kind: "switch", id: 26, from: "codex", to: "claude", carried: "none" },
+    { kind: "notice", id: 27, notice: "preparing", agent: "codex", detail: null },
+    { kind: "notice", id: 28, notice: "install_failed", agent: "codex", detail: "네트워크에 연결할 수 없어요" },
+    { kind: "notice", id: 29, notice: "login_needed", agent: "codex", detail: "codex login" },
+    { kind: "notice", id: 30, notice: "blocked", agent: "claude", detail: null },
+    { kind: "notice", id: 31, notice: "host_stopped", agent: "claude", detail: null },
+    { kind: "notice", id: 32, notice: "resume_failed", agent: "claude", detail: null },
+    { kind: "notice", id: 33, notice: "no_ask_mode", agent: "pi", detail: null },
+    { kind: "notice", id: 34, notice: "turn_failed", agent: "claude", detail: null },
+    { kind: "reply", agent: "claude", id: 35, text: "정리하고 테스트를 다시 돌렸어요. 실패 하나는", at_ms: at(now, 1), state: "stopped" },
+    { kind: "user", id: 36, text: "지금 돌고 있는 일들 어디까지 왔어요?", at_ms: at(now, 0), mentions: [] },
   ];
 }
 
