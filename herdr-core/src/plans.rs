@@ -1152,7 +1152,10 @@ pub fn next_action(code: &str) -> &'static str {
             "A plan holds at most 64 steps; merge steps and run hide plan set again"
         }
         "plan_node_unknown" => {
-            "Run hide plan show for the plan's keys, then run hide plan node <key> again"
+            "Run hide plan show for the plan's keys, then run the command again with one of them"
+        }
+        "plan_node_finished" => {
+            "That step is already done or dropped; hand an unfinished step, or set this one back with hide plan node <key> --status planned first"
         }
         "plan_missing" => {
             "This session has no plan; put one up with hide plan set --file <plan.json>"
@@ -1176,7 +1179,7 @@ pub fn next_action(code: &str) -> &'static str {
             "A step whose output is pr ends with its pull request and one whose output is file with its file: run hide plan node <key> --status done --pr <number> (or --file <path>)"
         }
         "plan_pr_not_yours" => {
-            "That pull request was not made from this session's branch or a branch of a child it handed a step to; name the pull request this step made"
+            "That pull request was not made from a branch of this session's checkout or of a child it handed a step to; name the pull request this step made"
         }
         "plan_pr_unconfirmed" => {
             "Hide could not ask GitHub about the pull request just now; go on with the work and run the same command again in a minute"
