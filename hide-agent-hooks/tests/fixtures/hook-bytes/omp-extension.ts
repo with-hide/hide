@@ -1,4 +1,4 @@
-// hide-extension@11 sha256=bc3a102c7d5030b727a80efee9f7bf940ce2088b1433b4c388e1194a6fd69c6a
+// hide-extension@12 sha256=ac353bbbf5dadfd8333fade005ee1cf9bdb5d8b359a887c5408f628a8800c273
 // Hide's extension for Pi and omp, written by Hide's install kit (hide-agent-hooks).
 // An edit is kept and shown as edited in Settings; Reinstall puts Hide's back.
 // Outside a Herdr pane, in an agent started from another Pi's or omp's shell, or when its helper is gone, it does
@@ -14,7 +14,7 @@ import path from "node:path";
 const HELPER = "/kit path/it's/hide-agent-hooks";
 const ROUTE = [];
 const AGENT = "omp";
-const VERSION = 11;
+const VERSION = 12;
 
 // The prompt budget is Claude Code's prompt hook's; the tool budget is the spawn guard's. Both hosts wait for
 // a handler far longer (omp gives up at 30 s and then blocks the tool), so these are the limits.
@@ -306,7 +306,7 @@ function publishCounts(state, force) {
   }
   const key = `${working}/${done}`;
   if (!force && key === state.published) return state.counting ?? Promise.resolve();
-  // Only a report Herdr took counts as published: a failed one is sent again with the next change, prompt or rest.
+  // Only a report the core took counts as published: a failed one is sent again with the next change, prompt or rest.
   state.published = key;
   state.nextCount = { working, done, key };
   state.counting ??= (async () => {
@@ -322,6 +322,37 @@ function publishCounts(state, force) {
     }
   })();
   return state.counting;
+}
+
+/**
+ * Sends the pane's own session's turn when it moved: working, done, or idle after an abort (PRD engine-bundle-1
+ * D-10). It carries the pane's counts. One report runs at a time and only the newest waiting one follows it.
+ */
+function publishTurn(state, ctx, turn) {
+  const session = sessionFile(ctx);
+  if (!session || (turn === state.turn && session === state.turnSession)) return;
+  state.turn = turn;
+  state.turnSession = session;
+  state.nextTurn = { session, turn };
+  state.turning ??= (async () => {
+    try {
+      while (state.nextTurn) {
+        const next = state.nextTurn;
+        state.nextTurn = null;
+        const answer = await helper(state, "turn", { session_id: next.session, turn: next.turn }, COUNT_BUDGET_MS);
+        // A turn the core did not take is sent again with the next event that names it.
+        if (answer?.reported !== true && state.turn === next.turn) state.turn = null;
+      }
+    } finally {
+      state.turning = null;
+    }
+  })();
+}
+
+/** Whether the run `agent_end` closes was aborted: the host ends it with an assistant message that says so. */
+function aborted(event) {
+  const messages = Array.isArray(event?.messages) ? event.messages : [];
+  return messages.at(-1)?.stopReason === "aborted";
 }
 
 /** One subagent's line: a spawn the parent dispatched, then its own session's turns. */
@@ -621,6 +652,10 @@ export default function hide(pi) {
     published: null,
     counting: null,
     nextCount: null,
+    turn: null,
+    turnSession: null,
+    nextTurn: null,
+    turning: null,
   };
   const on = (name, handler) => {
     try {
@@ -645,8 +680,9 @@ export default function hide(pi) {
   });
   on("agent_start", (_event, ctx) => {
     if (subagent(ctx)) setChild(ctx.agent.id, true);
+    else if (root(ctx)) publishTurn(state, ctx, "working");
   });
-  on("agent_end", (_event, ctx) => {
+  on("agent_end", (event, ctx) => {
     if (subagent(ctx)) {
       setChild(ctx.agent.id, false);
       return;
@@ -654,8 +690,15 @@ export default function hide(pi) {
     if (!root(ctx)) return;
     // A turn whose reply never came leaves its letters pending in Hide for the next prompt.
     state.written = [];
-    // Each turn's end reports again, as Claude Code's Stop does, so a Herdr that lost the pane's counts gets them back.
+    // An aborted run rests without being announced as finished. Pi may still retry, compact or take a queued
+    // message after `agent_end`, so its turn ends at `agent_settled`; omp has no such event and ends it here.
+    if (aborted(event)) publishTurn(state, ctx, "idle");
+    else if (AGENT === "omp") publishTurn(state, ctx, "done");
+    // Each turn's end reports the counts again, as Claude Code's Stop does.
     if (AGENT === "omp") void publishCounts(state, true);
+  });
+  on("agent_settled", (_event, ctx) => {
+    if (root(ctx) && state.turn === "working") publishTurn(state, ctx, "done");
   });
   on("before_subagent_spawn", (event, ctx) => {
     if (!root(ctx)) return undefined;

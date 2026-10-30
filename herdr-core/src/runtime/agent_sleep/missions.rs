@@ -257,7 +257,7 @@ impl Runtime {
             .find(|agent| &agent.pane_id == pane)
         else {
             // A machine that does not answer now may still list it later.
-            if device.is_some_and(|device| self.remote_herdr_api(device).is_none()) {
+            if device.is_some_and(|device| self.device_engine(device).is_none()) {
                 return Verdict::Keep;
             }
             return Verdict::Drop("pane_gone");
@@ -265,7 +265,7 @@ impl Runtime {
         if agent
             .session_id
             .as_deref()
-            .and_then(crate::wire::session_digest)
+            .and_then(crate::engine::tokens::session_digest)
             != actor.session
         {
             return Verdict::Drop("another_session");

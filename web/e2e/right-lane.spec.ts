@@ -105,7 +105,7 @@ test("an opened file comes up over Agent Views without resizing a terminal, stay
   const lane = await startLane(page, "lane-overlay");
   try {
     await expect(screen(page)).toHaveAttribute("data-lane-mode", "closed");
-    await expect(page.locator("[data-lane-tool]")).toHaveCount(5);
+    await expect(page.locator("[data-lane-tool]")).toHaveCount(6);
     await expect(railTool(page, "documents")).toBeDisabled();
     await expect(pane(page, lane.herdr.panes[0]!)).toBeVisible();
     await quietFor(page, 500, "the first fit has landed before the lane opens");
@@ -211,7 +211,7 @@ test("the rail draws the viewing column's buttons over a rule and one divider be
   try {
     // The documents' button, a rule, then one short rule where the Project's tools end and the checkout's begin.
     const rail = await page.locator("[data-tool-rail] > [data-lane-tool], [data-tool-rail] > [data-tool-rail-divider]").evaluateAll((nodes) => nodes.map((node) => node.getAttribute("data-lane-tool") ?? `divider:${node.getAttribute("data-tool-rail-divider")}`));
-    expect(rail).toEqual(["documents", "divider:view", "project", "memory", "divider:true", "explorer", "changes"]);
+    expect(rail).toEqual(["documents", "divider:view", "project", "memory", "mission", "divider:true", "explorer", "changes"]);
     // The Project tool's head names the project and where it is, with ⚙ and × (PRD lane-two-columns B26).
     await showTool(page, "project");
     const projectHeader = page.locator('aside[data-lane="project"] [data-lane-header]');

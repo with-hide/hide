@@ -8,7 +8,9 @@
 // in the page they would cover and lock every other cell.
 
 import { ArrowRightIcon, CopyIcon, FolderIcon, Loader2Icon, PlusIcon, SettingsIcon, TrashIcon } from "lucide-react";
-import { useEffect, useRef, useState, type ReactNode } from "react";
+import { Fragment, useEffect, useRef, useState, type ReactNode } from "react";
+import { DESK_SCENES } from "./DeskScene";
+import { DESK_THREAD_SCENES } from "./DeskThreadScene";
 import { toast } from "sonner";
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "../components/ui/alert-dialog";
 import { Badge } from "../components/ui/badge";
@@ -749,6 +751,12 @@ export function Gallery() {
           <a href="#scenes" className="block rounded-xs px-sm py-xxs text-subtle-foreground hover:bg-accent hover:text-foreground">
             Scenes
           </a>
+          <a href="#shared-parts" className="block rounded-xs px-sm py-xxs text-subtle-foreground hover:bg-accent hover:text-foreground">
+            Shared parts
+          </a>
+          <a href="#desk" className="block rounded-xs px-sm py-xxs text-subtle-foreground hover:bg-accent hover:text-foreground">
+            Desk
+          </a>
           {sections.map((section) => (
             <a key={section} href={`#${encodeURIComponent(section)}`} className="block rounded-xs px-sm py-xxs text-subtle-foreground hover:bg-accent hover:text-foreground">
               {section}
@@ -757,6 +765,8 @@ export function Gallery() {
         </nav>
         <main className="min-w-0 flex-1 overflow-auto p-xl">
           <Scenes />
+          <SharedParts />
+          <Desk />
           {sections.map((section) => (
             <section key={section} id={encodeURIComponent(section)} data-gallery-section={section} className="mb-xxxl">
               <h2 className="mb-sm text-headline font-semibold">{section}</h2>
@@ -812,6 +822,61 @@ function Scenes() {
         <div className="bg-card px-md py-xs text-caption text-muted-foreground">Dark</div>
         {SCENE_CASES.map(({ label, query }) => (
           <SceneRow key={label} label={label} query={query} />
+        ))}
+      </div>
+    </section>
+  );
+}
+
+/**
+ * The parts the sidebar, the session record and Desk draw alike (PRD
+ * session-docs-and-assistant D-72), in their states, in both themes.
+ */
+function SharedParts() {
+  return (
+    <section id="shared-parts" data-gallery-section="Shared parts" className="mb-xxxl">
+      <h2 className="mb-sm text-headline font-semibold">Shared parts</h2>
+      <div className="grid grid-cols-2 overflow-hidden rounded-md border border-border">
+        {(["light", "dark"] as const).map((theme) => (
+          <iframe key={theme} loading="lazy" title={`Shared parts ${theme}`} src={`/gallery?scene=shared-parts&theme=${theme}`} className="h-(--size-gallery-scene-h) w-full border-0" />
+        ))}
+      </div>
+    </section>
+  );
+}
+
+/**
+ * Desk 1차 for review before it is wired (PRD session-docs-and-assistant):
+ * every scene of the approved mockup and the states it leaves out, from the
+ * real Desk parts over invented values, in both themes.
+ */
+function Desk() {
+  return (
+    <section id="desk" data-gallery-section="Desk" className="mb-xxxl">
+      <h2 className="mb-sm text-headline font-semibold">Desk</h2>
+      <div className="grid grid-cols-[var(--size-sidebar-min)_minmax(0,1fr)_minmax(0,1fr)] overflow-hidden rounded-md border border-border">
+        <div className="bg-card px-md py-xs text-caption text-muted-foreground">Scene</div>
+        <div className="bg-card px-md py-xs text-caption text-muted-foreground">Light</div>
+        <div className="bg-card px-md py-xs text-caption text-muted-foreground">Dark</div>
+        {DESK_SCENES.map(({ state, label }) => (
+          <Fragment key={state}>
+            <div className="border-t border-border px-md py-sm text-caption text-subtle-foreground">{label}</div>
+            {(["light", "dark"] as const).map((theme) => (
+              <div key={theme} className="border-t border-border">
+                <iframe loading="lazy" title={`${label} ${theme}`} src={`/gallery?scene=desk&state=${state}&theme=${theme}`} className="h-(--size-gallery-scene-h) w-full border-0" />
+              </div>
+            ))}
+          </Fragment>
+        ))}
+        {DESK_THREAD_SCENES.map(({ state, label }) => (
+          <Fragment key={`thread-${state}`}>
+            <div className="border-t border-border px-md py-sm text-caption text-subtle-foreground">{label}</div>
+            {(["light", "dark"] as const).map((theme) => (
+              <div key={theme} className="border-t border-border">
+                <iframe loading="lazy" title={`${label} ${theme}`} src={`/gallery?scene=desk-thread&state=${state}&theme=${theme}`} className="h-(--size-gallery-scene-h) w-full border-0" />
+              </div>
+            ))}
+          </Fragment>
         ))}
       </div>
     </section>

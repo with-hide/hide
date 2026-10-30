@@ -2,12 +2,13 @@ import { CheckIcon, ChevronRightIcon, ListChecksIcon } from "lucide-react";
 import { useEffect, useMemo, useRef, useState, type MouseEvent } from "react";
 import type { Actions } from "./actions";
 import { ProgressCells } from "./components/mission-tone";
+import type { CellTone } from "./missions";
 import { Popover, PopoverAnchor, PopoverContent } from "./components/ui/popover";
 import { useInterfaceTranslation } from "./i18n/client";
 import { cn } from "./lib/utils";
 import { paneChildren } from "./paneChildren";
 import { usePaneAgents } from "./PaneHeaderBand";
-import { PlanChecklist } from "./PlanChecklist";
+import { PlanChecklist } from "./components/plan-checklist";
 import { PlanSummaryLine } from "./PlanMap";
 import { handedPanes, planCells, planCount, planOfPane, planProposed, stepOf } from "./plans";
 import type { PlanView } from "./snapshot";
@@ -43,7 +44,6 @@ export function PanePlanChip({ paneId, actions }: { paneId: string; actions: Act
       : current
         ? t("plan.chipNow", { progress: planCount(plan), step: current.title })
         : t("plan.chip", { progress: planCount(plan) });
-  const Mark = finished ? CheckIcon : ListChecksIcon;
   return (
     <Popover {...chip.popover}>
       <PopoverAnchor asChild>
@@ -52,16 +52,9 @@ export function PanePlanChip({ paneId, actions }: { paneId: string; actions: Act
           aria-label={label}
           data-pane-plan-chip={paneId}
           data-plan-chip-state={proposed ? "review" : finished ? "finished" : "running"}
-          className={cn(
-            "flex h-(--size-sidebar-line-detail) shrink-0 items-center gap-xxs rounded-xs border border-border bg-background px-xs text-micro text-muted-foreground outline-none hover:bg-popover hover:text-foreground focus-visible:ring-1 focus-visible:ring-ring data-[state=open]:border-ring data-[state=open]:text-foreground",
-            proposed && "border-mission-hold text-mission-hold data-[state=open]:border-mission-hold data-[state=open]:text-mission-hold",
-            finished && "text-mission-done data-[state=open]:text-mission-done",
-          )}
+          className={cn(planChipLook(proposed, finished), "outline-none hover:bg-popover hover:text-foreground focus-visible:ring-1 focus-visible:ring-ring data-[state=open]:border-ring data-[state=open]:text-foreground", proposed && "data-[state=open]:border-mission-hold data-[state=open]:text-mission-hold", finished && "data-[state=open]:text-mission-done")}
         >
-          <Mark aria-hidden="true" className="size-(--size-icon-sm) shrink-0" />
-          <span className="whitespace-nowrap">{proposed ? t("plan.review") : t("plan.title")}</span>
-          <ProgressCells tones={planCells(plan)} size="chip" />
-          {proposed ? null : <span className="font-mono tabular-nums">{planCount(plan)}</span>}
+          <PlanChipFace tones={planCells(plan)} count={planCount(plan)} proposed={proposed} finished={finished} />
         </button>
       </PopoverAnchor>
       <PopoverContent
@@ -102,6 +95,34 @@ export function PanePlanChip({ paneId, actions }: { paneId: string; actions: Act
         </div>
       </PopoverContent>
     </Popover>
+  );
+}
+
+/** The plan chip's box, in its review or finished colour. */
+export function planChipLook(proposed: boolean, finished: boolean): string {
+  return cn(
+    "flex h-(--size-sidebar-line-detail) shrink-0 items-center gap-xxs rounded-xs border border-border bg-background px-xs text-micro text-muted-foreground",
+    proposed && "border-mission-hold text-mission-hold",
+    finished && "text-mission-done",
+  );
+}
+
+/**
+ * What the plan chip shows (PRD hide-plan B7): its mark, `계획` or `검토`, a
+ * cell per step and `n/m`. The pane head wraps it in its press; Desk's card
+ * and thread head draw it from a job's own plan (PRD
+ * session-docs-and-assistant B24, B25).
+ */
+export function PlanChipFace({ tones, count, proposed, finished }: { tones: readonly CellTone[]; count: string; proposed: boolean; finished: boolean }) {
+  const { t } = useInterfaceTranslation();
+  const Mark = finished ? CheckIcon : ListChecksIcon;
+  return (
+    <>
+      <Mark aria-hidden="true" className="size-(--size-icon-sm) shrink-0" />
+      <span className="whitespace-nowrap">{proposed ? t("plan.review") : t("plan.title")}</span>
+      <ProgressCells tones={tones} size="chip" />
+      {proposed ? null : <span className="font-mono tabular-nums">{count}</span>}
+    </>
   );
 }
 

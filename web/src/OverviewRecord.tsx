@@ -69,7 +69,7 @@ export function TaskRecordPanel({ panel, rows, actions }: { panel: Extract<Overv
           </Button>
         ) : (
           <>
-            <Button size="sm" onClick={() => { actions.closeOverview(); actions.openAgent(agent.pane_id); }} data-record-open-workspace="true">{t("record.openWorkspace")}</Button>
+            <Button variant="secondary" size="sm" onClick={() => { actions.closeOverview(); actions.openAgent(agent.pane_id); }} data-record-open-workspace="true">{t("record.openWorkspace")}</Button>
             <Button size="sm" variant="outline" onClick={() => actions.viewRecordInLane(project.device_id, project.id, checkout.id, session)} data-record-in-lane="true">{t("record.viewInLane")}</Button>
           </>
         )

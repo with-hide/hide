@@ -150,7 +150,7 @@ function ConnectionPopover({
         ) : null}
         <div className="flex items-center gap-sm">
           {offersReopen(connection) && copy.reopen ? (
-            <Button size="sm" aria-busy={pending} disabled={pending} data-pane-reopen={paneId} onClick={() => once(() => actions.reopenPane(paneId))}>
+            <Button variant="secondary" size="sm" aria-busy={pending} disabled={pending} data-pane-reopen={paneId} onClick={() => once(() => actions.reopenPane(paneId))}>
               {pending ? t("panes.connection.reopening") : t(copy.reopen)}
             </Button>
           ) : null}

@@ -27,7 +27,7 @@ fn setup() -> (Runtime, FakeHerdr, u64) {
         socket_path: herdr.socket_path().to_path_buf(),
         runtime: Weak::new(),
         notifier: ChangeNotifier::noop(),
-        api_connector: Arc::new(herdr.connector()),
+        engine: herdr.engine(),
         node: Arc::new(hide_node::Local::of_process()),
     });
     runtime.ingest_session(Ok(session(true)));
@@ -375,7 +375,7 @@ fn remote_setup() -> (Runtime, FakeHerdr, u64, String, String) {
     });
     runtime.install_remote_control(RemoteControlContext::new(
         DEVICE,
-        Arc::new(herdr.connector()),
+        herdr.engine(),
         Weak::new(),
         ChangeNotifier::noop(),
     ));

@@ -167,7 +167,7 @@ fn machine_identity_resolves_lineage_in_both_directions_and_restores_after_recon
 /// remote child its local parent for `s-local-parent`; each pane runs the
 /// session the relationship was written for.
 fn attest_cross_machine_sessions(runtime: &mut Runtime) {
-    let digest = |session: &str| crate::wire::session_digest(session);
+    let digest = |session: &str| crate::engine::tokens::session_digest(session);
     for agent in &mut runtime.snapshot.navigator.agents {
         match agent.pane_id.as_str() {
             "local-parent" => agent.lineage_session = digest("s-local-parent"),
@@ -223,7 +223,7 @@ fn a_parent_pane_on_another_machine_reused_by_another_agent_adopts_no_local_chil
         .agents
     {
         if agent.pane_id == "remote:mini:pane:remote-parent" {
-            agent.lineage_session = crate::wire::session_digest("s-another-agent");
+            agent.lineage_session = crate::engine::tokens::session_digest("s-another-agent");
         }
     }
     runtime.refresh_agent_lineage();
@@ -1042,8 +1042,9 @@ fn a_strip_entry_carries_its_one_agents_identity_and_mark() {
 
 #[test]
 fn moving_a_delegated_child_asks_for_a_new_tab_in_the_workspace_it_is_already_in() {
-    let params = crate::wire::pane_move_to_new_tab_params("w1:p2", "w1", "Implementor")
-        .expect("params encode");
+    let params =
+        crate::engine::herdr::wire::pane_move_to_new_tab_params("w1:p2", "w1", "Implementor")
+            .expect("params encode");
     assert_eq!(
         params,
         serde_json::json!({
@@ -1060,22 +1061,36 @@ fn a_move_herdr_declined_is_an_error_rather_than_a_silent_success() {
     // Herdr reports a refusal as an unchanged move with a reason, not as an
     // error, so the decision has to read `changed` rather than assume that a
     // successful request moved anything.
-    let refused = crate::wire::move_outcome(false, Some("SameTab".to_owned()), None)
+    let moved = |changed: bool, reason: Option<&str>, created: Option<&str>| {
+        crate::engine::PaneJoinResult {
+            changed,
+            reason: reason.map(str::to_owned),
+            workspace_id: "w1".into(),
+            tab_id: "w1:t2".into(),
+            pane_id: "w1:p1".into(),
+            terminal_id: "term_1".into(),
+            previous_workspace_id: "w1".into(),
+            previous_tab_id: "w1:t1".into(),
+            previous_pane_id: "w1:p1".into(),
+            closed_tab_id: None,
+            closed_workspace_id: None,
+            created_tab_id: created.map(str::to_owned),
+        }
+    };
+    let refused = moved(false, Some("same_tab"), None)
+        .created_tab()
         .expect_err("a refusal is not a move");
     assert!(
-        refused.contains("declined") && refused.contains("SameTab"),
+        refused.contains("declined") && refused.contains("same_tab"),
         "got {refused}"
     );
     assert!(
-        crate::wire::move_outcome(false, None, Some("t2".to_owned())).is_err(),
+        moved(false, None, Some("t2")).created_tab().is_err(),
         "an unchanged move is a refusal even when a tab id came back"
     );
-    assert_eq!(
-        crate::wire::move_outcome(true, None, Some("t2".to_owned())).unwrap(),
-        "t2"
-    );
+    assert_eq!(moved(true, None, Some("t2")).created_tab().unwrap(), "t2");
     assert!(
-        crate::wire::move_outcome(true, None, None).is_err(),
+        moved(true, None, None).created_tab().is_err(),
         "a move with no tab to show for it is not a success"
     );
 }
@@ -1824,6 +1839,13 @@ fn a_pane_whose_session_ended_draws_no_counts_even_though_its_tokens_remain() {
 #[test]
 fn the_settings_diagnosis_reports_each_runtime_and_the_sessions_that_predate_the_install() {
     let mut runtime = runtime();
+    super::agent_connection::hook_reported(
+        &mut runtime,
+        "w1:p1",
+        "claude",
+        "instrumented-session",
+        Some((0, 2)),
+    );
     runtime.ingest_session(Ok(crate::sidebar::owned_label_fixture(serde_json::json!({
         "agents": [
             {"id":"instrumented-control","pane_id":"w1:p1","agent":"claude","agent_status":"working",
@@ -1834,7 +1856,7 @@ fn the_settings_diagnosis_reports_each_runtime_and_the_sessions_that_predate_the
              "state_change_seq":2,"cwd":"/fixture","workspace_label":"Fixture","tokens":{"task":"Restore hook visibility"}}
         ],
         "panes": [
-            {"pane_id":"w1:p1","cwd":"/fixture","tokens":{"hide_hooks":hide_agent_hooks::HOOK_VERSION.to_string(),"hide_sub_done":"2"}},
+            {"pane_id":"w1:p1","cwd":"/fixture"},
             {"pane_id":"w1:p2","cwd":"/fixture"}
         ],
         "tabs": [{"workspace_id":"w1","tab_id":"t1","label":""}],
@@ -1935,9 +1957,9 @@ fn the_settings_diagnosis_reports_each_runtime_and_the_sessions_that_predate_the
         .expect("diagnosis was ingested");
     refused.last_report_failure = Some(hide_agent_hooks::report::ReportFailure {
         pane_id: "w1:p2".to_owned(),
+        agent: "claude".to_owned(),
         event: "SessionStart".to_owned(),
-        socket_path: "/fixture/herdr.sock".to_owned(),
-        error: "invalid_metadata_source: metadata source may contain only ASCII letters".to_owned(),
+        error: "unavailable".to_owned(),
         at_unix_ms: 1,
     });
     assert!(runtime.ingest_hook_diagnosis(refused));
@@ -1949,9 +1971,7 @@ fn the_settings_diagnosis_reports_each_runtime_and_the_sessions_that_predate_the
         .clone()
         .expect("the refusal reaches the snapshot");
     assert!(
-        message.contains("/fixture/herdr.sock")
-            && message.contains("w1:p2")
-            && message.contains("invalid_metadata_source"),
+        message.contains("w1:p2") && message.contains("unavailable"),
         "got {message:?}"
     );
 }
@@ -2196,6 +2216,20 @@ fn the_overview_agent_line_separates_nobody_working_here_from_cannot_see() {
 #[test]
 fn a_delegation_session_projects_every_state_the_operator_has_to_tell_apart() {
     let mut runtime = runtime();
+    for (pane, counts) in [
+        ("w1:p1", Some((2, 4))),
+        ("w1:p2", None),
+        ("w1:p3", None),
+        ("w1:p5", Some((0, 0))),
+    ] {
+        super::agent_connection::hook_reported(
+            &mut runtime,
+            pane,
+            "claude",
+            &format!("session-{pane}"),
+            counts,
+        );
+    }
     runtime.ingest_session(Ok(crate::sidebar::owned_label_fixture(serde_json::json!({
         "agents": [
             {"id":"Observer","pane_id":"w1:p1","agent":"claude","agent_status":"working",
@@ -2218,12 +2252,11 @@ fn a_delegation_session_projects_every_state_the_operator_has_to_tell_apart() {
              "tokens":{"task":"Verify solo agent state","progress":"working with no children"}}
         ],
         "panes": [
-            {"pane_id":"w1:p1","cwd":"/fixture",
-             "tokens":{"hide_hooks":hide_agent_hooks::HOOK_VERSION.to_string(),"hide_sub_working":"2","hide_sub_done":"4"}},
-            {"pane_id":"w1:p2","cwd":"/fixture","tokens":{"hide_hooks":hide_agent_hooks::HOOK_VERSION.to_string()}},
-            {"pane_id":"w1:p3","cwd":"/fixture","tokens":{"hide_hooks":hide_agent_hooks::HOOK_VERSION.to_string()}},
+            {"pane_id":"w1:p1","cwd":"/fixture"},
+            {"pane_id":"w1:p2","cwd":"/fixture"},
+            {"pane_id":"w1:p3","cwd":"/fixture"},
             {"pane_id":"w1:p4","cwd":"/fixture"},
-            {"pane_id":"w1:p5","cwd":"/fixture","tokens":{"hide_hooks":hide_agent_hooks::HOOK_VERSION.to_string(),"hide_sub_working":"0","hide_sub_done":"0"}},
+            {"pane_id":"w1:p5","cwd":"/fixture"},
             {"pane_id":"w1:p6","cwd":"/fixture"}
         ],
         "tabs": [
@@ -2777,7 +2810,7 @@ fn a_quiet_row_waits_on_children_then_a_proven_device_then_a_reply() {
     );
 
     // An agent that took the peer's pane over is not who was asked.
-    rows[peer].lineage_session = crate::wire::session_digest("another-agent");
+    rows[peer].lineage_session = crate::engine::tokens::session_digest("another-agent");
     crate::agent_state::apply_lineage(&mut rows, &[], &[]);
     assert_eq!(wait_of(&rows, "child"), None);
 }
@@ -2884,7 +2917,7 @@ fn rows_and_checkouts_hide_started_are_marked_from_the_ledger_alone() {
     // An agent that took the pane later holds another session: no mark.
     for agent in &mut runtime.snapshot.navigator.agents {
         if agent.pane_id == "local-child" {
-            agent.lineage_session = crate::wire::session_digest("s-another-agent");
+            agent.lineage_session = crate::engine::tokens::session_digest("s-another-agent");
         }
     }
     runtime.refresh_agent_lineage();

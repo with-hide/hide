@@ -130,11 +130,11 @@ fn install(runtime: &Arc<Mutex<Runtime>>, context: &SessionSyncContext) {
     let mut guard = runtime.lock().unwrap();
     guard.install_remote_control(live::RemoteControlContext::new(
         DEVICE,
-        Arc::clone(&context.api_connector),
+        Arc::clone(&context.engine),
         Arc::downgrade(runtime),
         ChangeNotifier::noop(),
     ));
-    coordinator_bootstrap(&mut guard, DEVICE, &context.api_connector);
+    coordinator_bootstrap(&mut guard, DEVICE, &context.engine);
 }
 
 impl Fixture {
@@ -174,7 +174,7 @@ impl Fixture {
             name: "observer".into(),
             kind: "codex".into(),
             device_id: crate::node::TEST_NODE.into(),
-            session: wire::session_digest("observer-native"),
+            session: crate::engine::tokens::session_digest("observer-native"),
         };
         let local: SessionSnapshotPayload = serde_json::from_value(json!({"agents": [{
             "id": "observer", "pane_id": "observer", "agent": "codex",
@@ -245,7 +245,7 @@ impl Fixture {
         SessionSyncContext::remote(
             DEVICE,
             DEVICE,
-            Arc::new(self.herdr.connector()),
+            self.herdr.engine(),
             Arc::downgrade(&self.runtime),
             ChangeNotifier::noop(),
         )
@@ -265,13 +265,7 @@ impl Fixture {
 
     fn start_current(&self, context: &SessionSyncContext) {
         install(&self.runtime, context);
-        assert!(
-            self.runtime
-                .lock()
-                .unwrap()
-                .remote_herdr_api(DEVICE)
-                .is_none()
-        );
+        assert!(self.runtime.lock().unwrap().device_engine(DEVICE).is_none());
         assert!(
             begin_delivery_pane_read(context),
             "current not_connected owner admitted"
@@ -310,7 +304,7 @@ impl Fixture {
             json!({"target_id": DEVICE}),
         );
         let new = self.context();
-        assert!(!Arc::ptr_eq(&old.api_connector, &new.api_connector));
+        assert!(!Arc::ptr_eq(&old.engine, &new.engine));
         self.start_current(&new);
         new
     }
@@ -377,7 +371,7 @@ fn remote_actor(pane: &str) -> Actor {
         name: pane.into(),
         kind: "codex".into(),
         device_id: DEVICE.into(),
-        session: wire::session_digest(&format!("{pane}-native")),
+        session: crate::engine::tokens::session_digest(&format!("{pane}-native")),
     }
 }
 
@@ -545,7 +539,7 @@ fn replacement_between_publication_locks_preserves_the_new_coordinators_session(
     let old = test.context();
     test.start_current(&old);
     let current = test.context();
-    assert!(!Arc::ptr_eq(&old.api_connector, &current.api_connector));
+    assert!(!Arc::ptr_eq(&old.engine, &current.engine));
     let runtime = Arc::clone(&test.runtime);
     let mut replacement = test.replica(&[MANUAL, CHILD]);
     let expected = Arc::new(Mutex::new(None));

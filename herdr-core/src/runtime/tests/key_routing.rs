@@ -56,7 +56,7 @@ fn runtime_on(herdr: &FakeHerdr) -> (Runtime, Arc<RecordedTerminals>) {
         socket_path: herdr.socket_path().to_path_buf(),
         runtime: std::sync::Weak::new(),
         notifier: crate::handle::ChangeNotifier::noop(),
-        api_connector: Arc::new(herdr.connector()),
+        engine: herdr.engine(),
         node: Arc::new(hide_node::Local::of_process()),
     });
     runtime.ingest_session(Ok(tab_order_payload(

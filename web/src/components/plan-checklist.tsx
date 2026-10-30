@@ -1,14 +1,14 @@
 import { CheckIcon, HistoryIcon } from "lucide-react";
 import { useLayoutEffect, useMemo, useRef } from "react";
-import { AgentMark } from "./AgentMark";
-import { StatusMark } from "./components/status-mark";
-import { Button } from "./components/ui/button";
-import { Hint } from "./components/ui/tooltip";
-import { useInterfaceTranslation } from "./i18n/client";
-import { cn } from "./lib/utils";
-import { childNow, childPlanOf, evidenceWords, planChecklist, stepDelegationWord, type StepMarkWord } from "./plans";
-import type { PlanDelegation, PlanStep, PlanView } from "./snapshot";
-import { useShellStore } from "./store";
+import { AgentMark } from "../AgentMark";
+import { StatusMark } from "./status-mark";
+import { Button } from "./ui/button";
+import { Hint } from "./ui/tooltip";
+import { useInterfaceTranslation } from "../i18n/client";
+import { cn } from "../lib/utils";
+import { childNow, childPlanOf, evidenceWords, planChecklist, stepDelegationWord, type StepMarkWord } from "../plans";
+import type { PlanDelegation, PlanStep, PlanView } from "../snapshot";
+import { useShellStore } from "../store";
 
 // A plan read as a list (PRD mission-plan-visibility D-07, B3-B5): the pane
 // chip's popover, a mission node's folded plan, the session record and a
@@ -18,7 +18,8 @@ import { useShellStore } from "./store";
 // hide-plan-delegate B30). A done step's tail is what it left, a handed step
 // names its child and the child's current step, and the child's name goes to
 // its pane where `openPane` is given (B26, B28). The map is drawn only in the
-// 보기 slot.
+// 보기 slot. Every screen that lists a plan's steps draws this one list (PRD
+// session-docs-and-assistant D-72).
 
 export function PlanChecklist({ plan, popover = false, openPane }: { plan: PlanView; popover?: boolean; openPane?: (paneId: string) => void }) {
   const { t } = useInterfaceTranslation();

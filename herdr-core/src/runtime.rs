@@ -9,6 +9,7 @@ mod agent_catalog;
 pub(crate) mod agent_choice;
 mod agent_close;
 mod agent_groups;
+mod agent_hook_status;
 mod agent_sleep;
 mod agents;
 mod attachments;
@@ -60,6 +61,7 @@ mod op_timing;
 mod operations;
 pub(crate) mod output_language;
 mod overview_graph;
+mod pane_command;
 pub(crate) mod pane_move;
 mod pane_move_preview;
 mod pane_prediction;
@@ -78,6 +80,7 @@ mod request_view;
 mod session;
 mod session_archive;
 mod session_state;
+mod session_thread;
 mod snapshot_delta;
 mod ssh_hosts;
 mod suggestion_apply;
@@ -1586,6 +1589,8 @@ pub struct Runtime {
     archive_detail_load_generation: u64,
     /// What the link worker was last handed, and its panel reads.
     links_work: links::LinksWork,
+    /// The one session thread a screen has open (`runtime/session_thread.rs`).
+    session_thread: session_thread::ThreadWork,
     backlog_work: backlog::BacklogWork,
     issue_detail_work: issues::IssueDetailWork,
     /// The minute the PRs tool's list was last judged against the clock
@@ -1708,6 +1713,12 @@ pub struct Runtime {
     /// The last labels the local session-sync coordinator published, laid on
     /// every local projection this runtime ingests, whichever path brings it.
     label_overlay: crate::labels::overlay::LabelOverlay,
+    /// What each pane's agent hook last reported (`agent_hooks::facts`),
+    /// shared with the device coordinators that lay it on their sessions.
+    hook_facts: crate::agent_hooks::facts::SharedHookFacts,
+    /// The hook tokens the last local session laid, by pane, until the next
+    /// session replaces them.
+    local_hook_tokens: BTreeMap<String, crate::agent_hooks::PaneHookTokens>,
     /// The label store and analyzer every session-sync coordinator's worker
     /// shares; `None` when the core was made without them (tests).
     label_services: Option<std::sync::Arc<crate::labels::LabelServices>>,
@@ -1722,7 +1733,7 @@ pub struct Runtime {
     /// What each of this Mac's rows waited on in a pull request's checks
     /// (`checks_wait`).
     checks_memory: checks_wait::ChecksMemory,
-    issue_tokens: crate::wire::IssueTokens,
+    issue_tokens: crate::engine::tokens::IssueTokens,
     issue_candidates: BTreeMap<String, crate::issues::IssueCandidate>,
     issue_write_pending: Option<issues::IssueWritePending>,
     unconfirmed_issue_tokens: BTreeMap<String, issues::UnconfirmedIssueToken>,
@@ -1912,7 +1923,7 @@ pub struct Runtime {
     disk_generation: u64,
     /// The Projects tab's disk sweep, per machine (`disk_sweep.rs`).
     disk_sweeps: disk_sweep::Sweeps,
-    cleanup: Option<live::cleanup::CleanupSnapshot>,
+    cleanup: Option<crate::worktree_cleanup::CleanupSnapshot>,
     /// The node whose session last carried `cleanup`, so a cleanup that
     /// replaces it on another project also leaves that node's rows.
     cleanup_published_node: Option<String>,
@@ -2424,6 +2435,7 @@ impl Runtime {
             memory_sessions_load_generation: 0,
             archive_detail_load_generation: 0,
             links_work: links::LinksWork::default(),
+            session_thread: session_thread::ThreadWork::default(),
             backlog_work: backlog::BacklogWork::default(),
             issue_detail_work: issues::IssueDetailWork::default(),
             work_clock_minute: 0,
@@ -2475,6 +2487,8 @@ impl Runtime {
             window_focused: false,
             unseen_laid_generation: 0,
             label_overlay: Default::default(),
+            hook_facts: Default::default(),
+            local_hook_tokens: BTreeMap::new(),
             label_services: None,
             pull_request_times: Default::default(),
             request_view_observed: false,
@@ -2686,20 +2700,17 @@ impl Runtime {
     pub(crate) fn remote_coordinator_is_current(
         &self,
         target_id: &str,
-        connector: &Arc<dyn hide_herdr_client::ApiConnector>,
+        engine: &crate::engine::SharedEngine,
     ) -> bool {
         self.remote_controls
             .get(target_id)
-            .is_some_and(|context| Arc::ptr_eq(&context.api_connector(), connector))
+            .is_some_and(|context| crate::engine::same_engine(&context.engine(), engine))
     }
 
-    /// The Herdr API connection the core already holds for a connected SSH
-    /// device, for a daemon request that reads or writes one of its panes
-    /// outside the attach set. A device that is not connected has none.
-    pub fn remote_herdr_api(
-        &self,
-        target_id: &str,
-    ) -> Option<Arc<dyn hide_herdr_client::ApiConnector>> {
+    /// The engine the core already holds for a connected device, for a
+    /// daemon request that reads or writes one of its panes outside the
+    /// attach set. A device that is not connected has none.
+    pub(crate) fn device_engine(&self, target_id: &str) -> Option<crate::engine::SharedEngine> {
         let connected = self
             .snapshot
             .status
@@ -2711,7 +2722,7 @@ impl Runtime {
         }
         self.remote_controls
             .get(target_id)
-            .map(RemoteControlContext::api_connector)
+            .map(RemoteControlContext::engine)
     }
 
     pub(crate) fn install_remote_file_transport(

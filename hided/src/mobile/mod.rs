@@ -35,6 +35,7 @@ use tokio::sync::{Notify, watch};
 
 use crate::core::CoreHandle;
 use herdr_core::delivery::worker::{HumanNotice, HumanNoticeKind};
+use herdr_core::engine::EngineHandle;
 use phones::{PairRefusal, Phones};
 use projection::{AgentKey, Projection};
 use store::{MobileSettings, Notifications, PhoneRecord, PushMode, PushSubscription, ServeRecord};
@@ -152,7 +153,6 @@ pub struct Config {
     /// Asked at every write to a pane, so a reply never lands in the shell
     /// under an agent that is ending, asleep or waking.
     pub input_gate: Arc<herdr_core::input_gate::PaneInputGate>,
-    pub herdr_socket: Option<PathBuf>,
     /// Shell windows (desktop and web) on this daemon: "the app is open".
     pub renderers: Arc<AtomicUsize>,
     /// Which connections show a start surface; a phone's open start sheet is one.
@@ -942,8 +942,8 @@ impl Mobile {
                 .ok()
                 .and_then(|nodes| nodes.into_iter().next())
                 .unwrap_or_else(|| self.node().as_str().to_owned());
-            let herdr = match self.herdr_api(&machine) {
-                Ok(connector) => match notice.notify_herdr(connector.as_ref()) {
+            let herdr = match self.engine(&machine) {
+                Ok(engine) => match notice.notify_herdr(&engine) {
                     Ok(()) => continue,
                     Err(reason) => reason,
                 },
@@ -1536,26 +1536,15 @@ impl Mobile {
         self.config.core.terminals.as_ref()
     }
 
-    /// The Herdr connection for a pane on this Mac or a connected device.
-    pub fn herdr_api(
-        &self,
-        device_id: &str,
-    ) -> Result<Arc<dyn hide_herdr_client::ApiConnector>, pane::PaneError> {
+    /// The engine that runs a pane on this Mac or a connected device.
+    pub fn engine(&self, device_id: &str) -> Result<EngineHandle, pane::PaneError> {
         if self.node() == device_id {
-            return self
-                .config
-                .herdr_socket
-                .as_ref()
-                .map(|socket| {
-                    Arc::new(hide_herdr_client::LocalSocketConnector::new(socket.clone()))
-                        as Arc<dyn hide_herdr_client::ApiConnector>
-                })
-                .ok_or_else(|| {
-                    pane::PaneError::Unavailable("this Mac has no Herdr socket".to_owned())
-                });
+            return self.config.core.engine().cloned().ok_or_else(|| {
+                pane::PaneError::Unavailable("this Mac has no Herdr socket".to_owned())
+            });
         }
-        match self.config.core.remote_herdr_api(device_id) {
-            Ok(Some(connector)) => Ok(connector),
+        match self.config.core.device_engine(device_id) {
+            Ok(Some(engine)) => Ok(engine),
             Ok(None) => Err(pane::PaneError::DeviceUnreachable),
             Err(message) => Err(pane::PaneError::Unavailable(message)),
         }

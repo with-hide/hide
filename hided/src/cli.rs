@@ -34,6 +34,8 @@ pub enum CommandKind {
         actor: Option<String>,
     },
     Device(crate::device_cli::DeviceCli),
+    /// `hide pane …`, `hide agent read` and `hide workspace purpose`.
+    Pane(crate::pane_cli::PaneCli),
     Help,
     AgentSpawnHelp,
     /// `hide <command> … --help`: that command's usage, printed to stdout.
@@ -94,6 +96,9 @@ pub enum CommandKind {
     ObservationHook {
         start: bool,
     },
+    /// Private hook transport: one agent hook's report on its pane's agent
+    /// (`HookStatusReport` as JSON on stdin), proven like every hook request.
+    StatusHook,
     /// `hide view list [--session <id|here>]`: the checkout's Views, or
     /// the ones one session opened (PRD session-files D-31).
     ViewList {
@@ -169,7 +174,8 @@ fn topic_usage(topic: &str) -> Option<String> {
         "file" => FILE_USAGE.to_owned(),
         "diff" => DIFF_USAGE.to_owned(),
         "view" => VIEW_USAGE.to_owned(),
-        "workspace" => "usage: hide workspace info".to_owned(),
+        "pane" => usage(crate::pane_cli::USAGE),
+        "workspace" => usage("hide workspace info\nhide workspace purpose <text>"),
         "status" => "usage: hide status [--json]".to_owned(),
         "stop" => "usage: hide stop".to_owned(),
         "open" => OPEN_USAGE.to_owned(),
@@ -197,6 +203,7 @@ fn help_text() -> String {
         crate::device_cli::USAGE,
         crate::mission_cli::USAGE,
         crate::plan_cli::USAGE,
+        crate::pane_cli::USAGE,
         "hide workspace info",
         FILE_USAGE.trim_start_matches("usage: "),
         DIFF_USAGE.trim_start_matches("usage: "),
@@ -305,6 +312,20 @@ pub fn parse_args(args: &[String]) -> Result<CommandKind, String> {
                 .map(|(id, actor)| CommandKind::AgentSleep { id, actor })
                 .map_err(|reason| wrong(reason, crate::agent_cli::USAGE))
         }
+        Some("agent") if args.get(2).map(String::as_str) == Some("read") => {
+            crate::cli_contract::admit(&args[1..])
+                .map_err(|refusal| format!("{refusal}\n{}", usage(crate::pane_cli::USAGE)))?;
+            crate::pane_cli::parse_agent_read(&args[3..])
+                .map(CommandKind::Pane)
+                .map_err(|reason| wrong(reason, crate::pane_cli::USAGE))
+        }
+        Some("pane") => {
+            crate::cli_contract::admit(&args[1..])
+                .map_err(|refusal| format!("{refusal}\n{}", usage(crate::pane_cli::USAGE)))?;
+            crate::pane_cli::parse(&args[2..])
+                .map(CommandKind::Pane)
+                .map_err(|reason| wrong(reason, crate::pane_cli::USAGE))
+        }
         Some("agent") if args.get(2).map(String::as_str) == Some("catalog") => {
             crate::cli_contract::admit(&args[1..])
                 .map_err(|refusal| format!("{refusal}\n{}", usage(crate::agent_cli::USAGE)))?;
@@ -378,12 +399,23 @@ pub fn parse_args(args: &[String]) -> Result<CommandKind, String> {
                 parse_workspace_memory(&words)
             }
             Some("bootstrap") if iter.next().is_none() => Ok(CommandKind::WorkspaceBootstrap),
+            Some("purpose") => {
+                crate::cli_contract::admit(&args[1..])
+                    .map_err(|refusal| format!("{refusal}\n{}", usage(crate::pane_cli::USAGE)))?;
+                crate::pane_cli::parse_purpose(&args[3..])
+                    .map(CommandKind::Pane)
+                    .map_err(|reason| wrong(reason, crate::pane_cli::USAGE))
+            }
+            Some("status") => match (iter.next().map(String::as_str), iter.next()) {
+                (Some("--hook"), None) => Ok(CommandKind::StatusHook),
+                _ => Err("usage: hide workspace status --hook < report".to_owned()),
+            },
             Some("info") => match (iter.next().map(String::as_str), iter.next()) {
                 (None, None) => Ok(CommandKind::WorkspaceInfo),
                 (Some("--hook"), None) => Ok(CommandKind::WorkspaceHookInfo),
                 _ => Err("usage: hide workspace info [--hook]".to_owned()),
             },
-            _ => Err("usage: hide workspace info".to_owned()),
+            _ => Err("usage: hide workspace info | purpose <text>".to_owned()),
         },
         Some("file") => parse_open(iter, true),
         Some("diff") => parse_open(iter, false),
@@ -751,9 +783,11 @@ pub fn run(kind: CommandKind) -> Result<(), String> {
                     | CommandKind::Ps(_)
                     | CommandKind::AgentSleep { .. }
                     | CommandKind::Device(_)
+                    | CommandKind::Pane(_)
                     | CommandKind::WorkspaceInfo
                     | CommandKind::WorkspaceHookInfo
                     | CommandKind::ObservationHook { .. }
+                    | CommandKind::StatusHook
                     | CommandKind::ViewList { .. }
                     | CommandKind::ViewStatus { .. }
                     | CommandKind::BrowserOpen { .. }
@@ -784,6 +818,7 @@ pub fn run(kind: CommandKind) -> Result<(), String> {
         CommandKind::Ps(options) => crate::ps_cli::run(&env, &options),
         CommandKind::AgentSleep { id, actor } => crate::agent_cli::run_sleep(&env, id, actor),
         CommandKind::Device(cli) => crate::device_cli::run(&env, &cli),
+        CommandKind::Pane(cli) => crate::pane_cli::run(&env, cli),
         CommandKind::Delivery(command) => {
             if matches!(&command, herdr_core::delivery::Command::Agents { .. }) {
                 crate::agent_cli::run(&env, command)
@@ -835,6 +870,38 @@ pub fn run(kind: CommandKind) -> Result<(), String> {
             )?;
             println!("{answer}");
             Ok(())
+        }
+        CommandKind::StatusHook => {
+            use std::io::Read;
+            // The hook reads stdout as JSON, so every refusal answers as one
+            // and the hook records its reason rather than a format error.
+            const NEXT: &str = "Continue without the status report";
+            let limit = hide_node_link::panes::HOOK_REQUEST_LIMIT;
+            let mut bytes = Vec::new();
+            std::io::stdin()
+                .lock()
+                .take((limit + 1) as u64)
+                .read_to_end(&mut bytes)
+                .or_else(|_| workspace_refusal("status_input_unavailable", NEXT))?;
+            if bytes.len() > limit {
+                return workspace_refusal("status_input_too_large", NEXT);
+            }
+            let report: hide_node_link::panes::HookStatusReport = serde_json::from_slice(&bytes)
+                .or_else(|_| workspace_refusal("status_input_invalid", NEXT))?;
+            let answer = crate::workspace_cli::request_hook(
+                &env,
+                hide_node_link::panes::HookCommand::Status { report },
+            )
+            .or_else(|reason| workspace_refusal(&reason, NEXT))?;
+            println!("{answer}");
+            if answer["ok"] == true {
+                Ok(())
+            } else {
+                Err(answer["reason"]
+                    .as_str()
+                    .unwrap_or("status_unavailable")
+                    .to_owned())
+            }
         }
         CommandKind::ObservationHook { start } => {
             use hide_node_link::panes::{

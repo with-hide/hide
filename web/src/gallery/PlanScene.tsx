@@ -9,7 +9,7 @@ import { createActions } from "../actions";
 import { TooltipProvider } from "../components/ui/tooltip";
 import { useFollowInterfaceLanguage } from "../i18n/translator";
 import { requireInterfaceLanguage } from "../i18n/locale";
-import { PlanChecklist } from "../PlanChecklist";
+import { PlanChecklist } from "../components/plan-checklist";
 import { PlanMap, PlanSummaryLine } from "../PlanMap";
 import type { PlanDelegation, PlanStep, PlanView, SnapshotRest, WorkSession } from "../snapshot";
 import { useShellStore } from "../store";
@@ -22,7 +22,7 @@ function step(key: string, title: string, status: PlanStep["status"], depends_on
 }
 
 /** The eight steps of the mockup's evaluation run (scene 3), as each state leaves them. */
-function plan(state: string, now: number): PlanView {
+export function planFixture(state: string, now: number): PlanView {
   const review = state === "review";
   const finished = state === "finished";
   const done = (key: string, title: string, depends: string[], extra: Partial<PlanStep> = {}) => step(key, title, review ? "planned" : "done", depends, extra);
@@ -98,7 +98,7 @@ export function PlanScene({ params }: { params: URLSearchParams }) {
   useFollowInterfaceLanguage(requireInterfaceLanguage(params.get("lang") ?? "ko"));
   const theme = params.get("theme") === "light" ? "light" : "dark";
   const state = params.get("state") ?? "running";
-  const plans = useMemo(() => (state.startsWith("delegated") ? delegated(state === "delegated-finished", Date.now()) : [plan(state, Date.now())]), [state]);
+  const plans = useMemo(() => (state.startsWith("delegated") ? delegated(state === "delegated-finished", Date.now()) : [planFixture(state, Date.now())]), [state]);
   const [shown] = plans as [PlanView, ...PlanView[]];
   const actions = useMemo(() => createActions(() => true), []);
   useLayoutEffect(() => {

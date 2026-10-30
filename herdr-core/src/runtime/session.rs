@@ -389,7 +389,7 @@ impl Runtime {
             .filter(|tab| tab.delegated)
             .filter_map(|tab| tab.id.clone())
             .collect::<HashSet<_>>();
-        self.issue_tokens = crate::wire::issue_tokens(payload);
+        self.issue_tokens = crate::engine::tokens::issue_tokens(payload);
         // The catalog reads what the core's own node says of its paths, so
         // the sync coordinator asks and builds it before taking the runtime
         // lock. A precomputation whose registrations or worktrees no longer match current
@@ -2500,6 +2500,13 @@ impl Runtime {
         let mut inline_paths = None;
         if let Ok(payload) = fetched.as_mut() {
             self.label_overlay.apply(payload);
+            self.local_hook_tokens = self
+                .hook_facts
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .lay(payload, str::to_owned, |pane| {
+                    !is_remote_scoped_pane_id(pane)
+                });
             self.settle_agent_sleep(payload);
             // A session without a catalog reads its paths here, before the
             // clamps read the session's cwds.
@@ -2660,8 +2667,8 @@ impl Runtime {
         // snapshot already matched, so Settings can show real values (B5).
         let protocol_details = match fetched.as_ref() {
             Ok(payload) => Some((
-                u64::from(crate::herdr_contract::HERDR_PROTOCOL_REVISION),
-                u64::from(crate::herdr_contract::HERDR_PROTOCOL_REVISION),
+                u64::from(crate::engine::herdr::contract::HERDR_PROTOCOL_REVISION),
+                u64::from(crate::engine::herdr::contract::HERDR_PROTOCOL_REVISION),
                 payload.herdr_version.clone(),
             )),
             Err(error) => error
@@ -2990,16 +2997,7 @@ impl Runtime {
                 let layout = target_pane_id
                     .map(|pane_id| live::project_layout_for_pane(&payload, pane_id))
                     .transpose();
-                self.pane_hook_tokens = payload
-                    .panes
-                    .iter()
-                    .map(|pane| {
-                        (
-                            pane.pane_id.clone(),
-                            crate::agent_hooks::PaneHookTokens::read(&pane.tokens),
-                        )
-                    })
-                    .collect();
+                self.pane_hook_tokens = std::mem::take(&mut self.local_hook_tokens);
                 let projection = project_agents(payload);
                 excluded = projection.excluded;
                 match layout {
@@ -4012,7 +4010,10 @@ impl Runtime {
     pub fn ingest_task_operation_result(
         &mut self,
         id: u64,
-        result: Result<live::WorktreeTaskOutcome, live::TaskFailure>,
+        result: Result<
+            crate::worktree_control::WorktreeTaskOutcome,
+            crate::worktree_control::TaskFailure,
+        >,
     ) -> bool {
         let Some(operation) = self.snapshot.task_operation.as_ref() else {
             return false;
@@ -4035,7 +4036,7 @@ impl Runtime {
         let adds_pane = self.group_start_adds_pane(id);
         match result {
             Ok(outcome) => {
-                let live::WorktreeTaskOutcome {
+                let crate::worktree_control::WorktreeTaskOutcome {
                     path,
                     pane_id,
                     created_tab_id,
@@ -4263,7 +4264,7 @@ impl Runtime {
     pub fn ingest_purpose_operation_result(
         &mut self,
         id: u64,
-        result: Result<live::PurposeTaskOutcome, String>,
+        result: Result<crate::worktree_control::PurposeTaskOutcome, String>,
     ) -> bool {
         let Some(operation) = self.snapshot.task_operation.as_ref() else {
             return false;
@@ -4281,14 +4282,14 @@ impl Runtime {
             .cloned();
         let mut visible_purpose = None;
         let (phase, message, diagnostic) = match result {
-            Ok(live::PurposeTaskOutcome::Saved {
+            Ok(crate::worktree_control::PurposeTaskOutcome::Saved {
                 purpose,
                 token_written,
             }) => {
                 visible_purpose = Some((purpose, token_written));
                 ("ready", None, None)
             }
-            Ok(live::PurposeTaskOutcome::GitFailed {
+            Ok(crate::worktree_control::PurposeTaskOutcome::GitFailed {
                 purpose,
                 token_written,
                 detail,
@@ -4881,7 +4882,7 @@ impl Runtime {
     pub(crate) fn task_session_control_is_current(
         &self,
         id: u64,
-        connector: &Arc<dyn hide_herdr_client::ApiConnector>,
+        engine: &crate::engine::SharedEngine,
         generation: Option<u64>,
     ) -> bool {
         let Some(operation) = self
@@ -4894,14 +4895,14 @@ impl Runtime {
         };
         match operation.device_id.as_deref() {
             Some(device) if device != self.node.as_str() => {
-                self.remote_coordinator_is_current(device, connector)
+                self.remote_coordinator_is_current(device, engine)
             }
             _ => {
                 generation == Some(self.live_generation)
                     && self
                         .live
                         .as_ref()
-                        .is_some_and(|live| Arc::ptr_eq(&live.api_connector, connector))
+                        .is_some_and(|live| crate::engine::same_engine(&live.engine, engine))
             }
         }
     }
@@ -4909,9 +4910,9 @@ impl Runtime {
     pub(crate) fn task_session_control_generation(
         &self,
         id: u64,
-        connector: &Arc<dyn hide_herdr_client::ApiConnector>,
+        engine: &crate::engine::SharedEngine,
     ) -> Option<u64> {
-        self.task_session_control_is_current(id, connector, Some(self.live_generation))
+        self.task_session_control_is_current(id, engine, Some(self.live_generation))
             .then_some(self.live_generation)
     }
 
@@ -4967,7 +4968,10 @@ impl Runtime {
         }
     }
 
-    pub(crate) fn pending_task_agent_start(&self, id: u64) -> Option<live::PendingAgentStart> {
+    pub(crate) fn pending_task_agent_start(
+        &self,
+        id: u64,
+    ) -> Option<crate::worktree_control::PendingAgentStart> {
         let operation = self.snapshot.task_operation.as_ref()?;
         if operation.id != id
             || operation.phase != "ready"
@@ -4985,7 +4989,7 @@ impl Runtime {
             .task_agent_launch
             .as_ref()
             .filter(|launch| launch.task == id);
-        Some(live::PendingAgentStart {
+        Some(crate::worktree_control::PendingAgentStart {
             // Only these tasks make the worktree their agent starts in.
             made_worktree: matches!(
                 operation.kind.as_str(),
@@ -5034,7 +5038,7 @@ impl Runtime {
     pub(crate) fn ingest_task_agent_result(
         &mut self,
         id: u64,
-        outcome: live::TaskAgentOutcome,
+        outcome: crate::worktree_control::TaskAgentOutcome,
     ) -> bool {
         if !self
             .snapshot
@@ -5048,11 +5052,13 @@ impl Runtime {
         }
         // A definite failure keeps the prompt for Retry; any other answer
         // settles it, since the agent may be running.
-        let launch = if !matches!(outcome, live::TaskAgentOutcome::Failed(_))
-            && self
-                .task_agent_launch
-                .as_ref()
-                .is_some_and(|launch| launch.task == id)
+        let launch = if !matches!(
+            outcome,
+            crate::worktree_control::TaskAgentOutcome::Failed(_)
+        ) && self
+            .task_agent_launch
+            .as_ref()
+            .is_some_and(|launch| launch.task == id)
         {
             self.task_agent_launch.take().map(|launch| launch.launch)
         } else {
@@ -5061,7 +5067,8 @@ impl Runtime {
         // The pane keeps the choice its agent started with, for the restarts
         // Hide makes of it, under the name the start gave the agent: the task
         // worker names it from Herdr's own id for the pane.
-        if let (live::TaskAgentOutcome::Started, Some(launch)) = (&outcome, &launch)
+        if let (crate::worktree_control::TaskAgentOutcome::Started, Some(launch)) =
+            (&outcome, &launch)
             && let Some((pane_id, kind, name)) =
                 self.snapshot.task_operation.as_ref().and_then(|operation| {
                     let pane_id = operation.pane_id.clone()?;
@@ -5081,15 +5088,19 @@ impl Runtime {
         };
         // A start that definitely failed ran no prompt, so its pane no
         // longer holds one a close could drop.
-        if matches!(outcome, live::TaskAgentOutcome::Failed(_))
-            && let Some(pane_id) = &operation.pane_id
+        if matches!(
+            outcome,
+            crate::worktree_control::TaskAgentOutcome::Failed(_)
+        ) && let Some(pane_id) = &operation.pane_id
         {
             self.start_prompts.remove(pane_id);
         }
         let (phase, failure) = match outcome {
-            live::TaskAgentOutcome::Started => ("started", None),
-            live::TaskAgentOutcome::Failed(failure) => ("failed", Some(failure)),
-            live::TaskAgentOutcome::Unknown(failure) => ("unknown", Some(failure)),
+            crate::worktree_control::TaskAgentOutcome::Started => ("started", None),
+            crate::worktree_control::TaskAgentOutcome::Failed(failure) => ("failed", Some(failure)),
+            crate::worktree_control::TaskAgentOutcome::Unknown(failure) => {
+                ("unknown", Some(failure))
+            }
         };
         let started_pane = (phase == "started" && operation.device_id.is_none())
             .then(|| operation.pane_id.clone());
@@ -5185,13 +5196,15 @@ impl Runtime {
         operation.agent_phase = Some("starting".into());
         operation.agent_reason = None;
         operation.agent_line = None;
-        if let Err(message) = live::spawn_task_agent_start(context, id) {
+        if let Err(message) = crate::worktree_control::spawn_task_agent_start(context, id) {
             return self.ingest_task_agent_result(
                 id,
-                live::TaskAgentOutcome::Failed(live::AgentFailure::with_detail(
-                    "agent_start.worker_unavailable",
-                    message,
-                )),
+                crate::worktree_control::TaskAgentOutcome::Failed(
+                    crate::worktree_control::AgentFailure::with_detail(
+                        "agent_start.worker_unavailable",
+                        message,
+                    ),
+                ),
             );
         }
         true
@@ -6253,7 +6266,10 @@ impl Runtime {
     pub fn ingest_workspace_creation(
         &mut self,
         request_path: &str,
-        result: Result<live::WorkspaceCreationOutcome, live::WorkspaceCreationFailure>,
+        result: Result<
+            crate::checkout_owner::open::WorkspaceCreationOutcome,
+            crate::checkout_owner::open::WorkspaceCreationFailure,
+        >,
         elapsed_ms: u128,
     ) -> bool {
         self.workspace_creations_in_flight.remove(request_path);

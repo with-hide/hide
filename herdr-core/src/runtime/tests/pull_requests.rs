@@ -294,7 +294,7 @@ fn a_local_issue_is_linked_in_hide_only() {
         checkout_id: "c".into(),
         node: None,
     });
-    let request = crate::live::PurposeTaskRequest {
+    let request = crate::worktree_control::PurposeTaskRequest {
         id: 7,
         checkout_id: "c".into(),
         repository_root: "/repo".into(),

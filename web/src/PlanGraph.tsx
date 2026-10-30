@@ -13,7 +13,7 @@ import { Hint } from "./components/ui/tooltip";
 import { useInterfaceTranslation } from "./i18n/client";
 import { cn } from "./lib/utils";
 import { usePaneAgents } from "./PaneHeaderBand";
-import { DelegationWord, PlanChecklist } from "./PlanChecklist";
+import { DelegationWord, PlanChecklist } from "./components/plan-checklist";
 import { childNow, childPlanOf, childReachable, evidenceWords, planCount, planGraph, stepDelegationWord, stepMark, waitingOn } from "./plans";
 import type { PlanDelegation, PlanStep, PlanView } from "./snapshot";
 import { useShellStore } from "./store";

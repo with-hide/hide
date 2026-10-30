@@ -24,11 +24,10 @@ use std::sync::Mutex;
 use std::time::Duration;
 
 use hide_agent_adapter::composer::{Composer, Miss, Verdict};
-use hide_herdr_client::{ApiConnector, request_small_response};
 use serde_json::json;
 
+use crate::engine::{Engine, EngineError, Wait};
 use crate::runtime::Runtime;
-use crate::wire;
 
 use super::Actor;
 
@@ -167,23 +166,58 @@ fn miss_code(reading: Reading) -> Option<&'static str> {
     reading.ok()?.err().map(Miss::code)
 }
 
-/// Reads the pane's visible screen with styling and judges it. The connector
+/// Reads the pane's visible screen with styling and judges it. The engine
 /// is looked up under the lock; the read itself runs off it.
 fn screen(owner: &Mutex<Runtime>, read: &Read) -> Reading {
-    let connector = owner
+    let engine = owner
         .lock()
         .ok()
-        .and_then(|guard| guard.delivery_connector(&read.actor.device_id))
+        .and_then(|guard| guard.delivery_engine(&read.actor.device_id))
         .ok_or("pane_unavailable")?;
-    judge(connector.as_ref(), read)
+    judge(engine.as_ref(), read)
 }
 
-fn judge(connector: &dyn ApiConnector, read: &Read) -> Reading {
-    let parameters =
-        wire::composer_screen_params(&read.raw_pane_id).map_err(|_| "herdr_parameters")?;
-    let answer = request_small_response(connector, "pane.read", parameters, READ_TIMEOUT)
-        .map_err(|_| "read_failed")?;
-    let screen = wire::pane_text(answer).map_err(|_| "herdr_format")?;
+/// The refusal when a forced letter's recipient shows text in its composer.
+pub(crate) const NOT_EMPTY: &str = "composer_not_empty";
+/// The refusal when a forced letter's recipient's composer cannot be read
+/// empty: no declaration for its kind, no composer where it is declared (a
+/// menu or a dialog over it), or a failed or cut read.
+pub(crate) const UNCONFIRMED: &str = "composer_unconfirmed";
+
+/// Whether a forced letter may be typed into `pane`, whose agent is of
+/// `kind`, now (PRD engine-bundle-1 D-14): its visible screen read with
+/// styling and judged by the kind's composer declaration. Any version is
+/// judged, since a screen not read empty is never typed into. Runs off the
+/// runtime lock.
+pub(crate) fn forced_clear(
+    engine: &dyn Engine,
+    pane: &str,
+    kind: &str,
+) -> Result<(), &'static str> {
+    let composer = hide_agent_adapter::adapter(kind)
+        .and_then(|row| row.composer.supported())
+        .ok_or(UNCONFIRMED)?;
+    let screen = engine
+        .read_screen(Wait::Small(READ_TIMEOUT), pane)
+        .map_err(|_| UNCONFIRMED)?;
+    if screen.truncated {
+        return Err(UNCONFIRMED);
+    }
+    match composer.explain(&screen.text) {
+        Ok(()) => Ok(()),
+        Err(miss) if miss.verdict() == Verdict::Holds => Err(NOT_EMPTY),
+        Err(_) => Err(UNCONFIRMED),
+    }
+}
+
+fn judge(engine: &dyn Engine, read: &Read) -> Reading {
+    let screen = engine
+        .read_screen(Wait::Small(READ_TIMEOUT), &read.raw_pane_id)
+        .map_err(|error| match error {
+            EngineError::Request(_) => "herdr_parameters",
+            EngineError::Answer(_) => "herdr_format",
+            _ => "read_failed",
+        })?;
     // A cut screen may have lost the composer's rows, which no verdict
     // could tell from an empty composer.
     if screen.truncated {

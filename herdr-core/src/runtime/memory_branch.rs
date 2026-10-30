@@ -49,9 +49,9 @@ pub(super) struct BatchBranchFacts {
     pub(super) purpose: Option<BatchPurpose>,
 }
 
-/// How a batch's machine is reached: its Herdr and its node.
+/// How a batch's machine is reached: its engine and its node.
 pub(super) type BatchReach = (
-    Arc<dyn hide_herdr_client::ApiConnector>,
+    Arc<dyn crate::engine::Engine>,
     Arc<dyn crate::node_access::NodeLink>,
 );
 
@@ -358,6 +358,20 @@ impl Runtime {
         number: u64,
         decision: BatchDecision,
     ) -> bool {
+        self.decide_batch_as(workspace_id, number, decision, true)
+    }
+
+    /// A decision on a ready batch; with `remake`, a merge the base conflicts
+    /// with starts `다시 맞추기` and is pressed again once the remade batch
+    /// is ready. The merge pressed again after a remake has no `remake`: a
+    /// second refusal stops for the operator.
+    fn decide_batch_as(
+        &mut self,
+        workspace_id: &str,
+        number: u64,
+        decision: BatchDecision,
+        remake: bool,
+    ) -> bool {
         let refused = |reason: &str| {
             crate::diagnostic!(json!({
                 "component": "memory", "kind": "promotion.decision_refused",
@@ -378,7 +392,7 @@ impl Runtime {
         let Ok(link) = self.node_link(node.as_str()) else {
             return refused("node_unavailable");
         };
-        let connector = self.delivery_connector(node.as_str());
+        let engine = self.delivery_engine(node.as_str());
         let facts = self.project_memory.promotions.branches.get(&key).cloned();
         let base = facts
             .as_ref()
@@ -408,6 +422,16 @@ impl Runtime {
                     Err(reason) => return refused(&reason),
                 }
             }
+            // A merge refused because the branch no longer applies on its
+            // base starts `다시 맞추기` itself, so it carries the start a
+            // rebase needs; without one the refusal and its button stay.
+            BatchDecision::Merge | BatchDecision::MergePush if remake => {
+                self.promotion_start(&node, &root).ok().map(|mut start| {
+                    start.purpose = BatchPurpose::Rebase;
+                    start.base = Some(base.clone());
+                    start
+                })
+            }
             BatchDecision::Merge
             | BatchDecision::MergePush
             | BatchDecision::Discard
@@ -428,6 +452,7 @@ impl Runtime {
             .deciding
             .insert(key.clone(), decision);
         let carried = key.clone();
+        let workspace_id = workspace_id.to_owned();
         let pushed = decision == BatchDecision::MergePush;
         let based = (place.node.clone(), place.root.clone(), place.base.clone());
         let day = branch_decision::sync_day(super::memory::now_ms());
@@ -436,7 +461,7 @@ impl Runtime {
             move || {
                 decide(
                     decision,
-                    connector,
+                    engine,
                     link,
                     &place,
                     &own,
@@ -447,8 +472,18 @@ impl Runtime {
                     &day,
                 )
             },
-            move |runtime, (unseen, learned)| {
+            move |runtime, (unseen, learned, remade)| {
                 runtime.project_memory.promotions.deciding.remove(&carried);
+                if remade {
+                    runtime.project_memory.promotions.finish.insert(
+                        carried.clone(),
+                        BatchFinish {
+                            decision,
+                            workspace_id,
+                            running: false,
+                        },
+                    );
+                }
                 let (node, root, base) = based;
                 // Whatever GitHub answered the push, its rules are read again
                 // before the button is offered again.
@@ -555,12 +590,6 @@ impl Runtime {
         branches.into_iter().collect()
     }
 
-    /// The ready Memory batches waiting for the operator in the Project at
-    /// `root` on `node` (D-17).
-    pub(super) fn memory_branches_waiting(&self, node: &NodeId, root: &str) -> usize {
-        self.memory_branch_overlay(node, root).len()
-    }
-
     /// A batch's branch facts the 제안 row draws, by Project and branch.
     pub(super) fn memory_batch_facts(&self, branch: &str) -> Option<&BatchBranchFacts> {
         let project_id = self.project_memory.project_id.clone()?;
@@ -568,6 +597,77 @@ impl Runtime {
             .promotions
             .branches
             .get(&(project_id, branch.to_owned()))
+    }
+}
+
+/// A merge a remake carries out (operator decision 2026-10-31): the decision
+/// the operator pressed, the Project it was pressed in, and whether the
+/// remade batch was seen running yet, so the batch's old ready rows are
+/// never taken for the remake's.
+#[derive(Clone, Debug)]
+pub(super) struct BatchFinish {
+    decision: BatchDecision,
+    workspace_id: String,
+    running: bool,
+}
+
+impl Runtime {
+    /// Presses again the merge a remake carries out once the Memory read
+    /// shows the remade batch ready; a batch that ended any other way drops
+    /// it, and its row offers what its state offers.
+    pub(super) fn finish_remade_batches(&mut self) {
+        if self.project_memory.promotions.finish.is_empty() {
+            return;
+        }
+        let Some(project_id) = self.project_memory.project_id.clone() else {
+            return;
+        };
+        let Some(memory) = self
+            .snapshot
+            .memory
+            .as_ref()
+            .and_then(|memory| memory.project.as_ref())
+            .cloned()
+        else {
+            return;
+        };
+        let mut due = Vec::new();
+        self.project_memory
+            .promotions
+            .finish
+            .retain(|(project, branch), finish| {
+                if *project != project_id || finish.workspace_id != memory.workspace_id {
+                    return true;
+                }
+                let rows = memory
+                    .rows
+                    .iter()
+                    .filter_map(|row| {
+                        let promotion = row.promotion.as_ref()?;
+                        (promotion.branch.as_deref() == Some(branch.as_str()))
+                            .then_some((row.number, promotion.state))
+                    })
+                    .collect::<Vec<_>>();
+                use crate::model::MemoryPromotionState as State;
+                if rows.iter().any(|(_, state)| *state == State::Running) {
+                    finish.running = true;
+                    return true;
+                }
+                if !finish.running {
+                    return rows.iter().any(|(_, state)| *state == State::Ready);
+                }
+                if let Some((number, _)) = rows.iter().find(|(_, state)| *state == State::Ready) {
+                    due.push((finish.workspace_id.clone(), *number, finish.decision));
+                }
+                false
+            });
+        for (workspace_id, number, decision) in due {
+            crate::diagnostic!(json!({
+                "component": "memory", "kind": "promotion.finish",
+                "card": hide_memory::card_name(number),
+            }));
+            self.decide_batch_as(&workspace_id, number, decision, false);
+        }
     }
 }
 
@@ -588,7 +688,7 @@ type Unseen = Option<((String, u64, u32), PromotionStart)>;
 #[allow(clippy::too_many_arguments)]
 fn decide(
     decision: BatchDecision,
-    connector: Option<Arc<dyn hide_herdr_client::ApiConnector>>,
+    engine: Option<Arc<dyn crate::engine::Engine>>,
     link: Arc<dyn crate::node_access::NodeLink>,
     place: &BranchPlace,
     own: &[String],
@@ -597,11 +697,12 @@ fn decide(
     cards: &[u64],
     start: Option<PromotionStart>,
     day: &str,
-) -> (Unseen, Option<branch_decision::BaseChange>) {
+) -> (Unseen, Option<branch_decision::BaseChange>, bool) {
     let mut learned = None;
+    let mut remade = false;
     let unseen = decide_batch(
         decision,
-        connector,
+        engine,
         link,
         place,
         own,
@@ -611,14 +712,15 @@ fn decide(
         start,
         day,
         &mut learned,
+        &mut remade,
     );
-    (unseen, learned)
+    (unseen, learned, remade)
 }
 
 #[allow(clippy::too_many_arguments)]
 fn decide_batch(
     decision: BatchDecision,
-    connector: Option<Arc<dyn hide_herdr_client::ApiConnector>>,
+    engine: Option<Arc<dyn crate::engine::Engine>>,
     link: Arc<dyn crate::node_access::NodeLink>,
     place: &BranchPlace,
     own: &[String],
@@ -628,6 +730,7 @@ fn decide_batch(
     start: Option<PromotionStart>,
     day: &str,
     learned: &mut Option<branch_decision::BaseChange>,
+    remade: &mut bool,
 ) -> Unseen {
     let now = super::memory::now_ms();
     let mut store = match super::memory::open_memory_store(database) {
@@ -683,7 +786,7 @@ fn decide_batch(
             let push = decision == BatchDecision::MergePush;
             let kind = if push { "merge_push" } else { "merge" };
             let (landing, base) =
-                branch_decision::land(connector.as_deref(), link.as_ref(), place, own, tip, push);
+                branch_decision::land(engine.as_deref(), link.as_ref(), place, own, tip, push);
             *learned = base;
             match landing {
                 branch_decision::Landing::Merged(_) => {
@@ -696,6 +799,22 @@ fn decide_batch(
                 }
                 branch_decision::Landing::Refused(code) => {
                     branch_decision::log(place, &subject, kind, code);
+                    if branch_decision::remakes(code)
+                        && let Some(start) = start
+                        && let Ok(unseen) = restart_batch(
+                            &mut store,
+                            engine.as_deref(),
+                            link.as_ref(),
+                            place,
+                            own,
+                            &ready,
+                            start,
+                            now,
+                        )
+                    {
+                        *remade = true;
+                        return unseen;
+                    }
                     refuse_all(&mut store, code);
                 }
             }
@@ -723,10 +842,8 @@ fn decide_batch(
             None
         }
         BatchDecision::Discard => {
-            let discarded = match connector.as_deref() {
-                Some(connector) => {
-                    branch_decision::discard(connector, link.as_ref(), place, own, tip)
-                }
+            let discarded = match engine.as_deref() {
+                Some(engine) => branch_decision::discard(engine, link.as_ref(), place, own, tip),
                 None => Err("herdr_unavailable".to_owned()),
             };
             match discarded {
@@ -741,47 +858,72 @@ fn decide_batch(
             }
             None
         }
-        BatchDecision::OpenPr | BatchDecision::Rebase => {
-            let mut start = start?;
-            if let Some(connector) = connector.as_deref() {
-                for pane in own {
-                    if branch_decision::end_agent(connector, link.as_ref(), pane).is_err() {
-                        crate::diagnostic!(json!({
-                            "component": "memory", "kind": "promotion.previous_agent_kept",
-                            "project_id": place.project_id,
-                        }));
-                    }
-                }
-            }
-            if let Err(error) = store.set_promotion_batch_branch(
-                &place.project_id,
-                &place.branch,
-                start.purpose,
-                None,
-            ) {
+        BatchDecision::OpenPr | BatchDecision::Rebase => restart_batch(
+            &mut store,
+            engine.as_deref(),
+            link.as_ref(),
+            place,
+            own,
+            &ready,
+            start?,
+            now,
+        )
+        .unwrap_or(None),
+    }
+}
+
+/// Starts an agent on a ready batch's branch for the purpose `start` names
+/// (`PR 올리기`, `다시 맞추기`), its old agents ended first; `Err` when no
+/// card of the batch restarted.
+#[allow(clippy::too_many_arguments)]
+fn restart_batch(
+    store: &mut MemoryStore,
+    engine: Option<&dyn crate::engine::Engine>,
+    link: &dyn crate::node_access::NodeLink,
+    place: &BranchPlace,
+    own: &[String],
+    ready: &[(u64, Promotion)],
+    mut start: PromotionStart,
+    now: u64,
+) -> Result<Unseen, ()> {
+    if let Some(engine) = engine {
+        for pane in own {
+            if branch_decision::end_agent(engine, link, pane).is_err() {
                 crate::diagnostic!(json!({
-                    "component": "memory", "kind": "promotion.move_failed",
-                    "project_id": place.project_id, "message": error.to_string(),
+                    "component": "memory", "kind": "promotion.previous_agent_kept",
+                    "project_id": place.project_id,
                 }));
-                return None;
             }
-            let mut restarted = Vec::new();
-            for (number, promotion) in &ready {
-                match store.restart_promotion(&place.project_id, *number, promotion, now) {
-                    Ok(true) => restarted.push(*number),
-                    Ok(false) => {}
-                    Err(error) => crate::diagnostic!(json!({
-                        "component": "memory", "kind": "promotion.move_failed",
-                        "project_id": place.project_id, "card": hide_memory::card_name(*number),
-                        "message": error.to_string(),
-                    })),
-                }
-            }
-            if restarted.is_empty() {
-                return None;
-            }
-            start.numbers = restarted;
-            super::memory_promotion::spawn_restarted(&mut store, &place.project_id, start)
         }
     }
+    if let Err(error) =
+        store.set_promotion_batch_branch(&place.project_id, &place.branch, start.purpose, None)
+    {
+        crate::diagnostic!(json!({
+            "component": "memory", "kind": "promotion.move_failed",
+            "project_id": place.project_id, "message": error.to_string(),
+        }));
+        return Err(());
+    }
+    let mut restarted = Vec::new();
+    for (number, promotion) in ready {
+        match store.restart_promotion(&place.project_id, *number, promotion, now) {
+            Ok(true) => restarted.push(*number),
+            Ok(false) => {}
+            Err(error) => crate::diagnostic!(json!({
+                "component": "memory", "kind": "promotion.move_failed",
+                "project_id": place.project_id, "card": hide_memory::card_name(*number),
+                "message": error.to_string(),
+            })),
+        }
+    }
+    if restarted.is_empty() {
+        return Err(());
+    }
+    start.numbers = restarted;
+    Ok(super::memory_promotion::spawn_restarted(
+        store,
+        &place.project_id,
+        start,
+    ))
 }

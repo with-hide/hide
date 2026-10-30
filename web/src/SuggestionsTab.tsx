@@ -228,7 +228,7 @@ function Lines({ row, open, project, actions }: { row: SuggestionRow; open: bool
         <span className="min-w-0 break-words text-muted-foreground" data-suggestion-moved-to={row.attempt.branch.moved_to}>{t("suggestions.branch.movedTo", { branch: row.attempt.branch.moved_to })}</span>
       ) : null}
       {row.attempt?.phase === "ready" && row.attempt.branch ? <BranchLine row={row} branch={row.attempt.branch} project={project} actions={actions} /> : null}
-      {row.attempt?.phase === "failed" && row.cause ? (
+      {row.attempt?.phase === "failed" && row.cause && !attempt?.worded ? (
         <span className={cn("min-w-0 break-words text-muted-foreground", !open && "truncate")} title={row.cause} data-suggestion-failure-detail="true">{row.cause}</span>
       ) : null}
       {row.group === "applied" && row.state === "watching" && row.watch ? (
@@ -287,7 +287,7 @@ function AgentAsk({ pane, actions }: { pane: string | null; actions: Actions }) 
     <div className="pointer-events-auto col-start-2 flex min-w-0 flex-col gap-xxs rounded-xs bg-secondary px-sm py-xs text-caption" data-suggestion-asking={agent.pane_id}>
       <span className="font-medium text-warning">{t("suggestions.asking")}</span>
       {question ? <span className="min-w-0 break-words text-foreground">{question}</span> : null}
-      <Button className="self-start" size="sm" onClick={() => actions.openAgent(agent.pane_id)} data-suggestion-answer={agent.pane_id}>{t("suggestions.answerInSession")}</Button>
+      <Button variant="secondary" className="self-start" size="sm" onClick={() => actions.openAgent(agent.pane_id)} data-suggestion-answer={agent.pane_id}>{t("suggestions.answerInSession")}</Button>
     </div>
   );
 }
@@ -527,8 +527,7 @@ function Evidence({ evidence, project, actions }: { evidence: SuggestionEvidence
 
 /**
  * A choice's `문서 고치기` or `이슈로 남기기` (B10, B14), `GitHub 연결 필요`
- * or `결정을 기다리는 브랜치가 5개예요` in its place (B18; PRD
- * hide-ai-branch-first-apply B28), a ready branch's choices, and a failed
+ * in its place (B18), a ready branch's choices, and a failed
  * attempt's `다시 시도` (B12), each
  * with a quiet `넘어가기` beside it (D-51, B16). A global instruction row
  * offers `Hide 전역 지시에 넣기` with the preview it was shown, held while it
@@ -554,15 +553,13 @@ function Buttons({ row, project, actions }: { row: SuggestionRow; project: Proje
   return (
     <div className="col-start-2 flex flex-wrap items-center gap-xs pt-xxs">
       {offer === "local" || offer === "local_held" ? (
-        <Button className="pointer-events-auto" size="sm" disabled={offer === "local_held"} onClick={() => row.local?.preview != null && actions.suggestionAction(id, row.id, "apply", row.local.preview)} data-suggestion-apply={offer}>
+        <Button variant="secondary" className="pointer-events-auto" size="sm" disabled={offer === "local_held"} onClick={() => row.local?.preview != null && actions.suggestionAction(id, row.id, "apply", row.local.preview)} data-suggestion-apply={offer}>
           {t(row.local?.failure === "write_failed" ? "suggestions.retry" : "suggestions.makeLocal")}
         </Button>
       ) : offer === "github_needed" ? (
         <span className="text-caption text-muted-foreground" data-suggestion-github-needed="true">{t("suggestions.githubNeeded")}</span>
-      ) : offer === "branches_full" ? (
-        <span className="text-caption text-muted-foreground" data-suggestion-hold="branches_full">{t("suggestions.branchesFull")}</span>
       ) : offer ? (
-        <Button className="pointer-events-auto" size="sm" variant={offer === "issue" ? "secondary" : "default"} onClick={() => actions.suggestionAction(id, row.id, "apply")} data-suggestion-apply={offer}>
+        <Button className="pointer-events-auto" size="sm" variant="secondary" onClick={() => actions.suggestionAction(id, row.id, "apply")} data-suggestion-apply={offer}>
           {offer === "issue" ? t("suggestions.makeIssue") : row.plan ? t("suggestions.makePrFile", { file: fileName(row.plan.path) }) : t("suggestions.makePr")}
         </Button>
       ) : null}
@@ -580,8 +577,9 @@ function Buttons({ row, project, actions }: { row: SuggestionRow; project: Proje
  * merges and pushes, only while the core read that GitHub's base takes a
  * direct push; a base that takes pull requests only says so in its place, and
  * an unread one shows nothing. A quiet `버리기` either way. A refused merge
- * puts its answer first: `다시 시도` merges again, `다시 맞추기` makes the
- * branch again on its base, and a push GitHub did not take leaves `PR 올리기`.
+ * puts its answer first: `다시 시도` merges again (where the base conflicts,
+ * Hide remakes the branch on it and merges once that is ready), and a push
+ * GitHub did not take leaves `PR 올리기`.
  * A push that found the local base apart from GitHub's offers `PR 올리기`
  * first, since the pull request goes up from the branch whatever main holds,
  * and `내 커밋을 브랜치로 옮기고 main 맞추기`, which keeps main's own commits
@@ -597,12 +595,10 @@ export function BranchButtons({ row, project, actions, again, className }: { row
   const push = pr && again !== "pr" && again !== "sync" ? branch?.push ?? "unknown" : "unknown";
   return (
     <div className={cn("col-start-2 flex flex-wrap items-center gap-xs pt-xxs", className)} data-suggestion-branch-buttons={row.id}>
-      {again === "rebase" ? (
-        <Button className="pointer-events-auto" size="sm" onClick={() => actions.suggestionAction(id, row.id, "rebase")} data-suggestion-rebase={row.id}>{t("suggestions.branch.rebase")}</Button>
-      ) : github ? null : (
-        <Button className="pointer-events-auto" size="sm" onClick={() => actions.suggestionAction(id, row.id, "merge")} data-suggestion-merge={row.id}>{t(again === "merge" ? "suggestions.retry" : "suggestions.branch.merge", { base })}</Button>
+      {github ? null : (
+        <Button variant="secondary" className="pointer-events-auto" size="sm" onClick={() => actions.suggestionAction(id, row.id, "merge")} data-suggestion-merge={row.id}>{t(again === "merge" ? "suggestions.retry" : "suggestions.branch.merge", { base })}</Button>
       )}
-      {pr ? <Button className="pointer-events-auto" size="sm" variant={again === "rebase" ? "outline" : "default"} onClick={() => actions.suggestionAction(id, row.id, "open_pr")} data-suggestion-open-pr={row.id}>{t("suggestions.branch.openPr")}</Button> : null}
+      {pr ? <Button variant="secondary" className="pointer-events-auto" size="sm" onClick={() => actions.suggestionAction(id, row.id, "open_pr")} data-suggestion-open-pr={row.id}>{t("suggestions.branch.openPr")}</Button> : null}
       {again === "sync" ? <Button className="pointer-events-auto" size="sm" variant="outline" onClick={() => actions.suggestionAction(id, row.id, "sync_base")} data-suggestion-sync-base={row.id}>{t("suggestions.branch.sync", { base })}</Button> : null}
       {push === "allowed" ? (
         <Button className="pointer-events-auto" size="sm" variant="outline" onClick={() => actions.suggestionAction(id, row.id, "merge_push")} data-suggestion-merge-push={row.id}>{t(again === "merge" ? "suggestions.retry" : "suggestions.branch.mergePush", { base })}</Button>

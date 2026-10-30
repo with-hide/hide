@@ -1,7 +1,7 @@
 //! Bounded read-only hover content. One read runs and only the newest hover
 //! waits; no terminal controller, attachment, focus or grid is touched.
 use super::*;
-use crate::wire;
+use crate::engine::Wait;
 use serde::Deserialize;
 use std::time::{Duration, Instant};
 
@@ -116,16 +116,14 @@ impl Runtime {
             return;
         };
         let device = &request.workspace.device_id;
-        let connector = if device == self.node.as_str() {
-            self.live
-                .as_ref()
-                .map(|live| Arc::clone(&live.api_connector))
+        let engine = if device == self.node.as_str() {
+            self.live.as_ref().map(|live| Arc::clone(&live.engine))
         } else {
             self.remote_controls
                 .get(device)
-                .map(|remote| remote.api_connector())
+                .map(|remote| remote.engine())
         };
-        let Some(connector) = connector else {
+        let Some(engine) = engine else {
             self.fail_pane_move_preview("The terminal connection is unavailable");
             return;
         };
@@ -180,17 +178,14 @@ impl Runtime {
                         message = Some("The tab preview took too long".into());
                         break;
                     }
-                    let read = wire::pane_read_params(raw, "visible", 80)
-                        .and_then(|params| {
-                            hide_herdr_client::request_small_response(
-                                connector.as_ref(),
-                                "pane.read",
-                                params,
-                                remaining.min(Duration::from_secs(2)),
-                            )
-                            .map_err(|error| error.to_string())
-                        })
-                        .and_then(wire::pane_text);
+                    let read = engine
+                        .read_pane(
+                            Wait::Small(remaining.min(Duration::from_secs(2))),
+                            raw,
+                            "visible",
+                            80,
+                        )
+                        .map_err(String::from);
                     match read {
                         Ok(read) => rows.push(crate::model::PaneMovePreviewPaneSnapshot {
                             pane_id,

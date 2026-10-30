@@ -81,7 +81,6 @@ pub struct AppState {
     /// The operator's Comment mode on browser Views (PRD
     /// view-opener-feedback B9).
     pub browser_comments: Arc<crate::browser_page::comment::CommentSessions>,
-    pub herdr_socket: Option<PathBuf>,
     pub allowed_origins: Arc<HashSet<String>>,
     pub clients: Arc<AtomicUsize>,
     /// Authenticated shell windows, distinct from CLI and non-rendering clients.
@@ -1320,6 +1319,15 @@ pub(crate) fn delivery_next_action(code: &str) -> &'static str {
             "Install the agent CLI on the device so it is on the device's PATH, then run the command again"
         }
         "spawn_busy" => "The first request is still running; wait, then run the same command again",
+        "composer_not_empty" => {
+            "Someone is typing in the recipient's input, so nothing was typed or recorded; send it again without --force, and it is delivered once they submit"
+        }
+        "composer_unconfirmed" => {
+            "Hide could not read the recipient's input as empty (a menu or dialog may be open), so nothing was typed or recorded; send it again without --force"
+        }
+        "force_target_asleep" => {
+            "The recipient is asleep; send it again without --force, and a request or block wakes it"
+        }
         "machine_not_permitted" => {
             "Run the command from an agent on the machine that runs Hide, or leave out --machine"
         }
@@ -1493,6 +1501,9 @@ enum ScopedRequest {
     },
     /// `hide device`: the core's own device registrations.
     Device(herdr_core::device_command::DeviceCommand),
+    /// `hide pane`, `hide agent read` and `hide workspace purpose`: run
+    /// through the core's engine, which needs no shell.
+    Pane(herdr_core::pane_command::PaneCommand),
     /// `hide <path>`: a folder of the caller's machine opened as a project
     /// (`project_open`).
     ProjectOpen(String),
@@ -1514,6 +1525,7 @@ impl ScopedRequest {
                 | Self::Ps { .. }
                 | Self::AgentSleep { .. }
                 | Self::Device(..)
+                | Self::Pane(..)
                 | Self::ProjectOpen(..)
         )
     }
@@ -1664,6 +1676,11 @@ async fn scoped_client_loop(
                         .ok()
                         .filter(herdr_core::device_command::DeviceCommand::valid)
                         .map(ScopedRequest::Device),
+                        Some("pane") => serde_json::from_value::<
+                            herdr_core::pane_command::PaneCommand,
+                        >(value["command"].clone())
+                        .ok()
+                        .map(ScopedRequest::Pane),
                         Some("project_open") => value["path"]
                             .as_str()
                             .filter(|path| herdr_core::project_open::valid_path(path))
@@ -1676,6 +1693,7 @@ async fn scoped_client_loop(
                         || (value["type"] != "delivery"
                             && value["type"] != "mission"
                             && value["type"] != "plan"
+                            && value["type"] != "pane"
                             && text.len() > 16 * 1024)
                         || request_id.is_empty()
                         || request_id.len() > 64
@@ -1702,7 +1720,6 @@ async fn scoped_client_loop(
                         let renderers = Arc::clone(&state.renderers);
                         let desktop_renderers = Arc::clone(&state.desktop_renderers);
                         let browser_control = Arc::clone(&state.browser_control);
-                        let herdr_socket = state.herdr_socket.clone();
                         let query_token = token.clone();
                         let command_request_id = request_id.clone();
                         let caller_node = source.as_ref().map(|(node, _)| node.clone());
@@ -1713,7 +1730,7 @@ async fn scoped_client_loop(
                             Ok(Err(((*reason).to_owned(), *next_action)))
                         } else {
                             tokio::task::spawn_blocking(move || {
-                            let cap = registry.validate(&query_token, herdr_socket.as_deref(), &core, attested.as_deref())
+                            let cap = registry.validate(&query_token, core.engine(), &core, attested.as_deref())
                                 .map_err(|reason| (reason.to_owned(), crate::pane_auth::refusal_next_action(reason)))?;
                             if command.needs_renderer() && renderers.load(Ordering::SeqCst) == 0 {
                                 return Err((
@@ -1827,6 +1844,16 @@ async fn scoped_client_loop(
                                     &path,
                                     &command_request_id,
                                 )?,
+                                ScopedRequest::Pane(command) => {
+                                    let refusal = |code: String| {
+                                        let next = herdr_core::pane_command::next_action(&code)
+                                            .unwrap_or_else(|| crate::server::delivery_next_action(&code));
+                                        (code, next)
+                                    };
+                                    core.prepare_pane(&cap.context.device_id, &cap.pane_id, &cap.context, command)
+                                        .and_then(herdr_core::pane_command::Prepared::run)
+                                        .map_err(refusal)?
+                                }
                                 ScopedRequest::Device(command) => {
                                     core.device_command(&cap.context.device_id, command)
                                         .map_err(|code| {
@@ -2207,6 +2234,9 @@ fn handle_client_text(
             return Ok(ClientAction::Replies(handle_attachment_commit(
                 state, &event,
             )));
+        }
+        Some("thread_input") => {
+            return Ok(ClientAction::Replies(handle_thread_input(state, &event)));
         }
         Some("path_import") => {
             return Ok(ClientAction::Replies(handle_path_import(state, &event)));
@@ -3021,6 +3051,67 @@ fn attachment_refused(request_id: &str, reason: &str) -> Value {
     json!({"type": "attachment_refused", "payload": {"request_id": request_id, "reason": reason}})
 }
 
+/// A session thread's input box (PRD session-docs-and-assistant B29): the
+/// files it staged are committed here, where they were staged, and the core
+/// is told their paths with the words, which it types into the thread's
+/// pane. A refusal before the core is answered as an attachment's is, by
+/// the input's request id; the core's own answer is in the thread section.
+fn handle_thread_input(state: &AppState, event: &Value) -> Vec<Message> {
+    let request_id = payload_str(event, "request_id");
+    let refuse = |reason: &str| {
+        vec![Message::Text(
+            attachment_refused(&request_id, reason).to_string().into(),
+        )]
+    };
+    if !attachments::valid_request_id(&request_id) {
+        return refuse("invalid_request_id");
+    }
+    let (Some(generation), Some(text)) = (
+        event.pointer("/payload/generation").and_then(Value::as_u64),
+        event.pointer("/payload/text").and_then(Value::as_str),
+    ) else {
+        return refuse("invalid_item");
+    };
+    let stages: Vec<String> = event
+        .pointer("/payload/stages")
+        .and_then(Value::as_array)
+        .map(|stages| {
+            stages
+                .iter()
+                .filter_map(Value::as_str)
+                .map(str::to_owned)
+                .collect()
+        })
+        .unwrap_or_default();
+    let paths = if stages.is_empty() {
+        Vec::new()
+    } else {
+        match state.attachments.commit(&stages, false) {
+            Ok(paths) => paths,
+            Err(reason) => return refuse(reason),
+        }
+    };
+    let input = json!({
+        "schema_version": 2,
+        "kind": "session_thread_input",
+        "payload": {
+            "generation": generation,
+            "pane_id": payload_str(event, "pane_id"),
+            "request_id": request_id,
+            "text": text,
+            "paths": paths,
+        },
+    });
+    if let Err(error) = state
+        .core
+        .dispatch(serde_json::to_vec(&input).unwrap_or_default())
+    {
+        log_snapshot_failure("thread_input", &error);
+        return refuse("forward_failed");
+    }
+    Vec::new()
+}
+
 /// Opens one staged upload the client will send bytes for. The caps are
 /// checked here so a too-large file is refused before its bytes arrive.
 fn handle_attachment_stage(state: &AppState, event: &Value, connection: u64) -> Vec<Message> {
@@ -3760,13 +3851,14 @@ fn apply_boundary(boundary: &Boundary, event: &mut Value) -> Option<Value> {
         {
             browser_url(boundary, event, &kind)
         }
-        // The shell's attachment events name files the operator's machine
-        // shows it; hided is their only producer for a web client (which
-        // stages bytes instead), so a client that sends one is naming an
-        // arbitrary path and never reaches the core.
-        "terminal_attachment" | "terminal_attachment_ready" | "terminal_attachment_action" => {
-            rejected(kind.as_str())
-        }
+        // The shell's attachment events and a thread's input name files the
+        // operator's machine shows it; hided is their only producer for a
+        // web client (which stages bytes instead), so a client that sends
+        // one is naming an arbitrary path and never reaches the core.
+        "terminal_attachment"
+        | "terminal_attachment_ready"
+        | "terminal_attachment_action"
+        | "session_thread_input" => rejected(kind.as_str()),
         _ => None,
     }
 }
@@ -4537,7 +4629,7 @@ pub fn mount(seat: &crate::seat::SeatParts, state: AppState) -> tokio::task::Joi
             clients: Arc::clone(&state.clients),
             last_client_gone: Arc::clone(&state.last_client_gone),
             shutdown,
-            herdr_socket: state.herdr_socket.clone(),
+            herdr: state.core.engine().cloned(),
         },
         // Mobile on with a phone paired: the phone may come back at any
         // time and push has to keep going (PRD D-10). The idle clock starts
@@ -4555,7 +4647,8 @@ pub(crate) struct Idle {
     pub clients: Arc<AtomicUsize>,
     pub last_client_gone: Arc<Mutex<Instant>>,
     pub shutdown: crate::ending::Ending,
-    pub herdr_socket: Option<PathBuf>,
+    /// This machine's engine; `None` when the daemon runs without one.
+    pub herdr: Option<herdr_core::engine::EngineHandle>,
 }
 
 /// Ends the daemon once it had no screen for `idle_secs` while `held` was
@@ -4587,11 +4680,11 @@ pub(crate) fn watch_idle(
             // only while the server is unreachable, so a restart or a live
             // handoff, which brings it back within the idle window, never
             // ends the daemon.
-            if let Some(socket) = idle.herdr_socket.clone()
+            if let Some(engine) = idle.herdr.clone()
                 && herdr_probed.is_none_or(|at| at.elapsed() >= HERDR_PROBE_INTERVAL)
             {
                 herdr_probed = Some(Instant::now());
-                herdr_up = tokio::task::spawn_blocking(move || herdr_reachable(&socket))
+                herdr_up = tokio::task::spawn_blocking(move || herdr_reachable(&engine))
                     .await
                     .unwrap_or(false);
             }
@@ -4612,12 +4705,12 @@ pub(crate) fn watch_idle(
 const HERDR_PROBE_INTERVAL: Duration = Duration::from_secs(30);
 const HERDR_PROBE_TIMEOUT: Duration = Duration::from_secs(2);
 
-/// Whether the Herdr server at `socket` answers; a refusal is an answer.
-pub(crate) fn herdr_reachable(socket: &std::path::Path) -> bool {
-    matches!(
-        hide_herdr_client::request_with_timeout(socket, "ping", json!({}), HERDR_PROBE_TIMEOUT),
-        Ok(_) | Err(hide_herdr_client::ApiError::Remote { .. })
-    )
+/// Whether the engine answers; a refusal is an answer.
+pub(crate) fn herdr_reachable(engine: &herdr_core::engine::EngineHandle) -> bool {
+    match engine.ping(HERDR_PROBE_TIMEOUT) {
+        Ok(_) => true,
+        Err(error) => error.answered(),
+    }
 }
 
 pub async fn bind(addr: SocketAddr) -> Result<tokio::net::TcpListener, String> {

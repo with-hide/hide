@@ -74,6 +74,15 @@ pub struct RowFacts {
     /// The devices the agent waited for died with their process and nothing
     /// has begun since (B16).
     pub(crate) wake_vanished: bool,
+    /// How the session's last turn ended, as read for the agent's current
+    /// Herdr state; `None` while it runs or the read does not settle it. It
+    /// ends a hook's turn that began before that state
+    /// (`agent_hooks::facts`).
+    pub(crate) turn_ended: Option<hide_session::turns::TurnEnded>,
+    /// The keys of the session's last tool calls that have a result, as
+    /// read for the agent's current Herdr state: a hook's wait on one of
+    /// them that began before that state is over (`agent_hooks::facts`).
+    pub(crate) answered_calls: Vec<String>,
 }
 
 /// Who sent the request a row shows.

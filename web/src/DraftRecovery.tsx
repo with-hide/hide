@@ -136,11 +136,11 @@ function DraftRecoverySheet({ actions, onClose }: { actions: Actions; onClose: (
                   </span>
                   <span className="flex flex-wrap gap-sm">
                     {place.kind === "front" ? (
-                      <Button size="sm" data-draft-open={tag} onClick={() => { actions.openFile(draft.path, false); onClose(); }}>{t("common.open")}</Button>
+                      <Button variant="secondary" size="sm" data-draft-open={tag} onClick={() => { actions.openFile(draft.path, false); onClose(); }}>{t("common.open")}</Button>
                     ) : place.kind === "device" ? (
-                      <Button size="sm" data-draft-show-device={tag} onClick={() => actions.focusDevice(place.device)}>{t("documents.showPlace", { place: place.label })}</Button>
+                      <Button variant="secondary" size="sm" data-draft-show-device={tag} onClick={() => actions.focusDevice(place.device)}>{t("documents.showPlace", { place: place.label })}</Button>
                     ) : place.kind === "checkout" ? (
-                      <Button size="sm" data-draft-show-checkout={tag} onClick={() => actions.focusCheckout(place.workspaceId, place.checkoutId)}>{t("documents.showPlace", { place: place.label })}</Button>
+                      <Button variant="secondary" size="sm" data-draft-show-checkout={tag} onClick={() => actions.focusCheckout(place.workspaceId, place.checkoutId)}>{t("documents.showPlace", { place: place.label })}</Button>
                     ) : null}
                     <Button variant="ghost" size="sm" data-draft-export={tag} onClick={() => exportContents(draft)}>{t("documents.export")}</Button>
                     {confirming === draft.id ? (

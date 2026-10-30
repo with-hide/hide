@@ -51,6 +51,9 @@ pub(crate) struct Observation {
     /// composer declaration is checked (`composer_check_due`).
     pub hook_submit_at_unix_ms: u64,
     pub session: Option<hide_session::session_activity::SessionActivityRequest>,
+    /// The session a thread of this pane reads, for every agent with a
+    /// thread reader, OpenCode's database included.
+    pub thread: Option<super::session_thread::ThreadReference>,
     pub host_scope: Option<String>,
     pub turn: Turn,
 }
@@ -231,6 +234,7 @@ impl Runtime {
                 released_input_at_unix_ms: previous.map_or(0, |old| old.released_input_at_unix_ms),
                 hook_submit_at_unix_ms: previous.map_or(0, |old| old.hook_submit_at_unix_ms),
                 session,
+                thread: super::session_thread::ThreadReference::of(agent),
                 host_scope: host_scope
                     .filter(|scope| scope.len() <= 4096)
                     .map(str::to_owned),
@@ -256,6 +260,8 @@ impl Runtime {
         // A woken pane is first seen here; the session projection that
         // follows publishes whatever this settles.
         self.settle_dormant_registrations();
+        self.follow_resumed_conductors(device);
+        self.follow_session_thread(device, payload);
     }
 
     /// Continue a registration only when this host still reports its terminal
@@ -594,7 +600,7 @@ impl Runtime {
             .filter(|registration| registration.id != self.node.as_str())
             .map(|registration| {
                 let id = registration.id.as_str();
-                let reachable = self.remote_herdr_api(id).is_some() && !self.device_host_ended(id);
+                let reachable = self.device_engine(id).is_some() && !self.device_host_ended(id);
                 (registration.id.clone(), reachable)
             })
             .collect()
@@ -659,16 +665,16 @@ impl Runtime {
         }
     }
 
-    /// The phone's reply is text hide sent and submitted in one write to an
-    /// agent waiting on the operator, so it is a key and a submit.
-    pub(crate) fn note_delivery_reply(&mut self, pane_id: &str) {
+    /// A phone's reply or a thread's input is text hide sent and submitted
+    /// in one write, so it is a key and a submit; `source` names which.
+    pub(crate) fn note_delivery_reply(&mut self, pane_id: &str, source: &'static str) {
         self.reopen_resolved_session(pane_id);
         if let Some(observation) = self.delivery_observations.get_mut(pane_id) {
             let now = unix_milliseconds();
             observation.last_input_at_unix_ms = now;
             observation.last_submit_at_unix_ms = now;
             self.sync_composer_mark(pane_id, now);
-            self.trace_delivery_input(pane_id, "phone_reply");
+            self.trace_delivery_input(pane_id, source);
         }
     }
 
@@ -1064,7 +1070,7 @@ impl Runtime {
                 if !crate::delivery::valid_session(session) {
                     return Err("session_invalid".into());
                 }
-                let own = crate::wire::session_digest(session) == actor.session;
+                let own = crate::engine::tokens::session_digest(session) == actor.session;
                 // A tool event's ask submits nothing: the composer may hold
                 // a draft while the agent works (D-09). It must come from
                 // the pane's own session, since it hands letters over.
@@ -1198,7 +1204,26 @@ impl Runtime {
                 .actor
                 .require_native_identity()?;
         }
-        Ok(Prepared::new(
+        // A forced letter is typed into a pane that runs now, so its
+        // composer can be read; a sleeping recipient is woken by an ordinary
+        // letter instead (PRD engine-bundle-1 D-14).
+        let forced = match (&command, &target) {
+            (Command::Send { force: true, .. }, Some(target)) if !repeated => {
+                let live = self
+                    .delivery_observations
+                    .get(&target.actor.pane_id)
+                    .is_some_and(|observation| observation.actor.same_identity(&target.actor));
+                if !live {
+                    return Err("force_target_asleep".into());
+                }
+                Some(
+                    self.delivery_engine(&target.actor.device_id)
+                        .ok_or("delivery_unavailable")?,
+                )
+            }
+            _ => None,
+        };
+        let prepared = Prepared::new(
             self.delivery_client.clone().ok_or("delivery_unavailable")?,
             Authority {
                 caller: caller.to_owned(),
@@ -1207,7 +1232,11 @@ impl Runtime {
             actor,
             target,
             command,
-        ))
+        );
+        Ok(match forced {
+            Some(engine) => prepared.forced_through(engine),
+            None => prepared,
+        })
     }
 
     pub(crate) fn install_delivery_client(&mut self, client: Client) {
@@ -1518,14 +1547,11 @@ impl Runtime {
             .is_some_and(|observation| observation.actor.same_identity(actor))
     }
 
-    pub(crate) fn delivery_connector(
-        &self,
-        device: &str,
-    ) -> Option<Arc<dyn hide_herdr_client::ApiConnector>> {
+    pub(crate) fn delivery_engine(&self, device: &str) -> Option<crate::engine::SharedEngine> {
         if self.node == device {
-            self.live.as_ref().map(|live| live.api_connector.clone())
+            self.live.as_ref().map(|live| live.engine.clone())
         } else {
-            self.remote_herdr_api(device)
+            self.device_engine(device)
         }
     }
 
@@ -1762,7 +1788,7 @@ impl Runtime {
         let (connector, scope, machine) = if on_node {
             let live = self.live.as_ref().ok_or("herdr_unavailable")?;
             (
-                live.api_connector.clone(),
+                live.engine.clone(),
                 live.socket_path
                     .to_str()
                     .ok_or("host_scope_unavailable")?
@@ -1771,7 +1797,7 @@ impl Runtime {
             )
         } else {
             (
-                self.remote_herdr_api(device).ok_or("device_unavailable")?,
+                self.device_engine(device).ok_or("device_unavailable")?,
                 device.to_owned(),
                 self.device_machine_ids
                     .get(device)
@@ -1787,7 +1813,7 @@ impl Runtime {
                 .find_map(|(ready, node)| (ready == device).then_some(node))
         };
         Ok(CoordinationContext {
-            connector,
+            engine: connector,
             host_scope: scope,
             machine,
             codex: self.codex_daemon(device),
@@ -1845,7 +1871,7 @@ impl Runtime {
 
 /// What a coordination command needs of the machine it acts on.
 pub(crate) struct CoordinationContext {
-    pub(crate) connector: Arc<dyn hide_herdr_client::ApiConnector>,
+    pub(crate) engine: crate::engine::SharedEngine,
     pub(crate) host_scope: String,
     pub(crate) machine: String,
     pub(crate) codex: crate::codex_launch::CodexDaemon,
@@ -1865,6 +1891,7 @@ pub(crate) mod tests {
     const WAITED: crate::delivery::doorbell::Patience = crate::delivery::doorbell::Patience {
         arrived_at_unix_ms: 0,
         now: false,
+        forced: false,
     };
     use crate::delivery::worker::Worker;
     use crate::handle::ChangeNotifier;
@@ -1933,13 +1960,13 @@ pub(crate) mod tests {
     pub(crate) fn coordinator_bootstrap(
         runtime: &mut Runtime,
         device: &str,
-        connector: &Arc<dyn hide_herdr_client::ApiConnector>,
+        connector: &crate::engine::SharedEngine,
     ) {
         let control = runtime
             .remote_controls
             .get(device)
             .expect("installed owner");
-        assert!(Arc::ptr_eq(&control.api_connector(), connector));
+        assert!(Arc::ptr_eq(&control.engine(), connector));
         let status = runtime
             .snapshot
             .status
@@ -2123,7 +2150,7 @@ pub(crate) mod tests {
         let payload: SessionSnapshotPayload = serde_json::from_value(json!({"agents":[
             {"id":"sender","pane_id":"sender","agent":"codex","agent_status":"working","state_change_seq":1,"lineage_session":"sender-session"},
             {"id":"recipient","pane_id":"recipient","agent":"codex","agent_status":"idle","state_change_seq":2,
-             "lineage_session":crate::wire::session_digest(native)},
+             "lineage_session":crate::engine::tokens::session_digest(native)},
         ]})).unwrap();
         runtime.observe_delivery(crate::node::TEST_NODE, &payload, None, None);
         let observation = runtime.delivery_observations.get_mut("recipient").unwrap();
@@ -2137,7 +2164,7 @@ pub(crate) mod tests {
             socket_path: herdr.socket_path().to_path_buf(),
             runtime: std::sync::Weak::new(),
             notifier: ChangeNotifier::noop(),
-            api_connector: Arc::new(herdr.connector()),
+            engine: herdr.engine(),
             node: Arc::new(hide_node::Local::of_process()),
         });
         observation
@@ -2223,7 +2250,7 @@ pub(crate) mod tests {
             socket_path: herdr.socket_path().to_path_buf(),
             runtime: std::sync::Weak::new(),
             notifier: ChangeNotifier::noop(),
-            api_connector: Arc::new(herdr.connector()),
+            engine: herdr.engine(),
             node: Arc::new(hide_node::Local::of_process()),
         });
     }
@@ -2309,6 +2336,7 @@ pub(crate) mod tests {
             let patience = Patience {
                 arrived_at_unix_ms: 0,
                 now: true,
+                forced: false,
             };
             assert_eq!(
                 judge(&observed(&guard, "recipient"), patience, u64::MAX),
@@ -2899,7 +2927,7 @@ pub(crate) mod tests {
         .unwrap();
         let mut guard = runtime.lock().unwrap();
         guard.install_delivery_client(client);
-        let own = crate::wire::session_digest("hook-session");
+        let own = crate::engine::tokens::session_digest("hook-session");
         let payload: SessionSnapshotPayload = serde_json::from_value(json!({"agents":[
             {"id":"sender","pane_id":"sender","agent":"codex","agent_status":"working","state_change_seq":1,"lineage_session":"sender-session"},
             {"id":"recipient","pane_id":"recipient","agent":"codex","agent_status":"idle","state_change_seq":2,"lineage_session":own},
@@ -3019,7 +3047,7 @@ pub(crate) mod tests {
         .unwrap();
         let mut guard = runtime.lock().unwrap();
         guard.install_delivery_client(client);
-        let own = crate::wire::session_digest("hook-session");
+        let own = crate::engine::tokens::session_digest("hook-session");
         let payload: SessionSnapshotPayload = serde_json::from_value(json!({"agents":[
             {"id":"sender","pane_id":"sender","agent":"codex","agent_status":"working","state_change_seq":1,"lineage_session":"sender-session"},
             {"id":"recipient","pane_id":"recipient","agent":"opencode","agent_status":"working","state_change_seq":2,"lineage_session":own},
@@ -3032,6 +3060,7 @@ pub(crate) mod tests {
             body: format!("{intent} body"),
             kind: "request".into(),
             now,
+            force: false,
         };
         let sender_context = authority(&sender).context;
         let mut sent = Vec::new();
@@ -3227,6 +3256,7 @@ pub(crate) mod tests {
                     body: "done".into(),
                     kind: "report".into(),
                     now: false,
+                    force: false,
                 },
             )
             .unwrap();
@@ -3297,6 +3327,7 @@ pub(crate) mod tests {
             body: "done".into(),
             kind: "report".into(),
             now: false,
+            force: false,
         }
     }
 
@@ -3475,6 +3506,7 @@ pub(crate) mod tests {
                 body: "hello".into(),
                 kind: "request".into(),
                 now: false,
+                force: false,
             },
             Command::Inbox,
             Command::WatchStart {
@@ -3564,6 +3596,7 @@ pub(crate) mod tests {
                         body: "private".into(),
                         kind: "request".into(),
                         now: false,
+                        force: false,
                     },
                 )
                 .unwrap()
@@ -3592,9 +3625,9 @@ pub(crate) mod tests {
     fn registered_pair(runtime: &mut Runtime) -> Ledger {
         let payload: SessionSnapshotPayload = serde_json::from_value(json!({"agents":[
             {"id":"lead","pane_id":"lead","agent":"claude","agent_status":"idle","state_change_seq":1,
-             "lineage_session":crate::wire::session_digest("lead-native")},
+             "lineage_session":crate::engine::tokens::session_digest("lead-native")},
             {"id":"child","pane_id":"child","agent":"codex","agent_status":"working","state_change_seq":1,
-             "lineage_session":crate::wire::session_digest("child-native")},
+             "lineage_session":crate::engine::tokens::session_digest("child-native")},
         ]}))
         .unwrap();
         runtime.observe_delivery(crate::node::TEST_NODE, &payload, Some("scope"), None);
@@ -3666,9 +3699,9 @@ pub(crate) mod tests {
             "panes":[{"pane_id":"moved-child","terminal_id":"terminal-child"}],
             "agents":[
                 {"id":"lead","pane_id":"lead","agent":"claude","agent_status":"idle",
-                    "lineage_session":crate::wire::session_digest("lead-native")},
+                    "lineage_session":crate::engine::tokens::session_digest("lead-native")},
                 {"id":"child","pane_id":"moved-child","agent":"codex","agent_status":"working",
-                    "lineage_session":crate::wire::session_digest("child-native")}
+                    "lineage_session":crate::engine::tokens::session_digest("child-native")}
             ]}))
             .unwrap();
             guard.observe_delivery(crate::node::TEST_NODE, &payload, Some("scope"), None);
@@ -3712,7 +3745,7 @@ pub(crate) mod tests {
             let payload = serde_json::from_value(json!({
                 "panes":[{"pane_id":"moved-child","terminal_id":terminal}],
                 "agents":[{"id":"child","pane_id":"moved-child","agent":"codex",
-                    "agent_status":"working","lineage_session":crate::wire::session_digest(session)}]
+                    "agent_status":"working","lineage_session":crate::engine::tokens::session_digest(session)}]
             })).unwrap();
             guard.observe_delivery(crate::node::TEST_NODE, &payload, Some(scope), None);
             assert!(
@@ -3750,7 +3783,7 @@ pub(crate) mod tests {
             let payload = serde_json::from_value(json!({
                 "panes":[{"pane_id":"moved-child","terminal_id":"terminal-child"}],
                 "agents":[{"id":"child","pane_id":"moved-child","agent":"codex","agent_status":"working",
-                    "lineage_session":crate::wire::session_digest("child-native")}]
+                    "lineage_session":crate::engine::tokens::session_digest("child-native")}]
             })).unwrap();
             // This is the Remote coordinator's actual calling convention.
             guard.observe_delivery("device", &payload, None, None);
@@ -3779,7 +3812,7 @@ pub(crate) mod tests {
     fn only_lead() -> SessionSnapshotPayload {
         serde_json::from_value(json!({"agents":[
             {"id":"lead","pane_id":"lead","agent":"claude","agent_status":"idle","state_change_seq":1,
-             "lineage_session":crate::wire::session_digest("lead-native")},
+             "lineage_session":crate::engine::tokens::session_digest("lead-native")},
         ]}))
         .unwrap()
     }
@@ -4106,9 +4139,9 @@ pub(crate) mod tests {
             set_live(&mut guard, Some(&herdr));
             let payload: SessionSnapshotPayload = serde_json::from_value(json!({"agents":[
                 {"id":"sender","pane_id":"sender","agent":"codex","agent_status":"working","state_change_seq":1,
-                    "lineage_session":crate::wire::session_digest("writer-session")},
+                    "lineage_session":crate::engine::tokens::session_digest("writer-session")},
                 {"id":"recipient","pane_id":"recipient","agent":"codex","agent_status":"working","state_change_seq":1,
-                    "lineage_session":crate::wire::session_digest("reader-session")},
+                    "lineage_session":crate::engine::tokens::session_digest("reader-session")},
             ]})).unwrap();
             guard.observe_delivery(crate::node::TEST_NODE, &payload, None, None);
         }
@@ -4156,6 +4189,7 @@ pub(crate) mod tests {
                 body: "read me after a restart".into(),
                 kind: "request".into(),
                 now: false,
+                force: false,
             },
         )
         .unwrap();

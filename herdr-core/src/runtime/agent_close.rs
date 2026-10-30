@@ -12,10 +12,10 @@ impl Runtime {
     /// shell.
     pub(super) fn keeps_named_tab(
         &self,
-        target: &live::CloseCaptureTarget,
+        target: &crate::recent_closed::capture::CloseCaptureTarget,
         tab: &TabSnapshot,
     ) -> bool {
-        let live::CloseCaptureTarget::Pane { pane_id } = target else {
+        let crate::recent_closed::capture::CloseCaptureTarget::Pane { pane_id } = target else {
             return false;
         };
         tab.naming.operator_name().is_some()
@@ -48,7 +48,7 @@ impl Runtime {
     /// closing tab.
     pub(crate) fn ingest_close_replacement(
         &mut self,
-        request: &live::CloseEffectRequest,
+        request: &crate::recent_closed::capture::CloseEffectRequest,
         shell: &str,
         payload: SessionSnapshotPayload,
     ) -> Result<(), String> {
@@ -156,7 +156,7 @@ impl Runtime {
     /// and it takes the keyboard from the closing pane.
     fn ingest_shell_in_tab(
         &mut self,
-        request: &live::CloseEffectRequest,
+        request: &crate::recent_closed::capture::CloseEffectRequest,
         shell: &str,
         payload: SessionSnapshotPayload,
     ) -> Result<(), String> {
@@ -279,7 +279,7 @@ impl Runtime {
         self.panes_closing.extend(operation.pane_ids);
         // The node refuses keys for a closing pane from now on.
         self.sync_terminal_intents();
-        if let Err(message) = live::spawn_close_capture(context, request) {
+        if let Err(message) = crate::recent_closed::capture::spawn_close_capture(context, request) {
             self.fail_close_operation(key, message);
         }
         self.sync_recent_closed_snapshot();

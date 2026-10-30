@@ -762,7 +762,10 @@ impl Runtime {
     /// B10): the device's own node link, whichever way it opened, asked as
     /// it stands and never woken. A node that dials in takes files from its
     /// own screen only (PRD core-host-node-remote-core D-06).
-    fn staging_link(&self, target: &str) -> Result<Arc<dyn crate::node_access::NodeLink>, String> {
+    pub(super) fn staging_link(
+        &self,
+        target: &str,
+    ) -> Result<Arc<dyn crate::node_access::NodeLink>, String> {
         if matches!(
             self.remote_file_transports.get(target),
             Some(super::devices::DeviceReach::Inbound(_))

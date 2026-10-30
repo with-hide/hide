@@ -133,7 +133,7 @@ impl Runtime {
             .get(device)
             .is_some_and(|next| now_unix_ms < *next)
             || self.sleep_machine(device) != SleepMachine::Node
-            || self.remote_herdr_api(device).is_none()
+            || self.device_engine(device).is_none()
             || self.effects_held()
         {
             return false;
@@ -425,7 +425,7 @@ impl Runtime {
         }
         let reachable = match device {
             None => self.live.is_some(),
-            Some(device) => self.remote_herdr_api(device).is_some(),
+            Some(device) => self.device_engine(device).is_some(),
         };
         if !reachable {
             return Err(SleepRefused::Unreachable);
@@ -918,7 +918,7 @@ impl Runtime {
         let Some(device) = pane_device(pane_id) else {
             let live = self.live.as_ref()?;
             return Some(SleepTarget {
-                api_connector: Arc::clone(&live.api_connector),
+                engine: Arc::clone(&live.engine),
                 node: Arc::clone(&live.node),
                 runtime: live.runtime.clone(),
                 notifier: live.notifier.clone(),
@@ -931,7 +931,7 @@ impl Runtime {
         }
         let worker = self.worker_context.as_ref()?;
         Some(SleepTarget {
-            api_connector: self.remote_herdr_api(device)?,
+            engine: self.device_engine(device)?,
             node: super::inbound::InboundLink::for_device(device, worker.runtime.clone()),
             runtime: worker.runtime.clone(),
             notifier: worker.notifier.clone(),

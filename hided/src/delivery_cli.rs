@@ -4,7 +4,7 @@ use herdr_core::delivery::{BODY_LIMIT, Command, HOOK_LETTERS};
 
 use crate::env::{self, Env};
 
-pub const USAGE: &str = "hide request send <target> --intent <key> --body <text> [--kind request|block|report|progress] [--now]\nhide request reply <id> --intent <key> --body <text>\nhide request ack|cancel|show <id>\nhide inbox [--hook [--prompt-digest <sha256>] [--session <id>] [--tool|--turn-end]]\nhide watch start <target> [--observer <id>] [--actor <id>]\nhide watch assign <watch-or-target-id> --observer <id> [--actor <id>] [--expected-generation <n>] [--approval <text>]\nhide watch stop <id>\nhide watch list\nThese commands need a running Hide and a current agent pane; Hide's window does not have to be open.";
+pub const USAGE: &str = "hide request send <target> --intent <key> --body <text> [--kind request|block|report|progress] [--now | --force]\nhide request reply <id> --intent <key> --body <text>\nhide request ack|cancel|show <id>\nhide inbox [--hook [--prompt-digest <sha256>] [--session <id>] [--tool|--turn-end]]\nhide watch start <target> [--observer <id>] [--actor <id>]\nhide watch assign <watch-or-target-id> --observer <id> [--actor <id>] [--expected-generation <n>] [--approval <text>]\nhide watch stop <id>\nhide watch list\nThese commands need a running Hide and a current agent pane; Hide's window does not have to be open.";
 
 pub fn parse<'a>(
     topic: &str,
@@ -123,9 +123,14 @@ pub fn parse<'a>(
             let mut body = None;
             let mut kind = None;
             let mut now = false;
+            let mut force = false;
             while let Some(flag) = args.next() {
-                if flag == "--now" && verb == Some("send") && !now {
+                if flag == "--now" && verb == Some("send") && !now && !force {
                     now = true;
+                    continue;
+                }
+                if flag == "--force" && verb == Some("send") && !force && !now {
+                    force = true;
                     continue;
                 }
                 let value = args.next().ok_or(USAGE)?.clone();
@@ -159,6 +164,7 @@ pub fn parse<'a>(
                     body,
                     kind: kind.unwrap_or_else(|| "request".into()),
                     now,
+                    force,
                 })
             } else {
                 Ok(Command::Reply {
@@ -321,6 +327,7 @@ mod tests {
                 body: "body".into(),
                 kind: "request".into(),
                 now: false,
+                force: false,
             }
         );
         assert!(parse_line(&["watch", "start", "target", "--force"]).is_err());

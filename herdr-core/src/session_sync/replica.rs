@@ -156,7 +156,7 @@ pub(crate) const SNAPSHOT_FIELDS_THE_REPLICA_READS: [&str; 7] = [
 impl SessionReplica {
     #[cfg(test)]
     pub(crate) fn from_snapshot(snapshot: &Value) -> Result<Self, SessionFetchError> {
-        Self::from_decoded(wire::snapshot(snapshot.clone())?)
+        Self::from_decoded(crate::engine::herdr::wire::snapshot(snapshot.clone())?)
     }
 
     pub(crate) fn from_decoded(state: ProjectionState) -> Result<Self, SessionFetchError> {
@@ -424,7 +424,7 @@ impl SessionReplica {
         payload: SessionSnapshotPayload,
     ) -> Result<(RemoteSessionSnapshot, Vec<crate::sidebar::AgentExclusion>), SessionFetchError>
     {
-        let issue_tokens = crate::wire::issue_tokens(&payload);
+        let issue_tokens = crate::engine::tokens::issue_tokens(&payload);
         let agent_projection = crate::sidebar::project_agents(payload);
         let mut agents = agent_projection.agents;
 
@@ -770,18 +770,10 @@ impl SessionReplica {
                     .as_deref()
                     .map(|pane_id| remote_pane_id(target_id, pane_id)),
                 pane_layouts,
-                pane_hook_tokens: state
-                    .panes
-                    .iter()
-                    .map(|pane| {
-                        (
-                            remote_pane_id(target_id, &pane.pane_id),
-                            crate::agent_hooks::PaneHookTokens::read(&pane.tokens),
-                        )
-                    })
-                    .filter(|(_, tokens)| !tokens.is_empty())
-                    .collect(),
-                issue_tokens: crate::wire::IssueTokens {
+                // The core's hook facts, laid by the device's coordinator;
+                // Herdr's pane tokens carry none of them.
+                pane_hook_tokens: BTreeMap::new(),
+                issue_tokens: crate::engine::tokens::IssueTokens {
                     panes: issue_tokens
                         .panes
                         .into_iter()

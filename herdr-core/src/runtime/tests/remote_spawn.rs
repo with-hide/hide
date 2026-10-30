@@ -252,7 +252,7 @@ fn spawner() -> Spawner {
     let (runtime, mut actor, _, path) = fixture(root.path());
     // The ledger keeps the digest of the native session, which is what the
     // pane's observation must carry for the caller to be that participant.
-    actor.session = crate::wire::session_digest("native-parent");
+    actor.session = crate::engine::tokens::session_digest("native-parent");
     let payload: crate::sidebar::SessionSnapshotPayload = serde_json::from_value(json!({"agents":[
         {"id":"sender","pane_id":"sender","agent":"codex","agent_status":"working",
             "state_change_seq":1,"lineage_session":actor.session},
@@ -338,7 +338,7 @@ fn spawner() -> Spawner {
         );
         guard.install_remote_control(RemoteControlContext::new(
             DEVICE,
-            Arc::new(herdr.connector()),
+            herdr.engine(),
             Arc::downgrade(&runtime),
             ChangeNotifier::noop(),
         ));
@@ -473,7 +473,7 @@ impl Spawner {
             .install_delivery_client(self.client.clone());
         crate::coordination::lineage::Writer::new(
             DEVICE.into(),
-            Arc::new(self.herdr.connector()),
+            self.herdr.engine(),
             Arc::downgrade(&self.runtime),
         )
         .unwrap()
@@ -485,11 +485,11 @@ impl Spawner {
         let listed = hide_herdr_client::request_with_connector(
             &self.herdr.connector(),
             "agent.list",
-            crate::wire::empty_params(),
+            crate::engine::herdr::wire::empty_params(),
             Duration::from_secs(2),
         )
         .unwrap();
-        let agents = crate::wire::agents_response(listed).unwrap();
+        let agents = crate::engine::herdr::wire::agents_response(listed).unwrap();
         let ledger = self.runtime.lock().unwrap().delivery_state().unwrap();
         writer.observe(
             &ledger,
@@ -958,7 +958,7 @@ fn a_caller_on_a_device_may_name_no_other_device() {
 #[test]
 fn a_device_herdr_that_stops_answering_is_unavailable_and_the_retry_converges() {
     let spawner = spawner();
-    let install = |connector: Arc<dyn hide_herdr_client::ApiConnector>| {
+    let install = |connector: crate::engine::SharedEngine| {
         spawner
             .runtime
             .lock()
@@ -970,9 +970,9 @@ fn a_device_herdr_that_stops_answering_is_unavailable_and_the_retry_converges() 
                 ChangeNotifier::noop(),
             ));
     };
-    install(Arc::new(hide_herdr_client::LocalSocketConnector::new(
+    install(crate::engine::herdr::local(
         spawner.root.path().join("no-herdr.sock"),
-    )));
+    ));
     assert_eq!(
         spawner
             .spawn(Some("here"), Some(DEVICE), "down")
@@ -982,7 +982,7 @@ fn a_device_herdr_that_stops_answering_is_unavailable_and_the_retry_converges() 
     let reserved = spawner.ledger().spawns;
     assert_eq!(reserved.len(), 1);
     assert!(reserved[0].pane.is_none() && reserved[0].child.is_none());
-    install(Arc::new(spawner.herdr.connector()));
+    install(spawner.herdr.engine());
     let answer = spawner
         .spawn(Some("here"), Some(DEVICE), "down")
         .expect("the retry continues the same spawn");
@@ -1070,7 +1070,7 @@ fn a_device_herdr_that_refuses_keeps_its_own_failure() {
         .unwrap()
         .install_remote_control(RemoteControlContext::new(
             DEVICE,
-            Arc::new(refusing.connector()),
+            refusing.engine(),
             Arc::downgrade(&spawner.runtime),
             ChangeNotifier::noop(),
         ));

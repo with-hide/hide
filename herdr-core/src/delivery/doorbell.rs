@@ -13,14 +13,13 @@ use std::sync::{Arc, Mutex, Weak};
 use std::thread;
 use std::time::Duration;
 
-use hide_herdr_client::{ApiConnector, request_small_response};
 use hide_session::turns::Waiting;
-use serde_json::{Value, json};
+use serde_json::json;
 
+use crate::engine::{Engine, EngineError, Readiness, Wait};
 use crate::runtime::Runtime;
 use crate::runtime::delivery::Observation;
 use crate::runtime::mission_events::SendFailure;
-use crate::wire::{self, Readiness};
 
 use super::ledger::{Ledger, Letter, State};
 use super::worker::{Client, Effect, now};
@@ -98,6 +97,10 @@ pub(crate) enum Hold {
     /// The core waits for its move's link before it types into any pane
     /// (`effects.rs`).
     CorePending,
+    /// Right before a forced letter's bell, the screen could not be read as
+    /// an empty composer: no declaration for the kind, none where it is
+    /// declared, as under a menu or a dialog, or a failed or cut read.
+    ComposerUnread,
 }
 
 impl Hold {
@@ -121,6 +124,7 @@ impl Hold {
             Self::Letter => "letter_changed",
             Self::Exhausted => "attempts_exhausted",
             Self::CorePending => "core_pending",
+            Self::ComposerUnread => "composer_unconfirmed",
         }
     }
 }
@@ -154,6 +158,9 @@ pub(crate) enum Turn {
 pub(crate) struct Patience {
     pub arrived_at_unix_ms: u64,
     pub now: bool,
+    /// Sent with `--force` (PRD engine-bundle-1 D-14): the composer read
+    /// right before the bell decides instead of the draft and quiet clocks.
+    pub forced: bool,
 }
 
 impl Patience {
@@ -161,6 +168,7 @@ impl Patience {
         Self {
             arrived_at_unix_ms: letter.created_at_unix_ms,
             now: letter.immediate,
+            forced: letter.forced,
         }
     }
 
@@ -181,11 +189,17 @@ impl Patience {
 /// newer than the last submission and the last start of work (input before
 /// either was consumed by it, a menu answer for one), and the pane still hosts
 /// the session the letter was written for.
+///
+/// A forced letter skips the kind's bell declaration, the mid-turn wait, an
+/// unsettled session read, the draft and the quiet period: the doorbell reads
+/// the composer empty right before it types instead. It still waits for a
+/// menu, a question of the agent's own, and a kind that takes letters at its
+/// tools while it works, whose next tool hands the letter over.
 pub(crate) fn judge(observation: &Observation, patience: Patience, now: u64) -> Result<(), Hold> {
     if observation.telemetry_stale {
         return Err(Hold::Status);
     }
-    if !bell_target(&observation.actor.kind) {
+    if !patience.forced && !bell_target(&observation.actor.kind) {
         return Err(Hold::Kind);
     }
     if observation.actor.require_native_identity().is_err() {
@@ -196,7 +210,8 @@ pub(crate) fn judge(observation: &Observation, patience: Patience, now: u64) -> 
         "working"
             if observation.state_change_seq.is_some()
                 && !super::mailbox::tool_letters(&observation.actor.kind)
-                && patience.due(observation.entered_working_at_unix_ms, now) => {}
+                && (patience.forced
+                    || patience.due(observation.entered_working_at_unix_ms, now)) => {}
         "working" => return Err(Hold::Working),
         "blocked" => return Err(Hold::Blocked),
         _ => return Err(Hold::Status),
@@ -206,7 +221,11 @@ pub(crate) fn judge(observation: &Observation, patience: Patience, now: u64) -> 
         Turn::Read(Waiting::Question | Waiting::PlanApproval) => {
             return Err(Hold::AwaitingOperator);
         }
+        Turn::Unread if patience.forced => {}
         Turn::Unread => return Err(Hold::SessionUnread),
+    }
+    if patience.forced {
+        return Ok(());
     }
     if observation.unsent_draft() {
         return Err(Hold::Draft);
@@ -420,11 +439,11 @@ impl Doorbell {
                 continue;
             }
             // The bell is worded in the operator's language, read with the
-            // connector from what the runtime already holds.
-            let Some((connector, language)) = owner.lock().ok().and_then(|guard| {
+            // engine from what the runtime already holds.
+            let Some((engine, language)) = owner.lock().ok().and_then(|guard| {
                 guard
-                    .delivery_connector(&letter.recipient.device_id)
-                    .map(|connector| (connector, guard.interface_language()))
+                    .delivery_engine(&letter.recipient.device_id)
+                    .map(|engine| (engine, guard.interface_language()))
             }) else {
                 self.link_lost(&letter.id);
                 self.hold(&letter.id, pane, Hold::Absent);
@@ -455,12 +474,30 @@ impl Doorbell {
                     other.id != letter.id && other.recipient.same_identity(&letter.recipient)
                 })
                 .count();
+            // A forced letter is typed only over a composer read empty now;
+            // one that shows text stays, as an ordinary letter (D-14).
+            if letter.forced
+                && let Err(reason) = super::composer::forced_clear(
+                    engine.as_ref(),
+                    &observed.raw_pane_id,
+                    &observed.actor.kind,
+                )
+            {
+                defer(client, letter, reason);
+                let hold = if reason == super::composer::NOT_EMPTY {
+                    Hold::Draft
+                } else {
+                    Hold::ComposerUnread
+                };
+                self.hold(&letter.id, pane, hold);
+                continue;
+            }
             let sender = bell_sender(owner, &ledger, letter);
             let line = bell_line(&sender, letter, others, language);
             match deliver(
                 owner,
                 client,
-                connector.as_ref(),
+                engine.as_ref(),
                 &letter.id,
                 &observed,
                 (&line, &sender, &letter.kind),
@@ -566,10 +603,10 @@ impl Doorbell {
                     continue;
                 }
             };
-            let Some(connector) = owner
+            let Some(engine) = owner
                 .lock()
                 .ok()
-                .and_then(|guard| guard.delivery_connector(&work.conductor.device_id))
+                .and_then(|guard| guard.delivery_engine(&work.conductor.device_id))
             else {
                 self.answer_hold(owner, &work, Hold::Absent);
                 continue;
@@ -583,7 +620,7 @@ impl Doorbell {
                 continue;
             }
             *count += 1;
-            match type_answer(owner, connector.as_ref(), &work, &observed, stop) {
+            match type_answer(owner, engine.as_ref(), &work, &observed, stop) {
                 Ok(Outcome::Rung) => {
                     self.answer_tried.remove(&work.mission);
                     self.answer_held.remove(&work.mission);
@@ -693,7 +730,10 @@ fn bell_line(
         kind: &letter.kind,
         body: &letter.body,
         others,
-        inbox: super::bell::names_inbox(&letter.recipient.kind),
+        // A kind the doorbell does not ring has no bell turn of its own, so
+        // a forced bell there says where the letter is.
+        inbox: super::bell::names_inbox(&letter.recipient.kind)
+            || (letter.forced && !bell_target(&letter.recipient.kind)),
         language,
     })
 }
@@ -721,6 +761,27 @@ fn bell_sender(owner: &Mutex<Runtime>, ledger: &Ledger, letter: &Letter) -> Stri
         .unwrap_or_else(|| crate::sidebar::provider_name(Some(&about.kind)))
 }
 
+/// Leaves a forced letter whose recipient's composer was not read empty as
+/// an ordinary letter, logged with why and never with the screen's text.
+fn defer(client: &Client, letter: &Letter, reason: &str) {
+    crate::diagnostic!(
+        json!({"component":"delivery","kind":"delivery.forced_deferred",
+        "letter_id":letter.id,"pane_id":letter.recipient.pane_id,"reason":reason})
+    );
+    if let Err(code) = client.submit(
+        Effect::Deferred {
+            id: letter.id.clone(),
+            recipient: letter.recipient.clone(),
+        },
+        Duration::from_secs(5),
+    ) {
+        crate::diagnostic!(
+            json!({"component":"delivery","kind":"doorbell.transaction_failed",
+            "letter_id":letter.id,"code":code})
+        );
+    }
+}
+
 fn record(client: &Client, id: &str, observed: &Observation, sent: bool) {
     if let Err(code) = client.submit(
         Effect::Bell {
@@ -737,8 +798,24 @@ fn record(client: &Client, id: &str, observed: &Observation, sent: bool) {
     }
 }
 
-fn rpc(connector: &dyn ApiConnector, method: &str, params: Value) -> Result<Value, &'static str> {
-    request_small_response(connector, method, params, RPC_TIMEOUT).map_err(|_| "herdr_call_failed")
+/// A delivery call's failure as the code its hold records.
+fn call_failure(error: EngineError) -> &'static str {
+    match error {
+        EngineError::Request(_) => "herdr_parameters",
+        EngineError::Answer(_) => "herdr_format",
+        _ => "herdr_call_failed",
+    }
+}
+
+/// Submits `line` to the agent in `pane`: once asked, a failure may follow
+/// a typed line.
+fn prompt(engine: &dyn Engine, pane: &str, line: &str) -> Result<(), SendFailure> {
+    engine
+        .prompt_agent(Wait::Small(PROMPT_TIMEOUT), pane, line)
+        .map_err(|error| match error {
+            EngineError::Request(_) => SendFailure::NotTyped("herdr_parameters"),
+            error => SendFailure::MaybeTyped(call_failure(error)),
+        })
 }
 
 /// Whether Herdr still reports the agent the verdict was read for, at the
@@ -748,16 +825,15 @@ fn rpc(connector: &dyn ApiConnector, method: &str, params: Value) -> Result<Valu
 /// the quiet period, it is the same agent and native session, and hide holds
 /// no draft or recent key for it.
 fn native_current(
-    connector: &dyn ApiConnector,
+    engine: &dyn Engine,
     observed: &Observation,
 ) -> Result<Result<(), Hold>, &'static str> {
     if observed.actor.require_native_identity().is_err() {
         return Ok(Err(Hold::Session));
     }
-    let parameters =
-        wire::agent_target_params(&observed.raw_pane_id).map_err(|_| "herdr_parameters")?;
-    let agent = wire::delivery_agent(rpc(connector, "agent.get", parameters)?)
-        .map_err(|_| "herdr_format")?;
+    let agent = engine
+        .delivery_agent(Wait::Small(RPC_TIMEOUT), &observed.raw_pane_id)
+        .map_err(call_failure)?;
     Ok(match agent.readiness {
         readiness if !readiness.accepts_input() => Err(if readiness == Readiness::Launching {
             Hold::Launching
@@ -790,7 +866,7 @@ fn native_current(
 fn deliver(
     owner: &Mutex<Runtime>,
     client: &Client,
-    connector: &dyn ApiConnector,
+    engine: &dyn Engine,
     id: &str,
     observed: &Observation,
     (line, sender, kind): (&str, &str, &str),
@@ -799,7 +875,7 @@ fn deliver(
     if stop.load(Ordering::Acquire) {
         return Ok(Outcome::Stopped);
     }
-    if let Err(reason) = native_current(connector, observed).map_err(SendFailure::NotTyped)? {
+    if let Err(reason) = native_current(engine, observed).map_err(SendFailure::NotTyped)? {
         return Ok(Outcome::Held(reason));
     }
     let reservation = client
@@ -828,7 +904,7 @@ fn deliver(
     if stop.load(Ordering::Acquire) {
         return Ok(Outcome::Stopped);
     }
-    if let Err(reason) = native_current(connector, observed).map_err(SendFailure::NotTyped)? {
+    if let Err(reason) = native_current(engine, observed).map_err(SendFailure::NotTyped)? {
         return Ok(Outcome::Held(reason));
     }
     if stop.load(Ordering::Acquire) {
@@ -845,8 +921,6 @@ fn deliver(
     // turn it opens is recognized by it (`mailbox::rang`).
     // Herdr owns submission for each input reader, including Windows paste
     // bursts (herdrdev/herdr#3187). Raw pane input bypasses that contract.
-    let parameters = wire::delivery_prompt_params(&observed.raw_pane_id, line)
-        .map_err(|_| SendFailure::NotTyped("herdr_parameters"))?;
     // The message the bell writes into the conversation is the letter's,
     // never the operator's request (PRD session-record-goal-flow D-19): the
     // label reads it as a letter from `sender` by this record, as it reads
@@ -855,9 +929,7 @@ fn deliver(
         .lock()
         .map_err(|_| SendFailure::NotTyped("runtime_unavailable"))?
         .record_bell(&observed.actor.pane_id, line, (sender, kind));
-    let submitted = request_small_response(connector, "agent.prompt", parameters, PROMPT_TIMEOUT)
-        .map_err(|_| SendFailure::MaybeTyped("herdr_call_failed"))?;
-    wire::delivery_prompted(submitted).map_err(|_| SendFailure::MaybeTyped("herdr_format"))?;
+    prompt(engine, &observed.raw_pane_id, line)?;
     // Arrival is not intake. Only a flushed prompt-hook confirmation clears it.
     Ok(Outcome::Rung)
 }
@@ -870,7 +942,7 @@ fn deliver(
 /// read may follow a typed answer, so it is never typed again on its own.
 fn type_answer(
     owner: &Mutex<Runtime>,
-    connector: &dyn ApiConnector,
+    engine: &dyn Engine,
     work: &crate::runtime::mission_events::AnswerWork,
     observed: &Observation,
     stop: &AtomicBool,
@@ -878,11 +950,9 @@ fn type_answer(
     if stop.load(Ordering::Acquire) {
         return Ok(Outcome::Stopped);
     }
-    if let Err(reason) = native_current(connector, observed).map_err(SendFailure::NotTyped)? {
+    if let Err(reason) = native_current(engine, observed).map_err(SendFailure::NotTyped)? {
         return Ok(Outcome::Held(reason));
     }
-    let parameters = wire::delivery_prompt_params(&observed.raw_pane_id, &work.line)
-        .map_err(|_| SendFailure::NotTyped("herdr_parameters"))?;
     {
         let mut guard = owner
             .lock()
@@ -893,9 +963,7 @@ fn type_answer(
         // From here the answer may reach the conversation.
         guard.mission_answer_typing(&work.mission, work.key);
     }
-    let submitted = request_small_response(connector, "agent.prompt", parameters, PROMPT_TIMEOUT)
-        .map_err(|_| SendFailure::MaybeTyped("herdr_call_failed"))?;
-    wire::delivery_prompted(submitted).map_err(|_| SendFailure::MaybeTyped("herdr_format"))?;
+    prompt(engine, &observed.raw_pane_id, &work.line)?;
     Ok(Outcome::Rung)
 }
 
@@ -903,6 +971,7 @@ fn type_answer(
 mod tests {
     use super::*;
     use crate::delivery::Actor;
+    use serde_json::Value;
 
     const NOW: u64 = 1_000_000;
     /// A letter whose wait is over, or that never had one: the bell's
@@ -910,6 +979,7 @@ mod tests {
     const WAITED: Patience = Patience {
         arrived_at_unix_ms: 0,
         now: false,
+        forced: false,
     };
 
     /// A pane at rest: idle for a minute, last keys and submit a minute ago.
@@ -935,6 +1005,7 @@ mod tests {
             released_input_at_unix_ms: 0,
             hook_submit_at_unix_ms: 0,
             session: None,
+            thread: None,
             host_scope: None,
             turn: if kind == "codex" {
                 Turn::Read(Waiting::Nothing)
@@ -962,7 +1033,7 @@ mod tests {
             json!({"type": "agent_info", "agent": agent})
         });
         let mut observed = at_rest(" CLAUDE_CODE ");
-        observed.actor.session = wire::session_digest("session");
+        observed.actor.session = crate::engine::tokens::session_digest("session");
         for (kind, canonical) in [
             (" CLAUDE-CODE ", "claude"),
             (" CLAUDE ", "claude"),
@@ -972,7 +1043,7 @@ mod tests {
             observed.actor.kind = kind.into();
             *flags.lock().unwrap() = json!({"agent": canonical});
             assert_eq!(
-                native_current(&herdr.connector(), &observed),
+                native_current(herdr.engine().as_ref(), &observed),
                 Ok(Ok(())),
                 "{kind}"
             );
@@ -995,14 +1066,14 @@ mod tests {
         ] {
             *flags.lock().unwrap() = change;
             assert_eq!(
-                native_current(&herdr.connector(), &observed),
+                native_current(herdr.engine().as_ref(), &observed),
                 Ok(Err(expected))
             );
         }
         observed.actor.kind = "future-agent".into();
         *flags.lock().unwrap() = json!({"agent": "FUTURE-AGENT"});
         assert_eq!(
-            native_current(&herdr.connector(), &observed),
+            native_current(herdr.engine().as_ref(), &observed),
             Ok(Err(Hold::Identity))
         );
     }
@@ -1169,10 +1240,12 @@ mod tests {
         let arrived = |at| Patience {
             arrived_at_unix_ms: at,
             now: false,
+            forced: false,
         };
         let urgent = Patience {
             arrived_at_unix_ms: NOW - 1_000,
             now: true,
+            forced: false,
         };
         let mut pane = at_rest("claude");
         pane.status = "working".into();
@@ -1338,6 +1411,7 @@ mod tests {
                             body: "private".into(),
                             kind: "report".into(),
                             now: false,
+                            force: false,
                         }),
                     },
                     Duration::from_secs(5),
@@ -1371,6 +1445,27 @@ mod tests {
 
         /// Another letter from the same sender to the same pane, pending.
         fn send_another(&self, intent: &str, now: bool) -> String {
+            self.send_with(intent, now, false)
+        }
+
+        /// Another letter as `--force` records it, its composer already read
+        /// empty when it was sent.
+        fn send_forced(&self, intent: &str) -> String {
+            self.send_with(intent, false, true)
+        }
+
+        fn letter_forced(&self, id: &str) -> bool {
+            let guard = self.runtime.lock().unwrap();
+            let ledger = guard.delivery_state().unwrap();
+            ledger
+                .letters
+                .iter()
+                .find(|letter| letter.id == id)
+                .unwrap()
+                .forced
+        }
+
+        fn send_with(&self, intent: &str, now: bool, force: bool) -> String {
             use crate::delivery::Command;
             use crate::runtime::delivery::tests::authority;
             let (sender, recipient) = {
@@ -1394,6 +1489,7 @@ mod tests {
                             body: "private".into(),
                             kind: "report".into(),
                             now,
+                            force,
                         }),
                     },
                     Duration::from_secs(5),
@@ -1552,6 +1648,147 @@ mod tests {
         assert_eq!(bell.typed().len(), 2);
         assert_eq!(attempts(&third), (1, true));
         assert_eq!(attempts(&bell.letter), (0, false));
+    }
+
+    /// PRD engine-bundle-1 D-14, B4: a forced letter goes into a working
+    /// agent's input at the next pass, past the mid-turn wait, the quiet
+    /// period and Hide's draft record, once the composer reads empty right
+    /// then; a letter sent without --force beside it stays held.
+    #[test]
+    fn a_forced_letter_is_typed_into_a_working_agent_over_an_empty_composer() {
+        let bell = Bell::start(json!({}));
+        *bell.screen.lock().unwrap() = CODEX_EMPTY.into();
+        let mut doorbell = Doorbell::default();
+        let start = now();
+        bell.working_since(start - 1_000);
+        // A key routed a moment ago, which would hold an ordinary letter as
+        // a draft and in the quiet period.
+        bell.runtime
+            .lock()
+            .unwrap()
+            .note_delivery_key_at("recipient", start - 500);
+        let forced = bell.send_forced("forced");
+        bell.pass(&mut doorbell, start);
+        assert_eq!(bell.typed().len(), 1, "the forced letter is typed at once");
+        assert_eq!(bell.reads(), 1, "its composer is read right before");
+        assert_eq!(bell.attempts(), 0, "the ordinary letter still waits");
+        assert!(bell.letter_forced(&forced));
+    }
+
+    /// PRD engine-bundle-1 D-14: someone starts typing between the send
+    /// and the doorbell's turn. The composer read right before typing shows
+    /// their text, so nothing is typed, `delivery.forced_deferred` is
+    /// logged, and the letter stays as an ordinary letter that waits like
+    /// any other.
+    #[test]
+    fn a_forced_letter_meeting_text_in_the_composer_is_not_typed_and_waits_as_a_letter() {
+        // Someone's text, and a screen that cannot be read as an empty
+        // composer, each held for its own reason until the next pass.
+        for (screen, reason, hold) in [
+            (CODEX_DRAFT, "composer_not_empty", "draft"),
+            (
+                "$ ls\r\nREADME.md\r\n",
+                "composer_unconfirmed",
+                "composer_unconfirmed",
+            ),
+        ] {
+            let bell = Bell::start(json!({}));
+            *bell.screen.lock().unwrap() = screen.into();
+            let mut doorbell = Doorbell::default();
+            let start = now();
+            bell.working_since(start - 1_000);
+            let forced = bell.send_forced("forced");
+            let ((), logged) = crate::diagnostics::capture(|| {
+                doorbell.pass(&bell.runtime, &bell.client, &AtomicBool::new(false), start)
+            });
+            let deferred: Vec<_> = logged
+                .iter()
+                .filter(|record| record["kind"] == "delivery.forced_deferred")
+                .collect();
+            assert_eq!(deferred.len(), 1, "{reason}");
+            assert_eq!(deferred[0]["letter_id"], forced.as_str());
+            assert_eq!(deferred[0]["reason"], reason);
+            assert!(
+                deferred[0].get("text").is_none(),
+                "no screen text is logged"
+            );
+            assert!(
+                logged
+                    .iter()
+                    .any(|record| record["letter_id"] == forced.as_str()
+                        && record["kind"] == "doorbell.held"
+                        && record["reason"] == hold)
+            );
+            assert!(bell.typed().is_empty(), "nothing is typed: {reason}");
+            assert!(!bell.letter_forced(&forced), "it is an ordinary letter now");
+            // The screen clears, but the letter no longer forces its way in:
+            // it keeps the urgency of --now and waits behind every ordinary
+            // guard, here the quiet period after the pane's last change.
+            *bell.screen.lock().unwrap() = CODEX_EMPTY.into();
+            let ((), later) = crate::diagnostics::capture(|| {
+                doorbell.pass(
+                    &bell.runtime,
+                    &bell.client,
+                    &AtomicBool::new(false),
+                    start + 250,
+                )
+            });
+            assert!(bell.typed().is_empty());
+            assert!(
+                later
+                    .iter()
+                    .any(|record| record["letter_id"] == forced.as_str()
+                        && record["kind"] == "doorbell.held"
+                        && record["reason"] == "quiet_period")
+            );
+        }
+    }
+
+    /// PRD engine-bundle-1 B4: a `--force` send reads the recipient's
+    /// composer first, and while it shows someone's text, or cannot be read
+    /// empty, the send is refused with nothing recorded and nothing typed.
+    #[test]
+    fn a_forced_send_is_refused_over_text_in_the_composer_and_records_nothing() {
+        use crate::delivery::Command;
+        use crate::runtime::delivery::tests::{authority, observed};
+        for (screen, code) in [
+            (CODEX_DRAFT, "composer_not_empty"),
+            ("$ ls\r\nREADME.md\r\n", "composer_unconfirmed"),
+        ] {
+            let bell = Bell::start(json!({}));
+            *bell.screen.lock().unwrap() = screen.into();
+            let (sender, recipient, engine, letters) = {
+                let guard = bell.runtime.lock().unwrap();
+                let recipient = observed(&guard, "recipient");
+                let engine = guard.delivery_engine(&recipient.actor.device_id).unwrap();
+                let letters = guard.delivery_state().unwrap().letters.len();
+                (observed(&guard, "sender").actor, recipient, engine, letters)
+            };
+            let prepared = crate::delivery::worker::Prepared::new(
+                bell.client.clone(),
+                authority(&sender),
+                sender,
+                Some(recipient),
+                Command::Send {
+                    target: "recipient".into(),
+                    intent: "forced".into(),
+                    body: "now".into(),
+                    kind: "request".into(),
+                    now: false,
+                    force: true,
+                },
+            )
+            .forced_through(engine);
+            assert_eq!(prepared.run(Duration::from_secs(5)), Err(code.to_owned()));
+            let guard = bell.runtime.lock().unwrap();
+            assert_eq!(
+                guard.delivery_state().unwrap().letters.len(),
+                letters,
+                "{code}"
+            );
+            drop(guard);
+            assert!(bell.typed().is_empty(), "{code}");
+        }
     }
 
     /// A ring whose Herdr call failed as the device's link went away is

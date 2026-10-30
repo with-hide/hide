@@ -9,7 +9,9 @@ use crate::model::{
 use crate::pane_reopen::ReopenFailure;
 use hide_agent_hooks::{AgentRuntime, HookStatus};
 
-/// One Herdr session with one pane per `(pane id, agent, hook token)`.
+/// One Herdr session with one pane per `(pane id, agent, hook reported)`;
+/// whether the pane's hook reported is the core's record, not Herdr's
+/// ([`feed`]).
 fn session(panes: &[(&str, &str, bool)]) -> serde_json::Value {
     let agents = panes
         .iter()
@@ -26,14 +28,7 @@ fn session(panes: &[(&str, &str, bool)]) -> serde_json::Value {
         .collect::<Vec<_>>();
     let pane_rows = panes
         .iter()
-        .map(|(pane, _, hooked)| {
-            let tokens = if *hooked {
-                serde_json::json!({"hide_hooks": hide_agent_hooks::HOOK_VERSION.to_string()})
-            } else {
-                serde_json::json!({})
-            };
-            serde_json::json!({"pane_id": pane, "cwd": "/fixture", "tokens": tokens})
-        })
+        .map(|(pane, _, _)| serde_json::json!({"pane_id": pane, "cwd": "/fixture", "tokens": {}}))
         .collect::<Vec<_>>();
     // One pane per tab: a tab of several panes needs an authoritative split.
     let tabs = (0..panes.len())
@@ -58,6 +53,32 @@ fn session(panes: &[(&str, &str, bool)]) -> serde_json::Value {
         "tabs": tabs,
         "layouts": layouts,
     })
+}
+
+/// The hook in `pane` reported to the core for `agent` (Herdr's agent name)
+/// and its `session`, with `counts` when it counts subagents.
+pub(super) fn hook_reported(
+    runtime: &mut Runtime,
+    pane: &str,
+    agent: &str,
+    session: &str,
+    counts: Option<(u32, u32)>,
+) {
+    let report = hide_node_link::panes::HookStatusReport {
+        runtime: hide_agent_adapter::adapter(agent)
+            .expect("a known agent")
+            .id
+            .to_owned(),
+        version: hide_agent_hooks::HOOK_VERSION,
+        session: Some(session.to_owned()),
+        turn: None,
+        counts: counts.map(|(working, done)| hide_node_link::panes::HookCounts { working, done }),
+        session_start: false,
+        waiting: None,
+    };
+    runtime
+        .ingest_hook_status(crate::node::TEST_NODE, pane, &report)
+        .expect("the report is recorded");
 }
 
 pub(super) fn diagnosis(claude: HookStatus, codex: HookStatus) -> hide_agent_hooks::Diagnosis {
@@ -144,6 +165,11 @@ pub(super) fn connection_of(runtime: &Runtime, pane_id: &str) -> Option<PaneConn
 }
 
 pub(super) fn feed(runtime: &mut Runtime, panes: &[(&str, &str, bool)]) {
+    for (pane, agent, hooked) in panes {
+        if *hooked {
+            hook_reported(runtime, pane, agent, &format!("session-{pane}"), None);
+        }
+    }
     runtime.ingest_session(Ok(
         crate::sidebar::owned_label_fixture(session(panes)).expect("session payload")
     ));
@@ -293,7 +319,7 @@ fn with_live(runtime: &mut Runtime) {
         socket_path: socket.clone().into(),
         runtime: std::sync::Weak::new(),
         notifier: crate::handle::ChangeNotifier::noop(),
-        api_connector: Arc::new(hide_herdr_client::LocalSocketConnector::new(&socket)),
+        engine: crate::engine::herdr::local(&socket),
         node: Arc::new(hide_node::Local::of_process()),
     });
 }
@@ -928,7 +954,7 @@ fn a_reopen_through_the_worker_waits_for_herdr_to_release_the_name() {
             socket_path: herdr.socket_path().to_path_buf(),
             runtime: Arc::downgrade(&shared),
             notifier: crate::handle::ChangeNotifier::noop(),
-            api_connector: Arc::new(herdr.connector()),
+            engine: herdr.engine(),
             node: Arc::new(hide_node::Local::of_process()),
         });
         assert!(reopen(&mut runtime, "w1:p2"));
@@ -1046,7 +1072,7 @@ fn a_reopen_in_its_pane_resumes_with_the_choice_the_agent_was_started_with() {
             socket_path: herdr.socket_path().to_path_buf(),
             runtime: shared.weak(),
             notifier: crate::handle::ChangeNotifier::noop(),
-            api_connector: Arc::new(herdr.connector()),
+            engine: herdr.engine(),
             node: Arc::new(hide_node::Local::of_process()),
         });
         assert!(reopen(&mut runtime, "w1:p2"));
@@ -1075,4 +1101,186 @@ fn a_reopen_in_its_pane_resumes_with_the_choice_the_agent_was_started_with() {
         Some(&launch),
         "the same conversation keeps its choice for the next restart"
     );
+}
+
+/// B10, from the report to the row: a permission wait the hook reports asks
+/// the coordinator to publish again, the next session lays it on the agent,
+/// and the row reads an approval while Herdr still reads the agent working;
+/// the tool call after the answer reports it working and takes the approval
+/// back.
+#[test]
+fn a_waiting_hook_report_reaches_the_row_as_an_approval_until_the_turn_runs_again() {
+    use hide_node_link::panes::HookTurn;
+    let mut runtime = runtime();
+    runtime.ingest_hook_diagnosis(diagnosis(installed(), installed()));
+    let mut working = session(&[("w1:p1", "claude", false)]);
+    working["agents"][0]["agent_status"] = "working".into();
+    let publish = |runtime: &mut Runtime| {
+        runtime.ingest_session(Ok(
+            crate::sidebar::owned_label_fixture(working.clone()).expect("session payload")
+        ));
+    };
+    let turn = |runtime: &mut Runtime, turn| {
+        let report = hide_node_link::panes::HookStatusReport {
+            runtime: "claude-code".to_owned(),
+            version: hide_agent_hooks::HOOK_VERSION,
+            session: Some("session-w1:p1".to_owned()),
+            turn: Some(turn),
+            counts: None,
+            session_start: false,
+            waiting: None,
+        };
+        runtime
+            .ingest_hook_status(crate::node::TEST_NODE, "w1:p1", &report)
+            .expect("the report is recorded");
+    };
+    let row = |runtime: &Runtime| {
+        let row = runtime
+            .snapshot
+            .navigator
+            .agents
+            .iter()
+            .find(|row| row.pane_id == "w1:p1")
+            .expect("the agent is a row");
+        (row.demand.clone(), row.activity.clone())
+    };
+    publish(&mut runtime);
+    assert_eq!(row(&runtime), ("none".into(), "working".into()));
+
+    turn(&mut runtime, HookTurn::Waiting);
+    assert!(
+        runtime.take_republish_request(),
+        "the report asks for a publish"
+    );
+    publish(&mut runtime);
+    assert_eq!(row(&runtime), ("approval".into(), "stopped".into()));
+
+    // The same report again changes nothing and asks for nothing.
+    turn(&mut runtime, HookTurn::Waiting);
+    assert!(!runtime.take_republish_request());
+
+    turn(&mut runtime, HookTurn::Working);
+    assert!(runtime.take_republish_request());
+    publish(&mut runtime);
+    assert_eq!(row(&runtime), ("none".into(), "working".into()));
+}
+
+/// D-10: an approval is a call's, not the turn's. A background subagent's
+/// dialog stays in Needs You through the main session's `Stop` (Claude Code
+/// 2.1.314 runs the Agent in the background) and leaves it when the hook
+/// says that call ended, showing the turn the main session ended.
+#[test]
+fn an_open_approval_outlives_the_main_turns_end_and_closes_with_its_call() {
+    use hide_node_link::panes::HookTurn;
+    let mut runtime = runtime();
+    runtime.ingest_hook_diagnosis(diagnosis(installed(), installed()));
+    let mut herdr = session(&[("w1:p1", "claude", false)]);
+    herdr["agents"][0]["agent_status"] = "working".into();
+    let publish = |runtime: &mut Runtime, status: &str| {
+        let mut herdr = herdr.clone();
+        herdr["agents"][0]["agent_status"] = status.into();
+        runtime.ingest_session(Ok(
+            crate::sidebar::owned_label_fixture(herdr).expect("session payload")
+        ));
+    };
+    let report = |runtime: &mut Runtime, turn, waiting: &[&str]| {
+        let report = hide_node_link::panes::HookStatusReport {
+            runtime: "claude-code".to_owned(),
+            version: hide_agent_hooks::HOOK_VERSION,
+            session: Some("session-w1:p1".to_owned()),
+            turn: Some(turn),
+            counts: None,
+            session_start: false,
+            waiting: Some(waiting.iter().map(|call| (*call).to_owned()).collect()),
+        };
+        runtime
+            .ingest_hook_status(crate::node::TEST_NODE, "w1:p1", &report)
+            .expect("the report is recorded");
+    };
+    let row = |runtime: &Runtime| {
+        let row = runtime
+            .snapshot
+            .navigator
+            .agents
+            .iter()
+            .find(|row| row.pane_id == "w1:p1")
+            .expect("the agent is a row");
+        (row.demand.clone(), row.activity.clone())
+    };
+    let call = "Bash:0123456789abcdef";
+
+    report(&mut runtime, HookTurn::Working, &[]);
+    publish(&mut runtime, "working");
+    assert_eq!(row(&runtime), ("none".into(), "working".into()));
+    report(&mut runtime, HookTurn::Working, &[call]);
+    publish(&mut runtime, "working");
+    assert_eq!(row(&runtime), ("approval".into(), "stopped".into()));
+    // The main session's turn ends while the subagent's dialog is open.
+    report(&mut runtime, HookTurn::Done, &[call]);
+    publish(&mut runtime, "idle");
+    assert_eq!(row(&runtime), ("approval".into(), "stopped".into()));
+    // That call ended.
+    report(&mut runtime, HookTurn::Done, &[]);
+    publish(&mut runtime, "idle");
+    assert_eq!(row(&runtime), ("none".into(), "stopped".into()));
+}
+
+/// An agent exited and started again in the same pane: Herdr dropped the
+/// agent, then lists it again under the session that ended, and the new
+/// session's hook, proven to run in the pane, decides the row.
+#[test]
+fn an_agent_started_again_in_its_pane_follows_its_hook_over_herdrs_earlier_session() {
+    use hide_node_link::panes::HookTurn;
+    let mut runtime = runtime();
+    runtime.ingest_hook_diagnosis(diagnosis(installed(), installed()));
+    let listed = |runtime: &mut Runtime, status: &str| {
+        let mut herdr = session(&[("w1:p1", "claude", false)]);
+        herdr["agents"][0]["agent_status"] = status.into();
+        herdr["agents"][0]["agent_session"]["value"] = "session-old".into();
+        runtime.ingest_session(Ok(
+            crate::sidebar::owned_label_fixture(herdr).expect("session payload")
+        ));
+    };
+    let report = |runtime: &mut Runtime, session: &str, turn| {
+        let report = hide_node_link::panes::HookStatusReport {
+            runtime: "claude-code".to_owned(),
+            version: hide_agent_hooks::HOOK_VERSION,
+            session: Some(session.to_owned()),
+            turn,
+            counts: None,
+            session_start: turn.is_none(),
+            waiting: None,
+        };
+        runtime
+            .ingest_hook_status(crate::node::TEST_NODE, "w1:p1", &report)
+            .expect("the report is recorded");
+    };
+    let activity = |runtime: &Runtime| {
+        runtime
+            .snapshot
+            .navigator
+            .agents
+            .iter()
+            .find(|row| row.pane_id == "w1:p1")
+            .expect("the agent is a row")
+            .activity
+            .clone()
+    };
+    report(&mut runtime, "session-old", Some(HookTurn::Done));
+    listed(&mut runtime, "idle");
+    // The agent exits: Herdr lists no agent, and its facts go.
+    let mut gone = session(&[("w1:p1", "claude", false)]);
+    gone["agents"] = serde_json::json!([]);
+    runtime.ingest_session(Ok(
+        crate::sidebar::owned_label_fixture(gone).expect("session payload")
+    ));
+    // Started again: the new session reports, Herdr names the old one and
+    // reads it idle.
+    report(&mut runtime, "session-new", None);
+    report(&mut runtime, "session-new", Some(HookTurn::Working));
+    listed(&mut runtime, "idle");
+    assert_eq!(activity(&runtime), "working");
+    report(&mut runtime, "session-new", Some(HookTurn::Done));
+    listed(&mut runtime, "working");
+    assert_eq!(activity(&runtime), "stopped");
 }

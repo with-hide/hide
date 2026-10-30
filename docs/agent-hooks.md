@@ -32,23 +32,28 @@ That comparison is not an operating-system compare-and-swap: an arbitrary editor
 The file keeps its mode, a new one is created 0600, and a file that is a symlink stays one: the write lands at the file the link resolves to, so a settings file kept in a dotfiles repository is edited there.
 Entries belonging to other tools are counted before and after, and a regression test asserts they survive.
 
-Both runtimes register `SessionStart`, `UserPromptSubmit`, `PreToolUse`, `SubagentStart`, `SubagentStop`, `Stop`, and `PostToolUse`.
-Claude Code also registers `PostToolUseFailure`; Codex reports nonzero outcomes through Post and gets no invented failure event.
-The Post matcher selects `Bash|PowerShell` and produces no replacement output or permission decision.
+Both runtimes register `SessionStart`, `UserPromptSubmit`, `PreToolUse`, `SubagentStart`, `SubagentStop`, `Stop`, `PostToolUse` and `PermissionRequest`.
+Claude Code also registers `PostToolUseFailure` and `Notification`, the latter for `permission_prompt|elicitation_dialog|idle_prompt` only, and Codex registers `Interrupt`; Codex reports nonzero outcomes through Post and declares no failure event and no notification, and Claude Code declares no interrupt event, so neither gets an event it would not send.
+`PermissionRequest`, `Notification` and `Interrupt` only report the session's turn ([The turn the hook reports](#the-turn-the-hook-reports)): they carry no Memory, print nothing and decide no permission.
+Codex declares both of its events from 0.155.1, its minimum, in `codex-rs/config/src/hook_config.rs` of `rust-v0.155.1`, and the installed 0.166.0 lists them among its hook events.
+The Post entries have no matcher in Claude Code, so the end of every call reaches the helper (the end of the call a permission waited on is what says the turn runs again), and select `Bash|PowerShell` in Codex; they produce no replacement output or permission decision, and only a shell call's result is observed.
+Codex runs an `Interrupt` hook for at most three seconds and warns at its start when an entry asks for more (Codex 0.166.0), so that entry's timeout is three seconds and every other entry's eight (`install::hook_timeout`); an entry of Hide's with another timeout or matcher than an install writes reads Outdated.
 `SessionEnd` is not registered by either: a session's record is read only while Herdr reports that session for the pane, so a session that ends needs no event to be forgotten.
-`PreToolUse` selects `Bash|AskUserQuestion|ExitPlanMode|Edit|Write|MultiEdit|NotebookEdit|Read` in Claude Code and `Bash|request_user_input|request_user_input_async|apply_patch|Edit|Write` in Codex (`install::hook_matcher`, the one function the writer and Codex's trust check both read): the shell, the native questions, and the file tools the [project guardrails](#project-guardrails) judge; a search never starts the helper.
+`PreToolUse` has no matcher in Claude Code and selects `Bash|request_user_input|request_user_input_async|apply_patch|Edit|Write` in Codex (`install::hook_matcher`, the one function the writer and Codex's trust check both read).
+In Claude Code every tool call reaches the helper, an MCP tool, a search, a subagent's `Task` or a `Skill` included, because an approval sends no event of its own: the next tool call is what says the turn runs again ([The turn the hook reports](#the-turn-the-hook-reports)); the guards judge the shell, the native questions and the file tools the [project guardrails](#project-guardrails) read, and refuse nothing a call of another tool asks.
+In Codex the matcher keeps to the shell, the native questions and those file tools.
 Codex matches a tool by its whole name: with a hook on `request_user_input` alone, the async question tool of 0.162.1 never reached the helper (measured 2026-10-15 in an isolated `CODEX_HOME`), so each question tool is named.
 An entry of Hide's whose matcher differs from the one written today reads Outdated at its own version, so the next kit pass rewrites it and records its Codex trust.
-The version-ten marker makes earlier entries Outdated until the normal kit pass at launch, connection or Reinstall replaces Hide's entries and records their exact Codex trust.
+The version-eleven marker makes earlier entries Outdated until the normal kit pass at launch, connection or Reinstall replaces Hide's entries and records their exact Codex trust.
 Already-running sessions pick up the changed hooks when restarted.
-The installed-command version (`HOOK_ENTRY_VERSION`, now 10) is separate from the pane-report protocol (`HOOK_VERSION`, still 8).
+The installed-command version (`HOOK_ENTRY_VERSION`, now 11) is separate from the pane-report protocol (`HOOK_VERSION`, still 8).
 A pane already reporting protocol 8 keeps its connection and child counts both before and after that kit pass; updating a command does not invalidate a readable report.
 
 Every entry carries `--runtime claude-code|codex` and `--source hide-subagents@<version>` inside its command (in Claude Code's Windows entry, inside its `args`).
 The runtime argument selects that runtime's stdout envelope; the current marker also replaces commands not guarded against a missing helper.
 The source name proves the entry is Hide's, and the version after the `@` separates a current hook from an outdated one.
 The kit also compares the generated command, including its helper and state route; an unedited command for another state folder is stale, while an operator edit stays until Reinstall.
-The helper does not pass the marker on: it is an install marker, not the metadata source (see below).
+The helper does not pass the marker on: it is an install marker only.
 
 Every active agent's hook or extension carries the installing daemon's state folder as `--state-dir-b64`, a URL-safe base64 argument that preserves spaces, quotes and non-ASCII names across POSIX shells, PowerShell and JavaScript argument arrays.
 The helper gives this route to each sibling `hide` call when `HIDE_STATE_DIR` is absent; an explicit pane route and the CLI's capability reference retain their existing priority and authentication checks.
@@ -56,7 +61,7 @@ The installer rejects relative, non-UTF-8, NUL-containing or oversized state pat
 Without a nonempty explicit `HIDE_STATE_DIR`, a malformed, relative or duplicate captured route fails the call rather than falling back to another daemon.
 This covers an app opened from the Dock without `XDG_STATE_HOME` while an agent's shell exports it, and agents whose hooks do not inherit Hide's environment.
 The current Grok and agy entries, Pi and omp extensions, and both OpenCode server plugins use the same rule; the kit updates their owned entries through its normal pass and records the exact route-bearing Codex command as trusted.
-The install versions are Claude Code and Codex 10, Grok 9, agy 10, Pi and omp 10, OpenCode V1 9, OpenCode's server plugin 4 and its TUI plugin 2.
+The install versions are Claude Code and Codex 11, Grok 9, agy 10, Pi and omp 12, OpenCode V1 11, OpenCode's server plugin 5 and its TUI plugin 3.
 Every kit pass compares the captured folder with the running daemon's folder, so a state move or a daemon started with another environment rewrites an unedited generated command without another version bump.
 The account kit records which daemon state folder owns those commands; a different daemon sharing that HOME cannot change them while the recorded owner's lifetime lock is held.
 File identity treats aliases or case changes of the same state folder as the same owner.
@@ -64,10 +69,10 @@ After that daemon ends, the next pass may take ownership and refresh the entries
 Development and QA candidates use a private HOME as well as a private state folder, because changing only the state folder still shares the account's hook files.
 Before that pass, an unavailable old folder leaves mail pending and records the existing throttled `intake.failed` diagnostic with code `unavailable` in the helper's private delivery diagnostics; an invalid captured argument records `record` instead.
 
-The shared SessionStart guidance is English and begins with an intent table that turns what the operator asks for into its command: showing the operator a file, diff or web page (`hide file|diff|browser open …`, which opens as a tab of the active View area and waits in their Needs You as To look at until they look at it), checking a page for yourself with your own browser tool such as `aside` and not `hide browser open`, collecting what a delegated child opened (`hide view list`, a read with `hide view status` or `hide browser snapshot`, and an open again from your own pane to show it), an agent beside you (`hide agent spawn --beside …`, own checkout only), work handed to an agent whose result you collect (`--parent here`), work the operator wants split across several agents (plan it with `hide plan help` and hand only the steps that deliver something with `hide agent spawn --parent here --plan-node <key> …`, research staying with the agent's own subagents, PRD hide-plan-delegate D-11) and independent work (no `--parent`), with a line that forbids starting an agent with `"${HERDR_BIN_PATH:-herdr}" pane split` or `agent start` directly.
-The table is one literal (`hide_agent_hooks::intent_table!`) at the front of `PURPOSE_CONTEXT`, so every runtime's SessionStart, `hide guide` and the `hide` skill (version 3) carry the same text, and an older version is replaced at the next kit pass.
-It distinguishes Herdr's direct terminal input and control from Hide letters' stored delivery, replies and retry management.
-`herdr agent prompt` may yield a passive observation but creates no Hide letter, watch or parent relationship.
+The shared SessionStart guidance is English and begins with an intent table that turns what the operator asks for into its command: showing the operator a file, diff or web page (`hide file|diff|browser open …`, which opens as a tab of the active View area and waits in their Needs You as To look at until they look at it), checking a page for yourself with your own browser tool such as `aside` and not `hide browser open`, collecting what a delegated child opened (`hide view list`, a read with `hide view status` or `hide browser snapshot`, and an open again from your own pane to show it), an agent beside you (`hide agent spawn --beside …`, own checkout only), work handed to an agent whose result you collect (`--parent here`), work the operator wants split across several agents (plan it with `hide plan help` and hand only the steps that deliver something with `hide agent spawn --parent here --plan-node <key> …`, research staying with the agent's own subagents, PRD hide-plan-delegate D-11) and independent work (no `--parent`), with a line that forbids starting an agent with `hide pane open` or by typing its program into a pane.
+The table is one literal (`hide_agent_hooks::intent_table!`) at the front of `PURPOSE_CONTEXT`, so every runtime's SessionStart, `hide guide` and the `hide` skill (version 5) carry the same text, and an older version is replaced at the next kit pass.
+The guidance names Hide's commands only, never Herdr's program, its variables or its commands (PRD engine-bundle-1 D-6): a pane is read and driven with `hide pane read|send|open` and `hide agent read`, a worktree's purpose is set with `hide workspace purpose`, and input for another agent goes as a letter, `hide request send`, with `--force` to put it into the agent's input now ([delivery.md](delivery.md#pane-commands)).
+`hided/src/guide.rs` holds the session note, `hide guide` and `hide mission help` to that: none names Herdr, and every command of the contract's topics they teach is one `hide contract --json` names.
 Supervised delegation uses `hide agent spawn --parent here` to record responsibility and start the automatic watch.
 
 ## What the hook returns and reports back
@@ -181,53 +186,86 @@ The app probes the installed runtime binaries with a 750 ms bounded version chec
 A runtime below that capability is diagnosed as `Update required` without disabling a supported installed runtime or Sessions browsing.
 
 The helper is stateless, as a hook script must be.
-The count lives in `~/.hide/agent-hooks/panes/`, keyed by `$HERDR_PANE_ID`, and is republished after every event through the `pane.report_metadata` socket method, which Herdr defines as display-only pane metadata.
-The request goes through `hide-herdr-client`, the same client the core's Herdr connections use, to the socket in `HERDR_SOCKET_PATH` or Herdr's default (`$XDG_CONFIG_HOME/herdr/herdr.sock`, otherwise `~/.config/herdr/herdr.sock`), with a two-second timeout so a Herdr that does not answer costs the agent's turn that long and no more.
-The metadata source is `hide-subagents`, the marker name without its version: Herdr limits a source to ASCII letters, digits, `:`, `.`, `_` and `-`, and refuses the marker's `@` with `invalid_metadata_source`.
-The core reads the tokens back out of the pane tokens its ordinary snapshot already carries, so no subscription or poll exists for any of this.
+It reports to the core through hided and never to Herdr (PRD engine-bundle-1 D-7): it runs `hide workspace status --hook`, the `hide` beside it, with one JSON report on stdin, and that `hide` sends it as a hook request (`HookCommand::Status`), which hided proves came from the pane like every other hook request (`hided/src/pane_auth.rs`); a device's node forwards it with the pane's proof.
+The report names the runtime's adapter id, the hook version (`HOOK_VERSION`, 8), the session id the hook's input named, the session's turn when the event says one, its subagent counts for an agent that counts them, and whether the event is a session start (`hide_agent_hooks::report::HookStatusReport`).
+The call has a two-second bound, so a hided that is absent or does not answer costs the event that long and no more (B13), and its outcome is recorded with the pane and the agent ([below](#what-the-report-records-when-it-fails)); nothing reaches the screen (B14).
+The bound also ends inside the time the agent gives the hook, counted from the hook's start rather than from the Memory and letter work before the report (`report::deadline`, from the same `install::hook_timeout` the entry is written with, less half a second for the helper to end), so Codex's three-second `Interrupt` entry is never cut by its own report.
+The core keeps the latest report of each session of each pane, at most eight sessions a pane and 1,024 panes (`herdr-core/src/agent_hooks/facts.rs`), and lays the one for the pane's agent on the session it projects; [status-model.md](status-model.md#where-each-axis-comes-from) owns what it decides.
+A report that changes nothing a projection would show wakes nothing, and one that does wakes the coordinator of the pane's machine to publish again.
+What the core keeps besides the turn (runtime, version, session and counts) is saved to `hook-facts.json` in its state folder on a thread of its own, so a restart of hided keeps every pane's connection and counts; the turn is not kept, since the session's next hook event says it again.
+A Herdr handoff or restart loses none of this, because Herdr holds none of it (D-8).
+A core that starts with no `hook-facts.json` takes the pane records below as its facts once and saves them, so an agent that last reported to Herdr before the update stays connected.
 
-The first release shelled out to `herdr pane report-metadata` with the pane id after the options and the versioned marker as the source.
-The pinned CLI refuses both, the helper swallowed the exit status, and every pane on the machine read as `session_predates_install` with advice to restart that changed nothing.
-Two things keep that from recurring: `report::tests` sends one report at a fake socket and asserts the exact request, and a report that fails is written down (next section) rather than dropped.
+Each pane's records live in `~/.hide/agent-hooks/panes/`, one file per `$HERDR_PANE_ID`.
+The file holds a record per session, at most eight, the session heard from last at the end: the counts, the hook version and adapter id of the helper that wrote it, the session id the hook's input named, and the turn its last report said, so a tool event reports only a turn it moves.
+A file an earlier helper wrote, with one record, is read as that record, and an event that changed no record leaves the file unwritten.
+A pane Herdr has stopped listing has its file swept on the next session bootstrap.
 
-| Token | Meaning |
+| Report field | Meaning |
 | --- | --- |
-| `hide_hooks` | The hook version this session reported with. Its presence is the proof that the session is instrumented at all |
-| `hide_sub_working` | Subagents currently running |
-| `hide_sub_done` | Subagents this session has finished |
+| `version` | The hook version this session reported with. Its presence is the proof that the session is instrumented at all |
+| `counts.working` | Subagents currently running |
+| `counts.done` | Subagents this session has finished |
+| `turn` | `working`, `done`, `waiting` or `idle`, when the event says one ([The turn the hook reports](#the-turn-the-hook-reports)) |
 
-`hide_sub_blocked` is defined and never written: neither shipped adapter can observe a blocked subagent from the four available events, so the count stays unknown rather than being drawn as a zero.
-A token that is not a count is dropped rather than coerced.
+No adapter can observe a blocked subagent from the events it has, so the blocked count stays unknown rather than being drawn as a zero.
 
 A record belongs to one session.
-The first event of another session that the pane's agent now is starts the record over, so a new session in a reused pane never inherits the last one's numbers.
-A `SessionStart` of the same session (a resume or a compaction) keeps them, since its background subagents still run; a runtime whose input names no session resets at `SessionStart`.
-A pane Herdr has stopped listing has its record swept on the next session bootstrap.
+A new session in a reused pane starts a record of its own, so it never inherits the last one's numbers.
+A `SessionStart` of the same session (a resume or a compaction) keeps them, since its background subagents still run, and forgets the session's turn; a runtime whose input names no session resets at `SessionStart`.
 
 #### Which session is the pane's
 
 A session that is not the pane's agent runs the same hooks in the pane's environment: the operator's own Stop hook that starts `claude -p` is one, and it reset the pane's count to zero after every turn of a session that ran subagents (twenty-one of the forty panes on the operator's machine on 2026-10-15 held such a session's record).
-The hook therefore asks Herdr, before it changes anything, which session it reports for the pane's agent (`pane.get`, `agent_session`).
-An event of any other session changes nothing and reports nothing, and an event that names no session counts as another one.
-A pane for which Herdr reports no session, or does not answer, takes every event as its own, as before; an answer that cannot be had is written down as the pane's last report failure (`doctor` and Settings show it), so a pane that fell back to counting every session says so.
-Herdr is the authority and the hook's environment is not: `CLAUDE_CODE_ENTRYPOINT` says `sdk-cli` inside the nested session, but a user's own program can start a session that says `cli`.
+So the hook does not decide which session is the pane's: every session reports under its own id into a record of its own, and the core lays on the pane's agent only the report of the session Herdr reports for it (`agent_session` of kind `id`); an agent Herdr names no session for, or names by a path, takes the session of its runtime that reported last.
+Herdr can keep naming the session of an agent that ended in the pane when the operator starts it again there, so where no session reported under the id Herdr names and a hook reported since Herdr last changed that id, the session that reported last speaks for the pane: the hook's report is proven to come from the pane, and it is the later word (`agent_hooks::facts::tests::the_session_the_hook_reported_since_herdr_last_changed_its_id_speaks_for_the_pane`).
+An agent restarted quickly enough that Herdr first names the ended session after the new one already reported is the edge: that naming reads as newer than the report, so the new session's turn shows from its next hook event, and Herdr's state before it.
+A nested `claude -p` session therefore keeps its own numbers and changes nothing the pane shows (`claude_subagent_counts::the_counts_follow_background_subagents_through_pauses_resumes_a_kill_and_a_nested_session`, `agent_hooks::facts::tests::a_nested_session_never_takes_the_panes_own_sessions_place`).
+Which session Herdr reports follows Herdr's own rule, in `src/terminal/state.rs` of the pinned tag (`session_report_allows_session_replacement` and `conflicting_same_owner_session_ref`): for `herdr:claude` another session replaces the pane's only when it starts as `clear`, `resume` or `compact`, and `real_herdr::the_pinned_herdr_keeps_a_panes_session_against_a_nested_startup_and_follows_clear_resume_and_compact` pins it against the pinned binary in the `os contract` lane.
+A nested session that reports `resume` (a `claude -p --resume`) therefore replaces the pane's session in Herdr itself, and Hide follows Herdr; for `herdr:codex`, Herdr's own Codex hook script ignores a session whose id differs from `CODEX_THREAD_ID`.
 
-The rule that makes Herdr's answer the right one is Herdr's, in `src/terminal/state.rs` of the pinned tag (`session_report_allows_session_replacement` and `conflicting_same_owner_session_ref`, called from `set_agent_session_ref_for_session_start`).
-For `herdr:claude`, a `pane.report_agent_session` of another session replaces the pane's only when its `session_start_source` is `clear`, `resume` or `compact`; a `startup` of another session is dropped.
-Every `claude -p` session reports `startup`, and so does the pane's own first session, which has no earlier one to conflict with.
-The Socket API reference does not document this, so `real_herdr::the_pinned_herdr_keeps_a_panes_session_against_a_nested_startup_and_follows_clear_resume_and_compact` pins it against the pinned binary in the `os contract` lane, and a Herdr bump that changes the rule fails there.
-Two limits follow from the rule:
+#### The turn the hook reports
 
-- A nested session that reports `resume` (a `claude -p --resume`) replaces the pane's session in Herdr itself, and Hide follows Herdr.
-- For `herdr:codex` the rule lets a `startup` replace the session; Herdr's own Codex hook script ignores a session whose id differs from `CODEX_THREAD_ID`, which is how a nested Codex session stays out, and Hide relies on that script for Codex.
+The turn is the first thing the core reads for a pane's activity, completion and approval (D-9, [status-model.md](status-model.md#where-each-axis-comes-from)), and each agent reports it from the events it gives (D-10):
 
-A pane's own `SessionStart` can reach the socket before Herdr's own hook has reported the new session (Claude Code runs a start's hooks in parallel).
-Hide then reads it against the old session and ignores it, and the new session's next counted event starts its record from zero, so the old session's numbers are never added to (`claude_subagent_counts::a_new_session_whose_start_beats_herdrs_own_report_starts_a_fresh_record_at_its_next_event`).
-Until that event the pane's tokens still show the old session's counts.
+| Agent | Working | Done | Waiting on the operator | At rest without finishing |
+| --- | --- | --- | --- | --- |
+| Claude Code | `UserPromptSubmit`; a tool event of its own after a turn that ended, rested or waited on no named call | the session's own `Stop` | an open approval of a call `PermissionRequest` named, until that call ends or the session file holds its result; `Notification` `permission_prompt` or `elicitation_dialog` while none is open | `Notification` `idle_prompt`, which comes after an interrupt, where no `Stop` does, when it comes; otherwise the session file's interruption (below) |
+| Codex | `UserPromptSubmit`; a tool event after a turn that ended, waited or rested | `Stop` | `PermissionRequest` | `Interrupt` |
+| OpenCode 1.x | the root session's prompt, its `session.status` busy, and `permission.replied` | the root's `session.status` idle | `permission.asked` of the root or a child of it | the root's idle after a `session.error` named `MessageAbortedError` |
+| OpenCode 2 | the root's prompt and its `session.execution.started` | `session.execution.succeeded` or `failed` | not reported | `session.execution.interrupted` |
+| Pi | the pane session's `agent_start` | `agent_settled`, since Pi may retry, compact or take a queued message after `agent_end` | not reported | an `agent_end` whose last message has `stopReason` `aborted` |
+| omp | `agent_start` | `agent_end` | not reported | an `agent_end` whose last message has `stopReason` `aborted` |
+| Grok | its prompt, and a tool event that moves the turn | `Stop` of the session | not reported | not reported |
+| Antigravity | its prompt, and a tool event after a gap | `Stop` of the root session | not reported | not reported |
 
-What an event costs beyond the count it always made: one `pane.get` over the local socket, before the lock is taken, for `SessionStart`, `SubagentStart`, `SubagentStop` and a `Stop`, and none for an event that changes no count and finds the record already naming its session.
-`UserPromptSubmit` and `PreToolUse` never reach the count (the prompt hook and the spawn guard take them).
-`PostToolUse` and the supported failure events feed passive observations only and add nothing to the count.
+A tool event of Claude Code or Codex reads the pane file and starts no process unless the session's last report was not working, so an ordinary tool call costs a helper run at its start and, in Claude Code, one at its end, each reading one small file; the first tool after a turn ended, waited or rested, as when a background task wakes the agent without a prompt, reports it working.
+A subagent's tool call (its input names an `agent_id`) moves only the subagent counts, never the session's turn.
+An approval is a call's, not the turn's: a Claude Code `PermissionRequest` opens the approval of the call it names (its tool and a digest of its input with each object's keys in order, `hide_session::calls::key`, kept in the pane file as `waiting` and reported as `waiting`), and the session waits on the operator while any approval is open, whatever its turn says (`HookFacts`, `counters::Said`).
+Claude Code 2.1.314 runs an Agent in the background and its subagents ask under the main session's `session_id`, so the main session's `Stop` can come while a subagent's dialog is open: the `Stop` ends the turn and leaves the approval open, and the end of that call, whoever made it, closes it (`claude_subagent_counts::a_background_subagents_dialog_outlives_the_main_stop_and_ends_at_its_call`, `runtime::tests::agent_connection::an_open_approval_outlives_the_main_turns_end_and_closes_with_its_call`).
+A call that runs beside it, whose hook may finish after the request's, and a notification of the open dialog leave the approval open; a prompt and an interrupt close every one, since the operator is back at the prompt; at most 16 are open per session, and a seventeenth is a failed report.
+A call refused in the dialog sends no hook event (`PermissionDenied` runs only for auto mode's refusals, not a dialog's), and Claude Code 2.1.312 writes the refusal into the session file as the call's result (`is_error`, `permissionDecision.source` `user_reject`); two readers close its approval from there.
+The helper, at the session's next hook event whose input names the session file (`transcript_path`) while an approval is open, reads the file's last 256 KiB (`hide_session::calls::answered_in_claude_file`), so the next call or the turn's `Stop` reports it closed (`claude_subagent_counts::a_stop_after_a_refusal_the_session_file_records_leaves_no_approval_open`).
+It looks for the last call with the waited input, and for a call known by its tool alone, the tool's last call: a background subagent writes its calls to its own file while its events name the main session's, so the main session's earlier call of the same tool must not close the subagent's approval (`claude_subagent_counts::a_subagents_approval_asked_after_the_main_stop_stays_open_until_its_call_ends`).
+The core, when the turn after the refusal only writes text and sends no hook event, takes it from the session read the label worker makes on Herdr's state change: the read keeps, of the last 64 calls, each key whose last call has a result (`TurnTracker::answered_calls`, laid as `RowFacts.answered_calls` for that state), so a command run twice waits on its second run's own result, and an approval first laid under an earlier Herdr state closes, with no I/O under `Mutex<Runtime>` (`runtime::tests::labels::an_approval_ends_when_the_session_file_reads_the_refused_calls_result`).
+The same read's interruption, which ends the turn as resting, closes every open approval with it.
+A waited call older than either window, or a file that cannot be read, leaves the approval to the call's end, the next prompt or an interrupt.
+The core keeps open approvals in memory only, so after hided restarts a dialog still open is judged from the session file and Herdr, as before hooks, until the session's next hook report names its approvals again.
+A call whose input a hook rewrote (`updatedInput`) ends with an input whose digest differs from the one the request named, so its own end does not close the approval: the session file's result for it does, read as above.
+Every other event that names a turn (a prompt, `Stop`, a permission, a notification, an interrupt) reports it each time, with one `hide` process, as do a session start and a change of the subagent count.
+`UserPromptSubmit`'s report is sent by the outer hook process, beside the inner one that pulls the prompt's letters and Memory and within the same budget: the outer process ends the inner one at the budget, which once took a report and its outcome with it under load, and the outer process outlives it.
+The outer process reads the prompt's input itself and passes the same bytes to the inner one, saying whether the read was cut or not made by its budget (`--payload`), so the report names the session the prompt came from, not a nested `claude -p` session that reported last in the pane; a tool event's report likewise names its input's session, and an input that names none falls back to the session the pane file last recorded for the runtime.
+A plugin or extension sends one turn report at a time and lets a newer turn replace one still waiting, so a burst of events costs at most two helper runs.
+A turn stands until the same session's next hook event, or until the session file says the turn ended after it; no timer ends it (design principle 13).
+Claude Code writes an Esc as a `user` record whose text is `[Request interrupted by user]` (`… for tool use]` when a tool call was cut; Claude Code 2.1.314), and sends no `Stop` and not always `idle_prompt` (none came in 199 s on 2026-10-30): the session read under a later Herdr state than the one the hook's turn was first laid under, with Herdr reading the agent at rest, finds the turn interrupted and ends the hook's turn as resting (`TurnTracker::ended`, `agent_hooks::facts`, `runtime::tests::labels::a_hook_turn_ends_when_the_session_file_reads_an_interruption_after_it`); a session file that records completed turns (Codex) ends it as done the same way.
+An Esc before the first output leaves less: Claude Code 2.1.314 puts the prompt back in the composer and keeps its `user` record and the hooks' attachments in the session file with nothing of the agent's after them (the next prompt takes the same `parentUuid`), and records no interruption, `Stop` or notification; a prompt whose turn has no agent record after it reads as unanswered (`TurnMark::Prompt`, `TurnMark::Reply`, `TurnEnded::Unanswered`), and the same later read at rest ends the hook's turn as resting (`runtime::tests::labels::a_hook_turn_whose_prompt_the_session_file_shows_unanswered_ends_at_rest`).
+A turn the agent wrote anything for is not unanswered, so after output only the interruption record or the next hook event ends it, and only Claude Code's reader marks replies, so no other agent's turn reads unanswered.
+The read is the status's, not the labels': the agent-summary switch stops analysis and takes the AI fields off the row, and the label worker still reads each session on the agent's Herdr state change and lays what it finds (`labels::tests::an_interruption_is_read_from_the_session_file_with_summaries_off`, `runtime::tests::labels::a_hook_turn_ends_on_the_session_files_interruption_with_summaries_off`).
+The read runs on the label worker's read thread, once per Herdr state change and never per hook report or tick; under `Mutex<Runtime>` the core only compares the read's Herdr state with the turn's.
+Where a cell says not reported, the core reads Herdr's state for that part until the agent gives an event for it: an OpenCode 2, Pi or omp permission prompt, and a Grok or Antigravity interrupt, show as Herdr reads the screen.
+A Claude Code or Codex approval sends no event of its own, so the turn reads waiting while the approved call runs: in Claude Code until that call ends, and in Codex until the session's next tool call; a plain denial in Claude Code interrupts the turn, which the session file then says, and a denial with feedback lets the turn go on, which the session file's result for the call says (above).
+An answered MCP `elicitation_dialog` names no call, so it reads waiting until the session's next call starts or ends, since the tool that asked is still running.
+Codex's tool hooks keep to its shell, question and file tools, so an approval of an MCP tool in Codex reads waiting until the next of those or the turn's end.
 
 #### Which subagents run
 
@@ -286,58 +324,16 @@ The `hide` whose request failed also writes `hook.request_failed` on its standar
 Memory's request records every failure but a deadline as `memory_unavailable` and keeps the step's cause beside it under `step`, so the file says where it stopped; a file an earlier helper wrote has no `step` and is read as it is.
 Each step has its own reason because they used to share one: every step answered `hide_unavailable`, recorded as `cli`, so a Windows hook that never wrote a byte to its daemon read like a missing `hide`.
 
-### After Herdr hands off or restarts
-
-Herdr keeps a pane token only as long as the server that took it.
-A live handoff (what an update runs) and a restart both start the new server with no tokens, while the pane ids stay, so the pane's record is still there and the pane still has its name (measured on the pinned Herdr 0.9.3 in a private server, issue 799).
-The agent session Herdr reports for a pane (`agent_session`) survived the live handoff in the same measurement.
-Until the agent's next hook event, which for an idle session can be a long time, every instrumented pane then read as a session that predates Hide's setup, with a Reopen that restarted a healthy session.
-hided puts the tokens back, so the pane reads as it did before.
-
-A pane id alone does not say that the agent in the pane now is the one the record describes: a restart can leave the same id with another process in it.
-So each record names, besides its counts, who wrote it (`counters::Record`): the hook version of the helper, the adapter id of the runtime that reported, and the agent's own id of the session, read from the `session_id` of the hook's input when the helper read that input whole.
-Every pane that has reported has a record: an event that changes no count writes it when the pane has none or when it names another version, agent or session.
-An event that changes no count keeps the session the record names for the same agent, and any other event names its own, or none when its input named none.
-Grok names its agent and no session, because their hook input is not read for one.
-The OpenCode and Pi plugins' count calls carry no session id today, so their records name none either (the helper records one it is given, after the same validity check).
-A record that names no session never has its counts put back; the version still is.
-
-The core's restorer (`herdr-core/src/coordination/hook_tokens.rs`) reads the agent list the coordinator already reads each second.
-For each listed agent that carries no `hide_hooks` token and that Hide has an adapter for, it reads that pane's record on a worker thread, under the shared side of the same lock, and sends the report the helper sends (`report::report_params`):
-
-| The record and what Herdr says now | What is put back |
-| --- | --- |
-| Names the agent Herdr detects, and the session Herdr reports | `hide_hooks` with the version the record names, and the counts |
-| Names the same agent, and Herdr reports no session or another one, or the record names none | `hide_hooks` only; the counts are left out, so they read as unknown and never as a zero |
-| Names another agent | nothing: the pane was taken over |
-| Is missing, or was written by an older helper (no version, no agent) | nothing; the pane waits for its next hook event, and no record is migrated |
-
-The version is put back for the same agent because a hook is installed in a runtime's configuration and not in a session.
-The counts are put back only for the same session, and nothing relies on `SessionStart` having reset the record: a session that started after the record was written and before the connection is the case the session id tells apart.
-What the counts can still be is the record's last word for that session: a subagent that ended with no `SubagentStop` reaching the helper still counts as working until the session's next `Stop` lists the subagents that run (or, for a runtime that lists none, ends the turn), exactly as it did before the loss.
-A record that changed while the report was on its way is sent again, as the helper does, so Herdr ends on the latest count.
-A report merges token by token, so when the second read finds the counts no longer vouched for (the session changed, or another agent's record replaced the file) the restorer clears the two count tokens with `null` instead of leaving the first report's values on the pane.
-
-What else it does not do:
-
-- A pane that already has its token is left alone, so a live helper's report is never raced.
-- The record sweep (`sweep_subagent_counters`, which drops the records of panes Herdr no longer lists) cannot take a record the restorer is about to read: both work from the same bootstrap snapshot, a pane the restorer asks about is listed in it, and the sweep keeps every listed pane's record.
-  After a server restart the first answer on the socket already lists every restored pane (measured on the pinned Herdr 0.9.3: five panes before a stop, the same five in the first snapshot after it), so a connect cannot see an empty pane list while the session is still being restored.
-  With a hided attached, a stop and start of the private Herdr left the pane's record in place after hided's reconnect.
-- A pane is asked once for each connection to Herdr, because every connect is a bootstrap and a handoff or a restart ends the connection.
-  A pane with no record, or one an older helper wrote, is not asked again: the helper's next event reports the token and writes the record in the same step.
-- It covers this machine's panes only.
-  A device's record is the device's file, and the core reaches a machine's files through its node, so a device's pane waits for its next hook event as before.
-
-The snapshot-rate work is a comparison of the tokens each listed agent already carries.
-The only file read and the only `pane.report_metadata` call are on the worker, at most 256 panes in one batch, one batch in flight and one waiting, a failed pane tried three times for a connection, and each failure is a `hook_tokens` diagnostic naming the pane (`restore.failed`, `restore.gave_up`, `restore.batch`, `restore.deferred`).
+### What the report records when it fails
 
 The helper always exits zero and reads no more than its bounded standard-input prefix before writing applicable context.
 A producer that never closes stdin is released after the 500 ms payload wait.
 A hook that fails must never be what breaks the operator's agent.
 
 Exiting zero is not the same as saying nothing.
-The outcome of every report is recorded in `~/.hide/agent-hooks/last-report-failure.json`: a failure writes the pane, the event, the socket and Herdr's answer, and the next success removes the file, so it describes the hook's current state rather than its history.
+The outcome of every report is recorded in `~/.hide/agent-hooks/last-report-failure.json`: a failure writes the pane, the agent, the event and the cause `hide` answered (the causes of [What a hook records when it fails](#what-a-hook-records-when-it-fails)), and the next success removes the file, so it describes the hook's current state rather than its history.
+Every failure is also a `report.failed` line in the hooks' bounded log, `~/.hide/agent-hooks/spawn-guard.log`, with the pane, the agent, the event and the cause, so a report that did not arrive stays on record after a later one clears the file (engineering rule 10).
+A report the core refuses is also written to hided's diagnostic log as `agent_hooks` `status.refused` with the pane, the device, the agent and the reason.
 `Diagnosis` reads it back as `last_report_failure`, `doctor` prints it as a `Last report failed:` line, and the Settings group shows it as an error note above the restart advice, because with a refused report on record a restart is not the fix.
 The Settings screen learns of it through the existing kit worker, with the next diagnosis due one second after the previous read finishes while a window observes Settings (`settings_observed`, the same flag the Hide AI tab sets).
 The same worker reads once at startup and after a successful install; ordinary refreshes stop when Settings is unobserved.
@@ -552,17 +548,17 @@ Hide writes into OpenCode's global plugin folder `~/.config/opencode/plugins/`, 
 OpenCode 1.x loads only the files of the folder, so it never sees `hide-opencode/`, and OpenCode 2 loads `hide.js` as a plugin that does nothing.
 `hide-agent-hooks/src/opencode.rs` declares the three files and `hide-agent-hooks/src/plugin.rs`, the owned script files they share with Pi's and omp's extension, writes, judges and removes them together; their sources are `hide-agent-hooks/src/opencode/{plugin,server,tui}.js` with this build's helper path filled in.
 Each file's first line, `// <hide-opencode-plugin|hide-opencode-server|hide-opencode-tui>@<version> sha256=<hash of the rest>`, proves the file is Hide's, carries its version and shows whether it was edited; `hide.js` and `server.js` hold `const HELPER = "<absolute path of this build's hide-agent-hooks>";`, and `tui.js` takes it from `server.js`.
-The current plugin, server and TUI payload versions are 9, 4 and 2; Pi and omp use extension version 10.
+The current plugin, server and TUI payload versions are 11, 5 and 3; Pi and omp use extension version 12.
 OpenCode's configuration folder is never created: with no `~/.config/opencode` the row reads Absent and says OpenCode has not created it yet, and only the `plugins/` folder inside an existing one and Hide's `hide-opencode/` inside that are made.
 
 On OpenCode 1.x the plugin does nothing outside a pane Hide manages: with no `HERDR_ENV=1`, `HERDR_PANE_ID` and `HERDR_SOCKET_PATH`, or no helper at its path, it registers no hook and starts no process, so OpenCode in an ordinary terminal runs as if the file were not there.
-Inside one it uses three hooks, each calling `hide-agent-hooks opencode <start|prompt|confirm|tool|subagents>` with one JSON object on stdin and one answered on stdout; the helper always exits 0 and a failure answers `{}`:
+Inside one it uses three hooks, each calling `hide-agent-hooks opencode <start|prompt|confirm|tool|subagents|turn>` with one JSON object on stdin and one answered on stdout; the helper always exits 0 and a failure answers `{}`:
 
 - `chat.message` adds Hide's text to a root session's prompt as one synthetic text part wrapped in `<system-reminder>`: the session guidance (the same text the `SessionStart` hook gives, read once when OpenCode loads the plugin) on the session's first prompt, then Project Memory under Claude Code's rules (the session-start index with the first prompt's cards on the first prompt, the prompt's cards after), then the pane's waiting letters ([docs/delivery.md](delivery.md)).
   OpenCode's TUI does not show a synthetic part, and the title and label readers skip it, so the operator's text stays theirs; a subagent's prompt and a prompt of only synthetic text get nothing.
   The part's id is made the way OpenCode makes its own (`prt_` and a time-ordered id), so it sorts after the operator's text.
 - `event` confirms letters once `message.part.updated` reports Hide's part stored, and counts subagents: a `session.created` with a parent is a child, `session.status` busy and idle move it between working and done, and a root that goes idle while a child still runs in the background keeps it counted (OpenCode's `session.status` list is read then).
-  The counts go to the pane's counter file and to Herdr as the Claude Code and Codex hooks report theirs.
+  The counts and the root session's turn go to the pane's record and to the core as the Claude Code and Codex hooks report theirs (`subagents` and `turn`, [The turn the hook reports](#the-turn-the-hook-reports)).
 - `tool.execute.after` asks, for the pane's root session at every result except while letters it handed over wait for their receipt, for the letters due while the agent works (`letters`, which runs `hide inbox --hook --session <id> --tool`), appends them to the tool's `output` inside `<system-reminder>`, and confirms them through `event` once `message.part.updated` reports that session's completed tool part stored with the letters still in its output; a part stored without them leaves the letters pending in Hide for the next ask ([docs/delivery.md: Letters while the agent works](delivery.md#letters-while-the-agent-works)); nothing due, a failed helper and a child session leave the result as it is.
 - `tool.execute.before` sends a `bash` call whose command mentions `herdr` or `HERDR_BIN_PATH` to the spawn guard, and one that can hand a result to the system opener to the [opener guard](#the-opener-guard), and throws the deny reason; OpenCode hands a thrown error to the model as the tool's error, so the model reads the same reason Claude Code's model does.
   While some project of the machine has a protection on, every `bash` call and the file tools `read`, `edit`, `write`, `apply_patch` and `multiedit` go to the helper too, with only the arguments that name a file (`filePath`, a patch's `*** ` lines), for the [project guardrails](#project-guardrails).
@@ -837,13 +833,14 @@ Its recorded layout stays only so retirement can remove Hide-owned entries witho
 Grok fails open on everything but a refusal, so its hook prints nothing on those paths, as Claude Code's does.
 A failure goes to the guard's log, never to the agent (B5).
 
-The count is the same per-pane record and the same `pane.report_metadata` report as Claude Code's (above), changed under an exclusive lock on `~/.hide/agent-hooks/panes.lock` (private to the account), so subagents started in parallel are all counted; a report that finds the record changed by another event while it was sent sends the record again, so Herdr ends on the latest count, and a lock not taken within one second is written down as the pane's last report failure.
+The count is the same per-pane record and the same report to the core as Claude Code's (above), changed under an exclusive lock on `~/.hide/agent-hooks/panes.lock` (private to the account), so subagents started in parallel are all counted, and a lock not taken within one second is written down as the pane's last report failure.
 A subagent start adds one working, a subagent stop moves one from working to done.
 Grok's `Stop` from inside a subagent leaves the count alone, and the main session's `Stop` sets working to the number of `subagent` entries in `backgroundTasks`, so a background subagent stays counted past the turn and its own `SubagentStop` ends it (D-06); a payload that is cut off or unreadable leaves the count alone.
 The core judges a Grok pane instrumented by that agent's hook piece in the kit (`herdr_core::agent_hooks::kit_hook_status` for the agent's `HookDialect`, as for OpenCode's plugin), not by a Claude Code or Codex component.
 
 
-`hide-agent-hooks/tests/it/grok_cursor_hooks.rs` runs the built helper with Grok's documented payloads and historical Cursor payloads beside a stand-in `hide` and a stand-in Herdr socket.
+`hide-agent-hooks/tests/it/grok_cursor_hooks.rs` runs the built helper with Grok's documented payloads and historical Cursor payloads beside a stand-in `hide` that keeps the status reports.
+`web/e2e/grok-cursor-hooks.spec.ts` runs Grok's hooks from inside a Grok stand-in's own process in its pane (`agentRunner` in `web/e2e/agent-pane.ts`), because hided takes a status report only from a process it proves runs in the pane.
 It asserts Grok's answers and counts, retired Cursor's silence and lack of daemon calls or counts, and a single count when Grok runs all three of Hide's hooks for one subagent.
 
 The record `~/.hide/kit/installed.json` keeps the operator's choice per agent (`agents`) and the pieces Hide installed (`hook:<agent>`, `skill:<folder>`, `herdr:<agent>`), and an older build ignores them.
@@ -1194,7 +1191,7 @@ OpenCode's plugin is tested at three layers, none of which runs the operator's O
 `hide-agent-hooks/src/plugin/tests.rs` writes, judges and removes the files in a fixture `HOME`, and `tests/it/opencode_helper.rs` runs the built helper beside a stand-in `hide` that records each call.
 `tests/it/opencode_plugin.rs` runs `tests/opencode/plugin.test.mjs` in Node 22, which loads the generated `hide.js` as OpenCode 1.x does and calls its hooks with OpenCode 1.18.30's event and hook shapes (`tests/fixtures/opencode/events-1.18.30.json`) against a stand-in helper; the rust lane installs Node for it.
 It runs `tests/opencode/plugin2.test.mjs` the same way, which loads the generated `hide-opencode/` halves on a stand-in for OpenCode 2.0.29's shared server, with the hook and event shapes a 2.0.29 capture showed: an instance per folder with a call routed by the folder it names, every event to every instance, and terminals in two panes; it checks that each prompt, guard and letter is answered in the pane showing its session, a letter's confirmation once OpenCode delivered or stored it, the guardrails alone with no terminal or a vanished one, and the counts of the pane showing a subagent's root.
-`web/e2e/opencode-plugin.spec.ts` lets the kit write the plugin into a private `HOME`, runs a small OpenCode stand-in (`web/e2e/opencode-host.ts`) that loads it in two panes of the pinned Herdr, reports itself the way Herdr's OpenCode integration does, and checks a letter on the next prompt and its confirmation once stored, the spawn guard's refusal, and the subagent counts Herdr receives.
+`web/e2e/opencode-plugin.spec.ts` lets the kit write the plugin into a private `HOME`, runs a small OpenCode stand-in (`web/e2e/opencode-host.ts`) that loads it in two panes of the pinned Herdr, reports itself the way Herdr's OpenCode integration does, and checks a letter on the next prompt and its confirmation once stored, the spawn guard's refusal, and the subagent counts the core receives.
 
 Pi's and omp's extension is tested at the same three layers, none of which runs the operator's Pi or omp.
 `hide-agent-hooks/src/plugin/tests.rs` holds the file tests for all three script files, and `tests/it/pi_extension.rs` pins both files' bytes and runs `tests/pi-extension/extension.test.mjs` in Node once per agent, which loads the generated file and replays the event and context shapes captured from Pi 1.0.4 and omp 18.7.0 (`tests/fixtures/pi-extension/`) against a stand-in helper: what stays out, the hidden message, confirmation after the reply and once across omp's re-entry, the budgets, omp's counts and `ask`, and that no handler throws.
@@ -1203,6 +1200,9 @@ Which session a receipt is signed for and what the core answers are `hide-memory
 `web/e2e/pi-omp-extension.spec.ts` lets the kit write both files into a private `HOME`, runs a Pi stand-in and an omp stand-in (`web/e2e/pi-omp-host.ts`) in the two panes of the pinned Herdr, reporting the session file the way Herdr's integrations do, and checks a letter in each direction on the next prompt and its confirmation once written, the spawn guard's refusal in both, and omp's subagent counts with a subagent prompt that takes no letter.
 
 ## Passive direct prompt observations
+
+Agents are no longer taught these calls: a letter sent with `hide request send --force` records the relationship a direct prompt's observation recorded, with its reply and retry ([delivery.md](delivery.md#forced-letters)).
+The observation stays for a call an agent still makes, such as one Herdr's own skill teaches until it is removed with Herdr's integration.
 
 The Post adapter reads every `herdr agent prompt`, `herdr agent start` and `herdr pane run <agent>` in a shell call, wherever it sits in the line: after `;`, `&&` or a pipe, with `--wait`, `--until` or `--timeout`, under a loop, or inside a `$(...)` command substitution.
 It reads the call with the spawn guard's lexer and adds no string pattern of its own; it never rewrites the command or the result.

@@ -33,6 +33,10 @@ pub struct Prepared {
     actor: Actor,
     target: Option<Observation>,
     command: Command,
+    /// For a new `--force` letter, the engine of its recipient's machine,
+    /// whose composer is read before the letter is recorded (PRD
+    /// engine-bundle-1 D-14).
+    forced: Option<crate::engine::SharedEngine>,
 }
 
 /// Immutable notification receipt. Reserving it consumes the attempt before
@@ -95,45 +99,16 @@ impl HumanNotice {
     /// `Ok` means Herdr showed it; `Err` is the stable reason code the log
     /// records: Herdr's own `reason` for a `shown: false` answer, or
     /// `call_failed` / `answer_unreadable` when there was no usable answer.
-    pub fn notify_herdr(
-        &self,
-        connector: &dyn hide_herdr_client::ApiConnector,
-    ) -> Result<(), &'static str> {
-        // The pinned request schema requires title and accepts body/sound.
+    pub fn notify_herdr(&self, engine: &crate::engine::EngineHandle) -> Result<(), &'static str> {
         // This outcome is an external effect receipt, never a core input.
-        let params =
-            json!({"title":self.english_title(),"body":self.english_body(),"sound":"request"});
-        let value = hide_herdr_client::request_small_response(
-            connector,
-            "notification.show",
-            params,
-            Duration::from_millis(500),
-        )
-        .map_err(|_| "call_failed")?;
-        herdr_notice_answer(&value)
-    }
-}
-
-/// Reads `notification.show`'s answer. Herdr names why nothing showed in
-/// `reason` (`NotificationShowReason`); a reason outside that set is
-/// recorded as `not_shown` rather than echoed into the log.
-fn herdr_notice_answer(value: &Value) -> Result<(), &'static str> {
-    match value.get("shown").and_then(Value::as_bool) {
-        Some(true) => Ok(()),
-        Some(false) => Err(
-            match value
-                .get("reason")
-                .and_then(Value::as_str)
-                .unwrap_or_default()
-            {
-                "disabled" => "disabled",
-                "rate_limited" => "rate_limited",
-                "no_foreground_client" => "no_foreground_client",
-                "busy" => "busy",
-                _ => "not_shown",
-            },
-        ),
-        None => Err("answer_unreadable"),
+        engine
+            .shared()
+            .notify(
+                crate::engine::Wait::Small(Duration::from_millis(500)),
+                self.english_title(),
+                &self.english_body(),
+            )
+            .map_err(|_| "call_failed")?
     }
 }
 
@@ -171,7 +146,15 @@ impl Prepared {
             actor,
             target,
             command,
+            forced: None,
         }
+    }
+
+    /// Reads the recipient's composer through `engine` before a forced
+    /// letter is recorded.
+    pub(crate) fn forced_through(mut self, engine: crate::engine::SharedEngine) -> Self {
+        self.forced = Some(engine);
+        self
     }
 
     /// Called by the request worker after owner-thread preparation. Its wait
@@ -179,6 +162,22 @@ impl Prepared {
     pub fn run(self, timeout: Duration) -> Result<Value, String> {
         if let Command::Agents { command } = self.command {
             return crate::coordination::run(self.client, self.authority, self.actor, command);
+        }
+        // A forced letter is recorded only when its recipient shows nothing
+        // of a person's in its composer now; nothing is recorded or typed
+        // otherwise. The doorbell reads it again before it types.
+        if let (Some(engine), Some(target)) = (&self.forced, &self.target)
+            && let Err(code) = super::composer::forced_clear(
+                engine.as_ref(),
+                &target.raw_pane_id,
+                &target.actor.kind,
+            )
+        {
+            crate::diagnostic!(
+                json!({"component":"delivery","kind":"delivery.forced_refused",
+                "pane_id":target.actor.pane_id,"reason":code})
+            );
+            return Err(code.to_owned());
         }
         self.client.submit(
             Effect::Command {
@@ -272,6 +271,12 @@ pub(crate) enum Effect {
         id: String,
         recipient: Actor,
         sent: bool,
+    },
+    /// A forced letter whose recipient's composer showed text when the
+    /// doorbell was about to type it: it stays, as an ordinary letter.
+    Deferred {
+        id: String,
+        recipient: Actor,
     },
 }
 
@@ -695,6 +700,16 @@ fn apply(ledger: &mut Ledger, request: &Request, now: u64) -> Result<(Value, boo
                 } else {
                     letter.bell_errors = letter.bell_errors.saturating_add(1).min(3);
                 }
+            }
+            return Ok((Value::Null, false));
+        }
+        Effect::Deferred { id, recipient } => {
+            if let Some(letter) = ledger.letters.iter_mut().find(|letter| {
+                letter.id == *id
+                    && letter.recipient.same_identity(recipient)
+                    && letter.state == super::ledger::State::Pending
+            }) {
+                letter.forced = false;
             }
             return Ok((Value::Null, false));
         }
@@ -1316,41 +1331,17 @@ mod tests {
     }
 
     #[test]
-    fn herdr_notice_names_why_nothing_showed() {
-        for (answer, expected) in [
-            (json!({"shown": true, "reason": "shown"}), Ok(())),
-            (
-                json!({"shown": false, "reason": "disabled"}),
-                Err("disabled"),
-            ),
-            (
-                json!({"shown": false, "reason": "rate_limited"}),
-                Err("rate_limited"),
-            ),
-            (
-                json!({"shown": false, "reason": "no_foreground_client"}),
-                Err("no_foreground_client"),
-            ),
-            (json!({"shown": false, "reason": "busy"}), Err("busy")),
-            (json!({"shown": false}), Err("not_shown")),
-            (json!({"shown": false, "reason": "other"}), Err("not_shown")),
-            (json!({"reason": "disabled"}), Err("answer_unreadable")),
-        ] {
-            assert_eq!(herdr_notice_answer(&answer), expected, "{answer}");
-        }
-    }
-
-    #[test]
     fn notify_herdr_reports_herdr_reason_or_a_failed_call() {
         let herdr = crate::fake_herdr::FakeHerdr::start("notice-reason", |method, _| {
             assert_eq!(method, "notification.show");
             json!({"type": "notification_show", "shown": false, "reason": "disabled"})
         });
         let notice = undelivered_notice();
-        assert_eq!(notice.notify_herdr(&herdr.connector()), Err("disabled"));
-        let gone = hide_herdr_client::LocalSocketConnector::new(
+        let engine = crate::engine::EngineHandle::new(herdr.engine());
+        assert_eq!(notice.notify_herdr(&engine), Err("disabled"));
+        let gone = crate::engine::EngineHandle::new(crate::engine::herdr::local(
             herdr.socket_path().with_file_name("absent.sock"),
-        );
+        ));
         assert_eq!(notice.notify_herdr(&gone), Err("call_failed"));
     }
 
@@ -1423,6 +1414,7 @@ mod tests {
                 exact_route: false,
                 expected_id: None,
             }),
+            thread: None,
             host_scope: Some("fixture".into()),
             turn: crate::delivery::doorbell::Turn::Unread,
         };
@@ -1764,6 +1756,7 @@ mod tests {
                 body: "private".into(),
                 kind: "request".into(),
                 now: false,
+                force: false,
             },
         ] {
             assert_eq!(
@@ -1821,6 +1814,7 @@ mod tests {
                 body: "private".into(),
                 kind: "request".into(),
                 now: false,
+                force: false,
             };
             assert_eq!(
                 client
@@ -1917,6 +1911,7 @@ mod tests {
                         body: "private fixture".into(),
                         kind: "request".into(),
                         now: false,
+                        force: false,
                     }),
                 },
                 Duration::from_secs(5),
@@ -2219,6 +2214,7 @@ mod tests {
                     body: body.into(),
                     kind: "request".into(),
                     now: false,
+                    force: false,
                 }),
             },
             reply: mpsc::sync_channel(1).0,

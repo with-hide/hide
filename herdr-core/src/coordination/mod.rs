@@ -2,7 +2,6 @@
 //! store is the sole writer; native I/O is performed by request workers.
 
 mod executor;
-pub(crate) mod hook_tokens;
 pub(crate) mod identity_wait;
 pub(crate) mod lineage;
 pub(crate) mod naming;
@@ -683,18 +682,27 @@ pub fn resolve_actor<'a>(ledger: &'a Ledger, key: &str) -> Option<&'a Actor> {
 /// that only sits in a pane called `key`: a pane id is per machine, so a
 /// caller that names a pane resolves it against its own machine's panes.
 pub(crate) fn resolve_registered<'a>(ledger: &'a Ledger, key: &str) -> Option<&'a Actor> {
-    resolve_by(ledger, |record| {
+    registered_record(ledger, key).map(|record| &record.actor)
+}
+
+/// The live registration [`resolve_registered`] finds, whole.
+pub(crate) fn registered_record<'a>(ledger: &'a Ledger, key: &str) -> Option<&'a AgentRecord> {
+    record_by(ledger, |record| {
         record.id == key || record.name.as_deref() == Some(key)
     })
 }
 
 fn resolve_by(ledger: &Ledger, is: impl Fn(&AgentRecord) -> bool) -> Option<&Actor> {
+    record_by(ledger, is).map(|record| &record.actor)
+}
+
+fn record_by(ledger: &Ledger, is: impl Fn(&AgentRecord) -> bool) -> Option<&AgentRecord> {
     let mut found = ledger
         .agents
         .iter()
         .filter(|record| !record.ended && is(record));
     let first = found.next()?;
-    found.next().is_none().then_some(&first.actor)
+    found.next().is_none().then_some(first)
 }
 
 /// What a caller does about each refusal `hide agent sleep` gives.
@@ -881,7 +889,7 @@ pub(crate) fn validate_records(ledger: &Ledger) -> Result<(), String> {
             || kept_session(&record.session).is_err()
             || !record.actor.valid()
             || record.actor.device_id != record.machine
-            || record.actor.session != crate::wire::session_digest(&record.session)
+            || record.actor.session != crate::engine::tokens::session_digest(&record.session)
             || record.origin.as_ref().is_some_and(|origin| {
                 record.parent.is_some()
                     || origin == &record.id
@@ -1903,7 +1911,7 @@ mod tests {
                 name: pane.into(),
                 kind: "codex".into(),
                 device_id: "local".into(),
-                session: crate::wire::session_digest(session),
+                session: crate::engine::tokens::session_digest(session),
             },
             ended: false,
             terminal_id: None,
@@ -2292,7 +2300,7 @@ mod tests {
         );
         // The pane's session moved on: its record belongs to the old one.
         let mut handed_off = caller.clone();
-        handed_off.session = crate::wire::session_digest("observer-after-compaction");
+        handed_off.session = crate::engine::tokens::session_digest("observer-after-compaction");
         assert_eq!(
             here(&ledger, &handed_off).err(),
             Some("participant_session_changed")
@@ -3169,7 +3177,7 @@ mod tests {
             ledger.spawns[0].kind = "pi".into();
             child.session = session.clone();
             child.actor.kind = "pi".into();
-            child.actor.session = crate::wire::session_digest(&session);
+            child.actor.session = crate::engine::tokens::session_digest(&session);
             let bound = apply(
                 &mut ledger,
                 &caller,
@@ -3194,7 +3202,7 @@ mod tests {
             assert_eq!(registered.parent.as_ref(), Some(&parent));
             let past = format!("{session}{}", "x".repeat(crate::delivery::SESSION_LIMIT));
             registered.session = past[..=crate::delivery::SESSION_LIMIT].to_owned();
-            registered.actor.session = crate::wire::session_digest(&registered.session);
+            registered.actor.session = crate::engine::tokens::session_digest(&registered.session);
             assert!(read.bytes().is_err());
         }
     }
@@ -3973,7 +3981,7 @@ mod tests {
                 name: "woken".into(),
                 kind: "codex".into(),
                 device_id: "local".into(),
-                session: crate::wire::session_digest("other-session"),
+                session: crate::engine::tokens::session_digest("other-session"),
             },
         );
         let before = ledger.clone();

@@ -6,7 +6,7 @@ import { createActions } from "./actions";
 import { TooltipProvider } from "./components/ui/tooltip";
 import { initializeInterfaceI18n } from "./i18n/instance";
 import { PanePlanChip } from "./PanePlanChip";
-import { PlanChecklist } from "./PlanChecklist";
+import { PlanChecklist } from "./components/plan-checklist";
 import { PlanMap } from "./PlanMap";
 import { planNowLine, planWorkLine } from "./plans";
 import type { AgentRow, PlanDelegation, PlanStep, PlanView, SnapshotRest } from "./snapshot";
