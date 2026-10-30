@@ -515,6 +515,7 @@ Unavailable-server tooltips describe the connection problem rather than presenti
 A sleeping agent of a kind that sleeps in its pane (Claude Code, Codex, Antigravity) keeps its row, name, place, lineage and badge while Herdr no longer lists it: the core draws the row from its own sleep record (`herdr-core/src/agent_sleep.rs`), because the pinned Herdr forgets an agent and its session reference once its process ends.
 Only a stopped agent of a kind that sleeps, on the core's machine or a node that dials it, with no demand and a reported conversation can sleep; the hours rule also wants it seen and off screen, a finished mission node's agents and `hide agent sleep` want it off screen, and the pane menu wants neither ([ARCHITECTURE.md: Agent sleep](ARCHITECTURE.md#agent-sleep)); a delegated child sleeps by the same rule as its parent and keeps its place under it.
 A `request` or `block` letter wakes a sleeping agent exactly as Wake agent does, and its row passes from the moon through waking back to its own mark.
+Each letter wakes it once: a letter that already rang or already woke it waits for the agent to look, and does not wake it again after a later sleep.
 A new agent in the pane, whether a wake, the operator or a restore started it, is awake: its `state_change_seq` differs from the one the record kept, and the record is dropped.
 
 A provider with an implemented close-pane sleep dialect instead retains a dormant conversation keyed by `SleepId`, separate from the live agent projection.

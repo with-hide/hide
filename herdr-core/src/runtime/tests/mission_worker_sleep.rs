@@ -251,6 +251,50 @@ fn a_request_wakes_a_sleeping_agent_and_a_report_waits() {
     assert_eq!(runtime.letter_wakes_running(), 1);
 }
 
+/// A request nobody takes in wakes its recipient once: after the agent
+/// sleeps again it waits as a letter to an awake agent does, so a sleep and
+/// a wake cannot follow each other for the same letter, while a new request
+/// still wakes it. A request whose bell rang before the sleep wakes no one.
+#[test]
+fn a_request_wakes_its_recipient_once_and_a_rung_one_not_at_all() {
+    let mut runtime = sleepers(&[WORKER]);
+    let rung = letter(&mut runtime, WORKER, "request");
+    let mut ledger = (*runtime.delivery_state().unwrap()).clone();
+    ledger
+        .letters
+        .iter_mut()
+        .find(|letter| letter.id == rung)
+        .unwrap()
+        .bell_sent = true;
+    runtime.publish_delivery(Arc::new(ledger), true);
+    runtime.drive_letter_wakes();
+    assert_eq!(phase(&runtime, WORKER), Some(SleepPhase::Sleeping));
+    letter(&mut runtime, WORKER, "request");
+    runtime.drive_letter_wakes();
+    assert_eq!(phase(&runtime, WORKER), Some(SleepPhase::Waking));
+    // It wakes, nobody reads the letter, and the agent sleeps again.
+    let sleep = &mut runtime.snapshot.ui_state.agent_sleep.records;
+    sleep.remove(WORKER);
+    runtime.letter_wakes.touch();
+    runtime.drive_letter_wakes();
+    runtime
+        .snapshot
+        .ui_state
+        .agent_sleep
+        .records
+        .insert(WORKER.into(), record(WORKER));
+    runtime.letter_wakes.touch();
+    runtime.drive_letter_wakes();
+    assert_eq!(
+        phase(&runtime, WORKER),
+        Some(SleepPhase::Sleeping),
+        "the same letter does not wake it again"
+    );
+    letter(&mut runtime, WORKER, "block");
+    runtime.drive_letter_wakes();
+    assert_eq!(phase(&runtime, WORKER), Some(SleepPhase::Waking));
+}
+
 /// B4: letters to five sleeping agents wake four at once, in the order the
 /// letters came; the fifth wakes when one of the four is awake.
 #[test]
