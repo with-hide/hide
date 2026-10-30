@@ -11316,7 +11316,11 @@ PRAGMA user_version=14;"#,
             .collect();
         assert_eq!(suggested, [1]);
         assert_eq!(
-            store.item_by_number(&project, 2).unwrap().unwrap().lifecycle,
+            store
+                .item_by_number(&project, 2)
+                .unwrap()
+                .unwrap()
+                .lifecycle,
             MemoryLifecycle::Active,
             "the plan card stays for the agents that build it later"
         );

@@ -1150,7 +1150,8 @@ impl Runtime {
             .followed
             .iter()
             .filter(|attempt| {
-                attempt.location.node == opened.node.as_str() && attempt.location.path == opened.root
+                attempt.location.node == opened.node.as_str()
+                    && attempt.location.path == opened.root
             })
             .filter_map(|attempt| {
                 let id = attempt.agent_id.as_deref()?;

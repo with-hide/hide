@@ -190,7 +190,11 @@ impl Runtime {
             .branch_diffs
             .iter()
             .filter_map(|diff| {
-                let target = (diff.workspace_id.clone(), diff.row.clone(), diff.path.clone());
+                let target = (
+                    diff.workspace_id.clone(),
+                    diff.row.clone(),
+                    diff.path.clone(),
+                );
                 let place = self.branch_diff_place(&target.0, &target.1, &target.2)?;
                 (place.tip != diff.tip).then_some(target)
             })

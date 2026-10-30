@@ -558,11 +558,8 @@ impl Notebook {
                 };
                 let (fix, plan) = match outcome {
                     Outcome::Pr => {
-                        let title = required(
-                            given(title, "title")?,
-                            "title",
-                            policy::PLAN_TITLE_CHARS,
-                        )?;
+                        let title =
+                            required(given(title, "title")?, "title", policy::PLAN_TITLE_CHARS)?;
                         let path = required(given(path, "path")?, "path", policy::READ_PATH_CHARS)?;
                         let draft = draft_text(given(draft, "draft")?)?;
                         let plan = FixPlan {
@@ -645,7 +642,11 @@ mod tests {
         notebook.apply(new_line(&[1]), &index, 1).unwrap();
         notebook
             .apply(
-                write_cause("lint", Outcome::Pr, Some("+ Run the linter first.\n+ Then the tests.")),
+                write_cause(
+                    "lint",
+                    Outcome::Pr,
+                    Some("+ Run the linter first.\n+ Then the tests."),
+                ),
                 &index,
                 2,
             )

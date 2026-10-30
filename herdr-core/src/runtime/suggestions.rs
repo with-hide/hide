@@ -899,7 +899,11 @@ fn lay_branches(project: &mut ProjectSuggestionsSnapshot, overlay: &BranchOverla
 /// show it in, so `에이전트 ↗` and the agent's question reach it; a Memory
 /// row names its pane from its promotion already.
 fn lay_agents(project: &mut ProjectSuggestionsSnapshot, agents: &[(String, String)]) {
-    for attempt in project.rows.iter_mut().filter_map(|row| row.attempt.as_mut()) {
+    for attempt in project
+        .rows
+        .iter_mut()
+        .filter_map(|row| row.attempt.as_mut())
+    {
         if attempt.agent_pane.is_some() {
             continue;
         }
