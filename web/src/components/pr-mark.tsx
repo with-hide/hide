@@ -3,10 +3,10 @@ import { recordPending, recordWords } from "../agentRow";
 import { useInterfaceTranslation } from "../i18n/client";
 import { requireInterfaceLanguage } from "../i18n/locale";
 import { cn } from "../lib/utils";
-import { agentStaleness, ownPulls, PR_LOOK, prMarkParts, reviewWord, sessionStaleness, staleLabel, type PrMarkParts, type PrStaleness, type SessionPull } from "../prMark";
+import { CLOSED_DIM, PR_LOOK, prMarkParts, pullsStaleness, reviewWord, staleLabel, type PrMarkParts, type PrStaleness } from "../prMark";
 import type { PrChip } from "../projectBoard";
 import { pullRequestCard } from "../projects";
-import { catalogWorkspaces, type AgentPullRequest, type AgentRow, type PrState } from "../snapshot";
+import { catalogWorkspaces, type AgentRow, type PrState, type SessionPull } from "../snapshot";
 import { useShellStore } from "../store";
 import { AgentRecordTitle } from "./agent-record-title";
 import { CheckoutCardHint } from "./pr-card";
@@ -57,7 +57,7 @@ function PrStateCounts({ counts, stale = false, className, ...rest }: { counts: 
       {counts.map(({ state, count }) => {
         const { icon: Icon, tone } = PR_LOOK[state];
         return (
-          <span key={state} className={cn("inline-flex items-center gap-xxs", tone)} data-pr-count={state}>
+          <span key={state} className={cn("inline-flex items-center gap-xxs", tone, state === "closed" && CLOSED_DIM)} data-pr-count={state}>
             <Icon aria-hidden="true" className="size-(--size-pr-icon) shrink-0" />
             {count}
           </span>
@@ -67,9 +67,9 @@ function PrStateCounts({ counts, stale = false, className, ...rest }: { counts: 
   );
 }
 
-/** A row's or a family's mark, one PR or several. */
-export function PartsMark({ parts, stale, ...rest }: { parts: PrMarkParts; stale?: boolean } & HTMLAttributes<HTMLSpanElement>) {
-  return "counts" in parts ? <PrStateCounts counts={parts.counts} stale={stale} {...rest} /> : <PrMark state={parts.state} number={parts.number} stale={stale} {...rest} />;
+/** A row's or a family's mark, one PR or several; a closed PR is dimmed. */
+export function PartsMark({ parts, stale, className, ...rest }: { parts: PrMarkParts; stale?: boolean } & HTMLAttributes<HTMLSpanElement>) {
+  return "counts" in parts ? <PrStateCounts counts={parts.counts} stale={stale} className={className} {...rest} /> : <PrMark state={parts.state} number={parts.number} stale={stale} className={cn(className, parts.state === "closed" && CLOSED_DIM)} {...rest} />;
 }
 
 /**
@@ -93,12 +93,6 @@ export function PrChipMark({ chip, stale = false }: { chip: PrChip; stale?: bool
 
 const CHANGES = reviewWord("changes_requested")!;
 
-/** The GitHub read behind a row's own PRs, read as two plain values so a snapshot that moves neither renders nothing. */
-export function useAgentStaleness(agent: AgentRow, family?: SessionPull[]): PrStaleness | undefined {
-  const stale = useShellStore((s) => (family ? sessionStaleness(s.rest, family) : agentStaleness(s.rest, agent))?.stale);
-  const lastRead = useShellStore((s) => (family ? sessionStaleness(s.rest, family) : agentStaleness(s.rest, agent))?.lastRead);
-  return stale === undefined ? undefined : { stale, lastRead: lastRead ?? null };
-}
 
 /** The words a mark reads out: its number and state, or how many in each state, and when GitHub was last read. */
 function useMarkLabel(parts: PrMarkParts | null, stale: PrStaleness | undefined): string {
@@ -114,29 +108,30 @@ function useMarkLabel(parts: PrMarkParts | null, stale: PrStaleness | undefined)
 export const PR_MARK_PRESS = "flex shrink-0 items-center rounded-xs px-xxs outline-none hover:bg-accent focus-visible:ring-1 focus-visible:ring-ring data-[state=open]:bg-secondary disabled:opacity-(--opacity-disabled)";
 
 /**
- * An agent row's own PRs, or a task root's complete family, as one mark
- * (PRD sidebar-task-lens B14): one PR opens on a press, several list each PR,
- * worst first, and choosing one opens it; ⌘-press opens one PR on GitHub.
- * Under the pointer or focus it shows what the 프로젝트 row's mark shows: the
- * PR card for one PR, the list for several.
+ * A row's pull requests as one mark (PRD sidebar-task-lens B14): the core's
+ * list (`AgentRow.pulls`), its session's and every descendant's, or a
+ * 프로젝트 tree child row's own. One PR opens on a press, several list each
+ * PR, worst first, and choosing one opens it; ⌘-press opens one PR on
+ * GitHub. Under the pointer or focus it shows what the 프로젝트 row's mark
+ * shows: the PR card for one PR, the list for several.
  */
-export function AgentPrMark({ agent, family, staleness, disabled = false, side, onOpen, onExternal }: { agent: AgentRow; family?: SessionPull[]; staleness?: PrStaleness; disabled?: boolean; side?: "right" | "bottom"; onOpen: (pull: AgentPullRequest) => void; onExternal?: (pull: AgentPullRequest) => void }) {
+export function AgentPrMark({ agent, pulls, disabled = false, side, onOpen, onExternal }: { agent: AgentRow; pulls: SessionPull[]; disabled?: boolean; side?: "right" | "bottom"; onOpen: (pull: SessionPull) => void; onExternal?: (pull: SessionPull) => void }) {
   const { t } = useInterfaceTranslation();
-  const entries: MarkPulls = family ?? ownPulls(agent);
-  const parts = prMarkParts(entries);
+  const parts = prMarkParts(pulls);
+  const staleness = pullsStaleness(pulls);
   const baseLabel = useMarkLabel(parts, staleness);
   const label = [baseLabel, recordWords(t, agent)].filter(Boolean).join(" · ");
   if (!parts) return null;
-  const open = (pull: AgentPullRequest, external: boolean) => (external && onExternal ? onExternal(pull) : onOpen(pull));
+  const open = (pull: SessionPull, external: boolean) => (external && onExternal ? onExternal(pull) : onOpen(pull));
   const openUrl = (url: string, external: boolean) => {
-    const pull = entries.find((entry) => entry.pull.url === url)?.pull;
+    const pull = pulls.find((entry) => entry.url === url);
     if (!pull) throw new Error("PR card names a pull request outside its mark");
     open(pull, external);
   };
-  const only = entries.length === 1 ? entries[0]!.pull : null;
+  const only = pulls.length === 1 ? pulls[0]! : null;
   if (only) {
     return (
-      <PrHoverCard agent={agent} pulls={entries} staleness={staleness} side={side} onOpenPullRequest={openUrl}>
+      <PrHoverCard agent={agent} pulls={pulls} staleness={staleness} side={side} onOpenPullRequest={openUrl}>
         <button type="button" disabled={disabled} aria-label={label} data-agent-pr={agent.pane_id} className={cn(PR_MARK_PRESS, recordPending(agent) && "opacity-(--opacity-dimmed)")} data-record-provisional={recordPending(agent) || undefined}
           onClick={(event) => {
             event.stopPropagation();
@@ -149,7 +144,7 @@ export function AgentPrMark({ agent, family, staleness, disabled = false, side, 
   }
   return (
     <DropdownMenu>
-      <PrHoverCard agent={agent} pulls={entries} staleness={staleness} side={side} onOpenPullRequest={openUrl}>
+      <PrHoverCard agent={agent} pulls={pulls} staleness={staleness} side={side} onOpenPullRequest={openUrl}>
         <DropdownMenuTrigger asChild>
           <button type="button" disabled={disabled} aria-label={label} data-agent-pr={agent.pane_id} onClick={(event) => event.stopPropagation()} className={cn(PR_MARK_PRESS, recordPending(agent) && "opacity-(--opacity-dimmed)")} data-record-provisional={recordPending(agent) || undefined}>
             <PartsMark parts={parts} stale={staleness?.stale} />
@@ -157,10 +152,10 @@ export function AgentPrMark({ agent, family, staleness, disabled = false, side, 
         </DropdownMenuTrigger>
       </PrHoverCard>
       <DropdownMenuContent align="start" className="w-(--size-pr-popover)" onClick={(event) => event.stopPropagation()} data-pr-list={agent.pane_id}>
-        <PrListHead agent={agent} count={family?.length} />
-        {entries.map((entry) => (
-          <DropdownMenuItem key={entry.pull.url} aria-label={[`#${entry.pull.number} ${t(PR_LOOK[entry.state].word)}`, entry.pull.title, entry.owners?.map((owner) => owner.identity_label).join(" · ")].filter(Boolean).join(" · ")} onSelect={() => onOpen(entry.pull)} data-pr-list-item={entry.pull.number}>
-            <PrListItem pull={entry.pull} state={entry.state} owners={entry.owners} />
+        <PrListHead agent={agent} count={pulls.length} />
+        {pulls.map((pull) => (
+          <DropdownMenuItem key={pull.url} aria-label={[`#${pull.number} ${t(PR_LOOK[pull.state].word)}`, pull.title, holderNames(pull)].filter(Boolean).join(" · ")} onSelect={() => onOpen(pull)} data-pr-list-item={pull.number}>
+            <PrListItem pull={pull} />
           </DropdownMenuItem>
         ))}
       </DropdownMenuContent>
@@ -168,23 +163,28 @@ export function AgentPrMark({ agent, family, staleness, disabled = false, side, 
   );
 }
 
-function PrListHead({ agent, count }: { agent: AgentRow; count?: number }) {
+function PrListHead({ agent, count }: { agent: AgentRow; count: number }) {
   const { t } = useInterfaceTranslation();
   return (
     <DropdownMenuLabel className="flex min-w-0 items-baseline gap-xs">
-      <span className="shrink-0">{t("agentSessions.pr.count", { count: count ?? agent.state.pr?.count ?? 0 })}</span>
+      <span className="shrink-0">{t("agentSessions.pr.count", { count })}</span>
       <AgentRecordTitle agent={agent} className="font-normal text-muted-foreground" />
     </DropdownMenuLabel>
   );
 }
 
-function PrListItem({ pull, state, owners }: { pull: AgentPullRequest; state: PrState; owners?: AgentRow[] }) {
+/** Who holds or made a listed PR, when someone other than the row's own session does. */
+function holderNames(pull: SessionPull): string | null {
+  return pull.own && pull.holders.length <= 1 ? null : pull.holders.join(" · ") || null;
+}
+
+function PrListItem({ pull }: { pull: SessionPull }) {
   const { t } = useInterfaceTranslation();
-  const names = owners?.map((owner) => owner.identity_label).join(" · ");
+  const names = holderNames(pull);
   return (
     <>
-      <PrMark role="img" aria-label={`#${pull.number} ${t(PR_LOOK[state].word)}`} state={state} number={pull.number} />
-      <span className="min-w-0 flex-1">
+      <PrMark role="img" aria-label={`#${pull.number} ${t(PR_LOOK[pull.state].word)}`} state={pull.state} number={pull.number} stale={pull.stale} className={pull.state === "closed" ? CLOSED_DIM : undefined} />
+      <span className={cn("min-w-0 flex-1", pull.state === "closed" && CLOSED_DIM)} data-pr-closed={pull.state === "closed" || undefined}>
         <span className="block truncate" title={pull.title}>{pull.title}</span>
         {names ? <span className="block truncate text-micro text-muted-foreground" title={names}>{names}</span> : null}
       </span>
@@ -192,18 +192,16 @@ function PrListItem({ pull, state, owners }: { pull: AgentPullRequest; state: Pr
   );
 }
 
-/** A mark's PRs: a root's family with who holds each, or the row's own. */
-export type MarkPulls = { pull: AgentPullRequest; state: PrState; owners?: AgentRow[] }[];
-
 /**
  * The sidebar row's and the tree popover's mark: the same mark, not a menu,
- * over the row's own PRs or a root's `family`. Under the pointer `card` draws
- * what it opens (the PR card for one PR, the list for several); with none, a
- * stale mark still says when GitHub was read.
+ * over the list the caller chose of the row's (`rowPulls`). Under the pointer
+ * `card` draws what it opens (the PR card for one PR, the list for several);
+ * with none, a stale mark still says when GitHub was read.
  */
-export function AgentPrHover({ agent, family, staleness, card }: { agent: AgentRow; family?: SessionPull[]; staleness?: PrStaleness; card?: (mark: ReactNode) => ReactNode }) {
+export function AgentPrHover({ agent, pulls, card }: { agent: AgentRow; pulls: SessionPull[]; card?: (mark: ReactNode) => ReactNode }) {
   const { t } = useInterfaceTranslation();
-  const parts = prMarkParts(family ?? ownPulls(agent));
+  const parts = prMarkParts(pulls);
+  const staleness = pullsStaleness(pulls);
   const baseLabel = useMarkLabel(parts, staleness);
   const label = [baseLabel, recordWords(t, agent)].filter(Boolean).join(" · ");
   if (!parts) return null;
@@ -218,7 +216,7 @@ export function AgentPrHover({ agent, family, staleness, card }: { agent: AgentR
  * last read if it cannot be read now. Choosing a PR opens it; the list stays
  * open while the pointer moves into it.
  */
-function PrHoverList({ agent, pulls, staleness, side = "right", onOpen, children }: { agent: AgentRow; pulls: MarkPulls; staleness?: PrStaleness; side?: "right" | "bottom"; onOpen: (pull: AgentPullRequest) => void; children: ReactNode }) {
+function PrHoverList({ agent, pulls, staleness, side = "right", onOpen, children }: { agent: AgentRow; pulls: SessionPull[]; staleness?: PrStaleness; side?: "right" | "bottom"; onOpen: (pull: SessionPull) => void; children: ReactNode }) {
   const { t, i18n } = useInterfaceTranslation();
   const { open, onOpenChange, triggerProps } = useHintOpen();
   const stale = staleLabel(staleness, t, requireInterfaceLanguage(i18n.language));
@@ -228,9 +226,9 @@ function PrHoverList({ agent, pulls, staleness, side = "right", onOpen, children
         {children}
       </TooltipTrigger>
       <TooltipContent side={side} align="start" aria-label={t("agentSessions.pr.list", { name: agent.identity_label })} className="pointer-events-auto flex w-(--size-pr-popover) flex-col gap-xxs rounded-md p-xs text-left" data-pr-list={agent.pane_id}>
-        {pulls.map(({ pull, state, owners }) => (
+        {pulls.map((pull) => (
           <button key={pull.url} type="button" onClick={() => onOpen(pull)} data-pr-list-item={pull.number} className="flex min-w-0 items-center gap-xs rounded-xs px-xs py-xxs text-left outline-none hover:bg-accent focus-visible:ring-1 focus-visible:ring-ring">
-            <PrListItem pull={pull} state={state} owners={owners} />
+            <PrListItem pull={pull} />
           </button>
         ))}
         {stale ? <span className="px-xs text-caption text-muted-foreground">{stale}</span> : null}
@@ -245,10 +243,10 @@ function PrHoverList({ agent, pulls, staleness, side = "right", onOpen, children
  * family naming who holds each. The 프로젝트 row, the 태스크 row and the pane
  * header draw the same card.
  */
-export function PrHoverCard({ agent, pulls, staleness, side, onOpenPullRequest, children }: { agent: AgentRow; pulls: MarkPulls; staleness?: PrStaleness; side?: "right" | "bottom"; onOpenPullRequest: (url: string, external: boolean) => void; children: ReactNode }) {
+export function PrHoverCard({ agent, pulls, staleness, side, onOpenPullRequest, children }: { agent: AgentRow; pulls: SessionPull[]; staleness?: PrStaleness; side?: "right" | "bottom"; onOpenPullRequest: (url: string, external: boolean) => void; children: ReactNode }) {
   const { t } = useInterfaceTranslation();
   const trigger = <span className="relative z-10 flex shrink-0" data-pr-hover={agent.pane_id}>{children}</span>;
-  const single = pulls.length === 1 ? pulls[0]!.pull : null;
+  const single = pulls.length === 1 ? pulls[0]! : null;
   const pr = useShellStore((s) => (single ? catalogWorkspaces(s.rest).flatMap((project) => project.pull_requests ?? []).find((row) => row.url === single.url) : undefined));
   if (pr && !staleness?.stale) {
     return (

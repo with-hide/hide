@@ -1,5 +1,6 @@
 //! Association of a session with PRs and issues, and the one holder of each duty.
 pub(crate) mod board;
+pub mod family;
 use crate::model::{GithubSnapshot, PullRequestChecks, PullRequestSnapshot, SidebarAgentSnapshot};
 use crate::request_view::{AgentPullRequestSnapshot, RowPlace};
 use std::collections::HashMap;

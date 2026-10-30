@@ -7,8 +7,9 @@ import { TooltipProvider } from "./components/ui/tooltip";
 import { initializeInterfaceI18n } from "./i18n/instance";
 import { RELATION_ANSWER_TIMEOUT_MS } from "./lineage";
 import { PaneAskMark, PaneHeaderBand, PanePrChip, PaneRecordButton } from "./PaneHeaderBand";
-import type { AgentPullRequest, AgentRow, PaneBand, PaneHeader, PaneFocusRequest, PrState, SnapshotRest, Workspace } from "./snapshot";
+import type { AgentRow, PaneBand, PaneHeader, PaneFocusRequest, SessionPull, SnapshotRest, Workspace } from "./snapshot";
 import { legacyAgentRow } from "../test/legacyAgentRow";
+import { sessionPull } from "../test/sessionPull";
 import { useShellStore } from "./store";
 import { useUiStore } from "./ui";
 import type { DispatchFn } from "./ws";
@@ -403,12 +404,10 @@ it("opens the card of the displayed repository even when another project has the
   } finally { await unmount(); }
 });
 
-// The pane header draws the Sessions row's PR mark: a parent counts its
-// descendants' pull requests, a pane without children shows only its own.
-function pullRow(pane: string, numbers: number[], children: string[] = [], states: PrState[] = numbers.map(() => "pending")): AgentRow {
-  const seed = legacyAgentRow({ pane_id: pane, identity_label: `${pane} 세션`, lineage_child_pane_ids: children });
-  const pulls: AgentPullRequest[] = numbers.map((number) => ({ number, title: `PR ${number}`, url: `https://github.com/acme/app/pull/${number}`, badge: "open", checks: "pending", head_branch: "feat/work", closing_issues: [], live: true, duty: true, created: true, settled_at_unix_ms: null }));
-  return { ...seed, state: { ...seed.state, pr: numbers.length ? { count: numbers.length, worst: states[0]!, pulls: numbers.map((_, index) => ({ state: states[index]!, index })) } : null }, request: { verb: "working", verb_since_unix_ms: 0, request: null, later_by: null, pull_requests: pulls } };
+// The pane header draws the 태스크 row's PR mark from the same core list: a
+// parent's holds its descendants' pull requests, ended ones included.
+function pullRow(pane: string, pulls: SessionPull[], children: string[] = []): AgentRow {
+  return { ...legacyAgentRow({ pane_id: pane, identity_label: `${pane} 세션`, lineage_child_pane_ids: children }), pulls: pulls.length ? { pulls } : null };
 }
 
 async function mountChip(paneId: string, agents: AgentRow[]) {
@@ -424,13 +423,14 @@ async function mountChip(paneId: string, agents: AgentRow[]) {
   return { container, unmount: async () => { await act(async () => root.unmount()); } };
 }
 
-it("shows a parent's PR mark over its descendants as the Sessions row does, and a childless pane's own", async () => {
-  const parent = pullRow("parent", [], ["child"]);
-  const child = pullRow("child", [1073]);
+it("shows a pane's list as its 태스크 row does: a parent's holds its descendants', a childless pane's its own", async () => {
+  const made = sessionPull(1073, "pending", { own: false, holders: ["child 세션"] });
+  const parent = pullRow("parent", [made], ["child"]);
+  const child = pullRow("child", [{ ...made, own: true, holders: [] }]);
   const { container, unmount } = await mountChip("parent", [parent, child]);
   try {
     const mark = container.querySelector<HTMLButtonElement>("[data-agent-pr=parent]")!;
-    // One PR in the family is that PR's number; the digits-only form is a count of several.
+    // One PR in the list is that PR's number; the digits-only form is a count of several.
     expect(mark.textContent).toBe("#" + "1073");
     expect(mark.getAttribute("aria-label")).toBe("#" + "1073 CI running or review pending");
   } finally { await unmount(); }
@@ -439,14 +439,15 @@ it("shows a parent's PR mark over its descendants as the Sessions row does, and 
     expect(own.container.querySelector("[data-agent-pr=child]")?.textContent).toBe("#" + "1073");
   } finally { await own.unmount(); }
   // Several PRs are counted per state in each state's colour, worst first:
-  // a mergeable PR beside a merged one is green 1 purple 1, not green 2.
-  const several = await mountChip("parent", [parent, pullRow("child", [1073, 1074], [], ["mergeable", "merged"])]);
+  // a mergeable PR beside a merged one is green 1 purple 1, not green 2. The
+  // child that made them has ended; the parent's list keeps them.
+  const several = await mountChip("parent", [pullRow("parent", [sessionPull(1074, "mergeable", { own: false }), sessionPull(1073, "merged", { own: false })])]);
   try {
     const mark = several.container.querySelector<HTMLButtonElement>("[data-agent-pr=parent]")!;
     expect(Array.from(mark.querySelectorAll("[data-pr-count]"), (part) => [part.getAttribute("data-pr-count"), part.textContent])).toEqual([["mergeable", "1"], ["merged", "1"]]);
     expect(mark.getAttribute("aria-label")).toBe("PR 2 · Mergeable 1 · Merged 1");
   } finally { await several.unmount(); }
-  const none = await mountChip("parent", [{ ...parent, lineage_child_pane_ids: [] }]);
+  const none = await mountChip("parent", [pullRow("parent", [])]);
   try {
     expect(none.container.querySelector("[data-agent-pr]")).toBeNull();
   } finally { await none.unmount(); }

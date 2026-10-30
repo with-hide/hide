@@ -768,6 +768,7 @@ fn project_agent(agent: SessionAgentPayload) -> Result<SidebarAgentSnapshot, Str
         escalation: None,
         letters_waiting: None,
         raised: Vec::new(),
+        pulls: None,
         descendant_mark: None,
         descendant_line: None,
         id: agent.id.unwrap_or_else(|| pane_id.clone()),

@@ -1,5 +1,5 @@
 import type { BoardProject } from "./projectBoard";
-import { localDeviceId, type AgentRow, type Checkout, type Workspace, type MissedWork, type PrState, type SessionRecord, type SessionWorkSummary, type SnapshotRest, type WorkOutput, type WorkRequest, type WorkSession } from "./snapshot";
+import { localDeviceId, type AgentRow, type Checkout, type Workspace, type MissedWork, type SessionRecord, type SessionWorkSummary, type SnapshotRest, type WorkRequest, type WorkSession } from "./snapshot";
 
 export const workKey = (session: WorkSession) => `${session.device_id}\0${session.agent}\0${session.session_id}`;
 export function sessionOfAgent(agent: AgentRow, rest: SnapshotRest | null): WorkSession | null {
@@ -15,10 +15,6 @@ export function recordTitle(record: Pick<SessionRecord, "title" | "manual_title"
 export function recordTree(record: SessionRecord): SessionRecord[] {
   return [record, ...record.children.flatMap(recordTree)];
 }
-const OUTPUT_ORDER: Record<string, number> = { ci_failed: 0, review: 1, open: 2, merged: 3, closed: 4 };
-export function orderedOutputs(outputs: readonly WorkOutput[]): WorkOutput[] {
-  return [...outputs].sort((a, b) => (OUTPUT_ORDER[a.state] ?? 5) - (OUTPUT_ORDER[b.state] ?? 5) || b.created_at_unix_ms - a.created_at_unix_ms);
-}
 /** The Overview fold that holds the backlog's 놓친 일 group open (`OverviewPlace.open`). */
 export const MISSED_FOLD = "missed";
 
@@ -31,11 +27,6 @@ export function openMissedWork(work: readonly SessionWorkSummary[]): { owner: Se
   return work
     .flatMap((owner) => owner.missed.filter((item) => item.status === "open").map((item) => ({ owner, item })))
     .sort((a, b) => b.item.at_unix_ms - a.item.at_unix_ms);
-}
-
-/** The PR mark's state for a recorded output: the record keeps merged, closed, CI failed, and otherwise open for review. */
-export function outputPrState(state: string): PrState {
-  return state === "merged" ? "merged" : state === "closed" ? "closed" : state === "ci_failed" ? "failed" : "pending";
 }
 
 /** How many characters of a request with no summary show before `…` (D-06, B5). */
@@ -70,7 +61,7 @@ export function holdsRequest(request: Pick<WorkRequest, "offset" | "repeats">, o
 }
 
 /** A pull request nothing more happens to: merged, or closed unmerged (B19). */
-export const settledOutput = (output: Pick<WorkOutput, "state">) => output.state === "merged" || output.state === "closed";
+export const settledOutput = (output: { state: string }) => output.state === "merged" || output.state === "closed";
 
 /** Where a session works: the project and checkout its pane is in, else the registered checkout holding its folder. */
 export type SessionPlace = { project: Workspace; checkout: Checkout | null; agent: AgentRow | null };

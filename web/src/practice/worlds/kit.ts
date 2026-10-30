@@ -241,7 +241,7 @@ function workingState(since: number): AgentState {
     chip_tone: { kind: "working", read: false }, mark_tone: { kind: "working", read: false },
     line: null, branch_badge: null, bucket: "working", attention_rank: 3, link_rank: 1, search_tone: "working", subtree: "working", link: "working",
     descendant_asking: 0, verb: "working", request_todo: false, request_since: since,
-    session: { group: "working", line: null, unfinished: false }, ask: null, tree_rank: 1, pr: null,
+    session: { group: "working", line: null, unfinished: false }, ask: null, tree_rank: 1,
   };
 }
 

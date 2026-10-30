@@ -1189,6 +1189,14 @@ pub struct Runtime {
     archive_deletes_sent: HashSet<crate::session_archive::ArchiveId>,
     /// The archived sessions last handed to the link worker's retention.
     archive_retention_sent: Arc<Vec<crate::links::store::ArchivedSession>>,
+    /// What the link record keeps of sessions, from its project summaries:
+    /// who started whom and the pull requests each made, so a row's list
+    /// gathers its ended descendants' (`agent_state::work::family`). Made
+    /// again only when a summary changes.
+    recorded_pulls: crate::agent_state::work::family::Recorded,
+    /// The panes whose pull request list is past its cap, so the crossing
+    /// is logged once (`lay_session_pulls`).
+    pulls_over_cap: HashSet<String>,
     /// When each resumed archived member's registration began waiting for
     /// the delivery store to see its new pane, by agent id.
     archive_registration_waits: HashMap<String, u64>,
@@ -2242,6 +2250,8 @@ impl Runtime {
             registration_rebinds: std::collections::BTreeMap::new(),
             archive_deletes_sent: HashSet::new(),
             archive_retention_sent: Arc::default(),
+            recorded_pulls: Default::default(),
+            pulls_over_cap: HashSet::new(),
             archive_registration_waits: HashMap::new(),
             node: options.node_id.clone(),
             machine_name: options.machine_name.clone(),

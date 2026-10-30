@@ -29,6 +29,8 @@ pub struct ShellLine {
     /// The text of each `$(...)` command substitution, which the shell runs
     /// as a line of its own, and whether its command is conditional.
     pub substitutions: Vec<(bool, String)>,
+    /// The line holds an `||`: a command that runs only when another failed.
+    pub fallback: bool,
 }
 
 pub fn shell_line(text: &str) -> ShellLine {
@@ -57,6 +59,8 @@ struct Lexer {
     /// The current command's substitutions, which take its state when it ends.
     pending_substitutions: Vec<String>,
     conditional: Vec<bool>,
+    /// An `||` has been read.
+    fallback: bool,
     /// The current list has passed `&&` or `||`.
     and_or: bool,
     /// An `&&`, `||` or `|` still waits for its command, which may follow a
@@ -93,6 +97,7 @@ impl Lexer {
             substitutions: Vec::new(),
             pending_substitutions: Vec::new(),
             conditional: Vec::new(),
+            fallback: false,
             and_or: false,
             operator_open: false,
             compound: 0,
@@ -160,7 +165,10 @@ impl Lexer {
                     self.operator_open = c == '|';
                     match c {
                         ';' => self.and_or = false,
-                        '|' if doubled => self.and_or = true,
+                        '|' if doubled => {
+                            self.and_or = true;
+                            self.fallback = true;
+                        }
                         '(' => {
                             let body = std::mem::take(&mut self.function_next);
                             self.subshells
@@ -194,6 +202,7 @@ impl Lexer {
                 targets: Vec::new(),
                 conditional: Vec::new(),
                 substitutions: Vec::new(),
+                fallback: false,
             };
         }
         ShellLine {
@@ -201,6 +210,7 @@ impl Lexer {
             targets: self.targets,
             conditional: self.conditional,
             substitutions: self.substitutions,
+            fallback: self.fallback,
         }
     }
 

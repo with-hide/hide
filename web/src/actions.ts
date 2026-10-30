@@ -2973,15 +2973,6 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
       this.openWorkspace(deviceId, workspaceId, checkoutId);
       dispatch({ schema_version: 2, kind: "detail_open", payload: { item: { kind: "record", session } } });
     },
-    openRecordedIssue(session: import("./snapshot").WorkSession, repository: string, number: number) {
-      const project = catalogWorkspaces(rest()).find((row) => row.device_id === session.device_id && row.tasks?.source?.name?.toLowerCase() === repository.toLowerCase());
-      if (project) this.openBacklogItem(project.device_id, project.id, `github:${repository.toLowerCase()}#${number}`);
-      else this.openLink(`https://github.com/${repository}/issues/${number}`, true);
-    },
-    openRecordedOutput(output: import("./snapshot").WorkOutput) {
-      if (output.kind === "pr") this.openSessionPullRequest({ workspace_id: null, number: output.number, url: output.url });
-      else this.openRecordedIssue(output.source, output.repository, output.number);
-    },
     /**
      * A tile of the record's 결과물 gallery (PRD session-docs-and-assistant
      * D-40): its View in front of its checkout's documents. In the

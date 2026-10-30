@@ -17,8 +17,9 @@ import { cn } from "../lib/utils";
 import type { AgentRow } from "../snapshot";
 import type { AgentMenuItem } from "../workspaceManage";
 import { AskLine, TreeChevron, TreeRails, type TreePlace } from "./agent-tree";
-import { AgentPrHover, PrHoverCard, useAgentStaleness } from "./pr-mark";
-import { ownPulls, type SessionPull } from "../prMark";
+import { AgentPrHover, PrHoverCard } from "./pr-mark";
+import { pullsStaleness, rowPulls } from "../prMark";
+import type { SessionPull } from "../snapshot";
 import { AgentTreePopover } from "./agent-tree-popover";
 import { Elapsed } from "./elapsed";
 import { MissionChip } from "./mission-chip";
@@ -105,7 +106,7 @@ export const SidebarAgentRow = memo(function SidebarAgentRow({
   branchShown = true,
   number = null,
   menu,
-  family,
+  pulls: listed,
   onOpenMission,
 }: {
   agent: AgentRow;
@@ -131,8 +132,8 @@ export const SidebarAgentRow = memo(function SidebarAgentRow({
   number?: number | null;
   /** The row's right-click menu; the menu key or ⇧F10 on the focused row opens it too. */
   menu: AgentRowMenu;
-  /** On a root with children: its own and every descendant's PRs, which its mark gathers as the 태스크 row's does. */
-  family?: SessionPull[];
+  /** The PRs its mark draws (`rowPulls`): a 프로젝트 tree root's whole list, as the 태스크 row's; the row's own when absent. */
+  pulls?: SessionPull[];
   /** Opens a mission's map from the Conductor's mark (PRD software-factory-conductor B14). */
   onOpenMission?: (missionId: string) => void;
 }) {
@@ -142,7 +143,7 @@ export const SidebarAgentRow = memo(function SidebarAgentRow({
   const closing = useShellStore((s) => agentClosing(s.rest?.status?.async_operations, agent.pane_id));
   // The target of a close with its children counts the panes gone so far, so a long close shows it moves.
   const closingProgress = useShellStore((s) => treeCloseProgress(s.rest?.status?.async_operations, agent.pane_id));
-  const agentPrStaleness = useAgentStaleness(agent, family);
+  const pulls = listed ?? rowPulls(agent, "own");
   const line = tree ? treeLine(agent) : sidebarLine(agent);
   const branch = branchShown ? branchChip(agent) : null;
   const attention = agent.state.attention;
@@ -156,7 +157,7 @@ export const SidebarAgentRow = memo(function SidebarAgentRow({
   // Only a root in the project tree draws a resolved row (it carries `tree`); the raised lists leave it out and a child keeps its own look.
   const resting = tree && depth === 0 && agent.resolved;
   const hint = [resting ? t("sidebar.resolvedHint", { label: title }) : title, agentProductName(agent.agent_kind), recordWords(t, agent), agent.record_summary, offline ?? markWords(t, agent), offline ? null : rowSentence(t, agent), place].filter(Boolean).join("\n");
-  const staleness = ask ? undefined : agentPrStaleness;
+  const staleness = ask ? undefined : pullsStaleness(pulls);
   const onKeyDown = (event: KeyboardEvent<HTMLButtonElement>) => {
     if (!tree || tree.open === null || event.metaKey || event.ctrlKey || event.altKey) return;
     if (tree.popover) {
@@ -234,7 +235,7 @@ export const SidebarAgentRow = memo(function SidebarAgentRow({
             {device ? (
               <DeviceChip label={device} className="pointer-events-none max-w-2/5" />
             ) : null}
-            {ask ? null : <AgentPrHover agent={agent} family={family} staleness={staleness} card={(icon) => <PrHoverCard agent={agent} pulls={family ?? ownPulls(agent)} staleness={staleness} onOpenPullRequest={onOpenPullRequest}>{icon}</PrHoverCard>} />}
+            {ask ? null : <AgentPrHover agent={agent} pulls={pulls} card={(icon) => <PrHoverCard agent={agent} pulls={pulls} staleness={staleness} onOpenPullRequest={onOpenPullRequest}>{icon}</PrHoverCard>} />}
             {agent.letters_waiting ? <RowLetterMark /> : null}
             {/* The row whose question is its mission's decision keeps the chip that says which mission (needs-you-cleanup D-12). */}
             {onOpenMission && (!ask || agent.state.ask?.subject?.cause === "mission_decision") ? <MissionChip agent={agent} onOpen={onOpenMission} /> : null}

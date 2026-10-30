@@ -4,8 +4,8 @@ import type { TFunction } from "i18next";
 import type { Actions } from "./actions";
 import { agentProductName } from "./agentAdapters";
 import { askWhat, VerbText } from "./components/agent-tree";
-import { AgentPrMark, useAgentStaleness } from "./components/pr-mark";
-import { familyPulls, type SessionPull } from "./prMark";
+import { AgentPrMark } from "./components/pr-mark";
+import { rowPulls } from "./prMark";
 import { AgentTreePopover } from "./components/agent-tree-popover";
 import { Elapsed } from "./components/elapsed";
 import { Hint } from "./components/ui/tooltip";
@@ -362,24 +362,18 @@ export function PaneRecordButton({ paneId, title, product, actions, children, pl
 }
 
 /**
- * The pane's PR mark after its title, as the Sessions row of the same agent
- * draws it: a pane without children shows its own PRs (B21, B22), and a
- * parent shows `PR N` over itself and every descendant, so the operator sees a
- * child's pull request from the pane that delegated it.
+ * The pane's PR mark after its title, as the 태스크 row of the same agent
+ * draws it (B21, B22): the core's list of its session and every descendant,
+ * live or ended, so the operator sees a child's pull request from the pane
+ * that delegated it, after the child is gone too.
  */
 export function PanePrChip({ paneId, actions }: { paneId: string; actions: Actions }) {
   const agents = usePaneAgents();
-  const byPane = agentsByPane(agents);
-  const agent = byPane.get(paneId);
-  const family = useMemo(() => (agent ? familyPulls(agent, byPane) : undefined), [agent, byPane]);
-  if (!agent || (family ? family.length === 0 : !agent.state.pr)) return null;
-  return <PaneAgentPrMark agent={agent} family={family} actions={actions} />;
-}
-
-function PaneAgentPrMark({ agent, family, actions }: { agent: AgentRow; family?: SessionPull[]; actions: Actions }) {
-  const staleness = useAgentStaleness(agent, family);
+  const agent = agentsByPane(agents).get(paneId);
+  const pulls = agent ? rowPulls(agent) : [];
+  if (!agent || pulls.length === 0) return null;
   // The pane names no project; the PR's URL finds the one that lists it.
-  return <AgentPrMark agent={agent} family={family} staleness={staleness} side="bottom" onOpen={(pull) => actions.openSessionPullRequest({ workspace_id: null, url: pull.url, number: pull.number })} onExternal={(pull) => actions.openLink(pull.url, true)} />;
+  return <AgentPrMark agent={agent} pulls={pulls} side="bottom" onOpen={(pull) => actions.openSessionPullRequest({ workspace_id: null, url: pull.url, number: pull.number })} onExternal={(pull) => actions.openLink(pull.url, true)} />;
 }
 
 /** How many direct children the children button draws a mark for before `+N`. */

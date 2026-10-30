@@ -9,7 +9,7 @@ import { EMPTY_GALLERY_SCOPE, galleryScopes } from "./agentScopes";
 // a machine. The folds are this scene's own ui state, applied by `applyEvent`
 // the way the core applies the same events, so a chevron really folds.
 
-import type { AgentRow, Checkout, MarkCounts, PullRequest, SleepingSession, SnapshotRest, Workspace } from "../snapshot";
+import type { AgentRow, Checkout, MarkCounts, PrState, PullRequest, SessionPull, SleepingSession, SnapshotRest, Workspace } from "../snapshot";
 import { galleryAgentState } from "./agentStates";
 
 /** Which titles the scene carries: the Pen frame's, or long Korean ones for truncation. */
@@ -229,13 +229,19 @@ const A1_CHILDREN = ["a1c1", "a1c2", "a1c3", "a1c4", "a1c5", "a1c6", "a1c7", "a1
 
 type PullState = "failed" | "pending" | "mergeable" | "merged";
 
-/** One PR the row holds the duty of (D-39); its summary is the pane's state preset in agentStates.json. */
-function ownPull(number: number, title: string, state: PullState): Pick<AgentRow, "request"> {
+/** One PR of a row's list as the core lays it (`AgentRow.pulls`): its own when `holder` is null, else a descendant's. */
+export function listedPull(number: number, title: string, state: PrState, holder: string | null = null, url = `https://example.invalid/hide/pull/${number}`): SessionPull {
+  return { url, number, title, state, own: holder === null, holders: holder ? [holder] : [], stale: false, last_read_at_unix_ms: null };
+}
+
+/** One PR the row holds the duty of (D-39), and the row's list holding it alone. */
+function ownPull(number: number, title: string, state: PullState): Pick<AgentRow, "request" | "pulls"> {
   return {
     request: {
       verb: "working", verb_since_unix_ms: 0, line: undefined, request: null, later_by: null,
       pull_requests: [{ number, title, url: `https://example.invalid/hide/pull/${number}`, badge: state === "merged" ? "merged" : "open", checks: state === "failed" ? "failed" : state === "pending" ? "pending" : "passing", review: state === "pending" ? "review_required" : "approved", head_branch: `agents/${number}`, closing_issues: [], live: true, duty: true, created: true, settled_at_unix_ms: state === "merged" ? 0 : null }],
     },
+    pulls: { pulls: [listedPull(number, title, state)] },
   };
 }
 
@@ -262,6 +268,17 @@ export function sidebarScene(content: SceneContent, folds: SceneFolds, nowMs: nu
       descendant_counts: { error: 0, approval: 1, question: 1, working: 1, done: 1 },
       descendant_mark: { kind: "raised", count: 1 },
       ...ownPull(140, "사이드바 트리 행", "mergeable"),
+      // The core's list: a1's own and every descendant's, a child that ended
+      // keeping its pull requests on it, a closed one dimmed last.
+      pulls: { pulls: [
+        listedPull(811, "읽기 전용 준비", "failed", "P8 읽기 전용 준비"),
+        listedPull(838, "Pi·omp 재우기", "pending", "P7 Pi·omp 재우기"),
+        listedPull(842, "OpenCode 세션 리더", "mergeable", "P6 OpenCode 세션 리더"),
+        listedPull(140, "사이드바 트리 행", "mergeable"),
+        listedPull(830, "큰 도구 결과 읽기", "merged", "P5 큰 도구 결과 읽기"),
+        listedPull(826, "세션 기록 정리", "merged", "P4 세션 기록 정리"),
+        listedPull(819, "옛 트리 실험", "closed", "P4 세션 기록 정리"),
+      ] },
     }),
     agent({
       pane_id: "a1c1",

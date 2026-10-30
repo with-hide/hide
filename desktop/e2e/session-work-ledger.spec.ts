@@ -45,7 +45,9 @@ test("@platform session records by goal flow, ended work and search render in bo
     // The record opens in the lane's 보기 slot (PRD sidebar-task-lens B15).
     const record = page.locator('aside[data-lane="detail"][data-detail="record"] [data-session-record="lane"]');
     await expect(record.locator("[data-record-flow]")).toHaveCount(1, { timeout: 45_000 });
-    await expectRecordPrs(record, child, 2);
+    // The record reads the session's one list (status-model, One list per session): #32, which the pane holds on
+    // the checkout's branch, joins this session's and its child's from the start.
+    await expectRecordPrs(record, child, 3);
     // The rail keeps a button for the slot: pressed while the viewing column draws it, folding it when pressed then, and pressing it again comes back (B46; PRD lane-two-columns B11).
     const slotButton = page.locator('[data-lane-tool="detail"][data-detail-slot="record"]');
     await expect(slotButton).toHaveAttribute("aria-pressed", "true");

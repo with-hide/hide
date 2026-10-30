@@ -606,7 +606,7 @@ fn literal(rest: &str) -> Option<String> {
 
 /// Whether a Codex tool output says its command failed: a nonzero exit
 /// code in any of the forms Codex writes it.
-fn codex_failed(output: Option<&Value>) -> bool {
+pub(crate) fn codex_failed(output: Option<&Value>) -> bool {
     let failed = |code: i64| code != 0;
     let texts: Vec<&str> = match output {
         Some(Value::String(text)) => vec![text],

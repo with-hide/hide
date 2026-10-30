@@ -77,10 +77,37 @@ pub const BACKFILL_MS: u64 = 90 * DAY_MS;
 /// counted from the session's end (D-25).
 pub const OPEN_EXCEPTION_MS: u64 = 365 * DAY_MS;
 pub const DAY_MS: u64 = 86_400_000;
-/// The created-PR judgement of the label worker (`labels/facts.rs`, D-44):
-/// an address first printed within this window of GitHub's `createdAt`.
+/// The created-PR judgement (D-31, D-44), the link record's and the label
+/// worker's (`labels/facts.rs`): an address first printed within this window
+/// of GitHub's `createdAt` is the session's making of it. A print reads
+/// before `createdAt` by the two clocks alone, the session machine's and
+/// GitHub's, so the early side stays narrow: a listing another session
+/// printed then must not read as a making.
 pub const CREATED_BEFORE_MS: u64 = 2_000;
 pub const CREATED_AFTER_MS: u64 = 30_000;
+/// The early side for an address its successful creating call gave back
+/// (`hide_session::links::PrMark::made`), which only clock skew can put
+/// before `createdAt`: this Mac's record held 234 prints, the earliest 3.4 s
+/// before GitHub's time, and mission-13's #1810 to #1813 were made 2.6 s to
+/// 3.2 s before it. The bound still keeps out a pull request made long ago
+/// that the same call happened to print.
+pub const MADE_BEFORE_MS: u64 = 10_000;
+
+/// Whether a print at `printed` is the making of a pull request GitHub made
+/// at `created`: within [`MADE_BEFORE_MS`] before it when its creating call
+/// gave it back (`made`), else within [`CREATED_BEFORE_MS`]; within
+/// [`CREATED_AFTER_MS`] after it either way.
+pub fn made_by_print(made: bool, printed: u64, created: Option<u64>) -> bool {
+    let before = if made {
+        MADE_BEFORE_MS
+    } else {
+        CREATED_BEFORE_MS
+    };
+    created.is_some_and(|created| {
+        printed.saturating_add(before) >= created
+            && printed <= created.saturating_add(CREATED_AFTER_MS)
+    })
+}
 
 /// One registered project as the runtime knows it, handed to the worker
 /// whenever it changes.

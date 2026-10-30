@@ -1554,22 +1554,19 @@ impl Runtime {
     }
 }
 
-/// The pull requests a row holds the duty of, as kept with its archive.
+/// The pull requests a row's own session holds or made, as kept with its
+/// archive; each descendant member keeps its own.
 fn archived_pulls(agent: &SidebarAgentSnapshot) -> Vec<ArchivedPull> {
-    let Some(request) = agent.request.as_ref() else {
-        return Vec::new();
-    };
     agent
-        .state
-        .pr
+        .pulls
         .iter()
-        .flat_map(|summary| &summary.pulls)
-        .filter_map(|own| request.pull_requests.get(own.index))
+        .flat_map(|list| &list.pulls)
+        .filter(|pull| pull.own)
         .map(|pull| ArchivedPull {
             url: pull.url.clone(),
             number: pull.number,
             title: pull.title.clone(),
-            state: pull.state(),
+            state: pull.state,
         })
         .collect()
 }

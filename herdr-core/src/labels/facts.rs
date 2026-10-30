@@ -31,11 +31,6 @@ pub(crate) const MAX_TEXT_BYTES: usize = 8 * 1024;
 pub(crate) const MAX_SIGHTINGS: usize = 20;
 /// Pull requests one session is recorded as having made.
 const MAX_CREATED: usize = 20;
-/// How far from GitHub's creation time a tool's printing of the address may
-/// be and still be the creation (D-31): a little before, for clock skew, and
-/// up to thirty seconds after, for a tool that prints when it returns.
-const CREATED_BEFORE_MS: u64 = 2_000;
-const CREATED_AFTER_MS: u64 = 30_000;
 
 /// When GitHub made each pull request this daemon has read, by lowercase
 /// `owner/name` and number.
@@ -213,8 +208,9 @@ impl SessionFacts {
         before != self.shown()
     }
 
-    /// Records each sighted pull request whose address a tool printed when
-    /// GitHub made it. Returns whether one was added.
+    /// Records each sighted pull request the session made: one its creating
+    /// call gave back, or whose address a tool printed when GitHub made it
+    /// (`links::made_by_print`). Returns whether one was added.
     pub(crate) fn judge_created(&mut self, times: &PullRequestTimes) -> bool {
         let mut added = false;
         for sighting in &self.sightings {
@@ -223,8 +219,7 @@ impl SessionFacts {
                 continue;
             };
             let at = sighting.at_unix_ms;
-            let made_then = at.saturating_add(CREATED_BEFORE_MS) >= created
-                && at <= created.saturating_add(CREATED_AFTER_MS);
+            let made_then = crate::links::made_by_print(sighting.made, at, Some(created));
             let known = self
                 .created_prs
                 .iter()
@@ -347,12 +342,12 @@ impl SessionFacts {
     /// [`MAX_SIGHTINGS`] of them.
     fn sight(&mut self, sightings: &[PrSighting], log: &LogTarget<'_>) {
         for sighting in sightings {
-            let known = self.sightings.iter().any(|kept| {
+            match self.sightings.iter_mut().find(|kept| {
                 kept.number == sighting.number
                     && kept.repository.eq_ignore_ascii_case(&sighting.repository)
-            });
-            if !known {
-                self.sightings.push(sighting.clone());
+            }) {
+                Some(kept) => kept.made |= sighting.made,
+                None => self.sightings.push(sighting.clone()),
             }
         }
         if self.sightings.len() > MAX_SIGHTINGS {
@@ -659,26 +654,43 @@ mod tests {
         assert!(facts.other_request.is_none());
     }
 
+    /// D-31, and the review of #1859: mission-13's #1810 to #1813 were each
+    /// printed by the `gh pr create` that made them up to 3.2 s before the
+    /// time GitHub gave them, on another clock. A print its creating call
+    /// gave back is the making up to 10 s before; a listing printed as early
+    /// is a look.
     #[test]
-    fn a_pull_request_is_the_sessions_only_when_its_tool_printed_it_as_github_made_it() {
+    fn a_pull_request_is_the_sessions_when_its_creating_call_or_its_tool_printed_it_as_github_made_it()
+     {
         let mut facts = SessionFacts::default();
-        let sighting = |number, at_unix_ms| PrSighting {
+        let sighting = |number, at_unix_ms, made| PrSighting {
             repository: "Acme/App".to_owned(),
             number,
             at_unix_ms,
+            made,
         };
         facts.sight(
             &[
-                sighting(1, 100_000),
-                sighting(2, 100_000),
-                sighting(3, 200_000),
+                sighting(1, 100_000, false),
+                sighting(2, 100_000, false),
+                sighting(3, 200_000, false),
+                sighting(4, 300_000, true),
+                sighting(5, 400_000, false),
+                sighting(6, 500_000, false),
+                sighting(7, 600_000, true),
             ],
             &LOG,
         );
+        // A later read of the same address from its creating call.
+        facts.sight(&[sighting(6, 500_100, true)], &LOG);
         let times = PullRequestTimes::from([
             (("acme/app".to_owned(), 1), 90_000), // printed 10 s after: made here
             (("acme/app".to_owned(), 2), 40_000), // printed a minute after: looked at
             (("acme/app".to_owned(), 3), 201_000), // printed a second before: made here
+            (("acme/app".to_owned(), 4), 303_400), // its creating call, 3.4 s before: made here
+            (("acme/app".to_owned(), 5), 403_000), // a listing 3 s before: looked at
+            (("acme/app".to_owned(), 6), 509_000), // its creating call, read again: made here
+            (("acme/app".to_owned(), 7), 612_000), // its creating call, 12 s before: not this making
         ]);
         assert!(facts.judge_created(&times));
         assert_eq!(
@@ -687,7 +699,7 @@ mod tests {
                 .iter()
                 .map(|pr| pr.number)
                 .collect::<Vec<_>>(),
-            [1, 3]
+            [1, 3, 4, 6]
         );
         assert!(!facts.judge_created(&times), "judged once");
     }
@@ -706,6 +718,7 @@ mod tests {
                 repository: "o/r".to_owned(),
                 number,
                 at_unix_ms: number * 10,
+                made: false,
             })
             .collect();
         facts.sight(&sightings, &LOG);
