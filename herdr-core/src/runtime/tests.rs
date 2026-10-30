@@ -28,6 +28,7 @@ mod birth_cwd;
 mod checkout_git;
 #[path = "tests/control_order.rs"]
 mod control_order;
+mod desk_group;
 #[path = "tests/detail.rs"]
 mod detail;
 #[path = "tests/device_catalog.rs"]

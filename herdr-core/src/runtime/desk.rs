@@ -938,6 +938,16 @@ impl Runtime {
     }
 }
 
+#[cfg(test)]
+impl Runtime {
+    /// Runs Desk with a worker nobody reads, for the runtime's other tests.
+    pub(in crate::runtime) fn start_test_desk(&mut self) {
+        let (orders, _unread) = std::sync::mpsc::channel();
+        self.desk.worker = Some(worker::Handle { orders });
+        self.compose_desk();
+    }
+}
+
 fn refused(reason: &str) -> bool {
     crate::diagnostic!(json!({
         "component": "desk",

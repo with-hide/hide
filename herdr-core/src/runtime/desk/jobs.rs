@@ -1043,13 +1043,15 @@ impl Runtime {
                 next.joined = true;
             }
             if spawn.machine.is_none() && !next.closed && !next.moved_out {
+                // Placed once, from whatever group its tab opened in; out of
+                // the group after that is the operator's move.
                 match self.desk_tab_group(&pane) {
-                    Some((path, tab, None)) if !mark.grouped => {
+                    Some((_, _, Some(true))) => next.grouped = true,
+                    Some((path, tab, _)) if !mark.grouped => {
                         next.grouped = self.desk_place_in_group(&path, &tab);
                     }
-                    Some((_, _, Some(false))) if mark.grouped => next.moved_out = true,
-                    Some((_, _, Some(true))) if !mark.grouped => next.grouped = true,
-                    _ => {}
+                    Some(_) => next.moved_out = true,
+                    None => {}
                 }
             }
             if !mark.watched && spawn.completed && !registration.ended {
