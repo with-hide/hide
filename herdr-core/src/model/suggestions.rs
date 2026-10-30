@@ -185,12 +185,35 @@ pub struct SuggestionCountsSnapshot {
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum SuggestionGroup {
-    /// 고를 것.
+    /// 고를 것: a new suggestion, and an attempt that stopped for the
+    /// operator's choice.
     Choose,
-    /// 반영 중.
+    /// 반영 중: an attempt Hide AI works on, or that waits elsewhere, on a
+    /// pull request's review or an open issue.
     Applying,
     /// The folded 반영됨.
     Applied,
+}
+
+impl SuggestionGroup {
+    /// The group of a row whose attempt is in `phase` and has not landed: a
+    /// ready branch, a failed attempt and failed checks wait for the
+    /// operator to choose what comes next, so they sit in 고를 것, never in
+    /// 반영 중, which reads as Hide still working.
+    pub(crate) fn of_attempt(phase: SuggestionAttemptPhase) -> Self {
+        match phase {
+            SuggestionAttemptPhase::Ready
+            | SuggestionAttemptPhase::Failed
+            | SuggestionAttemptPhase::CiFailed => Self::Choose,
+            SuggestionAttemptPhase::Starting
+            | SuggestionAttemptPhase::Working
+            | SuggestionAttemptPhase::Merging
+            | SuggestionAttemptPhase::Syncing
+            | SuggestionAttemptPhase::PrOpen
+            | SuggestionAttemptPhase::IssueOpen
+            | SuggestionAttemptPhase::Merged => Self::Applying,
+        }
+    }
 }
 
 /// A row's mark (D-37).
@@ -265,6 +288,20 @@ pub struct SuggestionRowSnapshot {
     /// A Memory card offered for the documents: what it says and how much
     /// the operator leaned on it; none for other rows.
     pub memory: Option<SuggestionMemorySnapshot>,
+}
+
+impl SuggestionRowSnapshot {
+    /// Where the row draws in the tab: 고를 것 with the rows that are the
+    /// operator's turn first, then the new suggestions, then 반영 중 and
+    /// 반영됨; a sort by it is stable, so each keeps its own order inside.
+    pub(crate) fn drawing_rank(&self) -> u8 {
+        match (self.group, self.state) {
+            (SuggestionGroup::Choose, SuggestionState::New) => 1,
+            (SuggestionGroup::Choose, _) => 0,
+            (SuggestionGroup::Applying, _) => 2,
+            (SuggestionGroup::Applied, _) => 3,
+        }
+    }
 }
 
 /// A Memory card offered for the documents, as its row opens: the card's
@@ -352,6 +389,9 @@ pub enum SuggestionAttemptPhase {
     Ready,
     /// Hide is merging the ready branch into the base (B6).
     Merging,
+    /// Hide is moving the base to GitHub's, its own commits kept on a new
+    /// branch, after a push found it apart.
+    Syncing,
     /// The pull request is open and waits for the operator's review.
     PrOpen,
     /// Its checks failed and the agent is not working (B12).
@@ -408,6 +448,14 @@ pub struct SuggestionBranchSnapshot {
     /// Whether GitHub's base takes a direct push, which offers `{base}에 바로
     /// 올리기` in a Project whose GitHub is connected.
     pub push: SuggestionBranchPush,
+    /// How many commits of its own the local base had that GitHub's did
+    /// not, as the last push found; none when no push found it apart.
+    pub base_unpushed: Option<u32>,
+    /// The branch a sync kept the local base's own commits on
+    /// (`내 커밋은 local-main-1030 브랜치로 옮겼어요`).
+    pub moved_to: Option<String>,
+    /// The files a sync found unsaved where the base is checked out.
+    pub base_unsaved: Vec<String>,
 }
 
 /// What GitHub said of a ready branch's base: it takes a direct push, it

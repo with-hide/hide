@@ -4,7 +4,7 @@
 // mark and line, so the components draw them without deciding anything.
 import type { TFunction } from "i18next";
 import type { MessageKey } from "./i18n/catalogs";
-import type { GlobalInstructionUnusable, ProjectSuggestions, SuggestionLocalFailure, SuggestionRow, SuggestionState } from "./snapshot";
+import type { GlobalInstructionUnusable, ProjectSuggestions, SuggestionBranch, SuggestionLocalFailure, SuggestionRow, SuggestionState } from "./snapshot";
 
 export type SuggestionGroups = { choose: SuggestionRow[]; applying: SuggestionRow[]; applied: SuggestionRow[] };
 
@@ -62,15 +62,28 @@ export function fileName(path: string): string {
 }
 
 /**
+ * Whether a row is a suggestion not pressed yet, which offers its fix; every
+ * other row under 고를 것 is an attempt that waits for the operator's choice.
+ */
+export function offered(row: Pick<SuggestionRow, "state">): boolean {
+  return row.state === "new";
+}
+
+/**
  * How a status line reads: the words, their tone, and what the operator does
  * from it: `다시 시도` with `넘어가기` on a failed attempt, or a ready branch's
  * decision (PRD hide-ai-branch-first-apply B3-B9), where `retry` is the
- * action a refused merge offers again.
+ * action a refused merge offers again; `files` are the ones a sync found
+ * unsaved.
  */
-export type AttemptLine = { text: string; tone: "muted" | "warning" | "destructive"; retry: boolean; branch?: BranchChoice };
+export type AttemptLine = { text: string; tone: "muted" | "warning" | "destructive"; retry: boolean; branch?: BranchChoice; files?: string[] };
 
-/** A ready branch's buttons: the action that answers its last refusal, if any (B7, B8); `pr` after a push GitHub did not take. */
-export type BranchChoice = { again: "merge" | "rebase" | "discard" | "pr" | null };
+/**
+ * A ready branch's buttons: the action that answers its last refusal, if any
+ * (B7, B8): `pr` after a push GitHub did not take, `sync` after a push that
+ * found the local base apart from GitHub's.
+ */
+export type BranchChoice = { again: "merge" | "rebase" | "discard" | "pr" | "sync" | null };
 
 /** The line of a row being applied (B2-B12, B14): what the attempt is doing, in words; null before one started. */
 export function attemptLine(t: TFunction<"translation">, row: Pick<SuggestionRow, "outcome" | "attempt">): AttemptLine | null {
@@ -87,11 +100,14 @@ export function attemptLine(t: TFunction<"translation">, row: Pick<SuggestionRow
     }
     case "ready": {
       const code = attempt.failure;
-      const reason = code ? failureWords(t, code, base) : null;
-      const again = code === "merge_conflict" ? "rebase" : code === "discard_failed" ? "discard" : code?.startsWith("push_") ? "pr" : code ? "merge" : null;
-      return { text: reason ?? t("suggestions.branch.view"), tone: code ? "warning" : "muted", retry: false, branch: { again } };
+      if (!code) return { text: t("suggestions.branch.view"), tone: "muted", retry: false, branch: { again: null } };
+      const refusal = REFUSALS[code];
+      const text = refusal ? refusalWords(t, refusal, attempt.branch ?? null, base) : t("suggestions.failure.lead.merge");
+      const files = code === "sync_dirty" ? attempt.branch?.base_unsaved ?? [] : [];
+      return { text, tone: "warning", retry: false, branch: { again: refusal?.again ?? "merge" }, ...(files.length > 0 ? { files } : {}) };
     }
     case "merging": return { text: t("suggestions.attempt.merging"), tone: "muted", retry: false };
+    case "syncing": return { text: t("suggestions.attempt.syncing", { base }), tone: "muted", retry: false };
     case "pr_open": return { text: attempt.pr_number === null ? t("suggestions.attempt.writingPr") : t("suggestions.attempt.prReview", { number: String(attempt.pr_number) }), tone: "warning", retry: false };
     case "ci_failed": return { text: t("suggestions.attempt.ciFailed"), tone: "destructive", retry: true };
     case "failed": {
@@ -105,7 +121,7 @@ export function attemptLine(t: TFunction<"translation">, row: Pick<SuggestionRow
   }
 }
 
-/** The failure codes the catalogs word; a code of another build reads as the generic ending, and its detail is in the log. */
+/** The failure codes of an attempt that ended, which the catalogs word; a code of another build reads as the generic ending, and its detail is in the log. */
 const FAILURE_KEYS: Record<string, MessageKey> = {
   agent_not_started: "suggestions.failure.agent_not_started",
   no_pr: "suggestions.failure.no_pr",
@@ -115,24 +131,65 @@ const FAILURE_KEYS: Record<string, MessageKey> = {
   unbuilt: "suggestions.failure.unbuilt",
   issue_failed: "suggestions.failure.issue_failed",
   no_change: "suggestions.failure.no_change",
-  merge_dirty: "suggestions.failure.merge_dirty",
-  merge_conflict: "suggestions.failure.merge_conflict",
-  merge_moved: "suggestions.failure.merge_moved",
-  merge_branch_moved: "suggestions.failure.merge_branch_moved",
-  merge_failed: "suggestions.failure.merge_failed",
-  discard_failed: "suggestions.failure.discard_failed",
-  push_refused: "suggestions.failure.push_refused",
-  push_failed: "suggestions.failure.push_failed",
-  push_kept: "suggestions.failure.push_kept",
-  push_base_ahead: "suggestions.failure.push_base_ahead",
-  push_base_diverged: "suggestions.failure.push_base_diverged",
-  push_fetch_failed: "suggestions.failure.push_fetch_failed",
-  push_no_upstream: "suggestions.failure.push_no_upstream",
 };
 
 function failureWords(t: TFunction<"translation">, code: string, base: string): string | null {
   const key = FAILURE_KEYS[code];
   return key ? t(key, { base }) : null;
+}
+
+/**
+ * A ready branch's refusal: what did not happen (`합치지 못했어요`,
+ * `올리지 못했어요`, `맞추지 못했어요`, `버리지 못했어요`), why in one line
+ * after it, and the button that answers it. A code this build does not know
+ * reads `합치지 못했어요` with `다시 시도`; its reason is in the log.
+ */
+type Refusal = { lead: MessageKey; reason: MessageKey | "apart" | null; again: BranchChoice["again"] };
+
+const merge = (reason: MessageKey, again: BranchChoice["again"] = "merge"): Refusal => ({ lead: "suggestions.failure.lead.merge", reason, again });
+const push = (reason: MessageKey | "apart", again: BranchChoice["again"] = "pr"): Refusal => ({ lead: "suggestions.failure.lead.push", reason, again });
+const sync = (reason: MessageKey): Refusal => ({ lead: "suggestions.failure.lead.sync", reason, again: "sync" });
+
+const REFUSALS: Record<string, Refusal> = {
+  merge_dirty: merge("suggestions.failure.merge_dirty"),
+  merge_in_progress: merge("suggestions.failure.in_progress"),
+  merge_conflict: merge("suggestions.failure.merge_conflict", "rebase"),
+  merge_moved: merge("suggestions.failure.merge_moved"),
+  merge_branch_moved: merge("suggestions.failure.merge_branch_moved"),
+  merge_sign_failed: merge("suggestions.failure.sign_failed"),
+  merge_timed_out: merge("suggestions.failure.timed_out"),
+  merge_worktree_missing: merge("suggestions.failure.worktree_missing"),
+  merge_unreachable: merge("suggestions.failure.unreachable"),
+  merge_unknown: merge("suggestions.failure.unknown"),
+  merge_failed: merge("suggestions.failure.git_failed"),
+  discard_failed: { lead: "suggestions.failure.lead.discard", reason: null, again: "discard" },
+  push_refused: push("suggestions.failure.push_refused"),
+  push_failed: push("suggestions.failure.push_failed"),
+  push_kept: push("suggestions.failure.push_kept"),
+  push_base_ahead: push("apart", "sync"),
+  push_base_diverged: push("apart", "sync"),
+  push_fetch_failed: push("suggestions.failure.push_fetch_failed", "merge"),
+  push_no_upstream: push("suggestions.failure.push_no_upstream"),
+  sync_dirty: sync("suggestions.failure.sync_dirty"),
+  sync_in_progress: sync("suggestions.failure.in_progress"),
+  sync_moved: sync("suggestions.failure.sync_moved"),
+  sync_fetch_failed: sync("suggestions.failure.push_fetch_failed"),
+  sync_no_upstream: sync("suggestions.failure.push_no_upstream"),
+  sync_timed_out: sync("suggestions.failure.timed_out"),
+  sync_worktree_missing: sync("suggestions.failure.worktree_missing"),
+  sync_unreachable: sync("suggestions.failure.unreachable"),
+  sync_unknown: sync("suggestions.failure.unknown"),
+  sync_failed: sync("suggestions.failure.git_failed"),
+};
+
+function refusalWords(t: TFunction<"translation">, refusal: Refusal, branch: SuggestionBranch | null, base: string): string {
+  const lead = t(refusal.lead);
+  if (refusal.reason === null) return lead;
+  // How many commits the local base has of its own, once a push counted them.
+  const reason = refusal.reason === "apart"
+    ? branch?.base_unpushed ? t("suggestions.failure.push_base_unpushed", { base, count: branch.base_unpushed }) : t("suggestions.failure.push_base_apart", { base })
+    : t(refusal.reason, { base });
+  return `${lead} · ${reason}`;
 }
 
 /** The fold's line: how many rows are under 반영됨 and how many of them worked (B15). */
@@ -154,8 +211,8 @@ export function memoryTabCount(project: Pick<ProjectSuggestions, "counts">): num
  * while the core gave a preview to send back, and shows it held while none
  * of its evidence could be read (B7) or the line has no room (B10).
  */
-export function applyOffer(row: Pick<SuggestionRow, "group" | "hold" | "outcome" | "local" | "evidence_unconfirmed">): "pr" | "issue" | "local" | "local_held" | "github_needed" | "branches_full" | null {
-  if (row.group !== "choose") return null;
+export function applyOffer(row: Pick<SuggestionRow, "state" | "hold" | "outcome" | "local" | "evidence_unconfirmed">): "pr" | "issue" | "local" | "local_held" | "github_needed" | "branches_full" | null {
+  if (!offered(row)) return null;
   if (row.outcome === "local") {
     if (!row.local || row.local.present) return null;
     return row.local.preview !== null && !row.evidence_unconfirmed ? "local" : "local_held";

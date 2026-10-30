@@ -112,6 +112,9 @@ enum SuggestionActionKind {
     Discard,
     /// `다시 맞추기` on a ready branch the base moved under (B8, B12).
     Rebase,
+    /// `내 커밋을 브랜치로 옮기고 main 맞추기` on a ready branch whose push
+    /// found the local base apart from GitHub's.
+    SyncBase,
 }
 
 /// `suggestion_settings`: exactly one of ⚙'s settings; a 읽을 곳 switch is
@@ -271,6 +274,21 @@ impl Runtime {
             }));
             return false;
         }
+        // A sync moves the operator's own main, so it answers only the
+        // refusal that offers it: a push that found the base apart from
+        // GitHub's, or a sync that did not finish.
+        if matches!(payload.action, SuggestionActionKind::SyncBase)
+            && !self
+                .row_failure(&payload.workspace_id, &payload.id)
+                .is_some_and(|code| super::branch_decision::offers_sync(&code))
+        {
+            crate::diagnostic!(json!({
+                "component": "suggestions", "kind": "apply.refused",
+                "workspace_id": payload.workspace_id, "id": payload.id,
+                "reason": "base_not_apart",
+            }));
+            return false;
+        }
         if let Some(number) = super::suggestion_memory::card_of_row(&payload.id) {
             let decision = match payload.action {
                 SuggestionActionKind::Merge => Some(super::memory_branch::BatchDecision::Merge),
@@ -280,6 +298,9 @@ impl Runtime {
                 SuggestionActionKind::OpenPr => Some(super::memory_branch::BatchDecision::OpenPr),
                 SuggestionActionKind::Discard => Some(super::memory_branch::BatchDecision::Discard),
                 SuggestionActionKind::Rebase => Some(super::memory_branch::BatchDecision::Rebase),
+                SuggestionActionKind::SyncBase => {
+                    Some(super::memory_branch::BatchDecision::SyncBase)
+                }
                 _ => None,
             };
             if let Some(decision) = decision {
@@ -293,6 +314,7 @@ impl Runtime {
                 | SuggestionActionKind::OpenPr
                 | SuggestionActionKind::Discard
                 | SuggestionActionKind::Rebase
+                | SuggestionActionKind::SyncBase
                 | SuggestionActionKind::Restore
                 | SuggestionActionKind::Revert => {
                     crate::diagnostic!(json!({
@@ -317,6 +339,9 @@ impl Runtime {
             }
             SuggestionActionKind::Discard => {
                 return decide(self, super::suggestion_apply::BranchDecision::Discard);
+            }
+            SuggestionActionKind::SyncBase => {
+                return decide(self, super::suggestion_apply::BranchDecision::SyncBase);
             }
             SuggestionActionKind::Dismiss => LineAction::Dismiss,
             SuggestionActionKind::Restore => LineAction::Restore,
@@ -705,6 +730,23 @@ impl Runtime {
         true
     }
 
+    /// The refusal row `id` of the opened Project shows now.
+    fn row_failure(&self, workspace_id: &str, id: &str) -> Option<String> {
+        self.snapshot
+            .suggestions
+            .as_ref()?
+            .project
+            .as_ref()
+            .filter(|project| project.workspace_id == workspace_id)?
+            .rows
+            .iter()
+            .find(|row| row.id == id)?
+            .attempt
+            .as_ref()?
+            .failure
+            .clone()
+    }
+
     /// The hold the tab shows on row `id` of the opened Project now.
     fn held_row(&self, workspace_id: &str, id: &str) -> Option<SuggestionHold> {
         self.snapshot
@@ -759,19 +801,19 @@ impl Runtime {
             .find(|workspace| workspace.id == opened.workspace_id)
             .is_some_and(|workspace| workspace.is_git);
         let work = &self.suggestions_work.apply;
-        let mut merging = HashSet::new();
+        let mut deciding = HashMap::new();
         let mut checkouts = HashMap::new();
         for attempt in &work.followed {
             if attempt.location.node != opened.node.as_str() || attempt.location.path != opened.root
             {
                 continue;
             }
-            if work
+            if let Some(phase) = work
                 .deciding
                 .get(&(attempt.project_id.clone(), attempt.line.0))
-                .is_some_and(|decision| decision.merges())
+                .and_then(|decision| decision.shown_as())
             {
-                merging.insert(crate::suggestions::read::row_id(attempt.line));
+                deciding.insert(crate::suggestions::read::row_id(attempt.line), phase);
             }
             if let Some(path) = self.branch_checkout(&opened.node, &opened.root, &attempt.branch) {
                 checkouts.insert(attempt.branch.clone(), path);
@@ -781,16 +823,18 @@ impl Runtime {
             if let Some(path) = self.branch_checkout(&opened.node, &opened.root, &branch) {
                 checkouts.insert(branch.clone(), path);
             }
-            if let Some(row) = merge {
-                merging.insert(row);
+            if let Some((row, phase)) = merge {
+                deciding.insert(row, phase);
             }
         }
         let push = self.base_push_answers(&opened.node, &opened.root);
+        let notes = self.base_notes(&opened.node, &opened.root);
         BranchOverlay {
             git,
-            merging,
+            deciding,
             checkouts,
             push,
+            notes,
         }
     }
 
@@ -878,19 +922,23 @@ struct BranchOverlay {
     /// The Project is a git repository: a folder that is not one gets no
     /// document fix (D-09, B16).
     git: bool,
-    /// Rows whose ready branch Hide is merging now.
-    merging: HashSet<String>,
+    /// Rows whose ready branch Hide is merging, or whose base it syncs, now.
+    deciding: HashMap<String, SuggestionAttemptPhase>,
     /// Where each attempt branch is checked out, which a branch card's file
     /// opens.
     checkouts: HashMap<String, String>,
     /// Whether GitHub's base takes a direct push, by base.
     push: HashMap<String, crate::model::SuggestionBranchPush>,
+    /// What the last decision on each base learned of it, by base.
+    notes: HashMap<String, super::base_push::BaseNote>,
 }
 
 /// Lays the branch facts on the rows: no document fix in a folder that is
 /// not a git repository (B16), a new fix held while five branches wait for
-/// a decision (D-17, B28), `합치는 중` on a branch being merged (B6), and
-/// the checkout each branch is in.
+/// a decision (D-17, B28), `합치는 중` on a branch being merged (B6) and
+/// `맞추는 중` on one whose base Hide syncs, which move its row to 반영 중
+/// while Hide works on it, the checkout each branch is in, and what the last
+/// decision on its base learned of it.
 fn lay_branches(project: &mut ProjectSuggestionsSnapshot, overlay: &BranchOverlay) {
     if !overlay.git {
         project
@@ -917,8 +965,12 @@ fn lay_branches(project: &mut ProjectSuggestionsSnapshot, overlay: &BranchOverla
         let Some(attempt) = row.attempt.as_mut() else {
             continue;
         };
-        if attempt.phase == SuggestionAttemptPhase::Ready && overlay.merging.contains(&row.id) {
-            attempt.phase = SuggestionAttemptPhase::Merging;
+        if attempt.phase == SuggestionAttemptPhase::Ready
+            && let Some(phase) = overlay.deciding.get(&row.id)
+        {
+            attempt.phase = *phase;
+            row.group = SuggestionGroup::of_attempt(attempt.phase);
+            row.state = SuggestionState::HideAiWorking;
         }
         if let Some(branch) = attempt.branch.as_mut() {
             branch.checkout = overlay.checkouts.get(&branch.name).cloned();
@@ -928,8 +980,20 @@ fn lay_branches(project: &mut ProjectSuggestionsSnapshot, overlay: &BranchOverla
                 .and_then(|base| overlay.push.get(base))
                 .copied()
                 .unwrap_or_default();
+            if let Some(note) = branch
+                .base
+                .as_ref()
+                .and_then(|base| overlay.notes.get(base))
+            {
+                branch.base_unpushed = note.unpushed;
+                branch.moved_to = note.moved_to.clone();
+                branch.base_unsaved = note.unsaved.clone();
+            }
         }
     }
+    project
+        .rows
+        .sort_by_key(crate::model::SuggestionRowSnapshot::drawing_rank);
 }
 
 /// Names each notebook attempt's live agent by the pane the agent lists

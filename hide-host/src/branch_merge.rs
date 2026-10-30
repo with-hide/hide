@@ -38,9 +38,9 @@ use std::process::Output;
 use std::time::Duration;
 
 use hide_node_link::branch::{
-    BranchFacts, BranchFile, CatchUpOutcome, DIRTY_FILES_MAX, DiscardOutcome, FILES_MAX,
-    MergeOutcome, MergePushOutcome, check_catch_up, check_diff, check_discard, check_facts,
-    check_merge,
+    BaseSyncOutcome, BranchFacts, BranchFile, CatchUpOutcome, DIRTY_FILES_MAX, DiscardOutcome,
+    FILES_MAX, MergeOutcome, MergePushOutcome, MergeStep, SYNC_NAMES, check_catch_up, check_diff,
+    check_discard, check_facts, check_merge, check_sync,
 };
 use hide_node_link::git::{Diff, DiffNotice};
 
@@ -68,18 +68,27 @@ fn failed(message: impl Into<String>) -> HostError {
     HostError::new(ErrorCode::Io, message)
 }
 
-fn run_within(cwd: &Path, args: &[&str], deadline: Duration) -> HostResult<Output> {
+/// A run that may outlive `deadline`: `None` when git did not finish, which a
+/// merge's writing steps answer as [`MergeStep::TimedOut`].
+fn run_bounded(cwd: &Path, args: &[&str], deadline: Duration) -> HostResult<Option<Output>> {
     let mut command = crate::git_run::at(cwd);
     command.env("LC_ALL", "C").args(args);
     crate::git_run::output(&mut command, deadline, Some(READ_LIMIT))
-        .map_err(|error| failed(format!("git could not be run: {error}")))?
-        .ok_or_else(|| {
-            failed(format!(
-                "git {} did not finish within {} s",
-                args[0],
-                deadline.as_secs()
-            ))
-        })
+        .map_err(|error| failed(format!("git could not be run: {error}")))
+}
+
+fn run_within(cwd: &Path, args: &[&str], deadline: Duration) -> HostResult<Output> {
+    run_bounded(cwd, args, deadline)?.ok_or_else(|| {
+        failed(format!(
+            "git {} did not finish within {} s",
+            args[0],
+            deadline.as_secs()
+        ))
+    })
+}
+
+fn stopped(step: MergeStep) -> MergeOutcome {
+    MergeOutcome::Failed { step }
 }
 
 /// A read, bounded like the rest of the node's reads.
@@ -275,22 +284,29 @@ pub fn diff(root: &Path, branch: &str, base: &str, path: &str) -> HostResult<Dif
     Ok(diff)
 }
 
+/// Where `base` is checked out.
+enum Holder {
+    /// No worktree has it, so its ref moves alone.
+    Ref,
+    Worktree(PathBuf),
+    /// `git worktree list` names a worktree for it whose folder is gone.
+    Gone,
+}
+
 /// The worktree that has `base` checked out, if any.
-fn holder(root: &Path, base: &str) -> HostResult<Option<PathBuf>> {
+fn holder(root: &Path, base: &str) -> HostResult<Holder> {
     let listing = read_text(root, &["worktree", "list", "--porcelain"])?;
     let Some(row) = crate::worktrees::parse_worktree_list(&listing)
         .into_iter()
         .find(|row| row.branch.as_deref() == Some(base))
     else {
-        return Ok(None);
+        return Ok(Holder::Ref);
     };
-    if !row.path.is_dir() {
-        return Err(failed(format!(
-            "the worktree that holds {base} is not at {}",
-            row.path.display()
-        )));
-    }
-    Ok(Some(row.path))
+    Ok(if row.path.is_dir() {
+        Holder::Worktree(row.path)
+    } else {
+        Holder::Gone
+    })
 }
 
 /// The ignored files and folders in `worktree`, a folder ending in `/`. A
@@ -421,11 +437,14 @@ fn supports_merge_tree() -> bool {
     crate::git_run::version().is_some_and(|version| version >= MERGE_TREE_MINIMUM)
 }
 
-/// The tree a merge of `tip` into `base` would make, or `None` when the two
-/// change the same lines. Nothing but unreferenced objects is written.
-fn trial_merge(root: &Path, base: &str, tip: &str) -> HostResult<Option<String>> {
+/// The tree a merge of `tip` into `base` would make, or the answer in its
+/// place: `Conflict` when the two change the same lines, `Failed` when git
+/// did not finish. Nothing but unreferenced objects is written.
+fn trial_merge(root: &Path, base: &str, tip: &str) -> HostResult<Result<String, MergeOutcome>> {
     let args = ["merge-tree", "--write-tree", base, tip];
-    let output = run_within(root, &args, crate::git_run::CHANGE_DEADLINE)?;
+    let Some(output) = run_bounded(root, &args, crate::git_run::CHANGE_DEADLINE)? else {
+        return Ok(Err(stopped(MergeStep::TimedOut)));
+    };
     match output.status.code() {
         Some(0) => {
             let stdout = String::from_utf8_lossy(&output.stdout);
@@ -433,9 +452,9 @@ fn trial_merge(root: &Path, base: &str, tip: &str) -> HostResult<Option<String>>
             if tree.is_empty() {
                 return Err(failed("git merge-tree printed no tree"));
             }
-            Ok(Some(tree.to_owned()))
+            Ok(Ok(tree.to_owned()))
         }
-        Some(1) => Ok(None),
+        Some(1) => Ok(Err(MergeOutcome::Conflict)),
         _ => Err(describe(&args, &output)),
     }
 }
@@ -478,8 +497,9 @@ pub fn merge(
         fast_forward,
     };
     match holder(root, base)? {
-        Some(worktree) => plan.in_worktree(root, &worktree),
-        None => plan.on_ref(root),
+        Holder::Worktree(worktree) => plan.in_worktree(root, &worktree),
+        Holder::Ref => plan.on_ref(root),
+        Holder::Gone => Ok(stopped(MergeStep::WorktreeMissing)),
     }
 }
 
@@ -539,15 +559,18 @@ fn catch_base_up(
 ) -> HostResult<Option<MergePushOutcome>> {
     let refused = |merge| Ok(Some(MergePushOutcome::NotMerged { merge }));
     match holder(root, base)? {
-        Some(worktree) => match catch_up(&worktree, local)? {
+        Holder::Gone => refused(stopped(MergeStep::WorktreeMissing)),
+        Holder::Worktree(worktree) => match catch_up(&worktree, local)? {
             CatchUpOutcome::Updated { .. } | CatchUpOutcome::AlreadyCurrent { .. } => Ok(None),
-            CatchUpOutcome::Diverged => Ok(Some(MergePushOutcome::BaseDiverged)),
+            CatchUpOutcome::Diverged => Ok(Some(MergePushOutcome::BaseDiverged {
+                commits: own_commits(root, upstream, local)?,
+            })),
             CatchUpOutcome::NoUpstream => Ok(Some(MergePushOutcome::NoUpstream)),
             CatchUpOutcome::HeadMoved => refused(MergeOutcome::BaseMoved),
             CatchUpOutcome::InProgress => refused(dirty([])),
             CatchUpOutcome::Dirty { files, .. } => refused(dirty(files)),
         },
-        None => {
+        Holder::Ref => {
             let reference = format!("refs/heads/{base}");
             let args = ["update-ref", &reference, upstream, local];
             let output = run_within(root, &args, crate::git_run::CHANGE_DEADLINE)?;
@@ -560,6 +583,35 @@ fn catch_base_up(
     }
 }
 
+/// How many commits `local` has that `upstream` does not.
+fn own_commits(root: &Path, upstream: &str, local: &str) -> HostResult<u32> {
+    let range = format!("{upstream}..{local}");
+    let counted = read_text(root, &["rev-list", "--count", &range, "--"])?;
+    counted
+        .parse()
+        .map_err(|_| failed(format!("git rev-list counted {counted:?}")))
+}
+
+/// Fetches `upstream` into its remote-tracking ref; the commit it holds now,
+/// or `None` when the fetch failed.
+fn fetch_upstream(root: &Path, upstream: &Upstream) -> HostResult<Option<String>> {
+    let refspec = format!("+{}:{}", upstream.branch, upstream.tracking);
+    // `--` so a remote's name is never read as an option.
+    let fetch = [
+        "fetch",
+        "--quiet",
+        "--no-tags",
+        "--no-recurse-submodules",
+        "--",
+        &upstream.remote,
+        &refspec,
+    ];
+    if !run_remote(root, &fetch).is_ok_and(|output| output.status.success()) {
+        return Ok(None);
+    }
+    resolve_ref(root, &upstream.tracking)
+}
+
 /// Puts `refs/heads/<base>` back from `merged` to `before` after a push the
 /// remote did not take, only while it still points at `merged`: on the ref
 /// with a compare-and-swap, or in the worktree that holds it with `git reset
@@ -569,7 +621,8 @@ fn put_base_back(root: &Path, base: &str, before: &str, merged: &str) -> bool {
     let reference = format!("refs/heads/{base}");
     let back = || -> HostResult<bool> {
         match holder(root, base)? {
-            Some(worktree) => {
+            Holder::Gone => Ok(false),
+            Holder::Worktree(worktree) => {
                 let head = read_text(&worktree, &["symbolic-ref", "--quiet", "HEAD"])?;
                 if head != reference
                     || read_text(&worktree, &["rev-parse", "--verify", "HEAD"])? != merged
@@ -583,7 +636,7 @@ fn put_base_back(root: &Path, base: &str, before: &str, merged: &str) -> bool {
                         .success(),
                 )
             }
-            None => {
+            Holder::Ref => {
                 let args = ["update-ref", &reference, before, merged];
                 Ok(run_within(root, &args, crate::git_run::CHANGE_DEADLINE)?
                     .status
@@ -612,21 +665,7 @@ pub fn merge_push(
     let Some(upstream) = upstream_of(root, base)? else {
         return Ok(MergePushOutcome::NoUpstream);
     };
-    let refspec = format!("+{}:{}", upstream.branch, upstream.tracking);
-    // `--` so a remote's name is never read as an option.
-    let fetch = [
-        "fetch",
-        "--quiet",
-        "--no-tags",
-        "--no-recurse-submodules",
-        "--",
-        &upstream.remote,
-        &refspec,
-    ];
-    if !run_remote(root, &fetch).is_ok_and(|output| output.status.success()) {
-        return Ok(MergePushOutcome::FetchFailed);
-    }
-    let Some(before) = resolve_ref(root, &upstream.tracking)? else {
+    let Some(before) = fetch_upstream(root, &upstream)? else {
         return Ok(MergePushOutcome::FetchFailed);
     };
     let Some(local) = resolve(root, base)? else {
@@ -638,10 +677,14 @@ pub fn merge_push(
     if local != before {
         let unknown = || failed("git could not tell how the base and its upstream relate");
         if is_ancestor(root, &before, &local)?.ok_or_else(unknown)? {
-            return Ok(MergePushOutcome::BaseAhead);
+            return Ok(MergePushOutcome::BaseAhead {
+                commits: own_commits(root, &before, &local)?,
+            });
         }
         if !is_ancestor(root, &local, &before)?.ok_or_else(unknown)? {
-            return Ok(MergePushOutcome::BaseDiverged);
+            return Ok(MergePushOutcome::BaseDiverged {
+                commits: own_commits(root, &before, &local)?,
+            });
         }
         if let Some(refused) = catch_base_up(root, base, &local, &before)? {
             return Ok(refused);
@@ -688,6 +731,142 @@ pub fn merge_push(
             reverted: put_base_back(root, base, &before, &commit),
         }),
     }
+}
+
+/// Moves `base` to its upstream as just fetched, the operator's
+/// `내 커밋을 브랜치로 옮기고 main 맞추기`: the commits only the local base
+/// has go first to a new branch, `branch` or `branch-2` and on while a name
+/// is taken, created only where no ref is; then the base moves, in the
+/// worktree that holds it with `git reset --keep` once nothing there is
+/// uncommitted and no ignored or untracked file is in the upstream's way, or
+/// on its ref alone with a compare-and-swap. A base that moved in between is
+/// refused and the new branch is taken back, so a refusal changes nothing;
+/// nothing is ever deleted that held a commit only it had.
+pub fn sync_base(root: &Path, base: &str, branch: &str) -> HostResult<BaseSyncOutcome> {
+    check_sync(base, branch).map_err(invalid)?;
+    let Some(upstream) = upstream_of(root, base)? else {
+        return Ok(BaseSyncOutcome::NoUpstream);
+    };
+    let Some(target) = fetch_upstream(root, &upstream)? else {
+        return Ok(BaseSyncOutcome::FetchFailed);
+    };
+    let Some(local) = resolve(root, base)? else {
+        return Err(HostError::new(
+            ErrorCode::NotFound,
+            format!("the branch {base} is not in this repository"),
+        ));
+    };
+    if local == target {
+        return Ok(BaseSyncOutcome::Synced {
+            commit: target,
+            branch: None,
+        });
+    }
+    let reference = format!("refs/heads/{base}");
+    let holder = holder(root, base)?;
+    if let Holder::Worktree(worktree) = &holder {
+        if in_progress(&git_dir(worktree)?) {
+            return Ok(BaseSyncOutcome::Dirty { files: Vec::new() });
+        }
+        if read_text(worktree, &["rev-parse", "--verify", "HEAD"])? != local {
+            return Ok(BaseSyncOutcome::BaseMoved);
+        }
+        let mut local_paths = status_paths(worktree)?;
+        let changed = changed_paths(root, &local, &target)?;
+        local_paths.extend(overwritten(ignored_paths(worktree)?, &changed));
+        if !local_paths.is_empty() {
+            return Ok(BaseSyncOutcome::Dirty {
+                files: local_paths.into_iter().take(DIRTY_FILES_MAX).collect(),
+            });
+        }
+    }
+    if let Holder::Gone = holder {
+        return Ok(BaseSyncOutcome::Failed {
+            step: MergeStep::WorktreeMissing,
+        });
+    }
+    let unknown = || failed("git could not tell how the base and its upstream relate");
+    let behind = is_ancestor(root, &local, &target)?.ok_or_else(unknown)?;
+    let kept = if behind {
+        None
+    } else {
+        match keep_on_new_branch(root, branch, &local)? {
+            Some(kept) => Some(kept),
+            None => {
+                return Err(failed(format!(
+                    "every name from {branch} to {branch}-{SYNC_NAMES} is taken"
+                )));
+            }
+        }
+    };
+    let take_back = |root: &Path| {
+        if let Some(kept) = &kept {
+            let reference = format!("refs/heads/{kept}");
+            let _ = run(root, &["update-ref", "-d", &reference, &local]);
+        }
+    };
+    let moved = match &holder {
+        Holder::Worktree(worktree) => {
+            if read_text(worktree, &["rev-parse", "--verify", "HEAD"])? != local {
+                take_back(root);
+                return Ok(BaseSyncOutcome::BaseMoved);
+            }
+            let args = ["reset", "--quiet", "--keep", &target];
+            run_bounded(worktree, &args, crate::git_run::CHANGE_DEADLINE)?
+        }
+        Holder::Ref => {
+            let args = ["update-ref", &reference, &target, &local];
+            run_bounded(root, &args, crate::git_run::CHANGE_DEADLINE)?
+        }
+        Holder::Gone => unreachable!("answered above"),
+    };
+    let Some(moved) = moved else {
+        return Ok(BaseSyncOutcome::Failed {
+            step: MergeStep::TimedOut,
+        });
+    };
+    if moved.status.success() {
+        return Ok(BaseSyncOutcome::Synced {
+            commit: target,
+            branch: kept,
+        });
+    }
+    take_back(root);
+    if resolve(root, base)?.as_deref() != Some(local.as_str()) {
+        return Ok(BaseSyncOutcome::BaseMoved);
+    }
+    if let Holder::Worktree(worktree) = &holder {
+        let files = status_paths(worktree)?;
+        if !files.is_empty() {
+            return Ok(BaseSyncOutcome::Dirty {
+                files: files.into_iter().take(DIRTY_FILES_MAX).collect(),
+            });
+        }
+    }
+    Err(failed("git could not move the base to its upstream"))
+}
+
+/// Creates `refs/heads/<name>` on `commit` where no ref is, `name` or
+/// `name-2` and on up to [`SYNC_NAMES`]; the name it took, or `None` when
+/// every one is taken.
+fn keep_on_new_branch(root: &Path, name: &str, commit: &str) -> HostResult<Option<String>> {
+    for number in 1..=SYNC_NAMES {
+        let candidate = if number == 1 {
+            name.to_owned()
+        } else {
+            format!("{name}-{number}")
+        };
+        let reference = format!("refs/heads/{candidate}");
+        // An empty old value creates the ref only where there is none.
+        let args = ["update-ref", &reference, commit, ""];
+        if run(root, &args)?.status.success() {
+            return Ok(Some(candidate));
+        }
+        if resolve(root, &candidate)?.is_none() {
+            return Err(failed(format!("git could not create {candidate}")));
+        }
+    }
+    Ok(None)
 }
 
 /// The commit the upstream of the branch checked out in `worktree` points
@@ -779,13 +958,13 @@ pub fn catch_up(worktree: &Path, head: &str) -> HostResult<CatchUpOutcome> {
 
 /// Deletes `refs/heads/<branch>` and nothing else. With `tip` the delete is
 /// a compare-and-swap on it; without, on the commit read here. A branch a
-/// worktree has checked out is left alone.
+/// worktree has checked out, its folder there or gone, is left alone.
 pub fn discard(root: &Path, branch: &str, tip: Option<&str>) -> HostResult<DiscardOutcome> {
     check_discard(branch, tip).map_err(invalid)?;
     let Some(current) = resolve(root, branch)? else {
         return Ok(DiscardOutcome::Missing);
     };
-    if holder(root, branch)?.is_some() {
+    if !matches!(holder(root, branch)?, Holder::Ref) {
         return Ok(DiscardOutcome::CheckedOut);
     }
     let expected = tip.unwrap_or(&current);
@@ -853,10 +1032,10 @@ impl Plan<'_> {
         let target = if self.fast_forward {
             Some(self.tip.clone())
         } else if supports_merge_tree() {
-            let Some(commit) = self.merge_commit(root)? else {
-                return Ok(MergeOutcome::Conflict);
-            };
-            Some(commit)
+            match self.merge_commit(root)? {
+                Ok(commit) => Some(commit),
+                Err(answer) => return Ok(answer),
+            }
         } else {
             None
         };
@@ -899,20 +1078,18 @@ impl Plan<'_> {
                 &merge_args
             }
         };
-        let output = match run_within(worktree, args, crate::git_run::CHANGE_DEADLINE) {
-            Ok(output) => output,
-            Err(error) => {
-                // A merge that ran out of time or could not be read may have
-                // stopped halfway; the operator's tree is put back first.
-                if git_dir(worktree)?.join("MERGE_HEAD").exists() {
-                    run_within(
-                        worktree,
-                        &["merge", "--abort"],
-                        crate::git_run::CHANGE_DEADLINE,
-                    )?;
-                }
-                return Err(error);
+        let answer = run_bounded(worktree, args, crate::git_run::CHANGE_DEADLINE);
+        let Ok(Some(output)) = answer else {
+            // A merge that ran out of time or could not be read may have
+            // stopped halfway; the operator's tree is put back first.
+            if git_dir(worktree)?.join("MERGE_HEAD").exists() {
+                run_within(
+                    worktree,
+                    &["merge", "--abort"],
+                    crate::git_run::CHANGE_DEADLINE,
+                )?;
             }
+            return answer.map(|_| stopped(MergeStep::TimedOut));
         };
         if output.status.success() {
             return Ok(self.merged(read_text(worktree, &["rev-parse", "--verify", "HEAD"])?));
@@ -968,12 +1145,15 @@ impl Plan<'_> {
 
     /// The merge commit of the branch into the base, written to the object
     /// store with the base as its first parent and referenced by nothing, or
-    /// `None` when the two change the same lines. It is signed when the
-    /// operator's `commit.gpgSign` asks, as `git merge` would sign it;
-    /// `commit-tree` reads only its `-S`.
-    fn merge_commit(&self, root: &Path) -> HostResult<Option<String>> {
-        let Some(tree) = trial_merge(root, &self.base_tip, &self.tip)? else {
-            return Ok(None);
+    /// the answer in its place: `Conflict` when the two change the same
+    /// lines, `Failed` when git stopped. It is signed when the operator's
+    /// `commit.gpgSign` asks, as `git merge` would sign it; `commit-tree`
+    /// reads only its `-S`, and a signed `commit-tree` that fails or does not
+    /// finish is the signing's failure.
+    fn merge_commit(&self, root: &Path) -> HostResult<Result<String, MergeOutcome>> {
+        let tree = match trial_merge(root, &self.base_tip, &self.tip)? {
+            Ok(tree) => tree,
+            Err(answer) => return Ok(Err(answer)),
         };
         let sign_args = ["config", "--type=bool", "--get", "commit.gpgSign"];
         let sign = run(root, &sign_args)?;
@@ -995,13 +1175,24 @@ impl Plan<'_> {
         if sign {
             args.push("-S");
         }
-        let output = run_within(root, &args, crate::git_run::CHANGE_DEADLINE)?;
+        let output = run_bounded(root, &args, crate::git_run::CHANGE_DEADLINE)?;
+        let step = if sign {
+            MergeStep::Sign
+        } else {
+            MergeStep::TimedOut
+        };
+        let Some(output) = output else {
+            return Ok(Err(stopped(step)));
+        };
         if !output.status.success() {
+            if sign {
+                return Ok(Err(stopped(step)));
+            }
             return Err(describe(&args, &output));
         }
-        Ok(Some(
-            String::from_utf8_lossy(&output.stdout).trim().to_owned(),
-        ))
+        Ok(Ok(String::from_utf8_lossy(&output.stdout)
+            .trim()
+            .to_owned()))
     }
 
     /// No worktree holds the base: move the ref alone.
@@ -1015,10 +1206,10 @@ impl Plan<'_> {
                     "merging a branch that is not checked out needs git 2.38 or newer",
                 ));
             }
-            let Some(commit) = self.merge_commit(root)? else {
-                return Ok(MergeOutcome::Conflict);
-            };
-            commit
+            match self.merge_commit(root)? {
+                Ok(commit) => commit,
+                Err(answer) => return Ok(answer),
+            }
         };
         let reference = format!("refs/heads/{}", self.base);
         let log = format!("merge {}", self.branch);
@@ -1030,7 +1221,9 @@ impl Plan<'_> {
             &commit,
             &self.base_tip,
         ];
-        let output = run_within(root, &args, crate::git_run::CHANGE_DEADLINE)?;
+        let Some(output) = run_bounded(root, &args, crate::git_run::CHANGE_DEADLINE)? else {
+            return Ok(stopped(MergeStep::TimedOut));
+        };
         if output.status.success() {
             return Ok(self.merged(commit));
         }

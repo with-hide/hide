@@ -9,9 +9,10 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use hide_host::ErrorCode;
-use hide_host::branch_merge::{catch_up, diff, discard, facts, merge, merge_push};
+use hide_host::branch_merge::{catch_up, diff, discard, facts, merge, merge_push, sync_base};
 use hide_node_link::branch::{
-    CatchUpOutcome, DiscardOutcome, FILES_MAX, MergeOutcome, MergePushOutcome,
+    BaseSyncOutcome, CatchUpOutcome, DiscardOutcome, FILES_MAX, MergeOutcome, MergePushOutcome,
+    MergeStep,
 };
 use hide_node_link::git::DiffNotice;
 
@@ -374,6 +375,98 @@ fn a_worktree_in_the_middle_of_a_merge_is_not_merged_into() {
     assert_eq!(outcome, MergeOutcome::Dirty { files: Vec::new() });
     assert_eq!(snapshot(&fixture.main), before);
     assert!(git_dir(&fixture.main).join("MERGE_HEAD").exists());
+}
+
+/// The operator's signing setting asks every commit signed, by a signing
+/// program that is not there.
+fn sign_with_a_missing_program(fixture: &Fixture) {
+    let missing = fixture.main.parent().unwrap().join("no-such-signer");
+    git(&fixture.main, &["config", "commit.gpgsign", "true"]);
+    git(&fixture.main, &["config", "gpg.format", "ssh"]);
+    git(
+        &fixture.main,
+        &["config", "gpg.ssh.program", missing.to_str().unwrap()],
+    );
+    git(
+        &fixture.main,
+        &[
+            "config",
+            "user.signingkey",
+            "key::ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIFixtureKeyThatSignsNothing",
+        ],
+    );
+}
+
+fn builds_merge_commits() -> bool {
+    hide_host::git_run::version().is_some_and(|version| version >= (2, 38))
+}
+
+#[test]
+fn a_merge_commit_whose_signing_fails_answers_the_signing_with_nothing_moved() {
+    if !builds_merge_commits() {
+        return;
+    }
+    let fixture = fixture();
+    let base = commit(&fixture.main, "main-only.txt", "m\n");
+    commit(&fixture.feat, "feat-only.txt", "f\n");
+    sign_with_a_missing_program(&fixture);
+    let before = snapshot(&fixture.main);
+    let outcome = merge(&fixture.main, "feat", None, "main", "Merge feat").unwrap();
+    assert_eq!(
+        outcome,
+        MergeOutcome::Failed {
+            step: MergeStep::Sign
+        }
+    );
+    assert_eq!(snapshot(&fixture.main), before);
+    assert_eq!(git(&fixture.main, &["rev-parse", "main"]), base);
+    // The base checked out nowhere builds the same commit and answers the same.
+    git(&fixture.main, &["checkout", "-q", "-b", "elsewhere"]);
+    let outcome = merge(&fixture.main, "feat", None, "main", "Merge feat").unwrap();
+    assert_eq!(
+        outcome,
+        MergeOutcome::Failed {
+            step: MergeStep::Sign
+        }
+    );
+    assert_eq!(git(&fixture.main, &["rev-parse", "main"]), base);
+}
+
+#[test]
+fn a_signing_setting_does_not_stop_a_fast_forward_which_builds_no_commit() {
+    let fixture = fixture();
+    let tip = commit(&fixture.feat, "b.txt", "new\n");
+    sign_with_a_missing_program(&fixture);
+    let outcome = merge(&fixture.main, "feat", None, "main", "Merge feat").unwrap();
+    assert_eq!(
+        outcome,
+        MergeOutcome::Merged {
+            commit: tip,
+            fast_forward: true
+        }
+    );
+}
+
+#[test]
+fn a_base_worktree_whose_folder_is_gone_answers_that_with_nothing_moved() {
+    let fixture = fixture();
+    let base = git(&fixture.main, &["rev-parse", "main"]);
+    commit(&fixture.feat, "b.txt", "new\n");
+    git(&fixture.main, &["checkout", "-q", "-b", "elsewhere"]);
+    let holder = fixture.main.parent().unwrap().join("holder");
+    git(
+        &fixture.main,
+        &["worktree", "add", "-q", holder.to_str().unwrap(), "main"],
+    );
+    fs::remove_dir_all(&holder).unwrap();
+    let outcome = merge(&fixture.main, "feat", None, "main", "Merge feat").unwrap();
+    assert_eq!(
+        outcome,
+        MergeOutcome::Failed {
+            step: MergeStep::WorktreeMissing
+        }
+    );
+    assert_eq!(git(&fixture.main, &["rev-parse", "main"]), base);
 }
 
 /// The base is checked out nowhere: main's worktree moves to another branch,
@@ -927,7 +1020,7 @@ fn a_base_ahead_of_or_apart_from_its_remote_is_refused_with_nothing_moved() {
     let remote_before = git(&remote, &["rev-parse", "main"]);
     assert_eq!(
         merge_push(&fixture.main, "feat", Some(&tip), "main", "Merge feat").unwrap(),
-        MergePushOutcome::BaseAhead
+        MergePushOutcome::BaseAhead { commits: 1 }
     );
     assert_eq!(snapshot(&fixture.main), before);
 
@@ -948,7 +1041,7 @@ fn a_base_ahead_of_or_apart_from_its_remote_is_refused_with_nothing_moved() {
     git(&other, &["push", "-q", "origin", "main"]);
     assert_eq!(
         merge_push(&fixture.main, "feat", Some(&tip), "main", "Merge feat").unwrap(),
-        MergePushOutcome::BaseDiverged
+        MergePushOutcome::BaseDiverged { commits: 1 }
     );
     assert_eq!(snapshot(&fixture.main), before);
     assert_ne!(git(&remote, &["rev-parse", "main"]), remote_before);
@@ -965,4 +1058,154 @@ fn a_base_with_no_remote_upstream_is_not_merged_or_pushed() {
         MergePushOutcome::NoUpstream
     );
     assert_eq!(snapshot(&fixture.main), before);
+}
+
+/// A clone of `remote` that pushes one commit to its `main`, so the
+/// fixture's `main` is behind GitHub's by one.
+fn push_from_elsewhere(fixture: &Fixture, remote: &Path) -> String {
+    let other = fixture._folder.path().join("elsewhere");
+    git(
+        fixture._folder.path(),
+        &[
+            "clone",
+            "-q",
+            remote.to_str().unwrap(),
+            other.to_str().unwrap(),
+        ],
+    );
+    git(&other, &["config", "user.name", "Other"]);
+    git(&other, &["config", "user.email", "other@example.invalid"]);
+    git(&other, &["config", "commit.gpgsign", "false"]);
+    let pushed = commit(&other, "theirs.txt", "theirs\n");
+    git(&other, &["push", "-q", "origin", "main"]);
+    pushed
+}
+
+#[test]
+fn a_sync_keeps_the_base_commits_on_a_new_branch_and_puts_the_base_on_its_remote() {
+    let (fixture, remote) = with_remote();
+    commit(&fixture.main, "local-1.txt", "one\n");
+    let mine = commit(&fixture.main, "local-2.txt", "two\n");
+    let theirs = push_from_elsewhere(&fixture, &remote);
+    let outcome = sync_base(&fixture.main, "main", "local-main-1030").unwrap();
+    assert_eq!(
+        outcome,
+        BaseSyncOutcome::Synced {
+            commit: theirs.clone(),
+            branch: Some("local-main-1030".into())
+        }
+    );
+    assert_eq!(git(&fixture.main, &["rev-parse", "main"]), theirs);
+    assert_eq!(git(&fixture.main, &["rev-parse", "HEAD"]), theirs);
+    assert_eq!(git(&fixture.main, &["rev-parse", "local-main-1030"]), mine);
+    // The worktree is the remote's: its file is there, the moved ones are not.
+    assert!(fixture.main.join("theirs.txt").is_file());
+    assert!(!fixture.main.join("local-2.txt").exists());
+    assert_eq!(git(&fixture.main, &["status", "--porcelain"]), "");
+    // A second sync of a base apart again takes the next free name.
+    let again = commit(&fixture.main, "local-3.txt", "three\n");
+    let outcome = sync_base(&fixture.main, "main", "local-main-1030").unwrap();
+    assert_eq!(
+        outcome,
+        BaseSyncOutcome::Synced {
+            commit: theirs,
+            branch: Some("local-main-1030-2".into())
+        }
+    );
+    assert_eq!(
+        git(&fixture.main, &["rev-parse", "local-main-1030-2"]),
+        again
+    );
+    assert_eq!(git(&fixture.main, &["rev-parse", "local-main-1030"]), mine);
+}
+
+#[test]
+fn a_sync_of_a_base_checked_out_nowhere_moves_its_ref_alone() {
+    let (fixture, remote) = with_remote();
+    let mine = commit(&fixture.main, "local.txt", "mine\n");
+    let theirs = push_from_elsewhere(&fixture, &remote);
+    git(&fixture.main, &["checkout", "-q", "-b", "elsewhere"]);
+    let before = snapshot(&fixture.main);
+    let outcome = sync_base(&fixture.main, "main", "local-main-1030").unwrap();
+    assert_eq!(
+        outcome,
+        BaseSyncOutcome::Synced {
+            commit: theirs.clone(),
+            branch: Some("local-main-1030".into())
+        }
+    );
+    assert_eq!(git(&fixture.main, &["rev-parse", "main"]), theirs);
+    assert_eq!(git(&fixture.main, &["rev-parse", "local-main-1030"]), mine);
+    assert_eq!(snapshot(&fixture.main), before);
+}
+
+#[test]
+fn a_sync_with_an_uncommitted_change_changes_nothing_and_names_the_file() {
+    let (fixture, remote) = with_remote();
+    commit(&fixture.main, "local.txt", "mine\n");
+    push_from_elsewhere(&fixture, &remote);
+    write(&fixture.main, "z.txt", "unsaved\n");
+    let before = snapshot(&fixture.main);
+    let branches = git(&fixture.main, &["branch", "--list"]);
+    let outcome = sync_base(&fixture.main, "main", "local-main-1030").unwrap();
+    assert_eq!(
+        outcome,
+        BaseSyncOutcome::Dirty {
+            files: vec!["z.txt".into()]
+        }
+    );
+    assert_eq!(snapshot(&fixture.main), before);
+    assert_eq!(git(&fixture.main, &["branch", "--list"]), branches);
+}
+
+#[test]
+fn a_sync_whose_base_moved_meanwhile_changes_nothing() {
+    let (fixture, remote) = with_remote();
+    commit(&fixture.main, "local.txt", "mine\n");
+    push_from_elsewhere(&fixture, &remote);
+    // The base's own worktree is somewhere else, and the base moves under
+    // the sync: its compare-and-swap names the commit it read.
+    git(&fixture.main, &["checkout", "-q", "-b", "elsewhere"]);
+    let hook = git_dir(&fixture.main)
+        .join("hooks")
+        .join("reference-transaction");
+    fs::create_dir_all(hook.parent().unwrap()).unwrap();
+    fs::write(
+        &hook,
+        "#!/bin/sh\n# Moves main once, the first time a branch is created.\n\
+         [ \"$1\" = committed ] || exit 0\n\
+         if grep -q refs/heads/local-main && [ ! -e \"$GIT_DIR/moved\" ]; then\n\
+           touch \"$GIT_DIR/moved\"\n\
+           git update-ref refs/heads/main \"$(git commit-tree -p main -m moved main^{tree})\"\n\
+         fi\n",
+    )
+    .unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(&hook, fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    let outcome = sync_base(&fixture.main, "main", "local-main-1030").unwrap();
+    assert_eq!(outcome, BaseSyncOutcome::BaseMoved);
+    assert_eq!(
+        git(&fixture.main, &["log", "-1", "--format=%s", "main"]),
+        "moved"
+    );
+    assert_eq!(git(&fixture.main, &["branch", "--list", "local-main*"]), "");
+}
+
+#[test]
+fn a_sync_of_a_base_only_behind_catches_it_up_with_no_new_branch() {
+    let (fixture, remote) = with_remote();
+    let theirs = push_from_elsewhere(&fixture, &remote);
+    let outcome = sync_base(&fixture.main, "main", "local-main-1030").unwrap();
+    assert_eq!(
+        outcome,
+        BaseSyncOutcome::Synced {
+            commit: theirs.clone(),
+            branch: None
+        }
+    );
+    assert_eq!(git(&fixture.main, &["rev-parse", "HEAD"]), theirs);
+    assert_eq!(git(&fixture.main, &["branch", "--list", "local-main*"]), "");
 }

@@ -1281,6 +1281,11 @@ pub fn handle_with_progress(
             &base,
             &message,
         )?),
+        Call::BaseSync { root, base, branch } => to_value(crate::branch_merge::sync_base(
+            &absolute(&root)?,
+            &base,
+            &branch,
+        )?),
         Call::BranchDiff {
             root,
             branch,

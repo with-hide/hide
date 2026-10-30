@@ -14,7 +14,7 @@ import { useUiStore } from "../ui";
 import type { LaneFrame, LaneSizes, WorkspaceView } from "../workspace";
 import { memorySceneProject } from "./MemoryScene";
 
-export const HIDE_AI_SCENE_STATES = ["new", "improvement", "applying", "applied", "settings", "settings_unread", "off", "first_run", "not_investigated", "memory", "empty", "memory_empty", "suggestions_off", "global", "global_unusable", "memory_offer", "asking", "ready", "ready_pr_only", "ready_local"] as const;
+export const HIDE_AI_SCENE_STATES = ["new", "improvement", "applying", "applied", "settings", "settings_unread", "off", "first_run", "not_investigated", "memory", "empty", "memory_empty", "suggestions_off", "global", "global_unusable", "memory_offer", "asking", "ready", "ready_pr_only", "ready_local", "ready_folded", "ready_failed", "ready_apart", "ready_synced"] as const;
 export type HideAiSceneState = (typeof HIDE_AI_SCENE_STATES)[number];
 export type HideAiSceneLanguage = "en" | "ko" | "zh-CN" | "ja";
 export type HideAiSceneParams = { theme: "light" | "dark"; state: HideAiSceneState; width: number; language: HideAiSceneLanguage };
@@ -75,11 +75,13 @@ const APPLYING_ROWS: SuggestionRow[] = [
     group: "applying", state: "my_turn", discomfort: "리뷰 요청이 늦게 와요", cause: "PR을 열면 운영자에게 알리라는 말이 없어요", auto: true,
     attempt: { phase: "pr_open", started_at_unix_ms: Date.now() - 50 * MINUTE, pr_number: 1712, url: "https://github.com/hide/hide/pull/1712", agent_pane: null, failure: null },
   }),
-  row("m72", {
-    source: "memory", group: "applying", state: "my_turn", discomfort: "앱 교체는 운영자가 요청할 때만 한다", cause: "이 기억이 아직 문서에 없어요",
-    attempt: { phase: "ci_failed", started_at_unix_ms: Date.now() - 3 * 60 * MINUTE, pr_number: 1709, url: "https://github.com/hide/hide/pull/1709", agent_pane: null, failure: null },
-  }),
 ];
+
+/** Failed checks wait for the operator's choice, so the core puts them under 고를 것, ahead of new suggestions. */
+const CI_FAILED_ROW: SuggestionRow = row("m72", {
+  source: "memory", group: "choose", state: "my_turn", discomfort: "앱 교체는 운영자가 요청할 때만 한다", cause: "이 기억이 아직 문서에 없어요",
+  attempt: { phase: "ci_failed", started_at_unix_ms: Date.now() - 3 * 60 * MINUTE, pr_number: 1709, url: "https://github.com/hide/hide/pull/1709", agent_pane: null, failure: null },
+});
 
 const APPLIED_ROWS: SuggestionRow[] = [
   row("s3", { group: "applied", state: "watching", discomfort: "에이전트가 앱을 마음대로 교체해요", attempt: { phase: "merged", started_at_unix_ms: Date.now() - 2 * 1440 * MINUTE, pr_number: 1690, url: "https://github.com/hide/hide/pull/1690", agent_pane: null, failure: null }, watch: { sessions_seen: 2, sessions_needed: 5 } }),
@@ -95,21 +97,41 @@ const MEMORY_OFFER: SuggestionRow = row("m569", {
 /** The applying agent stopped on a question for the operator. */
 const ASKING_ROW: SuggestionRow = { ...APPLYING_ROWS[0]!, plan: { title: "작업 트리를 나눠 쓰게 하기", path: "AGENTS.md", new_file: false, draft: "+ 브랜치마다 작업 트리를 따로 연다." } };
 
-/** A branch Hide AI finished, opened to its files and the first one's diff. */
+/** A branch Hide AI finished, under 고를 것 as the operator's turn, opened to its files and the first one's diff. */
 const READY_ROW: SuggestionRow = row("s12", {
-  ...NEW_ROWS[0]!, group: "applying", state: "my_turn",
+  ...NEW_ROWS[0]!, group: "choose", state: "my_turn",
   attempt: {
-    phase: "ready", started_at_unix_ms: Date.now() - 6 * MINUTE, pr_number: null, url: null, agent_pane: null, failure: null, purpose: "branch",
-    branch: { name: "hide-suggestion-s12-verify", base: "main", checkout: "/projects/herdr-ide-s12", files: [{ path: "AGENTS.md", added: 1, removed: 0, binary: false }, { path: "docs/BUILD.md", added: 16, removed: 0, binary: false }], files_total: 2, added: 17, removed: 0, push: "allowed" },
+    phase: "ready", started_at_unix_ms: Date.now() - 6 * MINUTE, pr_number: null, url: null, agent_pane: "hide-ai-s12", failure: null, purpose: "branch",
+    branch: { name: "hide-suggestion-s12-verify", base: "main", checkout: "/projects/herdr-ide-s12", files: [{ path: "AGENTS.md", added: 1, removed: 0, binary: false }, { path: "docs/BUILD.md", added: 16, removed: 0, binary: false }], files_total: 2, added: 17, removed: 0, push: "allowed", base_unpushed: null, moved_to: null, base_unsaved: [] },
   },
 });
 
+/** The same branch with what came of the operator's last press laid on it. */
+const readyWith = (failure: string | null, branch: Partial<NonNullable<NonNullable<SuggestionRow["attempt"]>["branch"]>>): SuggestionRow => ({
+  ...READY_ROW, attempt: { ...READY_ROW.attempt!, failure, branch: { ...READY_ROW.attempt!.branch!, ...branch } },
+});
+
 /** The same branch where GitHub's main takes pull requests only. */
-const READY_PR_ONLY_ROW: SuggestionRow = { ...READY_ROW, attempt: { ...READY_ROW.attempt!, branch: { ...READY_ROW.attempt!.branch!, push: "pr_only" } } };
+const READY_PR_ONLY_ROW: SuggestionRow = readyWith(null, { push: "pr_only" });
+/** `main에 바로 올리기` stopped where the merge commit had to be signed. */
+const READY_SIGN_FAILED_ROW: SuggestionRow = readyWith("merge_sign_failed", {});
+/** `main에 바로 올리기` found two commits on the local main that GitHub does not have. */
+const READY_APART_ROW: SuggestionRow = readyWith("push_base_ahead", { base_unpushed: 2 });
+/** After `내 커밋을 브랜치로 옮기고 main 맞추기`: main is GitHub's again, and the two commits are on their own branch. */
+const READY_SYNCED_ROW: SuggestionRow = readyWith(null, { moved_to: "local-main-1030" });
+
+/** The ready states' rows: the branch first, then the other turn, new suggestions, the working one and the folded applied. */
+const readyRows = (ready: SuggestionRow): SuggestionRow[] => [ready, CI_FAILED_ROW, MEMORY_OFFER, ...APPLYING_ROWS.slice(0, 1), ...APPLIED_ROWS];
 
 export const HIDE_AI_SCENE_AGENTS = [{
   id: "hide-ai-s9", pane_id: "hide-ai-s9", agent_kind: "claude", identity_label: "작업 트리 나누기", mark: "turn", status_code: "question", group: "",
   state: { asking: true, working: false, line: { text: "AGENTS.md와 CONTRIBUTING.md 중 어디에 넣을까요?", mode: "request" } },
+}];
+
+/** The ready branch's agent, its turn done, still open so `에이전트 ↗` reaches it. */
+const READY_AGENTS = [{
+  id: "hide-ai-s12", pane_id: "hide-ai-s12", agent_kind: "claude", identity_label: "verify-cargo.sh 규칙", mark: "done", status_code: "done", group: "",
+  state: { asking: false, working: false, line: null },
 }];
 
 export const HIDE_AI_SCENE_DIFFS = [{
@@ -160,14 +182,14 @@ export function hideAiSceneProject(state: HideAiSceneState, workspaceId = "herdr
         { id: "s5", discomfort: "알림 소리가 커요", basis: null, may_return: false },
       ],
     },
-    rows: [...NEW_ROWS, ...APPLYING_ROWS, ...APPLIED_ROWS],
+    rows: [CI_FAILED_ROW, ...NEW_ROWS, ...APPLYING_ROWS, ...APPLIED_ROWS],
     counts: { suggestions: 6, rail: 7 },
   };
   switch (state) {
     case "new":
     case "settings":
     case "memory": return base;
-    case "improvement": return { ...base, rows: [IMPROVEMENT_ROW, ...NEW_ROWS, ...APPLYING_ROWS, ...APPLIED_ROWS], counts: { suggestions: 7, rail: 8 } };
+    case "improvement": return { ...base, rows: [CI_FAILED_ROW, IMPROVEMENT_ROW, ...NEW_ROWS, ...APPLYING_ROWS, ...APPLIED_ROWS], counts: { suggestions: 7, rail: 8 } };
     // Not on GitHub, with Memory and the turn-end analysis off: GitHub reads nothing, the session records read all but corrections and improvements (D-52, D-57).
     case "settings_unread": return {
       ...base,
@@ -180,21 +202,25 @@ export function hideAiSceneProject(state: HideAiSceneState, workspaceId = "herdr
         )),
       },
     };
-    case "applying": return { ...base, rows: [...APPLYING_ROWS, ...APPLIED_ROWS], counts: { suggestions: 2, rail: 3 } };
+    case "applying": return { ...base, rows: [CI_FAILED_ROW, ...APPLYING_ROWS, ...APPLIED_ROWS], counts: { suggestions: 2, rail: 3 } };
     case "applied": return { ...base, status: "none_today", rows: APPLIED_ROWS, counts: { suggestions: 0, rail: 1 } };
     case "off": return { ...base, enabled: false, counts: { suggestions: 0, rail: 0 } };
-    case "not_investigated": return { ...base, status: "not_investigated", rows: [...APPLYING_ROWS, ...APPLIED_ROWS], counts: { suggestions: 2, rail: 3 } };
+    case "not_investigated": return { ...base, status: "not_investigated", rows: [CI_FAILED_ROW, ...APPLYING_ROWS, ...APPLIED_ROWS], counts: { suggestions: 2, rail: 3 } };
     case "first_run": return { ...base, intro_seen: false, status: "first_run_pending", rows: [], counts: { suggestions: 0, rail: 1 } };
     case "empty":
     case "memory_empty": return { ...base, status: "none_today", rows: [], counts: { suggestions: 0, rail: 0 } };
     case "global": return { ...base, global: { path: GLOBAL_PATH, unusable: null }, rows: [LOCAL_NEW, LOCAL_RECURRED, ...NEW_ROWS.slice(0, 1), LOCAL_APPLIED, ...APPLIED_ROWS], counts: { suggestions: 3, rail: 4 } };
     case "global_unusable": return { ...base, global: { path: GLOBAL_PATH, unusable: "too_large" }, rows: [LOCAL_HELD, ...NEW_ROWS.slice(1, 2)], counts: { suggestions: 2, rail: 3 } };
     case "memory_offer": return { ...base, rows: [MEMORY_OFFER, ...NEW_ROWS.slice(0, 2)], counts: { suggestions: 3, rail: 3 } };
-    case "asking": return { ...base, rows: [ASKING_ROW, ...APPLYING_ROWS.slice(1), ...APPLIED_ROWS], counts: { suggestions: 2, rail: 3 } };
-    case "ready": return { ...base, rows: [READY_ROW, ...APPLYING_ROWS.slice(1), ...APPLIED_ROWS], counts: { suggestions: 3, rail: 4 } };
-    case "ready_pr_only": return { ...base, rows: [READY_PR_ONLY_ROW, ...APPLYING_ROWS.slice(1), ...APPLIED_ROWS], counts: { suggestions: 3, rail: 4 } };
+    case "asking": return { ...base, rows: [CI_FAILED_ROW, ASKING_ROW, ...APPLYING_ROWS.slice(1), ...APPLIED_ROWS], counts: { suggestions: 2, rail: 3 } };
+    case "ready":
+    case "ready_folded": return { ...base, rows: readyRows(READY_ROW), counts: { suggestions: 3, rail: 4 } };
+    case "ready_pr_only": return { ...base, rows: readyRows(READY_PR_ONLY_ROW), counts: { suggestions: 3, rail: 4 } };
     // The same branch in a Project without GitHub: the local main is the real one, so it offers `main에 합치기` in place of `PR 올리기`.
-    case "ready_local": return { ...base, github: "missing", rows: [READY_ROW, ...APPLYING_ROWS.slice(1), ...APPLIED_ROWS], counts: { suggestions: 3, rail: 4 } };
+    case "ready_local": return { ...base, github: "missing", rows: readyRows(READY_ROW), counts: { suggestions: 3, rail: 4 } };
+    case "ready_failed": return { ...base, rows: readyRows(READY_SIGN_FAILED_ROW), counts: { suggestions: 3, rail: 4 } };
+    case "ready_apart": return { ...base, rows: readyRows(READY_APART_ROW), counts: { suggestions: 3, rail: 4 } };
+    case "ready_synced": return { ...base, rows: readyRows(READY_SYNCED_ROW), counts: { suggestions: 3, rail: 4 } };
     case "suggestions_off": return { ...base, status: "off", settings: { ...base.settings, suggestions_enabled: false }, counts: { suggestions: 0, rail: 0 } };
   }
 }
@@ -217,16 +243,17 @@ export function HideAiScene({ theme, state, width, language }: HideAiSceneParams
   }) as unknown as SnapshotRest, [language]);
   useLayoutEffect(() => {
     const memory = { ...memorySceneProject(state === "off" || state === "settings_unread" ? "off" : state === "memory_empty" ? "empty" : "correction"), workspace_id: "herdr-ide" };
-    const shown = state === "ready" || state === "ready_pr_only" || state === "ready_local" ? { ...rest, pr_work: { link: null, feedback: null, branch_diffs: HIDE_AI_SCENE_DIFFS } } as SnapshotRest : rest;
-    useShellStore.setState({ rest: shown, agents: (state === "asking" ? HIDE_AI_SCENE_AGENTS : []) as never, memory: { project: memory }, suggestions: { project: hideAiSceneProject(state) }, connection: "gone" });
-    useUiStore.setState({ hideAiTab: state === "memory" || state === "memory_empty" ? "memory" : "suggestions", openSuggestion: state === "new" ? "s12" : state === "improvement" ? "s18" : state === "global" ? "s21" : state === "memory_offer" ? "m569" : state === "ready" || state === "ready_pr_only" || state === "ready_local" ? "s12" : null });
+    const ready = state.startsWith("ready");
+    const shown = ready ? { ...rest, pr_work: { link: null, feedback: null, branch_diffs: HIDE_AI_SCENE_DIFFS } } as SnapshotRest : rest;
+    useShellStore.setState({ rest: shown, agents: (state === "asking" ? HIDE_AI_SCENE_AGENTS : ready ? READY_AGENTS : []) as never, memory: { project: memory }, suggestions: { project: hideAiSceneProject(state) }, connection: "gone" });
+    useUiStore.setState({ hideAiTab: state === "memory" || state === "memory_empty" ? "memory" : "suggestions", openSuggestion: state === "new" ? "s12" : state === "improvement" ? "s18" : state === "global" ? "s21" : state === "memory_offer" ? "m569" : ready ? "s12" : null });
     document.documentElement.classList.toggle("dark", theme === "dark");
     document.documentElement.classList.toggle("light", theme === "light");
   }, [rest, state, theme]);
   // The fold and the sheet are the components' own; the scene presses them as the operator would, once the tool drew them.
   const drawn = useShellStore((store) => store.suggestions?.project?.workspace_id === "herdr-ide");
   useEffect(() => {
-    const press = state === "applied" || state === "global" ? "[data-suggestions-fold]" : state === "settings" || state === "settings_unread" ? "[data-hide-ai-settings-open]" : null;
+    const press = state === "applied" || state === "global" ? "[data-suggestions-fold]" : state === "settings" || state === "settings_unread" ? "[data-hide-ai-settings-open]" : state === "ready_folded" ? '[data-suggestion-branch-file="AGENTS.md"]' : null;
     if (!drawn || !press) return;
     document.querySelector<HTMLElement>(press)?.click();
     if (state !== "settings_unread") return;

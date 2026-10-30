@@ -6,6 +6,11 @@
 //! ready branch of the opened Project names. An answer is kept for
 //! [`FRESH_FOR`], an unreadable one too, so the 제안 tab composing again asks
 //! nothing; a push the remote turned away forgets it, so it is read again.
+//!
+//! It also keeps what a decision last learned of each base on the
+//! Project's machine (`BaseNote`): how many commits of its own a push found
+//! it had, the branch a sync kept them on, the files a sync found unsaved.
+//! Every ready row on that base reads it; it lives as long as the runtime.
 
 use super::*;
 use crate::model::{SuggestionBranchPush, SuggestionsGithub};
@@ -20,10 +25,26 @@ const FRESH_FOR: Duration = Duration::from_secs(5 * 60);
 /// base branch.
 type BaseKey = (String, String, String);
 
+/// The most bases a runtime keeps a note on; past it the notes start over.
+const BASE_NOTES: usize = 64;
+
 #[derive(Debug, Default)]
 pub(super) struct BasePushWork {
     read: HashMap<BaseKey, (SuggestionBranchPush, Instant)>,
     reading: HashSet<BaseKey>,
+    notes: HashMap<BaseKey, BaseNote>,
+}
+
+/// What the last decision on a base learned of it, which a ready row on it
+/// words beside its refusal.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub(super) struct BaseNote {
+    /// Commits of its own that its upstream does not have.
+    pub(super) unpushed: Option<u32>,
+    /// The branch a sync kept its own commits on.
+    pub(super) moved_to: Option<String>,
+    /// The files a sync found unsaved in the worktree that holds it.
+    pub(super) unsaved: Vec<String>,
 }
 
 fn key(node: &crate::node::NodeId, root: &str, base: &str) -> BaseKey {
@@ -123,6 +144,53 @@ impl Runtime {
         self.base_push_work
             .read
             .insert(key(node, root, base), (push, Instant::now()));
+    }
+
+    /// Records what a decision learned of `base`.
+    pub(super) fn note_base(
+        &mut self,
+        node: &crate::node::NodeId,
+        root: &str,
+        base: &str,
+        learned: super::branch_decision::BaseChange,
+    ) {
+        use super::branch_decision::BaseChange;
+        let notes = &mut self.base_push_work.notes;
+        let key = key(node, root, base);
+        if !notes.contains_key(&key) && notes.len() >= BASE_NOTES {
+            notes.clear();
+            super::suggestions::cache_cleared("base_notes", BASE_NOTES);
+        }
+        let note = notes.entry(key).or_default();
+        match learned {
+            BaseChange::Apart(commits) => {
+                *note = BaseNote {
+                    unpushed: Some(commits),
+                    ..BaseNote::default()
+                };
+            }
+            BaseChange::Even { moved_to } => {
+                *note = BaseNote {
+                    moved_to,
+                    ..BaseNote::default()
+                }
+            }
+            BaseChange::Unsaved(files) => note.unsaved = files,
+        }
+    }
+
+    /// Every base note of the Project at `root` on `node`, by base.
+    pub(super) fn base_notes(
+        &self,
+        node: &crate::node::NodeId,
+        root: &str,
+    ) -> HashMap<String, BaseNote> {
+        self.base_push_work
+            .notes
+            .iter()
+            .filter(|((at, folder, _), _)| at == node.as_str() && folder == root)
+            .map(|((_, _, base), note)| (base.clone(), note.clone()))
+            .collect()
     }
 
     /// Drops the answer for `base`, so the next compose asks GitHub again.

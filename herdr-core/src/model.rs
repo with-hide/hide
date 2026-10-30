@@ -9490,6 +9490,7 @@ mod wire_enum_tests {
             SuggestionAttemptPhase::Working,
             SuggestionAttemptPhase::Ready,
             SuggestionAttemptPhase::Merging,
+            SuggestionAttemptPhase::Syncing,
             SuggestionAttemptPhase::PrOpen,
             SuggestionAttemptPhase::CiFailed,
             SuggestionAttemptPhase::Failed,
@@ -9502,6 +9503,7 @@ mod wire_enum_tests {
                 | SuggestionAttemptPhase::Working
                 | SuggestionAttemptPhase::Ready
                 | SuggestionAttemptPhase::Merging
+                | SuggestionAttemptPhase::Syncing
                 | SuggestionAttemptPhase::PrOpen
                 | SuggestionAttemptPhase::CiFailed
                 | SuggestionAttemptPhase::Failed
