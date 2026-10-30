@@ -7,7 +7,6 @@
 
 import { expect, test } from "@playwright/test";
 import { spawnSync } from "node:child_process";
-import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { agentPane, type HideAnswer } from "./agent-pane";
@@ -15,6 +14,7 @@ import { claudeProjects, herdrHasFocus, startHerdr, writeFixtureTranscript } fro
 import { startHided, type Daemon } from "./hided-fixture";
 import { enterWorkspace, screenshot } from "./wire";
 import { chord } from "./chords";
+import { quietFor } from "./wait";
 
 test.describe.configure({ timeout: 300_000 });
 
@@ -88,7 +88,8 @@ test("a finished worker sleeps, a request letter wakes it into the same conversa
     await expect.poll(nativeSession, { timeout: 20_000 }).toBeTruthy();
     const session = nativeSession()!;
     // The conversation file a real Claude writes; the bell reads its turns before it rings.
-    writeFixtureTranscript(claudeProjects(herdr), session, { task: "Review fix worker" });
+    // Written now, so turning sleep on later does not find it hours idle.
+    writeFixtureTranscript(claudeProjects(herdr), session, { task: "Review fix worker", at: Date.now() });
     const processInfo = () => (herdr.run(["pane", "process-info", "--pane", worker.pane]) as ProcessInfo).result.process_info;
     const asleep = () => { const info = processInfo(); return info.foreground_process_group_id === info.shell_pid; };
 
@@ -98,17 +99,14 @@ test("a finished worker sleeps, a request letter wakes it into the same conversa
     await expect(leadView).toBeVisible({ timeout: 20_000 });
 
     // Control: an awake worker's request rings in this fixture.
+    const show = async (id: string) => JSON.stringify(await answer(conductor, ["request", "show", id]));
+    const holds = (id: string) => JSON.stringify(diagnostics(daemon!, "doorbell.held").filter((record) => record.letter_id === id).slice(-6));
     const control = await ok(conductor, ["request", "send", worker.id, "--intent", "control", "--kind", "request", "--body", "깨어 있는 동안의 확인"]);
     const controlId = ((control.value ?? control.result) as { id: string }).id;
-    try {
-      await expect.poll(async () => JSON.stringify(await answer(conductor, ["request", "show", controlId])), { message: "an awake worker's request rings", timeout: 40_000 })
-        .toMatch(/"bell_sent":true|"state":"(delivered|acknowledged)"/);
-      // The fixture runs no hook to confirm it; settle it so no pending request is left to wake for.
-      await ok(conductor, ["request", "cancel", controlId]);
-    } catch (error) {
-      console.log("DEBUG control held", JSON.stringify(diagnostics(daemon!, "doorbell.held").slice(-6)));
-      throw error;
-    }
+    await expect.poll(() => show(controlId), { message: `an awake worker's request rings; holds ${holds(controlId)}`, timeout: 40_000 })
+      .toMatch(/"bell_sent":true|"state":"(delivered|acknowledged)"/);
+    // The fixture runs no hook to confirm it; settle it so no pending request is left to wake for.
+    await ok(conductor, ["request", "cancel", controlId]);
 
     // B14: the parent puts its worker to sleep from the CLI; again answers asleep.
     await expect.poll(async () => JSON.stringify(await answer(conductor, ["agent", "sleep", worker.id])), { timeout: 30_000 }).toMatch(/"state":"(ending|asleep)"/);
@@ -119,33 +117,28 @@ test("a finished worker sleeps, a request letter wakes it into the same conversa
     // B1, B3: a report to the sleeper is accepted, waits, and wakes no one.
     const report = await ok(conductor, ["request", "send", worker.id, "--intent", "status-report", "--kind", "report", "--body", "참고: 리뷰가 시작됐어요"]);
     expect(JSON.stringify(report)).toContain('"state":"pending"');
-    await page.waitForTimeout(8_000);
-    if (!asleep()) console.log("DEBUG report woke", JSON.stringify(diagnostics(daemon!, "agent_sleep.").slice(-12)));
-    expect(asleep(), "a report wakes no one").toBe(true);
+    const reportId = ((report.value ?? report.result) as { id: string }).id;
+    const sleepRecords = () => JSON.stringify(diagnostics(daemon!, "agent_sleep.").slice(-12));
+    await quietFor(page, 8_000, "a report letter starts no wake; a request starts one within a tick");
+    expect(asleep(), `a report wakes no one; ${sleepRecords()}`).toBe(true);
 
     // B2, B5: a request wakes it into the same conversation; the operator's pane keeps the focus.
     const request = await ok(conductor, ["request", "send", worker.id, "--intent", "review-fix", "--kind", "request", "--body", "리뷰 지적 하나를 고쳐 주세요"]);
     const requestId = ((request.value ?? request.result) as { id: string }).id;
     await expect.poll(asleep, { message: "the request wakes the worker", timeout: 60_000 }).toBe(false);
     // The wake was the letter's, resuming the conversation rather than starting a new one.
-    const wakes = () => diagnostics(daemon!, '"agent_sleep.waking"').filter((record) => JSON.stringify(record).includes(worker.pane));
-    await expect.poll(() => JSON.stringify(wakes()), { timeout: 20_000 }).toContain('"trigger":"letter"');
-    expect(wakes().every((record) => JSON.stringify(record).includes('"mode":"resume"')), JSON.stringify(wakes())).toBe(true);
+    const wakes = () => diagnostics(daemon!, '"agent_sleep.waking"').filter((record) => record.pane_id === worker.pane);
+    const letterWakes = () => wakes().filter((record) => record.trigger === "letter").length;
+    await expect.poll(letterWakes, { timeout: 20_000 }).toBe(1);
+    expect(wakes().every((record) => record.mode === "resume"), JSON.stringify(wakes())).toBe(true);
+    expect(nativeSession(), "the worker resumed its own conversation").toBe(session);
     await expect(leadView).toHaveAttribute("data-focused", "true");
     expect(herdrHasFocus(herdr, lead)).toBe(true);
-    let rang = false;
-    try {
-      await expect.poll(async () => JSON.stringify(await answer(conductor, ["request", "show", requestId])), { message: "the request rings once the worker is back", timeout: 70_000 })
-        .toMatch(/"bell_sent":true|"state":"(delivered|acknowledged)"/);
-      rang = true;
-    } catch {
-      const sha = (value: string) => crypto.createHash("sha256").update(value).digest("hex");
-      const now = snapshotAgents().find((agent) => agent.pane_id === worker.pane)?.agent_session?.value ?? "";
-      const shown = JSON.stringify(await answer(conductor, ["request", "show", requestId]));
-      console.log("DEBUG sessions", JSON.stringify({ original: session, originalSha: sha(session), herdrNow: now, herdrNowSha: sha(now), recipient: /"recipient":\{[^}]*\}/.exec(shown)?.[0] }));
-      console.log("DEBUG ps", JSON.stringify(await answer(conductor, ["ps", "--json"])).slice(0, 2500));
-      console.log("DEBUG woken request never rang; last holds", JSON.stringify(diagnostics(daemon!, "doorbell.held").filter((record) => JSON.stringify(record).includes(requestId))));
-    }
+    // One bell rings for the worker's turn: the oldest letter's, which counts the request with it.
+    await expect.poll(async () => {
+      const [reportShown, requestShown] = [await show(reportId), await show(requestId)];
+      return /"bell_sent":true/.test(requestShown) || (/"bell_sent":true/.test(reportShown) && /and 1 more/.test(reportShown));
+    }, { message: `the woken worker's bell carries the request; holds ${holds(requestId)}`, timeout: 70_000 }).toBe(true);
     await screenshot(page, "mission-worker-sleep-woken");
 
     // B8, B12: with sleep turned on, the worker's node finishing sleeps it without the hours.
@@ -160,20 +153,21 @@ test("a finished worker sleeps, a request letter wakes it into the same conversa
     await ok(conductor, ["mission", "plan", "--json", JSON.stringify({ scope: "pr", nodes: [{ key: "fix", title: "리뷰 수정", kind: "change", delivery: "pr", criteria: ["지적이 고쳐졌다"] }] })]);
     await ok(conductor, ["mission", "start"]);
     await ok(conductor, ["mission", "node", "fix", "--status", "working", "--agent-id", worker.id, "--line", "고치는 중"]);
-    await page.waitForTimeout(5_000);
-    expect(asleep(), "a working node sleeps no one").toBe(false);
-    console.log("DEBUG show", JSON.stringify(await answer(conductor, ["mission", "show"])).slice(0, 1500));
-    const finished = await answer(conductor, ["mission", "node", "fix", "--status", "dropped"]);
-    console.log("DEBUG dropped", JSON.stringify(finished));
-    expect(finished.ok, JSON.stringify(finished)).toBe(true);
-    await expect.poll(asleep, { message: "the finished node's worker sleeps within the minute pass", timeout: 150_000, intervals: [2_000] }).toBe(true)
-      .catch((error) => { console.log("DEBUG mission sleep", JSON.stringify(diagnostics(daemon!, "agent_sleep.").slice(-8))); throw error; });
+    await quietFor(page, 5_000, "a working node marks no one; a finish marks its worker at once");
+    expect(asleep(), `a working node sleeps no one; ${sleepRecords()}`).toBe(false);
+    await ok(conductor, ["mission", "node", "fix", "--status", "dropped"]);
+    await expect.poll(asleep, { message: `the finished node's worker sleeps within the minute pass; ${sleepRecords()}`, timeout: 150_000, intervals: [2_000] }).toBe(true);
+    const missionSleeps = diagnostics(daemon!, '"agent_sleep.ending"').filter((record) => record.pane_id === worker.pane && record.trigger === "mission");
+    expect(missionSleeps.length, `the node's finish put it to sleep; ${sleepRecords()}`).toBeGreaterThan(0);
+    // The request still pending woke it once already, so it does not wake it again.
+    await quietFor(page, 10_000, "a pending letter's wake starts within a tick of the sleep landing");
+    expect(asleep(), `a letter wakes its recipient once; ${sleepRecords()}`).toBe(true);
+    expect(letterWakes()).toBe(1);
     // The Conductor itself never sleeps for its mission.
     expect(snapshotAgents().some((agent) => agent.pane_id === lead)).toBe(true);
     expect(conductorId).toBeTruthy();
     await expect(leadView).toHaveAttribute("data-focused", "true");
     await screenshot(page, "mission-worker-sleep-node-done");
-    expect(rang, "the woken worker's request rang").toBe(true);
   } finally {
     daemon?.stop();
     herdr.stop();
