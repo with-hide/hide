@@ -714,6 +714,12 @@ fn processes(distro: &str) -> String {
                 String::from_utf8_lossy(&output.stdout),
                 String::from_utf8_lossy(&output.stderr)
             ),
+            // A capture whose cleanup was not confirmed leaves the child
+            // ours: end it and reap it before saying why nothing was read.
+            Err(error) if error.cleanup.is_some() => {
+                let ended = child.kill_tree().and_then(|_| child.wait());
+                format!("unread: {error}; its end: {ended:?}")
+            }
             Err(error) => format!("unread: {error}"),
         },
         Err(error) => format!("unread: {error}"),

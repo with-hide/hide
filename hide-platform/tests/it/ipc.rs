@@ -865,11 +865,22 @@ fn a_shutdown_ends_the_peers_blocked_read_every_time() {
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
+        let mut rounds =
+            hide_platform::process::OwnedChild::spawn(&mut command).expect("the rounds start");
         // A hang guard over all the rounds, which take well under a second.
-        let output = hide_platform::process::OwnedChild::spawn(&mut command)
-            .expect("the rounds start")
-            .capture_until(Instant::now() + Duration::from_secs(60), 64 * 1024)
-            .expect("the rounds end and their process is reaped");
+        let output = match rounds.capture_until(Instant::now() + Duration::from_secs(60), 64 * 1024)
+        {
+            Ok(output) => output,
+            Err(error) => {
+                // A capture whose cleanup was not confirmed leaves the child
+                // ours: end it and reap it before the failure is reported.
+                if error.cleanup.is_some() {
+                    let ended = rounds.kill_tree().and_then(|_| rounds.wait());
+                    panic!("the rounds did not end: {error}; their end: {ended:?}");
+                }
+                panic!("the rounds did not end: {error}");
+            }
+        };
         assert!(
             output.status.success(),
             "{}",
