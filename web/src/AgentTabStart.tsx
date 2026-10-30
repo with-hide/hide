@@ -15,6 +15,7 @@ import { useUiStore } from "./ui";
 import { catalogWorkspaces } from "./snapshot";
 import { failedReceiptMoved, inlineReceipts, inlineStartAnswer, receiptTarget } from "./inlineStart";
 import type { ViewWorkspace } from "./viewLayout";
+import { composingKey } from "./keys";
 
 const ANSWER_TIMEOUT_MS = 90_000;
 
@@ -116,7 +117,7 @@ export function AgentTabStart({ workspace, target, groupName, actions }: { works
     <div className="flex w-full max-w-(--size-worktree-dialog) flex-col gap-md">
       <div className="flex items-start justify-between gap-sm"><div className="min-w-0"><p className="flex items-center gap-xs text-caption text-muted-foreground" title={groupName}><BriefcaseBusinessIcon className="size-(--size-icon-sm) shrink-0" /><span className="truncate">{groupName}</span></p><h2 className="mt-xs text-title font-semibold">{t(target.add_pane ? "groups.addAgent" : target.tab_id ? "groups.draftTitle" : "groups.firstTitle")}</h2><p className="mt-xs text-caption text-muted-foreground">{t("groups.startHint")}</p></div></div>
       <div className="overflow-hidden rounded-lg border border-input bg-background focus-within:ring-1 focus-within:ring-ring">
-        <textarea rows={3} value={draft.text} readOnly={locked && !editingRestored} aria-label={t("shell.firstInstruction")} placeholder={t("groups.prompt")} className="block w-full resize-none bg-transparent p-md text-body text-foreground outline-none placeholder:text-muted-foreground" onChange={(event) => update({ ...draft, text: event.target.value, phase: editingRestored ? draft.phase : "editing", failure: null })} onKeyDown={(event) => { if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing && event.keyCode !== 229) { event.preventDefault(); if (!busy && !terminalIntent) start(false); } }} />
+        <textarea rows={3} value={draft.text} readOnly={locked && !editingRestored} aria-label={t("shell.firstInstruction")} placeholder={t("groups.prompt")} className="block w-full resize-none bg-transparent p-md text-body text-foreground outline-none placeholder:text-muted-foreground" onChange={(event) => update({ ...draft, text: event.target.value, phase: editingRestored ? draft.phase : "editing", failure: null })} onKeyDown={(event) => { if (event.key === "Enter" && !event.shiftKey && !composingKey(event)) { event.preventDefault(); if (!busy && !terminalIntent) start(false); } }} />
         <div className="flex flex-wrap items-center justify-between gap-sm px-sm pb-sm"><AgentPicker actions={actions} value={draft.selection} onChange={(selection) => update({ ...draft, selection, phase: "editing", failure: null })} disabled={locked} /><Button disabled={!connected || busy || terminalIntent || draft.selection.kind === "terminal"} onClick={() => start(false)} data-group-start-agent="true">{t(busy ? "shell.starting" : "common.start")}</Button></div>
       </div>
       <Button variant="secondary" className="w-full" disabled={!connected || (locked && !terminalRetry)} onClick={() => start(true)} data-group-start-terminal="true"><TerminalIcon />{t(terminalRetry ? "groups.retryTerminal" : "groups.terminal")}</Button>

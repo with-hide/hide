@@ -14,6 +14,7 @@ import { Switch } from "./components/ui/switch";
 import { useInterfaceTranslation } from "./i18n/client";
 import { guardPathRefusal, type Guardrails } from "./projectSettings";
 import type { KitAgent } from "./snapshot";
+import { composingKey } from "./keys";
 
 /** The control a change came from, so its saving state shows beside that row. */
 export type GuardPart = "worktree_folder" | "base_branch" | "agent_merge" | "git_commands" | "files" | "paths";
@@ -124,7 +125,7 @@ export function ProjectGuardrails({ rules, isGit, base, disabled, unguarded, sav
         <Input ref={field} autoFocus aria-label={t("projectSettings.guardPathAdd")} placeholder={t("projectSettings.guardPathHint")} value={draft} disabled={disabled}
           className="w-(--size-settings-control-w) max-w-full font-mono"
           onChange={(event) => { setDraft(event.target.value); setRefusal(null); setSent(null); }}
-          onKeyDown={(event) => { if (!event.nativeEvent.isComposing && event.key === "Enter") add(); }} />
+          onKeyDown={(event) => { if (!composingKey(event) && event.key === "Enter") add(); }} />
         <Button size="sm" disabled={disabled} onClick={add}>{t("projectSettings.apply")}</Button>
       </div> : null}
       {refusal ? <Note tone="error">{t(pathRefusalKey(refusal))}</Note> : null}

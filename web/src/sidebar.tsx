@@ -59,9 +59,8 @@ import { projectIssueSource, projectRepository, settingsTarget } from "./project
 import { machineName, windowDeviceId, windowFirst } from "./screenMachine";
 import { focusedRemoteDevice, localDeviceId, type AgentRow, type Checkout, type HideAiCheckout, type SessionPull, type SleepingSession, type SnapshotRest, type Workspace } from "./snapshot";
 import { useStartPanel } from "./startDraft";
-import { HelpMenu } from "./components/help-menu";
 import { PracticeInvite } from "./components/practice-invite";
-import { ViewMenu } from "./components/view-menu";
+import { SidebarMenus } from "./components/sidebar-menus";
 import { useShellStore } from "./store";
 import { draggedSidebarWidth, sidebarWidthToSend } from "./sidebarWidth";
 import { useUiStore } from "./ui";
@@ -159,16 +158,12 @@ export function Sidebar({ actions }: { actions: Actions }) {
             <PracticeInvite actions={actions} />
             <div data-sidebar-footer="true" className="flex shrink-0 flex-wrap items-center gap-xs border-t border-border px-sm py-xs">
               <Usage actions={actions} />
-              {/* Usage holds the left edge; the menus keep the right one, also on a wrapped line. */}
-              <div className="ml-auto flex items-center gap-xs">
-                <ViewMenu actions={actions} />
-                <HelpMenu actions={actions} />
-                <Hint label={`${t("common.settings")} (${commandLabel("settings")})`}>
-                  <Button variant="ghost" size="icon-sm" data-open-settings="true" onClick={() => actions.openSettings()}>
-                    <SettingsIcon />
-                  </Button>
-                </Hint>
-              </div>
+              {/* Usage holds the left edge; with the rail hidden the menus keep the right one, also on a wrapped line. */}
+              {rail ? null : (
+                <div className="ml-auto flex items-center gap-xs">
+                  <SidebarMenus actions={actions} place="footer" />
+                </div>
+              )}
             </div>
           </div>
         </div>

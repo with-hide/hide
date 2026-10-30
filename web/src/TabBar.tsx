@@ -20,6 +20,7 @@ import { useShellStore } from "./store";
 import { tabFit, type AreaTabInteraction } from "./AreaTree";
 import { useInterfaceTranslation } from "./i18n/client";
 import type { TabFit } from "./areaLayout";
+import { composingKey } from "./keys";
 
 // The sole Agent tab rendering unit, reused by every local and device area.
 const NONE: AsyncOperation[] = [];
@@ -108,7 +109,7 @@ function TabRenameInput({ entry, actions, onCancel }: { entry: StripTab; actions
           onBlur={onCancel}
           onKeyDown={(event) => {
             event.stopPropagation();
-            if (event.nativeEvent.isComposing || event.keyCode === 229) return;
+            if (composingKey(event)) return;
             if (event.key === "Escape") { event.preventDefault(); cancel(); }
             if (event.key === "Enter" && !sent.current) {
               event.preventDefault();

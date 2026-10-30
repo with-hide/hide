@@ -27,10 +27,21 @@ function presses(event: KeyEventLike, chord: Chord): boolean {
   return event.code === chord.code && event.metaKey === !!chord.meta && event.ctrlKey === !!chord.ctrl && event.shiftKey === !!chord.shift && event.altKey === !!chord.alt;
 }
 
-// 229 is the key an input method is still processing; Chromium can report it
-// with `isComposing` false (a Windows IME's key="Process"), and xterm reads it
-// the same way.
-export function terminalKey(event: KeyEventLike, system: KeySystem, selection: boolean, composing = event.isComposing || event.keyCode === 229): TerminalKey | null {
+/**
+ * Whether a key belongs to an input method's composition rather than to the
+ * field: an Enter that confirms a Korean syllable is the input method's, and a
+ * field that acted on it (blurred, submitted) would see the syllable committed
+ * twice. 229 is the key an input method is still processing; Chromium can
+ * report it with `isComposing` false (a Windows IME's key="Process"), and
+ * Safari sends the confirming Enter after `compositionend` with only 229, so
+ * every text field asks this one question before it reads a key.
+ */
+export function composingKey(event: Pick<KeyboardEvent, "isComposing" | "keyCode"> | { nativeEvent: Pick<KeyboardEvent, "isComposing">; keyCode: number }): boolean {
+  const composing = "nativeEvent" in event ? event.nativeEvent.isComposing : event.isComposing;
+  return composing || event.keyCode === 229;
+}
+
+export function terminalKey(event: KeyEventLike, system: KeySystem, selection: boolean, composing = composingKey({ isComposing: event.isComposing, keyCode: event.keyCode ?? 0 })): TerminalKey | null {
   if (composing) return null;
   const bytes = (value: Uint8Array): TerminalKey => ({ kind: "bytes", bytes: value });
   const chord = !event.ctrlKey && !event.altKey;

@@ -571,6 +571,7 @@ A definitive failure offers Retry locally; an uncertain result offers a status c
 An agent pane's head carries no task chip, no checklist popover and no chord for one (PRD session-record-goal-flow D-01, B1); the PR, letter and branch marks in the same place stay, and the session record holds the whole record.
 A turn the agent's provider refused for a usage limit or an API error ends as the label's `한도`, and the second row and the turn card draw it as `막힘` with its line as the cause (B9); only the session record tells the two apart.
 A plain shell keeps its terminal mark.
+A pane's terminal stands 8px in from the pane's sides and 4px from its top and bottom, so its text never touches the pane's border, and its grid is the one that fits that inset box.
 On an agent pane whose session Hide knows, the status mark, the logo and the title are one button: under the pointer or focus they light together and open nothing, since a card under the head kept rising in the way of the terminal (the turn card opens from the request on the second row, and the record shows the whole title), and a press shows that session's record in the lane's 보기 slot ([The 보기 slot](#the-보기-slot)), opening the lane when it is closed, while the keyboard and the input cursor stay in the pane's terminal (PRD overview-device-tasks B22, sidebar-task-lens B15); the Overview's `레인에서 보기` lands the same way.
 A press while the lane already draws that record turns the lane back to its tool, and the fork mark and the PR mark keep their own presses outside the button (B23).
 Whether the lane draws that record is read from the slot's front item and the lane's tool, both of which the core keeps.
@@ -755,8 +756,9 @@ Web owners: `web/src/hideAiOrigin.ts` (the words, the place line, the turn line,
 
 ### Agent logo view mode
 
-The sidebar footer carries a View menu between the usage chips and Help: an eye button whose hint and accessible name are `보기` (`View`).
-It opens above the footer with the label `에이전트 로고`, two choices, `행 왼쪽에 표시` and `숨기기`, with a check on the current one, a separator, and a muted line that is not a choice: `⌥ 누르고 있으면 잠깐 보기` (`Alt` on Windows and Linux).
+The View menu, Help and Settings stand together, in that order: stacked at the foot of the device rail, their hints and menus opening to the right, or, while the rail is hidden, at the sidebar footer's right edge after the usage chips, opening upwards.
+The View menu is an eye button whose hint and accessible name are `보기` (`View`).
+It opens beside its button with the label `에이전트 로고`, two choices, `행 왼쪽에 표시` and `숨기기`, with a check on the current one, a separator, and a muted line that is not a choice: `⌥ 누르고 있으면 잠깐 보기` (`Alt` on Windows and Linux).
 Arrow keys move through the choices, Enter chooses, and Escape or a click outside closes the menu without changing anything and returns focus to the button.
 Choosing the checked choice only closes the menu.
 While the daemon is not connected both choices are disabled and the check stays on the last value received.
@@ -2495,7 +2497,7 @@ Web owner: `web/src/components/usage.tsx`, `web/src/components/usage-history.tsx
 The core owns account windows and shared preferences (`usage`, `ui_state.usage`); all limits refer to the core's own node, even with a remote device in front.
 The declaration lists all seven agents; only agents with a declared limit source appear in the footer and popover.
 
-The footer draws up to three pinned account windows at its left edge, and the View menu, Help and Settings at its right edge.
+The footer draws up to three pinned account windows at its left edge, and, while the device rail is hidden, the View menu, Help and Settings at its right edge.
 Defaults pin the weekly window of each agent that is on by default and reports one (Claude Code and Codex), leaving a slot for the operator's own pin.
 Each chip shows the agent mark and its rounded percent, naming the window when the agent has multiple visible chips.
 A numberless not-started or expired chip always names its window.

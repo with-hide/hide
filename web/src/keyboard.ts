@@ -35,6 +35,7 @@ import { useShellStore } from "./store";
 import { coveringLayer, useUiStore, type Cycle } from "./ui";
 import { installWindowFocus } from "./windowFocus";
 import { drawnViews, installKeyboardOwner, keyboardCommandOwner, noteCommandDelivered, subscribeKeyboardOwner } from "./viewFocus";
+import { composingKey } from "./keys";
 
 /**
  * Recent Panels: every surface the shell holds on every connected device and
@@ -452,7 +453,7 @@ export function installKeyboard(actions: Actions): () => void {
       // now and comes back only with a fresh hold (B6, B8).
       endHold();
     }
-    if (event.isComposing || event.keyCode === 229) {
+    if (composingKey(event)) {
       // An Escape while an input method composes belongs to the input method,
       // which has already answered it; Radix's own Escape listener does not
       // ask, and would close the dialog the operator is typing Hangul in. A

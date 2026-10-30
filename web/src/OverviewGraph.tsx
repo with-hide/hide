@@ -27,6 +27,7 @@ import { useShellStore } from "./store";
 import { useUiStore } from "./ui";
 import "@xyflow/react/dist/base.css";
 import "./overviewGraph.css";
+import { composingKey } from "./keys";
 
 type Props = { projects: BoardProject[]; deviceId: string; actions: Actions; onOpenRecord?: (session: WorkSession) => void };
 const NODE_TYPES: NodeTypes = { operator: OperatorGraphNode, project: ProjectGraphNode, glow: GlowGraphNode, cluster: ClusterGraphNode, team: TeamGraphNode, session: SessionGraphNode };
@@ -454,7 +455,7 @@ function ProjectColumn({ model, query, setQuery, hidden, toggle, point, locate, 
   // Every root whose turn it is, drawn, folded or hidden, so the list agrees with the projects' My turn counts.
   const waiting = model.allAgents.filter((row) => model.roots.has(row.id) && graphActivity(row.agent) === "turn");
   return <aside className="og-navigator" aria-label={t("overviewGraph.projects")} data-graph-projects="true">
-    <Input aria-label={t("overviewGraph.find")} placeholder={t("overviewGraph.find")} value={query} onChange={(event) => setQuery(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter" && !event.nativeEvent.isComposing) { event.preventDefault(); takeFirst(event.currentTarget); } }} />
+    <Input aria-label={t("overviewGraph.find")} placeholder={t("overviewGraph.find")} value={query} onChange={(event) => setQuery(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter" && !composingKey(event)) { event.preventDefault(); takeFirst(event.currentTarget); } }} />
     {needle && !summaries.length && !found.length ? <p className="og-no-match">{t("overviewGraph.noMatch")}</p> : null}
     <div className="og-project-list">{summaries.map((summary) => {
       const label = summary.project.workspace.label;

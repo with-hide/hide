@@ -54,6 +54,7 @@ import {
 } from "./viewFeedback";
 import { holdsFieldModifier } from "./shortcuts";
 import { keySystem } from "./host";
+import { composingKey } from "./keys";
 
 /** The front Workspace's feedback, or none. */
 export function useViewFeedback(): ViewFeedback | undefined {
@@ -232,7 +233,7 @@ export function NoteFormCard({ form, meta, full, workspace, actions, add, close 
       onMouseDown={(event) => event.stopPropagation()}
       onKeyDown={(event) => {
         event.stopPropagation();
-        if (event.nativeEvent.isComposing) return;
+        if (composingKey(event)) return;
         if (event.key === "Escape") {
           event.preventDefault();
           close();
@@ -897,7 +898,7 @@ export function PageNoteLayer({ commentKey, displayId, workspace, actions, add, 
         if (event.target === event.currentTarget) close();
       }}
       onKeyDown={(event) => {
-        if (event.key !== "Escape" || event.nativeEvent.isComposing) return;
+        if (event.key !== "Escape" || composingKey(event)) return;
         event.preventDefault();
         event.stopPropagation();
         close();

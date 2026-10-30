@@ -1,5 +1,5 @@
-// The native host's smallest window and largest text must contain all footer
-// controls and the Usage sheet. The provider alone is a fixed external shim.
+// The native host's smallest window and largest text must contain the footer's
+// chips, the rail's View, Help and Settings, and the Usage sheet. The provider alone is a fixed external shim.
 import fs from "node:fs";
 import path from "node:path";
 import { expect, type ElectronApplication } from "@playwright/test";
@@ -75,9 +75,12 @@ test("three usage chips, View, Help and Settings fit the minimum native window i
           return box.left >= bounds.left && box.right <= bounds.right && box.top >= bounds.top && box.bottom <= bounds.bottom;
         });
       });
-      // Three chips, View, Help and Settings.
-      expect(boxes).toHaveLength(6);
+      // The three chips in the footer; View, Help and Settings stand at the device rail's foot.
+      expect(boxes).toHaveLength(3);
       expect(boxes.every(Boolean)).toBe(true);
+      const menus = page.locator("[data-device-rail] [data-rail-menus] button");
+      await expect(menus).toHaveCount(3);
+      for (const menu of await menus.all()) await expect(menu).toBeInViewport({ ratio: 1 });
       await capture(`usage-footer-${language}-electron`);
       await chips.first().click();
       const popover = page.locator('[data-usage-popover]');

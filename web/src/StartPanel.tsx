@@ -22,6 +22,7 @@ import { Input } from "./components/ui/input";
 import { catalogWorkspaces, localDeviceId } from "./snapshot";
 import { projectBaseBranch } from "./projectSettings";
 import { branchProblem } from "./workspaceManage";
+import { composingKey } from "./keys";
 import { followStartedPane } from "./opening";
 
 // The start panel (PRD home-device-rail D-17..D-21, B23-B31): ⌘K's position
@@ -196,7 +197,7 @@ function StartPanel({ actions }: { actions: Actions }) {
         className="h-(--size-control-lg) w-full bg-transparent px-md pt-md pb-md text-body text-foreground outline-none placeholder:text-muted-foreground"
         onChange={(event) => useStartPanel.getState().setText(event.target.value)}
         onKeyDown={(event) => {
-          if (event.key !== "Enter" || event.nativeEvent.isComposing) return;
+          if (event.key !== "Enter" || composingKey(event)) return;
           event.preventDefault();
           start();
         }}

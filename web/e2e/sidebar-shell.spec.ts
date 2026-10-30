@@ -249,12 +249,13 @@ test("the Help menu opens the shortcut sheet, copies the diagnostics, opens the 
     await page.context().route("https://github.com/**", (route) => route.fulfill({ status: 200, contentType: "text/html", body: "<title>new issue</title>" }));
     const trigger = page.locator("[data-help-menu-trigger]");
     const settings = page.locator("[data-open-settings]");
-    // B13: `?` sits before the gear.
+    // B13: `?` sits above the gear at the device rail's foot.
     await expect(trigger).toHaveAccessibleName("Help");
+    await expect(page.locator("[data-device-rail] [data-rail-menus] [data-help-menu-trigger]")).toHaveCount(1);
     const triggerBox = (await trigger.boundingBox())!;
     const settingsBox = (await settings.boundingBox())!;
-    expect(triggerBox.x + triggerBox.width).toBeLessThanOrEqual(settingsBox.x);
-    expect(Math.round(triggerBox.y)).toBe(Math.round(settingsBox.y));
+    expect(triggerBox.y + triggerBox.height).toBeLessThanOrEqual(settingsBox.y);
+    expect(Math.round(triggerBox.x)).toBe(Math.round(settingsBox.x));
 
     // B13: the actions, then the version as a line to read.
     await trigger.click();
