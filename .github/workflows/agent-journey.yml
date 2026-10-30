@@ -46,6 +46,10 @@ on:
         description: Run the stand-ins and the Windows forms, which measure Hide and no agent CLI.
         type: boolean
         default: true
+      agents:
+        description: Comma-separated adapter IDs the fake lane measures; every active adapter when empty.
+        type: string
+        default: ''
   workflow_call:
     inputs:
       source-sha:
