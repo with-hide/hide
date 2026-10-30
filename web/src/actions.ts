@@ -1406,6 +1406,10 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
     connectHerdrProfile(profileId: string) {
       dispatch({ schema_version: 2, kind: "herdr_profile_connect", payload: { profile_id: profileId, host_consent: true } });
     },
+    /** The Devices step went away: the sign-ins its own Connect started end, as a closed screen's do (B8). */
+    withdrawFirstRunSignIns() {
+      dispatch({ schema_version: 2, kind: "first_run_sign_in_withdraw", payload: {} });
+    },
 
     /** Needs You, with an optional Done choice for the reopened wizard's Not now. */
     setProductAnalytics(enabled: boolean) {

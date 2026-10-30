@@ -522,6 +522,11 @@ function StartStep({ actions, reopened, onBack }: { actions: Actions; reopened: 
   const [host, setHost] = useState<string | null>(null);
   const added = registrations.find((row) => !row.home && !known.has(row.id) && row.device_id === host) ?? null;
   const [adding, setAdding] = useState(() => !!useShellStore.getState().rest?.ui_state?.first_run_choices?.project_form?.view);
+  // The Devices step was skipped because neither the ssh config nor Herdr names a machine: one line says where they go later.
+  const noDevices = useShellStore((s) => {
+    const listed = s.rest?.status?.herdr_profiles;
+    return listed?.state === "ready" && listed.profiles.length === 0 && !listed.truncated;
+  });
   const finish = () => {
     if (reopened) useSetupWalk.getState().close();
     else actions.advanceFirstRun("project");
@@ -590,6 +595,7 @@ function StartStep({ actions, reopened, onBack }: { actions: Actions; reopened: 
           onClick={() => showAdding(true)}
           data-first-run-way="project"
         />
+        {noDevices ? <Note data-first-run-devices-later="true">{t("firstRun.start.devicesLater")}</Note> : null}
       </DialogBody>
       <DialogFooter>
         <Button variant="ghost" onClick={onBack} data-first-run-back="true">{t("firstRun.back")}</Button>

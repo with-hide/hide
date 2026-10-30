@@ -1827,8 +1827,15 @@ export type FirstRunProjectForm = { view?: "add" | "clone" | "create" | ""; url?
 export type FirstRunChoices = { agents?: string[] | null; /** Null until a device row is checked or unchecked (PRD wsl-device B1). */ devices?: string[] | null; project_device?: string | null; project_path?: string; project_form?: FirstRunProjectForm; notifications_answered?: boolean };
 export type HerdrProfileRefusal = "no_consent" | "disabled" | "invalid_target" | "discovery_pending" | "device_limit" | "profile_moved";
 
+/** A machine the first-run Devices step offers: a saved Herdr profile, an ssh config Host, both as one row, or this PC's WSL. */
 export type HerdrProfile = {
   id: string; label: string; target: string; session: string; enabled: boolean;
+  /** Herdr saved it. */
+  herdr: boolean;
+  /** The ssh config Host the row is, or the one the profile's target is. */
+  ssh_host: string | null;
+  /** `user@host:port` as `ssh -G` resolved the Host. */
+  address: string | null;
   /** Set on the one row that is this PC's default WSL distribution, not a saved profile (PRD wsl-device B1). */
   wsl_distro?: string | null;
   added_as: string | null; problem: string | null; device_id: string | null;

@@ -37,6 +37,38 @@ const REFUSED_STOP: Record<OnboardingSystem, string> = {
   windows: "$env:HIDE_STATE_DIR = 'D:\\hide'; & 'C:\\Users\\me\\.hide\\runtime\\0.4.1\\hide.exe' stop; Remove-Item Env:HIDE_STATE_DIR",
 };
 
+/**
+ * The devices the first-run step's Connect added in the sign-in scenes, as the
+ * core's rows report them: what ssh asks each now, or why each stopped
+ * (PRD system-ssh-device-link B4-B13).
+ */
+function sshDevices(state: string, kit: unknown) {
+  const device = (id: string, patch: Record<string, unknown>) => ({ agent_scope: EMPTY_GALLERY_SCOPE, id, label: id, kind: "remote", state: "unavailable", message: null, ssh_alias: id, agent_count: 0, test: null, kit, problem: null, sign_in: null, ...patch });
+  if (state === "devices-signin") {
+    return [
+      device("mini", { state: "ready" }),
+      device("config-ubuntu", { sign_in: { question: 1, key_command: null, kind: "browser", url: "https://login.tailscale.com/a/1f2e3d4c" } }),
+      device("office", { sign_in: { question: 2, key_command: null, kind: "secret", prompt: "dev@10.0.0.7's password:" } }),
+      device("lab", { sign_in: { question: 3, key_command: null, kind: "host_key", host: "lab.local (192.168.0.21)", fingerprint: "SHA256:Xk3vQ8m2Lr7aZ0bN4cD1eF6gH9iJ2kpT9fQ" } }),
+      device("home-nas", { state: "ready", kit: { agents: [], components: [], busy: true } }),
+    ];
+  }
+  if (state === "devices-ssh-failed") {
+    return [
+      device("office", { problem: "sign_in_needed" }),
+      device("lab", { problem: "host_key_changed" }),
+      device("home-nas", { problem: "cannot_connect", message: "ssh: connect to host nas port 22: Operation timed out" }),
+    ];
+  }
+  return [];
+}
+
+function sshRemotes(state: string) {
+  if (state === "devices-signin") return [{ target_id: "mini", state: "connected" }, ...["config-ubuntu", "office", "lab", "home-nas"].map((id) => ({ target_id: id, state: "connecting" }))];
+  if (state === "devices-ssh-failed") return ["office", "lab", "home-nas"].map((id) => ({ target_id: id, state: "action_required" }));
+  return [];
+}
+
 export const ONBOARDING_STATES = [
   "agents",
   "agents-changes",
@@ -53,6 +85,8 @@ export const ONBOARDING_STATES = [
   "devices-long32",
   "devices-wsl",
   "devices-wsl1",
+  "devices-signin",
+  "devices-ssh-failed",
   "notifications",
   "notifications-asking",
   "notifications-on",
@@ -272,14 +306,20 @@ function sceneRest(state: OnboardingState, system: OnboardingSystem): SnapshotRe
   const kit = refused
     ? { agents, components: [], busy: false, refused: { cause: "unsafe", path: system === "windows" ? "D:\\" : system === "linux" ? "/srv/team" : "/Volumes/Team", variable: "HIDE_STATE_DIR", stop: REFUSED_STOP[system] } }
     : { agents, components: [{ id: "cli", label: "hide", state: "off", why: null, location: system === "windows" ? `${HOME}/.local/bin/hide.cmd` : `${HOME}/.local/bin/hide` }], busy: false };
-  const profile = (id: string, label: string, patch: Partial<HerdrProfile> = {}): HerdrProfile => ({ id, label, target: `${id}@work.example`, session: "work", enabled: true, added_as: null, device_id: null, problem: null, connect_state: "saved", connect_refusal: null, ...patch });
+  const profile = (id: string, label: string, patch: Partial<HerdrProfile> = {}): HerdrProfile => ({ id, label, target: `${id}@work.example`, session: "work", herdr: true, ssh_host: null, address: null, enabled: true, added_as: null, device_id: null, problem: null, connect_state: "saved", connect_refusal: null, ...patch });
+  // A Host of the account's ssh config, which Add device lists too, and one that is also a saved Herdr profile.
+  const host = (alias: string, address: string, patch: Partial<HerdrProfile> = {}): HerdrProfile => profile(`ssh:${alias}`, alias, { target: alias, session: "default", herdr: false, ssh_host: alias, address, ...patch });
+  const linked = (alias: string, connect_state: string) => ({ added_as: alias, device_id: alias, connect_state });
   const savedProfiles = state === "devices-long32" ? Array.from({ length: 32 }, (_, index) => profile(`research-${index}`, `연구 개발팀의 아주 긴 기기 이름 ${index + 1} · 프로젝트 빌드 서버`, { target: `developer-${index}@very-long-research-hostname.engineering.example.test:2222`, session: "research-team-project-session-with-a-long-name" }))
     : state === "devices-disabled" ? [profile("build", "Build server", { enabled: false, problem: "disabled" }), profile("existing", "Design Mac", { added_as: "Design Mac", device_id: "existing", connect_state: "added" }), profile("invalid", "Unavailable configuration", { problem: "invalid_target" })]
     : state === "devices-partial" ? [profile("build", "Build server", { added_as: "Build server", device_id: "build", connect_state: "connected" }), profile("research", "Research server", { added_as: "Research server", device_id: "research", connect_state: "failed", connect_refusal: null })]
     // This PC's default WSL distribution, which the core lists first (PRD wsl-device B1, B29).
     : state === "devices-wsl" ? [profile("wsl:Ubuntu", "WSL Ubuntu", { target: "Ubuntu", session: "default", wsl_distro: "Ubuntu" }), profile("build", "Build server")]
     : state === "devices-wsl1" ? [profile("wsl:Ubuntu-20.04", "WSL Ubuntu-20.04", { target: "Ubuntu-20.04", session: "default", wsl_distro: "Ubuntu-20.04", problem: "wsl1" }), profile("build", "Build server")]
-    : [profile("build", "Build server"), profile("research", "Research server", { session: "experiments" })];
+    : state === "devices-signin" ? [host("mini", "grab@mini.tail56d7a2.ts.net:22", linked("mini", "connected")), host("config-ubuntu", "ubuntu@config-ubuntu:22", linked("config-ubuntu", "connecting")), host("office", "dev@10.0.0.7:22", linked("office", "connecting")), host("lab", "hoyeon@lab.local:22", linked("lab", "connecting")), host("home-nas", "me@nas:22", linked("home-nas", "connecting"))]
+    : state === "devices-ssh-failed" ? [host("office", "dev@10.0.0.7:22", linked("office", "failed")), host("lab", "hoyeon@lab.local:22", linked("lab", "failed")), host("home-nas", "me@nas:22", linked("home-nas", "failed"))]
+    // The account's ssh config Hosts beside Herdr's profiles: one row per machine, a chip for where it came from.
+    : [host("config-ubuntu", "ubuntu@config-ubuntu:22"), profile("mini", "mini", { target: "mini", session: "main", ssh_host: "mini", address: "grab@mini.tail56d7a2.ts.net:22" }), host("office", "dev@10.0.0.7:22"), profile("gpu-box", "gpu-box", { target: "me@gpu-box", session: "default", address: null, added_as: "gpu-box", device_id: "gpu-box", connect_state: "added" })];
   const deviceStep = state.startsWith("devices");
   return {
     revision: 1,
@@ -288,20 +328,20 @@ function sceneRest(state: OnboardingState, system: OnboardingSystem): SnapshotRe
       workspaces: projects,
       inactive_projects: [],
       agents: [],
-      devices: [{ agent_scope: EMPTY_GALLERY_SCOPE, id: "local", label: "This Mac", kind: "local", state: "local", message: null, ssh_alias: null, agent_count: 0, test: null, kit }, ...(state === "devices-partial" ? [{ agent_scope: EMPTY_GALLERY_SCOPE, id: "build", label: "Build server", kind: "remote", state: "connected", message: null, ssh_alias: "build", agent_count: 0, test: null, kit }] : [])],
+      devices: [{ agent_scope: EMPTY_GALLERY_SCOPE, id: "local", label: "This Mac", kind: "local", state: "local", message: null, ssh_alias: null, agent_count: 0, test: null, kit }, ...(state === "devices-partial" ? [{ agent_scope: EMPTY_GALLERY_SCOPE, id: "build", label: "Build server", kind: "remote", state: "connected", message: null, ssh_alias: "build", agent_count: 0, test: null, kit }] : []), ...sshDevices(state, kit)],
       focused_device_id: "local",
       focused_checkout_id: null,
     },
     ui_state: {
       left_sidebar_visible: true,
       first_run: { version: 1, step },
-      first_run_choices: { devices: state === "devices-partial" ? ["build", "research"] : state.startsWith("devices-wsl") ? null : [], project_form: { view: state === "project-add" ? "add" : "" } },
+      first_run_choices: { devices: state === "devices-partial" ? ["build", "research"] : state === "devices" ? ["ssh:config-ubuntu", "mini"] : state === "devices-signin" ? ["ssh:mini", "ssh:config-ubuntu", "ssh:office", "ssh:lab", "ssh:home-nas"] : state === "devices-ssh-failed" ? ["ssh:office", "ssh:lab", "ssh:home-nas"] : state.startsWith("devices-wsl") ? null : [], project_form: { view: state === "project-add" ? "add" : "" } },
       agent_onboarding: state === "agents-refused" ? null : step === "agents" || step === "herdr" ? "pending" : "done",
       desktop_notifications: enabled,
       desktop_notifications_done: state === "settings-done-only" || state === "settings-both",
       workspace_registrations: [{ id: "home", label: "hide", path: `${HOME}/hide`, device_id: "local", pinned: false, home: true }, ...projects.map((row) => ({ id: row.id, label: row.label, path: row.path, device_id: "local", pinned: false }))],
     },
-    status: { ...sceneHerdr(state), background_ai: { enabled: true, provider: "claude", chosen: true, providers: providers(), unavailable_reason: null }, herdr_profiles: { state: state === "devices-loading" ? "loading" : state === "devices-failed" ? "failed" : "ready", error: state === "devices-failed" ? "Saved profiles could not be read" : null, profiles: deviceStep ? savedProfiles : [], truncated: false }, remote: state === "devices-partial" ? [{ target_id: "build", state: "connected" }, { target_id: "research", state: "error", message: "SSH access was refused" }] : [] },
+    status: { ...sceneHerdr(state), background_ai: { enabled: true, provider: "claude", chosen: true, providers: providers(), unavailable_reason: null }, herdr_profiles: { state: state === "devices-loading" ? "loading" : state === "devices-failed" ? "failed" : "ready", error: state === "devices-failed" ? "Saved profiles could not be read" : null, profiles: deviceStep ? savedProfiles : [], truncated: false }, remote: state === "devices-partial" ? [{ target_id: "build", state: "connected" }, { target_id: "research", state: "error", message: "SSH access was refused" }] : sshRemotes(state) },
   } as unknown as SnapshotRest;
 }
 

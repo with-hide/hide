@@ -12,7 +12,7 @@ import type { DispatchFn } from "./ws";
 
 vi.hoisted(() => { HTMLCanvasElement.prototype.getContext = () => null; });
 
-const profile = (id: string, patch: Partial<HerdrProfile> = {}): HerdrProfile => ({ id, label: id, target: `${id}@server.example`, session: "work", enabled: true, added_as: null, problem: null, device_id: null, connect_state: "saved", connect_refusal: null, ...patch });
+const profile = (id: string, patch: Partial<HerdrProfile> = {}): HerdrProfile => ({ id, label: id, target: `${id}@server.example`, session: "work", herdr: true, ssh_host: null, address: null, enabled: true, added_as: null, problem: null, device_id: null, connect_state: "saved", connect_refusal: null, ...patch });
 
 async function mount(profiles: HerdrProfiles, devices: string[] | null = []) {
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
@@ -57,7 +57,8 @@ it("requires a selection and explicit Connect, and never selects a disabled or a
   expect(view.events.map((event) => event.kind)).toEqual(["first_run_draft"]);
   await act(async () => button("device-connect").click());
   expect(view.events.at(-1)).toEqual({ schema_version: 2, kind: "herdr_profile_connect", payload: { profile_id: "one", host_consent: true } });
-  expect(button("device-connect").disabled).toBe(true);
+  // While it connects the main button is Next: nothing holds the way on, and a second press connects nothing.
+  expect(button("device-connect").textContent).toBe("Continue");
   await act(async () => button("back").click());
   expect(view.back).toHaveBeenCalledOnce();
   expect(view.events.filter((event) => event.kind === "herdr_profile_connect")).toHaveLength(1);
@@ -106,7 +107,7 @@ it("follows a recovered live connection over an earlier profile failure while ke
   const shown = () => document.querySelector('[data-first-run-device="recovered"]')?.getAttribute("data-device-state");
   await update("connecting");
   expect(shown()).toBe("connecting");
-  expect(button("device-connect").disabled).toBe(true);
+  expect(button("device-connect").disabled).toBe(false);
   await update("connected");
   expect(shown()).toBe("connected");
   expect(document.querySelector('[data-first-run-device-retry="recovered"]')).toBeNull();
@@ -145,7 +146,7 @@ it("checks this PC's default WSL distribution and sends it only when Connect is 
     expect(box.getAttribute("aria-label")).toBe("WSL Ubuntu · This PC (WSL)");
     expect(box.getAttribute("data-state")).toBe("checked");
     expect(document.querySelector("#herdr-profile-one")?.getAttribute("data-state")).toBe("unchecked");
-    expect(document.querySelector("[data-first-run-devices]")?.closest("[role=dialog]")?.textContent).toContain("Connect your devices to Hide");
+    expect(document.querySelector("[data-first-run-devices]")?.closest("[role=dialog]")?.textContent).toContain("Do you run agents on other machines too?");
     // Showing the step sends nothing: nothing is installed before the press.
     expect(view.events).toEqual([]);
     await act(async () => button("device-connect").click());
@@ -186,10 +187,95 @@ it("shows a WSL 1 or unfinished distribution as not connectable, with the comman
   await fresh.unmount();
 });
 
-it("keeps the saved-profile step as it was on a machine without WSL", async () => {
-  const view = await mount({ state: "ready", error: null, truncated: false, profiles: [profile("one")] }, null);
+it("titles the step the same with or without Herdr, and starts every row unchecked on a machine without WSL", async () => {
+  const view = await mount({ state: "ready", error: null, truncated: false, profiles: [profile("one"), host("box")] }, null);
   expect(document.querySelector("[data-first-run-wsl]")).toBeNull();
-  expect(document.querySelector("#herdr-profile-one")?.getAttribute("data-state")).toBe("unchecked");
-  expect(document.querySelector("[data-first-run-devices]")?.closest("[role=dialog]")?.textContent).toContain("Bring your Herdr devices into Hide");
+  expect(document.querySelectorAll('[role="checkbox"][data-state="checked"]')).toHaveLength(0);
+  expect(document.querySelector("[data-first-run-devices]")?.closest("[role=dialog]")?.textContent).toContain("Do you run agents on other machines too?");
   await view.unmount();
+});
+
+const host = (alias: string, patch: Partial<HerdrProfile> = {}) => profile(`ssh:${alias}`, { label: alias, target: alias, session: "default", herdr: false, ssh_host: alias, address: `me@${alias}.lan:22`, ...patch });
+const device = (id: string, patch: Record<string, unknown> = {}) => ({ id, label: id, kind: "remote", state: "unavailable", message: null, ssh_alias: id, agent_count: 0, test: null, problem: null, sign_in: null, ...patch });
+/** The store as the core reports it after the step's Connect added `rows`' devices. */
+const after = async (rows: HerdrProfile[], devices: ReturnType<typeof device>[], remote: { target_id: string; state: string }[]) => act(async () => useShellStore.setState((current) => ({
+  revision: current.revision + 1,
+  rest: { ui_state: { first_run_choices: { devices: rows.map((row) => row.id) } }, status: { herdr_profiles: { state: "ready", error: null, truncated: false, profiles: rows }, remote }, navigator: { devices } },
+}) as never));
+
+it("shows a machine only the ssh config names, with its address and source, and connects it", async () => {
+  const view = await mount({ state: "ready", error: null, truncated: false, profiles: [host("config-ubuntu")] }, null);
+  try {
+    expect(view.next).not.toHaveBeenCalled();
+    const row = document.querySelector('[data-first-run-device="ssh:config-ubuntu"]')!;
+    expect(row.textContent).toContain("me@config-ubuntu.lan:22");
+    expect([...row.querySelectorAll("[data-first-run-device-source]")].map((chip) => chip.textContent)).toEqual(["ssh config"]);
+    await act(async () => document.querySelector<HTMLButtonElement>("#herdr-profile-ssh\\:config-ubuntu")!.click());
+    await act(async () => button("device-connect").click());
+    expect(view.events.at(-1)).toEqual({ schema_version: 2, kind: "herdr_profile_connect", payload: { profile_id: "ssh:config-ubuntu", host_consent: true } });
+  } finally {
+    await view.unmount();
+  }
+});
+
+it("draws a machine that is both a Host and a saved profile as one row with both sources", async () => {
+  const view = await mount({ state: "ready", error: null, truncated: false, profiles: [profile("mini-main", { label: "mini", target: "mini", session: "main", ssh_host: "mini", address: "grab@mini.ts.net:22" })] }, null);
+  const chips = [...document.querySelectorAll('[data-first-run-device="mini-main"] [data-first-run-device-source]')].map((chip) => chip.textContent);
+  expect(chips).toEqual(["ssh config", "Saved in Herdr · Session main"]);
+  expect(document.querySelectorAll("[data-first-run-device]")).toHaveLength(1);
+  await view.unmount();
+});
+
+it("answers what ssh asks on the row, and a failure shows the device row's state and action", async () => {
+  const rows = [host("office", { device_id: "office", added_as: "office", connect_state: "connecting" }), host("lab", { device_id: "lab", added_as: "lab", connect_state: "failed" }), host("nas", { device_id: "nas", added_as: "nas", connect_state: "failed" }), host("old", { device_id: "old", added_as: "old", connect_state: "failed" })];
+  const view = await mount({ state: "ready", error: null, truncated: false, profiles: rows }, rows.map((row) => row.id));
+  await after(rows, [
+    device("office", { sign_in: { question: 4, key_command: null, kind: "secret", prompt: "dev@office's password:" } }),
+    device("lab", { problem: "host_key_changed" }),
+    device("nas", { problem: "cannot_connect", message: "ssh: connect to host nas port 22: Operation timed out" }),
+    device("old", { problem: "sign_in_needed" }),
+  ], [{ target_id: "office", state: "connecting" }, ...["lab", "nas", "old"].map((id) => ({ target_id: id, state: "action_required" }))]);
+  try {
+    expect(document.querySelector('[data-first-run-device="ssh:office"]')?.getAttribute("data-device-state")).toBe("signing_in");
+    const field = document.querySelector<HTMLInputElement>('[data-device-sign-in-field="office"]')!;
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(field, "hunter2");
+      field.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    await act(async () => document.querySelector<HTMLButtonElement>('[data-device-sign-in-submit="office"]')!.click());
+    expect(view.events.at(-1)).toEqual({ schema_version: 2, kind: "device_sign_in", payload: { device_id: "office", question: 4, reply: "text", text: "hunter2" } });
+    // A changed server key: the command to check it, and no retry.
+    expect(document.querySelector('[data-device-problem-command="lab"]')?.textContent).toContain("ssh lab");
+    expect(document.querySelector('[data-first-run-device-retry="ssh:lab"]')).toBeNull();
+    // A connection that could not be made: ssh's last line and Retry.
+    expect(document.querySelector('[data-device-message="nas"]')?.textContent).toBe("ssh: connect to host nas port 22: Operation timed out");
+    expect(document.querySelector('[data-first-run-device-retry="ssh:nas"]')?.textContent).toBe("Retry");
+    // A sign-in that is needed reads Sign in in Retry's place.
+    expect(document.querySelector('[data-first-run-device-retry="ssh:old"]')?.textContent).toBe("Sign in");
+  } finally {
+    await view.unmount();
+  }
+});
+
+it("never holds Next on a waiting question, and leaving the step after Connect ends its sign-ins", async () => {
+  const rows = [host("office")];
+  const view = await mount({ state: "ready", error: null, truncated: false, profiles: rows }, [rows[0]!.id]);
+  await act(async () => button("device-connect").click());
+  const connected = [host("office", { device_id: "office", added_as: "office", connect_state: "connecting" })];
+  await after(connected, [device("office", { sign_in: { question: 1, key_command: null, kind: "browser", url: "https://login.example/a/1" } })], [{ target_id: "office", state: "connecting" }]);
+  expect(document.querySelector('[data-first-run-devices-note="leave"]')).not.toBeNull();
+  expect(button("device-skip").disabled).toBe(false);
+  expect(button("device-connect").disabled).toBe(false);
+  await act(async () => button("device-connect").click());
+  expect(view.next).toHaveBeenCalledOnce();
+  expect(view.events.some((event) => event.kind === "first_run_sign_in_withdraw")).toBe(false);
+  await view.unmount();
+  expect(view.events.at(-1)).toEqual({ schema_version: 2, kind: "first_run_sign_in_withdraw", payload: {} });
+});
+
+it("leaving a step whose Connect was never pressed ends nothing", async () => {
+  const view = await mount({ state: "ready", error: null, truncated: false, profiles: [host("office")] }, null);
+  await act(async () => button("device-skip").click());
+  await view.unmount();
+  expect(view.events.some((event) => event.kind === "first_run_sign_in_withdraw")).toBe(false);
 });
