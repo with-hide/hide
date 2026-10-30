@@ -85,7 +85,7 @@ fn spawn_subscription_reader(
                         if sender
                             .send(CoordinatorMessage::SubscriptionLine {
                                 generation,
-                                line,
+                                line: Box::new(line),
                                 received_at: Instant::now(),
                             })
                             .is_err()

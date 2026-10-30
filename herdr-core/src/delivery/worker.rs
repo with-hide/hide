@@ -101,7 +101,7 @@ impl HumanNotice {
             .shared()
             .notify(
                 crate::engine::Wait::Small(Duration::from_millis(500)),
-                &self.english_title(),
+                self.english_title(),
                 &self.english_body(),
             )
             .map_err(|_| "call_failed")?

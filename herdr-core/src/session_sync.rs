@@ -316,7 +316,7 @@ pub(crate) enum CoordinatorMessage {
     Stop,
     SubscriptionLine {
         generation: u64,
-        line: crate::engine::EventLine,
+        line: Box<crate::engine::EventLine>,
         /// When the reader pulled the line off the socket, which is what
         /// places it before or after the bootstrap snapshot.
         received_at: Instant,

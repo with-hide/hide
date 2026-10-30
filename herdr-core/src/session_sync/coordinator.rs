@@ -632,7 +632,7 @@ fn run_coordinator(
                 } else {
                     ApplyMode::Strict
                 };
-                match line {
+                match *line {
                     Ok(SubscriptionLine::Event(event)) => {
                         if context.is_local() {
                             let (tab_id, pane_id, layout) = event.subject();
