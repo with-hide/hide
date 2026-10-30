@@ -268,7 +268,7 @@ function runningPlan(plan: PlanView | null): PlanView | null {
 
 /**
  * The 지금 block (PRD session-docs-and-assistant D-41): while the pane works
- * or asks, the request and what the agent does about it in its second row's
+ * or asks, the request and what the agent does about it in its turn's
  * words, `<request> → <now>`, and its running plan with `n/m`; the work it
  * delegated is 함께 진행한 세션's to say. Each part is drawn only when Hide holds it,
  * so with Hide AI off the request is its own first line and no part is made
@@ -282,7 +282,7 @@ function NowWork({ agent, plan }: { agent: AgentRow; plan: PlanView | null }) {
   const request = header?.request ? requestWords(t, header.request) : raw ? requestWords(t, { text: agent.request?.request_summary ?? raw.text.split(/\r?\n/, 1)[0] ?? null, images: raw.images }) : null;
   const response = turnResponse(t, header, agent);
   const running = runningPlan(plan);
-  // The second row's progress place: an ask's words, else a running plan's step, else the agent's own sentence.
+  // The turn's progress place: an ask's words, else a running plan's step, else the agent's own sentence.
   const now = response?.asks ? response.text ?? response.verb : (running ? planWorkLine(running) : null) ?? header?.progress ?? null;
   const asks = response?.asks ?? false;
   if (!request && !now && !running) return null;

@@ -6,7 +6,7 @@ import { createActions } from "./actions";
 import { TooltipProvider } from "./components/ui/tooltip";
 import { initializeInterfaceI18n } from "./i18n/instance";
 import { RELATION_ANSWER_TIMEOUT_MS } from "./lineage";
-import { PaneAskMark, PaneHeaderBand, PanePrChip, PaneRecordButton } from "./PaneHeaderBand";
+import { PaneAskMark, PaneHeadTurn, PaneHeaderBand, PanePrChip, PaneRecordButton } from "./PaneHeaderBand";
 import type { AgentRow, PaneBand, PaneHeader, PaneFocusRequest, SessionPull, SnapshotRest, Workspace } from "./snapshot";
 import { legacyAgentRow } from "../test/legacyAgentRow";
 import { sessionPull } from "../test/sessionPull";
@@ -44,7 +44,9 @@ async function mount(value = header, agents: AgentRow[] = [], options: { rest?: 
   const container = document.createElement("div");
   document.body.append(container);
   const root = createRoot(container);
-  await act(async () => root.render(<TooltipProvider><PaneHeaderBand paneId={options.paneId ?? "parent"} header={value} actions={actions}/></TooltipProvider>));
+  // The head's turn and the second row, as the pane draws them.
+  const paneId = options.paneId ?? "parent";
+  await act(async () => root.render(<TooltipProvider><header><PaneHeadTurn paneId={paneId} header={value} actions={actions}/></header><PaneHeaderBand paneId={paneId} header={value} actions={actions}/></TooltipProvider>));
   const answer = async (outcome: PaneFocusRequest) => {
     await act(async () => useShellStore.setState({rest: {status: {pane_focus_request: outcome}} as SnapshotRest}));
   };
@@ -100,13 +102,15 @@ it("puts the tree and the first children's marks first while keeping state count
   const agents = childrenFixture().map((row) => row.pane_id === "result" ? { ...row, mark: "done" as const } : row.pane_id === "idle" ? { ...row, mark: "quiet" as const } : row);
   const { container, unmount } = await mount({ working: true, notice: null, band: null }, agents);
   try {
-    const row = container.querySelector('[data-pane-header-band="children"]')!;
+    // One line keeps the children button on the head, before its tools: no row over the terminal.
+    expect(container.querySelector("[data-pane-header-band]")).toBeNull();
+    const row = container.querySelector("header")!;
     const trigger = row.querySelector<HTMLButtonElement>("[data-pane-tree]")!;
     expect(trigger.getAttribute("aria-label")).toBe("Child agents 5 · Child requests: 1 · Working: 1 · Reported results: 1 · Unknown state: 1 · Resting: 1");
     expect([...trigger.querySelectorAll("[data-pane-tree-mark]")].map((mark) => [mark.getAttribute("data-pane-tree-mark"), mark.getAttribute("data-mark")])).toEqual([["question", "quiet"], ["working", "going"], ["result", "done"]]);
     // The unknown child draws no mark, so it is counted with the rest.
     expect(trigger.textContent).toBe("+2");
-    expect(row.firstElementChild?.firstElementChild).toBe(trigger);
+    expect(trigger.previousElementSibling?.hasAttribute("data-pane-move-blank")).toBe(true);
     // An ordinary child's question is its parent's to answer: no raised count.
     expect(trigger.querySelector('[data-mark="turn"]')).toBeNull();
     expect(row.querySelectorAll("[data-pane-child-name]")).toHaveLength(0);
@@ -129,12 +133,12 @@ it("puts the pane's own approval after the tree and keeps raised counts in its n
   agents[0]!.descendant_mark = { kind: "raised", count: 2 };
   const { container, unmount } = await mount({ working: false, notice: null, band: { ...header.band!, kind: "approval", reason: "Run the verification command", raised: undefined, action: null, more: 1 } }, agents);
   try {
-    const row = container.querySelector('[data-pane-header-band="approval"]')!;
-    expect(row.firstElementChild?.firstElementChild?.getAttribute("data-pane-tree")).toBe("parent");
+    const row = container.querySelector('[data-pane-head-turn="approval"]')!;
+    expect(row.parentElement!.nextElementSibling?.getAttribute("data-pane-tree")).toBe("parent");
     expect(row.querySelector("[data-verb]")?.getAttribute("data-verb")).toBe("approval");
     expect(row.querySelector("[data-pane-band-who]")).toBeNull();
     expect(row.querySelector("[data-pane-child-names]")).toBeNull();
-    const trigger = row.querySelector<HTMLButtonElement>("[data-pane-tree]")!;
+    const trigger = container.querySelector<HTMLButtonElement>("[data-pane-tree]")!;
     expect(trigger.textContent).toBe("+2");
     expect(trigger.getAttribute("aria-label")).toContain("Descendant requests needing you: 2");
     expect(row.textContent).toContain("Run the verification command");
@@ -146,8 +150,8 @@ it("shows only the core-owned progress when no request waits, with or without ch
   const progress = "검증 로그를 확인하고 있어요";
   const withChildren = await mount({ working: true, notice: null, band: null, progress }, childrenFixture());
   try {
-    const row = withChildren.container.querySelector('[data-pane-header-band="progress"]')!;
-    expect(row.firstElementChild?.firstElementChild?.getAttribute("data-pane-tree")).toBe("parent");
+    const row = withChildren.container.querySelector('[data-pane-head-turn="progress"]')!;
+    expect(row.parentElement!.nextElementSibling?.getAttribute("data-pane-tree")).toBe("parent");
     expect(row.querySelector('[data-pane-own-progress]')?.textContent).toBe(progress);
     expect(row.textContent).not.toContain("Child question");
   } finally { await withChildren.unmount(); }
@@ -179,12 +183,13 @@ it("skips a child of unknown state and marks the next known one", async () => {
   } finally { await unmount(); }
 });
 
-it("says the parent waits on its working children after the request, in the sidebar's words", async () => {
+it("says the parent waits on its working children in the sidebar's words, its request only in the card's trigger name", async () => {
   const { container, unmount } = await mount({ working: false, notice: null, band: null, request: { text: "Find the missing requests", images: 0 }, waiting_on_children: 2 }, childrenFixture());
   try {
-    const row = container.querySelector('[data-pane-header-band="waiting"]')!;
-    expect(row.firstElementChild?.firstElementChild?.getAttribute("data-pane-tree")).toBe("parent");
-    expect(row.querySelector("[data-pane-turn-request-text]")?.textContent).toBe("Find the missing requests");
+    const row = container.querySelector('[data-pane-head-turn="waiting"]')!;
+    expect(row.parentElement!.nextElementSibling?.getAttribute("data-pane-tree")).toBe("parent");
+    expect(container.querySelector("[data-pane-turn-request-text]")).toBeNull();
+    expect(row.querySelector("[data-pane-turn-trigger]")?.getAttribute("aria-label")).toBe("Waiting on children · 2 working, Request: Find the missing requests");
     expect(row.querySelector("[data-pane-children-wait]")?.textContent).toBe("Waiting on children · 2 working");
     expect(row.querySelector("[data-pane-own-progress]")).toBeNull();
   } finally { await unmount(); }
@@ -341,7 +346,7 @@ it("turns a missing core answer into a retryable timeout beside the move", async
 it("leads a raised ask with its verb, then the child name and request", async () => {
   const {container, unmount} = await mount();
   try {
-    const band = container.querySelector("[data-pane-header-band=raised]")!;
+    const band = container.querySelector("[data-pane-head-turn=raised]")!;
     const who = band.querySelector("[data-pane-band-who]")!;
     expect(who.getAttribute("data-pane-band-who")).toBe("child");
     expect(who.textContent).toBe("자식 검증(child)");
@@ -358,7 +363,7 @@ it("names the raised descendant while a draft opens its holder", async () => {
   const raised = { ...header.band!.raised!, verb: "draft" as const, what: null, raised_pane_id: "leaf", origin_title: "Leaf", pane_id: "middle", title: "Middle", open_pane_id: "middle", path: ["Root", "Middle"] };
   const {container, unmount} = await mount({ ...header, band: { ...header.band!, action: { pane_id: "middle", label: "Middle" }, raised } }, [], {paneId: "root"});
   try {
-    const band = container.querySelector("[data-pane-header-band=raised]")!;
+    const band = container.querySelector("[data-pane-head-turn=raised]")!;
     expect(band.querySelector("[data-verb=draft]")?.textContent).toBe("Draft");
     expect(band.querySelector("[data-pane-band-who=leaf]")?.textContent).toBe("Leaf(descendant)");
     expect(band.textContent).toContain("My draft keeps the question from going through");
@@ -383,7 +388,7 @@ it("blocks Open on a raised descendant whose device is not connected and says wh
   try {
     await act(async () => useShellStore.setState({rest: {status: {pane_focus_request: null, remote: [{target_id: "mini", state: "unreachable", message: "ssh: connect to host mini port 22: Connection refused"}]}} as unknown as SnapshotRest}));
     expect(container.querySelector<HTMLButtonElement>("[data-pane-band-open]")!.disabled).toBe(true);
-    expect(container.querySelector("[data-pane-band-unreachable]")?.textContent).toBe("Hide cannot reach mini");
+    expect(container.querySelector("[data-pane-band-unreachable] [data-pane-band-open]")?.getAttribute("aria-label")).toBe("Open · Hide cannot reach mini");
   } finally { await unmount(); }
 });
 
@@ -467,7 +472,7 @@ it("leaves a header alone when a snapshot section it does not draw moves, and re
   const actions = createActions(() => true);
   const plain: PaneHeader = { working: false, notice: null, band: null };
   await act(async () => root.render(<TooltipProvider>
-    {["shell", "parent"].map((id) => <Profiler key={id} id={id} onRender={() => { draws[id] = (draws[id] ?? 0) + 1; }}><PaneHeaderBand paneId={id} header={plain} actions={actions} /></Profiler>)}
+    {["shell", "parent"].map((id) => <Profiler key={id} id={id} onRender={() => { draws[id] = (draws[id] ?? 0) + 1; }}><PaneHeadTurn paneId={id} header={plain} actions={actions} /><PaneHeaderBand paneId={id} header={plain} actions={actions} /></Profiler>)}
   </TooltipProvider>));
   try {
     expect(container.querySelector('[data-pane-tree="parent"]')).not.toBeNull();
@@ -565,33 +570,63 @@ it("words the pane's own ask by its verb and dims it once it is read", async () 
   for (const [value, text] of cases) {
     const { container, unmount } = await mount(value, [], { paneId: "solo" });
     try {
-      const row = container.querySelector(`[data-pane-header-band="${value.band!.kind}"]`)!;
-      expect(row.textContent).toBe(text);
+      const row = container.querySelector(`[data-pane-head-turn="${value.band!.kind}"]`)!;
+      expect(row.querySelector("[data-pane-turn-trigger]")!.textContent).toBe(text);
       expect(row.querySelector("[data-pane-band-read]")).toBeNull();
       expect(row.querySelector("[data-pane-band-open]")).toBeNull();
       // Only what the operator answers is drawn in the warning colour; work left is not an ask.
       const asks = value.band!.kind !== "stopped";
-      expect(row.className.includes("border-warning")).toBe(asks);
       expect(row.querySelector("[data-verb]")!.className.includes("text-warning")).toBe(asks);
+      expect(row.querySelector("[data-verb] + span")!.className.includes("text-warning")).toBe(asks);
     } finally { await unmount(); }
   }
   const { container, unmount } = await mount(own("answer", "Deploy to staging first?", true), [], { paneId: "solo" });
   try {
-    expect(container.querySelector('[data-pane-header-band="answer"] [data-pane-band-read="true"]')?.textContent).toBe("QuestionDeploy to staging first?");
+    expect(container.querySelector('[data-pane-head-turn="answer"] [data-pane-band-read="true"]')?.textContent).toBe("QuestionDeploy to staging first?");
   } finally { await unmount(); }
 });
 
-it("draws no second row for a pane with nothing waiting and no children", async () => {
+it("draws no turn for a pane with nothing waiting and no children", async () => {
   const { container, unmount } = await mount({ working: false, notice: null, band: null }, [], { paneId: "solo" });
   try {
-    expect(container.querySelector("[data-pane-header-band]")).toBeNull();
+    expect(container.querySelector("[data-pane-header-band], [data-pane-head-turn]")).toBeNull();
   } finally { await unmount(); }
 });
 
-// PRD pane-last-request B1, B10, B11: the second row leads with the turn's
-// request, `<request> → <answer>` with no word before it, while the core says it shows the
-// turn; a request with no words counts its images.
-it("leads the row with the turn's request before its ask, progress or result", async () => {
+// One line, the default, puts the one thing the turn says now on the head
+// after `·`: an ask, progress or a result, never the request, whose words ride
+// the trigger's name for the card that shows them.
+it("says one thing of the turn on the head in one line, leaving the request to the card", async () => {
+  const request = { text: "Proceed as proposed + check unclear states", images: 0 };
+  const ask: PaneBand = { kind: "answer", reason: "Bundle questions 1-3 into one PR?", since_unix_ms: null, read: false, action: null, more: 0 };
+  const cases: [PaneHeader, string | null, string | null][] = [
+    [{ working: false, notice: null, band: ask, request }, "answer", "QuestionBundle questions 1-3 into one PR?"],
+    [{ working: true, notice: null, band: null, progress: "Reading the status model", request }, "progress", "Reading the status model"],
+    [{ working: true, notice: null, band: null, request }, null, null],
+    [{ working: false, notice: null, band: null, progress: "Remote reads every 3 s, PR merged", finished: true, request }, "finished", "DoneRemote reads every 3 s, PR merged"],
+  ];
+  for (const [value, kind, text] of cases) {
+    const { container, unmount } = await mount(value, [], { paneId: "solo" });
+    try {
+      expect(container.querySelector("[data-pane-header-band]"), "nothing is drawn over the terminal").toBeNull();
+      expect(container.querySelector("[data-pane-turn-request]")).toBeNull();
+      const turn = container.querySelector("[data-pane-head-turn]");
+      expect(turn?.getAttribute("data-pane-head-turn") ?? null).toBe(kind);
+      if (!turn) continue;
+      expect(turn.parentElement!.hasAttribute("data-pane-move-blank")).toBe(true);
+      const trigger = turn.querySelector("[data-pane-turn-trigger]")!;
+      expect(trigger.textContent).toBe(text);
+      expect(trigger.getAttribute("aria-label")).toContain(`Request: ${request.text}`);
+      // A pane too narrow for the words leaves the status mark to say it.
+      expect(turn.className).toContain("pane-turn-room:flex");
+    } finally { await unmount(); }
+  }
+});
+
+// PRD pane-last-request B1, B10, B11: two lines lead the second row with the
+// turn's request, `<request> → <answer>` with no word before it, while the core
+// says it shows the turn; a request with no words counts its images.
+it("leads the two-line row with the turn's request before its ask, progress or result", async () => {
   const request = { text: "Proceed as proposed + check unclear states", images: 0 };
   const ask: PaneBand = { kind: "answer", reason: "Bundle questions 1-3 into one PR?", since_unix_ms: null, read: false, action: null, more: 0 };
   const cases: [PaneHeader, string, string][] = [
@@ -602,17 +637,15 @@ it("leads the row with the turn's request before its ask, progress or result", a
     [{ working: false, notice: null, band: null, finished: true, request: { text: null, images: 2 } }, "finished", "2 images→Done"],
   ];
   for (const [value, kind, text] of cases) {
-    const { container, unmount } = await mount(value, [], { paneId: "solo" });
+    const { container, unmount } = await mount(value, [], { paneId: "solo", rest: { status: { pane_focus_request: null }, ui_state: { pane_turn_row_mode: "two_lines" } } as SnapshotRest });
     try {
+      expect(container.querySelector("[data-pane-head-turn]")).toBeNull();
       const row = container.querySelector(`[data-pane-header-band="${kind}"]`)!;
       expect(row.textContent).toBe(text);
       // A working turn with nothing beyond its request draws the request
       // alone; every other turn has the request and the answer as its parts.
       expect([...row.querySelectorAll("[data-pane-turn-part]")].map((part) => part.getAttribute("data-pane-turn-part"))).toEqual(kind === "request" ? ["request"] : ["request", "answer"]);
       expect(row.querySelector("[data-pane-turn-request]")?.getAttribute("aria-label")).toBe(`Request: ${text.split("→")[0]}`);
-      // One line, the default, cuts an ask as it cuts a quiet turn: nothing wraps over the terminal.
-      expect(row.classList.contains("flex-wrap")).toBe(false);
-      expect(row.querySelector('[data-pane-turn-part="request"]')!.classList.contains("max-w-2/5")).toBe(kind !== "request");
     } finally { await unmount(); }
   }
 });
@@ -634,14 +667,14 @@ function turnAgent(): AgentRow {
   } as Partial<AgentRow>);
 }
 
-// PRD pane-last-request B6-B9: a press or focus on the request opens the turn
-// card under it, the pointer passing over opens nothing, and Esc closes the
+// PRD pane-last-request B6-B9: a press or focus on the head's turn opens the
+// turn card under it, the pointer passing over opens nothing, and Esc closes the
 // card and stops there.
-it("opens the turn card from the request on a press, not on hover, until Esc", async () => {
+it("opens the turn card from the head's turn on a press, not on hover, until Esc", async () => {
   const value: PaneHeader = { working: false, notice: null, band: { kind: "answer", reason: "Bundle questions 1-3 into one PR?", since_unix_ms: null, read: false, action: null, more: 0 }, request: { text: "Proceed as proposed + check unclear states", images: 0 } };
   const { container, unmount } = await mount(value, [turnAgent()], { paneId: "solo", rest: { status: { pane_focus_request: null }, terminal: { headers: { solo: value } } } as SnapshotRest });
   const card = () => document.querySelector<HTMLElement>("[data-pane-turn-card=solo]");
-  const button = () => container.querySelector<HTMLButtonElement>("[data-pane-turn-request=solo]")!;
+  const button = () => container.querySelector<HTMLButtonElement>("[data-pane-turn-trigger=solo]")!;
   try {
     expect(card()).toBeNull();
     await act(async () => { button().dispatchEvent(new MouseEvent("pointerover", { bubbles: true })); vi.advanceTimersByTime(1_000); });
@@ -683,7 +716,7 @@ it("moves the keyboard into the turn card with Tab and back", async () => {
   const value: PaneHeader = { working: false, notice: null, band: { kind: "answer", reason: "Bundle questions 1-3 into one PR?", since_unix_ms: null, read: false, action: null, more: 0 }, request: { text: "Proceed as proposed + check unclear states", images: 0 } };
   const { container, unmount } = await mount(value, [turnAgent()], { paneId: "solo", rest: { status: { pane_focus_request: null }, terminal: { headers: { solo: value } } } as SnapshotRest });
   const card = () => document.querySelector<HTMLElement>("[data-pane-turn-card=solo]");
-  const button = () => container.querySelector<HTMLButtonElement>("[data-pane-turn-request=solo]")!;
+  const button = () => container.querySelector<HTMLButtonElement>("[data-pane-turn-trigger=solo]")!;
   const record = () => card()?.querySelector<HTMLButtonElement>("[data-turn-card-record]") ?? null;
   const key = (target: Element, init: KeyboardEventInit) => act(async () => { target.dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, cancelable: true, ...init })); });
   const layers = () => useUiStore.getState().escapeLayers;
@@ -731,9 +764,9 @@ it("opens no card on the record button's hover", async () => {
   } finally { await act(async () => root.unmount()); }
 });
 
-// The View menu's turn row mode (docs/UI_BEHAVIOR.md, Agent logo view mode):
+// The View menu's turn row mode (docs/UI_BEHAVIOR.md, Pane turn row mode):
 // two lines stack the request over the answer, and off draws no turn while a
-// parent keeps its children button and the pane's own ask rides its head.
+// parent keeps its children button on the head and the pane's own ask rides it.
 it("stacks the turn on two lines and draws none when off, keeping the children button and the pane's own ask", async () => {
   const request = { text: "Proceed as proposed", images: 0 };
   const ask: PaneBand = { kind: "answer", reason: "Bundle into one PR?", since_unix_ms: null, read: false, action: null, more: 0 };
@@ -756,15 +789,16 @@ it("stacks the turn on two lines and draws none when off, keeping the children b
 
   const off = await mount({ working: true, notice: null, band: null, progress: "Reading the status model", request }, [], { paneId: "solo", rest: rest("off") });
   try {
-    expect(off.container.querySelector("[data-pane-header-band]")).toBeNull();
+    expect(off.container.querySelector("[data-pane-header-band], [data-pane-head-turn]")).toBeNull();
     expect(off.container.querySelector("[data-pane-working-line]")).not.toBeNull();
   } finally { await off.unmount(); }
 
+  // Off keeps a parent's children button on the head, adding no row over the terminal.
   const parent = await mount(header, childrenFixture(), { rest: rest("off") });
   try {
-    const row = parent.container.querySelector('[data-pane-header-band="children"]')!;
-    expect(row.querySelector("[data-pane-tree]")).not.toBeNull();
-    expect(row.querySelector("[data-pane-band-open], [data-pane-turn-request]")).toBeNull();
+    expect(parent.container.querySelector("[data-pane-header-band], [data-pane-head-turn]")).toBeNull();
+    expect(parent.container.querySelector("header [data-pane-tree]")).not.toBeNull();
+    expect(parent.container.querySelector("[data-pane-band-open], [data-pane-turn-request], [data-pane-turn-trigger]")).toBeNull();
   } finally { await parent.unmount(); }
 });
 
@@ -790,7 +824,7 @@ it("puts the pane's own ask on its head only while the turn row is off", async (
   expect(await draw(header, "off")).toBeNull();
 });
 
-it("says a Conductor's waiting decision on its second line, else the nodes at work, and nothing when no node runs (PRD mission-plan-visibility B9)", async () => {
+it("says a Conductor's waiting decision on its head, else the nodes at work, and nothing when no node runs (PRD mission-plan-visibility B9)", async () => {
   const conductor = legacyAgentRow({ pane_id: "parent", agent_kind: "claude", session_id: "s-c", device_id: "mac", identity_label: "root", group: "working", activity: "working", status_code: "working" } as Partial<AgentRow>);
   const node = (key: string, status: string) => ({ key, title: `${key} title`, kind: "change", depends_on: [], status, blocked: null, delivery: "pr", worker: null, agent_id: null, pane_id: null, machine: null, pr: null, base_pr: null, branch: null, pr_state: null, pr_url: null, stage: null, attempts: 0, line: null, change: null, review: null, criteria: [], criteria_met: 0, criteria_skipped: 0, external: null, unread: false, reopened: 0, started_at_unix_ms: null, finished_at_unix_ms: null });
   const mission = (decision: string | null, nodes = [node("api", "working"), node("ui", "review"), node("docs", "planned")]) => ({ id: "m", title: "Ship", workspace_id: "w", project: "/repo", checkout_path: "/repo", device_id: "mac", status: "running", scope: "pr", cap: 4, exempt: false, strength: null, other_vendor: null, conductor: { pane_id: "parent", name: "c", agent_kind: "claude", session: null, present: true }, nodes, merge_order: [], check: null, github: null, decision, delay: null, report: null, created_at_unix_ms: 1, started_at_unix_ms: 1, closed_at_unix_ms: null, running: 2, stale: false, github_stale: false, github_read_at_unix_ms: null });
@@ -816,12 +850,12 @@ it("says a Conductor's waiting decision on its second line, else the nodes at wo
   const ownBand = (kind: PaneBand["kind"]): PaneHeader => ({ working: false, notice: null, band: { kind, reason: "Waiting for the workers", since_unix_ms: null, read: false, action: null, more: 0 } });
   const stopped = await mount(ownBand("stopped"), [conductor], { rest: rest("Which base?") });
   try {
-    expect(stopped.container.querySelector("[data-pane-header-band]")?.getAttribute("data-pane-header-band")).toBe("progress");
+    expect(stopped.container.querySelector("[data-pane-head-turn]")?.getAttribute("data-pane-head-turn")).toBe("progress");
     expect(stopped.container.querySelector<HTMLElement>("[data-pane-own-progress]")?.textContent).toBe("! Which base?");
   } finally { await stopped.unmount(); }
   const asking = await mount(ownBand("answer"), [conductor], { rest: rest("Which base?") });
   try {
-    expect(asking.container.querySelector("[data-pane-header-band]")?.getAttribute("data-pane-header-band")).toBe("answer");
+    expect(asking.container.querySelector("[data-pane-head-turn]")?.getAttribute("data-pane-head-turn")).toBe("answer");
     expect(asking.container.querySelector("[data-pane-own-progress]")).toBeNull();
   } finally { await asking.unmount(); }
   // No node at work: the mission line owns the place, so the agent's own progress does not stand in.
