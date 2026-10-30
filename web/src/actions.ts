@@ -57,6 +57,9 @@ import {
   visibleTab,
   type AgentRow,
   type Checkout,
+  type DeskAgentId,
+  type DeskLocation,
+  type DeskMention,
   type EditorDocumentSnapshot,
   type EditorTabSnapshot,
   type ForkPlacement,
@@ -2172,6 +2175,66 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
     /** One operator action on a row of the opened Project's 제안 tab (PRD hide-ai-suggestions B10-B16). */
     suggestionAction(workspaceId: string, id: string, action: SuggestionAction, preview?: string) {
       dispatch({ schema_version: 2, kind: "suggestion_action", payload: { workspace_id: workspaceId, id, action, ...(preview === undefined ? {} : { preview }) } });
+    },
+
+    /** Opens Desk's room (PRD Desk 1차 B1). */
+    openDesk() {
+      ui().setScreen({ kind: "desk" });
+    },
+
+    /** One message to Desk's agent with the sessions and projects it names (B7, B18). */
+    deskSend(text: string, mentions: readonly DeskMention[]) {
+      dispatch({ schema_version: 2, kind: "desk_send", payload: { text, mentions: mentions.map(({ kind, id, name }) => ({ kind, id, name })) } });
+    },
+
+    /** `중지`: ends Desk's turn and nothing it started (B7). */
+    deskStop() {
+      dispatch({ schema_version: 2, kind: "desk_stop", payload: {} });
+    },
+
+    /** `한 번 허용` or `거절` on an approval card (B14). */
+    deskApproval(id: number, allow: boolean) {
+      dispatch({ schema_version: 2, kind: "desk_approval", payload: { id, allow } });
+    },
+
+    /** `＋ 새 대화` (B10). */
+    deskNewConversation() {
+      dispatch({ schema_version: 2, kind: "desk_new_conversation", payload: {} });
+    },
+
+    /** `다시 시작` after Desk's agent stopped (B13). */
+    deskRestart() {
+      dispatch({ schema_version: 2, kind: "desk_restart", payload: {} });
+    },
+
+    /** The agent, model or effort under the composer (B4, B8, B9); a model or effort left null keeps the current one. */
+    deskSelect(agent: DeskAgentId | null, model: string | null, effort: string | null) {
+      dispatch({ schema_version: 2, kind: "desk_select", payload: { agent, model, effort } });
+    },
+
+    /** `다시 받기` after an agent's adapter failed to install (B5). */
+    deskInstall(agent: DeskAgentId) {
+      dispatch({ schema_version: 2, kind: "desk_install", payload: { agent } });
+    },
+
+    /** Settings › Desk (B4, B19, B21). */
+    deskSettings(settings: { default_agent: DeskAgentId | null; location: DeskLocation; cap: number }) {
+      dispatch({ schema_version: 2, kind: "desk_settings_set", payload: settings });
+    },
+
+    /** `취소` on a waiting card (B21). */
+    deskJobCancel(id: string) {
+      dispatch({ schema_version: 2, kind: "desk_job_cancel", payload: { id } });
+    },
+
+    /** `다시 맡기기` on a cancelled card, `다시 시도` on a failed one (B21, B22). */
+    deskJobRequeue(id: string) {
+      dispatch({ schema_version: 2, kind: "desk_job_requeue", payload: { id } });
+    },
+
+    /** The operator saw a job's card, which reads its row as the sidebar does. */
+    deskJobRead(id: string) {
+      dispatch({ schema_version: 2, kind: "desk_job_read", payload: { id } });
     },
 
     /** The row whose evidence is open, read again masked (PRD memory-self-improve B7); null when none is. */

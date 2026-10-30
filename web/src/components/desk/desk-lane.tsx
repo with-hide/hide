@@ -1,5 +1,5 @@
-import { ImagesIcon, ListIcon, Maximize2Icon, Minimize2Icon, PinIcon, XIcon } from "lucide-react";
-import type { ReactNode } from "react";
+import { ImagesIcon, ListIcon, Maximize2Icon, Minimize2Icon, PinIcon, PlusIcon, XIcon } from "lucide-react";
+import type { ReactNode, Ref } from "react";
 import { useInterfaceTranslation } from "../../i18n/client";
 import { cn } from "../../lib/utils";
 import { Button } from "../ui/button";
@@ -137,12 +137,23 @@ export function DeskRoom({ chat, view = null, tool = null, pinned, expanded = fa
   );
 }
 
-/** Desk's chat column: its head (the name and `＋ 새 대화`), the conversation, and the composer at the foot. */
-export function DeskChatColumn({ head, children, composer }: { head: ReactNode; children: ReactNode; composer: ReactNode }) {
+/** The chat column's head: its name and `＋ 새 대화` (B10); ◆ stays in the sidebar (D-38). */
+export function DeskChatHead({ onNewConversation }: { onNewConversation: () => void }) {
+  const { t } = useInterfaceTranslation();
+  return (
+    <>
+      <span className="flex-1 font-semibold text-foreground">{t("desk.name")}</span>
+      <Button variant="ghost" size="sm" className="h-(--size-control-compact) gap-xxs px-xs text-caption font-normal text-subtle-foreground" data-desk-new-conversation="true" onClick={onNewConversation}><PlusIcon />{t("desk.newConversation")}</Button>
+    </>
+  );
+}
+
+/** Desk's chat column: its head (the name and `＋ 새 대화`), the conversation, and the composer at the foot. `scrollRef` is the conversation's scroller. */
+export function DeskChatColumn({ head, children, composer, scrollRef }: { head: ReactNode; children: ReactNode; composer: ReactNode; scrollRef?: Ref<HTMLDivElement> }) {
   return (
     <>
       <div className="flex h-(--size-tab-strip) shrink-0 items-center gap-xs border-b border-border px-md text-caption" data-desk-chat-head="true">{head}</div>
-      <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-y-auto">{children}</div>
+      <div ref={scrollRef} className="flex min-h-0 min-w-0 flex-1 flex-col overflow-y-auto" data-desk-chat-scroll="true">{children}</div>
       <div className="mx-auto w-full max-w-(--size-editor-measure) shrink-0 px-lg pb-md pt-xs">{composer}</div>
     </>
   );

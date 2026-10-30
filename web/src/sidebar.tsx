@@ -69,6 +69,7 @@ import { useOverviewCount } from "./Overview";
 import { revealSidebarFocus, sidebarFocusPane, sidebarPanes } from "./sidebarFocus";
 import { observeStuckHeaders } from "./sidebarSticky";
 import { SidebarLensSwitch, TaskLens } from "./TaskLens";
+import { DeskSidebarEntry } from "./DeskScreen";
 import { SidebarPrs } from "./SidebarPrs";
 
 function herdrRowLabel(state: string | null, t: TFunction<"translation">): string | null {
@@ -150,6 +151,7 @@ export function Sidebar({ actions }: { actions: Actions }) {
             searchChord={commandLabel("search") || null}
             onSearch={() => actions.openSearch()}
           />
+          <DeskSidebarEntry actions={actions} />
           {status ? (
             <div className="border-b border-border px-md py-sm text-caption text-muted-foreground">{status}</div>
           ) : null}

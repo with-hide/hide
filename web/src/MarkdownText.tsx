@@ -4,9 +4,10 @@
 // viewer's preview. The language pack loads lazily, as a document's does; the
 // text stands plain until it arrives.
 
-import { Compartment, EditorState, Prec } from "@codemirror/state";
-import { EditorView } from "@codemirror/view";
-import { useEffect, useRef } from "react";
+import { Compartment, EditorState, Prec, type Extension, type Range } from "@codemirror/state";
+import { Decoration, EditorView, WidgetType } from "@codemirror/view";
+import { useEffect, useRef, type ReactNode } from "react";
+import { createRoot, type Root } from "react-dom/client";
 import { languageLoader } from "./editor/languages";
 import { markdownLive } from "./editor/markdownLivePlugin";
 import { baseTheme, liveTheme } from "./editor/theme";
@@ -28,8 +29,50 @@ const chat = EditorView.theme({
   "&.cm-editor .cm-content": { fontSize: "var(--text-subhead)", lineHeight: "1.625" },
 });
 
-/** `size="chat"` sets the text at Desk's conversation size. */
-export function MarkdownText({ text, size = "body" }: { text: string; size?: "body" | "chat" }) {
+/** A token of the text drawn as a part instead of its letters, such as a session a Desk reply names. */
+export type MarkdownChip = { token: string; node: ReactNode };
+
+const roots = new WeakMap<HTMLElement, Root>();
+
+/** A chip in the read-only text: its own React root, unmounted after the editor lets it go, since that happens while React commits. */
+class ChipWidget extends WidgetType {
+  constructor(readonly index: number, readonly node: ReactNode) {
+    super();
+  }
+  eq(other: ChipWidget) {
+    return other.index === this.index && other.node === this.node;
+  }
+  toDOM() {
+    const dom = document.createElement("span");
+    dom.dataset.markdownChip = String(this.index);
+    const root = createRoot(dom);
+    root.render(this.node);
+    roots.set(dom, root);
+    return dom;
+  }
+  destroy(dom: HTMLElement) {
+    const root = roots.get(dom);
+    roots.delete(dom);
+    if (root) queueMicrotask(() => root.unmount());
+  }
+}
+
+/** Every place a chip's token stands in the text, replaced by the chip. */
+function chipDecorations(text: string, chips: readonly MarkdownChip[]): Extension {
+  const ranges: Range<Decoration>[] = [];
+  chips.forEach((chip, index) => {
+    if (!chip.token) return;
+    for (let at = text.indexOf(chip.token); at >= 0; at = text.indexOf(chip.token, at + chip.token.length)) {
+      ranges.push(Decoration.replace({ widget: new ChipWidget(index, chip.node) }).range(at, at + chip.token.length));
+    }
+  });
+  return EditorView.decorations.of(Decoration.set(ranges, true));
+}
+
+const NO_CHIPS: readonly MarkdownChip[] = [];
+
+/** `size="chat"` sets the text at Desk's conversation size; `chips` draws tokens of the text as parts (keep the array stable between renders). */
+export function MarkdownText({ text, size = "body", chips = NO_CHIPS }: { text: string; size?: "body" | "chat"; chips?: readonly MarkdownChip[] }) {
   const host = useRef<HTMLDivElement>(null);
   useEffect(() => {
     const parent = host.current;
@@ -39,7 +82,7 @@ export function MarkdownText({ text, size = "body" }: { text: string; size?: "bo
       parent,
       state: EditorState.create({
         doc: text,
-        extensions: [baseTheme(), liveTheme, Prec.highest(size === "chat" ? [chat, prose] : prose), language.of([]), markdownLive({ reveal: false }), EditorView.lineWrapping, EditorState.readOnly.of(true), EditorView.editable.of(false)],
+        extensions: [baseTheme(), liveTheme, Prec.highest(size === "chat" ? [chat, prose] : prose), language.of([]), markdownLive({ reveal: false }), chipDecorations(text, chips), EditorView.lineWrapping, EditorState.readOnly.of(true), EditorView.editable.of(false)],
       }),
     });
     let live = true;
@@ -50,6 +93,6 @@ export function MarkdownText({ text, size = "body" }: { text: string; size?: "bo
       live = false;
       view.destroy();
     };
-  }, [text, size]);
+  }, [text, size, chips]);
   return <div ref={host} className="min-w-0" data-markdown-text="true" />;
 }

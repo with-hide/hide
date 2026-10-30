@@ -1,5 +1,5 @@
 import { ArrowUpIcon, ChevronDownIcon, ImageIcon, PaperclipIcon, SquareIcon, XIcon } from "lucide-react";
-import type { ReactNode } from "react";
+import type { KeyboardEvent, ReactNode } from "react";
 import type { DeskAgent, DeskAgentId, DeskChoice, DeskSelection } from "../../desk";
 import { agentPickable } from "../../desk";
 import { useInterfaceTranslation } from "../../i18n/client";
@@ -21,9 +21,10 @@ export type ComposerAttachment = { id: string; name: string; image: boolean };
  * the words, the attached files as chips above them, 📎, and send, which
  * becomes stop while Desk answers. `menu` is the `@` menu, opened above the
  * box while `menuOpen`; `children` sits in the box's foot between 📎 and
- * send (Desk's bar).
+ * send (Desk's bar). 📎 shows only where attaching is taken (`onAttach`);
+ * `canSend` false keeps send off while what it would send to cannot take it.
  */
-export function DeskComposer({ value, label, placeholder, attachments = [], answering = false, focused = false, menu = null, menuOpen = false, onChange, onSend, onStop, onAttach, onRemoveAttachment, onMenuOpenChange, children }: {
+export function DeskComposer({ value, label, placeholder, attachments = [], answering = false, focused = false, canSend = true, menu = null, menuOpen = false, onChange, onKeyDown, onSend, onStop, onAttach, onRemoveAttachment, onMenuOpenChange, children }: {
   value: string;
   label: string;
   placeholder: string;
@@ -32,13 +33,16 @@ export function DeskComposer({ value, label, placeholder, attachments = [], answ
   answering?: boolean;
   /** Drawn as the keyboard's place, as `답하기` leaves it (B29). */
   focused?: boolean;
+  canSend?: boolean;
   menu?: ReactNode;
   menuOpen?: boolean;
   onChange: (value: string) => void;
+  /** The box's keys before it takes them: ↵ to send, the `@` menu's moves. */
+  onKeyDown?: (event: KeyboardEvent<HTMLTextAreaElement>) => void;
   onSend: () => void;
   onStop?: () => void;
-  onAttach: () => void;
-  onRemoveAttachment: (id: string) => void;
+  onAttach?: () => void;
+  onRemoveAttachment?: (id: string) => void;
   onMenuOpenChange?: (open: boolean) => void;
   children?: ReactNode;
 }) {
@@ -55,16 +59,18 @@ export function DeskComposer({ value, label, placeholder, attachments = [], answ
                   <li key={attachment.id} className="flex min-w-0 items-center gap-xxs rounded-xs bg-secondary py-xxs pl-xs text-micro text-subtle-foreground">
                     {attachment.image ? <ImageIcon aria-hidden="true" className="size-(--size-icon-sm) shrink-0" /> : <PaperclipIcon aria-hidden="true" className="size-(--size-icon-sm) shrink-0" />}
                     <span className="max-w-(--size-tab-title-min) truncate">{attachment.name}</span>
-                    <Button variant="ghost" size="icon-xs" aria-label={t("desk.composer.removeAttachment", { name: attachment.name })} onClick={() => onRemoveAttachment(attachment.id)}><XIcon /></Button>
+                    <Button variant="ghost" size="icon-xs" aria-label={t("desk.composer.removeAttachment", { name: attachment.name })} onClick={() => onRemoveAttachment?.(attachment.id)}><XIcon /></Button>
                   </li>
                 ))}
               </ul>
             ) : null}
-            <Textarea bare rows={1} value={value} aria-label={label} placeholder={placeholder} className="max-h-(--size-search-sheet-h) min-h-(--size-control-sm) py-xxs" autoFocus={focused} onChange={(event) => onChange(event.target.value)} />
+            <Textarea bare rows={1} value={value} aria-label={label} placeholder={placeholder} className="max-h-(--size-search-sheet-h) min-h-(--size-control-sm) py-xxs" autoFocus={focused} onChange={(event) => onChange(event.target.value)} onKeyDown={onKeyDown} data-desk-composer-input="true" />
             <div className="flex min-w-0 items-center gap-xs">
-              <Hint label={t("desk.composer.attach")}>
-                <Button variant="ghost" size="icon-sm" className="-ml-xxs text-muted-foreground" aria-label={t("desk.composer.attach")} onClick={onAttach}><PaperclipIcon /></Button>
-              </Hint>
+              {onAttach ? (
+                <Hint label={t("desk.composer.attach")}>
+                  <Button variant="ghost" size="icon-sm" className="-ml-xxs text-muted-foreground" aria-label={t("desk.composer.attach")} onClick={onAttach}><PaperclipIcon /></Button>
+                </Hint>
+              ) : null}
               <span className="flex min-w-0 flex-1 items-center justify-end">{children}</span>
               {answering ? (
                 <Hint label={t("desk.composer.stopHint")}>
@@ -72,7 +78,7 @@ export function DeskComposer({ value, label, placeholder, attachments = [], answ
                 </Hint>
               ) : (
                 <Hint label={t("desk.composer.send")} shortcut="↵">
-                  <Button variant="secondary" size="icon-sm" className="rounded-full" aria-label={t("desk.composer.send")} disabled={empty} data-desk-composer-send="true" onClick={onSend}><ArrowUpIcon /></Button>
+                  <Button variant="secondary" size="icon-sm" className="rounded-full" aria-label={t("desk.composer.send")} disabled={empty || !canSend} data-desk-composer-send="true" onClick={onSend}><ArrowUpIcon /></Button>
                 </Hint>
               )}
             </div>
@@ -98,6 +104,7 @@ const AGENT_STATE: Record<DeskAgent["state"], MessageKey> = {
   login_needed: "desk.agentState.login_needed",
   not_installed: "desk.agentState.not_installed",
   no_ask_mode: "desk.agentState.no_ask_mode",
+  not_offered: "desk.agentState.not_offered",
 };
 
 /** One of the bar's three menus: its trigger names the value, and pressing it opens the choices. */
@@ -152,7 +159,7 @@ export function DeskAgentBar({ agents, selection, open = null, onAgent, onModel,
                 <span className={cn("text-micro", one.state === "ready" || one.state === "preparing" || one.state === "checking" ? "text-muted-foreground" : "text-warning")}>{t(AGENT_STATE[one.state])}</span>
               </DropdownMenuRadioItem>
             );
-            return pickable ? item : <Hint key={one.id} label={t("desk.agentState.noAskModeHint")} side="left"><span>{item}</span></Hint>;
+            return pickable ? item : <Hint key={one.id} label={t(one.state === "not_offered" ? "desk.agentState.notOfferedHint" : "desk.agentState.noAskModeHint")} side="left"><span>{item}</span></Hint>;
           })}
         </DropdownMenuRadioGroup>
         <DropdownMenuSeparator />

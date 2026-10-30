@@ -1,14 +1,14 @@
-import { ArrowLeftRightIcon, ChevronRightIcon, CopyIcon, CornerDownLeftIcon, MailIcon, SlidersHorizontalIcon, SquareTerminalIcon, TerminalIcon } from "lucide-react";
-import type { ReactNode } from "react";
+import { ArrowLeftRightIcon, ChevronRightIcon, CopyIcon, CornerDownLeftIcon, FilePenIcon, MailIcon, ShieldIcon, SlidersHorizontalIcon, SquareTerminalIcon, TerminalIcon } from "lucide-react";
+import { useMemo, type ReactNode } from "react";
 import { Trans } from "react-i18next";
 import type { DeskAgent, DeskItem, DeskJob, DeskMention, DeskNoticeKind, DeskSessionRef, DeskSteps } from "../../desk";
-import { markedMention, mentionParts, namedMention } from "../../desk";
+import { chipMention, handedSession, markedMention, mentionParts, namedMention } from "../../desk";
 import { AgentMark } from "../../AgentMark";
 import { useInterfaceTranslation } from "../../i18n/client";
 import { requireInterfaceLanguage } from "../../i18n/locale";
 import type { MessageKey } from "../../i18n/catalogs";
 import { cn } from "../../lib/utils";
-import { MarkdownText } from "../../MarkdownText";
+import { MarkdownText, type MarkdownChip } from "../../MarkdownText";
 import { Elapsed, formatElapsed } from "../elapsed";
 import { MentionChip } from "../mention-chip";
 import { StatusMark } from "../status-mark";
@@ -45,12 +45,20 @@ export function DeskUserMessage({ text, mentions, onMention }: { text: string; m
   );
 }
 
-/** Desk's answer as plain Markdown, with no marks of a session (D-75); streaming while `live`; a stopped answer keeps what it said and says it stopped (B7). */
-export function DeskReply({ text, stopped = false, live = false }: { text: string; stopped?: boolean; live?: boolean }) {
+/**
+ * Desk's answer as plain Markdown (D-75), where a session it names is that
+ * session's chip, pressed to open it; streaming while `live`; a stopped
+ * answer keeps what it said and says it stopped (B7).
+ */
+export function DeskReply({ text, stopped = false, live = false, mentions = [], onMention }: { text: string; stopped?: boolean; live?: boolean; mentions?: readonly DeskMention[]; onMention?: (mention: DeskMention) => void }) {
   const { t } = useInterfaceTranslation();
+  const chips = useMemo<MarkdownChip[]>(() => mentions.map((mention) => ({
+    token: markedMention(mention),
+    node: <SessionChip session={{ name: mention.name, mark: mention.mark ?? null, agent_kind: mention.agent_kind ?? null }} onPress={onMention ? () => onMention(mention) : undefined} />,
+  })), [mentions, onMention]);
   return (
     <div className="flex min-w-0 flex-col gap-xxs" data-desk-item="reply" data-desk-reply={live ? "live" : stopped ? "stopped" : "done"}>
-      <MarkdownText text={text} size="chat" />
+      <MarkdownText text={text} size="chat" chips={chips} />
       {stopped ? <span className="text-micro text-muted-foreground">{t("desk.reply.stopped")}</span> : null}
     </div>
   );
@@ -162,6 +170,13 @@ export function DeskNotice({ item, onAction, onCopy }: { item: Extract<DeskItem,
   );
 }
 
+/** The answered line's mark: what the card asked to do. */
+const APPROVAL_ICON: Record<Extract<DeskItem, { kind: "approval" }>["card"], typeof SquareTerminalIcon> = {
+  command: SquareTerminalIcon,
+  edit: FilePenIcon,
+  other: ShieldIcon,
+};
+
 const APPROVAL_CARD: Record<Extract<DeskItem, { kind: "approval" }>["card"], MessageKey> = {
   command: "desk.approval.card.command",
   edit: "desk.approval.card.edit",
@@ -179,9 +194,10 @@ export function DeskApprovalCard({ item, onAnswer }: { item: Extract<DeskItem, {
   const { t } = useInterfaceTranslation();
   if (item.state !== "waiting") {
     const answered = item.state === "allowed" ? t("desk.approval.allowed") : item.state === "rejected" ? t("desk.approval.rejected") : t("desk.approval.closed");
+    const Icon = APPROVAL_ICON[item.card];
     return (
       <p className="flex min-w-0 items-center gap-xs text-micro text-muted-foreground" title={item.command} data-desk-item="approval" data-desk-approval={item.state} data-desk-approval-answered={item.state}>
-        <SquareTerminalIcon aria-hidden="true" className="size-(--size-icon-sm) shrink-0" />
+        <Icon aria-hidden="true" className="size-(--size-icon-sm) shrink-0" data-desk-approval-card={item.card} />
         <span className="shrink-0">{answered}</span>
         <span aria-hidden="true">·</span>
         <span className="min-w-0 truncate font-mono">{item.command}</span>
@@ -223,7 +239,7 @@ export function DeskHandedLine({ session, handed, line, read, onOpen }: { sessio
   return (
     <p className="flex min-w-0 items-center gap-xs text-caption text-muted-foreground" data-desk-item="handed" data-desk-handed={handed ? "request" : "letter"} data-desk-handed-read={read ? "true" : "false"}>
       <MailIcon aria-hidden="true" className="size-(--size-icon-sm) shrink-0" />
-      <span className="shrink-0">
+      <span className="flex min-w-0 items-center whitespace-nowrap">
         <Trans i18n={i18n} t={t} i18nKey={handed ? "desk.handed.line" : "desk.handed.sent"} components={{ who: <SessionChip session={session} className="mr-xxs" onPress={onOpen} /> }} />
       </span>
       {line ? <><span aria-hidden="true">·</span><span className="min-w-0 truncate" title={line}>{line}</span></> : null}
@@ -235,11 +251,23 @@ export function DeskHandedLine({ session, handed, line, read, onOpen }: { sessio
 
 export type DeskChatActions = DeskJobCardActions & {
   onApproval: (id: number, allow: boolean) => void;
-  onNoticeAction: (action: DeskNoticeAction) => void;
+  onNoticeAction: (action: DeskNoticeAction, notice: Extract<DeskItem, { kind: "notice" }>) => void;
   onCopy: (text: string) => void;
   onMention: (mention: DeskMention) => void;
   onHanded: (paneId: string) => void;
 };
+
+const replyChips = new WeakMap<object, DeskMention[]>();
+
+/** A reply's sessions as mentions, one array per reply value, so its chips are drawn once. */
+function replyMentions(item: Extract<DeskItem, { kind: "reply" }>): DeskMention[] {
+  let mentions = replyChips.get(item);
+  if (!mentions) {
+    mentions = item.mentions.map(chipMention);
+    replyChips.set(item, mentions);
+  }
+  return mentions;
+}
 
 /** A job card's job: an item naming a job the snapshot does not carry is a broken snapshot, not an empty card. */
 function jobOf(jobs: Readonly<Record<string, DeskJob>>, id: string): DeskJob {
@@ -255,11 +283,9 @@ function jobOf(jobs: Readonly<Record<string, DeskJob>>, id: string): DeskJob {
  * each job Desk started. `live` is the answer still arriving; `thinking`
  * shows until it starts.
  */
-export function DeskChat({ items, jobs, sessions = {}, agents, live = null, thinking = false, startedAt = null, selectedJob = null, selectedOutput = null, ...actions }: {
+export function DeskChat({ items, jobs, agents, live = null, thinking = false, startedAt = null, selectedJob = null, selectedOutput = null, ...actions }: {
   items: readonly DeskItem[];
   jobs: Readonly<Record<string, DeskJob>>;
-  /** The sessions Desk wrote to, by pane, so a letter's chip carries their marks; one not listed has its name alone. */
-  sessions?: Readonly<Record<string, DeskSessionRef>>;
   /** The agents, whose choices name a model line's model and effort. */
   agents: readonly DeskAgent[];
   /** The answer streaming now, after the last item. */
@@ -278,12 +304,12 @@ export function DeskChat({ items, jobs, sessions = {}, agents, live = null, thin
       {items.map((item) => (
         <li key={item.id} className="flex min-w-0 flex-col">
           {item.kind === "user" ? <DeskUserMessage text={item.text} mentions={item.mentions} onMention={actions.onMention} />
-            : item.kind === "reply" ? <div className="flex min-w-0 flex-col gap-xs"><DeskReplySteps thoughtMs={item.thought_ms} steps={item.steps} /><DeskReply text={item.text} stopped={item.state === "stopped"} /></div>
+            : item.kind === "reply" ? <div className="flex min-w-0 flex-col gap-xs"><DeskReplySteps thoughtMs={item.thought_ms} steps={item.steps} /><DeskReply text={item.text} stopped={item.state === "stopped"} mentions={replyMentions(item)} onMention={actions.onMention} /></div>
             : item.kind === "switch" ? <MarkerLine icon={<ArrowLeftRightIcon aria-hidden="true" className="size-(--size-icon-sm) shrink-0" />} data-desk-item="switch">{item.from === null ? t("desk.switch.start", { to: deskAgentName(t, item.to) }) : t(SWITCH_WORDS[item.carried], { from: deskAgentName(t, item.from), to: deskAgentName(t, item.to) })}</MarkerLine>
             : item.kind === "model" ? <MarkerLine icon={<SlidersHorizontalIcon aria-hidden="true" className="size-(--size-icon-sm) shrink-0" />} data-desk-item="model">{t("desk.model", { model: choice(item.model, "models"), effort: choice(item.effort, "efforts") })}</MarkerLine>
             : item.kind === "approval" ? <DeskApprovalCard item={item} onAnswer={(allow) => actions.onApproval(item.id, allow)} />
-            : item.kind === "notice" ? <DeskNotice item={item} onAction={actions.onNoticeAction} onCopy={actions.onCopy} />
-            : item.kind === "handed" ? <DeskHandedLine session={sessions[item.pane_id] ?? { name: item.name, mark: null, agent_kind: null }} handed={item.letter_kind === "request"} line={item.line} read={item.read} onOpen={() => actions.onHanded(item.pane_id)} />
+            : item.kind === "notice" ? <DeskNotice item={item} onAction={(action) => actions.onNoticeAction(action, item)} onCopy={actions.onCopy} />
+            : item.kind === "handed" ? <DeskHandedLine session={handedSession(item)} handed={item.letter_kind === "request"} line={item.line} read={item.read} onOpen={() => actions.onHanded(item.pane_id)} />
             : <DeskJobCard job={jobOf(jobs, item.job_id)} selected={selectedJob === item.job_id} selectedOutput={selectedOutput} {...actions} />}
         </li>
       ))}
@@ -297,7 +323,7 @@ export function DeskChat({ items, jobs, sessions = {}, agents, live = null, thin
  * as plain rows a press sends, and while threads run their real marks and
  * counts with the way to them. ◆ stays in the sidebar (D-38).
  */
-export function DeskEmpty({ working, asking, onExample, onShowThreads }: { working: number; asking: number; onExample: (text: string) => void; onShowThreads: () => void }) {
+export function DeskEmpty({ working, asking, onExample, onShowThreads }: { working: number; asking: number; onExample: (text: string) => void; onShowThreads?: () => void }) {
   const { t } = useInterfaceTranslation();
   const examples = [t("desk.empty.example1"), t("desk.empty.example2"), t("desk.empty.example3")];
   return (
@@ -319,11 +345,15 @@ export function DeskEmpty({ working, asking, onExample, onShowThreads }: { worki
           {working > 0 ? <span className="flex items-center gap-xxs"><StatusMark mark="going" />{t("desk.empty.working", { count: working })}</span> : null}
           {working > 0 && asking > 0 ? <span aria-hidden="true">·</span> : null}
           {asking > 0 ? <span className="flex items-center gap-xxs text-warning"><StatusMark mark="turn" />{t("desk.empty.asking", { count: asking })}</span> : null}
-          <span aria-hidden="true">·</span>
-          <Button variant="text" size="inline" className="gap-0 text-caption" onClick={onShowThreads}>
-            {t("desk.empty.showThreads")}
-            <ChevronRightIcon aria-hidden="true" className="size-(--size-icon-sm)" />
-          </Button>
+          {onShowThreads ? (
+            <>
+              <span aria-hidden="true">·</span>
+              <Button variant="text" size="inline" className="gap-0 text-caption" onClick={onShowThreads}>
+                {t("desk.empty.showThreads")}
+                <ChevronRightIcon aria-hidden="true" className="size-(--size-icon-sm)" />
+              </Button>
+            </>
+          ) : null}
         </p>
       ) : null}
     </div>

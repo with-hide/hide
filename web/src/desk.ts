@@ -1,142 +1,43 @@
 // Desk's screen values (PRD session-docs-and-assistant, Desk 1차): what the
-// Desk room, its job cards, the Threads list and a thread draw, in the shape
-// of the `desk` and `desk_live` sections `snapshot.ts` declares on the desk
-// node's branch (feat/desk-host), so they can be handed to these parts
-// unchanged once it lands. The parts take these values as props only;
-// nothing here reads the store or the socket.
+// Desk room, its job cards, the Threads list and a thread draw. The wire's
+// own shapes are `snapshot.ts`'s (the `desk`, `desk_live`, `desk_jobs` and
+// `desk_mentions` sections), re-exported here under the names the parts use;
+// the types below them are the screen's own. The parts take these values as
+// props only; nothing here reads the store or the socket.
 //
-// The fields that section does not carry (marked `wire gap` below) are a
-// thread's own, which the threads node reads from the session record.
+// The fields no section carries (marked `wire gap` below) are a thread's
+// own, which the threads node reads from the session record.
 
-import type { CellTone } from "./missions";
-import type { PlanView, PrState, RowMark } from "./snapshot";
+import type { DeskAgent, DeskAskKind, DeskItem, DeskJob, DeskMention as WireMention, DeskMission, DeskNotice, DeskOutput, DeskOutputKind, DeskSection, DeskSessionChip, PlanView, PrState, RowMark } from "./snapshot";
 
-/** An agent Desk talks to over ACP; its name is the screen's (`desk.agentName.*`). */
-export type DeskAgentId = "claude" | "codex" | "pi";
+export type { DeskAgent, DeskAgentId, DeskAgentState, DeskApprovalState, DeskChoice, DeskItem, DeskJob, DeskJobFailure, DeskJobState, DeskLive, DeskLocation, DeskMission, DeskOutput, DeskOutputKind, DeskSteps } from "./snapshot";
 
-export type DeskAgentState = "checking" | "ready" | "preparing" | "not_installed" | "install_failed" | "node_missing" | "cli_missing" | "login_needed" | "no_ask_mode";
-
-export type DeskChoice = { id: string; label: string };
-
-export type DeskAgent = {
-  id: DeskAgentId;
-  label: string;
-  state: DeskAgentState;
-  /** What the state names: the Node version found, the install's last line, the missing CLI. */
-  detail: string | null;
-  /** Shown with `login_needed`. */
-  login_command: string;
-  /** What the agent's last session offered; empty until one opened. */
-  models: DeskChoice[];
-  efforts: DeskChoice[];
-};
-
-export type DeskSelection = { agent: DeskAgentId | null; model: string | null; effort: string | null };
-
-export type DeskMention = {
-  kind: "session" | "project";
-  id: string;
-  name: string;
-  /** A session's status and agent, so its chip reads as a session does everywhere. wire gap */
-  mark?: RowMark | null;
-  agent_kind?: string | null;
-};
-
-export type DeskNoticeKind = "blocked" | "preparing" | "host_stopped" | "resume_failed" | "login_needed" | "install_failed" | "no_ask_mode" | "turn_failed";
-
-export type DeskApprovalState = "waiting" | "allowed" | "rejected" | "closed";
-
-export type DeskLocation = "desk" | "worktree" | "checkout";
-
-/** One line of the Desk conversation. A message's text holds a mention as `@session(<id> <name>)` or `@project(<path> <name>)`. */
-export type DeskItem =
-  | { kind: "user"; id: number; text: string; at_ms: number; mentions: DeskMention[] }
-  /** `thought_ms` and `steps` fold the turn into one line: `생각 8초 · 세션 4개 읽음`. */
-  | { kind: "reply"; id: number; agent: DeskAgentId; text: string; at_ms: number; state: "done" | "stopped"; thought_ms: number | null; steps: DeskSteps }
-  /** How much of the conversation the new agent was handed. */
-  | { kind: "switch"; id: number; from: DeskAgentId | null; to: DeskAgentId; carried: "all" | "trimmed" | "none" }
-  | { kind: "model"; id: number; model: string | null; effort: string | null }
-  | { kind: "approval"; id: number; card: "command" | "edit" | "other"; command: string; folder: string | null; reason: string | null; state: DeskApprovalState }
-  /** `detail` is the install's last line, the sign-in command for `login_needed`, or the blocked call. */
-  | { kind: "notice"; id: number; notice: DeskNoticeKind; agent: DeskAgentId | null; detail: string | null }
-  /** Desk started or queued a job; its card is `jobs`' entry `job_id`. */
-  | { kind: "job"; id: number; job_id: string }
-  /** A letter Desk sent a running session (B16): handed work when `letter_kind` is `request`; `read` once its runtime took it in. */
-  | { kind: "handed"; id: number; agent_id: string; pane_id: string; name: string; project: string | null; letter_kind: string; line: string; letter_id: string | null; read: boolean };
-
-export type DeskJobState = "queued" | "starting" | "working" | "asking" | "done" | "failed" | "cancelled" | "closed" | "moved_out" | "sleeping" | "archived";
-
+export type DeskSelection = DeskSection["selection"];
+export type DeskSettings = DeskSection["settings"];
+export type DeskNoticeKind = DeskNotice;
 /** What an asking job waits on, each said with its own verb (B20): a question, a terminal's permission, a mission's decision, a plan to review, a call that stopped. */
-export type DeskAsk = "question" | "approval" | "decision" | "plan_review" | "blocked";
+export type DeskAsk = DeskAskKind;
 
-/** What Desk's agent did in a turn, counted from its tool calls. */
-export type DeskSteps = { sessions: number; files: number; letters: number; starts: number; other: number };
+/** A mention as a chip draws it: the wire's, and for a session its status and agent, so its chip reads as a session does everywhere. */
+export type DeskMention = WireMention & { mark?: RowMark | null; agent_kind?: string | null };
 
-/** The `desk_live` section: the reply being written and when its turn started, `null` between turns. */
-export type DeskLive = { text: string | null; started_at_ms: number | null };
+/** A session a reply names, as its chip draws it: the token is its pane, as the reply's text spells it. */
+export function chipMention(chip: DeskSessionChip): DeskMention {
+  return { kind: "session", id: chip.pane_id, name: chip.name, mark: chip.mark, agent_kind: chip.agent_kind };
+}
 
 /** A session as a chip names it: its status, its agent and its name (B26); a session Hide does not know the state of has its name alone. */
 export type DeskSessionRef = { name: string; mark: RowMark | null; agent_kind: string | null };
 
-/** What a thread made, as the session's View list holds it (D-65): only these kinds are shown. */
-export type DeskOutputKind = "image" | "page" | "doc" | "pr";
-
-export type DeskOutput = {
-  id: string;
-  kind: DeskOutputKind;
-  label: string;
-  /** A picture to draw: an image's bytes or a page's capture, when the window holds one. */
-  thumb: string | null;
-  /** Looked at since it appeared (the ▣ badge counts the rest). */
-  seen: boolean;
-  /** A PR output's state, so it reads the same on a card, in a thread and in 결과물 (one PR, one state). */
-  pr_state: PrState | null;
-};
+/** The session a handed line names, from the line's own mark and agent. */
+export function handedSession(item: Extract<DeskItem, { kind: "handed" }>): DeskSessionRef {
+  return { name: item.name, mark: item.mark, agent_kind: item.agent_kind };
+}
 
 /** One View of a session, before Desk keeps only its outputs (B30). */
 export type SessionViewKind = "image" | "page" | "pr" | "markdown" | "pdf" | "html" | "code" | "diff" | "log" | "hide_ai";
 
 export type DeskPullRequest = { number: number; state: PrState };
-
-/** The mission a Conductor thread runs, as its `미션 k/n` chip draws it (B34, D-43); its nodes are not drawn. */
-export type DeskMission = { id: string; title: string; status: "planning" | "running" | "merge_wait" | "done" | "cancelled"; done: number; total: number; tone: CellTone; deciding: boolean };
-
-/** One session Desk started or queued; `id` is the spawn's intent, `pane_id` its thread's key. */
-export type DeskJob = {
-  id: string;
-  agent_id: string | null;
-  pane_id: string | null;
-  title: string;
-  agent_kind: string;
-  project: { workspace_id: string | null; label: string };
-  location: { kind: "checkout" | "worktree"; label: string };
-  state: DeskJobState;
-  queue_position: number | null;
-  now: string | null;
-  plan: { done: number; total: number } | null;
-  /** The question, the command asking approval, the decision or the plan's step count, as the second line says it. */
-  question: string | null;
-  summary: string | null;
-  pull_requests: DeskPullRequest[];
-  outputs: DeskOutput[];
-  joined: boolean;
-  reason: "spawn_failed" | "exited" | "device_disconnected" | null;
-  /** The code a failed start ended with. */
-  failure: string | null;
-  ask: DeskAsk | null;
-  /** The sidebar row's mark, drawn with `StatusMark`; `mark_read` is its hollow read ask. A job with no row leaves it empty. */
-  mark: RowMark | null;
-  mark_read: boolean;
-  machine: string | null;
-  disconnected: boolean;
-  changed_at_unix_ms: number;
-  read: boolean;
-  mission: DeskMission | null;
-  /** The panes of a Conductor's workers. */
-  workers: string[];
-};
-
-export type DeskSettings = { default_agent: DeskAgentId | null; location: DeskLocation; cap: number };
 
 // ---------- the thread (B25-B27) ----------
 
@@ -415,7 +316,7 @@ export const namedMention = (mention: DeskMention) => `@${mention.name}`;
 
 /** An agent Desk cannot be given (D-53, B4): one that cannot ask before acting. One not installed or signed in can be picked and says so (B6). */
 export function agentPickable(agent: DeskAgent): boolean {
-  return agent.state !== "no_ask_mode";
+  return agent.state !== "no_ask_mode" && agent.state !== "not_offered";
 }
 
 /** One turn of a thread (B25): the words that started it, the work, the answer, and the parts the work made. */

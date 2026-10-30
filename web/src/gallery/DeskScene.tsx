@@ -6,7 +6,7 @@
 // mission, every chat notice, a thread that cannot be read, Settings ›
 // Desk). The sidebar column is a stand-in built from the shared row parts;
 // the real sidebar is not changed. Nothing leaves the page.
-import { DiamondIcon, FileTextIcon, ImageIcon, MapIcon, PlusIcon } from "lucide-react";
+import { DiamondIcon, FileTextIcon, ImageIcon, MapIcon } from "lucide-react";
 import { useLayoutEffect, useMemo, useState, type ReactNode } from "react";
 import { createActions } from "../actions";
 import { AgentMark } from "../AgentMark";
@@ -14,7 +14,7 @@ import { DeskAgentBar, DeskComposer, type ComposerAttachment } from "../componen
 import { DeskChat, DeskEmpty, DeskHandedLine, type DeskChatActions } from "../components/desk/desk-chat";
 import { DeskPaneReturn, DeskSidebarRow } from "../components/desk/desk-entry";
 import { DeskJobCard, JobMark, OutputMark } from "../components/desk/desk-job-card";
-import { DeskChatColumn, DeskRail, DeskRoom, DeskViewColumn, LaneColumnHead, type ViewTab } from "../components/desk/desk-lane";
+import { DeskChatColumn, DeskChatHead, DeskRail, DeskRoom, DeskViewColumn, LaneColumnHead, type ViewTab } from "../components/desk/desk-lane";
 import { DeskMentionMenu } from "../components/desk/desk-mention-menu";
 import { DeskOutputs } from "../components/desk/desk-outputs";
 import { DeskSettingsTab } from "../components/desk/desk-settings";
@@ -22,7 +22,6 @@ import { ThreadList } from "../components/desk/thread-list";
 import { ThreadHead, ThreadView, type ThreadConductor } from "../components/desk/thread-view";
 import { SessionRow } from "../components/session-row";
 import { StatusMark } from "../components/status-mark";
-import { Button } from "../components/ui/button";
 import { TooltipProvider } from "../components/ui/tooltip";
 import { askingCount, outputKindOf, threadLines, unseenOutputs, type DeskAgent, type DeskItem, type DeskJob, type DeskOutput, type DeskSelection, type ThreadReadFailure } from "../desk";
 import { useInterfaceTranslation } from "../i18n/client";
@@ -34,7 +33,7 @@ import { useShellStore } from "../store";
 import type { SnapshotRest } from "../snapshot";
 import { missionFixture } from "./MissionScene";
 import {
-  AGENTS, AGENTS_PREPARING, cardSceneItems, conductorThread, deskJob, SESSION_CHIPS, ENTERED_SESSIONS, everyStateJobs, GALLERY_DONE_THREAD, galleryThread, handoffItems, MENTIONS, MENU_PROJECTS, MENU_SESSIONS,
+  AGENTS, AGENTS_PREPARING, cardSceneItems, conductorThread, deskJob, ENTERED_SESSIONS, everyStateJobs, GALLERY_DONE_THREAD, galleryThread, handoffItems, MENTIONS, MENU_PROJECTS, MENU_SESSIONS,
   mentionItems, missionItems, OUTPUTS, PICTURES, RECORD_THREAD, SESSION_VIEWS, SESSIONS, stateItems, statusItems, storyJobs, switchedItems, WORKER_THREAD,
 } from "./deskSceneData";
 
@@ -94,13 +93,9 @@ function SceneSidebar({ jobs, selected }: { jobs: readonly DeskJob[]; selected: 
   );
 }
 
-/** The chat column's head: its name and `＋ 새 대화`; ◆ stays in the sidebar (D-38). */
+/** The chat column's head, as a scene sets it. */
 function ChatHead() {
-  const { t } = useInterfaceTranslation();
-  return <>
-    <span className="flex-1 font-semibold text-foreground">{t("desk.name")}</span>
-    <Button variant="ghost" size="sm" className="h-(--size-control-compact) gap-xxs px-xs text-caption font-normal text-subtle-foreground"><PlusIcon />{t("desk.newConversation")}</Button>
-  </>;
+  return <DeskChatHead onNewConversation={noop} />;
 }
 
 /** Desk's composer with its bar in the box's foot, as a scene sets them. */
@@ -177,7 +172,7 @@ export function DeskScene({ params }: { params: URLSearchParams }) {
   const rail = (threads: boolean, outputs: boolean, shown: readonly DeskJob[] = story) => <DeskRail asking={askingCount(shown)} unseen={unseenOutputs(shown)} threads={threads} outputs={outputs} onThreads={noop} onOutputs={noop} />;
   const chat = (items: DeskItem[], composer: ReactNode, options: { jobs?: Record<string, DeskJob>; selectedJob?: string | null; selectedOutput?: string | null; live?: string | null; thinking?: boolean } = {}) => (
     <DeskChatColumn head={<ChatHead />} composer={composer}>
-      <DeskChat items={items} jobs={options.jobs ?? jobs} sessions={SESSION_CHIPS} agents={AGENTS} startedAt={now - 3_000} selectedJob={options.selectedJob ?? null} selectedOutput={options.selectedOutput ?? null} live={options.live ?? null} thinking={options.thinking ?? false} {...CHAT_ACTIONS} />
+      <DeskChat items={items} jobs={options.jobs ?? jobs} agents={AGENTS} startedAt={now - 3_000} selectedJob={options.selectedJob ?? null} selectedOutput={options.selectedOutput ?? null} live={options.live ?? null} thinking={options.thinking ?? false} {...CHAT_ACTIONS} />
     </DeskChatColumn>
   );
   const threads = (pinned: boolean, shown: readonly DeskJob[], selected: string | null = null) => (
@@ -215,7 +210,7 @@ export function DeskScene({ params }: { params: URLSearchParams }) {
       const thread = galleryThread(jobs);
       const items: DeskItem[] = [
         { kind: "user", id: 1, text: "갤러리 캡처 라이트·다크로 비교해줘", at_ms: now, mentions: [] },
-        { kind: "reply", agent: "claude", id: 2, text: "갤러리 비교를 새 스레드로 띄웠어요.", at_ms: now, state: "done", thought_ms: null, steps: { sessions: 0, files: 0, letters: 0, starts: 0, other: 0 } },
+        { kind: "reply", mentions: [], agent: "claude", id: 2, text: "갤러리 비교를 새 스레드로 띄웠어요.", at_ms: now, state: "done", thought_ms: null, steps: { sessions: 0, files: 0, letters: 0, starts: 0, other: 0 } },
         { kind: "job", id: 3, job_id: "gallery" },
       ];
       body = <DeskRoom pinned rail={rail(true, false)} chat={chat(items, <ChatComposer selection={CLAUDE} />, { jobs: { gallery }, selectedJob: "gallery" })}
@@ -231,7 +226,7 @@ export function DeskScene({ params }: { params: URLSearchParams }) {
     case "s6": {
       const items: DeskItem[] = [
         { kind: "user", id: 1, text: "오늘 herdr-ide에서 돌던 거 어디까지 왔어?", at_ms: now, mentions: [] },
-        { kind: "reply", agent: "claude", id: 2, text: "지금 다섯 개가 돌고 있고 둘이 답을 기다려요.", at_ms: now, state: "done", thought_ms: null, steps: { sessions: 0, files: 0, letters: 0, starts: 0, other: 0 } },
+        { kind: "reply", mentions: [], agent: "claude", id: 2, text: "지금 다섯 개가 돌고 있고 둘이 답을 기다려요.", at_ms: now, state: "done", thought_ms: null, steps: { sessions: 0, files: 0, letters: 0, starts: 0, other: 0 } },
       ];
       const listed = [deskJob(jobs.gallery!, { mark_read: true }), ...pick("record", "conductor", "1a", "1b", "mention", "reel", "release")];
       body = <DeskRoom pinned={false} rail={rail(true, false)} chat={chat(items, <ChatComposer selection={CLAUDE} />)} tool={threads(false, listed, "record")} />;
