@@ -523,7 +523,9 @@ impl Runtime {
             engine
                 .submit_text(crate::engine::Wait::Each(SEND_TIMEOUT), &raw_pane, &text)
                 .map_err(|error| match error {
-                    crate::engine::EngineError::Refused { code, .. } if code.contains("not_found") => {
+                    crate::engine::EngineError::Refused { code, .. }
+                        if code.contains("not_found") =>
+                    {
                         "pane_gone"
                     }
                     // No answer: the words may have landed.
