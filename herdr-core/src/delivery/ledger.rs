@@ -156,15 +156,18 @@ impl Sleeper {
     }
 
     /// The sleeper whose wake `letter` waits for, its deadline paused (D-13).
-    /// A letter whose bell rang, or whose one wake started before this sleep,
-    /// wakes no one now, so its hour runs as it would for an awake agent.
+    /// A `request` or `block` whose bell rang, or whose one wake started
+    /// before this sleep, wakes no one now, so its hour runs as it would for
+    /// an awake agent; a `report` or `progress` wakes no one at all and waits
+    /// for the next wake paused, rung or not (B3).
     pub(crate) fn pausing<'a>(
         asleep: &'a Asleep,
         woken: &Woken,
         letter: &Letter,
     ) -> Option<&'a Self> {
+        let wakes = matches!(letter.kind.as_str(), "request" | "block");
         Self::of(asleep, letter).filter(|sleeper| {
-            !letter.bell_sent
+            !(wakes && letter.bell_sent)
                 && woken
                     .get(&letter.id)
                     .is_none_or(|started| *started >= sleeper.since)
@@ -1001,8 +1004,16 @@ mod tests {
         let asleep: Asleep = [("recipient".to_owned(), sleeper)].into();
         let mut rung = letter_to("local", 0);
         rung.letters[0].bell_sent = true;
+        let mut rung_report = rung.clone();
+        rung_report.letters[0].kind = "report".into();
         rung.expire_awake(60 * MINUTE, &asleep, &Woken::new());
         assert_eq!(rung.letters[0].state, State::Undelivered);
+        rung_report.expire_awake(60 * MINUTE, &asleep, &Woken::new());
+        assert_eq!(
+            rung_report.letters[0].state,
+            State::Pending,
+            "a report waits for the wake"
+        );
         let mut woke_before = letter_to("local", 0);
         let id = woke_before.letters[0].id.clone();
         let before: Woken = [(id.clone(), 10 * MINUTE)].into();
