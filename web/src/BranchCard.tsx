@@ -23,7 +23,7 @@ function useBranchRow(workspaceId: string, rowId: string): { project: ProjectSug
   if (!project || project.workspace_id !== workspaceId) return null;
   const row = project.rows.find((candidate) => candidate.id === rowId);
   const branch = row?.attempt?.branch;
-  if (!row || !branch || (row.attempt?.phase !== "ready" && row.attempt?.phase !== "merging")) return null;
+  if (!row || !branch || (row.attempt?.phase !== "ready" && row.attempt?.phase !== "merging" && row.attempt?.phase !== "syncing")) return null;
   return { project, row, branch };
 }
 
@@ -44,7 +44,7 @@ export function BranchCardView({ workspaceId, rowId, path, actions }: { workspac
           <span className="shrink-0 font-mono text-muted-foreground">{base}</span>
         </div>
         {line?.branch?.again ? <span className="text-caption text-warning" data-branch-card-failure={row.attempt?.failure ?? undefined}>{line.text}</span> : null}
-        {row.attempt?.phase === "merging" ? <span className="text-caption text-muted-foreground">{t("suggestions.attempt.merging")}</span> : <BranchButtons row={row} project={project} actions={actions} again={line?.branch?.again ?? null} className="col-start-auto pt-0" />}
+        {row.attempt?.phase === "merging" || row.attempt?.phase === "syncing" ? <span className="text-caption text-muted-foreground">{line?.text}</span> : <BranchButtons row={row} project={project} actions={actions} again={line?.branch?.again ?? null} className="col-start-auto pt-0" />}
       </div>
       {path ? <BranchFileDiff workspaceId={workspaceId} rowId={rowId} path={path} /> : <Files branch={branch} onOpen={(file) => actions.openBranchCard(workspaceId, rowId, file)} />}
     </article>

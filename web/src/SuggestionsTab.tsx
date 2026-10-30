@@ -16,7 +16,7 @@ import { allAgents } from "./paneAgents";
 import { catalogWorkspaces, type AgentRow, type ProjectSuggestions, type SuggestionBranch, type SuggestionEvidence, type SuggestionPlan, type SuggestionRow } from "./snapshot";
 import { suggestionSteps } from "./hideAiSteps";
 import { useShellStore } from "./store";
-import { applyOffer, appliedSummary, attemptLine, fileName, localLine, suggestionGroups, suggestionMark, suggestionReason, suggestionTitle, type BranchChoice, type SuggestionMark } from "./suggestionList";
+import { applyOffer, appliedSummary, attemptLine, fileName, localLine, offered, suggestionGroups, suggestionMark, suggestionReason, suggestionTitle, type BranchChoice, type SuggestionMark } from "./suggestionList";
 import { useUiStore } from "./ui";
 
 /**
@@ -163,7 +163,7 @@ function Row({ row, project, actions }: { row: SuggestionRow; project: ProjectSu
           {row.auto ? <span className="mt-xxs shrink-0 rounded-sm bg-secondary px-xs text-micro font-medium text-subtle-foreground" data-suggestion-auto="true">{t("suggestions.auto")}</span> : null}
         </div>
         <Lines row={row} open={open} project={project} actions={actions} />
-        {row.group === "applying" ? <AgentAsk pane={row.attempt?.agent_pane ?? null} actions={actions} /> : null}
+        {!offered(row) && row.group !== "applied" ? <AgentAsk pane={row.attempt?.agent_pane ?? null} actions={actions} /> : null}
         <Fix row={row} open={open} />
         {open ? <Detail row={row} project={project} actions={actions} /> : null}
         {open && row.attempt?.phase === "ready" && row.attempt.branch ? <BranchFiles row={row} branch={row.attempt.branch} project={project} actions={actions} /> : null}
@@ -173,7 +173,12 @@ function Row({ row, project, actions }: { row: SuggestionRow; project: ProjectSu
   );
 }
 
-/** The row's second line: 놓친 것 for a choice (with `문서로는 안 됐어요` when it came back after a merge, `넘어갔지만 다시 생겼어요` after a skip), the attempt while it is applied, the watch once merged. */
+/**
+ * The row's second line: 놓친 것 for a suggestion not pressed yet (with
+ * `문서로는 안 됐어요` when it came back after a merge, `넘어갔지만 다시
+ * 생겼어요` after a skip), the attempt once pressed, with a refusal's reason
+ * above a ready branch's line and `에이전트 ↗` once, the watch once merged.
+ */
 function Lines({ row, open, project, actions }: { row: SuggestionRow; open: boolean; project: ProjectSuggestions; actions: Actions }) {
   const { t } = useInterfaceTranslation();
   const working = row.state === "hide_ai_working";
@@ -196,26 +201,33 @@ function Lines({ row, open, project, actions }: { row: SuggestionRow; open: bool
         </span>
       ) : null}
       {row.returned_after_skip ? <span className="text-warning" data-suggestion-returned="true">{t("suggestions.returnedAfterSkip")}</span> : null}
-      {row.group === "choose" && row.cause && (open || !row.plan) ? (
+      {offered(row) && row.cause && (open || !row.plan) ? (
         <span className={cn("min-w-0 text-muted-foreground", !open && "truncate")} title={row.cause} data-suggestion-cause="true">
           <span className="font-medium text-subtle-foreground">{t("suggestions.cause")}</span> · {row.cause}
         </span>
       ) : null}
-      {row.group === "choose" && row.hold === "auto_pr_unreviewed" ? <span className="text-muted-foreground" data-suggestion-hold="auto_pr_unreviewed">{t("suggestions.waitsForAutoPr")}</span> : null}
-      {row.group !== "choose" && attempt && !(attempt.branch && attempt.branch.again === null) ? (
+      {offered(row) && row.hold === "auto_pr_unreviewed" ? <span className="text-muted-foreground" data-suggestion-hold="auto_pr_unreviewed">{t("suggestions.waitsForAutoPr")}</span> : null}
+      {!offered(row) && attempt && !(attempt.branch && attempt.branch.again === null) ? (
         <span className="flex min-w-0 items-center gap-sm" data-suggestion-attempt={row.attempt?.phase} data-suggestion-failure={row.attempt?.failure ?? undefined}>
           {row.attempt?.phase === "pr_open" && row.attempt.url ? (
             <PrLink project={project} actions={actions} url={row.attempt.url} label={attempt.text} className="min-w-0 truncate text-warning hover:text-warning" />
           ) : (
             <span className={cn("min-w-0 truncate", attempt.tone === "warning" ? "text-warning" : attempt.tone === "destructive" ? "text-destructive" : "text-muted-foreground")} title={attempt.text}>{attempt.text}</span>
           )}
-          {row.attempt && (row.attempt.phase === "starting" || row.attempt.phase === "working" || row.attempt.phase === "merging") ? <Elapsed since={row.attempt.started_at_unix_ms} className="shrink-0 text-muted-foreground" /> : null}
+          {row.attempt && (row.attempt.phase === "starting" || row.attempt.phase === "working" || row.attempt.phase === "merging" || row.attempt.phase === "syncing") ? <Elapsed since={row.attempt.started_at_unix_ms} className="shrink-0 text-muted-foreground" /> : null}
           {row.attempt?.url && row.attempt.phase !== "pr_open" ? <PrLink project={project} actions={actions} url={row.attempt.url} label={row.outcome === "issue" && row.attempt.pr_number === null ? t("suggestions.openIssue") : t("suggestions.openPr", { number: String(row.attempt.pr_number ?? "") })} /> : null}
-          <AgentLink pane={row.attempt?.agent_pane ?? null} actions={actions} />
+          {/* A ready branch's line below names the agent once. */}
+          {row.attempt?.phase === "ready" && row.attempt.branch ? null : <AgentLink pane={row.attempt?.agent_pane ?? null} actions={actions} />}
         </span>
       ) : null}
-      {row.group === "applying" && row.attempt?.phase === "ready" && row.attempt.branch ? <BranchLine row={row} branch={row.attempt.branch} project={project} actions={actions} /> : null}
-      {row.group === "applying" && row.attempt?.phase === "failed" && row.cause ? (
+      {attempt?.files ? (
+        <span className={cn("min-w-0 break-words font-mono text-muted-foreground", !open && "truncate")} title={attempt.files.join("\n")} data-suggestion-unsaved={attempt.files.length}>{attempt.files.join(", ")}</span>
+      ) : null}
+      {row.attempt?.phase === "ready" && !row.attempt.failure && row.attempt.branch?.moved_to ? (
+        <span className="min-w-0 break-words text-muted-foreground" data-suggestion-moved-to={row.attempt.branch.moved_to}>{t("suggestions.branch.movedTo", { branch: row.attempt.branch.moved_to })}</span>
+      ) : null}
+      {row.attempt?.phase === "ready" && row.attempt.branch ? <BranchLine row={row} branch={row.attempt.branch} project={project} actions={actions} /> : null}
+      {row.attempt?.phase === "failed" && row.cause ? (
         <span className={cn("min-w-0 break-words text-muted-foreground", !open && "truncate")} title={row.cause} data-suggestion-failure-detail="true">{row.cause}</span>
       ) : null}
       {row.group === "applied" && row.state === "watching" && row.watch ? (
@@ -309,7 +321,7 @@ function BranchLine({ row, branch, project, actions }: { row: SuggestionRow; bra
  */
 function Fix({ row, open }: { row: SuggestionRow; open: boolean }) {
   const { t } = useInterfaceTranslation();
-  if (row.group !== "choose") return null;
+  if (!offered(row)) return null;
   if (row.local) return <LocalFix row={row} line={row.local.line} open={open} />;
   if (row.plan) return <PlanFix row={row} plan={row.plan} open={open} />;
   if (row.memory) return <MemoryFix row={row} open={open} />;
@@ -375,15 +387,15 @@ function LocalFix({ row, line, open }: { row: SuggestionRow; line: string; open:
   );
 }
 
-/** A row in full (B10): the evidence it rests on, and 고칠 것 once it left the choice; evidence that is gone stays, dimmed, and opens nothing. */
+/** A row in full (B10): the evidence it rests on, and 고칠 것 once it was pressed; evidence that is gone stays, dimmed, and opens nothing. */
 function Detail({ row, project, actions }: { row: SuggestionRow; project: ProjectSuggestions; actions: Actions }) {
   const { t } = useInterfaceTranslation();
   return (
     <div className="col-start-2 flex min-w-0 flex-col gap-sm pt-xs" data-suggestion-detail={row.id}>
-      {row.local && row.group !== "choose" ? <LocalFix row={row} line={row.local.line} open /> : null}
+      {row.local && !offered(row) ? <LocalFix row={row} line={row.local.line} open /> : null}
       {/* A finished branch shows what it wrote, so the words planned before it give way. */}
-      {row.plan && row.group !== "choose" && !row.attempt?.branch ? <PlanFix row={row} plan={row.plan} open /> : null}
-      {row.fix && !row.local && !row.plan && row.group !== "choose" ? (
+      {row.plan && !offered(row) && !row.attempt?.branch ? <PlanFix row={row} plan={row.plan} open /> : null}
+      {row.fix && !row.local && !row.plan && !offered(row) ? (
         <div className="flex flex-col gap-xxs">
           <span className="text-micro text-muted-foreground">{t("suggestions.fix")}</span>
           <p className="whitespace-pre-wrap break-words break-keep text-caption text-foreground">{row.fix}</p>
@@ -421,13 +433,17 @@ function EvidenceList({ row, project, actions }: { row: SuggestionRow; project: 
 /**
  * A ready branch's changed files inside its open row, right above its
  * buttons (PRD hide-ai-branch-first-apply B4): each file with its +/−, and
- * the chosen one's diff against the base, the first file to begin with.
- * The diff is the one the branch card reads, asked for while the row is open.
+ * under the open one its diff against the base, the first file to begin
+ * with; pressing the open file again folds it. The diff is the one the
+ * branch card reads, asked for while a file is open, and its box scrolls
+ * inside a fixed height so the buttons stay in reach.
  */
 function BranchFiles({ row, branch, project, actions }: { row: SuggestionRow; branch: SuggestionBranch; project: ProjectSuggestions; actions: Actions }) {
   const { t } = useInterfaceTranslation();
-  const [chosen, setChosen] = useState<string | null>(null);
-  const path = branch.files.some((file) => file.path === chosen) ? chosen : (branch.files[0]?.path ?? null);
+  // `undefined` until a press: the first file opens; `null` once folded.
+  const [chosen, setChosen] = useState<string | null | undefined>(undefined);
+  const first = branch.files[0]?.path ?? null;
+  const path = chosen === null ? null : chosen !== undefined && branch.files.some((file) => file.path === chosen) ? chosen : first;
   const workspace = project.workspace_id;
   useEffect(() => {
     actions.suggestionBranchFile(workspace, row.id, path);
@@ -443,8 +459,9 @@ function BranchFiles({ row, branch, project, actions }: { row: SuggestionRow; br
       </div>
       <ul className="flex flex-col" role="list">
         {branch.files.map((file) => (
-          <li key={file.path}>
-            <button type="button" aria-pressed={file.path === path} onClick={() => setChosen(file.path)} className={cn("pointer-events-auto flex w-full min-w-0 items-center gap-sm rounded-xs px-xs py-xxs text-left text-caption outline-none hover:bg-accent focus-visible:ring-1 focus-visible:ring-ring", file.path === path && "bg-accent")} title={file.path} data-suggestion-branch-file={file.path}>
+          <li key={file.path} className="flex min-w-0 flex-col gap-xxs">
+            <button type="button" aria-expanded={file.path === path} onClick={() => setChosen(file.path === path ? null : file.path)} className={cn("pointer-events-auto flex w-full min-w-0 items-center gap-xs rounded-xs px-xs py-xxs text-left text-caption outline-none hover:bg-accent focus-visible:ring-1 focus-visible:ring-ring", file.path === path && "bg-accent")} title={file.path} data-suggestion-branch-file={file.path}>
+              <ChevronRightIcon aria-hidden="true" className={cn("size-(--size-icon-sm) shrink-0 text-muted-foreground", file.path === path && "rotate-90")} />
               <span className="min-w-0 flex-1 truncate font-mono">{file.path}</span>
               {file.binary ? <span className="shrink-0 text-micro text-muted-foreground">{t("suggestions.card.binary")}</span> : (
                 <>
@@ -453,11 +470,11 @@ function BranchFiles({ row, branch, project, actions }: { row: SuggestionRow; br
                 </>
               )}
             </button>
+            {file.path === path ? <div className="pointer-events-auto min-w-0" data-suggestion-branch-diff={file.path}><BranchFileDiff workspaceId={workspace} rowId={row.id} path={file.path} inline /></div> : null}
           </li>
         ))}
         {branch.files_total > branch.files.length ? <li className="py-xxs text-micro text-muted-foreground">{t("suggestions.card.filesMore", { shown: branch.files.length, total: branch.files_total })}</li> : null}
       </ul>
-      {path ? <div className="pointer-events-auto min-w-0"><BranchFileDiff workspaceId={workspace} rowId={row.id} path={path} inline /></div> : null}
     </section>
   );
 }
@@ -521,7 +538,7 @@ function Buttons({ row, project, actions }: { row: SuggestionRow; project: Proje
   const { t } = useInterfaceTranslation();
   const id = project.workspace_id;
   const offer = applyOffer(row);
-  const line = row.group === "applying" ? attemptLine(t, row) : null;
+  const line = !offered(row) && row.group !== "applied" ? attemptLine(t, row) : null;
   const retry = line?.retry === true;
   if (line?.branch) return <BranchButtons row={row} project={project} actions={actions} again={line.branch.again} />;
   const revert = row.group === "applied" && row.local !== null && row.local !== undefined && row.local.failure !== "edited";
@@ -564,6 +581,10 @@ function Buttons({ row, project, actions }: { row: SuggestionRow; project: Proje
  * an unread one shows nothing. A quiet `버리기` either way. A refused merge
  * puts its answer first: `다시 시도` merges again, `다시 맞추기` makes the
  * branch again on its base, and a push GitHub did not take leaves `PR 올리기`.
+ * A push that found the local base apart from GitHub's offers `PR 올리기`
+ * first, since the pull request goes up from the branch whatever main holds,
+ * and `내 커밋을 브랜치로 옮기고 main 맞추기`, which keeps main's own commits
+ * on a new branch and puts main on GitHub's.
  */
 export function BranchButtons({ row, project, actions, again, className }: { row: SuggestionRow; project: ProjectSuggestions; actions: Actions; again: BranchChoice["again"]; className?: string }) {
   const { t } = useInterfaceTranslation();
@@ -572,7 +593,7 @@ export function BranchButtons({ row, project, actions, again, className }: { row
   const base = branch?.base ?? "main";
   const github = project.github === "connected";
   const pr = github && row.outcome === "pr";
-  const push = pr && again !== "pr" ? branch?.push ?? "unknown" : "unknown";
+  const push = pr && again !== "pr" && again !== "sync" ? branch?.push ?? "unknown" : "unknown";
   return (
     <div className={cn("col-start-2 flex flex-wrap items-center gap-xs pt-xxs", className)} data-suggestion-branch-buttons={row.id}>
       {again === "rebase" ? (
@@ -581,6 +602,7 @@ export function BranchButtons({ row, project, actions, again, className }: { row
         <Button className="pointer-events-auto" size="sm" onClick={() => actions.suggestionAction(id, row.id, "merge")} data-suggestion-merge={row.id}>{t(again === "merge" ? "suggestions.retry" : "suggestions.branch.merge", { base })}</Button>
       )}
       {pr ? <Button className="pointer-events-auto" size="sm" variant={again === "rebase" ? "outline" : "default"} onClick={() => actions.suggestionAction(id, row.id, "open_pr")} data-suggestion-open-pr={row.id}>{t("suggestions.branch.openPr")}</Button> : null}
+      {again === "sync" ? <Button className="pointer-events-auto" size="sm" variant="outline" onClick={() => actions.suggestionAction(id, row.id, "sync_base")} data-suggestion-sync-base={row.id}>{t("suggestions.branch.sync", { base })}</Button> : null}
       {push === "allowed" ? (
         <Button className="pointer-events-auto" size="sm" variant="outline" onClick={() => actions.suggestionAction(id, row.id, "merge_push")} data-suggestion-merge-push={row.id}>{t(again === "merge" ? "suggestions.retry" : "suggestions.branch.mergePush", { base })}</Button>
       ) : push === "pr_only" ? (

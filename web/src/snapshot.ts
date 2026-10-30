@@ -2443,8 +2443,8 @@ export type SuggestionGroup = "choose" | "applying" | "applied";
 /** `suggestion_state`: a row's mark (D-37). */
 export type SuggestionState = "new" | "my_turn" | "hide_ai_working" | "watching" | "effective" | "applied";
 /** `suggestion_attempt_phase`: where applying a row stands. */
-/** `ready`: the agent committed on its branch and the operator decides; `merging`: Hide merges it now (PRD hide-ai-branch-first-apply). */
-export type SuggestionAttemptPhase = "starting" | "working" | "ready" | "merging" | "pr_open" | "ci_failed" | "failed" | "issue_open" | "merged";
+/** `ready`: the agent committed on its branch and the operator decides; `merging`: Hide merges it now (PRD hide-ai-branch-first-apply); `syncing`: Hide moves the base to GitHub's, its own commits kept on a new branch. */
+export type SuggestionAttemptPhase = "starting" | "working" | "ready" | "merging" | "syncing" | "pr_open" | "ci_failed" | "failed" | "issue_open" | "merged";
 
 /** What the attempt's agent was asked: commit on the branch, push it as one pull request, or make it again on its base. */
 export type SuggestionAttemptPurpose = "branch" | "pr" | "rebase";
@@ -2461,6 +2461,12 @@ export type SuggestionBranch = {
   removed: number;
   /** Whether GitHub's base takes a direct push, which offers `{base}에 바로 올리기` while GitHub is connected. */
   push: "allowed" | "pr_only" | "unknown";
+  /** How many commits of its own the local base had that GitHub's did not, as the last push found. */
+  base_unpushed: number | null;
+  /** The branch a sync kept the local base's own commits on. */
+  moved_to: string | null;
+  /** The files a sync found unsaved where the base is checked out. */
+  base_unsaved: string[];
 };
 
 export type SuggestionBasis = { signal: SuggestionSignal; tag: string };
@@ -2591,7 +2597,7 @@ export type ProjectSuggestions = {
 export type SuggestionsSection = { project: ProjectSuggestions | null };
 
 /** What the operator does to one row (`suggestion_action`). */
-export type SuggestionAction = "apply" | "dismiss" | "restore" | "retry" | "revert" | "merge" | "merge_push" | "open_pr" | "discard" | "rebase";
+export type SuggestionAction = "apply" | "dismiss" | "restore" | "retry" | "revert" | "merge" | "merge_push" | "open_pr" | "discard" | "rebase" | "sync_base";
 
 /** Where ⚙'s 읽을 곳 reads (D-52): the session records' four signals or GitHub's two; one switch turns its group. */
 export type SuggestionSignalGroup = "session" | "github";
