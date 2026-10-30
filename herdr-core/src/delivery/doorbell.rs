@@ -1457,7 +1457,8 @@ mod tests {
                 last_report_failure: None,
             });
             if let Some(passed) = checked {
-                guard.record_composer_check("codex", "0.163.0", passed);
+                let miss = (!passed).then_some("not_placeholder");
+                guard.record_composer_check("codex", "0.163.0", miss, now());
             }
         }
 
@@ -2327,7 +2328,7 @@ mod tests {
         for (known, checked, reason) in [
             (false, None, "version_unknown"),
             (true, None, "version_unchecked"),
-            (true, Some(false), "version_failed"),
+            (true, Some(false), "version_unconfirmed"),
         ] {
             let bell = Bell::start(json!({}));
             if known {
@@ -2359,7 +2360,7 @@ mod tests {
     /// Hide sees a version, at a moment its composer is known empty (a turn a
     /// prompt hook started has ended, no key since), the screen is read
     /// once. An empty screen passes the version, and its drafts are read; a
-    /// screen that does not read empty fails it, and its drafts hold.
+    /// screen that does not read empty is a miss, and its drafts hold.
     #[test]
     fn a_new_version_is_checked_once_at_a_known_empty_moment() {
         for (screen, verdict, then) in [
@@ -2385,6 +2386,17 @@ mod tests {
             assert_eq!(checked[0]["verdict"], verdict);
             assert_eq!(checked[0]["version"], "0.163.0");
             assert_eq!(bell.reads(), 1);
+            if verdict == "empty" {
+                assert!(checked[0]["reason"].is_null());
+                assert!(checked[0]["retry_after_ms"].is_null());
+            } else {
+                assert_eq!(checked[0]["reason"], "not_placeholder");
+                assert_eq!(checked[0]["misses"], 1);
+                assert_eq!(
+                    checked[0]["retry_after_ms"],
+                    crate::composer_checks::RETRY_FIRST_MS
+                );
+            }
             // The same moment is not checked again, nor is a checked version.
             pass_logged(
                 &bell,
@@ -2404,6 +2416,58 @@ mod tests {
                 "{verdict}: {later:?}"
             );
         }
+    }
+
+    /// One odd screen does not decide a version (seen live: a Claude Code
+    /// 2.1.314 pane whose top rule carried the session's name failed the
+    /// version and held letters all day). A miss waits `RETRY_FIRST_MS`, and
+    /// a later known-empty moment past it checks the version again; a
+    /// screen read empty there passes it, and its drafts are read.
+    #[test]
+    fn a_missed_version_is_checked_again_at_a_later_known_empty_moment() {
+        use crate::composer_checks::RETRY_FIRST_MS;
+        use crate::runtime::delivery::tests::observe_turn_ended;
+        let bell = Bell::start(json!({}));
+        bell.know_version(None);
+        *bell.screen.lock().unwrap() = "$ ls\r\nREADME.md\r\n".into();
+        let start = now();
+        observe_turn_ended(
+            &mut bell.runtime.lock().unwrap(),
+            "recipient",
+            start - 60_000,
+        );
+        let mut doorbell = Doorbell::default();
+        let checks = |logged: &[Value]| -> Vec<Value> {
+            logged
+                .iter()
+                .filter(|record| record["kind"] == "composer.version_checked")
+                .cloned()
+                .collect()
+        };
+        let missed = checks(&pass_logged(&bell, &mut doorbell, start));
+        assert_eq!(missed.len(), 1);
+        assert_eq!(missed[0]["verdict"], "not_found");
+        assert_eq!(missed[0]["reason"], "no_region");
+        // The next turn ends before the wait is over: not checked yet.
+        *bell.screen.lock().unwrap() = CODEX_EMPTY.into();
+        observe_turn_ended(&mut bell.runtime.lock().unwrap(), "recipient", start);
+        let waiting = pass_logged(&bell, &mut doorbell, start + 40_000);
+        assert!(checks(&waiting).is_empty(), "{waiting:?}");
+        assert_eq!(bell.reads(), 1);
+        // Past the wait, the same moment is checked and passes the version.
+        let passed = checks(&pass_logged(&bell, &mut doorbell, start + RETRY_FIRST_MS));
+        assert_eq!(passed.len(), 1);
+        assert_eq!(passed[0]["verdict"], "empty");
+        assert_eq!(passed[0]["misses"], 1);
+        bell.runtime
+            .lock()
+            .unwrap()
+            .note_delivery_key_at("recipient", start + RETRY_FIRST_MS);
+        let later = pass_logged(&bell, &mut doorbell, start + RETRY_FIRST_MS + 40_000);
+        assert!(
+            kinds_of(&later).contains(&"composer.released".to_owned()),
+            "{later:?}"
+        );
     }
 
     /// Herdr reported the turn `working` before its prompt hook reached the

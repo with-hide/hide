@@ -813,7 +813,7 @@ impl Runtime {
     /// the pane is not yet at rest on a draft; otherwise the draft episode,
     /// the input time that made it, with the read or the reason there is
     /// none: no declaration, a version Hide does not know, or one whose
-    /// check failed or has not run.
+    /// check has not run or has not yet read empty.
     pub(crate) fn composer_release_due(
         &self,
         recipient: &Actor,
@@ -832,8 +832,8 @@ impl Runtime {
         let episode = observation.last_input_at_unix_ms;
         let read = self.composer_read(observation, episode).and_then(|read| {
             match self.composer_check(read.agent, &read.version) {
-                Some(true) => Ok(read),
-                Some(false) => Err("version_failed"),
+                Some(check) if check.passed => Ok(read),
+                Some(_) => Err("version_unconfirmed"),
                 None => Err("version_unchecked"),
             }
         });
@@ -873,21 +873,21 @@ impl Runtime {
         true
     }
 
-    /// Whether `agent`'s `version` passed its composer check: `None` when it
-    /// has not been checked.
-    fn composer_check(&self, agent: &str, version: &str) -> Option<bool> {
+    /// `agent`'s `version` composer check: `None` when it has not been
+    /// checked.
+    fn composer_check(&self, agent: &str, version: &str) -> Option<&crate::composer_checks::Check> {
         self.composer_checks
             .iter()
             .find(|check| check.agent == agent && check.version == version)
-            .map(|check| check.passed)
     }
 
-    /// A pane whose composer is known empty and whose agent version has not
-    /// been checked: the turn a prompt hook of its own session started has
-    /// ended, no key came since, and it has rested for the quiet period
-    /// (docs/delivery.md, Catching an agent's screen change). One at a time;
-    /// `attempted` holds the moments already tried, by pane and hook time,
-    /// so a failed read is not repeated for the same moment.
+    /// A pane whose composer is known empty and whose agent version is due a
+    /// check: never checked, or not yet read empty and past the wait its
+    /// misses earned. The pane's known-empty moment: the turn a prompt hook
+    /// of its own session started has ended, no key came since, and it has
+    /// rested for the quiet period (docs/delivery.md, Catching an agent's
+    /// screen change). One at a time; `attempted` holds the moments already
+    /// tried, by pane and hook time, so a pane's moment is read once.
     pub(crate) fn composer_check_due(
         &self,
         attempted: &std::collections::HashMap<String, u64>,
@@ -907,9 +907,10 @@ impl Runtime {
             if !known_empty || attempted.get(&observation.actor.pane_id) == Some(&hook) {
                 return None;
             }
-            self.composer_read(observation, hook)
-                .ok()
-                .filter(|read| self.composer_check(read.agent, &read.version).is_none())
+            self.composer_read(observation, hook).ok().filter(|read| {
+                self.composer_check(read.agent, &read.version)
+                    .is_none_or(|check| check.due(now))
+            })
         })
     }
 
@@ -921,20 +922,21 @@ impl Runtime {
         attempted.retain(|pane, _| self.delivery_observations.contains_key(pane));
     }
 
-    /// Remembers the outcome of a version's composer check and saves it.
-    pub(crate) fn record_composer_check(&mut self, agent: &str, version: &str, passed: bool) {
-        crate::composer_checks::record(
-            &mut self.composer_checks,
-            crate::composer_checks::Check {
-                agent: agent.to_owned(),
-                version: version.to_owned(),
-                passed,
-                checked_at_unix_ms: unix_milliseconds(),
-            },
-        );
+    /// Remembers a version's composer check, passed or missed at the step
+    /// `miss` names, saves it and returns the version's record.
+    pub(crate) fn record_composer_check(
+        &mut self,
+        agent: &str,
+        version: &str,
+        miss: Option<&'static str>,
+        now: u64,
+    ) -> crate::composer_checks::Check {
+        let check =
+            crate::composer_checks::record(&mut self.composer_checks, agent, version, miss, now);
         if let Some(store) = &self.composer_checks_store {
             store.save(self.composer_checks.clone());
         }
+        check
     }
 
     /// Restores the agent versions earlier runs checked and keeps the store
