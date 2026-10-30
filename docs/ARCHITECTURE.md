@@ -1641,6 +1641,11 @@ Herdr target names are references to the pinned Herdr contract, never a second p
 The leaf selects dialects but does not implement them.
 `hide-agent-hooks` still owns installed hook bytes and command arguments, input/output formats and the only writes to operator hook files.
 `hide-session` owns session location and parsing, including whether a format reports user turns; the delivery gate conservatively holds a letter when such a reader cannot establish the current turn.
+`hide-session::thread` reads a session as the ACP session updates an editor would receive (PRD session-thread-acp): message and thought chunks, tool calls with their kind, input, diffs and output, and plans, in the official `agent-client-protocol-schema` types it re-exports.
+It reads the agent's own records and never an ACP server's `session/load`, which writes to the session it loads ([agent-hooks.md: ACP servers](agent-hooks.md#acp-servers)), and it writes nothing.
+Pages run newest first, 4 MiB of records at a time, with a cursor that refuses a replaced file; text past 20,000 characters and an image past 2 MiB arrive cut and marked `_meta.hide.truncated`, and what Hide put into the conversation (pasted content, injected context, a letter, an interruption) is marked `_meta.hide.origin` with the same tests the label reader uses.
+Each row's `thread` capability names its converter or the reason there is none (Cursor), and a sample of the same task per agent proves every converter ([agent-hooks.md: Adding an agent](agent-hooks.md#adding-an-agent)); Antigravity writes a result with no call id, so its results pair with the turn's calls by order and not at all when the counts differ (with-hide/hide-private#379).
+Nothing serves a thread yet; `hide-session/examples/thread.rs` is the development reader.
 `hide-kit` projects the shared rows into pieces and owns installation policy, while core feature gates read the relevant independent capability.
 OpenCode's letters, Memory context, spawn guard and subagent count come from Hide's plugin ([agent-hooks.md: OpenCode: Hide's plugin](agent-hooks.md#opencode-hides-plugin)), not from its sessions.
 Pi's and omp's letters, Memory and spawn guard, and omp's subagent count and `ask` guard, come the same way from Hide's extension ([agent-hooks.md: Pi and omp: Hide's extension](agent-hooks.md#pi-and-omp-hides-extension)).

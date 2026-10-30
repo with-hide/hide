@@ -139,6 +139,33 @@ pub struct CapabilityAbsence {
 
 pub type Capability<S> = usage::Support<S, CapabilityAbsence>;
 
+/// How Hide reads the agent's session as a thread of ACP updates
+/// (`hide-session`, `thread`; PRD session-thread-acp D-06): the record format
+/// its converter reads, and what that agent's records cannot show.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ThreadReading {
+    pub format: SessionFormat,
+    /// Each part the agent's same-scenario sample cannot show, with why.
+    /// A part the converter does draw from that sample must not be listed.
+    pub absent: &'static [(ThreadPart, CapabilityAbsence)],
+}
+
+/// The parts of a thread every agent's same-scenario sample is checked for
+/// (`hide-session/tests/it/thread.rs`).
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd)]
+pub enum ThreadPart {
+    /// An image the operator attached or the agent read.
+    Image,
+    /// A created or changed file, as a diff.
+    FileChange,
+    /// A command with its output and how it ended.
+    CommandOutput,
+}
+
+impl ThreadPart {
+    pub const ALL: [Self; 3] = [Self::Image, Self::FileChange, Self::CommandOutput];
+}
+
 /// Passive tool-result observation is an independent, required decision.
 /// The hook owner implements the selected dialect; unsupported agents must
 /// explain why no result can be observed rather than silently omitting it.
@@ -662,6 +689,7 @@ pub struct AgentAdapter {
     pub resume: Option<LaunchDialect>,
     pub conversation: Option<SessionFormat>,
     pub titles: Capability<SessionFormat>,
+    pub thread: Capability<ThreadReading>,
     /// Where the agent draws its composer and what an empty one shows, so
     /// a letter held on a possible draft can be released when the screen
     /// says the composer holds nothing (`docs/delivery.md`, Reading the
