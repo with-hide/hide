@@ -127,13 +127,14 @@ export function CommentCount({ display }: { display: Pick<ViewDisplaySnapshot, "
 
 // --- a pane's views (B8) ---------------------------------------------------------
 
-/** `N views` after a pane's PR chip: the Views its agent opened that the layout shows, those the operator has not looked at marked. */
+/** `N views` after a pane's PR chip: the Views its agent opened that the layout shows, those the operator has not looked at marked on their rows and once on the chip. */
 export function PaneViews({ paneId, name, actions }: { paneId: string; name: string; actions: Actions }) {
   const { t } = useInterfaceTranslation();
   const opened = useShellStore((s) => workspaceViewOf(s.rest)?.feedback?.opened);
   const rows = useMemo(() => (opened ?? []).filter((row) => row.pane_id === paneId), [opened, paneId]);
   if (rows.length === 0) return null;
   const label = t("feedback.views", { count: rows.length });
+  const unseen = rows.some((row) => row.unseen);
   return (
     <DropdownMenu>
       <Hint label={t("feedback.views.hint")}>
@@ -141,10 +142,13 @@ export function PaneViews({ paneId, name, actions }: { paneId: string; name: str
           <button
             type="button"
             data-pane-views={paneId}
+            data-pane-views-unseen={unseen ? "true" : undefined}
             className="flex h-(--size-sidebar-line-detail) shrink-0 items-center gap-xxs rounded-xs px-xs outline-none hover:bg-popover focus-visible:ring-1 focus-visible:ring-ring data-[state=open]:bg-secondary"
           >
             <FilesIcon aria-hidden="true" className="size-(--size-icon-sm)" />
             <span>{label}</span>
+            {/* Any View still unseen marks the chip too, so the list need not be opened to find it (PRD unseen-agent-views B10). */}
+            {unseen ? <StatusMark mark="look" label={t("agents.mark.look")} /> : null}
           </button>
         </DropdownMenuTrigger>
       </Hint>
