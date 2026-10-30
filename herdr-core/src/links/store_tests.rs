@@ -1775,26 +1775,31 @@ fn a_record_from_before_named_pull_requests_reads_its_files_again_and_finds_them
     );
 }
 
-/// The review of #1859: mission-13's #1810 to #1813 were printed by the
-/// `gh pr create` that made them up to 3.2 s before GitHub's `createdAt`, on
-/// another clock, and fell outside the -2 s edge. The call that made one is
-/// its maker at any distance; a listing printed as early stays a look.
+/// The review of #1859: mission-13's #1810 to #1813 were each made by one
+/// call that wrote the body and ran `gh pr create ... | tail -1`, which
+/// printed the address 2.6 s to 3.2 s before GitHub's `createdAt`, on another
+/// clock, outside the -2 s edge. The address its successful creating call
+/// gave back is its making within 10 s before; a listing printed as early
+/// stays a look, and so does a made print 12 s early.
 #[test]
-fn a_session_whose_creating_call_printed_the_address_made_it_whatever_the_clocks_say() {
+fn a_session_whose_creating_call_printed_the_address_made_it_within_ten_seconds() {
     let home = tempfile::tempdir().unwrap();
     let state = tempfile::tempdir().unwrap();
     let mut store = open(state.path());
     store
-        .apply_project(&project(vec![pr(7, "feat/x", T0, None)]), T0)
+        .apply_project(
+            &project(vec![pr(7, "feat/x", T0, None), pr(8, "feat/y", T0, None)]),
+            T0,
+        )
         .unwrap();
     // `claude_call` prints the address 2 s after the request.
     let made = claude_call(
         home.path(),
         "s-make",
         ROOT,
-        T0 - 5_400,
+        T0 - 5_200,
         "PR 올려줘",
-        "cat > /tmp/body.md <<'EOF'\nbody\nEOF\ngh pr create --repo acme/app --body-file /tmp/body.md",
+        "cd /work/app && B=/tmp/s/pr-body.md; cat > $B <<'EOF'\n## Summary\nbody\nEOF\ngh pr create --repo acme/app --base main --head feat/x --title \"fix: x\" --body-file $B 2>&1 | tail -1",
         Some(7),
     );
     let listed = claude_call(
@@ -1806,11 +1811,67 @@ fn a_session_whose_creating_call_printed_the_address_made_it_whatever_the_clocks
         "gh pr list",
         Some(7),
     );
-    ingest(&mut store, home.path(), &made);
-    ingest(&mut store, home.path(), &listed);
+    let early = claude_call(
+        home.path(),
+        "s-early",
+        ROOT,
+        T0 - 14_000,
+        "PR 올려줘",
+        "gh pr create --fill",
+        Some(8),
+    );
+    for file in [&made, &listed, &early] {
+        ingest(&mut store, home.path(), file);
+    }
     assert_eq!(
         roles(&panel(&store, 7)),
         vec![("s-make", SessionRole::Created, Some("PR 올려줘"))]
+    );
+    assert!(panel(&store, 8).is_empty(), "12 s before is no making");
+}
+
+/// The review of #1859: one call ran `gh pr create --fill || gh pr view 42`,
+/// the create failed and the view printed #42, which another session made a
+/// day before. Neither that call nor one joined by `&&` makes #42 its own:
+/// the first claims nothing, and GitHub's time keeps the second out. Both
+/// still name #42, so each worked on it.
+#[test]
+fn a_creating_call_that_also_prints_an_old_pull_request_does_not_make_it() {
+    let home = tempfile::tempdir().unwrap();
+    let state = tempfile::tempdir().unwrap();
+    let mut store = open(state.path());
+    store
+        .apply_project(&project(vec![pr(42, "feat/old", T0 - DAY_MS, None)]), T0)
+        .unwrap();
+    let fallback = claude_call(
+        home.path(),
+        "s-fallback",
+        ROOT,
+        T0 - 2_000,
+        "PR 올려줘",
+        "gh pr create --fill || gh pr view 42 --json url --jq .url",
+        Some(42),
+    );
+    let joined = claude_call(
+        home.path(),
+        "s-joined",
+        ROOT,
+        T0 - 2_000,
+        "PR 올리고 42 보여줘",
+        "gh pr create --fill && gh pr view 42 --json url --jq .url",
+        Some(42),
+    );
+    ingest(&mut store, home.path(), &fallback);
+    ingest(&mut store, home.path(), &joined);
+    let linked = panel(&store, 42);
+    let mut lines = roles(&linked);
+    lines.sort();
+    assert_eq!(
+        lines,
+        vec![
+            ("s-fallback", SessionRole::Worked, Some("PR 올려줘")),
+            ("s-joined", SessionRole::Worked, Some("PR 올리고 42 보여줘")),
+        ]
     );
 }
 

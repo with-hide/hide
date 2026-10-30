@@ -656,8 +656,9 @@ mod tests {
 
     /// D-31, and the review of #1859: mission-13's #1810 to #1813 were each
     /// printed by the `gh pr create` that made them up to 3.2 s before the
-    /// time GitHub gave them, on another clock. The making is known by the
-    /// call, whatever the clocks say; a listing printed as early is a look.
+    /// time GitHub gave them, on another clock. A print its creating call
+    /// gave back is the making up to 10 s before; a listing printed as early
+    /// is a look.
     #[test]
     fn a_pull_request_is_the_sessions_when_its_creating_call_or_its_tool_printed_it_as_github_made_it()
      {
@@ -676,6 +677,7 @@ mod tests {
                 sighting(4, 300_000, true),
                 sighting(5, 400_000, false),
                 sighting(6, 500_000, false),
+                sighting(7, 600_000, true),
             ],
             &LOG,
         );
@@ -688,6 +690,7 @@ mod tests {
             (("acme/app".to_owned(), 4), 303_400), // its creating call, 3.4 s before: made here
             (("acme/app".to_owned(), 5), 403_000), // a listing 3 s before: looked at
             (("acme/app".to_owned(), 6), 509_000), // its creating call, read again: made here
+            (("acme/app".to_owned(), 7), 612_000), // its creating call, 12 s before: not this making
         ]);
         assert!(facts.judge_created(&times));
         assert_eq!(

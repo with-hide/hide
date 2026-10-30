@@ -2542,8 +2542,8 @@ fn a_pull_request_the_label_judged_made_here_is_an_output_outside_the_reader_win
 }
 
 /// The review of #1859: a print its creating call gave back is the
-/// session's output 3.4 s before GitHub's `createdAt`; a listing printed 3 s
-/// before is not, and a plain print a second before still is.
+/// session's output 3.4 s before GitHub's `createdAt` but not 12 s before; a
+/// listing printed 3 s before is not, and a plain print a second before is.
 #[test]
 fn a_pull_request_its_creating_call_printed_early_is_the_sessions_output_and_a_listing_is_not() {
     let directory = tempfile::tempdir().unwrap();
@@ -2557,9 +2557,11 @@ fn a_pull_request_its_creating_call_printed_early_is_the_sessions_output_and_a_l
              INSERT INTO prs VALUES('id:1',41,'project:app','feat/x','Made here','https://github.com/acme/app/pull/41',100000000,NULL,NULL,1);
              INSERT INTO prs VALUES('id:1',42,'project:app','feat/y','Listed','https://github.com/acme/app/pull/42',100000000,NULL,NULL,1);
              INSERT INTO prs VALUES('id:1',43,'project:app','feat/z','Printed','https://github.com/acme/app/pull/43',100000000,NULL,NULL,1);
+             INSERT INTO prs VALUES('id:1',44,'project:app','feat/w','Made long before','https://github.com/acme/app/pull/44',100000000,NULL,NULL,1);
              INSERT INTO session_prs VALUES('device-a','codex','session-a','/s.jsonl','acme/app',41,99996600,NULL,1);
              INSERT INTO session_prs VALUES('device-a','codex','session-a','/s.jsonl','acme/app',42,99997000,NULL,0);
-             INSERT INTO session_prs VALUES('device-a','codex','session-a','/s.jsonl','acme/app',43,99999000,NULL,0);",
+             INSERT INTO session_prs VALUES('device-a','codex','session-a','/s.jsonl','acme/app',43,99999000,NULL,0);
+             INSERT INTO session_prs VALUES('device-a','codex','session-a','/s.jsonl','acme/app',44,99988000,NULL,1);",
         )
         .unwrap();
     store.refresh_ledger_outputs().unwrap();

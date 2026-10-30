@@ -8,8 +8,8 @@
 
 use super::{
     CREATED_AFTER_MS, CREATED_BEFORE_MS, DAY_MS, FileState, IssueSource, LinkedIssue, LinkedParent,
-    LinkedSession, OPEN_EXCEPTION_MS, PANEL_SESSION_LIMIT, PaneFact, ParentFact, ProjectFacts,
-    ProjectLinkSummary, SESSION_NAMED_LIMIT, SESSION_PR_LIMIT, STORE_PAGE_LIMIT,
+    LinkedSession, MADE_BEFORE_MS, OPEN_EXCEPTION_MS, PANEL_SESSION_LIMIT, PaneFact, ParentFact,
+    ProjectFacts, ProjectLinkSummary, SESSION_NAMED_LIMIT, SESSION_PR_LIMIT, STORE_PAGE_LIMIT,
     SUMMARY_SESSION_LIMIT, SessionPrChip, SessionRole, WorktreeFact, within,
 };
 use crate::links::ledger::SessionIdentity;
@@ -1410,12 +1410,18 @@ impl LinkStore {
                      LEFT JOIN repo_names r ON r.name=sp.repo_name \
                      JOIN prs p ON p.repo=COALESCE(r.repo, sp.repo_name) AND p.number=sp.number \
                      WHERE p.repo=?1 AND s.cwd IS NOT NULL AND p.created_at IS NOT NULL \
-                     AND (sp.made=1 OR (sp.at>=p.created_at-?2 AND sp.at<=p.created_at+?3))",
+                     AND sp.at>=p.created_at-CASE WHEN sp.made=1 THEN ?4 ELSE ?2 END \
+                     AND sp.at<=p.created_at+?3",
                 )
                 .map_err(failed)?;
             let learned: Vec<DevicePath> = statement
                 .query_map(
-                    params![repo, CREATED_BEFORE_MS as i64, CREATED_AFTER_MS as i64],
+                    params![
+                        repo,
+                        CREATED_BEFORE_MS as i64,
+                        CREATED_AFTER_MS as i64,
+                        MADE_BEFORE_MS as i64
+                    ],
                     |row| Ok((row.get(0)?, row.get(1)?)),
                 )
                 .and_then(Iterator::collect)

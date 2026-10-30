@@ -3,7 +3,7 @@
 use super::{LinkStore, ProjectPass, SessionKey, failed};
 use crate::labels::analysis::LabelEnd;
 use crate::links::ledger::*;
-use crate::links::{CREATED_AFTER_MS, CREATED_BEFORE_MS, SUMMARY_SESSION_LIMIT};
+use crate::links::{CREATED_AFTER_MS, CREATED_BEFORE_MS, MADE_BEFORE_MS, SUMMARY_SESSION_LIMIT};
 use rusqlite::{OptionalExtension, Transaction, params};
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -2351,9 +2351,9 @@ pub(super) fn refresh_outputs(tx: &Transaction<'_>) -> Result<(), String> {
             SELECT s.device,s.agent,s.id,'pr',s.repo_name,p.number,p.title,p.url,CASE WHEN p.merged_at IS NOT NULL THEN 'merged' \
             WHEN p.closed_at IS NOT NULL THEN 'closed' ELSE 'open' END,p.created_at,s.at \
             FROM session_prs s JOIN repo_names n ON n.name=s.repo_name JOIN prs p ON p.repo=n.repo AND p.number=s.number \
-            WHERE p.created_at IS NOT NULL AND (s.made=1 OR (s.at>=p.created_at-?1 AND s.at<=p.created_at+?2)) \
+            WHERE p.created_at IS NOT NULL AND s.at>=p.created_at-CASE WHEN s.made=1 THEN ?3 ELSE ?1 END AND s.at<=p.created_at+?2 \
             ON CONFLICT(device,agent,id,kind,repo,number) DO UPDATE SET title=excluded.title,url=excluded.url,state=excluded.state",
-            params![CREATED_BEFORE_MS as i64,CREATED_AFTER_MS as i64]).map_err(failed)?;
+            params![CREATED_BEFORE_MS as i64,CREATED_AFTER_MS as i64,MADE_BEFORE_MS as i64]).map_err(failed)?;
     // The label judged these pull requests made by the session against
     // GitHub's creation time (`SessionFacts::judge_created`), so a sighting
     // the link reader's window missed still finds its session (D-14, B21).
