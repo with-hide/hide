@@ -600,18 +600,27 @@ pub fn resolve_actor<'a>(ledger: &'a Ledger, key: &str) -> Option<&'a Actor> {
 /// that only sits in a pane called `key`: a pane id is per machine, so a
 /// caller that names a pane resolves it against its own machine's panes.
 pub(crate) fn resolve_registered<'a>(ledger: &'a Ledger, key: &str) -> Option<&'a Actor> {
-    resolve_by(ledger, |record| {
+    registered_record(ledger, key).map(|record| &record.actor)
+}
+
+/// The live registration [`resolve_registered`] finds, whole.
+pub(crate) fn registered_record<'a>(ledger: &'a Ledger, key: &str) -> Option<&'a AgentRecord> {
+    record_by(ledger, |record| {
         record.id == key || record.name.as_deref() == Some(key)
     })
 }
 
 fn resolve_by(ledger: &Ledger, is: impl Fn(&AgentRecord) -> bool) -> Option<&Actor> {
+    record_by(ledger, is).map(|record| &record.actor)
+}
+
+fn record_by(ledger: &Ledger, is: impl Fn(&AgentRecord) -> bool) -> Option<&AgentRecord> {
     let mut found = ledger
         .agents
         .iter()
         .filter(|record| !record.ended && is(record));
     let first = found.next()?;
-    found.next().is_none().then_some(&first.actor)
+    found.next().is_none().then_some(first)
 }
 
 /// What a caller does about each refusal `hide agent sleep` gives.

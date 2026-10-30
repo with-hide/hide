@@ -2767,8 +2767,14 @@ export type ThreadPart =
   | { kind: "letter"; to: string; body: string | null }
   | { kind: "view"; view: "browser" | "file" | "diff"; target: string }
   | { kind: "mission"; mission: string | null };
-/** One page: its updates in record order and the parts of its tool calls, by tool call id. */
-export type ThreadPage = { updates: ThreadUpdate[]; parts: Record<string, ThreadPart> };
+/** Where a session a thread names runs: its pane as the agent rows key it, on its machine. */
+export type ThreadSession = { pane_id: string; machine: string };
+/**
+ * One page: its updates in record order, the parts of its tool calls by tool
+ * call id, and where each session a letter, a spawn or a letter's sender
+ * names runs, by the name as written; a name no live session answers to is absent.
+ */
+export type ThreadPage = { updates: ThreadUpdate[]; parts: Record<string, ThreadPart>; sessions: Record<string, ThreadSession> };
 /** `contracts/snapshot-wire-enums.json`: `session_thread_state`. */
 export type SessionThreadState = "closed" | "loading" | "ready" | "failed";
 /** Why the record could not be read (B27; `session_thread_failure`). */

@@ -18,9 +18,10 @@
 //! `pane.send_input` with Enter).
 
 use super::*;
+use crate::delivery::ledger::Ledger;
 use crate::model::{
     SessionThreadHistorySnapshot, SessionThreadSnapshot, ThreadFailure, ThreadInputSnapshot,
-    ThreadInputState, ThreadOlder, ThreadPageSnapshot, ThreadPane, ThreadState,
+    ThreadInputState, ThreadOlder, ThreadPageSnapshot, ThreadPane, ThreadSession, ThreadState,
 };
 use crate::terminal_attachments as ingress;
 use hide_node_link::protocol::Call;
@@ -188,6 +189,7 @@ impl ReadFailure {
     }
 }
 
+#[derive(Clone, Copy)]
 enum ReadKind {
     Live,
     Older,
@@ -586,13 +588,21 @@ impl Runtime {
         kind: ReadKind,
     ) {
         let link = self.linked_node(device).map(|(_, link)| link);
-        let read = move || -> Result<ThreadPage, ReadFailure> {
+        // A forward read continues the pages already held, whose spawns its
+        // output may name; the newest and an older page stand alone.
+        let earlier = match (kind, &self.snapshot.session_thread_history) {
+            (ReadKind::Live, Some(history)) => merged_parts(&history.pages),
+            _ => BTreeMap::new(),
+        };
+        let ledger = self.delivery_state().ok();
+        let read = move || -> Result<ReadPage, ReadFailure> {
             let link = link.map_err(|_| ReadFailure::Unreachable)?;
-            crate::node_access::call_as(
+            crate::node_access::call_as::<ThreadPage>(
                 link.as_ref(),
                 Call::SessionThread { request },
                 READ_TIMEOUT,
             )
+            .map(|page| ReadPage::of(page, &earlier, ledger.as_deref()))
             .map_err(|error| {
                 let failure = ReadFailure::of(&error);
                 if matches!(failure, ReadFailure::NoRecord | ReadFailure::Refused) {
@@ -626,7 +636,7 @@ impl Runtime {
         &mut self,
         generation: u64,
         kind: ReadKind,
-        answer: Result<ThreadPage, ReadFailure>,
+        answer: Result<ReadPage, ReadFailure>,
     ) -> bool {
         let Some(open) = self
             .session_thread
@@ -700,7 +710,7 @@ impl Runtime {
         changed
     }
 
-    fn take_newest_thread_page(&mut self, page: ThreadPage) -> bool {
+    fn take_newest_thread_page(&mut self, page: ReadPage) -> bool {
         let Some(open) = self.session_thread.open.as_mut() else {
             return false;
         };
@@ -709,9 +719,9 @@ impl Runtime {
         open.tail_end = Some(page.end.clone());
         open.starts.clear();
         let mut pages = Vec::new();
-        if !page.updates.is_empty() {
-            open.starts.push(page.start.clone());
-            pages.push(Arc::new(page_snapshot(&page, &BTreeMap::new())));
+        if !page.snapshot.updates.is_empty() {
+            open.starts.push(page.start);
+            pages.push(Arc::new(page.snapshot));
         }
         self.set_session_thread_history(pages)
             | self.set_session_thread(|thread| {
@@ -723,20 +733,14 @@ impl Runtime {
             })
     }
 
-    fn take_live_thread_page(&mut self, page: ThreadPage) -> bool {
+    fn take_live_thread_page(&mut self, page: ReadPage) -> bool {
         let Some(open) = self.session_thread.open.as_mut() else {
             return false;
         };
         if !page.more && open.tail_end.as_ref() == Some(&page.end) {
             return self.set_session_thread(|thread| thread.connected = true);
         }
-        let earlier = self
-            .snapshot
-            .session_thread_history
-            .as_ref()
-            .map(|history| merged_parts(&history.pages))
-            .unwrap_or_default();
-        let snapshot = Arc::new(page_snapshot(&page, &earlier));
+        let snapshot = Arc::new(page.snapshot);
         if !page.more {
             open.tail_end = Some(page.end);
             return self.set_session_thread(|thread| {
@@ -772,7 +776,7 @@ impl Runtime {
             })
     }
 
-    fn prepend_thread_page(&mut self, page: ThreadPage) -> bool {
+    fn prepend_thread_page(&mut self, page: ReadPage) -> bool {
         let Some(open) = self.session_thread.open.as_mut() else {
             return false;
         };
@@ -782,8 +786,8 @@ impl Runtime {
             return self.set_session_thread(|thread| thread.older = ThreadOlder::Capacity);
         }
         let has_older = !page.start.at_start();
-        open.starts.insert(0, page.start.clone());
-        let mut pages = vec![Arc::new(page_snapshot(&page, &BTreeMap::new()))];
+        open.starts.insert(0, page.start);
+        let mut pages = vec![Arc::new(page.snapshot)];
         if let Some(history) = &self.snapshot.session_thread_history {
             pages.extend(history.pages.iter().cloned());
         }
@@ -990,14 +994,73 @@ fn wait_permit(
     }
 }
 
-fn page_snapshot(page: &ThreadPage, earlier: &BTreeMap<String, HideCall>) -> ThreadPageSnapshot {
-    let updates: Vec<Value> = page
-        .updates
+/// A page as its read answered it: where it sits in the record, and the
+/// screen's copy of it, made on the read's worker and never under the
+/// runtime lock.
+struct ReadPage {
+    start: ThreadCursor,
+    end: ThreadCursor,
+    more: bool,
+    snapshot: ThreadPageSnapshot,
+}
+
+impl ReadPage {
+    /// `earlier` holds the parts of the pages before this one, so a spawn
+    /// called there takes the agent this page's output names; `ledger`
+    /// places the sessions the page names.
+    fn of(page: ThreadPage, earlier: &BTreeMap<String, HideCall>, ledger: Option<&Ledger>) -> Self {
+        let updates: Vec<Value> = page
+            .updates
+            .iter()
+            .filter_map(|update| serde_json::to_value(update).ok())
+            .collect();
+        let parts = page_parts(&updates, earlier);
+        let sessions = ledger.map_or_else(BTreeMap::new, |ledger| {
+            page_sessions(&updates, &parts, ledger)
+        });
+        Self {
+            start: page.start,
+            end: page.end,
+            more: page.more,
+            snapshot: ThreadPageSnapshot {
+                updates,
+                parts,
+                sessions,
+            },
+        }
+    }
+}
+
+/// Where each session the page names runs now: a letter's addressee, a
+/// spawn's new agent and a received letter's sender, each as written, found
+/// among the live registrations by id or name the way a letter's target is
+/// (`coordination::resolve_registered`).
+fn page_sessions(
+    updates: &[Value],
+    parts: &BTreeMap<String, HideCall>,
+    ledger: &Ledger,
+) -> BTreeMap<String, ThreadSession> {
+    let called = parts.values().filter_map(|part| match part {
+        HideCall::Letter { to, .. } => Some(to.as_str()),
+        HideCall::Spawn { name, agent_id, .. } => agent_id.as_deref().or(name.as_deref()),
+        HideCall::Plan | HideCall::View { .. } | HideCall::Mission { .. } => None,
+    });
+    let senders = updates
         .iter()
-        .filter_map(|update| serde_json::to_value(update).ok())
-        .collect();
-    let parts = page_parts(&updates, earlier);
-    ThreadPageSnapshot { updates, parts }
+        .filter_map(|update| update["_meta"]["hide"]["from"].as_str());
+    called
+        .chain(senders)
+        .filter_map(|name| {
+            let record = crate::coordination::registered_record(ledger, name)?;
+            Some((
+                name.to_owned(),
+                ThreadSession {
+                    pane_id: record.pane.clone(),
+                    machine: record.machine.clone(),
+                },
+            ))
+        })
+        .collect()
 }
 
 fn merged_parts(pages: &[Arc<ThreadPageSnapshot>]) -> BTreeMap<String, HideCall> {
@@ -1518,6 +1581,72 @@ mod tests {
         assert_eq!(
             thread(&runtime).input.map(|input| input.state),
             Some(ThreadInputState::Sent)
+        );
+    }
+
+    /// A letter's addressee, a spawn's agent and a received letter's sender
+    /// are placed by the live registration that answers to the name as
+    /// written; an ended or unknown one is left to its name.
+    #[test]
+    fn the_sessions_a_page_names_are_placed_by_their_live_registration() {
+        let record = |id: &str, name: &str, machine: &str, pane: &str, ended: bool| {
+            crate::coordination::AgentRecord {
+                id: id.into(),
+                name: Some(name.into()),
+                machine: machine.into(),
+                host_scope: "scope".into(),
+                native_machine: machine.into(),
+                session: format!("{id}-session"),
+                instance: pane.into(),
+                pane: pane.into(),
+                parent: None,
+                origin: None,
+                project: None,
+                actor: crate::delivery::Actor {
+                    pane_id: pane.into(),
+                    name: name.into(),
+                    kind: "claude".into(),
+                    device_id: machine.into(),
+                    session: crate::engine::tokens::session_digest(&format!("{id}-session")),
+                },
+                ended,
+                terminal_id: None,
+                forked: false,
+            }
+        };
+        let ledger = Ledger {
+            agents: vec![
+                record("agent-7", "review", "mini", "remote:mini:pane:w2:p1", false),
+                record("agent-9", "desk-conductor", "mac", "w1:p3", false),
+                record("agent-42", "old", "mac", "w1:p4", true),
+            ],
+            ..Default::default()
+        };
+        let updates = vec![
+            json!({"sessionUpdate": "user_message_chunk",
+                "content": {"type": "text", "text": "다음 단계"},
+                "_meta": {"hide": {"origin": "letter", "from": "desk-conductor"}}}),
+            json!({"sessionUpdate": "tool_call", "toolCallId": "a", "kind": "execute",
+                "title": "hide request send agent-7 --intent m:ask --body 봐줘"}),
+            json!({"sessionUpdate": "tool_call", "toolCallId": "b", "kind": "execute",
+                "title": "hide agent spawn --name old"}),
+            json!({"sessionUpdate": "tool_call", "toolCallId": "c", "kind": "execute",
+                "title": "hide request send nobody --intent m:ask"}),
+        ];
+        let parts = page_parts(&updates, &BTreeMap::new());
+        let place = |pane: &str, machine: &str| ThreadSession {
+            pane_id: pane.into(),
+            machine: machine.into(),
+        };
+        assert_eq!(
+            page_sessions(&updates, &parts, &ledger),
+            BTreeMap::from([
+                (
+                    "agent-7".to_owned(),
+                    place("remote:mini:pane:w2:p1", "mini")
+                ),
+                ("desk-conductor".to_owned(), place("w1:p3", "mac")),
+            ])
         );
     }
 

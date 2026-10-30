@@ -89,12 +89,26 @@ pub struct ThreadInputSnapshot {
 }
 
 /// One page of the thread: ACP session updates as the reader wrote them
-/// (`sessionUpdate` names the variant, fields in camelCase), and each
-/// `hide` call on it by the tool call id it replaces.
+/// (`sessionUpdate` names the variant, fields in camelCase), each `hide`
+/// call on it by the tool call id it replaces, and where the sessions the
+/// page names run.
 #[derive(Clone, Debug, Default, PartialEq, Serialize)]
 pub struct ThreadPageSnapshot {
     pub updates: Vec<serde_json::Value>,
     pub parts: BTreeMap<String, HideCall>,
+    /// Each session a letter or a spawn on the page names (its registration
+    /// id or name, as written) that a live registration answers to, by that
+    /// name: a chip draws the session's row (B26). A name no live
+    /// registration answers to is left out, and the chip draws the name.
+    pub sessions: BTreeMap<String, ThreadSession>,
+}
+
+/// Where a session a thread names runs: its pane as the agent rows key it,
+/// on its machine.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct ThreadSession {
+    pub pane_id: String,
+    pub machine: String,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize)]

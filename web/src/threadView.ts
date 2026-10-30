@@ -3,16 +3,18 @@
 // `session_thread_history` and the page the session is still writing in
 // `session_thread`, each on its own revision; the screen draws them as one.
 
-import type { SessionThreadHistorySection, SessionThreadSection, SnapshotRest, ThreadPart, ThreadUpdate } from "./snapshot";
+import type { SessionThreadHistorySection, SessionThreadSection, SnapshotRest, ThreadPart, ThreadSession, ThreadUpdate } from "./snapshot";
 
 export type ThreadConversation = {
   /** Every update the thread holds, oldest first. */
   updates: ThreadUpdate[];
   /** The Hide part of each tool call that made one, by tool call id; a later page's reading of a call wins. */
   parts: Record<string, ThreadPart>;
+  /** Where each session the thread names runs, by the name as written; a later page's placing wins. */
+  sessions: Record<string, ThreadSession>;
 };
 
-const EMPTY: ThreadConversation = { updates: [], parts: {} };
+const EMPTY: ThreadConversation = { updates: [], parts: {}, sessions: {} };
 
 /**
  * The thread's conversation. Kept pages of another generation belong to a
@@ -26,6 +28,7 @@ export function threadConversation(thread: SessionThreadSection | null, history:
   return {
     updates: pages.flatMap((page) => page.updates),
     parts: Object.assign({}, ...pages.map((page) => page.parts)) as Record<string, ThreadPart>,
+    sessions: Object.assign({}, ...pages.map((page) => page.sessions)) as Record<string, ThreadSession>,
   };
 }
 
