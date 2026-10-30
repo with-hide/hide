@@ -5,8 +5,9 @@
 //! another machine ([`Session`]) start the same way: `ssh <alias>` runs the
 //! start script ([`super::host::bootstrap`]), its questions go to the
 //! attempt's [`SignIn`] through a desk ([`super::askpass`]), what it prints
-//! while it signs in is read for a browser check and kept for the one
-//! classification of a run that did not connect ([`openssh::classify`]),
+//! while it signs in is read for a browser check and kept, each link cut to
+//! its host ([`openssh::kept_line`]), for the one classification of a run
+//! that did not connect ([`openssh::classify`]),
 //! and the script's probe is the sign-in's end. A device then installs and
 //! starts its helper; a session takes steps until its owner ends it or
 //! hands its pipes to the attach role.
@@ -50,6 +51,7 @@ pub(super) struct SigningIn {
     sign_in: Arc<dyn SignIn>,
     wake: Wake,
     cancel: Cancel,
+    /// ssh's last error lines as [`openssh::kept_line`] keeps them.
     pub(super) stderr: std::collections::VecDeque<String>,
     signed_in: bool,
     /// When a sign-in link was shown on the row (or, for an attempt nobody
@@ -83,7 +85,7 @@ impl SigningIn {
         if self.stderr.len() == STDERR_TAIL {
             self.stderr.pop_front();
         }
-        self.stderr.push_back(line);
+        self.stderr.push_back(openssh::kept_line(&line));
     }
 
     /// The sign-in is over: the connection reached the device's shell.
@@ -204,7 +206,7 @@ pub(super) struct Dial<'a> {
 /// Starts `ssh` for the alias and reads the start script's probe through the
 /// sign-in: the attempt's questions go to `sign_in` (none when this `ssh`
 /// cannot hand one to Hide, B21), and a run that did not reach the script is
-/// classified once, with ssh's raw words in the log. Every way out but the
+/// classified once, with ssh's words in the log, each link cut to its host. Every way out but the
 /// probe's answer ends and reaps the `ssh` child before it returns (B8,
 /// B26); from the probe on, the caller owns it through the pipe, and `cancel`
 /// ends it at once until the caller disarms it.
@@ -680,4 +682,86 @@ pub struct AttachChannel {
     /// What the attach role and ssh wrote on their error output, for the
     /// diagnostic when the stream ends before a handshake.
     pub stderr: Arc<Mutex<Vec<u8>>>,
+}
+
+#[cfg(all(test, unix))]
+mod tests {
+    use std::os::unix::fs::PermissionsExt;
+
+    use super::*;
+    use hide_node_link::device::Answer;
+
+    /// The row's side of an attempt: keeps what it was shown.
+    #[derive(Default)]
+    struct Row(Mutex<Vec<SignInWait>>);
+
+    impl SignIn for Row {
+        fn show(&self, wait: Option<SignInWait>) {
+            lock_recover(&self.0).extend(wait);
+        }
+
+        fn ask(&self, _: SignInWait) -> Result<Answer, Refusal> {
+            Err(Refusal::NotAllowed)
+        }
+    }
+
+    /// A proxy that prints a sign-in link and fails before the start script
+    /// answers: the row is shown the whole link, while the failure's words
+    /// and the log keep where it pointed and nothing that signs in.
+    #[test]
+    fn a_failed_sign_in_shows_its_link_and_keeps_none_of_its_token() {
+        const TOKEN: &str = "s3cr3t-sign-in-token";
+        let link = format!("https://team.cloudflareaccess.com/cdn-cgi/access/cli?token={TOKEN}");
+        let dir = tempfile::tempdir().unwrap();
+        let ssh = dir.path().join("ssh");
+        std::fs::write(
+            &ssh,
+            format!(
+                "#!/bin/sh\necho 'Log in with your Cloudflare account: {link}' >&2\nexit 255\n"
+            ),
+        )
+        .unwrap();
+        std::fs::set_permissions(&ssh, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let row = Arc::new(Row::default());
+        let (signed, records) = crate::diagnostics::capture(|| {
+            sign_in(
+                &Dial {
+                    program: &SshProgram::new(ssh, dir.path()),
+                    alias: "studio",
+                    resolved: &Resolved::read("user al\nhostname studio.example.test\nport 22\n")
+                        .unwrap(),
+                    version: Version {
+                        major: 9,
+                        minor: 6,
+                        windows: false,
+                    },
+                    askpass: None,
+                    target: "ssh:studio",
+                },
+                Arc::clone(&row) as Arc<dyn SignIn>,
+                Wake::Allowed,
+                &Cancel::default(),
+                &|_| {},
+            )
+        });
+        let Err(EstablishError::Ssh(failure)) = signed else {
+            panic!("the stand-in fails before the start script answers");
+        };
+        assert_eq!(
+            *lock_recover(&row.0),
+            [SignInWait::Browser { url: link.clone() }]
+        );
+        assert!(!failure.detail.contains(TOKEN), "{}", failure.detail);
+        let logged = records
+            .iter()
+            .find(|record| record["kind"] == "host.ssh_failed")
+            .expect("the failure is logged");
+        assert_eq!(
+            logged["stderr_tail"][0],
+            "Log in with your Cloudflare account: https://team.cloudflareaccess.com/…"
+        );
+        for record in &records {
+            assert!(!record.to_string().contains(TOKEN), "{record}");
+        }
+    }
 }
