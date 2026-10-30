@@ -1485,6 +1485,20 @@ export type PlanStepStatus = "planned" | "working" | "done" | "dropped";
 export type PlanReview = "approved" | "proposed";
 /** What a step leaves behind, the tail of its card (`plan_output`, D-02). */
 export type PlanOutput = "pr" | "file" | "none";
+/** Where a handed step's current attempt stands (`plan_delegation_state`, PRD hide-plan-delegate D-07, D-22): working, its report came (보고 옴), it sent a block (막힘), or its pane closed for good without a report (닫힘). */
+export type PlanDelegationState = "working" | "reported" | "blocked" | "closed";
+/** What a finished step left, checked when its done was recorded (`plan_evidence_kind`, D-13, D-19): a pull request by repository and number, or a file by its path below the session's checkout. A step done before evidence existed carries none. */
+export type PlanEvidence = { kind: "pr"; repo: string; number: number } | { kind: "file"; path: string };
+/** The child a step is handed to, or was when it finished (B20): its pane while shown and its session, by which the child's own plan is found in `PlansSnapshot.items`. `agent_id` is null while the child is still being started. */
+export type PlanDelegation = {
+  state: PlanDelegationState;
+  attempt: number;
+  agent_id: string | null;
+  name: string;
+  agent: string;
+  pane_id: string | null;
+  session: WorkSession | null;
+};
 
 /** One step as the map draws it (`StepView`). */
 export type PlanStep = {
@@ -1499,6 +1513,11 @@ export type PlanStep = {
   change: string | null;
   /** A step it waits on is neither done nor dropped: the card is dashed (B7). */
   waiting: boolean;
+  /** 맡길 예정: the agent means to hand the step to another agent (PRD hide-plan-delegate B3). */
+  delegate: boolean;
+  evidence: PlanEvidence | null;
+  /** Null for a step the main does itself or took back. */
+  delegation: PlanDelegation | null;
 };
 
 /** The current and next step and the count, as the core reads them (D-03, D-25). */
@@ -1516,7 +1535,7 @@ export type PlanView = {
   updated_at_unix_ms: number;
 };
 
-/** The plans the core keeps for the panes on screen. */
+/** The plans the core keeps for the panes on screen, and the plans of the children their steps are handed to, whether or not those panes are shown (`pane_id` empty then). */
 export type PlansSnapshot = { items: PlanView[] };
 
 /** Settings › Conductor (D-31): the cap, the default scope, the worker candidates, a new mission's verification strength and whether its checkers come from another company. */

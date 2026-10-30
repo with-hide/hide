@@ -16,7 +16,7 @@ const MINUTE = 60_000;
 const SESSION = { device_id: "local", agent: "claude", session_id: "gallery-plan" };
 
 function step(key: string, title: string, status: PlanStep["status"], depends_on: string[], extra: Partial<PlanStep> = {}): PlanStep {
-  return { key, title, depends_on, status, line: null, output: null, changed: false, change: null, waiting: false, ...extra };
+  return { key, title, depends_on, status, line: null, output: null, changed: false, change: null, waiting: false, delegate: false, evidence: null, delegation: null, ...extra };
 }
 
 /** The eight steps of the mockup's evaluation run (scene 3), as each state leaves them. */

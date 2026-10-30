@@ -546,11 +546,17 @@ fn spawn(
         task,
         brief,
         mission: _,
+        plan_node,
+        plan,
         beside,
     } = &command
     else {
         return Err("invalid_spawn".into());
     };
+    // A plan step's spawn runs only as the core admitted it.
+    if plan_node.is_some() != plan.is_some() {
+        return Err("invalid_spawn".into());
+    }
     if brief
         .as_ref()
         .is_some_and(|brief| brief.trim().is_empty() || brief.len() > crate::delivery::BODY_LIMIT)
@@ -1896,6 +1902,8 @@ mod tests {
                     parent: self.parent.clone(),
                     command: Command::Spawn {
                         mission: None,
+                        plan_node: None,
+                        plan: None,
                         parent: Some(self.parent.clone()),
                         machine: None,
                         name: name.into(),
@@ -2150,6 +2158,8 @@ mod tests {
                 .to_owned();
             let command = Command::Spawn {
                 mission: None,
+                plan_node: None,
+                plan: None,
                 parent: Some("here".into()),
                 machine: None,
                 name: "recipient".into(),

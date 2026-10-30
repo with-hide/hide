@@ -2188,11 +2188,25 @@
                     }
                 },
                 {
+                    "conflicts": [
+                        "--plan-node"
+                    ],
                     "name": "--intent",
-                    "required": true,
+                    "required": false,
                     "requires": [],
                     "value": {
                         "type": "text"
+                    }
+                },
+                {
+                    "conflicts": [
+                        "--intent"
+                    ],
+                    "name": "--plan-node",
+                    "required": false,
+                    "requires": [],
+                    "value": {
+                        "type": "key"
                     }
                 },
                 {
@@ -2301,7 +2315,18 @@
                 "beside_other_checkout",
                 "beside_other_machine",
                 "beside_needs_agent_pane",
-                "beside_pane_unavailable"
+                "beside_pane_unavailable",
+                "plan_missing",
+                "plan_node_unknown",
+                "plan_node_finished",
+                "plan_delegate_needs_parent",
+                "plan_order_refused",
+                "plan_review_pending",
+                "plan_candidate_refused",
+                "plan_delegate_full",
+                "plan_delegate_not_permitted",
+                "plan_unavailable",
+                "plan_session_unknown"
             ],
             "repeats_at_most": null,
             "rest": "the agent's own arguments"
@@ -3898,7 +3923,14 @@
                 "plan_too_large",
                 "plan_full",
                 "plan_unavailable",
-                "plan_session_unknown"
+                "plan_session_unknown",
+                "plan_evidence_missing",
+                "plan_pr_not_yours",
+                "plan_pr_unconfirmed",
+                "plan_file_outside",
+                "plan_file_missing",
+                "plan_file_unconfirmed",
+                "plan_report_missing"
             ],
             "repeats_at_most": null,
             "rest": null
@@ -3924,9 +3956,9 @@
                     "value": {
                         "type": "one_of",
                         "values": [
+                            "done",
                             "planned",
                             "working",
-                            "done",
                             "dropped"
                         ]
                     }
@@ -3938,12 +3970,41 @@
                     "value": {
                         "type": "text"
                     }
+                },
+                {
+                    "conflicts": [
+                        "--file"
+                    ],
+                    "name": "--pr",
+                    "required": false,
+                    "requires": [],
+                    "value": {
+                        "type": "unsigned"
+                    }
+                },
+                {
+                    "conflicts": [
+                        "--pr"
+                    ],
+                    "name": "--file",
+                    "required": false,
+                    "requires": [],
+                    "value": {
+                        "type": "text"
+                    }
                 }
             ],
             "refusals": [
                 "plan_missing",
                 "plan_node_unknown",
-                "plan_order_refused"
+                "plan_order_refused",
+                "plan_evidence_missing",
+                "plan_pr_not_yours",
+                "plan_pr_unconfirmed",
+                "plan_file_outside",
+                "plan_file_missing",
+                "plan_file_unconfirmed",
+                "plan_report_missing"
             ],
             "repeats_at_most": null,
             "rest": null
@@ -3991,7 +4052,7 @@
             "rest": null
         }
     ],
-    "digest": "sha256:ed7bf74ade882f7b98344656f23870b8e93d2ec42a78a6cff970f5c5c7f50987",
+    "digest": "sha256:1019ebe976aed86140577551008d5a94cfd2bde2fcbc7723871f2cd01fefde6f",
     "envelopes": {
         "agent": {
             "answer": "value",

@@ -3,7 +3,7 @@
 //! capability a delivery command uses, on this machine or a connected
 //! device's (D-21).
 //!
-//! Six verbs and four flags. Each answer the core gives for the caller's own
+//! Six verbs and their flags. Each answer the core gives for the caller's own
 //! plan carries the summary the agent's hook keeps, and the CLI writes it
 //! into the pane's record at once, so a plan put up for review stops the
 //! next write in the same turn and an approval lets it through (D-30).
@@ -16,7 +16,7 @@ use std::collections::BTreeMap;
 /// The guide `hide plan help` prints, which the `hide-plan` skill points at.
 pub const HELP: &str = include_str!("../assets/plan/help.md");
 
-pub const USAGE: &str = "hide plan help\nhide plan set (--file <plan.json> | --json <plan>) [--ask [why]] [--reason <text>]\nhide plan node <key> [--status planned|working|done|dropped] [--line <text>]\nhide plan approve [<agent>]\nhide plan drop [<agent>]\nhide plan show [<agent>]";
+pub const USAGE: &str = "hide plan help\nhide plan set (--file <plan.json> | --json <plan>) [--ask [why]] [--reason <text>]\nhide plan node <key> [--status planned|working|done|dropped] [--line <text>] [--pr <number> | --file <path>]\nhide plan approve [<agent>]\nhide plan drop [<agent>]\nhide plan show [<agent>]";
 
 /// The largest plan file read from disk.
 const FILE_LIMIT: u64 = 96 * 1024;
@@ -161,7 +161,7 @@ pub fn parse<'a>(args: impl Iterator<Item = &'a String>) -> Result<PlanCli, Stri
         "node" => {
             let Flags {
                 positional, values, ..
-            } = flags(rest, &["--status", "--line"])?;
+            } = flags(rest, &["--status", "--line", "--pr", "--file"])?;
             let [key] = positional.as_slice() else {
                 return Err(USAGE.to_owned());
             };
@@ -177,10 +177,34 @@ pub fn parse<'a>(args: impl Iterator<Item = &'a String>) -> Result<PlanCli, Stri
             if status.is_none() && line.is_none() {
                 return Err("give --status, --line or both".into());
             }
+            let pr = values
+                .get("--pr")
+                .map(|number| {
+                    number
+                        .trim_start_matches('#')
+                        .parse::<u32>()
+                        .ok()
+                        .filter(|number| *number > 0)
+                        .ok_or_else(|| format!("--pr takes a pull request number, not {number}"))
+                })
+                .transpose()?;
+            // A path is sent as every machine spells it, `/` between names,
+            // and read from the session's checkout by the core (B12).
+            let file = values
+                .get("--file")
+                .map(|path| hide_platform::path::to_wire_lossy(std::path::Path::new(path)));
+            if pr.is_some() && file.is_some() {
+                return Err("give --pr or --file, not both".into());
+            }
+            if (pr.is_some() || file.is_some()) && status != Some(StepStatus::Done) {
+                return Err("--pr and --file go with --status done".into());
+            }
             PlanCommand::Node {
                 key: key.clone(),
                 status,
                 line,
+                pr,
+                file,
             }
         }
         "approve" | "drop" | "show" => {
@@ -370,6 +394,30 @@ mod tests {
         ));
         assert!(parse(words(&["node", "core"]).iter()).is_err());
         assert!(parse(words(&["node", "core", "--status", "finished"]).iter()).is_err());
+        assert!(matches!(
+            parse(words(&["node", "pr", "--status", "done", "--pr", "#1890"]).iter()).unwrap(),
+            PlanCli::Command(PlanCommand::Node {
+                pr: Some(1890),
+                file: None,
+                ..
+            })
+        ));
+        assert!(matches!(
+            parse(words(&["node", "spec", "--status", "done", "--file", "docs/spec.md"]).iter())
+                .unwrap(),
+            PlanCli::Command(PlanCommand::Node {
+                pr: None,
+                file: Some(path),
+                ..
+            }) if path == "docs/spec.md"
+        ));
+        // Evidence is what a done leaves, one at a time.
+        assert!(parse(words(&["node", "pr", "--status", "working", "--pr", "3"]).iter()).is_err());
+        assert!(
+            parse(words(&["node", "pr", "--status", "done", "--pr", "3", "--file", "a"]).iter())
+                .is_err()
+        );
+        assert!(parse(words(&["node", "pr", "--status", "done", "--pr", "zero"]).iter()).is_err());
         assert!(parse(words(&["node", "bad key", "--line", "x"]).iter()).is_err());
     }
 
