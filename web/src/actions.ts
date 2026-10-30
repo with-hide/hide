@@ -1938,6 +1938,17 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
       showTool("memory");
     },
 
+    /**
+     * The Mission tool on its defaults (PRD mission-tool B9): its head's ⚙,
+     * the empty tool's `바꾸기 ›` and the map head's ⚙ all open it here, never
+     * a settings window.
+     */
+    openMissionSettings() {
+      if (!workspaceInFront()) return diagnostic("mission_settings: no Workspace in front");
+      useUiStore.getState().setMissionToolPage("settings");
+      showTool("mission");
+    },
+
     /** ← in the 보기 head (B47): the item opened before, or the slot closes. */
     detailBack() {
       dispatch({ schema_version: 2, kind: "detail_back", payload: {} });

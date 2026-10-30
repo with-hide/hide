@@ -174,7 +174,7 @@ function useWide(root: HTMLElement | null): boolean {
 }
 
 /** The pill's words and colour: the operator's merge waits in the decision colour, a finished mission is grey (D-02). */
-const PILL: Record<MissionStatus, { key: MessageKey; tone: string }> = {
+export const PILL: Record<MissionStatus, { key: MessageKey; tone: string }> = {
   planning: { key: "mission.pill.planning", tone: "bg-muted text-muted-foreground" },
   running: { key: "mission.pill.running", tone: "bg-mission-working/15 text-mission-working" },
   merge_wait: { key: "mission.pill.mergeWait", tone: "bg-mission-hold/15 text-mission-hold" },

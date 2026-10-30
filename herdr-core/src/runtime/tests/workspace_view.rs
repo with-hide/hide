@@ -757,6 +757,30 @@ fn a_closed_lane_comes_back_in_the_shape_it_had_across_a_restart() {
     );
 }
 
+/// PRD mission-tool D-01, B1: the Mission tool is a tool column like the
+/// others: kept as sent, read by no panel reader, and saved with the
+/// Workspace so it is there after a restart.
+#[test]
+fn the_mission_tool_is_kept_and_saved_as_the_workspace_tool() {
+    let (runtime, _checkout_id, directory) = strip_checkout("lane-mission");
+    let (_views, state) = views_path("lane-mission");
+    let mut runtime = with_views(runtime, &state);
+    with_tabs(&mut runtime, &directory);
+
+    layout(&mut runtime, serde_json::json!({"tool": "mission"}));
+    assert_eq!(lane(&runtime), (true, false, Some(Tool::Mission), false));
+    assert!(
+        runtime.snapshot.ui_state.right_panel_visible
+            && runtime.snapshot.ui_state.right_panel_section == RightPanelSection::Memory,
+        "the Mission tool starts no Explorer, Changes or Git reader"
+    );
+
+    let (saved, _) = crate::workspace_views::load(&state, 0);
+    let view = runtime.snapshot.workspace_view.as_ref().unwrap();
+    let saved = saved.get(&view.device_id, &view.path).unwrap();
+    assert_eq!((saved.open, saved.tool), (true, Some(Tool::Mission)));
+}
+
 /// PRD lane-two-columns B5, B12: the Explorer opens with no view and opens
 /// nothing (no document, no New tab page); a file picked there opens beside
 /// it; closing the last view closes the viewing column and leaves the
