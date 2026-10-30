@@ -842,6 +842,8 @@ struct ReadyBranch {
     shared: SharedRuntime,
     commands: std::sync::mpsc::Receiver<crate::suggestions::worker::Command>,
     project: crate::suggestions::worker::ProjectRef,
+    /// The ready attempt the worker follows, as it last said.
+    attempt: crate::suggestions::apply::FollowedAttempt,
 }
 
 impl ReadyBranch {
@@ -925,7 +927,7 @@ impl ReadyBranch {
             }),
             failure: None,
         };
-        let fixture = Self {
+        let mut fixture = Self {
             _folder: folder,
             repo,
             remote: origin,
@@ -933,6 +935,7 @@ impl ReadyBranch {
             shared,
             commands,
             project: ProjectRef { node, path: root },
+            attempt: attempt.clone(),
         };
         fixture
             .shared
@@ -946,12 +949,49 @@ impl ReadyBranch {
         assert_eq!((facts.added, facts.removed, facts.files_total), (1, 0, 1));
         assert_eq!(facts.files[0].path, "AGENTS.md");
         attempt.branch_facts = Some(facts);
+        fixture.follow(attempt);
         fixture
-            .shared
+    }
+
+    /// The worker's list of attempts, now holding `attempt`.
+    fn follow(&mut self, attempt: crate::suggestions::apply::FollowedAttempt) {
+        self.attempt = attempt.clone();
+        self.shared
             .lock()
             .unwrap()
             .follow_suggestion_attempts(vec![attempt], Vec::new());
-        fixture
+    }
+
+    /// The remake's agent as the worker reports it: begun, then ready on the
+    /// branch as it is now.
+    fn remade(&mut self, started_at_unix_ms: u64) {
+        use crate::suggestions::lifecycle::{AttemptPhase, AttemptPurpose};
+        let mut attempt = self.attempt.clone();
+        attempt.started_at_unix_ms = started_at_unix_ms;
+        attempt.purpose = AttemptPurpose::Rebase;
+        attempt.phase = AttemptPhase::Working;
+        attempt.failure = None;
+        self.follow(attempt.clone());
+        let facts = attempt.branch_facts.as_mut().unwrap();
+        facts.tip = self.git(&["rev-parse", "hide-suggestion-s2-x"]);
+        attempt.phase = AttemptPhase::Ready;
+        self.follow(attempt);
+    }
+
+    /// The actions the runtime handed the worker, until it is quiet.
+    fn actions(
+        &self,
+    ) -> Vec<(
+        crate::suggestions::notebook::LineId,
+        crate::suggestions::worker::LineAction,
+    )> {
+        let mut actions = Vec::new();
+        while let Ok(command) = self.commands.recv_timeout(Duration::from_millis(200)) {
+            if let crate::suggestions::worker::Command::Action { line, action, .. } = command {
+                actions.push((line, action));
+            }
+        }
+        actions
     }
 
     fn git(&self, args: &[&str]) -> String {
@@ -1159,6 +1199,74 @@ fn a_merge_whose_signing_fails_is_refused_as_the_signing() {
         AttemptMove::DecisionRefused("merge_sign_failed".into())
     );
     assert_eq!(fixture.git(&["rev-parse", "main"]), main);
+}
+
+/// A merge refused because the base moved under the branch and conflicts
+/// with it is not left for the operator: Hide asks the worker to make the
+/// branch again on the base (`다시 맞추기`) once, right after the refusal,
+/// and main is left as it was (operator decision 2026-10-31).
+#[test]
+fn a_merge_that_conflicts_with_the_base_starts_the_remake_itself() {
+    use crate::runtime::suggestion_apply::BranchDecision;
+    use crate::suggestions::lifecycle::AttemptMove;
+    use crate::suggestions::notebook::LineId;
+    use crate::suggestions::worker::LineAction;
+    let mut fixture = ReadyBranch::new(false);
+    std::fs::write(fixture.repo.join("AGENTS.md"), "one\nthree\n").unwrap();
+    fixture.git(&["commit", "-q", "-am", "base moves the same line"]);
+    let main = fixture.git(&["rev-parse", "main"]);
+    fixture.github(None);
+    assert!(fixture.press(BranchDecision::Merge));
+    assert_eq!(
+        fixture.moved(),
+        AttemptMove::DecisionRefused("merge_conflict".into())
+    );
+    assert_eq!(fixture.actions(), [(LineId(2), LineAction::Rebase)]);
+    assert_eq!(fixture.git(&["rev-parse", "main"]), main);
+
+    // The remake makes the branch again on main, and the merge the operator
+    // pressed is done once it is ready, with no second press.
+    fixture.git(&["checkout", "-q", "hide-suggestion-s2-x"]);
+    fixture.git(&["reset", "-q", "--hard", "main"]);
+    std::fs::write(fixture.repo.join("AGENTS.md"), "one\nthree\ntwo\n").unwrap();
+    fixture.git(&["commit", "-q", "-am", "fix the docs again"]);
+    fixture.git(&["checkout", "-q", "main"]);
+    fixture.remade(2);
+    let remade = fixture.git(&["rev-parse", "hide-suggestion-s2-x"]);
+    assert_eq!(
+        fixture.merged_commit(),
+        remade,
+        "a fast-forward to the remake"
+    );
+    assert_eq!(fixture.git(&["rev-parse", "main"]), remade);
+}
+
+/// The merge done again after a remake is done once: when main moved under
+/// the remade branch too, the refusal stays for the operator and no second
+/// remake starts by itself.
+#[test]
+fn a_remade_branch_that_conflicts_again_waits_for_the_operator() {
+    use crate::runtime::suggestion_apply::BranchDecision;
+    use crate::suggestions::lifecycle::AttemptMove;
+    let mut fixture = ReadyBranch::new(false);
+    std::fs::write(fixture.repo.join("AGENTS.md"), "one\nthree\n").unwrap();
+    fixture.git(&["commit", "-q", "-am", "base moves the same line"]);
+    fixture.github(None);
+    assert!(fixture.press(BranchDecision::Merge));
+    assert_eq!(
+        fixture.moved(),
+        AttemptMove::DecisionRefused("merge_conflict".into())
+    );
+    assert_eq!(fixture.actions().len(), 1, "one remake");
+    // The remake left the branch as it was, and main still conflicts.
+    fixture.remade(2);
+    assert_eq!(
+        fixture.moved(),
+        AttemptMove::DecisionRefused("merge_conflict".into())
+    );
+    assert!(fixture.actions().is_empty(), "no second remake");
+    fixture.remade(3);
+    fixture.moves_nothing();
 }
 
 /// `{base}에 바로 올리기` on a main with a commit GitHub does not have is

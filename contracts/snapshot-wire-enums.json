@@ -99,7 +99,7 @@
   "suggestion_group": ["choose", "applying", "applied"],
   "suggestion_state": ["new", "my_turn", "hide_ai_working", "watching", "effective", "applied"],
   "suggestion_source": ["notebook", "memory"],
-  "suggestion_hold": ["github_needed", "branches_full", "auto_pr_unreviewed"],
+  "suggestion_hold": ["github_needed", "auto_pr_unreviewed"],
   "suggestion_evidence_kind": ["session", "pr"],
   "suggestion_attempt_phase": ["starting", "working", "ready", "merging", "syncing", "pr_open", "ci_failed", "failed", "issue_open", "merged"],
   "suggestion_attempt_purpose": ["branch", "pr", "rebase"],
