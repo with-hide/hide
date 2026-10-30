@@ -32,7 +32,8 @@ const buttonVariants = cva(
         icon: "size-(--size-control)",
         "icon-sm": "size-(--size-control-sm)",
         "icon-xs": "rounded-xs p-xxs [&_svg:not([class*='size-'])]:size-(--size-icon-sm)",
-        inline: "h-auto rounded-xs p-0",
+        // A word action sits in a dense row or a list edge: its ring hugs it.
+        inline: "h-auto rounded-xs p-0 focus-visible:ring-offset-0",
       },
     },
     defaultVariants: { variant: "default", size: "default" },
