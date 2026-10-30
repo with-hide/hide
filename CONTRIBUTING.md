@@ -125,6 +125,22 @@ Follow the skill's verification prerequisites, and use its `screenshots` command
 Write the issue it finishes on the `Closes #N` line and nothing else there; a big issue split across several pull requests gets one sub-issue per piece, and each pull request closes its own.
 `Related:` names only the PRD path and the pull requests this one follows or depends on, because Hide and GitHub relate a pull request to an issue only through a closing keyword.
 
+### Waiting for CI
+
+An agent that waits for a run, a pull request's `verify` or main's push run after a merge, keeps a background watch on it; a turn never ends on "CI is running" with nothing watching, and never waits in a foreground `sleep` loop.
+Start the watch as a background command whose exit your runtime reports back to you (in Claude Code, a Bash call with `run_in_background`), then act when it ends: read the failed job and fix it, or take the next step the task names, such as the report letter.
+Watch the run, not the check list, because right after a push `gh pr checks --watch` exits at once with no checks reported:
+
+```sh
+# the newest verify run on the branch (main's push run after a merge); it can take a few seconds to appear
+gh run list --branch <branch> --workflow verify --limit 1 --json databaseId,headSha
+gh run watch <run-id> --exit-status --interval 60 >/dev/null 2>&1; echo "exit=$?"
+gh run view <run-id> --json jobs --jq '.jobs[] | select(.conclusion != "success" and .conclusion != "skipped") | .name'
+```
+
+Check that the run's `headSha` is the commit you pushed before watching it; a run for an older head says nothing about yours.
+On main, a later merge can cancel a pending push run ([Merging into main](#merging-into-main)), so a cancelled run means watching the next one that contains your merge.
+
 ## Starting work beside open pull requests
 
 Where work starts is decided twice: before it has code, and after its first push, from the conflicts git computes.
