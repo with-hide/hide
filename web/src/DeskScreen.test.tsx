@@ -42,6 +42,7 @@ const desk = (items: DeskItem[], state: DeskAgent["state"] = "ready"): DeskSecti
   conversation: { generation: 1, items, dropped: 0 },
   approvals_waiting: 0,
   settings: { default_agent: "claude", location: "worktree", cap: 8 },
+  lane: { pinned: false, kept: [] },
 });
 
 const fixer = { kind: "session" as const, id: "w1:p2", name: "fixer" };
@@ -75,7 +76,7 @@ describe("Desk's room", () => {
   async function render(section: DeskSection) {
     const actions = createActions((event) => { events.push(event); return true; });
     await act(async () => {
-      useShellStore.setState({ connection: "live", rest, desk: section, deskLive: null, deskJobs: { jobs: [] }, deskMentions: { sessions: [], projects: [] } });
+      useShellStore.setState({ connection: "live", rest, desk: section, deskLive: null, deskJobs: { jobs: [], workers: [] }, deskMentions: { sessions: [], projects: [] } });
       root.render(<TooltipProvider><DeskScreen actions={actions} /></TooltipProvider>);
     });
   }
