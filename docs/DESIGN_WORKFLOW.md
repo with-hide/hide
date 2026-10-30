@@ -2,8 +2,8 @@
 
 This guide owns changes to the public interface, tokens and component library.
 [UI_BEHAVIOR.md](UI_BEHAVIOR.md) owns shipped behavior.
-Original design boards, proposals, authoring tools and maintainer skills are maintained separately.
-When using a Pen canvas, keep distinct areas for the design system, components, screens, review proposals and temporary feature designs.
+[DESIGN_GUIDE.md](DESIGN_GUIDE.md) owns which part a screen is built from and the rules that keep screens alike.
+The production gallery is the visual reference; no design board is an input to a change or its review.
 A public checkout requires no private repository or design-tool login to build, test or contribute.
 
 ## Authorities
@@ -16,7 +16,6 @@ A public checkout requires no private repository or design-tool login to build, 
 The token generator remains public and is the only implementation of token parsing and web generation.
 Run `node scripts/gen-tokens.mjs` after changing tokens.
 It generates `web/src/tokens.css` and `web/src/generated/accents.ts`; do not edit those generated files by hand.
-Original boards are not an input to the public build or CI.
 
 ## Make a change
 
@@ -50,7 +49,7 @@ A screenshot exemption names its concrete reason in the pull request for the rev
 Add a token with both Dark (`value`) and Light (`light`) colors when it is a color.
 Use `hide` only when the Hide palette differs, and use aliases instead of restating an existing value.
 Regenerate the web outputs and use the token through Tailwind classes or CSS custom properties.
-Remove a token only after no public consumer needs it and maintainers have checked their separately maintained boards.
+Remove a token once no consumer needs it.
 For a reusable component, extend the existing part and its gallery states before introducing a sibling implementation.
 Keep product composites in `web/src/components` and smaller reusable parts in `web/src/components/ui`.
 
@@ -62,8 +61,9 @@ The public `design-contract.yml` workflow runs this same entrypoint and the cont
 - `check-web-tokens.mjs` refuses literal colors, sizes, radii and unchosen Tailwind values in web source.
 - `check-token-contrast.mjs` checks terminal text and secondary text against their backgrounds in both palettes and modes.
 - `check-agent-logos.mjs` checks bundled agent marks against their public registries and asset manifest.
+- `check-ui-parts.mjs` refuses a raw control or layer outside `web/src/components/ui` beyond each file's count in `scripts/ui-parts-baseline.json`, and asks for `--update` when a count went down ([DESIGN_GUIDE.md](DESIGN_GUIDE.md#three-rules)).
 
-`node --test scripts/tests/token-contrast.test.mjs scripts/tests/design-contract.test.mjs` checks contrast policy and staged-source isolation.
+`node --test scripts/tests/token-contrast.test.mjs scripts/tests/design-contract.test.mjs scripts/tests/ui-parts.test.mjs` checks contrast policy, staged-source isolation and the part-count ratchet.
 The opt-in `.githooks/pre-commit` invokes `node scripts/check-design-contract.mjs --staged`.
 That mode reads staged checker modules, tokens, web sources and agent registries into a temporary directory without changing the index or working tree.
 Stage the checker and inputs together; an unstaged repair must never make a broken staged candidate pass.
