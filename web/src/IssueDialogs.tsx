@@ -31,6 +31,7 @@ import { fieldLabel } from "./shortcutLabels";
 import { originOf, useBacklogOrigin } from "./backlogOrigin";
 import { useIssueDetail } from "./issueDetails";
 import { remoteRequestId } from "./remote";
+import { followStartedPane } from "./opening";
 
 export const DEFAULT_SETTINGS: IssueSettings = { ai_worktree_name: true, closes_instruction: true };
 
@@ -167,7 +168,7 @@ export function StartIssueDialog({ actions, workspace, task, onClose }: { action
   useEffect(() => {
     if (created?.phase !== "ready") return;
     if (created.agent_phase) useUiStore.getState().setWatchedTask(created.id);
-    if (created.pane_id) useUiStore.getState().setFocusWhenListed(created.pane_id);
+    if (created.pane_id) followStartedPane(created.pane_id);
     onClose();
   }, [created, onClose]);
 
