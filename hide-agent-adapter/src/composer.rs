@@ -101,6 +101,62 @@ impl Verdict {
     }
 }
 
+/// The step of [`Composer::judge`] that kept a screen from reading empty,
+/// named without anything of the screen's text, so a diagnostic can say why
+/// a composer was not read empty.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum Miss {
+    /// No line drawn only of `─`, where the declaration puts rules.
+    NoRule,
+    /// A bottom rule with no rule, labelled or not, above it.
+    NoTopRule,
+    /// No box, bar or marked line where the declaration puts the composer.
+    NoRegion,
+    /// The composer's first line does not begin with a declared marker.
+    NoMarker,
+    /// The composer has fewer lines than the agent's own chrome under it.
+    NoTrailer,
+    /// A line shows a placeholder's text with a cell in another style.
+    PlaceholderStyle,
+    /// A line shows text that is none of the placeholders.
+    NotPlaceholder,
+}
+
+impl Miss {
+    const ALL: [Self; 7] = [
+        Self::NoRule,
+        Self::NoTopRule,
+        Self::NoRegion,
+        Self::NoMarker,
+        Self::NoTrailer,
+        Self::PlaceholderStyle,
+        Self::NotPlaceholder,
+    ];
+
+    pub const fn verdict(self) -> Verdict {
+        match self {
+            Self::PlaceholderStyle | Self::NotPlaceholder => Verdict::Holds,
+            _ => Verdict::NotFound,
+        }
+    }
+
+    pub const fn code(self) -> &'static str {
+        match self {
+            Self::NoRule => "no_rule",
+            Self::NoTopRule => "no_top_rule",
+            Self::NoRegion => "no_region",
+            Self::NoMarker => "no_marker",
+            Self::NoTrailer => "no_trailer",
+            Self::PlaceholderStyle => "placeholder_style",
+            Self::NotPlaceholder => "not_placeholder",
+        }
+    }
+
+    pub fn from_code(code: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|miss| miss.code() == code)
+    }
+}
+
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 struct Pen {
     dim: bool,
@@ -118,39 +174,46 @@ impl Composer {
     /// Judges a screen Herdr read with styling (`pane.read`, format `ansi`,
     /// rows separated by newlines).
     pub fn judge(&self, screen: &str) -> Verdict {
+        self.explain(screen)
+            .map_or_else(Miss::verdict, |()| Verdict::Empty)
+    }
+
+    /// Judges a screen as [`Composer::judge`] does, and says which step kept
+    /// it from reading empty.
+    pub fn explain(&self, screen: &str) -> Result<(), Miss> {
         let lines: Vec<Cells> = screen.split('\n').map(cells).collect();
-        let Some(mut region) = self.region(&lines) else {
-            return Verdict::NotFound;
-        };
+        let mut region = self.region(&lines)?;
         if !self.marker.is_empty() {
-            let Some(first) = region.first_mut() else {
-                return Verdict::NotFound;
-            };
+            let first = region.first_mut().ok_or(Miss::NoMarker)?;
             let start = first.iter().take_while(|(c, _)| c.is_whitespace()).count();
             let text: String = first[start..].iter().map(|(c, _)| *c).collect();
-            let Some(marker) = self.marker.iter().find(|marker| text.starts_with(**marker)) else {
-                return Verdict::NotFound;
-            };
+            let marker = self
+                .marker
+                .iter()
+                .find(|marker| text.starts_with(**marker))
+                .ok_or(Miss::NoMarker)?;
             first.drain(..start + marker.chars().count());
         }
         for _ in 0..self.trailer {
-            let Some(last) = region.iter().rposition(|line| !blank(line)) else {
-                return Verdict::NotFound;
-            };
+            let last = region
+                .iter()
+                .rposition(|line| !blank(line))
+                .ok_or(Miss::NoTrailer)?;
             region.truncate(last);
         }
-        if region
-            .iter()
-            .filter(|line| !blank(line))
-            .all(|line| self.empty.iter().any(|shown| shown.matches(line)))
-        {
-            Verdict::Empty
-        } else {
-            Verdict::Holds
+        for line in region.iter().filter(|line| !blank(line)) {
+            if !self.empty.iter().any(|shown| shown.matches(line)) {
+                return Err(if self.empty.iter().any(|shown| shown.shows_text(line)) {
+                    Miss::PlaceholderStyle
+                } else {
+                    Miss::NotPlaceholder
+                });
+            }
         }
+        Ok(())
     }
 
-    fn region(&self, lines: &[Cells]) -> Option<Vec<Cells>> {
+    fn region(&self, lines: &[Cells]) -> Result<Vec<Cells>, Miss> {
         let marked = |line: &Cells| {
             let text = visible(line);
             let text = text.trim_start();
@@ -158,49 +221,64 @@ impl Composer {
         };
         match self.region {
             Region::BetweenRules => {
-                let bottom = lines.iter().rposition(rule)?;
-                let pen = lines[bottom].iter().find(|(c, _)| *c == '─')?.1;
+                let bottom = lines.iter().rposition(rule).ok_or(Miss::NoRule)?;
+                let pen = lines[bottom]
+                    .iter()
+                    .find(|(c, _)| *c == '─')
+                    .ok_or(Miss::NoRule)?
+                    .1;
                 let top = lines[..bottom]
                     .iter()
-                    .rposition(|line| rule(line) || labelled_rule(line, pen))?;
-                Some(lines[top + 1..bottom].to_vec())
+                    .rposition(|line| rule(line) || labelled_rule(line, pen))
+                    .ok_or(Miss::NoTopRule)?;
+                Ok(lines[top + 1..bottom].to_vec())
             }
             Region::Box { open, close, side } => {
-                let bottom = lines.iter().rposition(|line| starts_with(line, close))?;
-                let top = lines[..bottom]
-                    .iter()
-                    .rposition(|line| starts_with(line, open))?;
-                lines[top + 1..bottom]
-                    .iter()
-                    .map(|line| strip_side(line, side, true))
-                    .collect()
+                boxed(lines, open, close, side).ok_or(Miss::NoRegion)
             }
-            Region::Bar { side, close } => {
-                let bottom = lines.iter().rposition(|line| starts_with(line, close))?;
-                let top = lines[..bottom]
-                    .iter()
-                    .rposition(|line| !starts_with(line, side))
-                    .map_or(0, |index| index + 1);
-                (top < bottom).then_some(())?;
-                lines[top..bottom]
-                    .iter()
-                    .map(|line| strip_side(line, side, false))
-                    .collect()
-            }
+            Region::Bar { side, close } => barred(lines, side, close).ok_or(Miss::NoRegion),
             Region::ToBlank => {
-                let top = lines.iter().rposition(marked)?;
+                let top = lines.iter().rposition(marked).ok_or(Miss::NoRegion)?;
                 let end = lines[top + 1..]
                     .iter()
                     .position(blank)
                     .map_or(lines.len(), |offset| top + 1 + offset);
-                Some(lines[top..end].to_vec())
+                Ok(lines[top..end].to_vec())
             }
             Region::Line => {
-                let line = lines.iter().rposition(marked)?;
-                Some(vec![lines[line].clone()])
+                let line = lines.iter().rposition(marked).ok_or(Miss::NoRegion)?;
+                Ok(vec![lines[line].clone()])
             }
         }
     }
+}
+
+/// The lines between the last line beginning with `close` and the line
+/// beginning with `open` above it, stripped of the `side` border.
+fn boxed(lines: &[Cells], open: char, close: char, side: char) -> Option<Vec<Cells>> {
+    let bottom = lines.iter().rposition(|line| starts_with(line, close))?;
+    let top = lines[..bottom]
+        .iter()
+        .rposition(|line| starts_with(line, open))?;
+    lines[top + 1..bottom]
+        .iter()
+        .map(|line| strip_side(line, side, true))
+        .collect()
+}
+
+/// The lines beginning with `side` directly above the last line beginning
+/// with `close`, stripped of that border.
+fn barred(lines: &[Cells], side: char, close: char) -> Option<Vec<Cells>> {
+    let bottom = lines.iter().rposition(|line| starts_with(line, close))?;
+    let top = lines[..bottom]
+        .iter()
+        .rposition(|line| !starts_with(line, side))
+        .map_or(0, |index| index + 1);
+    (top < bottom).then_some(())?;
+    lines[top..bottom]
+        .iter()
+        .map(|line| strip_side(line, side, false))
+        .collect()
 }
 
 /// Whether a row of a screen Herdr read with styling (as [`Composer::judge`]
@@ -213,13 +291,8 @@ pub fn screen_shows(screen: &str, text: &str) -> bool {
 
 impl Placeholder {
     fn matches(&self, line: &Cells) -> bool {
-        let start = line
-            .iter()
-            .position(|(c, _)| !c.is_whitespace())
-            .unwrap_or(line.len());
-        let text: String = line[start..].iter().map(|(c, _)| *c).collect();
-        text.trim_end().starts_with(self.text)
-            && line[start..]
+        self.shows_text(line)
+            && line
                 .iter()
                 .filter(|(c, _)| !c.is_whitespace())
                 .all(|(_, pen)| match self.style {
@@ -228,6 +301,11 @@ impl Placeholder {
                     Style::Italic => pen.italic,
                     Style::Rgb(r, g, b) => pen.fg == Some(Colour::Rgb(r, g, b)),
                 })
+    }
+
+    /// Whether the line's text is this placeholder's, whatever its style.
+    fn shows_text(&self, line: &Cells) -> bool {
+        visible(line).trim().starts_with(self.text)
     }
 }
 

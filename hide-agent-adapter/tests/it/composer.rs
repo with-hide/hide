@@ -6,7 +6,7 @@
 
 use std::path::Path;
 
-use hide_agent_adapter::composer::Verdict;
+use hide_agent_adapter::composer::{Miss, Verdict};
 use hide_agent_adapter::{ADAPTERS, AgentId};
 
 fn screen(name: &str) -> String {
@@ -259,4 +259,44 @@ fn only_the_declared_signature_reads_empty() {
         grok.judge(&boxed("$ \x1b[3mhello\x1b[0m")),
         Verdict::NotFound
     );
+}
+
+/// A screen that does not read empty names the step that stopped it, so a
+/// diagnostic can say why without the screen's text.
+#[test]
+fn a_screen_not_read_empty_names_the_step_that_stopped_it() {
+    let claude = AgentId::ClaudeCode.adapter().composer.supported().unwrap();
+    let rule = "─".repeat(40);
+    let composer = |line: &str| format!("{rule}\r\n{line}\r\n{rule}\r\n");
+    for (screen, miss) in [
+        (String::new(), Miss::NoRule),
+        (format!("{rule}\r\n❯ \r\n"), Miss::NoTopRule),
+        (format!("─── name\r\n❯ \r\n{rule}\r\n"), Miss::NoTopRule),
+        (composer("$ "), Miss::NoMarker),
+        (composer("❯ hello"), Miss::PlaceholderStyle),
+    ] {
+        assert_eq!(claude.explain(&screen), Err(miss), "{screen:?}");
+        assert_eq!(claude.judge(&screen), miss.verdict());
+    }
+    assert_eq!(
+        claude.explain(&screen("claude-2.1.314-labelled-0-empty")),
+        Ok(())
+    );
+
+    let codex = AgentId::Codex.adapter().composer.supported().unwrap();
+    assert_eq!(
+        codex.explain("\x1b[1m› \x1b[0m\x1b[2mExplain this codebase\x1b[0m\r\n\r\n"),
+        Err(Miss::NotPlaceholder)
+    );
+    assert_eq!(
+        codex.explain("› Ask Codex to do anything\r\n\r\n"),
+        Err(Miss::PlaceholderStyle)
+    );
+    let grok = AgentId::Grok.adapter().composer.supported().unwrap();
+    assert_eq!(grok.explain("$ ls\r\n"), Err(Miss::NoRegion));
+
+    for miss in [Miss::NoRule, Miss::NoMarker, Miss::NotPlaceholder] {
+        assert_eq!(Miss::from_code(miss.code()), Some(miss));
+    }
+    assert_eq!(Miss::from_code("hello"), None);
 }

@@ -12,15 +12,18 @@
 //! The read runs on the doorbell's thread, off the runtime lock, at most
 //! once per draft episode (the input time that made the draft) and within
 //! the doorbell's per-pass budget of Herdr calls. The same read checks each
-//! agent version once at a moment its composer is known empty, so a screen
-//! that changed under the declaration turns the release off for that
-//! version rather than ringing over the operator's words.
+//! agent version at moments its composer is known empty, and only a version
+//! seen read empty there is released, so a screen that changed under the
+//! declaration keeps holding rather than ringing over the operator's words.
+//! A screen that did not read empty is a miss, logged with the step that
+//! stopped it, and the version is checked again later
+//! (`crate::composer_checks`).
 
 use std::collections::HashMap;
 use std::sync::Mutex;
 use std::time::Duration;
 
-use hide_agent_adapter::composer::{Composer, Verdict};
+use hide_agent_adapter::composer::{Composer, Miss, Verdict};
 use hide_herdr_client::{ApiConnector, request_small_response};
 use serde_json::json;
 
@@ -97,11 +100,11 @@ impl Reader {
             }
         };
         self.read.insert(pane.clone(), episode);
-        let verdict = screen(owner, &read);
+        let reading = screen(owner, &read);
         crate::diagnostic!(json!({"component":"delivery","kind":"composer.read",
             "pane_id":pane,"agent":read.agent,"version":read.version,
-            "verdict":verdict.map_or_else(|code| code, Verdict::code)}));
-        if verdict == Ok(Verdict::Empty)
+            "verdict":verdict_code(reading),"reason":miss_code(reading)}));
+        if reading == Ok(Ok(()))
             && let Ok(mut guard) = owner.lock()
         {
             guard.release_empty_composer(&read.actor, read.input_at_unix_ms, now);
@@ -110,8 +113,10 @@ impl Reader {
     }
 
     /// Checks one agent version's composer declaration, at most every
-    /// `CHECK_EVERY_MS`, at a moment the composer is known empty. Returns
-    /// whether a Herdr call was made.
+    /// `CHECK_EVERY_MS`, at a moment the composer is known empty: a screen
+    /// read empty passes the version, and any other is a miss that waits
+    /// longer before the version's next check. Returns whether a Herdr call
+    /// was made.
     pub(crate) fn check(&mut self, owner: &Mutex<Runtime>, now: u64) -> bool {
         if now < self.next_check_at {
             return false;
@@ -125,26 +130,46 @@ impl Reader {
         };
         self.attempted
             .insert(read.actor.pane_id.clone(), read.input_at_unix_ms);
-        let verdict = screen(owner, &read);
+        let reading = screen(owner, &read);
+        // A failed read says nothing about the screen, so it is no miss and
+        // the version waits for its next known-empty moment.
+        let check = reading.ok().and_then(|judged| {
+            let miss = judged.err().map(Miss::code);
+            let mut guard = owner.lock().ok()?;
+            Some(guard.record_composer_check(read.agent, &read.version, miss, now))
+        });
         crate::diagnostic!(
             json!({"component":"delivery","kind":"composer.version_checked",
             "pane_id":read.actor.pane_id,"agent":read.agent,"version":read.version,
-            "verdict":verdict.map_or_else(|code| code, Verdict::code)})
+            "verdict":verdict_code(reading),"reason":miss_code(reading),
+            "misses":check.as_ref().map(|check| check.misses),
+            "retry_after_ms":check.filter(|check| !check.passed)
+                .map(|check| crate::composer_checks::retry_after(check.misses))})
         );
-        // A failed read says nothing about the screen, so the version waits
-        // for its next known-empty moment.
-        if let Ok(verdict) = verdict
-            && let Ok(mut guard) = owner.lock()
-        {
-            guard.record_composer_check(read.agent, &read.version, verdict == Verdict::Empty);
-        }
         true
     }
 }
 
+/// A screen judged by its declaration: read empty, or the step that kept it
+/// from reading empty; or the code of a read that brought no screen.
+type Reading = Result<Result<(), Miss>, &'static str>;
+
+fn verdict_code(reading: Reading) -> &'static str {
+    match reading {
+        Ok(judged) => judged
+            .map_or_else(|miss| miss.verdict(), |()| Verdict::Empty)
+            .code(),
+        Err(code) => code,
+    }
+}
+
+fn miss_code(reading: Reading) -> Option<&'static str> {
+    reading.ok()?.err().map(Miss::code)
+}
+
 /// Reads the pane's visible screen with styling and judges it. The connector
 /// is looked up under the lock; the read itself runs off it.
-fn screen(owner: &Mutex<Runtime>, read: &Read) -> Result<Verdict, &'static str> {
+fn screen(owner: &Mutex<Runtime>, read: &Read) -> Reading {
     let connector = owner
         .lock()
         .ok()
@@ -153,7 +178,7 @@ fn screen(owner: &Mutex<Runtime>, read: &Read) -> Result<Verdict, &'static str> 
     judge(connector.as_ref(), read)
 }
 
-fn judge(connector: &dyn ApiConnector, read: &Read) -> Result<Verdict, &'static str> {
+fn judge(connector: &dyn ApiConnector, read: &Read) -> Reading {
     let parameters =
         wire::composer_screen_params(&read.raw_pane_id).map_err(|_| "herdr_parameters")?;
     let answer = request_small_response(connector, "pane.read", parameters, READ_TIMEOUT)
@@ -164,5 +189,5 @@ fn judge(connector: &dyn ApiConnector, read: &Read) -> Result<Verdict, &'static 
     if screen.truncated {
         return Err("read_truncated");
     }
-    Ok(read.composer.judge(&screen.text))
+    Ok(read.composer.explain(&screen.text))
 }
