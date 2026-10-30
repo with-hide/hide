@@ -801,3 +801,68 @@ fn putting_away_a_read_question_records_one_signal_with_ids_only() {
             .any(|event| event["kind"] == "verdict.ask_put_away")
     );
 }
+
+/// mission-17: the pull requests a child made stay on its live parent's row
+/// once the child has ended, from the link record's summary, and a summary
+/// that does not move them publishes nothing.
+#[test]
+fn a_summary_lays_an_ended_childs_pull_request_on_its_parents_row() {
+    let mut runtime = runtime();
+    let _dirs = hold_dirs(&mut runtime);
+    runtime.snapshot.navigator.agents = project_agents(serde_json::from_value(json!({
+        "agents": [{"pane_id":"lead", "agent":"claude", "agent_status":"idle", "state_change_seq":1}]
+    })).unwrap()).agents;
+    runtime.snapshot.navigator.agents[0].session_id = Some("s-lead".into());
+    runtime.sync_session_state();
+    assert_eq!(runtime.snapshot.navigator.agents[0].pulls, None);
+    let session = |id: &str| crate::links::ledger::SessionIdentity {
+        device_id: runtime.node.to_string(),
+        agent: "claude".into(),
+        session_id: id.into(),
+    };
+    let ended = crate::links::ledger::SessionWorkSummary {
+        session: session("s-ended"),
+        title: "ended child".into(),
+        fallback_title: String::new(),
+        native_title: None,
+        manual_title: None,
+        cwd: None,
+        ended_at_unix_ms: Some(1),
+        open_missed: 0,
+        subtree_open_missed: 0,
+        missed: Vec::new(),
+        open_asks: 0,
+        parent: Some(session("s-lead")),
+    };
+    let project = crate::links::ProjectLinkSummary {
+        work: vec![ended],
+        creators: vec![crate::links::ledger::OutputCreator {
+            source: session("s-ended"),
+            kind: "pr".into(),
+            repository: "acme/app".into(),
+            number: 1812,
+            url: "https://github.com/acme/app/pull/1812".into(),
+            title: "Fix the wake handoff".into(),
+            state: "merged".into(),
+            last_read_at_unix_ms: Some(5_000),
+        }],
+        ..Default::default()
+    };
+    assert!(runtime.ingest_link_summaries([("project".to_owned(), project.clone())].into()));
+    let list = runtime.snapshot.navigator.agents[0]
+        .pulls
+        .clone()
+        .expect("the lead lists its child's PR");
+    let shown: Vec<_> = list
+        .pulls
+        .iter()
+        .map(|pull| (pull.number, pull.state, pull.own))
+        .collect();
+    assert_eq!(shown, [(1812, crate::model::PrState::Merged, false)]);
+    assert_eq!(list.pulls[0].holders, ["ended child"]);
+    assert!(!runtime.ingest_link_summaries([("project".to_owned(), project)].into()));
+    assert!(
+        !runtime.sync_session_state(),
+        "an unchanged list publishes nothing"
+    );
+}

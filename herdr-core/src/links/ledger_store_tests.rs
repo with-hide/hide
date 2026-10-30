@@ -1621,10 +1621,7 @@ fn a_mixed_device_tree_groups_descendant_prs_under_the_direct_child() {
         assert_eq!(record.children[0].children[0].session, grandchild);
         assert_eq!(record.outputs.len(), 1);
         assert_eq!(record.outputs[0].source, grandchild);
-        // A grandchild's PR is listed under the direct child that led to it.
-        assert_eq!(record.pr_groups.len(), 1);
-        assert_eq!(record.pr_groups[0].child.as_ref(), Some(&child));
-        assert_eq!(record.pr_groups[0].outputs[0].state, state);
+        assert_eq!(record.outputs[0].state, state);
         assert_eq!(record.status.as_ref().map(|s| s.end), Some(LabelEnd::Done));
     }
     assert_eq!(
@@ -2540,10 +2537,10 @@ fn a_pull_request_the_label_judged_made_here_is_an_output_outside_the_reader_win
         .unwrap();
     store.refresh_ledger_outputs().unwrap();
     let record = store.ledger_record(&session()).unwrap();
-    assert_eq!(record.pr_groups.len(), 1);
-    assert_eq!(record.pr_groups[0].child, None);
-    assert_eq!(record.pr_groups[0].outputs[0].number, 41);
-    assert_eq!(record.pr_groups[0].outputs[0].state, "open");
+    assert_eq!(record.outputs.len(), 1);
+    assert_eq!(record.outputs[0].source, session());
+    assert_eq!(record.outputs[0].number, 41);
+    assert_eq!(record.outputs[0].state, "open");
 }
 
 /// The printing and GitHub's `createdAt` are read on two clocks, this
@@ -2569,9 +2566,9 @@ fn a_pull_request_printed_before_githubs_creation_time_is_still_the_sessions_out
     store.refresh_ledger_outputs().unwrap();
     let record = store.ledger_record(&session()).unwrap();
     let numbers: Vec<u64> = record
-        .pr_groups
+        .outputs
         .iter()
-        .flat_map(|group| &group.outputs)
+        .filter(|output| output.kind == "pr")
         .map(|output| output.number)
         .collect();
     assert_eq!(numbers, [41]);

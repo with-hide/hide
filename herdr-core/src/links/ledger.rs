@@ -443,15 +443,6 @@ pub struct WorkFlow {
     pub result: Option<FlowResult>,
 }
 
-/// The pull requests of this session or of one direct child's subtree (D-14).
-#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
-pub struct PrGroup {
-    /// `None` for this session's own.
-    pub child: Option<SessionIdentity>,
-    pub name: String,
-    pub outputs: Vec<WorkOutput>,
-}
-
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum MissedKind {
@@ -689,9 +680,11 @@ pub struct SessionRecord {
     pub omitted_requests: u64,
     /// This session's and every descendant's outputs, newest first.
     pub outputs: Vec<WorkOutput>,
-    /// The pull requests among `outputs`: this session's first, then one
-    /// group per direct child holding its whole subtree's (B18).
-    pub pr_groups: Vec<PrGroup>,
+    /// The `PR` section: this session's pull requests first, then one group
+    /// per direct child holding its whole subtree's (B18). The runtime lays
+    /// them from the session's one list (`agent_state::work::family`), the
+    /// list its rows draw; the ledger never reads or writes them.
+    pub pr_groups: Vec<crate::agent_state::work::family::PrGroup>,
     /// Non-PR outputs of this session and its descendants, newest first,
     /// each once (B22).
     pub artifacts: Vec<String>,
@@ -739,6 +732,11 @@ pub struct SessionWorkSummary {
     /// stands (PRD lane-two-columns B34). Core only.
     #[serde(skip)]
     pub open_asks: usize,
+    /// The session that started this one, as the record keeps the edge after
+    /// either ends: a session's pull requests gather its ended descendants'
+    /// along it (`agent_state::work::Recorded`). Core only.
+    #[serde(skip)]
+    pub parent: Option<SessionIdentity>,
 }
 
 impl LedgerUpdate {
@@ -853,6 +851,16 @@ pub struct OutputCreator {
     pub kind: String,
     pub repository: String,
     pub number: u64,
+    /// The output as the record last read it, which a session's pull
+    /// requests draw once GitHub's list no longer holds it. Core only.
+    #[serde(skip)]
+    pub url: String,
+    #[serde(skip)]
+    pub title: String,
+    #[serde(skip)]
+    pub state: String,
+    #[serde(skip)]
+    pub last_read_at_unix_ms: Option<u64>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize)]

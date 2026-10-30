@@ -436,6 +436,7 @@ impl Runtime {
         }
         self.snapshot.session_record = Some(Arc::new(snapshot));
         self.settle_record_views();
+        self.settle_record_pulls();
         true
     }
 
@@ -1063,8 +1064,14 @@ impl Runtime {
             associate_landed(workspace, projects.get(&workspace.id));
             associate_pr_sessions(&mut workspace.pull_requests, projects.get(&workspace.id));
         }
+        let recorded =
+            crate::agent_state::work::family::Recorded::from_summaries(projects.values());
         summaries.projects = projects;
         self.refresh_inactive_groups();
+        if recorded != self.recorded_pulls {
+            self.recorded_pulls = recorded;
+            self.sync_session_state();
+        }
         self.refresh_agent_scopes();
         true
     }

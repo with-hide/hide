@@ -3,7 +3,7 @@
 //! whether a resolve holds it, and its own PR summary. Which task a row
 //! belongs to and in what order the tasks stand is `tally/tasks.rs`'s.
 //! Memory and conversation history are separate readers, not session state.
-use crate::model::{PrState, SidebarAgentSnapshot};
+use crate::model::SidebarAgentSnapshot;
 use serde::{Deserialize, Serialize};
 
 /// How long a resolved session stays under Resolved (PRD D-23).
@@ -222,47 +222,4 @@ pub(crate) fn row(agent: &SidebarAgentSnapshot) -> Row {
             unfinished,
         },
     }
-}
-
-/// The PRs this row holds the duty of, plus its provisional history for
-/// display only, never its descendants' (PRD D-18,
-/// D-39): how many, the worst state, and each PR as an
-/// index into `request.pull_requests`, worst first, each in the one PR state
-/// ([`PrState::of`]). A merged PR keeps its place however long ago it
-/// merged, since the mark says what the row made, not what it still owes;
-/// closed PRs are not counted.
-#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
-pub struct PrSummary {
-    pub count: usize,
-    pub worst: PrState,
-    pub pulls: Vec<OwnPr>,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
-pub struct OwnPr {
-    pub index: usize,
-    pub state: PrState,
-}
-
-pub(crate) fn own_prs(agent: &SidebarAgentSnapshot) -> Option<PrSummary> {
-    let mut pulls: Vec<OwnPr> = agent
-        .request
-        .iter()
-        .flat_map(|request| request.pull_requests.iter().enumerate())
-        .filter(|(_, pull)| {
-            (pull.duty || pull.provisional) && (pull.live || pull.state() == PrState::Merged)
-        })
-        .map(|(index, pull)| OwnPr {
-            index,
-            state: pull.state(),
-        })
-        .filter(|pull| pull.state != PrState::Closed)
-        .collect();
-    pulls.sort_by_key(|pull| pull.state);
-    let worst = pulls.first()?.state;
-    Some(PrSummary {
-        count: pulls.len(),
-        worst,
-        pulls,
-    })
 }

@@ -1606,19 +1606,6 @@ impl LinkStore {
         if record.outputs.len() > REQUEST_LIMIT {
             return Err("ledger_output_capacity".into());
         }
-        let own_prs: Vec<WorkOutput> = record
-            .outputs
-            .iter()
-            .filter(|output| output.kind == "pr")
-            .cloned()
-            .collect();
-        if !own_prs.is_empty() {
-            record.pr_groups.push(PrGroup {
-                child: None,
-                name: record.title.clone(),
-                outputs: own_prs,
-            });
-        }
         record.artifacts = turns
             .iter()
             .rev()
@@ -1658,21 +1645,6 @@ impl LinkStore {
         for child in children {
             let child =
                 self.record_tree(&child, visited, depth + 1, request_budget, include_requests)?;
-            // A grandchild's pull requests sit under the direct child that
-            // started it (B18).
-            let prs: Vec<WorkOutput> = child
-                .outputs
-                .iter()
-                .filter(|output| output.kind == "pr")
-                .cloned()
-                .collect();
-            if !prs.is_empty() {
-                record.pr_groups.push(PrGroup {
-                    child: Some(child.session.clone()),
-                    name: child.title.clone(),
-                    outputs: prs,
-                });
-            }
             record.outputs.extend(child.outputs.iter().cloned());
             record.artifacts.extend(child.artifacts.iter().cloned());
             if record.outputs.len() > REQUEST_LIMIT {
@@ -1688,13 +1660,6 @@ impl LinkStore {
                 output.number,
             ))
         });
-        let mut groups_seen = BTreeSet::new();
-        for group in &mut record.pr_groups {
-            group
-                .outputs
-                .retain(|output| groups_seen.insert((output.repository.clone(), output.number)));
-        }
-        record.pr_groups.retain(|group| !group.outputs.is_empty());
         let mut artifacts_seen = BTreeSet::new();
         record
             .artifacts
@@ -2129,6 +2094,7 @@ impl LinkStore {
                 subtree_open_missed: subtree.get(&identity).copied().unwrap_or(0),
                 missed,
                 open_asks: asks.get(&identity).copied().unwrap_or(0),
+                parent: parents.get(&identity).cloned(),
                 session: identity,
             });
         }
@@ -2339,8 +2305,9 @@ impl LinkStore {
                 .map(|record| &record.session)
                 .collect::<Vec<_>>(),
         )?;
-        let mut statement = self.connection.prepare("SELECT o.device,o.agent,o.id,o.kind,o.repo,o.number FROM ledger_outputs o \
+        let mut statement = self.connection.prepare("SELECT o.device,o.agent,o.id,o.kind,o.repo,o.number,o.url,o.title,o.state,f.read_at FROM ledger_outputs o \
             JOIN json_each(?1) s ON o.device=json_extract(s.value,'$.device_id') AND o.agent=json_extract(s.value,'$.agent') AND o.id=json_extract(s.value,'$.session_id') \
+            LEFT JOIN ledger_output_facts f ON f.repo=o.repo AND f.kind=o.kind AND f.number=o.number \
             ORDER BY o.created_at DESC,o.kind,o.number LIMIT ?2").map_err(failed)?;
         let creators = statement
             .query_map(params![sessions, REQUEST_LIMIT as i64 + 1], |row| {
@@ -2353,6 +2320,10 @@ impl LinkStore {
                     kind: row.get(3)?,
                     repository: row.get(4)?,
                     number: row.get(5)?,
+                    url: row.get(6)?,
+                    title: row.get(7)?,
+                    state: row.get(8)?,
+                    last_read_at_unix_ms: row.get(9)?,
                 })
             })
             .map_err(failed)?

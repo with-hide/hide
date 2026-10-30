@@ -694,6 +694,7 @@ mod tests {
             escalation: None,
             letters_waiting: None,
             raised: Vec::new(),
+            pulls: None,
             descendant_mark: None,
             descendant_line: None,
             id: pane_id.to_owned(),

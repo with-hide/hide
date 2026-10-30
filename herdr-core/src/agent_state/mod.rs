@@ -7,7 +7,7 @@ pub mod header;
 pub mod sessions;
 pub(crate) mod tally;
 pub(crate) mod turn;
-pub(crate) mod work;
+pub mod work;
 
 pub(crate) use axes::*;
 pub(crate) use tally::*;

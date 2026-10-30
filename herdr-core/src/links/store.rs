@@ -7,10 +7,10 @@
 //! panels and `hide links` open it read-only.
 
 use super::{
-    CREATED_WITHIN_MS, DAY_MS, FileState, IssueSource, LinkedIssue, LinkedParent,
-    LinkedSession, OPEN_EXCEPTION_MS, PANEL_SESSION_LIMIT, PaneFact, ParentFact, ProjectFacts,
-    ProjectLinkSummary, SESSION_NAMED_LIMIT, SESSION_PR_LIMIT, STORE_PAGE_LIMIT,
-    SUMMARY_SESSION_LIMIT, SessionPrChip, SessionRole, WorktreeFact, within,
+    CREATED_WITHIN_MS, DAY_MS, FileState, IssueSource, LinkedIssue, LinkedParent, LinkedSession,
+    OPEN_EXCEPTION_MS, PANEL_SESSION_LIMIT, PaneFact, ParentFact, ProjectFacts, ProjectLinkSummary,
+    SESSION_NAMED_LIMIT, SESSION_PR_LIMIT, STORE_PAGE_LIMIT, SUMMARY_SESSION_LIMIT, SessionPrChip,
+    SessionRole, WorktreeFact, within,
 };
 use crate::links::ledger::SessionIdentity;
 use hide_session::ConversationCheckpoint;
@@ -1412,10 +1412,9 @@ impl LinkStore {
                 )
                 .map_err(failed)?;
             let learned: Vec<DevicePath> = statement
-                .query_map(
-                    params![repo, CREATED_WITHIN_MS as i64],
-                    |row| Ok((row.get(0)?, row.get(1)?)),
-                )
+                .query_map(params![repo, CREATED_WITHIN_MS as i64], |row| {
+                    Ok((row.get(0)?, row.get(1)?))
+                })
                 .and_then(Iterator::collect)
                 .map_err(failed)?;
             paths.extend(learned.into_iter().filter(|place| fences.admit(place)));
@@ -1645,9 +1644,8 @@ impl LinkStore {
         let created: BTreeSet<SessionKey> = printed
             .iter()
             .filter(|(_, (at, _))| {
-                pr.created_at.is_some_and(|created| {
-                    crate::links::printed_at_creation(*at, created)
-                })
+                pr.created_at
+                    .is_some_and(|created| crate::links::printed_at_creation(*at, created))
             })
             .map(|(key, _)| key.clone())
             .collect();

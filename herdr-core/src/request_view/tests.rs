@@ -72,6 +72,18 @@ fn head_of(branch: &str) -> String {
     format!("head-of-{branch}")
 }
 
+/// The row's list as every PR mark draws it (`agent_state::work::family`),
+/// with no link record behind it.
+fn listed(
+    rows: &[SidebarAgentSnapshot],
+    github: &GithubSnapshot,
+    index: usize,
+) -> Option<crate::agent_state::work::family::SessionPulls> {
+    use crate::agent_state::work::family::{Recorded, Sources};
+    let sessions = vec![None; rows.len()];
+    Sources::new(rows.iter(), &sessions, [github]).pulls(Some(index), None, &Recorded::default())
+}
+
 fn github(pull_requests: Vec<PullRequestSnapshot>) -> GithubSnapshot {
     GithubSnapshot {
         projects: vec![GithubProjectSnapshot {
@@ -139,18 +151,32 @@ fn saved_pr_is_drawn_before_confirmation_without_assigning_current_work() {
     ]);
     run(&mut rows, &[("resumed", "main")], &github);
     assert_eq!(verb(&rows[0]), RequestVerb::Idle);
-    let shown = crate::agent_state::sessions::own_prs(&rows[0]).unwrap();
-    assert_eq!(shown.count, 2, "the merged historical PR stays drawn");
-    let pull = &rows[0].request.as_ref().unwrap().pull_requests[shown.pulls[0].index];
-    assert_eq!(pull.number, 32);
+    let shown = listed(&rows, &github, 0).unwrap();
+    assert_eq!(shown.pulls.len(), 2, "the merged historical PR stays drawn");
+    assert_eq!(shown.pulls[0].number, 32);
+    let pull = rows[0]
+        .request
+        .as_ref()
+        .unwrap()
+        .pull_requests
+        .iter()
+        .find(|pull| pull.number == 32)
+        .unwrap();
     assert!(pull.provisional);
     assert!(!pull.duty && !pull.created);
 
     rows[0].record_connection = Some(RecordConnection::Confirmed);
     run(&mut rows, &[("resumed", "main")], &github);
-    let shown = crate::agent_state::sessions::own_prs(&rows[0]).unwrap();
-    let pull = &rows[0].request.as_ref().unwrap().pull_requests[shown.pulls[0].index];
-    assert_eq!(pull.number, 32);
+    let shown = listed(&rows, &github, 0).unwrap();
+    assert_eq!(shown.pulls[0].number, 32);
+    let pull = rows[0]
+        .request
+        .as_ref()
+        .unwrap()
+        .pull_requests
+        .iter()
+        .find(|pull| pull.number == 32)
+        .unwrap();
     assert!(!pull.provisional);
     assert!(pull.duty && pull.created);
 }
@@ -236,8 +262,10 @@ fn a_rows_verb_follows_its_demand_its_activity_and_its_pull_requests() {
     );
 }
 
+/// A closed pull request stays in the row's list, drawn dimmed, as the
+/// operator decided for mission-17; it was left out before.
 #[test]
-fn own_pr_summary_counts_only_live_duty_prs_worst_first_and_never_a_closed_one() {
+fn a_rows_list_holds_its_duty_prs_worst_first_with_a_closed_one_last() {
     use crate::model::PrState;
     let mut rows = rows(&[("maker", "idle"), ("other", "idle")]);
     rows[0].row_facts.as_mut().unwrap().created_prs = vec![
@@ -260,23 +288,27 @@ fn own_pr_summary_counts_only_live_duty_prs_worst_first_and_never_a_closed_one()
         PullRequestChecks::Failed,
     );
     closed.closed_at_unix_ms = Some(ASKED + 10);
-    run(
-        &mut rows,
-        &[("maker", "main"), ("other", "one")],
-        &github(vec![
-            pull_request(1, "one", PullRequestBadge::Open, PullRequestChecks::Failed),
-            pull_request(2, "two", PullRequestBadge::Open, PullRequestChecks::Passing),
-            merged,
-            closed,
-        ]),
-    );
+    let github = github(vec![
+        pull_request(1, "one", PullRequestBadge::Open, PullRequestChecks::Failed),
+        pull_request(2, "two", PullRequestBadge::Open, PullRequestChecks::Passing),
+        merged,
+        closed,
+    ]);
+    run(&mut rows, &[("maker", "main"), ("other", "one")], &github);
     // PR 1 is on `other`'s checkout branch, so `other` holds its duty.
-    let maker = rows[0].state.pr.as_ref().expect("maker owns PRs");
-    assert_eq!((maker.count, maker.worst), (2, PrState::Mergeable));
+    let maker = listed(&rows, &github, 0).expect("maker owns PRs");
     let states: Vec<_> = maker.pulls.iter().map(|pull| pull.state).collect();
-    assert_eq!(states, [PrState::Mergeable, PrState::Merged]);
-    let other = rows[1].state.pr.as_ref().expect("other owns PR 1");
-    assert_eq!((other.count, other.worst), (1, PrState::Failed));
+    assert_eq!(
+        states,
+        [PrState::Mergeable, PrState::Merged, PrState::Closed]
+    );
+    let other = listed(&rows, &github, 1).expect("other owns PR 1");
+    let states: Vec<_> = other
+        .pulls
+        .iter()
+        .map(|pull| (pull.number, pull.state))
+        .collect();
+    assert_eq!(states, [(1, PrState::Failed)]);
 }
 
 #[test]
@@ -320,9 +352,10 @@ fn a_pr_reads_draft_then_failed_or_changes_requested_then_mergeable_then_pending
         let mut pull = pull_request(1, "feature", PullRequestBadge::Open, checks);
         pull.review = review;
         pull.is_draft = draft;
-        run(&mut rows, &[("agent", "feature")], &github(vec![pull]));
+        let github = github(vec![pull]);
+        run(&mut rows, &[("agent", "feature")], &github);
         assert_eq!(
-            rows[0].state.pr.as_ref().map(|pr| pr.worst),
+            listed(&rows, &github, 0).map(|list| list.pulls[0].state),
             Some(expected),
             "{draft} {checks:?} {review:?}"
         );
@@ -519,11 +552,11 @@ fn a_session_that_made_pull_requests_on_main_shows_the_one_to_look_at_first() {
         [(11, true, true), (12, true, true), (10, false, true)],
         "a PR it did not make is not its"
     );
-    let marked: Vec<_> = crate::agent_state::sessions::own_prs(&rows[0])
+    let marked: Vec<_> = listed(&rows, &github, 0)
         .unwrap()
         .pulls
         .iter()
-        .map(|own| request.pull_requests[own.index].number)
+        .map(|pull| pull.number)
         .collect();
     assert_eq!(
         marked,

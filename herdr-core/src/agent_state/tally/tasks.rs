@@ -365,24 +365,17 @@ fn linked_worktree<'a>(place: &Place<'a>) -> Option<&'a crate::model::CheckoutSn
 fn stage(rows: &[&Place<'_>]) -> Option<u8> {
     let mut states: BTreeMap<&str, PrState> = BTreeMap::new();
     for row in rows {
-        let Some(summary) = row.agent.state.pr.as_ref() else {
-            continue;
-        };
-        let pulls = row
+        // The PRs a row holds the duty of; one merged before the operator's
+        // last request keeps the row's mark but is not this request's
+        // progress.
+        for pull in row
             .agent
             .request
             .iter()
             .flat_map(|r| &r.pull_requests)
-            .collect::<Vec<_>>();
-        for own in &summary.pulls {
-            // A PR merged before the operator's last request keeps the row's
-            // mark but is not this request's progress.
-            if let Some(pull) = pulls
-                .get(own.index)
-                .filter(|pull| !pull.provisional && pull.live)
-            {
-                states.entry(pull.url.as_str()).or_insert(own.state);
-            }
+            .filter(|pull| pull.duty && pull.live)
+        {
+            states.entry(pull.url.as_str()).or_insert(pull.state());
         }
     }
     let open: Vec<_> = states.values().filter(|s| **s != PrState::Merged).collect();

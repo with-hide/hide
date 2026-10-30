@@ -1480,6 +1480,10 @@ pub struct SidebarAgentSnapshot {
     pub letters_waiting: Option<u32>,
     /// On a lineage root: every raised descendant, lead first (PRD D-10, D-27).
     pub raised: Vec<crate::agent_state::escalation::RaisedAsk>,
+    /// The pull requests this row's session holds or made and every
+    /// descendant's, live or ended (`agent_state::work::family`): the one
+    /// list every PR mark of the row draws. Laid with the lineage pass.
+    pub pulls: Option<crate::agent_state::work::family::SessionPulls>,
     /// The one mark this row wears for its descendants while folded (PRD D-40).
     pub descendant_mark: Option<crate::agent_state::escalation::DescendantMark>,
     /// The label line of the most recently changed working descendant, the
