@@ -7,6 +7,7 @@ import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSPr
 import { drawnInTree, hideAiCheckoutOf, originLine } from "./hideAiOrigin";
 import type { Actions } from "./actions";
 import { Button } from "./components/ui/button";
+import { RowButton, RowOverlayButton } from "./components/ui/row-button";
 import { EntryContextMenu, EntryDropdown } from "./components/entry-menu";
 import { SidebarHeader, type DeviceMenu } from "./components/sidebar-header";
 import { GithubIcon } from "./components/github-icon";
@@ -762,14 +763,10 @@ function FoldRow({
 } & Record<`data-${string}`, string>) {
   const Chevron = expanded ? ChevronDownIcon : ChevronRightIcon;
   return (
-    <button
-      type="button"
+    <RowButton
       aria-expanded={expanded}
       aria-current={current ? "true" : undefined}
-      className={cn(
-        "flex min-h-(--size-control-lg) w-full items-center gap-sm rounded-sm pr-xs text-left text-caption font-medium outline-none hover:text-foreground focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-ring",
-        current ? "bg-secondary text-foreground" : "text-subtle-foreground hover:bg-accent",
-      )}
+      className={cn("min-h-(--size-control-lg) gap-sm rounded-sm py-0 text-caption font-medium hover:text-foreground", current ? "bg-secondary text-foreground hover:bg-secondary" : "text-subtle-foreground")}
       style={{ paddingLeft: PROJECT_COLUMN }}
       onClick={onToggle}
       {...data}
@@ -780,7 +777,7 @@ function FoldRow({
       <span className="flex w-(--size-lineage-chevron) shrink-0 justify-center text-muted-foreground">
         <Chevron aria-hidden="true" className="size-(--size-icon-sm)" />
       </span>
-    </button>
+    </RowButton>
   );
 }
 
@@ -788,20 +785,18 @@ function FoldRow({
 function FoldToggle({ open, label, onToggle, disabled, ...data }: { open: boolean; label: string; onToggle: () => void; disabled?: boolean } & Record<`data-${string}`, string>) {
   const Chevron = open ? ChevronDownIcon : ChevronRightIcon;
   return (
-    <button
-      type="button"
+    <Button
+      variant="text"
+      size="inline"
       disabled={disabled}
       aria-expanded={open}
       aria-label={label}
-      className={cn(
-        "pointer-events-auto relative flex h-(--size-icon-button-toolbar) w-(--size-lineage-chevron) shrink-0 items-center justify-center rounded-xs text-muted-foreground outline-none hover:text-foreground focus-visible:ring-1 focus-visible:ring-ring",
-        open && ROW_REVEALED,
-      )}
+      className={cn("pointer-events-auto relative h-(--size-icon-button-toolbar) w-(--size-lineage-chevron)", open && ROW_REVEALED)}
       onClick={onToggle}
       {...data}
     >
       <Chevron aria-hidden="true" className="size-(--size-icon-sm)" />
-    </button>
+    </Button>
   );
 }
 
@@ -843,25 +838,24 @@ function RowActions({ workspace, items, onSelect }: { workspace: Workspace; item
   const { t } = useInterfaceTranslation();
   const [menuOpen, setMenuOpen] = useState(false);
   const more = useRef<HTMLButtonElement>(null);
-  const control = "flex size-(--size-icon-button-toolbar) items-center justify-center rounded-xs text-subtle-foreground outline-none hover:bg-accent hover:text-foreground focus-visible:ring-1 focus-visible:ring-ring";
   return (
     <span className="grid shrink-0 items-center justify-items-end">
       <span className={cn("pointer-events-auto relative col-start-1 row-start-1 flex items-center gap-xxs", menuOpen ? "opacity-100" : ROW_REVEALED)} data-row-actions={workspace.id}>
         <Hint label={t("sidebar.startAgentIn", { name: workspace.label })}>
-          <button
-            type="button"
+          <Button
+            variant="row-action"
+            size="icon-sm"
             aria-label={t("sidebar.startAgentIn", { name: workspace.label })}
             data-row-start={workspace.id}
-            className={control}
             onClick={() => useStartPanel.getState().open(false, { projectId: workspace.id })}
           >
             <PlusIcon aria-hidden="true" className="size-(--size-icon-sm)" />
-          </button>
+          </Button>
         </Hint>
         <Hint label={t("projectSettings.open", { project: workspace.label })}>
-          <button type="button" aria-label={t("projectSettings.open", { project: workspace.label })} data-row-settings={workspace.id} className={control} onClick={() => useUiStore.getState().openProjectSettings(settingsTarget(workspace))}>
+          <Button variant="row-action" size="icon-sm" aria-label={t("projectSettings.open", { project: workspace.label })} data-row-settings={workspace.id} onClick={() => useUiStore.getState().openProjectSettings(settingsTarget(workspace))}>
             <SettingsIcon aria-hidden="true" className="size-(--size-icon-sm)" />
-          </button>
+          </Button>
         </Hint>
         <EntryDropdown
           label={t("common.entryActions", { name: workspace.label })}
@@ -872,9 +866,9 @@ function RowActions({ workspace, items, onSelect }: { workspace: Workspace; item
           onOpenChange={setMenuOpen}
           data-row-more-menu={workspace.id}
           trigger={
-            <button ref={more} type="button" aria-label={t("sidebar.moreActionsFor", { name: workspace.label })} data-row-more={workspace.id} className={control}>
+            <Button ref={more} variant="row-action" size="icon-sm" aria-label={t("sidebar.moreActionsFor", { name: workspace.label })} data-row-more={workspace.id}>
               <EllipsisIcon aria-hidden="true" className="size-(--size-icon-sm)" />
-            </button>
+            </Button>
           }
         />
       </span>
@@ -896,15 +890,15 @@ function RepositoryMark({ workspace, actions }: { workspace: Workspace; actions:
   const label = t("sidebar.openRepository", { repository });
   return (
     <Hint label={repository}>
-      <button
-        type="button"
+      <Button
+        variant="row-action"
+        size="icon-sm"
         aria-label={label}
         data-project-github={workspace.id}
-        className="flex size-(--size-icon-button-toolbar) shrink-0 items-center justify-center rounded-xs text-subtle-foreground outline-none hover:bg-accent hover:text-foreground focus-visible:ring-1 focus-visible:ring-ring"
         onClick={(event) => actions.openRepository(repository, workspace.device_id, pullRequestOpenExternal(event))}
       >
         <GithubIcon aria-hidden="true" className="size-(--size-icon-sm)" />
-      </button>
+      </Button>
     </Hint>
   );
 }
@@ -1366,14 +1360,14 @@ function CheckoutOpenButton({
       onOpenPullRequest={(url, external) => actions.openPullRequest(url, workspace.device_id, external)}
       onShowPullRequestRow={workspace.is_git && readsHere(workspace, devices) ? (number) => actions.openPrCard(workspace.id, number) : undefined}
     >
-      <button
-        type="button"
+      <RowOverlayButton
+        hover={false}
         data-checkout={checkout.id}
         data-checkout-kind={view.kind}
         aria-current={focused ? "true" : undefined}
         aria-label={label}
         disabled={disabled}
-        className="absolute inset-0 rounded-sm outline-none focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-ring disabled:cursor-default"
+        className="rounded-sm disabled:pointer-events-auto disabled:cursor-default"
         onClick={() => actions.openWorkspace(workspace.device_id, checkout.workspace_id, checkout.id, expanded, projectExpanded)}
       />
     </CheckoutCardHint>
@@ -1488,8 +1482,8 @@ function OpenAgentRows({ checkout, groupTabs, deviceId, agentRows, sleeping, ins
         {/* The header stands one step in from the checkout's own row: its chevron on the checkout's glyph column
             and its briefcase where its rows' own column starts, so a collection never reads deeper than its rows. */}
         <div className="flex h-(--size-control-compact) min-w-0 items-center gap-xs rounded-sm pr-xs text-caption hover:bg-accent" style={{ paddingLeft: glyphColumn }}>
-          <button type="button" aria-label={t(open ? "groups.fold" : "groups.unfold", { name })} aria-expanded={open} onClick={() => useGroupFolds.getState().toggle(foldKey)} className="shrink-0 rounded-sm outline-none focus-visible:ring-1 focus-visible:ring-ring">{open ? <ChevronDownIcon className="size-(--size-icon-sm)" /> : <ChevronRightIcon className="size-(--size-icon-sm)" />}</button>
-          <Hint label={name} reveals><button type="button" data-sidebar-group-select={group.id ?? "ungrouped"} aria-current={selected ? "true" : undefined} className={cn("flex min-w-0 flex-1 items-center gap-xs rounded-sm text-left outline-none focus-visible:ring-1 focus-visible:ring-ring", selected ? "font-medium text-foreground" : "text-muted-foreground")} onClick={() => context.actions.agentGroup({ device_id: deviceId, path: checkout.path }, group.id, { action: "select" })}><BriefcaseBusinessIcon className={cn("size-(--size-icon-sm) shrink-0", selected ? "text-foreground" : "text-muted-foreground")} /><span className="truncate">{name}</span></button></Hint>
+          <Button variant="text" size="inline" aria-label={t(open ? "groups.fold" : "groups.unfold", { name })} aria-expanded={open} onClick={() => useGroupFolds.getState().toggle(foldKey)}>{open ? <ChevronDownIcon className="size-(--size-icon-sm)" /> : <ChevronRightIcon className="size-(--size-icon-sm)" />}</Button>
+          <Hint label={name} reveals><Button variant="text" size="inline" data-sidebar-group-select={group.id ?? "ungrouped"} aria-current={selected ? "true" : undefined} className={cn("min-w-0 flex-1 justify-start", selected && "font-medium text-foreground")} onClick={() => context.actions.agentGroup({ device_id: deviceId, path: checkout.path }, group.id, { action: "select" })}><BriefcaseBusinessIcon className={cn("size-(--size-icon-sm) shrink-0", selected ? "text-foreground" : "text-muted-foreground")} /><span className="truncate">{name}</span></Button></Hint>
         </div>
         {open ? <ul className="mt-xxs"><CollectionRows checkout={checkout} deviceId={deviceId} collection={collection} inset={childInset} guideColumn={GROUP_GLYPH_COLUMN} guideSize="var(--size-icon-sm)" context={context} /></ul> : null}
       </li>;
@@ -1527,7 +1521,7 @@ function CollectionRows({ checkout, deviceId, collection, inset, guideColumn, gu
   const placed = new Set(group.tabs);
   return <>
     {group.tabs.map((id) => {
-      if (drafts.includes(id)) return <li key={id}><button type="button" data-sidebar-tab={id} className="flex h-(--size-sidebar-line) w-full min-w-0 items-center gap-xs rounded-sm pr-xs text-left text-caption text-subtle-foreground outline-none hover:bg-accent focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-ring" style={{ paddingLeft: inset }} onClick={() => context.actions.agentGroup({ device_id: deviceId, path: checkout.path }, group.id, { action: "select", tab_id: id })}><PanelsTopLeftIcon className="size-(--size-icon-sm) shrink-0" /><span className="truncate">{t("groups.newTab")}</span></button></li>;
+      if (drafts.includes(id)) return <li key={id}><RowButton data-sidebar-tab={id} className="h-(--size-sidebar-line) rounded-sm py-0 text-caption text-subtle-foreground" style={{ paddingLeft: inset }} onClick={() => context.actions.agentGroup({ device_id: deviceId, path: checkout.path }, group.id, { action: "select", tab_id: id })}><PanelsTopLeftIcon className="size-(--size-icon-sm) shrink-0" /><span className="truncate">{t("groups.newTab")}</span></RowButton></li>;
       const segment = segments.find((candidate) => candidate.tab?.id === id);
       return segment ? <li key={id} className="relative" data-sidebar-tab-group={id}><TabSegmentHead group={segment} checkout={checkout} deviceId={deviceId} inset={inset} glyphColumn={guideColumn} glyphSize={guideSize} context={context} /><AgentTreeRows checkoutId={checkout.id} deviceId={deviceId} agentRows={segment.rows} inset={inset} context={context} /></li> : null;
     })}
@@ -1561,7 +1555,7 @@ function TabSegmentHead({ group, checkout, deviceId, inset, glyphColumn, glyphSi
       <span aria-hidden="true" data-sidebar-tab-guide={tab!.id!} className="pointer-events-none absolute top-xs bottom-xs z-10 w-(--size-hairline) bg-lineage-rail" style={{ left: `calc(${center} - var(--size-hairline) / 2)` }} />
       {group.line ? <div data-sidebar-tab-line={tab!.id!} className="group/row relative rounded-sm hover:bg-accent" style={{ height: TAB_LINE }}>
           <Hint label={label} reveals>
-            <button type="button" data-sidebar-tab={tab!.id!} disabled={removing} aria-label={label} className="absolute inset-0 rounded-sm outline-none focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-ring" onClick={open} />
+            <RowOverlayButton hover={false} data-sidebar-tab={tab!.id!} disabled={removing} aria-label={label} className="rounded-sm" onClick={open} />
           </Hint>
           <span aria-hidden="true" className="pointer-events-none absolute top-1/2 -translate-x-1/2 -translate-y-1/2 text-subtle-foreground" style={{ left: `calc(${inset} + var(--size-agent-mark) / 2)` }}><PanelsTopLeftIcon aria-hidden="true" className="size-(--size-icon-sm)" /></span>
           <span aria-hidden="true" data-sidebar-tab-name="true" className="pointer-events-none absolute inset-y-0 right-xs flex min-w-0 items-center text-caption text-subtle-foreground" style={{ left: `calc(${inset} + var(--size-agent-mark) + var(--spacing-xs))` }}><span className="truncate">{name}</span></span>
@@ -1584,10 +1578,10 @@ function AgentTreeRows({ checkoutId, deviceId, agentRows, inset, context }: { ch
           return (
             <li key={`more:${line.parent}`} className="flex items-stretch rounded-sm pr-xs hover:bg-accent" style={{ paddingLeft: inset }}>
               <TreeRails place={line.place} />
-              <button type="button" data-tree-more={line.count} className="flex min-w-0 flex-1 items-center gap-xs py-xs pl-xxs text-left text-caption text-subtle-foreground outline-none focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-ring" onClick={() => setShownAll((before) => new Set(before).add(line.parent))}>
+              <Button variant="text" size="inline" data-tree-more={line.count} className="min-w-0 flex-1 justify-start py-xs pl-xxs text-caption" onClick={() => setShownAll((before) => new Set(before).add(line.parent))}>
                 <ChevronRightIcon aria-hidden="true" className="size-(--size-icon-sm) shrink-0 text-muted-foreground" />
                 <span className="min-w-0 truncate">{t("agentSessions.tree.more", { count: line.count })}</span>
-              </button>
+              </Button>
             </li>
           );
         }

@@ -19,6 +19,7 @@ import { RowLineText } from "./components/row-line-text";
 import { StatusMark } from "./components/status-mark";
 import { Button } from "./components/ui/button";
 import { Keycap } from "./components/ui/keycap";
+import { ToggleGroup, ToggleGroupItem } from "./components/ui/toggle-group";
 import { EntryContextMenu, EntryDropdown, type MenuEntry } from "./components/entry-menu";
 import { PartsMark } from "./components/pr-mark";
 import { archivedProject, archivedRows, archiveOffer } from "./archive";
@@ -61,15 +62,13 @@ export function SidebarLensSwitch({ actions }: { actions: Actions }) {
   return (
     <div className="shrink-0 px-sm pt-xs pb-xxs">
       <Hint label={t("taskLens.switch")} shortcut={chord || null}>
-        <div role="group" aria-label={t("taskLens.switch")} className="flex min-w-0 rounded-sm bg-muted p-xxs" data-sidebar-lens={lens}>
+        <ToggleGroup type="single" value={lens} onValueChange={(id) => { const next = SIDEBAR_LENSES.find((l) => l === id); if (next && next !== lens) actions.setSidebarLens(next); }} aria-label={t("taskLens.switch")} className="flex w-full min-w-0" data-sidebar-lens={lens}>
           {SIDEBAR_LENSES.map((id) => (
-            <button key={id} type="button" aria-pressed={lens === id} data-sidebar-lens-option={id}
-              className={cn("flex min-w-0 flex-1 items-center justify-center rounded-xs px-sm py-xxs text-caption outline-none focus-visible:ring-1 focus-visible:ring-ring", lens === id ? "bg-background font-medium text-foreground shadow-xs" : "text-subtle-foreground hover:text-foreground")}
-              onClick={() => lens !== id && actions.setSidebarLens(id)}>
+            <ToggleGroupItem key={id} value={id} data-sidebar-lens-option={id} className="min-w-0 flex-1 text-caption">
               <span className="truncate">{t(`taskLens.lens.${id}`)}</span>
-            </button>
+            </ToggleGroupItem>
           ))}
-        </div>
+        </ToggleGroup>
       </Hint>
     </div>
   );
@@ -125,18 +124,18 @@ export function TaskLens({ actions }: { actions: Actions }) {
   );
 }
 
+const TASK_VIEWS: readonly TaskView[] = ["status", "project"];
+
 function ViewSwitch({ view, actions }: { view: TaskView; actions: Actions }) {
   const { t } = useInterfaceTranslation();
   return (
-    <div role="group" aria-label={t("taskLens.view")} className="flex shrink-0 rounded-xs border border-border p-px" data-task-view={view}>
-      {(["status", "project"] as const).map((id) => (
-        <button key={id} type="button" aria-pressed={view === id} data-task-view-option={id}
-          className={cn("rounded-xs px-xs py-px text-micro outline-none focus-visible:ring-1 focus-visible:ring-ring", view === id ? "bg-secondary font-medium text-foreground" : "text-subtle-foreground hover:text-foreground")}
-          onClick={() => view !== id && actions.setTaskView(id)}>
+    <ToggleGroup type="single" value={view} onValueChange={(id) => { const next = TASK_VIEWS.find((v) => v === id); if (next && next !== view) actions.setTaskView(next); }} aria-label={t("taskLens.view")} className="shrink-0" data-task-view={view}>
+      {TASK_VIEWS.map((id) => (
+        <ToggleGroupItem key={id} value={id} size="xs" data-task-view-option={id}>
           {t(`taskLens.view.${id}`)}
-        </button>
+        </ToggleGroupItem>
       ))}
-    </div>
+    </ToggleGroup>
   );
 }
 
@@ -323,14 +322,13 @@ function Folds({ group, resting, cleanup, archived, open, onToggle, rows, archiv
     const expanded = open.has(key);
     return (
       <div data-task-fold={kind}>
-        <button type="button" data-task-focus="fold" aria-expanded={expanded} onClick={() => onToggle(key)}
-          className="flex w-full items-center gap-xs rounded-xs px-xs py-xs text-left text-micro text-muted-foreground outline-none hover:text-foreground focus-visible:ring-1 focus-visible:ring-ring">
+        <Button variant="text" size="inline" data-task-focus="fold" aria-expanded={expanded} onClick={() => onToggle(key)} className="w-full justify-start px-xs py-xs text-micro">
           {expanded ? <ChevronDownIcon aria-hidden="true" className="size-(--size-icon-sm)" /> : <ChevronRightIcon aria-hidden="true" className="size-(--size-icon-sm)" />}
           <span>{t(kind === "rest" ? "taskLens.fold.resting" : kind === "cleanup" ? "taskLens.fold.cleanup" : "archive.fold", { count })}</span>
-        </button>
+        </Button>
         {expanded ? <>
           <ul className="flex min-w-0 flex-col">{drawn}</ul>
-          <button type="button" data-task-focus="fold-close" onClick={() => onToggle(key)} className="ml-lg rounded-xs px-xs py-xxs text-micro text-muted-foreground outline-none hover:text-foreground focus-visible:ring-1 focus-visible:ring-ring">{t("taskLens.fold.close")}</button>
+          <Button variant="text" size="inline" data-task-focus="fold-close" onClick={() => onToggle(key)} className="ml-lg px-xs py-xxs text-micro">{t("taskLens.fold.close")}</Button>
         </> : null}
       </div>
     );
@@ -469,9 +467,9 @@ function ArchivedRow({ entry, showProject, disabled, actions }: { entry: Archive
               <span data-row-actions="" className={cn("items-center gap-xxs", revealed(open))}>
                 <EntryDropdown label={label} title={root.title} items={items} onSelect={select} onOpenChange={setOpen} data-archived-menu={row.id}
                   trigger={
-                    <button type="button" aria-label={label} data-archived-more={row.id} className="rounded-xs p-xxs text-muted-foreground outline-none hover:bg-secondary focus-visible:ring-1 focus-visible:ring-ring data-[state=open]:bg-secondary">
-                      <EllipsisIcon className="size-(--size-icon-sm)" />
-                    </button>
+                    <Button variant="row-action" size="icon-xs" aria-label={label} data-archived-more={row.id}>
+                      <EllipsisIcon />
+                    </Button>
                   } />
               </span>
             </span>
@@ -551,11 +549,11 @@ function RevisitButton({ agent, on, disabled, actions }: { agent: AgentRow; on: 
   const label = t(on ? "taskLens.menu.revisitDone" : "taskLens.menu.revisit");
   return (
     <Hint label={label}>
-      <button type="button" aria-label={label} aria-pressed={on} disabled={disabled} data-task-revisit={agent.pane_id}
-        className={cn("rounded-xs p-xxs outline-none hover:bg-secondary focus-visible:ring-1 focus-visible:ring-ring disabled:opacity-50", on ? "text-warning" : "text-muted-foreground")}
+      <Button variant="row-action" size="icon-xs" aria-label={label} aria-pressed={on} disabled={disabled} data-task-revisit={agent.pane_id}
+        className={cn(on && "text-warning hover:text-warning")}
         onClick={() => (on ? actions.finishRevisit(agent.pane_id) : actions.starSession(agent.pane_id))}>
-        <StarIcon className={cn("size-(--size-icon-sm)", on && "fill-current")} />
-      </button>
+        <StarIcon className={cn(on && "fill-current")} />
+      </Button>
     </Hint>
   );
 }
@@ -584,16 +582,16 @@ function TimeSlot({ agent, record, menu, revisit }: { agent: AgentRow; record: (
         {revisit ? <RevisitButton agent={agent} {...revisit} /> : null}
         {record ? (
           <Hint label={t("taskLens.menu.record")} shortcut="Space">
-            <button type="button" aria-label={t("taskLens.menu.record")} data-task-record={agent.pane_id} className="rounded-xs p-xxs text-muted-foreground outline-none hover:bg-secondary focus-visible:ring-1 focus-visible:ring-ring" onClick={record}>
-              <FileTextIcon className="size-(--size-icon-sm)" />
-            </button>
+            <Button variant="row-action" size="icon-xs" aria-label={t("taskLens.menu.record")} data-task-record={agent.pane_id} onClick={record}>
+              <FileTextIcon />
+            </Button>
           </Hint>
         ) : null}
         <EntryDropdown label={t("taskLens.more", { name: agent.identity_label })} title={agent.identity_label} items={menu.items} onSelect={menu.select} onOpenChange={setOpen} data-task-menu={agent.pane_id}
           trigger={
-            <button type="button" aria-label={t("taskLens.more", { name: agent.identity_label })} data-task-more={agent.pane_id} className="rounded-xs p-xxs text-muted-foreground outline-none hover:bg-secondary focus-visible:ring-1 focus-visible:ring-ring data-[state=open]:bg-secondary">
-              <EllipsisIcon className="size-(--size-icon-sm)" />
-            </button>
+            <Button variant="row-action" size="icon-xs" aria-label={t("taskLens.more", { name: agent.identity_label })} data-task-more={agent.pane_id}>
+              <EllipsisIcon />
+            </Button>
           } />
       </span>
     </span>
@@ -701,10 +699,10 @@ function TreeMoreRow({ line, onShowAll }: { line: Extract<SidebarTreeLine, { kin
     <li className="flex min-w-0 items-stretch rounded-xs pr-xs hover:bg-accent">
       <TreeRails place={line.place} />
       <TreeChevron name="" open={null} hangs chain={line.place.chain} />
-      <button type="button" data-task-focus="tree-more" data-tree-more={line.count} onClick={() => onShowAll(line.parent)}
-        className="flex min-w-0 flex-1 items-center gap-xs py-xs pl-xs text-left text-micro text-subtle-foreground outline-none focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-ring">
+      <Button variant="text" size="inline" data-task-focus="tree-more" data-tree-more={line.count} onClick={() => onShowAll(line.parent)}
+        className="min-w-0 flex-1 justify-start py-xs pl-xs text-micro">
         <span className="min-w-0 truncate">{t("agentSessions.tree.more", { count: line.count })}</span>
-      </button>
+      </Button>
     </li>
   );
 }
