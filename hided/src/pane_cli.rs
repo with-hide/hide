@@ -101,9 +101,16 @@ pub fn parse(args: &[String]) -> Result<PaneCli, String> {
             if !beside || command.is_empty() {
                 return Err(USAGE.to_owned());
             }
+            // One word is the command line as written, shell syntax and
+            // all; several are one argument each, quoted for this machine's
+            // shell, which the new pane beside the caller runs.
+            let line = match command {
+                [line] => line.clone(),
+                words => hide_agent_hooks::install::command_line_for_shell(words),
+            };
             Ok(PaneCli {
                 command: PaneCommand::Open {
-                    command: command.join(" "),
+                    command: line,
                     focus,
                 },
                 json: false,
@@ -233,7 +240,7 @@ mod tests {
     }
 
     #[test]
-    fn open_needs_beside_and_runs_the_words_after_the_separator_as_one_line() {
+    fn open_needs_beside_and_keeps_each_word_after_the_separator_one_argument() {
         assert_eq!(
             parse(&words(&["open", "--beside", "--", "npm", "run", "dev"]))
                 .unwrap()
@@ -257,6 +264,20 @@ mod tests {
                 command: "tail -f log".into(),
                 focus: true
             }
+        );
+        // Each word stays one argument; a lone word is the line as written.
+        let opened = |line: &[&str]| match parse(&words(line)).unwrap().command {
+            PaneCommand::Open { command, .. } => command,
+            other => panic!("{other:?}"),
+        };
+        assert_eq!(
+            opened(&["open", "--beside", "--", "sh", "-c", "echo a b"]),
+            // The same line in a POSIX shell and in PowerShell.
+            "sh -c 'echo a b'"
+        );
+        assert_eq!(
+            opened(&["open", "--beside", "--", "npm run dev | tee log"]),
+            "npm run dev | tee log"
         );
         assert!(parse(&words(&["open", "--", "ls"])).is_err());
         assert!(parse(&words(&["open", "--beside"])).is_err());

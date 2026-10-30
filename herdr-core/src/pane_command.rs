@@ -143,9 +143,9 @@ pub fn next_action(code: &str) -> Option<&'static str> {
         "purpose_invalid" => "Write the purpose as one line of text",
         "purpose_too_long" => "Write the purpose in 40 characters or fewer",
         "pane_unavailable" => "Run hide ps for the panes there are and their ids",
-        "agent_unavailable" => "Run hide agent list for the agents there are",
+        "agent_unavailable" => "Run hide ps for the agents there are, their names and panes",
         "target_ambiguous" => {
-            "Name the agent by its registration id from hide agent list, or by its pane"
+            "Name the agent by its registration id or its pane, both shown by hide ps"
         }
         "pane_required" => "Run the command in a pane of Hide",
         "caller_context_changed" => {
