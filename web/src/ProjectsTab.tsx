@@ -22,6 +22,7 @@ import { settingsTarget } from "./projectSettings";
 import { useShellStore } from "./store";
 import { useUiStore, type OverviewPanel } from "./ui";
 import { primaryCheckout } from "./workspaceManage";
+import { RowOverlayButton } from "./components/ui/row-button";
 
 // The Projects tab (PRD overview-device-tasks D-14, D-15, D-24..D-28,
 // B47-B57): the device's disk on one line, then a row per project with its
@@ -197,7 +198,7 @@ function ProjectRow({ row, sessions, largest, actions }: { row: ProjectRowModel;
   const activity = project.last_activity_unix_ms ?? null;
   return (
     <div role="row" className={cn(COLUMNS, "relative border-b border-border px-md py-xl text-body hover:bg-accent", selected && "bg-secondary")} data-projects-row={project.id}>
-      <button type="button" aria-label={project.label} aria-pressed={selected} className="absolute inset-0 rounded-sm outline-none focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-ring" onClick={() => useUiStore.getState().setOverview({ projectId: project.id, panel: null })} />
+      <RowOverlayButton hover={false} aria-label={project.label} aria-pressed={selected} className="rounded-sm" onClick={() => useUiStore.getState().setOverview({ projectId: project.id, panel: null })} />
       <span role="cell" className="pointer-events-none flex min-w-0 items-center gap-xs">
         {row.folder ? <FolderIcon aria-hidden="true" className="size-(--size-icon-sm) shrink-0 text-muted-foreground" /> : project.tasks?.source?.kind === "github" ? <GithubIcon aria-hidden="true" className="size-(--size-icon-sm) shrink-0 text-muted-foreground" data-projects-github="true" /> : <FolderGit2Icon aria-hidden="true" className="size-(--size-icon-sm) shrink-0 text-muted-foreground" />}
         <span className="min-w-0"><span className="block truncate text-title font-semibold text-foreground">{project.label}</span><span className="text-micro text-muted-foreground">{t("overviewRedesign.checkouts")} {project.checkouts.length}</span></span>
