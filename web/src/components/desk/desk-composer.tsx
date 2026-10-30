@@ -69,7 +69,7 @@ export function DeskComposer({ value, label, placeholder, attachments = [], answ
                 </Hint>
               ) : (
                 <Hint label={t("desk.composer.send")} shortcut="↵">
-                  <Button size="icon-sm" aria-label={t("desk.composer.send")} disabled={empty} data-desk-composer-send="true" onClick={onSend}><ArrowUpIcon /></Button>
+                  <Button variant="soft" size="icon-sm" aria-label={t("desk.composer.send")} disabled={empty} data-desk-composer-send="true" onClick={onSend}><ArrowUpIcon /></Button>
                 </Hint>
               )}
             </div>

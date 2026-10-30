@@ -48,7 +48,7 @@ export function ThreadRow({ job, selected, expanded, worker = false, onOpen, onM
       </>}
       right={<Elapsed since={job.changed_at_unix_ms} className="font-mono text-caption text-muted-foreground" />}
       line={{
-        text: worker ? jobLine(t, job) : `${job.location.kind === "worktree" ? job.location.label : job.project.label} · ${jobLine(t, job)}`,
+        text: worker ? jobLine(t, job) : `${job.project.label} · ${jobLine(t, job)}`,
         className: job.state === "asking" ? "text-warning" : job.state === "failed" ? "text-destructive" : undefined,
         wrap: job.state === "asking",
       }}

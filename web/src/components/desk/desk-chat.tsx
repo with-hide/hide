@@ -1,6 +1,6 @@
-import { ArrowLeftRightIcon, CircleAlertIcon, CopyIcon, LoaderCircleIcon, SlidersHorizontalIcon, TerminalIcon } from "lucide-react";
+import { ArrowLeftRightIcon, CircleAlertIcon, CopyIcon, HandIcon, LoaderCircleIcon, SlidersHorizontalIcon, TerminalIcon } from "lucide-react";
 import type { ReactNode } from "react";
-import type { DeskItem, DeskJob, DeskMention } from "../../desk";
+import type { DeskItem, DeskJob, DeskMention, DeskNoticeKind } from "../../desk";
 import { useInterfaceTranslation } from "../../i18n/client";
 import type { MessageKey } from "../../i18n/catalogs";
 import { cn } from "../../lib/utils";
@@ -91,12 +91,30 @@ const NOTICE: Record<Extract<DeskItem, { kind: "notice" }>["notice"], MessageKey
   blocked: "desk.notice.blocked",
   host_stopped: "desk.notice.host_stopped",
   resume_failed: "desk.notice.resume_failed",
+  no_ask_mode: "desk.notice.no_ask_mode",
+  turn_failed: "desk.notice.turn_failed",
 };
 
-const NOTICE_ACTION: Record<"retry" | "restart" | "reinstall", MessageKey> = {
+export type DeskNoticeAction = "retry" | "restart" | "reinstall";
+
+/** The one action that answers a notice, from its kind. */
+const NOTICE_ACTION: Partial<Record<DeskNoticeKind, DeskNoticeAction>> = {
+  install_failed: "reinstall",
+  blocked: "retry",
+  host_stopped: "restart",
+  turn_failed: "retry",
+};
+
+const ACTION_WORDS: Record<DeskNoticeAction, MessageKey> = {
   retry: "desk.action.retry",
   restart: "desk.action.restart",
   reinstall: "desk.action.reinstall",
+};
+
+const SWITCH_WORDS: Record<Extract<DeskItem, { kind: "switch" }>["carried"], MessageKey> = {
+  all: "desk.switch.carried",
+  trimmed: "desk.switch.trimmed",
+  none: "desk.switch.none",
 };
 
 /**
@@ -104,9 +122,10 @@ const NOTICE_ACTION: Record<"retry" | "restart" | "reinstall", MessageKey> = {
  * and the one action that answers it. A sign-in notice carries the command
  * to run, copyable; the words the operator sent stay in the composer.
  */
-export function DeskNotice({ item, onAction, onCopy }: { item: Extract<DeskItem, { kind: "notice" }>; onAction: (action: "retry" | "restart" | "reinstall") => void; onCopy: (text: string) => void }) {
+export function DeskNotice({ item, onAction, onCopy }: { item: Extract<DeskItem, { kind: "notice" }>; onAction: (action: DeskNoticeAction) => void; onCopy: (text: string) => void }) {
   const { t } = useInterfaceTranslation();
-  const failed = item.notice === "blocked" || item.notice === "host_stopped" || item.notice === "install_failed";
+  const failed = item.notice === "blocked" || item.notice === "host_stopped" || item.notice === "install_failed" || item.notice === "turn_failed";
+  const action = NOTICE_ACTION[item.notice];
   const words = t(NOTICE[item.notice], { agent: item.agent ?? "", detail: item.detail ?? "" });
   return (
     <div className="flex min-w-0 flex-wrap items-center gap-x-sm gap-y-xxs text-caption" role={failed ? "alert" : "status"} data-desk-item="notice" data-desk-notice={item.notice}>
@@ -121,7 +140,7 @@ export function DeskNotice({ item, onAction, onCopy }: { item: Extract<DeskItem,
           </Hint>
         </span>
       ) : null}
-      {item.action ? <Button variant="text-link" size="inline" className="text-caption" data-desk-notice-action={item.action} onClick={() => onAction(item.action!)}>{t(NOTICE_ACTION[item.action])}</Button> : null}
+      {action ? <Button variant="text-link" size="inline" className="text-caption" data-desk-notice-action={action} onClick={() => onAction(action)}>{t(ACTION_WORDS[action])}</Button> : null}
     </div>
   );
 }
@@ -136,8 +155,9 @@ export function DeskApprovalCard({ item, onAnswer }: { item: Extract<DeskItem, {
   const waiting = item.state === "waiting";
   const answered = item.state === "allowed" ? t("desk.approval.allowed") : item.state === "rejected" ? t("desk.approval.rejected") : item.state === "closed" ? t("desk.approval.closed") : null;
   return (
-    <section className={cn("flex min-w-0 flex-col gap-xs rounded-md border bg-card px-md py-sm", waiting ? "border-warning" : "border-border")} aria-label={item.title} data-desk-item="approval" data-desk-approval={item.state}>
+    <section className="flex min-w-0 flex-col gap-xs rounded-lg border border-border px-md py-sm" aria-label={item.title} data-desk-item="approval" data-desk-approval={item.state}>
       <p className="flex min-w-0 items-center gap-xs text-caption">
+        {waiting ? <HandIcon aria-hidden="true" className="size-(--size-icon) shrink-0 text-warning" /> : null}
         <span className={cn("font-medium", waiting ? "text-foreground" : item.state === "allowed" ? "text-success" : "text-muted-foreground")} data-desk-approval-answered={waiting ? undefined : item.state}>{waiting ? t("desk.approval.title") : answered}</span>
         <span className="min-w-0 truncate text-muted-foreground">{item.title}</span>
       </p>
@@ -149,8 +169,8 @@ export function DeskApprovalCard({ item, onAnswer }: { item: Extract<DeskItem, {
       <p className="min-w-0 whitespace-normal break-keep text-caption text-subtle-foreground [overflow-wrap:anywhere]">{item.reason}</p>
       {waiting ? (
         <div className="flex items-center justify-end gap-xs pt-xxs">
-          <Button variant="outline" size="sm" data-desk-approval-answer="reject" onClick={() => onAnswer(false)}>{t("desk.approval.reject")}</Button>
-          <Button size="sm" data-desk-approval-answer="allow" onClick={() => onAnswer(true)}>{t("desk.approval.allow")}</Button>
+          <Button variant="soft" size="sm" className="font-normal" data-desk-approval-answer="reject" onClick={() => onAnswer(false)}>{t("desk.approval.reject")}</Button>
+          <Button variant="soft" size="sm" className="font-semibold" data-desk-approval-answer="allow" onClick={() => onAnswer(true)}>{t("desk.approval.allow")}</Button>
         </div>
       ) : null}
     </section>
@@ -159,7 +179,7 @@ export function DeskApprovalCard({ item, onAnswer }: { item: Extract<DeskItem, {
 
 export type DeskChatActions = DeskJobCardActions & {
   onApproval: (id: string, allow: boolean) => void;
-  onNoticeAction: (action: "retry" | "restart" | "reinstall") => void;
+  onNoticeAction: (action: DeskNoticeAction) => void;
   onCopy: (text: string) => void;
   onMention: (mention: DeskMention) => void;
   onHanded: (agentId: string) => void;
@@ -194,7 +214,7 @@ export function DeskChat({ items, jobs, live = null, thinking = false, selectedJ
         <li key={item.id} className="flex min-w-0 flex-col">
           {item.kind === "user" ? <DeskUserMessage text={item.text} mentions={item.mentions} onMention={actions.onMention} />
             : item.kind === "reply" ? <DeskReply text={item.text} stopped={item.state === "stopped"} />
-            : item.kind === "switch" ? <MarkerLine icon={<ArrowLeftRightIcon aria-hidden="true" className="size-(--size-icon-sm) shrink-0" />} data-desk-item="switch">{t(item.carried ? "desk.switch.carried" : "desk.switch.trimmed", { from: item.from, to: item.to })}</MarkerLine>
+            : item.kind === "switch" ? <MarkerLine icon={<ArrowLeftRightIcon aria-hidden="true" className="size-(--size-icon-sm) shrink-0" />} data-desk-item="switch">{t(SWITCH_WORDS[item.carried], { from: item.from, to: item.to })}</MarkerLine>
             : item.kind === "model" ? <MarkerLine icon={<SlidersHorizontalIcon aria-hidden="true" className="size-(--size-icon-sm) shrink-0" />} data-desk-item="model">{t("desk.model", { model: item.model, effort: item.effort })}</MarkerLine>
             : item.kind === "approval" ? <DeskApprovalCard item={item} onAnswer={(allow) => actions.onApproval(item.id, allow)} />
             : item.kind === "notice" ? <DeskNotice item={item} onAction={actions.onNoticeAction} onCopy={actions.onCopy} />
@@ -221,7 +241,7 @@ export function DeskEmpty({ working, asking, onExample, onShowThreads }: { worki
       <ul className="mt-sm flex w-full min-w-0 flex-col gap-xs">
         {examples.map((example) => (
           <li key={example}>
-            <Button variant="outline" className="h-auto min-h-(--size-control) w-full justify-start whitespace-normal py-xs text-left font-normal text-subtle-foreground" data-desk-example="true" onClick={() => onExample(example)}>{example}</Button>
+            <Button variant="soft" className="h-auto min-h-(--size-control) w-full justify-start whitespace-normal py-xs text-left font-normal text-subtle-foreground" data-desk-example="true" onClick={() => onExample(example)}>{example}</Button>
           </li>
         ))}
       </ul>

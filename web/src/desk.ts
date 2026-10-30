@@ -28,17 +28,19 @@ export type DeskSelection = { agent: string; model: string; effort: string };
 
 export type DeskMention = { kind: "session" | "project"; name: string; id: string };
 
-export type DeskNoticeKind = "blocked" | "host_stopped" | "resume_failed" | "login_needed" | "install_failed" | "preparing";
+export type DeskNoticeKind = "blocked" | "preparing" | "host_stopped" | "resume_failed" | "login_needed" | "install_failed" | "no_ask_mode" | "turn_failed";
 
 export type DeskApprovalState = "waiting" | "allowed" | "rejected" | "closed";
 
 export type DeskItem =
   | { kind: "user"; id: string; text: string; at: number; mentions: DeskMention[] }
   | { kind: "reply"; id: string; text: string; at: number; state: "done" | "stopped" }
-  | { kind: "switch"; id: string; from: string; to: string; carried: boolean }
+  /** How much of the conversation the new agent was handed. */
+  | { kind: "switch"; id: string; from: string; to: string; carried: "all" | "trimmed" | "none" }
   | { kind: "model"; id: string; model: string; effort: string }
   | { kind: "approval"; id: string; title: string; command: string; folder: string; reason: string; state: DeskApprovalState }
-  | { kind: "notice"; id: string; notice: DeskNoticeKind; action?: "retry" | "restart" | "reinstall" | null; detail?: string | null; agent?: string | null }
+  /** `detail` is the install's last line, the sign-in command for `login_needed`, or the blocked call. */
+  | { kind: "notice"; id: string; notice: DeskNoticeKind; agent: string | null; detail: string | null }
   | { kind: "job"; id: string; job_id: string }
   | { kind: "handed"; id: string; agent_id: string; name: string; project: string };
 

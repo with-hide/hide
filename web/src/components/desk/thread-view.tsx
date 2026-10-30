@@ -71,7 +71,8 @@ export function ThreadNow({ job }: { job: DeskJob }) {
     <StateBox tone={NOW_TONE[job.state]} aria-label={t("desk.thread.now")} data-desk-thread-now={job.state}>
       <p className="flex min-w-0 items-baseline gap-sm text-caption">
         <span className="shrink-0 font-medium text-foreground">{t("desk.thread.now")}</span>
-        <span className={cn("min-w-0 whitespace-normal break-keep [overflow-wrap:anywhere]", job.state === "asking" ? "text-warning" : job.state === "failed" ? "text-destructive" : "text-subtle-foreground")}>{jobLine(t, job)}</span>
+        <span className={cn("min-w-0 flex-1 whitespace-normal break-keep [overflow-wrap:anywhere]", job.state === "asking" ? "text-warning" : job.state === "failed" ? "text-destructive" : "text-subtle-foreground")}>{jobLine(t, job)}</span>
+        {job.disconnected ? <span className="shrink-0 text-warning" data-desk-thread-disconnected="true">{t("desk.job.disconnected")}</span> : null}
       </p>
     </StateBox>
   );
@@ -240,11 +241,15 @@ function Line({ line, mentions, actions }: { line: ThreadLine; mentions: readonl
  * A thread (D-61, B25-B27, B29): the 지금 box, the session's record drawn as
  * words, tool calls, diffs, images and plans with its `hide` calls as Hide's
  * own parts, its outputs, and the box that types into its terminal. A record
- * that cannot be read says why in one line and offers the terminal.
+ * that cannot be read says why in one line and offers the terminal; one being
+ * read, or with nothing in it yet, says so in one quiet line. A thread on a
+ * device that dropped says so in its 지금 box.
  */
-export function ThreadView({ job, lines, failure = null, mentions = [], outputs, selectedOutput = null, composer, onTerminal, ...actions }: {
+export function ThreadView({ job, lines, reading = false, failure = null, mentions = [], outputs, selectedOutput = null, composer, onTerminal, ...actions }: {
   job: DeskJob;
   lines: readonly ThreadLine[];
+  /** The record is still being read: `lines` is not the thread yet. */
+  reading?: boolean;
   failure?: ThreadReadFailure | null;
   /** The sessions and projects Hide knows by name, so an `@name` in the words is a chip. */
   mentions?: readonly DeskMention[];
@@ -264,6 +269,13 @@ export function ThreadView({ job, lines, failure = null, mentions = [], outputs,
             <span className="min-w-0 text-subtle-foreground">{t(failure === "no_record" ? "desk.thread.readFailed.no_record" : "desk.thread.readFailed.refused")}</span>
             <Button variant="text-link" size="inline" onClick={onTerminal}>{t("desk.thread.toTerminal")}</Button>
           </p>
+        ) : reading ? (
+          <p role="status" className="flex min-w-0 items-center gap-xs text-caption text-muted-foreground" data-desk-thread-reading="true">
+            <LoaderCircleIcon aria-hidden="true" className="size-(--size-icon-sm) shrink-0 animate-spin" />
+            {t("desk.thread.reading")}
+          </p>
+        ) : lines.length === 0 ? (
+          <p className="text-caption text-muted-foreground" data-desk-thread-empty="true">{t("desk.thread.empty")}</p>
         ) : (
           <ol className="flex min-w-0 flex-col gap-sm" data-desk-thread-lines={lines.length}>
             {lines.map((line) => <li key={line.id} className="min-w-0"><Line line={line} mentions={mentions} actions={actions} /></li>)}

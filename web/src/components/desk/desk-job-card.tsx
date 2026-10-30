@@ -1,4 +1,4 @@
-import { CircleXIcon, FolderIcon, GitBranchIcon, GlobeIcon, ImageIcon, ServerIcon } from "lucide-react";
+import { CheckIcon, CircleXIcon, GlobeIcon, HandIcon, ImageIcon } from "lucide-react";
 import type { ReactNode } from "react";
 import type { DeskJob, DeskMission, DeskOutput } from "../../desk";
 import { jobMark } from "../../desk";
@@ -90,21 +90,6 @@ export function UnseenDot({ className }: { className?: string }) {
   return <span role="img" aria-label={t("desk.outputs.unseen")} className={cn("size-(--size-tab-status-dot) shrink-0 rounded-full bg-primary", className)} data-desk-output-unseen="true" />;
 }
 
-/** Where a job runs (D-19, B17): its checkout or the worktree's branch, as the lane head names a scope. */
-export function LocationChip({ location }: { location: DeskJob["location"] }) {
-  const { t } = useInterfaceTranslation();
-  const Icon = location.kind === "worktree" ? GitBranchIcon : FolderIcon;
-  const label = location.kind === "worktree" ? t("desk.job.worktree", { label: location.label }) : t("desk.job.checkout", { label: location.label });
-  return (
-    <Hint label={label}>
-      <span className="inline-flex min-w-0 shrink items-center gap-xxs text-micro text-subtle-foreground" aria-label={label} data-desk-location={location.kind}>
-        <Icon aria-hidden="true" className="size-(--size-icon-sm) shrink-0" />
-        <span className="truncate">{location.label}</span>
-      </span>
-    </Hint>
-  );
-}
-
 /** The mark of an output's kind: an image, a page, a PR, or the document's file type. */
 export function OutputMark({ output, className }: { output: DeskOutput; className?: string }) {
   const size = cn("size-(--size-icon-sm) shrink-0 text-muted-foreground", className);
@@ -121,9 +106,9 @@ export function OutputMark({ output, className }: { output: DeskOutput; classNam
 export function OutputChip({ output, selected = false, onOpen }: { output: DeskOutput; selected?: boolean; onOpen: (output: DeskOutput) => void }) {
   return (
     <Button
-      variant="secondary"
+      variant="outline"
       size="sm"
-      className={cn("pointer-events-auto relative h-(--size-badge-height) max-w-full gap-xxs px-xs text-micro font-normal", selected && "border-ring")}
+      className={cn("pointer-events-auto relative h-(--size-badge-height) max-w-full gap-xxs bg-transparent px-xs text-micro font-normal text-subtle-foreground", selected && "border-ring")}
       aria-pressed={selected}
       data-desk-output-chip={output.id}
       onClick={() => onOpen(output)}
@@ -172,70 +157,88 @@ export type DeskJobCardActions = {
   onMission: (missionId: string) => void;
 };
 
-/** What a card offers for its state (B21, B22, B29): the one action the operator would take. */
+/** What a card offers for its state (B21, B22, B29): the one action the operator would take, as a grey button. */
 function action(t: T, job: DeskJob, actions: DeskJobCardActions): ReactNode {
+  const button = (kind: string, words: string, onPress: () => void) => (
+    <Button variant="soft" size="sm" className="pointer-events-auto relative font-normal" data-desk-job-action={kind} onClick={onPress}>{words}</Button>
+  );
   switch (job.state) {
     case "asking":
-      return <Button size="sm" className="pointer-events-auto relative" data-desk-job-action="answer" onClick={() => actions.onAnswer(job)}>{t("desk.job.answer")}</Button>;
+      return button("answer", t("desk.job.answer"), () => actions.onAnswer(job));
+    case "done":
+      return button("open", t("desk.job.viewThread"), () => actions.onOpen(job));
     case "queued":
-      return <Button variant="outline" size="sm" className="pointer-events-auto relative" data-desk-job-action="cancel" onClick={() => actions.onCancel(job)}>{t("desk.job.cancel")}</Button>;
+      return button("cancel", t("desk.job.cancel"), () => actions.onCancel(job));
     case "cancelled":
-      return <Button variant="outline" size="sm" className="pointer-events-auto relative" data-desk-job-action="requeue" onClick={() => actions.onRequeue(job)}>{t("desk.job.requeue")}</Button>;
+      return button("requeue", t("desk.job.requeue"), () => actions.onRequeue(job));
     case "failed":
-      return <Button variant="outline" size="sm" className="pointer-events-auto relative" data-desk-job-action="retry" onClick={() => actions.onRetry(job)}>{t("desk.action.retry")}</Button>;
+      return button("retry", t("desk.action.retry"), () => actions.onRetry(job));
     default:
       return null;
   }
 }
 
+/** A card's one coloured mark (D-39): ✋ while it asks, a check when done, a cross when it failed, else its status. */
+function CardMark({ job }: { job: DeskJob }) {
+  if (job.state === "asking") return <HandIcon aria-hidden="true" className="size-(--size-icon) shrink-0 text-warning" data-desk-job-mark="asking" />;
+  if (job.state === "done") return <CheckIcon aria-hidden="true" className="size-(--size-icon) shrink-0 text-success" data-desk-job-mark="done" />;
+  return <JobMark job={job} />;
+}
+
+/** The card's second line (B24): the question, what it does now, its summary or its state, then where it runs. */
+function cardLine(t: T, job: DeskJob): string {
+  const what = job.state === "asking" ? (job.question ?? t("desk.job.asking"))
+    : job.state === "working" ? (job.now ?? t("desk.job.working"))
+    : job.state === "failed" ? jobLine(t, job)
+    : job.state === "done" ? (job.summary ?? t("desk.job.done"))
+    : jobStateWords(t, job);
+  const place = job.location.kind === "worktree" ? `${job.project.label} · ${job.location.label}` : job.project.label;
+  return [what, place, job.machine].filter(Boolean).join(" · ");
+}
+
 /**
- * One job Desk started, as a card in the chat (D-39, B21-B24, B36-B39): its
- * mark and title, where it runs, its mission and PRs, the line of what it is
- * doing, asking or left, its outputs and the one action its state offers.
- * Pressing the card opens its thread (B25). An ended job is dimmed; a job
- * on a device that dropped is dimmed and says so (B23).
+ * One job Desk started, as a card in the chat (D-39, B21-B24, B36-B39): an
+ * unfilled card with a thin line, the one coloured mark of its state, its
+ * title with its mission and PRs, an output at the top right, one quiet
+ * line of what it asks, does or left and where, and the one grey action its
+ * state offers. Pressing the card opens its thread (B25). An ended job is
+ * dimmed; a job on a device that dropped is dimmed and says so (B23).
  */
 export function DeskJobCard({ job, selected = false, selectedOutput = null, ...actions }: { job: DeskJob; selected?: boolean; selectedOutput?: string | null } & DeskJobCardActions) {
   const { t } = useInterfaceTranslation();
   const ended = job.state === "cancelled" || job.state === "closed" || job.state === "moved_out" || job.state === "archived";
-  const line = jobLine(t, job);
   const button = action(t, job, actions);
+  const plan = job.state === "working" && job.plan ? `${job.plan.done}/${job.plan.total}` : null;
+  // One output stands at the top right, the selected one if any; the rest are counted and listed in the thread's 결과물.
+  const shown = job.outputs.find((output) => output.id === selectedOutput) ?? job.outputs[0] ?? null;
+  const more = job.outputs.filter((output) => output !== shown);
   return (
     <article
-      className={cn("relative min-w-0 rounded-md border border-border bg-card", selected && "border-ring")}
+      className={cn("relative min-w-0 rounded-lg border border-border", selected && "border-ring")}
       aria-label={job.title}
       data-desk-job={job.state}
       data-desk-job-selected={selected ? "true" : undefined}
     >
-      {job.state !== "moved_out" ? <RowOverlayButton className="rounded-md" aria-label={t("desk.job.open", { title: job.title })} onClick={() => actions.onOpen(job)} /> : null}
-      <div className={cn("pointer-events-none relative flex min-w-0 flex-col gap-xxs px-md py-sm", (ended || job.disconnected) && "opacity-(--opacity-dimmed)")}>
-        <div className="flex min-w-0 items-center gap-xs">
-          <JobMark job={job} />
+      {job.state !== "moved_out" ? <RowOverlayButton className="rounded-lg" aria-label={t("desk.job.open", { title: job.title })} onClick={() => actions.onOpen(job)} /> : null}
+      <div className={cn("pointer-events-none relative grid min-w-0 grid-cols-[auto_minmax(0,1fr)_auto] items-start gap-x-sm gap-y-xxs px-md py-sm", (ended || job.disconnected) && "opacity-(--opacity-dimmed)")}>
+        <span className="flex h-(--size-control-sm) items-center"><CardMark job={job} /></span>
+        <span className="flex h-(--size-control-sm) min-w-0 items-center gap-xs">
           <span className={cn("min-w-0 truncate font-medium", ended ? "text-subtle-foreground" : "text-foreground")}>{job.title}</span>
           {job.mission ? <span className="pointer-events-auto relative"><DeskMissionChip mission={job.mission} onOpen={actions.onMission} /></span> : null}
           {job.pull_requests.map((pr) => <PrMark key={pr.number} state={pr.state} number={pr.number} />)}
           {job.joined ? <Badge variant="outline" data-desk-job-joined="true">{t("desk.job.joined")}</Badge> : null}
-        </div>
-        <div className="ml-xs flex min-w-0 items-center gap-sm pl-(--size-agent-mark) text-micro">
-          {/* ⌂ is always drawn (B17); the project is named beside it only where the place does not already say it. */}
-          {job.location.kind === "worktree" || job.location.label !== job.project.label ? <span className="min-w-0 truncate text-subtle-foreground">{job.project.label}</span> : null}
-          <LocationChip location={job.location} />
-          {job.machine ? <span className="inline-flex shrink-0 items-center gap-xxs text-subtle-foreground" data-desk-job-machine={job.machine}><ServerIcon aria-hidden="true" className="size-(--size-icon-sm)" />{job.machine}</span> : null}
-          {job.disconnected ? <span className="shrink-0 text-warning" data-desk-job-disconnected="true">{t("desk.job.disconnected")}</span> : null}
-        </div>
-        <p
-          className={cn("ml-xs min-w-0 whitespace-normal break-keep pl-(--size-agent-mark) text-caption [overflow-wrap:anywhere]", job.state === "asking" ? "text-warning" : job.state === "failed" ? "text-destructive" : "text-muted-foreground")}
-          data-desk-job-line="true"
-        >
-          {line}
+        </span>
+        <span className="flex h-(--size-control-sm) min-w-0 items-center justify-end gap-xxs">
+          {plan ? <span className="inline-flex h-(--size-badge-height) shrink-0 items-center rounded-sm border border-border px-xs font-mono text-micro text-muted-foreground" data-desk-job-plan={plan}>{plan}</span> : null}
+          {shown ? <OutputChip output={shown} selected={selectedOutput === shown.id} onOpen={actions.onOutput} /> : null}
+          {more.length ? <span className="shrink-0 text-micro text-muted-foreground" title={more.map((output) => output.label).join(", ")} data-desk-job-more-outputs={more.length}>+{more.length}</span> : null}
+        </span>
+        <p className="col-span-2 col-start-2 min-w-0 truncate text-caption text-muted-foreground" title={cardLine(t, job)} data-desk-job-line="true">
+          {job.disconnected ? <span className="text-warning" data-desk-job-disconnected="true">{t("desk.job.disconnected")} · </span> : null}
+          {cardLine(t, job)}
         </p>
-        {job.mission ? <span className="ml-xs pl-(--size-agent-mark) pt-xxs"><MissionNodeCells mission={job.mission} /></span> : null}
-        {job.outputs.length > 0 || button ? (
-          <div className="ml-xs flex min-w-0 flex-wrap items-center gap-xs pl-(--size-agent-mark) pt-xs">
-            {job.outputs.map((output) => <OutputChip key={output.id} output={output} selected={selectedOutput === output.id} onOpen={actions.onOutput} />)}
-            {button ? <span className="ml-auto">{button}</span> : null}
-          </div>
-        ) : null}
+        {job.mission ? <span className="col-span-2 col-start-2 pt-xxs"><MissionNodeCells mission={job.mission} /></span> : null}
+        {button ? <span className="col-span-2 col-start-2 pt-xs">{button}</span> : null}
       </div>
     </article>
   );
@@ -250,8 +253,8 @@ export function DeskHandedCard({ name, project, onOpen }: { name: string; projec
   const { t } = useInterfaceTranslation();
   const title = t("desk.handed.title", { name });
   return (
-    <article className="relative min-w-0 rounded-md border border-border bg-card" aria-label={title} data-desk-handed="true">
-      <RowOverlayButton className="rounded-md" aria-label={t("desk.job.open", { title: name })} onClick={onOpen} />
+    <article className="relative min-w-0 rounded-lg border border-border" aria-label={title} data-desk-handed="true">
+      <RowOverlayButton className="rounded-lg" aria-label={t("desk.job.open", { title: name })} onClick={onOpen} />
       <div className="pointer-events-none relative flex min-w-0 flex-col gap-xxs px-md py-sm">
         <div className="flex min-w-0 items-center gap-xs">
           <StatusMark mark={null} />

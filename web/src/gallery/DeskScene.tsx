@@ -57,7 +57,7 @@ export const DESK_SCENES = [
   { state: "outputs", label: "결과물 기준 (B30)" },
   { state: "cards", label: "일 카드 모든 상태 (B16, B21-B24, B36-B39)" },
   { state: "chat-states", label: "채팅 상태: 승인 카드, 알림 줄, 생각 중 · 중단 (B5-B8, B11, B13-B15)" },
-  { state: "thread-failed", label: "스레드 기록 읽기 실패 (B27)" },
+  { state: "thread-states", label: "스레드 읽기 실패 · 읽는 중 · 빈 · 연결 안 됨 (B23, B27)" },
   { state: "settings", label: "Settings › Desk (B4, B19, B21)" },
   { state: "row-sizes", label: "운영자 질문: 태스크 줄 두 크기" },
 ] as const;
@@ -119,10 +119,11 @@ function ChatComposer({ agents = AGENTS, selection, menuOpen = null, value = "",
 const CLAUDE: DeskSelection = { agent: "claude", model: "opus", effort: "high" };
 const CODEX: DeskSelection = { agent: "codex", model: "gpt", effort: "medium" };
 
-function Thread({ job, updates, parts, failure = null, outputs = job.outputs, selectedOutput = null, focused = false, draft = "", attachments = [] }: {
+function Thread({ job, updates, parts, reading = false, failure = null, outputs = job.outputs, selectedOutput = null, focused = false, draft = "", attachments = [] }: {
   job: DeskJob;
   updates: Parameters<typeof threadLines>[0];
   parts?: Parameters<typeof threadLines>[1];
+  reading?: boolean;
   failure?: ThreadReadFailure | null;
   outputs?: readonly DeskOutput[];
   selectedOutput?: string | null;
@@ -134,7 +135,7 @@ function Thread({ job, updates, parts, failure = null, outputs = job.outputs, se
   const lines = useMemo(() => threadLines(updates, parts), [updates, parts]);
   return (
     <ThreadView
-      job={job} lines={lines} failure={failure} mentions={MENTIONS} outputs={outputs} selectedOutput={selectedOutput}
+      job={job} lines={lines} reading={reading} failure={failure} mentions={MENTIONS} outputs={outputs} selectedOutput={selectedOutput}
       composer={{ value: text, attachments, focused, onChange: setText, onSend: noop, onAttach: noop, onRemoveAttachment: noop }}
       onTerminal={noop} {...PART_ACTIONS}
     />
@@ -193,10 +194,14 @@ export function DeskScene({ params }: { params: URLSearchParams }) {
   let sidebar: ReactNode = <SceneSidebar jobs={sidebarJobs(["mention", "gallery", "release"])} selected={null} />;
   let body: ReactNode;
   switch (state) {
-    case "s1":
-      sidebar = <SceneSidebar jobs={[]} selected={null} />;
-      body = <DeskRoom pinned={false} rail={rail(false, false)} chat={<DeskChatColumn head={<ChatHead />} composer={<ChatComposer selection={CLAUDE} />}><DeskEmpty working={2} asking={1} onExample={noop} onShowThreads={noop} /></DeskChatColumn>} />;
+    case "s1": {
+      // A new conversation while three threads from before still run: the sidebar, the rail and the empty Desk count the same three.
+      const running = sidebarJobs(["mention", "gallery", "release"]);
+      sidebar = <SceneSidebar jobs={running} selected={null} />;
+      body = <DeskRoom pinned={false} rail={<DeskRail asking={askingCount(running)} unseen={unseenOutputs(running)} threads={false} outputs={false} onThreads={noop} onOutputs={noop} />}
+        chat={<DeskChatColumn head={<ChatHead />} composer={<ChatComposer selection={CLAUDE} />}><DeskEmpty working={running.filter((job) => job.state === "working").length} asking={askingCount(running)} onExample={noop} onShowThreads={noop} /></DeskChatColumn>} />;
       break;
+    }
     case "s1b":
       body = <DeskRoom pinned={false} rail={rail(false, false)} chat={chat(switchedItems(now), <ChatComposer selection={CODEX} menuOpen="agent" />)} />;
       break;
@@ -282,10 +287,24 @@ export function DeskScene({ params }: { params: URLSearchParams }) {
     case "chat-states":
       body = <DeskRoom pinned={false} rail={rail(false, false)} chat={chat(stateItems(now), <ChatComposer agents={AGENTS_PREPARING} selection={CODEX} answering />, null, null, { live: "지금 돌고 있는 일은 세 개예요. mention 버튼 정리는 테스트를 돌리는 중이고" })} />;
       break;
-    case "thread-failed":
-      body = <DeskRoom pinned={false} rail={rail(true, false)} chat={chat(handoffItems(now), <ChatComposer selection={CLAUDE} />, "release")}
-        tool={<ToolColumn pinned={false} head={<ThreadHead path={threadPath("release 노트 초안")} onTerminal={noop} />}><Thread job={jobs.release!} updates={[]} failure="no_record" /></ToolColumn>} />;
+    case "thread-states": {
+      const fresh: DeskJob = { ...jobs.gallery!, id: "fresh", title: "로그 정리", state: "starting", question: null, outputs: [] };
+      const mini = everyStateJobs(now).find((job) => job.id === "s-mini")!;
+      const column = (key: string, job: DeskJob, thread: ReactNode) => (
+        <div key={key} className="flex min-h-0 min-w-0 flex-1 flex-col border-r border-border" data-desk-scene-thread-state={key}>
+          <ToolColumn pinned={false} head={<ThreadHead path={threadPath(job.title)} onTerminal={noop} />}>{thread}</ToolColumn>
+        </div>
+      );
+      body = (
+        <div className="flex min-h-0 min-w-0 flex-1">
+          {column("failed", jobs.release!, <Thread job={jobs.release!} updates={[]} failure="no_record" />)}
+          {column("reading", jobs.release!, <Thread job={jobs.release!} updates={[]} reading />)}
+          {column("empty", fresh, <Thread job={fresh} updates={[]} />)}
+          {column("disconnected", mini, <Thread job={mini} updates={MENTION_THREAD.slice(0, 4)} outputs={[]} />)}
+        </div>
+      );
       break;
+    }
     case "settings":
       sidebar = null;
       body = <div className="w-(--size-settings-sheet-w) max-w-full p-xl"><DeskSettingsTab settings={{ default_agent: "claude", location: "desk", cap: 8 }} agents={AGENTS} onChange={noop} /></div>;

@@ -3,7 +3,7 @@
 // TypeScript refuses a state the page does not render. Keep it a plain literal.
 
 export const GALLERY = {
-  "Button": ["Default", "Default Hover", "Default Focus", "Default Disabled", "Pending", "Secondary", "Secondary Hover", "Outline", "Ghost", "Ghost Hover", "Destructive", "Destructive Hover", "Link", "Text", "Text Hover", "Text Link", "Text Link Hover", "Small", "Large", "Icon", "Icon Small", "Icon Extra Small", "Row Action", "Row Action Hover"],
+  "Button": ["Default", "Default Hover", "Default Focus", "Default Disabled", "Pending", "Secondary", "Secondary Hover", "Soft", "Outline", "Ghost", "Ghost Hover", "Destructive", "Destructive Hover", "Link", "Text", "Text Hover", "Text Link", "Text Link Hover", "Small", "Large", "Icon", "Icon Small", "Icon Extra Small", "Row Action", "Row Action Hover"],
   "Input": ["Default", "Placeholder", "Filled", "Focus", "Invalid", "Disabled", "Mono"],
   "Textarea": ["Default", "Placeholder", "Focus", "Invalid", "Disabled", "Bare"],
   "Row Button": ["Default", "Hover", "Focus", "Disabled", "Overlay", "Overlay Hover"],

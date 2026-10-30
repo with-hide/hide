@@ -116,6 +116,7 @@ const renderers: Renderers = {
     ),
     "Secondary": () => <Button variant="secondary">Cancel</Button>,
     "Secondary Hover": () => <Button variant="secondary" data-gallery-state="hover">Cancel</Button>,
+    "Soft": () => <Button variant="soft" size="sm">Answer</Button>,
     "Outline": () => <Button variant="outline">Choose folder</Button>,
     "Ghost": () => <Button variant="ghost">Refresh</Button>,
     "Ghost Hover": () => <Button variant="ghost" data-gallery-state="hover">Refresh</Button>,

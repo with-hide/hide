@@ -22,7 +22,7 @@ A file may only go down: a new raw control fails, and a file with fewer than its
 
 | You need | Use | Notes |
 | --- | --- | --- |
-| An action | `Button` | `variant`: `default` (the one primary action), `secondary`, `outline`, `ghost` (toolbar and row actions), `destructive`, `link`, `text`, `text-link`, `row-action`; `size`: `default`, `sm`, `lg`, `icon`, `icon-sm`, `icon-xs`, `inline`. |
+| An action | `Button` | `variant`: `default` (the one primary action), `secondary`, `soft` (a grey rounded action on a card or in a list), `outline`, `ghost` (toolbar and row actions), `destructive`, `link`, `text`, `text-link`, `row-action`; `size`: `default`, `sm`, `lg`, `icon`, `icon-sm`, `icon-xs`, `inline`. |
 | An action that reads as words in a row or a sentence (더 보기, 접기, 열기) | `Button variant="text" size="inline"`; `variant="text-link"` when it underlines on hover | `inline` keeps the surrounding text's size; set one with `className` (`text-caption`, `text-micro`) only to differ from it. |
 | An icon-only control | `Button size="icon"`, `"icon-sm"` or `"icon-xs"` (a dense row) inside `Hint` | The hint's label is the control's accessible name. |
 | An icon action inside a row that lights on hover | `Button variant="row-action" size="icon-xs"` | `ghost` would light in the row's own hover color and vanish. |
@@ -69,7 +69,7 @@ These already draw a thing Hide shows in several places; use them instead of dra
 | A device | `DeviceChip`, `device-rail.tsx` |
 | What a close would take with it | `SubtreeList` |
 | A state that stands in a box | `StateBox` |
-| Desk: its chat, job and approval cards, composer and agent bar, `@` menu, Threads list, a thread, outputs, lane columns and rail, Settings › Desk | `components/desk/*`, drawn from props in the shape of `web/src/desk.ts`; the gallery's `scene=desk` shows every state |
+| Desk: its chat, job and approval cards, composer and agent bar, `@` menu, Threads list, a thread, outputs, lane columns and rail, Settings › Desk | `components/desk/*`, drawn from props in the shape of `web/src/desk.ts`; the gallery's `scene=desk` shows every state. In Desk a card is unfilled with a thin `--border` line and one coloured mark for its state, a card never holds another filled box, and every action is `Button variant="soft"`: lime marks a state or a selection only, and `default` is kept for an irreversible confirmation, of which Desk has none |
 
 ## Tokens at a glance
 
