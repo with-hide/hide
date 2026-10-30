@@ -1,4 +1,3 @@
-import { ChevronRightIcon } from "lucide-react";
 import { useMemo, type ReactNode } from "react";
 import type { Actions } from "./actions";
 import { MissionNodeMark } from "./components/mission-node-mark";
@@ -40,7 +39,6 @@ function Item({ item, mission, device, actions, onSelect }: { item: TurnItem; mi
   const conversation = (
     <Button size="sm" variant="ghost" onClick={() => actions.openAgent(mission.conductor.pane_id)} data-mission-conversation="true">
       {t("mission.toTerminal")}
-      <ChevronRightIcon aria-hidden="true" className="size-(--size-icon-sm)" />
     </Button>
   );
   switch (item.kind) {
