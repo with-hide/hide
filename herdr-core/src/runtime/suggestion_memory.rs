@@ -61,10 +61,9 @@ pub(super) struct Refusal {
 }
 
 impl Refusal {
-    /// A refusal Memory answered with `kind` (`memory.branches_full`).
+    /// A refusal Memory answered with `kind` (`memory.not_git`).
     pub(super) fn of(kind: &str, reason: String) -> Self {
         let code = match kind {
-            "memory.branches_full" => "branches_full",
             "memory.not_git" => "not_git",
             "memory.promotion_unavailable" => "promotion_unavailable",
             "memory.action_busy" => "action_busy",
@@ -950,7 +949,7 @@ mod tests {
                 (
                     2,
                     Pressed::Refused {
-                        refusal: Refusal::of("memory.branches_full", "busy".into()),
+                        refusal: Refusal::of("memory.action_busy", "busy".into()),
                         pressed_at_unix_ms: 8,
                     },
                 ),
@@ -979,7 +978,7 @@ mod tests {
         assert_eq!(refused.cause.as_deref(), Some("busy"));
         assert_eq!(
             refused.attempt.as_ref().unwrap().failure.as_deref(),
-            Some("branches_full")
+            Some("action_busy")
         );
     }
 

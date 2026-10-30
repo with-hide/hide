@@ -3450,9 +3450,6 @@ pub struct ProjectMemorySnapshot {
     pub usable_cards: usize,
     /// At the store's cap with no card it may forget: new cards are refused.
     pub capacity_reached: bool,
-    /// True when the Project already has 5 branches waiting for a decision,
-    /// so `N개 문서에 반영` starts nothing until one is decided.
-    pub branches_full: bool,
     /// Older cards forgotten automatically to make room, still forgotten,
     /// since the Memory tab last said so (`memory_evictions_seen`).
     pub evicted_cards: usize,
@@ -9538,14 +9535,11 @@ mod wire_enum_tests {
 
         let holds = [
             SuggestionHold::GithubNeeded,
-            SuggestionHold::BranchesFull,
             SuggestionHold::AutoPrUnreviewed,
         ];
         for variant in holds {
             match variant {
-                SuggestionHold::GithubNeeded
-                | SuggestionHold::BranchesFull
-                | SuggestionHold::AutoPrUnreviewed => {}
+                SuggestionHold::GithubNeeded | SuggestionHold::AutoPrUnreviewed => {}
             }
         }
         assert_wire(&contract, "suggestion_hold", &holds);
