@@ -681,7 +681,7 @@ it("leads a finished mission with its result tiles, its pull requests and its re
     const parts = [...done.container.querySelectorAll<HTMLElement>("[data-mission-summary], [data-mission-results], [data-mission-pulls], [data-mission-report-text], [data-mission-conductor], [data-mission-turn], [data-mission-map], [data-mission-side]")].map((part) => Object.keys(part.dataset)[0]);
     expect(parts).toEqual(["missionSummary", "missionResults", "missionPulls", "missionReportText", "missionConductor", "missionMap", "missionSide"]);
     const tile = (key: string) => [done.q(`[data-mission-tile="${key}"] [data-mission-tile-value]`)?.textContent, done.q(`[data-mission-tile="${key}"] dt`)?.textContent];
-    expect(["merged", "criteria", "agents", "landed"].map(tile)).toEqual([["2", "PRs merged"], ["3 / 4", "Finish lines met · ⤳1 skipped"], ["4", "Workers · 2 checking"], ["2 / 2", "In main"]]);
+    expect(["merged", "criteria", "agents", "landed"].map(tile)).toEqual([["2", "PRs merged"], ["3 / 4", "Finish lines met · ⤳1 skipped"], ["2", "Workers · 2 checking"], ["2 / 2", "In main"]]);
     // Each pull request is its mark, its node's title and its state's word; pressing one picks its node.
     const pull = done.q('[data-mission-pull="1871"]')!;
     expect([pull.querySelector("[data-pr-mark]")?.getAttribute("data-pr-mark"), pull.textContent]).toEqual(["merged", `${"#"}1871API addedMerged`]);

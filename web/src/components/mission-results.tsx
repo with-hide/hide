@@ -24,7 +24,7 @@ export function ResultTiles({ mission }: { mission: Mission }) {
   }
   if (counts.agents) {
     const { workers, checkers } = counts.agents;
-    tiles.push({ key: "agents", value: String(workers + checkers), label: checkers > 0 ? t("mission.tile.checkers", { count: checkers }) : t("mission.tile.workers") });
+    tiles.push({ key: "agents", value: String(workers), label: checkers > 0 ? t("mission.tile.checkers", { count: checkers }) : t("mission.tile.workers") });
   }
   if (counts.landed) tiles.push({ key: "landed", value: `${counts.landed.landed} / ${counts.landed.total}`, label: t("mission.tile.landed") });
   if (tiles.length === 0) return null;
