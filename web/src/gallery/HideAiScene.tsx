@@ -14,7 +14,7 @@ import { useUiStore } from "../ui";
 import type { LaneFrame, LaneSizes, WorkspaceView } from "../workspace";
 import { memorySceneProject } from "./MemoryScene";
 
-export const HIDE_AI_SCENE_STATES = ["new", "improvement", "applying", "applied", "settings", "settings_unread", "off", "first_run", "not_investigated", "memory", "empty", "memory_empty", "suggestions_off", "global", "global_unusable", "memory_offer", "asking", "ready", "ready_pr_only", "ready_local", "ready_folded", "ready_failed", "ready_apart", "ready_synced"] as const;
+export const HIDE_AI_SCENE_STATES = ["new", "improvement", "applying", "applied", "settings", "settings_unread", "off", "first_run", "not_investigated", "memory", "empty", "memory_empty", "suggestions_off", "global", "global_unusable", "memory_offer", "asking", "ready", "ready_pr_only", "ready_local", "ready_folded", "ready_failed", "ready_apart", "ready_synced", "remaking"] as const;
 export type HideAiSceneState = (typeof HIDE_AI_SCENE_STATES)[number];
 export type HideAiSceneLanguage = "en" | "ko" | "zh-CN" | "ja";
 export type HideAiSceneParams = { theme: "light" | "dark"; state: HideAiSceneState; width: number; language: HideAiSceneLanguage };
@@ -120,6 +120,28 @@ const READY_APART_ROW: SuggestionRow = readyWith("push_base_ahead", { base_unpus
 /** After `내 커밋을 브랜치로 옮기고 main 맞추기`: main is GitHub's again, and the two commits are on their own branch. */
 const READY_SYNCED_ROW: SuggestionRow = readyWith(null, { moved_to: "local-main-1030" });
 
+/** `main에 합치기` found main moved under the branch: Hide remakes it on main by itself, and the row works under 반영 중 (operator decision 2026-10-31). */
+const REMAKING_ROW: SuggestionRow = row("s16", {
+  ...NEW_ROWS[2]!, group: "applying", state: "hide_ai_working", returned_after_skip: false,
+  attempt: {
+    phase: "working", started_at_unix_ms: Date.now() - 1 * MINUTE, pr_number: null, url: null, agent_pane: "hide-ai-s16", failure: null, purpose: "rebase",
+    branch: { ...READY_ROW.attempt!.branch!, name: "hide-suggestion-s16-merge-main" },
+  },
+});
+
+/** Six branches already wait, and a new suggestion still offers `문서 고치기`. */
+const waitingBranch = (id: string, discomfort: string): SuggestionRow => ({ ...READY_ROW, id, discomfort, plan: undefined, attempt: { ...READY_ROW.attempt!, branch: { ...READY_ROW.attempt!.branch!, name: `hide-suggestion-${id}` } } });
+const REMAKING_ROWS: SuggestionRow[] = [
+  READY_ROW,
+  waitingBranch("s30", "릴리스 노트 형식을 매번 물어봐요"),
+  waitingBranch("s31", "worktree 정리 순서를 헷갈려요"),
+  waitingBranch("s32", "e2e 포트를 매번 찾아요"),
+  waitingBranch("s33", "PR 템플릿 순서를 틀려요"),
+  waitingBranch("s34", "스크린샷 업로드 경로를 몰라요"),
+  { ...NEW_ROWS[0]!, id: "s40" },
+  REMAKING_ROW,
+];
+
 /** The ready states' rows: the branch first, then the other turn, new suggestions, the working one and the folded applied. */
 const readyRows = (ready: SuggestionRow): SuggestionRow[] => [ready, CI_FAILED_ROW, MEMORY_OFFER, ...APPLYING_ROWS.slice(0, 1), ...APPLIED_ROWS];
 
@@ -221,6 +243,7 @@ export function hideAiSceneProject(state: HideAiSceneState, workspaceId = "herdr
     case "ready_failed": return { ...base, rows: readyRows(READY_SIGN_FAILED_ROW), counts: { suggestions: 3, rail: 4 } };
     case "ready_apart": return { ...base, rows: readyRows(READY_APART_ROW), counts: { suggestions: 3, rail: 4 } };
     case "ready_synced": return { ...base, rows: readyRows(READY_SYNCED_ROW), counts: { suggestions: 3, rail: 4 } };
+    case "remaking": return { ...base, rows: REMAKING_ROWS, counts: { suggestions: 7, rail: 8 } };
     case "suggestions_off": return { ...base, status: "off", settings: { ...base.settings, suggestions_enabled: false }, counts: { suggestions: 0, rail: 0 } };
   }
 }
