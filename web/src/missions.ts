@@ -546,10 +546,7 @@ export function cardLine(mission: Mission, node: MissionNode, planLine: string |
   if (look === "hold") return { text: t("mission.line.held"), attention: false };
   if (look === "failed") return { text: node.line ?? t("mission.status.failed"), attention: true };
   if (node.blocked) return { text: nodeLine(node, t), attention: true };
-  const before = node.depends_on.flatMap((key) => {
-    const dep = mission.nodes.find((other) => other.key === key);
-    return dep && dep.status !== "done" && dep.status !== "dropped" ? [dep.pr != null ? `#${dep.pr}` : dep.title] : [];
-  });
+  const before = waitingFor(mission, node).map((dep) => (dep.pr != null ? `#${dep.pr}` : dep.title));
   if (before.length > 0) return { text: t("mission.line.waitsFor", { names: before.join(" ") }), attention: false };
   return node.line ? { text: node.line, attention: false } : null;
 }
@@ -709,4 +706,99 @@ export function conductorResume(mission: Mission): { provider: ProviderKind; ses
  */
 export function takeOverPrompt(mission: Mission): string {
   return `Read \`hide mission help\` and follow it as this mission's Conductor: take over mission ${mission.id}. Run \`hide mission take ${mission.id}\`, then \`hide mission show\` and \`hide inbox\`, read each worker's state, and go on from there.`;
+}
+
+/**
+ * The Conductor row's state (PRD mission-tool B12, B13): `gone` for an open
+ * mission no Conductor holds, the decision it waits on, else what its pane's
+ * row shows (asleep, at work, resting). `unknown` while the core holds the
+ * Conductor but its row is not listed, so no state word is made up; null for
+ * a closed mission with no Conductor row to bring forward.
+ */
+export type ConductorState = "working" | "deciding" | "resting" | "asleep" | "gone" | "unknown";
+
+export function conductorState(mission: Mission, row: AgentRow | null): ConductorState | null {
+  const open = missionOpen(mission);
+  if (open && !mission.conductor.present) return "gone";
+  if (!row) return open ? (missionDeciding(mission) ? "deciding" : "unknown") : null;
+  if (missionDeciding(mission)) return "deciding";
+  if (row.mark === "asleep") return "asleep";
+  if (row.mark === "going") return "working";
+  return "resting";
+}
+
+/** The nodes that made the mission's own pull requests, in order (B18, B20): an outside node's pull request is not the mission's. */
+export function missionPulls(mission: Mission): MissionNode[] {
+  return orderedNodes(mission).filter((node) => node.pr != null && node.kind !== "external" && node.status !== "dropped");
+}
+
+/**
+ * A finished mission's result tiles (B20), each counted from the record and
+ * null when the record holds nothing for it: merged pull requests of those
+ * it made (none while no state was read), finish lines met of all of them
+ * with the skipped ones, the agents bound to its work and its checks, and
+ * its changes in main of those it planned.
+ */
+export type MissionResultCounts = {
+  merged: { merged: number; total: number } | null;
+  criteria: { passed: number; total: number; skipped: number } | null;
+  agents: { workers: number; checkers: number } | null;
+  landed: { landed: number; total: number } | null;
+};
+
+export function missionResultCounts(mission: Mission): MissionResultCounts {
+  const kept = mission.nodes.filter((node) => node.status !== "dropped");
+  const pulls = missionPulls(mission);
+  const read = pulls.filter((node) => node.pr_state != null);
+  const lines = mission.exempt ? [] : kept;
+  const total = lines.reduce((sum, node) => sum + node.criteria.length, 0);
+  const skipped = lines.reduce((sum, node) => sum + node.criteria_skipped, 0);
+  const passed = lines.reduce((sum, node) => sum + node.criteria_met, 0) - skipped;
+  const workers = kept.filter((node) => node.kind !== "external" && node.agent_id != null).length;
+  const checkers = kept.reduce((sum, node) => sum + missionCheckers(node).filter((checker) => checker.agent_id != null).length, 0);
+  const changes = kept.filter((node) => node.kind === "change");
+  return {
+    merged: read.length > 0 ? { merged: read.filter((node) => node.pr_state === "merged").length, total: pulls.length } : null,
+    criteria: total > 0 ? { passed, total, skipped } : null,
+    agents: workers + checkers > 0 ? { workers, checkers } : null,
+    landed: changes.length > 0 ? { landed: changes.filter(nodeLanded).length, total: changes.length } : null,
+  };
+}
+
+/** A node's other agents checking it, review and verify lines in order (B17). */
+export function missionCheckers(node: MissionNode): MissionChecker[] {
+  return node.criteria.flatMap((line) => (line.kind === "review" || line.kind === "verify" ? (line.checkers ?? []) : []));
+}
+
+/**
+ * The report's folded line (B21): its first line of words without Markdown
+ * marks, the next one when the first only repeats the mission's title; null
+ * for a report with no words.
+ */
+export function reportLine(plain: string, title: string): string | null {
+  const lines = plain.split("\n").map((one) => one.trim()).filter(Boolean);
+  const [first, second] = lines;
+  if (first === undefined) return null;
+  return first === title.trim() && second !== undefined ? second : first;
+}
+
+/**
+ * The nodes a worker can start next (B19): planned or waiting, not held by a
+ * failed or dropped node, with every node they wait on finished or dropped;
+ * an outside node is no worker's to start.
+ */
+export function nextNodes(mission: Mission): MissionNode[] {
+  const byKey = new Map(mission.nodes.map((node) => [node.key, node]));
+  return orderedNodes(mission).filter((node) => node.kind !== "external" && (node.status === "planned" || node.status === "waiting") && !node.blocked && node.depends_on.every((key) => {
+    const dep = byKey.get(key);
+    return !dep || dep.status === "done" || dep.status === "dropped";
+  }));
+}
+
+/** The nodes a waiting node still waits for (B28): those not finished or dropped, which its line names by pull request or title. */
+export function waitingFor(mission: Mission, node: MissionNode): MissionNode[] {
+  return node.depends_on.flatMap((key) => {
+    const dep = mission.nodes.find((other) => other.key === key);
+    return dep && dep.status !== "done" && dep.status !== "dropped" ? [dep] : [];
+  });
 }

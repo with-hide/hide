@@ -4,7 +4,7 @@ import type { Actions } from "./actions";
 import { AgentMark } from "./AgentMark";
 import { CriterionMark } from "./components/criterion-mark";
 import { MissionNodeMark } from "./components/mission-node-mark";
-import { PrMark } from "./components/pr-mark";
+import { MissionPrMark } from "./components/mission-pr";
 import { Button } from "./components/ui/button";
 import { Hint } from "./components/ui/tooltip";
 import { useInterfaceTranslation } from "./i18n/client";
@@ -158,7 +158,7 @@ function Made({ mission, node }: { mission: Mission; node: MissionNode }) {
     rows.push([
       t("mission.field.pr"),
       <span key="pr" className="flex min-w-0 flex-wrap items-center gap-xs">
-        {node.pr_state ? <PrMark state={node.pr_state} number={pr} stale={mission.github_stale} /> : <span className="font-mono">#{pr}</span>}
+        <MissionPrMark number={pr} state={node.pr_state} stale={mission.github_stale} />
         {node.base_pr != null ? <span className="text-caption text-muted-foreground" data-panel-base={node.base_pr}>{t("mission.panel.base", { number: String(node.base_pr) })}</span> : null}
       </span>,
     ]);
@@ -249,7 +249,7 @@ function Criteria({ mission, node }: { mission: Mission; node: MissionNode }) {
   );
 }
 
-/** What the node waits on and what waits on it, by name with a pull request's number dim beside it; pressing one picks it (B33). */
+/** What the node waits on and what waits on it, by name with its pull request's mark beside it (PRD mission-tool B18); pressing one picks it (B33). */
 function Links({ mission, node, onSelect }: { mission: Mission; node: MissionNode; onSelect: (key: string) => void }) {
   const { t } = useInterfaceTranslation();
   const before = node.depends_on.flatMap((key) => mission.nodes.find((other) => other.key === key) ?? []);
@@ -263,7 +263,7 @@ function Links({ mission, node, onSelect }: { mission: Mission; node: MissionNod
         return (
           <button key={other.key} type="button" onClick={() => onSelect(other.key)} title={other.title} className="flex min-w-0 max-w-full items-center gap-xxs rounded-xs border border-border px-xs outline-none hover:bg-accent focus-visible:ring-1 focus-visible:ring-ring" data-panel-link={other.key}>
             <span className="min-w-0 truncate">{other.title}</span>
-            {pr != null ? <span className="shrink-0 font-mono text-muted-foreground">#{pr}</span> : null}
+            {pr != null ? <MissionPrMark number={pr} state={other.pr_state} stale={mission.github_stale} /> : null}
           </button>
         );
       })}
