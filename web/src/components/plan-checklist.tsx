@@ -1,11 +1,11 @@
 import { CheckIcon, HistoryIcon } from "lucide-react";
 import { useLayoutEffect, useMemo, useRef } from "react";
-import { StatusMark } from "./components/status-mark";
-import { Hint } from "./components/ui/tooltip";
-import { useInterfaceTranslation } from "./i18n/client";
-import { cn } from "./lib/utils";
-import { planChecklist } from "./plans";
-import type { PlanStep, PlanView } from "./snapshot";
+import { StatusMark } from "./status-mark";
+import { Hint } from "./ui/tooltip";
+import { useInterfaceTranslation } from "../i18n/client";
+import { cn } from "../lib/utils";
+import { planChecklist } from "../plans";
+import type { PlanStep, PlanView } from "../snapshot";
 
 // A plan read as a list (PRD mission-plan-visibility D-07, B3-B6): the pane
 // chip's popover and a mission node's folded plan. The steps run in the order
@@ -13,7 +13,8 @@ import type { PlanStep, PlanView } from "./snapshot";
 // parallel step indented once. In the popover a finished plan folds its steps
 // into one line and keeps what they left behind; a session record or a node's
 // row, where a finished plan is read afterwards, lists every step. The map is
-// drawn only in the 보기 slot.
+// drawn only in the 보기 slot. Every screen that lists a plan's steps draws
+// this one list (PRD session-docs-and-assistant D-72).
 
 export function PlanChecklist({ plan, popover = false }: { plan: PlanView; popover?: boolean }) {
   const { t } = useInterfaceTranslation();

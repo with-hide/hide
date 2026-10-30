@@ -28,7 +28,7 @@ import { recordDate } from "./sessionRecordTime";
 import { machineName } from "./screenMachine";
 import { localDeviceId } from "./snapshot";
 import type { AgentRow, Checkout, FlowResult, MissedWork, PlanView, PrSettlement, SessionPull, SessionRecord as RecordValue, WorkEnd, WorkRequest, WorkSession } from "./snapshot";
-import { PlanChecklist } from "./PlanChecklist";
+import { PlanChecklist } from "./components/plan-checklist";
 import { planCount, planOfSession, planWorkLine } from "./plans";
 import { statusText } from "./agentStatus";
 import { askSubjectText } from "./askSubject";
@@ -40,6 +40,8 @@ import type { ArchivedMember, ArchivedSession } from "./snapshot";
 import { HighlightedRequest } from "./RequestHighlight";
 import { startReasonText } from "./startReason";
 import { RowButton } from "./components/ui/row-button";
+import { SessionRowBody } from "./components/session-row";
+import { LetterTag } from "./components/letter-mark";
 
 type RequestLocator = { request_offset: number; query?: string };
 
@@ -611,7 +613,7 @@ function RequestRow({ request, locator }: { request: WorkRequest; locator?: Requ
     <RowButton className={cn("items-baseline gap-sm px-0 py-xxs disabled:opacity-100", !opens && "hover:bg-transparent")} aria-expanded={opens ? raw : undefined} disabled={!opens} onClick={() => setRaw(!raw)}>
       <RequestTime at={request.at_unix_ms} />
       <span className={cn("flex min-w-0 flex-1 items-baseline gap-xs", letter ? "text-muted-foreground" : "text-foreground")}>
-        {letter ? <span className="inline-flex shrink-0 items-center gap-xxs text-micro" aria-label={t("record.letterFrom", { name: letter })}><MailIcon aria-hidden="true" className="size-(--size-icon-sm) self-center" />{letter}</span> : null}
+        {letter ? <LetterTag who={letter} label={t("record.letterFrom", { name: letter })} /> : null}
         {request.goal_command ? <span className="shrink-0 rounded-xs border border-border px-xxs font-mono text-micro text-muted-foreground" aria-label={t("record.goalCommand")} data-record-goal="true">{GOAL_MARK}</span> : null}
         {request.answers ? <span className="min-w-0 shrink truncate text-micro text-muted-foreground" aria-label={t("record.answers", { question: request.answers })} data-record-answers="true">↩ {request.answers}:</span> : null}
         <span className={cn("min-w-0 flex-1 truncate", !preview.summarized && !letter && "text-subtle-foreground")} title={preview.text}>{preview.text}</span>
@@ -694,8 +696,13 @@ function ChildRows({ parent, summaries, onOpen, actions }: { parent: RecordValue
       const device = child.session.device_id !== parent.session.device_id ? machineName(rest?.navigator?.devices, child.session.device_id, t) : null;
       return <li key={key} className="min-w-0 border-b border-border last:border-b-0" data-record-child={child.session.session_id}>
         <RowButton className="items-start gap-sm px-0 py-sm" aria-expanded={expanded === key} title={[branch, device].filter(Boolean).join(" · ")} onClick={() => setExpanded(expanded === key ? null : key)}>
-          {done ? <CheckIcon aria-hidden="true" className="mt-xs size-(--size-agent-mark) shrink-0 text-success" /> : live ? <StatusMark mark={live.mark} className={cn("mt-xs shrink-0", markTone(live))} /> : end === "waiting" && !settled ? <Clock3Icon aria-hidden="true" className="mt-xs size-(--size-agent-mark) shrink-0 text-muted-foreground" /> : <SquareIcon aria-hidden="true" className="mt-xs size-(--size-agent-mark) shrink-0 text-muted-foreground" />}
-          <span className="min-w-0 flex-1"><span className={cn("block truncate text-caption font-medium", done && "text-subtle-foreground")} title={title}>{title}</span><span className="mt-xs flex min-w-0 flex-wrap items-center gap-x-xs gap-y-xxs text-micro text-muted-foreground"><AgentMark kind={child.session.agent} />{agentProductName(child.session.agent)} · <span data-record-child-state="true">{state}</span>{prs ? <span>· {t("recordCard.prs")} {prs}</span> : null}</span></span>
+          <SessionRowBody
+            size="record"
+            mark={done ? <CheckIcon aria-hidden="true" className="size-(--size-agent-mark) shrink-0 text-success" /> : live ? <StatusMark mark={live.mark} className={cn("shrink-0", markTone(live))} /> : end === "waiting" && !settled ? <Clock3Icon aria-hidden="true" className="size-(--size-agent-mark) shrink-0 text-muted-foreground" /> : <SquareIcon aria-hidden="true" className="size-(--size-agent-mark) shrink-0 text-muted-foreground" />}
+            head={<span className={cn("block truncate text-caption font-medium", done && "text-subtle-foreground")} title={title}>{title}</span>}
+          >
+            <span className="mt-xs flex min-w-0 flex-wrap items-center gap-x-xs gap-y-xxs text-micro text-muted-foreground"><AgentMark kind={child.session.agent} />{agentProductName(child.session.agent)} · <span data-record-child-state="true">{state}</span>{prs ? <span>· {t("recordCard.prs")} {prs}</span> : null}</span>
+          </SessionRowBody>
           <ChevronRightIcon aria-hidden="true" className={cn("mt-xs size-(--size-icon-sm) shrink-0 text-muted-foreground", expanded === key && "rotate-90")} />
         </RowButton>
         {expanded === key ? <div className="mb-sm ml-md min-w-0 border-l-2 border-border bg-card px-sm pb-sm" data-record-child-detail={child.session.session_id}>
