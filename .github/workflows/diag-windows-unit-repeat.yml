@@ -15,8 +15,8 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        variant: [fixtrace]
-        attempt: [1, 2, 3, 4, 5, 6]
+        variant: [basetrace]
+        attempt: [1, 2, 3]
     defaults:
       run:
         shell: bash
@@ -48,7 +48,7 @@ jobs:
           cache-dependency-path: pnpm-lock.yaml
       - run: bash scripts/verify-web.sh install --ignore-scripts
       - name: The suite as main has it
-        if: ${{ matrix.variant == 'base' }}
+        if: ${{ startsWith(matrix.variant, 'base') }}
         run: |
           sed -i '/globalSetup: \["\.\/e2e\/unit-node-binary\.ts"\],/d' web/vite.config.ts
           rm web/e2e/unit-node-binary.ts
@@ -58,13 +58,13 @@ jobs:
         run: |
           mkdir -p diag-out
           typeperf "\Processor(_Total)\% Processor Time" "\Memory\Pages Input/sec" "\Memory\Page Reads/sec" "\PhysicalDisk(*)\Disk Reads/sec" "\PhysicalDisk(*)\Disk Read Bytes/sec" "\PhysicalDisk(*)\Avg. Disk sec/Read" "\PhysicalDisk(*)\Current Disk Queue Length" -si 1 -sc 600 -f CSV -o diag-out/perf.csv -y > /dev/null 2>&1 &
-          if [ "${{ matrix.variant }}" = fixtrace ]; then
+          if [ "${{ endsWith(matrix.variant, 'trace') }}" = true ]; then
             logman start "NT Kernel Logger" -p "Windows Kernel Trace" "(process,img,disk,file,hf)" -o "$RUNNER_TEMP/kernel.etl" -ets -bs 1024 -nb 64 512
           fi
           status=0
           bash scripts/verify-web.sh web test --reporter=default --reporter=./e2e/unit-failure-reporter.ts --reporter=json --outputFile.json=../diag-out/vitest.json || status=$?
           taskkill //IM typeperf.exe //F || true
-          if [ "${{ matrix.variant }}" = fixtrace ]; then
+          if [ "${{ endsWith(matrix.variant, 'trace') }}" = true ]; then
             logman stop "NT Kernel Logger" -ets
             tracerpt "$RUNNER_TEMP/kernel.etl" -o "$RUNNER_TEMP/events.csv" -of CSV -y > /dev/null
             ls -la "$RUNNER_TEMP/events.csv"
