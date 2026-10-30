@@ -1,0 +1,21 @@
+# A pull request's package lane checks that the app packages, installs, starts
+# and updates, not how fast its binaries run, so it builds them without the
+# release profile's cross-crate optimization. docs/BUILD.md, "A pull request's
+# release build", owns the measurement and why main and a release never use it.
+name: Quick release build
+description: Build this job's release binaries at opt-level 1 without LTO, in the release profile's own target folder.
+
+runs:
+  using: composite
+  steps:
+    - name: Build the release binaries at opt-level 1 without LTO
+      # Cargo's own profile variables, so the binaries still land in
+      # target/release, the one path desktop/scripts/package.mjs reads, and
+      # keep the release profile's strip, panic and debug-assertion settings.
+      shell: bash
+      run: |
+        {
+          echo CARGO_PROFILE_RELEASE_OPT_LEVEL=1
+          echo CARGO_PROFILE_RELEASE_LTO=off
+          echo CARGO_PROFILE_RELEASE_CODEGEN_UNITS=256
+        } >> "$GITHUB_ENV"
