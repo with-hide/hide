@@ -1240,3 +1240,114 @@ fn a_hook_turn_ends_when_the_session_file_reads_an_interruption_after_it() {
     runtime.ingest_session(Ok(claude("done", 5)));
     assert_eq!(axes(&runtime).0, "working");
 }
+
+/// D-9 with agent summaries off: a Claude Code session file whose turn was
+/// interrupted, read as the label worker reads it, ends the hook's working
+/// turn; the switch takes the AI fields away, not the session read the
+/// status stands on.
+#[test]
+fn a_hook_turn_ends_on_the_session_files_interruption_with_summaries_off() {
+    use hide_node_link::panes::{HookStatusReport, HookTurn};
+    use hide_session::label_transcript::{LabelTranscriptRequest, read};
+    let home = tempfile::tempdir().unwrap();
+    let folder = home.path().join(".claude/projects/-private-tmp-hide-labels-overlay");
+    std::fs::create_dir_all(&folder).unwrap();
+    let record = |at: &str, kind: &str, content: serde_json::Value| {
+        let mut record = serde_json::json!({
+            "type": kind, "version": "2.1.314", "userType": "external",
+            "timestamp": at, "sessionId": SESSION, "cwd": CHECKOUT,
+            "message": {"role": kind, "content": content},
+        });
+        if content.is_string() {
+            record["promptId"] = serde_json::json!(format!("prompt-{at}"));
+        }
+        record
+    };
+    let records = [
+        record(
+            "2026-10-30T13:00:00.000Z",
+            "user",
+            serde_json::json!("로그를 찾아줘"),
+        ),
+        record(
+            "2026-10-30T13:00:01.000Z",
+            "assistant",
+            serde_json::json!([{"type": "text", "text": "찾는 중"}]),
+        ),
+        record(
+            "2026-10-30T13:00:02.000Z",
+            "user",
+            serde_json::json!([{"type": "text", "text": "[Request interrupted by user]"}]),
+        ),
+    ];
+    std::fs::write(
+        folder.join(format!("{SESSION}.jsonl")),
+        records
+            .iter()
+            .map(|record| format!("{record}\n"))
+            .collect::<String>(),
+    )
+    .unwrap();
+    let transcript = read(
+        home.path(),
+        &LabelTranscriptRequest {
+            agent: hide_session::Agent::Claude,
+            reference_kind: "id".to_owned(),
+            reference_value: SESSION.to_owned(),
+            cwd: None,
+            checkpoint: None,
+            subagents: Default::default(),
+            turns: None,
+            tools: None,
+        },
+    )
+    .unwrap();
+    let claude = |status: &str, seq: u64| {
+        let mut payload = projection(SESSION);
+        for agent in &mut payload.agents {
+            agent.agent_status = Some(status.to_owned());
+            agent.state_change_seq = Some(seq);
+        }
+        payload
+    };
+    let axes = |runtime: &Runtime| {
+        let row = row(runtime);
+        (
+            row["activity"].as_str().unwrap().to_owned(),
+            row["demand"].as_str().unwrap().to_owned(),
+        )
+    };
+
+    let mut runtime = runtime();
+    runtime
+        .ingest_hook_status(
+            crate::node::TEST_NODE,
+            PANE,
+            &HookStatusReport {
+                runtime: "claude-code".to_owned(),
+                version: hide_agent_hooks::HOOK_VERSION,
+                session: Some(SESSION.to_owned()),
+                turn: Some(HookTurn::Working),
+                counts: None,
+                session_start: false,
+            },
+        )
+        .unwrap();
+    runtime.ingest_session(Ok(claude("working", 4)));
+    assert_eq!(axes(&runtime).0, "working");
+
+    // Agent summaries off: the overlay carries no summary, only the facts.
+    let record = PaneRecord {
+        owner: hide_session::label_reference_token("claude", "id", SESSION),
+        turns: transcript.turns,
+        turns_seq: Some(5),
+        ..PaneRecord::default()
+    };
+    runtime.set_label_overlay(LabelOverlay::of_records(
+        [(&PANE.to_owned(), &record)],
+        true,
+        false,
+    ));
+    runtime.ingest_session(Ok(claude("done", 5)));
+    assert_eq!(axes(&runtime), ("stopped".to_owned(), "none".to_owned()));
+}
