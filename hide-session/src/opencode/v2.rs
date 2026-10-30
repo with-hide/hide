@@ -482,7 +482,12 @@ impl super::Read {
             .pointer("/time/completed")
             .and_then(Value::as_u64)
             .unwrap_or(message_at);
-        let made = super::made_by(item.get("name").and_then(Value::as_str), input, &output);
+        let made = super::made_by(
+            item.get("name").and_then(Value::as_str),
+            input,
+            item,
+            &output,
+        );
         self.note_sightings(&output, at, &made);
     }
 }

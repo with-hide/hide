@@ -523,6 +523,56 @@ fn claude_result(id: &str, output: &str, at: &str) -> String {
     .to_string()
 }
 
+fn claude_failed_result(id: &str, output: &str, at: &str) -> String {
+    let mut line: serde_json::Value = serde_json::from_str(&claude_result(id, output, at)).unwrap();
+    line["message"]["content"][0]["is_error"] = true.into();
+    line.to_string()
+}
+
+/// The review of #1859: one call that makes a pull request and also prints
+/// another one claims nothing when the other runs after `||`, and a create
+/// that failed claims nothing, though it prints the pull request already on
+/// its branch alone on a line; in every format that pairs call and output.
+#[test]
+fn a_create_that_failed_or_fell_back_claims_no_making() {
+    for (agent, path, _) in CALL_FIXTURES {
+        let contents = fs::read_to_string(fixture(path)).unwrap();
+        let fallback = contents.replace(
+            "bash scripts/ship.sh",
+            "gh pr create --fill || gh pr view 12 --json url --jq .url",
+        );
+        let parsed = parse_events(agent, &fallback);
+        assert_eq!(made(&parsed.links, 12), Some(false), "{agent:?}");
+    }
+    let lines = [
+        claude_call(
+            "toolu_failed",
+            "gh pr create --fill",
+            "2026-10-03T01:00:01Z",
+        ),
+        claude_failed_result(
+            "toolu_failed",
+            "a pull request for branch \"fix/x\" into branch \"main\" already exists:\nhttps://github.com/acme/app/pull/42\n",
+            "2026-10-03T01:00:03Z",
+        ),
+        claude_call(
+            "toolu_made",
+            "gh pr create --fill && gh pr view 43 --json url --jq .url",
+            "2026-10-03T01:00:04Z",
+        ),
+        claude_result(
+            "toolu_made",
+            "https://github.com/acme/app/pull/44\nhttps://github.com/acme/app/pull/43\n",
+            "2026-10-03T01:00:06Z",
+        ),
+    ];
+    let facts = parse_events(Agent::Claude, &(lines.join("\n") + "\n")).links;
+    assert_eq!(made(&facts, 42), Some(false), "a failed create");
+    // `&&` claims both lines; GitHub's creation time decides (the store).
+    assert_eq!(made(&facts, 44), Some(true));
+    assert_eq!(made(&facts, 43), Some(true));
+}
+
 /// A live session writes the call and, seconds later, its output: a read
 /// that falls between them still knows, at the next read, that the output
 /// answers a call that makes a pull request.

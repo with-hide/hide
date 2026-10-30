@@ -194,15 +194,19 @@ impl LinkAccumulator {
         self.creating.push(id.to_owned());
     }
 
-    /// The output of call `id`: when the call makes a pull request, the
-    /// addresses it gave back are made here, at `at`.
-    fn output_of(&mut self, id: Option<&str>, outputs: &[&str], at: u64) {
+    /// The output of call `id`: when the call makes a pull request and its
+    /// record does not say it `failed`, the addresses it gave back are made
+    /// here, at `at`. A failed `gh pr create` prints the pull request that
+    /// already holds its branch, which it did not make.
+    fn output_of(&mut self, id: Option<&str>, outputs: &[&str], at: u64, failed: bool) {
         let Some(at_call) = id.and_then(|id| self.creating.iter().position(|kept| kept == id))
         else {
             return;
         };
         self.creating.remove(at_call);
-        self.made_now(crate::named_prs::created_addresses(outputs), at);
+        if !failed {
+            self.made_now(crate::named_prs::created_addresses(outputs), at);
+        }
     }
 
     /// Addresses a call and its output, read together, gave back as made.
@@ -490,6 +494,7 @@ pub(crate) fn claude_line(item: &Value, offset: u64, links: &mut LinkAccumulator
                         block.get("tool_use_id").and_then(Value::as_str),
                         &outputs,
                         at,
+                        block.get("is_error").and_then(Value::as_bool) == Some(true),
                     );
                 }
             }
@@ -533,12 +538,19 @@ pub(crate) fn pi_line(item: &Value, offset: u64, links: &mut LinkAccumulator) {
             Some("toolResult") => {
                 let mut outputs = Vec::new();
                 crate::collect_text(message.get("content"), &mut outputs);
-                links.output_of(message["toolCallId"].as_str(), &outputs, at);
+                links.output_of(
+                    message["toolCallId"].as_str(),
+                    &outputs,
+                    at,
+                    message["isError"] == true,
+                );
             }
             // The operator's own `!` command and its output, in one record.
             Some("bashExecution") => {
                 if let (Some(command), Some(output)) =
                     (message["command"].as_str(), message["output"].as_str())
+                    && message["exitCode"] == 0
+                    && message["cancelled"] != true
                     && crate::named_prs::creates_pull_request(
                         None,
                         &serde_json::json!({ "command": command }),
@@ -574,7 +586,7 @@ pub(crate) fn grok_line(item: &Value, _offset: u64, links: &mut LinkAccumulator)
             }
             Some("tool_call_update") if crate::grok::terminal(update) => {
                 if let Some(text) = crate::grok::tool_text(update) {
-                    links.output_of(id, &[&text], at);
+                    links.output_of(id, &[&text], at, update["status"] == "failed");
                 }
             }
             _ => {}
@@ -696,7 +708,9 @@ pub(crate) fn codex_line(item: &Value, _offset: u64, links: &mut LinkAccumulator
                 }
                 other => crate::collect_text(other, &mut outputs),
             }
-            links.output_of(call_id(payload), &outputs, at);
+            let failed =
+                crate::tools::codex_failed(payload.and_then(|payload| payload.get("output")));
+            links.output_of(call_id(payload), &outputs, at, failed);
         }
         _ => {}
     }

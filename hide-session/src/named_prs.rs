@@ -132,7 +132,8 @@ fn commands(object: &serde_json::Map<String, Value>, place: &Place, found: &mut 
 /// create`, a `gh api` POST to `repos/<owner>/<name>/pulls`, or a GitHub
 /// tool named for it (`create_pull_request`, as the GitHub MCP server names
 /// it, under any prefix). `name` is the tool's own name when the record
-/// keeps one.
+/// keeps one. A shell call with an `||` makes no claim: the command after
+/// it runs because one failed, and what it prints is no making.
 pub(crate) fn creates_pull_request(name: Option<&str>, input: &Value) -> bool {
     if name.is_some_and(|name| name.to_ascii_lowercase().ends_with("create_pull_request")) {
         return true;
@@ -142,7 +143,7 @@ pub(crate) fn creates_pull_request(name: Option<&str>, input: &Value) -> bool {
     };
     let mut found = Found::default();
     commands(object, &Place::Session, &mut found);
-    found.creates
+    found.creates && !found.fallback
 }
 
 /// The pull requests a creating call's output gives back: an address alone
@@ -179,6 +180,8 @@ struct Found {
     named: Vec<NamedPr>,
     /// A command among them makes a pull request.
     creates: bool,
+    /// A line among them holds an `||`.
+    fallback: bool,
 }
 
 impl Found {
@@ -208,6 +211,7 @@ enum Place {
 
 fn shell(text: &str, mut place: Place, depth: usize, found: &mut Found) {
     let line = hide_shell::shell_line(text);
+    found.fallback |= line.fallback;
     for words in &line.commands {
         command(words, &mut place, found);
     }
@@ -777,6 +781,23 @@ mod tests {
             None,
             &json!({"command": ["bash", "-lc", "gh pr create --fill"]})
         ));
+        // The shape each of mission-13's #1810 to #1813 was made with.
+        assert!(creates_pull_request(
+            None,
+            &json!({"command": "cd /work/app && B=/tmp/s/pr-body.md; cat > $B <<'EOF'\n## Summary\nSee https://github.com/acme/app/pull/12\nEOF\ngh pr create --repo acme/app --base main --head fix/x --title \"fix: x\" --body-file $B 2>&1 | tail -1"})
+        ));
+        // The review of #1859: what runs after `||` runs because the create
+        // failed, so the call claims nothing.
+        for command in [
+            "gh pr create --fill || gh pr view 42 --json url --jq .url",
+            "gh pr create --fill 2>/dev/null || gh pr list --head fix/x",
+            "x=$(gh pr create --fill || gh pr view 42)",
+        ] {
+            assert!(
+                !creates_pull_request(None, &json!({ "command": command })),
+                "{command}"
+            );
+        }
         assert!(creates_pull_request(
             Some("mcp__github__create_pull_request"),
             &json!({"owner": "acme", "repo": "app", "title": "x"})

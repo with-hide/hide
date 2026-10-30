@@ -1335,7 +1335,12 @@ impl Read {
             .pointer("/state/time/end")
             .and_then(Value::as_u64)
             .unwrap_or(message_at);
-        let made = made_by(part.get("tool").and_then(Value::as_str), input, output);
+        let made = made_by(
+            part.get("tool").and_then(Value::as_str),
+            input,
+            part,
+            output,
+        );
         self.note_sightings(output, at, &made);
     }
 
@@ -1391,9 +1396,20 @@ impl Read {
 
 /// The pull requests a tool part made: one part holds the call and its
 /// output together, so a call that makes a pull request
-/// (`named_prs::creates_pull_request`) gives back the addresses it made.
-fn made_by(name: Option<&str>, input: Option<&Value>, output: &str) -> Vec<(String, u64)> {
-    if input.is_some_and(|input| crate::named_prs::creates_pull_request(name, input)) {
+/// (`named_prs::creates_pull_request`) and completed with no nonzero exit
+/// gives back the addresses it made.
+fn made_by(
+    name: Option<&str>,
+    input: Option<&Value>,
+    part: &Value,
+    output: &str,
+) -> Vec<(String, u64)> {
+    let succeeded = part.pointer("/state/status").and_then(Value::as_str) == Some("completed")
+        && part
+            .pointer("/state/metadata/exit")
+            .and_then(Value::as_i64)
+            .is_none_or(|code| code == 0);
+    if succeeded && input.is_some_and(|input| crate::named_prs::creates_pull_request(name, input)) {
         crate::named_prs::created_addresses(&[output])
     } else {
         Vec::new()
