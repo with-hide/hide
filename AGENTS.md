@@ -129,8 +129,10 @@ The CLI is a wrapper over the same local socket API: use CLI wrappers for shell 
   Check the target binary with `herdr --version` and `herdr api schema --json`, then compare with `contracts/herdr-api.schema.json` through `scripts/check-herdr-contract.sh`.
 - The pin lives only in `contracts/herdr-bundle.json`, and the contract is what that exact binary answers, never a copy from a Herdr checkout; `check-herdr-pin-single-source.sh` fails when anything restates it.
   Move it with `scripts/bump-herdr.sh <release-tag>`.
-- The generated wire types live in a private module of `herdr-core/src/wire.rs` (built by `herdr-core/build.rs`), so only that file can name them and an import anywhere else fails to compile.
-  Another crate reaches Herdr's typed answers through the plain-value `pub` functions of `herdr_core::wire`, or, where it cannot depend on the core (`hide-kit`), through the typed helpers of `hide-herdr-client` (transport plus the plugin registry entry); never through a generated type.
+- The core and hided speak to Herdr only through the engine boundary, `herdr-core/src/engine/`: the `Engine` trait inside the core and `EngineHandle` off its owner thread; its Herdr implementation (`engine/herdr.rs`) is the only code that holds a Herdr connection or reads its wire (`docs/ARCHITECTURE.md`, The core, the shell and Herdr).
+  `scripts/check-engine-boundary.py` fails a Herdr connection, wire type, `hide-herdr-client` use or Herdr launch outside it, except the files its allow-list names with the bundle that deletes each.
+- The generated wire types live in a private module of `herdr-core/src/engine/herdr/wire.rs` (built by `herdr-core/build.rs`), so only that file can name them and an import anywhere else fails to compile; `wire.rs` is itself private to the engine's Herdr implementation.
+  Another crate reaches Herdr through `EngineHandle`, or, where it cannot depend on the core (`hide-kit`), through the typed helpers of `hide-herdr-client` (transport plus the plugin registry entry); never through a generated type.
   Do not write wire deserialization in `session_sync/{projection,replica}.rs`.
   `docs/ARCHITECTURE.md` lists the schema gaps the boundary still handwrites and the tests that demand migration when the schema closes them.
 
