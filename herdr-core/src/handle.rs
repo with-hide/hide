@@ -741,6 +741,22 @@ impl Core {
         serde_json::to_value(rows.answer(all)).map_err(|_| "ps_unavailable".into())
     }
 
+    /// Checks a `hide pane`, `hide agent read` or `hide workspace purpose`
+    /// caller and resolves what its command acts on; the command's engine
+    /// calls then run on the daemon's blocking task, off this lock.
+    pub fn prepare_pane_command(
+        &self,
+        device: &str,
+        caller: &str,
+        expected: &crate::workspace_control::Context,
+        command: crate::pane_command::PaneCommand,
+    ) -> Result<crate::pane_command::Prepared, String> {
+        if !check_owner_thread(self, "pane.prepare") {
+            return Err("pane_unavailable".into());
+        }
+        lock_recover(&self.runtime).prepare_pane_command(device, caller, expected, command)
+    }
+
     /// Checks a `hide memory` caller and takes what its command needs; the
     /// command then runs on the daemon's blocking task, off this lock.
     pub fn prepare_memory(

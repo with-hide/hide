@@ -220,6 +220,7 @@ fn a_letter_to_a_sleeping_agent_is_taken_and_waits() {
                     body: "Fix the next bug".into(),
                     kind: "report".into(),
                     now: false,
+                    force: false,
                 },
             )
             .unwrap();
