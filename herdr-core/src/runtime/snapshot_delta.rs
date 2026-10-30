@@ -126,6 +126,9 @@ impl Runtime {
             self.delta.revision = rest.revision();
             self.delta.rest_revision = self.delta.revision;
             self.delta.last_rest = Some(Arc::new(rest));
+            // Desk's cards read the rows, which ride `rest`: they are
+            // followed only when it moved.
+            self.refresh_desk_jobs();
         }
         if self.delta.last_editor.as_deref() != Some(&self.snapshot.editor) {
             self.delta.revision += 1;

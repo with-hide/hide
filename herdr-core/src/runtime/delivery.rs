@@ -1101,6 +1101,8 @@ impl Runtime {
             }
             _ => {}
         }
+        // A spawn of Desk's past its places waits in Desk's queue (B21).
+        let queued = self.desk_spawn_admission(&actor, &command)?;
         let repeated = match &command {
             Command::Send { intent, .. } => self.delivery_ledger.as_ref().is_ok_and(|ledger| {
                 crate::delivery::mailbox::existing_intent(
@@ -1177,7 +1179,12 @@ impl Runtime {
                 .actor
                 .require_native_identity()?;
         }
-        Ok(Prepared::new(
+        let after = if queued.is_none() && !repeated {
+            self.desk_after(&actor, &command, target.as_ref())
+        } else {
+            None
+        };
+        let prepared = Prepared::new(
             self.delivery_client.clone().ok_or("delivery_unavailable")?,
             Authority {
                 caller: caller.to_owned(),
@@ -1186,7 +1193,12 @@ impl Runtime {
             actor,
             target,
             command,
-        ))
+        )
+        .then(after);
+        Ok(match queued {
+            Some(answer) => prepared.answered(answer),
+            None => prepared,
+        })
     }
 
     pub(crate) fn install_delivery_client(&mut self, client: Client) {
@@ -1429,7 +1441,7 @@ impl Runtime {
                 || *actor
                     == Actor::hide(super::agent_sleep::letters::WAKE_ROLE, self.node.as_str())
                 || (*actor == Actor::hide(crate::delivery::HIDE_DESK_ROLE, self.node.as_str())
-                    && self.desk_running())
+                    && self.desk_installed())
                 || *actor == Actor::operator(self.node.as_str()))
     }
 

@@ -36,6 +36,13 @@ pub(super) struct ArchiveTargetPayload {
     pub(super) session_id: Option<String>,
 }
 
+fn log_archive_refusal(pane_id: &str, kind: &str) {
+    crate::diagnostic!(serde_json::json!({
+        "component": "session_archive", "kind": "session_archive.refused",
+        "reason": kind, "pane_id": pane_id,
+    }));
+}
+
 /// The request id a member's start carries, so its answer is found.
 fn resume_request(id: &ArchiveId, session: &str) -> String {
     format!("archive:{}:{session}", id.as_str())
@@ -48,14 +55,59 @@ impl Runtime {
         match self.admit_archive(&payload.pane_id, payload.confirmed) {
             Ok(()) => {}
             Err((kind, message)) => {
-                crate::diagnostic!(serde_json::json!({
-                    "component": "session_archive", "kind": "session_archive.refused",
-                    "reason": kind, "pane_id": payload.pane_id,
-                }));
+                log_archive_refusal(&payload.pane_id, kind);
                 self.set_error(kind, message, false);
             }
         }
         true
+    }
+
+    /// `hide agent archive <id> [--actor <id>]`: `세션 보관` for the session
+    /// registration `id` holds, asked by the agent itself, its parent, or
+    /// Desk. It admits the archive the screen's event admits, so a working
+    /// session is refused `archive_confirmation_required`: only the operator
+    /// confirms stopping work, and only from the screen. Returns the answer
+    /// and whether anything changed.
+    pub(crate) fn agent_archive_command(
+        &mut self,
+        device: &str,
+        caller: &str,
+        expected: &crate::workspace_control::Context,
+        id: &str,
+        acting: Option<&str>,
+    ) -> Result<(serde_json::Value, bool), String> {
+        let actor = self.registered_agent_for(device, caller, expected, id, acting, true)?;
+        self.archive_registered(id, &actor)
+            .map(|answer| (answer, true))
+    }
+
+    /// The archive of the session registration `id` runs in its pane, never
+    /// confirmed: a refusal comes back as the screen's error kind with its
+    /// dot written as an underscore, which `archive_next_action` words.
+    pub(super) fn archive_registered(
+        &mut self,
+        id: &str,
+        actor: &crate::delivery::Actor,
+    ) -> Result<serde_json::Value, String> {
+        let pane = actor.pane_id.as_str();
+        let row = self
+            .archive_rows()
+            .find(|agent| agent.pane_id == pane)
+            .ok_or("agent_unavailable")?;
+        // The pane hosts another conversation than the registration's.
+        if row
+            .session_id
+            .as_deref()
+            .and_then(crate::wire::session_digest)
+            != actor.session
+        {
+            return Err("agent_unavailable".into());
+        }
+        self.admit_archive(pane, false).map_err(|(kind, _)| {
+            log_archive_refusal(pane, kind);
+            kind.replace('.', "_")
+        })?;
+        Ok(serde_json::json!({"archived": id, "pane_id": pane}))
     }
 
     /// Why `세션 보관` cannot run on this row now, as an error kind and the

@@ -953,6 +953,25 @@ Desk does not read the operator's `CLAUDE.md`, skills, agent settings or hooks, 
 Its instructions are Hide's own: its role, the `hide` commands it uses, and to answer in the operator's language.
 The Desk agent is no session in a pane: it is not in the sidebar, Sessions, Needs You or Memory, and it opens nothing on the operator's screen.
 
+### Desk's jobs
+
+A session Desk starts is the operator's own: a real Agent tab in its checkout, which the core puts in the checkout's `◆ Desk` group (made when missing) once, without changing the screen in front or the keyboard; a job on another device keeps the tab where that device made it.
+Work Desk hands to a session that already runs is a letter, and the conversation shows a `기존 세션에 맡김` line with the session and its project; it changes no state and takes no place.
+Where a task works follows Settings › Desk: per task (the default, a new `desk/<task name>` branch for work that touches code another session is changing or ends in a pull request), always a new branch, or always the checkout's current branch; Desk is told the setting with its first message and again when it changes, and a place the operator names for a task wins for that task.
+
+Each job is a card in the `desk` section's `jobs`, newest first and at most 64, keyed by its spawn's intent; `pane_id` is its thread's key.
+Its state comes from the ledger and the row the sidebar draws for it, never from a model call:
+
+- `queued` with its place (`대기 중 · n번째`): Desk's places (Settings, 8 at most) are taken; it starts by itself when one frees, and the queue survives a restart. `취소` leaves it `cancelled` and moves the ones behind it up; `다시 맡기기` puts it at the back.
+- `starting`, `working` (now line, plan n/m, outputs), `asking` (the question and `답하기`), `done` (the last turn's summary line, its pull requests with their PR mark state, outputs).
+- `failed` with its reason: `spawn_failed`, `exited`, or `device_disconnected` for a job asked of a device whose link was down; `다시 시도` queues it again. A failed job takes no place, and nothing times out.
+- A job on a device whose link drops dims and says `연결 안 됨` while it keeps working.
+- `joined` once the operator types into its terminal (`나도 참여 중`); Desk keeps following it.
+- `moved_out` once the operator drags its tab out of the `◆ Desk` group (`내 탭으로 옮김`), and `closed` once they close it (`내가 닫음`); neither takes a place, and Desk never starts it again. A closed tab reopened with `세션 복구하기` or ⇧⌘T comes back to its place in the group and is followed again.
+- `archived` once `세션 보관` or `hide agent archive` archived it.
+
+Starting, working and asking jobs take Desk's places; the rest do not.
+
 ## Hide AI: the Hide AI tool
 
 Web owners: `web/src/HideAiTool.tsx` (the head, the tabs, the one-time line, the off state), `web/src/SuggestionsTab.tsx` and `web/src/suggestionList.ts` (the 제안 tab), `web/src/HideAiSettings.tsx` (⚙), `web/src/MemoryTab.tsx` and `web/src/memoryList.ts` (the Memory tab); core owners: `herdr-core/src/model/suggestions.rs` and `herdr-core/src/runtime/suggestions.rs` (the `suggestions` section), `herdr-core/src/runtime/project_memory.rs` and `herdr-core/src/runtime/memory_promotion.rs` (Memory).
@@ -1477,6 +1496,7 @@ The `프로젝트 | 태스크` switch decides which list ⌥n counts, so on 태�
 Under the pointer or focus the small ★ after the title is not drawn and a ☆/★ button, the record button and `⋯` take the time's place in the first line, and the title gives way for them, so they never cover the PR mark or mission chip; at rest the row keeps no room for them beyond its time (an input with no hover always draws them); `⋯` offers `기록 보기` (Space), `터미널로 이동` (↩), on a task `다시 볼 것으로 표시` or, on a starred one, `다시 볼 것에서 빼기`, on a read ask in 내 차례 also `치우기`, which puts that ask away until the agent asks something new (needs-you-cleanup B15), then Resolve (not while the agent works or waits, or an approval prompt holds it) and, on a task, `세션 보관`, offered and disabled as the pane menu's Archive session is, and last `세션 닫기`, which closes the row's pane on whichever host holds it through the same confirmation as the pane menu's close; a right-click on the row opens the same menu (B15, B18; PRD session-archive B1, D-27; PRD revisit-group B8, B9).
 ☆ stars the task and ★ is `다시 볼 것에서 빼기`, which takes the ★ and puts the read ask away so the task rests until something new; on an ask in 내 차례, ☆ reads it and moves it to 다시 볼 것, and a new question from that agent brings it back to 내 차례 unread and announced (needs-you-cleanup B13, B14); the button is ★ only on a task the operator starred; a root agent's pane menu offers the same item before Archive session, the 프로젝트 tree, Overview's list and its detail head draw a starred task's small ★, an archived row keeps its ★, the phone lists the same group between 읽을 것 and 작업 중 and a read ask in 내 차례 with the hollow `!`, and a ★ or 다시 볼 것에서 빼기 that could not be saved, or a ★ past 256, leaves the row as it was and says so once (PRD revisit-group B10, B11, B15, B19, B20, B22, B23).
 `세션 보관` closes the task's root and every descendant pane with it and keeps their conversations: a session that is not working, or only waits on the operator, goes at once, and one with work running first asks `작업을 멈추고 보관할까요?`, listing the agents working now, with `작업 멈추고 보관` and `취소`, neither holding the keyboard (B5-B7).
+`hide agent archive <id>` does the same for one session and refuses a working one with `archive_confirmation_required`, which the operator confirms only from this screen ([delivery.md](delivery.md#agent-registration-and-spawning); PRD Desk B40).
 The row leaves the open groups for 보관됨 once every pane closed; a save that fails closes nothing, and a close some agents refuse keeps the session as it was, with one notice, the members that did close listed in its record, and `세션 보관` again finishing the same archive; the notice says whether a close was refused, timed out or lost its device, and once that root closes some other way its archived members stand in 보관됨 as their own row (B8-B12, B24).
 An archived row reads its title, its project in 상태별, its PR marks and how long ago it was archived, with no status mark, since nothing runs; `보관하는 중…`, `이어가는 중…`, `이어가지 못함`, `지우는 중…` or `상태 모름` stand on its second line while they hold, and a device that is not connected dims it (B14-B18, B13).
 Pressing it opens its record; `⋯` and a right-click offer `기록 보기`, `이어가기`, `상태 확인` while Hide cannot say whether its close finished, and `보관함에서 지우기…`, which asks `<name> 세션을 보관함에서 지울까요?` with `보관함에서 지우기` and `남겨 두기`, neither holding the keyboard (B19-B21, B28, B34).

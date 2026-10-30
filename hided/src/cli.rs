@@ -33,6 +33,11 @@ pub enum CommandKind {
         id: String,
         actor: Option<String>,
     },
+    /// `hide agent archive <id> [--actor <id>]`.
+    AgentArchive {
+        id: String,
+        actor: Option<String>,
+    },
     Device(crate::device_cli::DeviceCli),
     Help,
     AgentSpawnHelp,
@@ -293,16 +298,23 @@ pub fn parse_args(args: &[String]) -> Result<CommandKind, String> {
         }
         Some("dev") => Ok(CommandKind::Dev),
         Some("agent") if args[2..] == ["spawn", "--help"] => Ok(CommandKind::AgentSpawnHelp),
-        Some("agent") if args.get(2).map(String::as_str) == Some("sleep") => {
+        Some("agent") if matches!(args.get(2).map(String::as_str), Some("sleep" | "archive")) => {
             crate::cli_contract::admit(&args[1..])
                 .map_err(|refusal| format!("{refusal}\n{}", usage(crate::agent_cli::USAGE)))?;
+            let archive = args[2] == "archive";
             let args = args[3..]
                 .iter()
                 .filter(|arg| *arg != "--json")
                 .cloned()
                 .collect::<Vec<_>>();
-            crate::agent_cli::parse_sleep(&args)
-                .map(|(id, actor)| CommandKind::AgentSleep { id, actor })
+            crate::agent_cli::parse_id_and_actor(&args)
+                .map(|(id, actor)| {
+                    if archive {
+                        CommandKind::AgentArchive { id, actor }
+                    } else {
+                        CommandKind::AgentSleep { id, actor }
+                    }
+                })
                 .map_err(|reason| wrong(reason, crate::agent_cli::USAGE))
         }
         Some("agent") if args.get(2).map(String::as_str) == Some("catalog") => {
@@ -750,6 +762,7 @@ pub fn run(kind: CommandKind) -> Result<(), String> {
                     | CommandKind::AgentCatalog { .. }
                     | CommandKind::Ps(_)
                     | CommandKind::AgentSleep { .. }
+                    | CommandKind::AgentArchive { .. }
                     | CommandKind::Device(_)
                     | CommandKind::WorkspaceInfo
                     | CommandKind::WorkspaceHookInfo
@@ -783,6 +796,7 @@ pub fn run(kind: CommandKind) -> Result<(), String> {
         CommandKind::AgentCatalog { machine } => crate::mission_cli::run_catalog(&env, machine),
         CommandKind::Ps(options) => crate::ps_cli::run(&env, &options),
         CommandKind::AgentSleep { id, actor } => crate::agent_cli::run_sleep(&env, id, actor),
+        CommandKind::AgentArchive { id, actor } => crate::agent_cli::run_archive(&env, id, actor),
         CommandKind::Device(cli) => crate::device_cli::run(&env, &cli),
         CommandKind::Delivery(command) => {
             if matches!(&command, herdr_core::delivery::Command::Agents { .. }) {

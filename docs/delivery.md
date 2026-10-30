@@ -542,7 +542,10 @@ Its `hide` presents a capability hided binds to that process's pid and start tim
 A delivery command on it (`hide agent`, `hide request`, `hide inbox`, `hide watch`) acts as `Actor::hide("desk")` while the core says Desk runs a session (`desk_authority`), and on this machine only; with Desk ended it is refused `desk_not_running`, and the capability is revoked with the process.
 Every Workspace, View, Memory, mission or plan command refuses it `desk_has_no_checkout`, so Desk opens nothing on the operator's screen and reads no Project's Memory.
 A spawn Desk makes without `--parent` is a handoff whose origin is `hide:desk`: the agent is the operator's own, and `hide_started` leaves it out of Hide AI's work.
-`hide:desk` is in `code_owned_authority_current` only while Desk runs, so a letter it queued is refused once its process ends.
+`hide:desk` is in `code_owned_authority_current` while this daemon runs Desk, so a spawn waiting in its queue starts after a restart; its capability still holds only while its process runs.
+A spawn of Desk's past its places (Settings › Desk, 8 at most) is taken into Desk's queue in `desk.json` and answered `{"queued":true,"intent","position","next_action"}` without running; asking again with the same intent answers the same place.
+The core starts the first waiting spawn as `hide:desk` on a thread of its own when a place frees, and a spawn whose start failed waits in the queue as failed until the operator retries it; a retry resumes the same intent, so the ledger's unfinished record converges.
+The core watches each session Desk started with `hide:desk` as its observer once its spawn completed; its warnings are code-owned and reach no person's notification.
 
 ## The operator's View feedback
 
@@ -588,6 +591,11 @@ A longer session is refused `session_too_long` when the record is made, never as
 An empty session or one holding a control character is refused `invalid_registration` by the same rule (`coordination::kept_session`).
 A build before this one reads a session past 256 bytes as a damaged ledger, so going back to it after such a registration answers every delivery and agent command `ledger_unavailable` until this build or a later one runs again.
 A caller with no such record is refused `participant_ended` when its record ended, `participant_session_changed` when its pane's live record belongs to another session (the pane's agent session changed), `ambiguous_participant` when two live records match, and `participant_unavailable` otherwise; a remote participant on a pane of the same name is never the local caller.
+`hide agent archive <id> [--actor <id>]` does what `세션 보관` does for the session registration `<id>` holds ([UI_BEHAVIOR.md](UI_BEHAVIOR.md)), through the same admission as the screen's `archive_session` event (`Runtime::admit_archive`), and answers `{"archived":"<id>","pane_id":"<pane>"}` once the archive begins: its save first, its closes after.
+The agent itself or its parent may ask, as for `hide agent sleep`; Desk may ask for any live registration, because the operator approves its card before Desk runs the command (`desk_authority`).
+A session that is working is refused `archive_confirmation_required`, with the next action to ask the operator to archive it from Hide's screen, where they confirm stopping the work, and the screen shows nothing for that refusal.
+Every other refusal of the screen's archive is the same kind with `_` for the dot (`archive_delegated`, `archive_session_unknown`, `archive_device_disconnected`, `archive_busy` and the rest), beside `agent_unavailable`, `agent_ended`, `parent_authority_required`, `actor_identity_conflict` and `agent_pane_required`.
+Asking again while the archive runs answers the same success and closes nothing twice.
 `hide agent spawn` requires `--name`, `--intent`, `--kind`, `--repo` and `--branch`, with optional `--parent`, `--machine`, `--beside`, `--path`, `--model`, `--effort`, `--brief <text>` or `--brief-file <path>`, and native arguments after `--`.
 The brief is the child's first prompt: once Herdr reports the started agent ready for input (up to 30 s, `BRIEF_READY_WAIT`), the spawn submits it through `agent.prompt`, the one submission path the doorbell uses too, and only then waits for the child's session, so an agent that reports its session at its first turn (Codex, OpenCode 2) reports it on that turn and binds at once instead of waiting.
 When the child binds, the same text is recorded as a letter under the spawn's intent, kind `request`, delivered and hook-confirmed, so `hide inbox`, the ledger and a later wake carry what the child was started on, and a letter the parent sends under that intent afterwards is this one.

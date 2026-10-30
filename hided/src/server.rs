@@ -1500,6 +1500,12 @@ enum ScopedRequest {
         id: String,
         actor: Option<String>,
     },
+    /// `hide agent archive <id> [--actor <id>]`: the screen's `세션 보관`
+    /// for a registered agent, admitted by the core.
+    AgentArchive {
+        id: String,
+        actor: Option<String>,
+    },
     /// `hide device`: the core's own device registrations.
     Device(herdr_core::device_command::DeviceCommand),
     /// `hide <path>`: a folder of the caller's machine opened as a project
@@ -1522,6 +1528,7 @@ impl ScopedRequest {
                 | Self::AgentCatalog(..)
                 | Self::Ps { .. }
                 | Self::AgentSleep { .. }
+                | Self::AgentArchive { .. }
                 | Self::Device(..)
                 | Self::ProjectOpen(..)
         )
@@ -1643,7 +1650,7 @@ async fn scoped_client_loop(
                             Some(Value::Bool(true)) => Some(ScopedRequest::Ps { all: true }),
                             _ => None,
                         },
-                        Some("agent_sleep") => {
+                        Some(kind @ ("agent_sleep" | "agent_archive")) => {
                             let text = |value: &Value| -> Option<String> {
                                 value
                                     .as_str()
@@ -1655,17 +1662,19 @@ async fn scoped_client_loop(
                                     .map(str::to_owned)
                             };
                             match (text(&value["id"]), value.get("actor")) {
-                                (Some(id), None | Some(Value::Null)) => {
-                                    Some(ScopedRequest::AgentSleep { id, actor: None })
-                                }
+                                (Some(id), None | Some(Value::Null)) => Some((id, None)),
                                 (Some(id), Some(actor)) => {
-                                    text(actor).map(|actor| ScopedRequest::AgentSleep {
-                                        id,
-                                        actor: Some(actor),
-                                    })
+                                    text(actor).map(|actor| (id, Some(actor)))
                                 }
                                 _ => None,
                             }
+                            .map(|(id, actor)| {
+                                if kind == "agent_sleep" {
+                                    ScopedRequest::AgentSleep { id, actor }
+                                } else {
+                                    ScopedRequest::AgentArchive { id, actor }
+                                }
+                            })
                         }
                         Some("device") => serde_json::from_value::<
                             herdr_core::device_command::DeviceCommand,
@@ -1824,6 +1833,13 @@ async fn scoped_client_loop(
                                     core.agent_sleep(&cap.context.device_id, &cap.pane_id, &cap.context, id, actor)
                                         .map_err(|code| {
                                             let next = herdr_core::coordination::sleep_next_action(&code);
+                                            (code, next)
+                                        })?
+                                }
+                                ScopedRequest::AgentArchive { id, actor } => {
+                                    core.agent_archive(&cap.context.device_id, &cap.pane_id, &cap.context, id, actor)
+                                        .map_err(|code| {
+                                            let next = herdr_core::coordination::archive_next_action(&code);
                                             (code, next)
                                         })?
                                 }

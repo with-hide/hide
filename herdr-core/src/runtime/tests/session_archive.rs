@@ -159,6 +159,78 @@ fn archiving_again_while_it_closes_converges_on_the_one_record() {
     assert_eq!(started(&runtime), before, "nothing is closed twice");
 }
 
+/// The registration `hide agent archive` acts on: the agent in `pane`
+/// reporting the conversation the fixture gives it.
+fn registered(pane: &str) -> crate::delivery::Actor {
+    crate::delivery::Actor {
+        pane_id: pane.into(),
+        name: format!("agent-{pane}"),
+        kind: "claude".into(),
+        device_id: crate::node::TEST_NODE.into(),
+        session: crate::wire::session_digest(&session_of(pane)),
+    }
+}
+
+#[test]
+fn the_archive_command_saves_an_idle_session_as_the_screen_does() {
+    let mut screen = archive_runtime(&[]);
+    archive(&mut screen, "w1:p1", false);
+
+    let mut command = archive_runtime(&[]);
+    let mut other = registered("w1:p1");
+    other.session = crate::wire::session_digest("another-conversation");
+    assert_eq!(
+        command.archive_registered("agent-1", &other),
+        Err("agent_unavailable".to_owned()),
+        "the pane hosts another conversation than the registration's"
+    );
+    assert!(record(&command).is_none());
+
+    assert_eq!(
+        command.archive_registered("agent-1", &registered("w1:p1")),
+        Ok(serde_json::json!({"archived": "agent-1", "pane_id": "w1:p1"}))
+    );
+    let (_, saved) = record(&command).expect("the saved archive");
+    let (_, on_screen) = record(&screen).expect("the screen's archive");
+    assert_eq!(saved.phase, ArchivePhase::Closing);
+    assert_eq!(saved.phase, on_screen.phase);
+    let sessions = |record: &crate::session_archive::ArchiveRecord| {
+        record
+            .members
+            .iter()
+            .map(|member| member.native_session_id.clone())
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(sessions(&saved), sessions(&on_screen));
+    assert_eq!(started(&command), started(&screen));
+}
+
+#[test]
+fn the_archive_command_leaves_a_working_session_for_the_operator_to_confirm_on_the_screen() {
+    let mut runtime = archive_runtime(&[("w1:p3", "working")]);
+    assert_eq!(
+        runtime.archive_registered("agent-1", &registered("w1:p1")),
+        Err("archive_confirmation_required".to_owned())
+    );
+    assert!(record(&runtime).is_none());
+    assert!(started(&runtime).is_empty(), "nothing closed");
+    assert_eq!(error_kind(&runtime), None, "the caller reads the refusal");
+    assert_eq!(
+        crate::coordination::archive_next_action("archive_confirmation_required"),
+        "The session is working; ask the operator to archive it from Hide's screen, where they confirm stopping the work"
+    );
+
+    archive(&mut runtime, "w1:p1", true);
+    assert_eq!(record(&runtime).unwrap().1.phase, ArchivePhase::Closing);
+
+    // A delegated child is archived with its root, however it is asked.
+    let mut runtime = archive_runtime(&[]);
+    assert_eq!(
+        runtime.archive_registered("agent-2", &registered("w1:p2")),
+        Err("archive_delegated".to_owned())
+    );
+}
+
 #[test]
 fn an_archive_that_cannot_be_saved_closes_nothing() {
     let mut runtime = archive_runtime(&[]);

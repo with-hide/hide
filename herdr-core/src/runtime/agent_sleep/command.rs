@@ -8,42 +8,59 @@ use serde_json::{Value, json};
 use super::super::Runtime;
 use super::letters::Stage;
 use super::{SleepRefused, pane_device};
+use crate::delivery::Actor;
 use crate::model::AgentActionRefusal;
 use crate::workspace_control::{Caller, Context, Query};
 
 impl Runtime {
-    /// Puts registration `id` to sleep for the agent in `caller`'s pane, or
-    /// says why not; asking again while it ends or sleeps answers the same
-    /// (B14, B15). Returns the answer and whether anything changed.
-    pub(crate) fn agent_sleep_command(
-        &mut self,
+    /// Who `caller` is and the registration `id` it may act on, for a command
+    /// that acts on another agent's pane (`hide agent sleep`, `hide agent
+    /// archive`): the registration's actor, or why not.
+    ///
+    /// A pane's command may act on the agent itself or on its child, as `hide
+    /// agent end` does. Desk (`desk_may_act`) has no pane: it acts as Hide's
+    /// own `hide:desk` while it runs, on any live registration, because the
+    /// operator approves each such command on its card before Desk runs it.
+    pub(in crate::runtime) fn registered_agent_for(
+        &self,
         device: &str,
         caller: &str,
         expected: &Context,
         id: &str,
         acting: Option<&str>,
-    ) -> Result<(Value, bool), String> {
-        let context = self
-            .workspace_control_query(device, caller, Query::Info)
-            .map_err(|refusal| refusal.reason.to_owned())?
-            .context;
+        desk_may_act: bool,
+    ) -> Result<Actor, String> {
+        let desk = desk_may_act && Caller::parse(caller) == Caller::Desk;
+        let desk_authority = desk.then(|| self.desk_authority(device)).transpose()?;
+        let context = match &desk_authority {
+            Some((context, _)) => context.clone(),
+            None => {
+                self.workspace_control_query(device, caller, Query::Info)
+                    .map_err(|refusal| refusal.reason.to_owned())?
+                    .context
+            }
+        };
         if context != *expected {
             return Err("caller_context_changed".into());
         }
-        let Caller::Pane(pane) = Caller::parse(caller) else {
-            return Err("agent_pane_required".into());
+        let me = match desk_authority {
+            Some((_, actor)) => actor,
+            None => {
+                let Caller::Pane(pane) = Caller::parse(caller) else {
+                    return Err("agent_pane_required".into());
+                };
+                let pane = if device == self.node.as_str() || pane.starts_with("remote:") {
+                    pane.to_owned()
+                } else {
+                    format!("remote:{device}:pane:{pane}")
+                };
+                self.delivery_observations
+                    .get(&pane)
+                    .ok_or("agent_pane_required")?
+                    .actor
+                    .clone()
+            }
         };
-        let pane = if device == self.node.as_str() || pane.starts_with("remote:") {
-            pane.to_owned()
-        } else {
-            format!("remote:{device}:pane:{pane}")
-        };
-        let me = self
-            .delivery_observations
-            .get(&pane)
-            .ok_or("agent_pane_required")?
-            .actor
-            .clone();
         me.require_native_identity()?;
         let ledger = self.delivery_state()?;
         let record = ledger
@@ -57,7 +74,8 @@ impl Runtime {
             .parent
             .as_deref()
             .and_then(|parent| crate::coordination::resolve_actor(&ledger, parent));
-        if !record.actor.same_identity(&me)
+        if !desk
+            && !record.actor.same_identity(&me)
             && !parent.is_some_and(|parent| parent.same_identity(&me))
         {
             return Err("parent_authority_required".into());
@@ -71,7 +89,21 @@ impl Runtime {
         if record.ended {
             return Err("agent_ended".into());
         }
-        let actor = record.actor.clone();
+        Ok(record.actor.clone())
+    }
+
+    /// Puts registration `id` to sleep for the agent in `caller`'s pane, or
+    /// says why not; asking again while it ends or sleeps answers the same
+    /// (B14, B15). Returns the answer and whether anything changed.
+    pub(crate) fn agent_sleep_command(
+        &mut self,
+        device: &str,
+        caller: &str,
+        expected: &Context,
+        id: &str,
+        acting: Option<&str>,
+    ) -> Result<(Value, bool), String> {
+        let actor = self.registered_agent_for(device, caller, expected, id, acting, false)?;
         let answer = |state: &str| json!({"id": id, "state": state});
         match self.asleep_route(&actor).map(|(_, stage)| stage) {
             Some(Stage::Ending) => return Ok((answer("ending"), false)),

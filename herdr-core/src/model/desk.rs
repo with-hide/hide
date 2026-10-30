@@ -20,6 +20,178 @@ pub struct DeskSnapshot {
     /// Approval cards waiting for the operator.
     pub approvals_waiting: usize,
     pub settings: DeskSettings,
+    /// The sessions Desk started and the ones waiting in its queue, newest
+    /// first (B20-B24, B36-B39).
+    pub jobs: Vec<DeskJobSnapshot>,
+    /// What the `@` menu offers (B18).
+    pub mentions: DeskMentionsSnapshot,
+}
+
+/// One session Desk started, or one waiting to start.
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct DeskJobSnapshot {
+    /// The spawn's intent, stable from the queue to the end.
+    pub id: String,
+    /// The ledger agent once it registered.
+    pub agent_id: Option<String>,
+    pub pane_id: Option<String>,
+    pub title: String,
+    pub agent_kind: String,
+    pub project: DeskJobProject,
+    pub location: DeskJobLocation,
+    pub state: DeskJobState,
+    /// Its place in the queue, from 1, while `queued`.
+    pub queue_position: Option<usize>,
+    /// What the session does now: its pane's second line.
+    pub now: Option<String>,
+    pub plan: Option<DeskJobPlan>,
+    /// What it asks the operator, while `asking`.
+    pub question: Option<String>,
+    /// The last turn's summary line, once `done`.
+    pub summary: Option<String>,
+    pub pull_requests: Vec<DeskPullRequest>,
+    pub outputs: Vec<DeskJobOutput>,
+    /// The operator typed into its terminal (B36).
+    pub joined: bool,
+    pub reason: Option<DeskJobReason>,
+    /// The device it runs on, when not this machine (B23).
+    pub machine: Option<String>,
+    pub disconnected: bool,
+    pub changed_at_unix_ms: u64,
+    /// The operator saw it since it ended.
+    pub read: bool,
+    pub mission: Option<DeskJobMission>,
+    /// The panes of a Conductor's workers, each its thread's key.
+    pub workers: Vec<String>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct DeskJobProject {
+    pub workspace_id: Option<String>,
+    pub label: String,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct DeskJobLocation {
+    pub kind: DeskJobLocationKind,
+    /// The branch or worktree folder the card's ⌂ names.
+    pub label: String,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DeskJobLocationKind {
+    Checkout,
+    Worktree,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+pub struct DeskJobPlan {
+    pub done: usize,
+    pub total: usize,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct DeskJobOutput {
+    pub id: String,
+    pub kind: DeskOutputKind,
+    pub label: String,
+    pub thumb: Option<String>,
+    pub seen: bool,
+    /// A pull request's one state, the PR mark's (`PrState::of`), so it
+    /// reads the same on a card, in a thread and in 결과물.
+    pub pr_state: Option<crate::model::PrState>,
+}
+
+/// A pull request the job's session holds or made, as its PR mark draws it.
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct DeskPullRequest {
+    pub number: u32,
+    pub state: crate::model::PrState,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DeskOutputKind {
+    Image,
+    Page,
+    Doc,
+    Pr,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct DeskJobMission {
+    pub id: String,
+    pub title: String,
+    pub status: String,
+    pub done: usize,
+    pub total: usize,
+    pub tone: String,
+    pub deciding: bool,
+    pub nodes: Vec<DeskJobMissionNode>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct DeskJobMissionNode {
+    pub key: String,
+    pub title: String,
+    pub tone: String,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DeskJobState {
+    Queued,
+    Starting,
+    Working,
+    Asking,
+    Done,
+    Failed,
+    Cancelled,
+    /// The operator closed its tab (B38).
+    Closed,
+    /// The operator moved its tab out of the `◆ Desk` group (B37).
+    MovedOut,
+    Archived,
+}
+
+impl DeskJobState {
+    /// Whether the job holds one of Desk's places (B21, B22, B37, B38).
+    pub fn holds_place(self) -> bool {
+        matches!(self, Self::Starting | Self::Working | Self::Asking)
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DeskJobReason {
+    SpawnFailed,
+    Exited,
+    DeviceDisconnected,
+}
+
+/// The `@` menu: recent sessions, then projects.
+#[derive(Clone, Debug, Default, Eq, PartialEq, Serialize)]
+pub struct DeskMentionsSnapshot {
+    pub sessions: Vec<DeskMentionSession>,
+    pub projects: Vec<DeskMentionProject>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct DeskMentionSession {
+    pub id: String,
+    pub name: String,
+    pub agent_kind: String,
+    pub mark: Option<String>,
+    pub detail: Option<String>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct DeskMentionProject {
+    pub id: String,
+    pub name: String,
+    /// Its sessions running now, which `⇥` lists (B18).
+    pub sessions: Vec<String>,
 }
 
 /// The agent, model and effort the next message goes to.
@@ -129,6 +301,16 @@ pub enum DeskItem {
         to: AdapterId,
         carried: DeskCarried,
     },
+    /// Desk handed the work to a session that already runs it (B16): it
+    /// changes no state and holds no place.
+    Handed {
+        id: u64,
+        agent_id: String,
+        name: String,
+        project: Option<String>,
+    },
+    /// Desk started a job; its card is `jobs`' entry `job_id`.
+    Job { id: u64, job_id: String },
     /// The model or effort changed.
     Model {
         id: u64,
@@ -162,6 +344,8 @@ impl DeskItem {
             | Self::Reply { id, .. }
             | Self::Switch { id, .. }
             | Self::Model { id, .. }
+            | Self::Handed { id, .. }
+            | Self::Job { id, .. }
             | Self::Approval { id, .. }
             | Self::Notice { id, .. } => *id,
         }
@@ -193,6 +377,13 @@ impl DeskItem {
             Self::Model { model, effort, .. } => {
                 model.as_ref().map_or(0, String::len) + effort.as_ref().map_or(0, String::len)
             }
+            Self::Handed {
+                name,
+                agent_id,
+                project,
+                ..
+            } => name.len() + agent_id.len() + project.as_ref().map_or(0, String::len),
+            Self::Job { job_id, .. } => job_id.len(),
             Self::Switch { .. } => 0,
         }
     }

@@ -2624,7 +2624,55 @@ export type DeskItem =
   | { kind: "model"; id: number; model: string | null; effort: string | null }
   | { kind: "approval"; id: number; card: "command" | "edit" | "other"; command: string; folder: string | null; reason: string | null; state: DeskApprovalState }
   /** `detail` is the install's last line, the sign-in command for `login_needed`, or the blocked call. */
-  | { kind: "notice"; id: number; notice: DeskNotice; agent: DeskAgentId | null; detail: string | null };
+  | { kind: "notice"; id: number; notice: DeskNotice; agent: DeskAgentId | null; detail: string | null }
+  /** Desk handed work to a session that already runs (B16): no state, no place. */
+  | { kind: "handed"; id: number; agent_id: string; name: string; project: string | null }
+  /** Desk started or queued a job; its card is `jobs`' entry `job_id`. */
+  | { kind: "job"; id: number; job_id: string };
+
+/** `contracts/snapshot-wire-enums.json` `desk_job_state`. */
+export type DeskJobState = "queued" | "starting" | "working" | "asking" | "done" | "failed" | "cancelled" | "closed" | "moved_out" | "archived";
+/** `desk_job_reason`. */
+export type DeskJobReason = "spawn_failed" | "exited" | "device_disconnected";
+/** `desk_output_kind`. */
+export type DeskOutputKind = "image" | "page" | "doc" | "pr";
+/** A job's result; `pr_state` is a pull request's one state, its PR mark's. */
+export type DeskOutput = { id: string; kind: DeskOutputKind; label: string; thumb: string | null; seen: boolean; pr_state: PrState | null };
+export type DeskMissionTone = "done" | "review" | "working" | "hold" | "failed" | "waiting" | "cancelled";
+/** The mission a Conductor job runs (B34). */
+export type DeskMission = { id: string; title: string; status: string; done: number; total: number; tone: DeskMissionTone; deciding: boolean; nodes: { key: string; title: string; tone: DeskMissionTone }[] };
+/** One session Desk started or queued; `id` is the spawn's intent, `pane_id` its thread's key. */
+export type DeskJob = {
+  id: string;
+  agent_id: string | null;
+  pane_id: string | null;
+  title: string;
+  agent_kind: string;
+  project: { workspace_id: string | null; label: string };
+  location: { kind: "checkout" | "worktree"; label: string };
+  state: DeskJobState;
+  queue_position: number | null;
+  now: string | null;
+  plan: { done: number; total: number } | null;
+  question: string | null;
+  summary: string | null;
+  pull_requests: { number: number; state: PrState }[];
+  outputs: DeskOutput[];
+  joined: boolean;
+  reason: DeskJobReason | null;
+  machine: string | null;
+  disconnected: boolean;
+  changed_at_unix_ms: number;
+  read: boolean;
+  mission: DeskMission | null;
+  /** The panes of a Conductor's workers. */
+  workers: string[];
+};
+/** The `@` menu: recent sessions, then projects with their running sessions' panes. */
+export type DeskMentions = {
+  sessions: { id: string; name: string; agent_kind: string; mark: string | null; detail: string | null }[];
+  projects: { id: string; name: string; sessions: string[] }[];
+};
 
 /** The `desk` section: absent until hided starts Desk. */
 export type DeskSection = {
@@ -2635,6 +2683,9 @@ export type DeskSection = {
   conversation: { generation: number; items: DeskItem[]; dropped: number };
   approvals_waiting: number;
   settings: { default_agent: DeskAgentId | null; location: DeskLocation; cap: number };
+  /** Newest first, at most 64. */
+  jobs: DeskJob[];
+  mentions: DeskMentions;
 };
 
 /** The `desk_live` section: the reply being written, `null` between turns. */

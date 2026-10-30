@@ -629,6 +629,27 @@ impl Core {
         Ok(answer)
     }
 
+    /// Runs `hide agent archive`: the screen's `세션 보관` for one registered
+    /// agent, admitted under the lock like the screen's event.
+    pub fn agent_archive(
+        &self,
+        device: &str,
+        caller: &str,
+        expected: &crate::workspace_control::Context,
+        id: &str,
+        actor: Option<&str>,
+    ) -> Result<serde_json::Value, String> {
+        if !check_owner_thread(self, "agent.archive") {
+            return Err("agent_unavailable".into());
+        }
+        let (answer, changed) = lock_recover(&self.runtime)
+            .agent_archive_command(device, caller, expected, id, actor)?;
+        if changed {
+            notify_change(self);
+        }
+        Ok(answer)
+    }
+
     /// Runs a `hide plan` command (PRD hide-plan D-27): one change under the
     /// lock, saved by the link worker.
     pub fn plan_command(

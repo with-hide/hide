@@ -110,6 +110,14 @@ enum Command {
         actor: Option<String>,
         reply: Sender<Result<serde_json::Value, String>>,
     },
+    AgentArchive {
+        device_id: String,
+        pane_id: String,
+        expected: Context,
+        id: String,
+        actor: Option<String>,
+        reply: Sender<Result<serde_json::Value, String>>,
+    },
     Device {
         device_id: String,
         command: herdr_core::device_command::DeviceCommand,
@@ -474,6 +482,29 @@ impl CoreHandle {
         let (reply, result) = mpsc::channel();
         self.commands
             .send(Command::AgentSleep {
+                device_id: device.to_owned(),
+                pane_id: pane.to_owned(),
+                expected: expected.clone(),
+                id,
+                actor,
+                reply,
+            })
+            .map_err(|_| "agent_unavailable".to_owned())?;
+        result.recv().map_err(|_| "agent_unavailable".to_owned())?
+    }
+
+    /// `hide agent archive`, run on the owner thread.
+    pub fn agent_archive(
+        &self,
+        device: &str,
+        pane: &str,
+        expected: &Context,
+        id: String,
+        actor: Option<String>,
+    ) -> Result<serde_json::Value, String> {
+        let (reply, result) = mpsc::channel();
+        self.commands
+            .send(Command::AgentArchive {
                 device_id: device.to_owned(),
                 pane_id: pane.to_owned(),
                 expected: expected.clone(),
@@ -1197,6 +1228,23 @@ fn owner_loop(
                 reply,
             } => {
                 let _ = reply.send(core.agent_sleep(
+                    &device_id,
+                    &pane_id,
+                    &expected,
+                    &id,
+                    actor.as_deref(),
+                ));
+            }
+
+            Command::AgentArchive {
+                device_id,
+                pane_id,
+                expected,
+                id,
+                actor,
+                reply,
+            } => {
+                let _ = reply.send(core.agent_archive(
                     &device_id,
                     &pane_id,
                     &expected,

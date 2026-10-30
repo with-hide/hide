@@ -175,6 +175,23 @@ pub struct Launch {
     pub pi_marker: Option<PathBuf>,
 }
 
+/// Whether Pi's Desk extension loaded in the Desk process's tree: its
+/// marker names a pid under `host`, the process Desk started.
+pub fn pi_extension_loaded(marker: Option<&Path>, host: u32) -> Result<(), String> {
+    let marker = marker.ok_or("no marker was asked for")?;
+    let text = std::fs::read_to_string(marker)
+        .map_err(|error| format!("the extension's marker is missing: {error}"))?;
+    let pid: u32 = text
+        .trim()
+        .parse()
+        .map_err(|_| "the extension's marker names no process".to_owned())?;
+    if hide_platform::process::descends_from(pid, host) {
+        Ok(())
+    } else {
+        Err("the extension loaded in another process".into())
+    }
+}
+
 /// Desk's working folder: no checkout, so no project's settings or
 /// instructions load into the Desk agent.
 pub fn work_dir(desk: &Path) -> PathBuf {

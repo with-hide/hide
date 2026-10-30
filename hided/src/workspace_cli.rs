@@ -652,9 +652,11 @@ pub fn request_ps(credential: &mut Credential, all: bool) -> Result<Value, Strin
     })
 }
 
-/// `hide agent sleep`: the core's own end of a registered agent.
-pub fn request_agent_sleep(
+/// `hide agent sleep` (`agent_sleep`) and `hide agent archive`
+/// (`agent_archive`): the core's own action on a registered agent.
+pub fn request_agent_action(
     credential: &mut Credential,
+    action: &str,
     id: &str,
     actor: Option<&str>,
 ) -> Result<Value, String> {
@@ -664,7 +666,7 @@ pub fn request_agent_sleep(
         run_exchange(
             path,
             &reference,
-            json!({"type":"agent_sleep","request_id":request_id,"id":id,"actor":actor}),
+            json!({"type":action,"request_id":request_id,"id":id,"actor":actor}),
             &request_id,
             false,
             after,

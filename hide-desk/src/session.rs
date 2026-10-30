@@ -62,7 +62,7 @@ impl OpenError {
 
 /// Opens a session in `cwd`: loads `resume` when the agent can, else starts
 /// a new one, then puts it in the adapter's ask mode. Pi's mode is proven by
-/// its extension's marker, which `pi_ready` checks once the session exists.
+/// its extension's marker, which `adapter::pi_extension_loaded` checks once the session exists.
 pub fn open(
     connection: &Connection,
     adapter: AdapterId,

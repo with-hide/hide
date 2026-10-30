@@ -6,7 +6,6 @@
 //! and with hided itself, since it is started tied.
 
 use std::collections::HashMap;
-use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::{Arc, Mutex, Weak};
@@ -67,6 +66,8 @@ pub(super) struct Send {
     pub resume: Option<String>,
     pub model: Option<String>,
     pub effort: Option<String>,
+    /// Where Settings › Desk puts each task's work (B19).
+    pub placement: hide_desk::Placement,
 }
 
 /// What the worker tells the runtime.
@@ -180,6 +181,9 @@ struct Running {
     announced: HashMap<String, Value>,
     announced_order: Vec<String>,
     turn: Option<u64>,
+    /// The work placement this session was last told; none for a session
+    /// resumed from an earlier run.
+    placement: Option<hide_desk::Placement>,
 }
 
 impl Worker {
@@ -355,10 +359,12 @@ impl Worker {
             return;
         };
         let text = if new_session {
-            hide_desk::first_message(send.carried.as_deref(), &send.text)
+            hide_desk::first_message(send.placement, send.carried.as_deref(), &send.text)
         } else {
-            send.text
+            let changed = (running.placement != Some(send.placement)).then_some(send.placement);
+            hide_desk::next_message(changed, &send.text)
         };
+        running.placement = Some(send.placement);
         match session::prompt(
             running.host.connection(),
             &running.session_id,
@@ -435,7 +441,7 @@ impl Worker {
         }
         let marker = launch.pi_marker.clone();
         let host_pid = host.pid();
-        let pi_ready = move || pi_ready(marker.as_ref(), host_pid);
+        let pi_ready = move || hide_desk::adapter::pi_extension_loaded(marker.as_deref(), host_pid);
         let work = adapter::work_dir(&places.desk);
         let opened = match session::open(
             host.connection(),
@@ -474,6 +480,7 @@ impl Worker {
                 announced: HashMap::new(),
                 announced_order: Vec::new(),
                 turn: None,
+                placement: None,
             },
             opened.resume_failed,
             choices,
@@ -757,23 +764,6 @@ fn install_state(
         InstallError::Failed(detail) => {
             (adapter, DeskAgentState::InstallFailed, Some(detail.clone()))
         }
-    }
-}
-
-/// Whether Pi's Desk extension loaded in this process's tree: its marker
-/// names a pid under the Desk process.
-fn pi_ready(marker: Option<&PathBuf>, host: u32) -> Result<(), String> {
-    let marker = marker.ok_or("no marker was asked for")?;
-    let text = std::fs::read_to_string(marker)
-        .map_err(|error| format!("the extension's marker is missing: {error}"))?;
-    let pid: u32 = text
-        .trim()
-        .parse()
-        .map_err(|_| "the extension's marker names no process".to_owned())?;
-    if hide_platform::process::descends_from(pid, host) {
-        Ok(())
-    } else {
-        Err("the extension loaded in another process".into())
     }
 }
 

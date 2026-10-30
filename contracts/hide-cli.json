@@ -237,6 +237,21 @@
             "title": "AgentView",
             "type": "object"
         },
+        "agent_archived": {
+            "properties": {
+                "archived": {
+                    "type": "object"
+                },
+                "pane_id": {
+                    "type": "object"
+                }
+            },
+            "required": [
+                "archived",
+                "pane_id"
+            ],
+            "type": "object"
+        },
         "agent_catalog": {
             "properties": {
                 "installed_known": {
@@ -2001,6 +2016,56 @@
         },
         {
             "answers": [
+                "agent_archived"
+            ],
+            "arguments": [
+                {
+                    "name": "id",
+                    "value": {
+                        "type": "text"
+                    }
+                }
+            ],
+            "command": "agent archive",
+            "options": [
+                {
+                    "name": "--actor",
+                    "required": false,
+                    "requires": [],
+                    "value": {
+                        "type": "text"
+                    }
+                },
+                {
+                    "name": "--json",
+                    "required": false,
+                    "requires": [],
+                    "value": null
+                }
+            ],
+            "refusals": [
+                "agent_pane_required",
+                "agent_unavailable",
+                "agent_ended",
+                "parent_authority_required",
+                "actor_identity_conflict",
+                "archive_confirmation_required",
+                "archive_not_offered",
+                "archive_delegated",
+                "archive_device_disconnected",
+                "archive_session_unknown",
+                "archive_status_unknown",
+                "archive_target_unknown",
+                "archive_too_many",
+                "archive_busy",
+                "archive_context_unavailable",
+                "archive_full"
+            ],
+            "repeats_at_most": null,
+            "rest": null
+        },
+        {
+            "answers": [
                 "agent"
             ],
             "arguments": [],
@@ -3659,7 +3724,7 @@
             "rest": null
         }
     ],
-    "digest": "sha256:0826270596fd45f7884584e06cb8b1447ea7abb392f60949609f66d18536e3bd",
+    "digest": "sha256:93763833a7ac916e99e41a21ffd28c7c848453c41032dbd4cdf6cad8bd858155",
     "envelopes": {
         "agent": {
             "answer": "value",

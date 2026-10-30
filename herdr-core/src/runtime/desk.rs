@@ -10,6 +10,7 @@
 //! and a new conversation, a restart or the process's end closes it as a
 //! refusal (D-52). `allow_always` is never chosen.
 
+mod jobs;
 mod worker;
 
 use std::collections::BTreeMap;
@@ -40,6 +41,8 @@ pub(super) struct Desk {
     store: Option<DeskStore>,
     stored: Stored,
     worker: Option<worker::Handle>,
+    /// How a thread of Desk's other than the worker answers.
+    handle: Option<jobs::DeskHandle>,
     agents: BTreeMap<AdapterId, (DeskAgentState, Option<String>)>,
     host: Host,
     /// The turn under way: its tag and the reply written so far.
@@ -82,6 +85,17 @@ pub(super) enum DeskEvent {
     Select(SelectPayload),
     Install(InstallPayload),
     SettingsSet(SettingsPayload),
+    /// `취소` on a waiting card.
+    JobCancel(JobPayload),
+    /// `다시 맡기기` on a cancelled card, `다시 시도` on a failed one.
+    JobRequeue(JobPayload),
+    /// The operator saw an ended job's card.
+    JobRead(JobPayload),
+}
+
+#[derive(Debug, Deserialize)]
+pub(super) struct JobPayload {
+    id: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -125,7 +139,7 @@ fn present<'de, D: serde::Deserializer<'de>>(
 }
 
 impl DeskEvent {
-    pub(super) const KINDS: [&'static str; 8] = [
+    pub(super) const KINDS: [&'static str; 11] = [
         "desk_send",
         "desk_stop",
         "desk_approval",
@@ -134,6 +148,9 @@ impl DeskEvent {
         "desk_select",
         "desk_install",
         "desk_settings_set",
+        "desk_job_cancel",
+        "desk_job_requeue",
+        "desk_job_read",
     ];
 
     pub(super) fn decode(kind: &str, payload: Value) -> Option<Self> {
@@ -149,6 +166,9 @@ impl DeskEvent {
             "desk_select" => Self::Select(parse(payload)?),
             "desk_install" => Self::Install(parse(payload)?),
             "desk_settings_set" => Self::SettingsSet(parse(payload)?),
+            "desk_job_cancel" => Self::JobCancel(parse(payload)?),
+            "desk_job_requeue" => Self::JobRequeue(parse(payload)?),
+            "desk_job_read" => Self::JobRead(parse(payload)?),
             _ => return None,
         })
     }
@@ -170,6 +190,10 @@ impl Runtime {
         runtime: Weak<Mutex<Runtime>>,
         notifier: ChangeNotifier,
     ) {
+        self.desk.handle = Some(jobs::DeskHandle {
+            runtime: runtime.clone(),
+            notifier: notifier.clone(),
+        });
         match worker::start(platform, runtime, notifier) {
             Ok(handle) => {
                 let _ = handle.orders.send(Order::Check);
@@ -200,12 +224,23 @@ impl Runtime {
                 false
             }
             DeskEvent::SettingsSet(payload) => self.desk_settings(payload),
+            DeskEvent::JobCancel(payload) => self.desk_job_cancel(&payload.id),
+            DeskEvent::JobRequeue(payload) => {
+                self.desk_job_requeue(&payload.id) | self.desk_start_queued()
+            }
+            DeskEvent::JobRead(payload) => self.desk_job_read(&payload.id),
         };
         if changed {
             self.save_desk();
             self.compose_desk();
         }
         changed
+    }
+
+    /// Whether this daemon runs Desk: its queued spawns start as
+    /// `hide:desk` whether or not its process runs.
+    pub(super) fn desk_installed(&self) -> bool {
+        self.desk.worker.is_some()
     }
 
     /// Whether the Desk process runs with a session open: only then does a
@@ -294,6 +329,11 @@ impl Runtime {
             resume,
             model: self.desk.stored.selection.model.clone(),
             effort: self.desk.stored.selection.effort.clone(),
+            placement: match self.desk.stored.settings.location {
+                DeskLocation::Desk => hide_desk::Placement::PerTask,
+                DeskLocation::Worktree => hide_desk::Placement::Worktree,
+                DeskLocation::Checkout => hide_desk::Placement::Checkout,
+            },
         }));
         self.desk.host.state = Some(if self.desk.host.open {
             DeskHostState::Thinking
@@ -861,6 +901,8 @@ impl Runtime {
             },
             approvals_waiting: desk.approvals.len(),
             settings: desk.stored.settings,
+            jobs: self.desk_jobs(),
+            mentions: self.desk_mentions(),
         }));
     }
 
@@ -894,7 +936,7 @@ mod tests {
 
     /// A runtime whose Desk worker is a channel the test reads, with Claude
     /// and Codex installed.
-    fn runtime(root: &std::path::Path) -> (Runtime, Receiver<Order>) {
+    pub(super) fn runtime(root: &std::path::Path) -> (Runtime, Receiver<Order>) {
         let state = root.join("state");
         hide_platform::fs::private::create_dir_all(&state).unwrap();
         let options: crate::model::CoreOptions = serde_json::from_value(json!({

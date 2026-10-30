@@ -156,7 +156,7 @@ pub(crate) mod tests {
     /// A completed spawn by `caller` (registered as `parent`): a handoff, or
     /// with `delegated` a delegation of `parent`. The child's checkout is
     /// `/repo.worktrees/<branch>`.
-    fn spawn(
+    pub(crate) fn spawn(
         ledger: &mut Ledger,
         caller: &Actor,
         parent: &str,

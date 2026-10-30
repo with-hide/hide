@@ -178,6 +178,60 @@ pub(crate) struct Stored {
     /// Each agent's last ACP session, loaded again on the next start (B11).
     pub sessions: Vec<(AdapterId, String)>,
     pub choices: Vec<(AdapterId, KnownChoices)>,
+    /// Spawns waiting for a place, in order (B21); kept across a restart.
+    #[serde(default)]
+    pub queue: Vec<QueuedJob>,
+    /// What the core remembers of each job beyond the ledger, by intent.
+    #[serde(default)]
+    pub marks: Vec<JobMark>,
+}
+
+/// Spawns the queue holds; one past it is refused `desk_queue_full`.
+pub(crate) const MAX_QUEUE: usize = 64;
+/// Jobs remembered; the oldest ended ones are forgotten first.
+pub(crate) const MAX_MARKS: usize = 256;
+
+/// A spawn Desk asked for while every place was taken.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub(crate) struct QueuedJob {
+    pub intent: String,
+    /// The spawn as Desk asked it, run as `hide:desk` when a place frees.
+    pub command: crate::coordination::Command,
+    pub queued_at_ms: u64,
+    pub state: QueuedState,
+    /// Its start failed because its device was not connected (B23).
+    #[serde(default)]
+    pub disconnected: bool,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum QueuedState {
+    Waiting,
+    /// Taken from the queue and being started.
+    Starting,
+    Cancelled,
+    /// Its start failed, whether it came from the queue or Desk's own
+    /// spawn; `다시 시도` puts it back in the queue (B22).
+    Failed,
+}
+
+/// A job's facts the ledger does not hold.
+#[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
+pub(crate) struct JobMark {
+    pub intent: String,
+    /// Its tab was put in the `◆ Desk` group once; leaving it after that
+    /// is the operator's move (B37).
+    pub grouped: bool,
+    pub moved_out: bool,
+    pub closed: bool,
+    /// The operator typed into its terminal (B36).
+    pub joined: bool,
+    /// Desk watches it.
+    pub watched: bool,
+    /// The operator saw it since it ended.
+    pub read: bool,
+    pub changed_at_ms: u64,
 }
 
 const SCHEMA_VERSION: u32 = 1;
@@ -212,6 +266,9 @@ fn decode(bytes: &[u8]) -> Result<Stored, String> {
     stored.conversation.trim();
     stored.settings.cap = stored.settings.cap.clamp(1, DESK_CAP_MAX);
     stored.sessions.truncate(AdapterId::ALL.len());
+    stored.queue.truncate(MAX_QUEUE);
+    let excess = stored.marks.len().saturating_sub(MAX_MARKS);
+    stored.marks.drain(..excess);
     stored.choices.truncate(AdapterId::ALL.len());
     for (_, choices) in &mut stored.choices {
         choices.models.truncate(hide_desk::session::MAX_CHOICES);

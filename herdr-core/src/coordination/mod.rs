@@ -659,6 +659,55 @@ pub fn sleep_next_action(code: &str) -> &'static str {
     }
 }
 
+/// What a caller does about each refusal `hide agent archive` gives: the
+/// screen's `archive.*` error kinds written with an underscore for the dot,
+/// then the codes for who may ask and for which registration.
+pub fn archive_next_action(code: &str) -> &'static str {
+    match code {
+        "archive_confirmation_required" => {
+            "The session is working; ask the operator to archive it from Hide's screen, where they confirm stopping the work"
+        }
+        "archive_not_offered" => {
+            "This agent's work is kept by its own home; there is nothing to archive"
+        }
+        "archive_delegated" => {
+            "A delegated session is archived with its root session; archive the root instead"
+        }
+        "archive_device_disconnected" => {
+            "The agent's device is not connected; ask again once it reconnects"
+        }
+        "archive_session_unknown" => {
+            "Hide has not seen the agent's conversation yet; ask again after its first turn"
+        }
+        "archive_status_unknown" => {
+            "Hide cannot tell whether an agent in the session is working; ask again once its row shows its state"
+        }
+        "archive_target_unknown" => {
+            "The agent's pane is no longer open; check the id with hide agent list"
+        }
+        "archive_too_many" => {
+            "The session has too many agents to archive at once; nothing was closed"
+        }
+        "archive_busy" => "Closes are already running; ask again once they finish",
+        "archive_context_unavailable" => {
+            "The session's checkout is not listed in Hide; ask again once it is"
+        }
+        "archive_full" => {
+            "Hide's archive is full; the operator deletes archived sessions on its screen"
+        }
+        "agent_ended" => "The registration has ended; there is no session to archive",
+        "agent_unavailable" => {
+            "Check the id with hide agent list; the agent must still run in its registered pane"
+        }
+        "parent_authority_required" => {
+            "Only the agent itself or its parent can archive it; ask its parent or the operator"
+        }
+        "actor_identity_conflict" => "--actor must name your own registration; leave it out",
+        "agent_pane_required" => "Run hide agent archive from an agent's own Hide pane",
+        _ => "Retry; the reason is in Hide's diagnostic log",
+    }
+}
+
 /// The id `hide agent show` and `--parent` take for the caller itself.
 pub const HERE: &str = "here";
 

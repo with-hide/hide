@@ -33,7 +33,16 @@ pub struct Prepared {
     actor: Actor,
     target: Option<Observation>,
     command: Command,
+    /// The answer the core gave under its lock, with nothing left to run: a
+    /// spawn Desk's queue took (PRD Desk 1차 B21).
+    answered: Option<Value>,
+    /// What the core records once the command answered, off its lock: a
+    /// Desk conversation line for the work Desk handed or started.
+    then: Option<After>,
 }
+
+/// A step that follows a command's answer, given that answer.
+pub(crate) type After = Box<dyn FnOnce(&Result<Value, String>) + Send>;
 
 /// Immutable notification receipt. Reserving it consumes the attempt before
 /// either external channel runs, so a crash or failed channels cannot resend.
@@ -171,24 +180,45 @@ impl Prepared {
             actor,
             target,
             command,
+            answered: None,
+            then: None,
         }
+    }
+
+    /// Runs `after` with the command's answer.
+    pub(crate) fn then(mut self, after: Option<After>) -> Self {
+        self.then = after;
+        self
+    }
+
+    /// Answers with `value` and runs nothing.
+    pub(crate) fn answered(mut self, value: Value) -> Self {
+        self.answered = Some(value);
+        self
     }
 
     /// Called by the request worker after owner-thread preparation. Its wait
     /// never holds Runtime's mutex.
     pub fn run(self, timeout: Duration) -> Result<Value, String> {
-        if let Command::Agents { command } = self.command {
-            return crate::coordination::run(self.client, self.authority, self.actor, command);
+        let result = if let Some(answer) = self.answered {
+            Ok(answer)
+        } else if let Command::Agents { command } = self.command {
+            crate::coordination::run(self.client, self.authority, self.actor, command)
+        } else {
+            self.client.submit(
+                Effect::Command {
+                    authority: self.authority,
+                    actor: self.actor,
+                    target: self.target.map(Box::new),
+                    command: Box::new(self.command),
+                },
+                timeout,
+            )
+        };
+        if let Some(after) = self.then {
+            after(&result);
         }
-        self.client.submit(
-            Effect::Command {
-                authority: self.authority,
-                actor: self.actor,
-                target: self.target.map(Box::new),
-                command: Box::new(self.command),
-            },
-            timeout,
-        )
+        result
     }
 }
 

@@ -113,5 +113,9 @@
   "desk_notice": ["blocked", "preparing", "host_stopped", "resume_failed", "login_needed", "install_failed", "no_ask_mode", "turn_failed"],
   "desk_location": ["desk", "worktree", "checkout"],
   "desk_mention_kind": ["session", "project"],
-  "desk_carried": ["all", "trimmed", "none"]
+  "desk_carried": ["all", "trimmed", "none"],
+  "desk_job_state": ["queued", "starting", "working", "asking", "done", "failed", "cancelled", "closed", "moved_out", "archived"],
+  "desk_job_reason": ["spawn_failed", "exited", "device_disconnected"],
+  "desk_output_kind": ["image", "page", "doc", "pr"],
+  "desk_job_location": ["checkout", "worktree"]
 }

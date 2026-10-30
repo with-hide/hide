@@ -9716,6 +9716,50 @@ mod wire_enum_tests {
             &[DeskCarried::All, DeskCarried::Trimmed, DeskCarried::None],
         );
         checked.insert("desk_carried");
+        assert_wire(
+            &contract,
+            "desk_job_state",
+            &[
+                DeskJobState::Queued,
+                DeskJobState::Starting,
+                DeskJobState::Working,
+                DeskJobState::Asking,
+                DeskJobState::Done,
+                DeskJobState::Failed,
+                DeskJobState::Cancelled,
+                DeskJobState::Closed,
+                DeskJobState::MovedOut,
+                DeskJobState::Archived,
+            ],
+        );
+        checked.insert("desk_job_state");
+        assert_wire(
+            &contract,
+            "desk_job_reason",
+            &[
+                DeskJobReason::SpawnFailed,
+                DeskJobReason::Exited,
+                DeskJobReason::DeviceDisconnected,
+            ],
+        );
+        checked.insert("desk_job_reason");
+        assert_wire(
+            &contract,
+            "desk_output_kind",
+            &[
+                DeskOutputKind::Image,
+                DeskOutputKind::Page,
+                DeskOutputKind::Doc,
+                DeskOutputKind::Pr,
+            ],
+        );
+        checked.insert("desk_output_kind");
+        assert_wire(
+            &contract,
+            "desk_job_location",
+            &[DeskJobLocationKind::Checkout, DeskJobLocationKind::Worktree],
+        );
+        checked.insert("desk_job_location");
 
         let unchecked = contract
             .keys()
