@@ -2655,8 +2655,15 @@ export type DeskJobReason = "spawn_failed" | "exited" | "device_disconnected";
 export type DeskJobFailure = "device_unavailable" | "agent_not_installed" | "branch_in_use" | "project_unavailable" | "already_started" | "busy" | "not_started" | "invalid_request" | "other";
 /** `desk_output_kind`. */
 export type DeskOutputKind = "image" | "page" | "doc" | "pr";
-/** A job's result; `pr_state` is a pull request's one state, its PR mark's. */
-export type DeskOutput = { id: string; kind: DeskOutputKind; label: string; thumb: string | null; seen: boolean; pr_state: PrState | null };
+/**
+ * A job's result; `pr_state` is a pull request's one state, its PR mark's.
+ * A View's file is read from `path` under `checkout` on `device_id`, so the
+ * lane shows it without a View of its own (B31); a page and a pull request
+ * carry `url`.
+ */
+export type DeskOutput = { id: string; kind: DeskOutputKind; label: string; thumb: string | null; seen: boolean; pr_state: PrState | null; device_id: string | null; checkout: string | null; path: string | null; url: string | null };
+/** A tab kept in Desk's 보기 column: a job's output as its card listed it when it was kept, or a mission's map (B31, B34). */
+export type DeskKeptTab = { kind: "output"; job: string; output: DeskOutput } | { kind: "mission"; mission: string; title: string };
 export type DeskMissionTone = "done" | "review" | "working" | "hold" | "failed" | "waiting" | "cancelled";
 /** The mission a Conductor job runs, as its `미션 k/n` chip (B34). */
 export type DeskMission = { id: string; title: string; status: MissionStatus; done: number; total: number; tone: DeskMissionTone; deciding: boolean };
@@ -2708,10 +2715,16 @@ export type DeskSection = {
   conversation: { generation: number; items: DeskItem[]; dropped: number };
   approvals_waiting: number;
   settings: { default_agent: DeskAgentId | null; location: DeskLocation; cap: number };
+  /** The lane's pin and the tabs kept in its 보기 column, oldest first, at most 16 (B31, B32). */
+  lane: { pinned: boolean; kept: DeskKeptTab[] };
 };
 
 /** The `desk_jobs` section: Desk's sessions as cards, newest first and at most 64, apart so a card's change never resends the conversation. */
-export type DeskJobsSection = { jobs: DeskJob[] };
+export type DeskJobsSection = {
+  jobs: DeskJob[];
+  /** The workers of the missions Desk's jobs conduct, as cards of their own: listed under their Conductor and opened from a mission map's node, never drawn in the chat (B28, B34). */
+  workers: DeskJob[];
+};
 
 /** The `desk_live` section: the reply being written, `null` between turns. */
 export type DeskLive = { text: string | null; started_at_ms: number | null };

@@ -1,5 +1,6 @@
 import { SettingsIcon, TriangleAlertIcon, XIcon } from "lucide-react";
 import { useMemo, useState, type ReactNode } from "react";
+import { ProjectLanePin } from "./ProjectLanePin";
 import type { Actions } from "./actions";
 import type { ProjectStatus, ProjectTodo } from "./agentScope";
 import { agentProductName } from "./agentAdapters";
@@ -70,6 +71,7 @@ function Header({ project, actions }: { project: Workspace; actions: Actions }) 
           <SettingsIcon />
         </Button>
       </Hint>
+      <ProjectLanePin column="tool" actions={actions} />
       <Hint label={t("panes.lane.closeTool")}>
         <Button variant="ghost" size="icon-sm" className="text-muted-foreground" aria-label={t("panes.lane.closeTool")} data-lane-tool-close="project" onClick={() => actions.closeTool()}>
           <XIcon />

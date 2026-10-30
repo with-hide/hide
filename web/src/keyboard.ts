@@ -318,6 +318,8 @@ export function installKeyboard(actions: Actions): () => void {
         return actions.openFrontProjectMemory();
       case "open_sidebar_prs":
         return actions.openSidebarPrs();
+      case "desk_terminal":
+        return actions.deskTerminal();
       case "toggle_lane_documents":
         return actions.toggleDocuments();
       case "find_in_pane": {

@@ -74,7 +74,7 @@ export type AreaAdapter<I extends AreaItem> = {
   barStart?: (area: Area<I>) => React.ReactNode;
   barEnd?: (area: Area<I>) => React.ReactNode;
   /** The column's own ✕, drawn once at its top-right corner as a tool's head draws it: it closes the whole column. */
-  close?: { label: string; onClose: () => void; attributes?: Record<string, string> };
+  close?: { label: string; onClose: () => void; attributes?: Record<string, string>; beside?: React.ReactNode };
   shown?: (area: Area<I>) => I | null;
   splitUnavailable?: string;
   label: (item: I) => string;
@@ -587,7 +587,8 @@ function AreaTabBar({ area, active, index, count, switcher }: { area: Area<I>; a
         />
       ) : null}
       {tree.adapter.close && (switcher || topRightArea(tree.layout.root).id === area.id) ? (
-        <div className="flex shrink-0 items-center pl-xxs pr-xs">
+        <div className="flex shrink-0 items-center gap-xxs pl-xxs pr-xs">
+          {tree.adapter.close.beside}
           <Hint label={tree.adapter.close.label}>
             <Button variant="ghost" size="icon-sm" className="text-muted-foreground" aria-label={tree.adapter.close.label} onClick={tree.adapter.close.onClose} {...tree.adapter.close.attributes}>
               <XIcon />

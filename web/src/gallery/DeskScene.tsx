@@ -354,7 +354,7 @@ function OutputsCriteria() {
             const kind = outputKindOf(view.kind);
             return (
               <li key={view.label} className={cn("flex min-w-0 items-center gap-xs text-caption", kind ? "text-subtle-foreground" : "text-muted-foreground line-through opacity-(--opacity-dimmed)")} data-desk-view-kept={kind ? "true" : "false"}>
-                <OutputMark output={{ id: view.label, kind: kind ?? "doc", label: view.label, thumb: null, seen: true, pr_state: kind === "pr" ? "merged" : null }} />
+                <OutputMark output={{ id: view.label, kind: kind ?? "doc", label: view.label, thumb: null, seen: true, pr_state: kind === "pr" ? "merged" : null, device_id: null, checkout: null, path: null, url: null }} />
                 <span className="truncate">{view.label}</span>
                 <span className="ml-auto font-mono text-micro text-muted-foreground">{view.kind}</span>
               </li>

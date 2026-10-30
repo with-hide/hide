@@ -12,6 +12,7 @@ import type { CycleItem } from "./recent";
 import type { NumberedFamily } from "./shortcuts";
 import type { ViewFocusRequest, ViewWorkspace } from "./viewLayout";
 import type { KeyboardOwner } from "./viewFocus";
+import { DESK_LANE_CLOSED, type DeskLaneWindow } from "./deskLane";
 import type { BrowserDevice } from "./browserDevice";
 import type { DeskMention } from "./desk";
 import { NO_CALLS_SEEN, type CallsSeen, type LaneMode, type LaneSide, type LaneView } from "./workspace";
@@ -213,6 +214,9 @@ type UiStore = {
   screen: Screen | null;
   deskDraft: DeskDraft;
   setDeskDraft: (draft: DeskDraft) => void;
+  /** Desk's lane in this window: its columns, the tool column's thread and the preview tab (`deskLane.ts`). */
+  deskLane: DeskLaneWindow;
+  setDeskLane: (change: (lane: DeskLaneWindow) => DeskLaneWindow) => void;
   /** Overview is a shell layer; opening it leaves the Workspace mounted. */
   overviewOpen: boolean;
   overview: OverviewPlace;
@@ -418,6 +422,8 @@ export const useUiStore = create<UiStore>((set, get) => ({
   screen: null,
   deskDraft: { text: "", mentions: [] },
   setDeskDraft: (deskDraft) => set({ deskDraft }),
+  deskLane: DESK_LANE_CLOSED,
+  setDeskLane: (change) => set((state) => ({ deskLane: change(state.deskLane) })),
   overviewOpen: false,
   overview: OVERVIEW_ENTRY,
   overviewReturnFocus: null,

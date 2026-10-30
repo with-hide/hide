@@ -1,9 +1,10 @@
-import { ImagesIcon, ListIcon, Maximize2Icon, Minimize2Icon, PinIcon, PlusIcon, XIcon } from "lucide-react";
+import { ImagesIcon, ListIcon, Maximize2Icon, Minimize2Icon, PlusIcon, XIcon } from "lucide-react";
 import type { ReactNode, Ref } from "react";
 import { useInterfaceTranslation } from "../../i18n/client";
 import { cn } from "../../lib/utils";
 import { Button } from "../ui/button";
 import { Hint } from "../ui/tooltip";
+import { LanePinButton } from "../lane-pin";
 
 const RAIL_BUTTON = "relative size-(--size-tool-rail-button) rounded-md [&_svg:not([class*='size-'])]:size-(--size-icon-lg)";
 
@@ -49,28 +50,44 @@ export function DeskRail({ asking, unseen, threads, outputs, onThreads, onOutput
   );
 }
 
+/** Desk's pin, as the lane's pin draws it, with Desk's words. */
+export function DeskPin({ pinned, onPin }: { pinned: boolean; onPin: () => void }) {
+  const { t } = useInterfaceTranslation();
+  return <LanePinButton pinned={pinned} label={t("desk.lane.pinLabel")} hint={pinned ? t("desk.lane.unpin") : t("desk.lane.pin")} state={pinned ? "on" : "off"} onPin={onPin} />;
+}
+
+/**
+ * The controls at the right of a lane column's head (D-73, B32, B33): ⤢,
+ * the pin beside ✕, and ✕. Only the column at the lane's edge carries the
+ * pin and ⤢ (a thread's head has no ⤢); the column beside it closes alone.
+ */
+export function LaneHeadControls({ edge, expanded = false, pinned, onExpand, onPin, onClose }: { edge: boolean; expanded?: boolean; pinned: boolean; onExpand?: () => void; onPin: () => void; onClose: () => void }) {
+  const { t } = useInterfaceTranslation();
+  return (
+    <>
+      {edge && onExpand ? (
+        <Hint label={t("desk.lane.expand")}>
+          <Button variant="ghost" size="icon-sm" className="text-muted-foreground" aria-label={t("desk.lane.expand")} aria-pressed={expanded} data-desk-lane-expand={expanded ? "on" : "off"} onClick={onExpand}>{expanded ? <Minimize2Icon /> : <Maximize2Icon />}</Button>
+        </Hint>
+      ) : null}
+      {edge ? <DeskPin pinned={pinned} onPin={onPin} /> : null}
+      <Hint label={edge ? t("desk.lane.close") : t("desk.lane.closeColumn")}>
+        <Button variant="ghost" size="icon-sm" className="text-muted-foreground" aria-label={edge ? t("desk.lane.close") : t("desk.lane.closeColumn")} data-desk-lane-close="true" onClick={onClose}><XIcon /></Button>
+      </Hint>
+    </>
+  );
+}
+
 /**
  * A lane column's head (D-73, B32, B33): what the column shows, then ⤢, the
  * pin beside ✕, and ✕. Filled while pinned, the pin docks the lane beside
- * the chat; unpinned, the lane floats over it. The project lane takes the
- * same head.
+ * the chat; unpinned, the lane floats over it.
  */
 export function LaneColumnHead({ children, expanded = false, pinned, onExpand, onPin, onClose }: { children: ReactNode; expanded?: boolean; pinned: boolean; onExpand: () => void; onPin: () => void; onClose: () => void }) {
-  const { t } = useInterfaceTranslation();
   return (
     <div className="flex h-(--size-tab-strip) shrink-0 items-center gap-xxs border-b border-border pl-md pr-xs text-caption" data-lane-header="true">
       <span className="flex min-w-0 flex-1 items-center gap-xs">{children}</span>
-      <Hint label={t("desk.lane.expand")}>
-        <Button variant="ghost" size="icon-sm" className="text-muted-foreground" aria-label={t("desk.lane.expand")} aria-pressed={expanded} onClick={onExpand}>{expanded ? <Minimize2Icon /> : <Maximize2Icon />}</Button>
-      </Hint>
-      <Hint label={pinned ? t("desk.lane.unpin") : t("desk.lane.pin")}>
-        <Button variant="ghost" size="icon-sm" className={pinned ? "text-foreground" : "text-muted-foreground"} aria-label={pinned ? t("desk.lane.unpin") : t("desk.lane.pin")} aria-pressed={pinned} data-lane-head-pin={pinned ? "on" : "off"} onClick={onPin}>
-          <PinIcon className={cn(pinned && "fill-current")} />
-        </Button>
-      </Hint>
-      <Hint label={t("desk.lane.close")}>
-        <Button variant="ghost" size="icon-sm" className="text-muted-foreground" aria-label={t("desk.lane.close")} onClick={onClose}><XIcon /></Button>
-      </Hint>
+      <LaneHeadControls edge expanded={expanded} pinned={pinned} onExpand={onExpand} onPin={onPin} onClose={onClose} />
     </div>
   );
 }
@@ -84,17 +101,33 @@ export type ViewTab = { id: string; label: string; preview: boolean; icon?: Reac
  * document, a live page, the mission map: Hide's existing viewers).
  * Pressing a tab shows it; pressing a preview again keeps it.
  */
-export function DeskViewColumn({ tabs, active, onTab, onKeep, onCloseTab, children }: { tabs: readonly ViewTab[]; active: string | null; onTab: (id: string) => void; onKeep: (id: string) => void; onCloseTab: (id: string) => void; children: ReactNode }) {
+export function DeskViewColumn({ tabs, active, onTab, onKeep, onCloseTab, controls = null, children }: { tabs: readonly ViewTab[]; active: string | null; onTab: (id: string) => void; onKeep: (id: string) => void; onCloseTab: (id: string) => void; controls?: ReactNode; children: ReactNode }) {
   const { t } = useInterfaceTranslation();
   return (
     <section className="flex min-h-0 min-w-0 flex-1 flex-col bg-card" aria-label={t("desk.outputs.title")} data-desk-view-column={tabs.length}>
-      <div role="tablist" className="flex h-(--size-tab-strip) shrink-0 items-end gap-xxs overflow-x-auto border-b border-border px-xs" data-desk-view-tabs="true">
+      <div className="flex h-(--size-tab-strip) shrink-0 items-center border-b border-border pr-xs">
+      <div role="tablist" className="flex h-full min-w-0 flex-1 items-end gap-xxs overflow-x-auto px-xs" data-desk-view-tabs="true">
         {tabs.map((tab) => {
           const on = tab.id === active;
           return (
             <Hint key={tab.id} label={tab.preview ? `${tab.label} · ${t("desk.lane.preview")}` : tab.label}>
               <span className={cn("group/tab flex h-(--size-control-sm) min-w-0 max-w-(--size-tab-preferred) items-center gap-xxs rounded-t-sm pl-xs pr-xxs", on ? "bg-background text-foreground" : "text-muted-foreground hover:bg-accent")} data-desk-view-tab={tab.id} data-desk-view-tab-preview={tab.preview ? "true" : undefined}>
-                <Button variant="text" size="inline" role="tab" aria-selected={on} className={cn("min-w-0 gap-xxs text-caption", on && "text-foreground", tab.preview && "italic")} onClick={() => onTab(tab.id)} onDoubleClick={() => onKeep(tab.id)}>
+                <Button
+                  variant="text"
+                  size="inline"
+                  role="tab"
+                  aria-selected={on}
+                  className={cn("min-w-0 gap-xxs text-caption", on && "text-foreground", tab.preview && "italic")}
+                  onClick={() => onTab(tab.id)}
+                  onDoubleClick={() => onKeep(tab.id)}
+                  onKeyDown={(event) => {
+                    // ↵ on the preview keeps it, as a second press does (B31).
+                    if (event.key === "Enter" && tab.preview && !event.nativeEvent.isComposing) {
+                      event.preventDefault();
+                      onKeep(tab.id);
+                    }
+                  }}
+                >
                   {tab.icon}
                   <span className="truncate">{tab.label}</span>
                 </Button>
@@ -103,6 +136,8 @@ export function DeskViewColumn({ tabs, active, onTab, onKeep, onCloseTab, childr
             </Hint>
           );
         })}
+      </div>
+      {controls}
       </div>
       <div role="tabpanel" className="flex min-h-0 min-w-0 flex-1 flex-col overflow-auto bg-background">{children}</div>
     </section>
@@ -119,7 +154,8 @@ export function DeskViewColumn({ tabs, active, onTab, onKeep, onCloseTab, childr
 export function DeskRoom({ chat, view = null, tool = null, pinned, expanded = false, rail }: { chat: ReactNode; view?: ReactNode; tool?: ReactNode; pinned: boolean; expanded?: boolean; rail: ReactNode }) {
   const up = view !== null || tool !== null;
   const over = up && !pinned && !expanded;
-  const covered = view !== null && tool !== null ? "pr-[calc(var(--size-lane-panel-ideal)*2)]" : "pr-(--size-lane-panel-ideal)";
+  // The chat moves left out from under a lane over it, but never narrower than a lane column's minimum.
+  const covered = view !== null && tool !== null ? "pr-[min(calc(var(--size-lane-panel-ideal)*2),max(0px,calc(100%_-_var(--size-lane-min))))]" : "pr-[min(var(--size-lane-panel-ideal),max(0px,calc(100%_-_var(--size-lane-min))))]";
   const columns = up ? (
     <div className={cn("flex min-h-0 min-w-0", pinned && !expanded ? "flex-[2]" : "absolute inset-y-0 right-0 z-10 border-l border-border bg-background shadow-lg", expanded && "left-0")} data-desk-lane={pinned ? "pinned" : "over"}>
       {view !== null ? <div className={cn("flex min-h-0 min-w-0 flex-col", expanded || pinned ? "flex-1" : "w-(--size-lane-panel-ideal)")} data-desk-lane-column="view">{view}</div> : null}

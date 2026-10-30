@@ -134,5 +134,6 @@ function viewOutput(view: "browser" | "file" | "diff", target: string): DeskOutp
   if (view === "diff") return null;
   const kind = view === "browser" ? "page" : IMAGE.test(target) ? "image" : "doc";
   const label = view === "browser" ? target.replace(/^[a-z]+:\/\//i, "") : (target.split(/[\\/]/).filter(Boolean).at(-1) ?? target);
-  return { id: target, kind, label, thumb: null, seen: true, pr_state: null };
+  // Where the session's call named it: a page's address, or a file as typed, read on this machine (D-65, B31).
+  return { id: target, kind, label, thumb: null, seen: true, pr_state: null, device_id: null, checkout: null, path: view === "browser" ? null : target, url: view === "browser" ? target : null };
 }

@@ -31,7 +31,7 @@ export const AGENTS: DeskAgent[] = [
 
 export const AGENTS_PREPARING: DeskAgent[] = AGENTS.map((agent) => (agent.id === "codex" ? { ...agent, state: "preparing" } : agent));
 
-const output = (id: string, kind: DeskOutput["kind"], label: string, seen: boolean, thumb: string | null = null): DeskOutput => ({ id, kind, label, seen, thumb, pr_state: null });
+const output = (id: string, kind: DeskOutput["kind"], label: string, seen: boolean, thumb: string | null = null): DeskOutput => ({ id, kind, label, seen, thumb, pr_state: null, device_id: "local", checkout: "/repo/herdr-ide", path: kind === "page" || kind === "pr" ? null : `/repo/herdr-ide/${label}`, url: kind === "page" ? `http://localhost:5173/${label}` : null });
 
 export const OUTPUTS = {
   light1: output("o-light-1", "image", "light-1.png", true, PICTURES.light),

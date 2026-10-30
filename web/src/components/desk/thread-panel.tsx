@@ -24,7 +24,7 @@ const INPUT_WORDS = new Set(["pane_changed", "pane_gone", "closed", "asleep", "u
  * files into that pane. Where the lane puts it, and where a chip or `터미널로`
  * goes, are the lane's.
  */
-export function ThreadPanel({ job, actions, conductor = null, pinned, mentions = [], startedByDesk = false, selectedOutput = null, focused = false, onBack, onPin, onClose, onTerminal, ...parts }: {
+export function ThreadPanel({ job, actions, conductor = null, pinned, mentions = [], startedByDesk = false, selectedOutput = null, focused = false, answer = 0, terminalChord, onBack, onPin, onClose, onTerminal, ...parts }: {
   job: DeskJob;
   actions: Pick<Actions, "openThread" | "closeThread" | "readOlderThread">;
   conductor?: ThreadConductor | null;
@@ -33,6 +33,9 @@ export function ThreadPanel({ job, actions, conductor = null, pinned, mentions =
   startedByDesk?: boolean;
   selectedOutput?: string | null;
   focused?: boolean;
+  /** Moves when `답하기` asks for this thread's input box (B29): the box takes the keyboard. */
+  answer?: number;
+  terminalChord?: string | null;
   onBack: () => void;
   onPin: () => void;
   onClose: () => void;
@@ -114,9 +117,14 @@ export function ThreadPanel({ job, actions, conductor = null, pinned, mentions =
     actions.readOlderThread(thread.generation);
   };
 
+  const root = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (answer > 0) root.current?.querySelector<HTMLTextAreaElement>("[data-desk-composer-input]")?.focus();
+  }, [answer]);
+
   return (
-    <div className="flex min-h-0 min-w-0 flex-1 flex-col" data-desk-thread-panel={paneId ?? ""}>
-      <ThreadHead job={job} model={model} conductor={conductor} pinned={pinned} onBack={onBack} onTerminal={onTerminal} onPin={onPin} onClose={onClose} />
+    <div ref={root} className="flex min-h-0 min-w-0 flex-1 flex-col" data-desk-thread-panel={paneId ?? ""}>
+      <ThreadHead job={job} model={model} conductor={conductor} pinned={pinned} terminalChord={terminalChord} onBack={onBack} onTerminal={onTerminal} onPin={onPin} onClose={onClose} />
       <ThreadView
         job={job}
         lines={screen.lines}

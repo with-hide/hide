@@ -249,7 +249,11 @@ export function outputKindOf(kind: SessionViewKind): DeskOutputKind | null {
 
 export type ThreadGroupKey = "turn" | "working" | "done";
 
-/** Which Threads group a job is listed in (B28): what waits on the operator, what runs, what ended. */
+/**
+ * Which Threads group a job is listed in (B28): what waits on the operator,
+ * what runs, what ended. A sleeping or archived thread is in none: the
+ * list's foot counts them and opens them under it (`restingThreads`).
+ */
 export function threadGroupOf(job: DeskJob): ThreadGroupKey | null {
   switch (job.state) {
     case "asking":
@@ -260,14 +264,21 @@ export function threadGroupOf(job: DeskJob): ThreadGroupKey | null {
     case "working":
       return "working";
     case "done":
-    case "sleeping":
     case "cancelled":
     case "closed":
-    case "archived":
       return "done";
+    case "sleeping":
+    case "archived":
     case "moved_out":
       return null;
   }
+}
+
+/** The threads the list's foot counts (proposal scene 6): asleep, and archived; a mission's workers stay under their Conductor. */
+export function restingThreads(jobs: readonly DeskJob[]): { sleeping: DeskJob[]; archived: DeskJob[] } {
+  const workers = new Set(jobs.flatMap((job) => job.workers));
+  const top = jobs.filter((job) => job.pane_id === null || !workers.has(job.pane_id));
+  return { sleeping: top.filter((job) => job.state === "sleeping"), archived: top.filter((job) => job.state === "archived") };
 }
 
 export type ThreadGroup = { key: ThreadGroupKey; jobs: DeskJob[] };
