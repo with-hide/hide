@@ -110,7 +110,11 @@ impl Drop for AppServer {
 }
 
 fn git(cwd: &Path, args: &[&str]) {
+    // The account's git settings, such as commit signing, are not the
+    // fixture's.
     let status = Command::new("git")
+        .env("GIT_CONFIG_GLOBAL", "/dev/null")
+        .env("GIT_CONFIG_NOSYSTEM", "1")
         .current_dir(cwd)
         .args([
             "-c",

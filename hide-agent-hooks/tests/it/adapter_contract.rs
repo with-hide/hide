@@ -202,6 +202,7 @@ fn every_supported_observation_reaches_admission() {
             }
             ObservationSupport::Plugin(_) => {
                 let fixture = &fixtures["claude-code"];
+                let started = std::time::Instant::now();
                 let answer = machine.run_as(
                     row.id,
                     "observation",
@@ -214,7 +215,23 @@ fn every_supported_observation_reaches_admission() {
                     }),
                     true,
                 );
-                assert_eq!(answer["observed"], true, "{}", row.id);
+                // The helper's send budget is the product's, and under load
+                // it has answered not observed here (with-hide/hide-private#334):
+                // the failure names how long the run took, the cause the
+                // helper recorded and what the stand-in `hide` was asked.
+                let read = |name: &str| {
+                    std::fs::read_to_string(machine.home.join(name))
+                        .unwrap_or_else(|error| format!("<{error}>"))
+                };
+                assert_eq!(
+                    answer["observed"],
+                    true,
+                    "{}: after {:?}; recorded {}; hide was asked {}",
+                    row.id,
+                    started.elapsed(),
+                    read(".hide/agent-hooks/delivery-diagnostics.json"),
+                    read("../hide-calls"),
+                );
                 assert_fact(machine.take_observation(), row.id, &fixture["expected"]);
             }
             ObservationSupport::Unsupported { .. } => {}

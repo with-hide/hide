@@ -3099,7 +3099,13 @@ mod measure_tests {
     }
 
     fn run(cwd: &Path, args: &[&str]) {
+        // The account's git settings, such as commit signing through an
+        // agent that may not answer, are not the fixture's: git reads neither
+        // the global nor the system file (Git for Windows reads `/dev/null`
+        // as `nul`).
         let status = Command::new("git")
+            .env("GIT_CONFIG_GLOBAL", "/dev/null")
+            .env("GIT_CONFIG_NOSYSTEM", "1")
             .arg("-C")
             .arg(cwd)
             .args([

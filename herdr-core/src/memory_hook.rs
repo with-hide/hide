@@ -104,8 +104,22 @@ fn memory_runtimes() -> impl Iterator<Item = String> {
         })
 }
 
-/// The Memory context for `ask`, or none with why, before `deadline`.
+/// The Memory context for `ask`, or none with why, before `deadline` and
+/// within the hook's own 100 ms.
 pub fn answer(scope: &Scope, ask: &Ask, deadline: Instant) -> HookContext {
+    answer_until(
+        scope,
+        ask,
+        hide_memory::hook::within_hook_budget(move || Instant::now() >= deadline),
+    )
+}
+
+/// [`answer`] bounded by `expired` alone, which a test that is not about the
+/// budget holds still.
+fn answer_until<E>(scope: &Scope, ask: &Ask, expired: E) -> HookContext
+where
+    E: Fn() -> bool + Clone + Send + 'static,
+{
     let without = |outcome| HookContext {
         context: None,
         outcome,
@@ -115,11 +129,11 @@ pub fn answer(scope: &Scope, ask: &Ask, deadline: Instant) -> HookContext {
     if !scope.store.is_file() {
         return without(HookOutcome::Unavailable);
     }
-    if Instant::now() >= deadline {
+    if expired() {
         return without(HookOutcome::Deadline);
     }
     let prompt = hide_memory::hook::prompt_prefix(ask.prompt.as_deref().unwrap_or_default());
-    hide_memory::hook::context_for(
+    hide_memory::hook::context_until(
         &scope.store,
         &scope.project,
         HookRequest {
@@ -129,7 +143,7 @@ pub fn answer(scope: &Scope, ask: &Ask, deadline: Instant) -> HookContext {
             prompt: Some(prompt),
             task_context: scope.task_context.as_deref(),
         },
-        move || Instant::now() >= deadline,
+        expired,
     )
 }
 
@@ -162,6 +176,12 @@ pub(crate) fn project_identity(
 mod tests {
     use super::*;
     use std::collections::BTreeSet;
+
+    /// The hook's 100 ms is `hide_memory::hook`'s tests' to hold; these read
+    /// which cards an ask gets, with a clock that never ends.
+    fn never() -> bool {
+        false
+    }
 
     #[test]
     fn short_continuations_use_only_the_prepared_confirmed_task() {
@@ -224,18 +244,18 @@ mod tests {
         };
         let ask = Ask::from_wire(&json!({"event":"UserPromptSubmit","runtime":"claude","session":"task-session","prompt":"계속해 주세요"})).unwrap();
         assert_eq!(
-            answer(&scope, &ask, Instant::now() + WITHIN).outcome,
+            answer_until(&scope, &ask, never).outcome,
             HookOutcome::Empty
         );
         scope.task_context = Some("테스트 실행기 점검".into());
         let unrelated = Ask::from_wire(&json!({"event":"UserPromptSubmit","runtime":"claude","session":"other-task","prompt":"Investigate the basalt specimen archive and document the geological history of the volcanic rocks collected last year."})).unwrap();
         assert_eq!(
-            answer(&scope, &unrelated, Instant::now() + WITHIN).outcome,
+            answer_until(&scope, &unrelated, never).outcome,
             HookOutcome::Empty
         );
 
         let own_topic = Ask::from_wire(&json!({"event":"UserPromptSubmit","runtime":"claude","session":"short-own-topic","prompt":"granite 목록 정리해줘"})).unwrap();
-        let result = answer(&scope, &own_topic, Instant::now() + WITHIN);
+        let result = answer_until(&scope, &own_topic, never);
         assert_eq!(
             result.outcome,
             HookOutcome::Provided { count: 1 },
@@ -254,12 +274,12 @@ mod tests {
             )
             .unwrap();
         assert_eq!(
-            answer(&scope, &own_topic, Instant::now() + WITHIN).outcome,
+            answer_until(&scope, &own_topic, never).outcome,
             HookOutcome::Empty,
             "a prompt whose own card was already given gets nothing, never the task's"
         );
 
-        let result = answer(&scope, &ask, Instant::now() + WITHIN);
+        let result = answer_until(&scope, &ask, never);
         assert_eq!(result.outcome, HookOutcome::Provided { count: 1 });
         assert!(
             result
@@ -272,7 +292,7 @@ mod tests {
             "basalt ".repeat(hide_memory::hook::PROMPT_LIMIT_BYTES / 7 + 1)
         ));
         assert_eq!(
-            answer(&scope, &ask, Instant::now() + WITHIN).outcome,
+            answer_until(&scope, &ask, never).outcome,
             HookOutcome::Empty,
             "ranking context beyond the combined 8 KiB limit is never searched"
         );
