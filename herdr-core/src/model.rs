@@ -6702,6 +6702,10 @@ impl Default for HerdrProfilesSnapshot {
     }
 }
 
+/// One machine the first-run Devices step offers: a saved Herdr profile, a
+/// Host of the account's ssh config (Add device's list), or both when the
+/// profile's target is that Host or leads to the same `user@host:port`, or
+/// this PC's default WSL distribution.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct HerdrProfileSnapshot {
     pub id: String,
@@ -6709,6 +6713,13 @@ pub struct HerdrProfileSnapshot {
     /// The SSH target, or the distribution of a WSL row.
     pub target: String,
     pub session: String,
+    /// Herdr saved this machine (`herdr machine list`).
+    pub herdr: bool,
+    /// The ssh config Host the row is, or the one the profile's target is.
+    pub ssh_host: Option<String>,
+    /// `user@host:port` as `ssh -G` resolved the Host, read without
+    /// connecting.
+    pub address: Option<String>,
     /// Set on the one row that is not a saved Herdr profile: this PC's
     /// default WSL distribution (PRD wsl-device B1), which connects as a
     /// WSL device.

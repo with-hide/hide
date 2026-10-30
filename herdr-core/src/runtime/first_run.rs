@@ -20,10 +20,12 @@ pub(super) struct FirstRunApply {
 
 impl Runtime {
     /// Discovery proves saved configuration only. Unknown and failed reads
-    /// keep a step with loading/retry; only an actual empty result skips it.
+    /// keep a step with loading/retry; only an actual empty result, no
+    /// Herdr profile and no ssh config Host, skips it. A list cut short
+    /// (an Include past its bounds) proves nothing.
     pub(super) fn first_run_has_devices(&self) -> bool {
         let profiles = &self.snapshot.status.herdr_profiles;
-        profiles.state != "ready" || !profiles.profiles.is_empty()
+        profiles.state != "ready" || !profiles.profiles.is_empty() || profiles.truncated
     }
 
     pub(super) fn settle_first_run_devices(&mut self) -> bool {
