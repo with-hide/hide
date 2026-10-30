@@ -1187,7 +1187,9 @@ impl Runtime {
                 .actor
                 .require_native_identity()?;
         }
-        let after = if queued.is_none() && !repeated {
+        let after = if queued.is_some() {
+            self.desk_queued_after()
+        } else if !repeated {
             self.desk_after(&actor, &command, target.as_ref())
         } else {
             None

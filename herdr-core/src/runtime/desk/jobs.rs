@@ -74,7 +74,16 @@ impl Runtime {
             id: 0,
             job_id: intent.clone(),
         });
+        // Its card is drawn with the answer, not at the next refresh.
+        self.compose_desk_jobs();
         Ok(Some(queued_answer(intent, waiting + 1)))
+    }
+
+    /// What follows a spawn Desk's queue took: its card and line were made
+    /// under the lock, so the screen is told once the lock is let go.
+    pub(in crate::runtime) fn desk_queued_after(&self) -> Option<crate::delivery::worker::After> {
+        let notifier = self.desk.handle.as_ref()?.notifier.clone();
+        Some(Box::new(move |_: &Result<Value, String>| notifier.notify()))
     }
 
     /// Its place in the queue, from 1, while it waits.
@@ -564,7 +573,7 @@ impl Runtime {
     /// Desk's jobs as cards, newest first: the queue's, then the newest
     /// [`MAX_CARDS`] of the ledger's, before the section's cap.
     fn desk_cards(&self) -> Vec<crate::model::DeskJobSnapshot> {
-        use crate::model::{DeskJobFailure, DeskJobReason, DeskJobSnapshot};
+        use crate::model::{AgentStatusCode, DeskJobFailure, DeskJobReason, DeskJobSnapshot};
         let index = self.desk_card_index();
         let mut cards: Vec<DeskJobSnapshot> = Vec::new();
         let ledger = self.delivery_state().ok();
@@ -604,6 +613,27 @@ impl Runtime {
             if completed(&job.intent) {
                 continue;
             }
+            // A start that failed after its tab opened (its brief not taken
+            // in time) leaves its agent there: the card follows that pane
+            // while the agent works or asks, and reads failed while it rests,
+            // where `다시 시도` hands the brief over in the same pane.
+            let opened = (job.state == QueuedState::Failed)
+                .then(|| spawns.iter().find(|spawn| spawn.intent == job.intent))
+                .flatten()
+                .filter(|spawn| spawn.machine.is_none())
+                .and_then(|spawn| spawn.pane.as_deref())
+                .filter(|pane| !self.desk_pane_closed(pane));
+            let following = opened
+                .and_then(|pane| index.rows.get(pane))
+                .and_then(|row| match row.status_code {
+                    AgentStatusCode::Question
+                    | AgentStatusCode::Approval
+                    | AgentStatusCode::Error => Some(DeskJobState::Asking),
+                    AgentStatusCode::Done | AgentStatusCode::Idle | AgentStatusCode::Stopped => {
+                        None
+                    }
+                    _ => Some(DeskJobState::Working),
+                });
             let (state, reason) = match job.state {
                 QueuedState::Waiting => {
                     position += 1;
@@ -622,6 +652,7 @@ impl Runtime {
                 }
                 QueuedState::Failed => (DeskJobState::Failed, Some(DeskJobReason::SpawnFailed)),
             };
+            let (state, reason) = following.map_or((state, reason), |state| (state, None));
             let AgentCommand::Spawn {
                 name,
                 kind,
@@ -646,7 +677,10 @@ impl Runtime {
             );
             card.state = state;
             card.reason = reason;
-            card.failure = job.code.as_deref().map(DeskJobFailure::of);
+            card.failure = (state == DeskJobState::Failed)
+                .then(|| job.code.as_deref().map(DeskJobFailure::of))
+                .flatten();
+            card.pane_id = opened.map(str::to_owned);
             card.queue_position = (state == DeskJobState::Queued).then_some(position);
             cards.insert(0, card);
         }
@@ -1078,17 +1112,24 @@ impl Runtime {
         let mut marked = false;
         let ledger = self.delivery_state().ok();
         for spawn in self.desk_spawns().iter().rev().take(MAX_CARDS) {
-            let Some(registration) = ledger.as_ref().and_then(|ledger| {
+            let registration = ledger.as_ref().and_then(|ledger| {
                 let child = spawn.child.as_ref()?;
                 ledger
                     .agents
                     .iter()
                     .find(|agent| &agent.id == child)
                     .cloned()
-            }) else {
+            });
+            // A start that failed after it made its pane (its brief not
+            // taken in time) has no child yet, and its tab is Desk's all
+            // the same; a device's pane is named by that device.
+            let Some(pane) = registration
+                .as_ref()
+                .map(|registration| registration.actor.pane_id.clone())
+                .or_else(|| spawn.pane.clone().filter(|_| spawn.machine.is_none()))
+            else {
                 continue;
             };
-            let pane = registration.actor.pane_id.clone();
             let mark = self.desk_mark(&spawn.intent).cloned().unwrap_or_default();
             let mut next = mark.clone();
             next.intent.clone_from(&spawn.intent);
@@ -1122,7 +1163,11 @@ impl Runtime {
                     None => {}
                 }
             }
-            if !mark.watched && spawn.completed && !registration.ended {
+            if let Some(registration) = registration.as_ref()
+                && !mark.watched
+                && spawn.completed
+                && !registration.ended
+            {
                 self.desk_watch(&spawn.intent, &registration.actor);
             }
             if next != mark {
@@ -1497,6 +1542,15 @@ impl Runtime {
             }
         }
         false
+    }
+}
+
+#[cfg(test)]
+impl Runtime {
+    /// A start of Desk's that answered `code`, as its spawn's answer comes
+    /// back to Desk.
+    pub(in crate::runtime) fn fail_test_desk_start(&mut self, spawn: AgentCommand, code: &str) {
+        self.desk_spawn_answered(spawn, Err(code.into()));
     }
 }
 
@@ -1898,6 +1952,36 @@ mod tests {
             chips(&runtime),
             (Some(done), (Some(done), Some("claude".into())))
         );
+    }
+
+    #[test]
+    fn a_queued_spawn_s_card_is_drawn_with_its_answer_and_the_screen_is_told() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        let root = tempfile::tempdir().unwrap();
+        let mut runtime = desk(root.path(), 1, &["a"]);
+        let told = Arc::new(AtomicUsize::new(0));
+        let counted = Arc::clone(&told);
+        runtime.desk.handle = Some(DeskHandle {
+            runtime: std::sync::Weak::new(),
+            notifier: crate::handle::ChangeNotifier::announcing(move || {
+                counted.fetch_add(1, Ordering::SeqCst);
+            }),
+        });
+
+        let answer = admit(&mut runtime, "b").expect("queued");
+        assert_eq!(answer["position"], 1);
+        let cards = &runtime.snapshot.desk_jobs.as_ref().expect("the cards").jobs;
+        let queued = cards
+            .iter()
+            .find(|job| job.id == "intent-b")
+            .expect("the queued card, before any refresh");
+        assert_eq!(
+            (queued.state, queued.queue_position),
+            (DeskJobState::Queued, Some(1))
+        );
+        assert_eq!(told.load(Ordering::SeqCst), 0, "told after the lock");
+        runtime.desk_queued_after().expect("Desk's handle")(&Ok(answer));
+        assert_eq!(told.load(Ordering::SeqCst), 1);
     }
 
     #[test]

@@ -982,10 +982,11 @@ Its outputs are the Views its session opened that are still open and are made to
 A job whose session conducts a mission carries it as a `미션 k/n` chip: the mission's status (`planning`, `running`, `merge_wait`, `done` or `cancelled`), its nodes done out of those not dropped, a tone, and whether it waits on the operator's decision; the card draws no node rows.
 Its state comes from the ledger and the row the sidebar draws for it, never from a model call:
 
-- `queued` with its place (`대기 중 · n번째`): Desk's places (Settings, 8 at most) are taken; it starts by itself when one frees, and the queue survives a restart. `취소` leaves it `cancelled` and moves the ones behind it up; `다시 맡기기` puts it at the back.
+- `queued` with its place (`대기 중 · n번째`), drawn with the spawn's answer: Desk's places (Settings, 8 at most) are taken; it starts by itself when one frees, and the queue survives a restart. `취소` leaves it `cancelled` and moves the ones behind it up; `다시 맡기기` puts it at the back.
 - `starting`, `working` (now line, plan n/m, outputs), `asking` (the question and `답하기`, with what it asks: `question`, `approval`, `decision` for a Conductor's mission, `plan_review`, or `blocked`), `done` (the last turn's summary line, its pull requests with their PR mark state, outputs).
 - `sleeping` while Hide holds it asleep (`hide agent sleep`); it takes no place.
 - `failed` with its reason: `spawn_failed`, `exited`, or `device_disconnected` for a job asked of a device whose link was down; `다시 시도` queues it again. A failed job takes no place, and nothing times out.
+  A start that failed after its tab opened (its brief not taken in time) leaves its agent in that tab, which joins the `◆ Desk` group like any other: its card follows that pane while the agent works or asks, and reads `failed` with the pane to open while the agent rests, where `다시 시도` hands the brief over in the same pane.
   A failed start says why, grouped by what the operator can do: `device_unavailable`, `agent_not_installed`, `branch_in_use` (another worktree holds the branch or folder), `project_unavailable`, `already_started`, `busy` (Hide was starting another session), `not_started`, `invalid_request` (Desk asked for a start Hide does not take) or `other`; the start's own code goes to the diagnostic log.
 - A job on a device whose link drops dims and says `연결 안 됨` while it keeps working.
 - `joined` once the operator types into its terminal (`나도 참여 중`); Desk keeps following it.
