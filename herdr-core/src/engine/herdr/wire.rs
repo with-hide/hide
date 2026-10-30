@@ -1016,46 +1016,10 @@ pub(crate) fn joined_pane(value: Value) -> Result<PaneJoinResult, String> {
             previous_pane_id: nonempty_id(move_result.previous_pane_id, missing)?,
             closed_tab_id: move_result.closed_tab_id,
             closed_workspace_id: move_result.closed_workspace_id,
+            created_tab_id: move_result.created_tab.map(|tab| tab.tab_id),
         }),
         _ => Err(missing.into()),
     }
-}
-
-/// The tab `pane.move` created, when it created one.
-///
-/// Herdr answers a move it declined with `changed: false` and a reason
-/// instead of an error, so a refusal has to be read off the result rather
-/// than inferred from a missing field.
-pub(crate) fn moved_pane_tab(value: Value) -> Result<String, String> {
-    let missing = "pane.move response is missing created_tab.tab_id";
-    match response(value, missing)? {
-        res::ResponseResult::PaneMove { move_result } => move_outcome(
-            move_result.changed,
-            move_result.reason.map(|reason| format!("{reason:?}")),
-            move_result.created_tab.map(|tab| tab.tab_id),
-        ),
-        _ => Err(missing.into()),
-    }
-}
-
-/// The decision `pane.move`'s result carries, apart from decoding it.
-///
-/// Herdr answers a move it declined with `changed: false` and a reason rather
-/// than an error, so a refusal has to be read rather than inferred from a
-/// missing field.
-pub(crate) fn move_outcome(
-    changed: bool,
-    reason: Option<String>,
-    created_tab_id: Option<String>,
-) -> Result<String, String> {
-    let missing = "pane.move response is missing created_tab.tab_id";
-    if !changed {
-        return Err(match reason {
-            Some(reason) => format!("Herdr declined the move: {reason}"),
-            None => "Herdr declined the move".to_owned(),
-        });
-    }
-    nonempty_id(created_tab_id.ok_or_else(|| missing.to_owned())?, missing)
 }
 
 pub(crate) fn tab_create_with_env_params(
@@ -2535,6 +2499,7 @@ mod tests {
                 previous_pane_id: "w1:p3".into(),
                 closed_tab_id: Some("w1:t2".into()),
                 closed_workspace_id: None,
+                created_tab_id: None,
             }
         );
         let mut missing_identity = joined_pane_answer();

@@ -1233,7 +1233,8 @@ fn execute(engine: &dyn Engine, intent: &Intent, local: bool) -> Result<(), Stri
             engine.set_zoom(CALL_WAIT, &pane, Zoom::Off)?;
         }
         if tab == source_tab {
-            let result = engine.move_pane_apart(CALL_WAIT, &current, &intent.workspace_id, "")?;
+            let result =
+                engine.move_pane_to_new_tab(CALL_WAIT, &current, &intent.workspace_id, "")?;
             if !result.changed {
                 return Err(format!("Herdr refused the pane move: {:?}", result.reason));
             }
@@ -1259,7 +1260,7 @@ fn execute(engine: &dyn Engine, intent: &Intent, local: bool) -> Result<(), Stri
             engine.swap_panes(CALL_WAIT, &result.pane_id, &pane)?;
         }
     } else {
-        let result = engine.move_pane_apart(CALL_WAIT, &current, &intent.workspace_id, "")?;
+        let result = engine.move_pane_to_new_tab(CALL_WAIT, &current, &intent.workspace_id, "")?;
         if !result.changed {
             return Err(format!("Herdr refused the pane move: {:?}", result.reason));
         }

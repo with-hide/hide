@@ -26,6 +26,25 @@ pub(crate) struct PaneJoinResult {
     pub(crate) previous_pane_id: String,
     pub(crate) closed_tab_id: Option<String>,
     pub(crate) closed_workspace_id: Option<String>,
+    /// The tab a move to a new tab made, when it made one.
+    pub(crate) created_tab_id: Option<String>,
+}
+
+impl PaneJoinResult {
+    /// The tab a move to a new tab made: a move the engine declined fails
+    /// with its reason, and so does an answer that names no new tab.
+    pub(crate) fn created_tab(&self) -> Result<&str, String> {
+        if !self.changed {
+            return Err(match &self.reason {
+                Some(reason) => format!("Herdr declined the move: {reason}"),
+                None => "Herdr declined the move".to_owned(),
+            });
+        }
+        self.created_tab_id
+            .as_deref()
+            .filter(|tab| !tab.is_empty())
+            .ok_or_else(|| "pane.move response is missing created_tab.tab_id".to_owned())
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]

@@ -338,24 +338,18 @@ pub(crate) trait Engine: Send + Sync {
         amount: f32,
     ) -> Answer<bool>;
     fn swap_panes(&self, wait: Wait, first: &str, second: &str) -> Answer<()>;
-    /// Moves a pane, unfocused, into a new tab of `workspace`: the new tab.
+    /// Moves a pane, unfocused, into a new tab of `workspace`: where it is
+    /// now, where it came from, and the tab made for it. A move the engine
+    /// declined answers `changed: false` with its reason, not an error.
     fn move_pane_to_new_tab(
         &self,
         wait: Wait,
         pane: &str,
         workspace: &str,
         label: &str,
-    ) -> Answer<String>;
+    ) -> Answer<PaneJoinResult>;
     /// Moves a pane, unfocused, beside `target_pane` in `target_tab`, to its
     /// right or `down`: where it is now and where it came from.
-    /// Moves a pane into a new tab of `workspace`, read as a join reads it.
-    fn move_pane_apart(
-        &self,
-        wait: Wait,
-        pane: &str,
-        workspace: &str,
-        label: &str,
-    ) -> Answer<PaneJoinResult>;
     fn move_pane_beside(
         &self,
         wait: Wait,

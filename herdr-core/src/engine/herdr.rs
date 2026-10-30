@@ -660,21 +660,6 @@ impl Engine for HerdrEngine<'_> {
         pane: &str,
         workspace: &str,
         label: &str,
-    ) -> Answer<String> {
-        self.call(
-            "pane.move",
-            wire::pane_move_to_new_tab_params(pane, workspace, label),
-            wait,
-            wire::moved_pane_tab,
-        )
-    }
-
-    fn move_pane_apart(
-        &self,
-        wait: Wait,
-        pane: &str,
-        workspace: &str,
-        label: &str,
     ) -> Answer<PaneJoinResult> {
         self.call(
             "pane.move",

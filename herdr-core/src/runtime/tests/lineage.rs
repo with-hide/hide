@@ -1061,22 +1061,36 @@ fn a_move_herdr_declined_is_an_error_rather_than_a_silent_success() {
     // Herdr reports a refusal as an unchanged move with a reason, not as an
     // error, so the decision has to read `changed` rather than assume that a
     // successful request moved anything.
-    let refused = crate::engine::herdr::wire::move_outcome(false, Some("SameTab".to_owned()), None)
+    let moved = |changed: bool, reason: Option<&str>, created: Option<&str>| {
+        crate::engine::PaneJoinResult {
+            changed,
+            reason: reason.map(str::to_owned),
+            workspace_id: "w1".into(),
+            tab_id: "w1:t2".into(),
+            pane_id: "w1:p1".into(),
+            terminal_id: "term_1".into(),
+            previous_workspace_id: "w1".into(),
+            previous_tab_id: "w1:t1".into(),
+            previous_pane_id: "w1:p1".into(),
+            closed_tab_id: None,
+            closed_workspace_id: None,
+            created_tab_id: created.map(str::to_owned),
+        }
+    };
+    let refused = moved(false, Some("same_tab"), None)
+        .created_tab()
         .expect_err("a refusal is not a move");
     assert!(
-        refused.contains("declined") && refused.contains("SameTab"),
+        refused.contains("declined") && refused.contains("same_tab"),
         "got {refused}"
     );
     assert!(
-        crate::engine::herdr::wire::move_outcome(false, None, Some("t2".to_owned())).is_err(),
+        moved(false, None, Some("t2")).created_tab().is_err(),
         "an unchanged move is a refusal even when a tab id came back"
     );
-    assert_eq!(
-        crate::engine::herdr::wire::move_outcome(true, None, Some("t2".to_owned())).unwrap(),
-        "t2"
-    );
+    assert_eq!(moved(true, None, Some("t2")).created_tab().unwrap(), "t2");
     assert!(
-        crate::engine::herdr::wire::move_outcome(true, None, None).is_err(),
+        moved(true, None, None).created_tab().is_err(),
         "a move with no tab to show for it is not a success"
     );
 }

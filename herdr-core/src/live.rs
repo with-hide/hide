@@ -487,7 +487,9 @@ fn execute_pane_control(
             // unchanged move fails the action rather than reading as done.
             engine
                 .move_pane_to_new_tab(CONTROL_WAIT, pane_id, workspace_id, label)
-                .map_err(mutation_failure("pane.move"))?;
+                .map_err(mutation_failure("pane.move"))?
+                .created_tab()
+                .map_err(ControlFailure::Ambiguous)?;
             None
         }
         PaneControlAction::Project { .. }
