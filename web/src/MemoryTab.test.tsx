@@ -202,13 +202,6 @@ describe("the Memory tab", () => {
     expect(container.querySelector<HTMLButtonElement>("[data-memory-open-batch]")?.disabled).toBe(true);
   });
 
-  it("tells a full branch queue instead of starting", async () => {
-    const document = { authority: "card_newer" as const, document: "AGENTS.md", document_at_unix_ms: null, operator_at_unix_ms: 1 };
-    await render(memory({ branches_full: true, questions: [{ kind: "docs_disagree", number: 3, title: "card 3", document }] }));
-    expect(container.querySelector<HTMLButtonElement>("[data-memory-open-batch]")?.disabled).toBe(true);
-    expect(container.querySelector("[data-memory-selection]")?.textContent).toContain("5 branches are waiting");
-  });
-
   it("shows a confirmed correction as the document sentence struck, its replacement, and the operator's words", async () => {
     const document = { authority: "card_newer" as const, document: "docs/TESTING.md", document_at_unix_ms: null, operator_at_unix_ms: Date.UTC(2026, 9, 20, 12), operator_line: "never run the full suite", document_sentence: "Run the full suite before a merge.", replacement: "Run only the lane the diff touches." };
     await render(memory({ questions: [{ kind: "docs_disagree", number: 3, title: "card 3", document }] }));

@@ -161,7 +161,7 @@ impl Runtime {
             .filter(|pane| self.agent_row(pane).is_some());
         if let Some(pane) = live {
             let started = self.pane_api_route(pane).and_then(|route| {
-                live::spawn_stray_prompt(
+                spawn_stray_prompt(
                     route,
                     payload.request_id.clone(),
                     words,
@@ -272,6 +272,32 @@ impl Runtime {
         }
     }
 }
+
+/// Submits a 마무리 맡기기's words to the session's agent as the operator's
+/// own message (PRD project-panel-results B11), through the input gate so a
+/// sleeping agent's shell never takes them as a command. The request runs
+/// on its own thread, never under the runtime mutex.
+fn spawn_stray_prompt(
+    route: crate::find::pane::PaneApiRoute,
+    request_id: String,
+    text: String,
+    gate: Arc<crate::input_gate::PaneInputGate>,
+) -> Result<(), String> {
+    let core_pane_id = route.pane_id.clone();
+    route.spawn(
+        "herdr-core-stray-prompt",
+        move |engine, herdr_pane_id| {
+            let _admission = gate
+                .admit(&core_pane_id)
+                .map_err(|_| "The agent is asleep".to_owned())?;
+            engine
+                .prompt_agent(crate::live::CONTROL_WAIT, herdr_pane_id, &text)
+                .map_err(crate::live::failed("agent.prompt"))
+        },
+        move |runtime, pane_id, result| runtime.ingest_stray_prompt(pane_id, &request_id, result),
+    )
+}
+
 
 #[cfg(test)]
 mod tests {

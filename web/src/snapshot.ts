@@ -2415,8 +2415,6 @@ export type ProjectMemory = {
   loading: boolean;
   enabled: boolean;
   capacity_reached: boolean;
-  /** True when the Project already has 5 branches waiting for a decision: `N개 문서에 반영` starts nothing until one is decided. Absent on older daemons. */
-  branches_full?: boolean;
   /** Cards forgotten automatically to make room for new ones since the tab last said so. */
   evicted_cards: number;
   /** When the newest of those was forgotten; the tab names it back once it said so. */
@@ -2552,7 +2550,7 @@ export type SuggestionRow = {
   /** Hide applied it by itself (`자동`, D-29). */
   auto: boolean;
   /** `suggestion_hold`: why a new suggestion waits instead of being applied. */
-  hold: "github_needed" | "branches_full" | "auto_pr_unreviewed" | null;
+  hold: "github_needed" | "auto_pr_unreviewed" | null;
   /** The problem came back after its fix merged (`문서로는 안 됐어요`); level 1 is a script or a check, 2 a hook. */
   escalated: { level: number; previous_pr_url: string | null } | null;
   /** It rose again after a skip because new evidence piled up as much as before (`넘어갔지만 다시 생겼어요`, D-43). */

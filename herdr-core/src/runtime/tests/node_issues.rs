@@ -185,9 +185,7 @@ fn node_runtime(
     own: Arc<dyn NodeLink>,
     store: crate::local_issues::LocalIssueStore,
 ) -> SharedRuntime {
-    let connector: Arc<dyn hide_herdr_client::ApiConnector> = Arc::new(
-        hide_herdr_client::LocalSocketConnector::new("/tmp/herdr-core-never-connect.sock"),
-    );
+    let connector = crate::engine::herdr::local("/tmp/herdr-core-never-connect.sock");
     let workspaces = vec![
         herdr_workspace(NODE, "w1", &repo.root, &[("t1", &repo.root)]),
         herdr_workspace(NODE, "w2", &repo.linked, &[("t2", &repo.linked)]),
@@ -202,7 +200,7 @@ fn node_runtime_with(
     node: Arc<dyn NodeLink>,
     own: Arc<dyn NodeLink>,
     store: crate::local_issues::LocalIssueStore,
-    connector: Arc<dyn hide_herdr_client::ApiConnector>,
+    connector: crate::engine::SharedEngine,
     workspaces: Vec<WorkspaceSnapshot>,
 ) -> SharedRuntime {
     let mut runtime = runtime();
@@ -1739,7 +1737,7 @@ fn a_node_s_merged_worktree_is_removed_on_the_node_and_a_changed_one_is_refused(
         FakeDevice::new(),
         own.clone(),
         Default::default(),
-        Arc::new(herdr.connector()),
+        herdr.engine(),
         vec![herdr_workspace(NODE, "w1", &repo.root, &[])],
     );
     let workspace_id = {
@@ -1761,11 +1759,11 @@ fn a_node_s_merged_worktree_is_removed_on_the_node_and_a_changed_one_is_refused(
     };
     // What the core showed and answered when the review's answer was
     // announced. Asserted afterwards: the announcement swallows a panic.
-    type Pressed = (crate::live::cleanup::CleanupSnapshot, Option<u64>, bool);
+    type Pressed = (crate::worktree_cleanup::CleanupSnapshot, Option<u64>, bool);
     let pressed = Arc::new(Mutex::new(None::<Pressed>));
     {
         let mut runtime = shared.lock().unwrap();
-        let connector = runtime.remote_controls[NODE].api_connector();
+        let connector = runtime.remote_controls[NODE].engine();
         let (owner, record) = (shared.weak(), Arc::clone(&pressed));
         let (linked, changed) = (repo.linked.clone(), changed.clone());
         runtime.install_remote_control(RemoteControlContext::new(
@@ -1865,9 +1863,7 @@ fn a_node_s_worktree_with_no_pane_keeps_its_id_from_before_the_move_and_folds_wh
         .status()
         .unwrap();
     assert!(committed.success());
-    let connector: Arc<dyn hide_herdr_client::ApiConnector> = Arc::new(
-        hide_herdr_client::LocalSocketConnector::new("/tmp/herdr-core-never-connect.sock"),
-    );
+    let connector = crate::engine::herdr::local("/tmp/herdr-core-never-connect.sock");
     let shared = node_runtime_with(
         &repo,
         FakeDevice::new(),
@@ -2022,7 +2018,7 @@ fn starting_a_node_project_s_issue_links_the_new_worktree_on_the_node() {
         FakeDevice::new(),
         own.clone(),
         store,
-        Arc::new(herdr.connector()),
+        herdr.engine(),
         vec![
             herdr_workspace(NODE, "w1", &repo.root, &[]),
             herdr_workspace(NODE, "w2", &repo.linked, &[]),
@@ -2282,7 +2278,7 @@ fn a_node_pull_request_is_handed_to_an_agent_on_the_node() {
         FakeDevice::new(),
         own.clone(),
         Default::default(),
-        Arc::new(herdr.connector()),
+        herdr.engine(),
         vec![
             herdr_workspace(NODE, "w1", &repo.root, &[("t1", &repo.root)]),
             herdr_workspace(NODE, "w2", &repo.linked, &[("t2", &repo.linked)]),
@@ -2357,7 +2353,7 @@ fn a_node_pull_request_with_no_checkout_gets_its_worktree_on_the_node() {
         node.clone(),
         own.clone(),
         Default::default(),
-        Arc::new(herdr.connector()),
+        herdr.engine(),
         vec![
             herdr_workspace(NODE, "w1", &repo.root, &[("t1", &repo.root)]),
             herdr_workspace(NODE, "w2", &repo.linked, &[("t2", &repo.linked)]),
@@ -2517,9 +2513,7 @@ fn a_failed_node_write_s_token_is_not_drawn_as_a_direct_link() {
         }
         raw
     };
-    let connector: Arc<dyn hide_herdr_client::ApiConnector> = Arc::new(
-        hide_herdr_client::LocalSocketConnector::new("/tmp/herdr-core-never-connect.sock"),
-    );
+    let connector = crate::engine::herdr::local("/tmp/herdr-core-never-connect.sock");
     let shared = node_runtime_with(
         &repo,
         FakeDevice::new(),
@@ -2754,7 +2748,7 @@ fn a_node_cleanup_says_why_github_cannot_prove_a_merge() {
         FakeDevice::new(),
         Recording::of(None),
         Default::default(),
-        Arc::new(herdr.connector()),
+        herdr.engine(),
         vec![herdr_workspace(NODE, "w1", &repo.root, &[])],
     );
     let workspace_id = node_project(&shared.lock().unwrap()).unwrap().id.clone();
@@ -2803,9 +2797,7 @@ fn a_node_worktree_the_window_selected_stays_out_of_the_inactive_fold() {
         FakeDevice::new(),
         Recording::of(None),
         Default::default(),
-        Arc::new(hide_herdr_client::LocalSocketConnector::new(
-            "/tmp/herdr-core-never-connect.sock",
-        )),
+        crate::engine::herdr::local("/tmp/herdr-core-never-connect.sock"),
         vec![herdr_workspace(
             NODE,
             "w1",

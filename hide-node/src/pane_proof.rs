@@ -12,10 +12,7 @@ use std::path::{Path, PathBuf};
 
 use hide_platform::fs::private;
 
-pub use hide_host::pane_peer::{
-    PaneIdentity, current_address, descends_from, inspect, inspect_address, inspect_until,
-    process_start,
-};
+pub use hide_host::pane_peer::{PaneIdentity, descends_from, process_start};
 
 /// The listener a pane's process asks for a capability on, or a node asks
 /// its core on: a Unix socket or a named pipe, whose system reports the

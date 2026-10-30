@@ -5,9 +5,13 @@
 //! like any other, and the confirmation closes those panes before it removes.
 //! All inspection and filesystem effects run on the existing action-worker
 //! path, never under the runtime lock.
-use super::{ApiConnector, ChangeNotifier, GhPlace, Runtime, control_request};
+use crate::engine::{EngineError, SharedEngine};
+use crate::handle::ChangeNotifier;
+use crate::live::{CONTROL_WAIT, failed};
 use crate::model::ListeningPortSnapshot;
 use crate::node_access::{NodeLink, call_as};
+use crate::runtime::Runtime;
+use crate::worktree_control::GhPlace;
 use crate::{disk, github};
 use hide_node_link::cleanup::{
     CleanRemoval, FolderJudgments, FolderToJudge, FolderVerdict, PathState, RepositoryDirs,
@@ -249,7 +253,7 @@ pub(crate) struct MergeBasis {
 }
 
 /// Where a cleanup runs: the machine whose disk holds the project, through
-/// its Herdr (`api_connector`) and its node, with the runtime its answers go
+/// its engine and its node, with the runtime its answers go
 /// to; and where `gh` reads a squash merge's proof (D-16), none for a
 /// node's repository that names no GitHub one. A node's project is cleaned
 /// up on that node, never on this machine's disk (D-29).
@@ -257,7 +261,7 @@ pub(crate) struct MergeBasis {
 pub(crate) struct CleanupPlace {
     runtime: Weak<Mutex<Runtime>>,
     notifier: ChangeNotifier,
-    api_connector: Arc<dyn ApiConnector>,
+    engine: SharedEngine,
     node: Arc<dyn NodeLink>,
     /// Where merge proofs are read, or why they cannot be.
     github: Result<GhPlace, String>,
@@ -265,11 +269,14 @@ pub(crate) struct CleanupPlace {
 
 impl CleanupPlace {
     /// This machine's project: its Herdr and the core's own node.
-    pub(crate) fn local(context: super::LiveContext, github: Result<GhPlace, String>) -> Self {
+    pub(crate) fn local(
+        context: crate::live::LiveContext,
+        github: Result<GhPlace, String>,
+    ) -> Self {
         Self {
             runtime: context.runtime,
             notifier: context.notifier,
-            api_connector: context.api_connector,
+            engine: context.engine,
             node: context.node,
             github,
         }
@@ -277,14 +284,14 @@ impl CleanupPlace {
 
     /// A node's project: the node's Herdr and its link.
     pub(crate) fn node(
-        control: &super::RemoteControlContext,
+        control: &crate::live::RemoteControlContext,
         node: Arc<dyn NodeLink>,
         github: Result<GhPlace, String>,
     ) -> Self {
         Self {
             runtime: control.runtime.clone(),
             notifier: control.notifier.clone(),
-            api_connector: Arc::clone(&control.api_connector),
+            engine: control.engine(),
             node,
             github,
         }
@@ -416,12 +423,10 @@ fn live_in_use(context: &CleanupPlace, checkouts: &[CheckoutFacts]) -> Result<In
         None => Ok(ports.entries),
     };
     read_in_use(context.node.as_ref(), checkouts, ports, |pane| {
-        let value = control_request(
-            context.api_connector.as_ref(),
-            "pane.process_info",
-            crate::wire::pane_process_info_params(pane)?,
-        )?;
-        let group = crate::wire::pane_process_group(value)?;
+        let group = context
+            .engine
+            .pane_processes(CONTROL_WAIT, pane)
+            .map_err(failed("pane.process_info"))?;
         if group.foreground_pids.is_empty() || group.shell_holds_terminal() {
             return Ok(None);
         }
@@ -570,15 +575,14 @@ fn listed(node: &dyn NodeLink, root: &Path) -> Result<Vec<CleanupRow>, String> {
 type PanePaths = Vec<(String, PathBuf)>;
 
 fn pane_paths(context: &CleanupPlace) -> Result<PanePaths, String> {
-    let response = control_request(
-        context.api_connector.as_ref(),
-        "session.snapshot",
-        serde_json::json!({}),
-    )?;
-    verified_pane_paths(
-        context.node.as_ref(),
-        crate::wire::cleanup_usage_paths(response).map_err(|e| e.message().to_owned())?,
-    )
+    let paths = context
+        .engine
+        .pane_folders(CONTROL_WAIT)
+        .map_err(|error| match error {
+            EngineError::Protocol { message, .. } => message,
+            error => error.within("session.snapshot failed"),
+        })?;
+    verified_pane_paths(context.node.as_ref(), paths)
 }
 
 fn verified_pane_paths(
@@ -1599,13 +1603,13 @@ fn close_checkout(
     if to_close.is_empty() {
         return Ok(());
     }
-    super::close_checkout_panes(
-        context.api_connector.as_ref(),
+    crate::worktree_control::close_checkout_panes(
+        context.engine.as_ref(),
         context.node.as_ref(),
         &[path.to_owned()],
         &to_close,
-        super::ProcessWait::for_folder_removal(true),
-        super::CONFIRM_TIMEOUT,
+        crate::worktree_control::ProcessWait::for_folder_removal(true),
+        crate::worktree_control::CONFIRM_TIMEOUT,
     )
     .map_err(|message| Refusal::failed("close_refused", message))
 }

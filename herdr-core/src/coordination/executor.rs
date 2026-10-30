@@ -4,9 +4,9 @@ use crate::delivery::{
     Actor,
     worker::{Authority, Client, Effect},
 };
+use crate::engine::{Engine, EngineError, Wait};
 use crate::runtime::delivery::CoordinationContext;
 use crate::session_sync::ProjectedAgent;
-use hide_herdr_client::{ApiConnector, ApiError, request_with_connector};
 use serde_json::{Value, json};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -23,7 +23,7 @@ pub(crate) const WORKTREE_UNCONFIRMED: &str = "worktree_unconfirmed";
 /// its words; a reply that never arrived leaves the worktree unknown, which
 /// the same intent resolves, so it gets its own code instead of the
 /// transport's sentence.
-fn worktree_create_refusal(error: ApiError) -> String {
+fn worktree_create_refusal(error: EngineError) -> String {
     if error.reply_unknown() {
         WORKTREE_UNCONFIRMED.to_owned()
     } else {
@@ -76,21 +76,21 @@ fn context(client: &Client, device: &str) -> Result<CoordinationContext, String>
         .map_err(|_| "delivery_unavailable")?
         .coordination_context(device)
 }
-fn agents(connector: &dyn ApiConnector) -> Result<Vec<ProjectedAgent>, String> {
-    agents_with_timeout(connector, Duration::from_secs(2))
+fn agents(engine: &dyn Engine) -> Result<Vec<ProjectedAgent>, String> {
+    agents_with_timeout(engine, Duration::from_secs(2))
 }
 fn agents_with_timeout(
-    connector: &dyn ApiConnector,
+    engine: &dyn Engine,
     timeout: Duration,
 ) -> Result<Vec<ProjectedAgent>, String> {
-    let result = request_with_connector(
-        connector,
-        "agent.list",
-        crate::wire::empty_params(),
-        timeout,
-    )
-    .map_err(|error| format!("{error}"))?;
-    crate::wire::agents_response(result).map_err(|_| "native_identity_unavailable".into())
+    engine
+        .agents(Wait::Each(timeout))
+        .map_err(|error| match error {
+            EngineError::Answer(_) | EngineError::Protocol { .. } => {
+                "native_identity_unavailable".into()
+            }
+            error => error.to_string(),
+        })
 }
 fn native_matches(agent: &ProjectedAgent, pane: &str, name: Option<&str>, kind: &str) -> bool {
     agent.pane_id == pane
@@ -101,7 +101,7 @@ fn native_matches(agent: &ProjectedAgent, pane: &str, name: Option<&str>, kind: 
 }
 #[allow(clippy::disallowed_methods)] // a production wait, not test code
 fn wait_native_identity(
-    connector: &dyn ApiConnector,
+    engine: &dyn Engine,
     pane: &str,
     name: Option<&str>,
     kind: &str,
@@ -118,7 +118,7 @@ fn wait_native_identity(
         if remaining.is_zero() {
             return Err("native_identity_unavailable".into());
         }
-        let observed = match agents_with_timeout(connector, remaining.min(Duration::from_secs(2))) {
+        let observed = match agents_with_timeout(engine, remaining.min(Duration::from_secs(2))) {
             Ok(observed) => observed,
             Err(detail) => {
                 crate::diagnostic!(json!({
@@ -150,7 +150,7 @@ fn wait_native_identity(
 /// it then.
 #[allow(clippy::disallowed_methods)] // a production wait on Herdr's readiness, bounded by the deadline
 fn submit_brief(
-    connector: &dyn ApiConnector,
+    engine: &dyn Engine,
     spawn: &str,
     pane: &str,
     name: &str,
@@ -164,15 +164,10 @@ fn submit_brief(
         "brief_not_submitted".to_owned()
     };
     loop {
-        let agent = request_with_connector(
-            connector,
-            "agent.get",
-            crate::wire::agent_target_params(pane)?,
-            Duration::from_secs(5),
-        )
-        .map_err(|error| format!("{error}"))
-        .and_then(crate::wire::delivery_agent)
-        .map_err(|detail| refused("brief.agent_unread", detail))?;
+        let agent = match engine.delivery_agent(Wait::Each(Duration::from_secs(5)), pane) {
+            Err(EngineError::Request(message)) => return Err(message),
+            agent => agent.map_err(|error| refused("brief.agent_unread", error.to_string()))?,
+        };
         if agent.pane_id == pane && agent.name == name && agent.readiness.accepts_input() {
             break;
         }
@@ -188,15 +183,11 @@ fn submit_brief(
         }
         std::thread::sleep(Duration::from_millis(250));
     }
-    let submitted = request_with_connector(
-        connector,
-        "agent.prompt",
-        crate::wire::delivery_prompt_params(pane, brief)?,
-        Duration::from_secs(10),
-    )
-    .map_err(|error| refused("brief.prompt_refused", format!("{error}")))?;
-    crate::wire::delivery_prompted(submitted)
-        .map_err(|detail| refused("brief.prompt_refused", detail))?;
+    match engine.prompt_agent(Wait::Each(Duration::from_secs(10)), pane, brief) {
+        Ok(()) => {}
+        Err(EngineError::Request(message)) => return Err(message),
+        Err(error) => return Err(refused("brief.prompt_refused", error.to_string())),
+    }
     crate::diagnostic!(json!({
         "component": "spawn", "kind": "brief.submitted", "spawn": spawn, "pane_id": pane,
         "bytes": brief.len(),
@@ -327,7 +318,7 @@ pub(crate) fn run(
             super::kept_session(&session)?;
             let machine = registration_machine(machine, &actor.device_id)?;
             let CoordinationContext {
-                connector,
+                engine,
                 host_scope: actual_scope,
                 machine: native_machine,
                 on_node,
@@ -336,12 +327,12 @@ pub(crate) fn run(
             if on_node && host_scope != actual_scope {
                 return Err("host_scope_conflict".into());
             }
-            let observed = agents(connector.as_ref())?;
+            let observed = agents(engine.as_ref())?;
             let native = observed
                 .iter()
                 .find(|agent| agent.pane_id == pane)
                 .ok_or("target_unavailable")?;
-            if native.lineage_session != crate::wire::session_digest(&session) {
+            if native.lineage_session != crate::engine::tokens::session_digest(&session) {
                 return Err("session_identity_conflict".into());
             }
             let ledger = state(&client)?;
@@ -379,7 +370,7 @@ pub(crate) fn run(
             if !check {
                 publish_tokens(
                     &client,
-                    connector.as_ref(),
+                    engine.as_ref(),
                     value["id"].as_str().ok_or("agent_unavailable")?,
                 )?;
             }
@@ -398,11 +389,7 @@ fn registration_machine(requested: Option<String>, caller: &str) -> Result<Strin
         Some(machine) => Ok(machine),
     }
 }
-pub(super) fn publish_tokens(
-    client: &Client,
-    connector: &dyn ApiConnector,
-    id: &str,
-) -> Result<(), String> {
+pub(super) fn publish_tokens(client: &Client, engine: &dyn Engine, id: &str) -> Result<(), String> {
     let ledger = state(client)?;
     let child = ledger
         .agents
@@ -410,7 +397,7 @@ pub(super) fn publish_tokens(
         .find(|record| record.id == id)
         .ok_or("agent_unavailable")?;
     if let Some(related) = super::lineage::related(child, &ledger) {
-        super::lineage::write_record(connector, child, related)?;
+        super::lineage::write_record(engine, child, related)?;
     }
     Ok(())
 }
@@ -687,13 +674,13 @@ fn spawn(
             parent.id.clone()
         } else {
             let CoordinationContext {
-                connector,
+                engine,
                 host_scope,
                 machine: native_machine,
                 on_node,
                 ..
             } = context(client, &actor.device_id)?;
-            let observed = agents(connector.as_ref())?;
+            let observed = agents(engine.as_ref())?;
             let native = observed
                 .iter()
                 .find(|agent| {
@@ -767,7 +754,7 @@ fn spawn(
         .clone()
         .unwrap_or_else(|| actor.device_id.clone());
     let CoordinationContext {
-        connector,
+        engine,
         host_scope,
         machine: native_machine,
         codex: codex_daemon,
@@ -790,16 +777,11 @@ fn spawn(
             // with the pane so every later start in it waits the same way.
             let shell;
             // Reconcile a worktree whose creation reply was interrupted. The
-            // existing local/device connector and checkout owner are shared with
+            // existing local/device engine and checkout owner are shared with
             // the product's worktree/start path; no spawn-specific SSH exists.
-            let listed = request_with_connector(
-                connector.as_ref(),
-                "worktree.list",
-                crate::wire::worktree_list_params(repo)?,
-                Duration::from_secs(5),
-            )
-            .map_err(|error| format!("{error}"))?;
-            let existing = crate::wire::listed_worktree_path(listed, branch)?;
+            let existing = engine
+                .worktree_path(Wait::Each(Duration::from_secs(5)), repo, branch)
+                .map_err(String::from)?;
             // `made`: this spawn made the worktree, now or in an attempt whose
             // reply was lost; only such a worktree is trusted for an agent
             // that asks (agy), as for a task's worktree. A worktree that was
@@ -823,15 +805,14 @@ fn spawn(
                 };
                 // The persistent unique tab label makes an interrupted tab-create
                 // discoverable before a retry could create another child pane.
-                let snapshot = request_with_connector(
-                    connector.as_ref(),
-                    "session.snapshot",
-                    crate::wire::empty_params(),
-                    Duration::from_secs(5),
-                )
-                .map_err(|error| format!("{error}"))?;
-                let snapshot =
-                    crate::wire::snapshot_response(snapshot).map_err(|_| "snapshot_unavailable")?;
+                let snapshot = engine.session(Wait::Each(Duration::from_secs(5))).map_err(
+                    |error| match error {
+                        EngineError::Answer(_) | EngineError::Protocol { .. } => {
+                            "snapshot_unavailable".to_owned()
+                        }
+                        error => error.to_string(),
+                    },
+                )?;
                 let label = format!("hide:{}", reserved.id);
                 let made = made_by_spawn(
                     &existing,
@@ -876,7 +857,7 @@ fn spawn(
                     (Some(caller), _) => {
                         shell = ShellStart::Plain;
                         let (pane, split) = beside_pane(
-                            connector.as_ref(),
+                            engine.as_ref(),
                             &snapshot,
                             caller,
                             &existing,
@@ -904,8 +885,8 @@ fn spawn(
                         pane
                     }
                     (None, None) => {
-                        let tab = crate::live::open_owner_tab(
-                            connector.as_ref(),
+                        let tab = crate::checkout_owner::open::open_owner_tab(
+                            engine.as_ref(),
                             &owner,
                             &existing,
                             &label,
@@ -935,25 +916,25 @@ fn spawn(
                 // Herdr, the folder's own HEAD.
                 let start = node
                     .as_deref()
-                    .and_then(|node| crate::live::new_branch_start(node, repo, None));
-                let mut params =
-                    crate::wire::worktree_create_params(repo, branch, start.as_deref(), false)?;
-                params["label"] = json!(format!("hide:{}", reserved.id));
-                if let Some(path) = path {
-                    params["path"] = json!(path);
-                }
-                let result = request_with_connector(
-                    connector.as_ref(),
-                    "worktree.create",
-                    params,
-                    WORKTREE_CREATE_TIMEOUT,
-                )
-                .map_err(worktree_create_refusal)?;
-                let created = crate::wire::created_worktree(result)?;
+                    .and_then(|node| crate::worktree_control::new_branch_start(node, repo, None));
+                let created = engine
+                    .create_worktree(
+                        Wait::Each(WORKTREE_CREATE_TIMEOUT),
+                        repo,
+                        branch,
+                        start.as_deref(),
+                        Some(&format!("hide:{}", reserved.id)),
+                        path.as_deref(),
+                        false,
+                    )
+                    .map_err(|error| match error {
+                        EngineError::Request(message) | EngineError::Answer(message) => message,
+                        error => worktree_create_refusal(error),
+                    })?;
                 let launch = crate::agent_start::shell_launch(node.as_deref(), &reserved.id);
-                let tab = crate::live::replace_tab(
-                    connector.as_ref(),
-                    crate::live::OwnedTab {
+                let tab = crate::checkout_owner::open::replace_tab(
+                    engine.as_ref(),
+                    crate::checkout_owner::open::OwnedTab {
                         initial_label: Some(created.tab_label),
                         workspace_id: created.workspace_id,
                         tab_id: created.tab_id,
@@ -981,7 +962,7 @@ fn spawn(
             }
             // The terminal is recorded with the pane, so a later attempt can
             // tell this pane from one Herdr gives the same id afterwards.
-            let terminal = pane_terminal(connector.as_ref(), &pane)?;
+            let terminal = pane_terminal(engine.as_ref(), &pane)?;
             reserved = serde_json::from_value(mutate(
                 client,
                 authority,
@@ -1000,15 +981,9 @@ fn spawn(
             // The record names the split now, so its label has done its work
             // and leaves Herdr's own title of the pane.
             if let (Some(_), Some(pane)) = (beside_of.as_ref(), reserved.pane.as_deref()) {
-                let cleared = crate::wire::pane_rename_params(pane, None).and_then(|params| {
-                    request_with_connector(
-                        connector.as_ref(),
-                        "pane.rename",
-                        params,
-                        Duration::from_secs(5),
-                    )
-                    .map_err(|error| error.to_string())
-                });
+                let cleared = engine
+                    .rename_pane(Wait::Each(Duration::from_secs(5)), pane, None)
+                    .map_err(String::from);
                 if let Err(detail) = cleared {
                     crate::diagnostic!(json!({
                         "component": "spawn", "kind": "beside.label_kept",
@@ -1020,7 +995,7 @@ fn spawn(
         let pane = reserved.pane.clone().ok_or("spawn_unavailable")?;
         let pane = pane.as_str();
         let shell = ShellStart::launched(reserved.shell.clone());
-        let observed = agents(connector.as_ref())?;
+        let observed = agents(engine.as_ref())?;
         let live = observed
             .iter()
             .find(|agent| native_matches(agent, pane, Some(name), kind));
@@ -1041,7 +1016,7 @@ fn spawn(
                         && agent.name.as_deref() == Some(name)
                         && agent.agent.is_none()
                 });
-                if held && !name_released(connector.as_ref(), name) {
+                if held && !name_released(engine.as_ref(), name) {
                     return Err("native_identity_unavailable".into());
                 }
                 // Herdr gave that start up. Only a shell back at rest, with
@@ -1049,7 +1024,7 @@ fn spawn(
                 // and only once: a start typed into a question at startup is
                 // typed again at the prompt that followed, and a second one
                 // that ends the same way is the answer.
-                if reserved.typed >= 2 || shell_alone(connector.as_ref(), pane) != Ok(true) {
+                if reserved.typed >= 2 || shell_alone(engine.as_ref(), pane) != Ok(true) {
                     return Err("agent_not_started".into());
                 }
                 crate::diagnostic!(json!({
@@ -1057,9 +1032,9 @@ fn spawn(
                     "pane_id": pane,
                 }));
             }
-            close_unstarted_attempts(connector.as_ref(), &*state(client)?, &reserved, &observed);
+            close_unstarted_attempts(engine.as_ref(), &*state(client)?, &reserved, &observed);
             crate::live::start_agent(
-                connector.as_ref(),
+                engine.as_ref(),
                 node.as_deref(),
                 &reserved.id,
                 pane,
@@ -1085,7 +1060,7 @@ fn spawn(
         // reports it on this very turn. A spawn asked again after the brief
         // went in never submits it twice.
         if let Some(brief) = reserved.brief.as_deref().filter(|_| !reserved.briefed) {
-            submit_brief(connector.as_ref(), &reserved.id, pane, name, brief)?;
+            submit_brief(engine.as_ref(), &reserved.id, pane, name, brief)?;
             reserved = serde_json::from_value(mutate(
                 client,
                 authority,
@@ -1112,7 +1087,7 @@ fn spawn(
                 .map_err(|_| "delivery_unavailable")?
                 .record_pane_launch(&pane_id, kind, name, &reserved.launch, None);
         }
-        let native = match wait_native_identity(connector.as_ref(), pane, Some(name), kind) {
+        let native = match wait_native_identity(engine.as_ref(), pane, Some(name), kind) {
             Err(reason) if reason == "native_identity_unavailable" => {
                 // The agent rests without a session (Codex and OpenCode 2
                 // report theirs at their first turn): the core binds it when
@@ -1146,7 +1121,7 @@ fn spawn(
             // The agent runs but can never be registered, and a retry of
             // this intent meets the same session: the pane this spawn made is
             // closed rather than left running with nothing tracking it.
-            close_refused_pane(connector.as_ref(), &reserved, pane, reason);
+            close_refused_pane(engine.as_ref(), &reserved, pane, reason);
             return Err(reason.into());
         }
         let mut child = record(
@@ -1174,7 +1149,7 @@ fn spawn(
         )?)
         .map_err(|_| "spawn_unavailable")?;
         let child_id = reserved.child.clone().ok_or("child_unavailable")?;
-        publish_tokens(client, connector.as_ref(), &child_id)?;
+        publish_tokens(client, engine.as_ref(), &child_id)?;
         mutate(
             client,
             authority,
@@ -1207,7 +1182,7 @@ fn spawn(
             "reason": reason,
         }));
         if on_device {
-            device_unreachable(connector.as_ref(), &child_device, &spawn_id, reason)
+            device_unreachable(engine.as_ref(), &child_device, &spawn_id, reason)
         } else {
             reason
         }
@@ -1250,15 +1225,10 @@ fn beside_target(
     let Some((repo, branch, path)) = target else {
         return Ok(pane);
     };
-    let CoordinationContext { connector, .. } = context(client, &actor.device_id)?;
-    let listed = request_with_connector(
-        connector.as_ref(),
-        "worktree.list",
-        crate::wire::worktree_list_params(repo)?,
-        Duration::from_secs(5),
-    )
-    .map_err(|error| format!("{error}"))?;
-    let existing = crate::wire::listed_worktree_path(listed, branch)?;
+    let CoordinationContext { engine, .. } = context(client, &actor.device_id)?;
+    let existing = engine
+        .worktree_path(Wait::Each(Duration::from_secs(5)), repo, branch)
+        .map_err(String::from)?;
     let same = |other: &str| other.trim_end_matches('/') == checkout;
     if !existing.as_deref().is_some_and(same) || path.is_some_and(|path| !same(path)) {
         return Err(refused("beside_other_checkout"));
@@ -1273,7 +1243,7 @@ fn beside_target(
 /// closed; one whose own reply was lost is never labelled, and a retry makes
 /// its own.
 fn beside_pane(
-    connector: &dyn ApiConnector,
+    engine: &dyn Engine,
     snapshot: &crate::session_sync::ProjectionState,
     caller: &str,
     cwd: &str,
@@ -1294,26 +1264,25 @@ fn beside_pane(
         }));
         "beside_pane_unavailable".to_owned()
     };
-    let pane = request_with_connector(
-        connector,
-        "pane.split",
-        crate::wire::fork_split_params(caller, Some(cwd), Default::default())?,
-        Duration::from_secs(5),
-    )
-    .map_err(|error| error.to_string())
-    .and_then(crate::wire::split_pane)
-    .map_err(refused)?;
-    if let Err(error) = request_with_connector(
-        connector,
-        "pane.rename",
-        crate::wire::pane_rename_params(&pane, Some(&label))?,
-        Duration::from_secs(5),
+    let pane = match engine.split_beside(
+        Wait::Each(Duration::from_secs(5)),
+        caller,
+        Some(cwd),
+        Default::default(),
     ) {
-        let closed = close_pane(connector, &pane);
-        return Err(refused(format!(
-            "{error}; split pane {pane} closed: {}",
-            closed.is_ok()
-        )));
+        Err(EngineError::Request(message)) => return Err(message),
+        pane => pane.map_err(|error| refused(error.to_string()))?,
+    };
+    match engine.rename_pane(Wait::Each(Duration::from_secs(5)), &pane, Some(&label)) {
+        Ok(()) => {}
+        Err(EngineError::Request(message)) => return Err(message),
+        Err(error) => {
+            let closed = close_pane(engine, &pane);
+            return Err(refused(format!(
+                "{error}; split pane {pane} closed: {}",
+                closed.is_ok()
+            )));
+        }
     }
     crate::diagnostic!(json!({
         "component": "spawn", "kind": "beside.split", "spawn": spawn,
@@ -1325,42 +1294,26 @@ fn beside_pane(
 /// Whether Herdr has let go of `name`. Herdr holds the name of a start whose
 /// agent never showed until that start's own deadline, and settles a passed
 /// deadline only when the name is read, which this `agent.get` is.
-fn name_released(connector: &dyn ApiConnector, name: &str) -> bool {
-    crate::wire::agent_target_params(name)
-        .map_err(hide_herdr_client::ApiError::Transport)
-        .and_then(|params| {
-            request_with_connector(connector, "agent.get", params, Duration::from_secs(2))
-        })
-        .is_err_and(|error| {
-            matches!(error, hide_herdr_client::ApiError::Remote { code, .. } if code == "agent_not_found")
-        })
+fn name_released(engine: &dyn Engine, name: &str) -> bool {
+    engine
+        .delivery_agent(Wait::Each(Duration::from_secs(2)), name)
+        .is_err_and(|error| error.code() == Some("agent_not_found"))
 }
 
 /// Whether `pane`'s shell alone holds its terminal: no program it started
 /// runs in the foreground.
-fn shell_alone(connector: &dyn ApiConnector, pane: &str) -> Result<bool, String> {
-    crate::wire::pane_process_info_params(pane)
-        .and_then(|params| {
-            request_with_connector(
-                connector,
-                "pane.process_info",
-                params,
-                Duration::from_secs(2),
-            )
-            .map_err(|error| error.to_string())
-        })
-        .and_then(crate::wire::pane_process_group)
+fn shell_alone(engine: &dyn Engine, pane: &str) -> Result<bool, String> {
+    engine
+        .pane_processes(Wait::Each(Duration::from_secs(2)), pane)
+        .map_err(String::from)
         .map(|group| group.shell_holds_terminal())
 }
 
 /// The terminal Herdr runs in `pane` now.
-fn pane_terminal(connector: &dyn ApiConnector, pane: &str) -> Result<String, String> {
-    crate::wire::pane_target_params(pane)
-        .and_then(|params| {
-            request_with_connector(connector, "pane.get", params, Duration::from_secs(5))
-                .map_err(|error| error.to_string())
-        })
-        .and_then(crate::wire::pane_terminal)
+fn pane_terminal(engine: &dyn Engine, pane: &str) -> Result<String, String> {
+    engine
+        .pane_terminal(Wait::Each(Duration::from_secs(5)), pane)
+        .map_err(String::from)
 }
 
 /// Closes the pane of every earlier attempt of `reserved`: a spawn of the
@@ -1376,7 +1329,7 @@ fn pane_terminal(connector: &dyn ApiConnector, pane: &str) -> Result<String, Str
 /// is left alone, and a pane that cannot be read or closed is logged and left
 /// to Herdr's own answer.
 fn close_unstarted_attempts(
-    connector: &dyn ApiConnector,
+    engine: &dyn Engine,
     ledger: &crate::delivery::ledger::Ledger,
     reserved: &SpawnRecord,
     observed: &[ProjectedAgent],
@@ -1400,13 +1353,12 @@ fn close_unstarted_attempts(
         {
             continue;
         }
-        let closed = match same_terminal(connector, record, pane)
-            .and_then(|()| shell_alone(connector, pane))
-        {
-            Ok(false) => continue,
-            Ok(true) => close_pane(connector, pane),
-            Err(reason) => Err(reason),
-        };
+        let closed =
+            match same_terminal(engine, record, pane).and_then(|()| shell_alone(engine, pane)) {
+                Ok(false) => continue,
+                Ok(true) => close_pane(engine, pane),
+                Err(reason) => Err(reason),
+            };
         crate::diagnostic!(json!({
             "component": "spawn", "kind": "unstarted_attempt.close", "spawn": reserved.id,
             "attempt": record.id, "pane_id": pane, "closed": closed.is_ok(),
@@ -1419,13 +1371,12 @@ fn close_unstarted_attempts(
 /// registration cannot keep (`reason`), when it is still the terminal the
 /// spawn recorded.
 pub(super) fn close_refused_pane(
-    connector: &dyn ApiConnector,
+    engine: &dyn Engine,
     reserved: &SpawnRecord,
     pane: &str,
     reason: &str,
 ) {
-    let closed =
-        same_terminal(connector, reserved, pane).and_then(|()| close_pane(connector, pane));
+    let closed = same_terminal(engine, reserved, pane).and_then(|()| close_pane(engine, pane));
     crate::diagnostic!(json!({
         "component": "spawn", "kind": "refused_pane.close", "spawn": reserved.id,
         "pane_id": pane, "refusal": reason, "closed": closed.is_ok(),
@@ -1435,48 +1386,34 @@ pub(super) fn close_refused_pane(
 
 /// Whether `pane` is still the terminal `record` recorded with it, so a pane
 /// Herdr gave the same id afterwards is never taken for the spawn's.
-fn same_terminal(
-    connector: &dyn ApiConnector,
-    record: &SpawnRecord,
-    pane: &str,
-) -> Result<(), String> {
+fn same_terminal(engine: &dyn Engine, record: &SpawnRecord, pane: &str) -> Result<(), String> {
     let recorded = record
         .terminal
         .as_deref()
         .ok_or("pane_identity_unrecorded")?;
-    if pane_terminal(connector, pane)? == recorded {
+    if pane_terminal(engine, pane)? == recorded {
         Ok(())
     } else {
         Err("pane_replaced".to_owned())
     }
 }
 
-fn close_pane(connector: &dyn ApiConnector, pane: &str) -> Result<(), String> {
-    let params = crate::wire::pane_target_params(pane)?;
-    request_with_connector(connector, "pane.close", params, Duration::from_secs(5))
-        .map(drop)
-        .map_err(|error| error.to_string())
+fn close_pane(engine: &dyn Engine, pane: &str) -> Result<(), String> {
+    engine
+        .close_pane(Wait::Each(Duration::from_secs(5)), pane)
+        .map_err(String::from)
 }
 
 /// A failure of a spawn's work on a device, as the caller should read it: the
 /// device is unavailable when its Herdr no longer answers, whatever step was
 /// running; any other failure keeps its own code. The dropped cause is logged
 /// with the device and the spawn it belongs to.
-fn device_unreachable(
-    connector: &dyn ApiConnector,
-    device: &str,
-    spawn: &str,
-    reason: String,
-) -> String {
-    match request_with_connector(
-        connector,
-        "agent.list",
-        crate::wire::empty_params(),
-        Duration::from_secs(2),
-    ) {
+fn device_unreachable(engine: &dyn Engine, device: &str, spawn: &str, reason: String) -> String {
+    match engine.agents(Wait::Each(Duration::from_secs(2))) {
         Err(
-            error @ (hide_herdr_client::ApiError::NotRunning(_)
-            | hide_herdr_client::ApiError::Transport(_)),
+            error @ (EngineError::NotRunning(_)
+            | EngineError::Transport(_)
+            | EngineError::Unanswered(_)),
         ) => {
             crate::diagnostic!(json!({
                 "component": "spawn", "kind": "device_unreachable", "device": device,
@@ -1506,13 +1443,13 @@ pub(crate) fn link_fork(
         .map_err(|_| "delivery_unavailable")?
         .coordination_fork_context(source)?;
     let CoordinationContext {
-        connector,
+        engine,
         host_scope,
         machine: native_machine,
         on_node,
         ..
     } = self::context(&client, &actor.device_id)?;
-    let observed = agents(connector.as_ref())?;
+    let observed = agents(engine.as_ref())?;
     let native_source = observed
         .iter()
         .find(|agent| agent.pane_id == source)
@@ -1592,13 +1529,13 @@ pub(crate) fn link_started(
         return Err("observation_native_changed".into());
     }
     let CoordinationContext {
-        connector,
+        engine,
         host_scope,
         machine: native_machine,
         on_node,
         ..
     } = self::context(&client, &actor.device_id)?;
-    let observed = agents_with_timeout(connector.as_ref(), within)?;
+    let observed = agents_with_timeout(engine.as_ref(), within)?;
     let mut matching = observed.iter().filter(|agent| started(agent));
     let child = matching.next().ok_or("child_unavailable")?;
     if matching.next().is_some() {
@@ -1712,17 +1649,19 @@ mod tests {
             "response was empty",
         ] {
             assert_eq!(
-                worktree_create_refusal(ApiError::Transport(lost.into())),
+                worktree_create_refusal(EngineError::Unanswered(lost.into())),
                 WORKTREE_UNCONFIRMED,
                 "{lost}"
             );
         }
         assert_eq!(
-            worktree_create_refusal(ApiError::Transport("connect failed for /s: refused".into())),
+            worktree_create_refusal(EngineError::Transport(
+                "connect failed for /s: refused".into()
+            )),
             "connect failed for /s: refused"
         );
         assert_eq!(
-            worktree_create_refusal(ApiError::Remote {
+            worktree_create_refusal(EngineError::Refused {
                 code: "branch_in_use".into(),
                 message: "taken".into()
             }),
@@ -1765,7 +1704,8 @@ mod tests {
                 "agent_session":{"source":"herdr:claude","agent":"claude",
                     "kind":"id","value":"parent-session"}}]})
         });
-        let native = wait_native_identity(&herdr.connector(), "w9J:p9R", None, "claude").unwrap();
+        let native =
+            wait_native_identity(herdr.engine().as_ref(), "w9J:p9R", None, "claude").unwrap();
         assert_eq!(native.name, None);
         let host = || HostIdentity {
             machine: crate::node::TEST_NODE,
@@ -1807,7 +1747,8 @@ mod tests {
                         "kind":"path","value":reported}}]})
             });
             let native =
-                wait_native_identity(&herdr.connector(), "w9J:p9R", Some("child"), "pi").unwrap();
+                wait_native_identity(herdr.engine().as_ref(), "w9J:p9R", Some("child"), "pi")
+                    .unwrap();
             let made = record(
                 &native,
                 HostIdentity {
@@ -1846,12 +1787,13 @@ mod tests {
                         "agent":session_agent,"kind":"id","value":"fixture-child-session"}
                 }]})
             });
-            let child = wait_native_identity(&herdr.connector(), "w2:p1", Some("child"), requested)
-                .unwrap();
+            let child =
+                wait_native_identity(herdr.engine().as_ref(), "w2:p1", Some("child"), requested)
+                    .unwrap();
             assert_eq!(child.agent.as_deref(), Some(reported));
             assert_eq!(
                 child.lineage_session,
-                crate::wire::session_digest("fixture-child-session")
+                crate::engine::tokens::session_digest("fixture-child-session")
             );
         }
     }
@@ -1872,11 +1814,11 @@ mod tests {
             }
             json!({"type":"agent_list","agents":[agent]})
         });
-        let child =
-            wait_native_identity(&herdr.connector(), "w2:p1", Some("child"), "claude").unwrap();
+        let child = wait_native_identity(herdr.engine().as_ref(), "w2:p1", Some("child"), "claude")
+            .unwrap();
         assert_eq!(
             child.lineage_session,
-            crate::wire::session_digest("fixture-child-session")
+            crate::engine::tokens::session_digest("fixture-child-session")
         );
         assert_eq!(observations.load(Ordering::SeqCst), 2);
         assert_eq!(herdr.methods(), ["agent.list", "agent.list"]);
@@ -1897,7 +1839,7 @@ mod tests {
                 name: "factory".into(),
                 kind: "codex".into(),
                 device_id: crate::node::TEST_NODE.into(),
-                session: crate::wire::session_digest("native-factory"),
+                session: crate::engine::tokens::session_digest("native-factory"),
             };
             let mut ledger = crate::delivery::ledger::Ledger::default();
             let parent = super::super::apply(
@@ -2062,7 +2004,7 @@ mod tests {
         // An agent shows in w2:p2, and Herdr holds the name for the start in
         // w2:p1 that never showed one.
         let observed: Vec<ProjectedAgent> =
-            crate::wire::agents_response(json!({"type": "agent_list", "agents": [
+            crate::engine::herdr::wire::agents_response(json!({"type": "agent_list", "agents": [
                 {"pane_id": "w2:p1", "workspace_id": "w2", "tab_id": "w2:t1",
                     "terminal_id": "t1", "revision": 0, "focused": false,
                     "agent_status": "unknown", "name": "worker", "launch_pending": true},
@@ -2071,7 +2013,12 @@ mod tests {
                     "agent_status": "idle", "agent": "claude"},
             ]}))
             .unwrap();
-        close_unstarted_attempts(&herdr.connector(), &attempts.ledger, &current, &observed);
+        close_unstarted_attempts(
+            herdr.engine().as_ref(),
+            &attempts.ledger,
+            &current,
+            &observed,
+        );
         assert_eq!(closed_panes(&herdr), ["w2:p1"]);
     }
 
@@ -2094,7 +2041,7 @@ mod tests {
             &[],
         );
         let ((), records) = crate::diagnostics::capture(|| {
-            close_unstarted_attempts(&herdr.connector(), &attempts.ledger, &current, &[]);
+            close_unstarted_attempts(herdr.engine().as_ref(), &attempts.ledger, &current, &[]);
         });
         assert_eq!(closed_panes(&herdr), ["w2:p1"]);
         let outcome = |attempt: &SpawnRecord| {
@@ -2157,7 +2104,7 @@ mod tests {
                     name: "sender".into(),
                     kind: "codex".into(),
                     device_id: crate::node::TEST_NODE.into(),
-                    session: crate::wire::session_digest("native-parent"),
+                    session: crate::engine::tokens::session_digest("native-parent"),
                 },
             };
             let actor = parent.actor.clone();
@@ -2166,7 +2113,7 @@ mod tests {
                 name: "recipient".into(),
                 kind: "codex".into(),
                 device_id: crate::node::TEST_NODE.into(),
-                session: crate::wire::session_digest("native-child"),
+                session: crate::engine::tokens::session_digest("native-child"),
             };
             let payload: SessionSnapshotPayload = serde_json::from_value(json!({"agents":[
                 {"id":"sender","pane_id":"sender","agent":"codex","agent_status":"working",

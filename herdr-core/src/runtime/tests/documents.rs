@@ -544,9 +544,11 @@ fn behind_reveal(views: &str) -> (Fixture, Arc<Mutex<Vec<Value>>>, HeldRevealRea
         let mut runtime = f.shared.lock().unwrap();
         runtime.install_remote_control(RemoteControlContext::new(
             DEVICE,
-            Arc::new(super::device_catalog::RecordingHerdr {
-                requests: requests.clone(),
-            }),
+            crate::engine::herdr::HerdrEngine::shared(Arc::new(
+                super::device_catalog::RecordingHerdr {
+                    requests: requests.clone(),
+                },
+            )),
             Weak::new(),
             crate::handle::ChangeNotifier::noop(),
         ));

@@ -18,7 +18,6 @@ use std::sync::{Arc, Mutex, Weak};
 use std::thread;
 use std::time::{Duration, Instant};
 
-use hide_herdr_client::{ApiConnector, ApiError, request_with_connector};
 use hide_node_link::process::GroupEnd;
 use hide_node_link::protocol::Call;
 
@@ -26,16 +25,16 @@ use crate::node_access::{NodeLink, call_as};
 
 use crate::agent_sleep::WakeMode;
 use crate::agent_start::StartError;
+use crate::engine::{AgentLaunch, Engine, EngineError, PaneProcessGroup, SharedEngine, Wait};
 use crate::handle::ChangeNotifier;
 use crate::input_gate::Drain;
+use crate::live::failed;
 use crate::runtime::Runtime;
-use crate::wire;
 
 mod dormant;
 pub(crate) use dormant::{
-    DormantStartOutcome, DormantStatus, DormantTabOutcome, DormantWork,
-    fenced_dormant_close_connector, spawn_dormant_start, spawn_dormant_status, spawn_dormant_tab,
-    wake_name as dormant_wake_name,
+    DormantStartOutcome, DormantStatus, DormantTabOutcome, DormantWork, dormant_close_gate,
+    spawn_dormant_start, spawn_dormant_status, spawn_dormant_tab, wake_name as dormant_wake_name,
 };
 
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(5);
@@ -100,20 +99,14 @@ impl std::fmt::Display for EndError {
 /// (`quit_on_key`). Only an agent still running after `EXIT_GRACE` is
 /// ended by the node.
 pub(crate) fn end_agent(
-    connector: &dyn ApiConnector,
+    engine: &dyn Engine,
     node: &dyn NodeLink,
     pane_id: &str,
     kind: &str,
 ) -> Result<u64, EndError> {
-    let state = request_with_connector(
-        connector,
-        "agent.get",
-        wire::agent_target_params(pane_id).map_err(EndError::Failed)?,
-        REQUEST_TIMEOUT,
-    )
-    .map_err(|error| format!("agent.get failed: {error}"))
-    .and_then(wire::agent_state)
-    .map_err(EndError::Failed)?;
+    let state = engine
+        .agent_state(Wait::Each(REQUEST_TIMEOUT), pane_id)
+        .map_err(|error| EndError::Failed(error.within("agent.get failed")))?;
     if !matches!(state.status.as_str(), "idle" | "done") {
         return Err(EndError::Busy(format!("the agent is {} now", state.status)));
     }
@@ -126,7 +119,7 @@ pub(crate) fn end_agent(
             state.agent.as_deref().unwrap_or("no agent")
         )));
     }
-    let group = process_group(connector, pane_id).map_err(EndError::Failed)?;
+    let group = process_group(engine, pane_id).map_err(EndError::Failed)?;
     let (Some(shell), Some(foreground)) = (group.shell_pid, group.foreground_process_group_id)
     else {
         return Err(EndError::Failed(
@@ -146,7 +139,7 @@ pub(crate) fn end_agent(
         ));
     }
     if let Some(quit) = Quit::of(kind) {
-        match quit.run(connector, pane_id, shell)? {
+        match quit.run(engine, pane_id, shell)? {
             Quitting::Quit => return Ok(state.state_change_seq),
             Quitting::Unanswered { reason, presses } => {
                 crate::diagnostic!(serde_json::json!({
@@ -185,7 +178,7 @@ pub(crate) fn end_agent(
                 .collect::<Vec<_>>(),
         }));
     }
-    if shell_takes_terminal_within(connector, pane_id, shell, END_TIMEOUT)? {
+    if shell_takes_terminal_within(engine, pane_id, shell, END_TIMEOUT)? {
         return Ok(state.state_change_seq);
     }
     Err(EndError::Failed(format!(
@@ -232,16 +225,11 @@ impl Quit {
     /// back. A read or a press Herdr refuses is an unanswered quit, which the
     /// node's end follows.
     #[allow(clippy::disallowed_methods)] // a production wait, not test code
-    fn run(
-        &self,
-        connector: &dyn ApiConnector,
-        pane_id: &str,
-        shell: u32,
-    ) -> Result<Quitting, EndError> {
+    fn run(&self, engine: &dyn Engine, pane_id: &str, shell: u32) -> Result<Quitting, EndError> {
         let deadline = Instant::now() + EXIT_GRACE;
         let mut presses = 0;
         let unanswered = |reason: String, presses: usize| Quitting::Unanswered { reason, presses };
-        let mut before = match screen(connector, pane_id) {
+        let mut before = match screen(engine, pane_id) {
             Ok(screen) => screen,
             Err(reason) => return Ok(unanswered(reason, presses)),
         };
@@ -249,7 +237,7 @@ impl Quit {
             if presses == QUIT_PRESSES {
                 return Ok(
                     if shell_takes_terminal_within(
-                        connector,
+                        engine,
                         pane_id,
                         shell,
                         deadline.saturating_duration_since(Instant::now()),
@@ -263,28 +251,27 @@ impl Quit {
                     },
                 );
             }
-            if let Err(reason) = request_with_connector(
-                connector,
-                "pane.send_keys",
-                wire::pane_send_keys_params(pane_id, &[self.key]).map_err(EndError::Failed)?,
-                REQUEST_TIMEOUT,
-            ) {
-                return Ok(unanswered(
-                    format!("pane.send_keys failed: {reason}"),
-                    presses,
-                ));
+            match engine.send_keys(Wait::Each(REQUEST_TIMEOUT), pane_id, &[self.key]) {
+                Ok(()) => {}
+                Err(EngineError::Request(message)) => return Err(EndError::Failed(message)),
+                Err(reason) => {
+                    return Ok(unanswered(
+                        format!("pane.send_keys failed: {reason}"),
+                        presses,
+                    ));
+                }
             }
             presses += 1;
             loop {
                 thread::sleep(QUIT_POLL_INTERVAL);
-                if process_group(connector, pane_id)
+                if process_group(engine, pane_id)
                     .map_err(EndError::Failed)?
                     .foreground_process_group_id
                     == Some(shell)
                 {
                     return Ok(Quitting::Quit);
                 }
-                let now = match screen(connector, pane_id) {
+                let now = match screen(engine, pane_id) {
                     Ok(screen) => screen,
                     Err(reason) => return Ok(unanswered(reason, presses)),
                 };
@@ -321,22 +308,17 @@ impl Quit {
 }
 
 /// The pane's visible screen with its styling, as a composer is judged.
-fn screen(connector: &dyn ApiConnector, pane_id: &str) -> Result<String, String> {
-    request_with_connector(
-        connector,
-        "pane.read",
-        wire::composer_screen_params(pane_id)?,
-        REQUEST_TIMEOUT,
-    )
-    .map_err(|error| format!("pane.read failed: {error}"))
-    .and_then(wire::pane_text)
-    .map(|screen| screen.text)
+fn screen(engine: &dyn Engine, pane_id: &str) -> Result<String, String> {
+    engine
+        .read_screen(Wait::Each(REQUEST_TIMEOUT), pane_id)
+        .map_err(failed("pane.read"))
+        .map(|screen| screen.text)
 }
 
 /// Whether the pane's shell holds the terminal again within `within`.
 #[allow(clippy::disallowed_methods)] // a production wait, not test code
 fn shell_takes_terminal_within(
-    connector: &dyn ApiConnector,
+    engine: &dyn Engine,
     pane_id: &str,
     shell: u32,
     within: Duration,
@@ -344,7 +326,7 @@ fn shell_takes_terminal_within(
     let deadline = Instant::now() + within;
     loop {
         thread::sleep(END_POLL_INTERVAL);
-        let group = process_group(connector, pane_id).map_err(EndError::Failed)?;
+        let group = process_group(engine, pane_id).map_err(EndError::Failed)?;
         if group.foreground_process_group_id == Some(shell) {
             return Ok(true);
         }
@@ -354,18 +336,10 @@ fn shell_takes_terminal_within(
     }
 }
 
-fn process_group(
-    connector: &dyn ApiConnector,
-    pane_id: &str,
-) -> Result<wire::PaneProcessGroup, String> {
-    request_with_connector(
-        connector,
-        "pane.process_info",
-        wire::pane_process_info_params(pane_id)?,
-        REQUEST_TIMEOUT,
-    )
-    .map_err(|error| format!("pane.process_info failed: {error}"))
-    .and_then(wire::pane_process_group)
+fn process_group(engine: &dyn Engine, pane_id: &str) -> Result<PaneProcessGroup, String> {
+    engine
+        .pane_processes(Wait::Each(REQUEST_TIMEOUT), pane_id)
+        .map_err(failed("pane.process_info"))
 }
 
 /// A resumed agent whose CLI runs no session hook on resume leaves Herdr with
@@ -374,11 +348,11 @@ fn process_group(
 /// the way the agent's own integration would have. Nothing is sent for an
 /// agent that reports it itself.
 pub(crate) fn report_resumed_session(
-    connector: &dyn ApiConnector,
+    engine: &dyn Engine,
     pane: &str,
     kind: &str,
     session_id: &str,
-) -> Result<(), ApiError> {
+) -> Result<(), EngineError> {
     let reports = hide_agent_adapter::adapter(kind)
         .and_then(|adapter| adapter.resume)
         .is_none_or(hide_agent_adapter::LaunchDialect::resume_reports_session);
@@ -390,20 +364,15 @@ pub(crate) fn report_resumed_session(
         .map_or(0, |elapsed| {
             u64::try_from(elapsed.as_nanos()).unwrap_or(u64::MAX)
         });
-    let params =
-        wire::report_agent_session_params(pane, kind, session_id, seq).map_err(|message| {
-            ApiError::Remote {
+    engine
+        .report_agent_session(Wait::Each(REQUEST_TIMEOUT), pane, kind, session_id, seq)
+        .map_err(|error| match error {
+            EngineError::Request(message) => EngineError::Refused {
                 code: "session_report_unavailable".into(),
                 message,
-            }
-        })?;
-    request_with_connector(
-        connector,
-        "pane.report_agent_session",
-        params,
-        REQUEST_TIMEOUT,
-    )
-    .map(|_| ())
+            },
+            error => error,
+        })
 }
 
 /// What a wake needs, gathered under the lock before the worker starts.
@@ -443,7 +412,7 @@ pub(crate) enum WakeOutcome {
 /// when it has taken the start, and the session sync settles the start once
 /// the agent rests (`session_sync/launch_settle.rs`, herdrdev/herdr#3853).
 pub(crate) fn start_agent(
-    connector: &dyn ApiConnector,
+    engine: &dyn Engine,
     node: &dyn NodeLink,
     request: &WakeRequest,
 ) -> WakeOutcome {
@@ -455,14 +424,14 @@ pub(crate) fn start_agent(
             detail: format!("{cwd} is not a directory"),
         };
     }
-    let params = match wire::agent_start_params(
-        &request.pane_id,
-        &request.name,
-        &request.kind,
-        request.args.clone(),
-        request.codex_daemon,
-    ) {
-        Ok(params) => params,
+    let start = match engine.prepare_start(AgentLaunch {
+        pane_id: request.pane_id.clone(),
+        name: request.name.clone(),
+        kind: request.kind.clone(),
+        args: request.args.clone(),
+        codex_daemon: request.codex_daemon,
+    }) {
+        Ok(start) => start,
         // A Codex whose daemon Hide has not read answers its own code
         // (`codex_launch::CAPABILITY_UNKNOWN`), which the screen words.
         Err(detail) => {
@@ -473,38 +442,35 @@ pub(crate) fn start_agent(
         }
     };
     match crate::agent_start::start_at_shell_reusing_name(
-        connector,
+        engine,
         Some(node),
         &format!("herdr-core:agent-sleep:{}:wake", request.pane_id),
-        &request.pane_id,
         crate::agent_start::ShellStart::Plain,
-        params,
+        &start,
         Duration::from_millis(AGENT_START_TIMEOUT_MS + 5_000),
         &|| Ok(()),
     ) {
-        Ok(value) => match wire::started_agent(value) {
-            Ok(_) => {
-                if request.mode == WakeMode::Resume
-                    && let Some(session) = request.session_id.as_deref()
-                    && let Err(error) =
-                        report_resumed_session(connector, &request.pane_id, &request.kind, session)
-                {
-                    // The agent runs its conversation; Herdr learns it at the
-                    // next prompt instead, as it would have without Hide.
-                    crate::diagnostic!(serde_json::json!({
-                        "component": "agent_sleep",
-                        "kind": "agent_sleep.session_report_failed",
-                        "pane_id": request.pane_id,
-                        "provider": request.kind,
-                        "message": error.to_string(),
-                    }));
-                }
-                WakeOutcome::Started
+        Ok(_) => {
+            if request.mode == WakeMode::Resume
+                && let Some(session) = request.session_id.as_deref()
+                && let Err(error) =
+                    report_resumed_session(engine, &request.pane_id, &request.kind, session)
+            {
+                // The agent runs its conversation; Herdr learns it at the
+                // next prompt instead, as it would have without Hide.
+                crate::diagnostic!(serde_json::json!({
+                    "component": "agent_sleep",
+                    "kind": "agent_sleep.session_report_failed",
+                    "pane_id": request.pane_id,
+                    "provider": request.kind,
+                    "message": error.to_string(),
+                }));
             }
-            Err(detail) => WakeOutcome::Failed {
-                reason: WAKE_NOT_READY.to_owned(),
-                detail,
-            },
+            WakeOutcome::Started
+        }
+        Err(StartError::Herdr(EngineError::Answer(detail))) => WakeOutcome::Failed {
+            reason: WAKE_NOT_READY.to_owned(),
+            detail,
         },
         Err(StartError::NotStarted { detail, .. }) => WakeOutcome::Failed {
             reason: refused_reason(request.mode).to_owned(),
@@ -514,7 +480,7 @@ pub(crate) fn start_agent(
             reason: refused_reason(request.mode).to_owned(),
             detail: crate::agent_start::shell_starting_message(screen.as_deref()),
         },
-        Err(StartError::Herdr(ApiError::Remote { code, message })) => WakeOutcome::Failed {
+        Err(StartError::Herdr(EngineError::Refused { code, message })) => WakeOutcome::Failed {
             reason: refused_reason(request.mode).to_owned(),
             detail: format!("{code}: {message}"),
         },
@@ -536,7 +502,7 @@ fn refused_reason(mode: WakeMode) -> &'static str {
 /// own Herdr and node, or those of a node that dials the core (PRD
 /// core-host-node-remote-core B13).
 pub(crate) struct SleepTarget {
-    pub(crate) api_connector: Arc<dyn ApiConnector>,
+    pub(crate) engine: SharedEngine,
     pub(crate) node: Arc<dyn NodeLink>,
     pub(crate) runtime: Weak<Mutex<Runtime>>,
     pub(crate) notifier: ChangeNotifier,
@@ -572,7 +538,7 @@ fn end_after_drain(
         return Err("a write to the pane was still in flight".to_owned());
     }
     end_agent(
-        context.api_connector.as_ref(),
+        context.engine.as_ref(),
         context.node.as_ref(),
         &context.herdr_pane_id,
         kind,
@@ -611,7 +577,7 @@ pub(crate) fn spawn_wake(context: SleepTarget, request: WakeRequest) -> Result<(
         .name("herdr-core-agent-wake".into())
         .spawn(move || {
             let outcome = start_agent(
-                context.api_connector.as_ref(),
+                context.engine.as_ref(),
                 context.node.as_ref(),
                 &WakeRequest {
                     pane_id: context.herdr_pane_id.clone(),
@@ -685,7 +651,7 @@ mod tests {
             });
             assert_eq!(
                 start_agent(
-                    &herdr.connector(),
+                    herdr.engine().as_ref(),
                     &hide_node::Local::of_process(),
                     &WakeRequest {
                         pane_id: "w1:p1".into(),
@@ -714,7 +680,7 @@ mod tests {
                 other => panic!("unexpected {other}"),
             });
             let error = end_agent(
-                &herdr.connector(),
+                herdr.engine().as_ref(),
                 &hide_node::Local::of_process(),
                 "w1:p1",
                 kind,
@@ -731,7 +697,7 @@ mod tests {
             });
             assert!(
                 end_agent(
-                    &herdr.connector(),
+                    herdr.engine().as_ref(),
                     &hide_node::Local::of_process(),
                     "w1:p1",
                     kind
@@ -749,7 +715,7 @@ mod tests {
         gate: &Arc<crate::input_gate::PaneInputGate>,
     ) -> SleepTarget {
         SleepTarget {
-            api_connector: Arc::new(herdr.connector()),
+            engine: herdr.engine(),
             node: Arc::new(hide_node::Local::of_process()),
             runtime: Weak::new(),
             notifier: ChangeNotifier::new(),
@@ -921,7 +887,10 @@ mod tests {
             }
             other => panic!("unexpected {other}"),
         });
-        assert_eq!(end_agent(&herdr.connector(), &NoNode, "w1:p1", kind), Ok(7));
+        assert_eq!(
+            end_agent(herdr.engine().as_ref(), &NoNode, "w1:p1", kind),
+            Ok(7)
+        );
         agent.wait().expect("the agent is reaped");
         herdr
             .calls()
@@ -1039,7 +1008,7 @@ mod tests {
         });
         assert_eq!(
             end_agent(
-                &herdr.connector(),
+                herdr.engine().as_ref(),
                 &hide_node::Local::of_process(),
                 "w1:p1",
                 "claude"
@@ -1098,7 +1067,7 @@ mod tests {
                 }
             });
             assert_eq!(
-                end_agent(&herdr.connector(), &node, "w1:p1", "claude"),
+                end_agent(herdr.engine().as_ref(), &node, "w1:p1", "claude"),
                 Ok(7),
                 "{answer}"
             );
@@ -1113,7 +1082,7 @@ mod tests {
             other => panic!("unexpected {other}"),
         });
         let error = end_agent(
-            &herdr.connector(),
+            herdr.engine().as_ref(),
             &hide_node::Local::of_process(),
             "w1:p1",
             "claude",
@@ -1133,7 +1102,7 @@ mod tests {
                 other => panic!("unexpected {other}"),
             });
             let error = end_agent(
-                &herdr.connector(),
+                herdr.engine().as_ref(),
                 &hide_node::Local::of_process(),
                 "w1:p1",
                 "claude",
@@ -1152,7 +1121,7 @@ mod tests {
             other => panic!("unexpected {other}"),
         });
         let error = end_agent(
-            &herdr.connector(),
+            herdr.engine().as_ref(),
             &hide_node::Local::of_process(),
             "w1:p1",
             "claude",
@@ -1168,7 +1137,7 @@ mod tests {
             panic!("unexpected {method}")
         });
         let outcome = start_agent(
-            &herdr.connector(),
+            herdr.engine().as_ref(),
             &hide_node::Local::of_process(),
             &WakeRequest {
                 codex_daemon: crate::codex_launch::CodexDaemon::Unknown,
@@ -1205,7 +1174,7 @@ mod tests {
             other => panic!("unexpected {other}"),
         });
         let outcome = start_agent(
-            &herdr.connector(),
+            herdr.engine().as_ref(),
             &hide_node::Local::of_process(),
             &WakeRequest {
                 codex_daemon: Default::default(),
@@ -1231,7 +1200,7 @@ mod tests {
     fn a_wake_into_a_folder_that_is_gone_asks_herdr_nothing() {
         let herdr = FakeHerdr::start("agent-wake-cwd", |method, _| panic!("unexpected {method}"));
         let outcome = start_agent(
-            &herdr.connector(),
+            herdr.engine().as_ref(),
             &hide_node::Local::of_process(),
             &WakeRequest {
                 codex_daemon: Default::default(),

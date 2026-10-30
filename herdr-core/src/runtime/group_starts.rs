@@ -89,7 +89,7 @@ pub(super) struct SaveWaiter {
 }
 
 pub(super) struct PreparedStart {
-    pub request: live::CheckoutStart,
+    pub request: crate::worktree_control::CheckoutStart,
     pub saved: Receiver<Result<(), String>>,
 }
 
@@ -482,7 +482,7 @@ impl Runtime {
         });
         self.persist_workspace_views();
         Ok(PreparedStart {
-            request: live::CheckoutStart {
+            request: crate::worktree_control::CheckoutStart {
                 marker: intent.marker,
                 recovery_only,
                 tab_id: target_tab_id,

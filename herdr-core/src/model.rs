@@ -1956,7 +1956,7 @@ pub struct WorkspaceSnapshot {
     pub disk: ProjectDiskSnapshot,
     /// The disk cleanup review or run of this project, while there is one.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub cleanup: Option<crate::live::cleanup::CleanupSnapshot>,
+    pub cleanup: Option<crate::worktree_cleanup::CleanupSnapshot>,
 }
 
 /// What a project's agents are doing, decided by the core so the shell only
@@ -3456,9 +3456,6 @@ pub struct ProjectMemorySnapshot {
     pub usable_cards: usize,
     /// At the store's cap with no card it may forget: new cards are refused.
     pub capacity_reached: bool,
-    /// True when the Project already has 5 branches waiting for a decision,
-    /// so `N개 문서에 반영` starts nothing until one is decided.
-    pub branches_full: bool,
     /// Older cards forgotten automatically to make room, still forgotten,
     /// since the Memory tab last said so (`memory_evictions_seen`).
     pub evicted_cards: usize,
@@ -7289,7 +7286,7 @@ pub struct RemoteSessionSnapshot {
     /// issue link from them (`Runtime::project_node_issues`), so they are not
     /// sent to the shell either.
     #[serde(skip)]
-    pub issue_tokens: crate::wire::IssueTokens,
+    pub issue_tokens: crate::engine::tokens::IssueTokens,
     /// The GitHub issues a node project's checkouts link to, by project
     /// root, made with its rows (`Runtime::project_node_issues`) for the
     /// node's GitHub read to bring the ones its open list leaves out; empty
@@ -9589,14 +9586,11 @@ mod wire_enum_tests {
 
         let holds = [
             SuggestionHold::GithubNeeded,
-            SuggestionHold::BranchesFull,
             SuggestionHold::AutoPrUnreviewed,
         ];
         for variant in holds {
             match variant {
-                SuggestionHold::GithubNeeded
-                | SuggestionHold::BranchesFull
-                | SuggestionHold::AutoPrUnreviewed => {}
+                SuggestionHold::GithubNeeded | SuggestionHold::AutoPrUnreviewed => {}
             }
         }
         assert_wire(&contract, "suggestion_hold", &holds);
