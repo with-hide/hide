@@ -79,9 +79,9 @@ fn listed(
     github: &GithubSnapshot,
     index: usize,
 ) -> Option<crate::agent_state::work::family::SessionPulls> {
-    use crate::agent_state::work::family::{Recorded, Sources};
+    use crate::agent_state::work::family::Sources;
     let sessions = vec![None; rows.len()];
-    Sources::new(rows.iter(), &sessions, [github]).pulls(Some(index), None, &Recorded::default())
+    Sources::new(rows.iter(), &sessions, [github]).pulls(Some(index), None, &[])
 }
 
 fn github(pull_requests: Vec<PullRequestSnapshot>) -> GithubSnapshot {

@@ -614,7 +614,7 @@ impl Runtime {
 
     /// Lays each row's pull requests (`agent_state::work::family`) across the
     /// rows of this machine and every device, which share one lineage. A list
-    /// past its cap is logged once as it crosses.
+    /// past either cap is logged once as it crosses.
     fn lay_session_pulls(&mut self, rows: &mut [SidebarAgentSnapshot]) {
         use crate::agent_state::work::family;
         let sessions = self.session_row_identities();
@@ -626,18 +626,24 @@ impl Runtime {
             );
             (0..rows.len())
                 .map(|index| {
-                    sources.pulls(Some(index), sessions[index].as_ref(), &self.recorded_pulls)
+                    sources.pulls(
+                        Some(index),
+                        sessions[index].as_ref(),
+                        &[&self.recorded_pulls],
+                    )
                 })
                 .collect()
         };
         for (row, pulls) in rows.iter_mut().zip(laid) {
             let omitted = pulls.as_ref().map_or(0, |list| list.omitted);
-            if omitted == 0 {
+            let lineage_capped = pulls.as_ref().is_some_and(|list| list.lineage_capped);
+            if omitted == 0 && !lineage_capped {
                 self.pulls_over_cap.remove(&row.pane_id);
             } else if self.pulls_over_cap.insert(row.pane_id.clone()) {
                 crate::diagnostic!(serde_json::json!({
                     "component": "session", "kind": "pulls.capacity",
                     "pane_id": row.pane_id, "omitted": omitted, "limit": family::PULL_LIMIT,
+                    "lineage_capped": lineage_capped, "session_limit": family::SESSION_LIMIT,
                 }));
             }
             row.pulls = pulls;
@@ -645,8 +651,10 @@ impl Runtime {
     }
 
     /// Lays the open session record's `PR` sections from the same lists the
-    /// rows draw (`agent_state::work::family`), with the record's own tree as
-    /// what the link record keeps. Writes only when a section moved.
+    /// rows draw (`agent_state::work::family`): what the link worker's
+    /// summaries keep, which the rows read, then the record's own tree for a
+    /// session no summary holds. Writes only when a section moved, and logs
+    /// a list past either cap as it is laid.
     pub(super) fn settle_record_pulls(&mut self) {
         use crate::agent_state::work::family;
         let Some(held) = self.snapshot.session_record.as_ref() else {
@@ -656,7 +664,8 @@ impl Runtime {
             return;
         };
         let sessions = self.session_row_identities();
-        let recorded = family::Recorded::from_record(record);
+        let tree = family::Recorded::from_record(record);
+        let recorded = [&self.recorded_pulls, &tree];
         let sources = family::Sources::new(
             self.session_rows(),
             &sessions,
@@ -667,13 +676,21 @@ impl Runtime {
         }
         let mut next = crate::links::ledger::SessionRecordSnapshot::clone(held);
         if let Some(record) = next.record.as_mut() {
-            sources.lay_groups(record, &recorded);
+            let capped = sources.lay_groups(record, &recorded);
+            if capped != family::Capped::default() {
+                crate::diagnostic!(serde_json::json!({
+                    "component": "session", "kind": "record_pulls.capacity",
+                    "session_id": record.session.session_id, "omitted": capped.omitted,
+                    "limit": family::PULL_LIMIT, "lineage_capped": capped.lineage,
+                    "session_limit": family::SESSION_LIMIT,
+                }));
+            }
         }
         self.snapshot.session_record = Some(Arc::new(next));
     }
 
     pub(super) fn sync_session_state(&mut self) -> bool {
-        let mut changed = self.project_session_state();
+        let changed = self.project_session_state();
         let automatic: Vec<_> = self
             .session_rows()
             .filter(|row| {
@@ -718,15 +735,18 @@ impl Runtime {
                 },
             );
         }
-        if !automatic.is_empty()
-            && let Err(message) = self.write_ui_state()
-        {
+        if automatic.is_empty() {
+            return changed;
+        }
+        if let Err(message) = self.write_ui_state() {
             for (pane, _, _) in automatic {
                 self.pending_session_resolutions.remove(&pane);
             }
             self.push_diagnostic("session.resolve.save_failed", message);
+            return changed;
         }
-        changed |= self.project_session_state();
-        changed
+        // The queued resolutions resolve their rows, which only a second
+        // projection shows.
+        self.project_session_state() || changed
     }
 }

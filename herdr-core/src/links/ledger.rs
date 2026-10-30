@@ -685,6 +685,10 @@ pub struct SessionRecord {
     /// them from the session's one list (`agent_state::work::family`), the
     /// list its rows draw; the ledger never reads or writes them.
     pub pr_groups: Vec<crate::agent_state::work::family::PrGroup>,
+    /// Pull requests of that list past its cap, the count its row's list
+    /// leaves out too.
+    #[serde(skip_serializing_if = "crate::agent_state::work::family::is_zero")]
+    pub pr_omitted: usize,
     /// Non-PR outputs of this session and its descendants, newest first,
     /// each once (B22).
     pub artifacts: Vec<String>,

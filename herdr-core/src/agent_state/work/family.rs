@@ -12,7 +12,8 @@
 //!
 //! Each pass is in memory over rows and summaries already in hand, under the
 //! lock, with no I/O; the rows it lays are compared before they are written,
-//! so an unchanged list publishes nothing.
+//! so an unchanged list publishes nothing. A pull request read fresh carries
+//! no read time, so GitHub answering the same again changes no list.
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 
@@ -27,8 +28,9 @@ use crate::model::{GithubSnapshot, PrState, SidebarAgentSnapshot};
 pub const PULL_LIMIT: usize = 200;
 
 /// The most recorded sessions one list follows down its lineage, the record
-/// tree's own budget (`links/ledger.rs`).
-const SESSION_LIMIT: usize = 2_000;
+/// tree's own budget (`links/ledger.rs`); past it the list says so in
+/// `lineage_capped`, with a diagnostic.
+pub(crate) const SESSION_LIMIT: usize = 2_000;
 
 /// One pull request of a session's list as every surface draws it.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
@@ -45,6 +47,7 @@ pub struct SessionPull {
     /// GitHub could not be read again, or its list no longer holds it:
     /// `state` is the one last read, at `last_read_at_unix_ms`.
     pub stale: bool,
+    /// When a stale state was read; none while the read is fresh.
     pub last_read_at_unix_ms: Option<u64>,
 }
 
@@ -55,15 +58,20 @@ pub struct SessionPulls {
     /// Pull requests past [`PULL_LIMIT`], counted and not listed.
     #[serde(skip_serializing_if = "is_zero")]
     pub omitted: usize,
+    /// The lineage held more than [`SESSION_LIMIT`] recorded sessions, and
+    /// the ones past it were not followed. Logged, never drawn.
+    #[serde(skip)]
+    pub lineage_capped: bool,
 }
 
-fn is_zero(count: &usize) -> bool {
+pub(crate) fn is_zero(count: &usize) -> bool {
     *count == 0
 }
 
 /// The session record's `PR` section (D-14, B18): the list of its session,
-/// its own first, then one group per direct child holding that child's
-/// whole subtree's, each pull request once.
+/// the one its row draws with the same cap, its own first, then one group
+/// per direct child holding that child's whole subtree's, each pull request
+/// once.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct PrGroup {
     /// `None` for this session's own.
@@ -187,11 +195,39 @@ fn recorded_state(state: &str) -> PrState {
 }
 
 /// How GitHub's list has a pull request now.
+#[derive(Clone, Copy)]
 struct Read<'a> {
     state: PrState,
     title: &'a str,
     stale: bool,
     last_read_at_unix_ms: Option<u64>,
+}
+
+impl Read<'_> {
+    /// Which of two machines' reads of one pull request a list takes: a
+    /// fresh one over a stale one, then the later read, then the worse state
+    /// and the title, so the answer never depends on which machine was read
+    /// first. Each read time is its own machine's clock; a skew between them
+    /// only orders two reads GitHub gave within one poll of each other.
+    fn rank(&self) -> (bool, Option<u64>, std::cmp::Reverse<PrState>, &str) {
+        (
+            !self.stale,
+            self.last_read_at_unix_ms,
+            std::cmp::Reverse(self.state),
+            self.title,
+        )
+    }
+
+    /// The read time a list keeps: only a stale state's.
+    fn stale_since(&self) -> Option<u64> {
+        self.last_read_at_unix_ms.filter(|_| self.stale)
+    }
+}
+
+/// Every pull request one walk down a lineage reached, before the cap.
+struct Gathered {
+    items: BTreeMap<String, SessionPull>,
+    lineage_capped: bool,
 }
 
 /// The rows and GitHub's lists one pass reads, indexed once.
@@ -204,7 +240,8 @@ pub(crate) struct Sources<'a> {
 }
 
 impl<'a> Sources<'a> {
-    /// `sessions[i]` is the session `rows[i]` hosts, on its own machine.
+    /// `sessions[i]` is the session `rows[i]` hosts, on its own machine;
+    /// `github` holds this machine's read and each device's.
     pub(crate) fn new(
         rows: impl IntoIterator<Item = &'a SidebarAgentSnapshot>,
         sessions: &'a [Option<SessionIdentity>],
@@ -221,45 +258,73 @@ impl<'a> Sources<'a> {
             .enumerate()
             .filter_map(|(index, session)| Some((session.as_ref()?, index)))
             .collect();
-        let github = github
-            .into_iter()
-            .flat_map(|snapshot| &snapshot.projects)
-            .flat_map(|project| {
-                project.pull_requests.iter().map(move |pull| {
-                    (
-                        pull.url.as_str(),
-                        Read {
-                            state: PrState::of(pull.badge, pull.is_draft, pull.checks, pull.review),
-                            title: pull.title.as_str(),
-                            stale: project.status.stale,
-                            last_read_at_unix_ms: project.status.last_success_at_unix_ms,
-                        },
-                    )
-                })
-            })
-            .collect();
+        let mut reads: HashMap<&str, Read> = HashMap::new();
+        for project in github.into_iter().flat_map(|snapshot| &snapshot.projects) {
+            for pull in &project.pull_requests {
+                let read = Read {
+                    state: PrState::of(pull.badge, pull.is_draft, pull.checks, pull.review),
+                    title: pull.title.as_str(),
+                    stale: project.status.stale,
+                    last_read_at_unix_ms: project.status.last_success_at_unix_ms,
+                };
+                reads
+                    .entry(pull.url.as_str())
+                    .and_modify(|kept| {
+                        if read.rank() > kept.rank() {
+                            *kept = read;
+                        }
+                    })
+                    .or_insert(read);
+            }
+        }
         Self {
             rows,
             sessions,
             by_pane,
             by_session,
-            github,
+            github: reads,
         }
     }
 
     /// The list of the session that `row` hosts or that `session` names, and
     /// of every descendant: the live ones by Herdr's lineage, the ended ones
-    /// by the record's. `None` when it has none.
+    /// by the record's. `recorded` is what the link record keeps, freshest
+    /// first. `None` when it has none.
     pub(crate) fn pulls(
         &self,
         row: Option<usize>,
         session: Option<&SessionIdentity>,
-        recorded: &Recorded,
+        recorded: &[&Recorded],
     ) -> Option<SessionPulls> {
+        let Gathered {
+            items,
+            lineage_capped,
+        } = self.gather(row, session, recorded);
+        if items.is_empty() {
+            return None;
+        }
+        let mut pulls: Vec<SessionPull> = items.into_values().collect();
+        pulls.sort_by(|a, b| a.state.cmp(&b.state).then_with(|| b.number.cmp(&a.number)));
+        let omitted = pulls.len().saturating_sub(PULL_LIMIT);
+        pulls.truncate(PULL_LIMIT);
+        Some(SessionPulls {
+            pulls,
+            omitted,
+            lineage_capped,
+        })
+    }
+
+    fn gather(
+        &self,
+        row: Option<usize>,
+        session: Option<&SessionIdentity>,
+        recorded: &[&Recorded],
+    ) -> Gathered {
         let session = session.or_else(|| row.and_then(|row| self.sessions[row].as_ref()));
         let row = row.or_else(|| session.and_then(|session| self.by_session.get(session).copied()));
         let mut live = BTreeSet::new();
         let mut kept = BTreeSet::new();
+        let mut lineage_capped = false;
         let mut rows: Vec<usize> = row.into_iter().collect();
         let mut sessions: Vec<&SessionIdentity> = session.into_iter().collect();
         let mut items: BTreeMap<String, SessionPull> = BTreeMap::new();
@@ -287,7 +352,7 @@ impl<'a> Sources<'a> {
                             own,
                             holders: vec![agent.identity_label.clone()],
                             stale: read.is_some_and(|read| read.stale),
-                            last_read_at_unix_ms: read.and_then(|read| read.last_read_at_unix_ms),
+                            last_read_at_unix_ms: read.and_then(Read::stale_since),
                         },
                     );
                 }
@@ -302,9 +367,14 @@ impl<'a> Sources<'a> {
                 );
             }
             while let Some(next) = sessions.pop() {
-                if kept.len() >= SESSION_LIMIT || !kept.insert(next) {
+                if kept.contains(next) {
                     continue;
                 }
+                if kept.len() >= SESSION_LIMIT {
+                    lineage_capped = true;
+                    continue;
+                }
+                kept.insert(next);
                 let host = self.by_session.get(next).copied();
                 if let Some(host) = host {
                     rows.push(host);
@@ -312,8 +382,11 @@ impl<'a> Sources<'a> {
                 let own = Some(next) == session;
                 let name = host
                     .map(|host| &self.rows[host].identity_label)
-                    .or_else(|| recorded.names.get(next));
-                for pull in recorded.pulls.get(next).into_iter().flatten() {
+                    .or_else(|| recorded.iter().find_map(|layer| layer.names.get(next)));
+                for pull in recorded
+                    .iter()
+                    .flat_map(|layer| layer.pulls.get(next).into_iter().flatten())
+                {
                     let item = match self.github.get(pull.url.as_str()) {
                         Some(read) => SessionPull {
                             url: pull.url.clone(),
@@ -323,7 +396,7 @@ impl<'a> Sources<'a> {
                             own,
                             holders: name.cloned().into_iter().collect(),
                             stale: read.stale,
-                            last_read_at_unix_ms: read.last_read_at_unix_ms,
+                            last_read_at_unix_ms: read.stale_since(),
                         },
                         None => SessionPull {
                             url: pull.url.clone(),
@@ -338,60 +411,69 @@ impl<'a> Sources<'a> {
                     };
                     add(&mut items, item);
                 }
-                sessions.extend(recorded.children.get(next).into_iter().flatten());
+                sessions.extend(
+                    recorded
+                        .iter()
+                        .flat_map(|layer| layer.children.get(next).into_iter().flatten()),
+                );
             }
         }
-        if items.is_empty() {
-            return None;
+        Gathered {
+            items,
+            lineage_capped,
         }
-        let mut pulls: Vec<SessionPull> = items.into_values().collect();
-        pulls.sort_by(|a, b| a.state.cmp(&b.state).then_with(|| b.number.cmp(&a.number)));
-        let omitted = pulls.len().saturating_sub(PULL_LIMIT);
-        pulls.truncate(PULL_LIMIT);
-        Some(SessionPulls { pulls, omitted })
     }
 
     /// The record's `PR` section for `record` and each of its children's
     /// records: the list of its session, its own first, then each direct
-    /// child's, each pull request in the first group that holds it.
-    pub(crate) fn lay_groups(&self, record: &mut SessionRecord, recorded: &Recorded) {
-        record.pr_groups = self.groups(record, recorded);
+    /// child's, each pull request in the first group that holds it. Returns
+    /// what `record`'s own list left out.
+    pub(crate) fn lay_groups(&self, record: &mut SessionRecord, recorded: &[&Recorded]) -> Capped {
+        let (groups, capped) = self.groups(record, recorded);
+        record.pr_groups = groups;
+        record.pr_omitted = capped.omitted;
         for child in &mut record.children {
             self.lay_groups(child, recorded);
         }
+        capped
     }
 
     /// [`Self::lay_groups`] without writing, to compare with what a record
     /// already holds.
-    pub(crate) fn groups_match(&self, record: &SessionRecord, recorded: &Recorded) -> bool {
-        record.pr_groups == self.groups(record, recorded)
+    pub(crate) fn groups_match(&self, record: &SessionRecord, recorded: &[&Recorded]) -> bool {
+        let (groups, capped) = self.groups(record, recorded);
+        record.pr_groups == groups
+            && record.pr_omitted == capped.omitted
             && record
                 .children
                 .iter()
                 .all(|child| self.groups_match(child, recorded))
     }
 
-    fn groups(&self, record: &SessionRecord, recorded: &Recorded) -> Vec<PrGroup> {
+    /// The section of `record`: its session's list, capped as its row's is,
+    /// cut into groups, and the count the cap left out. Each direct child's
+    /// whole subtree says which of the list it holds; one reached through no
+    /// named child (a live child Herdr has not named a session for yet) stays
+    /// in this session's group, so the section holds exactly the list.
+    fn groups(&self, record: &SessionRecord, recorded: &[&Recorded]) -> (Vec<PrGroup>, Capped) {
         let Some(all) = self.pulls(None, Some(&record.session), recorded) else {
-            return Vec::new();
+            return (Vec::new(), Capped::default());
         };
-        let mut placed = BTreeSet::new();
-        let mut groups = Vec::new();
-        let own: Vec<SessionPull> = all.pulls.iter().filter(|pull| pull.own).cloned().collect();
-        placed.extend(own.iter().map(|pull| pull.url.clone()));
-        if !own.is_empty() {
-            groups.push(PrGroup {
-                child: None,
-                name: record.title.clone(),
-                pulls: own,
-            });
-        }
-        // The children the record keeps, then a live child it has not read yet.
+        // The children the record keeps, the ones the link record has kept
+        // since, then a live child neither has read yet.
         let mut children: Vec<(SessionIdentity, String)> = record
             .children
             .iter()
             .map(|child| (child.session.clone(), child.title.clone()))
             .collect();
+        for layer in recorded {
+            for child in layer.children.get(&record.session).into_iter().flatten() {
+                if !children.iter().any(|(known, _)| known == child) {
+                    let name = layer.names.get(child).unwrap_or(&child.session_id);
+                    children.push((child.clone(), name.clone()));
+                }
+            }
+        }
         if let Some(row) = self.by_session.get(&record.session) {
             for pane in &self.rows[*row].lineage_child_pane_ids {
                 let Some(&child) = self.by_pane.get(pane.as_str()) else {
@@ -404,24 +486,37 @@ impl<'a> Sources<'a> {
                 }
             }
         }
-        for (session, name) in children {
-            let Some(theirs) = self.pulls(None, Some(&session), recorded) else {
-                continue;
-            };
-            let pulls: Vec<SessionPull> = theirs
-                .pulls
-                .into_iter()
-                .filter(|pull| placed.insert(pull.url.clone()))
-                .map(|pull| {
-                    // Within the parent's record the child's state is the
-                    // parent's list's, so the two never disagree.
-                    all.pulls
-                        .iter()
-                        .find(|kept| kept.url == pull.url)
-                        .cloned()
-                        .unwrap_or(pull)
-                })
-                .collect();
+        // Which child's group each pull request of the list falls in.
+        let descendants = all.pulls.iter().filter(|pull| !pull.own).count();
+        let mut placed: HashMap<&str, usize> = HashMap::new();
+        for (index, (session, _)) in children.iter().enumerate() {
+            if placed.len() == descendants {
+                break;
+            }
+            let held = self.gather(None, Some(session), recorded).items;
+            for pull in all.pulls.iter().filter(|pull| !pull.own) {
+                if held.contains_key(&pull.url) {
+                    placed.entry(pull.url.as_str()).or_insert(index);
+                }
+            }
+        }
+        let mut theirs: Vec<Vec<SessionPull>> = vec![Vec::new(); children.len()];
+        let mut own = Vec::new();
+        for pull in &all.pulls {
+            match placed.get(pull.url.as_str()) {
+                Some(&index) => theirs[index].push(pull.clone()),
+                None => own.push(pull.clone()),
+            }
+        }
+        let mut groups = Vec::new();
+        if !own.is_empty() {
+            groups.push(PrGroup {
+                child: None,
+                name: record.title.clone(),
+                pulls: own,
+            });
+        }
+        for ((session, name), pulls) in children.into_iter().zip(theirs) {
             if !pulls.is_empty() {
                 groups.push(PrGroup {
                     child: Some(session),
@@ -430,10 +525,21 @@ impl<'a> Sources<'a> {
                 });
             }
         }
-        groups
+        let capped = Capped {
+            omitted: all.omitted,
+            lineage: all.lineage_capped,
+        };
+        (groups, capped)
     }
 }
 
+/// What a session record's list left out: the count past [`PULL_LIMIT`],
+/// and whether its lineage went past [`SESSION_LIMIT`].
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub(crate) struct Capped {
+    pub(crate) omitted: usize,
+    pub(crate) lineage: bool,
+}
 /// Adds one sighting of a pull request to a list: a second holder joins its
 /// holders, and a fresh read replaces a stale one.
 fn add(items: &mut BTreeMap<String, SessionPull>, item: SessionPull) {
@@ -646,7 +752,7 @@ mod tests {
         ])]);
         let sources = Sources::new(rows.iter(), &sessions, [&github]);
         let lead = sources
-            .pulls(Some(0), sessions[0].as_ref(), &recorded)
+            .pulls(Some(0), sessions[0].as_ref(), &[&recorded])
             .unwrap();
         assert_eq!(
             numbers(&lead),
@@ -662,7 +768,7 @@ mod tests {
         assert!(!ended.own, "a descendant's is not the lead's own");
         // The ended child's own row is gone; its live sibling lists only its own.
         let live = sources
-            .pulls(Some(1), sessions[1].as_ref(), &recorded)
+            .pulls(Some(1), sessions[1].as_ref(), &[&recorded])
             .unwrap();
         assert_eq!(numbers(&live), [(3, PrState::Mergeable)]);
         assert!(live.pulls[0].own);
@@ -679,7 +785,7 @@ mod tests {
         holds(&mut rows[0], &merged);
         let github = github(vec![closed, merged]);
         let sources = Sources::new(rows.iter(), &sessions, [&github]);
-        let list = sources.pulls(Some(0), None, &Recorded::default()).unwrap();
+        let list = sources.pulls(Some(0), None, &[]).unwrap();
         assert_eq!(numbers(&list), [(5, PrState::Merged), (4, PrState::Closed)]);
     }
 
@@ -700,7 +806,7 @@ mod tests {
         holds(&mut rows[1], &foreign);
         let github = github(vec![shared, foreign]);
         let sources = Sources::new(rows.iter(), &sessions, [&github]);
-        let list = sources.pulls(Some(0), None, &Recorded::default()).unwrap();
+        let list = sources.pulls(Some(0), None, &[]).unwrap();
         assert_eq!(
             numbers(&list),
             [(42, PrState::Failed), (42, PrState::Mergeable)]
@@ -722,7 +828,7 @@ mod tests {
             &[(6, "merged"), (7, "review")],
         )])]);
         let sources = Sources::new(rows.iter(), &sessions, [&github]);
-        let list = sources.pulls(Some(0), None, &recorded).unwrap();
+        let list = sources.pulls(Some(0), None, &[&recorded]).unwrap();
         assert_eq!(
             numbers(&list),
             [(7, PrState::Pending), (6, PrState::Merged)]
@@ -810,11 +916,11 @@ mod tests {
             .pulls(
                 Some(0),
                 sessions[0].as_ref(),
-                &Recorded::from_summaries([&summary(made)]),
+                &[&Recorded::from_summaries([&summary(made)])],
             )
             .unwrap();
         let mut laid = tree.clone();
-        sources.lay_groups(&mut laid, &Recorded::from_record(&tree));
+        sources.lay_groups(&mut laid, &[&Recorded::from_record(&tree)]);
         let grouped: Vec<(Option<&str>, u32, PrState)> = laid
             .pr_groups
             .iter()
@@ -847,12 +953,284 @@ mod tests {
             record_list, row_list,
             "the record and the row show the same pull requests"
         );
-        assert!(sources.groups_match(&laid, &Recorded::from_record(&tree)));
+        assert!(sources.groups_match(&laid, &[&Recorded::from_record(&tree)]));
         // The child's own record, opened from the list, groups its own subtree.
         assert_eq!(laid.children[0].pr_groups[0].pulls[0].number, 11);
         assert_eq!(
             laid.children[0].pr_groups[1].child,
             Some(session("s-grandchild"))
         );
+    }
+
+    fn read(pulls: Vec<PullRequestSnapshot>, at: u64, stale: bool) -> GithubSnapshot {
+        let mut snapshot = github(pulls);
+        snapshot.projects[0].status.last_success_at_unix_ms = Some(at);
+        snapshot.projects[0].status.stale = stale;
+        snapshot
+    }
+
+    fn urls(pulls: &[SessionPull]) -> BTreeSet<&str> {
+        pulls.iter().map(|pull| pull.url.as_str()).collect()
+    }
+
+    /// The review of #1859: the reads of this machine and each device were
+    /// keyed by address, so whichever came last won, and a device's older
+    /// open read hid a merge this machine had just read.
+    #[test]
+    fn the_same_pull_request_read_on_several_machines_takes_the_fresh_latest_read_in_any_order() {
+        let (mut rows, sessions) = rows(&[("agent", "s-agent", &[])]);
+        let merged = listed(42, PullRequestBadge::Merged, PullRequestChecks::Passing);
+        holds(&mut rows[0], &merged);
+        let here = read(vec![merged], 9_000, false);
+        let stale_newer = read(
+            vec![listed(
+                42,
+                PullRequestBadge::Open,
+                PullRequestChecks::Pending,
+            )],
+            12_000,
+            true,
+        );
+        let fresh_older = read(
+            vec![listed(
+                42,
+                PullRequestBadge::Open,
+                PullRequestChecks::Failed,
+            )],
+            8_000,
+            false,
+        );
+        let orders: [[&GithubSnapshot; 3]; 3] = [
+            [&here, &stale_newer, &fresh_older],
+            [&stale_newer, &fresh_older, &here],
+            [&fresh_older, &here, &stale_newer],
+        ];
+        for order in orders {
+            let sources = Sources::new(rows.iter(), &sessions, order);
+            let list = sources.pulls(Some(0), None, &[]).unwrap();
+            assert_eq!(
+                numbers(&list),
+                [(42, PrState::Merged)],
+                "{order:?}",
+                order = order.map(|read| read.projects[0].status.last_success_at_unix_ms)
+            );
+            assert!(!list.pulls[0].stale);
+        }
+        // An ended session's pull request takes the same read.
+        let recorded =
+            Recorded::from_summaries([&summary(&[("s-ended", None, "ended", &[(42, "review")])])]);
+        for order in orders {
+            let sources = Sources::new(rows.iter(), &sessions, order);
+            let list = sources
+                .pulls(None, Some(&session("s-ended")), &[&recorded])
+                .unwrap();
+            assert_eq!(numbers(&list), [(42, PrState::Merged)]);
+        }
+    }
+
+    /// The review of #1859: every GitHub read moved the read time each pull
+    /// request carried, so a list that had not changed was published again.
+    #[test]
+    fn github_answering_the_same_again_leaves_the_list_equal() {
+        let (mut rows, sessions) = rows(&[("agent", "s-agent", &[])]);
+        let open = listed(7, PullRequestBadge::Open, PullRequestChecks::Passing);
+        holds(&mut rows[0], &open);
+        let recorded =
+            Recorded::from_summaries([&summary(&[("s-agent", None, "agent", &[(8, "merged")])])]);
+        let list = |at: u64, stale: bool| {
+            let github = read(
+                vec![
+                    open.clone(),
+                    listed(8, PullRequestBadge::Merged, PullRequestChecks::Passing),
+                ],
+                at,
+                stale,
+            );
+            Sources::new(rows.iter(), &sessions, [&github])
+                .pulls(Some(0), None, &[&recorded])
+                .unwrap()
+        };
+        assert_eq!(list(9_000, false), list(19_000, false));
+        let stale = list(9_000, true);
+        assert!(
+            stale
+                .pulls
+                .iter()
+                .all(|pull| pull.stale && pull.last_read_at_unix_ms == Some(9_000))
+        );
+        assert_ne!(
+            stale,
+            list(9_000, false),
+            "a read that fails is drawn as stale"
+        );
+    }
+
+    /// The review of #1859: the record cut the parent's list at the cap, then
+    /// read each child's list again, so two ended children with 100 and 101
+    /// merged pull requests drew 200 on the row and 201 in the record.
+    #[test]
+    fn the_record_lays_the_capped_list_its_row_draws() {
+        let (rows, sessions) = rows(&[("lead", "s-lead", &[])]);
+        let github = github(Vec::new());
+        let first: Vec<(u32, &str)> = (1..=100).map(|number| (number, "merged")).collect();
+        let second: Vec<(u32, &str)> = (101..=201).map(|number| (number, "merged")).collect();
+        let summaries = Recorded::from_summaries([&summary(&[
+            ("s-lead", None, "lead", &[]),
+            ("s-first", Some("s-lead"), "first", &first),
+            ("s-second", Some("s-lead"), "second", &second),
+        ])]);
+        let outputs = |id: &str, made: &[(u32, &str)]| {
+            made.iter()
+                .map(|(number, state)| output(id, *number, state))
+                .collect()
+        };
+        let tree = record(
+            "s-lead",
+            "lead",
+            Vec::new(),
+            vec![
+                record("s-first", "first", outputs("s-first", &first), Vec::new()),
+                record(
+                    "s-second",
+                    "second",
+                    outputs("s-second", &second),
+                    Vec::new(),
+                ),
+            ],
+        );
+        let sources = Sources::new(rows.iter(), &sessions, [&github]);
+        let row = sources
+            .pulls(Some(0), sessions[0].as_ref(), &[&summaries])
+            .unwrap();
+        assert_eq!((row.pulls.len(), row.omitted), (PULL_LIMIT, 1));
+        let mut laid = tree.clone();
+        let tree_recorded = Recorded::from_record(&tree);
+        let capped = sources.lay_groups(&mut laid, &[&summaries, &tree_recorded]);
+        let grouped: Vec<SessionPull> = laid
+            .pr_groups
+            .iter()
+            .flat_map(|group| group.pulls.clone())
+            .collect();
+        assert_eq!(urls(&grouped), urls(&row.pulls), "the same pull requests");
+        assert_eq!(grouped.len(), PULL_LIMIT, "each once");
+        assert_eq!(laid.pr_omitted, row.omitted);
+        assert_eq!(
+            capped,
+            Capped {
+                omitted: 1,
+                lineage: false
+            }
+        );
+        let sizes: Vec<usize> = laid
+            .pr_groups
+            .iter()
+            .map(|group| group.pulls.len())
+            .collect();
+        assert_eq!(sizes, [99, 101], "the lowest number is the one left out");
+        assert!(sources.groups_match(&laid, &[&summaries, &tree_recorded]));
+        // Each child's own record holds its whole list: neither is past the cap.
+        assert_eq!(laid.children[1].pr_groups[0].pulls.len(), 101);
+        assert_eq!(laid.children[1].pr_omitted, 0);
+    }
+
+    /// A lineage past [`SESSION_LIMIT`] says so instead of ending quietly.
+    #[test]
+    fn a_lineage_past_the_session_limit_is_reported() {
+        let ids: Vec<String> = (0..=SESSION_LIMIT)
+            .map(|index| format!("s-{index}"))
+            .collect();
+        let chain: Vec<Kept<'_>> = ids
+            .iter()
+            .enumerate()
+            .map(|(index, id)| {
+                let parent = index.checked_sub(1).map(|parent| ids[parent].as_str());
+                let made: &[(u32, &str)] = if index == 0 { &[(1, "merged")] } else { &[] };
+                (id.as_str(), parent, "step", made)
+            })
+            .collect();
+        let recorded = Recorded::from_summaries([&summary(&chain)]);
+        let github = github(Vec::new());
+        let sources = Sources::new([], &[], [&github]);
+        let list = sources
+            .pulls(None, Some(&session("s-0")), &[&recorded])
+            .unwrap();
+        assert!(list.lineage_capped);
+        let within = sources.pulls(None, Some(&session("s-1")), &[&recorded]);
+        assert!(
+            within.is_none(),
+            "the rest of the chain made nothing and stays within the limit"
+        );
+    }
+
+    /// The review of #1859: in A -> B -> C, B's 태스크 row under A showed only
+    /// what B made while its pane and record showed C's too. B's one list
+    /// holds both, while C works and after it ends.
+    #[test]
+    fn a_middle_sessions_list_holds_its_childs_pull_requests_live_and_ended() {
+        let made = listed(41, PullRequestBadge::Open, PullRequestChecks::Passing);
+        let childs = listed(42, PullRequestBadge::Merged, PullRequestChecks::Passing);
+        let github = github(vec![made.clone(), childs.clone()]);
+        let tree = record(
+            "s-b",
+            "b",
+            Vec::new(),
+            vec![record("s-c", "c", Vec::new(), Vec::new())],
+        );
+        let tree_recorded = Recorded::from_record(&tree);
+        let check = |rows: &[SidebarAgentSnapshot],
+                     sessions: &[Option<SessionIdentity>],
+                     summaries: &Recorded| {
+            let sources = Sources::new(rows.iter(), sessions, [&github]);
+            let a = sources
+                .pulls(Some(0), sessions[0].as_ref(), &[summaries])
+                .unwrap();
+            let b = sources
+                .pulls(Some(1), sessions[1].as_ref(), &[summaries])
+                .unwrap();
+            assert_eq!(
+                numbers(&b),
+                [(41, PrState::Mergeable), (42, PrState::Merged)]
+            );
+            assert_eq!(urls(&a.pulls), urls(&b.pulls));
+            assert!(b.pulls[0].own && !b.pulls[1].own);
+            let mut laid = tree.clone();
+            sources.lay_groups(&mut laid, &[summaries, &tree_recorded]);
+            let grouped: Vec<(Option<&str>, u32)> = laid
+                .pr_groups
+                .iter()
+                .flat_map(|group| {
+                    group.pulls.iter().map(move |pull| {
+                        (
+                            group.child.as_ref().map(|child| child.session_id.as_str()),
+                            pull.number,
+                        )
+                    })
+                })
+                .collect();
+            assert_eq!(grouped, [(None, 41), (Some("s-c"), 42)]);
+        };
+        // C works.
+        let (mut live, sessions) = rows(&[
+            ("a", "s-a", &["b"]),
+            ("b", "s-b", &["c"]),
+            ("c", "s-c", &[]),
+        ]);
+        holds(&mut live[1], &made);
+        holds(&mut live[2], &childs);
+        let lineage = Recorded::from_summaries([&summary(&[
+            ("s-a", None, "a", &[]),
+            ("s-b", Some("s-a"), "b", &[]),
+            ("s-c", Some("s-b"), "c", &[]),
+        ])]);
+        check(&live, &sessions, &lineage);
+        // C ended: its pane is gone and the record keeps what it made.
+        let (mut live, sessions) = rows(&[("a", "s-a", &["b"]), ("b", "s-b", &[])]);
+        holds(&mut live[1], &made);
+        let ended = Recorded::from_summaries([&summary(&[
+            ("s-a", None, "a", &[]),
+            ("s-b", Some("s-a"), "b", &[]),
+            ("s-c", Some("s-b"), "c", &[(42, "merged")]),
+        ])]);
+        check(&live, &sessions, &ended);
     }
 }
