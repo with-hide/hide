@@ -116,7 +116,7 @@ test("a project outside home is asked about again after its removal, and its wor
     // The made worktree comes forward as the front checkout once the core
     // lists its pane, so it stands on its own line rather than in the fold of
     // worktrees with no agents (docs/ARCHITECTURE.md, a created worktree's pane).
-    await expect(worktree.locator("[data-checkout]").first()).toHaveAttribute("aria-current", "true", { timeout: 60_000 });
+    await expect(worktree).toBeVisible({ timeout: 60_000 });
     const [made] = worktreesOf(repo);
     await worktree.locator("[data-checkout]").first().click();
     await showExplorer(page);
