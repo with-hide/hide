@@ -15,6 +15,7 @@ import { pathToFileURL } from "node:url";
 import { app, BrowserWindow, clipboard, dialog, ipcMain, nativeImage, net, Notification, powerMonitor, screen, session, shell, type IpcMainEvent, type IpcMainInvokeEvent, type NativeImage } from "electron";
 import { DebUpdater, MacUpdater, NsisUpdater, RpmUpdater } from "electron-updater";
 import { CHECK_UPDATES_COMMAND, SETUP_COMMAND, type ExternalGrant, type HerdrRestart } from "../../../web/src/host";
+import { pageKeepsKeyboard } from "../../../web/src/shortcuts";
 import type { MenuCommand } from "./menu";
 import { BINDINGS_CHANNEL, COME_FORWARD_CHANNEL, COMMAND_CHANNEL, EDITOR_AVAILABLE_CHANNEL, EDITOR_OPEN_CHANNEL, LANGUAGE_CHANNEL, NOTIFY_BADGE_CHANNEL, NOTIFY_CHANNEL, NOTIFY_OPEN_CHANNEL, NOTIFY_PERMISSION_CHANNEL, NOTIFY_SETTINGS_CHANNEL, NOTIFY_WITHDRAW_CHANNEL, OPEN_PATH_CHANNEL, EXTERNAL_DESCRIBE_CHANNEL, EXTERNAL_LIVE_CHANNEL, EXTERNAL_OPEN_CHANNEL, EXTERNAL_READ_CHANNEL, PICK_FOLDER_CHANNEL, PRACTICE_OPEN_CHANNEL, PROBE_PATHS_CHANNEL, HERDR_RESTART_CHANNEL, QUIT_CHANNEL, REVEAL_CHANNEL, UPDATE_CHECK_CHANNEL, UPDATE_PRERELEASE_CHANNEL, UPDATE_RESTART_CHANNEL, UPDATE_STATUS_CHANNEL, UPDATE_STATUS_GET_CHANNEL, WINDOW_CHROME_CHANNEL, WINDOW_CHROME_GET_CHANNEL } from "../channel";
 import { BrowserViews, type ResolvedPage } from "./browser";
@@ -889,8 +890,9 @@ export class DesktopHost {
     // Text size in a page is the page's zoom, and the page keeps the keyboard.
     if (command && this.browsers?.zoomFocused(command)) return;
     // A chord the page of a browser display left unhandled reaches the menu;
-    // the command's surface (the palette, a dialog) needs the keyboard.
-    if (this.browsers?.hasFocus()) this.window.webContents.focus();
+    // the command's surface (the palette, a dialog) needs the keyboard, unless
+    // the command leaves the operator in the page (Expand).
+    if (this.browsers?.hasFocus() && !(command && pageKeepsKeyboard(command))) this.window.webContents.focus();
     this.window.webContents.send(COMMAND_CHANNEL, id);
   }
 

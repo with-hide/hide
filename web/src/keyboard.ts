@@ -29,7 +29,7 @@ import { areaFrame } from "./areaFrames";
 import { adjacentDisplay } from "./areaLayout";
 import { availableEntries, currentEntry, expectPane, expectSurface, observeEntries, observePane, observeProject, paneItem, panelItem, projectItem, reconcileCycle, recentEntries, recentProjectOrder, type CycleItem } from "./recent";
 import { projectsOf, remoteContext } from "./remote";
-import { hostChord, hostRegistry, isNumberedCommand, releaseModifier, matchHost, numberedCommand, REGISTRY, storedBindings, type CommandId, type Digit, type NumberedFamily } from "./shortcuts";
+import { hostChord, hostRegistry, isNumberedCommand, pageKeepsKeyboard, releaseModifier, matchHost, numberedCommand, REGISTRY, storedBindings, type CommandId, type Digit, type NumberedFamily } from "./shortcuts";
 import { editorFor, type AgentRow, type SnapshotRest, type Workspace } from "./snapshot";
 import { useShellStore } from "./store";
 import { coveringLayer, useUiStore, type Cycle } from "./ui";
@@ -592,7 +592,8 @@ export function installKeyboard(actions: Actions): () => void {
     const command = REGISTRY.find((row) => row.id === id);
     if (command) {
       run(command.id, null);
-      noteCommandDelivered();
+      // The host left a page that holds the keyboard holding it, so the page stays its owner.
+      if (!pageKeepsKeyboard(command.id)) noteCommandDelivered();
     } else useShellStore.getState().noteDiagnostic(`menu command the shell does not know: ${id}`);
   });
   // The app menu's accelerators follow the stored macOS set: the host gets
