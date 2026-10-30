@@ -145,10 +145,12 @@ export function PaneViews({ paneId, name, actions }: { paneId: string; name: str
             data-pane-views-unseen={unseen ? "true" : undefined}
             className="flex h-(--size-sidebar-line-detail) shrink-0 items-center gap-xxs rounded-xs px-xs outline-none hover:bg-popover focus-visible:ring-1 focus-visible:ring-ring data-[state=open]:bg-secondary"
           >
-            <FilesIcon aria-hidden="true" className="size-(--size-icon-sm)" />
+            <span className="relative flex shrink-0">
+              <FilesIcon aria-hidden="true" className="size-(--size-icon-sm)" />
+              {/* Any View still unseen dots the chip's icon: the row's 볼 것 eye already says there is something to look at, the dot says it is in here (PRD unseen-agent-views B10). */}
+              {unseen ? <span role="img" aria-label={t("agents.mark.look")} className="absolute -right-xxs -top-xxs size-(--size-tab-status-dot) rounded-full bg-warning" /> : null}
+            </span>
             <span>{label}</span>
-            {/* Any View still unseen marks the chip too, so the list need not be opened to find it (PRD unseen-agent-views B10). */}
-            {unseen ? <StatusMark mark="look" label={t("agents.mark.look")} /> : null}
           </button>
         </DropdownMenuTrigger>
       </Hint>
