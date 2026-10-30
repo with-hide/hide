@@ -22,7 +22,7 @@ A file may only go down: a new raw control fails, and a file with fewer than its
 
 | You need | Use | Notes |
 | --- | --- | --- |
-| An action | `Button` | `variant`: `default` (the one primary action), `secondary`, `outline`, `ghost` (toolbar and row actions), `destructive`, `link`, `text`, `text-link`, `row-action`; `size`: `default`, `sm`, `lg`, `icon`, `icon-sm`, `icon-xs`, `inline`. |
+| An action | `Button` | `variant`: `default` (the one primary action), `secondary`, `outline`, `ghost` (toolbar and row actions), `destructive`, `link`, `text`, `text-link`, `row-action`; `size`: `default`, `sm`, `lg`, `icon`, `icon-sm`, `icon-xs`, `inline`. The lime fill (`default`) is for the one irreversible primary action of a screen or dialog (a submit, a confirm); an action inside a card, a list or a row is `secondary`, `text` or `row-action`, and lime otherwise marks only the focus ring and a selection. |
 | An action that reads as words in a row or a sentence (더 보기, 접기, 열기) | `Button variant="text" size="inline"`; `variant="text-link"` when it underlines on hover | `inline` keeps the surrounding text's size; set one with `className` (`text-caption`, `text-micro`) only to differ from it. |
 | An icon-only control | `Button size="icon"`, `"icon-sm"` or `"icon-xs"` (a dense row) inside `Hint` | The hint's label is the control's accessible name. |
 | An icon action inside a row that lights on hover | `Button variant="row-action" size="icon-xs"` | `ghost` would light in the row's own hover color and vanish. |

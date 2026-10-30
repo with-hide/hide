@@ -303,7 +303,7 @@ function Questions({ project, actions, busy }: { project: ProjectMemory; actions
         <div className="flex flex-wrap items-center gap-sm border-t border-border pt-sm text-caption" data-memory-selection={checked.length}>
           <span className="min-w-0 flex-1 text-muted-foreground" role={full ? "status" : undefined}>{full ? t("memory.batch.full") : t("memory.batch.selected", { count: checked.length })}</span>
           {checked.length ? <Button size="sm" variant="ghost" disabled={busy} onClick={() => set(Object.fromEntries(confirmed.map((question) => [question.number, false])))}>{t("memory.batch.clear")}</Button> : null}
-          <Button size="sm" disabled={busy || full || checked.length === 0} onClick={() => actions.memoryAction(project.workspace_id, "promote", null, checked)} data-memory-open-batch="true">{t("memory.batch.apply", { count: checked.length })}</Button>
+          <Button variant="secondary" size="sm" disabled={busy || full || checked.length === 0} onClick={() => actions.memoryAction(project.workspace_id, "promote", null, checked)} data-memory-open-batch="true">{t("memory.batch.apply", { count: checked.length })}</Button>
         </div>
       ) : null}
     </section>

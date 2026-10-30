@@ -278,7 +278,7 @@ export function ProjectPanel({ panel, projects, actions, onClose }: { panel: Ext
           {activity !== null ? <span>· {ageWords(language, Date.now() - activity, t)}</span> : null}
         </p>
         <div className="flex flex-wrap gap-xs">
-          <Button size="sm" onClick={() => openProject(project, actions)} data-project-panel-open={project.id}><ExternalLinkIcon />{t("overviewTasks.open")}</Button>
+          <Button variant="secondary" size="sm" onClick={() => openProject(project, actions)} data-project-panel-open={project.id}><ExternalLinkIcon />{t("overviewTasks.open")}</Button>
           <Button size="sm" variant="outline" onClick={() => actions.openStartPanel(project.id)}><PlusIcon />{t("overviewTasks.newAgent")}</Button>
         </div>
         <p className="flex min-w-0 items-baseline gap-sm" data-project-panel-now={row.now.total}>

@@ -199,7 +199,7 @@ function RestoreSession({ record, checkout: original, actions }: { record: Recor
     start((requestId, confirmOnly) => actions.startAgent({ target: { checkoutPath: checkout.path }, deviceId: record.session.device_id === node ? undefined : record.session.device_id, provider, resumeSessionId: record.session.session_id, resumeSessionPath: record.path ?? undefined, requestId, confirmOnly }));
   };
   return <div className="flex min-w-0 flex-col items-end gap-xs" data-record-restore="true">
-    <Button size="sm" disabled={off || busy} aria-busy={busy || undefined} onClick={restore} data-record-restore-button="true">
+    <Button variant="secondary" size="sm" disabled={off || busy} aria-busy={busy || undefined} onClick={restore} data-record-restore-button="true">
       {busy ? <LoaderCircleIcon aria-hidden="true" className="animate-spin" /> : <RotateCcwIcon aria-hidden="true" />}{t(resume.uncertain ? "groups.confirm" : busy ? "recordCard.restoring" : "recordCard.restore")}
     </Button>
     {resume.uncertain ? <p role="status" className="text-micro text-muted-foreground [overflow-wrap:anywhere]">{t("links.resumeUnknown")}</p> : null}
@@ -238,7 +238,7 @@ function NowBox({ record, summaries, checkout, agent, line, question, actions }:
   const said = settled ? settledPrs(t, settled) : recorded ? recorded.line || null : kind === "question" ? question ?? (agent?.state.ask?.subject ? askSubjectText(t, agent.state.ask.subject) : agent?.state.ask?.what) ?? null : kind === "blocked" ? (line?.kind === "blocked" ? line.what : null) ?? lastWords(agent) : lastWords(agent);
   const pane = agent?.pane_id ?? null;
   const button = pane === null ? <RestoreSession record={record} checkout={checkout} actions={actions} /> : kind === "question" ? (
-    <Button size="sm" onClick={() => actions.openAgent(pane)} data-record-now-button="answer"><CircleHelpIcon aria-hidden="true" />{t("links.answer")}</Button>
+    <Button variant="secondary" size="sm" onClick={() => actions.openAgent(pane)} data-record-now-button="answer"><CircleHelpIcon aria-hidden="true" />{t("links.answer")}</Button>
   ) : (
     <Button size="sm" variant="secondary" onClick={() => actions.openAgent(pane)} data-record-now-button="pane"><SquareTerminalIcon aria-hidden="true" />{t(kind === "blocked" ? "work.card.viewPane" : "record.toPane")}</Button>
   );
@@ -319,7 +319,7 @@ function ArchivedNow({ row, member, own, connected, actions }: { row: ArchivedSe
   const button = unknown ? (
     <Button size="sm" variant="secondary" disabled={!connected} onClick={() => actions.checkArchived(row.id)} data-record-now-button="check">{t("workspace.checkStatus")}</Button>
   ) : (
-    <Button size="sm" disabled={!connected || resuming || busy} onClick={() => actions.resumeArchived(row.id, own ? member.session.session_id : undefined)} data-record-now-button="resume">
+    <Button variant="secondary" size="sm" disabled={!connected || resuming || busy} onClick={() => actions.resumeArchived(row.id, own ? member.session.session_id : undefined)} data-record-now-button="resume">
       {resuming ? <LoaderCircleIcon aria-hidden="true" className="animate-spin" /> : null}{resuming ? t("archive.resuming") : t("archive.resume")}
     </Button>
   );
