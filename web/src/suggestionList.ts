@@ -204,21 +204,20 @@ export function memoryTabCount(project: Pick<ProjectSuggestions, "counts">): num
 
 /**
  * Whether a row offers its apply button: a new suggestion, `문서 고치기`
- * with or without GitHub (PRD hide-ai-branch-first-apply B1), an issue only
- * with it, where `GitHub 연결 필요` stands instead (B10, B18), and neither
- * while five branches wait for a decision (B28). A global instruction
+ * with or without GitHub (PRD hide-ai-branch-first-apply B1), however many
+ * branches already wait for a decision, and an issue only with it, where
+ * `GitHub 연결 필요` stands instead (B10, B18). A global instruction
  * row needs no GitHub (PRD memory-self-improve B8): it offers its press
  * while the core gave a preview to send back, and shows it held while none
  * of its evidence could be read (B7) or the line has no room (B10).
  */
-export function applyOffer(row: Pick<SuggestionRow, "state" | "hold" | "outcome" | "local" | "evidence_unconfirmed">): "pr" | "issue" | "local" | "local_held" | "github_needed" | "branches_full" | null {
+export function applyOffer(row: Pick<SuggestionRow, "state" | "hold" | "outcome" | "local" | "evidence_unconfirmed">): "pr" | "issue" | "local" | "local_held" | "github_needed" | null {
   if (!offered(row)) return null;
   if (row.outcome === "local") {
     if (!row.local || row.local.present) return null;
     return row.local.preview !== null && !row.evidence_unconfirmed ? "local" : "local_held";
   }
   if (row.hold === "github_needed") return "github_needed";
-  if (row.hold === "branches_full") return "branches_full";
   return row.outcome;
 }
 

@@ -408,10 +408,17 @@ impl Runtime {
                     Err(reason) => return refused(&reason),
                 }
             }
-            BatchDecision::Merge
-            | BatchDecision::MergePush
-            | BatchDecision::Discard
-            | BatchDecision::SyncBase => None,
+            // A merge refused because the branch no longer applies on its
+            // base starts `다시 맞추기` itself, so it carries the start a
+            // rebase needs; without one the refusal and its button stay.
+            BatchDecision::Merge | BatchDecision::MergePush => {
+                self.promotion_start(&node, &root).ok().map(|mut start| {
+                    start.purpose = BatchPurpose::Rebase;
+                    start.base = Some(base.clone());
+                    start
+                })
+            }
+            BatchDecision::Discard | BatchDecision::SyncBase => None,
         };
         let own = self.memory_batch_agents(&project_id, &cards);
         let place = BranchPlace {
@@ -555,12 +562,6 @@ impl Runtime {
         branches.into_iter().collect()
     }
 
-    /// The ready Memory batches waiting for the operator in the Project at
-    /// `root` on `node` (D-17).
-    pub(super) fn memory_branches_waiting(&self, node: &NodeId, root: &str) -> usize {
-        self.memory_branch_overlay(node, root).len()
-    }
-
     /// A batch's branch facts the 제안 row draws, by Project and branch.
     pub(super) fn memory_batch_facts(&self, branch: &str) -> Option<&BatchBranchFacts> {
         let project_id = self.project_memory.project_id.clone()?;
@@ -696,6 +697,21 @@ fn decide_batch(
                 }
                 branch_decision::Landing::Refused(code) => {
                     branch_decision::log(place, &subject, kind, code);
+                    if branch_decision::remakes(code)
+                        && let Some(start) = start
+                        && let Ok(unseen) = restart_batch(
+                            &mut store,
+                            connector.as_deref(),
+                            link.as_ref(),
+                            place,
+                            own,
+                            &ready,
+                            start,
+                            now,
+                        )
+                    {
+                        return unseen;
+                    }
                     refuse_all(&mut store, code);
                 }
             }
@@ -741,47 +757,72 @@ fn decide_batch(
             }
             None
         }
-        BatchDecision::OpenPr | BatchDecision::Rebase => {
-            let mut start = start?;
-            if let Some(connector) = connector.as_deref() {
-                for pane in own {
-                    if branch_decision::end_agent(connector, link.as_ref(), pane).is_err() {
-                        crate::diagnostic!(json!({
-                            "component": "memory", "kind": "promotion.previous_agent_kept",
-                            "project_id": place.project_id,
-                        }));
-                    }
-                }
-            }
-            if let Err(error) = store.set_promotion_batch_branch(
-                &place.project_id,
-                &place.branch,
-                start.purpose,
-                None,
-            ) {
+        BatchDecision::OpenPr | BatchDecision::Rebase => restart_batch(
+            &mut store,
+            connector.as_deref(),
+            link.as_ref(),
+            place,
+            own,
+            &ready,
+            start?,
+            now,
+        )
+        .unwrap_or(None),
+    }
+}
+
+/// Starts an agent on a ready batch's branch for the purpose `start` names
+/// (`PR 올리기`, `다시 맞추기`), its old agents ended first; `Err` when no
+/// card of the batch restarted.
+#[allow(clippy::too_many_arguments)]
+fn restart_batch(
+    store: &mut MemoryStore,
+    connector: Option<&dyn hide_herdr_client::ApiConnector>,
+    link: &dyn crate::node_access::NodeLink,
+    place: &BranchPlace,
+    own: &[String],
+    ready: &[(u64, Promotion)],
+    mut start: PromotionStart,
+    now: u64,
+) -> Result<Unseen, ()> {
+    if let Some(connector) = connector {
+        for pane in own {
+            if branch_decision::end_agent(connector, link, pane).is_err() {
                 crate::diagnostic!(json!({
-                    "component": "memory", "kind": "promotion.move_failed",
-                    "project_id": place.project_id, "message": error.to_string(),
+                    "component": "memory", "kind": "promotion.previous_agent_kept",
+                    "project_id": place.project_id,
                 }));
-                return None;
             }
-            let mut restarted = Vec::new();
-            for (number, promotion) in &ready {
-                match store.restart_promotion(&place.project_id, *number, promotion, now) {
-                    Ok(true) => restarted.push(*number),
-                    Ok(false) => {}
-                    Err(error) => crate::diagnostic!(json!({
-                        "component": "memory", "kind": "promotion.move_failed",
-                        "project_id": place.project_id, "card": hide_memory::card_name(*number),
-                        "message": error.to_string(),
-                    })),
-                }
-            }
-            if restarted.is_empty() {
-                return None;
-            }
-            start.numbers = restarted;
-            super::memory_promotion::spawn_restarted(&mut store, &place.project_id, start)
         }
     }
+    if let Err(error) =
+        store.set_promotion_batch_branch(&place.project_id, &place.branch, start.purpose, None)
+    {
+        crate::diagnostic!(json!({
+            "component": "memory", "kind": "promotion.move_failed",
+            "project_id": place.project_id, "message": error.to_string(),
+        }));
+        return Err(());
+    }
+    let mut restarted = Vec::new();
+    for (number, promotion) in ready {
+        match store.restart_promotion(&place.project_id, *number, promotion, now) {
+            Ok(true) => restarted.push(*number),
+            Ok(false) => {}
+            Err(error) => crate::diagnostic!(json!({
+                "component": "memory", "kind": "promotion.move_failed",
+                "project_id": place.project_id, "card": hide_memory::card_name(*number),
+                "message": error.to_string(),
+            })),
+        }
+    }
+    if restarted.is_empty() {
+        return Err(());
+    }
+    start.numbers = restarted;
+    Ok(super::memory_promotion::spawn_restarted(
+        store,
+        &place.project_id,
+        start,
+    ))
 }

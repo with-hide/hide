@@ -1161,6 +1161,36 @@ fn a_merge_whose_signing_fails_is_refused_as_the_signing() {
     assert_eq!(fixture.git(&["rev-parse", "main"]), main);
 }
 
+/// A merge refused because the base moved under the branch and conflicts
+/// with it is not left for the operator: Hide asks the worker to make the
+/// branch again on the base (`다시 맞추기`) once, right after the refusal,
+/// and main is left as it was (operator decision 2026-10-31).
+#[test]
+fn a_merge_that_conflicts_with_the_base_starts_the_remake_itself() {
+    use crate::runtime::suggestion_apply::BranchDecision;
+    use crate::suggestions::lifecycle::AttemptMove;
+    use crate::suggestions::notebook::LineId;
+    use crate::suggestions::worker::{Command, LineAction};
+    let fixture = ReadyBranch::new(false);
+    std::fs::write(fixture.repo.join("AGENTS.md"), "one\nthree\n").unwrap();
+    fixture.git(&["commit", "-q", "-am", "base moves the same line"]);
+    let main = fixture.git(&["rev-parse", "main"]);
+    fixture.github(None);
+    assert!(fixture.press(BranchDecision::Merge));
+    assert_eq!(
+        fixture.moved(),
+        AttemptMove::DecisionRefused("merge_conflict".into())
+    );
+    let mut remakes = Vec::new();
+    while let Ok(command) = fixture.commands.recv_timeout(Duration::from_millis(200)) {
+        if let Command::Action { line, action, .. } = command {
+            remakes.push((line, action));
+        }
+    }
+    assert_eq!(remakes, [(LineId(2), LineAction::Rebase)]);
+    assert_eq!(fixture.git(&["rev-parse", "main"]), main);
+}
+
 /// `{base}에 바로 올리기` on a main with a commit GitHub does not have is
 /// refused and counts it; `내 커밋을 브랜치로 옮기고 main 맞추기` then keeps
 /// that commit on `local-main-<day>` and puts main on GitHub's, and the rows

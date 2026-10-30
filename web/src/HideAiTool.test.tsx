@@ -331,11 +331,10 @@ describe("the Hide AI tool", () => {
     ]);
   });
 
-  it("offers a local merge and no PR without GitHub, fixes the docs without it, and holds a new fix while five branches wait (hide-ai-branch-first-apply B1, B7, B9, B28)", async () => {
+  it("offers a local merge and no PR without GitHub, fixes the docs without it, (hide-ai-branch-first-apply B1, B7, B9)", async () => {
     await render(suggestionsProject({ github: "missing", rows: [
       suggestionRow("s1", ready(null)),
       suggestionRow("s2"),
-      suggestionRow("s3", { hold: "branches_full" }),
       suggestionRow("m7", { source: "memory", memory_cards: [7, 9, 12], ...ready(null) }),
       suggestionRow("s4", ready("merge_dirty")),
     ] }));
@@ -350,8 +349,6 @@ describe("the Hide AI tool", () => {
     expect(sent("suggestion_action")).toEqual([{ workspace_id: "p", id: "s1", action: "merge" }]);
     expect(q('[data-suggestion="s2"] [data-suggestion-apply]')?.textContent).toBe("Fix the docs");
     expect(q('[data-suggestion="s2"] [data-suggestion-github-needed]')).toBeNull();
-    expect(q('[data-suggestion="s3"] [data-suggestion-apply]')).toBeNull();
-    expect(q('[data-suggestion="s3"] [data-suggestion-hold="branches_full"]')?.textContent).toBe("5 branches are waiting for a decision");
     expect(q('[data-suggestion="m7"]')?.textContent).toContain("Apply 3 corrections to the docs");
   });
 

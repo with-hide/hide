@@ -24,10 +24,6 @@ use std::time::Duration;
 const READ_TIMEOUT: Duration = Duration::from_secs(30);
 const CHANGE_TIMEOUT: Duration = Duration::from_secs(120);
 
-/// How many branches may wait for the operator's decision in one Project
-/// (D-17): past it no new fix starts.
-pub(crate) const WAITING_BRANCHES: usize = 5;
-
 /// Where a branch lives: the Project's machine and folder, and the branch
 /// and the base it is measured against.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -287,6 +283,14 @@ pub(super) fn sync(
 /// base apart from GitHub's, or a sync that did not finish.
 pub(super) fn offers_sync(code: &str) -> bool {
     matches!(code, "push_base_ahead" | "push_base_diverged") || code.starts_with("sync_")
+}
+
+/// Whether a merge's refusal means the branch no longer applies on its base,
+/// which Hide answers by starting `다시 맞추기` itself, once per refusal: an
+/// agent makes the branch again on the base as it is now, and the operator
+/// presses it only when that remake failed (operator decision 2026-10-31).
+pub(super) fn remakes(code: &str) -> bool {
+    code == "merge_conflict"
 }
 
 /// The operator's local day as a sync's branch names it: `1030` for

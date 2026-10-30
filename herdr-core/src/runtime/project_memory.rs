@@ -677,19 +677,6 @@ impl Runtime {
             .state
             .as_ref()
             .is_some_and(|state| state.capacity_reached);
-        let workspace_id = project.workspace_id.clone();
-        let branches_full = self
-            .catalog_workspaces()
-            .find(|workspace| workspace.id == workspace_id)
-            .and_then(|workspace| {
-                let node = crate::node::NodeId::parse(&workspace.device_id).ok()?;
-                Some(self.branches_waiting(&node, &workspace.path))
-            })
-            .is_some_and(|waiting| waiting >= super::branch_decision::WAITING_BRANCHES);
-        let Some(project) = self.memory_section().project.as_mut() else {
-            return false;
-        };
-        project.branches_full = branches_full;
         project.evicted_cards = load.state.as_ref().map_or(0, |state| state.evicted_count);
         project.evicted_through_unix_ms = load
             .state
@@ -1029,30 +1016,23 @@ impl Runtime {
             self.cancel_memory_pass();
         }
         // A batch commits on a local branch: a folder that is not a git
-        // repository takes none, and none starts while five branches wait
-        // for the operator's decision (PRD hide-ai-branch-first-apply D-09,
-        // D-17, B28). The tab holds the button; a screen behind it is
-        // refused here.
-        if payload.action == MemoryAction::Promote && !self.branch_room(&node, &path) {
-            let git = self.catalog_workspaces().any(|workspace| {
-                workspace.device_id == node.as_str() && workspace.path == path && workspace.is_git
-            });
-            let (kind, message) = if git {
-                (
-                    "memory.branches_full",
-                    "Merge or discard a waiting branch before starting another",
-                )
-            } else {
-                (
-                    "memory.not_git",
-                    "Documents are fixed on a git branch; this folder is not a git repository",
-                )
-            };
+        // repository takes none (PRD hide-ai-branch-first-apply D-09). The
+        // tab holds the button; a screen behind it is refused here. How many
+        // branches already wait never holds one (operator decision
+        // 2026-10-31, replacing D-17).
+        if payload.action == MemoryAction::Promote && !self.is_git_project(&node, &path) {
+            let kind = "memory.not_git";
             crate::diagnostic!(json!({
                 "component": "memory", "kind": "promotion.refused",
                 "workspace_id": payload.workspace_id, "reason": kind,
             }));
-            self.memory_action_failed(&payload.workspace_id, payload.action, kind, message, false);
+            self.memory_action_failed(
+                &payload.workspace_id,
+                payload.action,
+                kind,
+                "Documents are fixed on a git branch; this folder is not a git repository",
+                false,
+            );
             return true;
         }
         let start = match payload.action {

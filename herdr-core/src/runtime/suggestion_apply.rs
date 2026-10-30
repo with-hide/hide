@@ -29,7 +29,7 @@ use crate::suggestions::lifecycle::{
 use crate::suggestions::notebook::{LineId, Outcome};
 use crate::suggestions::policy;
 use crate::suggestions::watch::WatchedLine;
-use crate::suggestions::worker::{Command, ProjectRef};
+use crate::suggestions::worker::{Command, LineAction, ProjectRef};
 use serde_json::json;
 
 /// How often followed attempts are checked on the coordinator's tick; a
@@ -521,7 +521,13 @@ impl Runtime {
             .insert(deciding.clone(), decision);
         let pushed = decision == BranchDecision::MergePush;
         let based = (place.node.clone(), place.root.clone(), place.base.clone());
-        let carried = (key.clone(), deciding.clone(), pushed, based);
+        let carried = (
+            key.clone(),
+            deciding.clone(),
+            pushed,
+            based,
+            project.clone(),
+        );
         let day = super::branch_decision::sync_day(unix_milliseconds());
         let spawned = self.spawn_issue_worker(
             "suggestion-decide",
@@ -601,7 +607,7 @@ impl Runtime {
                 }
             },
             move |runtime, (change, learned)| {
-                let (key, deciding, pushed, (node, root, base)) = carried;
+                let (key, deciding, pushed, (node, root, base), project) = carried;
                 runtime.suggestions_work.apply.deciding.remove(&deciding);
                 // GitHub turned a push away that its rules allowed when read:
                 // they are read again before the button is offered again.
@@ -632,7 +638,21 @@ impl Runtime {
                 {
                     note_move(followed, &change);
                 }
+                let remake = matches!(&change, AttemptMove::DecisionRefused(code)
+                    if super::branch_decision::remakes(code));
                 runtime.move_attempt(&key, change);
+                // The branch no longer applies on its base: an agent makes it
+                // again there, as `다시 맞추기` would, and the row shows it
+                // working. A remake that cannot start leaves the refusal and
+                // its button.
+                if remake {
+                    runtime.send_suggestions(Command::Action {
+                        project,
+                        line: LineId(key.1),
+                        action: LineAction::Rebase,
+                        seen: None,
+                    });
+                }
                 runtime.compose_suggestions()
             },
         );

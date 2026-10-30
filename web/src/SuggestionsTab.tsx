@@ -559,8 +559,6 @@ function Buttons({ row, project, actions }: { row: SuggestionRow; project: Proje
         </Button>
       ) : offer === "github_needed" ? (
         <span className="text-caption text-muted-foreground" data-suggestion-github-needed="true">{t("suggestions.githubNeeded")}</span>
-      ) : offer === "branches_full" ? (
-        <span className="text-caption text-muted-foreground" data-suggestion-hold="branches_full">{t("suggestions.branchesFull")}</span>
       ) : offer ? (
         <Button className="pointer-events-auto" size="sm" variant={offer === "issue" ? "secondary" : "default"} onClick={() => actions.suggestionAction(id, row.id, "apply")} data-suggestion-apply={offer}>
           {offer === "issue" ? t("suggestions.makeIssue") : row.plan ? t("suggestions.makePrFile", { file: fileName(row.plan.path) }) : t("suggestions.makePr")}

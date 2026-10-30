@@ -249,19 +249,6 @@ impl Runtime {
         else {
             return false;
         };
-        // A new fix waits while five branches wait for a decision (PRD
-        // hide-ai-branch-first-apply D-17, B28).
-        if matches!(payload.action, SuggestionActionKind::Apply)
-            && self.held_row(&payload.workspace_id, &payload.id)
-                == Some(SuggestionHold::BranchesFull)
-        {
-            crate::diagnostic!(json!({
-                "component": "suggestions", "kind": "apply.refused",
-                "workspace_id": payload.workspace_id, "id": payload.id,
-                "reason": "branches_full",
-            }));
-            return false;
-        }
         // `PR 올리기` is offered only while GitHub is connected and permitted
         // (D-03, B9); an agent asked to push without it would only fail.
         if matches!(payload.action, SuggestionActionKind::OpenPr)
@@ -747,46 +734,14 @@ impl Runtime {
             .clone()
     }
 
-    /// The hold the tab shows on row `id` of the opened Project now.
-    fn held_row(&self, workspace_id: &str, id: &str) -> Option<SuggestionHold> {
-        self.snapshot
-            .suggestions
-            .as_ref()?
-            .project
-            .as_ref()
-            .filter(|project| project.workspace_id == workspace_id)?
-            .rows
-            .iter()
-            .find(|row| row.id == id)?
-            .hold
-    }
-
-    /// Whether the Project at `root` on `node` may start one more document
-    /// fix: it is a git repository and fewer than five branches wait for the
-    /// operator's decision there (PRD hide-ai-branch-first-apply D-09, D-17).
-    pub(super) fn branch_room(&self, node: &crate::node::NodeId, root: &str) -> bool {
-        let git = self
-            .catalog_workspaces()
+    /// Whether the Project at `root` on `node` is a git repository, which a
+    /// document fix needs for its branch (PRD hide-ai-branch-first-apply
+    /// D-09). How many branches already wait for a decision never holds a
+    /// new one (operator decision 2026-10-31, replacing D-17).
+    pub(super) fn is_git_project(&self, node: &crate::node::NodeId, root: &str) -> bool {
+        self.catalog_workspaces()
             .find(|workspace| workspace.device_id == node.as_str() && workspace.path == root)
-            .is_some_and(|workspace| workspace.is_git);
-        git && self.branches_waiting(node, root) < super::branch_decision::WAITING_BRANCHES
-    }
-
-    /// The branches waiting for the operator's decision in the Project at
-    /// `root` on `node`: ready 제안 attempts and ready Memory batches.
-    pub(super) fn branches_waiting(&self, node: &crate::node::NodeId, root: &str) -> usize {
-        let lines = self
-            .suggestions_work
-            .apply
-            .followed
-            .iter()
-            .filter(|attempt| {
-                attempt.location.node == node.as_str()
-                    && attempt.location.path == root
-                    && attempt.phase == crate::suggestions::lifecycle::AttemptPhase::Ready
-            })
-            .count();
-        lines + self.memory_branches_waiting(node, root)
+            .is_some_and(|workspace| workspace.is_git)
     }
 
     /// What the lock knows about the opened Project's branches: whether it
@@ -934,8 +889,7 @@ struct BranchOverlay {
 }
 
 /// Lays the branch facts on the rows: no document fix in a folder that is
-/// not a git repository (B16), a new fix held while five branches wait for
-/// a decision (D-17, B28), `합치는 중` on a branch being merged (B6) and
+/// not a git repository (B16), `합치는 중` on a branch being merged (B6) and
 /// `맞추는 중` on one whose base Hide syncs, which move its row to 반영 중
 /// while Hide works on it, the checkout each branch is in, and what the last
 /// decision on its base learned of it.
@@ -945,23 +899,7 @@ fn lay_branches(project: &mut ProjectSuggestionsSnapshot, overlay: &BranchOverla
             .rows
             .retain(|row| !(row.state == SuggestionState::New && row.outcome == Outcome::Pr));
     }
-    let waiting = project
-        .rows
-        .iter()
-        .filter(|row| {
-            row.attempt
-                .as_ref()
-                .is_some_and(|attempt| attempt.phase == SuggestionAttemptPhase::Ready)
-        })
-        .count();
     for row in &mut project.rows {
-        if row.state == SuggestionState::New
-            && row.outcome == Outcome::Pr
-            && row.hold.is_none()
-            && waiting >= super::branch_decision::WAITING_BRANCHES
-        {
-            row.hold = Some(SuggestionHold::BranchesFull);
-        }
         let Some(attempt) = row.attempt.as_mut() else {
             continue;
         };
@@ -1112,9 +1050,9 @@ impl Sink for RuntimeSink {
             return false;
         };
         runtime.lock().is_ok_and(|guard| match outcome {
-            // A document fix needs a git repository and room for one more
-            // waiting branch (PRD hide-ai-branch-first-apply D-09, D-17).
-            Outcome::Pr => guard.branch_room(&node, &location.path),
+            // A document fix needs a git repository for its branch (PRD
+            // hide-ai-branch-first-apply D-09).
+            Outcome::Pr => guard.is_git_project(&node, &location.path),
             Outcome::Issue => {
                 guard.suggestions_github(&node, &location.path) == SuggestionsGithub::Connected
             }
