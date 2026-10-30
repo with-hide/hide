@@ -12,7 +12,7 @@ import { bundledExecutable } from "./bundled-app";
 import { startHerdr, type HerdrFixture } from "./herdr-fixture";
 import { startHided, type Daemon } from "./hided-fixture";
 import { installOpenCodeHost, openCodeHost, type Host } from "./opencode-host";
-import { snapshotWorking } from "./subagent-counts";
+import { snapshotCounts } from "./subagent-counts";
 import { enterWorkspace } from "./wire";
 
 // The plugin starts its helper by path with no shell, which the kit writes only on macOS and Linux.
@@ -122,32 +122,25 @@ test("a shell call that starts an agent through Herdr is refused with the spawn 
 
 // A background child that outlives the root's turn is the plugin test's (`hide-agent-hooks/tests/opencode`):
 // across processes nothing marks the moment the root's idle sweep is done.
-test("child sessions of the prompted root session move the pane's subagent counts in Herdr and the snapshot", async ({ page }) => {
+test("child sessions of the prompted root session move the pane's subagent counts in the snapshot", async ({ page }) => {
   const stack = await start("opencode-counts");
   try {
     const pane = stack.herdr.panes[1];
-    const working = snapshotWorking(page, pane);
+    // The hook reports to the core, so the counts are what the core puts in the pane's row.
+    const counts = snapshotCounts(page, pane);
     await page.goto(`${stack.daemon.origin}/#token=${stack.daemon.token}`);
     await enterWorkspace(page, "fixture");
-    const counts = () => {
-      const listed = JSON.stringify(stack.herdr.run(["pane", "get", pane]));
-      const token = (name: string) => new RegExp(`"${name}":"(\\d+)"`).exec(listed)?.[1] ?? null;
-      return { working: token("hide_sub_working"), done: token("hide_sub_done") };
-    };
     // The plugin reports zero at load, so Hide hears the pane before any child.
-    await expect.poll(counts, { message: "the plugin's first report", timeout: 20_000 }).toEqual({ working: "0", done: "0" });
+    await expect.poll(counts, { message: "the plugin's first report", timeout: 20_000 }).toEqual({ working: 0, done: 0 });
 
     // B9: the operator's prompt starts a turn whose task tool runs a child session.
     await stack.recipient.send({ op: "prompt", text: "Explore the parser with a subagent" });
     await stack.recipient.send({ op: "created", id: "ses_child", parent: stack.recipient.session });
     await stack.recipient.send({ op: "status", id: "ses_child", status: "busy" });
-    await expect.poll(counts, { message: "one working child", timeout: 20_000 }).toEqual({ working: "1", done: "0" });
-    // What the shell is given for the pane's row (the badge drawing it is issue 810).
-    await expect.poll(working, { message: "the snapshot's working count", timeout: 20_000 }).toBe(1);
+    await expect.poll(counts, { message: "one working child", timeout: 20_000 }).toEqual({ working: 1, done: 0 });
 
     await stack.recipient.send({ op: "status", id: "ses_child", status: "idle" });
-    await expect.poll(counts, { message: "the child finished", timeout: 20_000 }).toEqual({ working: "0", done: "1" });
-    await expect.poll(working, { message: "the snapshot's working count", timeout: 20_000 }).toBe(0);
+    await expect.poll(counts, { message: "the child finished", timeout: 20_000 }).toEqual({ working: 0, done: 1 });
   } finally {
     stop(stack);
   }

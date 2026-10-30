@@ -101,10 +101,12 @@ fn event_command<'a>(document: &'a Value, event: &str, tool: &str) -> &'a str {
         .expect("declared observation needs its installed Post event");
     let group = groups
         .iter()
+        // A group with no matcher admits every tool.
         .find(|group| {
-            group["matcher"]
-                .as_str()
-                .is_some_and(|matcher| matcher.split('|').any(|name| name == tool))
+            group.get("matcher").is_none()
+                || group["matcher"]
+                    .as_str()
+                    .is_some_and(|matcher| matcher.split('|').any(|name| name == tool))
         })
         .expect("installed Post matcher must admit the native fixture tool");
     group["hooks"][0]["command"]

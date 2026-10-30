@@ -312,7 +312,7 @@ function Buttons({ project, pr, entry, card, actions, children }: { project: Wor
     </span>
   );
   const UpdateButton = (
-    <Button variant={primary === "update" ? "default" : "secondary"} size="sm" disabled={!canAsk || write?.phase === "working"} onClick={() => head !== null && setConfirm({ action: "update", head, method: null, queue })} data-pr-card-update="true">{t("work.card.updateBranch")}</Button>
+    <Button variant="secondary" size="sm" disabled={!canAsk || write?.phase === "working"} onClick={() => head !== null && setConfirm({ action: "update", head, method: null, queue })} data-pr-card-update="true">{t("work.card.updateBranch")}</Button>
   );
   return (
     <div className="flex flex-col gap-sm" data-pr-card-buttons={primary}>
@@ -320,9 +320,9 @@ function Buttons({ project, pr, entry, card, actions, children }: { project: Wor
         {children}
         <span className="flex min-w-0 flex-wrap items-center justify-end gap-xs">
           {primary === "update" || pr.work?.merge_state === "behind" ? UpdateButton : null}
-          {primary === "review" ? <Button size="sm" onClick={() => github("/files")} data-pr-card-review-github="true"><ExternalLinkIcon aria-hidden="true" />{t("work.card.reviewGithub")}</Button> : null}
-          {primary === "assign" ? <Button size="sm" onClick={() => useUiStore.getState().setWorkspaceDialog({ kind: "pr_delegate", workspaceId: project.id, prNumber: pr.number })} data-pr-card-assign="true">{t("work.card.assign")}</Button> : null}
-          {primary === "assign_reviewer" ? <Button size="sm" onClick={() => github()} data-pr-card-assign-reviewer="true"><ExternalLinkIcon aria-hidden="true" />{t("work.card.assignReviewer")}</Button> : null}
+          {primary === "review" ? <Button variant="secondary" size="sm" onClick={() => github("/files")} data-pr-card-review-github="true"><ExternalLinkIcon aria-hidden="true" />{t("work.card.reviewGithub")}</Button> : null}
+          {primary === "assign" ? <Button variant="secondary" size="sm" onClick={() => useUiStore.getState().setWorkspaceDialog({ kind: "pr_delegate", workspaceId: project.id, prNumber: pr.number })} data-pr-card-assign="true">{t("work.card.assign")}</Button> : null}
+          {primary === "assign_reviewer" ? <Button variant="secondary" size="sm" onClick={() => github()} data-pr-card-assign-reviewer="true"><ExternalLinkIcon aria-hidden="true" />{t("work.card.assignReviewer")}</Button> : null}
           {mine && primary !== "review" ? MergeButton : null}
         </span>
       </div>

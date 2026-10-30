@@ -1,4 +1,4 @@
-// hide-opencode-plugin@10 sha256=0b44372760155c7a9fa3a471c537591c38e9b4e136d6b6deed575d1454b6b080
+// hide-opencode-plugin@11 sha256=ede107e5cad13260645b75387ae463167442a1fa6eac645a73091deacf6c6222
 // Hide's OpenCode 1.x plugin, written by Hide's install kit (hide-agent-hooks).
 // An edit is kept and shown as edited in Settings; Reinstall puts Hide's back.
 // Outside a Herdr pane Hide manages, or when its helper is gone, it does nothing.
@@ -313,19 +313,41 @@ function publishCounts(state, force) {
   }
   const key = `${working}/${done}`;
   if (!force && key === state.published) return state.counting ?? Promise.resolve();
-  // Only a report Herdr took counts as published: a failed one is sent again with the next change, prompt or rest.
+  // Only a report the core took counts as published: a failed one is sent again with the next change, prompt or rest.
   state.published = key;
   state.nextCount = { working, done, key };
   state.counting ??= (async () => {
     while (state.nextCount) {
       const next = state.nextCount;
       state.nextCount = null;
-      const answer = await helper(state, "subagents", { working: next.working, done: next.done }, COUNT_BUDGET_MS);
+      const answer = await helper(state, "subagents", { session_id: state.root, working: next.working, done: next.done }, COUNT_BUDGET_MS);
       if (answer?.reported !== true && state.published === next.key) state.published = null;
     }
     state.counting = null;
   })();
   return state.counting;
+}
+
+/**
+ * Sends the root session's turn when it moved: working, done, waiting on the operator's permission, or idle after an
+ * abort (PRD engine-bundle-1 D-10). It carries the pane's counts, so a turn's start and end report them again, as
+ * Claude Code's hooks do. One report runs at a time and only the newest waiting one follows it.
+ */
+function publishTurn(state, turn) {
+  if (!state.root || turn === state.turn) return state.turning ?? Promise.resolve();
+  state.turn = turn;
+  state.nextTurn = { session: state.root, turn };
+  state.turning ??= (async () => {
+    while (state.nextTurn) {
+      const next = state.nextTurn;
+      state.nextTurn = null;
+      const answer = await helper(state, "turn", { session_id: next.session, turn: next.turn }, COUNT_BUDGET_MS);
+      // A turn the core did not take is sent again with the next event that names it.
+      if (answer?.reported !== true && state.turn === next.turn) state.turn = null;
+    }
+    state.turning = null;
+  })();
+  return state.turning;
 }
 
 /** At root idle, finished children leave the working count; a background child still busy stays. */
@@ -362,11 +384,28 @@ async function onEvent(state, client, event) {
       child.busy = busy;
       child.ran ||= busy;
       await publishCounts(state, false);
+    } else if (sessionID === state.root && (kind === "busy" || kind === "retry")) {
+      await publishTurn(state, "working");
     } else if (sessionID === state.root && kind === "idle") {
-      // Each turn's end reports again, as Claude Code's Stop does, so a Herdr that lost the pane's counts gets them back.
+      // An aborted turn rests without being announced as finished.
+      const turn = state.aborted ? "idle" : "done";
+      state.aborted = false;
       await sweep(state, client);
-      await publishCounts(state, true);
+      await publishCounts(state, false);
+      await publishTurn(state, turn);
     }
+    return;
+  }
+  if (type === "session.error") {
+    // OpenCode reports the operator's abort as this error before the session goes idle.
+    if (properties.sessionID === state.root && properties.error?.name === "MessageAbortedError") state.aborted = true;
+    return;
+  }
+  // A permission any session of the pane's root asks waits on the operator; the answer lets the turn go on.
+  if (type === "permission.asked" || type === "permission.replied") {
+    const sessionID = properties.sessionID;
+    if (!state.root || (sessionID !== state.root && rootOf(state, sessionID) !== state.root)) return;
+    await publishTurn(state, type === "permission.asked" ? "waiting" : "working");
     return;
   }
   if (type === "message.part.updated") {
@@ -494,7 +533,8 @@ async function onPrompt(state, client, directory, input, output) {
   );
   const answer = await helper(state, "prompt", { session_id: sessionID, prompt, cwd: directory, first }, Math.max(0, deadline - Date.now()));
   // After the prompt's own helper, so the report never shares its budget: each turn's start reports again.
-  void publishCounts(state, true);
+  state.turn = null;
+  void publishTurn(state, "working");
   const sections = [];
   // Guidance and the session-start Memory travel together: with no answer neither is given, and the next prompt asks again.
   if (first && answer !== null) {
@@ -558,6 +598,10 @@ const HidePlugin = async ({ client, directory }) => {
     closed: false,
     counting: null,
     nextCount: null,
+    turn: null,
+    nextTurn: null,
+    turning: null,
+    aborted: false,
     idTime: 0,
     idCounter: 0,
     guidance: null,

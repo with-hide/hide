@@ -271,11 +271,15 @@ use crate::error::HostError;
 /// approval count, and a node reads the approvals a branch's rulesets ask
 /// for (`gh::required_approvals_arguments`; PRD pr-review-status). A helper on
 /// 63 would refuse both reads, so it is refused at Hello and upgraded.
-/// 65: a node reads the thread of the session an agent pane runs, a page of
+/// 65: a device pane's hook reports its agent's turn and subagent counts to
+/// the core through its node (`panes::HookCommand::Status`) instead of to
+/// the device's Herdr. A helper on 64 would refuse the command, so it is
+/// refused at Hello and upgraded.
+/// 66: a node reads the thread of the session an agent pane runs, a page of
 /// ACP session updates, newest, before a page or forward from one
 /// (`Call::SessionThread`; PRD session-docs-and-assistant B25). A helper on
-/// 64 would refuse it, so it is refused at Hello and upgraded.
-pub const PROTOCOL_VERSION: u32 = 65;
+/// 65 would refuse it, so it is refused at Hello and upgraded.
+pub const PROTOCOL_VERSION: u32 = 66;
 
 /// What agy's index held in a checkout before Hide typed `/fork`
 /// ([`Call::AntigravityForkMark`]).

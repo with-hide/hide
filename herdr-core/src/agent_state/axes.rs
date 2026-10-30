@@ -3,6 +3,7 @@ use super::turn::{AgentGroup, derive_from_axes, group_of, sort_agents};
 use crate::labels::analysis::LabelEnd;
 use crate::model::{AgentWait, PaneReadRecord, SidebarAgentSnapshot};
 use crate::sidebar::SessionAgentPayload;
+use hide_node_link::panes::HookTurn;
 use std::collections::{BTreeMap, BTreeSet, HashSet};
 
 /// What an agent needs from the operator.
@@ -1096,35 +1097,64 @@ pub(crate) fn agent_demand(agent: &SessionAgentPayload) -> AgentDemand {
     }
 }
 
-/// Session plan approval holds the same state as Herdr's blocked prompt.
-/// A wait read from how the last turn ended cannot hold an agent that is
-/// already working again; one an agent kind reads from its session's current
-/// state can, because Herdr keeps that kind `working` while it waits.
+/// The turn the pane's own session's hook last reported: the first rank of
+/// every axis below (PRD engine-bundle-1 D-9). It stands until that session's
+/// next hook event; Herdr's state decides only an agent whose session has
+/// reported no turn (`agent_hooks::facts`).
+fn hook_turn(agent: &SessionAgentPayload) -> Option<HookTurn> {
+    agent.hook
+}
+
+/// Whether the agent waits for the operator's approval: its hook saying it
+/// asks for a permission or an answer first; then a plan approval its session
+/// read holds, which no hook reports; then Herdr's blocked prompt. A wait read
+/// from how the last turn ended cannot hold an agent that is already working
+/// again; one an agent kind reads from its session's current state can,
+/// because Herdr keeps that kind `working` while it waits.
 pub(crate) fn agent_blocked(agent: &SessionAgentPayload) -> bool {
     if agent.telemetry_stale {
         return false;
     }
-    agent.agent_status.as_deref() == Some("blocked")
-        || (agent
-            .facts
-            .as_ref()
-            .is_some_and(|facts| facts.awaiting_operator)
-            && (agent.agent_status.as_deref() != Some("working")
-                || agent
-                    .agent
-                    .as_deref()
-                    .and_then(hide_session::Agent::from_kind)
-                    .is_some_and(hide_session::Agent::waits_while_working)))
+    let hook = hook_turn(agent);
+    if hook == Some(HookTurn::Waiting) {
+        return true;
+    }
+    let working = match hook {
+        Some(turn) => turn == HookTurn::Working,
+        None => agent.agent_status.as_deref() == Some("working"),
+    };
+    let session_wait = agent
+        .facts
+        .as_ref()
+        .is_some_and(|facts| facts.awaiting_operator)
+        && (!working
+            || agent
+                .agent
+                .as_deref()
+                .and_then(hide_session::Agent::from_kind)
+                .is_some_and(hide_session::Agent::waits_while_working));
+    // A hook that reported the turn has said it is not waiting on a
+    // permission, so Herdr's blocked prompt is no longer the answer.
+    session_wait || (hook.is_none() && agent.agent_status.as_deref() == Some("blocked"))
 }
 
-/// The activity axis. A state Herdr does not name is reported as unknown
-/// rather than folded into idle (engineering rule 4). A turn that just ended
-/// whose session read has not landed is not a stop yet: whether a background
-/// task will wake the agent is not known, and a row announced as finished
-/// there is taken back when the read lands (#902). It goes on as it was.
+/// The activity axis: the hook's turn first, then Herdr's `agent_status`. A
+/// state Herdr does not name is reported as unknown rather than folded into
+/// idle (engineering rule 4). A turn that just ended whose session read has
+/// not landed is not a stop yet: whether a background task will wake the
+/// agent is not known, and a row announced as finished there is taken back
+/// when the read lands (#902). It goes on as it was.
 pub(crate) fn agent_activity(agent: &SessionAgentPayload) -> AgentActivity {
     if agent.telemetry_stale {
         return AgentActivity::Unknown;
+    }
+    match hook_turn(agent) {
+        Some(HookTurn::Working) => return AgentActivity::Working,
+        // An agent that asks goes on only once it is answered.
+        Some(HookTurn::Done | HookTurn::Idle | HookTurn::Waiting) => {
+            return AgentActivity::Stopped;
+        }
+        None => {}
     }
     match agent.agent_status.as_deref() {
         Some("working") => AgentActivity::Working,
@@ -1169,14 +1199,18 @@ pub(crate) fn agent_starting(agent: &SessionAgentPayload) -> bool {
     !agent.telemetry_stale && agent.launch_pending && agent.state_change_seq == Some(0)
 }
 
-/// Whether this stopped pane has actually completed work: Herdr's `done`, or
-/// its `idle` with the completion it keeps (`completion_seq`) after its
-/// tab-scoped seen turned `done` into `idle`. A ready pane has no completion.
-/// It is deliberately separate from activity and read state; Herdr's
-/// tab-scoped seen value never decides Hide's pane-level read axis.
+/// Whether this stopped pane has actually completed work: its hook saying the
+/// turn ended, or, without a hook's turn, Herdr's `done`, or its `idle` with
+/// the completion it keeps (`completion_seq`) after its tab-scoped seen turned
+/// `done` into `idle`. A ready pane has no completion. It is deliberately
+/// separate from activity and read state; Herdr's tab-scoped seen value never
+/// decides Hide's pane-level read axis.
 pub(crate) fn agent_completed(agent: &SessionAgentPayload) -> bool {
     if agent.telemetry_stale {
         return false;
+    }
+    if let Some(turn) = hook_turn(agent) {
+        return turn == HookTurn::Done;
     }
     match agent.agent_status.as_deref() {
         Some("done") => true,

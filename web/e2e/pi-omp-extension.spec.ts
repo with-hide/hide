@@ -13,7 +13,7 @@ import { bundledExecutable } from "./bundled-app";
 import { startHerdr, type HerdrFixture } from "./herdr-fixture";
 import { startHided, type Daemon } from "./hided-fixture";
 import { installPiOmpHosts, piOmpHost, type Host } from "./pi-omp-host";
-import { snapshotWorking } from "./subagent-counts";
+import { snapshotCounts } from "./subagent-counts";
 import { enterWorkspace } from "./wire";
 
 // The extension starts its helper by path with no shell, which the kit writes only on macOS and Linux.
@@ -138,35 +138,28 @@ test("a shell call that starts an agent through Herdr is refused with the spawn 
   }
 });
 
-test("omp's subagents move the pane's counts in Herdr and the snapshot, and their prompts take no letters", async ({ page }) => {
+test("omp's subagents move the pane's counts in the snapshot, and their prompts take no letters", async ({ page }) => {
   const stack = await start("pi-omp-counts");
   try {
     const pane = stack.herdr.panes[1];
-    const working = snapshotWorking(page, pane);
+    // The hook reports to the core, so the counts are what the core puts in the pane's row.
+    const counts = snapshotCounts(page, pane);
     await page.goto(`${stack.daemon.origin}/#token=${stack.daemon.token}`);
     await enterWorkspace(page, "fixture");
-    const counts = () => {
-      const listed = JSON.stringify(stack.herdr.run(["pane", "get", pane]));
-      const token = (name: string) => new RegExp(`"${name}":"(\\d+)"`).exec(listed)?.[1] ?? null;
-      return { working: token("hide_sub_working"), done: token("hide_sub_done") };
-    };
     // The extension reports zero when the session starts, so Hide hears the pane before any subagent.
-    await expect.poll(counts, { message: "the extension's first report", timeout: 20_000 }).toEqual({ working: "0", done: "0" });
+    await expect.poll(counts, { message: "the extension's first report", timeout: 20_000 }).toEqual({ working: 0, done: 0 });
 
     const sent = await hide(stack.pi, "request", "send", pane, "--intent", "e2e-omp-sub-letter", "--body", "E2E-LETTER-FOR-THE-PANE");
     expect(sent.ok, JSON.stringify(sent)).toBe(true);
 
     // B9: the parent dispatches a task; the subagent counts as working from dispatch until its turn ends.
     await stack.omp.send({ op: "spawn", id: "MassMoth" });
-    await expect.poll(counts, { message: "one working subagent", timeout: 20_000 }).toEqual({ working: "1", done: "0" });
-    // What the shell is given for the pane's row (the badge drawing it is issue 810).
-    await expect.poll(working, { message: "the snapshot's working count", timeout: 20_000 }).toBe(1);
+    await expect.poll(counts, { message: "one working subagent", timeout: 20_000 }).toEqual({ working: 1, done: 0 });
     await stack.omp.send({ op: "sub", id: "MassMoth", step: "start" });
     const subPrompt = await stack.omp.send({ op: "sub", id: "MassMoth", step: "prompt", text: "Complete assignment thoroughly:\n\nSay ok." });
     expect(subPrompt.message, "a subagent's prompt carries no letters or guidance").toBeNull();
     await stack.omp.send({ op: "sub", id: "MassMoth", step: "end" });
-    await expect.poll(counts, { message: "the subagent finished", timeout: 20_000 }).toEqual({ working: "0", done: "1" });
-    await expect.poll(working, { message: "the snapshot's working count", timeout: 20_000 }).toBe(0);
+    await expect.poll(counts, { message: "the subagent finished", timeout: 20_000 }).toEqual({ working: 0, done: 1 });
 
     // The letter waited for the pane's own next prompt.
     const prompted = (await stack.omp.send({ op: "prompt", text: "What did it find?" })).message as Hidden | null;

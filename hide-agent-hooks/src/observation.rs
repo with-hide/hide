@@ -586,6 +586,14 @@ fn grok_raw_output(response: &Value) -> Option<Value> {
     String::from_utf8(bytes).ok().map(Value::String)
 }
 
+/// Whether `tool` is a shell call, the only kind whose result is observed.
+pub fn shell_tool(tool: Option<&str>) -> bool {
+    matches!(
+        tool,
+        Some("Bash" | "PowerShell" | "run_terminal_command" | "run_command")
+    )
+}
+
 /// Native command-hook payloads. Post has the actual executed input, so no
 /// Pre spool, target query, detached helper or transcript scan is needed.
 pub fn native(
@@ -630,10 +638,7 @@ pub fn native(
     } else {
         field("tool_name", "toolName").and_then(Value::as_str)
     }?;
-    if !matches!(
-        tool,
-        "Bash" | "PowerShell" | "run_terminal_command" | "run_command"
-    ) {
+    if !shell_tool(Some(tool)) {
         return None;
     }
     let tool_input = if agy {

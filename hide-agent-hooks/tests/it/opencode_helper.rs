@@ -24,6 +24,10 @@ case "$1 $2" in
   "inbox --hook") echo '{"ok":true,"result":{"context":"LETTER-FOR-THIS-PANE","ids":["letter-1"],"remaining":0}}' ;;
   "inbox --confirm") echo '{"ok":true,"result":{"confirmed":["letter-1"]}}' ;;
   "workspace bootstrap") echo '{"ok":true}' ;;
+  "workspace status")
+    { cat; echo; } >> "${HOME%/*}/status"
+    if [ -f "${HOME%/*}/status-down" ]; then echo '{"ok":false,"reason":"hide_unavailable"}'; exit 2; fi
+    echo '{"ok":true,"result":{"recorded":true}}' ;;
   "observation --hook")
     cat > "${HOME%/*}/observation"
     echo '{"ok":true,"result":{"observed":true}}' ;;
@@ -474,25 +478,70 @@ fn outside_a_pane_or_with_unreadable_input_the_helper_answers_nothing_and_asks_n
     assert!(machine.calls().is_empty());
 }
 
+/// The plugin's counts and its root session's turn reach the core through
+/// `hide workspace status --hook`, kept in the pane's record under the
+/// session the plugin names; a report the core does not take is recorded
+/// (PRD engine-bundle-1 D-7, D-10).
 #[test]
-fn subagent_counts_are_stored_as_sent_and_a_failed_report_is_recorded() {
+fn counts_and_turns_are_stored_under_the_session_and_reported_to_the_core() {
     let machine = Machine::new();
-    let answer = machine.run("subagents", &json!({"working": 2, "done": 1}), true);
-    assert_eq!(answer, json!({"reported": false}));
+    let root = machine.home.parent().unwrap().to_path_buf();
+    let reports = || -> Vec<Value> {
+        std::fs::read_to_string(root.join("status"))
+            .unwrap_or_default()
+            .lines()
+            .filter(|line| !line.is_empty())
+            .map(|line| serde_json::from_str(line).unwrap())
+            .collect()
+    };
+    let answer = machine.run(
+        "subagents",
+        &json!({"session_id": "ses_root", "working": 2, "done": 1}),
+        true,
+    );
+    assert_eq!(answer, json!({"reported": true}));
     let stored: Value = serde_json::from_slice(
         &std::fs::read(machine.home.join(".hide/agent-hooks/panes/w1_p1.json")).unwrap(),
     )
     .unwrap();
-    // The counts as sent, and who stored them: the hook version, the agent
-    // and no session (the plugin's totals name none), which is what a restore
-    // pairs a file with a pane by after Herdr loses the tokens.
     assert_eq!(
         stored,
-        json!({"working": 2, "done": 1, "version": hide_agent_hooks::HOOK_VERSION, "agent": "opencode", "session": null})
+        json!({"sessions": [{"working": 2, "done": 1, "version": hide_agent_hooks::HOOK_VERSION,
+            "agent": "opencode", "session": "ses_root"}]})
     );
+    let answer = machine.run(
+        "turn",
+        &json!({"session_id": "ses_root", "turn": "waiting"}),
+        true,
+    );
+    assert_eq!(answer, json!({"reported": true}));
+    assert_eq!(
+        reports(),
+        [
+            json!({"runtime": "opencode", "version": hide_agent_hooks::HOOK_VERSION,
+                "session": "ses_root", "counts": {"working": 2, "done": 1}, "session_start": false}),
+            json!({"runtime": "opencode", "version": hide_agent_hooks::HOOK_VERSION,
+                "session": "ses_root", "turn": "waiting", "counts": {"working": 2, "done": 1},
+                "session_start": false}),
+        ]
+    );
+
+    std::fs::write(root.join("status-down"), "").unwrap();
+    let answer = machine.run(
+        "subagents",
+        &json!({"session_id": "ses_root", "working": 0, "done": 3}),
+        true,
+    );
+    assert_eq!(answer, json!({"reported": false}));
     let failure = hide_agent_hooks::report::last_failure(&machine.home).unwrap();
-    assert_eq!(failure.pane_id, PANE);
-    assert_eq!(failure.event, "subagent count");
+    assert_eq!(
+        (
+            failure.pane_id.as_str(),
+            failure.agent.as_str(),
+            failure.event.as_str()
+        ),
+        (PANE, "opencode", "subagent count")
+    );
 }
 
 #[test]

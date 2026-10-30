@@ -1,4 +1,4 @@
-// hide-opencode-tui@2 sha256=073d18354689ad07799a5e7adcd6a912821bbff4a2d002498d977f6d3e299df5
+// hide-opencode-tui@3 sha256=e648c2463551887de231e8adff533e328325bd3a2349cb54becdc4caef7436bc
 // Hide's OpenCode 2 plugin, its TUI half, written by Hide's install kit (hide-agent-hooks).
 // An edit is kept and shown as edited in Settings; Reinstall puts Hide's back.
 // It runs in the terminal, so in a Herdr pane it is that pane: it attaches to the root session the pane shows,
@@ -48,19 +48,41 @@ function publishCounts(state, api, force) {
   }
   const key = `${working}/${done}`;
   if (!force && key === state.published) return state.counting ?? Promise.resolve();
-  // Only a report Herdr took counts as published: a failed one is sent again with the next change, prompt or rest.
+  // Only a report the core took counts as published: a failed one is sent again with the next change, prompt or rest.
   state.published = key;
   state.nextCount = { working, done, key };
   state.counting ??= (async () => {
     while (state.nextCount) {
       const next = state.nextCount;
       state.nextCount = null;
-      const answer = await helper(state, "subagents", { working: next.working, done: next.done }, COUNT_BUDGET_MS, state.pane);
+      const answer = await helper(state, "subagents", { session_id: state.root, working: next.working, done: next.done }, COUNT_BUDGET_MS, state.pane);
       if (answer?.reported !== true && state.published === next.key) state.published = null;
     }
     state.counting = null;
   })();
   return state.counting;
+}
+
+/**
+ * Sends the root session's turn when it moved: working, done, or idle after an interrupt (PRD engine-bundle-1 D-10).
+ * It carries the pane's counts, so a turn's start and end report them again, as Claude Code's hooks do. One report
+ * runs at a time and only the newest waiting one follows it.
+ */
+function publishTurn(state, turn) {
+  if (!state.root || turn === state.turn) return state.turning ?? Promise.resolve();
+  state.turn = turn;
+  state.nextTurn = { session: state.root, turn };
+  state.turning ??= (async () => {
+    while (state.nextTurn) {
+      const next = state.nextTurn;
+      state.nextTurn = null;
+      const answer = await helper(state, "turn", { session_id: next.session, turn: next.turn }, COUNT_BUDGET_MS, state.pane);
+      // A turn the core did not take is sent again with the next event that names it.
+      if (answer?.reported !== true && state.turn === next.turn) state.turn = null;
+    }
+    state.turning = null;
+  })();
+  return state.turning;
 }
 
 /** At root rest, finished children leave the working count; a background child still running stays. */
@@ -70,7 +92,7 @@ function sweep(state, api) {
   }
 }
 
-/** Applies one of OpenCode's events to the pane's subagent counts. */
+/** Applies one of OpenCode's events to the pane's subagent counts and its root session's turn. */
 function onEvent(state, api, event) {
   const type = event?.type;
   const data = event?.data ?? {};
@@ -90,10 +112,13 @@ function onEvent(state, api, event) {
     child.busy = started;
     child.ran ||= started;
     void publishCounts(state, api, false);
-  } else if (!started && sessionID === state.root) {
-    // Each turn's end reports again, as Claude Code's Stop does, so a Herdr that lost the pane's counts gets them back.
+  } else if (sessionID === state.root && started) {
+    void publishTurn(state, "working");
+  } else if (sessionID === state.root) {
     sweep(state, api);
-    void publishCounts(state, api, true);
+    void publishCounts(state, api, false);
+    // An interrupted turn rests without being announced as finished.
+    void publishTurn(state, type === "session.execution.interrupted" ? "idle" : "done");
   }
 }
 
@@ -108,7 +133,8 @@ async function prompt(state, api, input, budgetMs) {
   const first = !state.guided.has(session);
   const answer = await helper(state, "prompt", { ...input, first }, budgetMs, state.pane);
   // After the prompt's own helper, so the report never shares its budget: each turn's start reports again.
-  void publishCounts(state, api, true);
+  state.turn = null;
+  void publishTurn(state, "working");
   let guidance = "";
   if (first && answer !== null) {
     const start = await withBudget(state.guidance, Math.max(0, deadline - Date.now()));
@@ -142,6 +168,9 @@ function setup(api) {
     published: null,
     counting: null,
     nextCount: null,
+    turn: null,
+    nextTurn: null,
+    turning: null,
   };
   state.guidance = helper(state, "start", { cwd: process.cwd() }, START_BUDGET_MS, pane).then((answer) => {
     state.started = true;
@@ -162,6 +191,7 @@ function setup(api) {
     if (root === state.root) return;
     if (state.root) rpc.detach({ root: state.root, client }, at(place)).catch(() => {});
     state.root = root;
+    state.turn = null;
     place = root ? api.data.session.get(root)?.location : undefined;
     attach(false);
     void publishCounts(state, api, true);
