@@ -433,11 +433,11 @@ test("a branch update on a pull request that moved is refused, looked at again, 
 
 test("the list and the card read without sideways scrolling in each language and both themes", async ({ page }) => {
   await openWork(page, async ({ work }) => {
-    // The lane opens unpinned, over the agents; a pinned one would dock and redraw under the keys.
-    await setLanePinned(page, false);
     await work.locator('[data-pr-row="33"]').click();
     const review = cardOf(page, 33);
     await expect(review).toBeVisible({ timeout: 30_000 });
+    // The lane stays unpinned, over the agents; a pinned one would dock and redraw under the keys.
+    await setLanePinned(page, false);
     const overflow = (target: Locator) => target.evaluate((node) => node.scrollWidth - node.clientWidth);
     // The narrowest lane (B48): the divider's keys narrow it to its minimum.
     const divider = page.locator('[data-lane-divider="lane"]');

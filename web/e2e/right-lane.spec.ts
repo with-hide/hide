@@ -212,21 +212,22 @@ test("the rail draws the viewing column's buttons over a rule and one divider be
     // The documents' button, a rule, then one short rule where the Project's tools end and the checkout's begin.
     const rail = await page.locator("[data-tool-rail] > [data-lane-tool], [data-tool-rail] > [data-tool-rail-divider]").evaluateAll((nodes) => nodes.map((node) => node.getAttribute("data-lane-tool") ?? `divider:${node.getAttribute("data-tool-rail-divider")}`));
     expect(rail).toEqual(["documents", "divider:view", "project", "memory", "mission", "divider:true", "explorer", "changes"]);
-    // The Project tool's head names the project and where it is, with ⚙ and × (PRD lane-two-columns B26).
+    // The Project tool's head names the project and where it is, with ⚙, the pin and × (PRD lane-two-columns B26; session-docs-and-assistant B33).
     await showTool(page, "project");
     const projectHeader = page.locator('aside[data-lane="project"] [data-lane-header]');
     await expect(projectHeader.locator('[data-lane-scope-kind="project"]')).toContainText("fixture");
-    await expect(projectHeader.getByRole("button")).toHaveCount(2);
+    await expect(projectHeader.getByRole("button")).toHaveCount(3);
+    await expect(projectHeader.locator("[data-lane-pin]")).toBeVisible();
     await expect(projectHeader.locator('[data-lane-tool-close="project"]')).toBeVisible();
-    // The Hide AI tool's head names the project beside its brain, with the switch for all of Hide AI, ⚙ and × (PRD hide-ai-suggestions B1, B3).
+    // The Hide AI tool's head names the project beside its brain, with the switch for all of Hide AI, ⚙, the pin and × (PRD hide-ai-suggestions B1, B3).
     await showTool(page, "memory");
     const hideAiHeader = page.locator('aside[data-lane="memory"] [data-lane-header]');
     await expect(hideAiHeader.locator('[data-lane-scope-kind="project"]')).toContainText(/Hide AI\s*· fixture/);
     await expect(hideAiHeader.locator("svg.lucide-brain")).toHaveCount(1);
     await expect(hideAiHeader.getByRole("switch")).toHaveCount(1);
-    await expect(hideAiHeader.getByRole("button")).toHaveCount(2);
+    await expect(hideAiHeader.getByRole("button")).toHaveCount(3);
     await expect(hideAiHeader.locator('[data-lane-tool-close="memory"]')).toBeVisible();
-    // Every checkout tool reads `name · scope`, with decoration only, and closes with one ×.
+    // Every checkout tool reads `name · scope`, with decoration only, and ends with the pin and one ×.
     for (const [tool, name, icon] of [["explorer", "Explorer", "git-branch"], ["changes", "Changes", "git-branch"]] as const) {
       await showTool(page, tool);
       const header = page.locator("[data-lane-header]");
@@ -235,7 +236,8 @@ test("the rail draws the viewing column's buttons over a rule and one divider be
       await expect(scope.locator("svg.lucide-folder, svg.lucide-git-branch")).toHaveCount(1);
       const text = (await scope.textContent())!.replace(/\s+/g, " ").trim();
       expect(text, tool).toMatch(new RegExp(`^${name} · \\S`));
-      await expect(header.getByRole("button")).toHaveCount(1);
+      await expect(header.getByRole("button")).toHaveCount(2);
+      await expect(header.locator("[data-lane-pin]")).toBeVisible();
       await expect(header.locator(`[data-lane-tool-close="${tool}"]`)).toBeVisible();
     }
   } finally {
