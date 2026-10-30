@@ -61,7 +61,7 @@ pub struct PreparedObservation {
     /// The session Hide already held in a started pane before the call; that
     /// agent was there before, so it is not the one the call started.
     pub(crate) seen_before: Option<String>,
-    pub(crate) connector: Arc<dyn hide_herdr_client::ApiConnector>,
+    pub(crate) engine: crate::engine::SharedEngine,
     pub(crate) node: Arc<dyn NodeLink>,
     pub(crate) source_server: String,
     pub(crate) runtime: Weak<Mutex<Runtime>>,
@@ -160,20 +160,20 @@ impl PreparedObservation {
         endpoint: &Endpoint,
     ) -> Result<
         (
-            crate::wire::DeliveryAgent,
+            crate::engine::DeliveryAgent,
             Option<hide_agent_hooks::observation::ObservationNativeSession>,
         ),
         String,
     > {
         self.remaining()?;
-        let value = hide_herdr_client::request_small_response_strict_until(
-            self.connector.as_ref(),
-            "agent.get",
-            crate::wire::agent_target_params(&endpoint.raw_pane)?,
-            self.deadline,
-        )
-        .map_err(|_| "observation_native_unavailable")?;
-        let (fresh, native) = crate::wire::direct_observation_agent(value)?;
+        let (fresh, native) = self
+            .engine
+            .observed_agent(crate::engine::Wait::By(self.deadline), &endpoint.raw_pane)
+            .map_err(|error| match error {
+                crate::engine::EngineError::Request(message)
+                | crate::engine::EngineError::Answer(message) => message,
+                _ => "observation_native_unavailable".to_owned(),
+            })?;
         if fresh.pane_id != endpoint.raw_pane
             || fresh.terminal_id != endpoint.terminal
             || fresh.session.is_none()
@@ -264,7 +264,7 @@ impl PreparedObservation {
             .as_ref()
             .ok_or("observation_recipient_unproven")?;
         let digest = |native: &hide_agent_hooks::observation::ObservationNativeSession| {
-            crate::wire::session_digest(&native.value)
+            crate::engine::tokens::session_digest(&native.value)
         };
         let started = |agent: &crate::session_sync::ProjectedAgent| {
             let named = match &claim.terminal_id {

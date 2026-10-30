@@ -128,7 +128,7 @@ fn successful_manual_issue_is_immediate_even_before_first_project_read() {
         checkout_id: "c".into(),
         node: None,
     });
-    let request = crate::live::PurposeTaskRequest {
+    let request = crate::worktree_control::PurposeTaskRequest {
         id: 7,
         checkout_id: "c".into(),
         repository_root: "/repo".into(),
@@ -184,8 +184,8 @@ fn manual_issue_runtime() -> Runtime {
     runtime.sync_issues();
     runtime
 }
-fn manual_request(number: u32) -> crate::live::PurposeTaskRequest {
-    crate::live::PurposeTaskRequest {
+fn manual_request(number: u32) -> crate::worktree_control::PurposeTaskRequest {
+    crate::worktree_control::PurposeTaskRequest {
         id: 7,
         checkout_id: "c".into(),
         repository_root: "/repo".into(),
@@ -215,7 +215,7 @@ fn issue_validation_failure_keeps_the_previously_saved_manual_override() {
     });
     runtime.ingest_issue_operation_result(
         &request,
-        Err(crate::live::IssueWriteFailure::unchanged(
+        Err(crate::worktree_control::IssueWriteFailure::unchanged(
             "read failed before mutation".into(),
         )),
     );
@@ -234,7 +234,7 @@ fn issue_uncertain_write_is_suppressed_even_when_metadata_arrives_later() {
     });
     runtime.ingest_issue_operation_result(
         &request,
-        Err(crate::live::IssueWriteFailure {
+        Err(crate::worktree_control::IssueWriteFailure {
             detail: "rollback uncertain".into(),
             unconfirmed_token: true,
         }),
@@ -679,7 +679,7 @@ fn a_task_prompt_is_handed_to_its_agent_start_and_kept_for_a_retry() {
     );
     assert!(runtime.ingest_task_operation_result(
         id,
-        Ok(live::WorktreeTaskOutcome {
+        Ok(crate::worktree_control::WorktreeTaskOutcome {
             path: "/tmp/hide-prompt".into(),
             pane_id: "w1:p9".into(),
             created_tab_id: None,
@@ -696,7 +696,7 @@ fn a_task_prompt_is_handed_to_its_agent_start_and_kept_for_a_retry() {
     // beside the code, and a later start clears both.
     assert!(runtime.ingest_task_agent_result(
         id,
-        live::TaskAgentOutcome::Failed(live::AgentFailure {
+        crate::worktree_control::TaskAgentOutcome::Failed(crate::worktree_control::AgentFailure {
             reason: "agent_start.shell_starting".into(),
             detail: None,
             line: Some("Update oh-my-zsh now? [Y/n]".into()),
@@ -718,7 +718,9 @@ fn a_task_prompt_is_handed_to_its_agent_start_and_kept_for_a_retry() {
         .as_mut()
         .unwrap()
         .agent_phase = Some("starting".into());
-    assert!(runtime.ingest_task_agent_result(id, live::TaskAgentOutcome::Started));
+    assert!(
+        runtime.ingest_task_agent_result(id, crate::worktree_control::TaskAgentOutcome::Started)
+    );
     assert!(runtime.task_agent_launch.is_none());
     let operation = runtime.snapshot().task_operation.clone().unwrap();
     assert_eq!(operation.agent_phase.as_deref(), Some("started"));

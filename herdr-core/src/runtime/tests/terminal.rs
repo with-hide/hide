@@ -314,7 +314,7 @@ fn observed_runtime(herdr: &FakeHerdr, pane: &str) -> SharedRuntime {
             socket_path: herdr.socket_path().to_path_buf(),
             runtime: shared.weak(),
             notifier: crate::handle::ChangeNotifier::noop(),
-            api_connector: Arc::new(herdr.connector()),
+            engine: herdr.engine(),
             node: Arc::new(hide_node::Local::of_process()),
         });
         runtime
@@ -510,7 +510,7 @@ fn a_device_pane_is_searched_on_its_own_herdr() {
         });
         runtime.install_remote_control(live::RemoteControlContext::new(
             "mini",
-            Arc::new(herdr.connector()),
+            herdr.engine(),
             shared.weak(),
             crate::handle::ChangeNotifier::noop(),
         ));

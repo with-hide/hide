@@ -12,7 +12,7 @@ Do not copy those contracts here.
 - Default modules and helpers to private or `pub(crate)`.
 - Add a public module or item only when a crate consumer needs that surface.
 - Keep the owner-thread handle hided drives in `handle.rs` and re-export only `Core` from `lib.rs`; the crate has no C ABI.
-- Keep conversions to and from the generated Herdr contract in `wire.rs`.
+- Speak to Herdr only through the `Engine` trait in `src/engine/`; keep conversions to and from the generated Herdr contract in `src/engine/herdr/wire.rs`, which only the engine's Herdr implementation calls.
 - Before changing that boundary, follow the Herdr API procedure in the root `AGENTS.md`.
 - Extend the existing feature owner instead of adding a second module for the same decision.
 

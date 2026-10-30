@@ -14,6 +14,8 @@
 //! snapshot costs no Herdr call; only creating a tab in a checkout with no
 //! owner opens one (B16).
 
+pub(crate) mod open;
+
 use sha2::{Digest, Sha256};
 
 /// The workspace token that marks a plain-folder workspace Hide opened as the

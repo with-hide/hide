@@ -2562,7 +2562,10 @@ fn a_device_reads_its_servers_own_version_and_device_advice_for_an_older_protoco
 
     runtime.ingest_remote_session(
         DEVICE,
-        Err(crate::wire::protocol_mismatch(21, Some("0.8.0".to_owned()))),
+        Err(crate::engine::herdr::wire::protocol_mismatch(
+            21,
+            Some("0.8.0".to_owned()),
+        )),
     );
     let status = remote(&runtime);
     assert_eq!(status.state, "protocol_mismatch");

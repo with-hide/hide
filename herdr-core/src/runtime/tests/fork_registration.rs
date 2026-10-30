@@ -67,7 +67,7 @@ fn forking() -> Forking {
         socket_path: herdr.socket_path().to_path_buf(),
         runtime: Arc::downgrade(&runtime),
         notifier: ChangeNotifier::noop(),
-        api_connector: Arc::new(herdr.connector()),
+        engine: herdr.engine(),
         node: Arc::new(hide_node::Local::of_process()),
     };
     let (worker, client) =
@@ -78,7 +78,7 @@ fn forking() -> Forking {
         // of the native session Herdr lists.
         let payload: crate::sidebar::SessionSnapshotPayload = serde_json::from_value(json!({"agents":[
             {"id":"sender","pane_id":"sender","agent":"codex","agent_status":"idle",
-             "state_change_seq":1,"lineage_session":crate::wire::session_digest("sender-native")},
+             "state_change_seq":1,"lineage_session":crate::engine::tokens::session_digest("sender-native")},
         ]}))
         .unwrap();
         guard.observe_delivery(crate::node::TEST_NODE, &payload, None, None);
@@ -86,7 +86,7 @@ fn forking() -> Forking {
             socket_path: live.socket_path.clone(),
             runtime: Arc::downgrade(&runtime),
             notifier: ChangeNotifier::noop(),
-            api_connector: live.api_connector.clone(),
+            engine: live.engine.clone(),
             node: live.node.clone(),
         });
         guard.install_delivery_client(client);
@@ -112,7 +112,7 @@ impl Forking {
     fn writer(&self) -> Writer {
         Writer::new(
             crate::node::TEST_NODE.into(),
-            Arc::new(self.herdr.connector()),
+            self.herdr.engine(),
             Arc::downgrade(&self.runtime),
         )
         .unwrap()
@@ -124,11 +124,11 @@ impl Forking {
         let listed = hide_herdr_client::request_with_connector(
             &self.herdr.connector(),
             "agent.list",
-            crate::wire::empty_params(),
+            crate::engine::herdr::wire::empty_params(),
             Duration::from_secs(2),
         )
         .unwrap();
-        let agents = crate::wire::agents_response(listed).unwrap();
+        let agents = crate::engine::herdr::wire::agents_response(listed).unwrap();
         let ledger = self.runtime.lock().unwrap().delivery_state().unwrap();
         writer.observe(
             &ledger,

@@ -215,12 +215,6 @@ impl ProjectionState {
     }
 }
 
-pub(crate) fn project_snapshot(
-    snapshot: &Value,
-) -> Result<SessionSnapshotPayload, SessionFetchError> {
-    Ok(wire::snapshot(snapshot.clone())?.project())
-}
-
 /// A Herdr label or terminal title that is present but blank carries no more
 /// information than an absent one, and a header ladder that treated the two
 /// differently would show an empty title instead of falling through.

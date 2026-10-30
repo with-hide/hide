@@ -1019,7 +1019,9 @@ fn a_device_workspace_keeps_its_view_when_its_visible_tab_changes() {
     let requests = Arc::new(Mutex::new(Vec::new()));
     runtime.install_remote_control(RemoteControlContext::new(
         device,
-        Arc::new(super::device_catalog::RecordingHerdr { requests }),
+        crate::engine::herdr::HerdrEngine::shared(Arc::new(
+            super::device_catalog::RecordingHerdr { requests },
+        )),
         Weak::new(),
         ChangeNotifier::noop(),
     ));
@@ -1636,7 +1638,7 @@ fn a_session_record_lists_the_outputs_its_session_tree_opened() {
         .map(|(pane, session)| serde_json::json!({
             "pane_id": pane, "agent": "codex", "agent_status": "working",
             "state_change_seq": 1,
-            "lineage_session": crate::wire::session_digest(session),
+            "lineage_session": crate::engine::tokens::session_digest(session),
         }))
         .collect::<Vec<_>>()
     ))

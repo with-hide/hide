@@ -33,6 +33,8 @@ Pick the cheapest layer that can observe the result.
 | End to end | A flow that crosses a process boundary a user depends on: browser to hided to the core to Herdr to the PTY, or the desktop window and its native integration | `web/e2e/`, `desktop/e2e/` |
 
 An e2e spec is for a flow that crosses a boundary, not for a rule a unit or core test can state.
+What a caller observes of the program that runs panes is the engine contract, `herdr-core/src/engine/contract.rs`: one suite that every implementation of the engine boundary runs in a test of its own against an engine it started, as each agent's fixture runs through `hide-session/tests/it/adapters.rs`.
+Today that is the pinned Herdr in a private server, run by the real Herdr steps of `pr.yml` on Linux and Windows; a change behind the boundary keeps it passing, and a new engine is supported when it passes.
 The external crate-boundary lane in `hided/tests/it/remote_delivery.rs` runs candidate CLI binaries, two private pinned Herdr servers and the system's own `sshd` on loopback.
 It verifies real helper attestation and mailbox intake over the device's node link, the two-second disconnected hook boundary, and reconnect without duplicate delivery.
 A device is reached with the system `ssh`, so every test of the device link starts `hided/tests/it/support/sshd.rs`: the system's `sshd` run as the runner's own account, with no root, on a loopback port, with the fixture's host and client keys, `SetEnv` giving each session the fixture's private HOME, and a client config naming its own `known_hosts` and key, so neither side reads or writes the account's `~/.ssh`.
