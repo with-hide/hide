@@ -10,7 +10,7 @@ import path from "node:path";
 import { chord } from "./chords";
 import { startHerdr } from "./herdr-fixture";
 import { startHided, type Daemon } from "./hided-fixture";
-import { enterWorkspace } from "./wire";
+import { enterWorkspace, screenshot } from "./wire";
 
 test.use({ deviceScaleFactor: 2 });
 
@@ -151,6 +151,7 @@ test("a Terminal font this machine does not have is said so and keeps the defaul
     await field.press("Enter");
     await expect(page.locator('[data-terminal-font-missing="true"]')).toBeVisible();
     await expect(field).toHaveValue("No Such Font 0");
+    await screenshot(page, "terminal-font-missing");
     expect(await page.evaluate((id) => window.__hideProbe!.paneGrid(id), paneId)).toEqual(before);
     await field.fill("");
     await field.press("Enter");
