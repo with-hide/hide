@@ -76,7 +76,7 @@ test("checkout header reads working files with Changes closed, current-SHA statu
   }
 });
 
-test("a commit pushed to origin shows as one to receive, with its row and GitHub page, without a manual fetch", async ({ page }) => {
+test("a commit pushed to origin shows as one to receive, without a manual fetch, and Pull takes it only past the operator's files", async ({ page }) => {
   test.setTimeout(90_000);
   const herdr = await startHerdr({ readiness: "registered" });
   let daemon: Daemon | undefined;
@@ -95,7 +95,9 @@ test("a commit pushed to origin shows as one to receive, with its row and GitHub
     git(root, ["push", "-u", "origin", "main"]);
     const theirs = path.join(herdr.root, "theirs");
     git(herdr.root, ["clone", local, theirs]);
-    git(theirs, ["commit", "--allow-empty", "-m", "Pushed elsewhere"]);
+    fs.writeFileSync(path.join(theirs, "shared.txt"), "theirs\n");
+    git(theirs, ["add", "shared.txt"]);
+    git(theirs, ["commit", "-m", "Pushed elsewhere"]);
     git(theirs, ["push", "origin", "main"]);
     const incoming = git(theirs, ["rev-parse", "HEAD"]).trim();
     daemon = await startHided(herdr, "checkout-freshness");
@@ -114,6 +116,25 @@ test("a commit pushed to origin shows as one to receive, with its row and GitHub
     // The fetch moved only the remote-tracking ref: the branch and the files are the operator's.
     expect(git(root, ["rev-parse", "HEAD"]).trim()).not.toBe(incoming);
     expect(git(root, ["rev-parse", "origin/main"]).trim()).toBe(incoming);
+    await page.keyboard.press("Escape");
+    // Pull moves nothing over an uncommitted file the incoming commit writes, and says how many.
+    fs.writeFileSync(path.join(root, "shared.txt"), "mine\n");
+    await upstream.click();
+    const pull = page.locator("[data-checkout-catch-up]");
+    await expect(pull).toHaveAttribute("data-checkout-catch-up", "offered");
+    await screenshot(page, "checkout-pull-offered-browser");
+    await pull.getByRole("button", { name: "Pull" }).click();
+    await expect(pull).toHaveAttribute("data-checkout-catch-up", "refused", { timeout: 15_000 });
+    await expect(pull.getByRole("status")).toHaveText("1 uncommitted files are in the way");
+    await screenshot(page, "checkout-pull-refused-browser");
+    expect(fs.readFileSync(path.join(root, "shared.txt"), "utf8")).toBe("mine\n");
+    expect(git(root, ["rev-parse", "HEAD"]).trim()).not.toBe(incoming);
+    // Out of the way, the branch fast-forwards and the counts go quiet with no message.
+    fs.unlinkSync(path.join(root, "shared.txt"));
+    await pull.getByRole("button", { name: "Pull again" }).click();
+    await expect(upstream).toHaveText("", { timeout: 15_000 });
+    expect(git(root, ["rev-parse", "HEAD"]).trim()).toBe(incoming);
+    expect(fs.readFileSync(path.join(root, "shared.txt"), "utf8")).toBe("theirs\n");
   } finally {
     daemon?.stop(); herdr.stop();
   }
