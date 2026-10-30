@@ -106,7 +106,30 @@ const SAMPLES: &[Sample] = &[
             (path, scope("01a18cd1-a9bc-75c4-9fc0-613bba53d364", cwd))
         },
     },
+    Sample {
+        format: SessionFormat::OpenCode,
+        place: |home, cwd| {
+            // The database stands for the session file the read must not write.
+            let database =
+                opencode_database(home, &fixtures().join("opencode-2.0.29/opencode.sql"), cwd);
+            (database, scope("ses_e734b9580ffek8rvRhfLo6NEsw", cwd))
+        },
+    },
 ];
+
+/// OpenCode's database in `home`, built from a fixture's SQL for `cwd`.
+fn opencode_database(home: &Path, sql: &Path, cwd: &Path) -> PathBuf {
+    let script = home.join("opencode.sql");
+    install(sql, &script, cwd);
+    let folder = home.join(".local/share/opencode");
+    std::fs::create_dir_all(&folder).unwrap();
+    let database = folder.join("opencode.db");
+    rusqlite::Connection::open(&database)
+        .unwrap()
+        .execute_batch(&std::fs::read_to_string(&script).unwrap())
+        .unwrap();
+    database
+}
 
 /// A checkout as Grok names its group folder: every byte but
 /// `A-Za-z0-9-_.~` as `%XX`.
@@ -639,4 +662,53 @@ fn hide_and_harness_wrappers_stay_apart_from_the_operators_words() {
             ("[Request interrupted by user]", Some("interrupted"), false),
         ]
     );
+}
+
+/// OpenCode 1.x keeps a message's pieces in rows of their own; the adapter
+/// fixture's session reads to the same kinds of update as a 2.x one.
+#[test]
+fn an_opencode_1_session_reads_from_its_parts() {
+    let home = tempfile::tempdir().unwrap();
+    let root = home.path().canonicalize().unwrap();
+    let cwd = Path::new("/work/app");
+    let fixture = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures/adapters/opencode-1.18.30/opencode.sql");
+    let folder = root.join(".local/share/opencode");
+    std::fs::create_dir_all(&folder).unwrap();
+    rusqlite::Connection::open(folder.join("opencode.db"))
+        .unwrap()
+        .execute_batch(&std::fs::read_to_string(fixture).unwrap())
+        .unwrap();
+    let page = read_thread(
+        &root,
+        Agent::OpenCode,
+        None,
+        &scope("ses_0a1b2c3d4e5f60718293a4b5c6", cwd),
+        None,
+    )
+    .unwrap();
+    let updates = json_of(&page);
+    assert_eq!(
+        updates[0]["content"]["text"],
+        "요청 보기를 만들어줘\n긴 요청의 둘째 줄"
+    );
+    let shipped = calls(&updates)
+        .into_values()
+        .find(|call| call["kind"] == "execute")
+        .unwrap();
+    assert_eq!(shipped["status"], "completed");
+    assert_eq!(
+        shipped["content"][0]["content"]["text"],
+        "https://github.com/acme/app/pull/12\n"
+    );
+    assert!(
+        blocks(&updates)
+            .iter()
+            .any(|block| block["type"] == "image")
+    );
+    let synthetic = updates
+        .iter()
+        .find(|update| update["content"]["text"] == "Summarize the conversation so far")
+        .unwrap();
+    assert_eq!(synthetic["_meta"]["hide"]["origin"], "injected");
 }

@@ -32,6 +32,7 @@ mod build;
 mod claude;
 mod codex;
 mod grok;
+mod opencode;
 mod pi;
 
 use build::Thread;
@@ -79,6 +80,8 @@ pub struct ThreadPage {
 enum Reader {
     /// One JSON record per line.
     Lines(Lines),
+    /// OpenCode's database, both of its schemas.
+    OpenCode,
     /// Declared unreadable; the adapter row says why.
     Unsupported,
 }
@@ -111,9 +114,8 @@ const fn reader(format: SessionFormat) -> Reader {
         SessionFormat::Codex => Reader::Lines(codex::LINES),
         SessionFormat::Grok => Reader::Lines(grok::LINES),
         SessionFormat::Pi | SessionFormat::Omp => Reader::Lines(pi::LINES),
-        SessionFormat::OpenCode | SessionFormat::Antigravity | SessionFormat::Cursor => {
-            Reader::Unsupported
-        }
+        SessionFormat::OpenCode => Reader::OpenCode,
+        SessionFormat::Antigravity | SessionFormat::Cursor => Reader::Unsupported,
     }
 }
 
@@ -124,7 +126,8 @@ pub const fn reads(format: SessionFormat) -> bool {
 
 /// The page of `agent`'s session that ends at `before`, or its newest page.
 ///
-/// A file format reads `path`, which must lie in the agent's session folder
+/// OpenCode's database is read for the root session `scope` names. A file
+/// format reads `path`, which must lie in the agent's session folder
 /// and, for a format that proves its owner from native records, belong to
 /// `scope`. A read that cannot answer returns a named refusal, never an
 /// empty page: a format declared unreadable, a missing or replaced file, a
@@ -138,6 +141,7 @@ pub fn read_thread(
 ) -> Result<ThreadPage, ReadRefusal> {
     match reader(agent.format()) {
         Reader::Unsupported => Err(ReadRefusal::from("thread_unsupported")),
+        Reader::OpenCode => opencode::read(home, scope, before),
         Reader::Lines(lines) => {
             let path = path.ok_or(ReadRefusal::from("thread_path_required"))?;
             crate::inside_session_root(home, &[agent], path)

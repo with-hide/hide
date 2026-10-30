@@ -1419,5 +1419,11 @@ fn made_by(
 /// A database refusal as a stable reason code: a lock OpenCode holds is a
 /// read to skip, anything else a database Hide cannot read.
 fn refusal(error: &rusqlite::Error) -> String {
-    crate::sqlite::refusal(&REASONS, error).into()
+    sql_refusal(error).into()
+}
+
+/// What a failed query on OpenCode's database says, kept typed so a held
+/// database stays a read in motion.
+pub(crate) fn sql_refusal(error: &rusqlite::Error) -> ReadRefusal {
+    crate::sqlite::refusal(&REASONS, error)
 }
