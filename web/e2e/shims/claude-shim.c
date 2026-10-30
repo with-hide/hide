@@ -264,7 +264,7 @@ static int run_as_codex(const char *argv0) {
 // An agent pane fixture needs the existing owned-command runner's native
 // session report and sentinel command. Provider/auth/model requests above keep
 // using this shim; only an explicitly configured interactive pane hands off.
-static int agent_pane_runner(void) {
+static int agent_pane_runner(int argc, char **argv) {
   const char *root = getenv("HIDE_E2E_ROOT");
   if (!root) return 0;
   char filename[4096], runner[4096];
@@ -277,12 +277,22 @@ static int agent_pane_runner(void) {
   runner[count] = 0;
   if (!complete || !count || strchr(runner, '\n') || strchr(runner, '\r')) return 1;
 #ifdef _WIN32
-  WCHAR executable[4096];
-  if (!MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, runner, -1, executable, 4096)) return 1;
-  const WCHAR *arguments[] = { executable, NULL };
+  /* The runner gets the launch's arguments, so a resume keeps its conversation. */
+  static WCHAR executable[4096], passed[16][4096];
+  const WCHAR *arguments[18] = { executable };
+  if (argc > 17 || !MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, runner, -1, executable, 4096)) return 1;
+  for (int i = 1; i < argc; i++) {
+    if (!MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, argv[i], -1, passed[i - 1], 4096)) return 1;
+    arguments[i] = passed[i - 1];
+  }
+  arguments[argc] = NULL;
   _wexecv(executable, arguments);
 #else
-  char *arguments[] = { runner, NULL };
+  /* The runner gets the launch's arguments, so a resume keeps its conversation. */
+  char *arguments[18] = { runner };
+  if (argc > 17) return 1;
+  for (int i = 1; i < argc; i++) arguments[i] = argv[i];
+  arguments[argc] = NULL;
   execv(runner, arguments);
 #endif
   fprintf(stderr, "fixture question runner failed: %s\n", strerror(errno));
@@ -385,7 +395,7 @@ int main(int argc, char **argv) {
   }
   if (getenv("HIDE_E2E_JOURNEY")) return journey(argc, argv);
   if (native_session(argc, argv) != 0) return 1;
-  if (agent_pane_runner() != 0) return 1;
+  if (agent_pane_runner(argc, argv) != 0) return 1;
   const char *log_path = getenv("HIDE_E2E_INPUT_LOG");
   int flags = O_WRONLY | O_CREAT | O_APPEND;
 #ifdef _WIN32

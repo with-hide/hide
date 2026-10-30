@@ -250,8 +250,11 @@ int main(int argc, char **argv) {
   if (load_config() != 0) return 1;
   const char *pane = getenv("HERDR_PANE_ID");
   if (!pane || !*pane) return 1;
+  /* A resumed conversation keeps its id, as Claude Code's own does. */
   char session[80];
   snprintf(session, sizeof session, "fixture-%d", process_id());
+  for (int i = 1; i + 1 < argc; i++)
+    if (strcmp(argv[i], "--resume") == 0) snprintf(session, sizeof session, "%s", argv[i + 1]);
   char *report[] = { (char *)herdr_binary, "pane", "report-agent-session", (char *)pane,
     "--source", "herdr:claude", "--agent", "claude", "--agent-session-id", session, "--seq", "1", NULL };
   if (run_child(report) != 0) return 1;
