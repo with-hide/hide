@@ -818,8 +818,13 @@ impl Runtime {
             }
             Report::Steps { tag, steps } => {
                 if let Some(turn) = self.desk.turn.as_mut().filter(|turn| turn.tag == tag) {
+                    // A start counts once its spawn answered that it started
+                    // (`desk_spawn_answered`), so a refused one is not told
+                    // as a thread started.
                     for step in steps {
-                        turn.steps.count(step);
+                        if step != hide_desk::permission::Step::Start {
+                            turn.steps.count(step);
+                        }
                     }
                 }
                 return false;
@@ -1047,6 +1052,14 @@ impl Runtime {
         let (orders, _unread) = std::sync::mpsc::channel();
         self.desk.worker = Some(worker::Handle { orders });
         self.compose_desk_sections();
+    }
+
+    /// Runs Desk with a session open, so its process's commands reach the
+    /// core, and `cap` places.
+    pub(in crate::runtime) fn open_test_desk(&mut self, cap: u8) {
+        self.start_test_desk();
+        self.desk.host.open = true;
+        self.desk.stored.settings.cap = cap;
     }
 }
 

@@ -931,7 +931,7 @@ Web owners: `web/src/DeskScreen.tsx` (the room, the sidebar row, Settings › De
 
 The sidebar's `◆ Desk` row, under its head, opens the room in the center with the chat and the composer; Settings › Desk holds the default agent, where tasks run and the cap.
 The composer keeps what the operator is writing while they go elsewhere, and clears it once the conversation shows the message, so a refused send keeps the words.
-`@` opens the menu on the word the caret ends; a picked session or project is written `@name` and sent as its `@session(...)` or `@project(...)` token, and one the operator deleted is not sent.
+`@` opens the menu on the word the caret ends; a picked session or project is written `@name` and sent as its `@session(<pane> <name>)` or `@project(<path> <name>)` token, a project named by its primary checkout's path (the folder's own for a project with none), which Desk's agent hands to `--repo` and pressing its chip opens; one the operator deleted is not sent.
 `다시 시도` on a notice sends the operator's last message again.
 Until the lane draws a thread, pressing a card, a session chip or a letter's line opens that session's own tab.
 A card's change sends only the `desk_jobs` section; the conversation is sent again only when it, the agents or the room's settings change.

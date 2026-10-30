@@ -233,6 +233,8 @@ impl Runtime {
                     code: Some(code),
                 });
             }
+        } else if let Some(turn) = self.desk.turn.as_mut() {
+            turn.steps.count(hide_desk::permission::Step::Start);
         }
         self.desk_line(crate::model::DeskItem::Job {
             id: 0,
@@ -961,8 +963,16 @@ impl Runtime {
         let projects = self
             .catalog_workspaces()
             .filter(|workspace| !workspace.is_home)
+            // A project is named by a path, as `@project(<path> <name>)`
+            // promises Desk's agent, which hands it to `--repo`: its primary
+            // checkout's, or the project's own for a folder with none.
             .map(|workspace| DeskMentionProject {
-                id: workspace.id.clone(),
+                id: workspace
+                    .checkouts
+                    .iter()
+                    .find(|checkout| checkout.is_primary)
+                    .map_or(&workspace.path, |checkout| &checkout.path)
+                    .clone(),
                 name: workspace.label.clone(),
                 sessions: workspace
                     .checkouts
@@ -1887,6 +1897,80 @@ mod tests {
         assert_eq!(
             chips(&runtime),
             (Some(done), (Some(done), Some("claude".into())))
+        );
+    }
+
+    #[test]
+    fn a_turn_tells_the_sessions_it_started_and_not_a_start_that_was_refused() {
+        use super::super::{DeskEvent, Order, Report, TurnOutcome};
+        use hide_desk::permission::Step;
+        let root = tempfile::tempdir().unwrap();
+        let (mut runtime, received) = super::super::tests::runtime(root.path());
+        for (kind, payload) in [
+            ("desk_select", json!({"agent": "claude"})),
+            ("desk_send", json!({"text": "start two"})),
+        ] {
+            assert!(runtime.desk_event(DeskEvent::decode(kind, payload).unwrap()));
+        }
+        let tag = std::iter::from_fn(|| received.try_recv().ok())
+            .find_map(|order| match order {
+                Order::Send(send) => Some(send.tag),
+                _ => None,
+            })
+            .expect("a Send order");
+        runtime.desk_spawn_answered(spawn_command("a", None), Ok(json!({"id": "agent-1"})));
+        runtime.desk_spawn_answered(spawn_command("b", None), Err("parent_unavailable".into()));
+        runtime.desk_report(Report::Text {
+            tag,
+            text: "one started".into(),
+        });
+        runtime.desk_report(Report::Steps {
+            tag,
+            steps: vec![Step::Start, Step::Start, Step::Sessions],
+        });
+        runtime.desk_report(Report::TurnEnded {
+            tag,
+            outcome: TurnOutcome::Done,
+        });
+
+        let steps = runtime
+            .desk
+            .stored
+            .conversation
+            .items
+            .iter()
+            .rev()
+            .find_map(|item| match item {
+                DeskItem::Reply { steps, .. } => Some(steps.clone()),
+                _ => None,
+            })
+            .expect("the turn's reply");
+        assert_eq!((steps.starts, steps.sessions), (1, 1));
+    }
+
+    #[test]
+    fn a_project_in_the_at_menu_is_named_by_its_primary_checkout_s_path() {
+        use crate::runtime::tests::{checkout, workspace};
+        let root = tempfile::tempdir().unwrap();
+        let mut runtime = desk(root.path(), 2, &[]);
+        let mut linked = checkout("w-repo", "c-linked", "/work/repo-fix", None);
+        linked.is_worktree = true;
+        let mut primary = checkout("w-repo", "c-primary", "/work/repo-home", None);
+        primary.is_primary = true;
+        let mut repo = workspace("w-repo", "repo", "/work/repo", vec![linked, primary]);
+        repo.is_git = true;
+        let notes = checkout("w-notes", "c-notes", "/work/notes", None);
+        let folder = workspace("w-notes", "notes", "/work/notes", vec![notes]);
+        runtime.snapshot.navigator.workspaces = vec![repo, folder];
+
+        let projects = runtime.desk_mentions().projects;
+        let named: Vec<_> = projects
+            .iter()
+            .map(|project| (project.id.as_str(), project.name.as_str()))
+            .collect();
+        assert_eq!(
+            named,
+            [("/work/repo-home", "repo"), ("/work/notes", "notes")]
         );
     }
 
