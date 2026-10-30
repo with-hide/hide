@@ -29,8 +29,9 @@
 //! - [`ShutdownHandle::shutdown`] called from another thread ends a read
 //!   that is blocked, with `Ok(0)`, and a write a peer that stopped reading
 //!   holds, with an error; later reads return `Ok(0)` and later writes fail
-//!   with `BrokenPipe`. A peer's read blocked on the other end hears the
-//!   shutdown as its end of stream, after the bytes already sent.
+//!   with `BrokenPipe`. On Unix a peer's read blocked on the other end hears
+//!   the shutdown as its end of stream, after the bytes already sent; on
+//!   Windows the peer hears the end when the handle closes.
 //! - [`LocalListener::bind`] fails with `AddrInUse` while another listener
 //!   lives at the path, whether or not its queue is full (#403), and replaces
 //!   what a dead one left behind. A listener is alive while it holds a lock

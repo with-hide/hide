@@ -844,8 +844,11 @@ fn shutdown_from_another_thread_frees_a_blocked_read() {
 /// 2026-10-30, about one round in five thousand at load 30), and a `recv`
 /// that missed it then misses its own end's shutdown too, while a wait in
 /// `poll` hears both, so a read waits for its socket in `poll` first. The
-/// rounds are what this needs: a lost end shows only now and then.
+/// rounds are what this needs: a lost end shows only now and then. Unix
+/// only: a Windows shutdown cancels this end's own reads and writes, and its
+/// peer hears the end when the handle closes.
 #[test]
+#[cfg(unix)]
 fn a_shutdown_ends_the_peers_blocked_read_every_time() {
     const ROUNDS: usize = 5000;
     for round in 0..ROUNDS {
