@@ -1005,6 +1005,7 @@ mod tests {
             released_input_at_unix_ms: 0,
             hook_submit_at_unix_ms: 0,
             session: None,
+            thread: None,
             host_scope: None,
             turn: if kind == "codex" {
                 Turn::Read(Waiting::Nothing)

@@ -80,6 +80,7 @@ mod request_view;
 mod session;
 mod session_archive;
 mod session_state;
+mod session_thread;
 mod snapshot_delta;
 mod ssh_hosts;
 mod suggestion_apply;
@@ -1588,6 +1589,8 @@ pub struct Runtime {
     archive_detail_load_generation: u64,
     /// What the link worker was last handed, and its panel reads.
     links_work: links::LinksWork,
+    /// The one session thread a screen has open (`runtime/session_thread.rs`).
+    session_thread: session_thread::ThreadWork,
     backlog_work: backlog::BacklogWork,
     issue_detail_work: issues::IssueDetailWork,
     /// The minute the PRs tool's list was last judged against the clock
@@ -2432,6 +2435,7 @@ impl Runtime {
             memory_sessions_load_generation: 0,
             archive_detail_load_generation: 0,
             links_work: links::LinksWork::default(),
+            session_thread: session_thread::ThreadWork::default(),
             backlog_work: backlog::BacklogWork::default(),
             issue_detail_work: issues::IssueDetailWork::default(),
             work_clock_minute: 0,

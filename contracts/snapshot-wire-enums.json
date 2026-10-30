@@ -104,5 +104,12 @@
   "suggestion_attempt_phase": ["starting", "working", "ready", "merging", "syncing", "pr_open", "ci_failed", "failed", "issue_open", "merged"],
   "suggestion_attempt_purpose": ["branch", "pr", "rebase"],
   "device_problem": ["sign_in_needed", "sign_in_refused", "host_key_changed", "cannot_connect", "ssh_missing", "openssh_old", "unsupported", "hide_updated"],
-  "device_sign_in_kind": ["secret", "host_key", "confirm", "touch", "browser"]
+  "device_sign_in_kind": ["secret", "host_key", "confirm", "touch", "browser"],
+  "session_thread_state": ["closed", "loading", "ready", "failed"],
+  "session_thread_failure": ["no_record", "refused"],
+  "session_thread_pane": ["same", "changed", "gone"],
+  "session_thread_older": ["idle", "loading", "capacity", "failed"],
+  "session_thread_input_state": ["sending", "sent", "refused"],
+  "session_thread_part_kind": ["plan", "spawn", "letter", "view", "mission"],
+  "session_thread_view_kind": ["browser", "file", "diff"]
 }

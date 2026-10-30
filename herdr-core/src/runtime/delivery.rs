@@ -51,6 +51,9 @@ pub(crate) struct Observation {
     /// composer declaration is checked (`composer_check_due`).
     pub hook_submit_at_unix_ms: u64,
     pub session: Option<hide_session::session_activity::SessionActivityRequest>,
+    /// The session a thread of this pane reads, for every agent with a
+    /// thread reader, OpenCode's database included.
+    pub thread: Option<super::session_thread::ThreadReference>,
     pub host_scope: Option<String>,
     pub turn: Turn,
 }
@@ -231,6 +234,7 @@ impl Runtime {
                 released_input_at_unix_ms: previous.map_or(0, |old| old.released_input_at_unix_ms),
                 hook_submit_at_unix_ms: previous.map_or(0, |old| old.hook_submit_at_unix_ms),
                 session,
+                thread: super::session_thread::ThreadReference::of(agent),
                 host_scope: host_scope
                     .filter(|scope| scope.len() <= 4096)
                     .map(str::to_owned),
@@ -257,6 +261,7 @@ impl Runtime {
         // follows publishes whatever this settles.
         self.settle_dormant_registrations();
         self.follow_resumed_conductors(device);
+        self.follow_session_thread(device, payload);
     }
 
     /// Continue a registration only when this host still reports its terminal
@@ -660,16 +665,16 @@ impl Runtime {
         }
     }
 
-    /// The phone's reply is text hide sent and submitted in one write to an
-    /// agent waiting on the operator, so it is a key and a submit.
-    pub(crate) fn note_delivery_reply(&mut self, pane_id: &str) {
+    /// A phone's reply or a thread's input is text hide sent and submitted
+    /// in one write, so it is a key and a submit; `source` names which.
+    pub(crate) fn note_delivery_reply(&mut self, pane_id: &str, source: &'static str) {
         self.reopen_resolved_session(pane_id);
         if let Some(observation) = self.delivery_observations.get_mut(pane_id) {
             let now = unix_milliseconds();
             observation.last_input_at_unix_ms = now;
             observation.last_submit_at_unix_ms = now;
             self.sync_composer_mark(pane_id, now);
-            self.trace_delivery_input(pane_id, "phone_reply");
+            self.trace_delivery_input(pane_id, source);
         }
     }
 

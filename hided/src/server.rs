@@ -2244,6 +2244,9 @@ fn handle_client_text(
                 state, &event,
             )));
         }
+        Some("thread_input") => {
+            return Ok(ClientAction::Replies(handle_thread_input(state, &event)));
+        }
         Some("path_import") => {
             return Ok(ClientAction::Replies(handle_path_import(state, &event)));
         }
@@ -3057,6 +3060,67 @@ fn attachment_refused(request_id: &str, reason: &str) -> Value {
     json!({"type": "attachment_refused", "payload": {"request_id": request_id, "reason": reason}})
 }
 
+/// A session thread's input box (PRD session-docs-and-assistant B29): the
+/// files it staged are committed here, where they were staged, and the core
+/// is told their paths with the words, which it types into the thread's
+/// pane. A refusal before the core is answered as an attachment's is, by
+/// the input's request id; the core's own answer is in the thread section.
+fn handle_thread_input(state: &AppState, event: &Value) -> Vec<Message> {
+    let request_id = payload_str(event, "request_id");
+    let refuse = |reason: &str| {
+        vec![Message::Text(
+            attachment_refused(&request_id, reason).to_string().into(),
+        )]
+    };
+    if !attachments::valid_request_id(&request_id) {
+        return refuse("invalid_request_id");
+    }
+    let (Some(generation), Some(text)) = (
+        event.pointer("/payload/generation").and_then(Value::as_u64),
+        event.pointer("/payload/text").and_then(Value::as_str),
+    ) else {
+        return refuse("invalid_item");
+    };
+    let stages: Vec<String> = event
+        .pointer("/payload/stages")
+        .and_then(Value::as_array)
+        .map(|stages| {
+            stages
+                .iter()
+                .filter_map(Value::as_str)
+                .map(str::to_owned)
+                .collect()
+        })
+        .unwrap_or_default();
+    let paths = if stages.is_empty() {
+        Vec::new()
+    } else {
+        match state.attachments.commit(&stages, false) {
+            Ok(paths) => paths,
+            Err(reason) => return refuse(reason),
+        }
+    };
+    let input = json!({
+        "schema_version": 2,
+        "kind": "session_thread_input",
+        "payload": {
+            "generation": generation,
+            "pane_id": payload_str(event, "pane_id"),
+            "request_id": request_id,
+            "text": text,
+            "paths": paths,
+        },
+    });
+    if let Err(error) = state
+        .core
+        .dispatch(serde_json::to_vec(&input).unwrap_or_default())
+    {
+        log_snapshot_failure("thread_input", &error);
+        return refuse("forward_failed");
+    }
+    Vec::new()
+}
+
 /// Opens one staged upload the client will send bytes for. The caps are
 /// checked here so a too-large file is refused before its bytes arrive.
 fn handle_attachment_stage(state: &AppState, event: &Value, connection: u64) -> Vec<Message> {
@@ -3796,13 +3860,14 @@ fn apply_boundary(boundary: &Boundary, event: &mut Value) -> Option<Value> {
         {
             browser_url(boundary, event, &kind)
         }
-        // The shell's attachment events name files the operator's machine
-        // shows it; hided is their only producer for a web client (which
-        // stages bytes instead), so a client that sends one is naming an
-        // arbitrary path and never reaches the core.
-        "terminal_attachment" | "terminal_attachment_ready" | "terminal_attachment_action" => {
-            rejected(kind.as_str())
-        }
+        // The shell's attachment events and a thread's input name files the
+        // operator's machine shows it; hided is their only producer for a
+        // web client (which stages bytes instead), so a client that sends
+        // one is naming an arbitrary path and never reaches the core.
+        "terminal_attachment"
+        | "terminal_attachment_ready"
+        | "terminal_attachment_action"
+        | "session_thread_input" => rejected(kind.as_str()),
         _ => None,
     }
 }

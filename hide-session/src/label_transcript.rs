@@ -746,7 +746,7 @@ fn codex_id_from_file_name(path: &Path) -> Option<String> {
 
 /// A native session id as Claude and Codex write them; anything else (a
 /// separator, `..`) could steer the file name the locator builds from it.
-fn is_session_id(value: &str) -> bool {
+pub(crate) fn is_session_id(value: &str) -> bool {
     value
         .bytes()
         .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-'))

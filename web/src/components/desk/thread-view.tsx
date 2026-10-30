@@ -1,10 +1,11 @@
 import { CheckIcon, ChevronDownIcon, ChevronLeftIcon, ChevronRightIcon, CircleAlertIcon, FilePenIcon, FileSearchIcon, GlobeIcon, MailIcon, PinIcon, PlusIcon, SquareTerminalIcon, WrenchIcon, XIcon } from "lucide-react";
-import { useState, type ReactNode } from "react";
+import { useLayoutEffect, useRef, useState, type ComponentPropsWithRef, type ReactNode } from "react";
 import { Trans } from "react-i18next";
 import type { AcpContentBlock, AcpPlanEntry, AcpToolKind, DeskJob, DeskMention, DeskOutput, DeskSessionRef, ThreadHidePart, ThreadLine, ThreadReadFailure, ThreadTurn } from "../../desk";
-import { threadTurns } from "../../desk";
+import { askedOnce, threadTurns } from "../../desk";
 import { useInterfaceTranslation } from "../../i18n/client";
 import { cn } from "../../lib/utils";
+import { useRunningClock } from "../elapsed";
 import { PlanChecklist } from "../plan-checklist";
 import { PrMark } from "../pr-mark";
 import { StatusMark } from "../status-mark";
@@ -27,7 +28,7 @@ export type ThreadConductor = { title: string; onOpen: () => void };
  */
 export function ThreadHead({ job, model = null, conductor = null, pinned, onBack, onTerminal, onPin, onClose }: {
   job: DeskJob;
-  /** The model the session runs, read from its record. wire gap: the threads node's */
+  /** The model Hide launched the session with (`threadLaunchModel`); none when the launch chose none. */
   model?: string | null;
   conductor?: ThreadConductor | null;
   pinned: boolean;
@@ -138,6 +139,8 @@ function ToolLine({ line }: { line: Extract<ThreadLine, { kind: "tool" }> }) {
   const added = diffs.reduce((sum, diff) => sum + diff.lines.filter((one) => one.sign === "+").length, 0);
   const removed = diffs.reduce((sum, diff) => sum + diff.lines.filter((one) => one.sign === "-").length, 0);
   const title = line.toolKind === "execute" && line.input ? line.input : line.title;
+  const running = line.status === "in_progress" || line.status === "pending";
+  const clock = useRunningClock(running && line.toolKind === "execute" ? line.startedAtMs : null);
   return (
     <div className="flex min-w-0 flex-col gap-xxs" data-desk-thread-line="tool" data-tool-status={line.status}>
       <p className="flex min-w-0 items-center gap-xs text-caption">
@@ -145,7 +148,7 @@ function ToolLine({ line }: { line: Extract<ThreadLine, { kind: "tool" }> }) {
         <span className="min-w-0 truncate font-mono text-subtle-foreground" title={title}>{title}</span>
         {diffs.length ? <span className="shrink-0 font-mono text-micro"><span className="text-success">+{added}</span> <span className="text-destructive">−{removed}</span></span> : null}
         <span className="flex-1" />
-        {line.status === "in_progress" || line.status === "pending" ? <span className="shrink-0 text-micro text-muted-foreground">{t("desk.thread.tool.running")}</span> : null}
+        {running ? <span className="shrink-0 text-micro text-muted-foreground" data-desk-tool-clock={clock ?? undefined}>{clock ? `${t("desk.thread.tool.running")} ${clock}` : t("desk.thread.tool.running")}</span> : null}
         {line.status === "failed" ? <span className="shrink-0 text-micro text-destructive">{t("desk.thread.tool.failed")}</span> : null}
       </p>
       {diffs.map((diff, index) => <span key={`${index}:${diff.path}`} className="min-w-0"><DiffBlock path={diff.path} lines={diff.lines} /></span>)}
@@ -170,21 +173,20 @@ function AcpPlan({ entries }: { entries: readonly AcpPlanEntry[] }) {
 }
 
 export type ThreadPartActions = {
-  onJob: (job: DeskJob) => void;
   onMission: (missionId: string) => void;
   onOutput: (output: DeskOutput) => void;
-  onSession: (name: string) => void;
+  /** A session a chip or an `@name` names: its pane when Hide knows it, else its name alone. */
+  onSession: (session: DeskSessionRef) => void;
 };
 
-/** A spawned job as its chip names it: its status, its agent and its title. */
-function sessionOf(job: DeskJob): DeskSessionRef {
-  return { name: job.title, mark: job.mark, agent_kind: job.agent_kind };
-}
-
-/** A line a Hide part takes in the thread: an icon and its words, with no box. */
-function PartLine({ icon, kind, children }: { icon: ReactNode; kind: ThreadHidePart["kind"]; children: ReactNode }) {
+/**
+ * A line a Hide part takes in the thread: an icon and its words, with no box.
+ * It takes the props and the ref a hint's trigger hands it, so the command
+ * behind it shows on hover.
+ */
+function PartLine({ icon, kind, children, className, ...rest }: { icon: ReactNode; kind: ThreadHidePart["kind"] | "received"; children: ReactNode } & ComponentPropsWithRef<"p">) {
   return (
-    <p className="flex min-w-0 items-center gap-xs text-caption text-muted-foreground" data-desk-thread-line="hide" data-desk-hide-part={kind}>
+    <p {...rest} className={cn("flex min-w-0 items-center gap-xs text-caption text-muted-foreground", className)} data-desk-thread-line="hide" data-desk-hide-part={kind}>
       {icon}
       {children}
     </p>
@@ -212,7 +214,7 @@ function HidePartLine({ part, command, actions }: { part: ThreadHidePart; comman
       body = (
         <PartLine kind="spawn" icon={<PlusIcon aria-hidden="true" className={PART_ICON} />}>
           <span className="shrink-0">{t("desk.part.spawned")}</span>
-          <SessionChip session={sessionOf(part.job)} onPress={() => actions.onJob(part.job)} />
+          <SessionChip session={part.session} onPress={() => actions.onSession(part.session)} />
         </PartLine>
       );
       break;
@@ -220,10 +222,9 @@ function HidePartLine({ part, command, actions }: { part: ThreadHidePart; comman
       body = (
         <PartLine kind="letter" icon={<MailIcon aria-hidden="true" className={PART_ICON} />}>
           <span className="shrink-0" data-desk-letter={part.direction}>
-            <Trans i18n={i18n} t={t} i18nKey={part.direction === "sent" ? "desk.letter.sent" : "desk.letter.received"} components={{ who: <SessionChip session={part.peer} className="mr-xxs" onPress={() => actions.onSession(part.peer.name)} /> }} />
+            <Trans i18n={i18n} t={t} i18nKey={part.direction === "sent" ? "desk.letter.sent" : "desk.letter.received"} components={{ who: <SessionChip session={part.peer} className="mr-xxs" onPress={() => actions.onSession(part.peer)} /> }} />
           </span>
-          <span aria-hidden="true">·</span>
-          <span className="min-w-0 truncate text-subtle-foreground">{part.body}</span>
+          {part.body ? <><span aria-hidden="true">·</span><span className="min-w-0 truncate text-subtle-foreground">{part.body}</span></> : null}
         </PartLine>
       );
       break;
@@ -265,16 +266,38 @@ function WorkLine({ line, mentions, actions }: { line: ThreadLine; mentions: rea
 }
 
 function AgentWords({ text, mentions, actions }: { text: string; mentions: readonly DeskMention[]; actions: ThreadPartActions }) {
-  return <p className="min-w-0 whitespace-pre-wrap break-keep text-body leading-relaxed text-foreground [overflow-wrap:anywhere]" data-desk-thread-line="agent"><MentionText text={text} mentions={mentions} onMention={(mention) => actions.onSession(mention.name)} /></p>;
+  return <p className="min-w-0 whitespace-pre-wrap break-keep text-body leading-relaxed text-foreground [overflow-wrap:anywhere]" data-desk-thread-line="agent"><MentionText text={text} mentions={mentions} onMention={(mention) => actions.onSession({ name: mention.name, mark: mention.mark ?? null, agent_kind: mention.agent_kind ?? null })} /></p>;
+}
+
+/**
+ * A letter the session got, as a line and not a bubble (D-75): `✉ [sender]에게서
+ * 받음 · first line`, the whole letter on hover; a letter whose record names
+ * no sender reads `✉ 편지 · first line`.
+ */
+function ReceivedLine({ line, actions }: { line: Extract<ThreadLine, { kind: "user" }>; actions: ThreadPartActions }) {
+  const { t, i18n } = useInterfaceTranslation();
+  const peer = line.peer;
+  const first = line.text.trim().split("\n", 1)[0] ?? "";
+  return (
+    <Hint label={line.text.trim()} reveals>
+      <PartLine kind="received" icon={<MailIcon aria-hidden="true" className={PART_ICON} />} data-origin="letter">
+        <span className="shrink-0" data-desk-letter="received">
+          {peer ? <Trans i18n={i18n} t={t} i18nKey="desk.letter.received" components={{ who: <SessionChip session={peer} className="mr-xxs" onPress={() => actions.onSession(peer)} /> }} /> : t("desk.part.letter")}
+        </span>
+        <span aria-hidden="true">·</span>
+        <span className="min-w-0 truncate text-subtle-foreground">{first}</span>
+      </PartLine>
+    </Hint>
+  );
 }
 
 /** The operator's words, the one thing drawn as a bubble (D-75); the first one carries `Desk가 맡김` when Desk handed the task. */
-function UserLine({ line, handed }: { line: Extract<ThreadLine, { kind: "user" }>; handed: boolean }) {
+function UserLine({ line, handed, actions }: { line: Extract<ThreadLine, { kind: "user" }>; handed: boolean; actions: ThreadPartActions }) {
   const { t } = useInterfaceTranslation();
+  if (line.origin === "letter") return <ReceivedLine line={line} actions={actions} />;
   return (
     <div className="flex min-w-0 flex-col items-end gap-xxs" data-desk-thread-line="user" data-origin={line.origin}>
       {handed ? <span className="text-micro text-muted-foreground" data-desk-thread-handed="true">{t("desk.thread.handedByDesk")}</span> : null}
-      {line.origin === "letter" ? <span className="flex items-center gap-xxs text-micro text-muted-foreground"><MailIcon aria-hidden="true" className="size-(--size-icon-sm)" />{t("desk.part.letter")}</span> : null}
       {line.text ? <p className="max-w-(--size-pr-popover) whitespace-pre-wrap break-keep rounded-xl bg-secondary px-md py-xs text-body leading-relaxed text-foreground [overflow-wrap:anywhere]">{line.text}</p> : null}
       {line.images.map((block, index) => <ThreadImage key={index} block={block} />)}
     </div>
@@ -295,9 +318,9 @@ function Turn({ turn, live, handed, mentions, actions }: { turn: ThreadTurn; liv
   const Chevron = open ? ChevronDownIcon : ChevronRightIcon;
   return (
     <li className="flex min-w-0 flex-col gap-sm" data-desk-thread-turn={open ? "open" : "folded"}>
-      {turn.user ? <UserLine line={turn.user} handed={handed} /> : null}
+      {turn.user ? <UserLine line={turn.user} handed={handed} actions={actions} /> : null}
       {turn.work.length ? (
-        <Button variant="text" size="inline" className="self-start gap-xxs text-caption text-muted-foreground" aria-expanded={open} aria-label={t(open ? "desk.turn.close" : "desk.turn.open")} data-desk-turn-toggle={open ? "open" : "folded"} onClick={() => setToggled(!toggled)}>
+        <Button variant="text" size="inline" className="self-start gap-xxs text-caption text-muted-foreground" aria-expanded={open} data-desk-turn-toggle={open ? "open" : "folded"} onClick={() => setToggled(!toggled)}>
           {[live ? t("desk.turn.working") : t("desk.turn.work"), ...counts].join(" · ")}
           <Chevron aria-hidden="true" className="size-(--size-icon-sm)" />
         </Button>
@@ -344,6 +367,39 @@ function ThreadAsk({ job }: { job: DeskJob }) {
   );
 }
 
+/** How near an end of the conversation still counts as at it, in pixels. */
+const AT_END = 24;
+
+/**
+ * The conversation's scrolling (B25): while the operator is at its end, what
+ * the session writes next is brought into view; a page read in above keeps
+ * the lines they are reading where they were; reaching the top asks for the
+ * page before.
+ */
+function useThreadScroll(lines: readonly ThreadLine[], onReachTop?: () => void) {
+  const ref = useRef<HTMLDivElement>(null);
+  const atEnd = useRef(true);
+  const before = useRef<{ first: string | null; height: number }>({ first: null, height: 0 });
+  useLayoutEffect(() => {
+    const box = ref.current;
+    if (!box) return;
+    // A message line's id is its place, which a page read in above moves, so the first line is known by its words too.
+    const head = lines[0];
+    const first = head ? `${head.kind}:${head.id}:${"text" in head ? head.text.slice(0, 80) : ""}` : null;
+    if (atEnd.current) box.scrollTop = box.scrollHeight;
+    else if (before.current.first !== null && first !== before.current.first) box.scrollTop += box.scrollHeight - before.current.height;
+    before.current = { first, height: box.scrollHeight };
+  }, [lines]);
+  const onScroll = () => {
+    const box = ref.current;
+    if (!box) return;
+    atEnd.current = box.scrollHeight - box.scrollTop - box.clientHeight < AT_END;
+    before.current.height = box.scrollHeight;
+    if (box.scrollTop < AT_END) onReachTop?.();
+  };
+  return { ref, onScroll };
+}
+
 /**
  * A thread (D-61, D-75, B25-B27, B29): the session's record as turns, its
  * question at the foot, its outputs after it, and the box that types into
@@ -351,7 +407,7 @@ function ThreadAsk({ job }: { job: DeskJob }) {
  * read says why in one line and offers the terminal; one being read, or with
  * nothing in it yet, says so in one quiet line.
  */
-export function ThreadView({ job, lines, reading = false, failure = null, mentions = [], startedByDesk = false, outputs, selectedOutput = null, composer, onTerminal, ...actions }: {
+export function ThreadView({ job, lines, reading = false, failure = null, mentions = [], startedByDesk = false, outputs, selectedOutput = null, composer, onTerminal, onReachTop, ...actions }: {
   job: DeskJob;
   lines: readonly ThreadLine[];
   /** The record is still being read: `lines` is not the thread yet. */
@@ -363,15 +419,19 @@ export function ThreadView({ job, lines, reading = false, failure = null, mentio
   startedByDesk?: boolean;
   outputs: readonly DeskOutput[];
   selectedOutput?: string | null;
-  composer: { value: string; attachments: readonly ComposerAttachment[]; focused?: boolean; onChange: (value: string) => void; onSend: () => void; onAttach: () => void; onRemoveAttachment: (id: string) => void };
+  composer: { value: string; attachments: readonly ComposerAttachment[]; focused?: boolean; held?: boolean; notice?: string | null; onChange: (value: string) => void; onSend: () => void; onAttach: () => void; onRemoveAttachment: (id: string) => void };
   onTerminal: () => void;
+  /** The conversation was scrolled to its top: the page before it can be read. */
+  onReachTop?: () => void;
 } & ThreadPartActions) {
   const { t } = useInterfaceTranslation();
-  const turns = threadTurns(lines);
+  const scroller = useThreadScroll(lines, onReachTop);
+  // An asking job's question is said once, in the wait at the foot (D-75).
+  const turns = job.state === "asking" && job.ask === "question" ? askedOnce(threadTurns(lines), job.question) : threadTurns(lines);
   const running = job.state === "working" || job.state === "starting";
   return (
     <div className="flex min-h-0 min-w-0 flex-1 flex-col" data-desk-thread={job.id}>
-      <div className="flex min-h-0 min-w-0 flex-1 flex-col gap-md overflow-y-auto px-md py-md">
+      <div ref={scroller.ref} onScroll={scroller.onScroll} data-desk-thread-conversation="true" className="flex min-h-0 min-w-0 flex-1 flex-col gap-md overflow-y-auto px-md py-md">
         {failure ? (
           <p role="alert" className="flex min-w-0 flex-wrap items-center gap-x-sm gap-y-xxs text-caption" data-desk-thread-failure={failure}>
             <CircleAlertIcon aria-hidden="true" className="size-(--size-icon-sm) shrink-0 text-warning" />
@@ -402,6 +462,8 @@ export function ThreadView({ job, lines, reading = false, failure = null, mentio
           placeholder={t("desk.thread.placeholder")}
           attachments={composer.attachments}
           focused={composer.focused}
+          held={composer.held}
+          notice={composer.notice}
           onChange={composer.onChange}
           onSend={composer.onSend}
           onAttach={composer.onAttach}
