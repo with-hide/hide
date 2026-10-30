@@ -146,7 +146,7 @@ const NO_STEPS: DeskSteps = { sessions: 0, files: 0, letters: 0, starts: 0, othe
 const letter = (id: number, session: DeskSessionRef, kind: string, line: string, read: boolean): DeskItem => ({ kind: "handed", id, agent_id: `agent-${id}`, pane_id: PANES[session.name]!, name: session.name, project: "herdr-ide", letter_kind: kind, line, letter_id: `letter-${id}`, read, agent_kind: session.agent_kind, mark: session.mark });
 
 /** A session a reply names, as the wire sends its chip. */
-const chip = (session: DeskSessionRef): DeskSessionChip => ({ pane_id: PANES[session.name]!, ...session });
+const chip = (session: DeskSessionRef): DeskSessionChip => ({ ...session, pane_id: PANES[session.name]! });
 
 /** Scene 2: a hand-off that started three threads, a task handed to a session already on it, and Desk thinking. */
 export function handoffItems(now: number): DeskItem[] {
