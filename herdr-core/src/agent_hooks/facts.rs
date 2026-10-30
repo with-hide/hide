@@ -379,10 +379,15 @@ fn end_by_session_read(fact: &mut SessionFact, agent: &SessionAgentPayload) {
     if now > since && at_rest {
         fact.turn = match ended {
             Some(hide_session::turns::TurnEnded::Completed) => Some(HookTurn::Done),
+            // An interrupt closes every dialog of the turn, a subagent's too.
             Some(
                 hide_session::turns::TurnEnded::Interrupted
                 | hide_session::turns::TurnEnded::Unanswered,
-            ) => Some(HookTurn::Idle),
+            ) => {
+                fact.waiting.clear();
+                fact.waiting_seq = None;
+                Some(HookTurn::Idle)
+            }
             None => return,
         };
     }
@@ -406,12 +411,7 @@ fn close_answered_waits(fact: &mut SessionFact, agent: &SessionAgentPayload) {
         return;
     };
     if now > since && !answered.is_empty() {
-        fact.waiting.retain(|open| {
-            !answered.iter().any(|call| {
-                call.split_once(':')
-                    .is_some_and(|(name, input)| hide_session::calls::ends(open, name, Some(input)))
-            })
-        });
+        fact.waiting.retain(|open| !answered.contains(open));
     }
 }
 

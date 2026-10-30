@@ -1242,6 +1242,68 @@ fn a_hook_turn_ends_when_the_session_file_reads_an_interruption_after_it() {
     assert_eq!(axes(&runtime).0, "working");
 }
 
+/// D-10: Esc closes every dialog of the turn, a background subagent's too,
+/// and sends no hook event; the session read's interruption ends the open
+/// approvals with the turn.
+#[test]
+fn an_interruption_the_session_file_reads_closes_the_open_approvals() {
+    use hide_node_link::panes::{HookStatusReport, HookTurn};
+    use hide_session::turns::{TurnMark, TurnTracker};
+    let mut runtime = runtime();
+    let claude = |status: &str, seq: u64| {
+        let mut payload = projection(SESSION);
+        for agent in &mut payload.agents {
+            agent.agent_status = Some(status.to_owned());
+            agent.state_change_seq = Some(seq);
+        }
+        payload
+    };
+    let row_axes = |runtime: &Runtime| {
+        let row = row(runtime);
+        (
+            row["activity"].as_str().unwrap().to_owned(),
+            row["demand"].as_str().unwrap().to_owned(),
+        )
+    };
+    runtime
+        .ingest_hook_status(
+            crate::node::TEST_NODE,
+            PANE,
+            &HookStatusReport {
+                runtime: "claude-code".to_owned(),
+                version: hide_agent_hooks::HOOK_VERSION,
+                session: Some(SESSION.to_owned()),
+                turn: Some(HookTurn::Working),
+                counts: None,
+                session_start: false,
+                waiting: Some(vec!["Bash:00aa".to_owned()]),
+            },
+        )
+        .unwrap();
+    runtime.ingest_session(Ok(claude("blocked", 4)));
+    assert_eq!(row_axes(&runtime).1, "approval");
+
+    let mut turns = TurnTracker::default();
+    turns.fold(0, &TurnMark::HumanTurn);
+    turns.fold(10, &TurnMark::Interrupted);
+    let record = PaneRecord {
+        owner: hide_session::label_reference_token("claude", "id", SESSION),
+        turns: Some(turns),
+        turns_seq: Some(5),
+        ..PaneRecord::default()
+    };
+    runtime.set_label_overlay(LabelOverlay::of_records(
+        [(&PANE.to_owned(), &record)],
+        true,
+        false,
+    ));
+    runtime.ingest_session(Ok(claude("done", 5)));
+    assert_eq!(
+        row_axes(&runtime),
+        ("stopped".to_owned(), "none".to_owned())
+    );
+}
+
 /// D-9 with agent summaries off: a Claude Code session file whose turn was
 /// interrupted, read as the label worker reads it, ends the hook's working
 /// turn; the switch takes the AI fields away, not the session read the
@@ -1492,7 +1554,15 @@ fn an_approval_ends_when_the_session_file_reads_the_refused_calls_result() {
         serde_json::json!({"type": "user", "timestamp": "2026-10-30T13:00:00.000Z",
             "sessionId": SESSION, "promptId": "p1", "cwd": CHECKOUT,
             "message": {"role": "user", "content": "빌드 폴더를 지워줘"}}),
+        // The same command ran once already and has its result.
         serde_json::json!({"type": "assistant", "timestamp": "2026-10-30T13:00:01.000Z",
+            "sessionId": SESSION, "cwd": CHECKOUT, "message": {"role": "assistant",
+            "content": [{"type": "tool_use", "id": "toolu_once", "name": "Bash",
+                         "input": {"command": "rm -rf build", "description": "Clean"}}]}}),
+        serde_json::json!({"type": "user", "timestamp": "2026-10-30T13:00:02.000Z",
+            "sessionId": SESSION, "cwd": CHECKOUT, "message": {"role": "user",
+            "content": [{"type": "tool_result", "tool_use_id": "toolu_once", "content": ""}]}}),
+        serde_json::json!({"type": "assistant", "timestamp": "2026-10-30T13:00:03.000Z",
             "sessionId": SESSION, "cwd": CHECKOUT, "message": {"role": "assistant",
             "content": [{"type": "tool_use", "id": "toolu_bash", "name": "Bash",
                          "input": {"description": "Clean", "command": "rm -rf build"}}]}}),
@@ -1505,28 +1575,44 @@ fn an_approval_ends_when_the_session_file_reads_the_refused_calls_result() {
             "sessionId": SESSION, "cwd": CHECKOUT, "message": {"role": "assistant",
             "content": [{"type": "text", "text": "알겠습니다. 다른 방법을 설명하겠습니다."}]}}),
     ];
-    std::fs::write(
-        folder.join(format!("{SESSION}.jsonl")),
-        records
-            .iter()
-            .map(|record| format!("{record}\n"))
-            .collect::<String>(),
-    )
-    .unwrap();
-    let transcript = read(
-        home.path(),
-        &LabelTranscriptRequest {
-            agent: hide_session::Agent::Claude,
-            reference_kind: "id".to_owned(),
-            reference_value: SESSION.to_owned(),
-            cwd: None,
-            checkpoint: None,
-            subagents: Default::default(),
-            turns: None,
-            tools: None,
-        },
-    )
-    .unwrap();
+    let turns = |records: &[serde_json::Value]| {
+        std::fs::write(
+            folder.join(format!("{SESSION}.jsonl")),
+            records
+                .iter()
+                .map(|record| format!("{record}\n"))
+                .collect::<String>(),
+        )
+        .unwrap();
+        read(
+            home.path(),
+            &LabelTranscriptRequest {
+                agent: hide_session::Agent::Claude,
+                reference_kind: "id".to_owned(),
+                reference_value: SESSION.to_owned(),
+                cwd: None,
+                checkpoint: None,
+                subagents: Default::default(),
+                turns: None,
+                tools: None,
+            },
+        )
+        .unwrap()
+        .turns
+    };
+    let overlay = |runtime: &mut Runtime, records: &[serde_json::Value], seq: u64| {
+        let record = PaneRecord {
+            owner: hide_session::label_reference_token("claude", "id", SESSION),
+            turns: turns(records),
+            turns_seq: Some(seq),
+            ..PaneRecord::default()
+        };
+        runtime.set_label_overlay(LabelOverlay::of_records(
+            [(&PANE.to_owned(), &record)],
+            true,
+            false,
+        ));
+    };
     let claude = |status: &str, seq: u64| {
         let mut payload = projection(SESSION);
         for agent in &mut payload.agents {
@@ -1562,19 +1648,14 @@ fn an_approval_ends_when_the_session_file_reads_the_refused_calls_result() {
     runtime.ingest_session(Ok(claude("blocked", 4)));
     assert_eq!(axes(&runtime).1, "approval");
 
+    // The first run's result is not the waited call's: the dialog stays.
+    overlay(&mut runtime, &records[..4], 5);
+    runtime.ingest_session(Ok(claude("blocked", 5)));
+    assert_eq!(axes(&runtime).1, "approval");
+
     // The operator refuses with a note; Herdr reads the agent working again,
     // and the read under that state finds the refusal.
-    let record = PaneRecord {
-        owner: hide_session::label_reference_token("claude", "id", SESSION),
-        turns: transcript.turns,
-        turns_seq: Some(5),
-        ..PaneRecord::default()
-    };
-    runtime.set_label_overlay(LabelOverlay::of_records(
-        [(&PANE.to_owned(), &record)],
-        true,
-        false,
-    ));
-    runtime.ingest_session(Ok(claude("working", 5)));
+    overlay(&mut runtime, &records, 6);
+    runtime.ingest_session(Ok(claude("working", 6)));
     assert_eq!(axes(&runtime), ("working".to_owned(), "none".to_owned()));
 }

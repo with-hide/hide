@@ -83,11 +83,13 @@ fn canonical(value: &Value, hasher: &mut sha2::Sha256) {
 }
 
 /// Whether Claude Code's session file at `transcript` records a result for
-/// the call `waited` names: the last call of that tool, the one with the
-/// same input when one has it. A refusal in the permission dialog writes
-/// that result and sends no hook event (Claude Code 2.1.312). A call beyond
-/// the file's last [`TRANSCRIPT_TAIL_BYTES`], or a file that cannot be read,
-/// is not answered.
+/// the call `waited` names: the last call with its input, or, for a key
+/// known by its tool alone, the tool's last call. A refusal in the permission
+/// dialog writes that result and sends no hook event (Claude Code 2.1.312).
+/// A call the file does not hold, as a background subagent's, which asks
+/// under the main session and writes its own file, a call beyond the file's
+/// last [`TRANSCRIPT_TAIL_BYTES`], or a file that cannot be read, is not
+/// answered.
 pub fn answered_in_claude_file(transcript: &Path, waited: &str) -> bool {
     let Some((name, input)) = waited.split_once(':') else {
         return false;
@@ -139,7 +141,8 @@ pub fn answered_in_claude_file(transcript: &Path, waited: &str) -> bool {
             }
         }
     }
-    same.or(last).is_some_and(|call| results.contains(&call))
+    let waited_call = if input.is_empty() { last } else { same };
+    waited_call.is_some_and(|call| results.contains(&call))
 }
 
 #[cfg(test)]
@@ -201,5 +204,9 @@ mod tests {
             &folder.path().join("missing.jsonl"),
             &waited
         ));
+        // A background subagent's call, which this file does not hold, is
+        // not answered by the main session's earlier call of the same tool.
+        let subagents = key("Bash", &json!({"command": "cargo test"})).unwrap();
+        assert!(!answered_in_claude_file(&transcript, &subagents));
     }
 }

@@ -470,6 +470,74 @@ fn a_background_subagents_dialog_outlives_the_main_stop_and_ends_at_its_call() {
     assert_eq!(pane.waits(s), [0, 1, 1, 1, 0]);
 }
 
+/// D-10, as Claude Code 2.1.314 ran it: the main session's `Stop` comes
+/// before the background subagent asks, and the request names the main
+/// session's file, whose earlier call of the same tool has its result; the
+/// subagent's own call is not in that file, so its approval stays open until
+/// that call ends.
+#[test]
+fn a_subagents_approval_asked_after_the_main_stop_stays_open_until_its_call_ends() {
+    let machine = Machine::new("registered");
+    let pane = Pane { machine: &machine };
+    let s = PANE_SESSION;
+    let folder = tempfile::tempdir().unwrap();
+    let transcript = folder.path().join(format!("{s}.jsonl"));
+    std::fs::write(
+        &transcript,
+        format!(
+            "{}\n{}\n",
+            json!({"type": "assistant", "message": {"role": "assistant", "content": [
+                {"type": "tool_use", "id": "toolu_main", "name": "Bash",
+                 "input": {"command": "ls"}}]}}),
+            json!({"type": "user", "message": {"role": "user", "content": [
+                {"type": "tool_result", "tool_use_id": "toolu_main", "content": "a"}]}}),
+        ),
+    )
+    .unwrap();
+    let subagent_bash = |event: &str| {
+        pane.event(
+            event,
+            json!({"session_id": s, "transcript_path": transcript, "agent_id": "a1",
+                   "agent_type": "general-purpose", "hook_event_name": event,
+                   "tool_name": "Bash",
+                   "tool_input": {"command": "touch /tmp/x", "description": "Touch"},
+                   "tool_response": {}}),
+        );
+    };
+    pane.session_start(s, "startup");
+    pane.event(
+        "UserPromptSubmit",
+        json!({"session_id": s, "transcript_path": transcript,
+               "hook_event_name": "UserPromptSubmit", "prompt": "go"}),
+    );
+    pane.subagent("SubagentStart", s, "a1");
+    pane.stop(s, &["a1"]);
+    subagent_bash("PreToolUse");
+    subagent_bash("PermissionRequest");
+    pane.event(
+        "Notification",
+        json!({"session_id": s, "transcript_path": transcript,
+               "hook_event_name": "Notification", "notification_type": "permission_prompt",
+               "message": "Claude needs your permission"}),
+    );
+    subagent_bash("PostToolUse");
+
+    let turn = |name: &str| Some(name.to_owned());
+    assert_eq!(
+        pane.turns(s),
+        [
+            None, // SessionStart
+            turn("working"),
+            None, // SubagentStart counts
+            turn("done"),
+            turn("waiting"), // the subagent asks after the main Stop
+            turn("waiting"),
+            turn("done"), // the approved call ended
+        ]
+    );
+    assert_eq!(pane.waits(s), [0, 0, 1, 1, 0]);
+}
+
 /// D-10: after a refusal with the operator's feedback the turn may only
 /// write text, so the next event is its `Stop`, which finds the refused
 /// call's result in the session file and closes its approval.

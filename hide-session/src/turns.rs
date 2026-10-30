@@ -517,14 +517,26 @@ impl TurnTracker {
         }
     }
 
-    /// The keys of the remembered tool calls that have a result
-    /// ([`ToolTurnMark::Called`]), oldest first.
+    /// The call keys ([`ToolTurnMark::Called`]) whose last remembered call
+    /// has a result, and `name:` ([`crate::calls::key_by_name`]) for each
+    /// tool whose last call has one, the rule
+    /// [`crate::calls::answered_in_claude_file`] keeps: a second call with
+    /// the same input waits on its own result, not the first one's.
     pub fn answered_calls(&self) -> Vec<String> {
-        self.calls
-            .iter()
-            .filter(|seen| seen.answered)
-            .map(|seen| seen.key.clone())
-            .collect()
+        let mut seen = std::collections::HashSet::new();
+        let mut answered = Vec::new();
+        for call in self.calls.iter().rev() {
+            let name = call
+                .key
+                .split_once(':')
+                .map_or(call.key.as_str(), |(name, _)| name);
+            for key in [call.key.clone(), format!("{name}:")] {
+                if seen.insert(key.clone()) && call.answered {
+                    answered.push(key);
+                }
+            }
+        }
+        answered
     }
 
     /// The devices the agent waited for died with the process that ran them,
@@ -930,6 +942,31 @@ mod tests {
             tracker.fold(offset as u64 * 10, mark);
         }
         tracker
+    }
+
+    /// A command run twice is two calls with one key: the second one's
+    /// dialog stays open while only the first has a result.
+    #[test]
+    fn a_key_is_answered_only_when_its_last_call_has_a_result() {
+        let called = |call: &str| {
+            TurnMark::Tools(vec![ToolTurnMark::Called {
+                call: call.to_owned(),
+                key: "Bash:00aa".to_owned(),
+            }])
+        };
+        let answered = |call: &str| {
+            TurnMark::Tools(vec![ToolTurnMark::Answered {
+                call: call.to_owned(),
+            }])
+        };
+        let first = [called("toolu_1"), answered("toolu_1"), called("toolu_2")];
+        assert!(folded(&first).answered_calls().is_empty());
+
+        let mut both = first.to_vec();
+        both.push(answered("toolu_2"));
+        let mut keys = folded(&both).answered_calls();
+        keys.sort();
+        assert_eq!(keys, ["Bash:", "Bash:00aa"]);
     }
 
     #[test]
