@@ -12,10 +12,11 @@ const RETIRED_ID_WINDOW: usize = 64;
 /// yet (`early_focuses`); one more is a divergence that rebuilds the replica.
 const EARLY_FOCUS_LIMIT: usize = 16;
 
-/// How many pane and layout events a replica holds for tabs not announced yet
-/// (`early_children`): a pane and a layout for each tab of a burst of 32. One
-/// more is a divergence that rebuilds the replica.
-const EARLY_CHILD_LIMIT: usize = 64;
+/// How many creation events a replica holds for a parent not announced yet
+/// (`early_children`): a tab for its workspace, a pane and a layout for their
+/// tab; a tab, a pane and a layout for each tab of a burst of 32. One more is
+/// a divergence that rebuilds the replica.
+const EARLY_CHILD_LIMIT: usize = 96;
 
 /// How many panes a replica holds waiting for their cwd to be confirmed
 /// (`unconfirmed_cwds`). A pane waits at most `CWD_READ_LIMIT` coordinator
@@ -1230,16 +1231,18 @@ impl SessionReplica {
             } => {
                 let event = "tab_created";
                 validate_tab_wire(event, &input_tab)?;
-                if !self
-                    .state
-                    .workspaces
-                    .iter()
-                    .any(|workspace| workspace.workspace_id == input_tab.workspace_id)
-                {
-                    return Err(malformed_event(
+                if !self.has_workspace(&input_tab.workspace_id) {
+                    // Herdr drains each subscribed kind on its own cursor, so a
+                    // workspace created while a drain runs can reach the stream
+                    // as its tab before its `workspace_created`.
+                    self.defer_child(
                         event,
-                        "created tab references a missing workspace",
-                    ));
+                        ReplicaEvent::TabCreated {
+                            tab: input_tab,
+                            focused,
+                        },
+                    )?;
+                    return Ok(false);
                 }
                 if self
                     .state
@@ -1795,32 +1798,40 @@ impl SessionReplica {
         Ok(())
     }
 
-    /// Holds a pane or layout event until its tab is announced.
+    /// Holds a tab event until its workspace is announced, and a pane or
+    /// layout event until its tab is.
     fn defer_child(&mut self, event: &str, child: ReplicaEvent) -> Result<(), SessionFetchError> {
         if self.early_children.len() == EARLY_CHILD_LIMIT {
             return Err(malformed_event(
                 event,
-                "too many pane and layout events ahead of their tabs",
+                "too many tab, pane and layout events ahead of their parents",
             ));
         }
         self.early_children.push(child);
         Ok(())
     }
 
-    /// Applies, in arrival order, each held pane and layout event whose tab
-    /// has now been announced.
+    /// Applies, in arrival order, each held event whose parent has now been
+    /// announced, until none is left whose parent is: a tab released by its
+    /// workspace releases the panes and layouts held for it.
     fn apply_early_children(&mut self, mode: ApplyMode) -> Result<(), SessionFetchError> {
-        let (ready, held): (Vec<_>, Vec<_>) = std::mem::take(&mut self.early_children)
-            .into_iter()
-            .partition(|child| {
-                let (tab_id, _, _) = child.subject();
-                tab_id.is_some_and(|tab_id| self.state.tabs.iter().any(|tab| tab.tab_id == tab_id))
-            });
-        self.early_children = held;
-        for child in ready {
-            self.apply_new_event(child, mode)?;
+        loop {
+            let (ready, held): (Vec<_>, Vec<_>) = std::mem::take(&mut self.early_children)
+                .into_iter()
+                .partition(|child| match child {
+                    ReplicaEvent::TabCreated { tab, .. } => self.has_workspace(&tab.workspace_id),
+                    _ => child.subject().0.is_some_and(|tab_id| {
+                        self.state.tabs.iter().any(|tab| tab.tab_id == tab_id)
+                    }),
+                });
+            self.early_children = held;
+            if ready.is_empty() {
+                return Ok(());
+            }
+            for child in ready {
+                self.apply_new_event(child, mode)?;
+            }
         }
-        Ok(())
     }
 
     /// Applies each held focus whose tab or pane has now been announced.
@@ -1894,6 +1905,7 @@ impl SessionReplica {
         self.pending_workspace_closures.remove(workspace_id);
         self.pending_active_tab_focuses.remove(workspace_id);
         self.early_children.retain(|child| match child {
+            ReplicaEvent::TabCreated { tab, .. } => tab.workspace_id != workspace_id,
             ReplicaEvent::PaneCreated { pane } => pane.workspace_id != workspace_id,
             ReplicaEvent::LayoutUpdated { layout } => layout.workspace_id != workspace_id,
             _ => true,
