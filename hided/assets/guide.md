@@ -2,10 +2,10 @@
 
 Hide is the operator's workspace for coding agents, and this guide is for an agent running in one of its panes.
 Outside Hide, or in a pane Hide does not know, the commands below are refused with a `reason` and a `next_action`; if you cannot get past that, this guide does not apply to the session.
-Herdr runs the terminals: it owns each pane, its split, its working folder, the agent in it and its terminal.
+Hide runs the terminals: each pane, its split, its working folder, the agent in it and its terminal.
 Hide draws them and keeps the rest: which tab and pane the operator sees, the letters and watches between agents, who started whom, Project Memory, the right lane with its View slot (보기 in Korean), the browser displays, and a Conductor's missions.
 You change Hide only through the `hide` commands below; what you print in your own pane is read by the operator, not by Hide.
-The `herdr` commands in the session rules below are Herdr's own and change only what Herdr keeps.
+Every pane, agent and letter command here is a `hide` command; there is no other program to call.
 
 ## Before the first command
 
@@ -19,7 +19,7 @@ The `herdr` commands in the session rules below are Herdr's own and change only 
 A letter is stored delivery from your pane to another agent's, with an answer, a receipt and a retry that never sends twice.
 
 ```
-hide request send <target> --intent <key> --body <text> [--kind request|block|report|progress] [--now]
+hide request send <target> --intent <key> --body <text> [--kind request|block|report|progress] [--now | --force]
 hide request reply <id> --intent <key> --body <text>
 hide inbox
 ```
@@ -28,6 +28,7 @@ hide inbox
 - The body's first line is its one-line summary, which the operator sees when Hide wakes the recipient, so begin with what happened or what you need.
 - `request` asks and waits for a reply; `block` says you cannot go on without one; `progress` is an interim report, such as a plan, and ends nothing; `report` says the work is finished and ends your parent's watch on you.
 - A recipient that is working reads a letter after five minutes of its work; `--now` hands it over at its next tool call instead, so keep `--now` for what cannot wait.
+- `--force` puts the letter into the recipient's input now, even while it works, and keeps it as a letter with its reply and retry. Hide reads the recipient's input first: while someone is typing there the send is refused with `composer_not_empty`, and one it cannot read as empty with `composer_unconfirmed`; nothing is typed or recorded then, so send it again without `--force`. Someone who starts typing just before Hide types it keeps their text, and the letter waits as one sent with `--now`.
 - A prompt that begins with 🦉 is Hide waking you for a letter: the letter comes with it, and `hide inbox` shows it if it did not; answer with `hide request reply`.
 - An agent Hide put to sleep still takes letters: a `request` or `block` wakes it, resuming its conversation, and is handed over once it is awake; a `report` or `progress` waits for its next wake, and the hour a letter waits does not run while it sleeps. Each `request` or `block` wakes it once: one that already rang or already woke it does not wake it again, and its hour runs while it sleeps.
   When it cannot be woken, the letter ends undelivered and Hide's own letter tells you whom and why; send again to try once more.
@@ -54,6 +55,23 @@ hide agent end <id> [--actor <id>]
 - `hide agent sleep <id>` puts a resting child of yours (or yourself) to sleep: its process ends, its conversation is kept, and a `request` or `block` letter wakes it; it answers `{"state":"ending"}`, or `asleep` when asked again, and refuses with a reason while the agent works, waits for the operator or is on the operator's screen.
   `hide agent end <id>` instead ends only its registration and leaves its process running.
 - `hide agent archive <id>` does what the screen's `세션 보관` does for that session: its conversation is saved, its panes close, and the operator resumes it from 보관됨; it answers `{"archived":"<id>","pane_id":"<pane>"}`, and refuses a session that is working with `archive_confirmation_required`, which only the operator confirms, from Hide's screen.
+
+## Panes
+
+```
+hide pane read <pane> [--lines <n>] [--json]
+hide pane send <pane> <text> [--enter]
+hide pane open --beside [--focus] -- <command>
+hide agent read <agent> [--lines <n>] [--json]
+hide workspace purpose <text>
+```
+
+- A pane is a pane id of your machine, as `hide ps` lists it; an agent is its name, registration id or pane, as a letter's target.
+- A read prints the pane's last 120 lines, unwrapped (`--lines` up to 2000); `--json` prints the answer line instead.
+- `hide pane send` types the text, 16 KiB at most, and presses Enter only with `--enter`. It is input, not a letter: Hide keeps no record of it, so hand an agent work with `hide request send`.
+- `hide pane open --beside -- <command>` opens a pane right of yours in your checkout, runs the command there and answers the new pane's id; the command is one line of 1000 bytes at most, and one that needs its shell's own quoting goes as one quoted argument. Your keyboard focus stays where it is unless `--focus`.
+- `hide workspace purpose <text>` sets your checkout's one-line purpose, 40 characters at most, which the sidebar shows.
+- A refusal is one line with its `code` and the step to take: a pane or agent that is not there, a limit passed, or a shell outside a Hide pane.
 
 ## Devices
 

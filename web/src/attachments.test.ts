@@ -11,6 +11,7 @@ import {
   safeName,
   submitAttachments,
   submitExplorerImage,
+  submitThreadInput,
   type AttachmentInput,
 } from "./attachments";
 import { useShellStore } from "./store";
@@ -204,5 +205,39 @@ describe("attachment upload", () => {
   it("states the daemon's caps in the chosen language", () => {
     expect(refusalText("too_large", ko)).toBe("파일 하나가 첨부 한도 20 MiB를 넘어요.");
     expect(refusalText("too_many_files", ko)).toBe("일반 파일을 1개에서 8개까지 선택하세요.");
+  });
+});
+
+describe("thread input (B29)", () => {
+  beforeEach(() => {
+    useShellStore.setState({ attachmentRefusal: null, threadInputRefusal: null });
+  });
+
+  it("stages each file under the input's id, then names the stages with the words", () => {
+    const { events, binaries } = capture();
+    const requestId = submitThreadInput(3, "w1:p1", "이거 봐줘", [{ name: "shot.png", bytes: new Uint8Array([1, 2]) }]);
+    expect(requestId).toMatch(/^[0-9a-f-]{36}$/);
+    expect(events.map((event) => event.kind)).toEqual(["attachment_stage", "thread_input"]);
+    expect(events.map((event) => event.payload)).toEqual([
+      { request_id: `${requestId}-0`, name: "shot.png", size: 2, clipboard: false },
+      { generation: 3, pane_id: "w1:p1", request_id: requestId, text: "이거 봐줘", stages: [`${requestId}-0`] },
+    ]);
+    expect(binaries).toHaveLength(1);
+  });
+
+  it("answers hided's refusal of an input to its thread, never to a pane", () => {
+    capture();
+    const requestId = submitThreadInput(3, "w1:p1", "봐줘", [{ name: "a.png", bytes: new Uint8Array([1]) }])!;
+    receiveAttachmentRefusal({ request_id: `${requestId}-0`, reason: "staging_full" });
+    expect(useShellStore.getState().threadInputRefusal).toEqual({ request_id: requestId, reason: "staging_full" });
+    expect(useShellStore.getState().attachmentRefusal).toBeNull();
+  });
+
+  it("refuses files over the cap before a byte leaves the page", () => {
+    const { events } = capture();
+    const big = { name: "big.bin", bytes: new Uint8Array(21 * 1024 * 1024) };
+    expect(submitThreadInput(3, "w1:p1", "", [big])).toBeNull();
+    expect(events).toEqual([]);
+    expect(useShellStore.getState().threadInputRefusal?.reason).toBe("too_large");
   });
 });

@@ -104,6 +104,8 @@ export type Frame = {
     link_summaries?: import("./snapshot").LinkSummaries;
     session_record?: import("./snapshot").SessionRecordSection | null;
     session_work_search?: import("./snapshot").SessionWorkSearch | null;
+    session_thread?: import("./snapshot").SessionThreadSection;
+    session_thread_history?: import("./snapshot").SessionThreadHistorySection;
     find?: PaneFind;
     chunks?: TerminalChunk[];
   } & Partial<DirectoryList> &
@@ -195,6 +197,12 @@ type Store = {
   linkSummaries: import("./snapshot").LinkSummaries | null;
   sessionRecord: import("./snapshot").SessionRecordSection | null;
   sessionWorkSearch: import("./snapshot").SessionWorkSearch | null;
+  /** The session thread a screen has open (`session_thread`); null until one opens. */
+  sessionThread: import("./snapshot").SessionThreadSection | null;
+  /** Its kept pages (`session_thread_history`). */
+  sessionThreadHistory: import("./snapshot").SessionThreadHistorySection | null;
+  /** hided refused a thread input before the core saw it: its request and why. */
+  threadInputRefusal: { request_id: string; reason: string } | null;
   agents: AgentRow[];
   /**
    * The keyboard-focus pane of the context on screen: the core's
@@ -252,6 +260,7 @@ type Store = {
   noteDiagnostic: (message: string) => void;
   clearPathRefusal: () => void;
   setAttachmentRefusal: (refusal: { pane_id: string; reason: string } | null) => void;
+  setThreadInputRefusal: (refusal: { request_id: string; reason: string } | null) => void;
   noteSaving: (tabId: string, saving: boolean) => void;
   noteBufferWarning: (tabId: string, warned: boolean) => void;
   noteDraftExported: (tabId: string, contents: string) => void;
@@ -341,6 +350,9 @@ export const useShellStore = create<Store>((set, get) => ({
   linkSummaries: null,
   sessionRecord: null,
   sessionWorkSearch: null,
+  sessionThread: null,
+  sessionThreadHistory: null,
+  threadInputRefusal: null,
   agents: [],
   focusedPaneId: null,
   operatorFocusSent: 0,
@@ -373,6 +385,7 @@ export const useShellStore = create<Store>((set, get) => ({
     if (get().pathRefusal) set({ pathRefusal: null });
   },
   setAttachmentRefusal: (attachmentRefusal) => set({ attachmentRefusal }),
+  setThreadInputRefusal: (threadInputRefusal) => set({ threadInputRefusal }),
   noteDraftExported: (tabId, contents) => {
     const next = new Map(get().exportedDrafts);
     next.set(tabId, contents);
@@ -440,6 +453,8 @@ export const useShellStore = create<Store>((set, get) => ({
         linkSummaries: payload.link_summaries ?? null,
         sessionRecord: payload.session_record ?? null,
         sessionWorkSearch: payload.session_work_search ?? null,
+        sessionThread: payload.session_thread ?? null,
+        sessionThreadHistory: payload.session_thread_history ?? null,
       });
     } else if (
       payload.editor !== undefined ||
@@ -450,7 +465,8 @@ export const useShellStore = create<Store>((set, get) => ({
       payload.desk !== undefined || payload.desk_live !== undefined ||
       payload.desk_jobs !== undefined || payload.desk_mentions !== undefined ||
       payload.link_panel !== undefined || payload.link_summaries !== undefined ||
-      payload.session_record !== undefined || payload.session_work_search !== undefined
+      payload.session_record !== undefined || payload.session_work_search !== undefined ||
+      payload.session_thread !== undefined || payload.session_thread_history !== undefined
     ) {
       set({
         editor: payload.editor ?? get().editor,
@@ -466,6 +482,8 @@ export const useShellStore = create<Store>((set, get) => ({
         linkSummaries: payload.link_summaries ? share(get().linkSummaries, payload.link_summaries) : get().linkSummaries,
         sessionRecord: payload.session_record !== undefined ? payload.session_record && share(get().sessionRecord, payload.session_record) : get().sessionRecord,
         sessionWorkSearch: payload.session_work_search !== undefined ? payload.session_work_search && share(get().sessionWorkSearch, payload.session_work_search) : get().sessionWorkSearch,
+        sessionThread: payload.session_thread ? share(get().sessionThread, payload.session_thread) : get().sessionThread,
+        sessionThreadHistory: payload.session_thread_history ? share(get().sessionThreadHistory, payload.session_thread_history) : get().sessionThreadHistory,
       });
     }
     if (frame.type === "directory_list") {

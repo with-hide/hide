@@ -26,8 +26,12 @@ export function chipMention(chip: DeskSessionChip): DeskMention {
   return { kind: "session", id: chip.pane_id, name: chip.name, mark: chip.mark, agent_kind: chip.agent_kind };
 }
 
-/** A session as a chip names it: its status, its agent and its name (B26); a session Hide does not know the state of has its name alone. */
-export type DeskSessionRef = { name: string; mark: RowMark | null; agent_kind: string | null };
+/**
+ * A session as a chip names it: its status, its agent and its name (B26); a
+ * session Hide does not know the state of has its name alone. `pane_id` is
+ * where it runs, the place pressing its chip goes, when Hide knows it.
+ */
+export type DeskSessionRef = { name: string; mark: RowMark | null; agent_kind: string | null; pane_id?: string | null };
 
 /** The session a handed line names, from the line's own mark and agent. */
 export function handedSession(item: Extract<DeskItem, { kind: "handed" }>): DeskSessionRef {
@@ -54,8 +58,12 @@ export type AcpContentBlock =
   | { type: "image"; data: string; mimeType: string; uri?: string | null; _meta?: AcpMeta }
   | { type: "resource_link"; uri: string; name: string };
 
-/** Hide's own marks under `_meta.hide`: a message's origin, a cut text or image. */
-export type AcpMeta = { hide?: { origin?: "letter" | "interrupted" | "injected"; truncated?: boolean } } | null;
+/**
+ * Hide's own marks under `_meta.hide`: a message's origin and a letter's
+ * sender as written, a cut text or image, and when a call or its result was
+ * written (Unix milliseconds).
+ */
+export type AcpMeta = { hide?: { origin?: "letter" | "interrupted" | "injected"; from?: string; truncated?: boolean; at_ms?: number } } | null;
 
 /** ACP `ToolCallContent`. */
 export type AcpToolCallContent =
@@ -78,6 +86,7 @@ export type AcpToolCallFields = {
   locations?: { path: string; line?: number | null }[];
   rawInput?: unknown;
   rawOutput?: unknown;
+  _meta?: AcpMeta;
 };
 
 /** ACP `PlanEntry`. */
@@ -100,7 +109,8 @@ export type AcpSessionUpdate =
  */
 export type ThreadHidePart =
   | { kind: "plan"; plan: PlanView }
-  | { kind: "spawn"; job: DeskJob }
+  /** A new session this one handed work to. */
+  | { kind: "spawn"; session: DeskSessionRef }
   /** A letter this session sent or got, with the other session and its first line. */
   | { kind: "letter"; direction: "sent" | "received"; peer: DeskSessionRef; body: string }
   | { kind: "view"; output: DeskOutput }
@@ -109,10 +119,12 @@ export type ThreadHidePart =
 
 /** One drawn line of a thread, after chunks are joined and call updates folded into their call. */
 export type ThreadLine =
-  | { kind: "user"; id: string; message: string | null; text: string; images: AcpContentBlock[]; origin: "operator" | "letter" | "interrupted" | "injected" }
+  /** `peer` is a letter's sender, when the record names it. */
+  | { kind: "user"; id: string; message: string | null; text: string; images: AcpContentBlock[]; origin: "operator" | "letter" | "interrupted" | "injected"; peer: DeskSessionRef | null }
   | { kind: "agent"; id: string; message: string | null; text: string }
   | { kind: "thought"; id: string; message: string | null; text: string }
-  | { kind: "tool"; id: string; title: string; toolKind: AcpToolKind; status: AcpToolCallStatus; input: string | null; output: string | null; diffs: Extract<AcpToolCallContent, { type: "diff" }>[]; images: AcpContentBlock[] }
+  /** `startedAtMs` is when the session made the call, when its record says. */
+  | { kind: "tool"; id: string; title: string; toolKind: AcpToolKind; status: AcpToolCallStatus; input: string | null; output: string | null; diffs: Extract<AcpToolCallContent, { type: "diff" }>[]; images: AcpContentBlock[]; startedAtMs: number | null }
   | { kind: "plan"; id: string; entries: AcpPlanEntry[] }
   /** `command` is what the session typed, when the call carries it. */
   | { kind: "hide"; id: string; part: ThreadHidePart; command: string | null };
@@ -134,15 +146,21 @@ function textOf(block: AcpContentBlock): string {
   return block.type === "text" ? block.text : "";
 }
 
+/** A session Hide cannot place: its name alone. */
+const nameOnly = (name: string): DeskSessionRef => ({ name, mark: null, agent_kind: null });
+
 /**
  * The lines a thread draws (B25): consecutive chunks of one kind and one
- * message joined (a chunk with no message id joins the line before it), a call's updates folded into the call (an update's content replaces
- * the call's, as ACP says), and a call the reader turned into a Hide part
- * drawn as that part instead (B26).
+ * message id joined (chunks with no message id join each other), a call's
+ * updates folded into the call (an update's content replaces the call's, as
+ * ACP says), and a call the reader turned into a Hide part drawn as that part
+ * instead (B26). `session` names a letter's sender as its chip draws it.
  */
-export function threadLines(updates: readonly AcpSessionUpdate[], parts: Readonly<Record<string, ThreadHidePart>> = {}): ThreadLine[] {
+export function threadLines(updates: readonly AcpSessionUpdate[], parts: Readonly<Record<string, ThreadHidePart>> = {}, session: (name: string) => DeskSessionRef = nameOnly): ThreadLine[] {
   const lines: ThreadLine[] = [];
   const calls = new Map<string, Extract<ThreadLine, { kind: "tool" }>>();
+  // A letter's sender as the record wrote it, so its chunks join by who wrote them, not by how the chip names them.
+  const senders = new Map<ThreadLine, string | null>();
   const fold = (line: Extract<ThreadLine, { kind: "tool" }>, fields: AcpToolCallFields) => {
     if (fields.title !== undefined) line.title = fields.title;
     if (fields.kind !== undefined) line.toolKind = fields.kind;
@@ -163,11 +181,14 @@ export function threadLines(updates: readonly AcpSessionUpdate[], parts: Readonl
     switch (update.sessionUpdate) {
       case "user_message_chunk": {
         const origin = update._meta?.hide?.origin ?? "operator";
-        if (last?.kind === "user" && last.origin === origin && last.message === message) {
+        const from = update._meta?.hide?.from ?? null;
+        if (last?.kind === "user" && last.origin === origin && last.message === message && (senders.get(last) ?? null) === from) {
           last.text += textOf(update.content);
           if (update.content.type === "image") last.images.push(update.content);
         } else {
-          lines.push({ kind: "user", id, message, text: textOf(update.content), images: update.content.type === "image" ? [update.content] : [], origin });
+          const line: ThreadLine = { kind: "user", id, message, text: textOf(update.content), images: update.content.type === "image" ? [update.content] : [], origin, peer: from === null ? null : session(from) };
+          senders.set(line, from);
+          lines.push(line);
         }
         return;
       }
@@ -184,7 +205,7 @@ export function threadLines(updates: readonly AcpSessionUpdate[], parts: Readonl
           lines.push({ kind: "hide", id: update.toolCallId, part, command: commandOf(update.rawInput) });
           return;
         }
-        const line: Extract<ThreadLine, { kind: "tool" }> = { kind: "tool", id: update.toolCallId, title: update.title, toolKind: "other", status: "pending", input: null, output: null, diffs: [], images: [] };
+        const line: Extract<ThreadLine, { kind: "tool" }> = { kind: "tool", id: update.toolCallId, title: update.title, toolKind: "other", status: "pending", input: null, output: null, diffs: [], images: [], startedAtMs: update._meta?.hide?.at_ms ?? null };
         fold(line, update);
         calls.set(update.toolCallId, line);
         lines.push(line);
@@ -371,4 +392,22 @@ export function threadTurns(lines: readonly ThreadLine[]): ThreadTurn[] {
   }
   close();
   return turns;
+}
+
+/**
+ * The turns with the question an asking job waits on said once (D-75): the
+ * wait at the thread's foot says it, so the last answer leaves it out, whole
+ * when the answer is only the question and its ending when it ends with it.
+ */
+export function askedOnce(turns: readonly ThreadTurn[], question: string | null): readonly ThreadTurn[] {
+  const asked = question?.trim();
+  const last = turns.at(-1);
+  const answer = last?.answer.at(-1);
+  if (!asked || !last || !answer) return turns;
+  const said = answer.text.trim();
+  const only = said.replace(/\s+/g, " ") === asked.replace(/\s+/g, " ");
+  if (!only && !said.endsWith(asked)) return turns;
+  const rest = only ? "" : said.slice(0, said.length - asked.length).trimEnd();
+  const answers = rest ? [...last.answer.slice(0, -1), { ...answer, text: rest }] : last.answer.slice(0, -1);
+  return [...turns.slice(0, -1), { ...last, answer: answers }];
 }

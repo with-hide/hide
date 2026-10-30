@@ -188,38 +188,26 @@ export function DeskScreen({ actions }: { actions: Actions }) {
     }
   };
 
+  // The `@` menu's keys; the composer sends on ↵ when the menu is closed.
   const onKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>) => {
-    if (event.nativeEvent.isComposing) return;
+    if (event.nativeEvent.isComposing || !menuOpen) return;
     const key = event.key;
-    if (menuOpen) {
-      if (key === "ArrowDown" || key === "ArrowUp") {
-        event.preventDefault();
-        const index = values.indexOf(active);
-        const next = (index + (key === "ArrowDown" ? 1 : values.length - 1)) % values.length;
-        setMenu({ ...menu, active: values[next]! });
-        return;
-      }
-      if (key === "Enter" && !event.shiftKey) {
-        event.preventDefault();
-        choose(active);
-        return;
-      }
-      if (key === "Tab" && !event.shiftKey && active.startsWith("project:")) {
-        event.preventDefault();
-        const id = active.slice("project:".length);
-        setMenu({ ...menu, entered: id, active: `new:${id}` });
-        return;
-      }
-      if ((key === "Tab" && event.shiftKey) || key === "Escape") {
-        event.preventDefault();
-        event.stopPropagation();
-        setMenu(menu.entered !== null ? { ...menu, entered: null, active: "" } : { ...menu, dismissed: at!.start });
-        return;
-      }
-    }
-    if (key === "Enter" && !event.shiftKey) {
+    if (key === "ArrowDown" || key === "ArrowUp") {
       event.preventDefault();
-      send();
+      const index = values.indexOf(active);
+      const next = (index + (key === "ArrowDown" ? 1 : values.length - 1)) % values.length;
+      setMenu({ ...menu, active: values[next]! });
+    } else if (key === "Enter" && !event.shiftKey) {
+      event.preventDefault();
+      choose(active);
+    } else if (key === "Tab" && !event.shiftKey && active.startsWith("project:")) {
+      event.preventDefault();
+      const id = active.slice("project:".length);
+      setMenu({ ...menu, entered: id, active: `new:${id}` });
+    } else if ((key === "Tab" && event.shiftKey) || key === "Escape") {
+      event.preventDefault();
+      event.stopPropagation();
+      setMenu(menu.entered !== null ? { ...menu, entered: null, active: "" } : { ...menu, dismissed: at!.start });
     }
   };
   const track = () => {
@@ -283,7 +271,7 @@ export function DeskScreen({ actions }: { actions: Actions }) {
       label={t("desk.composer.label")}
       placeholder={t("desk.composer.placeholder")}
       answering={answering}
-      canSend={canSend}
+      held={!canSend}
       focused={menuOpen}
       menuOpen={menuOpen}
       menu={menuOpen ? (

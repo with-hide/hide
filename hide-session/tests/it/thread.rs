@@ -11,7 +11,10 @@ use std::path::{Path, PathBuf};
 
 use hide_agent_adapter::usage::Support;
 use hide_agent_adapter::{ADAPTERS, SessionFormat, ThreadPart, ThreadReading};
-use hide_session::thread::{THREAD_PAGE_BYTES, ThreadCursor, ThreadPage, read_thread, reads};
+use hide_session::thread::{
+    THREAD_PAGE_BYTES, THREAD_TAIL_BYTES, ThreadCursor, ThreadPage, ThreadRead, ThreadRequest,
+    read_pane_thread, read_thread, read_thread_from, reads,
+};
 use hide_session::{Agent, SessionReadScope};
 use serde_json::{Value, json};
 
@@ -230,6 +233,10 @@ impl Placed {
         }
     }
 
+    fn read_from(&self, from: &ThreadCursor) -> Result<ThreadPage, hide_session::ReadRefusal> {
+        read_thread_from(&self.home, self.agent, Some(&self.path), &self.scope, from)
+    }
+
     fn read(&self, before: Option<&ThreadCursor>) -> Result<ThreadPage, hide_session::ReadRefusal> {
         read_thread(
             &self.home,
@@ -435,6 +442,42 @@ fn every_agents_sample_reads_to_the_task_it_recorded() {
                 absent.contains(&part)
             );
         }
+    }
+}
+
+/// A screen shows how long a command has run and how long it took, so
+/// every call says when it started and every finished result when it ended,
+/// from the record's own time: the samples were recorded on 2026-10-30.
+#[test]
+fn every_call_and_finished_result_carries_when_it_was_written() {
+    const RECORDED_FROM: u64 = 1_793_318_400_000; // 2026-10-30T00:00:00Z
+    const RECORDED_TO: u64 = RECORDED_FROM + 24 * 60 * 60 * 1000;
+    for sample in SAMPLES {
+        let name = format!("{:?}", sample.format);
+        let updates = Placed::new(sample).read_all();
+        let mut started = std::collections::BTreeMap::new();
+        for update in &updates {
+            let at = update["_meta"]["hide"]["at_ms"].as_u64();
+            let id = update["toolCallId"].as_str();
+            match update["sessionUpdate"].as_str() {
+                Some("tool_call") => {
+                    let at = at.unwrap_or_else(|| panic!("{name}: a call without its time"));
+                    assert!((RECORDED_FROM..RECORDED_TO).contains(&at), "{name}: {at}");
+                    started.insert(id.unwrap(), at);
+                }
+                Some("tool_call_update")
+                    if matches!(update["status"].as_str(), Some("completed" | "failed")) =>
+                {
+                    let ended = at.unwrap_or_else(|| panic!("{name}: a result without its time"));
+                    assert!(
+                        ended >= started[id.unwrap()],
+                        "{name}: {id:?} ended before it started"
+                    );
+                }
+                _ => {}
+            }
+        }
+        assert!(!started.is_empty(), "{name}: the sample ran tools");
     }
 }
 
@@ -697,6 +740,35 @@ fn hide_and_harness_wrappers_stay_apart_from_the_operators_words() {
     );
 }
 
+/// A letter's line says whom it came from: the envelope's sender, or the
+/// sender the doorbell's line names.
+#[test]
+fn a_letter_names_its_sender() {
+    let placed = Placed::new(&SAMPLES[0]);
+    let records = [
+        json!({"type":"user","uuid":"a","message":{"content":"Hide letter letter-1 from ci-lead (claude) [request]\nCI 다시 봐줘"}}),
+        json!({"type":"user","uuid":"b","message":{"content":"🦉 desk conductor 요청: 계획 승인 · hide inbox"}}),
+        json!({"type":"user","uuid":"c","message":{"content":"ci-lead에게 물어봐"}}),
+    ];
+    let contents = records
+        .iter()
+        .map(|record| format!("{record}\n"))
+        .collect::<String>();
+    std::fs::write(&placed.path, contents).unwrap();
+    let senders = json_of(&placed.read(None).unwrap())
+        .iter()
+        .map(|update| update["_meta"]["hide"]["from"].as_str().map(str::to_owned))
+        .collect::<Vec<_>>();
+    assert_eq!(
+        senders,
+        [
+            Some("ci-lead".to_owned()),
+            Some("desk conductor".to_owned()),
+            None
+        ]
+    );
+}
+
 /// OpenCode 1.x keeps a message's pieces in rows of their own; the adapter
 /// fixture's session reads to the same kinds of update as a 2.x one.
 #[test]
@@ -721,6 +793,24 @@ fn an_opencode_1_session_reads_from_its_parts() {
     )
     .unwrap();
     let updates = json_of(&page);
+    let forward = read_thread_from(
+        &root,
+        Agent::OpenCode,
+        None,
+        &scope("ses_0a1b2c3d4e5f60718293a4b5c6", cwd),
+        &page.start,
+    )
+    .unwrap();
+    assert_eq!(
+        json_of(&forward),
+        updates,
+        "a forward read from the page's start"
+    );
+    assert!(!forward.more);
+    assert_eq!(
+        forward.end, page.end,
+        "the newest page ends where the session does"
+    );
     assert_eq!(
         updates[0]["content"]["text"],
         "요청 보기를 만들어줘\n긴 요청의 둘째 줄"
@@ -744,4 +834,191 @@ fn an_opencode_1_session_reads_from_its_parts() {
         .find(|update| update["content"]["text"] == "Summarize the conversation so far")
         .unwrap();
     assert_eq!(synthetic["_meta"]["hide"]["origin"], "injected");
+}
+
+fn texts(page: &ThreadPage) -> Vec<String> {
+    json_of(page)
+        .iter()
+        .map(|update| update["content"]["text"].as_str().unwrap().to_owned())
+        .collect()
+}
+
+/// A session still being written is read forward from its newest page's
+/// start: what it wrote since is added after the page, and a line without
+/// its newline yet waits for the next read.
+#[test]
+fn a_working_session_read_forward_from_its_page_adds_only_whole_new_records() {
+    let placed = Placed::new(&SAMPLES[0]);
+    std::fs::write(
+        &placed.path,
+        [claude_line("one"), claude_line("two")].concat(),
+    )
+    .unwrap();
+    let newest = placed.read(None).unwrap();
+    assert_eq!(texts(&newest), ["one", "two"]);
+
+    let half = claude_line("four");
+    let mut file = std::fs::OpenOptions::new()
+        .append(true)
+        .open(&placed.path)
+        .unwrap();
+    std::io::Write::write_all(&mut file, claude_line("three").as_bytes()).unwrap();
+    std::io::Write::write_all(&mut file, &half.as_bytes()[..half.len() / 2]).unwrap();
+    let grown = placed.read_from(&newest.start).unwrap();
+    assert_eq!(texts(&grown), ["one", "two", "three"]);
+    assert_eq!(
+        texts(&placed.read_from(&newest.end).unwrap()),
+        ["three"],
+        "from where the newest page ended, only what was written since"
+    );
+    assert!(!grown.more, "the page reached the session's end");
+
+    std::io::Write::write_all(&mut file, &half.as_bytes()[half.len() / 2..]).unwrap();
+    assert_eq!(
+        texts(&placed.read_from(&newest.start).unwrap()),
+        ["one", "two", "three", "four"]
+    );
+}
+
+/// A forward page ends once it passed the tail size, and the cursor it
+/// names reads on from there: the pages together are the session, once.
+#[test]
+fn forward_pages_end_past_the_tail_size_and_together_read_the_session_once() {
+    let placed = Placed::new(&SAMPLES[0]);
+    let line = claude_line(&"가".repeat(4096));
+    let count = (THREAD_TAIL_BYTES as usize / line.len()) * 3;
+    let lines = (0..count)
+        .map(|index| claude_line(&format!("{index}:{}", "가".repeat(4096))))
+        .collect::<String>();
+    std::fs::write(&placed.path, &lines).unwrap();
+    let newest = placed.read(None).unwrap();
+    assert!(
+        newest.start.at_start(),
+        "the session fits one backward page"
+    );
+
+    let mut read = Vec::new();
+    let mut pages = 0;
+    let mut from = newest.start.clone();
+    loop {
+        let page = placed.read_from(&from).unwrap();
+        pages += 1;
+        assert!(
+            page.updates.len() < count,
+            "a forward page holds less than the session"
+        );
+        read.extend(texts(&page));
+        if !page.more {
+            break;
+        }
+        from = page.end;
+    }
+    assert!(pages >= 3, "{pages} pages");
+    assert_eq!(read, texts(&newest));
+    assert_eq!(read.len(), count);
+}
+
+/// A record bigger than the tail size makes a forward page of its own, so
+/// the next record starts the next page; a cursor into a file replaced at
+/// the same path is refused.
+#[test]
+fn a_record_past_the_tail_size_is_a_forward_page_and_a_replaced_file_refuses_its_cursor() {
+    let placed = Placed::new(&SAMPLES[0]);
+    let big =
+        |name: &str| claude_line(&format!("{name}{}", "x".repeat(THREAD_TAIL_BYTES as usize)));
+    let contents = [big("a"), big("b"), claude_line("last")].concat();
+    std::fs::write(&placed.path, &contents).unwrap();
+    let mut from = placed.read(None).unwrap().start;
+    let mut firsts = Vec::new();
+    let mut afters = Vec::new();
+    loop {
+        let page = placed.read_from(&from).unwrap();
+        firsts.push(texts(&page).first().map(|text| text[..1].to_owned()));
+        if !page.more {
+            break;
+        }
+        afters.push(page.end.clone());
+        from = page.end;
+    }
+    assert_eq!(
+        firsts,
+        [
+            Some("a".to_owned()),
+            Some("b".to_owned()),
+            Some("l".to_owned())
+        ]
+    );
+
+    let replacement = placed.path.with_extension("new");
+    std::fs::write(&replacement, &contents).unwrap();
+    std::fs::rename(&replacement, &placed.path).unwrap();
+    assert_eq!(
+        placed.read_from(&afters[0]).unwrap_err().reason(),
+        "thread_cursor_stale"
+    );
+}
+
+/// A pane's session is named as Herdr reports it; the read proves its owner
+/// the way the label read does and answers the same page.
+#[test]
+fn a_pane_thread_is_read_by_the_session_reference_herdr_reports() {
+    for sample in SAMPLES
+        .iter()
+        .filter(|sample| sample.format != SessionFormat::OpenCode)
+    {
+        let placed = Placed::new(sample);
+        let request = |read| ThreadRequest {
+            agent: placed.agent,
+            reference_kind: "path".to_owned(),
+            reference_value: placed.path.to_str().unwrap().to_owned(),
+            cwd: Some(placed.scope.cwd.clone()),
+            read,
+        };
+        let newest = read_pane_thread(&placed.home, &request(ThreadRead::Newest)).unwrap();
+        assert_eq!(
+            json_of(&newest),
+            json_of(&placed.read(None).unwrap()),
+            "{:?}",
+            sample.format
+        );
+        let forward = read_pane_thread(
+            &placed.home,
+            &request(ThreadRead::From(newest.start.clone())),
+        )
+        .unwrap();
+        assert_eq!(json_of(&forward), json_of(&newest), "{:?}", sample.format);
+    }
+}
+
+#[test]
+fn a_pane_thread_refuses_an_unsafe_id_and_an_agent_without_a_converter() {
+    let placed = Placed::new(&SAMPLES[0]);
+    let request = |agent, value: &str| ThreadRequest {
+        agent,
+        reference_kind: "id".to_owned(),
+        reference_value: value.to_owned(),
+        cwd: Some(placed.scope.cwd.clone()),
+        read: ThreadRead::Newest,
+    };
+    assert_eq!(
+        read_pane_thread(&placed.home, &request(placed.agent, "../escape"))
+            .unwrap_err()
+            .reason(),
+        "label_session_id_invalid"
+    );
+    assert_eq!(
+        read_pane_thread(&placed.home, &request(Agent::Cursor, &placed.scope.id))
+            .unwrap_err()
+            .reason(),
+        "thread_unsupported"
+    );
+    assert_eq!(
+        read_pane_thread(
+            &placed.home,
+            &request(placed.agent, "00000000-0000-4000-8000-000000000000")
+        )
+        .unwrap_err()
+        .reason(),
+        "session_file_missing"
+    );
 }

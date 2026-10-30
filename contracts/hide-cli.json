@@ -760,6 +760,11 @@
                                 "null"
                             ]
                         },
+                        "forced": {
+                            "default": false,
+                            "description": "Sent with `hide request send --force` (PRD engine-bundle-1 D-14): its composer was read empty when it was sent, and the doorbell types its bell even while the recipient works, after reading the composer empty once more; a composer that shows text then leaves it an ordinary letter sent with `--now`. An older build drops the field and the letter waits as a `--now` letter.",
+                            "type": "boolean"
+                        },
                         "hook_confirmed": {
                             "default": null,
                             "type": [
@@ -855,6 +860,7 @@
                         "bell_turn",
                         "intake_from",
                         "immediate",
+                        "forced",
                         "tool_handovers"
                     ],
                     "type": "object"
@@ -1106,6 +1112,11 @@
                         "null"
                     ]
                 },
+                "forced": {
+                    "default": false,
+                    "description": "Sent with `hide request send --force` (PRD engine-bundle-1 D-14): its composer was read empty when it was sent, and the doorbell types its bell even while the recipient works, after reading the composer empty once more; a composer that shows text then leaves it an ordinary letter sent with `--now`. An older build drops the field and the letter waits as a `--now` letter.",
+                    "type": "boolean"
+                },
                 "hook_confirmed": {
                     "default": null,
                     "type": [
@@ -1201,6 +1212,7 @@
                 "bell_turn",
                 "intake_from",
                 "immediate",
+                "forced",
                 "tool_handovers"
             ],
             "title": "Letter",
@@ -1267,6 +1279,66 @@
             "required": [
                 "settings"
             ],
+            "type": "object"
+        },
+        "pane_opened": {
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "description": "`hide pane open`: the pane made beside the caller's, and whether it took the keyboard focus.",
+            "properties": {
+                "focused": {
+                    "type": "boolean"
+                },
+                "pane": {
+                    "type": "string"
+                }
+            },
+            "required": [
+                "focused",
+                "pane"
+            ],
+            "title": "PaneOpened",
+            "type": "object"
+        },
+        "pane_read": {
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "description": "`hide pane read` and `hide agent read`: the pane's last lines, unwrapped.",
+            "properties": {
+                "pane": {
+                    "description": "The pane read: a pane of the caller's own machine bare, as `hide ps` lists it there (`w1:p2`), another machine's as `remote:<device>:pane:<id>`.",
+                    "type": "string"
+                },
+                "text": {
+                    "type": "string"
+                },
+                "truncated": {
+                    "description": "Whether the engine cut the answer short.",
+                    "type": "boolean"
+                }
+            },
+            "required": [
+                "pane",
+                "text",
+                "truncated"
+            ],
+            "title": "PaneRead",
+            "type": "object"
+        },
+        "pane_sent": {
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "description": "`hide pane send`: the pane typed into, and whether Enter followed.",
+            "properties": {
+                "pane": {
+                    "type": "string"
+                },
+                "submitted": {
+                    "type": "boolean"
+                }
+            },
+            "required": [
+                "pane",
+                "submitted"
+            ],
+            "title": "PaneSent",
             "type": "object"
         },
         "plan": {
@@ -1541,6 +1613,20 @@
                 "missions_unreadable"
             ],
             "title": "Ps",
+            "type": "object"
+        },
+        "purpose_set": {
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "description": "`hide workspace purpose`: the purpose the checkout now shows.",
+            "properties": {
+                "purpose": {
+                    "type": "string"
+                }
+            },
+            "required": [
+                "purpose"
+            ],
+            "title": "PurposeSet",
             "type": "object"
         },
         "stopped": {
@@ -2386,6 +2472,170 @@
         },
         {
             "answers": [
+                "pane_read"
+            ],
+            "arguments": [
+                {
+                    "name": "pane",
+                    "value": {
+                        "type": "key"
+                    }
+                }
+            ],
+            "command": "pane read",
+            "options": [
+                {
+                    "name": "--lines",
+                    "required": false,
+                    "requires": [],
+                    "value": {
+                        "type": "unsigned"
+                    }
+                },
+                {
+                    "name": "--json",
+                    "required": false,
+                    "requires": [],
+                    "value": null
+                }
+            ],
+            "refusals": [
+                "pane_required",
+                "lines_out_of_range",
+                "pane_unavailable"
+            ],
+            "repeats_at_most": null,
+            "rest": null
+        },
+        {
+            "answers": [
+                "pane_sent"
+            ],
+            "arguments": [
+                {
+                    "name": "pane",
+                    "value": {
+                        "type": "key"
+                    }
+                },
+                {
+                    "name": "text",
+                    "value": {
+                        "type": "body"
+                    }
+                }
+            ],
+            "command": "pane send",
+            "options": [
+                {
+                    "name": "--enter",
+                    "required": false,
+                    "requires": [],
+                    "value": null
+                }
+            ],
+            "refusals": [
+                "pane_required",
+                "text_too_long",
+                "pane_unavailable"
+            ],
+            "repeats_at_most": null,
+            "rest": null
+        },
+        {
+            "answers": [
+                "pane_opened"
+            ],
+            "arguments": [],
+            "command": "pane open",
+            "options": [
+                {
+                    "name": "--beside",
+                    "required": true,
+                    "requires": [],
+                    "value": null
+                },
+                {
+                    "name": "--focus",
+                    "required": false,
+                    "requires": [],
+                    "value": null
+                }
+            ],
+            "refusals": [
+                "pane_required",
+                "command_invalid",
+                "command_too_long",
+                "pane_unavailable",
+                "pane_open_unconfirmed",
+                "shell_not_ready"
+            ],
+            "repeats_at_most": null,
+            "rest": "the command the new pane's shell runs, its words joined by spaces into one line"
+        },
+        {
+            "answers": [
+                "pane_read"
+            ],
+            "arguments": [
+                {
+                    "name": "agent",
+                    "value": {
+                        "type": "key"
+                    }
+                }
+            ],
+            "command": "agent read",
+            "options": [
+                {
+                    "name": "--lines",
+                    "required": false,
+                    "requires": [],
+                    "value": {
+                        "type": "unsigned"
+                    }
+                },
+                {
+                    "name": "--json",
+                    "required": false,
+                    "requires": [],
+                    "value": null
+                }
+            ],
+            "refusals": [
+                "pane_required",
+                "lines_out_of_range",
+                "agent_unavailable",
+                "target_ambiguous"
+            ],
+            "repeats_at_most": null,
+            "rest": null
+        },
+        {
+            "answers": [
+                "purpose_set"
+            ],
+            "arguments": [
+                {
+                    "name": "text",
+                    "value": {
+                        "type": "text"
+                    }
+                }
+            ],
+            "command": "workspace purpose",
+            "options": [],
+            "refusals": [
+                "pane_required",
+                "purpose_invalid",
+                "purpose_too_long",
+                "purpose_no_workspace"
+            ],
+            "repeats_at_most": null,
+            "rest": null
+        },
+        {
+            "answers": [
                 "letter"
             ],
             "arguments": [
@@ -2429,11 +2679,28 @@
                     }
                 },
                 {
+                    "conflicts": [
+                        "--force"
+                    ],
                     "name": "--now",
                     "required": false,
                     "requires": [],
                     "value": null
+                },
+                {
+                    "conflicts": [
+                        "--now"
+                    ],
+                    "name": "--force",
+                    "required": false,
+                    "requires": [],
+                    "value": null
                 }
+            ],
+            "refusals": [
+                "composer_not_empty",
+                "composer_unconfirmed",
+                "force_target_asleep"
             ],
             "repeats_at_most": null,
             "rest": null
@@ -3724,7 +3991,7 @@
             "rest": null
         }
     ],
-    "digest": "sha256:93763833a7ac916e99e41a21ffd28c7c848453c41032dbd4cdf6cad8bd858155",
+    "digest": "sha256:ed7bf74ade882f7b98344656f23870b8e93d2ec42a78a6cff970f5c5c7f50987",
     "envelopes": {
         "agent": {
             "answer": "value",
@@ -3746,6 +4013,11 @@
             "code": "reason",
             "ok": "ok"
         },
+        "pane": {
+            "answer": "value",
+            "code": "error.code",
+            "ok": "ok"
+        },
         "plan": {
             "answer": "result",
             "code": "reason",
@@ -3764,6 +4036,11 @@
         "watch": {
             "answer": "result",
             "code": "reason",
+            "ok": "ok"
+        },
+        "workspace": {
+            "answer": "value",
+            "code": "error.code",
             "ok": "ok"
         }
     },

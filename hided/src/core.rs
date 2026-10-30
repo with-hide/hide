@@ -71,6 +71,13 @@ enum Command {
         command: herdr_core::memory_command::MemoryCommand,
         reply: Sender<Result<herdr_core::memory_command::PreparedMemory, String>>,
     },
+    PanePrepare {
+        device_id: String,
+        pane_id: String,
+        expected: Context,
+        command: herdr_core::pane_command::PaneCommand,
+        reply: Sender<Result<herdr_core::pane_command::Prepared, String>>,
+    },
     Mission {
         device_id: String,
         pane_id: String,
@@ -373,6 +380,29 @@ impl CoreHandle {
             })
             .map_err(|_| "memory_unavailable".to_owned())?;
         result.recv().map_err(|_| "memory_unavailable".to_owned())?
+    }
+
+    /// Admits a `hide pane`, `hide agent read` or `hide workspace purpose`
+    /// caller on the owner thread; the command's engine calls run on the
+    /// caller's blocking task.
+    pub fn prepare_pane(
+        &self,
+        device: &str,
+        pane: &str,
+        expected: &Context,
+        command: herdr_core::pane_command::PaneCommand,
+    ) -> Result<herdr_core::pane_command::Prepared, String> {
+        let (reply, result) = mpsc::channel();
+        self.commands
+            .send(Command::PanePrepare {
+                device_id: device.to_owned(),
+                pane_id: pane.to_owned(),
+                expected: expected.clone(),
+                command,
+                reply,
+            })
+            .map_err(|_| "pane_unavailable".to_owned())?;
+        result.recv().map_err(|_| "pane_unavailable".to_owned())?
     }
 
     /// Runs a Conductor's `hide mission` command on the owner thread.
@@ -1214,6 +1244,16 @@ fn owner_loop(
                 reply,
             } => {
                 let _ = reply.send(core.prepare_memory(&device_id, &pane_id, &expected, command));
+            }
+            Command::PanePrepare {
+                device_id,
+                pane_id,
+                expected,
+                command,
+                reply,
+            } => {
+                let _ =
+                    reply.send(core.prepare_pane_command(&device_id, &pane_id, &expected, command));
             }
             Command::Mission {
                 device_id,

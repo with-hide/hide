@@ -1666,6 +1666,10 @@ pub(super) enum Event {
     LinksClose,
     SessionRecordOpen(super::links::RecordOpenPayload),
     SessionRecordClose,
+    SessionThreadOpen(super::session_thread::ThreadOpenPayload),
+    SessionThreadOlder(super::session_thread::ThreadOlderPayload),
+    SessionThreadClose,
+    SessionThreadInput(super::session_thread::ThreadInputPayload),
     SessionWorkSearch(super::links::RecordSearchPayload),
     SessionMissedStatus(super::links::MissedStatusPayload),
     BacklogAdd(super::backlog::BacklogAddPayload),
@@ -1958,6 +1962,24 @@ pub(super) fn validate_event(event: EventEnvelope) -> Result<Event, EventValidat
         "links_open" => decode!(super::links::LinksOpenPayload, LinksOpen),
         "session_record_open" => decode!(super::links::RecordOpenPayload, SessionRecordOpen),
         "session_record_close" => Ok(Event::SessionRecordClose),
+        "session_thread_open" => {
+            decode!(super::session_thread::ThreadOpenPayload, SessionThreadOpen)
+        }
+        "session_thread_older" => {
+            decode!(
+                super::session_thread::ThreadOlderPayload,
+                SessionThreadOlder
+            )
+        }
+        "session_thread_close" => Ok(Event::SessionThreadClose),
+        // Made by hided from a screen's `thread_input`; hided refuses a
+        // client that sends it.
+        "session_thread_input" => {
+            decode!(
+                super::session_thread::ThreadInputPayload,
+                SessionThreadInput
+            )
+        }
         "session_work_search" => {
             let search: super::links::RecordSearchPayload =
                 serde_json::from_value(payload).map_err(|_| invalid_payload(&kind))?;
@@ -2248,6 +2270,10 @@ impl Runtime {
             Event::LinksOpen(payload) => self.open_links(payload),
             Event::SessionRecordOpen(payload) => self.open_session_record(payload),
             Event::SessionRecordClose => self.close_session_record(),
+            Event::SessionThreadOpen(payload) => self.open_session_thread(payload),
+            Event::SessionThreadOlder(payload) => self.read_older_session_thread(payload),
+            Event::SessionThreadClose => self.close_session_thread(),
+            Event::SessionThreadInput(payload) => self.send_session_thread_input(payload),
             Event::SessionWorkSearch(payload) => self.search_work_sessions(payload),
             Event::SessionMissedStatus(payload) => self.set_missed_status(payload),
             Event::BacklogAdd(payload) => self.add_backlog(payload),
@@ -2297,7 +2323,7 @@ impl Runtime {
             Event::ArchiveCheck(payload) => self.check_archive_status(payload),
             // The phone's reply reached the pane; nothing on screen moves.
             Event::PaneInputSubmitted(payload) => {
-                self.note_delivery_reply(&payload.pane_id);
+                self.note_delivery_reply(&payload.pane_id, "phone_reply");
                 self.record_operator_submit(&payload.pane_id);
                 false
             }

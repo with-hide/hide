@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { askingCount, markedMention, mentionParts, outputKindOf, threadGroups, threadLines, threadTurns, unseenOutputs, type AcpSessionUpdate, type DeskJob } from "./desk";
+import { askedOnce, askingCount, markedMention, mentionParts, outputKindOf, threadGroups, threadLines, threadTurns, unseenOutputs, type AcpSessionUpdate, type DeskJob } from "./desk";
 
 const job = (id: string, state: DeskJob["state"], extra: Partial<DeskJob> = {}): DeskJob => ({
   id, agent_id: null, pane_id: `pane-${id}`, title: id, agent_kind: "claude", project: { workspace_id: "w", label: "w" }, location: { kind: "checkout", label: "w" },
@@ -110,5 +110,35 @@ describe("a thread's turns (B25, B26)", () => {
     expect(turns[0]).toMatchObject({ files: 1, commands: 1, answer: [{ text: "고쳤어요" }], parts: [{ id: "l" }] });
     expect(turns[0]!.work.map((line) => line.id)).toEqual([lines[1]!.id, "e", "x", "p", "l"]);
     expect(turns[1]).toMatchObject({ work: [], answer: [], parts: [] });
+  });
+});
+
+describe("a letter's sender and a command's start (B25, D-75)", () => {
+  it("names who a letter came from as its chip draws them, and keeps when a call was made", () => {
+    const chip = (name: string) => ({ name: `chip:${name}`, mark: "going" as const, agent_kind: "codex" });
+    const lines = threadLines([
+      { sessionUpdate: "user_message_chunk", content: { type: "text", text: "다시 " }, _meta: { hide: { origin: "letter", from: "lead" } } },
+      { sessionUpdate: "user_message_chunk", content: { type: "text", text: "올려줘" }, _meta: { hide: { origin: "letter", from: "lead" } } },
+      { sessionUpdate: "user_message_chunk", content: { type: "text", text: "고마워" }, _meta: { hide: { origin: "letter", from: "review" } } },
+      text("user_message_chunk", "내 말"),
+      { sessionUpdate: "tool_call", toolCallId: "c", title: "Bash", kind: "execute", status: "in_progress", _meta: { hide: { at_ms: 1_793_000_000_000 } } },
+    ], {}, chip);
+    expect(lines.map((line) => (line.kind === "user" ? [line.text, line.peer?.name ?? null] : [line.kind, line.kind === "tool" ? line.startedAtMs : null]))).toEqual([
+      ["다시 올려줘", "chip:lead"],
+      ["고마워", "chip:review"],
+      ["내 말", null],
+      ["tool", 1_793_000_000_000],
+    ]);
+  });
+});
+
+describe("an asking thread's question (D-75)", () => {
+  const turns = (answer: string) => threadTurns(threadLines([text("user_message_chunk", "해줘"), text("agent_message_chunk", answer)]));
+
+  it("is said once, at the foot: an answer that is the question goes, and one that ends with it keeps the rest", () => {
+    expect(askedOnce(turns("다크 모드도 찍을까요?"), "다크 모드도  찍을까요?")[0]!.answer).toEqual([]);
+    expect(askedOnce(turns("라이트는 끝났어요.\n다크 모드도 찍을까요?"), "다크 모드도 찍을까요?")[0]!.answer.map((line) => line.text)).toEqual(["라이트는 끝났어요."]);
+    expect(askedOnce(turns("라이트는 끝났어요."), "다크 모드도 찍을까요?")[0]!.answer.map((line) => line.text)).toEqual(["라이트는 끝났어요."]);
+    expect(askedOnce(turns("다크 모드도 찍을까요?"), null)[0]!.answer).toHaveLength(1);
   });
 });

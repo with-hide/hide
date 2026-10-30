@@ -511,6 +511,13 @@ pub fn quote_for_shell(value: &str) -> String {
     Quoting::NATIVE.quote(value)
 }
 
+/// `words` as one command line for this system's own shell, each word one
+/// argument: a word the shell would read as it is stays bare, any other is
+/// quoted, so `sh -c 'echo a b'` keeps its three arguments.
+pub fn command_line_for_shell(words: &[String]) -> String {
+    Quoting::NATIVE.command_line(words)
+}
+
 /// How a path is quoted in the command this system writes, and read back.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum Quoting {
@@ -550,6 +557,33 @@ impl Quoting {
                 quoted.push('\'');
                 quoted
             }
+        }
+    }
+
+    /// `words` as one command line, a word only of characters no supported
+    /// shell expands left bare. PowerShell reads a quoted first word as a
+    /// string rather than a command, so the line then starts with `& `.
+    pub(crate) fn command_line(self, words: &[String]) -> String {
+        let bare = |word: &String| {
+            !word.is_empty()
+                && word
+                    .chars()
+                    .all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '-' | '.' | '/' | ':'))
+        };
+        let line = words
+            .iter()
+            .map(|word| {
+                if bare(word) {
+                    word.clone()
+                } else {
+                    self.quote(word)
+                }
+            })
+            .collect::<Vec<_>>()
+            .join(" ");
+        match words.first() {
+            Some(first) if self == Self::PowerShell && !bare(first) => format!("& {line}"),
+            _ => line,
         }
     }
 
@@ -901,6 +935,44 @@ mod tests {
     use std::path::PathBuf;
 
     use super::*;
+
+    #[test]
+    fn a_command_line_keeps_each_word_one_argument_in_both_shells() {
+        let words = |line: &[&str]| {
+            line.iter()
+                .map(|word| (*word).to_owned())
+                .collect::<Vec<_>>()
+        };
+        let call = words(&["sh", "-c", "echo a b", "it's", ""]);
+        assert_eq!(
+            Quoting::Posix.command_line(&call),
+            r#"sh -c 'echo a b' 'it'\''s' ''"#
+        );
+        assert_eq!(
+            Quoting::PowerShell.command_line(&call),
+            "sh -c 'echo a b' 'it''s' ''"
+        );
+        // Words no shell expands stay as typed.
+        let plain = words(&["npm", "run", "dev", "./src/a.ts", "--port", "3000"]);
+        assert_eq!(
+            Quoting::Posix.command_line(&plain),
+            "npm run dev ./src/a.ts --port 3000"
+        );
+        assert_eq!(
+            Quoting::PowerShell.command_line(&plain),
+            "npm run dev ./src/a.ts --port 3000"
+        );
+        // A program path with a space is still the command in PowerShell.
+        let spaced = words(&["/opt/my tools/run", "$HOME"]);
+        assert_eq!(
+            Quoting::Posix.command_line(&spaced),
+            "'/opt/my tools/run' '$HOME'"
+        );
+        assert_eq!(
+            Quoting::PowerShell.command_line(&spaced),
+            "& '/opt/my tools/run' '$HOME'"
+        );
+    }
 
     #[test]
     fn hide_can_take_out_its_own_entries_after_the_helper_they_name_is_gone() {

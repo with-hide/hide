@@ -1991,6 +1991,7 @@ fn run_send(job: &SendJob, runtime: &Weak<Mutex<Runtime>>, stop: &AtomicBool) ->
                 body,
                 kind: "report".into(),
                 now: false,
+                force: false,
             },
         );
     drop(runtime);

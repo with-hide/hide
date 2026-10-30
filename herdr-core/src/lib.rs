@@ -62,6 +62,7 @@ pub mod node;
 pub mod node_access;
 pub mod node_migration;
 mod observed;
+pub mod pane_command;
 mod pane_reopen;
 mod persistence;
 pub mod pet;

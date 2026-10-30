@@ -120,5 +120,12 @@
   "desk_job_reason": ["spawn_failed", "exited", "device_disconnected"],
   "desk_job_failure": ["device_unavailable", "agent_not_installed", "branch_in_use", "project_unavailable", "already_started", "busy", "not_started", "invalid_request", "other"],
   "desk_output_kind": ["image", "page", "doc", "pr"],
-  "desk_job_location": ["checkout", "worktree"]
+  "desk_job_location": ["checkout", "worktree"],
+  "session_thread_state": ["closed", "loading", "ready", "failed"],
+  "session_thread_failure": ["no_record", "refused"],
+  "session_thread_pane": ["same", "changed", "gone"],
+  "session_thread_older": ["idle", "loading", "capacity", "failed"],
+  "session_thread_input_state": ["sending", "sent", "refused"],
+  "session_thread_part_kind": ["plan", "spawn", "letter", "view", "mission"],
+  "session_thread_view_kind": ["browser", "file", "diff"]
 }

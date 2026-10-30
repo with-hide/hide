@@ -268,7 +268,7 @@ const GALLERY_FIRST_PARTS: Record<string, ThreadHidePart> = {
 };
 
 /** Scene 4: the gallery thread at work on its second turn, its `hide` calls read into Hide's parts. */
-export function galleryThread(jobs: Record<string, DeskJob>): { updates: AcpSessionUpdate[]; parts: Record<string, ThreadHidePart> } {
+export function galleryThread(): { updates: AcpSessionUpdate[]; parts: Record<string, ThreadHidePart> } {
   return {
     updates: [
       ...GALLERY_FIRST_TURN,
@@ -277,12 +277,12 @@ export function galleryThread(jobs: Record<string, DeskJob>): { updates: AcpSess
       call("g2-edit", "scripts/capture-gallery.mjs", "edit", "completed", { content: [{ type: "diff", path: "scripts/capture-gallery.mjs", oldText: "const themes = [\"light\"]\nfor (const theme of themes) {", newText: "const themes = [\"light\", \"dark\"]\nconst out = `${dir}/${theme}`\nfor (const theme of themes) {" }] }),
       hideCall("g2-letter", "hide request send record-now --intent dark-path --body …"),
       hideCall("g2-spawn", "hide agent spawn --parent here …"),
-      call("g2-run", "Bash", "execute", "in_progress", { rawInput: { command: "node scripts/capture-gallery.mjs --theme dark" } }),
+      call("g2-run", "Bash", "execute", "in_progress", { rawInput: { command: "node scripts/capture-gallery.mjs --theme dark" }, _meta: { hide: { at_ms: Date.now() - 12_000 } } }),
     ],
     parts: {
       ...GALLERY_FIRST_PARTS,
       "g2-letter": { kind: "letter", direction: "sent", peer: SESSIONS.recordNow, body: "다크 캡처 경로가 바뀌어요" },
-      "g2-spawn": { kind: "spawn", job: { ...jobs.mention!, id: "review", title: "캡처 차이 리뷰", agent_kind: "codex", state: "working" } },
+      "g2-spawn": { kind: "spawn", session: SESSIONS.review },
     },
   };
 }
@@ -317,17 +317,16 @@ export function conductorThread(jobs: Record<string, DeskJob>): { updates: AcpSe
       hideCall("h-plan", "hide plan set …"),
       hideCall("h-spawn", "hide agent spawn --parent here …"),
       hideCall("h-letter", "hide request send 1a-desk-room …"),
-      hideCall("h-reply", "hide inbox"),
       hideCall("h-view", "hide browser open …"),
       hideCall("h-mission", "hide mission show …"),
       hideCall("h-pr", "gh pr view 1905"),
+      { sessionUpdate: "user_message_chunk", content: { type: "text", text: "반영했어요. CI 기다리는 중\n실패하면 다시 알릴게요." }, _meta: { hide: { origin: "letter", from: "1a-desk-room" } } },
       text("agent_message_chunk", "1b가 끝나면 lane 노드를 띄울게요."),
     ],
     parts: {
       "h-plan": { kind: "plan", plan },
-      "h-spawn": { kind: "spawn", job: { ...jobs["1b"]!, state: "starting" } },
+      "h-spawn": { kind: "spawn", session: { name: jobs["1b"]!.title, mark: "going", agent_kind: jobs["1b"]!.agent_kind } },
       "h-letter": { kind: "letter", direction: "sent", peer: SESSIONS.room, body: "리뷰 지적 2개 반영해서 다시 올려줘" },
-      "h-reply": { kind: "letter", direction: "received", peer: SESSIONS.room, body: "반영했어요. CI 기다리는 중" },
       "h-view": { kind: "view", output: OUTPUTS.galleryPage },
       "h-mission": { kind: "mission", mission: MISSION },
       "h-pr": { kind: "pr", number: 1905, state: "pending" },

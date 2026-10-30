@@ -51,6 +51,9 @@ pub(crate) struct Observation {
     /// composer declaration is checked (`composer_check_due`).
     pub hook_submit_at_unix_ms: u64,
     pub session: Option<hide_session::session_activity::SessionActivityRequest>,
+    /// The session a thread of this pane reads, for every agent with a
+    /// thread reader, OpenCode's database included.
+    pub thread: Option<super::session_thread::ThreadReference>,
     pub host_scope: Option<String>,
     pub turn: Turn,
 }
@@ -231,6 +234,7 @@ impl Runtime {
                 released_input_at_unix_ms: previous.map_or(0, |old| old.released_input_at_unix_ms),
                 hook_submit_at_unix_ms: previous.map_or(0, |old| old.hook_submit_at_unix_ms),
                 session,
+                thread: super::session_thread::ThreadReference::of(agent),
                 host_scope: host_scope
                     .filter(|scope| scope.len() <= 4096)
                     .map(str::to_owned),
@@ -257,6 +261,7 @@ impl Runtime {
         // follows publishes whatever this settles.
         self.settle_dormant_registrations();
         self.follow_resumed_conductors(device);
+        self.follow_session_thread(device, payload);
     }
 
     /// Continue a registration only when this host still reports its terminal
@@ -660,16 +665,16 @@ impl Runtime {
         }
     }
 
-    /// The phone's reply is text hide sent and submitted in one write to an
-    /// agent waiting on the operator, so it is a key and a submit.
-    pub(crate) fn note_delivery_reply(&mut self, pane_id: &str) {
+    /// A phone's reply or a thread's input is text hide sent and submitted
+    /// in one write, so it is a key and a submit; `source` names which.
+    pub(crate) fn note_delivery_reply(&mut self, pane_id: &str, source: &'static str) {
         self.reopen_resolved_session(pane_id);
         if let Some(observation) = self.delivery_observations.get_mut(pane_id) {
             let now = unix_milliseconds();
             observation.last_input_at_unix_ms = now;
             observation.last_submit_at_unix_ms = now;
             self.sync_composer_mark(pane_id, now);
-            self.trace_delivery_input(pane_id, "phone_reply");
+            self.trace_delivery_input(pane_id, source);
         }
     }
 
@@ -1187,6 +1192,25 @@ impl Runtime {
         } else {
             None
         };
+        // A forced letter is typed into a pane that runs now, so its
+        // composer can be read; a sleeping recipient is woken by an ordinary
+        // letter instead (PRD engine-bundle-1 D-14).
+        let forced = match (&command, &target) {
+            (Command::Send { force: true, .. }, Some(target)) if !repeated => {
+                let live = self
+                    .delivery_observations
+                    .get(&target.actor.pane_id)
+                    .is_some_and(|observation| observation.actor.same_identity(&target.actor));
+                if !live {
+                    return Err("force_target_asleep".into());
+                }
+                Some(
+                    self.delivery_engine(&target.actor.device_id)
+                        .ok_or("delivery_unavailable")?,
+                )
+            }
+            _ => None,
+        };
         let prepared = Prepared::new(
             self.delivery_client.clone().ok_or("delivery_unavailable")?,
             Authority {
@@ -1198,6 +1222,10 @@ impl Runtime {
             command,
         )
         .then(after);
+        let prepared = match forced {
+            Some(engine) => prepared.forced_through(engine),
+            None => prepared,
+        };
         Ok(match queued {
             Some(answer) => prepared.answered(answer),
             None => prepared,
@@ -1854,6 +1882,7 @@ pub(crate) mod tests {
     const WAITED: crate::delivery::doorbell::Patience = crate::delivery::doorbell::Patience {
         arrived_at_unix_ms: 0,
         now: false,
+        forced: false,
     };
     use crate::delivery::worker::Worker;
     use crate::handle::ChangeNotifier;
@@ -2298,6 +2327,7 @@ pub(crate) mod tests {
             let patience = Patience {
                 arrived_at_unix_ms: 0,
                 now: true,
+                forced: false,
             };
             assert_eq!(
                 judge(&observed(&guard, "recipient"), patience, u64::MAX),
@@ -3021,6 +3051,7 @@ pub(crate) mod tests {
             body: format!("{intent} body"),
             kind: "request".into(),
             now,
+            force: false,
         };
         let sender_context = authority(&sender).context;
         let mut sent = Vec::new();
@@ -3216,6 +3247,7 @@ pub(crate) mod tests {
                     body: "done".into(),
                     kind: "report".into(),
                     now: false,
+                    force: false,
                 },
             )
             .unwrap();
@@ -3286,6 +3318,7 @@ pub(crate) mod tests {
             body: "done".into(),
             kind: "report".into(),
             now: false,
+            force: false,
         }
     }
 
@@ -3464,6 +3497,7 @@ pub(crate) mod tests {
                 body: "hello".into(),
                 kind: "request".into(),
                 now: false,
+                force: false,
             },
             Command::Inbox,
             Command::WatchStart {
@@ -3553,6 +3587,7 @@ pub(crate) mod tests {
                         body: "private".into(),
                         kind: "request".into(),
                         now: false,
+                        force: false,
                     },
                 )
                 .unwrap()
@@ -4145,6 +4180,7 @@ pub(crate) mod tests {
                 body: "read me after a restart".into(),
                 kind: "request".into(),
                 now: false,
+                force: false,
             },
         )
         .unwrap();

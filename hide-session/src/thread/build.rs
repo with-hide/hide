@@ -157,11 +157,28 @@ pub(crate) struct Thread {
     changes: BTreeMap<String, Vec<ToolCallContent>>,
     /// Whether a record that should hold conversation could not be read.
     unreadable: bool,
+    /// When the record being read was written, in Unix milliseconds: a
+    /// call carries it as when it started and a finished result as when it
+    /// ended (`_meta.hide.at_ms`), so a screen tells how long a command ran.
+    at_ms: Option<u64>,
 }
 
 impl Thread {
     pub fn into_parts(self) -> (Vec<SessionUpdate>, BTreeMap<&'static str, usize>) {
         (self.updates, self.skipped)
+    }
+
+    /// The time of the record read next, `None` when it names none.
+    pub fn at(&mut self, at_ms: Option<u64>) {
+        self.at_ms = at_ms;
+    }
+
+    pub fn at_ms(&self) -> Option<u64> {
+        self.at_ms
+    }
+
+    fn at_meta(&self) -> Option<Meta> {
+        self.at_ms.map(|at| hide_meta([("at_ms", json!(at))]))
     }
 
     pub fn skip(&mut self, reason: &'static str) {
@@ -193,9 +210,17 @@ impl Thread {
             match part {
                 Part::Text(text) => {
                     let origin = classify(origin, text);
+                    // A letter names who wrote it, for the line that says
+                    // whom it came from.
+                    let from = (origin == Origin::Letter)
+                        .then(|| {
+                            crate::envelope_sender(text)
+                                .or_else(|| crate::bell_sender(text).map(str::to_owned))
+                        })
+                        .flatten();
                     for (piece, pasted) in pasted_pieces(text) {
                         let block = text_block(piece, pasted.then_some(("pasted", json!(true))));
-                        self.chunk(SessionUpdate::UserMessageChunk, message, origin, block);
+                        self.letter_chunk(message, origin, from.as_deref(), block);
                     }
                 }
                 part => {
@@ -272,7 +297,8 @@ impl Thread {
                 .status(call.status)
                 .locations(locations)
                 .content(content)
-                .raw_input(call.input),
+                .raw_input(call.input)
+                .meta(self.at_meta()),
         ));
     }
 
@@ -346,11 +372,15 @@ impl Thread {
         } else {
             fields.content(content)
         };
-        self.updates
-            .push(SessionUpdate::ToolCallUpdate(ToolCallUpdate::new(
-                id.to_owned(),
-                fields,
-            )));
+        // A result still running has not ended.
+        let ended = if status == ToolCallStatus::InProgress {
+            None
+        } else {
+            self.at_meta()
+        };
+        self.updates.push(SessionUpdate::ToolCallUpdate(
+            ToolCallUpdate::new(id.to_owned(), fields).meta(ended),
+        ));
     }
 
     pub fn plan(&mut self, steps: impl IntoIterator<Item = Step>) {
@@ -367,6 +397,25 @@ impl Thread {
             })
             .collect();
         self.updates.push(SessionUpdate::Plan(Plan::new(entries)));
+    }
+
+    fn letter_chunk(
+        &mut self,
+        message: Option<&str>,
+        origin: Origin,
+        from: Option<&str>,
+        block: ContentBlock,
+    ) {
+        let Some(from) = from else {
+            return self.chunk(SessionUpdate::UserMessageChunk, message, origin, block);
+        };
+        let chunk = ContentChunk::new(block)
+            .message_id(message.map(str::to_owned).map(Into::into))
+            .meta(hide_meta([
+                ("origin", json!("letter")),
+                ("from", json!(from)),
+            ]));
+        self.updates.push(SessionUpdate::UserMessageChunk(chunk));
     }
 
     fn chunk(

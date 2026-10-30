@@ -21,10 +21,9 @@ export type ComposerAttachment = { id: string; name: string; image: boolean };
  * the words, the attached files as chips above them, 📎, and send, which
  * becomes stop while Desk answers. `menu` is the `@` menu, opened above the
  * box while `menuOpen`; `children` sits in the box's foot between 📎 and
- * send (Desk's bar). 📎 shows only where attaching is taken (`onAttach`);
- * `canSend` false keeps send off while what it would send to cannot take it.
+ * send (Desk's bar). 📎 shows only where attaching is taken (`onAttach`).
  */
-export function DeskComposer({ value, label, placeholder, attachments = [], answering = false, focused = false, canSend = true, menu = null, menuOpen = false, onChange, onKeyDown, onSend, onStop, onAttach, onRemoveAttachment, onMenuOpenChange, children }: {
+export function DeskComposer({ value, label, placeholder, attachments = [], answering = false, focused = false, held = false, notice = null, menu = null, menuOpen = false, onChange, onKeyDown, onSend, onStop, onAttach, onRemoveAttachment, onMenuOpenChange, children }: {
   value: string;
   label: string;
   placeholder: string;
@@ -33,11 +32,14 @@ export function DeskComposer({ value, label, placeholder, attachments = [], answ
   answering?: boolean;
   /** Drawn as the keyboard's place, as `답하기` leaves it (B29). */
   focused?: boolean;
-  canSend?: boolean;
+  /** Send waits: the words have nowhere to go yet, or the last ones are still on their way. */
+  held?: boolean;
+  /** One line under the box: why the last words were not sent, or why none can be. */
+  notice?: string | null;
   menu?: ReactNode;
   menuOpen?: boolean;
   onChange: (value: string) => void;
-  /** The box's keys before it takes them: ↵ to send, the `@` menu's moves. */
+  /** The box's keys before it takes them, such as the `@` menu's moves; one it prevents is not sent. */
   onKeyDown?: (event: KeyboardEvent<HTMLTextAreaElement>) => void;
   onSend: () => void;
   onStop?: () => void;
@@ -48,6 +50,7 @@ export function DeskComposer({ value, label, placeholder, attachments = [], answ
 }) {
   const { t } = useInterfaceTranslation();
   const empty = value.trim() === "" && attachments.length === 0;
+  const blocked = empty || held;
   return (
     <div className="flex min-w-0 flex-col gap-xs" data-desk-composer={answering ? "answering" : "idle"}>
       <Popover open={menuOpen} onOpenChange={onMenuOpenChange}>
@@ -64,7 +67,13 @@ export function DeskComposer({ value, label, placeholder, attachments = [], answ
                 ))}
               </ul>
             ) : null}
-            <Textarea bare rows={1} value={value} aria-label={label} placeholder={placeholder} className="max-h-(--size-search-sheet-h) min-h-(--size-control-sm) py-xxs" autoFocus={focused} onChange={(event) => onChange(event.target.value)} onKeyDown={onKeyDown} data-desk-composer-input="true" />
+            <Textarea bare rows={1} value={value} aria-label={label} placeholder={placeholder} className="max-h-(--size-search-sheet-h) min-h-(--size-control-sm) py-xxs" autoFocus={focused} onChange={(event) => onChange(event.target.value)} data-desk-composer-input="true" onKeyDown={(event) => {
+              onKeyDown?.(event);
+              // Enter sends and Shift+Enter starts a line; a key that ends an IME composition only commits it, and the `@` menu takes its own Enter.
+              if (event.defaultPrevented || event.key !== "Enter" || event.shiftKey || event.nativeEvent.isComposing || answering || menuOpen) return;
+              event.preventDefault();
+              if (!blocked) onSend();
+            }} />
             <div className="flex min-w-0 items-center gap-xs">
               {onAttach ? (
                 <Hint label={t("desk.composer.attach")}>
@@ -78,7 +87,7 @@ export function DeskComposer({ value, label, placeholder, attachments = [], answ
                 </Hint>
               ) : (
                 <Hint label={t("desk.composer.send")} shortcut="↵">
-                  <Button variant="secondary" size="icon-sm" className="rounded-full" aria-label={t("desk.composer.send")} disabled={empty || !canSend} data-desk-composer-send="true" onClick={onSend}><ArrowUpIcon /></Button>
+                  <Button variant="secondary" size="icon-sm" className="rounded-full" aria-label={t("desk.composer.send")} disabled={blocked} data-desk-composer-send="true" onClick={onSend}><ArrowUpIcon /></Button>
                 </Hint>
               )}
             </div>
@@ -90,6 +99,7 @@ export function DeskComposer({ value, label, placeholder, attachments = [], answ
           </PopoverContent>
         ) : null}
       </Popover>
+      {notice ? <p role="status" className="px-xs text-caption text-warning" data-desk-composer-notice="true">{notice}</p> : null}
     </div>
   );
 }

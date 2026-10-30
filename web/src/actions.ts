@@ -3062,6 +3062,17 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
     watchDisk(workspaceIds: readonly string[]) {
       dispatch({ schema_version: 2, kind: "disk_watch", payload: { workspace_ids: [...workspaceIds] } });
     },
+    /** A session thread of `paneId` (B25): its record is read, and read on as the session writes, until it closes. */
+    openThread(paneId: string) {
+      dispatch({ schema_version: 2, kind: "session_thread_open", payload: { pane_id: paneId } });
+    },
+    /** The page before the oldest one the thread holds. */
+    readOlderThread(generation: number) {
+      dispatch({ schema_version: 2, kind: "session_thread_older", payload: { generation } });
+    },
+    closeThread() {
+      dispatch({ schema_version: 2, kind: "session_thread_close", payload: {} });
+    },
     /** The Overview panel's record: read, without the lane moving. */
     readSessionRecord(session: import("./snapshot").WorkSession) {
       dispatch({ schema_version: 2, kind: "session_record_open", payload: { session } });

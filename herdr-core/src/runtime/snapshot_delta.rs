@@ -53,6 +53,10 @@ pub(super) struct DeltaState {
     last_session_record: Option<Arc<crate::links::ledger::SessionRecordSnapshot>>,
     session_work_search_revision: u64,
     last_session_work_search: Option<Arc<crate::links::ledger::SessionSearchSnapshot>>,
+    session_thread_revision: u64,
+    last_session_thread: Option<Arc<crate::model::SessionThreadSnapshot>>,
+    session_thread_history_revision: u64,
+    last_session_thread_history: Option<Arc<crate::model::SessionThreadHistorySnapshot>>,
     /// Reference-counted so a delta can carry the section out of the lock
     /// without copying it. The runtime never mutates one in place: a changed
     /// section becomes a new `Arc`, which leaves any payload already handed
@@ -258,6 +262,28 @@ impl Runtime {
             self.delta.session_work_search_revision = self.delta.revision;
             self.delta.last_session_work_search = Some(Arc::clone(search));
         }
+        if let Some(thread) = &self.snapshot.session_thread
+            && self
+                .delta
+                .last_session_thread
+                .as_ref()
+                .is_none_or(|last| !Arc::ptr_eq(last, thread))
+        {
+            self.delta.revision += 1;
+            self.delta.session_thread_revision = self.delta.revision;
+            self.delta.last_session_thread = Some(Arc::clone(thread));
+        }
+        if let Some(history) = &self.snapshot.session_thread_history
+            && self
+                .delta
+                .last_session_thread_history
+                .as_ref()
+                .is_none_or(|last| !Arc::ptr_eq(last, history))
+        {
+            self.delta.revision += 1;
+            self.delta.session_thread_history_revision = self.delta.revision;
+            self.delta.last_session_thread_history = Some(Arc::clone(history));
+        }
         // A cursor from the future has no valid meaning in-process; treat it
         // as a fresh reader so the response converges on full state.
         let have_revision = if have_revision > self.delta.revision {
@@ -368,6 +394,18 @@ impl Runtime {
                 .last_session_work_search
                 .as_ref()
                 .filter(|_| self.delta.session_work_search_revision > have_revision)
+                .map(Arc::clone),
+            session_thread: self
+                .delta
+                .last_session_thread
+                .as_ref()
+                .filter(|_| self.delta.session_thread_revision > have_revision)
+                .map(Arc::clone),
+            session_thread_history: self
+                .delta
+                .last_session_thread_history
+                .as_ref()
+                .filter(|_| self.delta.session_thread_history_revision > have_revision)
                 .map(Arc::clone),
             // Cloning a section clones the summary's `Arc` and at most the
             // capped answers, never the cards.

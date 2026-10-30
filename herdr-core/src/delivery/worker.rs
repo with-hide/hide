@@ -39,6 +39,10 @@ pub struct Prepared {
     /// What the core records once the command answered, off its lock: a
     /// Desk conversation line for the work Desk handed or started.
     then: Option<After>,
+    /// For a new `--force` letter, the engine of its recipient's machine,
+    /// whose composer is read before the letter is recorded (PRD
+    /// engine-bundle-1 D-14).
+    forced: Option<crate::engine::SharedEngine>,
 }
 
 /// A step that follows a command's answer, given that answer.
@@ -153,6 +157,7 @@ impl Prepared {
             command,
             answered: None,
             then: None,
+            forced: None,
         }
     }
 
@@ -168,6 +173,13 @@ impl Prepared {
         self
     }
 
+    /// Reads the recipient's composer through `engine` before a forced
+    /// letter is recorded.
+    pub(crate) fn forced_through(mut self, engine: crate::engine::SharedEngine) -> Self {
+        self.forced = Some(engine);
+        self
+    }
+
     /// Called by the request worker after owner-thread preparation. Its wait
     /// never holds Runtime's mutex.
     pub fn run(self, timeout: Duration) -> Result<Value, String> {
@@ -175,6 +187,21 @@ impl Prepared {
             Ok(answer)
         } else if let Command::Agents { command } = self.command {
             crate::coordination::run(self.client, self.authority, self.actor, command)
+        } else if let (Some(engine), Some(target)) = (&self.forced, &self.target)
+            && let Err(code) = super::composer::forced_clear(
+                engine.as_ref(),
+                &target.raw_pane_id,
+                &target.actor.kind,
+            )
+        {
+            // A forced letter is recorded only when its recipient shows
+            // nothing of a person's in its composer now; nothing is recorded
+            // or typed otherwise. The doorbell reads it again before it types.
+            crate::diagnostic!(
+                json!({"component":"delivery","kind":"delivery.forced_refused",
+                "pane_id":target.actor.pane_id,"reason":code})
+            );
+            Err(code.to_owned())
         } else {
             self.client.submit(
                 Effect::Command {
@@ -273,6 +300,12 @@ pub(crate) enum Effect {
         id: String,
         recipient: Actor,
         sent: bool,
+    },
+    /// A forced letter whose recipient's composer showed text when the
+    /// doorbell was about to type it: it stays, as an ordinary letter.
+    Deferred {
+        id: String,
+        recipient: Actor,
     },
 }
 
@@ -696,6 +729,16 @@ fn apply(ledger: &mut Ledger, request: &Request, now: u64) -> Result<(Value, boo
                 } else {
                     letter.bell_errors = letter.bell_errors.saturating_add(1).min(3);
                 }
+            }
+            return Ok((Value::Null, false));
+        }
+        Effect::Deferred { id, recipient } => {
+            if let Some(letter) = ledger.letters.iter_mut().find(|letter| {
+                letter.id == *id
+                    && letter.recipient.same_identity(recipient)
+                    && letter.state == super::ledger::State::Pending
+            }) {
+                letter.forced = false;
             }
             return Ok((Value::Null, false));
         }
@@ -1400,6 +1443,7 @@ mod tests {
                 exact_route: false,
                 expected_id: None,
             }),
+            thread: None,
             host_scope: Some("fixture".into()),
             turn: crate::delivery::doorbell::Turn::Unread,
         };
@@ -1741,6 +1785,7 @@ mod tests {
                 body: "private".into(),
                 kind: "request".into(),
                 now: false,
+                force: false,
             },
         ] {
             assert_eq!(
@@ -1798,6 +1843,7 @@ mod tests {
                 body: "private".into(),
                 kind: "request".into(),
                 now: false,
+                force: false,
             };
             assert_eq!(
                 client
@@ -1894,6 +1940,7 @@ mod tests {
                         body: "private fixture".into(),
                         kind: "request".into(),
                         now: false,
+                        force: false,
                     }),
                 },
                 Duration::from_secs(5),
@@ -2196,6 +2243,7 @@ mod tests {
                     body: body.into(),
                     kind: "request".into(),
                     now: false,
+                    force: false,
                 }),
             },
             reply: mpsc::sync_channel(1).0,

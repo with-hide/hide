@@ -23,7 +23,7 @@ import { ThreadHead, ThreadView, type ThreadConductor } from "../components/desk
 import { SessionRow } from "../components/session-row";
 import { StatusMark } from "../components/status-mark";
 import { TooltipProvider } from "../components/ui/tooltip";
-import { askingCount, outputKindOf, threadLines, unseenOutputs, type DeskAgent, type DeskItem, type DeskJob, type DeskOutput, type DeskSelection, type ThreadReadFailure } from "../desk";
+import { askingCount, outputKindOf, threadLines, unseenOutputs, type DeskAgent, type DeskItem, type DeskJob, type DeskOutput, type DeskSelection, type DeskSessionRef, type ThreadReadFailure } from "../desk";
 import { useInterfaceTranslation } from "../i18n/client";
 import { requireInterfaceLanguage } from "../i18n/locale";
 import { useFollowInterfaceLanguage } from "../i18n/translator";
@@ -68,7 +68,10 @@ const CHAT_ACTIONS: DeskChatActions = {
   onApproval: noop, onNoticeAction: noop, onCopy: noop, onMention: noop, onHanded: noop,
 };
 
-const PART_ACTIONS = { onJob: noop, onMission: noop, onOutput: noop, onSession: noop };
+const PART_ACTIONS = { onMission: noop, onOutput: noop, onSession: noop };
+
+/** A session the scene names, as its chip draws it. */
+const sceneSession = (name: string): DeskSessionRef => Object.values(SESSIONS).find((session) => session.name === name) ?? { name, mark: null, agent_kind: null };
 
 /** The stand-in sidebar: the ◆ Desk row, then each project's ◆ Desk group as the shared task rows (B3, B20). */
 function SceneSidebar({ jobs, selected }: { jobs: readonly DeskJob[]; selected: string | null }) {
@@ -129,7 +132,7 @@ function ThreadColumn({ job, model = null, updates, parts, pinned = false, condu
   attachments?: ComposerAttachment[];
 }) {
   const [text, setText] = useState(draft);
-  const lines = useMemo(() => threadLines(updates, parts), [updates, parts]);
+  const lines = useMemo(() => threadLines(updates, parts, sceneSession), [updates, parts]);
   return <>
     <ThreadHead job={job} model={model} conductor={conductor} pinned={pinned} onBack={noop} onTerminal={noop} onPin={noop} onClose={noop} />
     <ThreadView
@@ -207,7 +210,7 @@ export function DeskScene({ params }: { params: URLSearchParams }) {
       break;
     case "s4": {
       const gallery = deskJob(jobs.gallery!, { state: "working", ask: null, question: null, now: "다크 모드 찍는 중", plan: { done: 3, total: 5 } });
-      const thread = galleryThread(jobs);
+      const thread = galleryThread();
       const items: DeskItem[] = [
         { kind: "user", id: 1, text: "갤러리 캡처 라이트·다크로 비교해줘", at_ms: now, mentions: [] },
         { kind: "reply", mentions: [], agent: "claude", id: 2, text: "갤러리 비교를 새 스레드로 띄웠어요.", at_ms: now, state: "done", thought_ms: null, steps: { sessions: 0, files: 0, letters: 0, starts: 0, other: 0 } },
