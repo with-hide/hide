@@ -1159,7 +1159,7 @@ const CheckoutRowView = memo(function CheckoutRowView({
             disabled={removing}
           />
           {/* The row button covers the whole row; a control drawn over it is positioned, so it stacks above.
-              Line one is 20 whatever it carries: the 24-high fold toggle overhangs it rather than moving line two. */}
+              Line one is 22 whatever it carries: the 24-high fold toggle overhangs it rather than moving line two. */}
           <span className="pointer-events-none flex h-(--size-sidebar-line) min-w-0 items-center gap-xs">
             <KindGlyph view={view} deviceId={workspace.device_id} actions={actions} />
             <CheckoutName name={name} focused={focused} />

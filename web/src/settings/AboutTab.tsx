@@ -216,7 +216,7 @@ function DiagnosticList() {
   return (
     <ul className="space-y-xxs" data-diagnostics={rows.length}>
       {rows.map((row) => (
-        <li key={`${row.occurred_at}-${row.kind}`} className="break-words font-mono text-caption text-subtle-foreground">
+        <li key={`${row.occurred_at}-${row.kind}`} className="break-words font-mono text-micro text-subtle-foreground">
           <span className="text-muted-foreground">{formatDateTime(language, row.occurred_at, { timeStyle: "medium" })}</span> {row.kind}: {row.message}
         </li>
       ))}

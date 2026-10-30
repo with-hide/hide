@@ -233,8 +233,8 @@
   --size-checkout-row: 32px;
   --size-checkout-row-detailed: 48px;
   --size-project-row: 32px;
-  --size-sidebar-line: calc(20px * var(--interface-scale, 1));
-  --size-sidebar-line-detail: calc(16px * var(--interface-scale, 1));
+  --size-sidebar-line: calc(22px * var(--interface-scale, 1));
+  --size-sidebar-line-detail: calc(17px * var(--interface-scale, 1));
   --size-sidebar-section-header: calc(26px * var(--interface-scale, 1));
   --size-sidebar-search: 28px;
   --size-overview-group-header: 52px;
