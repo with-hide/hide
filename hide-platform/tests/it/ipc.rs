@@ -838,6 +838,47 @@ fn shutdown_from_another_thread_frees_a_blocked_read() {
     held.join().unwrap();
 }
 
+/// A shutdown of one end ends the read the other end is blocked in, after
+/// the bytes already sent, round after round. macOS sometimes leaves a
+/// `recv` blocked on a local socket asleep when its peer shuts down (on
+/// 2026-10-30, about one round in five thousand at load 30), and a `recv`
+/// that missed it then misses its own end's shutdown too, while a wait in
+/// `poll` hears both, so a read waits for its socket in `poll` first. The
+/// rounds are what this needs: a lost end shows only now and then.
+#[test]
+fn a_shutdown_ends_the_peers_blocked_read_every_time() {
+    const ROUNDS: usize = 5000;
+    for round in 0..ROUNDS {
+        let (mut left, right) = LocalStream::pair().unwrap();
+        let (done, finished) = mpsc::channel();
+        let wake = right.shutdown_handle();
+        let reader = thread::spawn(move || {
+            let mut right = right;
+            let mut buffer = [0_u8; 4096];
+            let mut read = 0;
+            let end = loop {
+                match right.read(&mut buffer) {
+                    Ok(0) => break Ok(read),
+                    Ok(count) => read += count,
+                    Err(error) => break Err(error.kind()),
+                }
+            };
+            let _ = done.send(end);
+        });
+        let sent = (round % 8) * 1024;
+        left.write_all(&vec![7_u8; sent]).unwrap();
+        left.shutdown_handle().shutdown();
+        // A read that missed the end is left to the test process's exit:
+        // nothing the test can do wakes it.
+        let heard = finished
+            .recv_timeout(Duration::from_secs(10))
+            .unwrap_or_else(|_| panic!("round {round}: the peer's read never heard the shutdown"));
+        wake.shutdown();
+        reader.join().unwrap();
+        assert_eq!(heard, Ok(sent), "round {round}");
+    }
+}
+
 /// A peer that stops reading holds a writer once the stream's buffer is
 /// full; a shutdown from another thread ends that write with an error.
 #[test]
