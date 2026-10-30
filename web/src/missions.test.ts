@@ -4,7 +4,7 @@ import { describe, expect, it } from "vitest";
 import { STRENGTHS } from "./conductorSettings";
 import { english } from "./i18n/catalogs";
 import { initializeInterfaceI18n } from "./i18n/instance";
-import { cardLine, checkerState, chipWords, conductedBy, criteriaTally, launchSession, runWords, criterionName, missionHeadCells, criterionNote, defectEdges, firstPlans, kindWord, landingLeft, missionCells, missionOfPane, missionResults, missionTally, missionTone, missionWorkLine, neighbours, nodeLook, nodeResult, nodeTimes, nodeTone, paneChipWords, missionCounts, nodeLine, nodeMark, stackWaiting, stageWord, takeOverPrompt, takeOverProvider, turnItems } from "./missions";
+import { cardLine, checkerState, conductorState, missionResultCounts, nextNodes, reportLine, chipWords, conductedBy, criteriaTally, launchSession, runWords, criterionName, missionHeadCells, criterionNote, defectEdges, firstPlans, kindWord, landingLeft, missionCells, missionOfPane, missionResults, missionTally, missionTone, missionWorkLine, neighbours, nodeLook, nodeResult, nodeTimes, nodeTone, paneChipWords, missionCounts, nodeLine, nodeMark, stackWaiting, stageWord, takeOverPrompt, takeOverProvider, turnItems } from "./missions";
 import type { AgentRow, Mission, MissionCriterion, MissionEvent, MissionNode, SnapshotRest } from "./snapshot";
 
 // What the map and the Conductor row read from a mission (PRD
@@ -388,5 +388,55 @@ describe("the operator's turn (PRD mission-map-git-criteria B18, B20, B25)", () 
     const gone = { pane_id: "p1", name: "c", agent_kind: "claude", session: null, present: false, takes_answers: true };
     expect(turnItems(mission("m", { conductor: gone }), none).map((item) => item.kind)).toEqual(["takeover"]);
     expect(turnItems(mission("m", { status: "done", conductor: gone, decision: "old" }), none)).toEqual([]);
+  });
+});
+
+describe("a finished mission's results and the map's summary (PRD mission-tool B12, B19-B21)", () => {
+  const pass = (key: string): MissionCriterion => ({ key, kind: "own", state: "pass" });
+  const checked = (state: MissionCriterion["state"], agent_id?: string): MissionCriterion => ({ key: "review", kind: "review", state, checkers: [{ worker: { agent: "codex" }, state, ...(agent_id ? { agent_id } : {}) }] });
+
+  it("counts each tile from the record, and leaves out a tile the record holds nothing for", () => {
+    const done = mission("m", {
+      status: "done",
+      nodes: [
+        node("a", { status: "done", agent_id: "w1", pr: 1, pr_state: "merged", criteria: [pass("c1"), { key: "c2", kind: "own", state: "skipped" }, checked("pass", "r1")], criteria_met: 3, criteria_skipped: 1 }),
+        node("b", { status: "done", agent_id: "w2", pr: 2, pr_state: "mergeable", criteria: [pass("c1"), { key: "ci", kind: "ci", state: "fail" }], criteria_met: 1, criteria_skipped: 0 }),
+        node("c", { status: "done", agent_id: "w3", delivery: "direct", branch: "c", in_main: "abc1234" }),
+        node("check", { kind: "verify", delivery: null, status: "done", agent_id: "w4" }),
+        // An outside pull request and a dropped node are not the mission's results.
+        node("out", { kind: "external", delivery: null, external: { pr: 9 }, pr: 9, pr_state: "merged", status: "done" }),
+        node("gone", { status: "dropped", agent_id: "w5", pr: 3, pr_state: "closed" }),
+      ],
+    });
+    expect(missionResultCounts(done)).toEqual({ merged: { merged: 1, total: 2 }, criteria: { passed: 3, total: 5, skipped: 1 }, agents: { workers: 4, checkers: 1 }, landed: { landed: 2, total: 3 } });
+    // No pull request state read, no finish lines, no agent bound, no change: no tile.
+    const bare = mission("m", { status: "done", exempt: true, nodes: [node("r", { kind: "research", delivery: null, status: "done", pr: null, criteria: [pass("c1")], criteria_met: 1 }), node("p", { kind: "verify", delivery: null, status: "done", pr: 4, pr_state: null })] });
+    expect(missionResultCounts(bare)).toEqual({ merged: null, criteria: null, agents: null, landed: null });
+  });
+
+  it("folds the report into its first line, past a first line that only repeats the title", () => {
+    expect(reportLine("Mission m\n\nTwo PRs merged.\nMore", "Mission m")).toBe("Two PRs merged.");
+    expect(reportLine("Mission m and more\nTwo PRs merged.", "Mission m")).toBe("Mission m and more");
+    expect(reportLine("Mission m", "Mission m")).toBe("Mission m");
+    expect(reportLine("\n  \n", "Mission m")).toBeNull();
+  });
+
+  it("names next the nodes whose every dependency finished, none held by a failure", () => {
+    const open = mission("m", { nodes: [node("a", { status: "done" }), node("b", { status: "working" }), node("c", { depends_on: ["a"] }), node("d", { depends_on: ["b"] }), node("e", { status: "waiting", depends_on: ["a"], blocked: "upstream_failed" }), node("f", { status: "held", depends_on: ["a"] })] });
+    expect(nextNodes(open).map((one) => one.key)).toEqual(["c"]);
+  });
+
+  it("reads the Conductor's state from the mission and its row, and makes none up", () => {
+    const row = (mark: AgentRow["mark"]) => ({ mark }) as AgentRow;
+    const gone = { ...mission("m").conductor, present: false };
+    expect(conductorState(mission("m", { conductor: gone }), row("going"))).toBe("gone");
+    expect(conductorState(mission("m", { decision: "Which?" }), row("going"))).toBe("deciding");
+    expect(conductorState(mission("m"), row("going"))).toBe("working");
+    expect(conductorState(mission("m"), row("asleep"))).toBe("asleep");
+    expect(conductorState(mission("m"), row("quiet"))).toBe("resting");
+    expect(conductorState(mission("m"), null)).toBe("unknown");
+    // A closed mission is never taken over; with no row there is nothing to bring forward.
+    expect(conductorState(mission("m", { status: "done", conductor: gone }), row("asleep"))).toBe("asleep");
+    expect(conductorState(mission("m", { status: "done", conductor: gone }), null)).toBeNull();
   });
 });
