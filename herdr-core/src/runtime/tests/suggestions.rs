@@ -951,3 +951,191 @@ fn a_ready_branch_is_read_from_git_and_merged_into_its_base() {
         "the branch stays"
     );
 }
+
+/// A Project whose folder is real, with one rule card the operator said in
+/// two sessions and the check let through, so Memory offers it (`m1`), and
+/// the 제안 tab opened on it: the runtime shared with its workers.
+struct OfferedCard {
+    runtime: Arc<Mutex<Runtime>>,
+    workspace: String,
+    database: std::path::PathBuf,
+    project_id: String,
+    _folder: tempfile::TempDir,
+}
+
+fn offered_card() -> OfferedCard {
+    use hide_memory::{AnalysisBatch, Candidate, CandidateKind, CandidateRelation, MemoryStore};
+    let folder = scratch_dir("herdr-core-offered-card-");
+    let root = std::fs::canonicalize(folder.path())
+        .unwrap()
+        .to_string_lossy()
+        .into_owned();
+    let mut runtime = runtime();
+    runtime.ingest_session(Ok(crate::sidebar::owned_label_fixture(serde_json::json!({
+        "agents": [{"pane_id":"w1:p1", "agent":"codex", "agent_status":"working",
+                    "state_change_seq":10, "cwd":root}],
+        "workspaces":[{"workspace_id":"w1","label":"Alpha"}],
+        "tabs":[{"workspace_id":"w1","tab_id":"w1:t1","label":"1"}],
+        "panes":[{"pane_id":"w1:p1","cwd":root}],
+        "layouts":[{"workspace_id":"w1","tab_id":"w1:t1","zoomed":false,
+                    "area":{"x":0,"y":0,"width":80,"height":24},"focused_pane_id":"w1:p1",
+                    "panes":[{"pane_id":"w1:p1","rect":{"x":0,"y":0,"width":80,"height":24}}],
+                    "splits":[]}]
+    }))
+    .unwrap()));
+    // A document fix is offered only in a git repository (B16).
+    runtime.snapshot.navigator.workspaces[0].is_git = true;
+    let workspace = runtime.snapshot.navigator.workspaces[0].id.clone();
+    let identity = crate::runtime::memory::project_identity(
+        &hide_node::Local::of_process(),
+        &crate::node::test_node(),
+        &root,
+    )
+    .unwrap();
+    let database = runtime.memory_database_path();
+    let mut store = MemoryStore::open(&database).unwrap();
+    store
+        .ensure_project(&identity.id, &identity.root, crate::node::TEST_NODE)
+        .unwrap();
+    store.set_enabled(&identity.id, true, true).unwrap();
+    let card = || Candidate {
+        text: "Lint runs before tests".to_owned(),
+        title: "Lint runs before tests".to_owned(),
+        aliases: Vec::new(),
+        kind: CandidateKind::Rule,
+        confidence: 0.9,
+        salience: 0.9,
+        source_offsets: vec![1],
+        human_offsets: vec![1],
+        source_times: Default::default(),
+        source_words: Default::default(),
+        cited_paths: Vec::new(),
+        relation: CandidateRelation::New,
+    };
+    let batch = |session: &str| AnalysisBatch {
+        id: session.to_owned(),
+        project_id: identity.id.clone(),
+        provider: "codex".to_owned(),
+        analysis_provider: "codex".to_owned(),
+        session_id: session.to_owned(),
+        content_hash: session.to_owned(),
+        created_at_unix_ms: 1,
+    };
+    store.apply_candidates(&batch("s-1"), &[card()]).unwrap();
+    let first = store.item_by_number(&identity.id, 1).unwrap().unwrap();
+    store
+        .apply_candidates(
+            &batch("s-2"),
+            &[Candidate {
+                relation: CandidateRelation::Same {
+                    target_id: first.id,
+                },
+                ..card()
+            }],
+        )
+        .unwrap();
+    store.mark_promotion_checked(&identity.id, 1, 1).unwrap();
+    drop(store);
+    let runtime = Arc::new(Mutex::new(runtime));
+    runtime.lock().unwrap().install_worker_context(
+        Arc::downgrade(&runtime),
+        crate::handle::ChangeNotifier::noop(),
+    );
+    {
+        let mut runtime = runtime.lock().unwrap();
+        runtime.dispatch_json(&memory_open(Some(&workspace)));
+        runtime.ingest_suggestions_read(
+            workspace.clone(),
+            crate::model::ProjectSuggestionsSnapshot {
+                workspace_id: workspace.clone(),
+                enabled: true,
+                settings: crate::model::SuggestionSettingsSnapshot {
+                    suggestions_enabled: true,
+                    ..Default::default()
+                },
+                ..Default::default()
+            },
+        );
+    }
+    let offered = OfferedCard {
+        runtime,
+        workspace,
+        database,
+        project_id: identity.id,
+        _folder: folder,
+    };
+    wait_for("Memory to offer m1 in the 제안 tab", || {
+        offered.rows().contains(&"m1".to_owned())
+    });
+    offered
+}
+
+impl OfferedCard {
+    /// The rows the 제안 tab shows on the next delta.
+    fn rows(&self) -> Vec<String> {
+        tab(&mut self.runtime.lock().unwrap())
+            .rows
+            .into_iter()
+            .map(|row| row.id)
+            .collect()
+    }
+
+    fn skip(&self, id: &str) {
+        self.runtime.lock().unwrap().dispatch_json(&event(
+            "suggestion_action",
+            serde_json::json!({"workspace_id": self.workspace, "id": id, "action": "dismiss"}),
+        ));
+    }
+
+    fn dismissed(&self) -> bool {
+        let store = hide_memory::MemoryStore::open_read_only(&self.database).unwrap();
+        store
+            .promotions(&self.project_id)
+            .unwrap()
+            .iter()
+            .any(|(number, promotion)| {
+                *number == 1 && promotion.state == hide_memory::PromotionState::Dismissed
+            })
+    }
+}
+
+/// `넘어가기` on a Memory row takes it out of the tab once Memory wrote the
+/// dismissal (PRD hide-ai-suggestions B29).
+#[test]
+fn skipping_a_memory_row_takes_it_out_of_the_tab() {
+    let offered = offered_card();
+    offered.skip("m1");
+    wait_for("the dismissal to be written", || offered.dismissed());
+    wait_for("m1 to leave the 제안 tab", || {
+        !offered.rows().contains(&"m1".to_owned())
+    });
+}
+
+/// The read after the dismissal finds the store held by another writer and
+/// answers `database is locked`: the row leaves all the same.
+#[test]
+fn a_skip_takes_the_row_out_while_the_store_is_too_busy_to_read() {
+    let offered = offered_card();
+    let mut guard = offered.runtime.lock().unwrap();
+    guard.dispatch_json(&event(
+        "suggestion_action",
+        serde_json::json!({"workspace_id": offered.workspace, "id": "m1", "action": "dismiss"}),
+    ));
+    // The writer wrote and waits for the lock this test holds to report.
+    wait_for("the dismissal to be written", || offered.dismissed());
+    let holder = rusqlite::Connection::open(&offered.database).unwrap();
+    holder
+        .execute_batch("PRAGMA locking_mode=EXCLUSIVE; BEGIN EXCLUSIVE; COMMIT;")
+        .unwrap();
+    assert!(
+        hide_memory::MemoryStore::open_read_only(&offered.database)
+            .err()
+            .is_some_and(|error| error.to_string().contains("database is locked")),
+        "the store refuses a reader"
+    );
+    drop(guard);
+    wait_for("m1 to leave the 제안 tab", || {
+        !offered.rows().contains(&"m1".to_owned())
+    });
+    drop(holder);
+}

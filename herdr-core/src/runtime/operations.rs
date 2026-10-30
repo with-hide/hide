@@ -371,6 +371,7 @@ impl Runtime {
         changed |= self.reconcile_attachment_target();
         changed |= self.tick_attachment();
         changed |= self.tick_project_memory(now_unix_ms);
+        self.tick_project_memory_read(now_unix_ms);
         changed |= self.tick_view_feedback(now_unix_ms);
         self.tick_memory_promotions(now_unix_ms);
         self.tick_suggestion_attempts(now_unix_ms);

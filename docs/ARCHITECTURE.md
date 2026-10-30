@@ -387,6 +387,8 @@ A Project keeps its newest 1,000 cards forgotten this way (`EVICTED_CARD_LIMIT`)
 Each forgotten card is a `card.evicted` diagnostic with its batch, and the batch's `analysis.session_cards` line counts those removed (`evictions_purged`).
 The prompt hook and the commands read only whether a Project's Memory is on (`MemoryStore::project_enabled`), never these counts, which only the Memory tab's read computes.
 Every write reports to the core, which reads the opened Project's Memory again; a forget names its card on the Memory tab with its Undo.
+A read that fails, such as one that finds the store held by another writer (`database is locked`), keeps the list the last read left and is read again on the coordinator's tick after one second, then two, then four; only a fourth failure in a row shows the Project as unreadable, with the operator's `다시 읽기`, and every failure is a `memory.read_failed` diagnostic.
+A dismissal the store wrote takes its card's question off the opened list at once, so its 제안 row leaves without waiting for that read.
 A card write checks the Project's switch inside its own transaction, so a card analyzed or added while the operator turned Memory off is never written after the switch.
 
 The core owns the fourth right-panel section, the focused checkout's session list with its filters and editor preview identity; Memory is not shown there.
