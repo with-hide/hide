@@ -168,7 +168,9 @@ pub fn next_action(code: &str) -> Option<&'static str> {
 /// `hide pane read` and `hide agent read`: the pane's last lines, unwrapped.
 #[derive(Debug, Serialize, JsonSchema)]
 pub struct PaneRead {
-    /// The pane read, as the caller's machine numbers it.
+    /// The pane read: a pane of the caller's own machine bare, as `hide ps`
+    /// lists it there (`w1:p2`), another machine's as
+    /// `remote:<device>:pane:<id>`.
     pub pane: String,
     pub text: String,
     /// Whether the engine cut the answer short.
@@ -229,8 +231,6 @@ pub(crate) enum Step {
         cwd: String,
         command: String,
         focus: bool,
-        /// How a pane id of the caller's machine is spelled to the caller.
-        remote_prefix: Option<String>,
     },
     Purpose {
         workspace: String,
@@ -285,7 +285,6 @@ impl Prepared {
                 cwd,
                 command,
                 focus,
-                remote_prefix,
             } => {
                 let raw = engine
                     .split_beside(wait, &caller, Some(&cwd), Default::default())
@@ -311,10 +310,9 @@ impl Prepared {
                         .map_err(|error| failed("focus", &raw, &error, "pane_unavailable"))?;
                 }
                 serde_json::to_value(PaneOpened {
-                    pane: match remote_prefix {
-                        Some(prefix) => format!("{prefix}{raw}"),
-                        None => raw,
-                    },
+                    // The caller's machine numbers its own panes, so the
+                    // new one is told bare, as its own pane is.
+                    pane: raw,
                     focused: focus,
                 })
             }

@@ -1289,7 +1289,7 @@
             "description": "`hide pane read` and `hide agent read`: the pane's last lines, unwrapped.",
             "properties": {
                 "pane": {
-                    "description": "The pane read, as the caller's machine numbers it.",
+                    "description": "The pane read: a pane of the caller's own machine bare, as `hide ps` lists it there (`w1:p2`), another machine's as `remote:<device>:pane:<id>`.",
                     "type": "string"
                 },
                 "text": {
@@ -3926,7 +3926,7 @@
             "rest": null
         }
     ],
-    "digest": "sha256:683af2a6c720bbc7bf05e1b88d7c16e4f51d167e1ca91652b8e0964fccb935f4",
+    "digest": "sha256:8dfcaa7df1678854c2945f2abd61707ebf956a1c6c3bc8969beecca7ac793799",
     "envelopes": {
         "agent": {
             "answer": "value",

@@ -97,6 +97,10 @@ pub(crate) enum Hold {
     /// The core waits for its move's link before it types into any pane
     /// (`effects.rs`).
     CorePending,
+    /// Right before a forced letter's bell, the screen could not be read as
+    /// an empty composer: no declaration for the kind, none where it is
+    /// declared, as under a menu or a dialog, or a failed or cut read.
+    ComposerUnread,
 }
 
 impl Hold {
@@ -120,6 +124,7 @@ impl Hold {
             Self::Letter => "letter_changed",
             Self::Exhausted => "attempts_exhausted",
             Self::CorePending => "core_pending",
+            Self::ComposerUnread => "composer_unconfirmed",
         }
     }
 }
@@ -479,7 +484,12 @@ impl Doorbell {
                 )
             {
                 defer(client, letter, reason);
-                self.hold(&letter.id, pane, Hold::Draft);
+                let hold = if reason == super::composer::NOT_EMPTY {
+                    Hold::Draft
+                } else {
+                    Hold::ComposerUnread
+                };
+                self.hold(&letter.id, pane, hold);
                 continue;
             }
             let sender = bell_sender(owner, &ledger, letter);
@@ -1671,48 +1681,66 @@ mod tests {
     /// any other.
     #[test]
     fn a_forced_letter_meeting_text_in_the_composer_is_not_typed_and_waits_as_a_letter() {
-        let bell = Bell::start(json!({}));
-        *bell.screen.lock().unwrap() = CODEX_DRAFT.into();
-        let mut doorbell = Doorbell::default();
-        let start = now();
-        bell.working_since(start - 1_000);
-        let forced = bell.send_forced("forced");
-        let ((), logged) = crate::diagnostics::capture(|| {
-            doorbell.pass(&bell.runtime, &bell.client, &AtomicBool::new(false), start)
-        });
-        let deferred: Vec<_> = logged
-            .iter()
-            .filter(|record| record["kind"] == "delivery.forced_deferred")
-            .collect();
-        assert_eq!(deferred.len(), 1);
-        assert_eq!(deferred[0]["letter_id"], forced.as_str());
-        assert_eq!(deferred[0]["reason"], "composer_not_empty");
-        assert!(
-            deferred[0].get("text").is_none(),
-            "no screen text is logged"
-        );
-        assert!(bell.typed().is_empty(), "nothing is typed over their text");
-        assert!(!bell.letter_forced(&forced), "it is an ordinary letter now");
-        // Their text is gone, but the letter no longer forces its way in:
-        // it keeps the urgency of --now and waits behind every ordinary
-        // guard, here the quiet period after the pane's last change.
-        *bell.screen.lock().unwrap() = CODEX_EMPTY.into();
-        let ((), later) = crate::diagnostics::capture(|| {
-            doorbell.pass(
-                &bell.runtime,
-                &bell.client,
-                &AtomicBool::new(false),
-                start + 250,
-            )
-        });
-        assert!(bell.typed().is_empty());
-        assert!(
-            later
+        // Someone's text, and a screen that cannot be read as an empty
+        // composer, each held for its own reason until the next pass.
+        for (screen, reason, hold) in [
+            (CODEX_DRAFT, "composer_not_empty", "draft"),
+            (
+                "$ ls\r\nREADME.md\r\n",
+                "composer_unconfirmed",
+                "composer_unconfirmed",
+            ),
+        ] {
+            let bell = Bell::start(json!({}));
+            *bell.screen.lock().unwrap() = screen.into();
+            let mut doorbell = Doorbell::default();
+            let start = now();
+            bell.working_since(start - 1_000);
+            let forced = bell.send_forced("forced");
+            let ((), logged) = crate::diagnostics::capture(|| {
+                doorbell.pass(&bell.runtime, &bell.client, &AtomicBool::new(false), start)
+            });
+            let deferred: Vec<_> = logged
                 .iter()
-                .any(|record| record["letter_id"] == forced.as_str()
-                    && record["kind"] == "doorbell.held"
-                    && record["reason"] == "quiet_period")
-        );
+                .filter(|record| record["kind"] == "delivery.forced_deferred")
+                .collect();
+            assert_eq!(deferred.len(), 1, "{reason}");
+            assert_eq!(deferred[0]["letter_id"], forced.as_str());
+            assert_eq!(deferred[0]["reason"], reason);
+            assert!(
+                deferred[0].get("text").is_none(),
+                "no screen text is logged"
+            );
+            assert!(
+                logged
+                    .iter()
+                    .any(|record| record["letter_id"] == forced.as_str()
+                        && record["kind"] == "doorbell.held"
+                        && record["reason"] == hold)
+            );
+            assert!(bell.typed().is_empty(), "nothing is typed: {reason}");
+            assert!(!bell.letter_forced(&forced), "it is an ordinary letter now");
+            // The screen clears, but the letter no longer forces its way in:
+            // it keeps the urgency of --now and waits behind every ordinary
+            // guard, here the quiet period after the pane's last change.
+            *bell.screen.lock().unwrap() = CODEX_EMPTY.into();
+            let ((), later) = crate::diagnostics::capture(|| {
+                doorbell.pass(
+                    &bell.runtime,
+                    &bell.client,
+                    &AtomicBool::new(false),
+                    start + 250,
+                )
+            });
+            assert!(bell.typed().is_empty());
+            assert!(
+                later
+                    .iter()
+                    .any(|record| record["letter_id"] == forced.as_str()
+                        && record["kind"] == "doorbell.held"
+                        && record["reason"] == "quiet_period")
+            );
+        }
     }
 
     /// PRD engine-bundle-1 B4: a `--force` send reads the recipient's

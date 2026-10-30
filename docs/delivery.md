@@ -263,6 +263,7 @@ It is how an agent hands another agent input since Hide stopped teaching Herdr's
 2. The letter is then recorded as one sent with `--now` and marked `forced` (`Letter.forced`), and the doorbell's next pass, within 250 ms, judges it without the kind's bell declaration, the mid-turn wait, an unsettled session read, Hide's draft record and the quiet period (`doorbell::judge`); it still waits while Herdr reads the agent `blocked`, while the agent's own question or plan approval waits for the operator, and, for a kind that takes letters at its tools, while it works, since its next tool call hands the letter over.
 3. Right before it types the bell line, the doorbell reads the composer again, inside its eight Herdr calls a pass, because someone can start typing between the send and the bell.
    Text there, or a screen not read empty, types nothing: the letter loses its `forced` mark and stays pending as a `--now` letter behind every ordinary guard, and `delivery.forced_deferred` is logged with the letter, the pane and the reason, never the screen's text.
+   Until the next pass the letter is held as `draft` for text and `composer_unconfirmed` for an unread screen.
 
 The bell line names `hide inbox` for a kind the doorbell does not ring on its own, whose prompt hook then takes the letter as it takes any prompt's.
 The residual is the [external-input race](#safe-intake-and-manual-fallback) every bell has: a key that lands between the second read and the bell's submission.
@@ -430,7 +431,7 @@ Kinds whose session readers report no turns retain the other delivery guards; th
 "No, stay in Plan mode" writes nothing to the session (measured with Codex CLI 0.160.1), so the wait, the hold and the row in Needs You last until Codex's next turn starts or a person's message is written.
 The first start of a build with this rule resumes a stored session at its last person's message, after that turn's `task_started`, so a plan already waiting then is not known until Herdr's next state; that start holds the bell rather than ringing it.
 The rule reads the session Herdr reports for the pane, so a pane reported with another session is judged by that session.
-It guards against hide's own bell, not against a process of the same account, which could append records to the session file or type into the pane through Herdr directly.
+It guards against hide's own bell, not against a process of the same account, which could append records to the session file or type into the pane with `hide pane send` or through Herdr directly.
 
 ## Persistence, clocks and limits
 
