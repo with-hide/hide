@@ -232,7 +232,7 @@ test("in a managed pane it registers the handlers it works through, and starts n
   const host = await extension();
   assert.deepEqual(
     [...host.names].sort(),
-    ["agent_end", "agent_start", "before_agent_start", "before_subagent_spawn", "message_end", "session_shutdown", "session_start", "session_switch", "tool_call", "tool_result"].sort(),
+    ["agent_end", "agent_settled", "agent_start", "before_agent_start", "before_subagent_spawn", "message_end", "session_shutdown", "session_start", "session_switch", "tool_call", "tool_result"].sort(),
   );
   // No session has started, so the barrier is the only call.
   await settled(host);
@@ -258,7 +258,7 @@ test("a new session's first prompt carries the guidance and the letters in one h
   // `lost` counts calls an earlier budget gave up on; a loaded machine may add it. Letters know the session by its
   // file, as Herdr does; Memory by the host's own id, which its session reader keys a receipt by.
   const { lost: _lost, ...input } = call.input;
-  assert.deepEqual(input, { session_id: file, native_session: id, prompt: "Fix the failing parser test", cwd: "/checkouts/fixture", first: true, memory_first: true, version: 11 });
+  assert.deepEqual(input, { session_id: file, native_session: id, prompt: "Fix the failing parser test", cwd: "/checkouts/fixture", first: true, memory_first: true, version: 12 });
   assert.equal(call.env.HERDR_PANE_ID, "w1:p1");
 
   // Once the host wrote it, the session's guidance is given.
@@ -424,6 +424,29 @@ test("a confirmation Hide did not take is made again when the letter rides the n
   assert.deepEqual(second.input.letters, ["letter-1"]);
 });
 
+test("the pane's session reports its turn: working from a run's start, done once it settles, idle after an abort", async () => {
+  const host = await extension();
+  await started(host, "");
+  answer({ prompt: { context: "", letters: [] }, turn: { reported: true } });
+  const run = async (end) => {
+    await host.emit("agent_start", sample("agent_start").event, context("agent_start"));
+    await host.emit("agent_end", end, context("agent_end"));
+    // Pi may still go on after a run ends; its settle is the turn's end. omp has none and ends at the run.
+    await host.emit("agent_settled", { type: "agent_settled" }, context("agent_end"));
+  };
+  // One report runs at a time and a newer turn replaces one still waiting, so each run is awaited to its end.
+  await run(sample("agent_end").event);
+  await until("turn", 1, (input) => input.turn === "done");
+  await run({ type: "agent_end", messages: [{ role: "assistant", stopReason: "aborted", content: [] }] });
+  await until("turn", 1, (input) => input.turn === "idle");
+  const session = context("agent_end").sessionManager.getSessionFile();
+  const turns = made("turn");
+  assert.ok(turns.every((call) => call.input.session_id === session), JSON.stringify(turns));
+  // The second run's start may wait behind the first run's end and be replaced by its abort before it is sent.
+  assert.deepEqual(turns.slice(0, 2).map((call) => call.input.turn), ["working", "done"]);
+  assert.equal(turns.at(-1).input.turn, "idle");
+});
+
 test("a turn that ends before any reply leaves its letters pending in Hide", async () => {
   const host = await extension();
   await started(host, "");
@@ -563,7 +586,7 @@ test("a shell call that starts an agent through Herdr is refused with the helper
   assert.deepEqual(await host.emit("tool_call", launch, context("tool_call.bash")), { block: true, reason: "Use hide agent spawn --parent here" });
   const [call] = await until("tool");
   const { lost: _lost, ...input } = call.input;
-  assert.deepEqual(input, { tool: "bash", command: "herdr agent start helper --kind claude", cwd: "/checkouts/fixture", version: 11 });
+  assert.deepEqual(input, { tool: "bash", command: "herdr agent start helper --kind claude", cwd: "/checkouts/fixture", version: 12 });
 
   // A call that can hand a result to the system opener asks the helper too.
   const opener = { ...sample("tool_call.bash").event, input: { command: "Start-Process report.pdf" } };
@@ -588,7 +611,7 @@ test("while a project has a protection on, file and shell calls ask the helper w
     const shell = { ...sample("tool_call.bash").event, input: { command: "cat .env" } };
     assert.deepEqual(await host.emit("tool_call", shell, context("tool_call.bash")), { block: true, reason: "Not run: Guard files is on" });
     const sent = (await until("tool", 2)).map(({ input: { lost: _lost, ...input } }) => input);
-    assert.deepEqual(sent[0], { tool: "write", args: { path: "/checkouts/fixture/.env" }, cwd: "/checkouts/fixture", version: 11 });
+    assert.deepEqual(sent[0], { tool: "write", args: { path: "/checkouts/fixture/.env" }, cwd: "/checkouts/fixture", version: 12 });
     assert.equal(sent[1].command, "cat .env");
 
     // Every protection off again: no file or shell call starts the helper (B27).

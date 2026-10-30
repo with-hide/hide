@@ -770,17 +770,9 @@ impl SessionReplica {
                     .as_deref()
                     .map(|pane_id| remote_pane_id(target_id, pane_id)),
                 pane_layouts,
-                pane_hook_tokens: state
-                    .panes
-                    .iter()
-                    .map(|pane| {
-                        (
-                            remote_pane_id(target_id, &pane.pane_id),
-                            crate::agent_hooks::PaneHookTokens::read(&pane.tokens),
-                        )
-                    })
-                    .filter(|(_, tokens)| !tokens.is_empty())
-                    .collect(),
+                // The core's hook facts, laid by the device's coordinator;
+                // Herdr's pane tokens carry none of them.
+                pane_hook_tokens: BTreeMap::new(),
                 issue_tokens: crate::wire::IssueTokens {
                     panes: issue_tokens
                         .panes

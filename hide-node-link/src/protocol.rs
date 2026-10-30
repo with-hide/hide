@@ -266,7 +266,11 @@ use crate::error::HostError;
 /// to its upstream, keeping the base's own commits on a new branch
 /// (`Call::BaseSync`, [`crate::branch::BaseSyncOutcome`]). A helper on 62
 /// would refuse it, so it is refused at Hello and upgraded.
-pub const PROTOCOL_VERSION: u32 = 63;
+/// 64: a device pane's hook reports its agent's turn and subagent counts to
+/// the core through its node (`panes::HookCommand::Status`) instead of to
+/// the device's Herdr. A helper on 63 would refuse the command, so it is
+/// refused at Hello and upgraded.
+pub const PROTOCOL_VERSION: u32 = 64;
 
 /// What agy's index held in a checkout before Hide typed `/fork`
 /// ([`Call::AntigravityForkMark`]).

@@ -367,6 +367,11 @@ fn hook_group<'a>(
 pub(crate) fn hook_matcher(runtime: AgentRuntime, event: HookEvent) -> Option<&'static str> {
     match (runtime, event) {
         (_, HookEvent::PostToolUse | HookEvent::PostToolUseFailure) => Some("Bash|PowerShell"),
+        // Claude Code's notifications that a turn waits on the operator, or
+        // rests at the prompt after an interrupt.
+        (AgentRuntime::ClaudeCode, HookEvent::Notification) => {
+            Some("permission_prompt|elicitation_dialog|idle_prompt")
+        }
         (AgentRuntime::ClaudeCode, HookEvent::PreToolUse) => {
             Some("Bash|AskUserQuestion|ExitPlanMode|Edit|Write|MultiEdit|NotebookEdit|Read")
         }
@@ -382,7 +387,12 @@ pub(crate) fn hook_matcher(runtime: AgentRuntime, event: HookEvent) -> Option<&'
 fn helper_arguments(helper: HookTarget<'_>, runtime: AgentRuntime, event: HookEvent) -> String {
     let memory = if matches!(
         event,
-        HookEvent::PreToolUse | HookEvent::PostToolUse | HookEvent::PostToolUseFailure
+        HookEvent::PreToolUse
+            | HookEvent::PostToolUse
+            | HookEvent::PostToolUseFailure
+            | HookEvent::PermissionRequest
+            | HookEvent::Notification
+            | HookEvent::Interrupt
     ) {
         ""
     } else {
@@ -1013,7 +1023,7 @@ mod tests {
             .unwrap();
         assert!(session_start_command.contains("--runtime codex"));
         assert!(session_start_command.contains("--memory-injection"));
-        assert!(session_start_command.contains("--source hide-subagents@10"));
+        assert!(session_start_command.contains("--source hide-subagents@11"));
         let guard = if cfg!(windows) {
             "if (Test-Path -LiteralPath '"
         } else {
@@ -1036,12 +1046,12 @@ mod tests {
             (
                 AgentRuntime::ClaudeCode,
                 HookEvent::SessionStart,
-                r#"{"type":"command","command":"if [ -x '/Users/example/o'\\''brien/hide.app/Contents/Resources/hide-agent-hooks' ]; then exec '/Users/example/o'\\''brien/hide.app/Contents/Resources/hide-agent-hooks' hook --runtime claude-code --event SessionStart --memory-injection --source hide-subagents@10; fi","timeout":8}"#,
+                r#"{"type":"command","command":"if [ -x '/Users/example/o'\\''brien/hide.app/Contents/Resources/hide-agent-hooks' ]; then exec '/Users/example/o'\\''brien/hide.app/Contents/Resources/hide-agent-hooks' hook --runtime claude-code --event SessionStart --memory-injection --source hide-subagents@11; fi","timeout":8}"#,
             ),
             (
                 AgentRuntime::Codex,
                 HookEvent::Stop,
-                r#"{"type":"command","command":"if [ -x '/Users/example/o'\\''brien/hide.app/Contents/Resources/hide-agent-hooks' ]; then exec '/Users/example/o'\\''brien/hide.app/Contents/Resources/hide-agent-hooks' hook --runtime codex --event Stop --memory-injection --source hide-subagents@10; fi","timeout":8}"#,
+                r#"{"type":"command","command":"if [ -x '/Users/example/o'\\''brien/hide.app/Contents/Resources/hide-agent-hooks' ]; then exec '/Users/example/o'\\''brien/hide.app/Contents/Resources/hide-agent-hooks' hook --runtime codex --event Stop --memory-injection --source hide-subagents@11; fi","timeout":8}"#,
             ),
         ];
         for (runtime, event, bytes) in pinned {
@@ -1072,7 +1082,7 @@ mod tests {
         let quoted = "'C:\\Users\\example\\a b''c\\it\u{2019}\u{2019}s\\hide-agent-hooks.exe'";
         let guard = |runtime: &str| {
             format!(
-                "if (Test-Path -LiteralPath {quoted} -PathType Leaf) {{ & {quoted} hook --runtime {runtime} --event Stop --memory-injection --source hide-subagents@10 }}"
+                "if (Test-Path -LiteralPath {quoted} -PathType Leaf) {{ & {quoted} hook --runtime {runtime} --event Stop --memory-injection --source hide-subagents@11 }}"
             )
         };
         let codex = windows_hook(helper, AgentRuntime::Codex, HookEvent::Stop);

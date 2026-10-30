@@ -262,6 +262,10 @@ pub struct SessionAgentPayload {
     /// Display history, never used by agent_demand/activity or close proof.
     #[serde(skip)]
     pub(crate) record: Option<crate::labels::record::RecordBinding>,
+    /// The turn the pane's own session's hook last reported; laid on by the
+    /// core's hook facts, never read from Herdr (`agent_hooks::facts`).
+    #[serde(skip)]
+    pub(crate) hook: Option<hide_node_link::panes::HookTurn>,
 }
 
 #[derive(Clone, Debug, Deserialize, serde::Serialize, Eq, PartialEq)]
@@ -1544,6 +1548,55 @@ mod tests {
             ),
             AgentGroup::Seen
         );
+    }
+
+    /// D-9. The turn the session's own hook reported decides the axes ahead of
+    /// Herdr's state, in both directions, until that session reports again;
+    /// without a hook turn Herdr's state still decides.
+    #[test]
+    fn a_hook_turn_decides_the_axes_ahead_of_herdrs_state() {
+        use hide_node_link::panes::HookTurn;
+        let axes = |herdr: &str, hook: Option<HookTurn>| {
+            let mut agent = payload(json!([{
+                "pane_id":"p", "agent":"claude", "agent_status":herdr, "state_change_seq":3
+            }]))
+            .agents
+            .remove(0);
+            agent.hook = hook;
+            (
+                agent_activity(&agent),
+                agent_completed(&agent),
+                agent_blocked(&agent),
+            )
+        };
+        let stopped = AgentActivity::Stopped;
+        let working = AgentActivity::Working;
+        // Herdr reads a command waited on in the background as finished (#348).
+        assert_eq!(
+            axes("done", Some(HookTurn::Working)),
+            (working, false, false)
+        );
+        assert_eq!(
+            axes("working", Some(HookTurn::Done)),
+            (stopped, true, false)
+        );
+        assert_eq!(
+            axes("working", Some(HookTurn::Waiting)),
+            (stopped, false, true)
+        );
+        // An interrupted turn rests without being announced as finished.
+        assert_eq!(
+            axes("working", Some(HookTurn::Idle)),
+            (stopped, false, false)
+        );
+        // A hook that reported the turn answers Herdr's blocked prompt too.
+        assert_eq!(
+            axes("blocked", Some(HookTurn::Working)),
+            (working, false, false)
+        );
+        assert_eq!(axes("done", None), (stopped, true, false));
+        assert_eq!(axes("working", None), (working, false, false));
+        assert!(axes("blocked", None).2);
     }
 
     /// AC10. Closing a pane needs confirmation for running work or unresolved

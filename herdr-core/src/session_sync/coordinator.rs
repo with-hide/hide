@@ -110,26 +110,6 @@ fn run_coordinator(
     // Kept for the AI settings and the counter sweep below, which read this
     // machine's files themselves.
     let hook_home = context.is_local().then(|| home_path.clone()).flatten();
-    // Herdr loses a pane's hook tokens when its server is handed off or
-    // restarted; this puts back the ones this machine's hook files still hold
-    // (issue 799). A device's files are the device's, so only the local
-    // coordinator has one.
-    let mut hook_token_restorer = hook_home.clone().and_then(|home| {
-        match crate::coordination::hook_tokens::Restorer::new(
-            home,
-            Arc::clone(&context.api_connector),
-        ) {
-            Ok(restorer) => Some(restorer),
-            Err(message) => {
-                crate::diagnostic!(json!({
-                    "component": "hook_tokens",
-                    "kind": "start_failed",
-                    "message": message,
-                }));
-                None
-            }
-        }
-    });
     // The rows read the operator's logins, which are the core's own node's.
     let mut usage_reader = usage_paths
         .zip(context.node().map(Arc::clone))
@@ -265,11 +245,6 @@ fn run_coordinator(
                             true,
                             snapshot_started_at,
                         );
-                    }
-                    if let (Some(restorer), Some(current)) =
-                        (hook_token_restorer.as_mut(), replica.as_ref())
-                    {
-                        restorer.observe(&current.state.agents, true);
                     }
                     if replica
                         .as_ref()
@@ -835,9 +810,6 @@ fn run_coordinator(
                                     started_at,
                                 );
                             }
-                            if let Some(restorer) = hook_token_restorer.as_mut() {
-                                restorer.observe(&agents, false);
-                            }
                             if requested {
                                 current.replace_agents(agents);
                                 match current.refresh_published_state() {
@@ -1021,13 +993,13 @@ fn run_coordinator(
                 // Cleared before the read, so a wake that lands during the
                 // publish asks for the next one rather than being lost.
                 republish_pending.store(false, Ordering::Release);
-                // Hide draws ahead of Herdr only on this machine's Herdr, so
-                // only its replica carries the overlay. The published state
-                // already leaves out what still waits for Herdr, as on the
-                // event path, so a tab waiting for its layout elsewhere does
-                // not hold the drawing back.
-                if context.is_local()
-                    && subscription.is_some()
+                // Hide draws ahead of Herdr only on this machine's Herdr; a
+                // device's coordinator is woken for its hooks' reports, which
+                // its publish lays on (`agent_hooks::facts`). The published
+                // state already leaves out what still waits for Herdr, as on
+                // the event path, so a tab waiting for its layout elsewhere
+                // does not hold the drawing back.
+                if subscription.is_some()
                     && let Some(current) = replica.as_mut()
                     && !publish_replica(
                         &context,
@@ -1444,12 +1416,32 @@ fn publish_replica(
         if let Some(overlay) = &overlay {
             overlay.apply(&mut payload);
         }
+        // The device's hooks report to the core, never to its Herdr, so their
+        // facts are laid here the way the labels are (`agent_hooks::facts`).
+        let hook_tokens = context.hook_facts.as_ref().map(|facts| {
+            let prefix = super::remote_pane_id(target_id, "");
+            facts
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .lay(
+                    &mut payload,
+                    |pane| super::remote_pane_id(target_id, pane),
+                    |pane| pane.starts_with(&prefix),
+                )
+        });
         let projection = match held_state.as_ref() {
             Some(state) => SessionReplica::project_remote_state(state, target_id, payload),
             None => replica.project_remote(target_id, payload),
         };
         let (fetched, excluded) = match projection {
-            Ok((session, excluded)) => (Ok(session), excluded),
+            Ok((mut session, excluded)) => {
+                session.pane_hook_tokens = hook_tokens
+                    .unwrap_or_default()
+                    .into_iter()
+                    .map(|(pane, tokens)| (super::remote_pane_id(target_id, &pane), tokens))
+                    .collect();
+                (Ok(session), excluded)
+            }
             Err(error) => (Err(error), Vec::new()),
         };
         for exclusion in excluded {

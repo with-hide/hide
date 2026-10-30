@@ -3,7 +3,8 @@
 //! Two jobs, and a hard line between them:
 //!
 //! - `hook` is what the installed hook entry runs. It counts one event for
-//!   the pane it fired in and reports the pane's totals to Herdr. It never
+//!   the pane it fired in and reports the pane's turn and totals to the core
+//!   through hided (`hide_agent_hooks::report`). It never
 //!   writes a runtime's configuration and never fails loudly: an agent turn
 //!   must not break because Hide could not count something.
 //! - `doctor` prints the same hook-install judgement the Settings diagnosis
@@ -22,7 +23,7 @@ use hide_agent_adapter::HookDialect;
 use hide_agent_hooks::counters::{self, Change, Reporter, SubagentInput};
 use hide_agent_hooks::diagnosis::Diagnosis;
 use hide_agent_hooks::guidance::{self, GuidanceAgent};
-use hide_agent_hooks::report;
+use hide_agent_hooks::report::{self, HookCounts, HookStatusReport, HookTurn};
 use hide_agent_hooks::runtime::{AgentRuntime, HookEvent, hook_stdout};
 use hide_agent_hooks::{antigravity, basic};
 use hide_platform::process::{OwnedChild, OwnerWatch};
@@ -85,6 +86,7 @@ fn main() -> ExitCode {
                 {
                     hide_agent_hooks::delivery::diagnose(&home, "format");
                 }
+                let _ = std::panic::catch_unwind(|| report_tool_turn(&arguments, started));
                 return ExitCode::SUCCESS;
             }
             // Grok and Cursor have no Memory: their hooks carry the spawn
@@ -131,6 +133,7 @@ fn main() -> ExitCode {
                 if std::panic::catch_unwind(|| run_spawn_guard(&arguments, started)).is_err() {
                     guard_failed(&arguments, "panic");
                 }
+                let _ = std::panic::catch_unwind(|| report_tool_turn(&arguments, started));
             } else if event.as_deref() == Some(HookEvent::UserPromptSubmit.name()) {
                 run_prompt_hook(&arguments, started + PROMPT_BUDGET);
             } else {
@@ -317,7 +320,7 @@ fn run_basic_hook(agent: GuidanceAgent, arguments: &[String], started: Instant) 
     {
         hide_agent_hooks::delivery::diagnose_failure(&home, &failure);
     }
-    let _ = std::panic::catch_unwind(|| count_basic(dialect, event, payload.as_ref()));
+    let _ = std::panic::catch_unwind(|| report_basic(dialect, event, payload.as_ref(), started));
 }
 
 fn basic_turn_event(
@@ -497,25 +500,30 @@ fn antigravity_event(event: HookEvent, started: Instant) {
         agent: Some(runtime),
         session: Some(session),
     };
+    let counted = hide_agent_adapter::adapter(runtime)
+        .is_some_and(|adapter| adapter.subagent_counts.is_some());
+    let report = |change, who, turn| {
+        report_pane(
+            &home,
+            event,
+            change,
+            who,
+            turn,
+            counted,
+            Instant::now() + report::REPORT_TIMEOUT,
+        )
+    };
     match (event, parent.as_deref()) {
         // A subagent gets nothing of the pane's: no guidance, no Memory and
         // no letter, which are the pane's own session's. Its start and end,
         // a nested subagent's too, are counted under the pane's own
         // conversation, the session Herdr reports for the pane.
-        (HookEvent::SessionStart, Some(parent)) => report_count(
-            &home,
-            event,
-            Change::Started(Some(&conversation)),
-            reporter(parent),
-            true,
-        ),
-        (HookEvent::Stop, Some(parent)) => report_count(
-            &home,
-            event,
-            Change::Stopped(Some(&conversation)),
-            reporter(parent),
-            true,
-        ),
+        (HookEvent::SessionStart, Some(parent)) => {
+            report(Change::Started(Some(&conversation)), reporter(parent), None)
+        }
+        (HookEvent::Stop, Some(parent)) => {
+            report(Change::Stopped(Some(&conversation)), reporter(parent), None)
+        }
         (_, Some(_)) => {}
         (HookEvent::SessionStart, None) => {
             let memory_deadline = started + hide_agent_hooks::memory::MEMORY_BUDGET;
@@ -548,13 +556,7 @@ fn antigravity_event(event: HookEvent, started: Instant) {
             if let Some(answer) = antigravity::inject(&context) {
                 print_line(&answer);
             }
-            report_count(
-                &home,
-                event,
-                Change::SessionStarted,
-                reporter(&conversation),
-                true,
-            );
+            report(Change::SessionStarted, reporter(&conversation), None);
         }
         // Every model call of a turn runs `PreInvocation`; the prompt's
         // first is the prompt hook, and a later one is the gap after a tool,
@@ -566,16 +568,26 @@ fn antigravity_event(event: HookEvent, started: Instant) {
             } else {
                 antigravity_tool_gap(&home, &conversation, started);
             }
+            // The prompt's first call starts the turn, and a later call
+            // reports it again only after a report said otherwise.
+            report(
+                Change::None,
+                reporter(&conversation),
+                Some(HookTurn::Working),
+            );
         }
         (HookEvent::Stop, None) => {
-            report_count(&home, event, Change::None, reporter(&conversation), true)
+            report(Change::None, reporter(&conversation), Some(HookTurn::Done))
         }
         (
             HookEvent::PreToolUse
             | HookEvent::PostToolUse
             | HookEvent::PostToolUseFailure
             | HookEvent::SubagentStart
-            | HookEvent::SubagentStop,
+            | HookEvent::SubagentStop
+            | HookEvent::PermissionRequest
+            | HookEvent::Notification
+            | HookEvent::Interrupt,
             None,
         ) => {}
     }
@@ -714,46 +726,64 @@ fn antigravity_memory(
     .joined()
 }
 
-/// The count a Grok or Cursor event makes. Grok's `Stop` names the
-/// background subagents still running and comes from inside a subagent too,
-/// which leaves the count alone; Cursor's subagents end with the turn.
-fn count_basic(dialect: HookDialect, event: HookEvent, payload: Option<&(Vec<u8>, bool)>) {
-    // An agent whose adapter declares no count reports none, rather than a
-    // zero its hooks never changed (Cursor, issue 911).
-    if dialect.adapter().subagent_counts.is_none() {
-        return;
-    }
-    let change = match (dialect, event) {
-        (_, HookEvent::SessionStart) => Change::SessionStarted,
-        (_, HookEvent::SubagentStart) => Change::Started(None),
-        (_, HookEvent::SubagentStop) => Change::Stopped(None),
+/// What a Grok or Cursor event reports: its turn, and the count it makes.
+/// Grok's `Stop` names the background subagents still running and comes
+/// from inside a subagent too, which leaves the count and the turn alone;
+/// Cursor's subagents end with the turn.
+fn report_basic(
+    dialect: HookDialect,
+    event: HookEvent,
+    payload: Option<&(Vec<u8>, bool)>,
+    started: Instant,
+) {
+    let (change, turn) = match (dialect, event) {
+        (_, HookEvent::SessionStart) => (Change::SessionStarted, None),
+        (_, HookEvent::SubagentStart) => (Change::Started(None), None),
+        (_, HookEvent::SubagentStop) => (Change::Stopped(None), None),
         (HookDialect::Grok, HookEvent::Stop) => {
             let Some((payload, truncated)) = payload else {
                 return;
             };
             match basic::grok_stop(payload, *truncated) {
                 basic::GrokStop::Ignore => return,
-                basic::GrokStop::Running { running, .. } => Change::Settled { running },
+                basic::GrokStop::Running { running, .. } => {
+                    (Change::Settled { running }, Some(HookTurn::Done))
+                }
             }
         }
-        (_, HookEvent::Stop) => Change::Settled { running: 0 },
+        (_, HookEvent::Stop) => (Change::Settled { running: 0 }, Some(HookTurn::Done)),
+        (_, HookEvent::UserPromptSubmit | HookEvent::PreToolUse) => {
+            (Change::None, Some(HookTurn::Working))
+        }
         (
             _,
-            HookEvent::UserPromptSubmit
-            | HookEvent::PreToolUse
-            | HookEvent::PostToolUse
-            | HookEvent::PostToolUseFailure,
+            HookEvent::PostToolUse
+            | HookEvent::PostToolUseFailure
+            | HookEvent::PermissionRequest
+            | HookEvent::Notification
+            | HookEvent::Interrupt,
         ) => return,
     };
+    // An agent whose adapter declares no count reports none, rather than a
+    // zero its hooks never changed (Cursor, issue 911).
+    let counted = dialect.adapter().subagent_counts.is_some();
+    let change = if counted { change } else { Change::None };
     let Some(home) = home_directory() else { return };
-    // Neither agent's hook input is read for its session here, so the file
-    // names the agent and no session, and a restore withholds the counts.
+    // Neither agent's hook input is read for its session here, so the record
+    // names the agent and no session.
     let who = Reporter {
         agent: Some(dialect.adapter().id),
         session: None,
     };
-    // No session is read, so there is none to compare with Herdr's.
-    report_count(&home, event, change, who, false);
+    report_pane(
+        &home,
+        event,
+        change,
+        who,
+        turn,
+        counted,
+        started + report::REPORT_TIMEOUT,
+    );
 }
 
 /// Prints one JSON answer. On Windows every agent runs its hook under
@@ -968,16 +998,26 @@ fn run_hook(arguments: &[String], started: Instant) {
     // Memory; a Memory read works from the same bytes.
     // A count reads the same input: the session it came from, the subagent it
     // is about and the subagents a turn end lists.
-    let counts = event != HookEvent::UserPromptSubmit
-        && !runtime.is_some_and(|runtime| runtime.dialect().adapter().subagent_counts.is_none());
-    let payload = if (event == HookEvent::UserPromptSubmit && runtime.is_some())
-        || memory_injection
-        || counts
-    {
+    // Every event of a known runtime reports to the core, which reads the
+    // session the input names, and a notification's kind.
+    let counted =
+        runtime.is_some_and(|runtime| runtime.dialect().adapter().subagent_counts.is_some());
+    let payload = if runtime.is_some() || memory_injection {
         read_stdin_before_deadline(started + PROMPT_PAYLOAD_BUDGET)
     } else {
         None
     };
+    // The session the event came from, when its input was read whole: what
+    // keeps a nested session's events out of the pane's own record.
+    let input = payload
+        .as_ref()
+        .map(|(bytes, truncated)| SubagentInput::read(bytes, *truncated))
+        .unwrap_or_default();
+    let who = Reporter {
+        agent: runtime.map(AgentRuntime::id),
+        session: input.session.as_deref(),
+    };
+    let turn = turn_of(event, &input, payload.as_ref());
     let prompt = match (&payload, event) {
         (Some((bytes, truncated)), HookEvent::UserPromptSubmit) => {
             match hide_agent_hooks::delivery::read_prompt(bytes, *truncated) {
@@ -1012,6 +1052,23 @@ fn run_hook(arguments: &[String], started: Instant) {
         // binds a caller outside any pane (a Codex shared daemon, a plain
         // terminal) to the registered checkout holding its cwd, and refuses
         // everything else itself.
+        // A prompt's turn is reported beside the letters and Memory, within
+        // the letters' own deadline, so it adds no wait to the prompt.
+        let reporting = (event == HookEvent::UserPromptSubmit).then(|| {
+            std::thread::Builder::new()
+                .name("hide-hook-report".to_owned())
+                .spawn_scoped(scope, || {
+                    report_pane(
+                        &home,
+                        event,
+                        Change::None,
+                        who,
+                        turn,
+                        counted,
+                        delivery_deadline,
+                    )
+                })
+        });
         let probing = (event == HookEvent::SessionStart).then(|| {
             std::thread::Builder::new()
                 .name("hide-hook-workspace".to_owned())
@@ -1047,6 +1104,9 @@ fn run_hook(arguments: &[String], started: Instant) {
             Some(Err(_)) => workspace_context::live_context(),
             None => None,
         };
+        if let Some(Ok(report)) = reporting {
+            let _ = report.join();
+        }
         (memory_output, intake, workspace)
     });
     let mut output =
@@ -1098,37 +1158,41 @@ fn run_hook(arguments: &[String], started: Instant) {
         }
         return;
     }
-    if !counts {
-        return;
-    }
-    // The session the event came from, when its input was read whole: what
-    // tells the pane's own session from another one's, and a restore this
-    // session's counts from another one's.
-    let input = payload
-        .as_ref()
-        .map(|(bytes, truncated)| SubagentInput::read(bytes, *truncated))
-        .unwrap_or_default();
-    let who = Reporter {
-        agent: runtime.map(AgentRuntime::id),
-        session: input.session.as_deref(),
+    let change = if counted {
+        Change::of(runtime, event, &input)
+    } else {
+        Change::None
     };
-    report_count(&home, event, Change::of(runtime, event, &input), who, true);
+    report_pane(
+        &home,
+        event,
+        change,
+        who,
+        turn,
+        counted,
+        Instant::now() + report::REPORT_TIMEOUT,
+    );
 }
 
-/// Applies `change` to this pane's count and reports the pane's totals to
-/// Herdr. Outside a Herdr pane there is no pane to describe.
+/// Applies `change` to the event's session in the pane's record and reports
+/// the session's turn and counts to the core (`hide_agent_hooks::report`).
+/// Outside a Herdr pane there is no pane to describe, and an agent whose hook
+/// does not know its own runtime has nothing to report under.
 ///
-/// With `compare_session`, the event's session is compared with the one Herdr
-/// reports for the pane's agent, and an event of another session (a nested
-/// `claude -p` that a user's own hook starts runs these hooks with the pane's
-/// environment) changes and reports nothing. A Herdr that names no session,
-/// or cannot say, leaves every event the pane's.
-fn report_count(
+/// An event that changes no count and says no turn reports only when it
+/// starts a session; a tool event reports its turn only when the session's
+/// last report said another one, so a turn's tool calls cost no `hide` run
+/// after its first. `counted` says whether the agent's hooks keep its
+/// subagent counts at all: one that keeps none reports none, rather than a
+/// zero its hooks never changed (Cursor, issue 911).
+fn report_pane(
     home: &std::path::Path,
     event: HookEvent,
     change: Change<'_>,
     who: Reporter<'_>,
-    compare_session: bool,
+    turn: Option<HookTurn>,
+    counted: bool,
+    deadline: Instant,
 ) {
     let Some(pane_id) = std::env::var("HERDR_PANE_ID")
         .ok()
@@ -1136,64 +1200,127 @@ fn report_count(
     else {
         return;
     };
-    // `--source` on the command line is the install marker the diagnosis
-    // reads out of the hook file; the report's own source is fixed in
-    // `report::metadata_source`, because Herdr refuses the marker's `@`.
-    let socket_path = report::socket_path(home);
-    // Herdr is asked only when the change needs the answer, and a Herdr that
-    // cannot say leaves every event the pane's: that fallback is written down
-    // below, where `doctor` and Settings read the last report's outcome, so a
-    // pane that counts every session is not silent about it.
-    let mut session_failure = None;
-    let applied = counters::change_for_pane(home, &pane_id, change, who, || {
-        let path = socket_path.as_ref().ok().filter(|_| compare_session)?;
-        match report::pane_session(path, &pane_id) {
-            Ok(session) => session,
-            Err(error) => {
-                session_failure = Some(error);
-                None
+    let Some(agent) = who.agent else { return };
+    let outcome = match counters::apply(home, &pane_id, change, who, turn) {
+        Err(error) => Err(format!("the pane's count could not be changed: {error}")),
+        Ok(applied) => {
+            let tool = matches!(
+                event,
+                HookEvent::PreToolUse | HookEvent::PostToolUse | HookEvent::PostToolUseFailure
+            );
+            let moved = turn.is_some_and(|turn| applied.previous_turn != Some(turn));
+            let starts = event == HookEvent::SessionStart;
+            if !(starts || change != Change::None || (turn.is_some() && (moved || !tool))) {
+                return;
             }
+            report::report(
+                &HookStatusReport {
+                    runtime: agent.to_owned(),
+                    version: hide_agent_hooks::HOOK_VERSION,
+                    session: who.session.map(str::to_owned),
+                    turn,
+                    counts: counted.then_some(HookCounts {
+                        working: applied.counters.working,
+                        done: applied.counters.done,
+                    }),
+                    session_start: starts,
+                },
+                deadline,
+            )
         }
-    });
-    if applied.as_ref().is_ok_and(|applied| applied.foreign) {
-        return;
-    }
-    let mut outcome = match (applied.map(|applied| applied.counters), &socket_path) {
-        (Ok(counters), Ok(path)) => report_latest(home, path, &pane_id, counters),
-        (Err(error), _) => Err(hide_herdr_client::ApiError::Transport(format!(
-            "the pane's count could not be changed: {error}"
-        ))),
-        (_, Err(error)) => Err(error.clone()),
     };
-    if let (Ok(()), Some(error)) = (&outcome, session_failure) {
-        outcome = Err(hide_herdr_client::ApiError::Transport(format!(
-            "Herdr did not say which session is the pane's agent, so every session was counted as the pane's: {error}"
-        )));
-    }
     // The outcome is written down rather than surfaced here: a hook's
     // stderr reaches nobody, and the record is what `doctor` and Settings
     // show (engineering rule 10).
-    let socket_path = socket_path.unwrap_or_default();
-    let _ = report::record_outcome(home, &pane_id, event.name(), &socket_path, &outcome);
+    let _ = report::record_outcome(home, &pane_id, agent, event.name(), &outcome);
 }
 
-/// Reports `counters` and, when another event of the pane changed the record
-/// while this report was on its way, the record as it is now: two events
-/// that report in the other order than they counted would otherwise leave
-/// Herdr with the older count until the pane's next event.
-fn report_latest(
-    home: &std::path::Path,
-    socket_path: &std::path::Path,
-    pane_id: &str,
-    counters: counters::PaneCounters,
-) -> Result<(), hide_herdr_client::ApiError> {
-    report::report(socket_path, pane_id, counters)?;
-    // Only a record actually read can be newer; one that cannot be read now
-    // is left to the event that is writing it, which reports it itself.
-    match counters::read_settled(home, pane_id) {
-        Ok(now) if now != counters => report::report(socket_path, pane_id, now),
-        _ => Ok(()),
+/// A tool call of a turn the session's last report did not say was running
+/// (after a permission was answered, or a background task woke the agent)
+/// reports the turn working again; any other tool call reports nothing.
+fn report_tool_turn(arguments: &[String], started: Instant) {
+    let Some(runtime) =
+        argument_value("--runtime", arguments).and_then(|value| AgentRuntime::parse(&value))
+    else {
+        return;
+    };
+    if hide_agent_hooks::runtime::ForeignOrigin::detect(|name| std::env::var_os(name)).is_some() {
+        return;
     }
+    let Some(home) = home_directory() else { return };
+    let Some(event) =
+        argument_value("--event", arguments).and_then(|value| HookEvent::parse(&value))
+    else {
+        return;
+    };
+    // The payload went to the guard or the observation, so the event's
+    // session is the runtime's last one in the pane's record.
+    let Some(pane_id) = std::env::var("HERDR_PANE_ID")
+        .ok()
+        .filter(|value| !value.is_empty())
+    else {
+        return;
+    };
+    let Some(session) = counters::resumes(
+        &home,
+        &pane_id,
+        Reporter {
+            agent: Some(runtime.id()),
+            session: None,
+        },
+    ) else {
+        return;
+    };
+    report_pane(
+        &home,
+        event,
+        Change::None,
+        Reporter {
+            agent: Some(runtime.id()),
+            session: session.as_deref(),
+        },
+        Some(HookTurn::Working),
+        runtime.dialect().adapter().subagent_counts.is_some(),
+        started + report::REPORT_TIMEOUT,
+    );
+}
+
+/// The turn a Claude Code or Codex event says, from what its input says.
+fn turn_of(
+    event: HookEvent,
+    input: &SubagentInput,
+    payload: Option<&(Vec<u8>, bool)>,
+) -> Option<HookTurn> {
+    match event {
+        HookEvent::UserPromptSubmit => Some(HookTurn::Working),
+        // A subagent's own turn end is not the session's.
+        HookEvent::Stop if input.subagent.is_none() => Some(HookTurn::Done),
+        HookEvent::PermissionRequest => Some(HookTurn::Waiting),
+        HookEvent::Interrupt => Some(HookTurn::Idle),
+        HookEvent::Notification => {
+            let (bytes, truncated) = payload?;
+            match notification_type(bytes, *truncated)?.as_str() {
+                "permission_prompt" | "elicitation_dialog" => Some(HookTurn::Waiting),
+                "idle_prompt" => Some(HookTurn::Idle),
+                _ => None,
+            }
+        }
+        _ => None,
+    }
+}
+
+/// Claude Code's `notification_type`, from an input read whole.
+fn notification_type(payload: &[u8], truncated: bool) -> Option<String> {
+    #[derive(serde::Deserialize)]
+    struct Input {
+        notification_type: Option<String>,
+    }
+    if truncated {
+        return None;
+    }
+    serde_json::from_slice::<Input>(payload)
+        .ok()?
+        .notification_type
 }
 
 fn memory_output_before_deadline(

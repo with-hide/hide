@@ -2498,6 +2498,13 @@ impl Runtime {
         let mut inline_paths = None;
         if let Ok(payload) = fetched.as_mut() {
             self.label_overlay.apply(payload);
+            self.local_hook_tokens = self
+                .hook_facts
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .lay(payload, str::to_owned, |pane| {
+                    !is_remote_scoped_pane_id(pane)
+                });
             self.settle_agent_sleep(payload);
             // A session without a catalog reads its paths here, before the
             // clamps read the session's cwds.
@@ -2988,16 +2995,7 @@ impl Runtime {
                 let layout = target_pane_id
                     .map(|pane_id| live::project_layout_for_pane(&payload, pane_id))
                     .transpose();
-                self.pane_hook_tokens = payload
-                    .panes
-                    .iter()
-                    .map(|pane| {
-                        (
-                            pane.pane_id.clone(),
-                            crate::agent_hooks::PaneHookTokens::read(&pane.tokens),
-                        )
-                    })
-                    .collect();
+                self.pane_hook_tokens = std::mem::take(&mut self.local_hook_tokens);
                 let projection = project_agents(payload);
                 excluded = projection.excluded;
                 match layout {

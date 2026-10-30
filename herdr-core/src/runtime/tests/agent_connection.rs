@@ -9,7 +9,9 @@ use crate::model::{
 use crate::pane_reopen::ReopenFailure;
 use hide_agent_hooks::{AgentRuntime, HookStatus};
 
-/// One Herdr session with one pane per `(pane id, agent, hook token)`.
+/// One Herdr session with one pane per `(pane id, agent, hook reported)`;
+/// whether the pane's hook reported is the core's record, not Herdr's
+/// ([`feed`]).
 fn session(panes: &[(&str, &str, bool)]) -> serde_json::Value {
     let agents = panes
         .iter()
@@ -26,14 +28,7 @@ fn session(panes: &[(&str, &str, bool)]) -> serde_json::Value {
         .collect::<Vec<_>>();
     let pane_rows = panes
         .iter()
-        .map(|(pane, _, hooked)| {
-            let tokens = if *hooked {
-                serde_json::json!({"hide_hooks": hide_agent_hooks::HOOK_VERSION.to_string()})
-            } else {
-                serde_json::json!({})
-            };
-            serde_json::json!({"pane_id": pane, "cwd": "/fixture", "tokens": tokens})
-        })
+        .map(|(pane, _, _)| serde_json::json!({"pane_id": pane, "cwd": "/fixture", "tokens": {}}))
         .collect::<Vec<_>>();
     // One pane per tab: a tab of several panes needs an authoritative split.
     let tabs = (0..panes.len())
@@ -58,6 +53,31 @@ fn session(panes: &[(&str, &str, bool)]) -> serde_json::Value {
         "tabs": tabs,
         "layouts": layouts,
     })
+}
+
+/// The hook in `pane` reported to the core for `agent` (Herdr's agent name)
+/// and its `session`, with `counts` when it counts subagents.
+pub(super) fn hook_reported(
+    runtime: &mut Runtime,
+    pane: &str,
+    agent: &str,
+    session: &str,
+    counts: Option<(u32, u32)>,
+) {
+    let report = hide_node_link::panes::HookStatusReport {
+        runtime: hide_agent_adapter::adapter(agent)
+            .expect("a known agent")
+            .id
+            .to_owned(),
+        version: hide_agent_hooks::HOOK_VERSION,
+        session: Some(session.to_owned()),
+        turn: None,
+        counts: counts.map(|(working, done)| hide_node_link::panes::HookCounts { working, done }),
+        session_start: false,
+    };
+    runtime
+        .ingest_hook_status(crate::node::TEST_NODE, pane, &report)
+        .expect("the report is recorded");
 }
 
 pub(super) fn diagnosis(claude: HookStatus, codex: HookStatus) -> hide_agent_hooks::Diagnosis {
@@ -144,6 +164,11 @@ pub(super) fn connection_of(runtime: &Runtime, pane_id: &str) -> Option<PaneConn
 }
 
 pub(super) fn feed(runtime: &mut Runtime, panes: &[(&str, &str, bool)]) {
+    for (pane, agent, hooked) in panes {
+        if *hooked {
+            hook_reported(runtime, pane, agent, &format!("session-{pane}"), None);
+        }
+    }
     runtime.ingest_session(Ok(
         crate::sidebar::owned_label_fixture(session(panes)).expect("session payload")
     ));
