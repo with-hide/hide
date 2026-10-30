@@ -44,12 +44,12 @@ class Pane:
         return "not_empty" if self.held else "empty"
 
 
-def journey_over(pane):
-    table = cells.plan(json.loads((ROOT / "contracts/agent-journey.json").read_text()), ["codex"])
-    cells.settle(table, "codex", "start", cells.PASS, "fixture")
+def journey_over(pane, agent="codex"):
+    table = cells.plan(json.loads((ROOT / "contracts/agent-journey.json").read_text()), [agent])
+    cells.settle(table, agent, "start", cells.PASS, "fixture")
     settled = []
     journey = SimpleNamespace(
-        id="codex", table=table, record={}, pane="w1:p1", run=Path("run"),
+        id=agent, table=table, record={}, pane="w1:p1", run=Path("run"),
         runtime=SimpleNamespace(owner=SimpleNamespace(cancelled=threading.Event()),
                                 command=lambda *_args, **_kw: (0, "screen", "")),
         daemon=SimpleNamespace(dispatch=pane.key),
@@ -61,8 +61,8 @@ def journey_over(pane):
 
 
 class Measure(unittest.TestCase):
-    def run_cell(self, pane):
-        journey, settled = journey_over(pane)
+    def run_cell(self, pane, agent="codex"):
+        journey, settled = journey_over(pane, agent)
         with mock.patch.object(composer, "verdict_of", pane.verdict), \
                 mock.patch.object(composer, "POLL_SECONDS", 0):
             composer.measure(journey)
@@ -84,6 +84,26 @@ class Measure(unittest.TestCase):
         self.assertTrue(paste.endswith(b"\x1b[201~"))
         self.assertEqual(paste.count(b"\r"), 11)
         self.assertNotIn(b"\n", paste)
+
+    def test_grok_on_windows_gets_the_lines_with_its_newline_key_and_no_line_break_that_submits(self):
+        # Grok on Windows joins a paste's keys only when they arrive within
+        # 10 ms; a pause sent lines 01 to 04 as a prompt (hide-private#361).
+        for windows, agent, step in ((True, "grok", "drafted"), (True, "codex", "pasted"),
+                                     (False, "grok", "pasted")):
+            with self.subTest(windows=windows, agent=agent), mock.patch.object(composer, "WINDOWS", windows):
+                pane = Pane()
+                journey, settled = self.run_cell(pane, agent)
+                self.assertEqual(settled[0][1][0], cells.PASS, settled)
+                names = [entry["name"] for entry in journey.record["composer"]["steps"]]
+                self.assertEqual(names, ["typed", "erased", step, "cleared"])
+                block = next(data for data in pane.sent if b"composer check line 12" in data)
+                if step == "drafted":
+                    self.assertNotIn(b"\x1b[200~", block)
+                    self.assertEqual(block.count(b"\x1b\r"), 11)
+                    self.assertEqual(block.count(b"\r"), 11, "every line break is Alt+Enter")
+                    self.assertEqual(block.replace(b"\x1b\r", b"\r"), composer.BLOCK.encode())
+                else:
+                    self.assertEqual(block, composer.PASTE)
 
     def test_a_paste_that_submits_its_lines_fails_at_the_paste_step(self):
         pane = Pane(submits_lines=True)
