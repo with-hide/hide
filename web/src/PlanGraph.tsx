@@ -122,8 +122,7 @@ function CardLine({ plan, step }: { plan: PlanView; step: PlanStep }) {
     return step.status === "working" ? step.line : t("plan.status.planned");
   })();
   return (
-    <span className="flex min-w-0 items-center gap-xxs pl-(--size-agent-mark) text-micro text-muted-foreground" data-step-line={step.key}>
-      <span className="w-xs shrink-0" aria-hidden="true" />
+    <span className="flex min-w-0 items-center gap-xs pl-(--size-agent-mark) text-micro text-muted-foreground" data-step-line={step.key}>
       {pending ? null : delegation ? (
         <span className="flex min-w-0 max-w-1/2 shrink-0 items-center gap-xxs text-foreground" data-step-who="child">
           <AgentMark kind={delegation.agent} />
