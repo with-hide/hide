@@ -1,4 +1,4 @@
-import { ArrowLeftIcon, CheckIcon, ChevronRightIcon, CircleHelpIcon, Clock3Icon, SquareIcon, ImageIcon, InfoIcon, LightbulbIcon, MailIcon, TriangleAlertIcon, HouseIcon, LoaderCircleIcon, SquareTerminalIcon, RotateCcwIcon } from "lucide-react";
+import { ArrowLeftIcon, CheckIcon, ChevronRightIcon, CircleHelpIcon, Clock3Icon, SquareIcon, ImageIcon, InfoIcon, LightbulbIcon, TriangleAlertIcon, HouseIcon, LoaderCircleIcon, SquareTerminalIcon, RotateCcwIcon } from "lucide-react";
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import type { Actions } from "./actions";
 import { AgentMark } from "./AgentMark";
@@ -569,8 +569,7 @@ function LetterRun({ letters, locator }: { letters: readonly WorkRequest[]; loca
     <RowButton className="items-baseline gap-sm px-0 py-xxs text-muted-foreground" aria-expanded={open} onClick={() => setOpen(!open)}>
       <RequestTime at={letters[0]!.at_unix_ms} />
       <span className="flex min-w-0 flex-1 items-baseline gap-xs">
-        <MailIcon aria-hidden="true" className="size-(--size-icon-sm) shrink-0 self-center" />
-        <span className="shrink-0 text-micro">{t("record.letterRun", { count })}</span>
+        <LetterTag className="gap-xs" who={t("record.letterRun", { count })} label={t("record.letterRun", { count })} />
         <span className="min-w-0 flex-1 truncate text-micro" title={senders.join(", ")}>{senders.join(", ")}</span>
       </span>
     </RowButton>

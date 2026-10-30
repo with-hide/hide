@@ -22,7 +22,14 @@ const prose = EditorView.theme({
   "&.cm-focused": { outline: "none" },
 });
 
-export function MarkdownText({ text }: { text: string }) {
+// Desk's conversation reads larger and looser than a panel (PRD
+// session-docs-and-assistant D-75): the subhead size at a relaxed leading.
+const chat = EditorView.theme({
+  "&.cm-editor .cm-content": { fontSize: "var(--text-subhead)", lineHeight: "1.625" },
+});
+
+/** `size="chat"` sets the text at Desk's conversation size. */
+export function MarkdownText({ text, size = "body" }: { text: string; size?: "body" | "chat" }) {
   const host = useRef<HTMLDivElement>(null);
   useEffect(() => {
     const parent = host.current;
@@ -32,7 +39,7 @@ export function MarkdownText({ text }: { text: string }) {
       parent,
       state: EditorState.create({
         doc: text,
-        extensions: [baseTheme(), liveTheme, Prec.highest(prose), language.of([]), markdownLive({ reveal: false }), EditorView.lineWrapping, EditorState.readOnly.of(true), EditorView.editable.of(false)],
+        extensions: [baseTheme(), liveTheme, Prec.highest(size === "chat" ? [chat, prose] : prose), language.of([]), markdownLive({ reveal: false }), EditorView.lineWrapping, EditorState.readOnly.of(true), EditorView.editable.of(false)],
       }),
     });
     let live = true;
@@ -43,6 +50,6 @@ export function MarkdownText({ text }: { text: string }) {
       live = false;
       view.destroy();
     };
-  }, [text]);
+  }, [text, size]);
   return <div ref={host} className="min-w-0" data-markdown-text="true" />;
 }
