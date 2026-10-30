@@ -56,16 +56,21 @@ export class BoundedChildError extends Error {
 export type Tree = {
   /**
    * Ends what is left of the tree and settles once none of it is, with how
-   * many processes it had when that is counted; rejects with `Unstarted`
-   * when the program never ran, and otherwise when its end cannot be said.
+   * many processes it had when that is counted; rejects with `NothingLeft`
+   * when the run failed but none of its tree is left, and otherwise when its
+   * end cannot be said.
    */
   end: () => Promise<number | undefined>;
   /** Ends what may be left at once, for the worker's exit, which cannot wait. */
   abandon: () => void;
 };
 
-/** A program that never ran: it left no tree, and its run fails as a start error does. */
-export class Unstarted extends Error {}
+/**
+ * A run that failed with none of its tree left: the program never ran, or
+ * its end could not be followed but its job was ended and found empty. It
+ * fails as a start error does, with no tree to keep files for.
+ */
+export class NothingLeft extends Error {}
 
 /** How long a tree's end may take to be confirmed: `hide-processes` gives it five seconds, and starting it on a loaded runner takes some of the rest. */
 const END_WITHIN_MS = 30_000;
@@ -130,7 +135,9 @@ function windowsJob(executable: string, child: ChildProcess): Tree {
       const [kind, ...fields] = reported.trim().split(" ");
       if (kind === "ended") return Number(fields[1]);
       if (kind === "survivors") throw new Error(`${fields.length - 1} of its ${fields[0]} processes were still running after 5 s: ${fields.slice(1).join(", ")}`);
-      if (kind === "unstarted") throw new Unstarted(`${executable} did not start: ${fields.join(" ")}`);
+      if (kind === "unstarted") throw new NothingLeft(`${executable} did not start: ${fields.join(" ")}`);
+      if (kind === "failed") throw new NothingLeft(`${executable}'s run could not be followed, and its tree was ended: ${fields.join(" ")}`);
+      if (kind === "unconfirmed") throw new Error(fields.join(" "));
       throw new Error(`hide-processes ended without a report (status ${child.exitCode}, signal ${child.signalCode})${reported ? `: ${reported.trim()}` : ""}`);
     },
     // Its input closes with this process anyway, however it exits; closing it
@@ -176,16 +183,16 @@ export function supervise(executable: string, child: ChildProcess, bounds: Bound
       bounds.signal?.removeEventListener("abort", abort);
     };
     /** Ends the tree: how many processes it had, or why its end is not confirmed; a child that never started has none. */
-    const endOwned = async (): Promise<{ processes?: number; unstarted?: Unstarted; unended?: string }> => {
+    const endOwned = async (): Promise<{ processes?: number; nothingLeft?: NothingLeft; unended?: string }> => {
       if (!owned) return {};
       try {
         const processes = await tree.end();
         owned.disown();
         return { processes };
       } catch (cleanup) {
-        if (cleanup instanceof Unstarted) {
+        if (cleanup instanceof NothingLeft) {
           owned.disown();
-          return { unstarted: cleanup };
+          return { nothingLeft: cleanup };
         }
         return { unended: `its tree was not confirmed ended: ${cleanup instanceof Error ? cleanup.message : String(cleanup)}` };
       }
@@ -219,8 +226,8 @@ export function supervise(executable: string, child: ChildProcess, bounds: Bound
     child.once("close", (status, signal) => {
       if (settled) return;
       finish();
-      void endOwned().then(({ processes, unstarted, unended }) => {
-        if (unstarted) reject(new BoundedChildError(unstarted.message, true, output.stdout, output.stderr, { cause: unstarted }));
+      void endOwned().then(({ processes, nothingLeft, unended }) => {
+        if (nothingLeft) reject(new BoundedChildError(nothingLeft.message, true, output.stdout, output.stderr, { cause: nothingLeft }));
         else if (unended) reject(new BoundedChildError(`${executable} ended with status ${status}, signal ${signal}, but ${unended}`, false, output.stdout, output.stderr));
         else resolve({ status, signal, ...output, ...(processes === undefined ? {} : { processes }) });
       });

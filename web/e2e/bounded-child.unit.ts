@@ -184,15 +184,20 @@ test("a first-compile step that does not end by its deadline is ended, with noth
 
 // What lets the first compile on Windows run without a tree owner: each of
 // its steps, counted here in a job, is one process, the compiler's exit is
-// its tree's end, and the program it links runs.
+// its tree's end, and the program it links runs. The variables that would
+// have clang's driver start cc1 as a second process are set around it, as an
+// account or a CI image may set them.
 test("each step of the first compile on Windows runs a single process", { timeout: 120_000 }, async (context) => {
   if (!windows) return context.skip();
   const dir = scratch();
+  const spawning = { CC_PRINT_PROC_STAT: "1", CCC_OVERRIDE_OPTIONS: "+-fno-integrated-cc1" };
+  const before = Object.fromEntries(Object.keys(spawning).map((name) => [name, process.env[name]]));
+  Object.assign(process.env, spawning);
   try {
     const output = path.join(dir, "noop.exe");
     const steps: BoundedResult[] = [];
-    const linked = await compileInSteps("clang.exe", fileURLToPath(new URL("./shims/noop.c", import.meta.url)), output, async (program, args) => {
-      const step = await runBounded(program, args, { ...bounds, timeoutMs: 60_000, outputBytes: 1024 * 1024 });
+    const linked = await compileInSteps("clang.exe", fileURLToPath(new URL("./shims/noop.c", import.meta.url)), output, async (program, args, env) => {
+      const step = await runBounded(program, args, { ...bounds, timeoutMs: 60_000, outputBytes: 1024 * 1024, env });
       steps.push(step);
       return step;
     });
@@ -200,6 +205,10 @@ test("each step of the first compile on Windows runs a single process", { timeou
     expect(steps.map((step) => step.processes)).toEqual([1, 1, 1]);
     expect((await runBounded(output, [], { ...bounds, timeoutMs: 10_000 })).status).toBe(0);
   } finally {
+    for (const [name, value] of Object.entries(before)) {
+      if (value === undefined) delete process.env[name];
+      else process.env[name] = value;
+    }
     fs.rmSync(dir, { recursive: true, force: true });
   }
 });

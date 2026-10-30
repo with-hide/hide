@@ -22,11 +22,14 @@
 //       caller's end), the job is ended and waited for until none of it is
 //       left, and one line is written to descriptor 3: `ended <status>
 //       <processes>`, the program's exit status and how many processes the
-//       job had in all, or `survivors <processes> <id> ...` after five
-//       seconds, or `unstarted <reason>` when the program did not start.
-//       Exits with the program's status when it ended by itself, 1 when it
-//       was ended, and 64-71 when it did not start. A run that is killed
-//       takes the job with it.
+//       job had in all; `survivors <processes> <id> ...` after five
+//       seconds; `unstarted <reason> (error <n>)` when the program did not
+//       start; `failed <reason> (error <n>)` when its end could not be
+//       followed but the job was ended and is empty; or `unconfirmed <reason>
+//       (error <n>)` when the job could not be ended or counted. Exits with
+//       the program's status when it ended by itself, 1 when it was ended,
+//       and 64-71 when it did not start. The program is created inside the
+//       job, and a run that is killed takes the job with it.
 //
 // A process is its id and its start together, so a reused id is never taken
 // for it. A process is a child of a parent when it names the parent's id and
@@ -42,6 +45,12 @@
 #include <wchar.h>
 
 #pragma comment(lib, "shell32.lib")
+
+// Windows 10's attribute that creates a process inside a job; older SDK
+// headers do not name it.
+#ifndef PROC_THREAD_ATTRIBUTE_JOB_LIST
+#define PROC_THREAD_ATTRIBUTE_JOB_LIST ProcThreadAttributeValue(13, FALSE, TRUE, FALSE)
+#endif
 
 #define MAX_ROWS 8192
 #define LIMIT 512
@@ -311,53 +320,64 @@ static DWORD WINAPI caller_end(LPVOID ended) {
   return 0;
 }
 
-static DWORD job_active(HANDLE job, DWORD *total) {
+// How many processes of the job still run, and how many it had in all;
+// FALSE, with the Win32 error left to read, when Windows does not say.
+static BOOL job_count(HANDLE job, DWORD *active, DWORD *total) {
   JOBOBJECT_BASIC_ACCOUNTING_INFORMATION accounting;
-  if (!QueryInformationJobObject(job, JobObjectBasicAccountingInformation, &accounting, sizeof accounting, NULL)) return (DWORD)-1;
+  if (!QueryInformationJobObject(job, JobObjectBasicAccountingInformation, &accounting, sizeof accounting, NULL)) return FALSE;
+  *active = accounting.ActiveProcesses;
   *total = accounting.TotalProcesses;
-  return accounting.ActiveProcesses;
+  return TRUE;
+}
+
+// A program that never ran: nothing of it is left to end.
+static int unstarted(HANDLE pipe, const char *what, DWORD error, int code) {
+  char line[160];
+  snprintf(line, sizeof line, "unstarted %s (error %lu)\n", what, (unsigned long)error);
+  report(pipe, line);
+  return code;
 }
 
 static int run(HANDLE pipe) {
   int argc = 0;
   wchar_t **argv = CommandLineToArgvW(GetCommandLineW(), &argc);
-  if (!argv || argc < 3) {
-    report(pipe, "unstarted no program to run\n");
-    return 64;
-  }
+  if (!argv) return unstarted(pipe, "the command line could not be read", GetLastError(), 64);
+  if (argc < 3) return unstarted(pipe, "no program to run", ERROR_BAD_ARGUMENTS, 64);
   static wchar_t program[32768];
-  if (!find_program(argv[2], program, 32768)) {
-    report(pipe, "unstarted the program to run is not found\n");
-    return 65;
-  }
+  if (!find_program(argv[2], program, 32768)) return unstarted(pipe, "the program to run is not found", ERROR_FILE_NOT_FOUND, 65);
   // The program's own arguments, as this one was given them.
   const wchar_t *arguments = after_argument(after_argument(after_argument(GetCommandLineW())));
   size_t capacity = wcslen(program) + wcslen(arguments) + 3;
   wchar_t *command = malloc(capacity * sizeof *command);
-  if (!command || _snwprintf(command, capacity, L"\"%ls\"%ls", program, arguments) < 0) return 70;
+  if (!command) return unstarted(pipe, "no memory for the command line", ERROR_NOT_ENOUGH_MEMORY, 70);
+  if (_snwprintf(command, capacity, L"\"%ls\"%ls", program, arguments) < 0) return unstarted(pipe, "the command line does not fit", ERROR_BUFFER_OVERFLOW, 70);
   // Killed with this program when it is killed; a program that crashes ends
   // instead of waiting on an error report.
   HANDLE job = CreateJobObjectW(NULL, NULL);
+  if (!job) return unstarted(pipe, "no job object", GetLastError(), 70);
   JOBOBJECT_EXTENDED_LIMIT_INFORMATION limits = {0};
   limits.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE | JOB_OBJECT_LIMIT_DIE_ON_UNHANDLED_EXCEPTION;
+  if (!SetInformationJobObject(job, JobObjectExtendedLimitInformation, &limits, sizeof limits)) return unstarted(pipe, "the job's limits cannot be set", GetLastError(), 70);
   HANDLE port = CreateIoCompletionPort(INVALID_HANDLE_VALUE, NULL, 0, 1);
+  if (!port) return unstarted(pipe, "no completion port for the job", GetLastError(), 70);
   JOBOBJECT_ASSOCIATE_COMPLETION_PORT notify = {job, port};
-  if (!job || !port || !SetInformationJobObject(job, JobObjectExtendedLimitInformation, &limits, sizeof limits) ||
-      !SetInformationJobObject(job, JobObjectAssociateCompletionPortInformation, &notify, sizeof notify)) {
-    report(pipe, "unstarted no job object\n");
-    return 70;
-  }
+  if (!SetInformationJobObject(job, JobObjectAssociateCompletionPortInformation, &notify, sizeof notify)) return unstarted(pipe, "the job's completion port cannot be set", GetLastError(), 70);
   // The program inherits its output and an empty input and nothing else, so
   // nothing it starts holds this program's input or report.
   SECURITY_ATTRIBUTES inherit = {sizeof inherit, NULL, TRUE};
   HANDLE nothing = CreateFileW(L"NUL", GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE, &inherit, OPEN_EXISTING, 0, NULL);
+  if (nothing == INVALID_HANDLE_VALUE) return unstarted(pipe, "NUL cannot be opened", GetLastError(), 70);
   HANDLE out = GetStdHandle(STD_OUTPUT_HANDLE);
   HANDLE err = GetStdHandle(STD_ERROR_HANDLE);
   HANDLE inherited[3] = {nothing, out, err};
   DWORD inherited_count = err == out ? 2 : 3;
-  for (DWORD i = 1; i < inherited_count; i += 1) SetHandleInformation(inherited[i], HANDLE_FLAG_INHERIT, HANDLE_FLAG_INHERIT);
+  for (DWORD i = 1; i < inherited_count; i += 1) {
+    if (!SetHandleInformation(inherited[i], HANDLE_FLAG_INHERIT, HANDLE_FLAG_INHERIT)) return unstarted(pipe, "the output cannot be handed on", GetLastError(), 70);
+  }
+  // The program is created in the job, so no moment exists in which it runs,
+  // or this one dies leaving it, outside the job.
   SIZE_T attributes_size = 0;
-  InitializeProcThreadAttributeList(NULL, 1, 0, &attributes_size);
+  InitializeProcThreadAttributeList(NULL, 2, 0, &attributes_size);
   STARTUPINFOEXW startup = {0};
   startup.StartupInfo.cb = sizeof startup;
   startup.StartupInfo.dwFlags = STARTF_USESTDHANDLES;
@@ -365,44 +385,52 @@ static int run(HANDLE pipe) {
   startup.StartupInfo.hStdOutput = out;
   startup.StartupInfo.hStdError = err;
   startup.lpAttributeList = malloc(attributes_size);
-  if (nothing == INVALID_HANDLE_VALUE || !startup.lpAttributeList || !InitializeProcThreadAttributeList(startup.lpAttributeList, 1, 0, &attributes_size) ||
-      !UpdateProcThreadAttribute(startup.lpAttributeList, 0, PROC_THREAD_ATTRIBUTE_HANDLE_LIST, inherited, inherited_count * sizeof(HANDLE), NULL, NULL)) {
-    report(pipe, "unstarted the program's handles cannot be set\n");
-    return 70;
+  if (!startup.lpAttributeList) return unstarted(pipe, "no memory for the start attributes", ERROR_NOT_ENOUGH_MEMORY, 70);
+  if (!InitializeProcThreadAttributeList(startup.lpAttributeList, 2, 0, &attributes_size) ||
+      !UpdateProcThreadAttribute(startup.lpAttributeList, 0, PROC_THREAD_ATTRIBUTE_HANDLE_LIST, inherited, inherited_count * sizeof(HANDLE), NULL, NULL) ||
+      !UpdateProcThreadAttribute(startup.lpAttributeList, 0, PROC_THREAD_ATTRIBUTE_JOB_LIST, &job, sizeof job, NULL, NULL)) {
+    return unstarted(pipe, "the start attributes cannot be set", GetLastError(), 70);
   }
-  // Suspended until it is in the job, so it starts nothing outside it.
-  PROCESS_INFORMATION started;
-  if (!CreateProcessW(program, command, NULL, NULL, TRUE, CREATE_SUSPENDED | EXTENDED_STARTUPINFO_PRESENT, NULL, NULL, &startup.StartupInfo, &started)) {
-    char line[96];
-    snprintf(line, sizeof line, "unstarted the program could not start (error %lu)\n", GetLastError());
-    report(pipe, line);
-    return 71;
-  }
-  if (!AssignProcessToJobObject(job, started.hProcess)) {
-    char line[96];
-    snprintf(line, sizeof line, "unstarted the program could not join its job (error %lu)\n", GetLastError());
-    // Still suspended: it ran nothing, and ends here.
-    TerminateProcess(started.hProcess, 1);
-    if (WaitForSingleObject(started.hProcess, END_MS) != WAIT_OBJECT_0) snprintf(line, sizeof line, "survivors 1 %lu\n", started.dwProcessId);
-    report(pipe, line);
-    return 71;
-  }
-  ResumeThread(started.hThread);
-  CloseHandle(started.hThread);
+  // What the run waits on is ready before the program exists, so nothing
+  // can fail between its start and the wait.
   HANDLE ended = CreateEventW(NULL, TRUE, FALSE, NULL);
-  HANDLE watcher = ended ? CreateThread(NULL, 0, caller_end, ended, 0, NULL) : NULL;
+  if (!ended) return unstarted(pipe, "no event for the caller's end", GetLastError(), 70);
+  HANDLE watcher = CreateThread(NULL, 0, caller_end, ended, 0, NULL);
+  if (!watcher) return unstarted(pipe, "no thread to watch for the caller's end", GetLastError(), 70);
+  PROCESS_INFORMATION started;
+  if (!CreateProcessW(program, command, NULL, NULL, TRUE, EXTENDED_STARTUPINFO_PRESENT, NULL, NULL, &startup.StartupInfo, &started)) return unstarted(pipe, "the program could not start", GetLastError(), 71);
+  CloseHandle(started.hThread);
   HANDLE waits[2] = {started.hProcess, ended};
-  int by_itself = WaitForMultipleObjects(watcher ? 2 : 1, waits, FALSE, INFINITE) == WAIT_OBJECT_0;
+  DWORD waited = WaitForMultipleObjects(2, waits, FALSE, INFINITE);
+  int by_itself = waited == WAIT_OBJECT_0;
+  // A run that could not be followed to its end still ends its job, and says why.
+  const char *failure = NULL;
+  DWORD failure_error = 0;
   DWORD status = 1;
-  if (by_itself && !GetExitCodeProcess(started.hProcess, &status)) status = 1;
+  if (waited == WAIT_FAILED) {
+    failure = "waiting on the program failed";
+    failure_error = GetLastError();
+  } else if (by_itself && !GetExitCodeProcess(started.hProcess, &status)) {
+    failure = "the program's exit status cannot be read";
+    failure_error = GetLastError();
+  }
   // Ended again while any is left: a process that was starting one as the
   // job ended can still add it.
   DWORD deadline = GetTickCount() + END_MS;
+  DWORD active = 0;
   DWORD total = 0;
-  DWORD active;
+  char line[160];
   for (;;) {
-    TerminateJobObject(job, 1);
-    active = job_active(job, &total);
+    if (!TerminateJobObject(job, 1)) {
+      snprintf(line, sizeof line, "unconfirmed the job cannot be ended (error %lu)\n", (unsigned long)GetLastError());
+      report(pipe, line);
+      return 1;
+    }
+    if (!job_count(job, &active, &total)) {
+      snprintf(line, sizeof line, "unconfirmed the job cannot be counted (error %lu)\n", (unsigned long)GetLastError());
+      report(pipe, line);
+      return 1;
+    }
     if (active == 0 || (LONG)(GetTickCount() - deadline) >= 0) break;
     // Woken by the job's last process ending; a message the system did not
     // deliver costs one slice, after which the count is read again.
@@ -411,7 +439,11 @@ static int run(HANDLE pipe) {
     LPOVERLAPPED overlapped;
     GetQueuedCompletionStatus(port, &message, &key, &overlapped, left < 100 ? left : 100);
   }
-  char line[64];
+  if (active == 0 && failure) {
+    snprintf(line, sizeof line, "failed %s (error %lu)\n", failure, (unsigned long)failure_error);
+    report(pipe, line);
+    return 1;
+  }
   if (active == 0) {
     snprintf(line, sizeof line, "ended %lu %lu\n", (unsigned long)status, (unsigned long)total);
     report(pipe, line);

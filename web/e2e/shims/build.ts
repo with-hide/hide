@@ -77,7 +77,7 @@ export async function buildFixtureShims(packageDir: string, programs: readonly F
       // The steps share one compile's bounds.
       const until = Date.now() + COMPILE.timeoutMs;
       const done = windows && !processTool
-        ? await compileInSteps(compiler, source, partial, (program, args) => runAlone(program, args, { ...COMPILE, timeoutMs: Math.max(0, until - Date.now()) }))
+        ? await compileInSteps(compiler, source, partial, (program, args, env) => runAlone(program, args, { ...COMPILE, timeoutMs: Math.max(0, until - Date.now()), env }))
         : await runBounded(compiler, ["-O1", "-o", partial, source], { ...COMPILE, processTool });
       if (done.status !== 0) failure = new Error(`exit status ${done.status}, signal ${done.signal}`);
       output = done.stdout + done.stderr;
@@ -111,27 +111,37 @@ export async function buildFixtureShims(packageDir: string, programs: readonly F
 }
 
 /**
+ * The variables that make clang's driver start cc1 as a process of its own
+ * or rewrite its arguments: `CC_PRINT_PROC_STAT` measures cc1 in a process
+ * of its own, `CLANG_SPAWN_CC1` asks for one, and `CCC_OVERRIDE_OPTIONS` can
+ * add `-fno-integrated-cc1` after this build's own arguments.
+ */
+const SPAWNS_CC1 = ["CC_PRINT_PROC_STAT", "CLANG_SPAWN_CC1", "CCC_OVERRIDE_OPTIONS"];
+
+/**
  * Compiles `source` to `output` with clang in steps that each run a single
  * process, through `run`, and returns the last step that ran: clang compiles
- * in its own process (`-fintegrated-cc1`, `-c`, and no crash report, which
- * would start a second clang), and the link is the one lld-link command
- * clang's driver plans for `-###` without running it, where the driver would
- * have started it as a child. A step's own exit is then the end of its tree,
- * which the first compile on Windows needs, before `hide-processes` exists to
- * own one; the Windows unit suite counts each step's processes in a job
- * (`bounded-child.unit.ts`).
+ * in its own process (`-fintegrated-cc1`, `-c`, no crash report, which would
+ * start a second clang, and none of `SPAWNS_CC1` in its environment), and the
+ * link is the one lld-link command clang's driver plans for `-###` without
+ * running it, where the driver would have started it as a child. A step's
+ * own exit is then the end of its tree, which the first compile on Windows
+ * needs, before `hide-processes` exists to own one; the Windows unit suite
+ * counts each step's processes in a job (`bounded-child.unit.ts`).
  */
-export async function compileInSteps(compiler: string, source: string, output: string, run: (program: string, args: string[]) => Promise<BoundedResult>): Promise<BoundedResult> {
+export async function compileInSteps(compiler: string, source: string, output: string, run: (program: string, args: string[], env: NodeJS.ProcessEnv) => Promise<BoundedResult>): Promise<BoundedResult> {
+  // Windows reads a variable's name without regard to case.
+  const env = Object.fromEntries(Object.entries(process.env).filter(([name]) => !SPAWNS_CC1.includes(name.toUpperCase())));
   const object = `${output}.obj`;
   // A step whose end was not confirmed may still write the object.
   let held = false;
   try {
-    const compiled = await run(compiler, ["-c", "-O1", "-fintegrated-cc1", "-fno-crash-diagnostics", "-o", object, source]);
+    const compiled = await run(compiler, ["-c", "-O1", "-fintegrated-cc1", "-fno-crash-diagnostics", "-o", object, source], env);
     if (compiled.status !== 0) return compiled;
-    const planned = await run(compiler, ["-###", "-fuse-ld=lld", "-o", output, object]);
+    const planned = await run(compiler, ["-###", "-fuse-ld=lld", "-o", output, object], env);
     if (planned.status !== 0) return planned;
     const [linker, ...args] = plannedLink(planned.stderr);
-    return await run(linker!, args);
+    return await run(linker!, args, env);
   } catch (error) {
     held = error instanceof BoundedChildError && !error.treeEnded;
     throw error;
