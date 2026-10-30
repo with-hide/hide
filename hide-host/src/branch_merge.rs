@@ -828,6 +828,19 @@ impl Plan<'_> {
 
 #[cfg(test)]
 mod tests {
+    /// A caller waits `CATCH_UP_WAIT` for a catch-up; every bound the node
+    /// keeps around it fits inside, the link's minute aside.
+    #[test]
+    fn a_catch_up_ends_within_the_wait_its_caller_keeps() {
+        let reads = 13;
+        assert!(
+            crate::git_run::CHANGE_DEADLINE
+                + crate::git_run::DEADLINE * reads
+                + std::time::Duration::from_secs(60)
+                <= hide_node_link::branch::CATCH_UP_WAIT
+        );
+    }
+
     use super::*;
 
     fn set(paths: &[&str]) -> BTreeSet<String> {

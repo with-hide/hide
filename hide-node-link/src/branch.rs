@@ -117,6 +117,14 @@ pub enum CatchUpOutcome {
     Dirty { files: Vec<String>, total: u32 },
 }
 
+/// How long a caller waits for a `BranchCatchUp` answer: past the node's own
+/// bounds on the fast-forward (10 minutes) and on the at most 13 reads
+/// around it (15 s each), with a minute for the link, so a caller never
+/// offers another catch-up while the first may still be writing the
+/// operator's files. `hide-host`'s tests hold the node to it.
+pub const CATCH_UP_WAIT: std::time::Duration =
+    std::time::Duration::from_secs(10 * 60 + 13 * 15 + 60);
+
 /// A `BranchCatchUp` request's values, or why they cannot make a git command.
 pub fn check_catch_up(head: &str) -> Result<(), String> {
     check_tip(head).map(|_| ())

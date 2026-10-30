@@ -10,21 +10,6 @@ use hide_node_link::branch::CatchUpOutcome;
 use hide_node_link::protocol::Call;
 use serde_json::json;
 
-/// The most bounded reads `hide_host::branch_merge::catch_up` makes around
-/// its one fast-forward: ten before it (`HEAD`, the branch, its upstream and
-/// that commit, two ancestry checks, the git folder, the diff, status and
-/// ignored files), one after, and two more when git refuses.
-const CATCH_UP_HOST_READS: u64 = 13;
-
-/// How long the core waits for a catch-up: past the node's own bounds on the
-/// fast-forward and every read around it, with a minute for the link, so the
-/// screen never offers another press while the first may still be writing
-/// the operator's files.
-const CATCH_UP_TIMEOUT: Duration = Duration::from_secs(
-    hide_host::git_run::CHANGE_DEADLINE.as_secs()
-        + CATCH_UP_HOST_READS * hide_host::git_run::DEADLINE.as_secs()
-        + 60,
-);
 use crate::observed::{Freshness, Observation, now_unix_ms};
 
 #[derive(Default)]
@@ -483,7 +468,7 @@ impl Runtime {
                             root: worker_target.root.path.clone(),
                             head,
                         },
-                        CATCH_UP_TIMEOUT,
+                        hide_node_link::branch::CATCH_UP_WAIT,
                     )
                     .map_err(|error| error.to_string());
                     let Some(runtime) = runtime.upgrade() else {
