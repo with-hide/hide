@@ -10,17 +10,21 @@ const directory = process.env.DIAG_DIR;
 if (!directory) throw new Error("DIAG_DIR is required for the diagnosis setup");
 mkdirSync(directory, { recursive: true });
 const sink = join(directory, `worker-${process.pid}.log`);
-const write = (line: string) => appendFileSync(sink, `${new Date().toISOString()} ${line}\n`);
+// Tests fake Date and performance; the diagnosis reads the clocks as they were before any test.
+const RealDate = Date;
+const realNow = performance.now.bind(performance);
+const realSetInterval = setInterval;
+const write = (line: string) => appendFileSync(sink, `${new RealDate(RealDate.now()).toISOString()} ${line}\n`);
 
 type Totals = { wall: number; cpu: number; calls: number; slowest: string; slowestWall: number };
 const totals: Totals = { wall: 0, cpu: 0, calls: 0, slowest: "", slowestWall: 0 };
 const cpuMs = () => { const usage = process.cpuUsage(); return (usage.user + usage.system) / 1000; };
 
 function measured<T>(name: string, run: () => T): T {
-  const wall = performance.now();
+  const wall = realNow();
   const cpu = cpuMs();
   try { return run(); } finally {
-    const spent = performance.now() - wall;
+    const spent = realNow() - wall;
     totals.wall += spent;
     totals.cpu += cpuMs() - cpu;
     totals.calls += 1;
@@ -53,7 +57,7 @@ if (!g.__diagIntl) {
 }
 
 let file = String((globalThis as unknown as { __vitest_worker__?: { filepath?: string } }).__vitest_worker__?.filepath ?? "?").replace(/^.*[\\/]web[\\/]/, "");
-const fileStart = performance.now();
+const fileStart = realNow();
 let fileReported = false;
 let testWall = 0;
 let testCpu = 0;
@@ -62,10 +66,10 @@ let faults = 0;
 let index = 0;
 
 let current = "(collect)";
-let lastTick = performance.now();
+let lastTick = realNow();
 let lastTickCpu = cpuMs();
-const ticker = setInterval(() => {
-  const now = performance.now();
+const ticker = realSetInterval(() => {
+  const now = realNow();
   const cpu = cpuMs();
   if (now - lastTick > 400) write(`stall ${file} ${current.slice(0, 50)}: ${(now - lastTick - 100).toFixed(0)} ms, cpu ${(cpu - lastTickCpu).toFixed(0)} ms in it`);
   lastTick = now;
@@ -79,17 +83,17 @@ const fmt = (value: number) => value.toFixed(0);
 beforeEach((context) => {
   if (!fileReported) {
     fileReported = true;
-    write(`file ${file}: uptime ${fmt(process.uptime() * 1000)} ms, before tests ${fmt(performance.now() - fileStart)} ms, intl so far wall ${fmt(totals.wall)} cpu ${fmt(totals.cpu)} calls ${totals.calls} slowest ${totals.slowest} ${fmt(totals.slowestWall)} ms`);
+    write(`file ${file}: uptime ${fmt(process.uptime() * 1000)} ms, before tests ${fmt(realNow() - fileStart)} ms, intl so far wall ${fmt(totals.wall)} cpu ${fmt(totals.cpu)} calls ${totals.calls} slowest ${totals.slowest} ${fmt(totals.slowestWall)} ms`);
   }
   current = context.task.name;
   testIntl = snapshot();
   faults = process.resourceUsage().majorPageFault;
   testCpu = cpuMs();
-  testWall = performance.now();
+  testWall = realNow();
 });
 
 afterEach((context) => {
-  const wall = performance.now() - testWall;
+  const wall = realNow() - testWall;
   const cpu = cpuMs() - testCpu;
   const intlWall = totals.wall - testIntl.wall;
   index += 1;
