@@ -1297,14 +1297,36 @@ impl Runtime {
             Some(delegation) => delegation.attempt,
             None => linked.max(1),
         };
-        let asleep = ledger
+        let asleep = self.plan_children_asleep(&ledger, &session);
+        Ok(Some(PlanAdmission {
+            link: PlanLink {
+                plan: id,
+                step: key.to_owned(),
+                attempt,
+                parent_session: session,
+            },
+            asleep,
+        }))
+    }
+
+    /// The children `session`'s plans handed steps to that are asleep now,
+    /// which hold no place under the cap (B5, B6): only a child whose sleep
+    /// has landed. One whose end still runs, that is waking, or whose wake
+    /// failed still holds its place, for the spawn and the waking letter
+    /// alike.
+    fn plan_children_asleep(
+        &self,
+        ledger: &crate::delivery::ledger::Ledger,
+        session: &SessionIdentity,
+    ) -> Vec<String> {
+        ledger
             .spawns
             .iter()
             .filter(|spawn| {
                 spawn
                     .plan
                     .as_ref()
-                    .is_some_and(|link| link.parent_session == session)
+                    .is_some_and(|link| link.parent_session == *session)
             })
             .filter_map(|spawn| spawn.child.as_deref())
             .filter(|child| {
@@ -1317,16 +1339,7 @@ impl Runtime {
                 })
             })
             .map(str::to_owned)
-            .collect();
-        Ok(Some(PlanAdmission {
-            link: PlanLink {
-                plan: id,
-                step: key.to_owned(),
-                attempt,
-                parent_session: session,
-            },
-            asleep,
-        }))
+            .collect()
     }
 
     /// Whether a letter from `actor` that would wake its sleeping plan child
@@ -1362,22 +1375,7 @@ impl Runtime {
         {
             return Ok(());
         }
-        let asleep: Vec<String> = ledger
-            .spawns
-            .iter()
-            .filter(|spawn| {
-                spawn
-                    .plan
-                    .as_ref()
-                    .is_some_and(|other| other.parent_session == link.parent_session)
-            })
-            .filter_map(|spawn| spawn.child.clone())
-            .filter(|id| {
-                ledger.agents.iter().any(|record| {
-                    &record.id == id && !record.ended && self.asleep_route(&record.actor).is_some()
-                })
-            })
-            .collect();
+        let asleep = self.plan_children_asleep(&ledger, &link.parent_session);
         if crate::coordination::plan_children(
             &ledger,
             &link.parent_session,

@@ -694,3 +694,81 @@ fn a_letter_waking_a_sleeping_plan_child_past_its_mains_cap_is_refused() {
     );
     assert_eq!(send(&mut runtime, "report"), "delivery_unavailable");
 }
+
+/// PRD hide-plan-delegate B5, B6: a child whose sleep is still ending holds
+/// its place, for a waking letter as for a spawn, so one ending, one asleep
+/// and two working leave no place to wake the sleeping one.
+#[test]
+fn a_child_still_ending_its_sleep_holds_its_place_against_a_waking_letter() {
+    const ENDING: &str = "w-order:t3:p";
+    let (mut runtime, _views) = views(sleepers(&[WORKER, ENDING]));
+    show(&mut runtime, session("w-order:t1", None));
+    // Its end still runs: the pane's record says so until the end lands.
+    let mut ending = record(ENDING);
+    ending.phase = SleepPhase::Ending;
+    runtime
+        .snapshot
+        .ui_state
+        .agent_sleep
+        .records
+        .insert(ENDING.into(), ending);
+    let lead = crate::links::ledger::SessionIdentity {
+        device_id: crate::node::TEST_NODE.into(),
+        agent: "claude".into(),
+        session_id: native(LEAD),
+    };
+    let mut ledger = (*runtime.delivery_state().unwrap()).clone();
+    for (step, child) in [
+        ("asleep", "agent-2"),
+        ("ending", "agent-3"),
+        ("a", "agent-4"),
+        ("b", "agent-5"),
+    ] {
+        let link = crate::coordination::PlanLink {
+            plan: "1000".into(),
+            step: step.into(),
+            attempt: 1,
+            parent_session: lead.clone(),
+        };
+        let mut record: crate::coordination::SpawnRecord =
+            serde_json::from_value(serde_json::json!({
+                "id": format!("spawn-{step}"), "parent": "agent-1",
+                "intent": crate::coordination::plan_intent(&link), "name": step, "kind": "claude",
+                "repo": CHECKOUT, "branch": step, "requested_path": null, "args": [],
+                "path": null, "pane": null, "child": child, "completed": true,
+            }))
+            .unwrap();
+        record.plan = Some(link);
+        ledger.spawns.push(record);
+    }
+    for (child, pane) in [("agent-4", "w-order:t4:p"), ("agent-5", "w-order:t5:p")] {
+        ledger
+            .agents
+            .push(registration(child, pane, Some("agent-1")));
+    }
+    runtime.delivery_ledger = Ok(Arc::new(ledger));
+    let context = runtime
+        .workspace_control_query(crate::node::TEST_NODE, LEAD, Query::Info)
+        .unwrap()
+        .context;
+    let refusal = runtime
+        .prepare_delivery(
+            crate::node::TEST_NODE,
+            LEAD,
+            &context,
+            None,
+            crate::delivery::Command::Send {
+                target: "agent-2".into(),
+                intent: "wake-request".into(),
+                body: "Fix the next bug".into(),
+                kind: "request".into(),
+                now: false,
+            },
+        )
+        .map(drop)
+        .unwrap_err();
+    assert_eq!(
+        refusal,
+        crate::coordination::refusal("plan_delegate_full", "3")
+    );
+}
