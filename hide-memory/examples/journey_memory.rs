@@ -48,7 +48,13 @@ fn seed(
                 analysis_provider: "journey".into(),
                 session_id: "agent-journey".into(),
                 content_hash: title.into(),
-                created_at_unix_ms: 1,
+                // Made now: a card dated 1970 is older than Memory's archive
+                // age and leaves the hooks at the first aging run (PRD
+                // memory-self-improve B22), before every agent has started.
+                created_at_unix_ms: std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map_err(|error| format!("clock_before_epoch: {error}"))?
+                    .as_millis() as u64,
             },
             &[hide_memory::Candidate {
                 text: title.into(),
