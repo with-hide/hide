@@ -763,7 +763,7 @@ mod tests {
     #[test]
     fn a_refusal_is_logged_without_the_command_or_a_path() {
         let home = tempfile::tempdir().unwrap();
-        let openings = find_openings("open /Users/someone/SECRET/report.html shot.png");
+        let openings = find_openings("open /Users/example/SECRET/report.html shot.png");
         record_refusal(home.path(), "codex", "w1:p2", &openings);
         let text = std::fs::read_to_string(log_path(home.path())).unwrap();
         let line: serde_json::Value = serde_json::from_str(text.trim()).unwrap();
