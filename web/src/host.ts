@@ -305,11 +305,20 @@ export function hostBridge(): HostBridge | null {
  * field chords all follow it (`shortcuts.ts`).
  */
 export function keySystem(): KeySystem {
+  return keySystemOf(hostPlatform());
+}
+
+/**
+ * The system of the machine the shell runs on, as a platform name: the
+ * desktop app's `process.platform`, else the browser's own report, else its
+ * user agent; empty with neither.
+ */
+export function hostPlatform(): string {
   const bridge = hostBridge();
-  if (bridge) return keySystemOf(bridge.platform);
-  if (typeof navigator === "undefined") return "pc";
+  if (bridge) return bridge.platform;
+  if (typeof navigator === "undefined") return "";
   const agent = navigator as Navigator & { userAgentData?: { platform?: string } };
-  return keySystemOf(agent.userAgentData?.platform || navigator.platform || navigator.userAgent);
+  return agent.userAgentData?.platform || navigator.platform || navigator.userAgent;
 }
 
 /**

@@ -43,7 +43,7 @@ it("an unrelated UI change cannot echo an older width over a completed drag", ()
 
 it("moving one text size right after the other cannot send the first one's older value back", () => {
   const sent: { kind: string; payload: Record<string, unknown> }[] = [];
-  useShellStore.setState({ rest: { ui_state: { font_size: 13, terminal_font_size: 14, left_sidebar_visible: true } } });
+  useShellStore.setState({ rest: { ui_state: { font_size: 13, terminal_font_size: 14, terminal_font_family: "Menlo", left_sidebar_visible: true } } });
   const actions = createActions((event) => {
     sent.push(event as { kind: string; payload: Record<string, unknown> });
     return true;
@@ -53,6 +53,7 @@ it("moving one text size right after the other cannot send the first one's older
   actions.setFontSize(17);
   expect(sent[0]?.payload.terminal_font_size).toBe(20);
   expect(sent[1]?.payload).not.toHaveProperty("terminal_font_size");
+  expect(sent[1]?.payload).not.toHaveProperty("terminal_font_family");
   expect(sent[1]?.payload.font_size).toBe(17);
   actions.toggleLeftSidebar();
   expect(sent[2]?.payload).not.toHaveProperty("font_size");

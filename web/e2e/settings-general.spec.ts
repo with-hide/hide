@@ -72,6 +72,7 @@ test("Settings lists its pages in two groups with About apart, and About shows t
       "accent",
       "interface-text",
       "terminal-text",
+      "terminal-font",
     ]);
     await expect(appearance.locator("[data-color-theme-option]")).toHaveText(["Hide", "Neutral"]);
     await expect(appearance.locator("[data-color-theme-choice]")).toHaveAttribute("data-color-theme-choice", "hide");

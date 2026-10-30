@@ -4435,6 +4435,13 @@ pub struct UiStateSnapshot {
     /// multiplies it, so the chords keep zooming one pane on top of it.
     #[serde(default = "default_terminal_font_size")]
     pub terminal_font_size: f32,
+    /// The installed font every terminal draws its own text in, as the
+    /// operator typed it in General's Terminal font; empty draws in the
+    /// `--font-mono` token. The web puts it ahead of that token and of the
+    /// fitted symbol and CJK fallbacks (`web/src/terminalFonts.ts`), so a
+    /// name the machine does not have falls through to them.
+    #[serde(default)]
+    pub terminal_font_family: String,
     /// Text scale for one pane's own content, keyed by pane id. A pane at the
     /// default scale is absent rather than present at 1.0, so the map stays
     /// the size of what the user actually changed.
@@ -5302,6 +5309,7 @@ impl Default for UiStateSnapshot {
             sidebar_width: default_sidebar_width(),
             font_size: default_font_size(),
             terminal_font_size: default_terminal_font_size(),
+            terminal_font_family: String::new(),
             pane_text_scales: BTreeMap::new(),
             editor_text_scale: DEFAULT_PANE_TEXT_SCALE,
             conversation_pane_ids: BTreeSet::new(),
@@ -5532,6 +5540,19 @@ pub(crate) fn default_terminal_font_size() -> f32 {
 
 pub(crate) fn terminal_font_size_fits(size: f32) -> bool {
     (TERMINAL_FONT_SIZE_MIN..=TERMINAL_FONT_SIZE_MAX).contains(&size)
+}
+
+/// The longest Terminal font name kept, in characters; a font's family name
+/// is far shorter, so a longer one is a paste, not a name.
+pub const TERMINAL_FONT_FAMILY_MAX_CHARS: usize = 128;
+
+/// Whether `family` can be kept as the Terminal font: trimmed, at most
+/// `TERMINAL_FONT_FAMILY_MAX_CHARS`, with no control character. Empty is the
+/// default font.
+pub(crate) fn terminal_font_family_fits(family: &str) -> bool {
+    family.trim() == family
+        && family.chars().count() <= TERMINAL_FONT_FAMILY_MAX_CHARS
+        && !family.chars().any(char::is_control)
 }
 
 pub(crate) fn default_panel_visible() -> bool {

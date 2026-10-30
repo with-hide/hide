@@ -31,6 +31,7 @@ import {
   socketProblem as socketProblemIn,
   usableAccent,
   usableFontSize,
+  usableTerminalFontFamily,
   usableTerminalFontSize,
   unstoredDeviceDrafts,
 } from "./settings";
@@ -185,6 +186,11 @@ describe("settings rules", () => {
     expect(usableTerminalFontSize(14)).toBe(14);
     expect(usableTerminalFontSize(9)).toBeNull();
     expect(usableTerminalFontSize(25)).toBeNull();
+    expect(usableTerminalFontFamily("JetBrains Mono")).toBe("JetBrains Mono");
+    expect(usableTerminalFontFamily(" Menlo")).toBe("");
+    expect(usableTerminalFontFamily("Mono\nFont")).toBe("");
+    expect(usableTerminalFontFamily("M".repeat(129))).toBe("");
+    expect(usableTerminalFontFamily(undefined)).toBe("");
   });
 
   it("names a device after its alias without colliding", () => {
