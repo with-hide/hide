@@ -120,6 +120,8 @@ it("skips Devices only when discovery proved there are no saved profiles", () =>
   expect(wizardSteps(undefined)).toEqual(steps);
   for (const state of ["idle", "loading", "failed"] as const) expect(wizardSteps({ state, error: null, profiles: [], truncated: false })).toEqual(steps);
   expect(wizardSteps({ state: "ready", error: null, profiles: [], truncated: false })).toEqual(["agents", "notifications", "project"]);
+  // A read cut at a bound proves nothing about what it did not read.
+  expect(wizardSteps({ state: "ready", error: null, profiles: [], truncated: true })).toEqual(steps);
 });
 
 describe("the start panel's sign-in mark (B23, D-06)", () => {

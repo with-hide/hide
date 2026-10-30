@@ -1047,6 +1047,18 @@ impl SshAddress {
             format!("{}@{}:{}", self.user, self.host, self.port)
         }
     }
+
+    /// The form two routes are compared in: `user@host:port` with the host
+    /// name in lowercase, as DNS reads it, so one server named in two cases
+    /// is one server wherever Hide asks. An IPv6 zone after `%` names an
+    /// interface, which the system may match by case, so it stays as written.
+    pub fn endpoint_key(&self) -> String {
+        let host = match self.host.split_once('%') {
+            Some((address, zone)) => format!("{}%{zone}", address.to_ascii_lowercase()),
+            None => self.host.to_ascii_lowercase(),
+        };
+        format!("{}@{host}:{}", self.user, self.port)
+    }
 }
 
 /// Why an alias has no address; the dialog shows a short line per code.
@@ -1085,7 +1097,11 @@ pub struct SshHostEntry {
 pub struct SshHostListing {
     pub entries: Vec<SshHostEntry>,
     pub registered: Vec<(String, SshAddress)>,
+    /// The read is incomplete (a bound was crossed): more may exist.
     pub truncated: bool,
+    /// A configuration file that exists could not be read: what it names is
+    /// unknown, which is not "no Host".
+    pub unreadable: bool,
 }
 
 /// Saved client configuration, never evidence of a reachable server.
@@ -1236,6 +1252,24 @@ pub trait DialedTransport: DeviceTransport {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A DNS name in two cases is one server; an IPv6 zone names an
+    /// interface and keeps its case.
+    #[test]
+    fn an_endpoint_key_folds_a_host_names_case_but_not_an_ipv6_zone() {
+        let at = |host: &str| {
+            SshAddress {
+                user: "alice".to_owned(),
+                host: host.to_owned(),
+                port: 22,
+            }
+            .endpoint_key()
+        };
+        assert_eq!(at("Box.example"), at("box.example"));
+        assert_eq!(at("box.example"), "alice@box.example:22");
+        assert_ne!(at("fe80::1%ETH0"), at("fe80::1%eth0"));
+        assert_eq!(at("FE80::1%ETH0"), "alice@fe80::1%ETH0:22");
+    }
 
     #[test]
     fn the_add_key_command_quotes_a_file_a_shell_would_split() {

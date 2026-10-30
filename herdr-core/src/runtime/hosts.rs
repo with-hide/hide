@@ -194,6 +194,10 @@ pub(super) struct DeviceHost {
     pub(super) failure: Option<String>,
     /// What the running attempt waits on from the operator (B4-B12, B27).
     pub(super) sign_in: Option<super::device_sign_in::SignInState>,
+    /// Raised when the screen that pressed for the running attempt went
+    /// away (the first-run step): its sign-in ends as if cancelled. Each
+    /// attempt has its own, so a later attempt is not withdrawn by it.
+    pub(super) withdrawn: Arc<std::sync::atomic::AtomicBool>,
 }
 
 impl DeviceHost {
@@ -205,6 +209,7 @@ impl DeviceHost {
             problem: None,
             failure: None,
             sign_in: None,
+            withdrawn: Arc::default(),
         }
     }
 }
@@ -598,6 +603,8 @@ impl Runtime {
             HostStart::Dial { wake, .. } => *wake,
             HostStart::Arrived { .. } => Wake::NotAllowed,
         };
+        host.withdrawn = Arc::default();
+        let withdrawn = Arc::clone(&host.withdrawn);
         if matches!(start, HostStart::Dial { .. }) {
             self.begin_device_connect(device_id);
         }
@@ -690,6 +697,7 @@ impl Runtime {
                                 device_id: device.clone(),
                                 generation,
                                 wake,
+                                withdrawn,
                             }),
                             cancel: run.clone(),
                             on_close,

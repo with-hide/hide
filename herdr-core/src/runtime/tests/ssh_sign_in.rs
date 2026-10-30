@@ -766,3 +766,112 @@ fn hide_device_retry_answers_as_its_published_schema() {
     }
     assert_eq!(schema["properties"]["started"]["type"], "boolean");
 }
+
+/// The first-run Devices step lists the device as its ssh config Host.
+fn step_lists_the_host(shared: &Arc<Mutex<Runtime>>) {
+    let mut runtime = shared.lock().unwrap();
+    runtime.snapshot.status.herdr_profiles = crate::model::HerdrProfilesSnapshot {
+        state: "ready".to_owned(),
+        error: None,
+        profiles: vec![crate::model::HerdrProfileSnapshot {
+            id: format!("ssh:{DEVICE}"),
+            label: DEVICE.to_owned(),
+            target: DEVICE.to_owned(),
+            session: "default".to_owned(),
+            herdr: false,
+            ssh_host: Some(DEVICE.to_owned()),
+            address: Some(format!("alice@{DEVICE}:22")),
+            wsl_distro: None,
+            enabled: true,
+            added_as: Some("Mini".to_owned()),
+            problem: None,
+            device_id: Some(DEVICE.to_owned()),
+            connect_state: "failed".to_owned(),
+            connect_refusal: None,
+        }],
+        truncated: false,
+    };
+}
+
+fn connect_from_the_step(shared: &Arc<Mutex<Runtime>>) {
+    let connect = event(
+        "herdr_profile_connect",
+        serde_json::json!({"profile_id": format!("ssh:{DEVICE}"), "host_consent": true}),
+    );
+    assert!(shared.lock().unwrap().dispatch_json(&connect));
+}
+
+fn leave_the_step(shared: &Arc<Mutex<Runtime>>) -> bool {
+    shared
+        .lock()
+        .unwrap()
+        .dispatch_json(&event("first_run_sign_in_withdraw", serde_json::json!({})))
+}
+
+/// B8 for the first-run step: the question its Connect put on the row is
+/// answered Cancelled once the step goes away, and the device is left
+/// needing a sign-in, as an unanswered question leaves it.
+#[test]
+fn leaving_the_first_run_step_ends_the_question_its_connect_asked() {
+    let (shared, asked) = ssh_runtime();
+    shared.lock().unwrap().connect_registered_devices();
+    settled(&shared);
+    step_lists_the_host(&shared);
+    connect_from_the_step(&shared);
+    question(&shared);
+    assert!(leave_the_step(&shared));
+    settled(&shared);
+    assert_eq!(
+        answers(&asked),
+        [Err(Refusal::NotAllowed), Err(Refusal::Cancelled)]
+    );
+    let runtime = shared.lock().unwrap();
+    assert_eq!(row(&runtime).sign_in, None);
+    assert_eq!(row(&runtime).problem.as_deref(), Some("sign_in_needed"));
+}
+
+/// The step ends only what its own Connect started: a sign-in the device
+/// row asked for after it keeps waiting for the operator.
+#[test]
+fn leaving_the_first_run_step_keeps_a_question_the_device_row_asked() {
+    let (shared, asked) = ssh_runtime();
+    shared.lock().unwrap().connect_registered_devices();
+    settled(&shared);
+    step_lists_the_host(&shared);
+    connect_from_the_step(&shared);
+    let first = question(&shared);
+    let cancel = event(
+        "device_sign_in",
+        serde_json::json!({"device_id": DEVICE, "question": first, "reply": "cancel"}),
+    );
+    assert!(shared.lock().unwrap().dispatch_json(&cancel));
+    settled(&shared);
+    let retry = event(
+        "device_host_retry",
+        serde_json::json!({"device_id": DEVICE}),
+    );
+    assert!(shared.lock().unwrap().dispatch_json(&retry));
+    let second = question(&shared);
+    assert!(!leave_the_step(&shared));
+    assert_eq!(
+        row(&shared.lock().unwrap())
+            .sign_in
+            .as_ref()
+            .map(|shown| shown.question),
+        Some(second)
+    );
+    let answer = event(
+        "device_sign_in",
+        serde_json::json!({"device_id": DEVICE, "question": second, "reply": "text", "text": "pw"}),
+    );
+    assert!(shared.lock().unwrap().dispatch_json(&answer));
+    settled(&shared);
+    assert_eq!(
+        answers(&asked),
+        [
+            Err(Refusal::NotAllowed),
+            Err(Refusal::Cancelled),
+            Ok("pw".to_owned())
+        ]
+    );
+}

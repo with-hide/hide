@@ -1950,6 +1950,10 @@ pub struct Runtime {
     ssh_hosts_job: Option<ssh_hosts::SshHostsJob>,
     herdr_profiles_job: Option<herdr_profiles::HerdrProfilesJob>,
     herdr_profile_endpoints: BTreeMap<String, Result<String, String>>,
+    /// The connection attempt each first-run Connect started, by device and
+    /// generation: the only sign-ins the step ends as it goes away, never
+    /// one the device row or another screen started. At most one per device.
+    first_run_attempts: BTreeMap<String, u64>,
     /// The checkout a purpose receipt belongs to. A remote checkout lives in
     /// `status.remote[].session`, not the local navigator, so the operation
     /// carries this target separately from its shell-facing receipt.
@@ -2534,6 +2538,7 @@ impl Runtime {
             ssh_hosts_job: None,
             herdr_profiles_job: None,
             herdr_profile_endpoints: BTreeMap::new(),
+            first_run_attempts: BTreeMap::new(),
             purpose_operation_target: None,
             created_purpose_writes_in_flight: HashMap::new(),
             unconfirmed_created_purposes: HashMap::new(),

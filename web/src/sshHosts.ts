@@ -19,6 +19,11 @@ const PROBLEM_REASON: Record<NonNullable<SshHost["problem"]>, MessageKey> = {
   timed_out: "devices.hostProblem.timedOut",
 };
 
+/** Why `ssh -G` gave a Host no address, or null for a code that is not a Host's (B52). */
+export function hostProblemReason(problem: string | null): MessageKey | null {
+  return problem !== null && Object.hasOwn(PROBLEM_REASON, problem) ? PROBLEM_REASON[problem as keyof typeof PROBLEM_REASON] : null;
+}
+
 /**
  * A Host already used by a registered device, or reaching the same machine as
  * one, wins over everything else: it is dimmed as "Added as <name>" (B51).

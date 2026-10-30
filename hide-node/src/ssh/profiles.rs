@@ -83,14 +83,7 @@ fn endpoints(
         .zip(resolved)
         .map(|(target, address)| {
             let endpoint = address
-                .map(|address| {
-                    format!(
-                        "{}@{}:{}",
-                        address.user,
-                        address.host.to_ascii_lowercase(),
-                        address.port
-                    )
-                })
+                .map(|address| address.endpoint_key())
                 .map_err(|_| unresolved());
             (target, endpoint)
         })
