@@ -101,7 +101,7 @@ Pressing a tool icon opens the tool column on that tool, or swaps the tool it sh
 A closed lane that a tool icon, an open, a reveal or the 보기 slot opens shows that one column alone, the other closed, whatever the lane held when ⌘E closed it; only ⌘E brings back both columns (operator decision 2026-10-23, replacing the mockup's reopen of the other column).
 Pressing the documents or 보기 button brings it to the front of the viewing column; pressed while it is in front, it folds the viewing column, and pressing it again brings the same content back (B11).
 The Project icon is a briefcase and the Explorer icon an open folder, so neither repeats the Overview's dashboard mark or the other's folder.
-The Project icon carries a warning-coloured number counting its project's 할 일, no number at 0, its hint ending in it, such as `할 일 2`; worktrees to remove, memory to move into documents and bots' pull requests are never in it (B38).
+The Project icon carries a warning-coloured number counting its project's 흘린 것, no number at 0, its hint ending in it, such as `흘린 것 2` (PRD project-panel-results, the operator's choice of 2026-10-31).
 The Hide AI icon carries the same warning-coloured number, the sum of its 제안 and Memory tabs' numbers (see Hide AI: the Hide AI tool), none at 0 or while Hide AI is off, its hint ending in `제안 3 · Memory 1`.
 At the rail's bottom, just above its `…`, the pin is an icon of its own, in the same place whether the lane is up or closed and whichever column it shows: an empty pin while unpinned, a filled pin drawn pressed while pinned, and its hint says what a press does (B15).
 The rail's `…` menu holds Expand, which moves both columns together, and with the lane closed the `…` is off (B15).
@@ -893,33 +893,51 @@ Web owner: `web/src/terminalLinks.ts` (detection), `web/src/terminalLinkProvider
 
 ## The Project tool
 
-Web owner: `web/src/ProjectTool.tsx`, `web/src/projectStatus.ts` and `web/src/ProjectDetail.tsx` (the worktree table and the cost in the 보기 slot); core owner: `herdr-core/src/agent_state/tally/project_status.rs` (the 현황 counts and the 할 일) and `herdr-core/src/usage_ledger/project_cost.rs` (the cost).
+Web owner: `web/src/ProjectTool.tsx`, `web/src/projectStatus.ts` and `web/src/ProjectDetail.tsx` (the worktree table, 남은 것 and 작업 비용 in the 보기 slot); core owners: `herdr-core/src/agent_state/tally/project_status.rs` (the counts and 흘린 것), `herdr-core/src/runtime/strays.rs` (마무리 맡기기, 놔두기 and 되돌리기), `herdr-core/src/usage_ledger/project_cost.rs` (each session's spend) and `herdr-core/src/usage_ledger/tasks.rs` (the tasks and the week).
 The Project tool is the rail's first tool and is about the project of the checkout in front (PRD lane-two-columns D-14, B26).
-Its head names the project, then its repository, path and machine on one dim line, then ⚙, which opens Project Settings, and `✕`, which closes the tool column; under it 현황, the tool's only page, since Hide AI is a tool of its own (see Hide AI: the Hide AI tool).
+Its head names the project, then its repository, path and machine on one dim line, then ⚙, which opens Project Settings, and `✕`, which closes the tool column.
+The left of the screen is state and the middle is work under way; this column is what came of it (PRD project-panel-results D-01), so it holds no list of what waits on the operator, which the sidebar's 태스크 and PR list already show.
 
-현황 is four tiles, then 할 일 (D-15).
-Each tile says where it goes at its top right, `사이드바` or `보기`, and `닫기 ✕` while the viewing column shows what it opened, which a second press folds (B32).
-A tile's number is a quiet bar until the core has answered, and a 0 is drawn as 0; nothing the system did not make is drawn (B33).
+Under the head one line counts `세션 N · PR N · 워크트리 N` (B1, B2).
+세션 turns the sidebar to 태스크 narrowed to the project, PR to the PR list narrowed the same way, and 워크트리 opens the worktree table in the viewing column, reading pressed while the table shows, when a second press folds it.
+A project with no GitHub remote has no PR item, and after a failed read a ⚠ and the last read's age stand beside its number (B3).
+While Hide AI's summaries are on and the project has open missed work, `놓친 일 N` in the warning colour ends the line and opens the Overview's backlog with the project's 놓친 일 unfolded (B4).
+A number is a quiet bar until the core has answered, and a 0 is drawn as 0 (B5).
 
-- 세션: the live sessions and a bar of 기다림, 일함, 대기 and 쉼; pressing it turns the sidebar to 태스크, narrowed to the project by the lists' project chip, whose `✕` lifts it (B27).
-  While Hide AI's summaries are on and the project has open missed work, `놓친 일 N` in the warning colour sits in its corner, and pressing it opens the Overview's backlog for the project with its 놓친 일 group unfolded; it is never counted in 할 일 or on the rail (B28).
-- PR: the open pull requests and a bar of 머지 가능, 실패, 리뷰 and 검사 중; pressing it turns the sidebar to the PR list, narrowed to the project (B29).
-  A project with no GitHub remote reads `GitHub 원격 없음` alone, and after a failed read a ⚠ stands beside the number with the last read's age.
-- Git: the worktrees, how far main is behind origin, and one mark per worktree, changed, not pushed or removable; pressing it opens the worktree table in the viewing column (B30).
-  The table has the project's disk bar, a row for every worktree of the project, however many the tile's marks stop at, with its mark, branch, pull request and size, and the removable ones folded under `정리할 것 N` with `정리…`, which opens the disk cleanup sheet and its confirmation; the table reads the worktrees again when it opens and measures the disk while it shows.
-- 비용 · 7일: the last seven days' total at API prices, a small bar per day and each agent's share; pressing it opens the cost in the viewing column, with a bar per day, the amount per model and the three sessions that spent the most, each opening its record (B31).
-  Only calls whose session ran inside one of the project's checkouts on the core's own machine count, since reading another device's usage would be a new remote call, so a project on a connected device reads `이 기기에서 실행한 것만 집계해요`.
-  An agent with a call Hide has no price for is named `가격 없음` apart, those calls in no amount, and when its other calls are priced the total reads `≥`.
-  Before the core's first reading the tile is the quiet bar and the page a placeholder; a reading that found no priced call is `$0.00`; when no reading has succeeded, the usage store failing to open included, the tile reads `–` and the page says so, and after a later failure the page keeps the last amounts and says they are the last read.
+`흘린 것 N` lists the worktrees where work ended unfinished: changes not committed, commits not pushed, or a pull request whose CI failed, where no agent works or waits on the operator (B6, B7).
+A pull request that only has a reviewer's change request is not one, and neither is a checkout of the default branch.
+A row shows a mark for what is left, the name of the task that last worked there (its branch when nothing names it), what is left (`커밋 안 한 변경 4파일`, `푸시 안 한 커밋 3`, `#1815 CI 실패`, as many as apply) and how long ago.
+With nothing left the part is not drawn and the disk line moves up; past five rows it shows five and `+N 더` (B8).
+Pressing a row brings the session that last worked there forward with the keyboard, when it is still open, and opens the evidence in the viewing column (B9): `남은 것`, the worktree's changed files and its commits not pushed, or the failing pull request's card when CI is all that is left.
+`남은 것` lists the changed files, each opening its diff when the worktree is in front, and the unpushed commits from the front checkout's header read, or the committed files of another worktree.
+Hovered or focused, a row's age gives way to `마무리 맡기기` and `놔두기`, both reached with Tab and read by name (B10).
+`마무리 맡기기` writes fixed words for what is left to that session (`커밋하고 PR 열어줘`, `브랜치 푸시하고 PR 열어줘`, `#N CI 실패 원인 고쳐줘`, together when several apply), or, with no session open, starts an agent of the same kind there (else the one the operator last started) with the same words (B11).
+While it sends the button shows progress and a second press sends nothing; once the agent works the row goes and the session shows as working on the left (B12); a failure keeps the row and goes to the diagnostic log (B13).
+When that agent ends with something still left the row comes back (B14).
+`놔두기` takes the row out and leaves `되돌리기` in its place for a few seconds; a new commit in the worktree or a new CI failure on its pull request brings the row back (B15).
+The core keeps 256 놔두기; past that the oldest goes, its row comes back, and the diagnostic log says so (B16).
+An agent that edits files without staging them is seen when its turn ends, since the core reads the project's worktrees again then (B17).
 
-할 일 opens with a head one size above its rows and bold, with its count; a group inside it keeps a smaller muted head, so the screen reads in three steps, part, group, row.
-할 일 holds only what stops without the operator (D-16, B34-B37).
-Its first group, `나를 기다리는 에이전트`, lists the questions and decisions waiting for an answer, read or not, then `다시 볼 것`, the ★ tasks, the rows of the sidebar's 태스크 Needs You and 다시 볼 것; a live session whose record still holds an open question joins the asks though its row asks nothing now, one line per pane; reading an ask keeps its row and the count, answering it takes it out, and ☆ moves it to 다시 볼 것 (needs-you-cleanup B11, B13).
-Its second group, `내 PR · 내 리뷰`, lists the project's pull requests the PR list puts in Needs You, the team's review asks and bots' left out; one opened from a Memory card wears `◆ Memory에서`, and a review left on GitHub or a moved state takes it out on the next read.
-A row has no button: an agent's row says `pane` and brings that pane forward with the keyboard, a pull request's says `보기` and opens its card in the viewing column (B36).
-Past five rows the list shows five in that order and `+N 더`, which shows the rest the core sent; past the core's 64 rows a last line sends each kind left over to the sidebar list that holds it, narrowed to the project: `나머지 N개는 사이드바 태스크에서` for the agents' rows and `나머지 PR N개는 사이드바 PR 목록에서` for the pull requests, one link per kind there is; with nothing to do its head reads `할 일 0` over a dim `없음`.
+The disk line shows the project's layers in one bar, its size, `머지됨 N · X GB 비울 수 있음` and `정리`, which opens the disk cleanup sheet; with nothing to free it is the bar and the size alone (B18).
+While measured it is a skeleton, a project measured only in part is dim with no size, and a project on a connected device has no disk line (B19); how the panel's watch starts and stops a measurement is in Disk allocation and cleanup.
 
-The core derives the counts and the 할 일 only on a publish whose inputs moved, and nothing on that path reads a file or runs a process (B42; [ARCHITECTURE.md](ARCHITECTURE.md#project-status-and-cost)).
+`최근 7일` shows the merged pull requests (with the open ones), what one cost and its tokens, how long one took (from the first call to its merge, with the working time of every session added up), the missions (with how often a node was opened again), and the seven days' cost with a bar per day where that day's merges sit on the bar (B21).
+The per-pull-request figures average the tasks whose pull request merged in the seven days; a task with no pull request counts only in the total and in `결과 없이 끝난 작업 N · $X`, which opens the 작업 비용 table on 결과 없음 and is absent at 0 (B22).
+The cost follows one rule everywhere (B23): a quiet bar before the core's first reading, `$0.00` when the reading found no priced call, `–` when no reading has succeeded, the last amounts after a later failure, an agent with no price named apart with its calls in no amount, `≥` when only part is priced, and `이 기기에서 실행한 것만 집계해요` for a project on a connected device, whose calls this machine does not read.
+`비싼 작업` lists the three costliest tasks with their result, name, child sessions, cost and time; a row opens the table with that task unfolded, and `전체 보기` opens it on 전체 (B25).
+`Hide AI 제안 N` ends the column while Hide AI has suggestions for the project and opens the Hide AI tool's 제안 tab (B26).
+
+The 작업 비용 table opens in the viewing column as `작업 비용 · <project>` (B27): the seven days' total and day bars, the amounts by model and by agent, then `전체 · 머지됨 · 진행 중 · 미션 · 결과 없음` with each filter's count, and the tasks costliest first with their result, cost, tokens, time taken and working time.
+Below 520px the tokens and working time move under the task's name, so every item stays at the 360px minimum (B35).
+A task is a top-level session with its children and grandchildren; a child that made its own pull request is a task of its own, so the tasks never add up past the seven days' total (B28).
+Unfolded, a task lists its sessions under their parents with agent, cost, tokens and working time, `가격 없음` for an agent with no price (B29).
+The result is the first of `작업 중` (a session works or waits on the operator), its pull request (open, merged or closed), `변경 남음`, `main 커밋` and `결과 없음` (B30).
+A mission is one row with its pull requests merged out of made; unfolded it lists each node with its pull request, cost, retries and reopenings (B31).
+Under 결과 없음 the result column holds `마지막에 한 말` and `대화 보기`, which brings the session forward while it is open and otherwise opens its record; the words are empty when no open session holds them (B32).
+A filter with nothing reads `이 필터에 맞는 작업이 없어요` with `전체 보기`, a project with no task in seven days `최근 7일 작업이 없어요` (B33), and past 200 tasks a line says `나머지 N개는 7일 합계에만 들어 있어요` (B34).
+Hide AI's own use is in no task and stands under the table as `Hide AI 사용 $X` (B24).
+
+The core derives the counts and 흘린 것 only on a publish whose inputs moved, and builds the tasks only when the ledger worker reports, the record's summaries change or a local agent starts or ends a turn; nothing on those paths reads a file or runs a process (B37; [ARCHITECTURE.md](ARCHITECTURE.md#project-status-and-cost)).
 
 ## Hide AI: the Hide AI tool
 
@@ -2146,6 +2164,9 @@ Each checkout is measured under its own limit of one million entries and 30 seco
 An incomplete measurement has no total, and allocated blocks are not a promise of reclaimable space, so the result states only the volume's free space before and after.
 A node's project is measured and cleaned up on that node; a project of a device the core dials is neither measured nor cleaned.
 The Overview's [Projects](#projects) tab is where a project's size shows: while it is on screen the core measures its projects one at a time in the order shown and keeps each answer for ten minutes, and its disk number, `머지됨 N → 정리` and the project panel's `정리` open the sheet below.
+The Project tool and the worktree table measure the one project they show, through the same watch and the same ten-minute answers, so opening the panel on a project measured in the last ten minutes measures nothing, and closing and opening it while a measurement runs leaves that one measurement (PRD project-panel-results D-15, B20).
+The lane counts the panel and the table as one holder per project and tells the core nothing once both are gone; the Overview's Projects tab takes the watch over while it is open.
+When nothing watches a machine any more, its running measurement stops before the next checkout, and the node stops walking between checkouts, so a closed panel costs at most one checkout's walk.
 
 Only what the ignore rules hide can fall into a layer, so every path git sees is worktree source and is never counted in a layer cell.
 An ignored folder holding a valid `CACHEDIR.TAG` is build cache, one Hide's ecosystem table names beside its marker file is build cache or dependencies, and every other ignored path is Other.
@@ -2673,7 +2694,7 @@ In the desktop app the window has no preload: it stands in for the desktop host 
 Chapter 2, going back and forth fast (`chapters/switch.ts`), plays on two invented projects: ⌃⇥ (`recent_area_tab`) goes back to the agent used before through the shell's own switcher, ⌥⇥ (`recent_project`) to the project used before, and ⌘P finds a file of the project by name and opens it in the lane's View beside the agent.
 The agent step ends on whichever agent the switcher stopped on and the project step on the other project, and a palette closed with Esc comes back with ⏎.
 Chapter 3, following agents, plays a lead with two children in tabs of their own beside a second project's asking and finished tasks: the 태스크 list by state, the pane head, its turn card, a child opened from the head's child button and the parent mark at the front of the child's head back to the parent, and the Overview's map, opened with the lead chosen from `개요에서 보기`, first in the pane's menu. Coming back to the lead finishes one child and turns the lead to Needs You, so the list and the head move while the learner watches. Going to an agent from an OS notification is not taught, because the notification is drawn outside the window.
-Chapter 6, the project at a glance (`chapters/project.ts`), opens the right lane beside an agent at work with the Project tool's rail icon (`toggle_lane_project`), so ⏎ reaches the Project tool even after the learner showed another one, and reads its 현황 tiles and 할 일, whose two invented PRs wear the `예시` mark; ⇧⌘E (`toggle_lane_explorer`) shows the files the agent changed, ⇧⌘L (`open_project_memory`) the project's Memory cards, and ⌘E puts the lane away.
+Chapter 6, the project at a glance (`chapters/project.ts`), opens the right lane beside an agent at work with the Project tool's rail icon (`toggle_lane_project`), so ⏎ reaches the Project tool even after the learner showed another one, and reads its count line and its 최근 7일, whose invented cost wears the `예시` mark; ⇧⌘E (`toggle_lane_explorer`) shows the files the agent changed, ⇧⌘L (`open_project_memory`) the project's Memory cards, and ⌘E puts the lane away.
 A tool step ends when the lane shows that tool, whether by its chord or its rail icon, and the closing step when the lane is no longer drawn, by ⌘E or by the tool's ×; the world answers the pin too, and nothing opens from a tile, a row or a file, which the bubbles say.
 
 ### Adding a chapter

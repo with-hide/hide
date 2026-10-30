@@ -68,6 +68,7 @@ pub(crate) mod plans;
 pub(crate) mod project_memory;
 mod project_open;
 mod project_settings;
+mod project_tasks;
 mod projects;
 mod ps;
 mod pull_requests;
@@ -1871,6 +1872,9 @@ pub struct Runtime {
     /// Git's watch does not see an edit left unstaged (PRD
     /// project-panel-results D-21, B17).
     turn_working_panes: HashSet<String>,
+    /// Each local project's seven days of spends as the ledger worker last
+    /// built them; `publish_project_tasks` makes the frame's tasks from them.
+    ledger_spends: Option<Arc<Vec<crate::usage_ledger::project_cost::ProjectCost>>>,
     /// Where each local project is in the re-read cycle: five minutes after a
     /// good answer, sooner after a failed read (`reread_stale_github`).
     github_clock: HashMap<String, projects::GithubClock>,
@@ -2541,6 +2545,7 @@ impl Runtime {
             github_generations: HashMap::new(),
             worktree_project_generations: HashMap::new(),
             turn_working_panes: HashSet::new(),
+            ledger_spends: None,
             github_clock: HashMap::new(),
             github_wanted: HashSet::new(),
             github_sighted: HashMap::new(),

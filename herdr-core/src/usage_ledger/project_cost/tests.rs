@@ -152,13 +152,14 @@ fn a_project_s_cost_sums_its_checkouts_calls_of_the_last_seven_days() {
             ("2026-10-23", 3_000_000),
         ]
     );
-    assert_eq!(
-        hide.sessions
-            .iter()
-            .map(|s| (s.session_id.as_str(), s.micro_usd))
-            .collect::<Vec<_>>(),
-        [("s1", 4_000_000), ("s2", 2_000_000)]
-    );
+    let mut spends: Vec<_> = hide
+        .spends
+        .iter()
+        .filter(|s| s.micro_usd > 0)
+        .map(|s| (s.session_id.as_str(), s.micro_usd))
+        .collect();
+    spends.sort_by_key(|s| std::cmp::Reverse(s.1));
+    assert_eq!(spends, [("s1", 4_000_000), ("s2", 2_000_000)]);
     assert_eq!(
         hide.agents
             .iter()

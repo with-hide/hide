@@ -172,6 +172,7 @@ impl Worker {
                                 projects: ProjectCosts {
                                     built: None,
                                     failed: true,
+                                    hide_ai_micro_usd: None,
                                 },
                                 progress: Vec::new(),
                                 failure: Some(code),
@@ -252,6 +253,8 @@ struct Engine {
 struct Costs {
     /// Absent until a build succeeded.
     value: Option<Arc<Vec<ProjectCost>>>,
+    /// Hide AI's seven days, built with `value`.
+    hide_ai: Option<u64>,
     projects: Arc<Vec<ProjectRoots>>,
     today: String,
     built: Option<Instant>,
@@ -268,6 +271,7 @@ impl Costs {
         ProjectCosts {
             built: self.value.clone(),
             failed: self.failure.is_some(),
+            hide_ai_micro_usd: self.hide_ai,
         }
     }
 }
@@ -690,10 +694,18 @@ impl Engine {
                     project_cost::EVENT_LIMIT,
                     |agent, day, event| preparation.add(agent, day, &event),
                 )?;
-                preparation.finish(limited, self.prices.table.as_ref(), now)
+                let table = self.prices.table.as_ref();
+                let hide_ai = project_cost::hide_ai_cost(
+                    &self.store.ai_rows()?,
+                    project_cost::first_day(date)?,
+                    table,
+                    now,
+                )?;
+                Ok((preparation.finish(limited, table, now)?, hide_ai))
             });
         match built {
-            Ok(value) => {
+            Ok((value, hide_ai)) => {
+                self.costs.hide_ai = Some(hide_ai);
                 let limited = value.iter().any(|cost| cost.limited);
                 if limited && !self.costs.capacity_logged {
                     diagnostic(

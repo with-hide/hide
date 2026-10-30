@@ -25,6 +25,10 @@ pub struct NodeUsage {
     /// The latest build of `projects` failed; the last one stays.
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub projects_failed: bool,
+    /// What Hide AI's own calls cost over the same seven days, in no
+    /// project (PRD project-panel-results B24); absent until a build.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub hide_ai_week_micro_usd: Option<u64>,
 }
 
 fn shared_projects<S: serde::Serializer>(
@@ -133,6 +137,7 @@ impl UsageSnapshot {
                 history: None,
                 projects: None,
                 projects_failed: false,
+                hide_ai_week_micro_usd: None,
             }],
         }
     }

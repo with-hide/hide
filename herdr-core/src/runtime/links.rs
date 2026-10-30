@@ -1073,6 +1073,8 @@ impl Runtime {
             self.sync_session_state();
         }
         self.refresh_agent_scopes();
+        // The tasks read the record's sessions, parents and pull requests.
+        self.publish_project_tasks();
         true
     }
 

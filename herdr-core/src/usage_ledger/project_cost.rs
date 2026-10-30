@@ -14,8 +14,10 @@ use super::store::{Daily, Totals};
 
 /// The days a project's cost covers, today included.
 pub const DAYS: i64 = 7;
-/// The sessions the cost view names, most expensive first.
-pub const SESSION_LIMIT: usize = 3;
+/// The longest quiet between two calls of a session still counted as its
+/// working time (PRD project-panel-results D-11): a longer gap is the agent
+/// waiting, not working.
+pub const WORK_GAP_MS: u64 = 5 * 60_000;
 /// The model rows one project publishes.
 pub const MODEL_LIMIT: usize = 16;
 /// The calls one preparation reads; past it the newest are read and the
@@ -39,6 +41,10 @@ pub struct ProjectRoots {
 pub struct ProjectCosts {
     pub built: Option<std::sync::Arc<Vec<ProjectCost>>>,
     pub failed: bool,
+    /// What Hide AI's own calls cost over the same seven days, in no
+    /// project and no task (PRD project-panel-results D-10, B24); absent
+    /// until a build succeeded.
+    pub hide_ai_micro_usd: Option<u64>,
 }
 
 #[derive(Clone, Debug, Default, Eq, PartialEq, Serialize)]
@@ -46,10 +52,11 @@ pub struct ProjectCost {
     pub workspace_id: String,
     /// The sum of the priced amounts, in millionths of a dollar.
     pub micro_usd: u64,
+    /// New tokens of the seven days' calls: input, output and cache writes.
+    pub tokens: u64,
     /// Oldest first, one per day of the seven, today last.
     pub days: Vec<DayCost>,
     pub models: Vec<ModelCost>,
-    pub sessions: Vec<SessionCost>,
     /// Each priced agent's amount, largest first.
     pub agents: Vec<AgentCost>,
     /// Agents that ran a call here Hide has no price for (B31): named apart,
@@ -63,6 +70,31 @@ pub struct ProjectCost {
     pub stale: bool,
     /// More calls than `EVENT_LIMIT` fell in the seven days.
     pub limited: bool,
+    /// What each session spent here, which the core groups into tasks with
+    /// what it knows of the sessions (`usage_ledger::tasks`). Core only.
+    #[serde(skip)]
+    pub spends: Vec<SessionSpend>,
+    /// The seven days' tasks, costliest first, at most `tasks::TASK_LIMIT`
+    /// (PRD project-panel-results B27-B34); the core fills them.
+    pub tasks: Vec<super::tasks::TaskCost>,
+    pub tasks_total: usize,
+    pub week: super::tasks::ProjectWeek,
+}
+
+/// One session's seven days in a project (PRD project-panel-results D-09,
+/// D-11): its priced amount, whether some of it had no price, its new
+/// tokens, its first and last call and its working time.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct SessionSpend {
+    pub agent: String,
+    pub session_id: String,
+    pub micro_usd: u64,
+    pub unpriced: bool,
+    pub tokens: u64,
+    pub first_ms: u64,
+    pub last_ms: u64,
+    /// The gaps between its calls up to `WORK_GAP_MS`, added up.
+    pub worked_ms: u64,
 }
 
 #[derive(Clone, Debug, Default, Eq, PartialEq, Serialize)]
@@ -76,13 +108,6 @@ pub struct ModelCost {
     pub agent: String,
     /// Absent for a model the native records do not name.
     pub model: Option<String>,
-    pub micro_usd: u64,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
-pub struct SessionCost {
-    pub agent: String,
-    pub session_id: String,
     pub micro_usd: u64,
 }
 
@@ -112,6 +137,9 @@ struct Groups {
     days: BTreeMap<(String, String, String), Totals>,
     /// (agent, session, model) totals.
     sessions: BTreeMap<(String, String, String), Totals>,
+    /// (agent, session): new tokens and every call's time, for the
+    /// session's span and working time.
+    calls: BTreeMap<(String, String), (u64, Vec<u64>)>,
 }
 
 /// Every project's cost over the seven days ending `today`, prepared from
@@ -160,6 +188,20 @@ impl<'a> Preparation<'a> {
             return Ok(());
         };
         let into = self.groups.entry(project).or_default();
+        let tokens = &event.tokens;
+        let (sum, stamps) = into
+            .calls
+            .entry((agent.to_owned(), event.session.clone()))
+            .or_default();
+        for part in [
+            tokens.input,
+            tokens.output,
+            tokens.cache_write,
+            tokens.cache_write_1h,
+        ] {
+            add(sum, part)?;
+        }
+        stamps.push(event.at_ms);
         for totals in [
             into.days
                 .entry((agent.to_owned(), day.to_owned(), event.model.clone()))
@@ -236,15 +278,24 @@ impl<'a> Preparation<'a> {
                     )?;
                     add(agents.entry(agent.clone()).or_default(), priced.micro_usd)?;
                 }
-                let mut sessions: BTreeMap<(String, String), u64> = BTreeMap::new();
+                let mut sessions: BTreeMap<(String, String), (u64, bool)> = BTreeMap::new();
                 for ((agent, session, model), totals) in &groups.sessions {
                     let priced = price(agent, &first_text, model, totals, table, now)?;
-                    add(
-                        sessions
-                            .entry((agent.clone(), session.clone()))
-                            .or_default(),
-                        priced.micro_usd,
-                    )?;
+                    let (micro_usd, unpriced) = sessions
+                        .entry((agent.clone(), session.clone()))
+                        .or_default();
+                    add(micro_usd, priced.micro_usd)?;
+                    *unpriced |= priced.unpriced;
+                }
+                for ((agent, session_id), (tokens, stamps)) in &groups.calls {
+                    let (micro_usd, unpriced) = sessions
+                        .get(&(agent.clone(), session_id.clone()))
+                        .copied()
+                        .unwrap_or_default();
+                    add(&mut cost.tokens, *tokens)?;
+                    cost.spends.push(spend(
+                        agent, session_id, micro_usd, unpriced, *tokens, stamps,
+                    ));
                 }
                 cost.days = days
                     .into_iter()
@@ -255,14 +306,6 @@ impl<'a> Preparation<'a> {
                     model: (model != hide_session::usage::UNNAMED_MODEL).then_some(model),
                     micro_usd,
                 });
-                cost.sessions =
-                    largest(sessions, SESSION_LIMIT, |(agent, session_id), micro_usd| {
-                        SessionCost {
-                            agent,
-                            session_id,
-                            micro_usd,
-                        }
-                    });
                 let agents_priced: BTreeSet<String> = agents.keys().cloned().collect();
                 cost.agents = largest(agents, usize::MAX, |agent, micro_usd| AgentCost {
                     agent,
@@ -276,6 +319,56 @@ impl<'a> Preparation<'a> {
             })
             .collect()
     }
+}
+
+/// A session's spend from its calls' times: the first and last call, and
+/// every gap up to `WORK_GAP_MS` added up as its working time.
+fn spend(
+    agent: &str,
+    session_id: &str,
+    micro_usd: u64,
+    unpriced: bool,
+    tokens: u64,
+    stamps: &[u64],
+) -> SessionSpend {
+    let mut sorted = stamps.to_vec();
+    sorted.sort_unstable();
+    let worked_ms = sorted
+        .windows(2)
+        .map(|pair| pair[1] - pair[0])
+        .filter(|gap| *gap <= WORK_GAP_MS)
+        .sum();
+    SessionSpend {
+        agent: agent.to_owned(),
+        session_id: session_id.to_owned(),
+        micro_usd,
+        unpriced,
+        tokens,
+        first_ms: sorted.first().copied().unwrap_or_default(),
+        last_ms: sorted.last().copied().unwrap_or_default(),
+        worked_ms,
+    }
+}
+
+/// What Hide AI's own calls cost from `first` on, priced as a day is.
+pub fn hide_ai_cost(
+    rows: &[super::store::AiRow],
+    first: Date,
+    table: Option<&Table>,
+    now: u64,
+) -> Result<u64, &'static str> {
+    let first = first.to_string();
+    let mut sum = 0;
+    for row in rows
+        .iter()
+        .filter(|row| row.day >= first && !row.model.is_empty())
+    {
+        add(
+            &mut sum,
+            price(&row.provider, &row.day, &row.model, &row.totals, table, now)?.micro_usd,
+        )?;
+    }
+    Ok(sum)
 }
 
 /// The project whose deepest checkout holds `cwd`.

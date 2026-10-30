@@ -244,5 +244,5 @@ export const PROJECT_WORLD: PracticeWorld<ProjectModel> = {
   snapshot,
   panes: (model) => model.desk.panes.map((pane) => pane.id),
   screen: (model, paneId) => paneScreen(model.desk.panes.find((pane) => pane.id === paneId)!),
-  examples: ["[data-todo-pr] button > span.flex-col > span:first-child"],
+  examples: ["[data-week-cost]"],
 };

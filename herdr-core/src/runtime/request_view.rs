@@ -83,7 +83,12 @@ impl Runtime {
         for path in projects {
             self.refresh_project_worktrees(&path);
         }
+        // A task's result reads which sessions work (B30).
+        let moved = working != self.turn_working_panes;
         self.turn_working_panes = working;
+        if moved {
+            self.publish_project_tasks();
+        }
     }
 
     /// Lays the block on this Mac's rows, whose pull requests come from

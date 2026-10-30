@@ -308,6 +308,7 @@ fn a_usage_store_that_cannot_open_reports_the_costs_failed() {
         ProjectCosts {
             built: None,
             failed: true,
+            hide_ai_micro_usd: None,
         }
     );
     drop(worker);
