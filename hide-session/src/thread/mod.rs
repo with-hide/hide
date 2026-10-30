@@ -155,6 +155,12 @@ struct Lines {
     may_start_page: fn(&Value) -> bool,
 }
 
+/// When a line record was written: its `timestamp`, an RFC 3339 time or
+/// Unix seconds or milliseconds (Grok), or agy's `created_at`.
+fn record_at(record: &Value) -> Option<u64> {
+    crate::timestamp_ms(record.get("timestamp").or_else(|| record.get("created_at"))).ok()
+}
+
 /// What a converter knows of the session besides the record it reads.
 struct Session<'a> {
     /// The record [`Lines::header`] picked, `Value::Null` without one.
@@ -336,6 +342,7 @@ fn read_lines(
         path,
     };
     for (_, record) in &records {
+        thread.at(record_at(record));
         (lines.record)(record, &session, &mut thread);
     }
     thread.end_turn();
@@ -420,6 +427,7 @@ fn read_lines_from(path: &Path, lines: Lines, from: &ThreadCursor) -> Result<Thr
         path,
     };
     for record in &records {
+        thread.at(record_at(record));
         (lines.record)(record, &session, &mut thread);
     }
     thread.end_turn();

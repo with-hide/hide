@@ -445,6 +445,42 @@ fn every_agents_sample_reads_to_the_task_it_recorded() {
     }
 }
 
+/// A screen shows how long a command has run and how long it took, so
+/// every call says when it started and every finished result when it ended,
+/// from the record's own time: the samples were recorded on 2026-10-30.
+#[test]
+fn every_call_and_finished_result_carries_when_it_was_written() {
+    const RECORDED_FROM: u64 = 1_793_318_400_000; // 2026-10-30T00:00:00Z
+    const RECORDED_TO: u64 = RECORDED_FROM + 24 * 60 * 60 * 1000;
+    for sample in SAMPLES {
+        let name = format!("{:?}", sample.format);
+        let updates = Placed::new(sample).read_all();
+        let mut started = std::collections::BTreeMap::new();
+        for update in &updates {
+            let at = update["_meta"]["hide"]["at_ms"].as_u64();
+            let id = update["toolCallId"].as_str();
+            match update["sessionUpdate"].as_str() {
+                Some("tool_call") => {
+                    let at = at.unwrap_or_else(|| panic!("{name}: a call without its time"));
+                    assert!((RECORDED_FROM..RECORDED_TO).contains(&at), "{name}: {at}");
+                    started.insert(id.unwrap(), at);
+                }
+                Some("tool_call_update")
+                    if matches!(update["status"].as_str(), Some("completed" | "failed")) =>
+                {
+                    let ended = at.unwrap_or_else(|| panic!("{name}: a result without its time"));
+                    assert!(
+                        ended >= started[id.unwrap()],
+                        "{name}: {id:?} ended before it started"
+                    );
+                }
+                _ => {}
+            }
+        }
+        assert!(!started.is_empty(), "{name}: the sample ran tools");
+    }
+}
+
 #[test]
 fn every_declaration_matches_its_converter_and_has_a_sample() {
     let sampled = SAMPLES
@@ -700,6 +736,35 @@ fn hide_and_harness_wrappers_stay_apart_from_the_operators_words() {
             ),
             (letter, Some("letter"), false),
             ("[Request interrupted by user]", Some("interrupted"), false),
+        ]
+    );
+}
+
+/// A letter's line says whom it came from: the envelope's sender, or the
+/// sender the doorbell's line names.
+#[test]
+fn a_letter_names_its_sender() {
+    let placed = Placed::new(&SAMPLES[0]);
+    let records = [
+        json!({"type":"user","uuid":"a","message":{"content":"Hide letter letter-1 from ci-lead (claude) [request]\nCI 다시 봐줘"}}),
+        json!({"type":"user","uuid":"b","message":{"content":"🦉 desk conductor 요청: 계획 승인 · hide inbox"}}),
+        json!({"type":"user","uuid":"c","message":{"content":"ci-lead에게 물어봐"}}),
+    ];
+    let contents = records
+        .iter()
+        .map(|record| format!("{record}\n"))
+        .collect::<String>();
+    std::fs::write(&placed.path, contents).unwrap();
+    let senders = json_of(&placed.read(None).unwrap())
+        .iter()
+        .map(|update| update["_meta"]["hide"]["from"].as_str().map(str::to_owned))
+        .collect::<Vec<_>>();
+    assert_eq!(
+        senders,
+        [
+            Some("ci-lead".to_owned()),
+            Some("desk conductor".to_owned()),
+            None
         ]
     );
 }

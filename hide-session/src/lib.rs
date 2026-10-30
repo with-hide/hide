@@ -52,7 +52,7 @@ pub mod tools;
 pub mod turns;
 pub mod usage;
 
-pub use bell_line::is_bell_line;
+pub use bell_line::{bell_sender, is_bell_line};
 pub use envelope::{
     envelope_from_operator, envelope_header, envelope_names, envelope_sender, is_letter,
 };

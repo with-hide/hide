@@ -241,6 +241,7 @@ fn draw(message: &Message, schema: Schema, thread: &mut Thread) {
         thread.skip("line_capacity");
         return;
     };
+    thread.at(data["time"]["created"].as_u64());
     match schema {
         Schema::V1 => {
             let role = data["role"].as_str();
@@ -400,7 +401,16 @@ fn tool(piece: &Value, thread: &mut Thread) {
         Some(path) => call.path(path),
         None => call,
     };
+    // A tool says when it ran and ended (2.x `ran`/`completed`, 1.x
+    // `state.time`); without that it is dated by its message.
+    let message_at = thread.at_ms();
+    let time = (&piece["time"], &state["time"]);
+    thread.at(time.0["ran"]
+        .as_u64()
+        .or(time.1["start"].as_u64())
+        .or(message_at));
     thread.call(call.input(input));
+    thread.at(time.0["completed"].as_u64().or(time.1["end"].as_u64()));
 
     let status = state["status"].as_str();
     let exit = state["metadata"]["exit"].as_i64();
@@ -431,6 +441,7 @@ fn tool(piece: &Value, thread: &mut Thread) {
             diffs: Vec::new(),
         },
     );
+    thread.at(message_at);
 }
 
 fn todos(input: &Value) -> Vec<Step> {
