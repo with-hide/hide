@@ -363,6 +363,12 @@ impl PaneRecord {
         Some((self.turns_seq?, self.turns.as_ref()?.ended()?))
     }
 
+    /// The keys of the session's last tool calls that have a result, with
+    /// the Herdr state they were read under.
+    pub(crate) fn answered_calls(&self) -> Option<(u64, Vec<String>)> {
+        Some((self.turns_seq?, self.turns.as_ref()?.answered_calls()))
+    }
+
     pub(crate) fn user_turn(&self) -> Option<(u64, hide_session::turns::UserTurnFact)> {
         Some((self.turns_seq?, self.turns.as_ref()?.user_turn()?))
     }

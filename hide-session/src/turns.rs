@@ -212,6 +212,24 @@ pub enum ToolTurnMark {
         call: String,
         question: u32,
     },
+    /// A tool call `call`, known across the hook and the session file as
+    /// `key` ([`crate::calls::key`]); its [`ToolTurnMark::Answered`] says it
+    /// has a result, a refusal in the permission dialog included.
+    Called {
+        call: String,
+        key: String,
+    },
+}
+
+/// The tool calls a tracker remembers for [`TurnTracker::answered_calls`]:
+/// the last ones made, since a wait is on a call made just before it.
+pub const CALL_LIMIT: usize = 64;
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+struct SeenCall {
+    call: String,
+    key: String,
+    answered: bool,
 }
 
 /// A provider can ask any number of questions in a turn, one after another,
@@ -331,6 +349,9 @@ pub struct TurnTracker {
     wake_calls: Vec<WakeCall>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     wake_loss: Option<WakeLoss>,
+    /// The last [`CALL_LIMIT`] tool calls the records made, oldest first.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    calls: Vec<SeenCall>,
     /// A new process started while devices were proven alive, so the work the
     /// agent was waiting for is gone. It holds until a turn or a device
     /// begins.
@@ -494,6 +515,16 @@ impl TurnTracker {
             Some(End::Aborted) => Some(TurnEnded::Interrupted),
             None => turn.unreplied.then_some(TurnEnded::Unanswered),
         }
+    }
+
+    /// The keys of the remembered tool calls that have a result
+    /// ([`ToolTurnMark::Called`]), oldest first.
+    pub fn answered_calls(&self) -> Vec<String> {
+        self.calls
+            .iter()
+            .filter(|seen| seen.answered)
+            .map(|seen| seen.key.clone())
+            .collect()
     }
 
     /// The devices the agent waited for died with the process that ran them,
@@ -679,7 +710,24 @@ impl TurnTracker {
                                 break;
                             }
                         }
+                        ToolTurnMark::Called { call, key } => {
+                            if !self.calls.iter().any(|seen| seen.call == *call) {
+                                if self.calls.len() == CALL_LIMIT {
+                                    self.calls.remove(0);
+                                }
+                                self.calls.push(SeenCall {
+                                    call: call.clone(),
+                                    key: key.clone(),
+                                    answered: false,
+                                });
+                            }
+                        }
                         ToolTurnMark::Answered { call } => {
+                            if let Some(seen) =
+                                self.calls.iter_mut().find(|seen| seen.call == *call)
+                            {
+                                seen.answered = true;
+                            }
                             if let Some(question) = self
                                 .questions
                                 .iter_mut()

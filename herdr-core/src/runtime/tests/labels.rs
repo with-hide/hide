@@ -1193,6 +1193,7 @@ fn a_hook_turn_ends_when_the_session_file_reads_an_interruption_after_it() {
             turn: Some(turn),
             counts: None,
             session_start: false,
+            waiting: None,
         };
         runtime
             .ingest_hook_status(crate::node::TEST_NODE, PANE, &report)
@@ -1332,6 +1333,7 @@ fn a_hook_turn_ends_on_the_session_files_interruption_with_summaries_off() {
                 turn: Some(HookTurn::Working),
                 counts: None,
                 session_start: false,
+                waiting: None,
             },
         )
         .unwrap();
@@ -1439,6 +1441,7 @@ fn a_hook_turn_whose_prompt_the_session_file_shows_unanswered_ends_at_rest() {
                     turn: Some(HookTurn::Working),
                     counts: None,
                     session_start: false,
+                    waiting: None,
                 },
             )
             .unwrap();
@@ -1467,4 +1470,111 @@ fn a_hook_turn_whose_prompt_the_session_file_shows_unanswered_ends_at_rest() {
         ("stopped".to_owned(), "none".to_owned())
     );
     assert_eq!(activity(&[&prompt, &attachment, &reply]).0, "working");
+}
+
+/// D-10: a refusal with the operator's feedback in Claude Code's dialog
+/// sends no hook event and the turn may go on writing text alone. The
+/// session read under the later Herdr state finds the refused call's
+/// result, so the approval ends and the row is working again before the
+/// turn's `Stop`.
+#[test]
+fn an_approval_ends_when_the_session_file_reads_the_refused_calls_result() {
+    use hide_node_link::panes::{HookStatusReport, HookTurn};
+    use hide_session::label_transcript::{LabelTranscriptRequest, read};
+    let bash = serde_json::json!({"command": "rm -rf build", "description": "Clean"});
+    let call = hide_session::calls::key("Bash", &bash).unwrap();
+    let home = tempfile::tempdir().unwrap();
+    let folder = home
+        .path()
+        .join(".claude/projects/-private-tmp-hide-labels-overlay");
+    std::fs::create_dir_all(&folder).unwrap();
+    let records = [
+        serde_json::json!({"type": "user", "timestamp": "2026-10-30T13:00:00.000Z",
+            "sessionId": SESSION, "promptId": "p1", "cwd": CHECKOUT,
+            "message": {"role": "user", "content": "빌드 폴더를 지워줘"}}),
+        serde_json::json!({"type": "assistant", "timestamp": "2026-10-30T13:00:01.000Z",
+            "sessionId": SESSION, "cwd": CHECKOUT, "message": {"role": "assistant",
+            "content": [{"type": "tool_use", "id": "toolu_bash", "name": "Bash",
+                         "input": {"description": "Clean", "command": "rm -rf build"}}]}}),
+        serde_json::json!({"type": "user", "timestamp": "2026-10-30T13:00:05.000Z",
+            "sessionId": SESSION, "cwd": CHECKOUT, "message": {"role": "user",
+            "content": [{"type": "tool_result", "tool_use_id": "toolu_bash", "is_error": true,
+                         "content": "The user doesn't want to proceed with this tool use."}]},
+            "permissionDecision": {"decision": "reject", "source": "user_reject"}}),
+        serde_json::json!({"type": "assistant", "timestamp": "2026-10-30T13:00:06.000Z",
+            "sessionId": SESSION, "cwd": CHECKOUT, "message": {"role": "assistant",
+            "content": [{"type": "text", "text": "알겠습니다. 다른 방법을 설명하겠습니다."}]}}),
+    ];
+    std::fs::write(
+        folder.join(format!("{SESSION}.jsonl")),
+        records
+            .iter()
+            .map(|record| format!("{record}\n"))
+            .collect::<String>(),
+    )
+    .unwrap();
+    let transcript = read(
+        home.path(),
+        &LabelTranscriptRequest {
+            agent: hide_session::Agent::Claude,
+            reference_kind: "id".to_owned(),
+            reference_value: SESSION.to_owned(),
+            cwd: None,
+            checkpoint: None,
+            subagents: Default::default(),
+            turns: None,
+            tools: None,
+        },
+    )
+    .unwrap();
+    let claude = |status: &str, seq: u64| {
+        let mut payload = projection(SESSION);
+        for agent in &mut payload.agents {
+            agent.agent_status = Some(status.to_owned());
+            agent.state_change_seq = Some(seq);
+        }
+        payload
+    };
+    let axes = |runtime: &Runtime| {
+        let row = row(runtime);
+        (
+            row["activity"].as_str().unwrap().to_owned(),
+            row["demand"].as_str().unwrap().to_owned(),
+        )
+    };
+
+    let mut runtime = runtime();
+    runtime
+        .ingest_hook_status(
+            crate::node::TEST_NODE,
+            PANE,
+            &HookStatusReport {
+                runtime: "claude-code".to_owned(),
+                version: hide_agent_hooks::HOOK_VERSION,
+                session: Some(SESSION.to_owned()),
+                turn: Some(HookTurn::Working),
+                counts: None,
+                session_start: false,
+                waiting: Some(vec![call]),
+            },
+        )
+        .unwrap();
+    runtime.ingest_session(Ok(claude("blocked", 4)));
+    assert_eq!(axes(&runtime).1, "approval");
+
+    // The operator refuses with a note; Herdr reads the agent working again,
+    // and the read under that state finds the refusal.
+    let record = PaneRecord {
+        owner: hide_session::label_reference_token("claude", "id", SESSION),
+        turns: transcript.turns,
+        turns_seq: Some(5),
+        ..PaneRecord::default()
+    };
+    runtime.set_label_overlay(LabelOverlay::of_records(
+        [(&PANE.to_owned(), &record)],
+        true,
+        false,
+    ));
+    runtime.ingest_session(Ok(claude("working", 5)));
+    assert_eq!(axes(&runtime), ("working".to_owned(), "none".to_owned()));
 }

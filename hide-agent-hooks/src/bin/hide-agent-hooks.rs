@@ -20,7 +20,7 @@ use std::process::{Command, ExitCode, Stdio};
 use std::time::{Duration, Instant};
 
 use hide_agent_adapter::HookDialect;
-use hide_agent_hooks::counters::{self, Change, Reporter, SubagentInput};
+use hide_agent_hooks::counters::{self, Change, Reporter, Said, SubagentInput};
 use hide_agent_hooks::diagnosis::Diagnosis;
 use hide_agent_hooks::guidance::{self, GuidanceAgent};
 use hide_agent_hooks::report::{self, HookCounts, HookStatusReport, HookTurn};
@@ -510,13 +510,13 @@ fn antigravity_event(event: HookEvent, started: Instant) {
     };
     let counted = hide_agent_adapter::adapter(runtime)
         .is_some_and(|adapter| adapter.subagent_counts.is_some());
-    let report = |change, who, turn| {
+    let report = |change, who, turn: Option<HookTurn>| {
         report_pane(
             &home,
             event,
             change,
             who,
-            Said::turn(turn),
+            Heard::said(turn.map_or(Said::Nothing, Said::Turn)),
             counted,
             Instant::now() + report::REPORT_TIMEOUT,
         )
@@ -788,7 +788,7 @@ fn report_basic(
         event,
         change,
         who,
-        Said::turn(turn),
+        Heard::said(turn.map_or(Said::Nothing, Said::Turn)),
         counted,
         started + report::REPORT_TIMEOUT,
     );
@@ -1203,21 +1203,28 @@ fn run_hook(arguments: &[String], started: Instant) {
     } else {
         Change::None
     };
-    // Claude Code's request names the call it waits on, whose end alone
-    // moves the turn back to working; Codex's waits end at any call of the
+    // Claude Code's request names the call it asks about, whose approval
+    // stays open until that call ends; Codex's waits end at any call of the
     // session, since its tool hooks select only some tools.
     let call = (runtime == Some(AgentRuntime::ClaudeCode) && event == HookEvent::PermissionRequest)
         .then_some(payload.as_ref())
         .flatten()
         .and_then(|(bytes, truncated)| counters::ToolCall::read(bytes, *truncated).key());
+    let said = match &call {
+        Some(call) => Said::Asks(call),
+        None => turn.map_or(Said::Nothing, Said::Turn),
+    };
+    let transcript = payload
+        .as_ref()
+        .and_then(|(bytes, truncated)| counters::ToolCall::read(bytes, *truncated).transcript);
     report_pane(
         &home,
         event,
         change,
         who,
-        Said {
-            turn,
-            call: call.as_deref(),
+        Heard {
+            said,
+            transcript: transcript.as_deref(),
         },
         counted,
         runtime.map_or(Instant::now() + report::REPORT_TIMEOUT, |runtime| {
@@ -1226,17 +1233,20 @@ fn run_hook(arguments: &[String], started: Instant) {
     );
 }
 
-/// What an event says of its session's turn: the turn, and the call a
-/// waiting turn waits on when the event names one.
+/// What one event said of its session ([`counters::Said`]), and the session
+/// file its input names, which records a refusal no event reports.
 #[derive(Clone, Copy)]
-struct Said<'a> {
-    turn: Option<HookTurn>,
-    call: Option<&'a str>,
+struct Heard<'a> {
+    said: Said<'a>,
+    transcript: Option<&'a std::path::Path>,
 }
 
-impl Said<'_> {
-    fn turn(turn: Option<HookTurn>) -> Self {
-        Self { turn, call: None }
+impl<'a> Heard<'a> {
+    fn said(said: Said<'a>) -> Self {
+        Self {
+            said,
+            transcript: None,
+        }
     }
 }
 
@@ -1256,7 +1266,7 @@ fn report_pane(
     event: HookEvent,
     change: Change<'_>,
     who: Reporter<'_>,
-    Said { turn, call }: Said<'_>,
+    Heard { said, transcript }: Heard<'_>,
     counted: bool,
     deadline: Instant,
 ) {
@@ -1267,16 +1277,20 @@ fn report_pane(
         return;
     };
     let Some(agent) = who.agent else { return };
-    let outcome = match counters::apply(home, &pane_id, change, who, turn, call) {
+    let outcome = match counters::apply(home, &pane_id, change, who, said, transcript) {
         Err(error) => Err(format!("the pane's count could not be changed: {error}")),
         Ok(applied) => {
-            let tool = matches!(
-                event,
-                HookEvent::PreToolUse | HookEvent::PostToolUse | HookEvent::PostToolUseFailure
-            );
-            let moved = turn.is_some_and(|turn| applied.previous_turn != Some(turn));
             let starts = event == HookEvent::SessionStart;
-            if !(starts || change != Change::None || (turn.is_some() && (moved || !tool))) {
+            // An event that says something of the turn reports it each time,
+            // and a tool event only when it moved the turn or an approval;
+            // one that says nothing restates neither, so it never brings back
+            // what the core already ended from the session file.
+            let speaks = match said {
+                Said::Nothing => false,
+                Said::Turn(_) | Said::Asks(_) => true,
+                Said::Tool { .. } => applied.moved,
+            };
+            if !(starts || change != Change::None || speaks) {
                 return;
             }
             report::report(
@@ -1284,12 +1298,13 @@ fn report_pane(
                     runtime: agent.to_owned(),
                     version: hide_agent_hooks::HOOK_VERSION,
                     session: who.session.map(str::to_owned),
-                    turn,
+                    turn: speaks.then_some(applied.turn).flatten(),
                     counts: counted.then_some(HookCounts {
                         working: applied.counters.working,
                         done: applied.counters.done,
                     }),
                     session_start: starts,
+                    waiting: speaks.then(|| applied.waiting.clone()),
                 },
                 deadline,
             )
@@ -1303,9 +1318,9 @@ fn report_pane(
 
 /// Reports a Claude Code or Codex event under the session its input names,
 /// or the runtime's last session in the pane's record when the input named
-/// none: a tool call that moves the turn back to working
-/// ([`counters::SessionState::resumed_by`], from the call's input the guard or
-/// the observation read), and a prompt, whose report the outer hook sends
+/// none: a tool call that moves the turn or ends an approval
+/// ([`counters::Said::Tool`], from the call's input the guard or the
+/// observation read), and a prompt, whose report the outer hook sends
 /// beside the inner one, so a prompt hook cut at its budget still records how
 /// its report went (engineering rule 10).
 fn report_recorded_turn(arguments: &[String], payload: Option<&(Vec<u8>, bool)>, started: Instant) {
@@ -1329,25 +1344,23 @@ fn report_recorded_turn(arguments: &[String], payload: Option<&(Vec<u8>, bool)>,
     else {
         return;
     };
-    let named = payload.and_then(|(bytes, truncated)| counters::session_named(bytes, *truncated));
-    let state = counters::session_state(
-        &home,
-        &pane_id,
-        Reporter {
-            agent: Some(runtime.id()),
-            session: named.as_deref(),
-        },
-    );
-    if event != HookEvent::UserPromptSubmit {
-        let call = payload.map(|(bytes, truncated)| counters::ToolCall::read(bytes, *truncated));
-        if !state
-            .as_ref()
-            .is_some_and(|state| state.resumed_by(event, call.as_ref()))
-        {
-            return;
-        }
-    }
-    let session = named.or_else(|| state.and_then(|state| state.session));
+    let session = payload
+        .and_then(|(bytes, truncated)| counters::session_named(bytes, *truncated))
+        .or_else(|| {
+            let runtime_only = Reporter {
+                agent: Some(runtime.id()),
+                session: None,
+            };
+            counters::session_state(&home, &pane_id, runtime_only).and_then(|state| state.session)
+        });
+    let call = payload
+        .map(|(bytes, truncated)| counters::ToolCall::read(bytes, *truncated))
+        .unwrap_or_default();
+    let said = if event == HookEvent::UserPromptSubmit {
+        Said::Turn(HookTurn::Working)
+    } else {
+        Said::Tool { event, call: &call }
+    };
     report_pane(
         &home,
         event,
@@ -1356,7 +1369,10 @@ fn report_recorded_turn(arguments: &[String], payload: Option<&(Vec<u8>, bool)>,
             agent: Some(runtime.id()),
             session: session.as_deref(),
         },
-        Said::turn(Some(HookTurn::Working)),
+        Heard {
+            said,
+            transcript: call.transcript.as_deref(),
+        },
         runtime.dialect().adapter().subagent_counts.is_some(),
         report::deadline(started, runtime, event),
     );

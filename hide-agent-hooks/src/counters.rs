@@ -75,11 +75,13 @@ struct Record {
     /// The turn the last report said, so a tool event reports only a move.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     turn: Option<HookTurn>,
-    /// The tool call a waiting turn waits on ([`ToolCall::key`]), when the
-    /// permission request named it: only that call's end moves the turn
-    /// back to working, so a call that runs beside it does not.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    waiting_call: Option<String>,
+    /// The calls whose permission the operator has not answered yet
+    /// ([`ToolCall::key`]), oldest first: the session's own and its
+    /// subagents'. Each stands until its call ends or the session file
+    /// records its result, whatever the turn does; a turn's end does not
+    /// close a background subagent's dialog.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    waiting: Vec<String>,
 }
 
 impl Record {
@@ -290,12 +292,94 @@ fn valid_subagent(id: &str) -> bool {
 }
 
 /// What a change did to its session's record.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Applied {
     /// The session's counts after the change.
     pub counters: PaneCounters,
     /// The turn the session's last report said, before this change.
     pub previous_turn: Option<HookTurn>,
+    /// Whether the turn or the open approvals moved.
+    pub moved: bool,
+    /// The session's turn after the change.
+    pub turn: Option<HookTurn>,
+    /// The session's open approvals after the change.
+    pub waiting: Vec<String>,
+}
+
+/// What one hook event says of its session's turn and the operator's open
+/// approvals ([`apply`]).
+#[derive(Clone, Copy, Debug)]
+pub enum Said<'a> {
+    /// Nothing of either: a count, a session start.
+    Nothing,
+    /// The turn the event says: a prompt, a `Stop`, an interrupt, a
+    /// notification, a permission request that names no call.
+    Turn(HookTurn),
+    /// A permission request that names the call it asks about.
+    Asks(&'a str),
+    /// One of the session's tool events, its subagents' included.
+    Tool {
+        event: HookEvent,
+        call: &'a ToolCall,
+    },
+}
+
+/// The most approvals one session keeps open at once; crossing it is a
+/// failed hook event the pane's last report failure shows.
+pub const WAITING_LIMIT: usize = 16;
+
+/// Folds what an event says into the session's turn and open approvals.
+///
+/// A prompt and an interrupt close every dialog; a `Stop` ends the turn and
+/// leaves a background subagent's dialog open. A request that names its call
+/// opens that call's approval and leaves the turn alone; one that names none
+/// (Codex, a notification) makes the turn wait while no named one is open.
+/// A tool event ends the approval of the call it ends, its subagent's
+/// included; a call of the session's own after a
+/// turn that ended, rested or waited on nothing named runs the turn again.
+fn fold_said(record: &mut Record, said: Said<'_>) -> io::Result<()> {
+    match said {
+        Said::Nothing => {}
+        Said::Turn(turn @ (HookTurn::Working | HookTurn::Idle)) => {
+            record.turn = Some(turn);
+            record.waiting.clear();
+        }
+        Said::Turn(HookTurn::Done) => record.turn = Some(HookTurn::Done),
+        Said::Turn(HookTurn::Waiting) => {
+            if record.waiting.is_empty() {
+                record.turn = Some(HookTurn::Waiting);
+            }
+        }
+        Said::Asks(call) => {
+            if !record.waiting.iter().any(|open| open == call) {
+                if record.waiting.len() >= WAITING_LIMIT {
+                    return Err(io::Error::new(
+                        io::ErrorKind::InvalidInput,
+                        format!("a session has more than {WAITING_LIMIT} open approvals"),
+                    ));
+                }
+                record.waiting.push(call.to_owned());
+            }
+        }
+        Said::Tool { event, call } => {
+            if matches!(
+                event,
+                HookEvent::PostToolUse | HookEvent::PostToolUseFailure
+            ) && let Some(at) = record.waiting.iter().position(|open| call.ends(open))
+            {
+                record.waiting.remove(at);
+            }
+            if !call.subagent
+                && matches!(
+                    record.turn,
+                    Some(HookTurn::Done | HookTurn::Idle | HookTurn::Waiting)
+                )
+            {
+                record.turn = Some(HookTurn::Working);
+            }
+        }
+    }
+    Ok(())
 }
 
 /// One session's record as a reader outside the hook sees it.
@@ -364,36 +448,8 @@ pub struct SessionState {
     pub session: Option<String>,
     /// The turn its last report said.
     pub turn: Option<HookTurn>,
-    /// The call a waiting turn waits on, when its request named one.
-    pub waiting_call: Option<String>,
-}
-
-impl SessionState {
-    /// Whether a tool event `call` of this session moves its turn back to
-    /// working: a turn that ended, rested or waits on nothing named does at
-    /// any of the session's own calls, and one that waits on a named call
-    /// when that call ends, its subagent's included, or when the session
-    /// file records an answer to it ([`answered`]): the operator's refusal
-    /// sends no event. A session with no turn yet is left to its prompt's
-    /// report, and a subagent's other calls are the subagent's, which only
-    /// its counts follow; so an ordinary tool call reads one small file and
-    /// starts no process.
-    pub fn resumed_by(&self, event: HookEvent, call: Option<&ToolCall>) -> bool {
-        match (self.turn, &self.waiting_call) {
-            (None | Some(HookTurn::Working), _) => false,
-            (Some(HookTurn::Waiting), Some(waited)) => {
-                let ended = matches!(
-                    event,
-                    HookEvent::PostToolUse | HookEvent::PostToolUseFailure
-                ) && call.is_some_and(|call| call.ends(waited));
-                ended
-                    || call
-                        .and_then(|call| call.transcript.as_deref())
-                        .is_some_and(|transcript| answered(transcript, waited))
-            }
-            _ => !call.is_some_and(|call| call.subagent),
-        }
-    }
+    /// Its open approvals.
+    pub waiting: Vec<String>,
 }
 
 pub fn session_state(home: &Path, pane_id: &str, who: Reporter<'_>) -> Option<SessionState> {
@@ -402,7 +458,7 @@ pub fn session_state(home: &Path, pane_id: &str, who: Reporter<'_>) -> Option<Se
     Some(SessionState {
         session: record.session.clone(),
         turn: record.turn,
-        waiting_call: record.waiting_call.clone(),
+        waiting: record.waiting.clone(),
     })
 }
 
@@ -416,7 +472,7 @@ pub struct ToolCall {
     name: Option<String>,
     input: Option<String>,
     /// The session file the agent keeps, which records a refused call.
-    transcript: Option<PathBuf>,
+    pub transcript: Option<PathBuf>,
 }
 
 impl ToolCall {
@@ -432,7 +488,7 @@ impl ToolCall {
             return Self {
                 subagent: input.agent_id.is_some_and(|id| !id.is_empty()),
                 name: input.tool_name,
-                input: input.tool_input.as_ref().map(digest),
+                input: input.tool_input.as_ref().map(hide_session::calls::digest),
                 transcript: input.transcript_path,
             };
         }
@@ -448,104 +504,19 @@ impl ToolCall {
     /// for an input that named no tool.
     pub fn key(&self) -> Option<String> {
         let name = self.name.as_deref()?;
-        Some(format!(
-            "{name}:{}",
-            self.input.as_deref().unwrap_or_default()
-        ))
+        match self.input.as_deref() {
+            Some(input) => hide_session::calls::key_by_name(name).map(|key| key + input),
+            None => hide_session::calls::key_by_name(name),
+        }
     }
 
     /// Whether this is the call `waited` names: the same tool, with the same
     /// input when both were read whole.
     fn ends(&self, waited: &str) -> bool {
-        let Some((name, input)) = waited.split_once(':') else {
-            return false;
-        };
-        self.name.as_deref() == Some(name)
-            && (input.is_empty() || self.input.as_deref().is_none_or(|own| own == input))
+        self.name
+            .as_deref()
+            .is_some_and(|name| hide_session::calls::ends(waited, name, self.input.as_deref()))
     }
-}
-
-/// How much of the session file's end [`answered`] reads: the waited call
-/// and what answered it are the file's last records while the turn waits.
-const TRANSCRIPT_TAIL_BYTES: u64 = 256 * 1024;
-
-/// Whether Claude Code's session file at `transcript` records a result for
-/// the call `waited` names: the last call of that tool, the one with the
-/// same input when one has it. A refusal in the permission dialog writes
-/// that result and sends no hook event, so a session whose next call is
-/// made after a refusal with the operator's feedback goes on here. A call
-/// beyond the file's last [`TRANSCRIPT_TAIL_BYTES`], or a file that cannot
-/// be read, is not answered, and the turn waits for its end or `Stop`.
-pub fn answered(transcript: &Path, waited: &str) -> bool {
-    use std::io::{Read, Seek, SeekFrom};
-    #[derive(Deserialize)]
-    struct Record {
-        message: Option<Message>,
-    }
-    #[derive(Deserialize)]
-    struct Message {
-        content: Option<serde_json::Value>,
-    }
-    let Some((name, input)) = waited.split_once(':') else {
-        return false;
-    };
-    let Ok(mut file) = fs::File::open(transcript) else {
-        return false;
-    };
-    let Ok(length) = file.seek(SeekFrom::End(0)) else {
-        return false;
-    };
-    let start = length.saturating_sub(TRANSCRIPT_TAIL_BYTES);
-    let mut tail = Vec::new();
-    if file.seek(SeekFrom::Start(start)).is_err() || file.read_to_end(&mut tail).is_err() {
-        return false;
-    }
-    // A read that starts inside a record skips to the next one.
-    let whole = if start == 0 {
-        &tail[..]
-    } else {
-        match tail.iter().position(|&byte| byte == b'\n') {
-            Some(at) => &tail[at + 1..],
-            None => return false,
-        }
-    };
-    let (mut same, mut last) = (None, None);
-    let mut results = HashSet::new();
-    for line in whole.split(|&byte| byte == b'\n') {
-        let Some(blocks) = serde_json::from_slice::<Record>(line)
-            .ok()
-            .and_then(|record| record.message?.content)
-        else {
-            continue;
-        };
-        for block in blocks.as_array().into_iter().flatten() {
-            let id = block["id"].as_str();
-            match block["type"].as_str() {
-                Some("tool_use") if block["name"].as_str() == Some(name) => {
-                    if !input.is_empty() && digest(&block["input"]) == input {
-                        same = id.map(str::to_owned);
-                    }
-                    last = id.map(str::to_owned);
-                }
-                Some("tool_result") => {
-                    if let Some(answered) = block["tool_use_id"].as_str() {
-                        results.insert(answered.to_owned());
-                    }
-                }
-                _ => {}
-            }
-        }
-    }
-    same.or(last).is_some_and(|call| results.contains(&call))
-}
-
-fn digest(input: &serde_json::Value) -> String {
-    use sha2::Digest;
-    let bytes = serde_json::to_vec(input).unwrap_or_default();
-    sha2::Sha256::digest(&bytes)[..8]
-        .iter()
-        .map(|byte| format!("{byte:02x}"))
-        .collect()
 }
 
 /// The tool an input cut at the read limit names, from the bytes that arrived.
@@ -593,7 +564,7 @@ pub fn change(
     change: Change<'_>,
     who: Reporter<'_>,
 ) -> io::Result<PaneCounters> {
-    apply(home, pane_id, change, who, None, None).map(|applied| applied.counters)
+    apply(home, pane_id, change, who, Said::Nothing, None).map(|applied| applied.counters)
 }
 
 /// Applies one [`Change`] to `who`'s record, and notes `turn` as the one its
@@ -611,8 +582,8 @@ pub fn apply(
     pane_id: &str,
     change: Change<'_>,
     who: Reporter<'_>,
-    turn: Option<HookTurn>,
-    call: Option<&str>,
+    said: Said<'_>,
+    transcript: Option<&Path>,
 ) -> io::Result<Applied> {
     let path = record_path(home, pane_id);
     if let Some(parent) = path.parent() {
@@ -626,6 +597,7 @@ pub fn apply(
         None => Record::default(),
     };
     let previous_turn = record.turn;
+    let previous_waiting = record.waiting.clone();
     match change {
         // A session that names itself has its own record already, or is the
         // record's own (a resume or a compaction keeps its subagents); one
@@ -635,7 +607,7 @@ pub fn apply(
                 record = Record::default();
             }
             record.turn = None;
-            record.waiting_call = None;
+            record.waiting.clear();
         }
         Change::Started(Some(subagent)) => {
             if let Some(at) = record.finished.iter().position(|id| id == subagent) {
@@ -682,15 +654,18 @@ pub fn apply(
         }
         Change::None => {}
     }
-    match turn {
-        Some(HookTurn::Waiting) if call.is_none() && previous_turn == Some(HookTurn::Waiting) => {}
-        Some(HookTurn::Waiting) => record.waiting_call = call.map(str::to_owned),
-        Some(_) => record.waiting_call = None,
-        None => {}
+    fold_said(&mut record, said)?;
+    // A refusal in the dialog sends no event: whatever event comes next
+    // with the session file's path finds the refused call's result there.
+    if let Some(transcript) = transcript
+        && !record.waiting.is_empty()
+    {
+        record
+            .waiting
+            .retain(|open| !hide_session::calls::answered_in_claude_file(transcript, open));
     }
-    if turn.is_some() {
-        record.turn = turn;
-    }
+    let moved = record.turn != previous_turn || record.waiting != previous_waiting;
+    let (turn, waiting) = (record.turn, record.waiting.clone());
     record.version = Some(HOOK_VERSION);
     record.agent = who.agent.map(str::to_owned);
     if who.session.is_some() {
@@ -709,6 +684,9 @@ pub fn apply(
     Ok(Applied {
         counters,
         previous_turn,
+        moved,
+        turn,
+        waiting,
     })
 }
 
@@ -876,123 +854,124 @@ mod tests {
         assert!(!ToolCall::read(br#"{"tool_name":"Read","tool_input":{}}"#, false).ends(&key));
     }
 
-    #[test]
-    fn a_wait_keeps_the_call_its_request_named_through_a_notification_of_it() {
-        let root = home("waited-call");
-        let pane = "w1:p1";
-        apply(
-            &root,
-            pane,
-            Change::None,
-            WHO,
-            Some(HookTurn::Working),
-            None,
-        )
-        .unwrap();
-        apply(
-            &root,
-            pane,
-            Change::None,
-            WHO,
-            Some(HookTurn::Waiting),
-            Some("Bash:ab"),
-        )
-        .unwrap();
-        apply(
-            &root,
-            pane,
-            Change::None,
-            WHO,
-            Some(HookTurn::Waiting),
-            None,
-        )
-        .unwrap();
-        let state = session_state(&root, pane, WHO).unwrap();
-        assert_eq!(state.waiting_call.as_deref(), Some("Bash:ab"));
-        let sibling = ToolCall {
-            subagent: false,
-            name: Some("Read".to_owned()),
-            input: Some("cd".to_owned()),
+    fn call(name: &str, input: &str, subagent: bool) -> ToolCall {
+        ToolCall {
+            subagent,
+            name: Some(name.to_owned()),
+            input: Some(input.to_owned()),
             transcript: None,
-        };
-        let waited = ToolCall {
-            name: Some("Bash".to_owned()),
-            input: Some("ab".to_owned()),
-            ..sibling.clone()
-        };
-        assert!(!state.resumed_by(HookEvent::PreToolUse, Some(&sibling)));
-        assert!(!state.resumed_by(HookEvent::PostToolUse, Some(&sibling)));
-        assert!(!state.resumed_by(HookEvent::PreToolUse, Some(&waited)));
-        assert!(state.resumed_by(HookEvent::PostToolUseFailure, Some(&waited)));
-        // A subagent's own waited call ends its wait; its other calls do not.
-        let subagent = |call: &ToolCall| ToolCall {
-            subagent: true,
-            ..call.clone()
-        };
-        assert!(state.resumed_by(HookEvent::PostToolUse, Some(&subagent(&waited))));
-        assert!(!state.resumed_by(HookEvent::PostToolUse, Some(&subagent(&sibling))));
-        // Any other turn forgets the call.
-        apply(&root, pane, Change::None, WHO, Some(HookTurn::Idle), None).unwrap();
-        let state = session_state(&root, pane, WHO).unwrap();
-        assert_eq!(state.waiting_call, None);
-        assert!(state.resumed_by(HookEvent::PreToolUse, Some(&sibling)));
-        assert!(!state.resumed_by(
-            HookEvent::PreToolUse,
-            Some(&ToolCall {
-                subagent: true,
-                ..sibling
-            })
-        ));
+        }
+    }
+
+    fn said(root: &Path, said: Said<'_>) -> Applied {
+        apply(root, "w1:p1", Change::None, WHO, said, None).unwrap()
+    }
+
+    /// A request opens its call's approval and a call's end closes it,
+    /// whoever made the call; a call beside it, a notification of it and a
+    /// `Stop` leave it open (Claude Code 2.1.314 runs a subagent in the
+    /// background, so the main turn can end while its dialog is open).
+    #[test]
+    fn an_approval_stays_open_until_its_call_ends_through_a_stop_and_a_sibling() {
+        let root = home("open-approvals");
+        let bash = call("Bash", "ab", true);
+        let read = call("Read", "cd", false);
+        said(&root, Said::Turn(HookTurn::Working));
+        let asked = said(&root, Said::Asks("Bash:ab"));
+        assert!(asked.moved);
+        assert_eq!(asked.waiting, ["Bash:ab"]);
+        assert_eq!(asked.turn, Some(HookTurn::Working));
+        for step in [
+            Said::Tool {
+                event: HookEvent::PreToolUse,
+                call: &read,
+            },
+            Said::Tool {
+                event: HookEvent::PostToolUse,
+                call: &read,
+            },
+            Said::Turn(HookTurn::Waiting),
+            Said::Tool {
+                event: HookEvent::PreToolUse,
+                call: &bash,
+            },
+        ] {
+            let applied = said(&root, step);
+            assert!(!applied.moved, "{step:?}");
+            assert_eq!(applied.waiting, ["Bash:ab"]);
+        }
+        let stopped = said(&root, Said::Turn(HookTurn::Done));
+        assert_eq!(
+            (stopped.turn, stopped.waiting.as_slice()),
+            (Some(HookTurn::Done), &["Bash:ab".to_owned()][..])
+        );
+        // The subagent's approved call ends: the dialog is closed, and the
+        // turn the main session ended stays ended.
+        let ended = said(
+            &root,
+            Said::Tool {
+                event: HookEvent::PostToolUse,
+                call: &bash,
+            },
+        );
+        assert!(ended.moved);
+        assert_eq!((ended.turn, ended.waiting.len()), (Some(HookTurn::Done), 0));
+        // A notification that names no call waits while none is open, and
+        // the session's next call runs the turn again.
+        assert_eq!(
+            said(&root, Said::Turn(HookTurn::Waiting)).turn,
+            Some(HookTurn::Waiting)
+        );
+        let resumed = said(
+            &root,
+            Said::Tool {
+                event: HookEvent::PreToolUse,
+                call: &read,
+            },
+        );
+        assert_eq!(resumed.turn, Some(HookTurn::Working));
+        // A prompt or an interrupt closes every dialog.
+        said(&root, Said::Asks("Bash:ab"));
+        assert!(said(&root, Said::Turn(HookTurn::Idle)).waiting.is_empty());
         fs::remove_dir_all(&root).ok();
     }
 
-    /// Claude Code 2.1.312 records a refusal in the permission dialog as
-    /// the call's result, and sends no hook event for it.
     #[test]
-    fn a_refused_call_is_answered_in_the_session_file_and_a_pending_one_is_not() {
-        let root = home("answered");
-        let transcript = root.join("session.jsonl");
-        let input = serde_json::json!({"command": "rm -rf build", "description": "Clean"});
-        let waited = format!("Bash:{}", digest(&input));
-        let call = serde_json::json!({"type": "assistant", "message": {"role": "assistant",
-        "content": [
-            {"type": "tool_use", "id": "toolu_read", "name": "Read",
-             "input": {"file_path": "/x"}},
-            {"type": "tool_use", "id": "toolu_bash", "name": "Bash", "input": input},
-        ]}});
-        let read_result = serde_json::json!({"type": "user", "message": {"role": "user",
-            "content": [{"type": "tool_result", "tool_use_id": "toolu_read", "content": "x"}]}});
-        let refusal = serde_json::json!({"type": "user", "message": {"role": "user",
-            "content": [{"type": "tool_result", "tool_use_id": "toolu_bash",
-                         "content": "User refused permission to run tool", "is_error": true}]},
-            "permissionDecision": {"decision": "reject", "source": "user_reject"}});
-        // A long record before the call leaves the read starting inside it.
-        let filler = serde_json::json!({"type": "user", "message": {"role": "user",
-            "content": "x".repeat(TRANSCRIPT_TAIL_BYTES as usize)}});
-        fs::write(&transcript, format!("{filler}\n{call}\n{read_result}\n")).unwrap();
-        assert!(!answered(&transcript, &waited), "the dialog is still open");
-        fs::write(
-            &transcript,
-            format!("{filler}\n{call}\n{read_result}\n{refusal}\n"),
-        )
-        .unwrap();
-        assert!(answered(&transcript, &waited));
-        // A call known by its tool alone is the tool's last call.
-        assert!(answered(&transcript, "Bash:"));
-        assert!(!answered(&transcript, "Edit:"));
-        assert!(!answered(&root.join("missing.jsonl"), &waited));
+    fn a_session_keeps_at_most_its_limit_of_open_approvals() {
+        let root = home("approval-limit");
+        for index in 0..WAITING_LIMIT {
+            said(&root, Said::Asks(&format!("Bash:{index:016x}")));
+        }
+        assert!(
+            apply(
+                &root,
+                "w1:p1",
+                Change::None,
+                WHO,
+                Said::Asks("Bash:ffff"),
+                None
+            )
+            .is_err()
+        );
+        fs::remove_dir_all(&root).ok();
+    }
 
-        // A waiting session goes on at its next call once the refusal is in.
-        apply(
-            &root,
-            "w1:p1",
-            Change::None,
-            WHO,
-            Some(HookTurn::Waiting),
-            Some(&waited),
-        )
-        .unwrap();
-        let state = session_state(&root, "w1:p1", WHO).unwrap();
+    /// A refusal in the dialog sends no event: the session's next tool
+    /// event finds the call's result in the session file.
+    #[test]
+    fn a_refusal_the_session_file_records_closes_the_approval_at_the_next_call() {
+        let root = home("refused");
+        let transcript = root.join("session.jsonl");
+        let input = serde_json::json!({"command": "rm -rf build"});
+        let waited = hide_session::calls::key("Bash", &input).unwrap();
+        let call = serde_json::json!({"type": "assistant", "message": {"role": "assistant",
+            "content": [{"type": "tool_use", "id": "toolu_bash", "name": "Bash", "input": input}]}});
+        let refusal = serde_json::json!({"type": "user", "message": {"role": "user",
+            "content": [{"type": "tool_result", "tool_use_id": "toolu_bash", "is_error": true,
+                         "content": "User refused permission to run tool"}]}});
+        fs::write(&transcript, format!("{call}\n{refusal}\n")).unwrap();
+        said(&root, Said::Turn(HookTurn::Working));
+        said(&root, Said::Asks(&waited));
         let next = ToolCall::read(
             serde_json::json!({"tool_name": "Edit", "tool_input": {},
                 "transcript_path": transcript})
@@ -1000,7 +979,20 @@ mod tests {
             .as_bytes(),
             false,
         );
-        assert!(state.resumed_by(HookEvent::PreToolUse, Some(&next)));
+        let applied = apply(
+            &root,
+            "w1:p1",
+            Change::None,
+            WHO,
+            Said::Tool {
+                event: HookEvent::PreToolUse,
+                call: &next,
+            },
+            next.transcript.as_deref(),
+        )
+        .unwrap();
+        assert!(applied.moved);
+        assert!(applied.waiting.is_empty());
         fs::remove_dir_all(&root).ok();
     }
 
@@ -1327,15 +1319,31 @@ mod tests {
             pane,
             Change::None,
             WHO,
-            Some(HookTurn::Working),
+            Said::Turn(HookTurn::Working),
             None,
         )
         .unwrap();
         assert_eq!(first.previous_turn, None);
-        let again = apply(&root, pane, Change::None, WHO, Some(HookTurn::Done), None).unwrap();
+        let again = apply(
+            &root,
+            pane,
+            Change::None,
+            WHO,
+            Said::Turn(HookTurn::Done),
+            None,
+        )
+        .unwrap();
         assert_eq!(again.previous_turn, Some(HookTurn::Working));
-        apply(&root, pane, Change::SessionStarted, WHO, None, None).unwrap();
-        let after = apply(&root, pane, Change::None, WHO, None, None).unwrap();
+        apply(
+            &root,
+            pane,
+            Change::SessionStarted,
+            WHO,
+            Said::Nothing,
+            None,
+        )
+        .unwrap();
+        let after = apply(&root, pane, Change::None, WHO, Said::Nothing, None).unwrap();
         assert_eq!(after.previous_turn, None);
         fs::remove_dir_all(&root).unwrap();
     }

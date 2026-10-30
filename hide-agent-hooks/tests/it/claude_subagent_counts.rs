@@ -80,12 +80,30 @@ impl Pane<'_> {
             .collect()
     }
 
-    /// The turn of every report `session` sent, `None` for a report of
-    /// counts alone.
+    /// What every report `session` sent says the session is doing, as the
+    /// core reads it: waiting while a call's approval is open, otherwise the
+    /// turn; `None` for a report of counts alone.
     fn turns(&self, session: &str) -> Vec<Option<String>> {
         self.reports(session)
             .iter()
-            .map(|report| report["turn"].as_str().map(str::to_owned))
+            .map(|report| {
+                let open = report["waiting"]
+                    .as_array()
+                    .is_some_and(|waiting| !waiting.is_empty());
+                if open {
+                    Some("waiting".to_owned())
+                } else {
+                    report["turn"].as_str().map(str::to_owned)
+                }
+            })
+            .collect()
+    }
+
+    /// The open approvals of every report `session` sent that says them.
+    fn waits(&self, session: &str) -> Vec<usize> {
+        self.reports(session)
+            .iter()
+            .filter_map(|report| report["waiting"].as_array().map(Vec::len))
             .collect()
     }
 
@@ -397,4 +415,100 @@ fn the_next_call_after_a_refusal_the_session_file_records_ends_the_wait() {
             Some("working".to_owned()),
         ]
     );
+}
+
+/// D-10, as Claude Code 2.1.314 ran it: the Agent runs in the background,
+/// its Bash asks for permission under the main session's id, and the main
+/// session's `Stop` and the dialog's notification come while the dialog is
+/// open. The wait stands through both and ends at that Bash call's end,
+/// leaving the turn the main session ended.
+#[test]
+fn a_background_subagents_dialog_outlives_the_main_stop_and_ends_at_its_call() {
+    let machine = Machine::new("registered");
+    let pane = Pane { machine: &machine };
+    let s = PANE_SESSION;
+    let subagent_bash = |event: &str| {
+        pane.event(
+            event,
+            json!({"session_id": s, "agent_id": "a1", "agent_type": "general-purpose",
+                   "hook_event_name": event, "tool_name": "Bash",
+                   "tool_input": {"command": "touch /tmp/x", "description": "Touch"},
+                   "tool_response": {}}),
+        );
+    };
+    pane.session_start(s, "startup");
+    pane.event(
+        "UserPromptSubmit",
+        json!({"session_id": s, "hook_event_name": "UserPromptSubmit", "prompt": "go"}),
+    );
+    pane.subagent("SubagentStart", s, "a1");
+    subagent_bash("PreToolUse");
+    subagent_bash("PermissionRequest");
+    pane.stop(s, &["a1"]);
+    pane.event(
+        "Notification",
+        json!({"session_id": s, "hook_event_name": "Notification",
+               "notification_type": "permission_prompt", "message": "Claude needs your permission"}),
+    );
+    subagent_bash("PostToolUse");
+    pane.subagent("SubagentStop", s, "a1");
+
+    let turn = |name: &str| Some(name.to_owned());
+    assert_eq!(
+        pane.turns(s),
+        [
+            None, // SessionStart
+            turn("working"),
+            None, // SubagentStart counts
+            turn("waiting"),
+            turn("waiting"), // the main Stop leaves the dialog open
+            turn("waiting"),
+            turn("done"), // the approved call ended
+            None,         // SubagentStop counts
+        ]
+    );
+    assert_eq!(pane.waits(s), [0, 1, 1, 1, 0]);
+}
+
+/// D-10: after a refusal with the operator's feedback the turn may only
+/// write text, so the next event is its `Stop`, which finds the refused
+/// call's result in the session file and closes its approval.
+#[test]
+fn a_stop_after_a_refusal_the_session_file_records_leaves_no_approval_open() {
+    let machine = Machine::new("registered");
+    let pane = Pane { machine: &machine };
+    let s = PANE_SESSION;
+    let folder = tempfile::tempdir().unwrap();
+    let transcript = folder.path().join(format!("{s}.jsonl"));
+    let bash = json!({"command": "rm -rf build"});
+    std::fs::write(
+        &transcript,
+        format!(
+            "{}\n{}\n",
+            json!({"type": "assistant", "message": {"role": "assistant", "content": [
+                {"type": "tool_use", "id": "toolu_bash", "name": "Bash", "input": bash}]}}),
+            json!({"type": "user", "message": {"role": "user", "content": [
+                {"type": "tool_result", "tool_use_id": "toolu_bash", "is_error": true,
+                 "content": "The user doesn't want to proceed with this tool use."}]}}),
+        ),
+    )
+    .unwrap();
+    pane.session_start(s, "startup");
+    pane.event(
+        "UserPromptSubmit",
+        json!({"session_id": s, "transcript_path": transcript,
+               "hook_event_name": "UserPromptSubmit", "prompt": "clean up"}),
+    );
+    pane.event(
+        "PermissionRequest",
+        json!({"session_id": s, "transcript_path": transcript,
+               "hook_event_name": "PermissionRequest", "tool_name": "Bash", "tool_input": bash}),
+    );
+    pane.event(
+        "Stop",
+        json!({"session_id": s, "transcript_path": transcript, "hook_event_name": "Stop",
+               "stop_hook_active": false}),
+    );
+    assert_eq!(pane.waits(s).last(), Some(&0));
+    assert_eq!(pane.turns(s).last(), Some(&Some("done".to_owned())));
 }

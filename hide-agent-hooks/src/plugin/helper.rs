@@ -497,6 +497,7 @@ fn subagents(home: &Path, agent: &Agent, input: Input, started: Instant) -> Valu
                 done: counts.done,
             }),
             session_start: false,
+            waiting: None,
         },
         started + report::REPORT_TIMEOUT,
     );
@@ -515,24 +516,32 @@ fn turn(home: &Path, agent: &Agent, input: Input, started: Instant) -> Value {
     }
     let who = reporter(agent, &input);
     let counted = agent.adapter.subagent_counts.is_some();
-    let outcome = counters::apply(home, &pane, counters::Change::None, who, Some(turn), None)
-        .map_err(|error| format!("the pane's record could not be changed: {error}"))
-        .and_then(|applied| {
-            report::report(
-                &report::HookStatusReport {
-                    runtime: agent.runtime().to_owned(),
-                    version: hide_agent_hooks::HOOK_VERSION,
-                    session: who.session.map(str::to_owned),
-                    turn: Some(turn),
-                    counts: counted.then_some(report::HookCounts {
-                        working: applied.counters.working,
-                        done: applied.counters.done,
-                    }),
-                    session_start: false,
-                },
-                started + report::REPORT_TIMEOUT,
-            )
-        });
+    let outcome = counters::apply(
+        home,
+        &pane,
+        counters::Change::None,
+        who,
+        counters::Said::Turn(turn),
+        None,
+    )
+    .map_err(|error| format!("the pane's record could not be changed: {error}"))
+    .and_then(|applied| {
+        report::report(
+            &report::HookStatusReport {
+                runtime: agent.runtime().to_owned(),
+                version: hide_agent_hooks::HOOK_VERSION,
+                session: who.session.map(str::to_owned),
+                turn: Some(turn),
+                counts: counted.then_some(report::HookCounts {
+                    working: applied.counters.working,
+                    done: applied.counters.done,
+                }),
+                session_start: false,
+                waiting: None,
+            },
+            started + report::REPORT_TIMEOUT,
+        )
+    });
     let _ = report::record_outcome(home, &pane, agent.runtime(), "turn", &outcome);
     json!({ "reported": outcome.is_ok() })
 }

@@ -57,6 +57,12 @@ pub struct HookStatusReport {
     /// turn the pane's earlier session left.
     #[serde(default)]
     pub session_start: bool,
+    /// The calls whose permission the operator has not answered yet
+    /// (`counters::Said::Asks`, `hide_session::calls::key`), oldest first:
+    /// the session waits on the operator while any is open, whatever its
+    /// turn says. Absent for an event that says nothing of them.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub waiting: Option<Vec<String>>,
 }
 
 /// Where a session's turn stands, as its hook saw it.
@@ -218,6 +224,7 @@ mod tests {
                 done: 5,
             }),
             session_start: false,
+            waiting: None,
         };
         assert_eq!(
             serde_json::to_value(&report).unwrap(),
@@ -246,6 +253,7 @@ mod tests {
                 turn: Some(HookTurn::Working),
                 counts: None,
                 session_start: false,
+                waiting: None,
             },
             started + REPORT_TIMEOUT,
         );

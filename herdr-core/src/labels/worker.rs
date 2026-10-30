@@ -1655,6 +1655,7 @@ impl LabelWorker {
             record.user_turn(),
             record.wake_read(),
             record.turn_ended(),
+            record.answered_calls(),
         );
         let lost_before = record
             .turns
@@ -1667,6 +1668,7 @@ impl LabelWorker {
             record.user_turn(),
             record.wake_read(),
             record.turn_ended(),
+            record.answered_calls(),
         ) != waited;
         // The read the turn's end was owed landed. The read moved `turns_seq`
         // to the state it was owed for, so the release is published with it.

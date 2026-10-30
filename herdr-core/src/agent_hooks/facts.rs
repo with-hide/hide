@@ -62,7 +62,22 @@ struct SessionFact {
     /// interruption, which sends neither `Stop` nor always `idle_prompt`).
     #[serde(skip)]
     turn_seq: Option<u64>,
+    /// The calls whose permission the operator has not answered yet, as the
+    /// hook last said them: the session waits on the operator while any is
+    /// open, whatever `turn` says (a background subagent's dialog outlives
+    /// the main turn's `Stop`).
+    #[serde(skip)]
+    waiting: Vec<String>,
+    /// Herdr's state sequence when `waiting` was last laid on the agent: a
+    /// session read under a later state that finds a call's result ends
+    /// its approval (a refusal in the dialog sends no hook event).
+    #[serde(skip)]
+    waiting_seq: Option<u64>,
 }
+
+/// The most open approvals one session reports; the hook keeps the same
+/// bound (`hide_agent_hooks::counters::WAITING_LIMIT`).
+const WAITING_LIMIT: usize = hide_agent_hooks::counters::WAITING_LIMIT;
 
 #[derive(Clone, Debug, Default, Eq, PartialEq, Deserialize, Serialize)]
 struct PaneFacts {
@@ -177,6 +192,14 @@ impl HookFacts {
         if !self.panes.contains_key(pane) && self.panes.len() >= PANE_LIMIT {
             return Err("hook_facts_full");
         }
+        if report.waiting.as_ref().is_some_and(|waiting| {
+            waiting.len() > WAITING_LIMIT
+                || waiting
+                    .iter()
+                    .any(|call| call.len() > hide_session::calls::NAME_LIMIT + 17)
+        }) {
+            return Err("hook_waiting_invalid");
+        }
         let facts = self.panes.entry(pane.to_owned()).or_default();
         let before = facts.clone();
         let same = |fact: &SessionFact| {
@@ -198,6 +221,8 @@ impl HookFacts {
                 counts: None,
                 turn: None,
                 turn_seq: None,
+                waiting: Vec::new(),
+                waiting_seq: None,
             },
         };
         facts.reported_since_herdr = true;
@@ -212,6 +237,13 @@ impl HookFacts {
         if report.session_start {
             // A resumed or compacted session has no turn running yet.
             fact.turn = None;
+            fact.waiting.clear();
+        }
+        if let Some(waiting) = &report.waiting
+            && *waiting != fact.waiting
+        {
+            fact.waiting.clone_from(waiting);
+            fact.waiting_seq = None;
         }
         fact.turn = match (report.turn, fact.turn) {
             // A prompt that waits after a finished turn is that turn's rest.
@@ -274,7 +306,11 @@ impl HookFacts {
                 continue;
             };
             end_by_session_read(fact, agent);
-            agent.hook = fact.turn;
+            agent.hook = if fact.waiting.is_empty() {
+                fact.turn
+            } else {
+                Some(HookTurn::Waiting)
+            };
             tokens.insert(
                 pane,
                 PaneHookTokens {
@@ -329,6 +365,7 @@ fn herdr_session(agent: &SessionAgentPayload) -> Option<&str> {
 /// read is the later fact, so the turn stands until the session's next hook
 /// event or that read, and no timer is involved (D-9).
 fn end_by_session_read(fact: &mut SessionFact, agent: &SessionAgentPayload) {
+    close_answered_waits(fact, agent);
     if fact.turn.is_some() && fact.turn_seq.is_none() {
         fact.turn_seq = agent.state_change_seq;
     }
@@ -348,6 +385,33 @@ fn end_by_session_read(fact: &mut SessionFact, agent: &SessionAgentPayload) {
             ) => Some(HookTurn::Idle),
             None => return,
         };
+    }
+}
+
+/// Ends each open approval whose call the session read, made under a later
+/// Herdr state than the one the approval was first laid under, finds a
+/// result for: the call ran, or the operator refused it in the dialog,
+/// which sends no hook event and lets the turn go on writing (D-9, D-10).
+fn close_answered_waits(fact: &mut SessionFact, agent: &SessionAgentPayload) {
+    if fact.waiting.is_empty() {
+        return;
+    }
+    if fact.waiting_seq.is_none() {
+        fact.waiting_seq = agent.state_change_seq;
+    }
+    let (Some(since), Some(now)) = (fact.waiting_seq, agent.state_change_seq) else {
+        return;
+    };
+    let Some(answered) = agent.facts.as_ref().map(|facts| &facts.answered_calls) else {
+        return;
+    };
+    if now > since && !answered.is_empty() {
+        fact.waiting.retain(|open| {
+            !answered.iter().any(|call| {
+                call.split_once(':')
+                    .is_some_and(|(name, input)| hide_session::calls::ends(open, name, Some(input)))
+            })
+        });
     }
 }
 
@@ -401,6 +465,8 @@ fn seeded_facts(records: Vec<hide_agent_hooks::counters::SessionRecord>) -> Pane
             session: record.session,
             turn: None,
             turn_seq: None,
+            waiting: Vec::new(),
+            waiting_seq: None,
         })
         .collect();
     PaneFacts {
@@ -444,6 +510,7 @@ mod tests {
             turn,
             counts: None,
             session_start: false,
+            waiting: None,
         }
     }
 

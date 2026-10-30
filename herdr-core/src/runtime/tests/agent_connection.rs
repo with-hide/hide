@@ -74,6 +74,7 @@ pub(super) fn hook_reported(
         turn: None,
         counts: counts.map(|(working, done)| hide_node_link::panes::HookCounts { working, done }),
         session_start: false,
+        waiting: None,
     };
     runtime
         .ingest_hook_status(crate::node::TEST_NODE, pane, &report)
@@ -1127,6 +1128,7 @@ fn a_waiting_hook_report_reaches_the_row_as_an_approval_until_the_turn_runs_agai
             turn: Some(turn),
             counts: None,
             session_start: false,
+            waiting: None,
         };
         runtime
             .ingest_hook_status(crate::node::TEST_NODE, "w1:p1", &report)
@@ -1163,6 +1165,66 @@ fn a_waiting_hook_report_reaches_the_row_as_an_approval_until_the_turn_runs_agai
     assert_eq!(row(&runtime), ("none".into(), "working".into()));
 }
 
+/// D-10: an approval is a call's, not the turn's. A background subagent's
+/// dialog stays in Needs You through the main session's `Stop` (Claude Code
+/// 2.1.314 runs the Agent in the background) and leaves it when the hook
+/// says that call ended, showing the turn the main session ended.
+#[test]
+fn an_open_approval_outlives_the_main_turns_end_and_closes_with_its_call() {
+    use hide_node_link::panes::HookTurn;
+    let mut runtime = runtime();
+    runtime.ingest_hook_diagnosis(diagnosis(installed(), installed()));
+    let mut herdr = session(&[("w1:p1", "claude", false)]);
+    herdr["agents"][0]["agent_status"] = "working".into();
+    let publish = |runtime: &mut Runtime, status: &str| {
+        let mut herdr = herdr.clone();
+        herdr["agents"][0]["agent_status"] = status.into();
+        runtime.ingest_session(Ok(
+            crate::sidebar::owned_label_fixture(herdr).expect("session payload")
+        ));
+    };
+    let report = |runtime: &mut Runtime, turn, waiting: &[&str]| {
+        let report = hide_node_link::panes::HookStatusReport {
+            runtime: "claude-code".to_owned(),
+            version: hide_agent_hooks::HOOK_VERSION,
+            session: Some("session-w1:p1".to_owned()),
+            turn: Some(turn),
+            counts: None,
+            session_start: false,
+            waiting: Some(waiting.iter().map(|call| (*call).to_owned()).collect()),
+        };
+        runtime
+            .ingest_hook_status(crate::node::TEST_NODE, "w1:p1", &report)
+            .expect("the report is recorded");
+    };
+    let row = |runtime: &Runtime| {
+        let row = runtime
+            .snapshot
+            .navigator
+            .agents
+            .iter()
+            .find(|row| row.pane_id == "w1:p1")
+            .expect("the agent is a row");
+        (row.demand.clone(), row.activity.clone())
+    };
+    let call = "Bash:0123456789abcdef";
+
+    report(&mut runtime, HookTurn::Working, &[]);
+    publish(&mut runtime, "working");
+    assert_eq!(row(&runtime), ("none".into(), "working".into()));
+    report(&mut runtime, HookTurn::Working, &[call]);
+    publish(&mut runtime, "working");
+    assert_eq!(row(&runtime), ("approval".into(), "stopped".into()));
+    // The main session's turn ends while the subagent's dialog is open.
+    report(&mut runtime, HookTurn::Done, &[call]);
+    publish(&mut runtime, "idle");
+    assert_eq!(row(&runtime), ("approval".into(), "stopped".into()));
+    // That call ended.
+    report(&mut runtime, HookTurn::Done, &[]);
+    publish(&mut runtime, "idle");
+    assert_eq!(row(&runtime), ("none".into(), "stopped".into()));
+}
+
 /// An agent exited and started again in the same pane: Herdr dropped the
 /// agent, then lists it again under the session that ended, and the new
 /// session's hook, proven to run in the pane, decides the row.
@@ -1187,6 +1249,7 @@ fn an_agent_started_again_in_its_pane_follows_its_hook_over_herdrs_earlier_sessi
             turn,
             counts: None,
             session_start: turn.is_none(),
+            waiting: None,
         };
         runtime
             .ingest_hook_status(crate::node::TEST_NODE, "w1:p1", &report)

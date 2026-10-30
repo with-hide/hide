@@ -79,6 +79,10 @@ pub struct RowFacts {
     /// ends a hook's turn that began before that state
     /// (`agent_hooks::facts`).
     pub(crate) turn_ended: Option<hide_session::turns::TurnEnded>,
+    /// The keys of the session's last tool calls that have a result, as
+    /// read for the agent's current Herdr state: a hook's wait on one of
+    /// them that began before that state is over (`agent_hooks::facts`).
+    pub(crate) answered_calls: Vec<String>,
 }
 
 /// Who sent the request a row shows.
