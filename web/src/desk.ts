@@ -258,6 +258,8 @@ const nameOnly = (name: string): DeskSessionRef => ({ name, mark: null, agent_ki
 export function threadLines(updates: readonly AcpSessionUpdate[], parts: Readonly<Record<string, ThreadHidePart>> = {}, session: (name: string) => DeskSessionRef = nameOnly): ThreadLine[] {
   const lines: ThreadLine[] = [];
   const calls = new Map<string, Extract<ThreadLine, { kind: "tool" }>>();
+  // A letter's sender as the record wrote it, so its chunks join by who wrote them, not by how the chip names them.
+  const senders = new Map<ThreadLine, string | null>();
   const fold = (line: Extract<ThreadLine, { kind: "tool" }>, fields: AcpToolCallFields) => {
     if (fields.title !== undefined) line.title = fields.title;
     if (fields.kind !== undefined) line.toolKind = fields.kind;
@@ -279,11 +281,13 @@ export function threadLines(updates: readonly AcpSessionUpdate[], parts: Readonl
       case "user_message_chunk": {
         const origin = update._meta?.hide?.origin ?? "operator";
         const from = update._meta?.hide?.from ?? null;
-        if (last?.kind === "user" && last.origin === origin && last.message === message && (last.peer?.name ?? null) === from) {
+        if (last?.kind === "user" && last.origin === origin && last.message === message && (senders.get(last) ?? null) === from) {
           last.text += textOf(update.content);
           if (update.content.type === "image") last.images.push(update.content);
         } else {
-          lines.push({ kind: "user", id, message, text: textOf(update.content), images: update.content.type === "image" ? [update.content] : [], origin, peer: from === null ? null : session(from) });
+          const line: ThreadLine = { kind: "user", id, message, text: textOf(update.content), images: update.content.type === "image" ? [update.content] : [], origin, peer: from === null ? null : session(from) };
+          senders.set(line, from);
+          lines.push(line);
         }
         return;
       }

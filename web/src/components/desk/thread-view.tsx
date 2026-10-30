@@ -1,5 +1,5 @@
 import { CheckIcon, ChevronDownIcon, ChevronLeftIcon, ChevronRightIcon, CircleAlertIcon, FilePenIcon, FileSearchIcon, GlobeIcon, MailIcon, PinIcon, PlusIcon, SquareTerminalIcon, WrenchIcon, XIcon } from "lucide-react";
-import { useState, type ComponentPropsWithRef, type ReactNode } from "react";
+import { useLayoutEffect, useRef, useState, type ComponentPropsWithRef, type ReactNode } from "react";
 import { Trans } from "react-i18next";
 import type { AcpContentBlock, AcpPlanEntry, AcpToolKind, DeskJob, DeskMention, DeskOutput, DeskSessionRef, ThreadHidePart, ThreadLine, ThreadReadFailure, ThreadTurn } from "../../desk";
 import { askedOnce, threadTurns } from "../../desk";
@@ -224,8 +224,7 @@ function HidePartLine({ part, command, actions }: { part: ThreadHidePart; comman
           <span className="shrink-0" data-desk-letter={part.direction}>
             <Trans i18n={i18n} t={t} i18nKey={part.direction === "sent" ? "desk.letter.sent" : "desk.letter.received"} components={{ who: <SessionChip session={part.peer} className="mr-xxs" onPress={() => actions.onSession(part.peer)} /> }} />
           </span>
-          <span aria-hidden="true">·</span>
-          <span className="min-w-0 truncate text-subtle-foreground">{part.body}</span>
+          {part.body ? <><span aria-hidden="true">·</span><span className="min-w-0 truncate text-subtle-foreground">{part.body}</span></> : null}
         </PartLine>
       );
       break;
@@ -368,6 +367,39 @@ function ThreadAsk({ job }: { job: DeskJob }) {
   );
 }
 
+/** How near an end of the conversation still counts as at it, in pixels. */
+const AT_END = 24;
+
+/**
+ * The conversation's scrolling (B25): while the operator is at its end, what
+ * the session writes next is brought into view; a page read in above keeps
+ * the lines they are reading where they were; reaching the top asks for the
+ * page before.
+ */
+function useThreadScroll(lines: readonly ThreadLine[], onReachTop?: () => void) {
+  const ref = useRef<HTMLDivElement>(null);
+  const atEnd = useRef(true);
+  const before = useRef<{ first: string | null; height: number }>({ first: null, height: 0 });
+  useLayoutEffect(() => {
+    const box = ref.current;
+    if (!box) return;
+    // A message line's id is its place, which a page read in above moves, so the first line is known by its words too.
+    const head = lines[0];
+    const first = head ? `${head.kind}:${head.id}:${"text" in head ? head.text.slice(0, 80) : ""}` : null;
+    if (atEnd.current) box.scrollTop = box.scrollHeight;
+    else if (before.current.first !== null && first !== before.current.first) box.scrollTop += box.scrollHeight - before.current.height;
+    before.current = { first, height: box.scrollHeight };
+  }, [lines]);
+  const onScroll = () => {
+    const box = ref.current;
+    if (!box) return;
+    atEnd.current = box.scrollHeight - box.scrollTop - box.clientHeight < AT_END;
+    before.current.height = box.scrollHeight;
+    if (box.scrollTop < AT_END) onReachTop?.();
+  };
+  return { ref, onScroll };
+}
+
 /**
  * A thread (D-61, D-75, B25-B27, B29): the session's record as turns, its
  * question at the foot, its outputs after it, and the box that types into
@@ -375,7 +407,7 @@ function ThreadAsk({ job }: { job: DeskJob }) {
  * read says why in one line and offers the terminal; one being read, or with
  * nothing in it yet, says so in one quiet line.
  */
-export function ThreadView({ job, lines, reading = false, failure = null, mentions = [], startedByDesk = false, outputs, selectedOutput = null, composer, onTerminal, ...actions }: {
+export function ThreadView({ job, lines, reading = false, failure = null, mentions = [], startedByDesk = false, outputs, selectedOutput = null, composer, onTerminal, onReachTop, ...actions }: {
   job: DeskJob;
   lines: readonly ThreadLine[];
   /** The record is still being read: `lines` is not the thread yet. */
@@ -387,16 +419,19 @@ export function ThreadView({ job, lines, reading = false, failure = null, mentio
   startedByDesk?: boolean;
   outputs: readonly DeskOutput[];
   selectedOutput?: string | null;
-  composer: { value: string; attachments: readonly ComposerAttachment[]; focused?: boolean; onChange: (value: string) => void; onSend: () => void; onAttach: () => void; onRemoveAttachment: (id: string) => void };
+  composer: { value: string; attachments: readonly ComposerAttachment[]; focused?: boolean; held?: boolean; notice?: string | null; onChange: (value: string) => void; onSend: () => void; onAttach: () => void; onRemoveAttachment: (id: string) => void };
   onTerminal: () => void;
+  /** The conversation was scrolled to its top: the page before it can be read. */
+  onReachTop?: () => void;
 } & ThreadPartActions) {
   const { t } = useInterfaceTranslation();
+  const scroller = useThreadScroll(lines, onReachTop);
   // An asking job's question is said once, in the wait at the foot (D-75).
   const turns = job.state === "asking" && job.ask === "question" ? askedOnce(threadTurns(lines), job.question) : threadTurns(lines);
   const running = job.state === "working" || job.state === "starting";
   return (
     <div className="flex min-h-0 min-w-0 flex-1 flex-col" data-desk-thread={job.id}>
-      <div className="flex min-h-0 min-w-0 flex-1 flex-col gap-md overflow-y-auto px-md py-md">
+      <div ref={scroller.ref} onScroll={scroller.onScroll} className="flex min-h-0 min-w-0 flex-1 flex-col gap-md overflow-y-auto px-md py-md">
         {failure ? (
           <p role="alert" className="flex min-w-0 flex-wrap items-center gap-x-sm gap-y-xxs text-caption" data-desk-thread-failure={failure}>
             <CircleAlertIcon aria-hidden="true" className="size-(--size-icon-sm) shrink-0 text-warning" />
@@ -427,6 +462,8 @@ export function ThreadView({ job, lines, reading = false, failure = null, mentio
           placeholder={t("desk.thread.placeholder")}
           attachments={composer.attachments}
           focused={composer.focused}
+          held={composer.held}
+          notice={composer.notice}
           onChange={composer.onChange}
           onSend={composer.onSend}
           onAttach={composer.onAttach}
