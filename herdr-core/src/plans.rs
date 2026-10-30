@@ -1455,6 +1455,28 @@ mod tests {
         assert_eq!(done.steps[0].evidence, claim());
     }
 
+    /// The example plan `hide plan help` shows is one `set` takes as it
+    /// stands, its done file step carrying the file (PRD risk: a stricter
+    /// `set` would refuse the old example).
+    #[test]
+    fn the_plan_help_example_is_a_plan_set_takes() {
+        let help = include_str!("../../hided/assets/plan/help.md");
+        let example = help
+            .split("```json\n")
+            .nth(1)
+            .and_then(|rest| rest.split("```").next())
+            .unwrap();
+        let input: PlanInput = serde_json::from_str(example).unwrap();
+        let mut proofs = Proofs::default();
+        for step in &input.nodes {
+            if let Some(file) = &step.file {
+                proofs.files.insert(file.clone(), FileProof::Present);
+            }
+        }
+        assert!(input.nodes.iter().any(|step| step.file.is_some()));
+        set_with(None, input.nodes, &proofs).unwrap();
+    }
+
     #[test]
     fn a_file_path_is_read_below_the_checkout_and_never_out_of_it() {
         let root = "/work/app";
