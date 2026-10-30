@@ -25,9 +25,9 @@ function fixture(t, files, baseline) {
 
 const twoButtons = '<button>a</button><button>b</button>';
 
-test('a file at its baseline passes and the parts, tests and selector strings are not counted', t => {
+test('a file at its baseline passes and the parts, a part given a layer role, tests and selector strings are not counted', t => {
   const {run} = fixture(t, {
-    'web/src/A.tsx': `${twoButtons} const s = '[role="menu"]';`,
+    'web/src/A.tsx': `${twoButtons} const s = '[role="menu"]'; <PopoverContent align="start" role="dialog" />`,
     'web/src/components/ui/button.tsx': '<button />',
     'web/src/A.test.tsx': '<button />',
   }, {'web/src/A.tsx': {button: 2}});

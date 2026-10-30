@@ -13,6 +13,7 @@ A project hook refuses the first edit of a web source or the tokens in an agent 
    Use a general token (`--size-control`, `--size-icon`, the spacing scale) before adding a feature-specific `--size-*`; a new token needs a reason the existing ones cannot carry.
 3. Open every layer (menu, dialog, popover, sheet, select) through its part.
    The parts register with the shell's one Escape owner and hand keyboard focus back when they close (`components/ui/layer.ts`); a hand-made layer leaves Escape to the terminal under it or loses focus.
+   A surface no part can draw, such as the Start panel's floating palette, registers itself with `useEscapeLayer` and hands focus back as the parts do; that is the exception, and it stays in the baseline.
 
 `check-ui-parts.mjs` counts raw `<button>`, `<input>`, `<select>`, `<textarea>` and `role="dialog"`/`role="menu"` outside `components/ui` against `scripts/ui-parts-baseline.json`.
 A file may only go down: a new raw control fails, and a file with fewer than its baseline asks you to lock the lower number in with `node scripts/check-ui-parts.mjs --update`.

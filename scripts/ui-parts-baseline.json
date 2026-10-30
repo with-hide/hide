@@ -80,9 +80,6 @@
   "web/src/Palette.tsx": {
     "button": 2
   },
-  "web/src/PaneConnection.tsx": {
-    "layer": 1
-  },
   "web/src/PaneHeaderBand.tsx": {
     "button": 6
   },

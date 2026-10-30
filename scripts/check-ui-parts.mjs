@@ -18,9 +18,20 @@ const KINDS = {
   input: [/<input\b/g, 'use `Input`, `Checkbox`, `Switch`, `RadioGroup` or `Slider` from components/ui'],
   select: [/<select\b/g, 'use `Select` (components/ui/select)'],
   textarea: [/<textarea\b/g, 'add a multi-line part to components/ui and use it'],
-  // A JSX attribute, not a `[role="menu"]` selector string.
-  layer: [/(?<=\s)role="(?:dialog|alertdialog|menu)"/g, 'open it through `Dialog`, `AlertDialog`, `Popover`, `Sheet` or `DropdownMenu`'],
+  layer: [null, 'open it through `Dialog`, `AlertDialog`, `Popover`, `Sheet` or `DropdownMenu`'],
 };
+
+// A layer role on a raw element (`<div role="dialog">`). The same role on a
+// part (`<PopoverContent role="dialog">`) is the part's layer, and a
+// `[role="menu"]` selector string is no element at all.
+function rawLayers(source) {
+  let n = 0;
+  for (const match of source.matchAll(/(?<=\s)role="(?:dialog|alertdialog|menu)"/g)) {
+    const open = source.lastIndexOf('<', match.index);
+    if (/^<[a-z]/.test(source.slice(open, open + 2))) n += 1;
+  }
+  return n;
+}
 
 const args = process.argv.slice(2);
 const update = args.includes('--update');
@@ -42,7 +53,7 @@ function count() {
     const source = fs.readFileSync(file, 'utf8');
     const rel = path.relative(root, file).split(path.sep).join('/');
     for (const [kind, [pattern]] of Object.entries(KINDS)) {
-      const n = source.match(pattern)?.length ?? 0;
+      const n = pattern ? (source.match(pattern)?.length ?? 0) : rawLayers(source);
       if (n) (counts[rel] ??= {})[kind] = n;
     }
   }
