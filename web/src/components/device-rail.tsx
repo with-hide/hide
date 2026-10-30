@@ -12,6 +12,7 @@ import { useUiStore } from "../ui";
 import { EntryContextMenu } from "./entry-menu";
 import { Keycap } from "./ui/keycap";
 import { Hint } from "./ui/tooltip";
+import { SidebarMenus } from "./sidebar-menus";
 
 /** `core` marks the machine the core runs on, set only while the core works with another machine (Q11). */
 /** `place` is where a WSL distribution's device is, which its hint says after the name (PRD wsl-device B5). */
@@ -81,6 +82,10 @@ export function DeviceRail({ actions }: { actions: Actions }) {
             </Hint>
           </li>
         </ul>
+        {/* View, Help and Settings stand at the rail's foot, as a chat app's rail keeps its own. */}
+        <div className="mt-auto flex flex-col items-center gap-xs pt-md" data-rail-menus="true">
+          <SidebarMenus actions={actions} place="rail" />
+        </div>
       </nav>
     </EntryContextMenu>
   );

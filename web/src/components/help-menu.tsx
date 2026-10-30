@@ -18,6 +18,7 @@ import { readyVersion, restartIntoUpdate, useUpdateStatus } from "../updates";
 import { Button } from "./ui/button";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuShortcut, DropdownMenuTrigger } from "./ui/dropdown-menu";
 import { Hint } from "./ui/tooltip";
+import { hintSide, menuSide, type MenuPlace } from "./menu-place";
 
 /** Where Report an issue goes: the repository's new-issue page. */
 export const NEW_ISSUE_URL = "https://github.com/with-hide/hide/issues/new";
@@ -25,7 +26,7 @@ export const NEW_ISSUE_URL = "https://github.com/with-hide/hide/issues/new";
 /** How long `Copied` stays beside Copy diagnostics. */
 const COPIED_SHOWN_MS = 1500;
 
-export function HelpMenu({ actions }: { actions: Actions }) {
+export function HelpMenu({ actions, place = "footer" }: { actions: Actions; place?: MenuPlace }) {
   const { t } = useInterfaceTranslation();
   const version = useShellStore((s) => s.daemon?.version ?? null);
   const ready = readyVersion(useUpdateStatus());
@@ -44,7 +45,7 @@ export function HelpMenu({ actions }: { actions: Actions }) {
   };
   return (
     <DropdownMenu onOpenChange={(open) => (open ? setCopy("idle") : undefined)}>
-      <Hint label={label}>
+      <Hint label={label} side={hintSide(place)}>
         <DropdownMenuTrigger asChild>
           <Button variant="ghost" size="icon-sm" aria-label={label} data-help-menu-trigger="true" className="relative">
             <CircleHelpIcon />
@@ -52,7 +53,7 @@ export function HelpMenu({ actions }: { actions: Actions }) {
           </Button>
         </DropdownMenuTrigger>
       </Hint>
-      <DropdownMenuContent align="end" side="top" aria-label={t("sidebar.help")} data-help-menu="true">
+      <DropdownMenuContent align="end" side={menuSide(place)} aria-label={t("sidebar.help")} data-help-menu="true">
         <DropdownMenuItem data-help-item="shortcuts" onSelect={() => actions.openShortcuts()}>
           {t("sidebar.help.shortcuts")}
           {chord ? <DropdownMenuShortcut>{chord}</DropdownMenuShortcut> : null}

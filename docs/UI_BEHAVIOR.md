@@ -754,8 +754,9 @@ Web owners: `web/src/hideAiOrigin.ts` (the words, the place line, the turn line,
 
 ### Agent logo view mode
 
-The sidebar footer carries a View menu between the usage chips and Help: an eye button whose hint and accessible name are `보기` (`View`).
-It opens above the footer with the label `에이전트 로고`, two choices, `행 왼쪽에 표시` and `숨기기`, with a check on the current one, a separator, and a muted line that is not a choice: `⌥ 누르고 있으면 잠깐 보기` (`Alt` on Windows and Linux).
+The View menu, Help and Settings stand together, in that order: stacked at the foot of the device rail, their hints and menus opening to the right, or, while the rail is hidden, at the sidebar footer's right edge after the usage chips, opening upwards.
+The View menu is an eye button whose hint and accessible name are `보기` (`View`).
+It opens beside its button with the label `에이전트 로고`, two choices, `행 왼쪽에 표시` and `숨기기`, with a check on the current one, a separator, and a muted line that is not a choice: `⌥ 누르고 있으면 잠깐 보기` (`Alt` on Windows and Linux).
 Arrow keys move through the choices, Enter chooses, and Escape or a click outside closes the menu without changing anything and returns focus to the button.
 Choosing the checked choice only closes the menu.
 While the daemon is not connected both choices are disabled and the check stays on the last value received.
@@ -2485,7 +2486,7 @@ Web owner: `web/src/components/usage.tsx`, `web/src/components/usage-history.tsx
 The core owns account windows and shared preferences (`usage`, `ui_state.usage`); all limits refer to the core's own node, even with a remote device in front.
 The declaration lists all seven agents; only agents with a declared limit source appear in the footer and popover.
 
-The footer draws up to three pinned account windows at its left edge, and the View menu, Help and Settings at its right edge.
+The footer draws up to three pinned account windows at its left edge, and, while the device rail is hidden, the View menu, Help and Settings at its right edge.
 Defaults pin the weekly window of each agent that is on by default and reports one (Claude Code and Codex), leaving a slot for the operator's own pin.
 Each chip shows the agent mark and its rounded percent, naming the window when the agent has multiple visible chips.
 A numberless not-started or expired chip always names its window.
