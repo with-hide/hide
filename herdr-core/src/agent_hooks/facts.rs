@@ -342,7 +342,10 @@ fn end_by_session_read(fact: &mut SessionFact, agent: &SessionAgentPayload) {
     if now > since && at_rest {
         fact.turn = match ended {
             Some(hide_session::turns::TurnEnded::Completed) => Some(HookTurn::Done),
-            Some(hide_session::turns::TurnEnded::Interrupted) => Some(HookTurn::Idle),
+            Some(
+                hide_session::turns::TurnEnded::Interrupted
+                | hide_session::turns::TurnEnded::Unanswered,
+            ) => Some(HookTurn::Idle),
             None => return,
         };
     }

@@ -287,7 +287,7 @@ An agent-list transport failure makes the retained telemetry unconfirmed while t
 Until a successful agent list or bootstrap snapshot confirms it again, the agent keeps its identity and task title but has Unknown activity, no completion or current demand, and requires a status check before closing.
 An identical successful list restores the confirmed state; a topology event alone does not confirm the entire agent list.
 No pane token is read for any of these.
-Regression owners: `sidebar::tests::a_hook_turn_decides_the_axes_ahead_of_herdrs_state`, `agent_hooks::facts::tests`, `runtime::tests::labels::a_hook_turn_ends_when_the_session_file_reads_an_interruption_after_it`, `runtime::tests::agent_connection::an_agent_started_again_in_its_pane_follows_its_hook_over_herdrs_earlier_session`.
+Regression owners: `sidebar::tests::a_hook_turn_decides_the_axes_ahead_of_herdrs_state`, `agent_hooks::facts::tests`, `runtime::tests::labels::a_hook_turn_ends_when_the_session_file_reads_an_interruption_after_it`, `runtime::tests::labels::a_hook_turn_whose_prompt_the_session_file_shows_unanswered_ends_at_rest`, `runtime::tests::agent_connection::an_agent_started_again_in_its_pane_follows_its_hook_over_herdrs_earlier_session`.
 Demand has these sources:
 
 - A question is the core's label verdict on the agent's last message (`label.question`, see Task identity below).

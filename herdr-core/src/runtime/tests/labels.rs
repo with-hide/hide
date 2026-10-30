@@ -1353,3 +1353,118 @@ fn a_hook_turn_ends_on_the_session_files_interruption_with_summaries_off() {
     runtime.ingest_session(Ok(claude("done", 5)));
     assert_eq!(axes(&runtime), ("stopped".to_owned(), "none".to_owned()));
 }
+
+/// D-9: Claude Code 2.1.314 puts a prompt interrupted before its first
+/// output back in the composer and records no interruption, no `Stop` and
+/// no notification; its session file keeps the prompt with nothing of the
+/// agent's after it. Read under a later Herdr state with the agent at rest,
+/// the hook's turn ends; a turn the agent answered stays the hook's until
+/// an interruption record or its next event, whatever Herdr reads.
+#[test]
+fn a_hook_turn_whose_prompt_the_session_file_shows_unanswered_ends_at_rest() {
+    use hide_node_link::panes::{HookStatusReport, HookTurn};
+    use hide_session::label_transcript::{LabelTranscriptRequest, read};
+    let record = |at: &str, kind: &str, content: serde_json::Value| {
+        let mut record = serde_json::json!({
+            "type": kind, "version": "2.1.314", "userType": "external",
+            "timestamp": at, "sessionId": SESSION, "cwd": CHECKOUT,
+            "message": {"role": kind, "content": content},
+        });
+        if content.is_string() {
+            record["promptId"] = serde_json::json!(format!("prompt-{at}"));
+        }
+        record
+    };
+    let prompt = record(
+        "2026-10-30T13:00:00.000Z",
+        "user",
+        serde_json::json!("로그를 찾아줘"),
+    );
+    let attachment = serde_json::json!({"type": "attachment",
+        "timestamp": "2026-10-30T13:00:00.100Z", "sessionId": SESSION,
+        "attachment": {"type": "hook_additional_context", "content": ["context"]}});
+    let reply = record(
+        "2026-10-30T13:00:01.000Z",
+        "assistant",
+        serde_json::json!([{"type": "text", "text": "찾는 중"}]),
+    );
+    let turns = |records: &[&serde_json::Value]| {
+        let home = tempfile::tempdir().unwrap();
+        let folder = home
+            .path()
+            .join(".claude/projects/-private-tmp-hide-labels-overlay");
+        std::fs::create_dir_all(&folder).unwrap();
+        std::fs::write(
+            folder.join(format!("{SESSION}.jsonl")),
+            records
+                .iter()
+                .map(|record| format!("{record}\n"))
+                .collect::<String>(),
+        )
+        .unwrap();
+        read(
+            home.path(),
+            &LabelTranscriptRequest {
+                agent: hide_session::Agent::Claude,
+                reference_kind: "id".to_owned(),
+                reference_value: SESSION.to_owned(),
+                cwd: None,
+                checkpoint: None,
+                subagents: Default::default(),
+                turns: None,
+                tools: None,
+            },
+        )
+        .unwrap()
+        .turns
+    };
+    let claude = |status: &str, seq: u64| {
+        let mut payload = projection(SESSION);
+        for agent in &mut payload.agents {
+            agent.agent_status = Some(status.to_owned());
+            agent.state_change_seq = Some(seq);
+        }
+        payload
+    };
+    let activity = |records: &[&serde_json::Value]| {
+        let mut runtime = runtime();
+        runtime
+            .ingest_hook_status(
+                crate::node::TEST_NODE,
+                PANE,
+                &HookStatusReport {
+                    runtime: "claude-code".to_owned(),
+                    version: hide_agent_hooks::HOOK_VERSION,
+                    session: Some(SESSION.to_owned()),
+                    turn: Some(HookTurn::Working),
+                    counts: None,
+                    session_start: false,
+                },
+            )
+            .unwrap();
+        runtime.ingest_session(Ok(claude("working", 4)));
+        let record = PaneRecord {
+            owner: hide_session::label_reference_token("claude", "id", SESSION),
+            turns: turns(records),
+            turns_seq: Some(5),
+            ..PaneRecord::default()
+        };
+        runtime.set_label_overlay(LabelOverlay::of_records(
+            [(&PANE.to_owned(), &record)],
+            true,
+            false,
+        ));
+        runtime.ingest_session(Ok(claude("idle", 5)));
+        let row = row(&runtime);
+        (
+            row["activity"].as_str().unwrap().to_owned(),
+            row["demand"].as_str().unwrap().to_owned(),
+        )
+    };
+
+    assert_eq!(
+        activity(&[&prompt, &attachment]),
+        ("stopped".to_owned(), "none".to_owned())
+    );
+    assert_eq!(activity(&[&prompt, &attachment, &reply]).0, "working");
+}

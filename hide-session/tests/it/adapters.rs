@@ -3987,7 +3987,7 @@ fn a_claude_hook_attachment_receipt_is_reported_and_a_quoted_one_is_not() {
 /// was cut), with no Stop hook and often no `idle_prompt` notification: the
 /// session read is what says the turn ended (PRD engine-bundle-1 D-9).
 #[test]
-fn a_claude_interruption_ends_the_turn_until_the_next_prompt() {
+fn a_claude_interruption_or_an_unanswered_prompt_ends_the_turn() {
     let home = home(Agent::Claude);
     let path = home
         .path()
@@ -4044,12 +4044,26 @@ fn a_claude_interruption_ends_the_turn_until_the_next_prompt() {
         serde_json::json!([{"type": "text", "text": "[Request interrupted by user]"}]),
     )]);
     assert_eq!(ended(), Some(hide_session::turns::TurnEnded::Interrupted));
+    // A new prompt starts a turn with nothing of the agent's after it: an
+    // Esc before the first output leaves it so, with the hooks' attachments
+    // and no record of the interruption (Claude Code 2.1.314).
+    append(&[
+        record(
+            "2026-10-30T13:00:03.000Z",
+            "user",
+            serde_json::json!("go on"),
+        ),
+        serde_json::json!({"type": "attachment", "timestamp": "2026-10-30T13:00:03.100Z",
+            "sessionId": "a1b2c3d4-0000-4000-8000-000000000001",
+            "attachment": {"type": "hook_additional_context", "content": ["context"]}}),
+    ]);
+    assert_eq!(ended(), Some(hide_session::turns::TurnEnded::Unanswered));
     append(&[record(
-        "2026-10-30T13:00:03.000Z",
-        "user",
-        serde_json::json!("go on"),
+        "2026-10-30T13:00:03.500Z",
+        "assistant",
+        serde_json::json!([{"type": "text", "text": "Going on."}]),
     )]);
-    assert_eq!(ended(), None, "a new prompt starts a turn");
+    assert_eq!(ended(), None, "the agent answered: the turn runs");
     append(&[record(
         "2026-10-30T13:00:04.000Z",
         "user",

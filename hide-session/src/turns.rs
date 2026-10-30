@@ -25,6 +25,12 @@ pub enum TurnEnded {
     /// The operator interrupted it (Claude Code's `[Request interrupted`
     /// record, Codex's aborted turn).
     Interrupted,
+    /// The person's message has no agent record after it, in a format that
+    /// records the agent's every reply (Claude Code): read under an agent at
+    /// rest, the turn never ran. Claude Code 2.1.314 puts a prompt
+    /// interrupted before its first output back in the composer and records
+    /// nothing of the interruption.
+    Unanswered,
 }
 
 /// What the last turn leaves the operator to do.
@@ -74,8 +80,13 @@ pub enum TurnMark {
     /// A person's message.
     Human,
     /// A person's message in a format whose native question calls are
-    /// known but which supplies no separate task-start record (Claude).
+    /// known but which supplies no separate task-start record (Grok, omp).
     HumanTurn,
+    /// A person's message that starts a turn in a format that records each
+    /// of the agent's replies ([`TurnMark::Reply`]; Claude Code).
+    Prompt,
+    /// The agent wrote a record of the turn.
+    Reply,
     /// A native interruption, without a turn identifier.
     Interrupted,
     /// A record too large to keep whose structure no bounded scan certifies
@@ -246,6 +257,9 @@ struct Turn {
     /// A person wrote after the turn ended.
     #[serde(default)]
     answered: bool,
+    /// The turn's prompt has no agent record after it yet.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    unreplied: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -475,9 +489,10 @@ impl TurnTracker {
             return None;
         }
         let turn = self.last.as_ref().filter(|turn| !turn.answered)?;
-        match turn.end? {
-            End::Completed => Some(TurnEnded::Completed),
-            End::Aborted => Some(TurnEnded::Interrupted),
+        match turn.end {
+            Some(End::Completed) => Some(TurnEnded::Completed),
+            Some(End::Aborted) => Some(TurnEnded::Interrupted),
+            None => turn.unreplied.then_some(TurnEnded::Unanswered),
         }
     }
 
@@ -635,6 +650,7 @@ impl TurnTracker {
                     plan_content: None,
                     end: None,
                     answered: false,
+                    unreplied: false,
                 });
             }
             TurnMark::Plan { turn } => self.current(turn).plan = true,
@@ -644,6 +660,9 @@ impl TurnTracker {
                 current.plan_content = Some(content.clone());
             }
             TurnMark::Tools(marks) => {
+                if let Some(turn) = &mut self.last {
+                    turn.unreplied = false;
+                }
                 for mark in marks {
                     match mark {
                         ToolTurnMark::Asked { call, content } => {
@@ -715,7 +734,7 @@ impl TurnTracker {
                     None => self.unstructured = true,
                 }
             }
-            TurnMark::HumanTurn => {
+            TurnMark::HumanTurn | TurnMark::Prompt => {
                 self.wake_vanished = false;
                 self.questions.clear();
                 self.question_capacity = false;
@@ -728,7 +747,13 @@ impl TurnTracker {
                     plan_content: None,
                     end: None,
                     answered: false,
+                    unreplied: *mark == TurnMark::Prompt,
                 });
+            }
+            TurnMark::Reply => {
+                if let Some(turn) = &mut self.last {
+                    turn.unreplied = false;
+                }
             }
             TurnMark::Interrupted => {
                 self.clear_questions();
@@ -836,6 +861,7 @@ impl TurnTracker {
                 plan_content: None,
                 end: None,
                 answered: false,
+                unreplied: false,
             });
         }
         self.last.as_mut().expect("a turn was just made")

@@ -200,6 +200,9 @@ pub(crate) fn claude(item: &Value) -> Mark {
             marks.push(mark);
         }
     }
+    if marks.is_empty() && role == Some("assistant") {
+        return Ok(Some(TurnMark::Reply));
+    }
     Ok((!marks.is_empty()).then_some(TurnMark::Tools(marks)))
 }
 
