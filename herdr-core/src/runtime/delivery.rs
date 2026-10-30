@@ -1003,16 +1003,34 @@ impl Runtime {
         if let Command::Agents {
             command:
                 crate::coordination::Command::Spawn {
+                    parent,
                     machine,
                     mission,
                     kind,
                     launch,
                     intent,
                     brief,
+                    plan_node,
+                    plan,
                     ..
                 },
         } = &mut command
         {
+            // A plan's child and a mission's worker or checker start no
+            // agents, and a step's spawn takes the intent the core makes for
+            // its attempt (PRD hide-plan-delegate B1, B7, B8).
+            *plan = self.plan_spawn_admission(
+                &actor,
+                device,
+                parent.as_deref(),
+                plan_node.as_deref(),
+                kind,
+                launch,
+                self.missions.book.conducted_open(&actor).is_some(),
+            )?;
+            if let Some(admission) = plan {
+                *intent = crate::coordination::plan_intent(&admission.link);
+            }
             *mission = self.mission_spawn_admission(
                 &actor,
                 machine.as_deref(),
@@ -1143,6 +1161,15 @@ impl Runtime {
                         .and_then(|ledger| self.sleeping_target(ledger, registered, &pane)),
                     (_, first) => first,
                 };
+                // A letter that wakes a sleeping plan child waits for a place
+                // under its main's cap, and is not kept without one (PRD
+                // hide-plan-delegate B6).
+                if let (Command::Send { kind, .. }, Some(observation)) = (&command, &first)
+                    && matches!(kind.as_str(), "request" | "block")
+                    && self.asleep_route(&observation.actor).is_some()
+                {
+                    self.plan_wake_admission(&actor, &observation.actor)?;
+                }
                 if first.is_none() && !self.delivery_overflow.is_empty() {
                     return Err("capacity".into());
                 }
@@ -1400,12 +1427,16 @@ impl Runtime {
         let continued = self.settle_dormant_registrations();
         self.feed_link_parents();
         let lineage = (waiters_moved || started_moved) && self.refresh_agent_lineage();
+        // A plan step's child moved by its letters or its end (PRD
+        // hide-plan-delegate B16, B17).
+        let plans = self.fold_delegations();
         changed
             | graph_changed
             | reopened
             | feedback
             | continued
             | lineage
+            | plans
             | self.sync_session_state()
             | self.refresh_agent_scopes()
     }

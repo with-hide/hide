@@ -82,7 +82,8 @@ enum Command {
         pane_id: String,
         expected: Context,
         command: herdr_core::plans::PlanCommand,
-        reply: Sender<Result<serde_json::Value, String>>,
+        proofs: herdr_core::plans::Proofs,
+        reply: Sender<Result<herdr_core::plans::PlanTurn, String>>,
     },
     PlanContext {
         device_id: String,
@@ -376,7 +377,12 @@ impl CoreHandle {
             .map_err(|_| "mission_unavailable".to_owned())?
     }
 
-    /// Runs a `hide plan` command on the owner thread.
+    /// Runs a `hide plan` command on the owner thread. A change whose
+    /// evidence needs reading (a step's pull request or file, PRD
+    /// hide-plan-delegate D-19) has it read here, on the caller's request
+    /// thread, and is asked again with what was read; a plan that moved in
+    /// between is judged again, and a change still asking after three rounds
+    /// is answered as unconfirmed.
     pub fn plan(
         &self,
         device: &str,
@@ -384,17 +390,25 @@ impl CoreHandle {
         expected: &Context,
         command: herdr_core::plans::PlanCommand,
     ) -> Result<serde_json::Value, String> {
-        let (reply, result) = mpsc::channel();
-        self.commands
-            .send(Command::Plan {
-                device_id: device.to_owned(),
-                pane_id: pane.to_owned(),
-                expected: expected.clone(),
-                command,
-                reply,
-            })
-            .map_err(|_| "plan_unavailable".to_owned())?;
-        result.recv().map_err(|_| "plan_unavailable".to_owned())?
+        let mut proofs = herdr_core::plans::Proofs::default();
+        for _ in 0..3 {
+            let (reply, result) = mpsc::channel();
+            self.commands
+                .send(Command::Plan {
+                    device_id: device.to_owned(),
+                    pane_id: pane.to_owned(),
+                    expected: expected.clone(),
+                    command: command.clone(),
+                    proofs: proofs.clone(),
+                    reply,
+                })
+                .map_err(|_| "plan_unavailable".to_owned())?;
+            match result.recv().map_err(|_| "plan_unavailable".to_owned())?? {
+                herdr_core::plans::PlanTurn::Answered { answer, .. } => return Ok(answer),
+                herdr_core::plans::PlanTurn::Prove(proof) => proof.run(&mut proofs),
+            }
+        }
+        Err("plan_pr_unconfirmed".to_owned())
     }
 
     /// The pane's plan summary for its prompt hook, on the owner thread;
@@ -1148,9 +1162,11 @@ fn owner_loop(
                 pane_id,
                 expected,
                 command,
+                proofs,
                 reply,
             } => {
-                let _ = reply.send(core.plan_command(&device_id, &pane_id, &expected, command));
+                let _ = reply
+                    .send(core.plan_command(&device_id, &pane_id, &expected, command, &proofs));
             }
             Command::PlanContext {
                 device_id,

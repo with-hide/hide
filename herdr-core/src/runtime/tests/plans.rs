@@ -8,7 +8,7 @@ use crate::delivery::Actor;
 use crate::handle::ChangeNotifier;
 use crate::links::ledger::SessionIdentity;
 use crate::model::AskSubject;
-use crate::plans::{PLAN_LIMIT, Plan, PlanCommand, Review, Step, StepStatus};
+use crate::plans::{PLAN_LIMIT, Plan, PlanCommand, PlanTurn, Proofs, Review, Step, StepStatus};
 use crate::runtime::delivery::tests::{authority, fixture};
 use serde_json::{Value, json};
 
@@ -44,12 +44,26 @@ fn saved(worker: &crate::links::worker::LinkWorker, count: usize) {
 }
 
 fn command(runtime: &mut Runtime, actor: &Actor, command: Value) -> Result<(Value, bool), String> {
+    match turn(runtime, actor, command, &Proofs::default())? {
+        PlanTurn::Answered { answer, changed } => Ok((answer, changed)),
+        PlanTurn::Prove(proof) => panic!("the change asks for {:?}", proof.asks),
+    }
+}
+
+/// One turn of a `hide plan` command, judged with `proofs`.
+fn turn(
+    runtime: &mut Runtime,
+    actor: &Actor,
+    command: Value,
+    proofs: &Proofs,
+) -> Result<PlanTurn, String> {
     let command: PlanCommand = serde_json::from_value(command).unwrap();
     runtime.plan_command(
         crate::node::TEST_NODE,
         &actor.pane_id,
         &authority(actor).context,
         command,
+        proofs,
     )
 }
 
@@ -339,6 +353,9 @@ fn a_new_plan_past_the_cap_takes_the_place_of_the_one_updated_longest_ago() {
                     output: None,
                     changed: false,
                     change: None,
+                    delegate: false,
+                    evidence: None,
+                    delegation: None,
                 }],
                 review: Review::Approved,
                 ask: None,
@@ -388,7 +405,7 @@ fn a_plan_is_drawn_for_the_pane_that_runs_its_session() {
         .steps
         .iter()
         .filter(|step| step.waiting)
-        .map(|step| step.step.key.as_str())
+        .map(|step| step.key.as_str())
         .collect();
     assert_eq!(waiting, ["pr"]);
 }

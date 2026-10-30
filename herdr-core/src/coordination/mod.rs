@@ -47,7 +47,16 @@ pub fn split_refusal(refusal: &str) -> (&str, Option<&str>) {
             | "plan_invalid"
             | "plan_order_refused"
             | "plan_too_large"
-            | "plan_node_unknown"),
+            | "plan_node_unknown"
+            | "plan_node_finished"
+            | "plan_evidence_missing"
+            | "plan_pr_not_yours"
+            | "plan_pr_unconfirmed"
+            | "plan_file_outside"
+            | "plan_file_missing"
+            | "plan_file_unconfirmed"
+            | "plan_report_missing"
+            | "plan_delegate_full"),
             detail,
         )) => (code, Some(detail)),
         _ => (refusal, None),
@@ -121,7 +130,78 @@ pub enum Command {
         /// caller's mission; no command names it.
         #[serde(default, skip_deserializing, skip_serializing_if = "Option::is_none")]
         mission: Option<crate::runtime::missions::MissionAdmission>,
+        /// The step of the caller's own plan the child is handed (`hide
+        /// agent spawn --plan-node <key>`, PRD hide-plan-delegate B1): the
+        /// core makes the intent from it.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        plan_node: Option<String>,
+        /// The plan step this spawn's child works on, and the main's plan
+        /// children asleep now. Only the core sets it, from `plan_node`.
+        #[serde(default, skip_deserializing, skip_serializing_if = "Option::is_none")]
+        plan: Option<PlanAdmission>,
     },
+}
+
+/// The step of a main's plan a spawn's child works on (PRD
+/// hide-plan-delegate D-24), saved with the spawn from its reservation on.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PlanLink {
+    /// The plan's instance (`Plan::id`).
+    pub plan: String,
+    pub step: String,
+    pub attempt: u32,
+    /// The main's session, whose plans' children share one cap (D-15).
+    pub parent_session: crate::links::ledger::SessionIdentity,
+}
+
+/// A spawn admitted as a plan step's child: its link, and the main's plan
+/// children asleep now, which hold no place under the cap.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PlanAdmission {
+    pub link: PlanLink,
+    pub asleep: Vec<String>,
+}
+
+/// The intent a plan step's spawn is made under: one per plan, step and
+/// attempt, so the same command again finds the same child and another
+/// attempt starts a new one (B8, engineering #11).
+pub fn plan_intent(link: &PlanLink) -> String {
+    format!("plan:{}:{}:{}", link.plan, link.step, link.attempt)
+}
+
+/// The children `session`'s plans have now (D-15): spawns made for one of
+/// its steps whose child has neither ended nor is among `asleep`, and those
+/// still being made, which will be one. A start still childless past the
+/// mission's hold stopped partway and holds no place.
+pub(crate) fn plan_children(
+    ledger: &Ledger,
+    session: &crate::links::ledger::SessionIdentity,
+    asleep: &[String],
+    now: u64,
+) -> usize {
+    ledger
+        .spawns
+        .iter()
+        .filter(|spawn| {
+            spawn
+                .plan
+                .as_ref()
+                .is_some_and(|link| link.parent_session == *session)
+        })
+        .filter(|spawn| match &spawn.child {
+            None => {
+                !spawn.completed
+                    && now.saturating_sub(spawn.reserved_at_unix_ms) < MISSION_RESERVATION_HOLD_MS
+            }
+            Some(child) => {
+                !asleep.contains(child)
+                    && ledger
+                        .agents
+                        .iter()
+                        .any(|agent| &agent.id == child && !agent.ended)
+            }
+        })
+        .count()
 }
 
 /// How long a spawn waits for its agent to take input before the brief is
@@ -448,6 +528,9 @@ pub struct SpawnRecord {
     /// The mission the child is a worker of, counted against its cap.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub mission: Option<String>,
+    /// The plan step the child works on, counted against its main's cap.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub plan: Option<PlanLink>,
     /// The child's first prompt (`Command::Spawn::brief`), part of the
     /// intent; the letter made of it when the child binds carries the same
     /// text.
@@ -972,11 +1055,20 @@ pub(crate) fn apply(
                 brief,
                 beside,
                 mission,
+                plan,
                 ..
             } = command
             else {
                 return Err("invalid_spawn".into());
             };
+            // The core makes a plan step's intent; one asked under another
+            // was not admitted by it.
+            if plan
+                .as_ref()
+                .is_some_and(|plan| *intent != plan_intent(&plan.link))
+            {
+                return Err("invalid_spawn".into());
+            }
             if brief.as_ref().is_some_and(|brief| {
                 brief.trim().is_empty() || brief.len() > crate::delivery::BODY_LIMIT
             }) {
@@ -1074,6 +1166,22 @@ pub(crate) fn apply(
             {
                 return Err(refusal("mission_cap_reached", &admission.cap.to_string()));
             }
+            // A plan's new child past its main's cap waits for one to end or
+            // sleep, counted with the reservations under this one write, so
+            // two starts at once never share the last place (B5).
+            if let Some(admission) = plan
+                && plan_children(
+                    ledger,
+                    &admission.link.parent_session,
+                    &admission.asleep,
+                    now,
+                ) >= crate::plans::PLAN_DELEGATE_LIMIT
+            {
+                return Err(refusal(
+                    "plan_delegate_full",
+                    &crate::plans::PLAN_DELEGATE_LIMIT.to_string(),
+                ));
+            }
             if ledger.spawns.len() >= SPAWN_LIMIT {
                 return Err("capacity".into());
             }
@@ -1102,6 +1210,7 @@ pub(crate) fn apply(
                 auto_watch_id: None,
                 task: task.clone(),
                 mission: mission.as_ref().map(|admission| admission.mission.clone()),
+                plan: plan.as_ref().map(|admission| admission.link.clone()),
                 brief: brief.clone(),
                 briefed: false,
                 beside: *beside,
@@ -1884,6 +1993,8 @@ mod tests {
     fn command(intent: &str) -> Command {
         Command::Spawn {
             mission: None,
+            plan_node: None,
+            plan: None,
             parent: Some("here".into()),
             machine: None,
             name: "worker".into(),

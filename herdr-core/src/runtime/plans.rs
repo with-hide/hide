@@ -4,17 +4,28 @@
 //! proposed plan waits on, laid on the agent's row as a question so it
 //! reaches the band, the sidebar and the bell by the ask's own path (D-12,
 //! D-30); and the summary the hook keeps of it (D-14, D-15).
+//!
+//! A step handed to another agent (PRD hide-plan-delegate) is admitted here
+//! before its spawn reaches the ledger, follows its child's letters and end
+//! from the published ledger, and asks its child to sleep once its main
+//! finished or took it back. A step's evidence is read off the lock by the
+//! caller's request worker (`PlanProof`) and the change is judged again
+//! under the lock with what it read.
 
-use std::collections::{BTreeMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashSet};
 
 use serde::Serialize;
-use serde_json::{Value, json};
+use serde_json::json;
 
 use super::Runtime;
+use crate::coordination::{PlanAdmission, PlanLink, refusal};
 use crate::delivery::Actor;
 use crate::links::ledger::{LedgerAnswer, LedgerCall, LedgerUpdate, SessionIdentity};
 use crate::model::{AskSubject, SidebarAgentSnapshot};
-use crate::plans::{self, PLAN_LIMIT, Plan, PlanCommand, PlanView, Review, view_of};
+use crate::plans::{
+    self, ChildPlace, Delegation, DelegationState, Evidence, PLAN_LIMIT, Plan, PlanCommand,
+    PlanProof, PlanTurn, PlanView, Proofs, Review, StepStatus,
+};
 use crate::workspace_control::{Caller, Context, Query};
 use hide_agent_hooks::plan_record::{
     ConductorWork, CriteriaLeft, MissionWork, PlanContext, PlanSummary, StepName,
@@ -162,6 +173,8 @@ impl Runtime {
                 }
                 self.plans.load = Load::Ready;
                 self.plans.edit += 1;
+                // What the ledger said while the plans were being read.
+                self.fold_delegations();
                 true
             }
             Ok(_) => {
@@ -272,15 +285,18 @@ impl Runtime {
         Ok(())
     }
 
-    /// Runs a `hide plan` command from `caller`'s pane on `device`.
-    /// Returns the answer and whether anything changed.
+    /// Runs a `hide plan` command from `caller`'s pane on `device`, judged
+    /// with the evidence `proofs` already read. Answers the command's answer
+    /// and whether anything changed, or the reads its evidence still needs,
+    /// which the caller makes off the lock before asking again.
     pub(crate) fn plan_command(
         &mut self,
         device: &str,
         caller: &str,
         expected: &Context,
         command: PlanCommand,
-    ) -> Result<(Value, bool), String> {
+        proofs: &Proofs,
+    ) -> Result<PlanTurn, String> {
         if !command.valid() {
             return Err("plan_invalid".into());
         }
@@ -313,6 +329,11 @@ impl Runtime {
             .caller_session(device, &pane, &actor)
             .ok_or("plan_session_unknown")?;
         let now = super::memory::now_ms();
+        // A step's file is read from the session's checkout (B12).
+        let root = context.checkout_path.clone();
+        let below = |path: &str| {
+            plans::file_below(&root, path).ok_or_else(|| refusal("plan_file_outside", path))
+        };
         // A named agent other than the caller only reads (D-05, B3).
         let named = |runtime: &Self,
                      agent: &Option<String>|
@@ -335,8 +356,11 @@ impl Runtime {
                         .plans
                         .book
                         .get(&session)
-                        .map(|plan| view_of(plan, &pane));
-                    return Ok((json!({"session": session, "plan": plan}), false));
+                        .map(|plan| self.plan_view(plan, &pane));
+                    return Ok(PlanTurn::Answered {
+                        answer: json!({"session": session, "plan": plan}),
+                        changed: false,
+                    });
                 }
                 (own.clone(), false)
             }
@@ -346,34 +370,64 @@ impl Runtime {
                 return Err("plan_not_yours".into());
             }
             PlanCommand::Set {
-                plan,
+                plan: mut input,
                 ask,
                 why,
                 reason,
             } => {
+                for step in &mut input.nodes {
+                    if let Some(path) = step.file.take() {
+                        step.file = Some(below(&path)?);
+                    }
+                }
                 let previous = self.plans.book.get(&own);
-                let next = plans::apply_set(
+                let mut next = plans::apply_set(
                     previous,
                     &own,
-                    &plan,
+                    &input,
                     ask,
                     why.as_deref(),
                     reason.as_deref(),
                     now,
                 )?;
+                let before = previous.filter(|plan| !plans::finished(plan));
+                let asks = plans::judge(before, &mut next, proofs)?;
+                if !asks.is_empty() {
+                    return self.plan_proof(device, &root, &own, &next, asks);
+                }
+                let before = before.cloned();
                 if previous.is_none() {
                     self.make_room()?;
                 }
-                self.save_plan(&own, Some(&next))?;
-                self.plans.book.insert(own.clone(), next);
+                self.keep_plan(&own, before.as_ref(), next)?;
                 (own.clone(), true)
             }
-            PlanCommand::Node { key, status, line } => {
+            PlanCommand::Node {
+                key,
+                status,
+                line,
+                pr,
+                file,
+            } => {
+                let claim = match (pr, file) {
+                    (Some(number), _) => Some(Evidence::Pr {
+                        repo: String::new(),
+                        number,
+                    }),
+                    (None, Some(path)) => Some(Evidence::File {
+                        path: below(&path)?,
+                    }),
+                    (None, None) => None,
+                };
                 let plan = self.plans.book.get(&own).ok_or("plan_missing")?;
-                match plans::apply_node(plan, &key, status, line.as_deref(), now)? {
-                    Some(next) => {
-                        self.save_plan(&own, Some(&next))?;
-                        self.plans.book.insert(own.clone(), next);
+                match plans::apply_node(plan, &key, status, line.as_deref(), claim, now)? {
+                    Some(mut next) => {
+                        let asks = plans::judge(Some(plan), &mut next, proofs)?;
+                        if !asks.is_empty() {
+                            return self.plan_proof(device, &root, &own, &next, asks);
+                        }
+                        let before = plan.clone();
+                        self.keep_plan(&own, Some(&before), next)?;
                         (own.clone(), true)
                     }
                     None => (own.clone(), false),
@@ -395,9 +449,11 @@ impl Runtime {
             }
             // Dropping a plan that is not there again changes nothing.
             PlanCommand::Drop { .. } => {
-                if self.plans.book.contains_key(&own) {
+                if let Some(plan) = self.plans.book.get(&own).cloned() {
                     self.save_plan(&own, None)?;
                     self.plans.book.remove(&own);
+                    // Its children's steps are gone with it.
+                    self.ask_children_to_sleep(&plan, |_, _| true);
                     (own.clone(), true)
                 } else {
                     (own.clone(), false)
@@ -414,12 +470,137 @@ impl Runtime {
             .plans
             .book
             .get(&session)
-            .map(|plan| view_of(plan, &pane));
+            .map(|plan| self.plan_view(plan, &pane));
         let context = self.plan_context_of(device, &actor, &session);
-        Ok((
-            json!({"session": session, "plan": plan, "context": context}),
+        Ok(PlanTurn::Answered {
+            answer: json!({"session": session, "plan": plan, "context": context}),
             changed,
-        ))
+        })
+    }
+
+    /// The reads `asks` needs, made off the lock on the session's machine;
+    /// a machine Hide cannot reach now refuses the change as unconfirmed.
+    fn plan_proof(
+        &mut self,
+        device: &str,
+        root: &str,
+        session: &SessionIdentity,
+        plan: &Plan,
+        asks: plans::Asks,
+    ) -> Result<PlanTurn, String> {
+        let link = self.node_link(device).map_err(|reason| {
+            crate::diagnostic!(json!({
+                "component": "plans", "kind": "plans.proof_unreachable",
+                "plan": plan.id(), "session_id": session.session_id, "device": device,
+                "reason": reason,
+            }));
+            match asks.prs.first() {
+                Some(number) => refusal("plan_pr_unconfirmed", &format!("#{number}")),
+                None => refusal(
+                    "plan_file_unconfirmed",
+                    asks.files.first().map_or("", String::as_str),
+                ),
+            }
+        })?;
+        let branches = self
+            .delivery_state()
+            .map(|ledger| {
+                ledger
+                    .spawns
+                    .iter()
+                    .filter(|spawn| {
+                        spawn
+                            .plan
+                            .as_ref()
+                            .is_some_and(|link| link.parent_session == *session)
+                    })
+                    .map(|spawn| spawn.branch.clone())
+                    .collect()
+            })
+            .unwrap_or_default();
+        Ok(PlanTurn::Prove(PlanProof {
+            link,
+            root: root.to_owned(),
+            branches,
+            asks,
+            plan: plan.id(),
+            session_id: session.session_id.clone(),
+        }))
+    }
+
+    /// Keeps `next` as `session`'s plan in place of `before`, and asks the
+    /// child of each step it finished or took back to sleep (B17, B18).
+    fn keep_plan(
+        &mut self,
+        session: &SessionIdentity,
+        before: Option<&Plan>,
+        next: Plan,
+    ) -> Result<(), String> {
+        self.save_plan(session, Some(&next))?;
+        let ended = |step: &plans::Step, prior: Option<&plans::Step>| {
+            let was_open = prior.is_some_and(|prior| {
+                prior.delegation.as_ref().is_some_and(Delegation::active)
+                    && prior.status != StepStatus::Done
+            });
+            was_open
+                && (step.status == StepStatus::Done
+                    || step
+                        .delegation
+                        .as_ref()
+                        .is_none_or(|delegation| !delegation.active()))
+        };
+        let steps: BTreeMap<&str, &plans::Step> = before
+            .map(|plan| {
+                plan.steps
+                    .iter()
+                    .map(|step| (step.key.as_str(), step))
+                    .collect()
+            })
+            .unwrap_or_default();
+        self.ask_children_to_sleep(&next, |step, _| {
+            ended(step, steps.get(step.key.as_str()).copied())
+        });
+        self.plans.book.insert(session.clone(), next);
+        Ok(())
+    }
+
+    /// Marks for sleep the child of each step of `plan` that `pick` names
+    /// (B18): the minute decision ends it once it rests off screen, and a
+    /// child that is asleep, gone or set not to sleep is left as it is.
+    fn ask_children_to_sleep(
+        &mut self,
+        plan: &Plan,
+        pick: impl Fn(&plans::Step, &Delegation) -> bool,
+    ) {
+        for step in &plan.steps {
+            let Some(delegation) = step.delegation.as_ref() else {
+                continue;
+            };
+            let Some(agent) = delegation.agent_id.as_deref() else {
+                continue;
+            };
+            if !pick(step, delegation)
+                || self
+                    .missions
+                    .sleep_marks
+                    .iter()
+                    .any(|mark| mark.agent_id == agent)
+            {
+                continue;
+            }
+            crate::diagnostic!(json!({
+                "component": "plans", "kind": "plans.child_sleep_asked",
+                "plan": plan.id(), "step": step.key, "attempt": delegation.attempt,
+                "agent_id": agent,
+            }));
+            self.missions
+                .sleep_marks
+                .push(super::agent_sleep::missions::SleepMark::plan(
+                    agent,
+                    &plan.id(),
+                    &step.key,
+                ));
+        }
     }
 
     /// The summary the prompt hook writes into the pane's record (D-30):
@@ -807,6 +988,416 @@ impl Runtime {
         asks
     }
 
+    /// `plan` as the screen draws it from `pane`, each handed step's child
+    /// placed where Hide knows it now (B20).
+    pub(super) fn plan_view(&self, plan: &Plan, pane: &str) -> PlanView {
+        let ledger = self.delivery_state().ok();
+        plans::view_with(plan, pane, &|agent| {
+            self.child_place(ledger.as_deref(), agent)
+        })
+    }
+
+    /// Where the child registered as `agent` is now: its pane while its row
+    /// is shown, and its session, read from the row or else from the
+    /// registration, so a sleeping or closed child's plan is still found.
+    fn child_place(
+        &self,
+        ledger: Option<&crate::delivery::ledger::Ledger>,
+        agent: &str,
+    ) -> ChildPlace {
+        let Some(record) =
+            ledger.and_then(|ledger| ledger.agents.iter().find(|record| record.id == agent))
+        else {
+            return (None, None);
+        };
+        let row = (!record.ended)
+            .then(|| {
+                self.machine_agents(&record.machine)
+                    .iter()
+                    .find(|row| same_pane(&row.pane_id, &record.actor.pane_id))
+            })
+            .flatten();
+        let session = row
+            .and_then(|row| row_session(&record.machine, row))
+            .or_else(|| {
+                Some(SessionIdentity {
+                    device_id: record.machine.clone(),
+                    agent: hide_session::Agent::from_kind(&record.actor.kind)?
+                        .as_str()
+                        .to_owned(),
+                    session_id: record.session.clone(),
+                })
+            });
+        (row.map(|row| row.pane_id.clone()), session)
+    }
+
+    /// Follows the published ledger into the plans (B16, B17, B20): a step's
+    /// spawn links it to its new attempt, the child's registration is named
+    /// once it binds, the attempt's letters between the child and its main
+    /// move where it stands, and the child's end without a report closes
+    /// it. Each delegation remembers the last letter it read, so a fold after
+    /// a restart neither repeats a letter nor loses one; a change is saved
+    /// like any other. Whether any plan changed.
+    pub(super) fn fold_delegations(&mut self) -> bool {
+        if self.plans.load != Load::Ready {
+            return false;
+        }
+        let Ok(ledger) = self.delivery_state() else {
+            return false;
+        };
+        let links: Vec<(&crate::coordination::SpawnRecord, &PlanLink)> = ledger
+            .spawns
+            .iter()
+            .filter_map(|spawn| Some((spawn, spawn.plan.as_ref()?)))
+            .collect();
+        if links.is_empty() {
+            return false;
+        }
+        let number = |id: &str| {
+            id.rsplit_once('-')
+                .and_then(|(_, number)| number.parse::<u64>().ok())
+                .unwrap_or(0)
+        };
+        let newest = ledger.letters.last().map_or(0, |letter| number(&letter.id));
+        let mut moved: Vec<(SessionIdentity, Plan)> = Vec::new();
+        let sessions: BTreeSet<&SessionIdentity> =
+            links.iter().map(|(_, link)| &link.parent_session).collect();
+        for session in sessions {
+            let Some(plan) = self.plans.book.get(session) else {
+                continue;
+            };
+            let id = plan.id();
+            let mut next = plan.clone();
+            for (spawn, link) in links
+                .iter()
+                .filter(|(_, link)| link.parent_session == *session && link.plan == id)
+            {
+                let Some(step) = next.steps.iter_mut().find(|step| step.key == link.step) else {
+                    continue;
+                };
+                match step.delegation.as_mut() {
+                    Some(delegation) if delegation.attempt > link.attempt => {}
+                    Some(delegation) if delegation.attempt == link.attempt => {
+                        if delegation.agent_id.is_none() {
+                            delegation.agent_id.clone_from(&spawn.child);
+                        }
+                    }
+                    _ => {
+                        crate::diagnostic!(json!({
+                            "component": "plans", "kind": "plans.step_handed",
+                            "plan": id, "step": step.key, "attempt": link.attempt,
+                            "spawn": spawn.id,
+                        }));
+                        step.delegation = Some(Delegation {
+                            attempt: link.attempt,
+                            spawn: spawn.id.clone(),
+                            name: spawn.name.clone(),
+                            agent: spawn.kind.clone(),
+                            agent_id: spawn.child.clone(),
+                            state: DelegationState::Working,
+                            reported_at_unix_ms: None,
+                            released: false,
+                            // Letters before the attempt are not its own.
+                            seen: newest,
+                        });
+                        if step.status == StepStatus::Planned {
+                            step.status = StepStatus::Working;
+                        }
+                    }
+                }
+            }
+            // The attempt's letters and end, for every step still handed.
+            for step in &mut next.steps {
+                let Some(delegation) = step.delegation.as_mut().filter(|d| d.active()) else {
+                    continue;
+                };
+                let Some(agent) = delegation.agent_id.as_deref() else {
+                    continue;
+                };
+                let Some(child) = ledger.agents.iter().find(|record| record.id == agent) else {
+                    continue;
+                };
+                let Some(parent) = links
+                    .iter()
+                    .find(|(spawn, _)| spawn.id == delegation.spawn)
+                    .and_then(|(spawn, _)| {
+                        ledger
+                            .agents
+                            .iter()
+                            .find(|record| record.id == spawn.parent)
+                    })
+                else {
+                    continue;
+                };
+                if delegation.seen < newest {
+                    let start = ledger
+                        .letters
+                        .partition_point(|letter| number(&letter.id) <= delegation.seen);
+                    for letter in &ledger.letters[start..] {
+                        let from_child = letter.sender.same_identity(&child.actor)
+                            && letter.recipient.same_identity(&parent.actor);
+                        let to_child = letter.sender.same_identity(&parent.actor)
+                            && letter.recipient.same_identity(&child.actor);
+                        delegation.state = match (from_child, to_child, letter.kind.as_str()) {
+                            (true, _, "report") => {
+                                delegation.reported_at_unix_ms = Some(letter.created_at_unix_ms);
+                                DelegationState::Reported
+                            }
+                            (true, _, "block") => DelegationState::Blocked,
+                            (true, _, "progress") | (_, true, _)
+                                if delegation.state == DelegationState::Blocked =>
+                            {
+                                DelegationState::Working
+                            }
+                            _ => delegation.state,
+                        };
+                    }
+                    delegation.seen = newest;
+                }
+                if child.ended && delegation.state != DelegationState::Reported {
+                    delegation.state = DelegationState::Closed;
+                }
+            }
+            if next != *plan {
+                moved.push((session.clone(), next));
+            }
+        }
+        if moved.is_empty() {
+            return false;
+        }
+        for (session, next) in moved {
+            if let Err(code) = self.save_plan(&session, Some(&next)) {
+                // Folded again from the ledger at the next publish.
+                crate::diagnostic!(json!({
+                    "component": "plans", "kind": "plans.fold_unsaved",
+                    "session_id": session.session_id, "code": code,
+                }));
+                continue;
+            }
+            self.plans.book.insert(session, next);
+        }
+        self.plans.edit += 1;
+        true
+    }
+
+    /// The admission of a spawn `actor` asks for with `plan_node` (B1-B4,
+    /// B7, B8): none for a spawn that names no step, after refusing any
+    /// spawn of a plan's child or a mission's worker or checker; and for a
+    /// step, the link to its attempt, which the ledger counts under the cap.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn plan_spawn_admission(
+        &self,
+        actor: &crate::delivery::Actor,
+        device: &str,
+        parent: Option<&str>,
+        plan_node: Option<&str>,
+        kind: &str,
+        launch: &hide_agent_adapter::LaunchChoice,
+        conducting: bool,
+    ) -> Result<Option<PlanAdmission>, String> {
+        let ledger = self.delivery_state()?;
+        let own = ledger
+            .agents
+            .iter()
+            .rev()
+            .find(|record| !record.ended && record.actor.same_identity(actor))
+            .map(|record| record.id.as_str());
+        // An agent a plan or a mission started does its own work (D-23).
+        let delegated = own.is_some_and(|own| {
+            ledger
+                .spawns
+                .iter()
+                .any(|spawn| spawn.plan.is_some() && spawn.child.as_deref() == Some(own))
+                || self.missions.book.missions.iter().any(|mission| {
+                    mission.status.open()
+                        && mission.nodes.iter().any(|node| {
+                            node.agent_id.as_deref() == Some(own)
+                                || node.criteria.iter().any(|line| {
+                                    line.checkers
+                                        .iter()
+                                        .any(|checker| checker.agent_id.as_deref() == Some(own))
+                                })
+                        })
+                })
+        });
+        if delegated {
+            return Err("plan_delegate_not_permitted".into());
+        }
+        let Some(key) = plan_node else {
+            return Ok(None);
+        };
+        // A mission's worker is the Conductor's, never a plan step's.
+        if conducting {
+            return Err("plan_delegate_not_permitted".into());
+        }
+        if parent.is_none() {
+            return Err("plan_delegate_needs_parent".into());
+        }
+        if self.plans.load != Load::Ready {
+            return Err("plan_unavailable".into());
+        }
+        let session = self
+            .caller_session(device, &actor.pane_id, actor)
+            .ok_or("plan_session_unknown")?;
+        let plan = self.plans.book.get(&session).ok_or("plan_missing")?;
+        let step = plan
+            .steps
+            .iter()
+            .find(|step| step.key == key)
+            .ok_or_else(|| refusal("plan_node_unknown", key))?;
+        if plan.review == Review::Proposed {
+            return Err("plan_review_pending".into());
+        }
+        if matches!(step.status, StepStatus::Done | StepStatus::Dropped) {
+            return Err(refusal("plan_node_finished", key));
+        }
+        if let Some(blocked) = step.depends_on.iter().find(|wanted| {
+            plan.steps.iter().any(|other| {
+                &other.key == *wanted
+                    && !matches!(other.status, StepStatus::Done | StepStatus::Dropped)
+            })
+        }) {
+            return Err(refusal(
+                "plan_order_refused",
+                &format!("{key} waits on {blocked}"),
+            ));
+        }
+        let candidates = &self.snapshot.ui_state.conductor_settings.candidates;
+        if !candidates.is_empty()
+            && !candidates
+                .iter()
+                .any(|candidate| candidate.admits(kind, launch))
+        {
+            return Err("plan_candidate_refused".into());
+        }
+        let id = plan.id();
+        // The attempt the step is on: the same while its child works or has
+        // reported, the next once it is blocked, closed or taken back. A
+        // spawn the ledger holds and the plan has not followed yet is the
+        // current one.
+        let linked = ledger
+            .spawns
+            .iter()
+            .filter_map(|spawn| spawn.plan.as_ref())
+            .filter(|link| link.parent_session == session && link.plan == id && link.step == key)
+            .map(|link| link.attempt)
+            .max()
+            .unwrap_or(0);
+        let attempt = match step.delegation.as_ref() {
+            Some(delegation) if linked > delegation.attempt => linked,
+            Some(delegation)
+                if delegation.released
+                    || matches!(
+                        delegation.state,
+                        DelegationState::Blocked | DelegationState::Closed
+                    ) =>
+            {
+                delegation.attempt + 1
+            }
+            Some(delegation) => delegation.attempt,
+            None => linked.max(1),
+        };
+        let asleep = ledger
+            .spawns
+            .iter()
+            .filter(|spawn| {
+                spawn
+                    .plan
+                    .as_ref()
+                    .is_some_and(|link| link.parent_session == session)
+            })
+            .filter_map(|spawn| spawn.child.as_deref())
+            .filter(|child| {
+                ledger.agents.iter().any(|record| {
+                    &record.id == child
+                        && !record.ended
+                        && self.asleep_route(&record.actor).is_some_and(|(_, stage)| {
+                            stage == super::agent_sleep::letters::Stage::Sleeping
+                        })
+                })
+            })
+            .map(str::to_owned)
+            .collect();
+        Ok(Some(PlanAdmission {
+            link: PlanLink {
+                plan: id,
+                step: key.to_owned(),
+                attempt,
+                parent_session: session,
+            },
+            asleep,
+        }))
+    }
+
+    /// Whether a letter from `actor` that would wake its sleeping plan child
+    /// `recipient` may go (B6): only while its main's plans have a place for
+    /// it under the cap.
+    pub(crate) fn plan_wake_admission(
+        &self,
+        actor: &crate::delivery::Actor,
+        recipient: &crate::delivery::Actor,
+    ) -> Result<(), String> {
+        let Ok(ledger) = self.delivery_state() else {
+            return Ok(());
+        };
+        let Some(child) = ledger
+            .agents
+            .iter()
+            .find(|record| !record.ended && record.actor.same_identity(recipient))
+        else {
+            return Ok(());
+        };
+        let Some(link) = ledger
+            .spawns
+            .iter()
+            .find(|spawn| spawn.child.as_deref() == Some(child.id.as_str()))
+            .and_then(|spawn| spawn.plan.as_ref())
+        else {
+            return Ok(());
+        };
+        if self
+            .caller_session(&actor.device_id, &actor.pane_id, actor)
+            .as_ref()
+            != Some(&link.parent_session)
+        {
+            return Ok(());
+        }
+        let asleep: Vec<String> = ledger
+            .spawns
+            .iter()
+            .filter(|spawn| {
+                spawn
+                    .plan
+                    .as_ref()
+                    .is_some_and(|other| other.parent_session == link.parent_session)
+            })
+            .filter_map(|spawn| spawn.child.clone())
+            .filter(|id| {
+                ledger.agents.iter().any(|record| {
+                    &record.id == id && !record.ended && self.asleep_route(&record.actor).is_some()
+                })
+            })
+            .collect();
+        if crate::coordination::plan_children(
+            &ledger,
+            &link.parent_session,
+            &asleep,
+            super::memory::now_ms(),
+        ) >= plans::PLAN_DELEGATE_LIMIT
+        {
+            crate::diagnostic!(json!({
+                "component": "plans", "kind": "plans.wake_refused",
+                "plan": link.plan, "step": link.step, "attempt": link.attempt,
+                "agent_id": child.id,
+            }));
+            return Err(refusal(
+                "plan_delegate_full",
+                &plans::PLAN_DELEGATE_LIMIT.to_string(),
+            ));
+        }
+        Ok(())
+    }
+
     /// Drops the plans of sessions that were deleted or pruned; their rows
     /// went with the session's other rows in the same store.
     pub(crate) fn drop_plans_of(&mut self, sessions: &[(String, String)]) -> bool {
@@ -832,13 +1423,28 @@ impl Runtime {
         dropped > 0
     }
 
-    /// Makes the plans view again when the book or the panes moved; with no
-    /// plan and nothing shown it does nothing.
+    /// Makes the plans view again when the book, the panes or the places of
+    /// the children they handed steps to moved; with no plan and nothing
+    /// shown it does nothing. A plan shown carries its children's plans
+    /// too, whether or not their panes are shown, keyed by their sessions
+    /// (B20).
     pub(super) fn refresh_plans(&mut self) {
         if self.plans.book.is_empty() && self.snapshot.plans.items.is_empty() {
             return;
         }
         let live = self.live_sessions();
+        let ledger = self.delivery_state().ok();
+        let children: Vec<String> = live
+            .iter()
+            .filter_map(|(_, session)| self.plans.book.get(session))
+            .flat_map(|plan| &plan.steps)
+            .filter_map(|step| step.delegation.as_ref().filter(|d| d.active()))
+            .filter_map(|delegation| delegation.agent_id.clone())
+            .collect();
+        let places: Vec<ChildPlace> = children
+            .iter()
+            .map(|agent| self.child_place(ledger.as_deref(), agent))
+            .collect();
         let print = {
             use std::hash::{Hash, Hasher};
             let mut hasher = std::collections::hash_map::DefaultHasher::new();
@@ -848,16 +1454,30 @@ impl Runtime {
                     session.hash(&mut hasher);
                 }
             }
+            children.hash(&mut hasher);
+            places.hash(&mut hasher);
             hasher.finish()
         };
         if self.plans.made_at == Some((self.plans.edit, print)) {
             return;
         }
         self.plans.made_at = Some((self.plans.edit, print));
-        self.snapshot.plans.items = live
+        let mut items: Vec<PlanView> = live
             .iter()
-            .filter_map(|(pane, session)| Some(view_of(self.plans.book.get(session)?, pane)))
+            .filter_map(|(pane, session)| Some(self.plan_view(self.plans.book.get(session)?, pane)))
             .collect();
+        for (pane, session) in places {
+            let Some(session) = session else {
+                continue;
+            };
+            if items.iter().any(|item| item.session == session) {
+                continue;
+            }
+            if let Some(plan) = self.plans.book.get(&session) {
+                items.push(self.plan_view(plan, pane.as_deref().unwrap_or_default()));
+            }
+        }
+        self.snapshot.plans.items = items;
     }
 
     /// The plan of the worker in `pane` on `machine`, for a mission node's
@@ -868,7 +1488,7 @@ impl Runtime {
             .iter()
             .find(|agent| same_pane(&agent.pane_id, pane))?;
         let session = row_session(machine, agent)?;
-        Some(view_of(self.plans.book.get(&session)?, &agent.pane_id))
+        Some(self.plan_view(self.plans.book.get(&session)?, &agent.pane_id))
     }
 }
 
@@ -880,7 +1500,7 @@ mod tests {
     /// hook reads (`contracts/delivery-envelope.json`, `plan_context`).
     #[test]
     fn the_plan_summary_matches_the_delivery_envelope_contract() {
-        let contract: Value =
+        let contract: serde_json::Value =
             serde_json::from_str(include_str!("../../../contracts/delivery-envelope.json"))
                 .unwrap();
         let mut checked = 0;

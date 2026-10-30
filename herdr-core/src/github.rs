@@ -27,8 +27,9 @@ use crate::model::{
 use crate::node_access::NodeLink;
 use crate::reader::BackgroundRead;
 use hide_node_link::gh::{
-    GhAnswer, OUTSIDE_PR_FIELDS, PR_FEEDBACK_FIELDS, REVIEW_ASKED_FIELDS, REVIEW_ASKED_SEARCH,
-    SEARCH_ISSUE_FIELDS, SEARCH_LIMIT, SEARCH_PR_FIELDS, VIEWER_LOGIN, is_number,
+    GhAnswer, OUTSIDE_PR_FIELDS, PLAN_PR_FIELDS, PR_FEEDBACK_FIELDS, REVIEW_ASKED_FIELDS,
+    REVIEW_ASKED_SEARCH, SEARCH_ISSUE_FIELDS, SEARCH_LIMIT, SEARCH_PR_FIELDS, VIEWER_LOGIN,
+    is_number,
 };
 pub(crate) use hide_node_link::gh::{SEARCH_QUERY_LIMIT, SEARCH_REPOSITORY_LIMIT};
 use hide_node_link::git::GitCommand;
@@ -1903,6 +1904,85 @@ pub(crate) fn pr_standing(
         "MERGED" => Ok(PrStanding::Merged),
         other => Err(format!("gh pr view answered the unknown state {other:?}")),
     }
+}
+
+/// Where pull request `number` at `place` was made from (PRD
+/// hide-plan-delegate D-19): its head branch, whether that branch is in
+/// another repository, and the repository it is in, read in one `gh pr
+/// view` on the caller's worker.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct PrHead {
+    pub(crate) branch: String,
+    pub(crate) cross_repository: bool,
+    /// `owner/name`, from its address.
+    pub(crate) repository: String,
+}
+
+/// Why a pull request's head could not be read.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) enum PrHeadFailure {
+    /// The repository has no pull request of that number.
+    Missing,
+    /// GitHub could not be asked, or answered something Hide cannot read.
+    Unread(String),
+}
+
+pub(crate) fn pr_head(
+    node: &dyn NodeLink,
+    place: &Where,
+    number: u32,
+) -> Result<PrHead, PrHeadFailure> {
+    #[derive(serde::Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    struct Viewed {
+        head_ref_name: String,
+        is_cross_repository: bool,
+        url: String,
+    }
+    let number = number.to_string();
+    let output = gh_at(
+        node,
+        place,
+        &["pr", "view", &number, "--json", PLAN_PR_FIELDS],
+    )
+    .map_err(|failure| {
+        // gh names a number the repository has no pull request of only
+        // in its words.
+        if failure
+            .reason
+            .to_ascii_lowercase()
+            .contains("could not resolve to a pullrequest")
+        {
+            PrHeadFailure::Missing
+        } else {
+            PrHeadFailure::Unread(failure.reason)
+        }
+    })?;
+    let viewed = serde_json::from_str::<Viewed>(&output).map_err(|error| {
+        PrHeadFailure::Unread(format!(
+            "gh pr view returned output Hide could not read: {error}"
+        ))
+    })?;
+    let repository = viewed
+        .url
+        .split_once("/pull/")
+        .and_then(|(base, _)| {
+            let mut names = base.rsplit('/');
+            let name = names.next()?;
+            let owner = names.next()?;
+            (!owner.is_empty() && !name.is_empty()).then(|| format!("{owner}/{name}"))
+        })
+        .ok_or_else(|| {
+            PrHeadFailure::Unread(format!(
+                "gh pr view named no repository in {:?}",
+                viewed.url
+            ))
+        })?;
+    Ok(PrHead {
+        branch: viewed.head_ref_name,
+        cross_repository: viewed.is_cross_repository,
+        repository,
+    })
 }
 
 fn parse_pr_feedback(output: &str) -> Result<PrFeedback, String> {
