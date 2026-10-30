@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { activeTab, afterKeep, backFromThread, closeLane, closeTab, DESK_LANE_CLOSED, openMission, openThread, outputTab, showTab, toggleLane, toggleOutputs, toggleThreads, viewTabs } from "./deskLane";
+import { activeTab, afterKeep, backFromThread, closeLane, namesView, closeTab, DESK_LANE_CLOSED, openMission, openThread, outputTab, showTab, toggleLane, toggleOutputs, toggleThreads, viewTabs } from "./deskLane";
 import type { DeskKeptTab, DeskOutput } from "./snapshot";
 
 // Expected answers are PRD session-docs-and-assistant B28-B35 and the
@@ -70,5 +70,13 @@ describe("Desk's lane", () => {
     expect(answered.answer).toEqual({ job: "job-a", seq: 1 });
     expect(openThread(answered, "job-a", { answer: true }).answer).toEqual({ job: "job-a", seq: 2 });
     expect(openThread(answered, "job-b").answer).toBeNull();
+  });
+
+  it("finds the View a thread's file names, as a path, from its folder, or with a Windows device's backslashes", () => {
+    const posix = { ...output("notes"), path: "/repo/docs/notes.md" };
+    expect([namesView(posix, "/repo/docs/notes.md"), namesView(posix, "/repo/./docs/x/../notes.md"), namesView(posix, "docs/notes.md"), namesView(posix, "./notes.md")]).toEqual([true, true, true, true]);
+    expect([namesView(posix, "/other/docs/notes.md"), namesView(posix, "otes.md"), namesView(posix, "../notes.md"), namesView(posix, "docs\\notes.md")]).toEqual([false, false, false, false]);
+    const windows = { ...output("notes"), path: "C:/repo/docs/notes.md" };
+    expect([namesView(windows, "C:\\repo\\docs\\notes.md"), namesView(windows, "c:/repo/docs/notes.md"), namesView(windows, "docs\\notes.md")]).toEqual([true, true, true]);
   });
 });

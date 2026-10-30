@@ -9,7 +9,7 @@ import { MapIcon } from "lucide-react";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent, type ReactNode, type RefObject } from "react";
 import type { Actions } from "./actions";
 import { askingCount, unseenOutputs, type DeskItem, type DeskJob, type DeskMention, type DeskOutput, type DeskSessionRef } from "./desk";
-import { activeTab, backFromThread, closeLane, closeTab, closeTool, closeView, openMission, openThread, outputTab, showTab, showThreads, tabKey, toggleOutputs, toggleThreads, viewTabs } from "./deskLane";
+import { activeTab, backFromThread, namesView, closeLane, closeTab, closeTool, closeView, openMission, openThread, outputTab, showTab, showThreads, tabKey, toggleOutputs, toggleThreads, viewTabs } from "./deskLane";
 import { DeskOutputView } from "./DeskOutputView";
 import { MissionMap } from "./MissionMap";
 import { OutputMark } from "./components/desk/desk-job-card";
@@ -343,7 +343,7 @@ function everyThread(): DeskJob[] {
 
 /** The output a thread's own line names, as its card lists it when it does: the View's id, or its address or file. */
 function outputOf(job: DeskJob, output: DeskOutput): DeskOutput {
-  return job.outputs.find((made) => made.id === output.id || (output.url !== null && made.url === output.url) || (output.path !== null && made.path !== null && (made.path === output.path || made.path.endsWith(`/${output.path}`)))) ?? output;
+  return job.outputs.find((made) => made.id === output.id || (output.url !== null && made.url === output.url) || (output.path !== null && namesView(made, output.path))) ?? output;
 }
 
 /** What a press in Desk opens in its lane (B25, B28, B29, B31, B34). */
@@ -485,8 +485,9 @@ function DeskLaneColumns({ actions, lane, chat }: { actions: Actions; lane: Lane
     const tabOf = (key: string) => tabs.find(({ tab }) => tabKey(tab) === key);
     let body: ReactNode;
     if (active?.kind === "output") {
-      // The card's value now, so a View seen since shows no dot.
-      const output = byId.get(active.job)?.outputs.find((one) => one.id === active.output.id) ?? active.output;
+      // The card's value now, so a View seen since shows no dot; a kept tab whose View
+      // closed has no View left to mark, so it reads as seen and asks the core nothing.
+      const output = byId.get(active.job)?.outputs.find((one) => one.id === active.output.id) ?? { ...active.output, seen: true };
       body = <DeskOutputView key={tabKey(active)} output={output} viewKey={tabKey(active)} actions={actions} />;
     } else if (active?.kind === "mission") {
       const conductor = threads.find((job) => job.mission?.id === active.mission)?.id ?? null;

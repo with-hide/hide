@@ -5,6 +5,7 @@
 // here is this window's and starts closed.
 
 import type { DeskKeptTab, DeskOutput } from "./snapshot";
+import { absolutePathRoot } from "./terminalLinks";
 
 /** What the tool column holds: the Threads list, or one thread, with the Conductor a worker's thread steps back to (B34). */
 export type DeskTool = { kind: "threads" } | { kind: "thread"; job: string; conductor: string | null };
@@ -136,4 +137,29 @@ export function toggleLane(lane: DeskLaneWindow): DeskLaneWindow {
   if (lane.up) return closeLane(lane);
   if (lane.tool === null && !lane.view) return { ...lane, up: true, tool: { kind: "threads" } };
   return { ...lane, up: true };
+}
+
+/**
+ * Whether `written`, a file as a session's call typed it, names the View
+ * `made` opened (B31). A View's path is spelled as the wire spells it, `/`
+ * between names on every system, so a Windows device's backslashes are read
+ * as `/` and its drive letter in either case (docs/ARCHITECTURE.md, The
+ * platform layer); a relative path names the View whose path ends with it.
+ */
+export function namesView(made: DeskOutput, written: string): boolean {
+  if (made.path === null) return false;
+  const windows = /^[A-Za-z]:\//u.test(made.path) || made.path.startsWith("//");
+  const wire = windows ? written.replaceAll("\\", "/") : written;
+  const root = absolutePathRoot(wire);
+  const parts: string[] = [];
+  for (const part of wire.slice(root?.length ?? 0).split("/")) {
+    if (part === "" || part === ".") continue;
+    if (part !== "..") parts.push(part);
+    else if (!root || parts.pop() === undefined) return false;
+  }
+  if (parts.length === 0) return false;
+  const same = (a: string, b: string) => (windows ? a.toLowerCase() === b.toLowerCase() : a === b);
+  if (root) return same(`${root}${parts.join("/")}`, made.path);
+  const tail = `/${parts.join("/")}`;
+  return made.path.length > tail.length && same(made.path.slice(-tail.length), tail);
 }
