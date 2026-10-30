@@ -390,6 +390,9 @@ fn read_project(
     // derived from them, and a failed one leaves those unknown on every pull
     // request, never "no" (issue #1189, replacing PRD work-tab-pr-lens D-25's
     // all-or-nothing rule).
+    if let Ok(repository) = &repository {
+        recheck_settled(&run, repository, &mut pull_requests, now_unix_ms());
+    }
     let unread_queries = add_extra_facts(&run, repository, viewer, &mut pull_requests);
     match issues {
         Ok((issues, warning)) => GithubProjectSnapshot {
@@ -721,6 +724,95 @@ fn list_pull_requests(
         }
     }
     Ok(pull_requests)
+}
+
+/// How long after a pull request settles its checks are read again while the
+/// last read left them pending or failed. A rerun can pass, and the pull
+/// request merge, between two reads; without this the read before the merge
+/// is the last word, and a mission's CI line stays failed on a merged pull
+/// request.
+const SETTLED_RECHECK_WINDOW_MS: u64 = 15 * 60 * 1000;
+
+/// The most settled pull requests one read asks about, the latest settled
+/// first; the rest wait for the next read, inside the window.
+const SETTLED_RECHECK_LIMIT: usize = 4;
+
+/// Reads again the head commit's checks of each pull request that settled in
+/// the last `SETTLED_RECHECK_WINDOW_MS` with checks last read pending or
+/// failed, and takes what they add up to now. An answer that says nothing
+/// (no checks, an unknown result) or a failed read keeps the remembered
+/// checks, the failure going to the diagnostic log.
+fn recheck_settled(
+    run: &(impl Fn(&[&str]) -> Result<String, GhFailure> + Sync),
+    repository: &str,
+    pull_requests: &mut [PullRequestSnapshot],
+    now: u64,
+) {
+    let mut due: Vec<(usize, String)> = pull_requests
+        .iter()
+        .enumerate()
+        .filter(|(_, pull_request)| {
+            !is_open(pull_request)
+                && matches!(
+                    pull_request.checks,
+                    PullRequestChecks::Pending | PullRequestChecks::Failed
+                )
+                && pull_request
+                    .closed_at_unix_ms
+                    .is_some_and(|closed| now.saturating_sub(closed) <= SETTLED_RECHECK_WINDOW_MS)
+        })
+        .filter_map(|(at, pull_request)| Some((at, pull_request.head_oid.clone()?)))
+        .collect();
+    if due.is_empty() {
+        return;
+    }
+    due.sort_by_key(|(at, _)| std::cmp::Reverse(pull_requests[*at].closed_at_unix_ms));
+    if due.len() > SETTLED_RECHECK_LIMIT {
+        crate::diagnostic!(serde_json::json!({
+            "component": "github", "kind": "settled_checks.deferred",
+            "due": due.len(), "cap": SETTLED_RECHECK_LIMIT,
+        }));
+        due.truncate(SETTLED_RECHECK_LIMIT);
+    }
+    let ask = |arguments: &[String]| {
+        let arguments: Vec<&str> = arguments.iter().map(String::as_str).collect();
+        run(&arguments).map_err(|failure| crate::github_poll::AskFailure {
+            category: failure.category,
+            reason: failure.reason,
+        })
+    };
+    let answers: Vec<_> = std::thread::scope(|scope| {
+        let reads: Vec<_> = due
+            .iter()
+            .map(|(at, head)| {
+                let ask = &ask;
+                let read =
+                    scope.spawn(move || crate::github_poll::commit_checks(ask, repository, head));
+                (*at, read)
+            })
+            .collect();
+        reads
+            .into_iter()
+            .map(|(at, read)| (at, read.join()))
+            .collect()
+    });
+    for (at, answer) in answers {
+        let pull_request = &mut pull_requests[at];
+        match answer {
+            Ok(Ok("passing")) => pull_request.checks = PullRequestChecks::Passing,
+            Ok(Ok("pending")) => pull_request.checks = PullRequestChecks::Pending,
+            Ok(Ok("failed")) => pull_request.checks = PullRequestChecks::Failed,
+            Ok(Ok(_)) => {}
+            Ok(Err(failure)) => crate::diagnostic!(serde_json::json!({
+                "component": "github", "kind": "settled_checks.unread",
+                "pull_request": pull_request.number, "reason": failure.reason,
+            })),
+            Err(_) => crate::diagnostic!(serde_json::json!({
+                "component": "github", "kind": "settled_checks.unread",
+                "pull_request": pull_request.number, "reason": "reader_failed",
+            })),
+        }
+    }
 }
 
 /// The checks to keep for the next read: this answer's, or, when it never
@@ -3483,6 +3575,146 @@ mod tests {
             checks_of(&read, 3),
             PullRequestChecks::Unknown,
             "checks read at another head commit are not this commit's"
+        );
+    }
+
+    fn settled_at(
+        number: u32,
+        head: &str,
+        closed: &str,
+        checks: PullRequestChecks,
+    ) -> PullRequestSnapshot {
+        let mut read = parse_pull_requests(&format!(
+            r#"[{{"title":"t","number":{number},"headRefName":"b{number}","headRefOid":"{head}","isCrossRepository":false,"baseRefName":"main","state":"MERGED","reviewDecision":"","isDraft":false,"url":"https://example.invalid/{number}","mergedAt":"{closed}","closedAt":"{closed}","updatedAt":"{closed}"}}]"#
+        ))
+        .expect("a pull request");
+        read[0].checks = checks;
+        read.remove(0)
+    }
+
+    fn head(digit: char) -> String {
+        std::iter::repeat_n(digit, 40).collect()
+    }
+
+    /// Answers a commit's check runs with `runs` and its status with `status`,
+    /// and keeps every command asked.
+    fn verdicts<'a>(
+        runs: &'static str,
+        status: &'static str,
+        asked: &'a Mutex<Vec<String>>,
+    ) -> impl Fn(&[&str]) -> Result<String, GhFailure> + Sync + 'a {
+        move |arguments: &[&str]| {
+            let endpoint = arguments.last().expect("an endpoint").to_string();
+            asked.lock().unwrap().push(endpoint.clone());
+            if endpoint.ends_with("/status") {
+                Ok(status.to_owned())
+            } else {
+                Ok(runs.to_owned())
+            }
+        }
+    }
+
+    fn at(value: &str) -> u64 {
+        parse_rfc3339_ms(value).expect("a time")
+    }
+
+    #[test]
+    fn a_rerun_that_passed_just_before_the_merge_is_read_after_it() {
+        let asked = Mutex::default();
+        let mut pulls = vec![
+            settled_at(
+                1840,
+                &head('1'),
+                "2026-10-29T17:27:55Z",
+                PullRequestChecks::Pending,
+            ),
+            settled_at(
+                1,
+                &head('2'),
+                "2026-10-29T17:00:00Z",
+                PullRequestChecks::Failed,
+            ),
+            settled_at(
+                2,
+                &head('3'),
+                "2026-10-29T17:27:00Z",
+                PullRequestChecks::Passing,
+            ),
+        ];
+        recheck_settled(
+            &verdicts("passing", "none", &asked),
+            "acme/app",
+            &mut pulls,
+            at("2026-10-29T17:28:30Z"),
+        );
+        assert_eq!(pulls[0].checks, PullRequestChecks::Passing);
+        assert_eq!(
+            pulls[1].checks,
+            PullRequestChecks::Failed,
+            "settled longer than the window ago"
+        );
+        assert_eq!(pulls[2].checks, PullRequestChecks::Passing);
+        let mut asked = asked.into_inner().unwrap();
+        asked.sort();
+        assert_eq!(
+            asked,
+            [
+                format!(
+                    "repos/acme/app/commits/{}/check-runs?per_page=100",
+                    head('1')
+                ),
+                format!("repos/acme/app/commits/{}/status", head('1')),
+            ],
+            "only the pull request settled inside the window with checks not passing is asked about"
+        );
+    }
+
+    #[test]
+    fn a_settled_recheck_that_says_nothing_keeps_the_remembered_checks() {
+        let now = at("2026-10-29T17:28:30Z");
+        let closed = "2026-10-29T17:27:55Z";
+        let asked = Mutex::default();
+        let mut pulls = vec![settled_at(1, &head('1'), closed, PullRequestChecks::Failed)];
+        recheck_settled(
+            &verdicts("none", "none", &asked),
+            "acme/app",
+            &mut pulls,
+            now,
+        );
+        assert_eq!(pulls[0].checks, PullRequestChecks::Failed);
+        let offline = |_: &[&str]| -> Result<String, GhFailure> {
+            Err(GhFailure::network("offline".to_owned()))
+        };
+        recheck_settled(&offline, "acme/app", &mut pulls, now);
+        assert_eq!(pulls[0].checks, PullRequestChecks::Failed);
+    }
+
+    #[test]
+    fn a_read_rechecks_at_most_its_cap_of_settled_pull_requests_latest_first() {
+        let asked = Mutex::default();
+        let mut pulls: Vec<_> = (1..=SETTLED_RECHECK_LIMIT as u32 + 1)
+            .map(|number| {
+                let digit = char::from_digit(number, 10).expect("a digit");
+                let closed = format!("2026-10-29T17:2{number}:00Z");
+                settled_at(number, &head(digit), &closed, PullRequestChecks::Pending)
+            })
+            .collect();
+        recheck_settled(
+            &verdicts("failed", "none", &asked),
+            "acme/app",
+            &mut pulls,
+            at("2026-10-29T17:30:00Z"),
+        );
+        assert_eq!(asked.lock().unwrap().len(), 2 * SETTLED_RECHECK_LIMIT);
+        assert_eq!(
+            pulls[0].checks,
+            PullRequestChecks::Pending,
+            "the oldest waits"
+        );
+        assert!(
+            pulls[1..]
+                .iter()
+                .all(|pull| pull.checks == PullRequestChecks::Failed)
         );
     }
 

@@ -108,7 +108,7 @@ pub(crate) struct AskFailure {
     pub(crate) reason: String,
 }
 
-type Ask<'a> = &'a dyn Fn(&[String]) -> Result<String, AskFailure>;
+pub(crate) type Ask<'a> = &'a dyn Fn(&[String]) -> Result<String, AskFailure>;
 
 /// Drives the poll on one worker thread, one `gh` at a time.
 pub struct GithubPollReader {
@@ -499,10 +499,6 @@ fn checks_verdict(
     endpoint: &str,
     list: ChecksList,
 ) -> Result<&'static str, AskFailure> {
-    let unreadable = |reason: &str| AskFailure {
-        category: GithubFailureCategory::NetworkOrRateLimit,
-        reason: reason.to_owned(),
-    };
     let commit = endpoint
         .split("/commits/")
         .nth(1)
@@ -510,13 +506,42 @@ fn checks_verdict(
         .ok_or_else(|| unreadable("endpoint_refused"))?;
     let arguments = checks_verdict_arguments(repository, commit, list)
         .ok_or_else(|| unreadable("endpoint_refused"))?;
-    match ask(&arguments)?.trim() {
+    verdict_word(&ask(&arguments)?)
+}
+
+/// What one commit's check runs and statuses add up to, read now, by the
+/// same two reads and the same rule as the poll's: for a pull request that
+/// settled before a read saw how its checks ended.
+pub(crate) fn commit_checks(
+    ask: Ask<'_>,
+    repository: &str,
+    commit: &str,
+) -> Result<&'static str, AskFailure> {
+    let read = |list| {
+        let arguments = checks_verdict_arguments(repository, commit, list)
+            .ok_or_else(|| unreadable("endpoint_refused"))?;
+        verdict_word(&ask(&arguments)?)
+    };
+    let runs = read(ChecksList::CheckRuns)?;
+    let status = read(ChecksList::Status)?;
+    Ok(combine(Some(&runs), Some(&status)))
+}
+
+fn verdict_word(output: &str) -> Result<&'static str, AskFailure> {
+    match output.trim() {
         "passing" => Ok("passing"),
         "pending" => Ok("pending"),
         "failed" => Ok("failed"),
         "unknown" => Ok("unknown"),
         "none" => Ok("none"),
         _ => Err(unreadable("verdict_unreadable")),
+    }
+}
+
+fn unreadable(reason: &str) -> AskFailure {
+    AskFailure {
+        category: GithubFailureCategory::NetworkOrRateLimit,
+        reason: reason.to_owned(),
     }
 }
 
@@ -540,10 +565,6 @@ fn is_list(endpoint: &str) -> bool {
 /// The digest of a repository's open pull requests, from the one string `gh`
 /// prints for `PULL_DIGEST_JQ`.
 fn pull_digest(ask: Ask<'_>, repository: &str) -> Result<u64, AskFailure> {
-    let unreadable = |reason: &str| AskFailure {
-        category: GithubFailureCategory::NetworkOrRateLimit,
-        reason: reason.to_owned(),
-    };
     let arguments =
         pull_digest_arguments(repository).ok_or_else(|| unreadable("endpoint_refused"))?;
     let text = ask(&arguments)?;
