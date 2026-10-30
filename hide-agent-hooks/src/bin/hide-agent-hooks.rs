@@ -90,11 +90,7 @@ fn main() -> ExitCode {
                             None
                         });
                 let _ = std::panic::catch_unwind(|| {
-                    report_recorded_turn(
-                        &arguments,
-                        payload.as_ref(),
-                        started + report::REPORT_TIMEOUT,
-                    )
+                    report_recorded_turn(&arguments, payload.as_ref(), started)
                 });
                 return ExitCode::SUCCESS;
             }
@@ -145,14 +141,10 @@ fn main() -> ExitCode {
                         None
                     });
                 let _ = std::panic::catch_unwind(|| {
-                    report_recorded_turn(
-                        &arguments,
-                        payload.as_ref(),
-                        started + report::REPORT_TIMEOUT,
-                    )
+                    report_recorded_turn(&arguments, payload.as_ref(), started)
                 });
             } else if event.as_deref() == Some(HookEvent::UserPromptSubmit.name()) {
-                run_prompt_hook(&arguments, started + PROMPT_BUDGET);
+                run_prompt_hook(&arguments, started);
             } else {
                 run_hook(&arguments, started);
             }
@@ -968,39 +960,69 @@ fn plan_refusal(
     Some(refused.reason().to_owned())
 }
 
-fn run_prompt_hook(arguments: &[String], deadline: Instant) {
-    // The prompt's turn is reported here, beside the inner hook and within
-    // its budget, so it adds no wait to the prompt, and an inner hook ended
-    // at the budget cannot take the report's outcome with it.
+/// How the outer prompt hook tells the inner one what became of the input
+/// it read and passed on: cut at the read limit, or not read by its budget.
+const PAYLOAD_ARGUMENT: &str = "--payload";
+
+fn run_prompt_hook(arguments: &[String], started: Instant) {
+    let deadline = started + PROMPT_BUDGET;
+    // The outer hook reads the prompt's input, so its report names the
+    // session the prompt came from rather than the pane's last one (a
+    // `claude -p` an operator's hook started), and hands the same bytes to
+    // the inner hook. The report runs beside the inner hook and within its
+    // budget, so it adds no wait to the prompt, and an inner hook ended at
+    // the budget cannot take the report's outcome with it.
+    let payload = read_stdin_before_deadline(started + PROMPT_PAYLOAD_BUDGET);
     std::thread::scope(|scope| {
         let reporting = std::thread::Builder::new()
             .name("hide-hook-report".to_owned())
-            .spawn_scoped(scope, || report_recorded_turn(arguments, None, deadline));
-        run_prompt_inner(arguments, deadline);
+            .spawn_scoped(scope, || {
+                report_recorded_turn(arguments, payload.as_ref(), started)
+            });
+        run_prompt_inner(arguments, payload.as_ref(), deadline);
         match reporting {
             Ok(reporting) => {
                 let _ = reporting.join();
             }
-            Err(_) => report_recorded_turn(arguments, None, deadline),
+            Err(_) => report_recorded_turn(arguments, payload.as_ref(), started),
         }
     });
 }
 
-fn run_prompt_inner(arguments: &[String], deadline: Instant) {
+fn run_prompt_inner(arguments: &[String], payload: Option<&(Vec<u8>, bool)>, deadline: Instant) {
     let Ok(executable) = std::env::current_exe() else {
         return;
     };
     let mut command = Command::new(executable);
+    command.arg("hook-inner").args(&arguments[1..]);
+    match payload {
+        None => {
+            command.args([PAYLOAD_ARGUMENT, "unread"]);
+        }
+        Some((_, true)) => {
+            command.args([PAYLOAD_ARGUMENT, "truncated"]);
+        }
+        Some((_, false)) => {}
+    }
     command
-        .arg("hook-inner")
-        .args(&arguments[1..])
-        .stdin(Stdio::inherit())
+        .stdin(Stdio::piped())
         // The inner flush must reach the runtime before it confirms intake.
         // Buffering and re-emitting here would acknowledge undelivered output.
         .stdout(Stdio::inherit())
         .stderr(Stdio::inherit());
     if let Ok(mut child) = OwnedChild::spawn_guarded(command, deadline) {
-        let _ = child.capture_until(deadline, 64 * 1024);
+        let input = child.take_stdin();
+        std::thread::scope(|scope| {
+            // The inner hook reads its input as it starts; a write it never
+            // reads ends when the child does, at the deadline.
+            if let Some(mut input) = input {
+                let bytes = payload.map_or(&[][..], |(bytes, _)| bytes.as_slice());
+                scope.spawn(move || {
+                    let _ = input.write_all(bytes);
+                });
+            }
+            let _ = child.capture_until(deadline, 64 * 1024);
+        });
     }
     // No filesystem or stream write follows the deadline. Failure keeps the
     // manual-inbox fallback; diagnostics run inside the supervised operation.
@@ -1034,8 +1056,14 @@ fn run_hook(arguments: &[String], started: Instant) {
     // session the input names, and a notification's kind.
     let counted =
         runtime.is_some_and(|runtime| runtime.dialect().adapter().subagent_counts.is_some());
-    let payload = if runtime.is_some() || memory_injection {
+    // The outer prompt hook read the input first and passes it on with what
+    // became of its read.
+    let passed = argument_value(PAYLOAD_ARGUMENT, arguments);
+    let payload = if passed.as_deref() == Some("unread") {
+        None
+    } else if runtime.is_some() || memory_injection {
         read_stdin_before_deadline(started + PROMPT_PAYLOAD_BUDGET)
+            .map(|(bytes, truncated)| (bytes, truncated || passed.as_deref() == Some("truncated")))
     } else {
         None
     };
@@ -1192,7 +1220,9 @@ fn run_hook(arguments: &[String], started: Instant) {
             call: call.as_deref(),
         },
         counted,
-        Instant::now() + report::REPORT_TIMEOUT,
+        runtime.map_or(Instant::now() + report::REPORT_TIMEOUT, |runtime| {
+            report::deadline(started, runtime, event)
+        }),
     );
 }
 
@@ -1271,17 +1301,14 @@ fn report_pane(
     let _ = report::record_outcome(home, &pane_id, agent, event.name(), &outcome);
 }
 
-/// Reports a Claude Code or Codex event under the runtime's last session in
-/// the pane's record: a tool call that moves the turn back to working
+/// Reports a Claude Code or Codex event under the session its input names,
+/// or the runtime's last session in the pane's record when the input named
+/// none: a tool call that moves the turn back to working
 /// ([`counters::SessionState::resumed_by`], from the call's input the guard or
 /// the observation read), and a prompt, whose report the outer hook sends
 /// beside the inner one, so a prompt hook cut at its budget still records how
 /// its report went (engineering rule 10).
-fn report_recorded_turn(
-    arguments: &[String],
-    payload: Option<&(Vec<u8>, bool)>,
-    deadline: Instant,
-) {
+fn report_recorded_turn(arguments: &[String], payload: Option<&(Vec<u8>, bool)>, started: Instant) {
     let Some(runtime) =
         argument_value("--runtime", arguments).and_then(|value| AgentRuntime::parse(&value))
     else {
@@ -1302,11 +1329,15 @@ fn report_recorded_turn(
     else {
         return;
     };
-    let runtime_only = Reporter {
-        agent: Some(runtime.id()),
-        session: None,
-    };
-    let state = counters::session_state(&home, &pane_id, runtime_only);
+    let named = payload.and_then(|(bytes, truncated)| counters::session_named(bytes, *truncated));
+    let state = counters::session_state(
+        &home,
+        &pane_id,
+        Reporter {
+            agent: Some(runtime.id()),
+            session: named.as_deref(),
+        },
+    );
     if event != HookEvent::UserPromptSubmit {
         let call = payload.map(|(bytes, truncated)| counters::ToolCall::read(bytes, *truncated));
         if !state
@@ -1316,7 +1347,7 @@ fn report_recorded_turn(
             return;
         }
     }
-    let session = state.and_then(|state| state.session);
+    let session = named.or_else(|| state.and_then(|state| state.session));
     report_pane(
         &home,
         event,
@@ -1327,7 +1358,7 @@ fn report_recorded_turn(
         },
         Said::turn(Some(HookTurn::Working)),
         runtime.dialect().adapter().subagent_counts.is_some(),
-        deadline,
+        report::deadline(started, runtime, event),
     );
 }
 

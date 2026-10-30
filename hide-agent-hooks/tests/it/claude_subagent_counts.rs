@@ -119,6 +119,14 @@ fn the_counts_follow_background_subagents_through_pauses_resumes_a_kill_and_a_ne
     pane.stop(NESTED_SESSION, &[]);
     assert_eq!(pane.counts(s), before);
     assert_eq!(pane.counts(NESTED_SESSION), [(0, 0), (0, 0)]);
+    // The pane's own next prompt is the pane session's, though the nested
+    // session reported last.
+    pane.event(
+        "UserPromptSubmit",
+        json!({"session_id": s, "hook_event_name": "UserPromptSubmit", "prompt": "go"}),
+    );
+    assert_eq!(pane.turns(s).last(), Some(&Some("working".to_owned())));
+    assert_eq!(pane.turns(NESTED_SESSION), [None, Some("done".to_owned())]);
 
     // Each subagent pauses on its own background command, then resumes.
     pane.subagent("SubagentStop", s, "a4d1fa1f46d17e01c");
@@ -145,6 +153,7 @@ fn the_counts_follow_background_subagents_through_pauses_resumes_a_kill_and_a_ne
             (1, 0),
             (2, 0),
             (2, 0), // the parent's turn end sweeps nothing
+            (2, 0), // the pane's next prompt
             (1, 1), // pause of one
             (0, 2), // pause of the other
             (0, 2),
@@ -287,4 +296,105 @@ fn a_report_hide_does_not_take_is_recorded_and_the_next_one_clears_it() {
     pane.subagent("SubagentStart", PANE_SESSION, "b");
     assert_eq!(hide_agent_hooks::report::last_failure(&machine.home), None);
     assert_eq!(pane.counts(PANE_SESSION).last(), Some(&(2, 0)));
+}
+
+/// D-10: a subagent's own call that waited on the operator ends the wait
+/// when it ends, as the session's own call does.
+#[test]
+fn a_subagents_approved_call_ends_the_wait_it_made() {
+    let machine = Machine::new("registered");
+    let pane = Pane { machine: &machine };
+    let s = PANE_SESSION;
+    let call = |event: &str| {
+        pane.event(
+            event,
+            json!({"session_id": s, "agent_id": "a1", "agent_type": "general-purpose",
+                   "hook_event_name": event, "tool_name": "Bash",
+                   "tool_input": {"command": "cargo build"}, "tool_response": {}}),
+        );
+    };
+    pane.session_start(s, "startup");
+    pane.event(
+        "UserPromptSubmit",
+        json!({"session_id": s, "hook_event_name": "UserPromptSubmit", "prompt": "go"}),
+    );
+    call("PermissionRequest");
+    call("PostToolUse");
+    assert_eq!(
+        pane.turns(s),
+        [
+            None,
+            Some("working".to_owned()),
+            Some("waiting".to_owned()),
+            Some("working".to_owned()),
+        ]
+    );
+}
+
+/// D-10: refusing a call in the permission dialog sends no hook event;
+/// Claude Code 2.1.312 writes the refusal as the call's result in the
+/// session file, and the session's next call, made after the operator's
+/// feedback, ends the wait. A call that runs while the dialog is open does
+/// not.
+#[test]
+fn the_next_call_after_a_refusal_the_session_file_records_ends_the_wait() {
+    let machine = Machine::new("registered");
+    let pane = Pane { machine: &machine };
+    let s = PANE_SESSION;
+    let folder = tempfile::tempdir().unwrap();
+    let transcript = folder.path().join(format!("{s}.jsonl"));
+    let bash = json!({"command": "rm -rf build"});
+    let record = |value: Value| {
+        use std::io::Write;
+        let mut file = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&transcript)
+            .unwrap();
+        writeln!(file, "{value}").unwrap();
+    };
+    let tool = |event: &str, name: &str, input: &Value| {
+        pane.event(
+            event,
+            json!({"session_id": s, "transcript_path": transcript, "hook_event_name": event,
+                   "tool_name": name, "tool_input": input}),
+        );
+    };
+    pane.session_start(s, "startup");
+    pane.event(
+        "UserPromptSubmit",
+        json!({"session_id": s, "transcript_path": transcript,
+               "hook_event_name": "UserPromptSubmit", "prompt": "clean up"}),
+    );
+    record(
+        json!({"type": "assistant", "message": {"role": "assistant", "content": [
+            {"type": "tool_use", "id": "toolu_read", "name": "Read", "input": {"file_path": "/x"}},
+            {"type": "tool_use", "id": "toolu_bash", "name": "Bash", "input": bash},
+        ]}}),
+    );
+    tool("PermissionRequest", "Bash", &bash);
+    // The read beside it runs while the dialog is open.
+    tool("PreToolUse", "Read", &json!({"file_path": "/x"}));
+    record(
+        json!({"type": "user", "message": {"role": "user", "content": [
+        {"type": "tool_result", "tool_use_id": "toolu_read", "content": "x"}]}}),
+    );
+    tool("PostToolUse", "Read", &json!({"file_path": "/x"}));
+    // The operator refuses and tells the agent what to do instead.
+    record(
+        json!({"type": "user", "message": {"role": "user", "content": [
+        {"type": "tool_result", "tool_use_id": "toolu_bash", "is_error": true,
+         "content": "The user doesn't want to proceed with this tool use."}]},
+        "permissionDecision": {"decision": "reject", "source": "user_reject"}}),
+    );
+    tool("PreToolUse", "Edit", &json!({"file_path": "/x"}));
+    assert_eq!(
+        pane.turns(s),
+        [
+            None,
+            Some("working".to_owned()),
+            Some("waiting".to_owned()),
+            Some("working".to_owned()),
+        ]
+    );
 }

@@ -14,9 +14,24 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
 
+use crate::runtime::{AgentRuntime, HookEvent};
+
 /// How long one report may hold the agent's hook slot, the `hide` it runs
 /// included.
 pub const REPORT_TIMEOUT: Duration = Duration::from_secs(2);
+
+/// What the helper leaves the agent of its hook's time: the process ends
+/// and the agent reads its answer within it.
+const EXIT_MARGIN: Duration = Duration::from_millis(500);
+
+/// When a report of the hook started at `started` for `event` must end: at
+/// most [`REPORT_TIMEOUT`] from `now`, and inside the time the agent gives
+/// the hook (`install::hook_timeout`, what the entry asks for), counted
+/// from the hook's start rather than from the work before the report.
+pub fn deadline(started: Instant, runtime: AgentRuntime, event: HookEvent) -> Instant {
+    let budget = Duration::from_secs(crate::install::hook_timeout(runtime, event));
+    (Instant::now() + REPORT_TIMEOUT).min(started + budget.saturating_sub(EXIT_MARGIN))
+}
 
 /// One hook event's report on the pane's agent, as the core keeps it.
 #[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]

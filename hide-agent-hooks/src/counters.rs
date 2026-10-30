@@ -274,6 +274,17 @@ impl SubagentInput {
     }
 }
 
+/// The session an event's input names, from the bytes that arrived when
+/// the input was cut at the read limit: `session_id` comes first.
+pub fn session_named(payload: &[u8], truncated: bool) -> Option<String> {
+    if !truncated {
+        return SubagentInput::read(payload, false).session;
+    }
+    prefix_string(payload, "session_id")
+        .filter(|id| crate::delivery::valid_session(id))
+        .map(str::to_owned)
+}
+
 fn valid_subagent(id: &str) -> bool {
     !id.is_empty() && id.len() <= 128 && !id.chars().any(char::is_control)
 }
@@ -361,23 +372,26 @@ impl SessionState {
     /// Whether a tool event `call` of this session moves its turn back to
     /// working: a turn that ended, rested or waits on nothing named does at
     /// any of the session's own calls, and one that waits on a named call
-    /// only at that call's end. A session with no turn yet is left to its
-    /// prompt's report, and a subagent's call is the subagent's, which only
+    /// when that call ends, its subagent's included, or when the session
+    /// file records an answer to it ([`answered`]): the operator's refusal
+    /// sends no event. A session with no turn yet is left to its prompt's
+    /// report, and a subagent's other calls are the subagent's, which only
     /// its counts follow; so an ordinary tool call reads one small file and
     /// starts no process.
     pub fn resumed_by(&self, event: HookEvent, call: Option<&ToolCall>) -> bool {
-        if call.is_some_and(|call| call.subagent) {
-            return false;
-        }
         match (self.turn, &self.waiting_call) {
             (None | Some(HookTurn::Working), _) => false,
             (Some(HookTurn::Waiting), Some(waited)) => {
-                matches!(
+                let ended = matches!(
                     event,
                     HookEvent::PostToolUse | HookEvent::PostToolUseFailure
-                ) && call.is_some_and(|call| call.ends(waited))
+                ) && call.is_some_and(|call| call.ends(waited));
+                ended
+                    || call
+                        .and_then(|call| call.transcript.as_deref())
+                        .is_some_and(|transcript| answered(transcript, waited))
             }
-            _ => true,
+            _ => !call.is_some_and(|call| call.subagent),
         }
     }
 }
@@ -401,6 +415,8 @@ pub struct ToolCall {
     pub subagent: bool,
     name: Option<String>,
     input: Option<String>,
+    /// The session file the agent keeps, which records a refused call.
+    transcript: Option<PathBuf>,
 }
 
 impl ToolCall {
@@ -410,18 +426,21 @@ impl ToolCall {
             agent_id: Option<String>,
             tool_name: Option<String>,
             tool_input: Option<serde_json::Value>,
+            transcript_path: Option<PathBuf>,
         }
         if !truncated && let Ok(input) = serde_json::from_slice::<Input>(payload) {
             return Self {
                 subagent: input.agent_id.is_some_and(|id| !id.is_empty()),
                 name: input.tool_name,
                 input: input.tool_input.as_ref().map(digest),
+                transcript: input.transcript_path,
             };
         }
         Self {
             subagent: prefix_string(payload, "agent_id").is_some_and(|id| !id.is_empty()),
             name: prefix_string(payload, "tool_name").map(str::to_owned),
             input: None,
+            transcript: prefix_string(payload, "transcript_path").map(PathBuf::from),
         }
     }
 
@@ -444,6 +463,80 @@ impl ToolCall {
         self.name.as_deref() == Some(name)
             && (input.is_empty() || self.input.as_deref().is_none_or(|own| own == input))
     }
+}
+
+/// How much of the session file's end [`answered`] reads: the waited call
+/// and what answered it are the file's last records while the turn waits.
+const TRANSCRIPT_TAIL_BYTES: u64 = 256 * 1024;
+
+/// Whether Claude Code's session file at `transcript` records a result for
+/// the call `waited` names: the last call of that tool, the one with the
+/// same input when one has it. A refusal in the permission dialog writes
+/// that result and sends no hook event, so a session whose next call is
+/// made after a refusal with the operator's feedback goes on here. A call
+/// beyond the file's last [`TRANSCRIPT_TAIL_BYTES`], or a file that cannot
+/// be read, is not answered, and the turn waits for its end or `Stop`.
+pub fn answered(transcript: &Path, waited: &str) -> bool {
+    use std::io::{Read, Seek, SeekFrom};
+    #[derive(Deserialize)]
+    struct Record {
+        message: Option<Message>,
+    }
+    #[derive(Deserialize)]
+    struct Message {
+        content: Option<serde_json::Value>,
+    }
+    let Some((name, input)) = waited.split_once(':') else {
+        return false;
+    };
+    let Ok(mut file) = fs::File::open(transcript) else {
+        return false;
+    };
+    let Ok(length) = file.seek(SeekFrom::End(0)) else {
+        return false;
+    };
+    let start = length.saturating_sub(TRANSCRIPT_TAIL_BYTES);
+    let mut tail = Vec::new();
+    if file.seek(SeekFrom::Start(start)).is_err() || file.read_to_end(&mut tail).is_err() {
+        return false;
+    }
+    // A read that starts inside a record skips to the next one.
+    let whole = if start == 0 {
+        &tail[..]
+    } else {
+        match tail.iter().position(|&byte| byte == b'\n') {
+            Some(at) => &tail[at + 1..],
+            None => return false,
+        }
+    };
+    let (mut same, mut last) = (None, None);
+    let mut results = HashSet::new();
+    for line in whole.split(|&byte| byte == b'\n') {
+        let Some(blocks) = serde_json::from_slice::<Record>(line)
+            .ok()
+            .and_then(|record| record.message?.content)
+        else {
+            continue;
+        };
+        for block in blocks.as_array().into_iter().flatten() {
+            let id = block["id"].as_str();
+            match block["type"].as_str() {
+                Some("tool_use") if block["name"].as_str() == Some(name) => {
+                    if !input.is_empty() && digest(&block["input"]) == input {
+                        same = id.map(str::to_owned);
+                    }
+                    last = id.map(str::to_owned);
+                }
+                Some("tool_result") => {
+                    if let Some(answered) = block["tool_use_id"].as_str() {
+                        results.insert(answered.to_owned());
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+    same.or(last).is_some_and(|call| results.contains(&call))
 }
 
 fn digest(input: &serde_json::Value) -> String {
@@ -820,6 +913,7 @@ mod tests {
             subagent: false,
             name: Some("Read".to_owned()),
             input: Some("cd".to_owned()),
+            transcript: None,
         };
         let waited = ToolCall {
             name: Some("Bash".to_owned()),
@@ -830,6 +924,13 @@ mod tests {
         assert!(!state.resumed_by(HookEvent::PostToolUse, Some(&sibling)));
         assert!(!state.resumed_by(HookEvent::PreToolUse, Some(&waited)));
         assert!(state.resumed_by(HookEvent::PostToolUseFailure, Some(&waited)));
+        // A subagent's own waited call ends its wait; its other calls do not.
+        let subagent = |call: &ToolCall| ToolCall {
+            subagent: true,
+            ..call.clone()
+        };
+        assert!(state.resumed_by(HookEvent::PostToolUse, Some(&subagent(&waited))));
+        assert!(!state.resumed_by(HookEvent::PostToolUse, Some(&subagent(&sibling))));
         // Any other turn forgets the call.
         apply(&root, pane, Change::None, WHO, Some(HookTurn::Idle), None).unwrap();
         let state = session_state(&root, pane, WHO).unwrap();
@@ -842,6 +943,64 @@ mod tests {
                 ..sibling
             })
         ));
+        fs::remove_dir_all(&root).ok();
+    }
+
+    /// Claude Code 2.1.312 records a refusal in the permission dialog as
+    /// the call's result, and sends no hook event for it.
+    #[test]
+    fn a_refused_call_is_answered_in_the_session_file_and_a_pending_one_is_not() {
+        let root = home("answered");
+        let transcript = root.join("session.jsonl");
+        let input = serde_json::json!({"command": "rm -rf build", "description": "Clean"});
+        let waited = format!("Bash:{}", digest(&input));
+        let call = serde_json::json!({"type": "assistant", "message": {"role": "assistant",
+        "content": [
+            {"type": "tool_use", "id": "toolu_read", "name": "Read",
+             "input": {"file_path": "/x"}},
+            {"type": "tool_use", "id": "toolu_bash", "name": "Bash", "input": input},
+        ]}});
+        let read_result = serde_json::json!({"type": "user", "message": {"role": "user",
+            "content": [{"type": "tool_result", "tool_use_id": "toolu_read", "content": "x"}]}});
+        let refusal = serde_json::json!({"type": "user", "message": {"role": "user",
+            "content": [{"type": "tool_result", "tool_use_id": "toolu_bash",
+                         "content": "User refused permission to run tool", "is_error": true}]},
+            "permissionDecision": {"decision": "reject", "source": "user_reject"}});
+        // A long record before the call leaves the read starting inside it.
+        let filler = serde_json::json!({"type": "user", "message": {"role": "user",
+            "content": "x".repeat(TRANSCRIPT_TAIL_BYTES as usize)}});
+        fs::write(&transcript, format!("{filler}\n{call}\n{read_result}\n")).unwrap();
+        assert!(!answered(&transcript, &waited), "the dialog is still open");
+        fs::write(
+            &transcript,
+            format!("{filler}\n{call}\n{read_result}\n{refusal}\n"),
+        )
+        .unwrap();
+        assert!(answered(&transcript, &waited));
+        // A call known by its tool alone is the tool's last call.
+        assert!(answered(&transcript, "Bash:"));
+        assert!(!answered(&transcript, "Edit:"));
+        assert!(!answered(&root.join("missing.jsonl"), &waited));
+
+        // A waiting session goes on at its next call once the refusal is in.
+        apply(
+            &root,
+            "w1:p1",
+            Change::None,
+            WHO,
+            Some(HookTurn::Waiting),
+            Some(&waited),
+        )
+        .unwrap();
+        let state = session_state(&root, "w1:p1", WHO).unwrap();
+        let next = ToolCall::read(
+            serde_json::json!({"tool_name": "Edit", "tool_input": {},
+                "transcript_path": transcript})
+            .to_string()
+            .as_bytes(),
+            false,
+        );
+        assert!(state.resumed_by(HookEvent::PreToolUse, Some(&next)));
         fs::remove_dir_all(&root).ok();
     }
 
