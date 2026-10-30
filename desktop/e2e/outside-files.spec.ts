@@ -14,7 +14,8 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { agentPane } from "../../web/e2e/agent-pane";
-import { startHerdr, type HerdrFixture } from "../../web/e2e/herdr-fixture";
+import { runInPane, startHerdr, type HerdrFixture } from "../../web/e2e/herdr-fixture";
+import { fixtureExecutable } from "../../web/e2e/platform-fixture";
 import { enterWorkspace } from "../../web/e2e/wire";
 import { toPage } from "../src/main/wirePath";
 import { fitWindow, hostLog, isolate, launch, screenshot, shellPage, test, type Isolated } from "./fixture";
@@ -237,21 +238,62 @@ function answer(out: string): Record<string, unknown> {
   return JSON.parse(out.trim().split("\n").at(-1) || "{}") as Record<string, unknown>;
 }
 
-// @platform: the agent's path goes from the CLI through hided to the desktop
-// host in the wire spelling, and the host resolves it on its own system
-// (`/tmp` is a link on macOS; a drive letter on Windows).
-test("an agent's hide file open and hide browser open of outside files open as its External tabs and wait for the operator", { tag: "@platform" }, async () => {
+let cliSequence = 0;
+/** `hide ...` run by the plain shell of `pane`, which no agent holds. */
+async function shellHide(args: string[], pane = herdr.panes[0]): Promise<Record<string, unknown>> {
+  const result = await runInPane(herdr, pane, `outside-cli-${++cliSequence}`, {
+    env: { HIDE_STATE_DIR: run.env.HIDE_STATE_DIR! },
+    argv: [path.resolve("..", "target", "debug", fixtureExecutable("hide")), ...args],
+    stdout: true,
+  });
+  return answer(result.stdout);
+}
+
+// @platform: the path goes from the CLI through hided to the desktop host in
+// the wire spelling, and the host resolves it on its own system (`/tmp` is a
+// link on macOS; a drive letter on Windows).
+test("hide file open and hide browser open of outside files open External tabs by the window's grant, and refuse what Hide cannot show", { tag: "@platform" }, async () => {
+  const shot = path.join(scratch!, "cli-shot.png");
+  fs.writeFileSync(shot, PNG);
+  const report = path.join(scratch!, "report.html");
+  fs.writeFileSync(report, "<!doctype html><title>Outside report</title><h1>Report</h1>");
+  fs.mkdirSync(path.join(scratch!, "folder"));
+  const { page, sent } = await start();
+
+  // An image opens in its viewer and an HTML page as a page of its own folder, each an External tab.
+  expect(await shellHide(["file", "open", shot])).toMatchObject({ ok: true });
+  await expect(outsideTab(page, "cli-shot.png")).toHaveAttribute("data-external", "held", { timeout: 20_000 });
+  await expect(page.locator('[data-viewer="image"]')).toBeVisible();
+  expect(await shellHide(["browser", "open", report])).toMatchObject({ ok: true });
+  await expect(outsideTab(page, "report.html")).toHaveAttribute("data-external", "held", { timeout: 20_000 });
+  await expect.poll(() => pageEval<string>("Outside report", "document.querySelector('h1').textContent"), { timeout: 20_000 }).toBe("Report");
+
+  // What Hide cannot show is refused with a reason, and nothing went to the system.
+  expect(await shellHide(["file", "open", path.join(scratch!, "missing.png")])).toMatchObject({ ok: false, reason: "file_missing" });
+  expect(await shellHide(["file", "open", path.join(scratch!, "folder")])).toMatchObject({ ok: false, reason: "unsupported_kind" });
+  expect(await shellHide(["browser", "open", shot])).toMatchObject({ ok: false, reason: "not_html" });
+  expect(await opened()).toEqual([]);
+
+  // No path or file name reached the shell's frames or the host's log (D-05, B22).
+  for (const frame of sent) expect(frame).not.toContain(scratch!);
+  const grants = hostLog(run.env).filter((line) => line.event.startsWith("external."));
+  expect(grants.length).toBeGreaterThan(0);
+  for (const line of grants) expect(JSON.stringify(line)).not.toMatch(/cli-shot|report\.html|hide-outside-/);
+});
+
+// macOS only: the fixture agent (`agentPane`) has not been started in a
+// Windows pane yet; the system-specific path is the test above.
+test("an agent's outside file is its open: it waits in Needs You, view list names the agent, and the row brings it forward", async () => {
   const shot = path.join(scratch!, "agent-shot.png");
   fs.writeFileSync(shot, PNG);
   const report = path.join(scratch!, "report.html");
   fs.writeFileSync(report, "<!doctype html><title>Agent report</title><h1>Report</h1>");
-  fs.mkdirSync(path.join(scratch!, "folder"));
-  const { page, sent } = await start();
+  const { page } = await start();
   const [pane, other] = herdr.panes;
   const agent = await agentPane(herdr, run.env.HIDE_STATE_DIR!, pane);
   const hide = async (args: string[]) => answer((await agent(args)).out);
   const row = page.locator(`nav[data-sidebar] [data-pane="${pane}"]`).first();
-  // The operator's keyboard is in the other pane, so the agent's opens wait for them.
+  // The operator's keyboard is in the other pane, so the agent's open waits for them.
   await page.locator(`[data-pane-view="${other}"] .xterm-screen`).click();
   await expect(page.locator(`[data-pane-view="${other}"]`)).toHaveAttribute("data-focused", "true");
 
@@ -271,21 +313,8 @@ test("an agent's hide file open and hide browser open of outside files open as i
   await expect(page.locator('[data-viewer="image"]')).toBeVisible();
   await expect(row.locator("[data-agent-status-mark]")).not.toHaveAttribute("data-agent-status-mark", "look");
 
-  // With the operator in the agent's pane, an HTML page opens in front as a page of its own folder.
+  // With the operator in the agent's pane, an HTML page opens in front.
   expect(await hide(["browser", "open", report])).toMatchObject({ ok: true });
   await expect(outsideTab(page, "report.html")).toHaveAttribute("data-external", "held", { timeout: 20_000 });
-  await expect.poll(() => pageEval<string>("Agent report", "document.querySelector('h1').textContent"), { timeout: 20_000 }).toBe("Report");
   await screenshot(page, "agent-outside-external");
-
-  // What Hide cannot show is refused with a reason, and nothing went to the system.
-  expect(await hide(["file", "open", path.join(scratch!, "missing.png")])).toMatchObject({ ok: false, reason: "file_missing" });
-  expect(await hide(["file", "open", path.join(scratch!, "folder")])).toMatchObject({ ok: false, reason: "unsupported_kind" });
-  expect(await hide(["browser", "open", shot])).toMatchObject({ ok: false, reason: "not_html" });
-  expect(await opened()).toEqual([]);
-
-  // No path or file name reached the shell's frames or the host's log (D-05, B22).
-  for (const frame of sent) expect(frame).not.toContain(scratch!);
-  const grants = hostLog(run.env).filter((line) => line.event.startsWith("external."));
-  expect(grants.length).toBeGreaterThan(0);
-  for (const line of grants) expect(JSON.stringify(line)).not.toMatch(/agent-shot|report\.html|hide-outside-/);
 });
