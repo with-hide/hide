@@ -9624,6 +9624,7 @@ mod wire_enum_tests {
             DeskAgentState::CliMissing,
             DeskAgentState::LoginNeeded,
             DeskAgentState::NoAskMode,
+            DeskAgentState::NotOffered,
         ];
         for state in states {
             match state {
@@ -9635,7 +9636,8 @@ mod wire_enum_tests {
                 | DeskAgentState::NodeMissing
                 | DeskAgentState::CliMissing
                 | DeskAgentState::LoginNeeded
-                | DeskAgentState::NoAskMode => {}
+                | DeskAgentState::NoAskMode
+                | DeskAgentState::NotOffered => {}
             }
         }
         assert_wire(&contract, "desk_agent_state", &states);

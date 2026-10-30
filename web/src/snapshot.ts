@@ -2595,7 +2595,7 @@ export type ProjectSuggestions = {
 
 /** An agent Desk talks to over ACP (PRD Desk 1차); `contracts/snapshot-wire-enums.json` `desk_agent`. */
 export type DeskAgentId = "claude" | "codex" | "pi";
-export type DeskAgentState = "checking" | "ready" | "preparing" | "not_installed" | "install_failed" | "node_missing" | "cli_missing" | "login_needed" | "no_ask_mode";
+export type DeskAgentState = "checking" | "ready" | "preparing" | "not_installed" | "install_failed" | "node_missing" | "cli_missing" | "login_needed" | "no_ask_mode" | "not_offered";
 export type DeskHostState = "idle" | "starting" | "ready" | "thinking" | "stopped";
 export type DeskApprovalState = "waiting" | "allowed" | "rejected" | "closed";
 export type DeskNotice = "blocked" | "preparing" | "host_stopped" | "resume_failed" | "login_needed" | "install_failed" | "no_ask_mode" | "turn_failed";

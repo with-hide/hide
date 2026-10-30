@@ -222,6 +222,7 @@ impl Runtime {
             DeskEvent::NewConversation => self.desk_new_conversation(),
             DeskEvent::Restart => self.desk_restart(),
             DeskEvent::Select(payload) => self.desk_select(payload),
+            DeskEvent::Install(payload) if !payload.agent.offered() => refused("agent_not_offered"),
             DeskEvent::Install(payload) => {
                 self.order(Order::Install(payload.agent));
                 false
@@ -439,6 +440,9 @@ impl Runtime {
     }
 
     fn desk_select(&mut self, payload: SelectPayload) -> bool {
+        if payload.agent.is_some_and(|agent| !agent.offered()) {
+            return refused("agent_not_offered");
+        }
         let selection = self.desk.stored.selection.clone();
         if let Some(agent) = payload.agent
             && Some(agent) != selection.agent
@@ -512,6 +516,13 @@ impl Runtime {
     }
 
     fn desk_settings(&mut self, payload: SettingsPayload) -> bool {
+        if payload
+            .default_agent
+            .flatten()
+            .is_some_and(|agent| !agent.offered())
+        {
+            return refused("agent_not_offered");
+        }
         let settings = &mut self.desk.stored.settings;
         let before = *settings;
         if let Some(agent) = payload.default_agent {
@@ -967,7 +978,7 @@ mod tests {
     use crate::model::DeskItem;
 
     /// A runtime whose Desk worker is a channel the test reads, with Claude
-    /// and Codex installed.
+    /// and Pi installed.
     pub(super) fn runtime(root: &std::path::Path) -> (Runtime, Receiver<Order>) {
         let state = root.join("state");
         hide_platform::fs::private::create_dir_all(&state).unwrap();
@@ -990,7 +1001,7 @@ mod tests {
         runtime.desk.worker = Some(worker::Handle { orders });
         runtime.desk_report(Report::Availability(vec![
             (AdapterId::Claude, DeskAgentState::Ready, None),
-            (AdapterId::Codex, DeskAgentState::Ready, None),
+            (AdapterId::Pi, DeskAgentState::Ready, None),
         ]));
         (runtime, received)
     }
@@ -1105,13 +1116,29 @@ mod tests {
     }
 
     #[test]
+    fn codex_cannot_be_chosen_while_desk_does_not_offer_it() {
+        let root = tempfile::tempdir().unwrap();
+        let (mut runtime, received) = runtime(root.path());
+        for (kind, payload) in [
+            ("desk_select", json!({"agent": "codex"})),
+            ("desk_install", json!({"agent": "codex"})),
+            ("desk_settings_set", json!({"default_agent": "codex"})),
+        ] {
+            assert!(!event(&mut runtime, kind, payload), "{kind}");
+        }
+        assert_eq!(runtime.desk.stored.selection.agent, None);
+        assert_eq!(runtime.desk.stored.settings.default_agent, None);
+        assert!(received.try_iter().next().is_none());
+    }
+
+    #[test]
     fn a_card_answers_the_agent_once_with_the_one_time_allowance() {
         let root = tempfile::tempdir().unwrap();
         let (mut runtime, received) = runtime(root.path());
-        event(&mut runtime, "desk_select", json!({"agent": "codex"}));
+        event(&mut runtime, "desk_select", json!({"agent": "pi"}));
         event(&mut runtime, "desk_send", json!({"text": "make a file"}));
         sent(&received);
-        opened(&mut runtime, AdapterId::Codex);
+        opened(&mut runtime, AdapterId::Pi);
         let card = ask(&mut runtime);
         assert_eq!(runtime.snapshot.desk.as_ref().unwrap().approvals_waiting, 1);
 
@@ -1205,19 +1232,19 @@ mod tests {
         assert!(event(
             &mut runtime,
             "desk_select",
-            json!({"agent": "codex"})
+            json!({"agent": "pi"})
         ));
         assert!(matches!(
             items(&runtime).last(),
             Some(DeskItem::Switch {
-                to: AdapterId::Codex,
+                to: AdapterId::Pi,
                 carried: crate::model::DeskCarried::All,
                 ..
             })
         ));
         event(&mut runtime, "desk_send", json!({"text": "continue"}));
         let send = sent(&received);
-        assert_eq!(send.adapter, AdapterId::Codex);
+        assert_eq!(send.adapter, AdapterId::Pi);
         assert_eq!(send.carried.as_deref(), Some("Operator: hello\nClaude: hi"));
     }
 
@@ -1230,6 +1257,11 @@ mod tests {
             "desk_send",
             json!({"text": "no agent yet"})
         ));
+        runtime.desk_report(Report::Availability(vec![(
+            AdapterId::Pi,
+            DeskAgentState::CliMissing,
+            Some("pi".into()),
+        )]));
         event(&mut runtime, "desk_select", json!({"agent": "pi"}));
         assert!(!event(
             &mut runtime,

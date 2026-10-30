@@ -116,6 +116,16 @@ impl AdapterId {
         }
     }
 
+    /// Whether Desk offers the agent. Codex is not offered yet: it reads the
+    /// operator's global `AGENTS.md`, skills and MCP servers whatever its
+    /// session config says, and its read-only sandbox keeps `hide` from
+    /// reaching hided. A Hide-owned `CODEX_HOME` with its own sign-in closes
+    /// both (with-hide/hide-private#388); its launch and permission reading
+    /// stay for that.
+    pub fn offered(self) -> bool {
+        !matches!(self, Self::Codex)
+    }
+
     /// The agent's own CLI the adapter starts, which the operator installs;
     /// Claude's and Codex's adapters carry theirs.
     pub fn own_cli(self) -> Option<&'static str> {

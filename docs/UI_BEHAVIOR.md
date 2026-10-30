@@ -935,6 +935,7 @@ The selector lists Claude, Codex and Pi with each one's state:
 - `cli_missing`: Pi's adapter runs the operator's own `pi`, which is not on the login shell's `PATH`.
 - `login_needed`: the agent's own sign-in command (`claude /login`, `codex login`, `pi /login`).
 - `no_ask_mode`: Hide could not hold the agent in its ask mode, so it is not used.
+- `not_offered`: Codex, dim with one line saying why it cannot be chosen yet: its own instructions and skills would come along, and its sandbox keeps the `hide` commands from working ([INSTALL.md: What each system supports](INSTALL.md#what-each-system-supports)).
 
 A message goes to the chosen agent, model and effort; while a reply is being written, the next message waits and `중지` ends the turn.
 While it thinks, the conversation shows the time since the message (`생각 중 · 3초`), and each reply carries its turn folded into one line: the time to its first words and what the agent did, counted from its tool calls (sessions read, letters, sessions started, files read, other commands), such as `생각 8초 · 세션 4개 읽음`.
@@ -945,7 +946,7 @@ Switching agents shows a line saying whether the conversation went with it, and 
 What the agent runs is decided by Hide, never by the agent's own settings:
 
 - A file read, and a `hide` command from the list Desk uses (`hide agent list`, `show`, `spawn`, `hide request`, `hide inbox`, `hide watch`, `hide ps` among them), run without asking.
-- Codex runs in its read-only sandbox, which refuses writes and the network, so a reading shell command inside it (`ls`, `git log`) counts as a file read and runs without asking; Claude's shell commands, reading ones included, always ask.
+- Claude's and Pi's shell commands, reading ones included, always ask. Codex, once Desk offers it, runs in its read-only sandbox, which refuses writes and the network, so a reading shell command inside it (`ls`, `git log`) counts as a file read and runs without asking.
 - Any other command, a file edit, and `hide agent archive` wait on an approval card that shows the command or files, the folder and the agent's reason, with `한 번 허용` and `거절`; nothing is ever allowed for good.
 - A request Hide cannot read does not run, and the conversation says `막힘` with what the agent asked.
 - `새 대화`, `다시 시작`, `중지` and the process's end close a waiting card as refused.
