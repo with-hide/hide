@@ -987,6 +987,14 @@ impl Runtime {
         self.desk.worker = Some(worker::Handle { orders });
         self.compose_desk_sections();
     }
+
+    /// Runs Desk with a session open, so its process's commands reach the
+    /// core, and `cap` places.
+    pub(in crate::runtime) fn open_test_desk(&mut self, cap: u8) {
+        self.start_test_desk();
+        self.desk.host.open = true;
+        self.desk.stored.settings.cap = cap;
+    }
 }
 
 fn refused(reason: &str) -> bool {
