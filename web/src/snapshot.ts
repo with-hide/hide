@@ -2683,9 +2683,8 @@ export type DeskOutputKind = "image" | "page" | "doc" | "pr";
 export type DeskOutput = { id: string; kind: DeskOutputKind; label: string; thumb: string | null; seen: boolean; pr_state: PrState | null; device_id: string | null; checkout: string | null; path: string | null; url: string | null };
 /** A tab kept in Desk's 보기 column: a job's output as its card listed it when it was kept, or a mission's map (B31, B34). */
 export type DeskKeptTab = { kind: "output"; job: string; output: DeskOutput } | { kind: "mission"; mission: string; title: string };
-export type DeskMissionTone = "done" | "review" | "working" | "hold" | "failed" | "waiting" | "cancelled";
 /** The mission a Conductor job runs, as its `미션 k/n` chip (B34). */
-export type DeskMission = { id: string; title: string; status: MissionStatus; done: number; total: number; tone: DeskMissionTone; deciding: boolean };
+export type DeskMission = { id: string; title: string; status: MissionStatus; done: number; total: number; deciding: boolean };
 /** One session Desk started or queued; `id` is the spawn's intent, `pane_id` its thread's key. */
 export type DeskJob = {
   id: string;

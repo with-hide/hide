@@ -949,7 +949,6 @@ fn desk_job_mission(
         .nodes
         .iter()
         .filter(|node| node.status != NodeStatus::Dropped);
-    let any = |status: NodeStatus| mission.nodes.iter().any(|node| node.status == status);
     crate::model::DeskJobMission {
         id: mission.id.clone(),
         title: mission.title.clone(),
@@ -959,16 +958,13 @@ fn desk_job_mission(
             .filter(|node| node.status == NodeStatus::Done)
             .count(),
         total: counted.count(),
-        tone: match mission.status {
-            MissionStatus::Cancelled => "cancelled",
-            MissionStatus::Done => "done",
-            _ if mission.question.is_some() || mission.decision.is_some() => "hold",
-            _ if any(NodeStatus::Failed) => "failed",
-            _ if any(NodeStatus::Review) => "review",
-            _ => "working",
-        }
-        .into(),
-        deciding: mission.question.is_some(),
+        // A decision waits on the operator while the mission is open, as the
+        // sidebar's chip reads it.
+        deciding: mission.decision.is_some()
+            && matches!(
+                mission.status,
+                MissionStatus::Planning | MissionStatus::Running | MissionStatus::MergeWait
+            ),
     }
 }
 

@@ -177,7 +177,9 @@ pub enum DeskOutputKind {
     Pr,
 }
 
-/// The mission a job conducts, as its card's `미션 k/n` chip draws it.
+/// The mission a job conducts, as its card's `미션 k/n` chip draws it; the
+/// chip's colour is the screen's, from `status` and `deciding`, by the rule
+/// every mission chip follows.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct DeskJobMission {
     pub id: String,
@@ -185,7 +187,6 @@ pub struct DeskJobMission {
     pub status: crate::missions::MissionStatus,
     pub done: usize,
     pub total: usize,
-    pub tone: String,
     pub deciding: bool,
 }
 

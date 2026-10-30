@@ -6,7 +6,7 @@ import { fileIcon } from "../../fileIcons";
 import { useInterfaceTranslation } from "../../i18n/client";
 import { cn } from "../../lib/utils";
 import type { MessageKey } from "../../i18n/catalogs";
-import type { CellTone } from "../../missions";
+import { missionToneOf, type CellTone } from "../../missions";
 import { PlanChipFace, planChipLook } from "../../PanePlanChip";
 import { DeviceChip } from "../device-chip";
 import { FileMark } from "../file-mark";
@@ -122,7 +122,8 @@ export function JobLine({ job, place = true, className }: { job: DeskJob; place?
   const { verb, words, tone, mono } = jobWords(t, job);
   const toned = tone === "warning" ? "text-warning" : tone === "destructive" ? "text-destructive" : null;
   return (
-    <span className={cn("flex min-w-0 items-center gap-xxs text-caption text-muted-foreground", className)} title={jobLine(t, job)} data-desk-job-line="true">
+    // The line takes its row's width, so the place keeps its half of the row and the state's words, not the place, give way first.
+    <span className={cn("flex w-full min-w-0 items-center gap-xxs text-caption text-muted-foreground", className)} title={jobLine(t, job)} data-desk-job-line="true">
       {place ? (
         <span className="flex min-w-0 max-w-1/2 shrink-0 items-center gap-xxs">
           {job.location.kind === "worktree" ? <GitBranchIcon aria-hidden="true" className="size-(--size-icon-sm) shrink-0" /> : null}
@@ -228,7 +229,7 @@ const MISSION_WORDS: Record<DeskMission["status"], MessageKey> = {
 /** A Conductor's `미션 k/n` chip (B34), drawn from the mission the job carries. */
 export function DeskMissionChip({ mission, onOpen }: { mission: DeskMission; onOpen: (missionId: string) => void }) {
   const { t } = useInterfaceTranslation();
-  return <MissionChipView id={mission.id} title={mission.title} words={t(MISSION_WORDS[mission.status])} counts={mission.status === "running" ? `${mission.done}/${mission.total}` : null} tone={mission.tone} deciding={mission.deciding} status={mission.status} onOpen={onOpen} />;
+  return <MissionChipView id={mission.id} title={mission.title} words={t(MISSION_WORDS[mission.status])} counts={mission.status === "running" ? `${mission.done}/${mission.total}` : null} tone={missionToneOf(mission.status, mission.deciding)} deciding={mission.deciding} status={mission.status} onOpen={onOpen} />;
 }
 
 /** A job's plan as the pane head's plan chip draws it (B24): its cells, `n/m`, and `검토` while it waits for review. */

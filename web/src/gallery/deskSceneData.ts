@@ -44,7 +44,7 @@ export const OUTPUTS = {
   pr: { ...output("o-pr-41", "pr", "PR #41 자막 수정", true), pr_state: "merged" },
 };
 
-export const MISSION: DeskMission = { id: "mission-desk", title: "Desk 1차", status: "running", done: 2, total: 6, tone: "working", deciding: false };
+export const MISSION: DeskMission = { id: "mission-desk", title: "Desk 1차", status: "running", done: 2, total: 6, deciding: false };
 
 /** Sessions as the chips inside a line name them. */
 export const SESSIONS = {
