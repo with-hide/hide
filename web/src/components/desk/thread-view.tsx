@@ -89,8 +89,9 @@ const TOOL_ICON: Partial<Record<AcpToolKind, typeof WrenchIcon>> = {
 
 /** An image the session saw or made, from its bytes; a cut image keeps only its place. */
 function ThreadImage({ block }: { block: AcpContentBlock }) {
+  const { t } = useInterfaceTranslation();
   if (block.type !== "image" || !block.data) return null;
-  return <img src={`data:${block.mimeType};base64,${block.data}`} alt="" className="max-h-(--size-overview-graph-root-height) max-w-full rounded-sm border border-border object-contain" data-desk-thread-image="true" />;
+  return <img src={`data:${block.mimeType};base64,${block.data}`} alt={t("desk.thread.image")} className="max-h-(--size-overview-graph-root-height) max-w-full rounded-sm border border-border object-contain" data-desk-thread-image="true" />;
 }
 
 /** A file's change: the lines before and after it, the unchanged ends trimmed to a line of context. */
@@ -134,8 +135,8 @@ function ToolLine({ line }: { line: Extract<ThreadLine, { kind: "tool" }> }) {
         {line.status === "in_progress" || line.status === "pending" ? <span className="flex shrink-0 items-center gap-xxs text-micro text-agent-working"><LoaderCircleIcon aria-hidden="true" className="size-(--size-icon-sm) animate-spin" />{t("desk.thread.tool.running")}</span> : null}
         {line.status === "failed" ? <span className="shrink-0 text-micro text-destructive">{t("desk.thread.tool.failed")}</span> : null}
       </p>
-      {input ? <pre aria-label={t("desk.thread.tool.input")} className="ml-(--size-icon) min-w-0 whitespace-pre-wrap break-all rounded-xs bg-muted px-xs py-xxs font-mono text-micro text-subtle-foreground">{input}</pre> : null}
-      {line.diffs.map((diff) => <span key={diff.path} className="ml-(--size-icon) min-w-0"><DiffBlock path={diff.path} oldText={diff.oldText} newText={diff.newText} /></span>)}
+      {input ? <pre aria-label={t("desk.thread.tool.input")} title={input} className="ml-(--size-icon) line-clamp-4 min-w-0 whitespace-pre-wrap break-all rounded-xs bg-muted px-xs py-xxs font-mono text-micro text-subtle-foreground">{input}</pre> : null}
+      {line.diffs.map((diff, index) => <span key={`${index}:${diff.path}`} className="ml-(--size-icon) min-w-0"><DiffBlock path={diff.path} oldText={diff.oldText} newText={diff.newText} /></span>)}
       {line.output ? <pre aria-label={t("desk.thread.tool.output")} className="ml-(--size-icon) line-clamp-4 min-w-0 whitespace-pre-wrap break-all px-xs font-mono text-micro text-muted-foreground">{line.output}</pre> : null}
       {line.images.map((block, index) => <span key={index} className="ml-(--size-icon)"><ThreadImage block={block} /></span>)}
     </div>
@@ -164,15 +165,6 @@ const PART_LABEL: Record<ThreadHidePart["kind"], MessageKey> = {
   mission: "desk.part.mission",
 };
 
-/** The command a part stands for, as the session typed it. */
-const PART_COMMAND: Record<ThreadHidePart["kind"], string> = {
-  plan: "hide plan",
-  spawn: "hide agent spawn",
-  letter: "hide request send",
-  view: "hide browser open",
-  mission: "hide mission",
-};
-
 export type ThreadPartActions = {
   onJob: (job: DeskJob) => void;
   onMission: (missionId: string) => void;
@@ -184,9 +176,9 @@ export type ThreadPartActions = {
  * A `hide` call drawn as the Hide part it made (D-72, B26): a plan's steps, a
  * new session's task row, a letter's line, an opened output, a mission's
  * chip, each in the shape the sidebar and the session record draw, under
- * the command's name. Pressing one goes to its place in Hide.
+ * the command the session typed. Pressing one goes to its place in Hide.
  */
-function HidePartLine({ part, actions }: { part: ThreadHidePart; actions: ThreadPartActions }) {
+function HidePartLine({ part, command, actions }: { part: ThreadHidePart; command: string | null; actions: ThreadPartActions }) {
   const { t } = useInterfaceTranslation();
   let body: ReactNode;
   switch (part.kind) {
@@ -199,7 +191,7 @@ function HidePartLine({ part, actions }: { part: ThreadHidePart; actions: Thread
     case "letter":
       body = (
         <p className="flex min-w-0 items-baseline gap-xs text-caption text-subtle-foreground">
-          <LetterTag who={<MentionChip kind="session" name={part.to} label={part.to} onPress={() => actions.onSession(part.to)} />} label={`${t("desk.part.letter")} ${part.to}`} />
+          <LetterTag who={<MentionChip kind="session" name={part.to} label={t("desk.mention.open", { name: part.to })} onPress={() => actions.onSession(part.to)} />} label={`${t("desk.part.letter")} ${part.to}`} />
           <span className="min-w-0 whitespace-normal break-keep [overflow-wrap:anywhere]">{part.body}</span>
         </p>
       );
@@ -213,7 +205,7 @@ function HidePartLine({ part, actions }: { part: ThreadHidePart; actions: Thread
   }
   return (
     <section className="flex min-w-0 flex-col gap-xxs rounded-md border border-border px-sm py-xs" aria-label={t(PART_LABEL[part.kind])} data-desk-thread-line="hide" data-desk-hide-part={part.kind}>
-      <span className="text-micro text-muted-foreground"><span className="font-mono">{PART_COMMAND[part.kind]}</span> · {t(PART_LABEL[part.kind])}</span>
+      <span className="text-micro text-muted-foreground">{command ? <><span className="font-mono">{command}</span> · </> : null}{t(PART_LABEL[part.kind])}</span>
       {body}
     </section>
   );
@@ -240,7 +232,7 @@ function Line({ line, mentions, actions }: { line: ThreadLine; mentions: readonl
     case "plan":
       return <AcpPlan entries={line.entries} />;
     case "hide":
-      return <HidePartLine part={line.part} actions={actions} />;
+      return <HidePartLine part={line.part} command={line.command} actions={actions} />;
   }
 }
 

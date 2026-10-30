@@ -84,6 +84,12 @@ export function JobMark({ job }: { job: DeskJob }) {
   return <StatusMark mark={jobMark(job)} data-desk-job-mark={job.state} />;
 }
 
+/** The dot on an output not looked at yet, named for a screen reader. */
+export function UnseenDot({ className }: { className?: string }) {
+  const { t } = useInterfaceTranslation();
+  return <span role="img" aria-label={t("desk.outputs.unseen")} className={cn("size-(--size-tab-status-dot) shrink-0 rounded-full bg-primary", className)} data-desk-output-unseen="true" />;
+}
+
 /** Where a job runs (D-19, B17): its checkout or the worktree's branch, as the lane head names a scope. */
 export function LocationChip({ location }: { location: DeskJob["location"] }) {
   const { t } = useInterfaceTranslation();
@@ -104,7 +110,10 @@ export function OutputMark({ output, className }: { output: DeskOutput; classNam
   const size = cn("size-(--size-icon-sm) shrink-0 text-muted-foreground", className);
   if (output.kind === "image") return <ImageIcon aria-hidden="true" className={size} />;
   if (output.kind === "page") return <GlobeIcon aria-hidden="true" className={size} />;
-  if (output.kind === "pr") return <PrMark state="pending" compact className="shrink-0" />;
+  if (output.kind === "pr") {
+    if (!output.pr_state) throw new Error(`PR output ${output.id} carries no pr_state`);
+    return <PrMark state={output.pr_state} compact className="shrink-0" />;
+  }
   return <FileMark icon={fileIcon(output.label)} className={size} />;
 }
 
@@ -121,7 +130,7 @@ export function OutputChip({ output, selected = false, onOpen }: { output: DeskO
     >
       <OutputMark output={output} />
       <span className="truncate">{output.label}</span>
-      {!output.seen ? <span aria-hidden="true" className="size-(--size-tab-status-dot) shrink-0 rounded-full bg-primary" data-desk-output-unseen="true" /> : null}
+      {!output.seen ? <UnseenDot /> : null}
     </Button>
   );
 }
@@ -146,7 +155,7 @@ export function MissionNodeCells({ mission }: { mission: DeskMission }) {
     <span className="flex items-center gap-xxs" data-desk-mission-nodes={mission.nodes.length}>
       {mission.nodes.map((node) => (
         <Hint key={node.key} label={node.title}>
-          <span className={cn("size-(--size-status-mark) rounded-xs", TONE_FILL[node.tone], node.tone === "waiting" && "border border-border")} aria-label={node.title} data-desk-mission-node={node.tone} />
+          <span role="img" className={cn("size-(--size-status-mark) rounded-xs", TONE_FILL[node.tone], node.tone === "waiting" && "border border-border")} aria-label={node.title} data-desk-mission-node={node.tone} />
         </Hint>
       ))}
     </span>

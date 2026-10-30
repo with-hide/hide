@@ -14,6 +14,7 @@ import { DeskHandedCard, DeskJobCard, type DeskJobCardActions } from "./desk-job
  * project read apart by colour; a chip with a press opens what it names.
  */
 export function MentionText({ text, mentions, onMention }: { text: string; mentions: readonly DeskMention[]; onMention?: (mention: DeskMention) => void }) {
+  const { t } = useInterfaceTranslation();
   if (mentions.length === 0) return <>{text}</>;
   const names = [...mentions].sort((a, b) => b.name.length - a.name.length);
   const parts: ReactNode[] = [];
@@ -30,7 +31,7 @@ export function MentionText({ text, mentions, onMention }: { text: string; menti
     }
     if (at > 0) parts.push(rest.slice(0, at));
     parts.push(onMention
-      ? <MentionChip key={key++} kind={mention.kind} name={mention.name} label={mention.name} onPress={() => onMention(mention)} />
+      ? <MentionChip key={key++} kind={mention.kind} name={mention.name} label={t("desk.mention.open", { name: mention.name })} onPress={() => onMention(mention)} />
       : <MentionChip key={key++} kind={mention.kind} name={mention.name} />);
     rest = rest.slice(at + 1 + mention.name.length);
   }
@@ -164,6 +165,13 @@ export type DeskChatActions = DeskJobCardActions & {
   onHanded: (agentId: string) => void;
 };
 
+/** A job card's job: an item naming a job the snapshot does not carry is a broken snapshot, not an empty card. */
+function jobOf(jobs: Readonly<Record<string, DeskJob>>, id: string): DeskJob {
+  const job = jobs[id];
+  if (!job) throw new Error(`Desk chat names an unknown job ${id}`);
+  return job;
+}
+
 /**
  * Desk's conversation (D-08, B7-B9, B13-B16): the operator's words, Desk's
  * answers, a job's card where Desk started it, a handed task's notice,
@@ -191,7 +199,7 @@ export function DeskChat({ items, jobs, live = null, thinking = false, selectedJ
             : item.kind === "approval" ? <DeskApprovalCard item={item} onAnswer={(allow) => actions.onApproval(item.id, allow)} />
             : item.kind === "notice" ? <DeskNotice item={item} onAction={actions.onNoticeAction} onCopy={actions.onCopy} />
             : item.kind === "handed" ? <DeskHandedCard name={item.name} project={item.project} onOpen={() => actions.onHanded(item.agent_id)} />
-            : jobs[item.job_id] ? <DeskJobCard job={jobs[item.job_id]!} selected={selectedJob === item.job_id} selectedOutput={selectedOutput} {...actions} /> : null}
+            : <DeskJobCard job={jobOf(jobs, item.job_id)} selected={selectedJob === item.job_id} selectedOutput={selectedOutput} {...actions} />}
         </li>
       ))}
       {live !== null ? <li className="flex min-w-0 flex-col"><DeskReply text={live} live /></li> : thinking ? <li><DeskThinking /></li> : null}

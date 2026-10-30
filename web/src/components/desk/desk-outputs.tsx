@@ -1,9 +1,8 @@
 import type { DeskOutput } from "../../desk";
 import { useInterfaceTranslation } from "../../i18n/client";
 import { cn } from "../../lib/utils";
-import { PrMark } from "../pr-mark";
 import { RowButton } from "../ui/row-button";
-import { OutputMark } from "./desk-job-card";
+import { OutputMark, UnseenDot } from "./desk-job-card";
 
 const PICTURE = "relative flex aspect-[5/2] w-full min-w-0 overflow-hidden rounded-sm border border-border bg-muted outline-none hover:border-ring focus-visible:ring-1 focus-visible:ring-ring";
 
@@ -14,11 +13,9 @@ const PICTURE = "relative flex aspect-[5/2] w-full min-w-0 overflow-hidden round
  * shown in the 보기 column is ringed; an output not looked at yet carries a
  * dot. Pressing one opens it there.
  */
-export function DeskOutputs({ outputs, selected = null, prs = {}, onOpen }: {
+export function DeskOutputs({ outputs, selected = null, onOpen }: {
   outputs: readonly DeskOutput[];
   selected?: string | null;
-  /** A PR output's state, by its id, for its mark. */
-  prs?: Readonly<Record<string, Parameters<typeof PrMark>[0]["state"]>>;
   onOpen: (output: DeskOutput) => void;
 }) {
   const { t } = useInterfaceTranslation();
@@ -31,9 +28,9 @@ export function DeskOutputs({ outputs, selected = null, prs = {}, onOpen }: {
         <ul className="grid min-w-0 grid-cols-3 gap-xs">
           {pictures.map((output) => (
             <li key={output.id} className="min-w-0">
-              <RowButton className={cn(PICTURE, "p-0", selected === output.id && "border-ring ring-1 ring-ring")} aria-label={output.label} aria-pressed={selected === output.id} title={output.label} onClick={() => onOpen(output)} data-desk-output={output.id} data-desk-output-thumb={output.kind}>
+              <RowButton className={cn(PICTURE, "p-0", selected === output.id && "border-ring ring-1 ring-ring")} aria-label={output.seen ? output.label : `${output.label} · ${t("desk.outputs.unseen")}`} aria-pressed={selected === output.id} title={output.label} onClick={() => onOpen(output)} data-desk-output={output.id} data-desk-output-thumb={output.kind}>
                 <img src={output.thumb!} alt="" aria-hidden="true" draggable={false} className="size-full object-cover object-top" />
-                {!output.seen ? <span aria-hidden="true" className="absolute right-xxs top-xxs size-(--size-tab-status-dot) rounded-full bg-primary" data-desk-output-unseen="true" /> : null}
+                {!output.seen ? <UnseenDot className="absolute right-xxs top-xxs" /> : null}
               </RowButton>
             </li>
           ))}
@@ -44,9 +41,9 @@ export function DeskOutputs({ outputs, selected = null, prs = {}, onOpen }: {
           {rows.map((output) => (
             <li key={output.id} className="min-w-0">
               <RowButton className={cn("px-xxs py-xxs text-caption", selected === output.id && "bg-accent")} aria-pressed={selected === output.id} onClick={() => onOpen(output)} data-desk-output={output.id} data-desk-output-thumb="row">
-                {output.kind === "pr" && prs[output.id] ? <PrMark state={prs[output.id]!} compact /> : <OutputMark output={output} />}
+                <OutputMark output={output} />
                 <span className="min-w-0 flex-1 truncate text-subtle-foreground">{output.label}</span>
-                {!output.seen ? <span aria-hidden="true" className="size-(--size-tab-status-dot) shrink-0 rounded-full bg-primary" data-desk-output-unseen="true" /> : null}
+                {!output.seen ? <UnseenDot /> : null}
               </RowButton>
             </li>
           ))}

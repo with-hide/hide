@@ -37,7 +37,7 @@ export const OUTPUTS = {
   notes: output("o-notes", "doc", "notes.md", true),
   beforeAfter: output("o-before-after", "doc", "before-after.md", false),
   galleryPage: output("o-gallery-page", "page", "gallery · desk", true, PICTURES.page),
-  pr: output("o-pr-41", "pr", "PR #41 자막 수정", true),
+  pr: { ...output("o-pr-41", "pr", "PR #41 자막 수정", true), pr_state: "merged" as const },
   reelCover: output("o-reel-cover", "image", "cover.png", true, PICTURES.light),
 };
 

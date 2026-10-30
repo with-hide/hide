@@ -211,7 +211,7 @@ export function DeskScene({ params }: { params: URLSearchParams }) {
     case "s3b":
     case "s3c": {
       const entered = state === "s3c" ? { project: MENU_PROJECTS[0]!, sessions: ENTERED_SESSIONS } : null;
-      const menu = <DeskMentionMenu sessions={MENU_SESSIONS} projects={MENU_PROJECTS} entered={entered} active="session:agent-record-now" onActive={noop} onSession={noop} onProject={noop} onEnter={noop} onBack={noop} />;
+      const menu = <DeskMentionMenu sessions={MENU_SESSIONS} projects={MENU_PROJECTS} entered={entered} active="session:agent-record-now" onActive={noop} onSession={noop} onProject={noop} onBack={noop} />;
       body = <DeskRoom pinned={false} rail={rail(false, false)} chat={chat(mentionItems(now), <ChatComposer selection={CLAUDE} value={state === "s3c" ? "@hide " : "@re"} mention={menu} />)} />;
       break;
     }
@@ -318,7 +318,7 @@ function OutputsCriteria() {
             const kind = outputKindOf(view.kind);
             return (
               <li key={view.label} className={cn("flex min-w-0 items-center gap-xs text-caption", kind ? "text-subtle-foreground" : "text-muted-foreground line-through opacity-(--opacity-dimmed)")} data-desk-view-kept={kind ? "true" : "false"}>
-                <OutputMark output={{ id: view.label, kind: kind ?? "doc", label: view.label, seen: true }} />
+                <OutputMark output={{ id: view.label, kind: kind ?? "doc", label: view.label, seen: true, pr_state: kind === "pr" ? "merged" : null }} />
                 <span className="truncate">{view.label}</span>
                 <span className="ml-auto font-mono text-micro text-muted-foreground">{view.kind}</span>
               </li>
@@ -328,7 +328,7 @@ function OutputsCriteria() {
       </section>
       <section className="flex min-w-0 flex-col gap-xs">
         <h3 className="text-caption font-medium text-muted-foreground">{t("desk.outputs.title")}</h3>
-        <DeskOutputs outputs={kept} prs={{ [OUTPUTS.pr.id]: "merged" }} onOpen={noop} />
+        <DeskOutputs outputs={kept} onOpen={noop} />
       </section>
     </div>
   );

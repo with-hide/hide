@@ -20,7 +20,7 @@ export type MentionProject = { id: string; name: string; sessions: number };
  * the menu lists its running sessions under `＋ 새 스레드`, and `⇧⇥` or Esc
  * goes back. `active` is the highlighted row's value; the composer moves it.
  */
-export function DeskMentionMenu({ sessions, projects, entered = null, active, onActive, onSession, onProject, onEnter, onBack }: {
+export function DeskMentionMenu({ sessions, projects, entered = null, active, onActive, onSession, onProject, onBack }: {
   sessions: readonly MentionSession[];
   projects: readonly MentionProject[];
   /** The project entered with ⇥, and its running sessions. */
@@ -29,7 +29,6 @@ export function DeskMentionMenu({ sessions, projects, entered = null, active, on
   onActive: (value: string) => void;
   onSession: (session: MentionSession) => void;
   onProject: (project: MentionProject) => void;
-  onEnter: (project: MentionProject) => void;
   onBack: () => void;
 }) {
   const { t } = useInterfaceTranslation();
@@ -68,7 +67,7 @@ export function DeskMentionMenu({ sessions, projects, entered = null, active, on
             {projects.length ? (
               <CommandGroup heading={t("desk.mention.projects")}>
                 {projects.map((project) => (
-                  <CommandItem key={project.id} value={`project:${project.id}`} onSelect={() => onProject(project)} onKeyDown={(event) => { if (event.key === "Tab") onEnter(project); }} data-desk-mention-project={project.id}>
+                  <CommandItem key={project.id} value={`project:${project.id}`} onSelect={() => onProject(project)} data-desk-mention-project={project.id}>
                     <FolderIcon aria-hidden="true" />
                     <span className="min-w-0 flex-1 truncate">{project.name}</span>
                     <span className="shrink-0 text-micro text-muted-foreground">{t("desk.mention.projectSessions", { count: project.sessions })}</span>

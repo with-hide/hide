@@ -26,10 +26,6 @@ export type DeskAgent = {
 
 export type DeskSelection = { agent: string; model: string; effort: string };
 
-export type DeskHostState = "idle" | "starting" | "thinking" | "stopped" | "failed";
-
-export type DeskHost = { state: DeskHostState; reason?: string | null };
-
 export type DeskMention = { kind: "session" | "project"; name: string; id: string };
 
 export type DeskNoticeKind = "blocked" | "host_stopped" | "resume_failed" | "login_needed" | "install_failed" | "preparing";
@@ -59,6 +55,8 @@ export type DeskOutput = {
   thumb?: string | null;
   /** Looked at since it appeared (the ▣ badge counts the rest). */
   seen: boolean;
+  /** A PR output's state, so it reads the same on a card, in a thread and in 결과물 (one PR, one state). wire gap */
+  pr_state?: PrState | null;
 };
 
 /** One View of a session, before Desk keeps only its outputs (B30). */
@@ -173,21 +171,25 @@ export type ThreadHidePart =
 
 /** One drawn line of a thread, after chunks are joined and call updates folded into their call. */
 export type ThreadLine =
-  | { kind: "user"; id: string; text: string; images: AcpContentBlock[]; origin: "operator" | "letter" | "interrupted" | "injected" }
-  | { kind: "agent"; id: string; text: string }
-  | { kind: "thought"; id: string; text: string }
+  | { kind: "user"; id: string; message: string | null; text: string; images: AcpContentBlock[]; origin: "operator" | "letter" | "interrupted" | "injected" }
+  | { kind: "agent"; id: string; message: string | null; text: string }
+  | { kind: "thought"; id: string; message: string | null; text: string }
   | { kind: "tool"; id: string; title: string; toolKind: AcpToolKind; status: AcpToolCallStatus; input: string | null; output: string | null; diffs: Extract<AcpToolCallContent, { type: "diff" }>[]; images: AcpContentBlock[] }
   | { kind: "plan"; id: string; entries: AcpPlanEntry[] }
-  | { kind: "hide"; id: string; part: ThreadHidePart };
+  /** `command` is what the session typed, when the call carries it. */
+  | { kind: "hide"; id: string; part: ThreadHidePart; command: string | null };
 
 export type ThreadReadFailure = "no_record" | "refused";
 
-/** The words of a call's input: a shell call's command, else the input as JSON. */
-function inputWords(raw: unknown): string | null {
-  if (raw === undefined || raw === null) return null;
+/**
+ * A shell call's command, the one input a thread shows: any other call's
+ * input (an edit's whole file, a search's options) is already said by its
+ * title, its diff or its output.
+ */
+function commandOf(raw: unknown): string | null {
   if (typeof raw === "string") return raw;
   if (typeof raw === "object" && raw !== null && "command" in raw && typeof (raw as { command: unknown }).command === "string") return (raw as { command: string }).command;
-  return JSON.stringify(raw);
+  return null;
 }
 
 function textOf(block: AcpContentBlock): string {
@@ -195,8 +197,8 @@ function textOf(block: AcpContentBlock): string {
 }
 
 /**
- * The lines a thread draws (B25): consecutive chunks of one kind and message
- * joined, a call's updates folded into the call (an update's content replaces
+ * The lines a thread draws (B25): consecutive chunks of one kind and one
+ * message joined (a chunk with no message id joins the line before it), a call's updates folded into the call (an update's content replaces
  * the call's, as ACP says), and a call the reader turned into a Hide part
  * drawn as that part instead (B26).
  */
@@ -207,7 +209,7 @@ export function threadLines(updates: readonly AcpSessionUpdate[], parts: Readonl
     if (fields.title !== undefined) line.title = fields.title;
     if (fields.kind !== undefined) line.toolKind = fields.kind;
     if (fields.status !== undefined) line.status = fields.status;
-    if (fields.rawInput !== undefined) line.input = inputWords(fields.rawInput);
+    if (fields.rawInput !== undefined) line.input = commandOf(fields.rawInput);
     if (fields.content !== undefined) {
       line.diffs = fields.content.filter((item): item is Extract<AcpToolCallContent, { type: "diff" }> => item.type === "diff");
       const blocks = fields.content.flatMap((item) => (item.type === "content" ? [item.content] : []));
@@ -219,28 +221,29 @@ export function threadLines(updates: readonly AcpSessionUpdate[], parts: Readonl
   updates.forEach((update, index) => {
     const id = `u${index}`;
     const last = lines.at(-1);
+    const message = "messageId" in update ? (update.messageId ?? null) : null;
     switch (update.sessionUpdate) {
       case "user_message_chunk": {
         const origin = update._meta?.hide?.origin ?? "operator";
-        if (last?.kind === "user" && last.origin === origin) {
+        if (last?.kind === "user" && last.origin === origin && last.message === message) {
           last.text += textOf(update.content);
           if (update.content.type === "image") last.images.push(update.content);
         } else {
-          lines.push({ kind: "user", id, text: textOf(update.content), images: update.content.type === "image" ? [update.content] : [], origin });
+          lines.push({ kind: "user", id, message, text: textOf(update.content), images: update.content.type === "image" ? [update.content] : [], origin });
         }
         return;
       }
       case "agent_message_chunk":
       case "agent_thought_chunk": {
         const kind = update.sessionUpdate === "agent_message_chunk" ? "agent" : "thought";
-        if (last?.kind === kind) last.text += textOf(update.content);
-        else lines.push({ kind, id, text: textOf(update.content) });
+        if (last?.kind === kind && last.message === message) last.text += textOf(update.content);
+        else lines.push({ kind, id, message, text: textOf(update.content) });
         return;
       }
       case "tool_call": {
         const part = parts[update.toolCallId];
         if (part) {
-          lines.push({ kind: "hide", id: update.toolCallId, part });
+          lines.push({ kind: "hide", id: update.toolCallId, part, command: commandOf(update.rawInput) });
           return;
         }
         const line: Extract<ThreadLine, { kind: "tool" }> = { kind: "tool", id: update.toolCallId, title: update.title, toolKind: "other", status: "pending", input: null, output: null, diffs: [], images: [] };
@@ -283,16 +286,6 @@ export function outputKindOf(kind: SessionViewKind): DeskOutputKind | null {
     case "hide_ai":
       return null;
   }
-}
-
-/** A job that no longer belongs to Desk: pulled into the operator's tabs (B37). */
-export function leftDesk(job: DeskJob): boolean {
-  return job.state === "moved_out";
-}
-
-/** A job that holds one of the cap's places (B21, B22, B38). */
-export function holdsCapPlace(job: DeskJob): boolean {
-  return job.state === "starting" || job.state === "working" || job.state === "asking";
 }
 
 export type ThreadGroupKey = "turn" | "working" | "done";
@@ -370,7 +363,7 @@ export function jobMark(job: DeskJob): RowMark | null {
   }
 }
 
-/** An agent Desk cannot be given (D-53, B4): it cannot run in ask mode, or it cannot run here at all. */
+/** An agent Desk cannot be given (D-53, B4): one that cannot ask before acting. One not installed or signed in can be picked and says so (B6). */
 export function agentPickable(agent: DeskAgent): boolean {
   return agent.state !== "no_ask_mode";
 }

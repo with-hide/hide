@@ -53,10 +53,21 @@ describe("a thread's lines (B25, B26)", () => {
 
   it("draws a call the reader turned into a Hide part as that part, and an update for it changes nothing", () => {
     const lines = threadLines(
-      [{ sessionUpdate: "tool_call", toolCallId: "h", title: "Bash", kind: "execute", rawInput: { command: "hide request send …" } }, { sessionUpdate: "tool_call_update", toolCallId: "h", status: "completed" }],
+      [{ sessionUpdate: "tool_call", toolCallId: "h", title: "Bash", kind: "execute", rawInput: { command: "hide request send worker --intent retry" } }, { sessionUpdate: "tool_call_update", toolCallId: "h", status: "completed" }],
       { h: { kind: "letter", to: "worker", body: "다시 올려줘" } },
     );
-    expect(lines).toEqual([{ kind: "hide", id: "h", part: { kind: "letter", to: "worker", body: "다시 올려줘" } }]);
+    expect(lines).toEqual([{ kind: "hide", id: "h", part: { kind: "letter", to: "worker", body: "다시 올려줘" }, command: "hide request send worker --intent retry" }]);
+  });
+
+  it("starts a new line where one speaker's message ends and the next begins", () => {
+    const chunk = (messageId: string, words: string): AcpSessionUpdate => ({ sessionUpdate: "agent_message_chunk", content: { type: "text", text: words }, messageId });
+    const lines = threadLines([chunk("m1", "하나"), chunk("m1", " 둘"), chunk("m2", "셋")]);
+    expect(lines.map((line) => "text" in line && line.text)).toEqual(["하나 둘", "셋"]);
+  });
+
+  it("shows a shell call's command as its input and no other call's input", () => {
+    const [line] = threadLines([{ sessionUpdate: "tool_call", toolCallId: "e", title: "Edit a.ts", kind: "edit", rawInput: { path: "a.ts", content: "x".repeat(10_000) } }]);
+    expect(line).toMatchObject({ kind: "tool", input: null });
   });
 
   it("keeps a letter apart from the operator's own words by its origin", () => {
