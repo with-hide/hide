@@ -300,6 +300,9 @@ pub(super) enum BatchDecision {
     OpenPr,
     Discard,
     Rebase,
+    /// `내 커밋을 브랜치로 옮기고 main 맞추기`, after a push found the base
+    /// apart from GitHub's.
+    SyncBase,
 }
 
 impl Runtime {
@@ -405,7 +408,10 @@ impl Runtime {
                     Err(reason) => return refused(&reason),
                 }
             }
-            BatchDecision::Merge | BatchDecision::MergePush | BatchDecision::Discard => None,
+            BatchDecision::Merge
+            | BatchDecision::MergePush
+            | BatchDecision::Discard
+            | BatchDecision::SyncBase => None,
         };
         let own = self.memory_batch_agents(&project_id, &cards);
         let place = BranchPlace {
@@ -422,8 +428,9 @@ impl Runtime {
             .deciding
             .insert(key.clone(), decision);
         let carried = key.clone();
-        let pushed = (decision == BatchDecision::MergePush)
-            .then(|| (place.node.clone(), place.root.clone(), place.base.clone()));
+        let pushed = decision == BatchDecision::MergePush;
+        let based = (place.node.clone(), place.root.clone(), place.base.clone());
+        let day = branch_decision::sync_day(super::memory::now_ms());
         let spawned = self.spawn_issue_worker(
             "memory-decide",
             move || {
@@ -437,14 +444,19 @@ impl Runtime {
                     &database,
                     &cards,
                     start,
+                    &day,
                 )
             },
-            move |runtime, unseen| {
+            move |runtime, (unseen, learned)| {
                 runtime.project_memory.promotions.deciding.remove(&carried);
+                let (node, root, base) = based;
                 // Whatever GitHub answered the push, its rules are read again
                 // before the button is offered again.
-                if let Some((node, root, base)) = &pushed {
-                    runtime.forget_base_push(node, root, base);
+                if pushed {
+                    runtime.forget_base_push(&node, &root, &base);
+                }
+                if let Some(learned) = learned {
+                    runtime.note_base(&node, &root, &base, learned);
                 }
                 if let Some((key, start)) = unseen {
                     runtime.project_memory.promotions.add_unseen(key, start);
@@ -483,12 +495,16 @@ impl Runtime {
     }
 
     /// The ready batches of the Project at `root` on `node`, by branch, and
-    /// the row Hide is merging now, if any (PRD hide-ai-branch-first-apply).
+    /// the row Hide is merging or syncing the base of now, with the phase it
+    /// shows, if any (PRD hide-ai-branch-first-apply).
     pub(super) fn memory_branch_overlay(
         &self,
         node: &NodeId,
         root: &str,
-    ) -> Vec<(String, Option<String>)> {
+    ) -> Vec<(
+        String,
+        Option<(String, crate::model::SuggestionAttemptPhase)>,
+    )> {
         if self
             .project_memory_path()
             .is_none_or(|(memory_node, memory_root)| memory_node != node || memory_root != root)
@@ -517,17 +533,23 @@ impl Runtime {
             if promotion.state != crate::model::MemoryPromotionState::Ready {
                 continue;
             }
-            let merging = self
+            let shown = self
                 .project_memory
                 .promotions
                 .deciding
                 .get(&(project_id.clone(), branch.clone()))
-                .is_some_and(|decision| {
-                    matches!(decision, BatchDecision::Merge | BatchDecision::MergePush)
+                .and_then(|decision| match decision {
+                    BatchDecision::Merge | BatchDecision::MergePush => {
+                        Some(crate::model::SuggestionAttemptPhase::Merging)
+                    }
+                    BatchDecision::SyncBase => Some(crate::model::SuggestionAttemptPhase::Syncing),
+                    BatchDecision::OpenPr | BatchDecision::Discard | BatchDecision::Rebase => None,
                 });
             let entry = branches.entry(branch).or_insert(None);
-            if merging && entry.is_none() {
-                *entry = Some(format!("m{}", row.number));
+            if let Some(phase) = shown
+                && entry.is_none()
+            {
+                *entry = Some((format!("m{}", row.number), phase));
             }
         }
         branches.into_iter().collect()
@@ -558,8 +580,11 @@ pub(super) fn attempt_purpose(purpose: Option<BatchPurpose>) -> AttemptPurpose {
     }
 }
 
+/// A restart whose agent has not shown yet, for the tracker to ask again.
+type Unseen = Option<((String, u64, u32), PromotionStart)>;
+
 /// Carries out a decision off the lock; answers a restart whose agent has
-/// not shown yet, for the tracker to ask again.
+/// not shown yet, and what it learned of the base.
 #[allow(clippy::too_many_arguments)]
 fn decide(
     decision: BatchDecision,
@@ -571,7 +596,39 @@ fn decide(
     database: &Path,
     cards: &[u64],
     start: Option<PromotionStart>,
-) -> Option<((String, u64, u32), PromotionStart)> {
+    day: &str,
+) -> (Unseen, Option<branch_decision::BaseChange>) {
+    let mut learned = None;
+    let unseen = decide_batch(
+        decision,
+        connector,
+        link,
+        place,
+        own,
+        tip,
+        database,
+        cards,
+        start,
+        day,
+        &mut learned,
+    );
+    (unseen, learned)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn decide_batch(
+    decision: BatchDecision,
+    connector: Option<Arc<dyn hide_herdr_client::ApiConnector>>,
+    link: Arc<dyn crate::node_access::NodeLink>,
+    place: &BranchPlace,
+    own: &[String],
+    tip: Option<&str>,
+    database: &Path,
+    cards: &[u64],
+    start: Option<PromotionStart>,
+    day: &str,
+    learned: &mut Option<branch_decision::BaseChange>,
+) -> Unseen {
     let now = super::memory::now_ms();
     let mut store = match super::memory::open_memory_store(database) {
         Ok(store) => store,
@@ -625,8 +682,10 @@ fn decide(
         BatchDecision::Merge | BatchDecision::MergePush => {
             let push = decision == BatchDecision::MergePush;
             let kind = if push { "merge_push" } else { "merge" };
-            match branch_decision::land(connector.as_deref(), link.as_ref(), place, own, tip, push)
-            {
+            let (landing, base) =
+                branch_decision::land(connector.as_deref(), link.as_ref(), place, own, tip, push);
+            *learned = base;
+            match landing {
                 branch_decision::Landing::Merged(_) => {
                     branch_decision::log(place, &subject, kind, "merged");
                     move_all(&mut store, PromotionState::Merged);
@@ -638,6 +697,27 @@ fn decide(
                 branch_decision::Landing::Refused(code) => {
                     branch_decision::log(place, &subject, kind, code);
                     refuse_all(&mut store, code);
+                }
+            }
+            None
+        }
+        BatchDecision::SyncBase => {
+            let (synced, base) = branch_decision::sync(link.as_ref(), place, day);
+            *learned = base;
+            let code = synced.err();
+            branch_decision::log(place, &subject, "sync_base", code.unwrap_or("synced"));
+            match code {
+                Some(code) => refuse_all(&mut store, code),
+                None => {
+                    for (number, promotion) in &ready {
+                        let _ = store.set_ready_failure(
+                            &place.project_id,
+                            *number,
+                            promotion,
+                            None,
+                            now,
+                        );
+                    }
                 }
             }
             None

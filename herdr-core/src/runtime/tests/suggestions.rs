@@ -1122,3 +1122,86 @@ fn a_github_projects_branch_is_pushed_only_while_its_base_takes_a_push() {
         "the branch stays"
     );
 }
+
+/// A merge git could not finish answers the step it stopped at, not
+/// `merge_failed`: here the operator's signing setting names a signing
+/// program that is not there, and the merge commit cannot be signed. Nothing
+/// moves, and the row reads why.
+#[test]
+fn a_merge_whose_signing_fails_is_refused_as_the_signing() {
+    use crate::runtime::suggestion_apply::BranchDecision;
+    use crate::suggestions::lifecycle::AttemptMove;
+    if !hide_host::git_run::version().is_some_and(|version| version >= (2, 38)) {
+        return;
+    }
+    let fixture = ReadyBranch::new(false);
+    // The base moved on, so the merge needs a commit of its own.
+    std::fs::write(fixture.repo.join("README.md"), "base\n").unwrap();
+    fixture.git(&["add", "README.md"]);
+    fixture.git(&["commit", "-q", "-m", "base moves"]);
+    let main = fixture.git(&["rev-parse", "main"]);
+    let missing = fixture.repo.join("no-such-signer");
+    for (key, value) in [
+        ("commit.gpgsign", "true"),
+        ("gpg.format", "ssh"),
+        ("gpg.ssh.program", missing.to_str().unwrap()),
+        (
+            "user.signingkey",
+            "key::ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIFixtureKeyThatSignsNothing",
+        ),
+    ] {
+        git_in(&fixture.repo, &["config", key, value]);
+    }
+    fixture.github(None);
+    assert!(fixture.press(BranchDecision::Merge));
+    assert_eq!(
+        fixture.moved(),
+        AttemptMove::DecisionRefused("merge_sign_failed".into())
+    );
+    assert_eq!(fixture.git(&["rev-parse", "main"]), main);
+}
+
+/// `{base}에 바로 올리기` on a main with a commit GitHub does not have is
+/// refused and counts it; `내 커밋을 브랜치로 옮기고 main 맞추기` then keeps
+/// that commit on `local-main-<day>` and puts main on GitHub's, and the rows
+/// on main read where it went.
+#[test]
+fn a_main_apart_from_github_is_synced_with_its_own_commit_kept_on_a_branch() {
+    use crate::model::SuggestionBranchPush;
+    use crate::runtime::suggestion_apply::BranchDecision;
+    use crate::suggestions::lifecycle::AttemptMove;
+    let fixture = ReadyBranch::new(true);
+    std::fs::write(fixture.repo.join("LOCAL.md"), "mine\n").unwrap();
+    fixture.git(&["add", "LOCAL.md"]);
+    fixture.git(&["commit", "-q", "-m", "only here"]);
+    let mine = fixture.git(&["rev-parse", "main"]);
+    let github_main = git_in(&fixture.remote, &["rev-parse", "main"]);
+    fixture.github(Some(SuggestionBranchPush::Allowed));
+    assert!(fixture.press(BranchDecision::MergePush));
+    assert_eq!(
+        fixture.moved(),
+        AttemptMove::DecisionRefused("push_base_ahead".into())
+    );
+    let note = |runtime: &Runtime| {
+        runtime
+            .base_notes(&fixture.project.node, &fixture.project.path)
+            .remove("main")
+            .unwrap_or_default()
+    };
+    assert_eq!(note(&fixture.shared.lock().unwrap()).unpushed, Some(1));
+    assert_eq!(fixture.git(&["rev-parse", "main"]), mine, "nothing merged");
+
+    // The press answers whether the tab changed; the move says it ran.
+    fixture.press(BranchDecision::SyncBase);
+    assert_eq!(fixture.moved(), AttemptMove::BaseSynced);
+    assert_eq!(fixture.git(&["rev-parse", "main"]), github_main);
+    let kept = format!(
+        "local-main-{}",
+        crate::runtime::branch_decision::sync_day(crate::runtime::unix_milliseconds())
+    );
+    assert_eq!(fixture.git(&["rev-parse", &kept]), mine);
+    let note = note(&fixture.shared.lock().unwrap());
+    assert_eq!(note.unpushed, None);
+    assert_eq!(note.moved_to.as_deref(), Some(kept.as_str()));
+    assert!(!fixture.repo.join("LOCAL.md").exists());
+}

@@ -256,6 +256,9 @@ pub(crate) fn branch(
         removed: facts.map_or(0, |facts| facts.removed),
         tip: facts.map(|facts| facts.tip.clone()),
         push: crate::model::SuggestionBranchPush::Unknown,
+        base_unpushed: None,
+        moved_to: None,
+        base_unsaved: Vec::new(),
     }
 }
 
@@ -465,6 +468,67 @@ mod tests {
         assert_eq!(line_of_row("s12"), Some(LineId(12)));
         for other in ["m12", "s", "s1x", "12", "s-1"] {
             assert_eq!(line_of_row(other), None, "{other}");
+        }
+    }
+
+    /// A ready branch, a failed attempt and failed checks wait for the
+    /// operator's choice, so they sit under 고를 것 as the operator's turn;
+    /// an attempt that runs, or waits on a review or an open issue, stays
+    /// under 반영 중.
+    #[test]
+    fn an_attempt_that_waits_for_the_operators_choice_is_under_choose() {
+        use crate::suggestions::ledger::Signal;
+        use crate::suggestions::lifecycle::{Attempt, AttemptPurpose};
+        let line = Line {
+            id: LineId(4),
+            discomfort: Some("the same check fails".into()),
+            cause: None,
+            fix: None,
+            plan: None,
+            outcome: None,
+            basis: Some((Signal::CheckFailed, "verify".into())),
+            records: Vec::new(),
+            struck: None,
+            stage: Stage::Applying,
+            level: 0,
+            created_at_unix_ms: 1,
+            updated_at_unix_ms: 1,
+        };
+        let placed = |phase| {
+            let life = LineLife {
+                attempt: Some(Attempt {
+                    started_at_unix_ms: 1,
+                    auto: false,
+                    phase,
+                    branch: "hide-suggestion-s4".into(),
+                    agent_name: "a".into(),
+                    agent_id: None,
+                    repository: None,
+                    pr: None,
+                    issue_url: None,
+                    issue_title: None,
+                    issue_since: None,
+                    failure: None,
+                    reviewed: false,
+                    purpose: AttemptPurpose::Branch,
+                    branch_facts: None,
+                }),
+                ..LineLife::default()
+            };
+            group_and_state(&line, &life).unwrap()
+        };
+        let (choose, applying) = (SuggestionGroup::Choose, SuggestionGroup::Applying);
+        let (mine, working) = (SuggestionState::MyTurn, SuggestionState::HideAiWorking);
+        for (phase, expected) in [
+            (AttemptPhase::Working, (applying, working)),
+            (AttemptPhase::Ready, (choose, mine)),
+            (AttemptPhase::Failed, (choose, mine)),
+            (AttemptPhase::Closed, (choose, mine)),
+            (AttemptPhase::CiFailed, (choose, mine)),
+            (AttemptPhase::PrOpen, (applying, mine)),
+            (AttemptPhase::IssueOpen, (applying, mine)),
+        ] {
+            assert_eq!(placed(phase), expected, "{phase:?}");
         }
     }
 }

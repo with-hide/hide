@@ -328,6 +328,12 @@ pub(crate) fn moved(
             }
             attempt.failure = Some(code);
         }
+        AttemptMove::BaseSynced => {
+            if attempt.phase != AttemptPhase::Ready {
+                return false;
+            }
+            attempt.failure = None;
+        }
         AttemptMove::Discarded => {
             attempt.phase = AttemptPhase::Closed;
             line.struck = Some(Strike {

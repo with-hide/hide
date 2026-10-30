@@ -208,6 +208,7 @@ impl SuggestionGroup {
             SuggestionAttemptPhase::Starting
             | SuggestionAttemptPhase::Working
             | SuggestionAttemptPhase::Merging
+            | SuggestionAttemptPhase::Syncing
             | SuggestionAttemptPhase::PrOpen
             | SuggestionAttemptPhase::IssueOpen
             | SuggestionAttemptPhase::Merged => Self::Applying,
@@ -388,6 +389,9 @@ pub enum SuggestionAttemptPhase {
     Ready,
     /// Hide is merging the ready branch into the base (B6).
     Merging,
+    /// Hide is moving the base to GitHub's, its own commits kept on a new
+    /// branch, after a push found it apart.
+    Syncing,
     /// The pull request is open and waits for the operator's review.
     PrOpen,
     /// Its checks failed and the agent is not working (B12).
@@ -444,6 +448,14 @@ pub struct SuggestionBranchSnapshot {
     /// Whether GitHub's base takes a direct push, which offers `{base}에 바로
     /// 올리기` in a Project whose GitHub is connected.
     pub push: SuggestionBranchPush,
+    /// How many commits of its own the local base had that GitHub's did
+    /// not, as the last push found; none when no push found it apart.
+    pub base_unpushed: Option<u32>,
+    /// The branch a sync kept the local base's own commits on
+    /// (`내 커밋은 local-main-1030 브랜치로 옮겼어요`).
+    pub moved_to: Option<String>,
+    /// The files a sync found unsaved where the base is checked out.
+    pub base_unsaved: Vec<String>,
 }
 
 /// What GitHub said of a ready branch's base: it takes a direct push, it

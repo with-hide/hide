@@ -448,6 +448,9 @@ fn batch_row(
                 removed: summary.map_or(0, |summary| summary.removed),
                 tip: summary.map(|summary| summary.tip.clone()),
                 push: crate::model::SuggestionBranchPush::Unknown,
+                base_unpushed: None,
+                moved_to: None,
+                base_unsaved: Vec::new(),
             }
         }),
         purpose: super::memory_branch::attempt_purpose(batch.and_then(|batch| batch.purpose)),

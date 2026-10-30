@@ -308,6 +308,9 @@ pub(crate) enum AttemptMove {
     /// code the row words (`merge_dirty`, `merge_conflict`, `merge_moved`,
     /// `merge_failed`, `discard_failed`); the branch stays ready.
     DecisionRefused(String),
+    /// The base was synced with GitHub's after a push found it apart; the
+    /// branch stays ready, its refusal gone.
+    BaseSynced,
     /// The branch was discarded, or deleted unmerged: the line is skipped as
     /// `넘어가기` skips it (D-07, D-08).
     Discarded,

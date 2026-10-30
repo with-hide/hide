@@ -48,6 +48,9 @@ pub(super) enum BranchDecision {
     /// `{base}에 바로 올리기`, a merge pushed to GitHub's base.
     MergePush,
     Discard,
+    /// `내 커밋을 브랜치로 옮기고 main 맞추기`, after a push found the base
+    /// apart from GitHub's.
+    SyncBase,
 }
 
 impl BranchDecision {
@@ -55,6 +58,16 @@ impl BranchDecision {
     /// `합치는 중` while it runs.
     pub(super) fn merges(self) -> bool {
         matches!(self, Self::Merge | Self::MergePush)
+    }
+
+    /// The phase its row shows while it runs: `합치는 중` for a merge,
+    /// `맞추는 중` for a sync; a discard shows nothing.
+    pub(super) fn shown_as(self) -> Option<crate::model::SuggestionAttemptPhase> {
+        match self {
+            Self::Merge | Self::MergePush => Some(crate::model::SuggestionAttemptPhase::Merging),
+            Self::SyncBase => Some(crate::model::SuggestionAttemptPhase::Syncing),
+            Self::Discard => None,
+        }
     }
 }
 
@@ -506,23 +519,39 @@ impl Runtime {
             .apply
             .deciding
             .insert(deciding.clone(), decision);
-        let pushed = (decision == BranchDecision::MergePush)
-            .then(|| (place.node.clone(), place.root.clone(), place.base.clone()));
-        let carried = (key.clone(), deciding.clone(), pushed);
+        let pushed = decision == BranchDecision::MergePush;
+        let based = (place.node.clone(), place.root.clone(), place.base.clone());
+        let carried = (key.clone(), deciding.clone(), pushed, based);
+        let day = super::branch_decision::sync_day(unix_milliseconds());
         let spawned = self.spawn_issue_worker(
             "suggestion-decide",
             move || match decision {
+                BranchDecision::SyncBase => {
+                    let (synced, base) = super::branch_decision::sync(link.as_ref(), &place, &day);
+                    let code = synced.err();
+                    super::branch_decision::log(
+                        &place,
+                        &subject,
+                        "sync_base",
+                        code.unwrap_or("synced"),
+                    );
+                    let change = code.map_or(AttemptMove::BaseSynced, |code| {
+                        AttemptMove::DecisionRefused(code.to_owned())
+                    });
+                    (change, base)
+                }
                 BranchDecision::Merge | BranchDecision::MergePush => {
                     let push = decision == BranchDecision::MergePush;
                     let kind = if push { "merge_push" } else { "merge" };
-                    match super::branch_decision::land(
+                    let (landing, base) = super::branch_decision::land(
                         connector.as_deref(),
                         link.as_ref(),
                         &place,
                         &own,
                         Some(facts.tip.as_str()),
                         push,
-                    ) {
+                    );
+                    let change = match landing {
                         super::branch_decision::Landing::Merged(commit) => {
                             super::branch_decision::log(&place, &subject, kind, "merged");
                             AttemptMove::Merged {
@@ -540,13 +569,14 @@ impl Runtime {
                             super::branch_decision::log(&place, &subject, kind, code);
                             AttemptMove::DecisionRefused(code.to_owned())
                         }
-                    }
+                    };
+                    (change, base)
                 }
                 BranchDecision::Discard => {
                     let Some(connector) = connector else {
-                        return AttemptMove::DecisionRefused("discard_failed".into());
+                        return (AttemptMove::DecisionRefused("discard_failed".into()), None);
                     };
-                    match super::branch_decision::discard(
+                    let change = match super::branch_decision::discard(
                         connector.as_ref(),
                         link.as_ref(),
                         &place,
@@ -566,19 +596,23 @@ impl Runtime {
                             );
                             AttemptMove::DecisionRefused("discard_failed".into())
                         }
-                    }
+                    };
+                    (change, None)
                 }
             },
-            move |runtime, change| {
-                let (key, deciding, pushed) = carried;
+            move |runtime, (change, learned)| {
+                let (key, deciding, pushed, (node, root, base)) = carried;
                 runtime.suggestions_work.apply.deciding.remove(&deciding);
                 // GitHub turned a push away that its rules allowed when read:
                 // they are read again before the button is offered again.
-                if let (Some((node, root, base)), AttemptMove::DecisionRefused(code)) =
-                    (&pushed, &change)
+                if pushed
+                    && let AttemptMove::DecisionRefused(code) = &change
                     && code.starts_with("push_")
                 {
-                    runtime.forget_base_push(node, root, base);
+                    runtime.forget_base_push(&node, &root, &base);
+                }
+                if let Some(learned) = learned {
+                    runtime.note_base(&node, &root, &base, learned);
                 }
                 // A branch its agent moved after the operator read it is
                 // read again at the next tick, not a minute later, so the
@@ -1354,7 +1388,8 @@ fn note_move(attempt: &mut FollowedAttempt, change: &AttemptMove) {
             attempt.branch_facts = Some(facts.clone());
         }
         AttemptMove::Discarded => attempt.phase = AttemptPhase::Closed,
-        AttemptMove::Started { .. } | AttemptMove::DecisionRefused(_) => {}
+        AttemptMove::Started { .. } | AttemptMove::DecisionRefused(_) | AttemptMove::BaseSynced => {
+        }
     }
 }
 
