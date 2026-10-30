@@ -1145,7 +1145,8 @@ impl Runtime {
         if marked || started {
             self.save_desk();
         }
-        self.publish_desk_jobs(cards);
+        let workers = self.desk_workers(&cards);
+        self.publish_desk_jobs(cards, workers);
         self.compose_desk_mentions();
         if letters_read || self.desk_chips_moved() {
             self.compose_desk();
@@ -1158,22 +1159,69 @@ impl Runtime {
             return;
         }
         let jobs = self.desk_jobs();
-        self.publish_desk_jobs(jobs);
+        let workers = self.desk_workers(&jobs);
+        self.publish_desk_jobs(jobs, workers);
+    }
+
+    /// The cards of the workers `jobs` conduct: each worker pane's spawn,
+    /// whoever started it, as Desk's own cards read theirs, at most
+    /// [`MAX_CARDS`].
+    fn desk_workers(
+        &self,
+        jobs: &[crate::model::DeskJobSnapshot],
+    ) -> Vec<crate::model::DeskJobSnapshot> {
+        let panes: HashSet<&str> = jobs
+            .iter()
+            .flat_map(|job| &job.workers)
+            .map(String::as_str)
+            .collect();
+        if panes.is_empty() {
+            return Vec::new();
+        }
+        let Ok(ledger) = self.delivery_state() else {
+            return Vec::new();
+        };
+        let index = self.desk_card_index();
+        ledger
+            .spawns
+            .iter()
+            .rev()
+            .filter(|spawn| {
+                spawn
+                    .pane
+                    .as_deref()
+                    .is_some_and(|pane| panes.contains(pane))
+            })
+            .take(MAX_CARDS)
+            .map(|spawn| {
+                let registration = spawn
+                    .child
+                    .as_ref()
+                    .and_then(|child| ledger.agents.iter().find(|agent| &agent.id == child));
+                self.desk_card(spawn, registration, &index)
+            })
+            .collect()
     }
 
     /// Sends the cards as the `desk_jobs` section when they moved, so a
     /// card's change never resends the conversation.
-    fn publish_desk_jobs(&mut self, jobs: Vec<crate::model::DeskJobSnapshot>) {
+    fn publish_desk_jobs(
+        &mut self,
+        jobs: Vec<crate::model::DeskJobSnapshot>,
+        workers: Vec<crate::model::DeskJobSnapshot>,
+    ) {
         if self
             .snapshot
             .desk_jobs
             .as_ref()
-            .is_some_and(|section| section.jobs == jobs)
+            .is_some_and(|section| section.jobs == jobs && section.workers == workers)
         {
             return;
         }
-        self.snapshot.desk_jobs =
-            Some(std::sync::Arc::new(crate::model::DeskJobsSnapshot { jobs }));
+        self.snapshot.desk_jobs = Some(std::sync::Arc::new(crate::model::DeskJobsSnapshot {
+            jobs,
+            workers,
+        }));
     }
 
     /// The `desk_mentions` section, sent again when the `@` menu moved.
@@ -1638,6 +1686,25 @@ mod tests {
         runtime.desk_watch_answered("intent-a", "p0", Ok(()));
         assert!(watched(&runtime));
         assert!(!runtime.desk.watch_asks.contains_key("intent-a"));
+    }
+
+    #[test]
+    fn a_conductors_workers_are_cards_of_their_own_found_by_their_panes() {
+        let root = tempfile::tempdir().unwrap();
+        let runtime = desk(root.path(), 2, &["conductor", "worker", "other"]);
+        let mut conductor = card(&runtime, "conductor");
+        conductor.workers = vec!["p1".into()];
+        // PRD session-docs-and-assistant B28, B34: the Threads list opens a
+        // Conductor to its workers, each with its own state and pane.
+        let workers = runtime.desk_workers(&[conductor]);
+        assert_eq!(
+            workers
+                .iter()
+                .map(|worker| (worker.id.as_str(), worker.pane_id.as_deref()))
+                .collect::<Vec<_>>(),
+            [("intent-worker", Some("p1"))]
+        );
+        assert!(runtime.desk_workers(&[card(&runtime, "other")]).is_empty());
     }
 
     #[test]

@@ -61,6 +61,11 @@ impl DeskKeptTab {
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct DeskJobsSnapshot {
     pub jobs: Vec<DeskJobSnapshot>,
+    /// The workers of the missions Desk's jobs conduct, as cards of their
+    /// own, so the Threads list opens a Conductor to them and a mission map's
+    /// node opens a worker's thread (B28, B34); none is Desk's job, and none
+    /// is drawn in the chat.
+    pub workers: Vec<DeskJobSnapshot>,
 }
 
 /// One session Desk started, or one waiting to start.
