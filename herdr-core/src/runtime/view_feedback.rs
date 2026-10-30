@@ -334,7 +334,8 @@ impl Runtime {
         }
     }
 
-    /// A pane caller's `hide file open` or `hide diff open` marks the View
+    /// A pane caller's `hide file open`, `hide diff open` or `hide browser
+    /// open`, an outside file's included, marks the View
     /// it landed in. A checkout caller, and a pane with no agent, is nobody
     /// (D-19), and the View is the operator's (PRD session-files D-28).
     pub(super) fn stamp_control_opener(
@@ -347,7 +348,10 @@ impl Runtime {
         use crate::workspace_control::{Action, Caller};
         if !matches!(
             action,
-            Action::OpenFile { .. } | Action::OpenDiff { .. } | Action::OpenBrowser { .. }
+            Action::OpenFile { .. }
+                | Action::OpenDiff { .. }
+                | Action::OpenBrowser { .. }
+                | Action::OpenExternal { .. }
         ) {
             return;
         }

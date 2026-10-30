@@ -395,11 +395,16 @@ test("the spawn guard uses the pane showing the session and native questions run
 
   assert.equal(await host.tool("ses_child", "question", { questions: [] }), null);
 
+  // A call that can hand a result to the system opener asks the terminal too.
+  assert.equal(await host.tool("ses_a", "shell", { command: "xdg-open http://localhost:5173" }), "Not run: use hide agent spawn");
+  const [, , opener] = await until("tool", 3);
+  assert.equal(opener.input.command, "xdg-open http://localhost:5173");
+
   // With no protection on, any other call runs without asking.
   assert.equal(await host.tool("ses_a", "shell", { command: "cargo test" }), null);
   assert.equal(await host.tool("ses_a", "read", { path: ".env" }), null);
   await sleep(100);
-  assert.equal(calls("tool").length, 2);
+  assert.equal(calls("tool").length, 3);
 });
 
 test("a subagent whose line OpenCode cannot tell in time is asked of the terminal showing its root", async (t) => {

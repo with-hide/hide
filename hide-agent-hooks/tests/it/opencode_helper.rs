@@ -356,6 +356,52 @@ fn a_shell_call_that_starts_an_agent_through_herdr_is_refused_with_the_spawn_gua
 }
 
 #[test]
+fn a_result_handed_to_the_system_opener_is_refused_for_opencode_pi_and_omp() {
+    // OpenCode 1.x's shell tool and 2.x's, and Pi's and omp's.
+    for (agent, shell) in [
+        ("opencode", "bash"),
+        ("opencode", "shell"),
+        ("pi", "bash"),
+        ("omp", "bash"),
+    ] {
+        let machine = Machine::new();
+        let answer = machine.run_as(
+            agent,
+            "tool",
+            &json!({"session_id": "ses_root", "tool": shell,
+                    "command": "xdg-open out/shot.png", "cwd": machine.home,
+                    "version": hide_agent_hooks::pi_extension::VERSION}),
+            true,
+        );
+        let reason = answer["deny"]
+            .as_str()
+            .unwrap_or_else(|| panic!("{agent} {shell}: {answer}"));
+        let hide = machine.helper.with_file_name("hide");
+        assert!(
+            reason.contains(&format!("{} file open out/shot.png", hide.display())),
+            "{reason}"
+        );
+        assert_eq!(machine.calls(), ["workspace bootstrap"]);
+        let log = std::fs::read_to_string(machine.home.join(".hide/agent-hooks/spawn-guard.log"))
+            .unwrap();
+        assert!(log.contains(&format!("\"runtime\":\"{agent}\"")), "{log}");
+        assert!(!log.contains("shot.png"), "a path is never logged: {log}");
+
+        // Outside a pane the call runs, and asks nothing.
+        let machine = Machine::new();
+        let answer = machine.run_as(
+            agent,
+            "tool",
+            &json!({"session_id": "ses_root", "tool": shell, "command": "xdg-open out/shot.png",
+                    "version": hide_agent_hooks::pi_extension::VERSION}),
+            false,
+        );
+        assert_eq!(answer, json!({}));
+        assert!(machine.calls().is_empty());
+    }
+}
+
+#[test]
 fn a_file_tool_on_a_protected_path_is_refused_for_opencode_pi_and_omp() {
     let machine = Machine::new();
     let project = machine.home.join("project");

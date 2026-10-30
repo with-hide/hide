@@ -197,6 +197,12 @@ Helper return time does not prove the agent's time to first token or its runtime
 Observe the actual supported runtimes separately when claiming native behavior.
 Regression owners are `hide-agent-hooks/tests/it/spawn_guard.rs` (nothing spawned for a payload without `herdr`, a slow `hide` stays under the budget) and the parser tests in `src/spawn_guard.rs` (the parser is `hide-shell`).
 
+The [opener guard](agent-hooks.md#the-opener-guard) rides the same hook and adds a second byte test in the same pass, so the per-input work is unchanged for a call that names no opener word or no viewable mark: no JSON parse, no lexer and no child.
+A call that holds both, which includes an ordinary call whose payload mentions `open` and a `.md` file, pays one JSON parse and the lexer and starts nothing; only an opener of a viewable target asks `hide workspace bootstrap`, the spawn guard's one bounded child, and only once per refused call.
+It adds no state, timer, lock, notification or retained data beyond one `opener.refused` line in the spawn guard's capped log.
+Measured on 2026-10-30 (macOS 15.1, debug build, load average 22 before and 21 after, so the scheduler dominates; 10 warm-up and 100 timed calls per row through `sh -c` with the payload on stdin): `/usr/bin/true` p50 14.4 ms and p95 20.2 ms, an ordinary call 20.1 and 31.5, a call that passes the byte test and holds no opener 19.1 and 33.1, and an opener refused through a stand-in `hide` 33.8 and 51.2.
+Regression owners are `hide-agent-hooks/tests/it/opener_guard.rs` (no `hide` started for a call that is not an opening) and the reading's table tests in `src/opener_guard.rs`.
+
 
 ## Letters at a tool event
 

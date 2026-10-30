@@ -647,3 +647,116 @@ fn reads_keep_no_receipt_so_any_number_of_them_leaves_room_for_an_open() {
     assert!(!row(&guard, "sender").unread);
     open_page(&mut guard, "recipient", "https://example.test/next");
 }
+
+/// An agent's `hide file open` or `hide browser open` of a file outside
+/// every checkout reaches the core as the window's grant alone
+/// (`open_external`, made by hided), and is tracked as any agent's open: it
+/// waits in Needs You under its file name, `hide view list` names who opened
+/// it and nothing of the file, a second open brings the same tab forward,
+/// and looking at it ends the wait.
+#[test]
+fn an_agents_open_of_an_outside_file_is_tracked_as_its_open_by_grant_alone() {
+    let (_root, runtime) = fixture(false);
+    let mut guard = runtime.lock().unwrap();
+    keyboard(&mut guard, Some("sender"));
+    let grant = "a1".repeat(16);
+    let open = |runtime: &mut Runtime, request: &str| {
+        let action = Action::OpenExternal {
+            grant: grant.clone(),
+            name: "report.html".into(),
+            kind: crate::view_layout::ExternalKind::Html,
+        };
+        let expected = runtime
+            .workspace_control_query(
+                crate::node::TEST_NODE,
+                "recipient",
+                crate::workspace_control::Query::Info,
+            )
+            .unwrap()
+            .context;
+        let request = format!("{}-{request}", unix_milliseconds());
+        let prepared = runtime
+            .workspace_control_prepare_action(
+                crate::node::TEST_NODE,
+                "recipient",
+                &expected,
+                &request,
+                &action,
+            )
+            .unwrap();
+        assert!(matches!(
+            prepared,
+            crate::workspace_control::ActionPreparation::Ready
+        ));
+        let answer = runtime
+            .workspace_control_action(
+                crate::node::TEST_NODE,
+                "recipient",
+                &expected,
+                &request,
+                action,
+                Ok(None),
+            )
+            .unwrap();
+        runtime.sync_workspace_view();
+        answer.view_id
+    };
+    let view = open(&mut guard, "first");
+    let display = guard
+        .view_layout_of(&key())
+        .unwrap()
+        .display(&view)
+        .unwrap()
+        .clone();
+    assert_eq!(display.kind, DisplayKind::External);
+    assert!(display.path.is_empty() && display.url.is_none());
+    assert!(guard.snapshot.external_grants.contains(&grant));
+    let recipient = row(&guard, "recipient");
+    assert_eq!(recipient.group, "needs_you");
+    assert_eq!(recipient.mark, RowMark::Look);
+    assert_eq!(recipient.look.as_ref().unwrap().label, "report.html");
+    let listed = guard
+        .workspace_control_query(
+            crate::node::TEST_NODE,
+            "sender",
+            crate::workspace_control::Query::ViewList,
+        )
+        .unwrap()
+        .views
+        .unwrap()
+        .into_iter()
+        .find(|row| row.view_id == view)
+        .unwrap();
+    assert_eq!((listed.kind, listed.target.as_str()), ("external", ""));
+    assert!(listed.unseen && !listed.operator);
+    assert_eq!(listed.openers.len(), 1);
+    assert_eq!(
+        listed.openers[0].session.as_deref(),
+        Some("native-recipient")
+    );
+    // B10: the same file again is the same tab, brought forward.
+    assert_eq!(open(&mut guard, "again"), view);
+    let externals = guard
+        .view_layout_of(&key())
+        .unwrap()
+        .displays()
+        .filter(|display| display.kind == DisplayKind::External)
+        .count();
+    assert_eq!(externals, 1);
+    look_at(&mut guard, &view);
+    keyboard(&mut guard, Some("recipient"));
+    assert!(!unseen(&guard, &view));
+}
+
+/// `open_external` exists only as hided makes it: no pane's request decodes
+/// one, so a caller cannot name a grant it was never given.
+#[test]
+fn no_pane_request_decodes_an_outside_file_open() {
+    let wire = json!({
+        "action": "open_external",
+        "grant": "a1".repeat(16),
+        "name": "report.html",
+        "kind": "html",
+    });
+    assert!(serde_json::from_value::<Action>(wire).is_err());
+}

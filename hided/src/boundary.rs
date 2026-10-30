@@ -731,6 +731,15 @@ impl Boundary {
                 .is_some_and(|parent| self.resolve_target(&parent.to_string_lossy()).is_ok())
     }
 
+    /// Whether `raw` is written under a registered checkout root, whatever
+    /// is on the disk there: the line between a checkout's file, which only
+    /// the core opens, and a file outside every checkout, which only the
+    /// desktop host does.
+    pub fn written_under_root(&self, raw: &str) -> bool {
+        self.expand(raw)
+            .is_ok_and(|raw| self.strip_root(Path::new(&raw)).is_some())
+    }
+
     /// The most specific root `path` is written under, with what follows it.
     /// The comparison is component-wise, so a sibling whose name merely starts
     /// with a root's path (`/repo-other` beside `/repo`) is not inside it.

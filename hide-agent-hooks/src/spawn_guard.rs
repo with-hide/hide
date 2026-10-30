@@ -586,6 +586,69 @@ pub fn registration(program: &OsStr, deadline: Instant) -> Registration {
     }
 }
 
+// --- The shell call in a pane ----------------------------------------------------
+
+/// The spawn guard's and the opener guard's (`crate::opener_guard`) decision
+/// for one shell call made in the Herdr pane `pane`: the reason it is
+/// refused, or `None` to let it run. A call that neither starts an agent
+/// through Herdr nor hands a viewable target to the system opener runs
+/// without asking anything; one that does asks the daemon once, through
+/// `program`, whether the pane sits in a registered checkout, and runs when
+/// it does not or the daemon cannot be asked. A launch is judged first: a
+/// call that does both is refused for the launch, and its opener is refused
+/// when the agent runs it again on its own. The refusal is logged before it
+/// is returned, and stands when the log cannot be written.
+#[allow(clippy::too_many_arguments)]
+pub fn pane_refusal(
+    home: &Path,
+    runtime: &str,
+    pane: &str,
+    command: &str,
+    cwd: Option<PathBuf>,
+    program: &OsStr,
+    deadline: Instant,
+    env: &dyn Fn(&str) -> Option<String>,
+) -> Option<String> {
+    use crate::opener_guard;
+
+    let launch = may_hold_launch(command.as_bytes())
+        .then(|| find_launch(command, env))
+        .flatten();
+    let openings = match launch {
+        Some(_) => Vec::new(),
+        None if opener_guard::may_hold_opening(command.as_bytes()) => {
+            opener_guard::find_openings(command)
+        }
+        None => return None,
+    };
+    if launch.is_none() && openings.is_empty() {
+        return None;
+    }
+    match registration(program, deadline) {
+        Registration::Registered => {}
+        Registration::NotRegistered => return None,
+        Registration::Unreachable(cause) => {
+            unreachable(home, runtime, cause);
+            return None;
+        }
+    }
+    let Some(launch) = launch else {
+        opener_guard::record_refusal(home, runtime, pane, &openings);
+        return Some(opener_guard::refusal_reason(
+            &program.to_string_lossy(),
+            &openings,
+        ));
+    };
+    let cwd = cwd
+        .or_else(|| std::env::current_dir().ok())
+        .unwrap_or_default();
+    let (repo, branch) = checkout_facts(&cwd);
+    let delegation = spawn_command(&launch, repo.as_deref(), branch.as_deref(), true);
+    let handoff = spawn_command(&launch, repo.as_deref(), branch.as_deref(), false);
+    record_refusal(home, runtime, pane, &launch);
+    Some(refusal_reason(&delegation, &handoff))
+}
+
 // --- What is recorded ------------------------------------------------------------
 
 const LOG_LIMIT: u64 = 256 * 1024;

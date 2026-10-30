@@ -59,7 +59,17 @@ struct ReadFence {
     generation: u64,
     in_flight: bool,
     waiting: bool,
+    /// Reads failed in a row, and when the next one runs: a store a writer
+    /// holds for a moment answers `database is locked`, and the list a write
+    /// changed must not stay as it was until something else reads it.
+    failures: u32,
+    retry_at_unix_ms: Option<u64>,
 }
+
+/// Reads tried again after a failed one before Memory says it is
+/// unreadable, each after twice the wait of the one before.
+const READ_RETRIES: u32 = 3;
+const READ_RETRY_FIRST_MS: u64 = 1_000;
 
 impl ReadFence {
     /// Starts a read now, or leaves it waiting behind the one in flight;
@@ -80,6 +90,24 @@ impl ReadFence {
         self.in_flight = false;
         let waiting = std::mem::take(&mut self.waiting);
         (!waiting && generation == self.generation, waiting)
+    }
+
+    /// A read that landed failed: answers whether another is due, at most
+    /// [`READ_RETRIES`] in a row.
+    fn failed(&mut self, now_unix_ms: u64) -> bool {
+        if self.failures >= READ_RETRIES {
+            self.failures = 0;
+            self.retry_at_unix_ms = None;
+            return false;
+        }
+        self.retry_at_unix_ms = Some(now_unix_ms + (READ_RETRY_FIRST_MS << self.failures));
+        self.failures += 1;
+        true
+    }
+
+    fn succeeded(&mut self) {
+        self.failures = 0;
+        self.retry_at_unix_ms = None;
     }
 }
 
@@ -348,6 +376,7 @@ impl Runtime {
             .and_then(|memory| memory.project.as_ref())
             .is_some_and(|project| project.workspace_id == workspace_id);
         if !same {
+            self.project_memory.reads.succeeded();
             self.project_memory.project_id = None;
             self.project_memory.expanded = None;
             self.project_memory.search = None;
@@ -518,6 +547,20 @@ impl Runtime {
             .is_some_and(|project| project.workspace_id == workspace_id)
     }
 
+    /// Reads the opened Project's Memory again once a failed read's wait
+    /// ran out, on the coordinator's tick.
+    pub(super) fn tick_project_memory_read(&mut self, now_unix_ms: u64) {
+        if self
+            .project_memory
+            .reads
+            .retry_at_unix_ms
+            .is_some_and(|at| now_unix_ms >= at)
+        {
+            self.project_memory.reads.retry_at_unix_ms = None;
+            self.refresh_project_memory();
+        }
+    }
+
     /// Reads the opened Project's Memory again, after a change to it or to
     /// what the screen asks of it.
     pub(super) fn refresh_project_memory(&mut self) {
@@ -594,13 +637,24 @@ impl Runtime {
             return false;
         }
         let load = match result {
-            Ok(load) => load,
+            Ok(load) => {
+                self.project_memory.reads.succeeded();
+                load
+            }
             Err(message) => {
+                let retry = self.project_memory.reads.failed(super::memory::now_ms());
                 crate::diagnostic!(json!({
                     "component": "memory",
                     "kind": "memory.read_failed",
                     "message": message,
+                    "failures": self.project_memory.reads.failures,
+                    "retry": retry,
                 }));
+                // The list stays as the last read left it while the read is
+                // tried again; only a read that keeps failing is unreadable.
+                if retry {
+                    return false;
+                }
                 if let Some(project) = self.memory_section().project.as_mut() {
                     project.loading = false;
                     project.unavailable = Some(MemoryUnavailableSnapshot::Unreadable);
@@ -1090,6 +1144,22 @@ impl Runtime {
             .action
             .take()
             .map(|(workspace, _)| workspace);
+        // A dismissal the store wrote ends the card's way into the documents
+        // (B29): the opened list drops that question now, so its 제안 row does
+        // not wait for the read below, which a busy store can delay or refuse.
+        // What the card says against a document is the Memory tab's and stays.
+        if let (Ok(_), MemoryAction::Dismiss, Some(dismissed), Some(workspace)) =
+            (&result, action, number, workspace.as_deref())
+            && self.memory_opened(workspace)
+            && let Some(project) = self.memory_section().project.as_mut()
+        {
+            project.questions.retain(|question| match question {
+                MemoryQuestionSnapshot::Promote { number, .. }
+                | MemoryQuestionSnapshot::Failed { number, .. }
+                | MemoryQuestionSnapshot::Unbuilt { number, .. } => *number != dismissed,
+                MemoryQuestionSnapshot::DocsDisagree { .. } => true,
+            });
+        }
         match result {
             Ok(outcome) => {
                 if let Some((kind, message)) = outcome.diagnostic {
@@ -1745,6 +1815,112 @@ mod tests {
             unchanged.expanded.unwrap().body,
             "Run tests with nextest before a merge"
         );
+    }
+
+    #[test]
+    fn a_read_that_fails_is_read_again_and_unreadable_only_once_it_keeps_failing() {
+        use crate::runtime::tests::wait_for;
+        let folder = tempfile::tempdir().unwrap();
+        let root = std::fs::canonicalize(folder.path())
+            .unwrap()
+            .to_string_lossy()
+            .into_owned();
+        let mut runtime = crate::runtime::tests::runtime();
+        runtime.ingest_session(Ok(crate::sidebar::owned_label_fixture(json!({
+            "agents": [{"pane_id":"w1:p1", "agent":"codex", "agent_status":"working",
+                        "state_change_seq":10, "cwd":root}],
+            "workspaces":[{"workspace_id":"w1","label":"Alpha"}],
+            "tabs":[{"workspace_id":"w1","tab_id":"w1:t1","label":"1"}],
+            "panes":[{"pane_id":"w1:p1","cwd":root}],
+            "layouts":[{"workspace_id":"w1","tab_id":"w1:t1","zoomed":false,
+                        "area":{"x":0,"y":0,"width":80,"height":24},"focused_pane_id":"w1:p1",
+                        "panes":[{"pane_id":"w1:p1","rect":{"x":0,"y":0,"width":80,"height":24}}],
+                        "splits":[]}]
+        }))
+        .unwrap()));
+        let workspace = runtime.snapshot.navigator.workspaces[0].id.clone();
+        let database = runtime.memory_database_path();
+        let unreadable = |database: &Path| {
+            for suffix in ["", "-wal", "-shm"] {
+                let mut path = database.as_os_str().to_owned();
+                path.push(suffix);
+                let _ = std::fs::remove_file(path);
+            }
+            std::fs::write(database, b"not a database").unwrap();
+        };
+        unreadable(&database);
+        let runtime = Arc::new(Mutex::new(runtime));
+        runtime.lock().unwrap().install_worker_context(
+            Arc::downgrade(&runtime),
+            crate::handle::ChangeNotifier::noop(),
+        );
+        // The read in flight has landed with `failures` failed in a row.
+        let landed = |failures| {
+            wait_for("the read to land", || {
+                let guard = runtime.lock().unwrap();
+                !guard.project_memory.reads.in_flight
+                    && guard.project_memory.reads.failures == failures
+            });
+            let guard = runtime.lock().unwrap();
+            let project = guard
+                .snapshot
+                .memory
+                .as_ref()
+                .unwrap()
+                .project
+                .clone()
+                .unwrap();
+            (project, guard.project_memory.reads.retry_at_unix_ms)
+        };
+        let tick = |at| runtime.lock().unwrap().tick_async_operations(at);
+
+        runtime.lock().unwrap().open_project_memory(Some(workspace));
+        let (project, retry_at) = landed(1);
+        let retry_at = retry_at.expect("a failed read is tried again");
+        assert!(project.loading && project.unavailable.is_none());
+        tick(retry_at - 1);
+        assert_eq!(landed(1).1, Some(retry_at), "not before its wait ran out");
+        tick(retry_at);
+        let (project, second) = landed(2);
+        assert!(project.loading && project.unavailable.is_none());
+        let second = second.unwrap();
+        assert!(
+            second >= retry_at + READ_RETRY_FIRST_MS,
+            "each wait is twice the one before"
+        );
+
+        // The store answers again: the next read lands the list.
+        std::fs::remove_file(&database).unwrap();
+        let identity = project_identity(
+            &hide_node::Local::of_process(),
+            &crate::node::test_node(),
+            &root,
+        )
+        .unwrap();
+        let store = MemoryStore::open(&database).unwrap();
+        store
+            .ensure_project(&identity.id, &identity.root, crate::node::TEST_NODE)
+            .unwrap();
+        drop(store);
+        tick(second);
+        let (project, retry_at) = landed(0);
+        assert!(!project.loading && project.unavailable.is_none());
+        assert_eq!(retry_at, None);
+
+        // A read that keeps failing is unreadable after its retries.
+        unreadable(&database);
+        runtime.lock().unwrap().refresh_project_memory();
+        for failures in 1..=READ_RETRIES {
+            let (project, retry_at) = landed(failures);
+            assert_eq!(project.unavailable, None);
+            tick(retry_at.unwrap());
+        }
+        let (project, retry_at) = landed(0);
+        assert_eq!(
+            project.unavailable,
+            Some(MemoryUnavailableSnapshot::Unreadable)
+        );
+        assert_eq!(retry_at, None, "the operator's 다시 읽기 reads it again");
     }
 
     #[test]

@@ -215,6 +215,26 @@ fn a_direct_agent_start_is_denied_in_agys_shape_and_every_other_call_is_left_to_
 }
 
 #[test]
+fn a_result_handed_to_the_system_opener_is_denied_in_agys_shape() {
+    let machine = Machine::new();
+    let denied = answer(&machine.run(
+        "PreToolUse",
+        &machine.shell("open out/report.html"),
+        Some(PANE),
+    ));
+    assert_eq!(denied["decision"], "deny", "{denied}");
+    let reason = denied["reason"].as_str().unwrap();
+    let hide = machine.hook.with_file_name("hide");
+    assert!(
+        reason.contains(&format!("{} browser open out/report.html", hide.display())),
+        "{reason}"
+    );
+    let ask = json!({ "decision": "ask" });
+    let run = machine.run("PreToolUse", &machine.shell("open ."), Some(PANE));
+    assert_eq!(answer(&run), ask);
+}
+
+#[test]
 fn the_first_prompt_of_a_conversation_is_given_hides_guidance() {
     let machine = Machine::new();
 

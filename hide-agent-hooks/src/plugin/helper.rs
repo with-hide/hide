@@ -20,7 +20,7 @@ use hide_agent_adapter::{AgentAdapter, PluginDialect};
 use hide_agent_hooks::delivery::{self, Intake, Prompt};
 use hide_agent_hooks::memory::{self, HookMemoryOutcome, MemoryRequest, memory_context_until};
 use hide_agent_hooks::runtime::HookEvent;
-use hide_agent_hooks::spawn_guard::{self as guard, Registration};
+use hide_agent_hooks::spawn_guard as guard;
 use hide_agent_hooks::{counters, guardrails, guidance, report};
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -452,28 +452,17 @@ fn tool(home: &Path, agent: &Agent, input: Input, deadline: Instant) -> Value {
             let Some(command) = input.command.as_deref() else {
                 return json!({});
             };
-            let Some(launch) = guard::find_launch(command, &|name| std::env::var(name).ok()) else {
-                return json!({});
-            };
-            match guard::registration(&program, deadline) {
-                Registration::Registered => {}
-                Registration::NotRegistered => return json!({}),
-                Registration::Unreachable(cause) => {
-                    guard::unreachable(home, runtime, cause);
-                    return json!({});
-                }
-            }
-            let cwd = input
-                .cwd
-                .or_else(|| std::env::current_dir().ok())
-                .unwrap_or_default();
-            let (repo, branch) = guard::checkout_facts(&cwd);
-            let delegation =
-                guard::spawn_command(&launch, repo.as_deref(), branch.as_deref(), true);
-            let handoff = guard::spawn_command(&launch, repo.as_deref(), branch.as_deref(), false);
-            // Logged before it is answered; the refusal stands without the log.
-            guard::record_refusal(home, runtime, &pane, &launch);
-            json!({ "deny": guard::refusal_reason(&delegation, &handoff) })
+            let refusal = guard::pane_refusal(
+                home,
+                runtime,
+                &pane,
+                command,
+                input.cwd,
+                &program,
+                deadline,
+                &|name| std::env::var(name).ok(),
+            );
+            refusal.map_or_else(|| json!({}), |reason| json!({ "deny": reason }))
         }
         _ => json!({}),
     }

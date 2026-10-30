@@ -1,8 +1,13 @@
 // How the macOS package is signed, chosen by HIDE_MACOS_SIGNING.
 //
 // Unset, it means `adhoc`: the bundle carries an ad-hoc signature, as every
-// local and pull-request package does, and a downloaded copy opens only after
-// the Gatekeeper step docs/INSTALL.md gives. `developer-id` is what a
+// pull-request package does, and a downloaded copy opens only after the
+// Gatekeeper step docs/INSTALL.md gives. Unset with HIDE_SIGN_IDENTITY set, it
+// means `local`: the bundle is signed with that identity under the hardened
+// runtime and not notarized. macOS keys a privacy grant such as Screen
+// Recording to the signature, and an ad-hoc one changes with every build, so
+// each install of an ad-hoc build asks for the grants again; a signature from
+// a certificate keeps them. `developer-id` is what a
 // release's package.yml run asks for: every executable in the bundle (the
 // Electron helpers, the notification permission helper, the bundled CLIs and
 // Herdr) is signed with the Developer ID certificate under the hardened
@@ -32,26 +37,35 @@ const DEVELOPER_ID_KEYS = {
 };
 
 /**
- * Reads the signing choice from `env`: `{ mode: "adhoc" }`, or the Developer
+ * Reads the signing choice from `env`: `{ mode: "adhoc" }`, a local
+ * package's `{ mode: "local", identity }`, or the Developer
  * ID identity and notary credentials once the identity is found in a keychain
  * codesign searches and notarytool is installed. Anything else throws.
  */
 export function macosSigning(env) {
-  const mode = env.HIDE_MACOS_SIGNING ?? "adhoc";
+  const mode = env.HIDE_MACOS_SIGNING ?? (env.HIDE_SIGN_IDENTITY ? "local" : "adhoc");
   if (mode === "adhoc") return { mode };
+  if (mode === "local") {
+    if (!hasIdentity(env.HIDE_SIGN_IDENTITY)) throw new Error(`no keychain on the search list holds the signing identity '${env.HIDE_SIGN_IDENTITY}' (HIDE_SIGN_IDENTITY)`);
+    return { mode, identity: env.HIDE_SIGN_IDENTITY };
+  }
   if (mode !== "developer-id") throw new Error(`HIDE_MACOS_SIGNING must be adhoc or developer-id (got '${mode}')`);
   const unusable = Object.entries(DEVELOPER_ID_KEYS)
     .filter(([key, usable]) => !env[key] || !usable(env[key]))
     .map(([key]) => key);
   if (unusable.length > 0) throw new Error(`HIDE_MACOS_SIGNING=developer-id needs these set and well formed: ${unusable.join(", ")}`);
-  const identities = execFileSync("/usr/bin/security", ["find-identity", "-v", "-p", "codesigning"], { encoding: "utf8" });
-  if (!identities.includes(env.HIDE_SIGN_IDENTITY)) throw new Error(`no keychain on the search list holds the signing identity '${env.HIDE_SIGN_IDENTITY}'`);
+  if (!hasIdentity(env.HIDE_SIGN_IDENTITY)) throw new Error(`no keychain on the search list holds the signing identity '${env.HIDE_SIGN_IDENTITY}'`);
   execFileSync("/usr/bin/xcrun", ["--find", "notarytool"], { stdio: "ignore" });
   return {
     mode,
     identity: env.HIDE_SIGN_IDENTITY,
     notary: { appleApiKey: env.HIDE_NOTARY_KEY_PATH, appleApiKeyId: env.HIDE_NOTARY_KEY_ID, appleApiIssuer: env.HIDE_NOTARY_ISSUER },
   };
+}
+
+/** Whether a keychain codesign searches holds the valid signing identity `identity`, by name or SHA-1. */
+function hasIdentity(identity) {
+  return execFileSync("/usr/bin/security", ["find-identity", "-v", "-p", "codesigning"], { encoding: "utf8" }).includes(identity);
 }
 
 /**
