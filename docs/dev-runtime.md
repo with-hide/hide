@@ -49,6 +49,7 @@ The app bundles `desktop/resources/hide.icns` as its icon (`desktop/scripts/pack
 The approved mark and its visual rules live in [BRAND.md](BRAND.md), with the full square source at `design/brand/hide-mark.png`.
 The app's rounded 1024-pixel PNG, `.icns` and the Windows `hide.ico` are derivatives of that source; the `.ico` holds that PNG resized to 16, 24, 32, 48, 64, 128 and 256 pixels as PNG entries, and a Linux package carries no icon of its own; the mobile web icons under `web/public/m/` use the same mark.
 Agent marks (`agent-claude.png`, `agent-codex.png`, and the other agents' logos under `web/src/assets/agents/`) live in `web/src/assets/`, drawn by the web shell itself rather than bundled as native app resources.
+The interface faces, Inter 4.1 and Pretendard 1.3.9 (both OFL 1.1, unmodified), live in `web/src/assets/fonts/` and are declared in `web/src/index.css`; each notice in `desktop/resources/THIRD_PARTY_NOTICES/` names its release and SHA-256.
 File and folder marks are the Material Icon Theme's SVGs (MIT), taken from the pinned `material-icon-theme` package at build time rather than copied into the repository; `web/src/fileIcons.ts` resolves a name to one.
 Keep packaging aligned with `desktop/resources/THIRD_PARTY_NOTICES/`; bundled artwork is not a grant of trademark permission.
 Use [UI_BEHAVIOR.md](UI_BEHAVIOR.md) for shell behavior.

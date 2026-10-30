@@ -18,9 +18,37 @@
  */
 @custom-variant hoverless (@media (hover: none));
 
+/*
+ * The interface's own faces ship with the shell, so every system draws the
+ * same letters (licenses in desktop/resources/THIRD_PARTY_NOTICES). Inter
+ * draws Latin; Pretendard, drawn to sit beside Inter, draws Hangul only, so
+ * its kana never stand in for a Japanese face. Kana and Han fall through to
+ * the system, which picks the face for the language <html lang> names
+ * (i18n/translator.tsx), so a Han character takes the reader's form. A
+ * character neither face has falls through the same way. `swap` keeps text
+ * visible in the system face for the moment a face takes to load.
+ */
+@font-face {
+  font-family: Inter;
+  font-style: normal;
+  font-weight: 100 900;
+  font-display: swap;
+  src: url("./assets/fonts/InterVariable.woff2") format("woff2");
+}
+
+@font-face {
+  font-family: Pretendard;
+  font-style: normal;
+  font-weight: 45 930;
+  font-display: swap;
+  src: url("./assets/fonts/PretendardVariable.woff2") format("woff2");
+  /* Unicode 17 Script=Hangul */
+  unicode-range: U+1100-11FF, U+302E-302F, U+3131-318E, U+3200-321E, U+3260-327E, U+A960-A97C, U+AC00-D7A3, U+D7B0-D7C6, U+D7CB-D7FB, U+FFA0-FFBE, U+FFC2-FFC7, U+FFCA-FFCF, U+FFD2-FFD7, U+FFDA-FFDC;
+}
+
 /* Font stacks are not numeric tokens; the terminal reads --font-mono at mount. */
 @theme {
-  --font-sans: Inter, ui-sans-serif, system-ui, sans-serif;
+  --font-sans: Inter, Pretendard, ui-sans-serif, system-ui, sans-serif;
   --font-mono: ui-monospace, SFMono-Regular, Menlo, Monaco, monospace;
 }
 
@@ -75,6 +103,10 @@
     background: var(--background);
     color: var(--foreground);
     font-family: var(--font-sans);
+    /* macOS draws light text on a dark ground heavier than the face; grayscale
+       keeps the interface's strokes at their weight. Other systems ignore it. */
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
   }
 
   /* Tailwind v3's preflight gave buttons a pointer; v4 dropped it and the shell keeps it. */
@@ -88,6 +120,13 @@
 .xterm-viewport,
 .xterm-screen {
   height: 100%;
+}
+
+/* The terminal keeps the system's rendering; the interface's grayscale
+   smoothing (above) is not the terminal's to change. */
+.xterm {
+  -webkit-font-smoothing: auto;
+  -moz-osx-font-smoothing: auto;
 }
 
 /* xterm's own sheet paints the viewport black; the part below the last row

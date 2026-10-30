@@ -1936,10 +1936,10 @@ Core owner: `herdr-core/src/sidebar.rs`, `herdr-core/src/project_context.rs`, `h
 The project-row entry and Overview child-row requirements in PRD sidebar-row-click-overview-row D-03 and B5-B7 and web-project-overview are superseded by overview-remove.
 Project rows now open checkouts; shared Overview owns the only Overview selection and destination.
 
-The sidebar sets its words on three sizes: a checkout name, an agent title and a count 12/400, and a second line, a project name, a tab or group name and a time 11; a section header is 10/500 in sentence case (`Projects · Recent activity · 5`), 26 high with its words on the baseline.
-A project's own name is its block's label, 11/600, muted while its agents only rest or sleep or it has none and in the ordinary text color while one of its awake agents draws a mark (the turn, the ring or a dot to read); the core decides which (`agent_presence.working`) and the next snapshot moves it.
+The sidebar sets its words on three sizes: a checkout name, an agent title and a count 13/400, and a second line, a project name, a tab or group name and a time 12; a section header is 11/500 in sentence case (`Projects · Recent activity · 5`), 26 high with its words on the baseline.
+A project's own name is its block's label, 12/600, muted while its agents only rest or sleep or it has none and in the ordinary text color while one of its awake agents draws a mark (the turn, the ring or a dot to read); the core decides which (`agent_presence.working`) and the next snapshot moves it.
 A project's block is set off from the one above it by a hairline at its top and a 12px gap, so the last checkouts of one project never read as the next project's rows.
-A project row and a one-line plain folder are 32 high, a checkout row 32 or 48 with its second line, an agent row 28 or 44.
+A project row and a one-line plain folder are 32 high, a checkout row 32 or 48 with its second line, an agent row 30 or 47.
 A checkout name mutes its prefix up to and including the first slash (`prd/`), so the part that tells checkouts apart reads first; a name with no slash, or one that starts or ends with it, has no prefix.
 The checkout whose Workspace is in front turns its name 500 and nothing else about the row.
 These are the sizes at the default Interface text; the sidebar follows Appearance's Interface text with the rest of the interface, its rows growing with their text so every row still holds it.
@@ -2888,6 +2888,9 @@ Settings opens on General unless the way in names a page: Explorer's and a devic
 General has the Appearance group.
 Appearance contains Language, Color theme, Mode, Accent, Interface text, Terminal text and Terminal font; Accent shows its swatches and no hex value (PRD settings-left-nav B5; hide-color-theme B1).
 Interface text, 11 to 17 pt with 13 the default, sizes every text outside the terminals and the editor's code, the sidebar included.
+Text outside the terminals and the editor's code is drawn in faces the app ships, so every system draws the same letters: Inter for Latin, and Pretendard, made to sit beside Inter, for Hangul only.
+Kana and Han characters, and any character neither face has, come from the system's own face for the language Language chose, so a Han character takes the form its reader expects.
+On macOS that text is drawn with grayscale smoothing, so light text on a dark ground keeps the face's weight; the terminals keep the system's smoothing.
 Terminal text, 10 to 24 pt with 14 the default, is every terminal's size; it carries one note that a single pane is sized with Larger text and Smaller text in that pane (⌘= and ⌘- on macOS) and the editor's text with the same keys in a document.
 A pane's own size multiplies Terminal text, so moving the slider resizes every terminal and keeps a zoomed pane that much larger than the rest; each terminal takes its new rows and columns at once.
 The core keeps both sizes in its ui state, where they survive a reload and a relaunch, and refuses a size outside its range into the diagnostic log, keeping the last one.
