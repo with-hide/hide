@@ -14,7 +14,8 @@
 //!
 //! Input goes only to the pane the thread was opened for, while it still
 //! runs that session, as the phone's reply does: the node's input permit,
-//! the sleep gate, then Herdr's `pane.send_input` with Enter.
+//! the sleep gate, then the engine's `submit_text` (Herdr's
+//! `pane.send_input` with Enter).
 
 use super::*;
 use crate::model::{
@@ -479,7 +480,7 @@ impl Runtime {
         let device = open.device.clone();
         let raw_pane = open.raw_pane.clone();
         let generation = open.generation;
-        let Some(connector) = self.delivery_connector(&device) else {
+        let Some(engine) = self.delivery_engine(&device) else {
             let reason = if device == self.node.as_str() {
                 "unavailable"
             } else {
@@ -519,21 +520,16 @@ impl Runtime {
             )?;
             wait_permit(terminals.as_ref(), &core_pane, text.len() + 1)?;
             let _admission = gate.admit(&core_pane).map_err(|_| "asleep")?;
-            let params =
-                crate::wire::delivery_input_params(&raw_pane, &text).map_err(|_| "unavailable")?;
-            hide_herdr_client::request_with_connector(
-                connector.as_ref(),
-                "pane.send_input",
-                params,
-                SEND_TIMEOUT,
-            )
-            .map(|_| ())
-            .map_err(|error| match error.code() {
-                Some(code) if code.contains("not_found") => "pane_gone",
-                Some(_) => "unavailable",
-                // No answer: the words may have landed.
-                None => "uncertain",
-            })
+            engine
+                .submit_text(crate::engine::Wait::Each(SEND_TIMEOUT), &raw_pane, &text)
+                .map_err(|error| match error {
+                    crate::engine::EngineError::Refused { code, .. } if code.contains("not_found") => {
+                        "pane_gone"
+                    }
+                    // No answer: the words may have landed.
+                    crate::engine::EngineError::Unanswered(_) => "uncertain",
+                    _ => "unavailable",
+                })
         };
         let Some(context) = self.worker_context.clone() else {
             let sent = write();
