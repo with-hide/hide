@@ -46,6 +46,7 @@ import { hostKind, keySystem, revealHost } from "./host";
 import { chordFromEvent, hostRegistry } from "./shortcuts";
 import { commandLabel } from "./shortcutLabels";
 import { useInterfaceTranslation } from "./i18n/client";
+import { composingKey } from "./keys";
 
 // The Explorer tree (PRD B1, B3, B9, B10): a lazy tree over the focused
 // checkout. The core owns which folders are expanded (`ui_state.expanded_paths`)
@@ -872,7 +873,7 @@ function DraftRowView({
         className="h-auto min-w-0 flex-1 rounded-xs border-primary px-xxs py-none"
         onChange={(event) => setValue(event.target.value)}
         onKeyDown={(event) => {
-          if (event.key !== "Enter" && event.key !== "Escape") {
+          if ((event.key !== "Enter" && event.key !== "Escape") || composingKey(event)) {
             event.stopPropagation();
             return;
           }

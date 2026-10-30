@@ -26,6 +26,7 @@ import { browserCommentKey, commentsOn, useFeedbackStore, noteBrowserComment } f
 import { OpenerMark, PageNoteLayer, useViewFeedback } from "./ViewComments";
 import { externalBridge, pendingDeadline, settlePendingGrants, syncedGrants, useExternalStore } from "./externalFiles";
 import { windowDeviceId } from "./screenMachine";
+import { composingKey } from "./keys";
 
 // A browser display (issue 155): its toolbar and the place its page shows.
 // In the desktop app the page is a native view the host lays over the slot
@@ -352,7 +353,7 @@ function AddressField({ address, onSubmit, autoFocus = false, trailing = null }:
         onChange={(event) => setDraft(event.currentTarget.value)}
         onBlur={() => setDraft(null)}
         onKeyDown={(event) => {
-          if (event.nativeEvent.isComposing) return;
+          if (composingKey(event)) return;
           if (event.key === "Enter") {
             event.preventDefault();
             const url = addressUrl(draft ?? address);

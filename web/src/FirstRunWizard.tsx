@@ -47,6 +47,7 @@ import { useShellStore } from "./store";
 import { fieldLabel } from "./shortcutLabels";
 import { holdsFieldModifier } from "./shortcuts";
 import { useUiStore } from "./ui";
+import { composingKey } from "./keys";
 
 /** Help > Set up Hide's walk: this page's own, gone with a close (B46). */
 type SetupWalk = { step: WizardStep | null; open: () => void; go: (step: WizardStep) => void; close: () => void };
@@ -108,7 +109,7 @@ function Wizard({ actions, step, reopened, desktop }: { actions: Actions; step: 
   };
   // Enter on the step itself, or ⌘↵ (Ctrl+Enter off macOS) anywhere in it, presses its main button; a control with its own Enter keeps it (B40).
   const onKeyDown = (event: KeyboardEvent) => {
-    if (event.key !== "Enter" || event.nativeEvent.isComposing) return;
+    if (event.key !== "Enter" || composingKey(event)) return;
     const target = event.target as HTMLElement;
     if (!holdsFieldModifier(event, keySystem()) && target.closest("button, a, input, textarea, select, [role=switch], [role=combobox]")) return;
     if (!primary.current) return;
