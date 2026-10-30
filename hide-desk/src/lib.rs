@@ -73,3 +73,52 @@ pub fn first_message(placement: Placement, carried: Option<&str>, message: &str)
     text.push_str(message);
     text
 }
+
+/// The most sessions one reply's chips name.
+pub const MAX_REPLY_MENTIONS: usize = 16;
+
+/// The sessions a reply names as `@session(<pane> <name>)`, in order, each
+/// once, at most [`MAX_REPLY_MENTIONS`].
+pub fn session_mentions(text: &str) -> Vec<(String, String)> {
+    const OPEN: &str = "@session(";
+    let mut found: Vec<(String, String)> = Vec::new();
+    let mut rest = text;
+    while let Some(start) = rest.find(OPEN) {
+        rest = &rest[start + OPEN.len()..];
+        let Some(end) = rest.find(')') else {
+            break;
+        };
+        let inner = &rest[..end];
+        rest = &rest[end + 1..];
+        let Some((pane, name)) = inner.trim().split_once(char::is_whitespace) else {
+            continue;
+        };
+        let name = name.trim();
+        if name.is_empty() || found.iter().any(|(seen, _)| seen == pane) {
+            continue;
+        }
+        found.push((pane.to_owned(), name.to_owned()));
+        if found.len() == MAX_REPLY_MENTIONS {
+            break;
+        }
+    }
+    found
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_reply_s_session_names_are_read_once_each_in_order() {
+        let text = "@session(w1:p2 fix login) is done; @session(w3:p1 docs) waits. \
+                    Again @session(w1:p2 fix login), then @session(broken) and @session(w4:p1 tail";
+        assert_eq!(
+            session_mentions(text),
+            [
+                ("w1:p2".to_owned(), "fix login".to_owned()),
+                ("w3:p1".to_owned(), "docs".to_owned()),
+            ]
+        );
+    }
+}

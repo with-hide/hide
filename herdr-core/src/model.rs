@@ -9760,6 +9760,22 @@ mod wire_enum_tests {
         checked.insert("desk_job_reason");
         assert_wire(
             &contract,
+            "desk_job_failure",
+            &[
+                DeskJobFailure::DeviceUnavailable,
+                DeskJobFailure::AgentNotInstalled,
+                DeskJobFailure::BranchInUse,
+                DeskJobFailure::ProjectUnavailable,
+                DeskJobFailure::AlreadyStarted,
+                DeskJobFailure::Busy,
+                DeskJobFailure::NotStarted,
+                DeskJobFailure::InvalidRequest,
+                DeskJobFailure::Other,
+            ],
+        );
+        checked.insert("desk_job_failure");
+        assert_wire(
+            &contract,
             "desk_output_kind",
             &[
                 DeskOutputKind::Image,

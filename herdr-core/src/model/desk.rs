@@ -54,8 +54,8 @@ pub struct DeskJobSnapshot {
     /// The operator typed into its terminal (B36).
     pub joined: bool,
     pub reason: Option<DeskJobReason>,
-    /// The code its start failed with, for the failed card's words.
-    pub failure: Option<String>,
+    /// Why its start failed, for the failed card's words.
+    pub failure: Option<DeskJobFailure>,
     /// What the operator's turn is about while it is `asking`.
     pub ask: Option<DeskAskKind>,
     /// The sidebar row's own mark, drawn by the same `StatusMark`; absent
@@ -128,23 +128,16 @@ pub enum DeskOutputKind {
     Pr,
 }
 
+/// The mission a job conducts, as its card's `미션 k/n` chip draws it.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct DeskJobMission {
     pub id: String,
     pub title: String,
-    pub status: String,
+    pub status: crate::missions::MissionStatus,
     pub done: usize,
     pub total: usize,
     pub tone: String,
     pub deciding: bool,
-    pub nodes: Vec<DeskJobMissionNode>,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
-pub struct DeskJobMissionNode {
-    pub key: String,
-    pub title: String,
-    pub tone: String,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -194,6 +187,69 @@ pub enum DeskJobReason {
     DeviceDisconnected,
 }
 
+/// Why a job's start failed, grouped by what the operator can do about it;
+/// the start's own code goes to the diagnostic log.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DeskJobFailure {
+    /// The device it was asked of was not connected.
+    DeviceUnavailable,
+    /// The agent's CLI is not installed where it would run.
+    AgentNotInstalled,
+    /// Another worktree holds its branch or folder.
+    BranchInUse,
+    /// Its project or worktree could not be prepared.
+    ProjectUnavailable,
+    /// A job with the same task key already started.
+    AlreadyStarted,
+    /// Hide was starting another session; `다시 시도` works.
+    Busy,
+    /// Hide could not open or confirm the session.
+    NotStarted,
+    /// Desk asked for a start Hide does not take.
+    InvalidRequest,
+    Other,
+}
+
+impl DeskJobFailure {
+    /// The group a start's failure code falls in.
+    pub fn of(code: &str) -> Self {
+        let code = code
+            .split(|c: char| !(c.is_ascii_lowercase() || c == '_'))
+            .next()
+            .unwrap_or_default();
+        match code {
+            "machine_unavailable"
+            | "machine_unknown"
+            | "device_unreachable"
+            | "device_check_failed" => Self::DeviceUnavailable,
+            "agent_not_installed" => Self::AgentNotInstalled,
+            "branch_in_use" | "checkout_path_conflict" => Self::BranchInUse,
+            "repository_unavailable" | "worktree_unconfirmed" => Self::ProjectUnavailable,
+            "intent_conflict" => Self::AlreadyStarted,
+            "spawn_busy" => Self::Busy,
+            "spawn_unavailable"
+            | "child_unavailable"
+            | "agent_not_started"
+            | "snapshot_unavailable"
+            | "brief_not_submitted"
+            | "native_identity_unavailable"
+            | "parent_unavailable"
+            | "ledger_unavailable"
+            | "delivery_unavailable" => Self::NotStarted,
+            "invalid_spawn"
+            | "invalid_brief"
+            | "invalid_agent_name"
+            | "invalid_launch_choice"
+            | "beside_other_checkout"
+            | "beside_other_machine"
+            | "parent_authority_required"
+            | "machine_not_permitted" => Self::InvalidRequest,
+            _ => Self::Other,
+        }
+    }
+}
+
 /// The `@` menu: recent sessions, then projects.
 #[derive(Clone, Debug, Default, Eq, PartialEq, Serialize)]
 pub struct DeskMentionsSnapshot {
@@ -206,7 +262,7 @@ pub struct DeskMentionSession {
     pub id: String,
     pub name: String,
     pub agent_kind: String,
-    pub mark: Option<String>,
+    pub mark: crate::agent_state::RowMark,
     pub detail: Option<String>,
 }
 
@@ -324,6 +380,10 @@ pub enum DeskItem {
         /// What the agent did in the turn, folded into one line.
         #[serde(default)]
         steps: DeskSteps,
+        /// The sessions the reply names as `@session(<id> <name>)`, each a
+        /// chip.
+        #[serde(default)]
+        mentions: Vec<DeskSessionChip>,
     },
     /// The operator switched agents; `carried` says how much of the
     /// conversation went with the switch.
@@ -355,6 +415,11 @@ pub enum DeskItem {
         /// The recipient's runtime took the letter in (`읽음`).
         #[serde(default)]
         read: bool,
+        #[serde(default)]
+        agent_kind: Option<String>,
+        /// The recipient's row mark now, for its chip.
+        #[serde(default, skip_deserializing)]
+        mark: Option<crate::agent_state::RowMark>,
     },
     /// Desk started a job; its card is `jobs`' entry `job_id`.
     Job { id: u64, job_id: String },
@@ -409,7 +474,13 @@ impl DeskItem {
                         .map(|mention| mention.id.len() + mention.name.len())
                         .sum::<usize>()
             }
-            Self::Reply { text, .. } => text.len(),
+            Self::Reply { text, mentions, .. } => {
+                text.len()
+                    + mentions
+                        .iter()
+                        .map(|chip| chip.pane_id.len() + chip.name.len())
+                        .sum::<usize>()
+            }
             Self::Approval {
                 command,
                 folder,
@@ -444,6 +515,18 @@ pub struct DeskMention {
     pub kind: DeskMentionKind,
     pub id: String,
     pub name: String,
+}
+
+/// A session a line of the conversation names, drawn as a chip with the
+/// row's mark as the sidebar draws it now.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct DeskSessionChip {
+    pub pane_id: String,
+    pub name: String,
+    #[serde(default, skip_deserializing)]
+    pub agent_kind: Option<String>,
+    #[serde(default, skip_deserializing)]
+    pub mark: Option<crate::agent_state::RowMark>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]

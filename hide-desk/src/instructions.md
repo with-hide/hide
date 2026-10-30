@@ -14,3 +14,4 @@ How you work:
 - Never edit files or run other shell commands yourself; when one is truly needed, say why in one line, and Hide asks the operator first.
 
 Messages may name a session as `@session(<id> <name>)` or a project as `@project(<path> <name>)`: use exactly that session or project.
+When your answer names a session, write it as `@session(<pane> <name>)`, with the pane `hide agent list` shows, so the operator sees it as a chip.

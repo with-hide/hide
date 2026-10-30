@@ -951,7 +951,7 @@ What the agent runs is decided by Hide, never by the agent's own settings:
 - A request Hide cannot read does not run, and the conversation says `막힘` with what the agent asked.
 - `새 대화`, `다시 시작`, `중지` and the process's end close a waiting card as refused.
 
-Desk does not read the operator's `CLAUDE.md`, skills, agent settings or hooks, and the operator's global auto-allow does not apply to it.
+Desk does not read the operator's `CLAUDE.md`, `AGENTS.md`, skills, extensions, prompt templates, MCP servers, agent settings or hooks, and the operator's global auto-allow does not apply to it; Pi's own startup lines are not a reply.
 Its instructions are Hide's own: its role, the `hide` commands it uses, and to answer in the operator's language.
 The Desk agent is no session in a pane: it is not in the sidebar, Sessions, Needs You or Memory, and it opens nothing on the operator's screen.
 
@@ -960,17 +960,21 @@ The Desk agent is no session in a pane: it is not in the sidebar, Sessions, Need
 A session Desk starts is the operator's own: a real Agent tab in its checkout, which the core puts in the checkout's `◆ Desk` group (made when missing) once, without changing the screen in front or the keyboard.
 A job on another device keeps its tab where that device made it, outside the group: the core finds the tab holding a pane only among this machine's checkouts (`checkout_tab_holding_pane`), and a device's tabs reach it through the link's projection under qualified pane ids. Mapping a device job's pane to its checkout tab through that projection, then placing it with the same group move, closes the gap.
 Work Desk hands to a session that already runs is a letter, and every letter Desk sends leaves a line with the session, its project, the letter's kind and first line, and `읽음` once the session's runtime took it in: a `request` is work handed (`편지로 맡김`), any other kind word passed on (`보냄`). It changes no state and takes no place.
+The session is a chip: its agent and the mark its sidebar row shows now, drawn with `StatusMark`.
+A reply that names a session writes it as `@session(<pane> <name>)`, as Desk's instructions ask, and draws it as the same chip; a reply carries 16 at most, and the newest 64 lines' chips follow their rows, while an older line's chip and one whose session has no row show no mark.
 Where a task works follows Settings › Desk: per task (the default, a new `desk/<task name>` branch for work that touches code another session is changing or ends in a pull request), always a new branch, or always the checkout's current branch; Desk is told the setting with its first message and again when it changes, and a place the operator names for a task wins for that task.
 
 Each job is a card in the `desk` section's `jobs`, newest first and at most 64, keyed by its spawn's intent; `pane_id` is its thread's key.
 A card with a row carries the row's own mark, drawn with the sidebar's `StatusMark`, and whether its ask was read; reading the card or its thread in Desk reads the row as the sidebar does, so the two never disagree.
 Its outputs are every View its session opened that is still open (32 at most), each marked seen or not, then its pull requests, each with its PR mark's state.
+A job whose session conducts a mission carries it as a `미션 k/n` chip: the mission's status (`planning`, `running`, `merge_wait`, `done` or `cancelled`), its nodes done out of those not dropped, a tone, and whether it waits on the operator's decision; the card draws no node rows.
 Its state comes from the ledger and the row the sidebar draws for it, never from a model call:
 
 - `queued` with its place (`대기 중 · n번째`): Desk's places (Settings, 8 at most) are taken; it starts by itself when one frees, and the queue survives a restart. `취소` leaves it `cancelled` and moves the ones behind it up; `다시 맡기기` puts it at the back.
 - `starting`, `working` (now line, plan n/m, outputs), `asking` (the question and `답하기`, with what it asks: `question`, `approval`, `decision` for a Conductor's mission, `plan_review`, or `blocked`), `done` (the last turn's summary line, its pull requests with their PR mark state, outputs).
 - `sleeping` while Hide holds it asleep (`hide agent sleep`); it takes no place.
-- `failed` with its reason: `spawn_failed` with the code the start failed with, `exited`, or `device_disconnected` for a job asked of a device whose link was down; `다시 시도` queues it again. A failed job takes no place, and nothing times out.
+- `failed` with its reason: `spawn_failed`, `exited`, or `device_disconnected` for a job asked of a device whose link was down; `다시 시도` queues it again. A failed job takes no place, and nothing times out.
+  A failed start says why, grouped by what the operator can do: `device_unavailable`, `agent_not_installed`, `branch_in_use` (another worktree holds the branch or folder), `project_unavailable`, `already_started`, `busy` (Hide was starting another session), `not_started`, `invalid_request` (Desk asked for a start Hide does not take) or `other`; the start's own code goes to the diagnostic log.
 - A job on a device whose link drops dims and says `연결 안 됨` while it keeps working.
 - `joined` once the operator types into its terminal (`나도 참여 중`); Desk keeps following it.
 - `moved_out` once the operator drags its tab out of the `◆ Desk` group (`내 탭으로 옮김`), and `closed` once they close it (`내가 닫음`); neither takes a place, and Desk never starts it again. A closed tab reopened with `세션 복구하기` or ⇧⌘T comes back to its place in the group and is followed again.

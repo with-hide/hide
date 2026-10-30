@@ -117,6 +117,7 @@
   "desk_job_state": ["queued", "starting", "working", "asking", "done", "failed", "cancelled", "closed", "moved_out", "sleeping", "archived"],
   "desk_ask_kind": ["question", "approval", "decision", "plan_review", "blocked"],
   "desk_job_reason": ["spawn_failed", "exited", "device_disconnected"],
+  "desk_job_failure": ["device_unavailable", "agent_not_installed", "branch_in_use", "project_unavailable", "already_started", "busy", "not_started", "invalid_request", "other"],
   "desk_output_kind": ["image", "page", "doc", "pr"],
   "desk_job_location": ["checkout", "worktree"]
 }

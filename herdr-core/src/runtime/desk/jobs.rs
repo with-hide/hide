@@ -10,7 +10,10 @@ use super::super::Runtime;
 use crate::coordination::Command as AgentCommand;
 use crate::delivery::{Actor, Command, HIDE_DESK_ROLE};
 use crate::desk::{MAX_QUEUE, QueuedJob, QueuedState};
-use crate::model::DeskJobState;
+use std::collections::HashMap;
+
+use crate::agent_state::RowMark;
+use crate::model::{DeskJobState, SidebarAgentSnapshot};
 
 impl Runtime {
     fn desk_actor(&self) -> Actor {
@@ -193,6 +196,8 @@ impl Runtime {
                     line: first_line(body),
                     letter_id: None,
                     read: false,
+                    agent_kind: Some(observed.actor.kind.clone()),
+                    mark: None,
                 }
             }
             _ => return None,
@@ -410,6 +415,17 @@ impl Runtime {
     }
 }
 
+/// The newest conversation lines whose session chips follow the rows.
+const FOLLOWED_CHIPS: usize = 64;
+
+fn has_chips(item: &crate::model::DeskItem) -> bool {
+    match item {
+        crate::model::DeskItem::Handed { .. } => true,
+        crate::model::DeskItem::Reply { mentions, .. } => !mentions.is_empty(),
+        _ => false,
+    }
+}
+
 /// A letter's first line, as its conversation line shows it.
 fn first_line(body: &str) -> String {
     const MAX: usize = 200;
@@ -423,14 +439,6 @@ fn first_line(body: &str) -> String {
         end -= 1;
     }
     line[..end].to_owned()
-}
-
-/// Whether a spawn failed because its device was not connected.
-fn device_failure(code: &str) -> bool {
-    matches!(
-        code,
-        "machine_unavailable" | "device_unreachable" | "device_check_failed"
-    )
 }
 
 fn queued_answer(intent: &str, position: usize) -> Value {
@@ -472,7 +480,7 @@ pub(crate) const MAX_CARDS: usize = 64;
 impl Runtime {
     /// Desk's jobs as cards, newest first: the queue's, then the ledger's.
     pub(super) fn desk_jobs(&self) -> Vec<crate::model::DeskJobSnapshot> {
-        use crate::model::{DeskJobReason, DeskJobSnapshot};
+        use crate::model::{DeskJobFailure, DeskJobReason, DeskJobSnapshot};
         let mut cards: Vec<DeskJobSnapshot> = Vec::new();
         let ledger = self.delivery_state().ok();
         let spawns = self.desk_spawns();
@@ -518,10 +526,15 @@ impl Runtime {
                 }
                 QueuedState::Starting => (DeskJobState::Starting, None),
                 QueuedState::Cancelled => (DeskJobState::Cancelled, None),
-                QueuedState::Failed if job.code.as_deref().is_some_and(device_failure) => (
-                    DeskJobState::Failed,
-                    Some(DeskJobReason::DeviceDisconnected),
-                ),
+                QueuedState::Failed
+                    if job.code.as_deref().map(DeskJobFailure::of)
+                        == Some(DeskJobFailure::DeviceUnavailable) =>
+                {
+                    (
+                        DeskJobState::Failed,
+                        Some(DeskJobReason::DeviceDisconnected),
+                    )
+                }
                 QueuedState::Failed => (DeskJobState::Failed, Some(DeskJobReason::SpawnFailed)),
             };
             let AgentCommand::Spawn {
@@ -548,7 +561,7 @@ impl Runtime {
             );
             card.state = state;
             card.reason = reason;
-            card.failure = job.code.clone();
+            card.failure = job.code.as_deref().map(DeskJobFailure::of);
             card.queue_position = (state == DeskJobState::Queued).then_some(position);
             cards.insert(0, card);
         }
@@ -808,7 +821,7 @@ impl Runtime {
         card
     }
 
-    /// The mission a job conducts, as its card's chip and node rows (B34).
+    /// The mission a job conducts, as its card's `미션 k/n` chip (B34).
     fn desk_job_mission(&self, pane: &str) -> Option<crate::model::DeskJobMission> {
         use crate::missions::NodeStatus;
         let mission = self
@@ -821,25 +834,10 @@ impl Runtime {
             .nodes
             .iter()
             .filter(|node| node.status != NodeStatus::Dropped);
-        let tone = |status: NodeStatus| {
-            match status {
-                NodeStatus::Done => "done",
-                NodeStatus::Failed => "failed",
-                NodeStatus::Review => "review",
-                NodeStatus::Held => "hold",
-                NodeStatus::Working => "working",
-                NodeStatus::Planned | NodeStatus::Waiting => "waiting",
-                NodeStatus::Dropped => "cancelled",
-            }
-            .to_owned()
-        };
         Some(crate::model::DeskJobMission {
             id: mission.id.clone(),
             title: mission.title.clone(),
-            status: serde_json::to_value(mission.status)
-                .ok()
-                .and_then(|value| value.as_str().map(str::to_owned))
-                .unwrap_or_default(),
+            status: mission.status,
             done: counted
                 .clone()
                 .filter(|node| node.status == NodeStatus::Done)
@@ -867,15 +865,6 @@ impl Runtime {
             }
             .into(),
             deciding: mission.question.is_some(),
-            nodes: mission
-                .nodes
-                .iter()
-                .map(|node| crate::model::DeskJobMissionNode {
-                    key: node.key.clone(),
-                    title: node.title.clone(),
-                    tone: tone(node.status),
-                })
-                .collect(),
         })
     }
 
@@ -894,9 +883,7 @@ impl Runtime {
                 id: row.pane_id.clone(),
                 name: row.identity_label.clone(),
                 agent_kind: row.agent_kind.clone(),
-                mark: serde_json::to_value(row.mark)
-                    .ok()
-                    .and_then(|value| value.as_str().map(str::to_owned)),
+                mark: row.mark,
                 detail: row.detail.clone(),
             })
             .collect();
@@ -1078,13 +1065,68 @@ impl Runtime {
             .snapshot
             .desk
             .as_ref()
-            .is_none_or(|desk| desk.jobs != jobs);
+            .is_none_or(|desk| desk.jobs != jobs)
+            || self.desk_chips_moved();
         if marked || started {
             self.save_desk();
         }
         if marked || started || moved {
             self.compose_desk();
         }
+    }
+
+    /// Fills the session chips of the newest conversation lines with each
+    /// row's mark and agent as the sidebar draws them now; an older line's
+    /// chip shows none.
+    pub(super) fn desk_fill_chips(&self, items: &mut [crate::model::DeskItem]) {
+        use crate::model::DeskItem;
+        let followed = || items.iter().rev().take(FOLLOWED_CHIPS);
+        if !followed().any(has_chips) {
+            return;
+        }
+        let rows: HashMap<&str, &SidebarAgentSnapshot> = self
+            .agent_rows()
+            .map(|row| (row.pane_id.as_str(), row))
+            .collect();
+        for item in items.iter_mut().rev().take(FOLLOWED_CHIPS) {
+            match item {
+                DeskItem::Handed { pane_id, mark, .. } => {
+                    *mark = rows.get(pane_id.as_str()).map(|row| row.mark);
+                }
+                DeskItem::Reply { mentions, .. } => {
+                    for chip in mentions {
+                        let row = rows.get(chip.pane_id.as_str());
+                        chip.mark = row.map(|row| row.mark);
+                        chip.agent_kind = row.map(|row| row.agent_kind.clone());
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+
+    /// Whether a chip the published conversation shows has another mark now.
+    fn desk_chips_moved(&self) -> bool {
+        use crate::model::DeskItem;
+        let Some(desk) = &self.snapshot.desk else {
+            return false;
+        };
+        let followed = || desk.conversation.items.iter().rev().take(FOLLOWED_CHIPS);
+        if !followed().any(has_chips) {
+            return false;
+        }
+        let rows: HashMap<&str, RowMark> = self
+            .agent_rows()
+            .map(|row| (row.pane_id.as_str(), row.mark))
+            .collect();
+        let now = |pane: &str| rows.get(pane).copied();
+        followed().any(|item| match item {
+            DeskItem::Handed { pane_id, mark, .. } => now(pane_id) != *mark,
+            DeskItem::Reply { mentions, .. } => {
+                mentions.iter().any(|chip| now(&chip.pane_id) != chip.mark)
+            }
+            _ => false,
+        })
     }
 
     /// Marks Desk's letter lines read once their recipient took them in.
@@ -1438,6 +1480,8 @@ mod tests {
             line: first_line("check it\nmore"),
             letter_id: Some(letter.id.clone()),
             read: false,
+            agent_kind: None,
+            mark: None,
         });
         let read = |runtime: &Runtime| {
             runtime.desk.stored.conversation.items.iter().any(
@@ -1453,6 +1497,84 @@ mod tests {
         runtime.delivery_ledger = Ok(Arc::new(ledger));
         runtime.refresh_desk_jobs();
         assert!(read(&runtime));
+    }
+
+    /// A sidebar row for `pane` with the agent status Herdr reports.
+    fn row(pane: &str, status: &str) -> crate::model::SidebarAgentSnapshot {
+        let payload: crate::sidebar::SessionSnapshotPayload =
+            serde_json::from_value(json!({"agents": [
+                {"pane_id": pane, "workspace_id": "w1", "tab_id": "w1:t1", "terminal_id": "t1",
+                 "revision": 1, "focused": false, "agent_status": status, "agent": "claude",
+                 "name": "fixer", "cwd": "/checkouts/fixture", "state_change_seq": 1},
+            ]}))
+            .unwrap();
+        crate::sidebar::project_agents(payload).agents.remove(0)
+    }
+
+    #[test]
+    fn a_session_chip_shows_the_mark_its_row_shows_now() {
+        let root = tempfile::tempdir().unwrap();
+        let mut runtime = desk(root.path(), 2, &[]);
+        runtime.start_test_desk();
+        runtime.snapshot.navigator.agents = vec![row("p3", "working")];
+        runtime.desk_line(DeskItem::Handed {
+            id: 0,
+            agent_id: "agent-3".into(),
+            pane_id: "p3".into(),
+            name: "fixer".into(),
+            project: None,
+            letter_kind: "request".into(),
+            line: "check it".into(),
+            letter_id: None,
+            read: false,
+            agent_kind: Some("claude".into()),
+            mark: None,
+        });
+        let id = runtime.desk.stored.conversation.next_id();
+        runtime.desk.stored.conversation.push(DeskItem::Reply {
+            id,
+            agent: hide_desk::AdapterId::Claude,
+            text: "@session(p3 fixer) works".into(),
+            at_ms: 0,
+            state: crate::model::DeskReplyState::Done,
+            thought_ms: None,
+            steps: Default::default(),
+            mentions: vec![crate::model::DeskSessionChip {
+                pane_id: "p3".into(),
+                name: "fixer".into(),
+                agent_kind: None,
+                mark: None,
+            }],
+        });
+        runtime.compose_desk();
+        let chips = |runtime: &Runtime| {
+            let items = &runtime.snapshot.desk.as_ref().unwrap().conversation.items;
+            let handed = items.iter().find_map(|item| match item {
+                DeskItem::Handed { mark, .. } => Some(*mark),
+                _ => None,
+            });
+            let replied = items.iter().find_map(|item| match item {
+                DeskItem::Reply { mentions, .. } => {
+                    Some((mentions[0].mark, mentions[0].agent_kind.clone()))
+                }
+                _ => None,
+            });
+            (handed.unwrap(), replied.unwrap())
+        };
+        let working = row("p3", "working").mark;
+        assert_eq!(
+            chips(&runtime),
+            (Some(working), (Some(working), Some("claude".into())))
+        );
+
+        let done = row("p3", "done").mark;
+        assert_ne!(done, working);
+        runtime.snapshot.navigator.agents = vec![row("p3", "done")];
+        runtime.refresh_desk_jobs();
+        assert_eq!(
+            chips(&runtime),
+            (Some(done), (Some(done), Some("claude".into())))
+        );
     }
 
     #[test]
@@ -1475,6 +1597,8 @@ mod tests {
             line: "check the dark capture".into(),
             letter_id: None,
             read: false,
+            agent_kind: None,
+            mark: None,
         };
         assert!(runtime.desk_line(handed()));
         assert!(runtime.desk_line(handed()));

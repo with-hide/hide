@@ -365,6 +365,7 @@ mod tests {
             state: DeskReplyState::Done,
             thought_ms: None,
             steps: Default::default(),
+            mentions: Vec::new(),
         });
         let carried = conversation.carried().unwrap();
         assert_eq!(carried, "Operator: what runs now?\nCodex: two sessions");

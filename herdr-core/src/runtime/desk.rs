@@ -592,6 +592,15 @@ impl Runtime {
         };
         if !turn.text.is_empty() {
             let id = self.desk.stored.conversation.next_id();
+            let mentions = hide_desk::session_mentions(&turn.text)
+                .into_iter()
+                .map(|(pane_id, name)| crate::model::DeskSessionChip {
+                    pane_id,
+                    name,
+                    agent_kind: None,
+                    mark: None,
+                })
+                .collect();
             self.desk.stored.conversation.push(DeskItem::Reply {
                 id,
                 agent: turn.agent,
@@ -606,6 +615,7 @@ impl Runtime {
                     .first_text_at_ms
                     .map(|at| at.saturating_sub(turn.started_at_ms)),
                 steps: turn.steps,
+                mentions,
             });
         }
         self.compose_desk_live();
@@ -927,7 +937,11 @@ impl Runtime {
             },
             conversation: DeskConversationSnapshot {
                 generation: *generation,
-                items: items.clone(),
+                items: {
+                    let mut items = items.clone();
+                    self.desk_fill_chips(&mut items);
+                    items
+                },
                 dropped: *dropped,
             },
             approvals_waiting: desk.approvals.len(),
