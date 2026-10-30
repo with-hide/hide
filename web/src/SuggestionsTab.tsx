@@ -228,7 +228,7 @@ function Lines({ row, open, project, actions }: { row: SuggestionRow; open: bool
         <span className="min-w-0 break-words text-muted-foreground" data-suggestion-moved-to={row.attempt.branch.moved_to}>{t("suggestions.branch.movedTo", { branch: row.attempt.branch.moved_to })}</span>
       ) : null}
       {row.attempt?.phase === "ready" && row.attempt.branch ? <BranchLine row={row} branch={row.attempt.branch} project={project} actions={actions} /> : null}
-      {row.attempt?.phase === "failed" && row.cause ? (
+      {row.attempt?.phase === "failed" && row.cause && !attempt?.worded ? (
         <span className={cn("min-w-0 break-words text-muted-foreground", !open && "truncate")} title={row.cause} data-suggestion-failure-detail="true">{row.cause}</span>
       ) : null}
       {row.group === "applied" && row.state === "watching" && row.watch ? (

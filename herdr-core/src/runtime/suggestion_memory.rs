@@ -47,9 +47,37 @@ enum Pressed {
     Dismissing,
     /// The promotion did not start, and why.
     Refused {
-        reason: String,
+        refusal: Refusal,
         pressed_at_unix_ms: u64,
     },
+}
+
+/// Why a press did not start: the code the tab words, and the core's
+/// sentence, which the tab shows only under a code it has no words for.
+#[derive(Clone, Debug, PartialEq)]
+pub(super) struct Refusal {
+    code: &'static str,
+    reason: String,
+}
+
+impl Refusal {
+    /// A refusal Memory answered with `kind` (`memory.branches_full`).
+    pub(super) fn of(kind: &str, reason: String) -> Self {
+        let code = match kind {
+            "memory.branches_full" => "branches_full",
+            "memory.not_git" => "not_git",
+            "memory.promotion_unavailable" => "promotion_unavailable",
+            "memory.action_busy" => "action_busy",
+            "memory.presses_full" => "presses_full",
+            "memory.worker_unavailable" | "memory.worker_failed" => "store_unavailable",
+            "memory.project_unavailable" => "project_unavailable",
+            "memory.project_unreachable" => "project_unreachable",
+            // The store's own refusals each say something different
+            // (`m3 is no longer in Memory`), so their sentence is the reason.
+            _ => "not_started",
+        };
+        Self { code, reason }
+    }
 }
 
 /// The most row presses held at once; settled ones give way, oldest first.
@@ -83,7 +111,7 @@ enum PressStage {
     /// Written; a read of this generation or later shows what it did.
     Written(u64),
     /// Refused or failed before the store took it, with why.
-    Refused(String),
+    Refused(Refusal),
 }
 
 impl RowPress {
@@ -97,8 +125,8 @@ impl RowPress {
 
     fn drawn(&self) -> Option<Pressed> {
         match (&self.stage, self.action) {
-            (PressStage::Refused(reason), MemoryAction::Promote) => Some(Pressed::Refused {
-                reason: reason.clone(),
+            (PressStage::Refused(refusal), MemoryAction::Promote) => Some(Pressed::Refused {
+                refusal: refusal.clone(),
                 pressed_at_unix_ms: self.pressed_at_unix_ms,
             }),
             // A refused dismissal leaves the row as it was; Memory reports
@@ -271,9 +299,10 @@ impl Runtime {
                 "component": "memory", "kind": "memory.presses_full",
                 "workspace_id": workspace_id, "card": hide_memory::card_name(number),
             }));
-            PressStage::Refused(
+            PressStage::Refused(Refusal::of(
+                "memory.presses_full",
                 "Too many Memory changes are waiting; press again when one finishes".into(),
-            )
+            ))
         };
         presses.push(RowPress {
             workspace_id,
@@ -317,7 +346,11 @@ impl Runtime {
                 change: None,
             });
             if let Err(refusal) = refused {
-                self.settle_row_press(&workspace_id, number, Err(refusal.message.clone()));
+                self.settle_row_press(
+                    &workspace_id,
+                    number,
+                    Err(Refusal::of(refusal.kind, refusal.message.clone())),
+                );
                 self.memory_action_failed(
                     &workspace_id,
                     action,
@@ -335,7 +368,7 @@ impl Runtime {
         &mut self,
         workspace_id: &str,
         number: u64,
-        outcome: Result<u64, String>,
+        outcome: Result<u64, Refusal>,
     ) {
         if let Some(press) = self
             .project_memory
@@ -346,7 +379,7 @@ impl Runtime {
         {
             press.stage = match outcome {
                 Ok(generation) => PressStage::Written(generation),
-                Err(reason) => PressStage::Refused(reason),
+                Err(refusal) => PressStage::Refused(refusal),
             };
         }
     }
@@ -394,7 +427,7 @@ pub(super) fn lay_memory_rows(project: &mut ProjectSuggestionsSnapshot, facts: &
             (
                 _,
                 Some(Pressed::Refused {
-                    reason,
+                    refusal,
                     pressed_at_unix_ms,
                 }),
             ) => {
@@ -404,8 +437,8 @@ pub(super) fn lay_memory_rows(project: &mut ProjectSuggestionsSnapshot, facts: &
                     SuggestionGroup::of_attempt(SuggestionAttemptPhase::Failed),
                     SuggestionState::MyTurn,
                 );
-                row.cause = Some(reason.clone());
-                row.attempt = Some(ended(*pressed_at_unix_ms, "not_started"));
+                row.cause = Some(refusal.reason.clone());
+                row.attempt = Some(ended(*pressed_at_unix_ms, refusal.code));
                 row
             }
             (
@@ -917,7 +950,7 @@ mod tests {
                 (
                     2,
                     Pressed::Refused {
-                        reason: "busy".into(),
+                        refusal: Refusal::of("memory.branches_full", "busy".into()),
                         pressed_at_unix_ms: 8,
                     },
                 ),
@@ -946,7 +979,7 @@ mod tests {
         assert_eq!(refused.cause.as_deref(), Some("busy"));
         assert_eq!(
             refused.attempt.as_ref().unwrap().failure.as_deref(),
-            Some("not_started")
+            Some("branches_full")
         );
     }
 

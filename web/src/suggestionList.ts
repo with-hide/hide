@@ -76,7 +76,7 @@ export function offered(row: Pick<SuggestionRow, "state">): boolean {
  * action a refused merge offers again; `files` are the ones a sync found
  * unsaved.
  */
-export type AttemptLine = { text: string; tone: "muted" | "warning" | "destructive"; retry: boolean; branch?: BranchChoice; files?: string[] };
+export type AttemptLine = { text: string; tone: "muted" | "warning" | "destructive"; retry: boolean; branch?: BranchChoice; files?: string[]; worded?: true };
 
 /**
  * A ready branch's buttons: the action that answers its last refusal, if any
@@ -111,6 +111,9 @@ export function attemptLine(t: TFunction<"translation">, row: Pick<SuggestionRow
     case "pr_open": return { text: attempt.pr_number === null ? t("suggestions.attempt.writingPr") : t("suggestions.attempt.prReview", { number: String(attempt.pr_number) }), tone: "warning", retry: false };
     case "ci_failed": return { text: t("suggestions.attempt.ciFailed"), tone: "destructive", retry: true };
     case "failed": {
+      // A start Memory refused reads why in these words; the core's sentence under it is for a code this build has no words for.
+      const refusal = attempt.failure ? START_REFUSAL_KEYS[attempt.failure] : undefined;
+      if (refusal) return { text: `${t("suggestions.failure.not_started")} · ${t(refusal, { base })}`, tone: "warning", retry: true, worded: true };
       // A known reason says what went wrong in place of the generic ending; an unknown code reads as the ending.
       const reason = attempt.failure ? failureWords(t, attempt.failure, base) : null;
       const ending = issue ? "suggestions.attempt.failedIssue" : attempt.purpose === "branch" || attempt.purpose === "rebase" ? "suggestions.failure.no_change" : "suggestions.attempt.failed";
@@ -132,6 +135,18 @@ const FAILURE_KEYS: Record<string, MessageKey> = {
   unbuilt: "suggestions.failure.unbuilt",
   issue_failed: "suggestions.failure.issue_failed",
   no_change: "suggestions.failure.no_change",
+};
+
+/** Why Memory refused to start a press, by the code the core put on the row (`herdr-core/src/runtime/suggestion_memory.rs`, `Refusal`). */
+const START_REFUSAL_KEYS: Record<string, MessageKey> = {
+  branches_full: "suggestions.refusal.branches_full",
+  not_git: "suggestions.refusal.not_git",
+  promotion_unavailable: "suggestions.refusal.promotion_unavailable",
+  action_busy: "suggestions.refusal.action_busy",
+  presses_full: "suggestions.refusal.presses_full",
+  store_unavailable: "suggestions.refusal.store_unavailable",
+  project_unavailable: "suggestions.refusal.project_unavailable",
+  project_unreachable: "suggestions.refusal.project_unreachable",
 };
 
 function failureWords(t: TFunction<"translation">, code: string, base: string): string | null {

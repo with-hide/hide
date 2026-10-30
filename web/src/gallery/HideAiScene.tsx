@@ -98,7 +98,7 @@ const MEMORY_OFFER: SuggestionRow = row("m569", {
 const MEMORY_PRESSED: SuggestionRow[] = [
   row("m400", {
     source: "memory", group: "choose", state: "my_turn", discomfort: "빠르고 되돌릴 수 있는 배포 경로", cause: "Merge or discard a waiting branch before starting another",
-    attempt: { phase: "failed", started_at_unix_ms: Date.now() - MINUTE, pr_number: null, url: null, agent_pane: null, failure: "not_started", purpose: "branch" },
+    attempt: { phase: "failed", started_at_unix_ms: Date.now() - MINUTE, pr_number: null, url: null, agent_pane: null, failure: "branches_full", purpose: "branch" },
   }),
   row("m146", {
     source: "memory", group: "applying", state: "hide_ai_working", discomfort: "외부 PR은 승인 기여자만 열고 나머지는 자동 닫기",

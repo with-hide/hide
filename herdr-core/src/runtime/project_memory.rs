@@ -1217,6 +1217,9 @@ impl Runtime {
         self.refresh_project_memory();
         if let (Some(workspace), Some(number)) = (workspace.as_deref(), number) {
             let shown_by = self.project_memory.reads.generation;
+            let refused = refused.map(|reason| {
+                super::suggestion_memory::Refusal::of("memory.action_failed", reason)
+            });
             self.settle_row_press(workspace, number, refused.map_or(Ok(shown_by), Err));
         }
         self.run_row_presses();

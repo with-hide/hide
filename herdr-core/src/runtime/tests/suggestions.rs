@@ -1480,7 +1480,8 @@ fn a_press_behind_another_memory_change_waits_and_a_refusal_shows_on_its_row() {
     );
     assert_eq!(
         row.attempt.and_then(|attempt| attempt.failure).as_deref(),
-        Some("not_started")
+        Some("promotion_unavailable"),
+        "a code the tab words"
     );
     assert!(
         row.cause
