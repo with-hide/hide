@@ -846,22 +846,26 @@ pub fn run(kind: CommandKind) -> Result<(), String> {
         }
         CommandKind::StatusHook => {
             use std::io::Read;
+            // The hook reads stdout as JSON, so every refusal answers as one
+            // and the hook records its reason rather than a format error.
+            const NEXT: &str = "Continue without the status report";
             let limit = hide_node_link::panes::HOOK_REQUEST_LIMIT;
             let mut bytes = Vec::new();
             std::io::stdin()
                 .lock()
                 .take((limit + 1) as u64)
                 .read_to_end(&mut bytes)
-                .map_err(|_| "status_input_unavailable")?;
+                .or_else(|_| workspace_refusal("status_input_unavailable", NEXT))?;
             if bytes.len() > limit {
-                return Err("status_input_too_large".into());
+                return workspace_refusal("status_input_too_large", NEXT);
             }
-            let report: hide_node_link::panes::HookStatusReport =
-                serde_json::from_slice(&bytes).map_err(|_| "status_input_invalid")?;
+            let report: hide_node_link::panes::HookStatusReport = serde_json::from_slice(&bytes)
+                .or_else(|_| workspace_refusal("status_input_invalid", NEXT))?;
             let answer = crate::workspace_cli::request_hook(
                 &env,
                 hide_node_link::panes::HookCommand::Status { report },
-            )?;
+            )
+            .or_else(|reason| workspace_refusal(&reason, NEXT))?;
             println!("{answer}");
             if answer["ok"] == true {
                 Ok(())
