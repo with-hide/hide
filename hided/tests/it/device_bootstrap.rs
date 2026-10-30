@@ -18,6 +18,7 @@ use hide_node_link::{NodeLink, call_as};
 use serde_json::{Value, json};
 
 use super::support::remote_delivery::{Environment, successful, wait_for};
+use super::support::shipped;
 use super::support::sshd::Sshd;
 
 #[derive(Default)]
@@ -130,18 +131,12 @@ impl Device {
         let packages = root.join("packages");
         std::fs::create_dir(&packages)?;
         // Stage real candidate code, as the existing SSH mailbox fixture
-        // does, with debug data removed only from this private copy.
-        let helper = packages.join("hided");
-        std::fs::copy(env!("CARGO_BIN_EXE_hided"), &helper)?;
-        let mut strip = self.environment.command("/usr/bin/strip");
-        strip.arg(&helper);
-        successful(strip)?;
-        #[cfg(target_os = "macos")]
-        {
-            let mut sign = self.environment.command("/usr/bin/codesign");
-            sign.args(["--force", "--sign", "-"]).arg(&helper);
-            successful(sign)?;
-        }
+        // does, as a shipped copy.
+        shipped::place(
+            std::path::Path::new(env!("CARGO_BIN_EXE_hided")),
+            &packages.join("hided"),
+            &self.environment,
+        )?;
         std::fs::copy(&self.pinned, packages.join("herdr"))?;
         let local = root.join("local");
         std::fs::create_dir_all(local.join(".ssh"))?;

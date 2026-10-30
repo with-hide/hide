@@ -1619,10 +1619,7 @@ fn a_mixed_device_tree_groups_descendant_prs_under_the_direct_child() {
         assert_eq!(record.children[0].children[0].session, grandchild);
         assert_eq!(record.outputs.len(), 1);
         assert_eq!(record.outputs[0].source, grandchild);
-        // A grandchild's PR is listed under the direct child that led to it.
-        assert_eq!(record.pr_groups.len(), 1);
-        assert_eq!(record.pr_groups[0].child.as_ref(), Some(&child));
-        assert_eq!(record.pr_groups[0].outputs[0].state, state);
+        assert_eq!(record.outputs[0].state, state);
         assert_eq!(record.status.as_ref().map(|s| s.end), Some(LabelEnd::Done));
     }
     assert_eq!(
@@ -2538,10 +2535,45 @@ fn a_pull_request_the_label_judged_made_here_is_an_output_outside_the_reader_win
         .unwrap();
     store.refresh_ledger_outputs().unwrap();
     let record = store.ledger_record(&session()).unwrap();
-    assert_eq!(record.pr_groups.len(), 1);
-    assert_eq!(record.pr_groups[0].child, None);
-    assert_eq!(record.pr_groups[0].outputs[0].number, 41);
-    assert_eq!(record.pr_groups[0].outputs[0].state, "open");
+    assert_eq!(record.outputs.len(), 1);
+    assert_eq!(record.outputs[0].source, session());
+    assert_eq!(record.outputs[0].number, 41);
+    assert_eq!(record.outputs[0].state, "open");
+}
+
+/// The review of #1859: a print its creating call gave back is the
+/// session's output 3.4 s before GitHub's `createdAt` but not 12 s before; a
+/// listing printed 3 s before is not, and a plain print a second before is.
+#[test]
+fn a_pull_request_its_creating_call_printed_early_is_the_sessions_output_and_a_listing_is_not() {
+    let directory = tempfile::tempdir().unwrap();
+    let (mut store, _) = LinkStore::open(&directory.path().join("links.sqlite3")).unwrap();
+    request(&mut store, 1, "PR 올려줘");
+    chapter(&mut store);
+    store
+        .connection
+        .execute_batch(
+            "INSERT INTO repo_names VALUES('acme/app','id:1');
+             INSERT INTO prs VALUES('id:1',41,'project:app','feat/x','Made here','https://github.com/acme/app/pull/41',100000000,NULL,NULL,1);
+             INSERT INTO prs VALUES('id:1',42,'project:app','feat/y','Listed','https://github.com/acme/app/pull/42',100000000,NULL,NULL,1);
+             INSERT INTO prs VALUES('id:1',43,'project:app','feat/z','Printed','https://github.com/acme/app/pull/43',100000000,NULL,NULL,1);
+             INSERT INTO prs VALUES('id:1',44,'project:app','feat/w','Made long before','https://github.com/acme/app/pull/44',100000000,NULL,NULL,1);
+             INSERT INTO session_prs VALUES('device-a','codex','session-a','/s.jsonl','acme/app',41,99996600,NULL,1);
+             INSERT INTO session_prs VALUES('device-a','codex','session-a','/s.jsonl','acme/app',42,99997000,NULL,0);
+             INSERT INTO session_prs VALUES('device-a','codex','session-a','/s.jsonl','acme/app',43,99999000,NULL,0);
+             INSERT INTO session_prs VALUES('device-a','codex','session-a','/s.jsonl','acme/app',44,99988000,NULL,1);",
+        )
+        .unwrap();
+    store.refresh_ledger_outputs().unwrap();
+    let record = store.ledger_record(&session()).unwrap();
+    let mut numbers: Vec<u64> = record
+        .outputs
+        .iter()
+        .filter(|output| output.kind == "pr")
+        .map(|output| output.number)
+        .collect();
+    numbers.sort_unstable();
+    assert_eq!(numbers, [41, 43]);
 }
 
 /// D-12, D-13: an ask waits on the operator in its session's record, and

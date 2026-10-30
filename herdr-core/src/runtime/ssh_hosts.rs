@@ -98,6 +98,62 @@ impl Runtime {
         true
     }
 
+    /// The registered device on the server `target` leads to, in Herdr
+    /// `session`: the one question Add device's list, the first-run rows and
+    /// their Connect ask, so one config shows one added state on every
+    /// screen. A device on a custom socket is never equated to a named
+    /// server; one registered under `target` itself is it, and so is one
+    /// whose alias `endpoint` leads to the same server, compared in
+    /// `SshAddress::endpoint_key`'s form. Another named session on the host
+    /// is a separate device.
+    pub(super) fn ssh_registration(
+        &self,
+        target: &str,
+        session: &str,
+        endpoint: impl Fn(&str) -> Option<String>,
+    ) -> Option<&crate::model::DeviceRegistration> {
+        let wanted = endpoint(target);
+        self.snapshot
+            .ui_state
+            .device_registrations
+            .iter()
+            .find(|registration| {
+                if registration.herdr_socket_path.is_some()
+                    || registration.herdr_session.as_deref().unwrap_or("default") != session
+                {
+                    return false;
+                }
+                let Some(alias) = registration.origin.ssh_alias() else {
+                    return false;
+                };
+                alias == target || (wanted.is_some() && endpoint(alias) == wanted)
+            })
+    }
+
+    /// The registered device on the default server of the Host `entry` of
+    /// `listing`, where every alias leads where the listing resolved it.
+    fn ssh_host_registration(
+        &self,
+        listing: &SshHostListing,
+        entry: &hide_node_link::device::SshHostEntry,
+    ) -> Option<&crate::model::DeviceRegistration> {
+        self.ssh_registration(&entry.alias, "default", |alias| {
+            listing
+                .entries
+                .iter()
+                .find(|entry| entry.alias == alias)
+                .and_then(|entry| entry.address.as_ref().ok())
+                .or_else(|| {
+                    listing
+                        .registered
+                        .iter()
+                        .find(|(registered, _)| registered == alias)
+                        .map(|(_, address)| address)
+                })
+                .map(hide_node_link::device::SshAddress::endpoint_key)
+        })
+    }
+
     /// Publishes a listing's answer, naming the device that already holds each
     /// alias or reaches the same address, or is each distribution. Only the
     /// running listing settles.
@@ -111,54 +167,23 @@ impl Runtime {
             return false;
         }
         self.ssh_hosts_job = None;
-        let registrations = &self.snapshot.ui_state.device_registrations;
-        let address_of = |alias: &str| {
-            listing
-                .registered
-                .iter()
-                .find(|(registered, _)| registered == alias)
-                .map(|(_, address)| address)
-        };
         let hosts = listing
             .entries
             .iter()
-            .map(|entry| {
-                let added_as = registrations
-                    .iter()
-                    .find(|registration| {
-                        // Add device's SSH aliases select the default server;
-                        // another named session on the host is a separate row.
-                        if registration.herdr_socket_path.is_some()
-                            || registration
-                                .herdr_session
-                                .as_deref()
-                                .is_some_and(|session| session != "default")
-                        {
-                            return false;
-                        }
-                        let Some(alias) = registration.origin.ssh_alias() else {
-                            return false;
-                        };
-                        alias == entry.alias
-                            || entry
-                                .address
-                                .as_ref()
-                                .ok()
-                                .is_some_and(|address| address_of(alias) == Some(address))
-                    })
-                    .map(|registration| registration.label.clone());
-                SshHostSnapshot {
-                    alias: entry.alias.clone(),
-                    address: entry.address.as_ref().ok().map(|address| address.display()),
-                    added_as,
-                    problem: entry
-                        .address
-                        .as_ref()
-                        .err()
-                        .map(|problem| problem.code().to_owned()),
-                }
+            .map(|entry| SshHostSnapshot {
+                alias: entry.alias.clone(),
+                address: entry.address.as_ref().ok().map(|address| address.display()),
+                added_as: self
+                    .ssh_host_registration(listing, entry)
+                    .map(|registration| registration.label.clone()),
+                problem: entry
+                    .address
+                    .as_ref()
+                    .err()
+                    .map(|problem| problem.code().to_owned()),
             })
             .collect();
+        let registrations = &self.snapshot.ui_state.device_registrations;
         let (wsl, wsl_problem) = match wsl {
             Ok(distributions) => (
                 distributions

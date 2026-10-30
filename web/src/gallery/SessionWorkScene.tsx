@@ -12,7 +12,7 @@ import { Palette } from "../Palette";
 import { SlotSessionRecord } from "../SessionRecord";
 import { TooltipProvider } from "../components/ui/tooltip";
 import { useFollowInterfaceLanguage } from "../i18n/translator";
-import type { MissedWork, PlanView, RecordView, SessionRecord as RecordValue, WorkFlow, WorkOutput, WorkRequest, WorkSession } from "../snapshot";
+import type { MissedWork, PlanView, PrState, RecordView, SessionPull, SessionRecord as RecordValue, WorkFlow, WorkOutput, WorkRequest, WorkSession } from "../snapshot";
 import { useShellStore } from "../store";
 import { useUiStore } from "../ui";
 import { REFERENCE_FOLDS, sidebarScene } from "./sceneData";
@@ -24,12 +24,15 @@ const CHILD_SESSION: WorkSession = { ...SESSION, agent: "claude", session_id: "c
 const request = (offset: number, minutes: number, text: string, patch: Partial<WorkRequest> = {}): WorkRequest => ({ offset, text, at_unix_ms: AT + minutes * MIN, author: "operator", images: 0, summary: null, answers: null, letter_from: null, count: 1, goal_command: false, ...patch });
 const ask = (id: string, text: string): MissedWork => ({ id, kind: "ask", text, status: "open", at_unix_ms: AT + 230 * MIN, turn_offset: 9, issue_repository: null, issue_number: null, creating: false, backlog_key: null });
 const pr = (number: number, title: string, state: string, source: WorkSession, sourceName: string): WorkOutput => ({ kind: "pr", repository: "example/hide", number, title, url: `https://example.invalid/pull/${number}`, state, stale: false, last_read_at_unix_ms: AT, created_at_unix_ms: AT + number, source, source_name: sourceName });
+/** One PR of a session's list as the core lays it: its own when `holder` is null, else a descendant's. */
+const listed = (number: number, title: string, state: PrState, holder: string | null = null): SessionPull => ({ url: `https://example.invalid/pull/${number}`, number, title, state, own: holder === null, holders: holder ? [holder] : [], stale: false, last_read_at_unix_ms: AT });
 const flow = (id: string, name: string, minutes: number, requests: WorkRequest[], result: WorkFlow["result"]): WorkFlow => ({ id, name, at_unix_ms: AT + minutes * MIN, requests, request_count: requests.filter((one) => !one.letter_from).length, result });
 const empty = { status: null, asks: [], flows: [], omitted_requests: 0, outputs: [], pr_groups: [], artifacts: [], children: [] } satisfies Partial<RecordValue>;
 // Invented content matching the user-approved record design.
 const CHILDREN = [
   ["기록 화면 조사", "claude", "done", []],
-  ["원장·라벨 조사", "codex", "done", []],
+  // Ended, its closed PR stays on the parent's list, dimmed.
+  ["원장·라벨 조사", "codex", "done", [[1538, "closed"]]],
   ["기록 화면 구현", "claude", "working", [[1544, "pending"], [1541, "merged"]]],
 ] as const;
 const children: RecordValue[] = CHILDREN.map(([title, agent, end, prs], i) => {
@@ -39,7 +42,7 @@ const children: RecordValue[] = CHILDREN.map(([title, agent, end, prs], i) => {
     ...empty, session, title, fallback_title: agent, native_title: title, manual_title: null, state: end === "working" ? "working" : "idle", cwd: "/work/hide", path: null, started_at_unix_ms: AT + 200 * MIN, ended_at_unix_ms: null,
     status: { end, line: end === "done" ? "조사 결과를 편지로 보냄" : "기록 화면 구현 중", at_unix_ms: AT + 240 * MIN, limited: null, settled: null },
     flows: [flow(`child-flow-${i}`, title, 200, [request(1, 200, `${title}을 맡아 결과를 편지로 보내줘.`, { author: "parent", summary: `${title} 맡김` })], null)],
-    outputs, pr_groups: outputs.length ? [{ child: null, name: title, outputs }] : [],
+    outputs, pr_groups: prs.length ? [{ child: null, name: title, pulls: prs.map(([number, state]) => listed(number, `${title} 결과`, state)) }] : [],
   };
 });
 const BASE: RecordValue = {
@@ -62,7 +65,7 @@ const BASE: RecordValue = {
   artifacts: ["session-record-goal-flow PRD", "record-revised-cases.html"],
 };
 BASE.outputs = [pr(1533, "pane 카드 정리", "merged", SESSION, BASE.title), ...children.flatMap((child) => child.outputs)];
-BASE.pr_groups = [{ child: null, name: BASE.title, outputs: [BASE.outputs[0]!] }, ...children.filter((child) => child.outputs.length).map((child) => ({ child: child.session, name: child.title, outputs: child.outputs }))];
+BASE.pr_groups = [{ child: null, name: BASE.title, pulls: [listed(1533, "pane 카드 정리", "merged")] }, ...children.filter((child) => child.pr_groups.length).map((child) => ({ child: child.session, name: child.title, pulls: child.pr_groups[0]!.pulls.map((pull) => ({ ...pull, own: false, holders: [child.title] })) }))];
 BASE.children = children;
 
 const step = (key: string, title: string, status: "done" | "working" | "planned", line: string | null = null) => ({ key, title, depends_on: [], status, line, output: null, changed: false, change: null, waiting: false });

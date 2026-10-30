@@ -29,7 +29,9 @@
 //! - [`ShutdownHandle::shutdown`] called from another thread ends a read
 //!   that is blocked, with `Ok(0)`, and a write a peer that stopped reading
 //!   holds, with an error; later reads return `Ok(0)` and later writes fail
-//!   with `BrokenPipe`.
+//!   with `BrokenPipe`. On Unix a peer's read blocked on the other end hears
+//!   the shutdown as its end of stream, after the bytes already sent; on
+//!   Windows the peer hears the end when the handle closes.
 //! - [`LocalListener::bind`] fails with `AddrInUse` while another listener
 //!   lives at the path, whether or not its queue is full (#403), and replaces
 //!   what a dead one left behind. A listener is alive while it holds a lock
@@ -717,18 +719,24 @@ mod sys {
     }
 
     /// Returns once a read would not block: data, end of stream or an error,
-    /// which the read that follows reports. `TimedOut` after `timeout`.
-    fn wait_readable(shared: &Shared, timeout: Duration) -> io::Result<()> {
+    /// which the read that follows reports. `TimedOut` after `timeout`; with
+    /// none, it waits until then.
+    fn wait_readable(shared: &Shared, timeout: Option<Duration>) -> io::Result<()> {
         let RawStream::UdSocket(socket) = &shared.raw;
         let descriptor = socket.inner().as_raw_fd();
-        let deadline = Instant::now() + timeout;
+        let deadline = timeout.map(|timeout| Instant::now() + timeout);
         loop {
-            let remaining = deadline.saturating_duration_since(Instant::now());
-            if remaining.is_zero() {
-                return Err(io::ErrorKind::TimedOut.into());
-            }
-            // Rounded up, so the wait is never shorter than asked.
-            let millis = remaining.as_micros().div_ceil(1000).min(i32::MAX as u128) as libc::c_int;
+            let millis = match deadline {
+                Some(deadline) => {
+                    let remaining = deadline.saturating_duration_since(Instant::now());
+                    if remaining.is_zero() {
+                        return Err(io::ErrorKind::TimedOut.into());
+                    }
+                    // Rounded up, so the wait is never shorter than asked.
+                    remaining.as_micros().div_ceil(1000).min(i32::MAX as u128) as libc::c_int
+                }
+                None => -1,
+            };
             let mut poll = libc::pollfd {
                 fd: descriptor,
                 events: libc::POLLIN,
@@ -749,12 +757,17 @@ mod sys {
         }
     }
 
+    /// A read with a timeout waits for the socket in `poll` first, and so
+    /// does every read on macOS, whose `recv` blocked on a local socket
+    /// sometimes sleeps through its peer's shutdown, and then through its
+    /// own end's, while `poll` wakes for both (with-hide/hide-private#351).
+    /// The `recv` that follows a ready `poll` returns at once.
     pub(super) fn read(
         shared: &Shared,
         timeout: Option<Duration>,
         buffer: &mut [u8],
     ) -> io::Result<usize> {
-        if let Some(timeout) = timeout {
+        if timeout.is_some() || cfg!(target_vendor = "apple") {
             wait_readable(shared, timeout)?;
         }
         let mut raw = &shared.raw;

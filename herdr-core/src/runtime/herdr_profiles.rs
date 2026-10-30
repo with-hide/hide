@@ -1,5 +1,9 @@
 //! Saved machine discovery reuses the device connector's machine boundary.
 //! One request joins one owned, cancelable worker; no polling or SSH probes.
+//! Beside Herdr's saved profiles the step lists the account's ssh config
+//! Hosts, read as Add device reads them (`ssh -G`, which never connects), so a
+//! person who never used Herdr has the machines they already reach; a profile
+//! whose target is a Host is one row with it.
 //! Beside the saved profiles the first-run step lists this PC's default WSL
 //! distribution (PRD wsl-device B1, D-13), read from the account's registry
 //! as Add device reads it, so listing never starts WSL; it connects as a WSL
@@ -7,9 +11,17 @@
 
 use super::*;
 use crate::model::{HerdrProfileRefusal, HerdrProfileSnapshot, HerdrProfilesSnapshot};
-use crate::remote::WslListing;
+use crate::remote::{SshHostListing, WslListing};
 use hide_node_link::device::HerdrProfileListing;
 use std::sync::atomic::{AtomicBool, Ordering};
+
+/// The id prefix of a Host row; a Herdr profile id is Herdr's own.
+const SSH_HOST_ROW: &str = "ssh:";
+
+/// One server: an endpoint and the Herdr session on it.
+fn server_key(endpoint: &str, session: &str) -> String {
+    format!("{endpoint} {session}")
+}
 
 pub(super) struct HerdrProfilesJob {
     id: u64,
@@ -60,6 +72,10 @@ impl Runtime {
                 .unwrap_or_else(|_| {
                     Err("Saved machine discovery stopped unexpectedly. Retry".to_owned())
                 });
+                let hosts = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    devices.ssh_hosts(&home, &registered, &stop)
+                }))
+                .map_err(|_| "The ssh config listing ended unexpectedly. Retry".to_owned());
                 let wsl = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                     devices.wsl_distributions()
                 }))
@@ -69,7 +85,13 @@ impl Runtime {
                 };
                 let changed = runtime
                     .lock()
-                    .map(|mut guard| guard.settle_herdr_profiles(id, listing, &wsl))
+                    .map(|mut guard| {
+                        guard.settle_herdr_profiles(
+                            id,
+                            listing.and_then(|listing| Ok((listing, hosts?))),
+                            &wsl,
+                        )
+                    })
                     .unwrap_or(false);
                 if changed {
                     context.notifier.notify();
@@ -91,7 +113,7 @@ impl Runtime {
     fn settle_herdr_profiles(
         &mut self,
         id: u64,
-        answer: Result<HerdrProfileListing, String>,
+        answer: Result<(HerdrProfileListing, SshHostListing), String>,
         wsl: &WslListing,
     ) -> bool {
         if self
@@ -105,8 +127,21 @@ impl Runtime {
         // A listing that could not be read proves nothing about WSL, so the
         // step keeps its failed state with Retry rather than reading empty
         // and being skipped (B1, B25); only a listing read empty is none.
-        let answer = answer.and_then(|listing| match wsl {
-            Ok(distributions) => Ok((listing, distributions)),
+        // A config that exists but could not be read says nothing about
+        // its Hosts, so the step keeps Retry rather than reading empty.
+        let answer = answer.and_then(|(listing, hosts)| {
+            if hosts.unreadable {
+                crate::diagnostic!(serde_json::json!({
+                    "component": "herdr_profiles",
+                    "kind": "ssh_hosts.unreadable",
+                    "request": id,
+                }));
+                return Err("This computer's ssh config could not be read. Retry".to_owned());
+            }
+            Ok((listing, hosts))
+        });
+        let answer = answer.and_then(|(listing, hosts)| match wsl {
+            Ok(distributions) => Ok((listing, hosts, distributions)),
             Err(reason) => {
                 crate::diagnostic!(serde_json::json!({
                     "component": "herdr_profiles",
@@ -122,13 +157,32 @@ impl Runtime {
                 self.snapshot.status.herdr_profiles.state = "failed".to_owned();
                 self.snapshot.status.herdr_profiles.error = Some(error);
             }
-            Ok((listing, distributions)) => {
+            Ok((listing, hosts, distributions)) => {
                 self.herdr_profile_endpoints = listing.endpoints;
-                let profiles = listing
+                // Every Host alias leads where `ssh -G` said, spelled as a
+                // profile's endpoint is, so a device registered under any
+                // alias or target of one server is found by the same key.
+                for (alias, address) in hosts
+                    .entries
+                    .iter()
+                    .filter_map(|entry| Some((&entry.alias, entry.address.as_ref().ok()?)))
+                    .chain(
+                        hosts
+                            .registered
+                            .iter()
+                            .map(|(alias, address)| (alias, address)),
+                    )
+                {
+                    self.herdr_profile_endpoints
+                        .entry(alias.clone())
+                        .or_insert_with(|| Ok(address.endpoint_key()));
+                }
+                let profiles: Vec<HerdrProfileSnapshot> = listing
                     .profiles
                     .into_iter()
                     .map(|profile| {
-                        let existing = self.profile_registration(&profile.target, &profile.session);
+                        let existing =
+                            self.endpoint_registration(&profile.target, &profile.session);
                         let (device_id, added_as) = existing
                             .map(|r| (Some(r.id.clone()), Some(r.label.clone())))
                             .unwrap_or_default();
@@ -151,6 +205,9 @@ impl Runtime {
                             label: profile.label,
                             target: profile.target,
                             session: profile.session,
+                            herdr: true,
+                            ssh_host: None,
+                            address: None,
                             wsl_distro: None,
                             enabled: profile.enabled,
                             added_as,
@@ -160,17 +217,61 @@ impl Runtime {
                             connect_refusal: None,
                         }
                     })
-                    .collect::<Vec<_>>();
+                    .collect();
+                // One row per server, by one key: the user, host and port
+                // ssh resolves to and the Herdr session. The Hosts come in
+                // the config's order, a second alias of a server named by
+                // the first; a saved profile of that server takes its row,
+                // keeping the Host's chip and address, and the profiles no
+                // Host is follow. Different users, ports and sessions stay
+                // apart, and a row that cannot connect is never merged.
+                let mut rows: Vec<(String, HerdrProfileSnapshot)> = Vec::new();
+                for entry in &hosts.entries {
+                    let key = match &entry.address {
+                        Ok(address) => server_key(&address.endpoint_key(), "default"),
+                        Err(_) => format!("alias {}", entry.alias),
+                    };
+                    if rows.iter().any(|(found, _)| *found == key) {
+                        continue;
+                    }
+                    let display = entry.address.as_ref().ok().map(|address| address.display());
+                    rows.push((key, self.ssh_host_row(entry, display)));
+                }
+                for profile in profiles {
+                    let endpoint = self
+                        .herdr_profile_endpoints
+                        .get(&profile.target)
+                        .and_then(|found| found.as_ref().ok());
+                    let key = match endpoint {
+                        Some(endpoint) if profile.problem.is_none() => {
+                            server_key(endpoint, &profile.session)
+                        }
+                        _ => format!("profile {}", profile.id),
+                    };
+                    match rows.iter_mut().find(|(found, _)| *found == key) {
+                        // A second profile of one server is the same device.
+                        Some((_, row)) if row.herdr => {}
+                        Some((_, row)) => {
+                            *row = HerdrProfileSnapshot {
+                                ssh_host: row.ssh_host.take(),
+                                address: row.address.take(),
+                                ..profile
+                            };
+                        }
+                        None => rows.push((key, profile)),
+                    }
+                }
+                let rows = rows.into_iter().map(|(_, row)| row);
                 let profiles = self
                     .default_wsl_row(distributions)
                     .into_iter()
-                    .chain(profiles)
+                    .chain(rows)
                     .collect();
                 self.snapshot.status.herdr_profiles = HerdrProfilesSnapshot {
                     state: "ready".to_owned(),
                     error: None,
                     profiles,
-                    truncated: listing.truncated,
+                    truncated: listing.truncated || hosts.truncated,
                 };
                 self.settle_first_run_devices();
             }
@@ -178,27 +279,20 @@ impl Runtime {
         true
     }
 
-    /// A custom socket cannot be equated to a named server without evidence.
-    fn profile_registration(
+    /// The registered device on the server `target` leads to in `session`,
+    /// by Add device's own decision (`ssh_registration`), where an alias or
+    /// target leads where this listing resolved it.
+    fn endpoint_registration(
         &self,
         target: &str,
         session: &str,
     ) -> Option<&crate::model::DeviceRegistration> {
-        let endpoint = self.herdr_profile_endpoints.get(target)?.as_ref().ok()?;
-        self.snapshot
-            .ui_state
-            .device_registrations
-            .iter()
-            .find(|registration| {
-                registration.herdr_socket_path.is_none()
-                    && registration.herdr_session.as_deref().unwrap_or("default") == session
-                    && registration
-                        .origin
-                        .ssh_alias()
-                        .and_then(|alias| self.herdr_profile_endpoints.get(alias))
-                        .and_then(|endpoint| endpoint.as_ref().ok())
-                        == Some(endpoint)
-            })
+        self.ssh_registration(target, session, |alias| {
+            self.herdr_profile_endpoints
+                .get(alias)
+                .and_then(|endpoint| endpoint.as_ref().ok())
+                .cloned()
+        })
     }
 
     fn profile_connection(&self, device: &str) -> String {
@@ -246,6 +340,9 @@ impl Runtime {
             label: super::devices::wsl_device_label(&distribution.name),
             target: distribution.name.clone(),
             session: "default".to_owned(),
+            herdr: false,
+            ssh_host: None,
+            address: None,
             wsl_distro: Some(distribution.name.clone()),
             enabled: true,
             added_as: registration.map(|registration| registration.label.clone()),
@@ -259,6 +356,58 @@ impl Runtime {
         })
     }
 
+    /// The step's row for a Host no saved profile is: it connects as Add
+    /// device's Host does, on the default server. One a device already uses
+    /// is that device; one `ssh -G` could not resolve says why, as Add device
+    /// does.
+    fn ssh_host_row(
+        &self,
+        entry: &hide_node_link::device::SshHostEntry,
+        address: Option<String>,
+    ) -> HerdrProfileSnapshot {
+        let mut row = HerdrProfileSnapshot {
+            id: format!("{SSH_HOST_ROW}{}", entry.alias),
+            label: entry.alias.clone(),
+            target: entry.alias.clone(),
+            session: "default".to_owned(),
+            herdr: false,
+            ssh_host: Some(entry.alias.clone()),
+            address,
+            wsl_distro: None,
+            enabled: true,
+            added_as: None,
+            problem: entry
+                .address
+                .as_ref()
+                .err()
+                .map(|problem| problem.code().to_owned()),
+            device_id: None,
+            connect_state: "saved".to_owned(),
+            connect_refusal: None,
+        };
+        if let Some(registration) = self.row_registration(&row) {
+            row.connect_state = self.profile_connection(&registration.id);
+            row.device_id = Some(registration.id.clone());
+            row.added_as = Some(registration.label.clone());
+        }
+        row
+    }
+
+    /// The registered device a row is: its distribution's, or the one on
+    /// the same server, found by where its alias or target leads and the
+    /// Herdr session, so a device registered under another alias or target
+    /// of that server, during this Connect too, is this row's (engineering
+    /// rule 11). A target nothing resolved is matched by its own name.
+    fn row_registration(
+        &self,
+        row: &HerdrProfileSnapshot,
+    ) -> Option<&crate::model::DeviceRegistration> {
+        if let Some(distro) = row.wsl_distro.as_deref() {
+            return self.wsl_registration(distro);
+        }
+        self.endpoint_registration(&row.target, &row.session)
+    }
+
     fn wsl_registration(&self, distro: &str) -> Option<&crate::model::DeviceRegistration> {
         self.snapshot
             .ui_state
@@ -267,7 +416,25 @@ impl Runtime {
             .find(|registration| registration.origin.wsl_distro() == Some(distro))
     }
 
+    /// Connects the step's row `profile_id`, and remembers the attempt it
+    /// started, which the step's sign-in withdrawal may end.
     pub(super) fn connect_herdr_profile(&mut self, profile_id: &str, consent: bool) -> bool {
+        let before: BTreeMap<String, u64> = self
+            .device_hosts
+            .iter()
+            .map(|(id, host)| (id.clone(), host.generation))
+            .collect();
+        let changed = self.connect_herdr_profile_row(profile_id, consent);
+        for (id, host) in &self.device_hosts {
+            if before.get(id) != Some(&host.generation) && host.wake == crate::remote::Wake::Allowed
+            {
+                self.first_run_attempts.insert(id.clone(), host.generation);
+            }
+        }
+        changed
+    }
+
+    fn connect_herdr_profile_row(&mut self, profile_id: &str, consent: bool) -> bool {
         let Some(index) = self
             .snapshot
             .status
@@ -301,11 +468,7 @@ impl Runtime {
             row.connect_refusal = Some(refusal);
             return true;
         }
-        let registration = match profile.wsl_distro.as_deref() {
-            Some(distro) => self.wsl_registration(distro),
-            None => self.profile_registration(&profile.target, &profile.session),
-        }
-        .cloned();
+        let registration = self.row_registration(&profile).cloned();
         if registration.is_none() && self.snapshot.ui_state.device_registrations.len() >= 64 {
             let row = &mut self.snapshot.status.herdr_profiles.profiles[index];
             row.connect_state = "failed".to_owned();
@@ -320,7 +483,7 @@ impl Runtime {
                 // Explicit import also protects a pre-existing default-session
                 // registration on subsequent automatic kit work and reconnects.
                 // A WSL device reaches its account's own Herdr, so it names none.
-                let import = profile.wsl_distro.is_none() && registration.herdr_session.is_none();
+                let import = profile.herdr && registration.herdr_session.is_none();
                 if import {
                     if let Some(stored) = self
                         .snapshot
@@ -369,6 +532,41 @@ impl Runtime {
                     return true;
                 }
             },
+            // A Host registers as Add device registers it (B50): the alias
+            // and its name, the default server, and the press's consent.
+            (None, None) if !profile.herdr => {
+                let existing: Vec<&str> = self
+                    .snapshot
+                    .ui_state
+                    .device_registrations
+                    .iter()
+                    .map(|r| r.id.as_str())
+                    .collect();
+                let id = super::devices::device_id_for_alias(&profile.target, &existing);
+                match self.register_device(super::events::RegisterDevicePayload {
+                    id,
+                    label: profile.label.clone(),
+                    ssh_alias: profile.target.clone(),
+                    wsl_distro: None,
+                    herdr_socket_path: None,
+                    herdr_session: None,
+                    host_consent: true,
+                }) {
+                    Ok(id) => {
+                        let registrations = &self.snapshot.ui_state.device_registrations;
+                        match registrations.iter().find(|r| r.id == id) {
+                            Some(registration) => registration.clone(),
+                            None => return true,
+                        }
+                    }
+                    Err(refusal) => {
+                        self.set_error(refusal.code, refusal.message, false);
+                        let row = &mut self.snapshot.status.herdr_profiles.profiles[index];
+                        row.connect_state = "failed".to_owned();
+                        return true;
+                    }
+                }
+            }
             (None, None) => {
                 use sha2::{Digest, Sha256};
                 let digest = format!("{:x}", Sha256::digest(profile.id.as_bytes()));
@@ -426,11 +624,9 @@ impl Runtime {
             .profiles
             .iter()
             .enumerate()
-            .filter(|(_, row)| match row.wsl_distro.as_deref() {
-                Some(distro) => registration.origin.wsl_distro() == Some(distro),
-                None => self
-                    .profile_registration(&row.target, &row.session)
-                    .is_some_and(|r| r.id == registration.id),
+            .filter(|(_, row)| {
+                self.row_registration(row)
+                    .is_some_and(|r| r.id == registration.id)
             })
             .map(|(index, _)| index)
             .collect();
@@ -464,32 +660,35 @@ mod tests {
         });
         runtime.settle_herdr_profiles(
             1,
-            Ok(HerdrProfileListing {
-                profiles: [
-                    ("first", "grab@box", "review", true),
-                    ("alias", "other-alias", "review", true),
-                    ("second", "grab@box", "default", true),
-                    ("disabled", "off", "review", false),
-                ]
-                .into_iter()
-                .map(|(id, target, session, enabled)| HerdrProfile {
-                    id: id.to_owned(),
-                    label: "Shared name".to_owned(),
-                    target: target.to_owned(),
-                    session: session.to_owned(),
-                    enabled,
-                })
-                .collect(),
-                endpoints: [
-                    ("grab@box", "grab@box:22"),
-                    ("other-alias", "grab@box:22"),
-                    ("off", "grab@off:22"),
-                ]
-                .into_iter()
-                .map(|(target, endpoint)| (target.to_owned(), Ok(endpoint.to_owned())))
-                .collect(),
-                truncated: false,
-            }),
+            Ok((
+                HerdrProfileListing {
+                    profiles: [
+                        ("first", "grab@box", "review", true),
+                        ("alias", "other-alias", "review", true),
+                        ("second", "grab@box", "default", true),
+                        ("disabled", "off", "review", false),
+                    ]
+                    .into_iter()
+                    .map(|(id, target, session, enabled)| HerdrProfile {
+                        id: id.to_owned(),
+                        label: "Shared name".to_owned(),
+                        target: target.to_owned(),
+                        session: session.to_owned(),
+                        enabled,
+                    })
+                    .collect(),
+                    endpoints: [
+                        ("grab@box", "grab@box:22"),
+                        ("other-alias", "grab@box:22"),
+                        ("off", "grab@off:22"),
+                    ]
+                    .into_iter()
+                    .map(|(target, endpoint)| (target.to_owned(), Ok(endpoint.to_owned())))
+                    .collect(),
+                    truncated: false,
+                },
+                SshHostListing::default(),
+            )),
             wsl,
         );
         runtime
@@ -530,7 +729,7 @@ mod tests {
             "failed"
         );
         assert_eq!(
-            runtime.snapshot.status.herdr_profiles.profiles[3]
+            runtime.snapshot.status.herdr_profiles.profiles[2]
                 .problem
                 .as_deref(),
             Some("disabled")
@@ -540,8 +739,17 @@ mod tests {
     #[test]
     fn imports_keep_original_routes_deduplicate_aliases_and_separate_sessions() {
         let mut runtime = discovered();
+        // "alias" leads to the same server as "first": one row, one device.
+        let ids: Vec<_> = runtime
+            .snapshot
+            .status
+            .herdr_profiles
+            .profiles
+            .iter()
+            .map(|row| row.id.as_str())
+            .collect();
+        assert_eq!(ids, ["first", "second", "disabled"]);
         connect(&mut runtime, "first", true);
-        connect(&mut runtime, "alias", true);
         assert_eq!(runtime.snapshot.ui_state.device_registrations.len(), 1);
         connect(&mut runtime, "second", true);
         let registrations = &runtime.snapshot.ui_state.device_registrations;
@@ -551,8 +759,7 @@ mod tests {
         assert_eq!(registrations[1].herdr_session.as_deref(), Some("default"));
         assert_ne!(registrations[0].id, registrations[1].id);
         let rows = &runtime.snapshot.status.herdr_profiles.profiles;
-        assert_eq!(rows[0].device_id, rows[1].device_id);
-        assert_ne!(rows[0].device_id, rows[2].device_id);
+        assert_ne!(rows[0].device_id, rows[1].device_id);
         let stored = serde_json::to_value(&runtime.snapshot.ui_state).unwrap();
         assert_eq!(stored["device_registrations"][0]["herdr_session"], "review");
     }
@@ -568,8 +775,8 @@ mod tests {
         let rows = &runtime.snapshot.status.herdr_profiles.profiles;
         assert_eq!(
             rows.len(),
-            5,
-            "the four saved profiles and one distribution"
+            4,
+            "the three saved servers and one distribution"
         );
         let wsl = &rows[0];
         assert_eq!(
@@ -648,11 +855,14 @@ mod tests {
             });
             runtime.settle_herdr_profiles(
                 1,
-                Ok(HerdrProfileListing {
-                    profiles: Vec::new(),
-                    endpoints: Default::default(),
-                    truncated: false,
-                }),
+                Ok((
+                    HerdrProfileListing {
+                        profiles: Vec::new(),
+                        endpoints: Default::default(),
+                        truncated: false,
+                    },
+                    SshHostListing::default(),
+                )),
                 wsl,
             );
             runtime
@@ -682,7 +892,7 @@ mod tests {
         let rows = &runtime.snapshot.status.herdr_profiles.profiles;
         assert_eq!(
             rows.iter().map(|row| row.id.as_str()).collect::<Vec<_>>(),
-            ["first", "alias", "second", "disabled"]
+            ["first", "second", "disabled"]
         );
         assert!(rows.iter().all(|row| row.wsl_distro.is_none()));
     }
@@ -728,5 +938,283 @@ mod tests {
         // Pressing again is the same device, not a second one.
         connect(&mut runtime, "wsl:Ubuntu", true);
         assert_eq!(runtime.snapshot.ui_state.device_registrations.len(), 1);
+    }
+
+    fn host(alias: &str, user: &str, host: &str) -> hide_node_link::device::SshHostEntry {
+        hide_node_link::device::SshHostEntry {
+            alias: alias.to_owned(),
+            address: Ok(hide_node_link::device::SshAddress {
+                user: user.to_owned(),
+                host: host.to_owned(),
+                port: 22,
+            }),
+        }
+    }
+
+    /// A runtime on the Devices step whose listing found `profiles` (each
+    /// target leading to its endpoint) and the config's `hosts`.
+    fn at_devices(
+        profiles: &[(&str, &str, &str)],
+        hosts: Vec<hide_node_link::device::SshHostEntry>,
+        truncated: bool,
+    ) -> Runtime {
+        let mut runtime = super::super::tests::runtime();
+        settle_at_devices(&mut runtime, profiles, hosts, truncated);
+        runtime
+    }
+
+    /// The step's listing answered again, on `runtime` as it now is.
+    fn settle_at_devices(
+        runtime: &mut Runtime,
+        profiles: &[(&str, &str, &str)],
+        hosts: Vec<hide_node_link::device::SshHostEntry>,
+        truncated: bool,
+    ) {
+        runtime.snapshot.ui_state.first_run = Some(crate::model::FirstRun {
+            version: crate::model::FIRST_RUN_VERSION,
+            step: crate::model::FirstRunStep::Devices,
+        });
+        runtime.herdr_profiles_job = Some(HerdrProfilesJob {
+            id: 1,
+            stop: Arc::new(AtomicBool::new(false)),
+        });
+        runtime.settle_herdr_profiles(
+            1,
+            Ok((
+                HerdrProfileListing {
+                    profiles: profiles
+                        .iter()
+                        .map(|(id, target, _)| HerdrProfile {
+                            id: (*id).to_owned(),
+                            label: (*id).to_owned(),
+                            target: (*target).to_owned(),
+                            // `id@session` names a profile of a named session.
+                            session: id
+                                .split_once('@')
+                                .map_or("default", |(_, session)| session)
+                                .to_owned(),
+                            enabled: true,
+                        })
+                        .collect(),
+                    endpoints: profiles
+                        .iter()
+                        .map(|(_, target, endpoint)| {
+                            ((*target).to_owned(), Ok((*endpoint).to_owned()))
+                        })
+                        .collect(),
+                    truncated: false,
+                },
+                SshHostListing {
+                    entries: hosts,
+                    registered: Vec::new(),
+                    truncated,
+                    unreadable: false,
+                },
+            )),
+            &Ok(Vec::new()),
+        );
+    }
+
+    fn step(runtime: &Runtime) -> Option<crate::model::FirstRunStep> {
+        runtime.first_run_step()
+    }
+
+    /// A person who never used Herdr has the machines their ssh config
+    /// names: the step stays, and Connect registers the Host as Add device
+    /// does, under its alias, on the default server, with the press's
+    /// consent.
+    #[test]
+    fn a_host_only_machine_keeps_the_step_and_connects_as_add_device_does() {
+        let mut runtime = at_devices(
+            &[],
+            vec![host("Config.Ubuntu", "ubuntu", "config-ubuntu.example")],
+            false,
+        );
+        assert_eq!(step(&runtime), Some(crate::model::FirstRunStep::Devices));
+        let rows = &runtime.snapshot.status.herdr_profiles.profiles;
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].id, "ssh:Config.Ubuntu");
+        assert!(!rows[0].herdr);
+        assert_eq!(rows[0].ssh_host.as_deref(), Some("Config.Ubuntu"));
+        assert_eq!(
+            rows[0].address.as_deref(),
+            Some("ubuntu@config-ubuntu.example:22")
+        );
+        connect(&mut runtime, "ssh:Config.Ubuntu", true);
+        let registrations = &runtime.snapshot.ui_state.device_registrations;
+        assert_eq!(registrations.len(), 1);
+        assert_eq!(registrations[0].id, "config-ubuntu");
+        assert_eq!(registrations[0].label, "Config.Ubuntu");
+        assert_eq!(registrations[0].origin.ssh_alias(), Some("Config.Ubuntu"));
+        assert_eq!(registrations[0].herdr_session, None);
+        assert_eq!(registrations[0].herdr_socket_path, None);
+        assert!(registrations[0].host_consent.is_some());
+        let row = &runtime.snapshot.status.herdr_profiles.profiles[0];
+        assert_eq!(row.device_id.as_deref(), Some("config-ubuntu"));
+        assert_eq!(row.added_as.as_deref(), Some("Config.Ubuntu"));
+        // A second press is the same device, never a second one.
+        connect(&mut runtime, "ssh:Config.Ubuntu", true);
+        assert_eq!(runtime.snapshot.ui_state.device_registrations.len(), 1);
+    }
+
+    /// One machine is one row: a profile whose target is a Host, or leads to
+    /// the Host's address, takes the Host's place and carries both sources;
+    /// a Host no profile is, and a profile no Host is, keep their own rows.
+    #[test]
+    fn a_profile_that_is_a_host_is_one_row_in_the_configs_order() {
+        let runtime = at_devices(
+            &[
+                ("gpu", "me@gpu-box.example", "me@gpu-box.example:22"),
+                ("mini-main", "mini", "alice@mini.example:22"),
+                ("box", "alice@Box.example", "alice@box.example:22"),
+            ],
+            vec![
+                host("config-ubuntu", "ubuntu", "config-ubuntu.example"),
+                host("mini", "alice", "mini.example"),
+                host("box-alias", "alice", "BOX.example"),
+            ],
+            false,
+        );
+        let rows: Vec<_> = runtime
+            .snapshot
+            .status
+            .herdr_profiles
+            .profiles
+            .iter()
+            .map(|row| (row.id.as_str(), row.herdr, row.ssh_host.as_deref()))
+            .collect();
+        assert_eq!(
+            rows,
+            [
+                ("ssh:config-ubuntu", false, Some("config-ubuntu")),
+                ("mini-main", true, Some("mini")),
+                ("box", true, Some("box-alias")),
+                ("gpu", true, None),
+            ]
+        );
+    }
+
+    /// Only a read that found no profile and no Host skips the step; a Host
+    /// list an Include cut short proves nothing.
+    #[test]
+    fn only_both_lists_read_empty_skip_the_step() {
+        let empty = at_devices(&[], Vec::new(), false);
+        assert_eq!(
+            step(&empty),
+            Some(crate::model::FirstRunStep::Notifications)
+        );
+        let cut = at_devices(&[], Vec::new(), true);
+        assert_eq!(step(&cut), Some(crate::model::FirstRunStep::Devices));
+    }
+
+    /// One key per server across every candidate: two aliases of one
+    /// endpoint and a profile of its default server are one row, while
+    /// another user, another port and a named session stay apart.
+    #[test]
+    fn aliases_and_a_profile_of_one_server_are_one_row_and_others_stay_apart() {
+        let runtime = at_devices(
+            &[
+                ("saved", "alice@box.example", "alice@box.example:22"),
+                ("saved@review", "alice@box.example", "alice@box.example:22"),
+            ],
+            vec![
+                host("a", "alice", "box.example"),
+                host("b", "alice", "BOX.example"),
+                host("bob", "bob", "box.example"),
+                hide_node_link::device::SshHostEntry {
+                    alias: "other-port".to_owned(),
+                    address: Ok(hide_node_link::device::SshAddress {
+                        user: "alice".to_owned(),
+                        host: "box.example".to_owned(),
+                        port: 2222,
+                    }),
+                },
+            ],
+            false,
+        );
+        let rows: Vec<_> = runtime
+            .snapshot
+            .status
+            .herdr_profiles
+            .profiles
+            .iter()
+            .map(|row| {
+                (
+                    row.id.as_str(),
+                    row.session.as_str(),
+                    row.ssh_host.as_deref(),
+                )
+            })
+            .collect();
+        assert_eq!(
+            rows,
+            [
+                ("saved", "default", Some("a")),
+                ("ssh:bob", "default", Some("bob")),
+                ("ssh:other-port", "default", Some("other-port")),
+                ("saved@review", "review", None),
+            ]
+        );
+    }
+
+    /// Connect is one device however often it is pressed and however the
+    /// server is named: a Host row whose server was registered meanwhile
+    /// under another alias is that device, and a second press registers
+    /// nothing (engineering rule 11).
+    #[test]
+    fn a_host_row_converges_on_the_device_its_server_already_has() {
+        let mut runtime = at_devices(&[], vec![host("a", "alice", "box.example")], false);
+        connect(&mut runtime, "ssh:a", true);
+        connect(&mut runtime, "ssh:a", true);
+        assert_eq!(runtime.snapshot.ui_state.device_registrations.len(), 1);
+        // The config now names the server under another alias first.
+        settle_again(
+            &mut runtime,
+            vec![
+                host("b", "alice", "box.example"),
+                host("a", "alice", "box.example"),
+            ],
+        );
+        let row = &runtime.snapshot.status.herdr_profiles.profiles[0];
+        assert_eq!(row.id, "ssh:b");
+        assert_eq!(row.device_id.as_deref(), Some("a"));
+        connect(&mut runtime, "ssh:b", true);
+        assert_eq!(runtime.snapshot.ui_state.device_registrations.len(), 1);
+    }
+
+    fn settle_again(runtime: &mut Runtime, hosts: Vec<hide_node_link::device::SshHostEntry>) {
+        runtime.herdr_profiles_job = Some(HerdrProfilesJob {
+            id: 1,
+            stop: Arc::new(AtomicBool::new(false)),
+        });
+        settle_at_devices(runtime, &[], hosts, false);
+    }
+
+    /// A config that exists but could not be read is a failed read with
+    /// Retry, never an empty list that skips the step.
+    #[test]
+    fn an_unreadable_ssh_config_keeps_the_step_with_retry() {
+        let mut runtime = super::super::tests::runtime();
+        runtime.snapshot.ui_state.first_run = Some(crate::model::FirstRun {
+            version: crate::model::FIRST_RUN_VERSION,
+            step: crate::model::FirstRunStep::Devices,
+        });
+        runtime.herdr_profiles_job = Some(HerdrProfilesJob {
+            id: 1,
+            stop: Arc::new(AtomicBool::new(false)),
+        });
+        runtime.settle_herdr_profiles(
+            1,
+            Ok((
+                HerdrProfileListing::default(),
+                SshHostListing {
+                    unreadable: true,
+                    ..SshHostListing::default()
+                },
+            )),
+            &Ok(Vec::new()),
+        );
+        assert_eq!(runtime.snapshot.status.herdr_profiles.state, "failed");
+        assert_eq!(step(&runtime), Some(crate::model::FirstRunStep::Devices));
     }
 }

@@ -1155,3 +1155,32 @@ impl Runtime {
         crate::device_command::device_answer(device, remote_state, problem)
     }
 }
+
+/// The id a Host's device registers under, as Add device names it
+/// (`deviceIdFor` in `web/src/settings.ts`): every run of characters other
+/// than lower-case letters, digits, `-` and `_` becomes one `-`, the ends lose
+/// their `-`, and a numeric suffix is added when a device already holds it;
+/// `local`, this machine's id before node ids, is never given.
+pub(super) fn device_id_for_alias(alias: &str, existing: &[&str]) -> String {
+    let mut base = String::new();
+    let mut replacing = false;
+    for character in alias.trim().to_lowercase().chars() {
+        if character.is_ascii_lowercase() || character.is_ascii_digit() || "_-".contains(character)
+        {
+            base.push(character);
+            replacing = false;
+        } else if !replacing {
+            base.push('-');
+            replacing = true;
+        }
+    }
+    let base = base.trim_matches('-');
+    let base = if base.is_empty() { "device" } else { base };
+    if !existing.contains(&base) && base != crate::node::LEGACY_LOCAL_DEVICE_ID {
+        return base.to_owned();
+    }
+    (2..)
+        .map(|index| format!("{base}-{index}"))
+        .find(|candidate| !existing.contains(&candidate.as_str()))
+        .unwrap_or_else(|| base.to_owned())
+}

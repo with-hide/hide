@@ -3,8 +3,9 @@ import path from "node:path";
 import { GitMergeIcon, GitPullRequestClosedIcon, GitPullRequestDraftIcon, GitPullRequestIcon } from "lucide-react";
 import { describe, expect, it } from "vitest";
 import { initializeInterfaceI18n } from "./i18n/instance";
-import { badgeWord, checksWord, PR_LOOK, prMarkParts, reviewWord, staleLabel, staleness } from "./prMark";
-import type { AgentPullRequest, PullRequest } from "./snapshot";
+import { badgeWord, checksWord, PR_LOOK, prMarkParts, pullsStaleness, reviewWord, rowPulls, staleLabel, staleness } from "./prMark";
+import type { AgentRow, PullRequest, SessionPull } from "./snapshot";
+import { sessionPull } from "../test/sessionPull";
 
 // The one PR mark (docs/status-model.md, Pull request visual states): the
 // palette the operator approved on 2026-10-10, one token per state.
@@ -72,18 +73,36 @@ describe("staleness", () => {
 });
 
 describe("a PR mark's parts", () => {
-  const pull = (number: number): AgentPullRequest => ({ number, title: `PR ${number}`, url: `https://github.com/acme/project/pull/${number}`, badge: "open", checks: "passing", head_branch: `b${number}`, closing_issues: [], live: true, duty: false, created: true, settled_at_unix_ms: null });
-
   it("draws one PR as its state and number", () => {
-    expect(prMarkParts([{ pull: pull(924), state: "mergeable" }])).toEqual({ state: "mergeable", number: 924 });
+    expect(prMarkParts([sessionPull(924, "mergeable")])).toEqual({ state: "mergeable", number: 924 });
   });
 
   it("counts several PRs per state, worst first, whatever order they arrive in", () => {
-    const pulls = [{ pull: pull(1), state: "merged" }, { pull: pull(2), state: "mergeable" }, { pull: pull(3), state: "merged" }, { pull: pull(4), state: "failed" }] as const;
+    const pulls = [sessionPull(1, "merged"), sessionPull(2, "mergeable"), sessionPull(3, "merged"), sessionPull(4, "failed")];
     expect(prMarkParts(pulls)).toEqual({ counts: [{ state: "failed", count: 1 }, { state: "mergeable", count: 1 }, { state: "merged", count: 2 }] });
   });
 
   it("draws nothing without a PR", () => {
     expect(prMarkParts([])).toBeNull();
+  });
+});
+
+describe("a row's list", () => {
+  const row = (pulls: SessionPull[] | null) => ({ pulls: pulls ? { pulls } : null }) as unknown as AgentRow;
+
+  it("reads the core's list whole, or only the session's own for a row that draws its descendants beside it", () => {
+    const own = sessionPull(1, "pending");
+    const child = sessionPull(2, "closed", { own: false, holders: ["child"] });
+    expect(rowPulls(row([own, child]))).toEqual([own, child]);
+    expect(rowPulls(row([own, child]), "own")).toEqual([own]);
+    expect(rowPulls(row(null))).toEqual([]);
+  });
+
+  it("is stale while any of its pull requests is, with the oldest last read", () => {
+    expect(pullsStaleness([])).toBeUndefined();
+    expect(pullsStaleness([sessionPull(1, "pending", { last_read_at_unix_ms: 300 })])).toEqual({ stale: false, lastRead: null });
+    const stale = [sessionPull(1, "pending", { stale: true, last_read_at_unix_ms: 200 }), sessionPull(2, "merged", { stale: true, last_read_at_unix_ms: 100 }), sessionPull(3, "pending", { last_read_at_unix_ms: 300 })];
+    expect(pullsStaleness(stale)).toEqual({ stale: true, lastRead: 100 });
+    expect(pullsStaleness([sessionPull(1, "pending", { stale: true })])).toEqual({ stale: true, lastRead: null });
   });
 });

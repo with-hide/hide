@@ -11,7 +11,7 @@
 import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
-import { BoundedChildError, runBounded } from "../bounded-child";
+import { BoundedChildError, runAlone, runBounded, type BoundedResult } from "../bounded-child";
 
 const windows = process.platform === "win32";
 const ext = windows ? ".exe" : "";
@@ -56,9 +56,9 @@ export async function buildFixtureShims(packageDir: string, programs: readonly F
   fs.mkdirSync(outputDir, { recursive: true });
   const compiler = windows ? "clang.exe" : "cc";
   const built: Record<string, string> = {};
-  // On Windows `hide-processes` is built first and follows every later
-  // compile's tree; its own compile has nothing to follow it with, so a
-  // failure there that is not the compiler's own exit keeps its partial file.
+  // On Windows `hide-processes` is built first and owns every later
+  // compile's tree; its own compile, with nothing to own a tree yet, runs in
+  // steps that each start no other process (`compileInSteps`).
   const order: FixtureShim[] = windows ? ["hide-processes", ...programs.filter((name) => name !== "hide-processes")] : [...programs];
   // The finished `hide-processes`, once there is one to run.
   let processTool: string | undefined;
@@ -74,7 +74,11 @@ export async function buildFixtureShims(packageDir: string, programs: readonly F
     let failure: unknown;
     let output = "";
     try {
-      const done = await runBounded(compiler, ["-O1", "-o", partial, source], { ...COMPILE, processTool });
+      // The steps share one compile's bounds.
+      const until = Date.now() + COMPILE.timeoutMs;
+      const done = windows && !processTool
+        ? await compileInSteps(compiler, source, partial, (program, args, env) => runAlone(program, args, { ...COMPILE, timeoutMs: Math.max(0, until - Date.now()), env }))
+        : await runBounded(compiler, ["-O1", "-o", partial, source], { ...COMPILE, processTool });
       if (done.status !== 0) failure = new Error(`exit status ${done.status}, signal ${done.signal}`);
       output = done.stdout + done.stderr;
     } catch (error) {
@@ -104,6 +108,60 @@ export async function buildFixtureShims(packageDir: string, programs: readonly F
     }
   }
   process.env[PROGRAMS] = JSON.stringify(built);
+}
+
+/**
+ * The variables that make clang's driver start cc1 as a process of its own
+ * or rewrite its arguments: `CC_PRINT_PROC_STAT` measures cc1 in a process
+ * of its own, `CLANG_SPAWN_CC1` asks for one, and `CCC_OVERRIDE_OPTIONS` can
+ * add `-fno-integrated-cc1` after this build's own arguments. A default
+ * config file can do the same, through `-fproc-stat-report`; clang reads
+ * none here (`--no-default-config`).
+ */
+const SPAWNS_CC1 = ["CC_PRINT_PROC_STAT", "CLANG_SPAWN_CC1", "CCC_OVERRIDE_OPTIONS"];
+
+/**
+ * Compiles `source` to `output` with clang in steps that each run a single
+ * process, through `run`, and returns the last step that ran: clang compiles
+ * in its own process (`-fintegrated-cc1`, `-c`, no crash report, which would
+ * start a second clang, no default config file and none of `SPAWNS_CC1` in
+ * its environment), and the link is the one lld-link command clang's driver
+ * plans for `-###` without running it, where the driver would have started
+ * it as a child. A step's
+ * own exit is then the end of its tree, which the first compile on Windows
+ * needs, before `hide-processes` exists to own one; the Windows unit suite
+ * counts each step's processes in a job (`bounded-child.unit.ts`).
+ */
+export async function compileInSteps(compiler: string, source: string, output: string, run: (program: string, args: string[], env: NodeJS.ProcessEnv) => Promise<BoundedResult>): Promise<BoundedResult> {
+  // Windows reads a variable's name without regard to case.
+  const env = Object.fromEntries(Object.entries(process.env).filter(([name]) => !SPAWNS_CC1.includes(name.toUpperCase())));
+  const object = `${output}.obj`;
+  // A step whose end was not confirmed may still write the object.
+  let held = false;
+  try {
+    const compiled = await run(compiler, ["--no-default-config", "-c", "-O1", "-fintegrated-cc1", "-fno-crash-diagnostics", "-o", object, source], env);
+    if (compiled.status !== 0) return compiled;
+    const planned = await run(compiler, ["--no-default-config", "-###", "-fuse-ld=lld", "-o", output, object], env);
+    if (planned.status !== 0) return planned;
+    const [linker, ...args] = plannedLink(planned.stderr);
+    return await run(linker!, args, env);
+  } catch (error) {
+    held = error instanceof BoundedChildError && !error.treeEnded;
+    throw error;
+  } finally {
+    if (!held) fs.rmSync(object, { force: true });
+  }
+}
+
+/**
+ * The link command in clang's `-###` plan: the last line of quoted
+ * arguments, each with its quotes and backslashes escaped by a backslash.
+ */
+function plannedLink(plan: string): string[] {
+  const command = plan.split(/\r?\n/).filter((line) => line.startsWith(' "')).at(-1);
+  const args = command ? [...command.matchAll(/"((?:[^"\\]|\\.)*)"/g)].map((match) => match[1]!.replace(/\\(.)/g, "$1")) : [];
+  if (!/lld-link(\.exe)?$/i.test(args[0] ?? "")) throw new Error(`clang planned no lld-link command:\n${plan}`);
+  return args;
 }
 
 /** The finished program `name`, run where it is built; a program that was not built is a failure that says how to build it. */

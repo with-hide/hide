@@ -1,7 +1,7 @@
 # Manual unsigned preparation only. No tag, release or signing credential is
 # written here; a consumer must verify this successful main run and receipt,
 # and that the verify run the receipt names concluded success, which this
-# workflow does not wait for.
+# workflow waits to start but not to finish.
 name: release candidate
 run-name: Candidate ${{ inputs.tag }} from ${{ inputs.public_sha }}
 
@@ -9,7 +9,7 @@ on:
   workflow_dispatch:
     inputs:
       public_sha:
-        description: Full public main commit whose verify push run is running or passed.
+        description: Full public main commit whose verify push run is pending, running or passed.
         required: true
         type: string
       tag:
@@ -17,7 +17,7 @@ on:
         required: true
         type: string
       verification_run_id:
-        description: The pr.yml push/main run of exactly public_sha, running or passed.
+        description: The pr.yml push/main run of exactly public_sha, pending, running or passed.
         required: true
         type: string
       build_order:
@@ -41,7 +41,8 @@ concurrency:
 jobs:
   validate:
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    # Up to 45 minutes waiting for a pending verify run to start, and the checks.
+    timeout-minutes: 50
     outputs:
       receipt: ${{ steps.source.outputs.receipt }}
     steps:
@@ -52,18 +53,16 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 22
-      - name: Require the exact main source and its verify run
+      - name: Require the exact main source and its started verify run
         id: source
         env:
           GH_TOKEN: ${{ github.token }}
-          VERIFICATION_RUN: ${{ inputs.verification_run_id }}
           PUBLIC_SHA: ${{ inputs.public_sha }}
         run: |
-          # Validate the path component before calling the API. The receipt
-          # checker also validates all inputs before they reach a build.
-          [[ "$VERIFICATION_RUN" =~ ^[1-9][0-9]*$ ]]
-          gh api "repos/$GITHUB_REPOSITORY/actions/runs/$VERIFICATION_RUN" > "$RUNNER_TEMP/verification.json"
-          node scripts/release-candidate.mjs source "$RUNNER_TEMP/verification.json" > "$RUNNER_TEMP/candidate.json"
+          # Reads the verify run named by the inputs, waiting while it is
+          # pending behind another main run, and checks every input before it
+          # reaches a build.
+          node scripts/release-candidate.mjs source > "$RUNNER_TEMP/candidate.json"
           git merge-base --is-ancestor "$PUBLIC_SHA" origin/main
           echo "receipt=$(cat "$RUNNER_TEMP/candidate.json")" >> "$GITHUB_OUTPUT"
       - name: Require the build steps the source was verified with
@@ -149,8 +148,13 @@ jobs:
       systems: '["linux","macos","windows"]'
       fake: true
 
+  # The receipt records the builds and does not wait for the journey, which
+  # uploads none of the artifacts a release takes: a journey-only failure is
+  # retried with "Re-run failed jobs" without making this receipt or any
+  # build again, so every artifact the publisher takes stays one attempt's.
+  # The run, which the publisher requires to succeed, still needs the journey.
   receipt:
-    needs: [validate, packages, macos-binaries, agent-journey]
+    needs: [validate, packages, macos-binaries]
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
@@ -177,13 +181,13 @@ jobs:
           name: hide-macos-release-binaries
           path: agents/runs/release-candidate/macos-binaries
           digest-mismatch: error
-      - name: Record the successful candidate, its device helpers and its Mac binaries
+      - name: Record the candidate's source, its device helpers and its Mac binaries
         env:
           RECEIPT: ${{ needs.validate.outputs.receipt }}
         run: |
           printf '%s\n' "$RECEIPT" > "$RUNNER_TEMP/source.json"
           node scripts/release-candidate.mjs builds "$RUNNER_TEMP/source.json" agents/runs/release-candidate/device-helpers agents/runs/release-candidate/macos-binaries > agents/runs/release-candidate/candidate.json
-          echo 'Signed-in providers: not measured on CI; the release measures them on the Mac. Fixture and fake-model checks passed.' >> "$GITHUB_STEP_SUMMARY"
+          echo 'Signed-in providers: not measured on CI; the release measures them on the Mac. Fixture and fake-model checks run beside this receipt, and the run succeeds only when they pass.' >> "$GITHUB_STEP_SUMMARY"
           echo 'The verify run this receipt names was not awaited; the publish requires that it concluded success.' >> "$GITHUB_STEP_SUMMARY"
       - uses: actions/upload-artifact@v7
         with:

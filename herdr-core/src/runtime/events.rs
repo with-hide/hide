@@ -1272,6 +1272,11 @@ pub(super) struct SshHostsListPayload {}
 #[derive(Debug, Deserialize)]
 pub(super) struct HerdrProfilesListPayload {}
 
+/// The first-run Devices step went away; the core knows which attempts it
+/// started.
+#[derive(Debug, Deserialize)]
+pub(super) struct FirstRunSignInWithdrawPayload {}
+
 #[derive(Debug, Deserialize)]
 pub(super) struct HerdrProfileConnectPayload {
     pub(super) profile_id: String,
@@ -1572,6 +1577,7 @@ pub(super) enum Event {
     RegisterDevice(RegisterDevicePayload),
     DeviceHostConsent(DeviceHostConsentPayload),
     DeviceSignIn(super::device_sign_in::DeviceSignInPayload),
+    FirstRunSignInWithdraw(FirstRunSignInWithdrawPayload),
     DeviceHostRetry(DeviceHostRetryPayload),
     RemoveDevice(RemoveDevicePayload),
     TestDevice(TestDevicePayload),
@@ -1726,6 +1732,7 @@ pub(super) enum Event {
     PrUpdateBranch(PrUpdateBranchPayload),
     SetCheckoutPurpose(SetCheckoutPurposePayload),
     SetCheckoutIssue(SetCheckoutPurposePayload),
+    CheckoutCatchUp(super::checkout_git::CatchUpPayload),
     MigrateMainBranch(MigrateMainBranchPayload),
     TaskOperationAck(TaskOperationAckPayload),
     TaskAgentRetry(TaskAgentRetryPayload),
@@ -1850,6 +1857,9 @@ pub(super) fn validate_event(event: EventEnvelope) -> Result<Event, EventValidat
         "device_host_consent" => decode!(DeviceHostConsentPayload, DeviceHostConsent),
         "device_host_retry" => decode!(DeviceHostRetryPayload, DeviceHostRetry),
         "device_sign_in" => decode!(super::device_sign_in::DeviceSignInPayload, DeviceSignIn),
+        "first_run_sign_in_withdraw" => {
+            decode!(FirstRunSignInWithdrawPayload, FirstRunSignInWithdraw)
+        }
         "remove_device" => decode!(RemoveDevicePayload, RemoveDevice),
         "test_device" => decode!(TestDevicePayload, TestDevice),
         "create_pane" => decode!(CreatePanePayload, CreatePane),
@@ -2039,6 +2049,7 @@ pub(super) fn validate_event(event: EventEnvelope) -> Result<Event, EventValidat
         "pr_update_branch" => decode!(PrUpdateBranchPayload, PrUpdateBranch),
         "set_checkout_issue" => decode!(SetCheckoutPurposePayload, SetCheckoutIssue),
         "set_checkout_purpose" => decode!(SetCheckoutPurposePayload, SetCheckoutPurpose),
+        "checkout_catch_up" => decode!(super::checkout_git::CatchUpPayload, CheckoutCatchUp),
         "migrate_main_branch" => decode!(MigrateMainBranchPayload, MigrateMainBranch),
         "task_operation_ack" => decode!(TaskOperationAckPayload, TaskOperationAck),
         "task_agent_retry" => decode!(TaskAgentRetryPayload, TaskAgentRetry),
@@ -3014,6 +3025,7 @@ impl Runtime {
                 self.set_host_consent(payload.device_id.trim(), payload.allow)
             }
             Event::DeviceSignIn(payload) => self.answer_device_sign_in(payload),
+            Event::FirstRunSignInWithdraw(_) => self.withdraw_first_run_sign_ins(),
             Event::DeviceHostRetry(payload) => {
                 let device_id = payload.device_id.trim().to_owned();
                 if self
@@ -4043,6 +4055,7 @@ impl Runtime {
             Event::PrMerge(payload) => self.merge_pull_request(payload),
             Event::PrUpdateBranch(payload) => self.update_pull_request_branch(payload),
             Event::SetCheckoutPurpose(payload) => self.set_checkout_purpose(payload),
+            Event::CheckoutCatchUp(payload) => self.catch_up_checkout(payload),
             Event::MigrateMainBranch(payload) => self.migrate_main_branch(payload),
             Event::TaskOperationAck(payload) => self.acknowledge_task_operation(payload.id),
             Event::TaskAgentRetry(payload) => self.retry_task_agent(payload.id),

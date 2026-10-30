@@ -8,8 +8,12 @@
 //! answer travels from the dispatch that carries it to the waiting attempt
 //! over a channel of that one question, never through the snapshot, a file
 //! or a log (B10). An attempt nobody may be asked for (`Wake::NotAllowed`,
-//! Hide's own retries) is refused at once and shows nothing (B14).
+//! Hide's own retries) is refused at once and shows nothing (B14). The
+//! first-run step, which goes away while an attempt its Connect started may
+//! still wait, withdraws that attempt's sign-in as it leaves; the device row
+//! itself never does.
 
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc;
 use std::time::Duration;
 
@@ -48,6 +52,8 @@ pub(super) struct RowSignIn {
     pub(super) device_id: String,
     pub(super) generation: u64,
     pub(super) wake: Wake,
+    /// The attempt's own flag in its [`super::hosts::DeviceHost`].
+    pub(super) withdrawn: Arc<AtomicBool>,
 }
 
 impl RowSignIn {
@@ -70,7 +76,7 @@ impl SignIn for RowSignIn {
     fn show(&self, wait: Option<SignInWait>) {
         // A touch needs the operator, so an attempt nobody may be asked for
         // shows none (B14).
-        if self.wake == Wake::NotAllowed && wait.is_some() {
+        if (self.wake == Wake::NotAllowed || self.withdrawn()) && wait.is_some() {
             return;
         }
         self.with_runtime(|runtime| {
@@ -84,6 +90,9 @@ impl SignIn for RowSignIn {
     fn ask(&self, wait: SignInWait) -> Result<Answer, Refusal> {
         if self.wake == Wake::NotAllowed {
             return Err(Refusal::NotAllowed);
+        }
+        if self.withdrawn() {
+            return Err(Refusal::Cancelled);
         }
         let (sender, answers) = mpsc::sync_channel(1);
         let question = self
@@ -107,6 +116,10 @@ impl SignIn for RowSignIn {
             // device's removal.
             Err(mpsc::RecvTimeoutError::Disconnected) => Err(Refusal::Ended),
         }
+    }
+
+    fn withdrawn(&self) -> bool {
+        self.withdrawn.load(Ordering::SeqCst)
     }
 }
 
@@ -222,6 +235,49 @@ impl Runtime {
         };
         let _ = answer.send(payload.reply.into_answer());
         self.refresh_device_snapshots()
+    }
+
+    /// The first-run step went away (Next, Not now, Back, Help's walk
+    /// moving on or closing): each attempt one of its Connect presses
+    /// started, and that still runs, ends its sign-in. A question still
+    /// waiting is answered Cancelled, a wait that takes no answer (a browser
+    /// check, a key's touch) ends the attempt, and a question it would ask
+    /// later is refused, so each ends as Sign-in needed (B8). An attempt the
+    /// device row or another screen started since, and a device already
+    /// connected, are left as they are.
+    pub(super) fn withdraw_first_run_sign_ins(&mut self) -> bool {
+        let mut changed = false;
+        for (device_id, generation) in std::mem::take(&mut self.first_run_attempts) {
+            let Some(host) = self
+                .device_hosts
+                .get_mut(&device_id)
+                .filter(|host| host.generation == generation)
+            else {
+                continue;
+            };
+            if matches!(host.phase, super::hosts::HostPhase::Ready { .. }) {
+                continue;
+            }
+            host.withdrawn.store(true, Ordering::SeqCst);
+            let Some(state) = host.sign_in.take() else {
+                continue;
+            };
+            crate::diagnostic!(serde_json::json!({
+                "component": "remote_host",
+                "kind": "host.sign_in_withdrawn",
+                "target": device_id,
+                "generation": generation,
+                "question": state.question,
+            }));
+            if let Some(answer) = state.answer {
+                let _ = answer.send(Err(Refusal::Cancelled));
+            }
+            changed = true;
+        }
+        if changed {
+            self.refresh_device_snapshots();
+        }
+        changed
     }
 
     fn next_sign_in_question(&mut self) -> u64 {

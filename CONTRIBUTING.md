@@ -350,8 +350,8 @@ Signing credentials and the maintainer's publication procedure are managed outsi
 Existing releases and downloads remain available.
 
 The public [unsigned release candidate](docs/BUILD.md#unsigned-release-candidates) prepares Linux and Windows packages, the two Linux device helpers the Mac app's device bundles are made from and the Mac app's release binaries, compiled on the operator's Mac mini ([The candidate's Mac build](docs/BUILD.md#the-candidates-mac-build)), and runs the agent journey's CI lanes on an exact main source.
-It may start while that source's own `verify` push run is still running, so the publish, not the candidate, requires that run to have passed.
-It creates no tag or Release, and produces its candidate receipt, which records the helpers' and the Mac binaries' digests, only after its packages, helpers, Mac binaries and journey pass.
+It may start while that source's own `verify` push run is still running, and waits for one still pending behind another main run to start, so the publish, not the candidate, requires that run to have passed.
+It creates no tag or Release, and produces its candidate receipt, which records the helpers' and the Mac binaries' digests, only after its packages, helpers and Mac binaries pass; the run succeeds only when its journey passes too, and a journey-only failure is retried with **Re-run failed jobs**.
 It runs the Linux/macOS stand-ins, the Windows form checks and the fake-model checks on all three systems, and signs no agent in: since 2026-10-27, by the operator's decision, a real login is measured only on the Mac, because what only a login proves (the provider's sign-in, quota and billed usage) is the provider's, not Hide's code.
 Public CI keeps the source, installation and update checks; official macOS signing and final publication run privately.
 

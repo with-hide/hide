@@ -4,7 +4,7 @@ import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { candidateReceipt, withDeviceHelpers, withMacosBinaries } from "../release-candidate.mjs";
+import { awaitStartedVerification, candidateReceipt, VERIFY_START_LIMIT_MS, withDeviceHelpers, withMacosBinaries } from "../release-candidate.mjs";
 import { recordReleaseBinaries } from "../../desktop/scripts/release-binaries.mjs";
 
 // The producer/consumer contract: public dispatch inputs, one receipt,
@@ -50,8 +50,47 @@ test("a wrong, waiting, failed or PR verification cannot authorize a candidate",
     { status: "pending", conclusion: null }, { status: "waiting", conclusion: null }, { status: "requested", conclusion: null },
     { conclusion: "failure" }, { conclusion: "cancelled" }, { conclusion: "skipped" }, { conclusion: "timed_out" },
   ]) {
-    assert.throws(() => candidateReceipt(inputs, context, { ...verification, ...patch }), /dispatch while it runs or after it passed/);
+    assert.throws(() => candidateReceipt(inputs, context, { ...verification, ...patch }), /dispatch while it is pending, runs or after it passed/);
   }
+});
+
+// GitHub's answers for the named verify run, one per read, on a clock the waits move.
+function verifyQueue(states) {
+  const clock = { ms: 0, waits: [] };
+  const reads = states.map((state) => ({ ...verification, ...state }));
+  return {
+    clock,
+    read: async () => reads.length > 1 ? reads.shift() : reads[0],
+    options: { now: () => clock.ms, wait: async (ms) => { clock.waits.push(ms); clock.ms += ms; } },
+  };
+}
+const pending = { status: "pending", conclusion: null };
+
+test("a candidate waits for a verify run pending behind another main run to start", async () => {
+  const queue = verifyQueue([pending, pending, { status: "in_progress", conclusion: null }]);
+  const { verification: started, waitedMs } = await awaitStartedVerification(inputs, queue.read, queue.options);
+  assert.equal(started.status, "in_progress");
+  assert.equal(waitedMs, 60_000);
+  assert.deepEqual(queue.clock.waits, [30_000, 30_000]);
+  assert.deepEqual(candidateReceipt(inputs, context, started), receipt);
+  // A started or passed run is taken at once.
+  const ready = verifyQueue([{}]);
+  assert.equal((await awaitStartedVerification(inputs, ready.read, ready.options)).waitedMs, 0);
+  assert.deepEqual(ready.clock.waits, []);
+});
+
+test("a pending verify run that a later merge replaces, or that never starts, refuses the candidate", async () => {
+  // pr.yml's concurrency cancels the waiting run when the next main run queues.
+  const replaced = verifyQueue([pending, { status: "completed", conclusion: "cancelled" }]);
+  const { verification: cancelled } = await awaitStartedVerification(inputs, replaced.read, replaced.options);
+  assert.throws(() => candidateReceipt(inputs, context, cancelled), /later main run replaced it/);
+  const stuck = verifyQueue([pending]);
+  await assert.rejects(awaitStartedVerification(inputs, stuck.read, stuck.options), /still waits behind another main run after 45 minutes/);
+  assert.ok(stuck.clock.ms <= VERIFY_START_LIMIT_MS);
+  // A wrong run is refused at the first read, not after the wait.
+  const wrong = verifyQueue([{ ...pending, head_sha: workflowSha }]);
+  await assert.rejects(awaitStartedVerification(inputs, wrong.read, wrong.options), /verify push\/main run of public_sha/);
+  assert.deepEqual(wrong.clock.waits, []);
 });
 
 test("candidate provenance cannot be issued from a branch, fork or different workflow revision", () => {

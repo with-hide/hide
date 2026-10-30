@@ -217,7 +217,7 @@ fn tool_kind(update: &Value) -> Option<&str> {
     update.pointer("/_meta/x.ai~1tool/kind")?.as_str()
 }
 
-fn tool_text(update: &Value) -> Option<String> {
+pub(crate) fn tool_text(update: &Value) -> Option<String> {
     let text = update
         .get("content")?
         .as_array()?
@@ -228,7 +228,7 @@ fn tool_text(update: &Value) -> Option<String> {
     (!text.trim().is_empty()).then_some(text)
 }
 
-fn terminal(update: &Value) -> bool {
+pub(crate) fn terminal(update: &Value) -> bool {
     matches!(update["status"].as_str(), Some("completed" | "failed"))
 }
 

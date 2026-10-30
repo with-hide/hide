@@ -3,7 +3,7 @@
 use super::{LinkStore, ProjectPass, SessionKey, failed};
 use crate::labels::analysis::LabelEnd;
 use crate::links::ledger::*;
-use crate::links::{CREATED_AFTER_MS, CREATED_BEFORE_MS, SUMMARY_SESSION_LIMIT};
+use crate::links::{CREATED_AFTER_MS, CREATED_BEFORE_MS, MADE_BEFORE_MS, SUMMARY_SESSION_LIMIT};
 use rusqlite::{OptionalExtension, Transaction, params};
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -1606,19 +1606,6 @@ impl LinkStore {
         if record.outputs.len() > REQUEST_LIMIT {
             return Err("ledger_output_capacity".into());
         }
-        let own_prs: Vec<WorkOutput> = record
-            .outputs
-            .iter()
-            .filter(|output| output.kind == "pr")
-            .cloned()
-            .collect();
-        if !own_prs.is_empty() {
-            record.pr_groups.push(PrGroup {
-                child: None,
-                name: record.title.clone(),
-                outputs: own_prs,
-            });
-        }
         record.artifacts = turns
             .iter()
             .rev()
@@ -1658,21 +1645,6 @@ impl LinkStore {
         for child in children {
             let child =
                 self.record_tree(&child, visited, depth + 1, request_budget, include_requests)?;
-            // A grandchild's pull requests sit under the direct child that
-            // started it (B18).
-            let prs: Vec<WorkOutput> = child
-                .outputs
-                .iter()
-                .filter(|output| output.kind == "pr")
-                .cloned()
-                .collect();
-            if !prs.is_empty() {
-                record.pr_groups.push(PrGroup {
-                    child: Some(child.session.clone()),
-                    name: child.title.clone(),
-                    outputs: prs,
-                });
-            }
             record.outputs.extend(child.outputs.iter().cloned());
             record.artifacts.extend(child.artifacts.iter().cloned());
             if record.outputs.len() > REQUEST_LIMIT {
@@ -1688,13 +1660,6 @@ impl LinkStore {
                 output.number,
             ))
         });
-        let mut groups_seen = BTreeSet::new();
-        for group in &mut record.pr_groups {
-            group
-                .outputs
-                .retain(|output| groups_seen.insert((output.repository.clone(), output.number)));
-        }
-        record.pr_groups.retain(|group| !group.outputs.is_empty());
         let mut artifacts_seen = BTreeSet::new();
         record
             .artifacts
@@ -2129,6 +2094,7 @@ impl LinkStore {
                 subtree_open_missed: subtree.get(&identity).copied().unwrap_or(0),
                 missed,
                 open_asks: asks.get(&identity).copied().unwrap_or(0),
+                parent: parents.get(&identity).cloned(),
                 session: identity,
             });
         }
@@ -2339,8 +2305,9 @@ impl LinkStore {
                 .map(|record| &record.session)
                 .collect::<Vec<_>>(),
         )?;
-        let mut statement = self.connection.prepare("SELECT o.device,o.agent,o.id,o.kind,o.repo,o.number FROM ledger_outputs o \
+        let mut statement = self.connection.prepare("SELECT o.device,o.agent,o.id,o.kind,o.repo,o.number,o.url,o.title,o.state,f.read_at FROM ledger_outputs o \
             JOIN json_each(?1) s ON o.device=json_extract(s.value,'$.device_id') AND o.agent=json_extract(s.value,'$.agent') AND o.id=json_extract(s.value,'$.session_id') \
+            LEFT JOIN ledger_output_facts f ON f.repo=o.repo AND f.kind=o.kind AND f.number=o.number \
             ORDER BY o.created_at DESC,o.kind,o.number LIMIT ?2").map_err(failed)?;
         let creators = statement
             .query_map(params![sessions, REQUEST_LIMIT as i64 + 1], |row| {
@@ -2353,6 +2320,10 @@ impl LinkStore {
                     kind: row.get(3)?,
                     repository: row.get(4)?,
                     number: row.get(5)?,
+                    url: row.get(6)?,
+                    title: row.get(7)?,
+                    state: row.get(8)?,
+                    last_read_at_unix_ms: row.get(9)?,
                 })
             })
             .map_err(failed)?
@@ -2380,9 +2351,9 @@ pub(super) fn refresh_outputs(tx: &Transaction<'_>) -> Result<(), String> {
             SELECT s.device,s.agent,s.id,'pr',s.repo_name,p.number,p.title,p.url,CASE WHEN p.merged_at IS NOT NULL THEN 'merged' \
             WHEN p.closed_at IS NOT NULL THEN 'closed' ELSE 'open' END,p.created_at,s.at \
             FROM session_prs s JOIN repo_names n ON n.name=s.repo_name JOIN prs p ON p.repo=n.repo AND p.number=s.number \
-            WHERE p.created_at IS NOT NULL AND s.at>=p.created_at-?1 AND s.at<=p.created_at+?2 \
+            WHERE p.created_at IS NOT NULL AND s.at>=p.created_at-CASE WHEN s.made=1 THEN ?3 ELSE ?1 END AND s.at<=p.created_at+?2 \
             ON CONFLICT(device,agent,id,kind,repo,number) DO UPDATE SET title=excluded.title,url=excluded.url,state=excluded.state",
-            params![CREATED_BEFORE_MS as i64,CREATED_AFTER_MS as i64]).map_err(failed)?;
+            params![CREATED_BEFORE_MS as i64,CREATED_AFTER_MS as i64,MADE_BEFORE_MS as i64]).map_err(failed)?;
     // The label judged these pull requests made by the session against
     // GitHub's creation time (`SessionFacts::judge_created`), so a sighting
     // the link reader's window missed still finds its session (D-14, B21).

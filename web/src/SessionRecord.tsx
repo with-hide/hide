@@ -1,4 +1,4 @@
-import { ArrowLeftIcon, CheckIcon, ChevronRightIcon, CircleDotIcon, CircleHelpIcon, Clock3Icon, SquareIcon, ImageIcon, InfoIcon, LightbulbIcon, MailIcon, TriangleAlertIcon, HouseIcon, LoaderCircleIcon, SquareTerminalIcon, RotateCcwIcon } from "lucide-react";
+import { ArrowLeftIcon, CheckIcon, ChevronRightIcon, CircleHelpIcon, Clock3Icon, SquareIcon, ImageIcon, InfoIcon, LightbulbIcon, MailIcon, TriangleAlertIcon, HouseIcon, LoaderCircleIcon, SquareTerminalIcon, RotateCcwIcon } from "lucide-react";
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import type { Actions } from "./actions";
 import { AgentMark } from "./AgentMark";
@@ -15,7 +15,7 @@ import { formatDateTime } from "./i18n/format";
 import { requireInterfaceLanguage } from "./i18n/locale";
 import { useInterfaceTranslation } from "./i18n/client";
 import { cn } from "./lib/utils";
-import { holdsRequest, orderedOutputs, requestRuns, outputPrState, recordTitle, recordTree, requestPreview, sessionOfAgentOn, sessionPlace, settledOutput, workKey } from "./sessionWork";
+import { holdsRequest, requestRuns, recordTitle, recordTree, requestPreview, sessionOfAgentOn, sessionPlace, settledOutput, workKey } from "./sessionWork";
 import { galleryTiles } from "./galleryTiles";
 import { RecordGallery } from "./RecordGallery";
 import { requestWords, senderName, turnResponse } from "./PaneTurnCard";
@@ -27,14 +27,14 @@ import { useSessionResume } from "./useSessionResume";
 import { recordDate } from "./sessionRecordTime";
 import { machineName } from "./screenMachine";
 import { localDeviceId } from "./snapshot";
-import type { AgentRow, Checkout, FlowResult, MissedWork, PlanView, PrSettlement, SessionRecord as RecordValue, WorkEnd, WorkOutput, WorkRequest, WorkSession } from "./snapshot";
+import type { AgentRow, Checkout, FlowResult, MissedWork, PlanView, PrSettlement, SessionPull, SessionRecord as RecordValue, WorkEnd, WorkRequest, WorkSession } from "./snapshot";
 import { PlanChecklist } from "./PlanChecklist";
 import { planCount, planOfSession, planWorkLine } from "./plans";
 import { statusText } from "./agentStatus";
 import { askSubjectText } from "./askSubject";
 import { useShellStore } from "./store";
 import { summariesEnabled } from "./hideAi";
-import { PR_LOOK } from "./prMark";
+import { CLOSED_DIM, PR_LOOK } from "./prMark";
 import { archivedChildrenOf, archivedMemberOf } from "./archive";
 import type { ArchivedMember, ArchivedSession } from "./snapshot";
 import { HighlightedRequest } from "./RequestHighlight";
@@ -373,21 +373,6 @@ function SectionHead({ label, count, summary, className }: { label: string; coun
   </h3>;
 }
 
-function staleHint(output: WorkOutput, unavailable: string): string | null {
-  return output.stale ? output.last_read_at_unix_ms ? new Date(output.last_read_at_unix_ms).toLocaleString() : unavailable : null;
-}
-
-/** One recorded output as a mark that opens its card (B15): a PR mark, or an issue's dot and number. */
-function OutputMark({ output, actions }: { output: WorkOutput; actions: Actions }) {
-  const { t } = useInterfaceTranslation();
-  const state = outputPrState(output.state);
-  const word = output.kind === "pr" ? t(PR_LOOK[state].word) : t(output.state === "closed" ? "sessionWork.closed" : "sessionWork.open");
-  const stale = staleHint(output, t("common.unavailable"));
-  return <button type="button" data-record-output={output.kind} data-record-output-number={output.number} className={cn(ROW, "shrink-0 px-xxs hover:bg-accent")} aria-label={[`#${output.number} ${word}`, output.title, stale].filter(Boolean).join(" · ")} title={output.title} onClick={() => actions.openRecordedOutput(output)}>
-    {output.kind === "pr" ? <PrMark state={state} number={output.number} stale={output.stale} /> : <span className={cn("inline-flex shrink-0 items-center gap-xxs font-mono text-caption", output.state === "closed" ? "text-muted-foreground" : "text-success", output.stale && "opacity-(--opacity-dimmed)")}><CircleDotIcon aria-hidden="true" className="size-(--size-pr-icon)" /><span className="text-subtle-foreground">#{output.number}</span></span>}
-  </button>;
-}
-
 /** The session's own plan (PRD hide-plan B9, B21; PRD mission-plan-visibility D-07): its count, `끝남` once every step is done or dropped, and the checklist. */
 function RecordPlan({ plan }: { plan: PlanView }) {
   const { t } = useInterfaceTranslation();
@@ -638,27 +623,40 @@ function RequestRow({ request, locator }: { request: WorkRequest; locator?: Requ
 }
 
 /**
- * The pull requests (D-14, B18, B19): this session's first, then one group
- * per direct child holding its whole subtree's. Open and failing ones show;
- * merged and closed ones fold into one count line that opens them.
+ * The pull requests (D-14, B18, B19): the core's list of this session and
+ * every descendant, the one its row and pane draw, this session's first, then
+ * one group per direct child holding its whole subtree's. Open and failing
+ * ones show; merged and closed ones fold into one count line that opens them,
+ * a closed one dimmed.
  */
 function Prs({ record, actions }: { record: RecordValue; actions: Actions }) {
   const { t } = useInterfaceTranslation();
   const [unfolded, setUnfolded] = useState(false);
-  const all = record.pr_groups.flatMap((group) => group.outputs);
+  const all = record.pr_groups.flatMap((group) => group.pulls);
   const settled = all.filter(settledOutput);
-  const allMerged = all.length > 0 && all.every((output) => output.state === "merged");
-  const rows = (items: readonly WorkOutput[]) => items.map((output) => <div key={`${output.kind}:${output.repository}:${output.number}`} className="flex min-w-0 items-start gap-sm py-xs" data-record-pr-row={output.number}><OutputMark output={output} actions={actions} /><button type="button" className={cn(ROW, "min-w-0 flex-1 truncate text-caption hover:underline", output.stale && "opacity-(--opacity-dimmed)")} onClick={() => actions.openRecordedOutput(output)} title={[output.title, staleHint(output, t("common.unavailable"))].filter(Boolean).join("\n")}>{output.title}</button></div>);
+  const allMerged = all.length > 0 && all.every((pull) => pull.state === "merged");
+  const open = (pull: SessionPull) => actions.openSessionPullRequest({ workspace_id: null, url: pull.url, number: pull.number });
+  const rows = (items: readonly SessionPull[]) => items.map((pull) => {
+    const word = t(PR_LOOK[pull.state].word);
+    const stale = pull.stale ? pull.last_read_at_unix_ms ? new Date(pull.last_read_at_unix_ms).toLocaleString() : t("common.unavailable") : null;
+    const dim = pull.state === "closed" && CLOSED_DIM;
+    return <div key={pull.url} className="flex min-w-0 items-start gap-sm py-xs" data-record-pr-row={pull.number} data-pr-closed={pull.state === "closed" || undefined}>
+      <button type="button" data-record-output="pr" data-record-output-number={pull.number} className={cn(ROW, "shrink-0 px-xxs hover:bg-accent")} aria-label={[`#${pull.number} ${word}`, pull.title, stale].filter(Boolean).join(" · ")} title={pull.title} onClick={() => open(pull)}>
+        <PrMark state={pull.state} number={pull.number} stale={pull.stale} className={dim || undefined} />
+      </button>
+      <button type="button" className={cn(ROW, "min-w-0 flex-1 truncate text-caption hover:underline", (pull.stale || dim) && "opacity-(--opacity-dimmed)")} onClick={() => open(pull)} title={[pull.title, stale].filter(Boolean).join("\n")}>{pull.title}</button>
+    </div>;
+  });
   return <section className="mt-lg min-w-0" data-record-prs={all.length}>
     <SectionHead label={t("recordCard.prs")} count={all.length} summary={allMerged ? t("record.allMerged") : null} />
     {!all.length ? <p className="py-xs text-micro text-muted-foreground">{t("recordCard.noPrs")}</p> : null}
     {record.pr_groups.map((group) => {
-      const shown = unfolded ? group.outputs : group.outputs.filter((output) => !settledOutput(output));
+      const shown = unfolded ? group.pulls : group.pulls.filter((pull) => !settledOutput(pull));
       // A group whose PRs all sit in the fold draws no empty name line.
       if (!shown.length) return null;
       return <div key={group.child ? workKey(group.child) : "own"} className="min-w-0" data-record-pr-group={group.child ? group.child.session_id : "own"}>
         {record.pr_groups.length > 1 || group.child ? <p className="truncate pt-xs text-micro text-muted-foreground" title={group.name}>{group.child ? group.name : t("record.thisSession")}</p> : null}
-        {rows(orderedOutputs(shown))}
+        {rows(shown)}
       </div>;
     })}
     {settled.length && !unfolded ? <button type="button" className={cn(ROW, "flex items-center gap-xxs py-xs text-micro text-muted-foreground hover:text-foreground")} aria-expanded="false" onClick={() => setUnfolded(true)} data-record-settled={settled.length}>{t("record.settledPrs", { count: settled.length })}<ChevronRightIcon aria-hidden="true" className="size-(--size-icon-sm)" /></button> : null}
@@ -690,7 +688,7 @@ function ChildRows({ parent, summaries, onOpen, actions }: { parent: RecordValue
       const done = live ? live.status_code === "done" : !away && (settled ? settled.state === "merged" : end === "done");
       const state = away && away !== "resumed" ? archivedWord(t, away) : live ? statusText(t, live.status_code) : settled ? t(settled.state === "merged" ? "record.merged" : "record.closed") : end ? t(`requests.end.${end}`) : t("common.unavailable");
       const title = recordTitle(child, summaries);
-      const prs = child.pr_groups.reduce((count, group) => count + group.outputs.length, 0);
+      const prs = child.pr_groups.reduce((count, group) => count + group.pulls.length, 0);
       const branch = live ? branchChip(live) : child.cwd && child.cwd !== parent.cwd ? folderName(child.cwd) : null;
       const device = child.session.device_id !== parent.session.device_id ? machineName(rest?.navigator?.devices, child.session.device_id, t) : null;
       return <li key={key} className="min-w-0 border-b border-border last:border-b-0" data-record-child={child.session.session_id}>
