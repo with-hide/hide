@@ -1,0 +1,69 @@
+# Throwaway: windows check's compile steps, then the web unit suite, ten times
+# without and ten times with the Node binary read first (with-hide/hide-private
+# issue 354). Never merged.
+name: diag windows unit repeat
+on:
+  push:
+    branches: [diag/windows-unit-stall-repeat]
+permissions:
+  contents: read
+jobs:
+  web-unit:
+    name: ${{ matrix.variant }} ${{ matrix.attempt }}
+    runs-on: windows-latest
+    timeout-minutes: 50
+    strategy:
+      fail-fast: false
+      matrix:
+        variant: [base, fix]
+        attempt: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
+    defaults:
+      run:
+        shell: bash
+    env:
+      TEST_TARGETS: >-
+        -p hided -p hide-host -p hide-node -p hide-kit -p hide-agent-hooks -p herdr-core -p hide-ai
+        --lib --bin hide-agent-hooks --test it
+    steps:
+      - run: git config --global core.autocrlf false
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 2
+      - uses: ./.github/actions/rust-cache
+        with:
+          set: workspace
+          save: false
+      - run: bash scripts/install-nextest.sh
+      - name: Compile the workspace for Windows, as windows check does
+        run: bash scripts/verify-cargo.sh check --workspace --all-targets --keep-going --message-format short
+      - name: Build the Windows test binaries, as windows check does
+        run: bash scripts/verify-cargo.sh nextest --profile ci $TEST_TARGETS --no-run
+      - uses: pnpm/action-setup@v6
+        with:
+          version: 10
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
+      - run: bash scripts/verify-web.sh install --ignore-scripts
+      - name: The suite as main has it
+        if: ${{ matrix.variant == 'base' }}
+        run: |
+          git checkout 1e8355e40 -- web/vite.config.ts
+          rm web/e2e/unit-node-binary.ts
+          git status --short
+      - name: Web shell unit suite, with the machine's disk each second
+        run: |
+          mkdir -p diag-out
+          typeperf "\Processor(_Total)\% Processor Time" "\Memory\Pages Input/sec" "\Memory\Page Reads/sec" "\PhysicalDisk(*)\Disk Reads/sec" "\PhysicalDisk(*)\Disk Read Bytes/sec" "\PhysicalDisk(*)\Avg. Disk sec/Read" "\PhysicalDisk(*)\Current Disk Queue Length" -si 1 -sc 600 -f CSV -o diag-out/perf.csv -y > /dev/null 2>&1 &
+          status=0
+          bash scripts/verify-web.sh web test --reporter=default --reporter=./e2e/unit-failure-reporter.ts --reporter=json --outputFile.json=../diag-out/vitest.json || status=$?
+          taskkill //IM typeperf.exe //F || true
+          exit $status
+      - uses: actions/upload-artifact@v4
+        if: ${{ !cancelled() }}
+        with:
+          name: repeat-${{ matrix.variant }}-${{ matrix.attempt }}
+          path: diag-out
+          retention-days: 5
