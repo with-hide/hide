@@ -246,6 +246,48 @@ fn an_ignored_file_where_the_branch_adds_one_refuses() {
     );
 }
 
+/// with-hide/hide-private#348: a local file in the way of a branch folder, or
+/// a local folder in the way of a branch file, is overwritten as surely as one
+/// at the same path; an ignored one could never be got back.
+#[test]
+fn a_local_file_where_the_branch_adds_a_folder_and_the_reverse_refuse_with_every_byte_kept() {
+    for diverged in [false, true] {
+        let fixture = fixture();
+        let common = git(&fixture.main, &["rev-parse", "--git-common-dir"]);
+        write(
+            &fixture.main.join(common),
+            "info/exclude",
+            "secret\ncache\n",
+        );
+        for path in ["secret/config", "cache", "draft/plan.md"] {
+            write(&fixture.feat, path, "from the branch\n");
+            git(&fixture.feat, &["add", "-f", "--", path]);
+        }
+        git(
+            &fixture.feat,
+            &["commit", "-qm", "add paths over local ones"],
+        );
+        if diverged {
+            commit(&fixture.main, "main-only.txt", "m\n");
+        }
+        // An ignored file, an ignored folder and an untracked file.
+        write(&fixture.main, "secret", "operator data\n");
+        write(&fixture.main, "cache/data", "operator cache\n");
+        write(&fixture.main, "draft", "operator draft\n");
+        let before = snapshot(&fixture.main);
+        let outcome = merge(&fixture.main, "feat", None, "main", "Merge feat").unwrap();
+        assert_eq!(
+            outcome,
+            MergeOutcome::Dirty {
+                files: vec!["cache/".to_owned(), "draft".to_owned(), "secret".to_owned()]
+            },
+            "diverged: {diverged}"
+        );
+        assert_eq!(snapshot(&fixture.main), before, "diverged: {diverged}");
+        assert!(!git_dir(&fixture.main).join("MERGE_HEAD").exists());
+    }
+}
+
 #[test]
 fn a_branch_that_moved_since_it_was_read_is_not_merged() {
     let fixture = fixture();
