@@ -184,7 +184,7 @@ function history(mission: Mission, now: number): MissionEvent[] {
 
 const OLD_CRITERION = "목록 화면이 새 API로 페이지를 넘기고, 필터를 바꿔도 처음 쪽으로 돌아가며, 빈 목록에서도 안내가 남는다";
 
-function scene(shown: string, now: number): { mission: Mission; rest: SnapshotRest } {
+export function missionFixture(shown: string, now: number): { mission: Mission; rest: SnapshotRest } {
   // An answer sent from the banner draws the decision with that answer on it.
   const state = shown === "decision-sent" || shown === "decision-unconfirmed" ? "decision" : shown === "exempt" ? "done" : shown;
   // A mission from before finish lines keeps each node's one old sentence (B23).
@@ -239,7 +239,7 @@ export function MissionScene({ params }: { params: URLSearchParams }) {
   const theme = params.get("theme") === "light" ? "light" : "dark";
   const state = params.get("state") ?? "running";
   const pane = PANE_STATES[state];
-  const fixture = useMemo(() => scene(pane ?? state, Date.now()), [pane, state]);
+  const fixture = useMemo(() => missionFixture(pane ?? state, Date.now()), [pane, state]);
   const actions = useMemo(() => createActions(() => true), []);
   const pick = params.get("pick");
   useLayoutEffect(() => {
