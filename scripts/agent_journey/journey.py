@@ -28,6 +28,9 @@ SLEEP_SECONDS = 90
 WAKE_SECONDS = 150
 ATTACH_SECONDS = 30
 TURN_POLL_SECONDS = 1
+# The moments a turn's trace keeps: each change of the row's activity, up to
+# this many, with the screen and Herdr's reading at that change.
+TURN_TRACE_CAP = 8
 # The grid the journey's one view of a pane draws at.
 VIEW_COLS, VIEW_ROWS = 120, 40
 # Refusals the product answers while the same spawn is still under way, each
@@ -177,6 +180,20 @@ class Journey:
     def herdr_agent(self):
         return self.runtime.agent(self.pane)
 
+    def turn_moment(self, activity):
+        """The row's `activity` as it changed, with Herdr's reading of the
+        agent and the pane's visible screen at that moment: a row that never
+        reads idle again says, from these, whether the agent still showed a
+        turn or Herdr kept reading one on an idle screen (with-hide/hide-private#309)."""
+        moment = {"at_ms": int(time.time() * 1000), "activity": activity}
+        try:
+            agent = self.herdr_agent() or {}
+            moment["herdr"] = {key: agent.get(key) for key in ("agent_status", "interactive_ready", "launch_pending")}
+            _, moment["screen"], _ = self.runtime.command(["pane", "read", self.pane, "--source", "visible"], check=False)
+        except ProcessError as error:
+            moment["unreadable"] = str(error)
+        return moment
+
     def conversation(self):
         """The whole conversation of the native session, as Hide's reader reads it."""
         reference = self.reference or {}
@@ -203,18 +220,24 @@ class Journey:
         return {"session": (self.session or value) if kind == "path" else value, "path": answer["path"],
                 "events": answer["events"]}
 
-    def wait_turn(self, since, value, after=lambda events: 0, seconds=TURN_SECONDS):
+    def wait_turn(self, since, value, after=lambda events: 0, seconds=TURN_SECONDS, trace=None):
         """Until the turn ended (cells.turn_verdict): Hide's reader has the
         answer carrying `value` from `after(events)` on, and the row read idle
         later than that answer. The row's history holds every activity the
         daemon's frames carried since `since`, so a turn that ended before
-        this wait began is still read. Returns (verdict, read, observed)."""
+        this wait began is still read. Returns (verdict, read, observed).
+        A `trace` list gets, at each change of the row's activity, what the
+        pane showed and what Herdr read then (`turn_moment`)."""
         end = time.monotonic() + seconds
+        last = None
         while True:
             if not self.reference:
                 self.reference = (self.herdr_agent() or {}).get("agent_session")
             read = self.conversation()
             observed = self.daemon.activities(self.pane, since)
+            if trace is not None and observed and observed[-1][0] != last and len(trace) < TURN_TRACE_CAP:
+                last = observed[-1][0]
+                trace.append(self.turn_moment(last))
             if "error" in read:
                 verdict = cells.FAIL, "Hide's reader could not read the session: " + read["error"]
             else:
@@ -621,7 +644,10 @@ class Journey:
             if not self.type_prompt(record, prompt(value)):
                 return (cells.FAIL, "the pane's terminal never took this screen's keys (transport "
                         + " -> ".join(map(str, record["terminal"])) + ")"), {}, value
-            turn, read, record["activities"] = self.wait_turn(since, value)
+            trace = []
+            turn, read, record["activities"] = self.wait_turn(since, value, trace=trace)
+            if turn[0] != cells.PASS:
+                record["turn_trace"] = trace
             return turn, read, value
         finally:
             self.pane, self.session, self.reference = saved
