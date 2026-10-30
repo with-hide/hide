@@ -597,6 +597,8 @@ The sidebar, the Overview's tasks, ancestor unread state, descendant marks and w
 PR and issue panels retain the handed-off session through its own branch facts and show no delegation line from origin.
 
 A completed spawn stores a durable receipt for its caller and intent, so retries return the same agent and preserve ended registrations and closed watches.
+The CLI waits for a spawn's answer as long as the core's own steps may take one after another (`coordination::SPAWN_ANSWER_WITHIN`, 120 s: the worktree, the shell's prompt, the agent taking input, the brief and the session wait, with a margin for the store's writes and a device's SSH round trips), so a spawn that is only slow answers with its agent instead of `request_timeout`.
+A spawn that still answers `request_timeout` goes on without its caller: running the same command with the same intent returns its agent or its reason, and a spawn that stopped partway is logged as `spawn.unfinished` with the spawn and the reason.
 Changing only responsibility mode on the same intent returns `intent_conflict` before creating anything.
 Only incomplete intents resume their recorded creation and registration steps; starting a new watch after completion requires explicit `hide watch start`.
 Remote starts through a caller's own device use Hide's existing device start path with the same caller, modes and focus rules.
@@ -622,7 +624,7 @@ The caller keeps the parent registration, the authority and the watch; the child
 The agent is registered under the device, so the sidebar and the Overview's tasks show it under its parent with the device's mark, its reports and inactivity warnings reach the parent as letters over the existing device paths, and a handed-off agent records the caller as `origin`.
 Before the intent is reserved or anything is made, the spawn is refused with a stable code and a next action when the id is not a device (`machine_unknown`, naming the connected device ids the caller could have used), the device is not connected or its helper cannot answer (`machine_unavailable`), `--repo` holds no repository there (`repository_unavailable`) or the agent CLI is not on the device's `PATH` (`agent_not_installed`); the checks are the node link's `repository` and `agent_installed` calls, taken off the runtime lock.
 The device is part of the intent: the same intent on another device, or on none, returns `intent_conflict`, and a spawn that already completed answers from its receipt even while the device is away.
-A spawn on a device makes several calls over SSH, so the CLI waits up to 60 seconds for it; one that times out still finishes, and running the same command again returns the same agent (`spawn_busy`, whose next action is to wait and run the same command again, while the first still runs).
+A spawn on a device makes several calls over SSH, and the CLI waits for it as long as for a local spawn; one that times out still finishes, and running the same command again returns the same agent (`spawn_busy`, whose next action is to wait and run the same command again, while the first still runs).
 The checks of the device only read, so they run before the process-wide spawn lock is taken and a slow device does not make local spawns answer `spawn_busy`.
 Creating is single-flight and the checks are not: each of the two calls waits up to 8 seconds, and checks of different spawns may overlap.
 When the device's Herdr stops answering after the spawn was reserved, the answer is `machine_unavailable`, the cause goes to the diagnostic log with the device and the spawn, and the same command continues the spawn once the device answers again.
@@ -694,6 +696,7 @@ Codex 0.163.0 runs the session hook that Herdr's integration reports from only w
 Instead of failing after a fixed time, such a registration waits in the ledger (`identity_waits`, `coordination::identity_wait`) until Herdr shows the session, and the core finishes it then.
 
 `hide agent spawn` still waits up to 5 seconds for the child's session.
+The agent runs by then, so an agent list Herdr does not answer inside that wait is logged as `identity.read_failed` and read again, never taken as the spawn's failure: a spawn that ended on that read left a running child that no wait and no registration tracked.
 When none shows in that time it records the wait and answers `native_identity_unavailable`, an error with no agent, whose next action says the agent started and Hide registers it when it reports its session; the pane and the agent stay as they are, and nothing is typed again.
 Until the child is bound, `hide agent list` does not show it, the parent has no watch on it and its pane carries no lineage tokens.
 Once Herdr shows the session in the spawn's pane under the spawn's agent name, the lineage writer binds the child as the spawn's own answer would: the registration with its parent, or for a handoff its origin, the initial watch of a delegated child, and the lineage tokens on its pane, logged as `identity_wait.bound` with the wait, the agent and the pane.

@@ -129,6 +129,21 @@ pub enum Command {
 /// and a trust question at startup holds it longer.
 pub(crate) const BRIEF_READY_WAIT: std::time::Duration = std::time::Duration::from_secs(30);
 
+/// How long a caller waits for a spawn's answer: the bounded steps a spawn
+/// takes one after another (its worktree, the shell reaching its prompt for
+/// the start, the agent taking input, the brief, the session showing), and
+/// a margin for the store's writes and a device's SSH round trips between
+/// them. A caller that waits less hears `request_timeout` from a spawn that
+/// is only slow, while the spawn goes on without it.
+pub const SPAWN_ANSWER_WITHIN: std::time::Duration = std::time::Duration::from_secs(
+    executor::WORKTREE_CREATE_TIMEOUT.as_secs()
+        + crate::agent_start::SHELL_WAIT.as_secs()
+        + BRIEF_READY_WAIT.as_secs()
+        + executor::BRIEF_PROMPT_TIMEOUT.as_secs()
+        + executor::IDENTITY_WAIT.as_secs()
+        + 15,
+);
+
 /// How long a mission's spawn with no child yet counts as a worker being
 /// made. A start takes seconds to a minute or two; one still childless past
 /// this failed and was left (a retry under a new intent is its own spawn),

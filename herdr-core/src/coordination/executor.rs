@@ -12,9 +12,14 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 const STORE_TIMEOUT: Duration = Duration::from_secs(5);
+/// How long Herdr gets to take the brief once the agent takes input.
+pub(super) const BRIEF_PROMPT_TIMEOUT: Duration = Duration::from_secs(10);
+/// How long a spawn waits for its started agent to show its session before
+/// it leaves the registration to an identity wait.
+pub(super) const IDENTITY_WAIT: Duration = Duration::from_secs(5);
 /// Herdr runs `git worktree add` inside `worktree.create`, which on a large
 /// repository under load takes longer than the 5 s every other call gets.
-const WORKTREE_CREATE_TIMEOUT: Duration = Duration::from_secs(30);
+pub(super) const WORKTREE_CREATE_TIMEOUT: Duration = Duration::from_secs(30);
 /// The refusal for a `worktree.create` whose answer never came: Herdr may
 /// still finish the worktree, and asking the same intent again continues it.
 pub(crate) const WORKTREE_UNCONFIRMED: &str = "worktree_unconfirmed";
@@ -109,13 +114,25 @@ fn wait_native_identity(
     // The public socket start acknowledges the typed command before the
     // process and its native session are detected. Wait for that observation,
     // never send another start, and keep every read within one finite deadline.
-    let deadline = Instant::now() + Duration::from_secs(5);
+    // The agent runs by now, so a read Herdr did not answer says nothing of
+    // it: the wait reads again, and at its deadline the spawn leaves the
+    // registration to an identity wait rather than an agent nothing tracks.
+    let deadline = Instant::now() + IDENTITY_WAIT;
     loop {
         let remaining = deadline.saturating_duration_since(Instant::now());
         if remaining.is_zero() {
             return Err("native_identity_unavailable".into());
         }
-        let observed = agents_with_timeout(connector, remaining.min(Duration::from_secs(2)))?;
+        let observed = match agents_with_timeout(connector, remaining.min(Duration::from_secs(2))) {
+            Ok(observed) => observed,
+            Err(detail) => {
+                crate::diagnostic!(json!({
+                    "component": "spawn", "kind": "identity.read_failed", "pane_id": pane,
+                    "detail": detail,
+                }));
+                Vec::new()
+            }
+        };
         if let Some(agent) = observed.into_iter().find(|agent| {
             native_matches(agent, pane, name, kind)
                 && agent.lineage_session.is_some()
@@ -180,7 +197,7 @@ fn submit_brief(
         connector,
         "agent.prompt",
         crate::wire::delivery_prompt_params(pane, brief)?,
-        Duration::from_secs(10),
+        BRIEF_PROMPT_TIMEOUT,
     )
     .map_err(|error| refused("brief.prompt_refused", format!("{error}")))?;
     crate::wire::delivery_prompted(submitted)
@@ -1181,6 +1198,13 @@ fn spawn(
     // never holds the lock for the probe below.
     drop(single);
     placed.map_err(|reason| {
+        // The caller may have stopped waiting for this answer, so the log is
+        // where a spawn that stopped partway is seen; the same intent
+        // continues it.
+        crate::diagnostic!(json!({
+            "component": "spawn", "kind": "spawn.unfinished", "spawn": spawn_id,
+            "reason": reason,
+        }));
         if on_device {
             device_unreachable(connector.as_ref(), &child_device, &spawn_id, reason)
         } else {
