@@ -71,8 +71,10 @@ impl Runtime {
                 let observation = self.agent_named(device, &agent)?;
                 (
                     observation.actor.device_id.clone(),
+                    // The answer names the agent's pane, which `hide pane
+                    // send` then takes.
                     Step::Read {
-                        pane: agent,
+                        pane: observation.actor.pane_id.clone(),
                         raw: observation.raw_pane_id.clone(),
                         lines,
                     },
