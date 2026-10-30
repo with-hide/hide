@@ -128,11 +128,11 @@ impl NodeLink for Node {
 }
 
 /// A private pinned Herdr server: its own socket, session, config and home
-/// (also `real_agent_trust_tests`).
-pub(super) struct PrivateHerdr {
+/// (also `real_agent_trust_tests` and the engine contract).
+pub(crate) struct PrivateHerdr {
     shell: Option<String>,
     bin: PathBuf,
-    pub(super) home: PathBuf,
+    pub(crate) home: PathBuf,
     socket: PathBuf,
     config: PathBuf,
     log: PathBuf,
@@ -142,7 +142,7 @@ pub(super) struct PrivateHerdr {
 
 impl PrivateHerdr {
     /// A server whose own shell, on unix, is `shell`.
-    pub(super) fn new(shell: Option<String>) -> Self {
+    pub(crate) fn new(shell: Option<String>) -> Self {
         let bin = PathBuf::from(
             std::env::var_os("HIDE_E2E_HERDR_BIN")
                 .expect("HIDE_E2E_HERDR_BIN names the pinned herdr"),
@@ -254,7 +254,7 @@ impl PrivateHerdr {
     }
 
     /// This Herdr as the core's engine.
-    pub(super) fn engine(&self) -> crate::engine::SharedEngine {
+    pub(crate) fn engine(&self) -> crate::engine::SharedEngine {
         crate::engine::herdr::local(&self.socket)
     }
 

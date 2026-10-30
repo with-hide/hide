@@ -729,7 +729,7 @@ impl Shell<'_> {
 #[cfg(test)]
 mod real_agent_trust_tests;
 #[cfg(test)]
-mod real_herdr_tests;
+pub(crate) mod real_herdr_tests;
 
 #[cfg(test)]
 mod tests {

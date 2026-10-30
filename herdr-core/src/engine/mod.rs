@@ -15,6 +15,8 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 pub(crate) mod answers;
+#[cfg(test)]
+mod contract;
 pub mod herdr;
 pub(crate) mod tokens;
 
