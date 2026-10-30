@@ -98,7 +98,7 @@ impl Runtime {
         if row
             .session_id
             .as_deref()
-            .and_then(crate::wire::session_digest)
+            .and_then(crate::engine::tokens::session_digest)
             != actor.session
         {
             return Err("agent_unavailable".into());

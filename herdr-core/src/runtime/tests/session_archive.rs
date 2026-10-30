@@ -167,7 +167,7 @@ fn registered(pane: &str) -> crate::delivery::Actor {
         name: format!("agent-{pane}"),
         kind: "claude".into(),
         device_id: crate::node::TEST_NODE.into(),
-        session: crate::wire::session_digest(&session_of(pane)),
+        session: crate::engine::tokens::session_digest(&session_of(pane)),
     }
 }
 
@@ -178,7 +178,7 @@ fn the_archive_command_saves_an_idle_session_as_the_screen_does() {
 
     let mut command = archive_runtime(&[]);
     let mut other = registered("w1:p1");
-    other.session = crate::wire::session_digest("another-conversation");
+    other.session = crate::engine::tokens::session_digest("another-conversation");
     assert_eq!(
         command.archive_registered("agent-1", &other),
         Err("agent_unavailable".to_owned()),
