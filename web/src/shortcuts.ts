@@ -934,6 +934,17 @@ export function sheetRows(group: Command["group"], registry: readonly Command[],
   return rows;
 }
 
+/**
+ * Commands that leave the operator where they work: pressed while a native
+ * page holds the keyboard, the page keeps it, so the next key and the next
+ * chord act on that page. Zoom pane in a page is Expand and Expand again
+ * (`keyboard.ts`); any other command needs the shell's keyboard for the
+ * surface it opens, or moves the keyboard itself.
+ */
+export function pageKeepsKeyboard(id: CommandId): boolean {
+  return id === "toggle_zoom";
+}
+
 /** Held navigation commands bypass native menu accelerators and share release routing. */
 export function isCycleCommand(id: CommandId): boolean {
   return ["recent_area_tab", "previous_recent_area_tab", "recent_panel", "previous_recent_panel", "recent_project", "previous_recent_project"].includes(id);

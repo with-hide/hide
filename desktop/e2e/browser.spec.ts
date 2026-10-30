@@ -1096,6 +1096,30 @@ test("zoom: the text-size commands zoom a focused page in Chrome's steps and a p
   await windowShot("browser-zoom-pinched");
 });
 
+test("expand: Zoom pane in a focused page expands the lane and back while the page keeps the keyboard", { tag: NEEDS_FOCUS }, async () => {
+  ({ app } = await launch(run.env));
+  await fitWindow(app, WINDOW);
+  const page = await app.firstWindow();
+  await enterWorkspace(page, "fixture");
+  const pageA = `${origin}/a.html`;
+  expect(await openFromCli(pageA, ["--wait"])).toMatchObject({ ok: true });
+  await expect.poll(async () => (await viewOf(pageA)).visible).toBe(true);
+  const screen = page.locator("[data-workspace-screen]");
+  await expect(screen).not.toHaveAttribute("data-lane-mode", "expanded");
+
+  // The chord reaches the menu the way an accelerator does; each press
+  // toggles the lane and the page still takes the next key and the next press.
+  await focusPage(app, { url: pageA });
+  await menuClick("toggle_zoom");
+  await expect(screen).toHaveAttribute("data-lane-mode", "expanded");
+  await quietFor(page, 300, "the expanded lane settles");
+  expect((await zoomOf(pageA)).focused, "the page lost the keyboard to the shell").toBe(true);
+  await menuClick("toggle_zoom");
+  await expect(screen).not.toHaveAttribute("data-lane-mode", "expanded");
+  await quietFor(page, 300, "the lane settles back");
+  expect((await zoomOf(pageA)).focused, "the page lost the keyboard to the shell").toBe(true);
+});
+
 /** The documents expanded over the body with the tool column closed, so their areas have the width to sit side by side (PRD right-lane B8; lane-two-columns B14, B20). */
 async function widenFiles(page: Page): Promise<void> {
   await showDocuments(page);
