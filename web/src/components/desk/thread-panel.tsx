@@ -6,6 +6,7 @@ import { useInterfaceTranslation } from "../../i18n/client";
 import type { MessageKey } from "../../i18n/catalogs";
 import { allAgents } from "../../paneAgents";
 import { useShellStore } from "../../store";
+import { Input } from "../ui/input";
 import { threadInputHeld, threadLaunchModel, threadScreen } from "../../threadView";
 import type { ComposerAttachment } from "./desk-composer";
 import { ThreadHead, ThreadView, type ThreadConductor, type ThreadPartActions } from "./thread-view";
@@ -128,7 +129,7 @@ export function ThreadPanel({ job, actions, conductor = null, pinned, mentions =
         onReachTop={reachTop}
         {...parts}
       />
-      <input
+      <Input
         ref={picker}
         type="file"
         multiple
