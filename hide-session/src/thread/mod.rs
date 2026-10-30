@@ -37,8 +37,11 @@ mod build;
 mod claude;
 mod codex;
 mod grok;
+mod hide_call;
 mod opencode;
 mod pi;
+
+pub use hide_call::{HideCall, ViewKind, hide_call, spawned_agent};
 
 use build::Thread;
 
