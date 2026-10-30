@@ -108,6 +108,8 @@ fn spawn(machine: Option<&str>, intent: &str, brief: Option<&str>) -> crate::del
             task: None,
             brief: brief.map(str::to_owned),
             mission: None,
+            plan_node: None,
+            plan: None,
             beside: false,
         },
     }

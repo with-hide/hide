@@ -491,7 +491,7 @@ it("does not restore a removed nested checkout in its still registered parent fo
   } finally { await view.unmount(); }
 });
 
-const planStep = (key: string, status: "done" | "working" | "planned", line: string | null = null) => ({ key, title: `${key} title`, depends_on: [], status, line, output: null, changed: false, change: null, waiting: false });
+const planStep = (key: string, status: "done" | "working" | "planned", line: string | null = null) => ({ key, title: `${key} title`, depends_on: [], status, line, output: null, changed: false, change: null, waiting: false, delegate: false, evidence: null, delegation: null });
 const PLAN = { pane_id: "", session: SESSION, steps: [planStep("spec", "done"), planStep("core", "working", "events land"), planStep("ship", "planned")], review: "approved" as const, ask: null, progress: { current: "core", next: "ship", done: 1, total: 3, finished: false }, created_at_unix_ms: AT, updated_at_unix_ms: AT };
 
 /** The reference scene with pane `a1` holding the record's session, working or asking, its second row as given. */

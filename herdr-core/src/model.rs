@@ -9239,6 +9239,43 @@ mod wire_enum_tests {
             }
             assert_wire(&contract, "plan_output", &outputs);
             checked.insert("plan_output");
+            use crate::plans::{DelegationState, Evidence};
+            let states = [
+                DelegationState::Working,
+                DelegationState::Reported,
+                DelegationState::Blocked,
+                DelegationState::Closed,
+            ];
+            for variant in states {
+                match variant {
+                    DelegationState::Working
+                    | DelegationState::Reported
+                    | DelegationState::Blocked
+                    | DelegationState::Closed => {}
+                }
+            }
+            assert_wire(&contract, "plan_delegation_state", &states);
+            checked.insert("plan_delegation_state");
+            // An evidence's kind is its tag on the wire.
+            let evidence = [
+                Evidence::Pr {
+                    repo: String::new(),
+                    number: 1,
+                },
+                Evidence::File {
+                    path: String::new(),
+                },
+            ];
+            let kinds: Vec<serde_json::Value> = evidence
+                .iter()
+                .map(|variant| match variant {
+                    Evidence::Pr { .. } | Evidence::File { .. } => {
+                        serde_json::to_value(variant).unwrap()["kind"].clone()
+                    }
+                })
+                .collect();
+            assert_wire(&contract, "plan_evidence_kind", &kinds);
+            checked.insert("plan_evidence_kind");
         }
 
         let session = crate::links::ledger::SessionIdentity {

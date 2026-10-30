@@ -33,7 +33,7 @@ afterEach(() => {
 });
 
 const SESSION = { device_id: "mac", agent: "claude", session_id: "s-1" };
-const step = (key: string, status: PlanStep["status"], depends_on: string[] = [], extra: Partial<PlanStep> = {}): PlanStep => ({ key, title: `${key} title`, depends_on, status, line: null, output: null, changed: false, change: null, waiting: false, ...extra });
+const step = (key: string, status: PlanStep["status"], depends_on: string[] = [], extra: Partial<PlanStep> = {}): PlanStep => ({ key, title: `${key} title`, depends_on, status, line: null, output: null, changed: false, change: null, waiting: false, delegate: false, evidence: null, delegation: null, ...extra });
 
 function plan(extra: Partial<PlanView> = {}): PlanView {
   return {
