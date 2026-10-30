@@ -366,10 +366,10 @@ esac"#
 
     #[test]
     fn timed_out_gh_and_its_pipe_holding_helper_are_terminated() {
-        let fixture = GhFixture::new("echo $$ > pid; sleep 5; touch survived");
+        // The helper holds gh's stdout and stderr for its whole minute.
+        let helper_lifetime = Duration::from_secs(60);
+        let fixture = GhFixture::new("echo $$ > pid; sleep 60");
         let started = Instant::now();
-        // The shell must get a turn to write its PID under parallel workspace
-        // tests; the deadline still precedes the script's five-second work.
         let failure = run_gh(
             &fixture.binary,
             Some(&fixture.root),
@@ -379,17 +379,29 @@ esac"#
         .unwrap_err();
         assert_eq!(failure.category, GithubFailureCategory::NetworkOrRateLimit);
         assert!(failure.reason.contains("timed out"));
-        assert!(started.elapsed() < Duration::from_secs(5));
-        let pid: u32 = std::fs::read_to_string(fixture.root.join("pid"))
-            .unwrap()
-            .trim()
-            .parse()
-            .unwrap();
+        // `run_gh` answers only once both pipes reach end of file, and gh and
+        // every helper it started hold them until they end, so an answer
+        // before the helper's own end proves the whole tree was killed. That
+        // holds whether or not a loaded machine let the shell reach its first
+        // line before the deadline.
         assert!(
-            !hide_platform::process::is_alive(pid),
-            "the gh child has ended"
+            started.elapsed() < helper_lifetime,
+            "gh or its helper outlived the deadline holding the pipes"
         );
-        assert!(!fixture.root.join("survived").exists());
+        // A shell that got as far as writing its PID is gone itself too; one
+        // killed before that line wrote nothing or an empty file.
+        let pid = match std::fs::read_to_string(fixture.root.join("pid")) {
+            Ok(text) => text.trim().to_owned(),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => String::new(),
+            Err(error) => panic!("reading the gh PID: {error}"),
+        };
+        if !pid.is_empty() {
+            let pid: u32 = pid.parse().unwrap();
+            assert!(
+                !hide_platform::process::is_alive(pid),
+                "the gh child has ended"
+            );
+        }
     }
 
     #[test]
