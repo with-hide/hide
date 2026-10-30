@@ -22,11 +22,11 @@
   --radius-md: 8px;
   --radius-lg: 10px;
   --radius-xl: 16px;
-  --text-micro: calc(10px * var(--interface-scale, 1));
-  --text-caption: calc(11px * var(--interface-scale, 1));
-  --text-body: calc(12px * var(--interface-scale, 1));
-  --text-subhead: calc(13px * var(--interface-scale, 1));
-  --text-title: calc(14px * var(--interface-scale, 1));
+  --text-micro: calc(11px * var(--interface-scale, 1));
+  --text-caption: calc(12px * var(--interface-scale, 1));
+  --text-body: calc(13px * var(--interface-scale, 1));
+  --text-subhead: calc(14px * var(--interface-scale, 1));
+  --text-title: calc(15px * var(--interface-scale, 1));
   --text-headline: calc(18px * var(--interface-scale, 1));
 }
 
@@ -308,8 +308,8 @@
   --size-pr-branch-max: 190px;
   --size-pr-indent: 60px;
   --size-relationship-list-max: 360px;
-  --text-git-row: 12px;
-  --text-git-detail: 11px;
+  --text-git-row: 13px;
+  --text-git-detail: 12px;
   --size-search-sheet-w: 570px;
   --size-search-sheet-h: 430px;
   --size-gallery-scene-h: 880px;
@@ -411,7 +411,7 @@
   --destructive: #d62323;
   --destructive-foreground: #ffffff;
   --border: #e0e0e3;
-  --input: var(--border);
+  --input: #e0e0e3;
   --ring: var(--primary);
   --sidebar: #f7f7f8;
   --sidebar-foreground: var(--foreground);
@@ -509,8 +509,8 @@
   --accent-foreground: var(--foreground);
   --destructive: #ff595c;
   --destructive-foreground: #101112;
-  --border: #34363a;
-  --input: var(--border);
+  --border: #26282b;
+  --input: #34363a;
   --ring: var(--primary);
   --sidebar: #171819;
   --sidebar-foreground: var(--foreground);
@@ -604,6 +604,7 @@
   --subtle-foreground: #3f5357;
   --accent: #dce6e8;
   --border: #d3dfe1;
+  --input: #d3dfe1;
   --sidebar: #edf2f3;
   --lineage-rail: #a7b8bc;
   --terminal-black: #16262a;
@@ -624,7 +625,8 @@
   --muted-foreground: #9cb1b3;
   --subtle-foreground: #b3c5c7;
   --accent: #1b3034;
-  --border: #24383c;
+  --border: #1a2d31;
+  --input: #24383c;
   --sidebar: #112023;
   --lineage-rail: #4a6266;
   --terminal-black: #1f3337;
