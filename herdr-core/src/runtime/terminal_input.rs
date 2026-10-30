@@ -21,14 +21,13 @@ use std::collections::VecDeque;
 use std::thread;
 use std::time::{Duration, Instant};
 
-use hide_herdr_client::{ApiConnector, request_with_connector};
 use hide_node_link::process::LineInput;
 use hide_node_link::protocol::Call;
 use hide_node_link::terminal::{HELD_INPUT_MAX_AGE_MS, INPUT_REQUEST_LIMIT, TerminalControl};
 
+use crate::engine::{Engine, PaneProcessGroup, Wait};
 use crate::model::{InputRequestSnapshot, InputRequestState as WireState};
 use crate::node_access::NodeLink;
-use crate::wire;
 
 /// The longest request id a client may name. The shell's ids are about 50
 /// bytes; every row rides each snapshot to every client, so a longer one is
@@ -463,7 +462,7 @@ impl ShellWait {
 /// (canonical mode off) while the shell alone holds it, which is its line
 /// editor reading and not a startup file's program, or the pane is a Windows
 /// console, which keeps keys as input events with no line discipline.
-fn reads_keys(group: &wire::PaneProcessGroup, input: LineInput) -> bool {
+fn reads_keys(group: &PaneProcessGroup, input: LineInput) -> bool {
     match input {
         LineInput::Console => true,
         LineInput::Keys => group.shell_holds_terminal(),
@@ -475,7 +474,7 @@ fn reads_keys(group: &wire::PaneProcessGroup, input: LineInput) -> bool {
 /// Herdr for the shell and `node`, the machine that runs it, for its
 /// terminal, each within what is left before `deadline`.
 fn shell_reads_keys(
-    connector: &dyn ApiConnector,
+    engine: &dyn Engine,
     node: &dyn NodeLink,
     pane_id: &str,
     deadline: Instant,
@@ -491,10 +490,9 @@ fn shell_reads_keys(
     if timeout.is_zero() {
         return Ok(false);
     }
-    let params = wire::pane_process_info_params(pane_id)?;
-    let group = request_with_connector(connector, "pane.process_info", params, timeout)
-        .map_err(|error| format!("pane.process_info failed: {error}"))
-        .and_then(wire::pane_process_group)?;
+    let group = engine
+        .pane_processes(Wait::Each(timeout), pane_id)
+        .map_err(crate::live::failed("pane.process_info"))?;
     // A pane whose shell Herdr has not named yet is still starting.
     let Some(shell) = group.shell_pid else {
         return Ok(false);
@@ -515,14 +513,14 @@ fn shell_reads_keys(
 /// `still_waiting` says nothing waits for it any more (a pane that closed
 /// discards its request).
 fn wait_for_shell_reading(
-    connector: &dyn ApiConnector,
+    engine: &dyn Engine,
     node: &dyn NodeLink,
     pane_id: &str,
     deadline: Instant,
     still_waiting: impl Fn() -> bool,
 ) -> Option<ShellWait> {
     wait_with(&SystemClock, deadline, still_waiting, || {
-        shell_reads_keys(connector, node, pane_id, deadline)
+        shell_reads_keys(engine, node, pane_id, deadline)
     })
 }
 
@@ -663,7 +661,7 @@ impl super::Runtime {
                     })
                 };
                 let Some(outcome) = wait_for_shell_reading(
-                    live.api_connector.as_ref(),
+                    live.engine.as_ref(),
                     live.node.as_ref(),
                     &pane,
                     deadline,
@@ -888,7 +886,7 @@ mod tests {
     /// mode off with the shell alone in the foreground, or a Windows console.
     #[test]
     fn a_shell_reads_keys_only_through_its_line_editor_or_a_console() {
-        let group = |foreground: u32, pids: &[u32]| wire::PaneProcessGroup {
+        let group = |foreground: u32, pids: &[u32]| crate::engine::PaneProcessGroup {
             shell_pid: Some(SHELL),
             foreground_process_group_id: Some(foreground),
             foreground_pids: pids.to_vec(),
@@ -972,7 +970,7 @@ mod tests {
             Ok(LineInput::Keys),
         ]);
         let outcome = wait_for_shell_reading(
-            &herdr.connector(),
+            herdr.engine().as_ref(),
             &node,
             "w1:p2",
             Instant::now() + Duration::from_secs(60),
@@ -992,7 +990,7 @@ mod tests {
             Ok(LineInput::Keys),
         ]);
         let outcome = wait_for_shell_reading(
-            &herdr.connector(),
+            herdr.engine().as_ref(),
             &node,
             "w1:p2",
             Instant::now() + Duration::from_secs(60),
@@ -1010,7 +1008,7 @@ mod tests {
         let node = Terminal::answering(vec![Ok(LineInput::Lines { limit: 1024 })]);
         // The bound is the subject: a short one keeps the test short.
         let outcome = wait_for_shell_reading(
-            &herdr.connector(),
+            herdr.engine().as_ref(),
             &node,
             "w1:p2",
             Instant::now() + Duration::from_millis(150),
@@ -1034,7 +1032,7 @@ mod tests {
         // request over 100 ms on a loaded CI runner ended the wait on the
         // failed read instead (2026-10-16, twice in one nextest run).
         let outcome = wait_for_shell_reading(
-            &herdr.connector(),
+            herdr.engine().as_ref(),
             &node,
             "w1:p2",
             Instant::now() + Duration::from_secs(1),
@@ -1136,7 +1134,7 @@ mod tests {
         let herdr = shell_pane("shell-wait-dropped");
         let node = Terminal::answering(vec![Ok(LineInput::Keys)]);
         let outcome = wait_for_shell_reading(
-            &herdr.connector(),
+            herdr.engine().as_ref(),
             &node,
             "w1:p2",
             Instant::now() + Duration::from_secs(60),

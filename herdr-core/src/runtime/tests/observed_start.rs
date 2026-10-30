@@ -71,7 +71,7 @@ fn starting() -> Starting {
         let mut guard = runtime.lock().unwrap();
         let payload: crate::sidebar::SessionSnapshotPayload = serde_json::from_value(json!({
             "agents":[{"id":"sender","pane_id":"sender","agent":"codex","agent_status":"idle",
-                "state_change_seq":1,"lineage_session":crate::wire::session_digest("sender-native"),
+                "state_change_seq":1,"lineage_session":crate::engine::tokens::session_digest("sender-native"),
                 "agent_session":{"source":"herdr:codex","agent":"codex","kind":"id","value":"sender-native"}}],
             "panes":[{"pane_id":"sender","terminal_id":"terminal-sender"}]}))
         .unwrap();
@@ -85,7 +85,7 @@ fn starting() -> Starting {
             socket_path: herdr.socket_path().to_path_buf(),
             runtime: Arc::downgrade(&runtime),
             notifier: ChangeNotifier::noop(),
-            api_connector: Arc::new(herdr.connector()),
+            engine: herdr.engine(),
             node: guard.own_node(),
         });
         guard.install_delivery_client(client);

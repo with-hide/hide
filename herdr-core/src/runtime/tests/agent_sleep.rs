@@ -686,7 +686,7 @@ fn durable_dormant_journey_in(kind: &'static str, interference: &'static str, op
         }
         other => panic!("unexpected dormant effect: {other}"),
     });
-    runtime.live.as_mut().unwrap().api_connector = Arc::new(herdr.connector());
+    runtime.live.as_mut().unwrap().engine = herdr.engine();
     let shared = Arc::new(std::sync::Mutex::new(runtime));
     shared.lock().unwrap().live.as_mut().unwrap().runtime = Arc::downgrade(&shared);
     shared.lock().unwrap().write_ui_state().unwrap();
@@ -873,12 +873,12 @@ fn durable_dormant_journey_in(kind: &'static str, interference: &'static str, op
         assert!(persisted_dormant(&path, &id).is_null());
         let (changed, effects) = runtime.ingest_close_capture_result(
             &retired_capture,
-            Ok(live::CloseCaptureOutcome { item: None }),
+            Ok(crate::recent_closed::capture::CloseCaptureOutcome { item: None }),
         );
         assert!(!changed);
         assert!(effects.is_empty());
         assert!(!runtime.ingest_close_effect_result(
-            &live::CloseEffectRequest {
+            &crate::recent_closed::capture::CloseEffectRequest {
                 safety: None,
                 failed_terminals: Vec::new(),
                 retain_for_reopen: false,
@@ -1049,7 +1049,7 @@ fn a_sleeping_worktree_session_is_opened_from_its_repository_while_no_list_shows
             "the fixture stops after the owner".into(),
         )),
     });
-    runtime.live.as_mut().unwrap().api_connector = Arc::new(herdr.connector());
+    runtime.live.as_mut().unwrap().engine = herdr.engine();
     let shared = Arc::new(std::sync::Mutex::new(runtime));
     shared.lock().unwrap().live.as_mut().unwrap().runtime = Arc::downgrade(&shared);
     shared.lock().unwrap().write_ui_state().unwrap();
@@ -1252,7 +1252,7 @@ fn checking_an_uncertain_sent_sleep_keeps_live_topology_and_sends_no_mutation() 
         }
         other => panic!("status inspection must not mutate Herdr: {other}"),
     });
-    runtime.live.as_mut().unwrap().api_connector = Arc::new(herdr.connector());
+    runtime.live.as_mut().unwrap().engine = herdr.engine();
     let shared = Arc::new(std::sync::Mutex::new(runtime));
     shared.lock().unwrap().live.as_mut().unwrap().runtime = Arc::downgrade(&shared);
     assert!(shared.lock().unwrap().request_dormant_status(&id));
@@ -1330,7 +1330,7 @@ fn a_dormant_close_never_becomes_reopenable_after_archive_retirement() {
         }}),
         other => panic!("unexpected retired sleep effect: {other}"),
     });
-    runtime.live.as_mut().unwrap().api_connector = Arc::new(herdr.connector());
+    runtime.live.as_mut().unwrap().engine = herdr.engine();
     runtime.close_local_pane(SLEEPER.into(), false, false);
     let key = runtime.snapshot.ui_state.agent_sleep.dormant[&id]
         .close_key
@@ -1373,7 +1373,7 @@ fn a_failed_actual_state_write_never_sends_a_dormant_close() {
     let server = FakeHerdr::start("sleep-save-failure", |method, _| {
         panic!("unexpected external effect: {method}")
     });
-    runtime.live.as_mut().unwrap().api_connector = Arc::new(server.connector());
+    runtime.live.as_mut().unwrap().engine = server.engine();
     let id = dormant_intent(&mut runtime);
     // A directory cannot be atomically replaced by the private state file.
     let blocked = tempfile::tempdir().unwrap();
@@ -1415,7 +1415,7 @@ fn an_old_successful_save_cannot_close_a_replaced_execution() {
     let server = FakeHerdr::start("sleep-stale-save", |method, _| {
         panic!("unexpected stale effect: {method}")
     });
-    runtime.live.as_mut().unwrap().api_connector = Arc::new(server.connector());
+    runtime.live.as_mut().unwrap().engine = server.engine();
     let id = dormant_intent(&mut runtime);
     let saved = runtime.snapshot.ui_state.agent_sleep.clone();
     runtime.ingest_session(Ok(session(Some(5))));
@@ -1450,7 +1450,7 @@ fn checking_an_unsent_recovered_sleep_leaves_the_pane_awake() {
     let server = FakeHerdr::start("sleep-unsent-check", |method, _| {
         panic!("an unsent sleep needs no external effect: {method}")
     });
-    runtime.live.as_mut().unwrap().api_connector = Arc::new(server.connector());
+    runtime.live.as_mut().unwrap().engine = server.engine();
     let id = dormant_intent(&mut runtime);
     runtime
         .snapshot
@@ -1818,18 +1818,18 @@ fn visiting_a_failed_terminal_preserves_sleep_without_starting_an_agent() {
 fn failed_terminal_close_errors_keep_the_sleeping_row_and_failure() {
     for (error, phase) in [
         (
-            hide_herdr_client::ApiError::Remote {
+            crate::engine::EngineError::Refused {
                 code: "refused".into(),
                 message: "close refused".into(),
             },
             "refused",
         ),
         (
-            hide_herdr_client::ApiError::Transport("acknowledgement timed out".into()),
+            crate::engine::EngineError::Transport("acknowledgement timed out".into()),
             "unknown",
         ),
         (
-            hide_herdr_client::ApiError::NotRunning("device disconnected".into()),
+            crate::engine::EngineError::NotRunning("device disconnected".into()),
             "unknown",
         ),
     ] {
@@ -1844,7 +1844,7 @@ fn failed_terminal_close_errors_keep_the_sleeping_row_and_failure() {
             .failed_terminal_id = Some("failed-terminal".into());
         runtime.ingest_session(Ok(failed));
         let mut request = close_capture_request("failed-sleep");
-        request.target = live::CloseCaptureTarget::Pane {
+        request.target = crate::recent_closed::capture::CloseCaptureTarget::Pane {
             pane_id: SLEEPER.into(),
         };
         request.context.tab_id = "w-order:t2".into();
@@ -2078,7 +2078,7 @@ const CHILD_NATIVE: &str = "child-native";
 pub(super) fn delivery_agent(id: &str, pane: &str, kind: &str, session: &str) -> serde_json::Value {
     serde_json::json!({
         "id": id, "pane_id": pane, "agent": kind, "agent_status": "idle",
-        "state_change_seq": 4, "lineage_session": crate::wire::session_digest(session)
+        "state_change_seq": 4, "lineage_session": crate::engine::tokens::session_digest(session)
     })
 }
 

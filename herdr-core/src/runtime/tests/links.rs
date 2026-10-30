@@ -369,7 +369,7 @@ fn spawned_record(
             name: format!("name-{id}"),
             kind: kind.into(),
             device_id: crate::node::TEST_NODE.into(),
-            session: crate::wire::session_digest(session),
+            session: crate::engine::tokens::session_digest(session),
         },
         ended: false,
         terminal_id: None,
@@ -1009,8 +1009,7 @@ fn native_archive_current_journey(kind: &'static str, flag: &str) {
             }
             panic!("unexpected current-server request: {method}")
         });
-        let replacement_connector: Arc<dyn hide_herdr_client::ApiConnector> =
-            Arc::new(replacement.connector());
+        let replacement_connector = replacement.engine();
         let changed_runtime = Arc::downgrade(&shared);
         let changed_connector = Arc::clone(&replacement_connector);
         let armed = Arc::new(std::sync::atomic::AtomicBool::new(false));
@@ -1028,7 +1027,7 @@ fn native_archive_current_journey(kind: &'static str, flag: &str) {
                         let runtime = changed_runtime.upgrade().unwrap();
                         let mut runtime = runtime.lock().unwrap();
                         let mut next = runtime.live.as_ref().unwrap().clone();
-                        next.api_connector = Arc::clone(&changed_connector);
+                        next.engine = Arc::clone(&changed_connector);
                         runtime.set_live(next);
                     }
                     serde_json::json!({"type":"tab_created", "tab":{
@@ -1052,50 +1051,51 @@ fn native_archive_current_journey(kind: &'static str, flag: &str) {
         let connect_runtime = shared.weak();
         let connect_replacement = Arc::clone(&replacement_connector);
         let reader_home = home.path().to_path_buf();
-        let old_connector = Arc::new(HerdrConnectTransition {
-            connector: old.connector(),
-            armed,
-            worker: "herdr-core-checkout-tab-create",
-            transition: Box::new(move || {
-                let runtime = connect_runtime.upgrade().unwrap();
-                let mut runtime = runtime.lock().unwrap();
-                match case {
-                    "reader-during-start-connect" => {
-                        runtime.own_node =
-                            Arc::new(hide_node::Local::new(Some(reader_home.clone())));
+        let old_connector =
+            crate::engine::herdr::HerdrEngine::shared(Arc::new(HerdrConnectTransition {
+                connector: old.connector(),
+                armed,
+                worker: "herdr-core-checkout-tab-create",
+                transition: Box::new(move || {
+                    let runtime = connect_runtime.upgrade().unwrap();
+                    let mut runtime = runtime.lock().unwrap();
+                    match case {
+                        "reader-during-start-connect" => {
+                            runtime.own_node =
+                                Arc::new(hide_node::Local::new(Some(reader_home.clone())));
+                        }
+                        "intent-during-start-connect" => {
+                            runtime
+                                .task_agent_launch
+                                .as_mut()
+                                .unwrap()
+                                .args
+                                .push("replacement-intent".into());
+                        }
+                        _ => {
+                            let mut next = runtime.live.as_ref().unwrap().clone();
+                            next.engine = Arc::clone(&connect_replacement);
+                            runtime.set_live(next);
+                        }
                     }
-                    "intent-during-start-connect" => {
-                        runtime
-                            .task_agent_launch
-                            .as_mut()
-                            .unwrap()
-                            .args
-                            .push("replacement-intent".into());
-                    }
-                    _ => {
-                        let mut next = runtime.live.as_ref().unwrap().clone();
-                        next.api_connector = Arc::clone(&connect_replacement);
-                        runtime.set_live(next);
-                    }
-                }
-            }),
-        });
+                }),
+            }));
         let target = {
             let mut runtime = shared.lock().unwrap();
             let mut context = runtime.live.as_ref().unwrap().clone();
             context.runtime = Arc::downgrade(&shared);
-            context.api_connector = old_connector;
+            context.engine = old_connector;
             runtime.set_live(context.clone());
             if case == "remote-before" {
                 runtime.snapshot.task_operation.as_mut().unwrap().device_id = Some("remote".into());
                 let remote = live::RemoteControlContext::new(
                     "remote",
-                    Arc::clone(&context.api_connector),
+                    Arc::clone(&context.engine),
                     Arc::downgrade(&shared),
                     crate::handle::ChangeNotifier::noop(),
                 );
                 runtime.install_remote_control(remote.clone());
-                let target = live::TabTarget::device(&remote);
+                let target = crate::worktree_control::TabTarget::device(&remote);
                 runtime.install_remote_control(live::RemoteControlContext::new(
                     "remote",
                     Arc::clone(&replacement_connector),
@@ -1104,9 +1104,10 @@ fn native_archive_current_journey(kind: &'static str, flag: &str) {
                 ));
                 target
             } else {
-                let target = live::TabTarget::local(&context, runtime.live_generation);
+                let target =
+                    crate::worktree_control::TabTarget::local(&context, runtime.live_generation);
                 if case == "local-before" {
-                    context.api_connector = Arc::clone(&replacement_connector);
+                    context.engine = Arc::clone(&replacement_connector);
                     runtime.set_live(context);
                 } else if case == "kind-before" {
                     runtime.snapshot.task_operation.as_mut().unwrap().agent_kind =
@@ -1115,9 +1116,9 @@ fn native_archive_current_journey(kind: &'static str, flag: &str) {
                 target
             }
         };
-        live::spawn_checkout_tab_create(
+        crate::worktree_control::spawn_checkout_tab_create(
             target,
-            live::CheckoutTabRequest {
+            crate::worktree_control::CheckoutTabRequest {
                 start: None,
                 id,
                 agent_kind: Some(kind.into()),
@@ -1326,8 +1327,7 @@ fn native_fork_current_journey(kind: &'static str) {
             focus_answer(method, params, &replacement_focus)
                 .unwrap_or_else(|| panic!("unexpected replacement-server request: {method}"))
         });
-        let replacement_connector: Arc<dyn hide_herdr_client::ApiConnector> =
-            Arc::new(replacement.connector());
+        let replacement_connector = replacement.engine();
         let armed = Arc::new(std::sync::atomic::AtomicBool::new(false));
         let arm_connect = Arc::clone(&armed);
         let old_focus = std::sync::Mutex::new(String::new());
@@ -1470,23 +1470,24 @@ fn native_fork_current_journey(kind: &'static str) {
             other => panic!("unexpected original-server request: {other}"),
         });
         let connect_runtime = shared.weak();
-        let connector = Arc::new(HerdrConnectTransition {
-            connector: old.connector(),
-            armed,
-            worker: "herdr-core-agent-fork",
-            transition: Box::new(move || {
-                let runtime = connect_runtime.upgrade().unwrap();
-                let mut runtime = runtime.lock().unwrap();
-                let mut next = runtime.live.as_ref().unwrap().clone();
-                next.api_connector = Arc::clone(&replacement_connector);
-                runtime.set_live(next);
-            }),
-        });
+        let connector =
+            crate::engine::herdr::HerdrEngine::shared(Arc::new(HerdrConnectTransition {
+                connector: old.connector(),
+                armed,
+                worker: "herdr-core-agent-fork",
+                transition: Box::new(move || {
+                    let runtime = connect_runtime.upgrade().unwrap();
+                    let mut runtime = runtime.lock().unwrap();
+                    let mut next = runtime.live.as_ref().unwrap().clone();
+                    next.engine = Arc::clone(&replacement_connector);
+                    runtime.set_live(next);
+                }),
+            }));
         {
             let mut runtime = shared.lock().unwrap();
             let mut context = runtime.live.as_ref().unwrap().clone();
             context.runtime = shared.weak();
-            context.api_connector = connector;
+            context.engine = connector;
             runtime.set_live(context);
             assert!(runtime.dispatch_json(&serde_json::to_vec(&serde_json::json!({
                 "schema_version":SCHEMA_VERSION,"kind":"fork_pane","payload":{"pane_id":parent,"placement":"tab","origin":"operator"}
@@ -1689,9 +1690,9 @@ fn a_parents_request_stays_the_childs_work_when_the_parents_screen_title_changes
     )];
     let payload: SessionSnapshotPayload = serde_json::from_value(serde_json::json!({"agents":[
         {"id":"lead","pane_id":"lead","agent":"claude","agent_status":"idle","state_change_seq":1,
-         "lineage_session":crate::wire::session_digest("lead-native")},
+         "lineage_session":crate::engine::tokens::session_digest("lead-native")},
         {"id":"worker","pane_id":"worker","agent":"claude","agent_status":"idle","state_change_seq":1,
-         "lineage_session":crate::wire::session_digest("worker-native")},
+         "lineage_session":crate::engine::tokens::session_digest("worker-native")},
     ]}))
     .unwrap();
     runtime.observe_delivery(crate::node::TEST_NODE, &payload, Some("scope"), None);
@@ -1896,4 +1897,125 @@ fn a_session_a_pane_carries_is_counted_once_across_a_restart() {
     // The worker is joined first, so a recount in the same pass is seen.
     drop(worker);
     assert_eq!(statistics.take(), [AgentStarted(Agent::Claude)]);
+}
+
+fn pre_check_operation(
+    request: &str,
+    pane: Option<&str>,
+    agent_phase: &str,
+) -> crate::model::TaskOperationSnapshot {
+    crate::model::TaskOperationSnapshot {
+        id: 1,
+        device_id: None,
+        kind: "agent_start".into(),
+        phase: "done".into(),
+        repository_root: None,
+        branch: None,
+        base_branch: None,
+        path: None,
+        pane_id: pane.map(str::to_owned),
+        agent_kind: Some("claude".into()),
+        failure: None,
+        agent_phase: Some(agent_phase.into()),
+        agent_reason: None,
+        agent_line: None,
+        request_id: Some(request.into()),
+        stays_behind: false,
+    }
+}
+
+/// A pre-check is followed from its start to its pane and from the pane to
+/// the session its agent opened, which the worker records as the pull
+/// request's review; a start that failed and a pane that closed first end
+/// the following (PRD pr-review-status D-11, B14).
+#[test]
+fn a_pre_check_reaches_the_record_as_its_session_and_a_failed_or_closed_start_is_dropped() {
+    let mut runtime = runtime();
+    runtime.snapshot.navigator.workspaces = vec![record_workspace(
+        crate::node::TEST_NODE,
+        "app",
+        &["p-check"],
+    )];
+    let client = crate::links::worker::LinkClient::full_mailbox_for_test();
+    runtime.links_work.client = Some(client.clone());
+
+    runtime.follow_pre_check("r-1".into(), "acme/app".into(), 7);
+    runtime.feed_link_reviews();
+    assert_eq!(runtime.links_work.pre_checks.len(), 1, "no answer yet");
+
+    runtime.snapshot.task_operation = Some(pre_check_operation("r-1", Some("p-check"), "starting"));
+    runtime.feed_link_reviews();
+    assert_eq!(
+        runtime.links_work.pre_checks[0].pane_id.as_deref(),
+        Some("p-check"),
+        "the pane is known, its session not yet"
+    );
+    assert!(client.review_facts_for_test().is_none());
+
+    runtime.snapshot.navigator.agents = vec![record_agent("p-check", "s-check", None)];
+    runtime.feed_link_reviews();
+    assert!(runtime.links_work.pre_checks.is_empty());
+    let facts = client.review_facts_for_test().unwrap();
+    assert_eq!(
+        *facts,
+        vec![crate::links::ReviewFact {
+            device_id: crate::node::TEST_NODE.into(),
+            agent: "claude".into(),
+            session_id: "s-check".into(),
+            repo_name: "acme/app".into(),
+            number: 7,
+        }]
+    );
+
+    // A start that failed has no session to wait for.
+    runtime.follow_pre_check("r-2".into(), "acme/app".into(), 8);
+    runtime.snapshot.task_operation = Some(pre_check_operation("r-2", Some("p-gone"), "failed"));
+    runtime.feed_link_reviews();
+    assert!(runtime.links_work.pre_checks.is_empty());
+
+    // A pane the session list has not shown yet is waited for; one that it
+    // showed and that closed before its agent named a session ends it.
+    runtime.follow_pre_check("r-3".into(), "acme/app".into(), 9);
+    runtime.snapshot.task_operation = Some(pre_check_operation("r-3", Some("p-closed"), "started"));
+    runtime.feed_link_reviews();
+    assert_eq!(runtime.links_work.pre_checks.len(), 1, "not listed yet");
+    runtime.snapshot.navigator.workspaces = vec![record_workspace(
+        crate::node::TEST_NODE,
+        "app",
+        &["p-check", "p-closed"],
+    )];
+    runtime.feed_link_reviews();
+    assert_eq!(runtime.links_work.pre_checks.len(), 1, "listed, no session");
+    runtime.snapshot.navigator.workspaces = vec![record_workspace(
+        crate::node::TEST_NODE,
+        "app",
+        &["p-check"],
+    )];
+    runtime.feed_link_reviews();
+    assert!(runtime.links_work.pre_checks.is_empty());
+    assert_eq!(client.review_facts_for_test().unwrap().len(), 1);
+
+    // A repeated request keeps its following, and an agent that fails after
+    // its pane was named ends it.
+    runtime.follow_pre_check("r-4".into(), "acme/app".into(), 11);
+    runtime.snapshot.task_operation = Some(pre_check_operation("r-4", Some("p-late"), "starting"));
+    runtime.feed_link_reviews();
+    runtime.follow_pre_check("r-4".into(), "acme/app".into(), 11);
+    assert_eq!(
+        runtime.links_work.pre_checks[0].pane_id.as_deref(),
+        Some("p-late")
+    );
+    runtime.snapshot.task_operation = Some(pre_check_operation("r-4", Some("p-late"), "failed"));
+    runtime.feed_link_reviews();
+    assert!(runtime.links_work.pre_checks.is_empty());
+
+    // The followed starts are capped.
+    for index in 0..crate::runtime::links::PRE_CHECK_LIMIT + 2 {
+        runtime.follow_pre_check(format!("r-cap-{index}"), "acme/app".into(), 10);
+    }
+    assert_eq!(
+        runtime.links_work.pre_checks.len(),
+        crate::runtime::links::PRE_CHECK_LIMIT
+    );
+    assert_eq!(runtime.links_work.pre_checks[0].request_id, "r-cap-2");
 }

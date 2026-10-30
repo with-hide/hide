@@ -337,18 +337,18 @@ impl SleepRecord {
             lineage_session: self
                 .session_id
                 .as_deref()
-                .and_then(crate::wire::session_digest),
+                .and_then(crate::engine::tokens::session_digest),
             completion_seq: None,
             state_change_seq: self.state_change_seq,
             tokens: self
                 .fork_source
                 .as_ref()
                 .map(|(source, source_session)| {
-                    crate::wire::fork_tokens(
+                    crate::engine::tokens::fork_tokens(
                         scope.session_id(source),
                         self.session_id
                             .as_deref()
-                            .and_then(crate::wire::session_digest)
+                            .and_then(crate::engine::tokens::session_digest)
                             .as_deref(),
                         source_session.as_deref(),
                     )
@@ -927,7 +927,7 @@ mod tests {
     /// what proves its parent: the session the declaration was written for.
     #[test]
     fn a_sleeping_child_stays_under_its_parent_only_while_its_record_can_prove_it() {
-        let parent_session = crate::wire::session_digest("session-parent");
+        let parent_session = crate::engine::tokens::session_digest("session-parent");
         let mut parent = agent("w1:p1");
         parent.lineage_session = parent_session.clone();
         let mut child = agent("w1:p2");

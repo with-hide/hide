@@ -174,7 +174,7 @@ export type AreaCommandId = (typeof AREA_COMMANDS)[number];
  * D-19, D-29): the lane opens on that tool, or closes when it already shows
  * it, as pressing the icon does. The checkout's tools take a letter of their
  * name (⇧⌘E Explorer, ⇧⌘G Changes), Alt+Shift with the same letter elsewhere
- * (PRD lane-two-columns D-08); the Project and Memory tools have no chord
+ * (PRD lane-two-columns D-08); the Project, Memory and Mission tools have no chord
  * until one is bound, because ⇧⌘L opens Memory without closing it
  * (`open_project_memory`) and ⇧⌘R the sidebar's PR list (`open_sidebar_prs`, B25).
  */
@@ -183,12 +183,14 @@ export const LANE_TOOL_COMMANDS: readonly LaneToolCommandId[] = TOOLS.map((tool)
 const LANE_TOOL_TITLES: Record<LaneToolCommandId, string> = {
   toggle_lane_project: "Toggle Project tool",
   toggle_lane_memory: "Toggle Hide AI tool",
+  toggle_lane_mission: "Toggle Mission tool",
   toggle_lane_explorer: "Toggle Explorer tool",
   toggle_lane_changes: "Toggle Changes tool",
 };
 const LANE_TOOL_CHORDS: Record<LaneToolCommandId, { browser: Chord | null; electron: Chord | null; moved: boolean }> = {
   toggle_lane_project: { browser: null, electron: null, moved: false },
   toggle_lane_memory: { browser: null, electron: null, moved: false },
+  toggle_lane_mission: { browser: null, electron: null, moved: false },
   toggle_lane_explorer: { browser: { code: "KeyE", meta: true, shift: true }, electron: { code: "KeyE", meta: true, shift: true }, moved: false },
   toggle_lane_changes: { browser: { code: "KeyG", meta: true, shift: true }, electron: { code: "KeyG", meta: true, shift: true }, moved: false },
 };

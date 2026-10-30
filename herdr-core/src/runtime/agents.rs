@@ -982,7 +982,7 @@ impl Runtime {
             .filter_map(|pane| {
                 let source = remote_pane_source_id(&target_id, &pane.id)?;
                 scope_pane_ids.contains(&source.to_owned()).then_some(())?;
-                Some(live::ClosePeer {
+                Some(crate::recent_closed::capture::ClosePeer {
                     pane_id: source.to_owned(),
                     terminal_id: pane.terminal_id.clone()?,
                     session: session
@@ -1021,7 +1021,7 @@ impl Runtime {
             action,
             connection_generation,
             failed_terminals,
-            live::CloseSafety {
+            crate::recent_closed::capture::CloseSafety {
                 pane_ids: scope_pane_ids,
                 approved_peers,
                 deadline: std::time::Instant::now()
@@ -2843,13 +2843,13 @@ impl Runtime {
     pub(crate) fn fork_request_is_current(
         &self,
         request: &ForkRequest,
-        connector: &Arc<dyn hide_herdr_client::ApiConnector>,
+        engine: &crate::engine::SharedEngine,
     ) -> bool {
         request.connection_generation == self.live_generation
             && self
                 .live
                 .as_ref()
-                .is_some_and(|live| Arc::ptr_eq(&live.api_connector, connector))
+                .is_some_and(|live| crate::engine::same_engine(&live.engine, engine))
             // A later press for the same pane/session cannot authorize this
             // worker: each admitted fork has its own name.
             && self

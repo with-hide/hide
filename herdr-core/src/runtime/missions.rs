@@ -1123,6 +1123,81 @@ impl Runtime {
             .is_some_and(|observation| observation.actor.same_identity(actor))
     }
 
+    /// An open mission whose Conductor's pane is gone and whose Conductor's
+    /// conversation now runs in another pane of the same device conducts
+    /// from that pane, as `hide mission take` would make it, its workers
+    /// handed over and its waiting wakes sent (PRD mission-tool D-11, B14).
+    /// The conversation comes back through 이어받기, Reopen closed, a wake
+    /// or the operator's own resume alike, so the move follows the session
+    /// rather than the button that resumed it.
+    pub(super) fn follow_resumed_conductors(&mut self, device: &str) {
+        let moves: Vec<(String, String, Actor)> = self
+            .missions
+            .book
+            .missions
+            .iter()
+            .filter(|mission| {
+                mission.status.open()
+                    && mission.device_id == device
+                    && !self.conductor_present(&mission.conductor.actor)
+            })
+            .filter_map(|mission| {
+                let session = mission.conductor.session.as_ref()?;
+                let row = self.machine_agents(device).iter().find(|agent| {
+                    agent.session_id.as_deref() == Some(session.session_id.as_str())
+                        && hide_session::Agent::from_kind(&agent.agent_kind)
+                            .is_some_and(|kind| kind.as_str() == session.agent)
+                })?;
+                let pane = if device == self.node.as_str() {
+                    row.pane_id.clone()
+                } else {
+                    format!("remote:{device}:pane:{}", row.pane_id)
+                };
+                let actor = self.delivery_observations.get(&pane)?.actor.clone();
+                // A pane that already conducts another open mission keeps it.
+                self.missions
+                    .book
+                    .conducted_open(&actor)
+                    .is_none()
+                    .then(|| (mission.id.clone(), pane, actor))
+            })
+            .collect();
+        if moves.is_empty() {
+            return;
+        }
+        let now = crate::delivery::worker::now();
+        let mut moved = false;
+        for (id, pane, actor) in moves {
+            let conductor = self.conductor_of(device, &pane, actor);
+            let agent_id = conductor.agent_id.clone();
+            let Some(mission) = self.missions.book.get_mut(&id) else {
+                continue;
+            };
+            let former = std::mem::replace(&mut mission.conductor, conductor);
+            mission.updated_at_unix_ms = now;
+            if let Err(code) = self.adopt_mission_workers(&id, agent_id.as_deref()) {
+                // Not moved, so the next sight of the pane tries again.
+                if let Some(mission) = self.missions.book.get_mut(&id) {
+                    mission.conductor = former;
+                }
+                crate::diagnostic!(json!({
+                    "component": "missions", "kind": "mission.conductor_resume_failed",
+                    "mission": id, "pane": pane, "code": code,
+                }));
+                continue;
+            }
+            crate::diagnostic!(json!({
+                "component": "missions", "kind": "mission.conductor_resumed",
+                "mission": id, "pane": pane,
+            }));
+            moved = true;
+        }
+        if moved {
+            self.save_missions();
+            self.flush_mission_wakes();
+        }
+    }
+
     /// The admission of a spawn `actor` asks for (B4, B8, B11, B12): none
     /// when it conducts no open mission, a refusal while its plan is not
     /// approved, when the worker would run on another machine than the

@@ -1974,3 +1974,58 @@ fn a_capacity_crossing_is_reported_once_until_the_count_falls_back_under() {
         "a key that fell back under reports again"
     );
 }
+
+/// A pre-check's session reads as the pull request's agent review, over its
+/// work on the branch, and keeps that role in a store reopened after the
+/// upgrade that added it (PRD pr-review-status B14, D-17).
+#[test]
+fn a_pre_check_session_reads_as_reviewed_and_keeps_it_across_a_reopen_and_an_upgrade() {
+    let home = tempfile::tempdir().unwrap();
+    let state = tempfile::tempdir().unwrap();
+    let path = state.path().join("links.sqlite3");
+    {
+        let mut store = open(state.path());
+        store
+            .apply_project(&project(vec![pr(7, "feat/x", T0, None)]), T0)
+            .unwrap();
+        let check = claude_call(
+            home.path(),
+            "s-check",
+            ROOT,
+            T0 + 30 * MIN,
+            "7번 미리 점검해 줘",
+            "gh pr view 7 --comments",
+            Some(7),
+        );
+        ingest(&mut store, home.path(), &check);
+        assert_eq!(
+            roles(&panel(&store, 7)),
+            vec![("s-check", SessionRole::Worked, Some("7번 미리 점검해 줘"))]
+        );
+        // A store from before version 13 had no table for it.
+        store
+            .connection
+            .execute_batch("DROP TABLE session_reviews; PRAGMA user_version=12;")
+            .unwrap();
+    }
+    let mut store = open(state.path());
+    let review = ReviewFact {
+        device_id: DEVICE.into(),
+        agent: "claude".into(),
+        session_id: "s-check".into(),
+        repo_name: "Acme/App".into(),
+        number: 7,
+    };
+    store
+        .apply_reviews(std::slice::from_ref(&review), T0 + 31 * MIN)
+        .unwrap();
+    store.apply_reviews(&[review], T0 + 40 * MIN).unwrap();
+    assert_eq!(rows(&store, "session_reviews"), 1);
+    drop(store);
+
+    let store = LinkStore::open(&path).unwrap().0;
+    assert_eq!(
+        roles(&panel(&store, 7)),
+        vec![("s-check", SessionRole::Reviewed, Some("7번 미리 점검해 줘"))]
+    );
+}

@@ -270,8 +270,8 @@ async fn conversation_step(
     let pane_id = key.herdr_pane_id().to_owned();
     let (transcript, page) = tokio::task::spawn_blocking(move || {
         let source = reader
-            .herdr_api(reader.node().as_str())
-            .and_then(|connector| conversation::source(&connector, &pane_id));
+            .engine(reader.node().as_str())
+            .and_then(|engine| conversation::source(&engine, &pane_id));
         let source = match source {
             Ok(Some(source)) => source,
             Ok(None) | Err(PaneError::Gone) => return (None, None),
@@ -338,8 +338,8 @@ impl RowsReader {
         // so it runs on the blocking pool with the read itself.
         let read = tokio::task::spawn_blocking(move || {
             reader
-                .herdr_api(&device_id)
-                .and_then(|connector| pane::read(&connector, &pane_id, asked))
+                .engine(&device_id)
+                .and_then(|engine| pane::read(&engine, &pane_id, asked))
         })
         .await
         .unwrap_or_else(|error| Err(PaneError::Unavailable(error.to_string())));
@@ -948,15 +948,15 @@ async fn input(
             Ok(admission) => admission,
             Err(error) => return (false, Err(error)),
         };
-        let connector = match writer.herdr_api(&device_id) {
-            Ok(connector) => connector,
+        let engine = match writer.engine(&device_id) {
+            Ok(engine) => engine,
             Err(error) => return (false, Err(error)),
         };
         let reply = matches!(input, Input::Reply(_));
         // Before the write, so the doorbell cannot judge the pane clean
         // while the key is landing; a refused write only holds the pane.
         writer.note_input(&core_pane_id);
-        let sent = pane::send(&connector, &pane_id, input);
+        let sent = pane::send(&engine, &pane_id, input);
         if reply && sent.is_ok() {
             writer.note_submit(&core_pane_id);
         }
@@ -1070,7 +1070,6 @@ mod tests {
             host_name: None,
             core: Arc::new(crate::core::CoreHandle::bare(directory)),
             input_gate: Arc::clone(gate),
-            herdr_socket: None,
             renderers: Arc::default(),
             start_demand: Arc::default(),
             open: tokio::sync::watch::channel(true).1,

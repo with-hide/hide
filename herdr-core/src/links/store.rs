@@ -9,8 +9,8 @@
 use super::{
     CREATED_AFTER_MS, CREATED_BEFORE_MS, DAY_MS, FileState, IssueSource, LinkedIssue, LinkedParent,
     LinkedSession, MADE_BEFORE_MS, OPEN_EXCEPTION_MS, PANEL_SESSION_LIMIT, PaneFact, ParentFact,
-    ProjectFacts, ProjectLinkSummary, SESSION_NAMED_LIMIT, SESSION_PR_LIMIT, STORE_PAGE_LIMIT,
-    SUMMARY_SESSION_LIMIT, SessionPrChip, SessionRole, WorktreeFact, within,
+    ProjectFacts, ProjectLinkSummary, ReviewFact, SESSION_NAMED_LIMIT, SESSION_PR_LIMIT,
+    STORE_PAGE_LIMIT, SUMMARY_SESSION_LIMIT, SessionPrChip, SessionRole, WorktreeFact, within,
 };
 use crate::links::ledger::SessionIdentity;
 use hide_session::ConversationCheckpoint;
@@ -27,7 +27,7 @@ use std::time::Duration;
 #[path = "ledger_store.rs"]
 mod ledger;
 
-const SCHEMA_VERSION: i64 = 12;
+const SCHEMA_VERSION: i64 = 13;
 
 const SCHEMA: &str = "
 CREATE TABLE projects(key TEXT PRIMARY KEY, device TEXT NOT NULL, root TEXT NOT NULL,
@@ -1128,6 +1128,30 @@ impl LinkStore {
         Ok(children)
     }
 
+    /// Records each session a pull request's pre-check started (PRD
+    /// pr-review-status D-11, D-17). The first time a session is seen
+    /// reviewing a pull request stands; a fact handed again changes nothing.
+    pub fn apply_reviews(&mut self, reviews: &[ReviewFact], now: u64) -> Result<(), String> {
+        let tx = self.connection.transaction().map_err(failed)?;
+        for review in reviews {
+            let id = session_name(&tx, &review.device_id, &review.agent, &review.session_id)?;
+            tx.execute(
+                "INSERT OR IGNORE INTO session_reviews(device, agent, id, repo_name, number, at) \
+                 VALUES(?1, ?2, ?3, ?4, ?5, ?6)",
+                params![
+                    review.device_id,
+                    review.agent,
+                    id,
+                    review.repo_name.to_ascii_lowercase(),
+                    review.number as i64,
+                    now as i64
+                ],
+            )
+            .map_err(failed)?;
+        }
+        tx.commit().map_err(failed)
+    }
+
     /// Removes the sessions their project's Copied history no longer keeps
     /// (D-18, D-25, B33). `days` answers a project key's policy (0 is Off,
     /// None the default 90); `file_exists` says whether a local file is
@@ -1299,6 +1323,7 @@ impl LinkStore {
                 "session_prs",
                 "session_named_prs",
                 "session_parents",
+                "session_reviews",
                 "ledger_requests",
                 "ledger_excluded",
                 "ledger_unjudged",
@@ -1664,6 +1689,7 @@ impl LinkStore {
             .map(|(key, _)| key.clone())
             .collect();
         let named = self.named_sessions(&pass.project, pr, &names)?;
+        let reviewed = self.reviewed_sessions(pr, &names)?;
         let start = self.window_start(pr)?;
         let end = pr.end().unwrap_or(u64::MAX);
         let mut paths = pass.paths.clone();
@@ -1726,6 +1752,7 @@ impl LinkStore {
             .iter()
             .chain(named.keys())
             .chain(worked.keys())
+            .chain(reviewed.iter())
             .cloned()
             .collect::<BTreeSet<_>>();
         for key in keys {
@@ -1736,7 +1763,8 @@ impl LinkStore {
                 continue;
             }
             let made = created.contains(&key);
-            if !made && !named.contains_key(&key) && !session.inside(&paths) {
+            let review = reviewed.contains(&key);
+            if !made && !review && !named.contains_key(&key) && !session.inside(&paths) {
                 continue;
             }
             let (role, request) = if made {
@@ -1749,11 +1777,46 @@ impl LinkStore {
                     .get(&key)
                     .and_then(|work| work.request.clone().map(|(_, text)| text));
                 let named_request = named.get(&key).and_then(|(_, request)| request.clone());
-                (SessionRole::Worked, branch_request.or(named_request))
+                let role = if review {
+                    SessionRole::Reviewed
+                } else {
+                    SessionRole::Worked
+                };
+                (role, branch_request.or(named_request))
             };
             members.push((session, role, request, worked.contains_key(&key)));
         }
         self.lines(members, pr.number, local)
+    }
+
+    /// The sessions a pre-check of `pr` started, by any of its repository's
+    /// names.
+    fn reviewed_sessions(
+        &self,
+        pr: &PrRow,
+        names: &[String],
+    ) -> Result<BTreeSet<SessionKey>, String> {
+        let mut statement = self
+            .connection
+            .prepare_cached(
+                "SELECT device, agent, id FROM session_reviews WHERE repo_name=?1 AND number=?2",
+            )
+            .map_err(failed)?;
+        let mut reviewed = BTreeSet::new();
+        for name in names {
+            let rows: Vec<SessionKey> = statement
+                .query_map(params![name, pr.number as i64], |row| {
+                    Ok(SessionKey {
+                        device: row.get(0)?,
+                        agent: row.get(1)?,
+                        id: row.get(2)?,
+                    })
+                })
+                .and_then(Iterator::collect)
+                .map_err(failed)?;
+            reviewed.extend(rows);
+        }
+        Ok(reviewed)
     }
 
     /// The sessions whose tool calls named `pr` (`hide_session::NamedPr`),
@@ -1874,14 +1937,11 @@ impl LinkStore {
         let mut lines = Vec::new();
         for group in groups {
             let last = &group[group.len() - 1].0;
-            let role = if group
+            let role = group
                 .iter()
-                .any(|(_, role, _, _)| *role == SessionRole::Created)
-            {
-                SessionRole::Created
-            } else {
-                SessionRole::Worked
-            };
+                .map(|(_, role, _, _)| *role)
+                .max_by_key(|role| role.rank())
+                .unwrap_or(SessionRole::Worked);
             let request = group
                 .iter()
                 .rev()
@@ -2049,7 +2109,7 @@ impl LinkStore {
                         && held.id == line.id
                 }) {
                     Some(held) => {
-                        if held.role == SessionRole::Worked && line.role == SessionRole::Created {
+                        if line.role.rank() > held.role.rank() {
                             *held = line;
                         }
                     }
@@ -2175,14 +2235,11 @@ impl LinkStore {
             return Ok(None);
         };
         let request = self.session_request(&session.key)?;
-        let role = if prs
+        let role = prs
             .iter()
-            .any(|(_, line)| line.role == SessionRole::Created)
-        {
-            SessionRole::Created
-        } else {
-            SessionRole::Worked
-        };
+            .map(|(_, line)| line.role)
+            .max_by_key(|role| role.rank())
+            .unwrap_or(SessionRole::Worked);
         let on_branch = prs.iter().any(|(_, line)| line.on_branch);
         let line = self
             .lines(vec![(session, role, request, on_branch)], 0, local)?
@@ -2394,6 +2451,15 @@ const PANE_SEEN_MARK: &str = "UPDATE sessions SET pane_first_at=COALESCE(started
 /// test rolled back may already hold the column.
 const MADE_COLUMN: &str = "ALTER TABLE session_prs ADD COLUMN made INTEGER NOT NULL DEFAULT 0;";
 
+/// The sessions a pull request's pre-check started (version 13, PRD
+/// pr-review-status D-17): added, nothing dropped or rewritten.
+const REVIEW_SCHEMA: &str = "
+CREATE TABLE IF NOT EXISTS session_reviews(device TEXT NOT NULL, agent TEXT NOT NULL, id TEXT NOT NULL,
+    repo_name TEXT NOT NULL, number INTEGER NOT NULL, at INTEGER NOT NULL,
+    PRIMARY KEY(device, agent, id, repo_name, number));
+CREATE INDEX IF NOT EXISTS session_reviews_pr ON session_reviews(repo_name, number);
+";
+
 /// The project ids a node conversion or a core move gave new ids, so the
 /// old session search file's `policy`, which is never written (D-20), still
 /// names each project's Copied history days. Version 4.
@@ -2444,6 +2510,7 @@ fn migrate(connection: &Connection) -> Result<(), OpenFailure> {
         };
         let plans = if version < 9 { ledger::PLAN_SCHEMA } else { "" };
         let named = if version < 10 { NAMED_SCHEMA } else { "" };
+        let reviews = if version < 13 { REVIEW_SCHEMA } else { "" };
         // A store before version 12 is read again for `made`, which also
         // gives one before version 10 its named pull requests.
         let reread = if (1..12).contains(&version) {
@@ -2466,7 +2533,7 @@ fn migrate(connection: &Connection) -> Result<(), OpenFailure> {
         };
         connection
             .execute_batch(&format!(
-                "BEGIN IMMEDIATE; {initial} {work_ledger} {origins} {backlog} {aliases} {observations} {metadata} {flows} {closed_flows} {plans} {named} {made} {reread} {pane_seen} PRAGMA user_version={SCHEMA_VERSION}; COMMIT;"
+                "BEGIN IMMEDIATE; {initial} {work_ledger} {origins} {backlog} {aliases} {observations} {metadata} {flows} {closed_flows} {plans} {named} {reviews} {made} {reread} {pane_seen} PRAGMA user_version={SCHEMA_VERSION}; COMMIT;"
             ))
             .map_err(|error| {
                 let _ = connection.execute_batch("ROLLBACK");

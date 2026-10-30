@@ -9,7 +9,7 @@ use std::{
 pub(crate) fn cleanup_facts(
     snapshot: &Snapshot,
     workspace: &WorkspaceSnapshot,
-) -> Vec<crate::live::cleanup::CheckoutFacts> {
+) -> Vec<crate::worktree_cleanup::CheckoutFacts> {
     // A delegated agent can run on a connected device, so its state is
     // read from the device's own rows too.
     let agents: HashMap<&str, &crate::model::SidebarAgentSnapshot> = snapshot
@@ -39,7 +39,7 @@ pub(crate) fn cleanup_facts(
                 .flat_map(|tab| tab.panes.iter())
                 .map(|pane| pane.id.clone())
                 .collect();
-            let mut facts = crate::live::cleanup::CheckoutFacts {
+            let mut facts = crate::worktree_cleanup::CheckoutFacts {
                 path: PathBuf::from(&checkout.path),
                 ..Default::default()
             };

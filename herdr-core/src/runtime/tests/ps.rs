@@ -12,7 +12,7 @@ fn actor(pane: &str, device: &str, session: &str) -> Actor {
         name: pane.into(),
         kind: "claude".into(),
         device_id: device.into(),
-        session: crate::wire::session_digest(session),
+        session: crate::engine::tokens::session_digest(session),
     }
 }
 
@@ -81,7 +81,8 @@ fn fixture() -> Runtime {
     ]));
     runtime.refresh_agent_lineage();
     for agent in &mut runtime.snapshot.navigator.agents {
-        agent.lineage_session = crate::wire::session_digest(&format!("{}-native", agent.pane_id));
+        agent.lineage_session =
+            crate::engine::tokens::session_digest(&format!("{}-native", agent.pane_id));
     }
     let mut far = checkout(
         "mini-project",
@@ -93,7 +94,7 @@ fn fixture() -> Runtime {
     let mut far_rows = rows(serde_json::json!([
         {"id":"far-control","pane_id":"remote:mini:pane:w1:p1","agent":"claude","agent_status":"working","state_change_seq":1,"tokens":{"task":"Far"}},
     ]));
-    far_rows[0].lineage_session = crate::wire::session_digest("far-native");
+    far_rows[0].lineage_session = crate::engine::tokens::session_digest("far-native");
     let mut far = workspace("mini-project", "Far", "/far/main", vec![far]);
     far.device_id = "mini".into();
     runtime.snapshot.status.remote.push(RemoteStatusSnapshot {

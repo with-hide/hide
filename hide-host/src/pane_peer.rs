@@ -40,16 +40,13 @@ pub fn inspect(socket: &Path, pane_id: &str) -> Result<PaneIdentity, &'static st
 }
 
 /// Resolves inherited caller aliases and proves the current address's shell.
-pub fn inspect_address(
-    socket: &Path,
-    pane_id: &str,
-) -> Result<(String, PaneIdentity), &'static str> {
+fn inspect_address(socket: &Path, pane_id: &str) -> Result<(String, PaneIdentity), &'static str> {
     inspect_address_until(socket, pane_id, Instant::now() + HERDR_TIMEOUT * 3)
 }
 
 /// The current address Herdr associates with an inherited caller reference.
 /// This is routing evidence only; callers must separately attest the shell.
-pub fn current_address(
+fn current_address(
     connector: &dyn ApiConnector,
     pane_id: &str,
     deadline: Instant,

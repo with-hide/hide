@@ -137,10 +137,10 @@ pub(super) struct PromotionStart {
     /// a rebase makes it again on.
     pub(super) purpose: hide_memory::BatchPurpose,
     pub(super) base: Option<String>,
-    /// The Herdr and node of the machine that holds the Project, which
+    /// The engine and node of the machine that holds the Project, which
     /// release a failed attempt's worktree; none when that machine cannot be
     /// reached now, and the worktree then stays for the next attempt.
-    connector: Option<Arc<dyn hide_herdr_client::ApiConnector>>,
+    engine: Option<Arc<dyn crate::engine::Engine>>,
     node: Option<Arc<dyn crate::node_access::NodeLink>>,
 }
 
@@ -169,6 +169,10 @@ pub(super) struct PromotionTracking {
     /// Ready batches Hide is merging or discarding now, by Project and
     /// branch (PRD hide-ai-branch-first-apply D-05, D-07).
     pub(super) deciding: HashMap<(String, String), super::memory_branch::BatchDecision>,
+    /// Merges a remake carries out, by Project and branch (operator
+    /// decision 2026-10-31); kept in memory, so after a restart the remade
+    /// batch waits for the operator.
+    pub(super) finish: HashMap<(String, String), super::memory_branch::BatchFinish>,
     /// What the tracker last read of each batch branch and what its agent
     /// was asked, by Project and branch.
     pub(super) branches: HashMap<(String, String), super::memory_branch::BatchBranchFacts>,
@@ -362,7 +366,7 @@ impl Runtime {
             machine: (*node != self.node).then(|| node.as_str().to_owned()),
             kind,
             launch,
-            connector: self.delivery_connector(node.as_str()),
+            engine: self.delivery_engine(node.as_str()),
             node: self.node_link(node.as_str()).ok(),
         })
     }
@@ -1152,11 +1156,11 @@ fn track_promotions(
         // panes and retire a settled one's, used off the lock.
         let mut reach = HashMap::new();
         for node in nodes {
-            if let (Some(connector), Ok(link)) = (
-                guard.delivery_connector(node.as_str()),
+            if let (Some(engine), Ok(link)) = (
+                guard.delivery_engine(node.as_str()),
                 guard.node_link(node.as_str()),
             ) {
-                reach.insert(node.clone(), (connector, link));
+                reach.insert(node.clone(), (engine, link));
             }
         }
         // The branches an attempt still followed holds: nothing is retired
@@ -1281,13 +1285,13 @@ fn track_promotions(
                         }
                         if state == PromotionState::Failed
                             && pr_number.is_none()
-                            && let (Some((connector, link)), Some(branch)) =
+                            && let (Some((engine, link)), Some(branch)) =
                                 (reach.get(*node), &promotion.branch)
                             && !held.contains(&(project_id.clone(), branch.clone()))
                             && released.insert((project_id.clone(), branch.clone()))
                         {
                             release_attempt(
-                                connector.as_ref(),
+                                engine.as_ref(),
                                 link.as_ref(),
                                 root,
                                 branch,
@@ -1340,7 +1344,7 @@ fn track_promotions(
     let mut retiring = retire_plan(carried, settled.into_iter().chain(converging), &held);
     let due = retire_due(&mut retiring, &held, |node| reach.contains_key(node));
     for retire in due {
-        let (connector, link) = &reach[&retire.node];
+        let (engine, link) = &reach[&retire.node];
         let note = &retiring[&retire];
         let noticed = note.tried == Tried::Failed;
         // The panes of the agents the store names for the attempt, from the
@@ -1353,7 +1357,7 @@ fn track_promotions(
             .collect::<Vec<_>>();
         let result = if note.empty_only {
             release_attempt(
-                connector.as_ref(),
+                engine.as_ref(),
                 link.as_ref(),
                 &retire.root,
                 &retire.branch,
@@ -1361,7 +1365,7 @@ fn track_promotions(
                 None,
             )
         } else {
-            retire_attempt(connector.as_ref(), link.as_ref(), &retire, &own, noticed)
+            retire_attempt(engine.as_ref(), link.as_ref(), &retire, &own, noticed)
         };
         match result {
             Retired::Failed => {
@@ -1510,19 +1514,12 @@ fn fail_start(
         return Ok(());
     }
     match (
-        start.connector.as_deref(),
+        start.engine.as_deref(),
         start.node.as_deref(),
         &promotion.branch,
     ) {
-        (Some(connector), Some(node), Some(branch)) => {
-            release_attempt(
-                connector,
-                node,
-                &start.repo,
-                branch,
-                project_id,
-                Some(number),
-            );
+        (Some(engine), Some(node), Some(branch)) => {
+            release_attempt(engine, node, &start.repo, branch, project_id, Some(number));
         }
         _ => crate::diagnostic!(json!({
             "component": "memory",
@@ -1539,18 +1536,28 @@ fn fail_start(
 /// The worktree of `branch` in the repository at `repo`, `None` when there
 /// is none.
 pub(super) fn worktree_path(
-    connector: &dyn hide_herdr_client::ApiConnector,
+    engine: &dyn crate::engine::Engine,
     repo: &str,
     branch: &str,
 ) -> Result<Option<String>, String> {
-    hide_herdr_client::request_with_connector(
-        connector,
-        "worktree.list",
-        crate::wire::worktree_list_params(repo)?,
-        std::time::Duration::from_secs(5),
-    )
-    .map_err(|error| error.to_string())
-    .and_then(|listed| crate::wire::listed_worktree_path(listed, branch))
+    engine
+        .worktree_path(READ_WAIT, repo, branch)
+        .map_err(String::from)
+}
+
+/// How long one of Herdr's reads here may take.
+const READ_WAIT: crate::engine::Wait = crate::engine::Wait::Each(std::time::Duration::from_secs(5));
+
+/// Every agent Herdr runs now.
+pub(super) fn agents_listed(
+    engine: &dyn crate::engine::Engine,
+) -> Result<Vec<crate::session_sync::ProjectedAgent>, String> {
+    engine.agents(READ_WAIT).map_err(|error| match error {
+        crate::engine::EngineError::Answer(_) | crate::engine::EngineError::Protocol { .. } => {
+            "agent.list is malformed".to_owned()
+        }
+        error => error.to_string(),
+    })
 }
 
 /// Releases what a failed attempt made (engineering principle 14): its
@@ -1560,7 +1567,7 @@ pub(super) fn worktree_path(
 /// (`start_promotion`), so retries never pile worktrees up. What happened is
 /// logged; a failure leaves the worktree for that next attempt too.
 fn release_attempt(
-    connector: &dyn hide_herdr_client::ApiConnector,
+    engine: &dyn crate::engine::Engine,
     node: &dyn crate::node_access::NodeLink,
     repo: &str,
     branch: &str,
@@ -1594,7 +1601,7 @@ fn release_attempt(
         Ok(own.trim() == "0" && git(path, GitCommand::Status)?.trim().is_empty())
     };
     let released = (|| -> Result<&'static str, String> {
-        let Some(path) = worktree_path(connector, repo, branch)? else {
+        let Some(path) = worktree_path(engine, repo, branch)? else {
             return Ok("gone");
         };
         // The branch checked out in the Project's own folder is the
@@ -1602,29 +1609,20 @@ fn release_attempt(
         if path.trim_end_matches('/') == repo.trim_end_matches('/') || !empty(&path)? {
             return Ok("kept");
         }
-        let panes = panes_in(connector, &path)?;
+        let panes = panes_in(engine, &path)?;
         // An agent there, or a start whose name Herdr still holds, may yet
         // do the attempt's work: nothing of it is closed.
-        let agents = hide_herdr_client::request_with_connector(
-            connector,
-            "agent.list",
-            crate::wire::empty_params(),
-            std::time::Duration::from_secs(5),
-        )
-        .map_err(|error| error.to_string())
-        .and_then(|listed| {
-            crate::wire::agents_response(listed).map_err(|_| "agent.list is malformed".into())
-        })?;
+        let agents = agents_listed(engine)?;
         if agents.iter().any(|agent| panes.contains(&agent.pane_id)) {
             return Ok("active");
         }
-        crate::live::close_checkout_panes(
-            connector,
+        crate::worktree_control::close_checkout_panes(
+            engine,
             node,
             std::slice::from_ref(&path),
             &panes,
-            crate::live::ProcessWait::for_folder_removal(true),
-            crate::live::CONFIRM_TIMEOUT,
+            crate::worktree_control::ProcessWait::for_folder_removal(true),
+            crate::worktree_control::CONFIRM_TIMEOUT,
         )?;
         // What ran in the panes until they closed may have committed or
         // written there: that work stays.
@@ -1748,7 +1746,7 @@ pub(super) enum Retired {
 /// branch always stays, for the merge or the operator to reuse. What
 /// happened is logged; a worktree that stays says why.
 pub(super) fn retire_attempt(
-    connector: &dyn hide_herdr_client::ApiConnector,
+    engine: &dyn crate::engine::Engine,
     node: &dyn crate::node_access::NodeLink,
     retire: &Retire,
     own: &[String],
@@ -1760,7 +1758,7 @@ pub(super) fn retire_attempt(
     let repo = retire.root.as_str();
     let mut at = None;
     let result = (|| -> Result<(Retired, &'static str), String> {
-        let Some(path) = worktree_path(connector, repo, &retire.branch)? else {
+        let Some(path) = worktree_path(engine, repo, &retire.branch)? else {
             return Ok((Retired::Done, "gone"));
         };
         at = Some(path.clone());
@@ -1769,17 +1767,8 @@ pub(super) fn retire_attempt(
         if path.trim_end_matches('/') == repo.trim_end_matches('/') {
             return Ok((Retired::Kept, "the Project's own folder"));
         }
-        let agents = hide_herdr_client::request_with_connector(
-            connector,
-            "agent.list",
-            crate::wire::empty_params(),
-            std::time::Duration::from_secs(5),
-        )
-        .map_err(|error| error.to_string())
-        .and_then(|listed| {
-            crate::wire::agents_response(listed).map_err(|_| "agent.list is malformed".to_owned())
-        })?;
-        let panes = panes_in(connector, &path)?;
+        let agents = agents_listed(engine)?;
+        let panes = panes_in(engine, &path)?;
         let (attempt, others): (Vec<_>, Vec<_>) = agents
             .iter()
             .filter(|agent| panes.contains(&agent.pane_id))
@@ -1789,13 +1778,13 @@ pub(super) fn retire_attempt(
             .into_iter()
             .map(|agent| agent.pane_id.clone())
             .collect::<Vec<_>>();
-        crate::live::close_checkout_panes(
-            connector,
+        crate::worktree_control::close_checkout_panes(
+            engine,
             node,
             &[],
             &attempt,
-            crate::live::ProcessWait::for_folder_removal(true),
-            crate::live::CONFIRM_TIMEOUT,
+            crate::worktree_control::ProcessWait::for_folder_removal(true),
+            crate::worktree_control::CONFIRM_TIMEOUT,
         )?;
         if !others.is_empty() {
             return Ok((Retired::Kept, "another agent works in it"));
@@ -1807,14 +1796,9 @@ pub(super) fn retire_attempt(
             .filter(|pane| !attempt.contains(pane))
             .collect::<Vec<_>>();
         for pane in &remaining {
-            let held = hide_herdr_client::request_with_connector(
-                connector,
-                "pane.process_info",
-                crate::wire::pane_process_info_params(pane)?,
-                std::time::Duration::from_secs(5),
-            )
-            .map_err(|error| error.to_string())
-            .and_then(crate::wire::pane_process_group)?;
+            let held = engine
+                .pane_processes(READ_WAIT, pane)
+                .map_err(String::from)?;
             if !held.foreground_pids.is_empty() && !held.shell_holds_terminal() {
                 return Ok((Retired::Kept, "a program is running in it"));
             }
@@ -1831,13 +1815,13 @@ pub(super) fn retire_attempt(
         if !status.trim().is_empty() {
             return Ok((Retired::Kept, "it holds uncommitted changes"));
         }
-        crate::live::close_checkout_panes(
-            connector,
+        crate::worktree_control::close_checkout_panes(
+            engine,
             node,
             std::slice::from_ref(&path),
             &remaining,
-            crate::live::ProcessWait::for_folder_removal(true),
-            crate::live::CONFIRM_TIMEOUT,
+            crate::worktree_control::ProcessWait::for_folder_removal(true),
+            crate::worktree_control::CONFIRM_TIMEOUT,
         )?;
         crate::node_access::call_as::<()>(
             node,
@@ -1886,17 +1870,15 @@ fn within(cwd: &str, path: &str) -> bool {
 }
 
 pub(super) fn panes_in(
-    connector: &dyn hide_herdr_client::ApiConnector,
+    engine: &dyn crate::engine::Engine,
     path: &str,
 ) -> Result<Vec<String>, String> {
-    let snapshot = hide_herdr_client::request_with_connector(
-        connector,
-        "session.snapshot",
-        crate::wire::empty_params(),
-        std::time::Duration::from_secs(5),
-    )
-    .map_err(|error| error.to_string())?;
-    let snapshot = crate::wire::snapshot_response(snapshot).map_err(|_| "snapshot_unavailable")?;
+    let snapshot = engine.session(READ_WAIT).map_err(|error| match error {
+        crate::engine::EngineError::Answer(_) | crate::engine::EngineError::Protocol { .. } => {
+            "snapshot_unavailable".to_owned()
+        }
+        error => error.to_string(),
+    })?;
     Ok(snapshot
         .panes
         .into_iter()
@@ -2010,12 +1992,14 @@ fn building_next(
 /// written as running before the spawn, so a start Hide never finished fails
 /// by the tracker's grace rather than holding the card forever. Answers the
 /// attempt and its start when the agent was started but has not shown its
-/// session yet, for the tracker to ask again.
+/// session yet, for the tracker to ask again. `reserved` runs once the
+/// cards are written as running, before the agent's start.
 pub(super) fn start_promotion(
     store: &mut MemoryStore,
     project_id: &str,
     numbers: &[u64],
     mut start: PromotionStart,
+    reserved: &dyn Fn(),
 ) -> Result<Option<(u32, PromotionStart)>, String> {
     let effects = Arc::clone(&start.effects);
     let _permit = effects.try_lock().map_err(|_| {
@@ -2183,6 +2167,7 @@ pub(super) fn start_promotion(
     store
         .set_promotion_batch(project_id, &branch, &promotions)
         .map_err(|error| error.to_string())?;
+    reserved();
     start.numbers = numbers;
     start.evidence = evidence;
     let (number, promotion) = &promotions[0];
@@ -2432,7 +2417,7 @@ pub(super) fn spawn_hide_agent(
         .ok_or("agent_not_startable")?;
     let args = vec![
         dialect.prompt_flag().to_owned(),
-        crate::live::prompt_argument(&spawn.prompt)?,
+        crate::worktree_control::prompt_argument(&spawn.prompt)?,
     ];
     crate::coordination::register_code_owned(&start.client, &start.authority, &start.actor)?;
     let view = crate::coordination::run(
@@ -3115,7 +3100,7 @@ mod tests {
         assert_eq!(remote.machine.as_deref(), Some("node-elsewhere"));
         // A failed attempt there is released by that node or not at all,
         // never by this Mac's Herdr reading the other machine's folder.
-        assert!(remote.connector.is_none() && remote.node.is_none());
+        assert!(remote.engine.is_none() && remote.node.is_none());
 
         let mut store = MemoryStore::open(&root.path().join("memory.sqlite3")).unwrap();
         store
@@ -3168,7 +3153,7 @@ mod tests {
         let effects = Arc::clone(&start().effects);
         let permit = effects.lock().unwrap();
         assert!(
-            start_promotion(&mut store, "p", &[1, 2], start())
+            start_promotion(&mut store, "p", &[1, 2], start(), &|| ())
                 .err()
                 .unwrap()
                 .contains("still being checked")
@@ -3190,15 +3175,15 @@ mod tests {
         drop(permit);
 
         assert!(
-            start_promotion(&mut store, "p", &[3], start()).is_err(),
+            start_promotion(&mut store, "p", &[3], start(), &|| ()).is_err(),
             "a fact"
         );
-        start_promotion(&mut store, "p", &[1, 2], start()).unwrap();
+        start_promotion(&mut store, "p", &[1, 2], start(), &|| ()).unwrap();
         let failed = promotion(&store).unwrap();
         let mut wrong_target = start();
         wrong_target.repository = Some("acme/other".into());
         assert!(
-            start_promotion(&mut store, "p", &[1, 2], wrong_target)
+            start_promotion(&mut store, "p", &[1, 2], wrong_target, &|| ())
                 .err()
                 .unwrap()
                 .contains("original promotion repository")
@@ -3260,7 +3245,7 @@ mod tests {
         store.set_promotion("p", 1, &running).unwrap();
         store.set_promotion("p", 2, &running).unwrap();
         assert!(
-            start_promotion(&mut store, "p", &[1, 2], start())
+            start_promotion(&mut store, "p", &[1, 2], start(), &|| ())
                 .unwrap()
                 .is_none(),
             "the same running intent converges"
@@ -3288,7 +3273,7 @@ mod tests {
                 )
                 .unwrap();
             assert!(
-                start_promotion(&mut store, "p", &[1], start())
+                start_promotion(&mut store, "p", &[1], start(), &|| ())
                     .err()
                     .unwrap()
                     .contains("still running"),
@@ -3300,12 +3285,12 @@ mod tests {
         wrong_target.repository = Some("acme/other".into());
         store.set_promotion("p", 2, &peer).unwrap();
         assert!(
-            start_promotion(&mut store, "p", &[1], wrong_target)
+            start_promotion(&mut store, "p", &[1], wrong_target, &|| ())
                 .err()
                 .unwrap()
                 .contains("original promotion repository")
         );
-        start_promotion(&mut store, "p", &[1, 2], start()).unwrap();
+        start_promotion(&mut store, "p", &[1, 2], start(), &|| ()).unwrap();
         assert_eq!(promotion(&store).unwrap().branch, failed.branch);
         assert_eq!(
             promotion(&store).unwrap().attempt,
@@ -3320,7 +3305,7 @@ mod tests {
         placed.state = PromotionState::PrOpen;
         placed.pr_number = Some(72);
         store.set_promotion("p", 2, &placed).unwrap();
-        start_promotion(&mut store, "p", &[1], start()).unwrap();
+        start_promotion(&mut store, "p", &[1], start(), &|| ()).unwrap();
         assert_eq!(promotion(&store).unwrap().pr_number, Some(72));
         assert_eq!(promotion(&store).unwrap().branch, placed.branch);
         assert_eq!(
@@ -3479,14 +3464,14 @@ mod tests {
             .panes
             .push(("w2:p1".into(), "/r.worktrees/first/docs".into()));
         let herdr = herdr(&repository);
-        let connector = herdr.connector();
+        let engine = herdr.engine();
         let failed = Promotion {
             state: PromotionState::Failed,
             ..running(None, 1)
         };
 
         release_attempt(
-            &connector,
+            engine.as_ref(),
             &Machine(Arc::clone(&repository)),
             "/r",
             &first,
@@ -3515,7 +3500,7 @@ mod tests {
         );
         // Asked again, nothing is left to release.
         release_attempt(
-            &connector,
+            engine.as_ref(),
             &Machine(Arc::clone(&repository)),
             "/r",
             &first,
@@ -3542,9 +3527,9 @@ mod tests {
                 repository.changed = changed;
             }
             let herdr = herdr(&repository);
-            let connector = herdr.connector();
+            let engine = herdr.engine();
             release_attempt(
-                &connector,
+                engine.as_ref(),
                 &Machine(Arc::clone(&repository)),
                 "/r",
                 &first,
@@ -3598,7 +3583,7 @@ mod tests {
             }
             let herdr = herdr(&repository);
             release_attempt(
-                &herdr.connector(),
+                herdr.engine().as_ref(),
                 &Machine(Arc::clone(&repository)),
                 "/r",
                 &first,
@@ -3653,7 +3638,7 @@ mod tests {
         let retire = retire_of(&branch(7, 1));
         assert_eq!(
             retire_attempt(
-                &herdr.connector(),
+                herdr.engine().as_ref(),
                 &Machine(Arc::clone(&repository)),
                 &retire,
                 &own(),
@@ -3698,7 +3683,7 @@ mod tests {
             let retire = retire_of(&branch(7, 1));
             for _ in 0..2 {
                 assert_eq!(
-                    retire_attempt(&herdr.connector(), &machine, &retire, &own(), false),
+                    retire_attempt(herdr.engine().as_ref(), &machine, &retire, &own(), false),
                     Retired::Kept,
                     "{case}"
                 );
@@ -3733,7 +3718,7 @@ mod tests {
         let first = herdr(&repository);
         assert_eq!(
             retire_attempt(
-                &first.connector(),
+                first.engine().as_ref(),
                 &Machine(Arc::clone(&repository)),
                 &retire_of(&branch(7, 1)),
                 &own(),
@@ -3758,7 +3743,7 @@ mod tests {
         let second = herdr(&repository);
         assert_eq!(
             retire_attempt(
-                &second.connector(),
+                second.engine().as_ref(),
                 &Machine(Arc::clone(&repository)),
                 &retire_of(&branch(7, 1)),
                 &[],
@@ -3852,7 +3837,7 @@ mod tests {
         let herdr = herdr(&repository);
         let release = || {
             release_attempt(
-                &herdr.connector(),
+                herdr.engine().as_ref(),
                 &Machine(Arc::clone(&repository)),
                 "/r",
                 &retire.branch,
@@ -3884,7 +3869,7 @@ mod tests {
         let herdr = herdr(&repository);
         assert_eq!(
             retire_attempt(
-                &herdr.connector(),
+                herdr.engine().as_ref(),
                 &Machine(Arc::clone(&repository)),
                 &retire_of(&branch(7, 1)),
                 &own(),
@@ -3904,7 +3889,7 @@ mod tests {
         let herdr = herdr(&repository);
         assert_eq!(
             retire_attempt(
-                &herdr.connector(),
+                herdr.engine().as_ref(),
                 &Machine(Arc::clone(&repository)),
                 &retire_of(&branch(7, 1)),
                 &own(),
@@ -3931,7 +3916,7 @@ mod tests {
         let repository = settled_repository(|_| {});
         assert_eq!(
             retire_attempt(
-                &Down,
+                crate::engine::herdr::HerdrEngine::shared(Arc::new(Down)).as_ref(),
                 &Machine(Arc::clone(&repository)),
                 &retire_of(&branch(7, 1)),
                 &own(),
@@ -4120,7 +4105,7 @@ mod tests {
             assert!(prompt.contains(step), "{step}");
         }
         assert!(!prompt.contains("open one PR"), "a batch commits and stops");
-        assert!(crate::live::prompt_argument(&prompt).is_ok());
+        assert!(crate::worktree_control::prompt_argument(&prompt).is_ok());
         assert!(
             super::prompt(
                 &[7],

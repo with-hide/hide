@@ -4,9 +4,9 @@
 //! registrations that waited for their agent's session (`identity_wait`).
 use super::AgentRecord;
 use crate::delivery::ledger::Ledger;
+use crate::engine::{Engine, SharedEngine, Wait};
 use crate::runtime::Runtime;
 use crate::session_sync::ProjectedAgent;
-use hide_herdr_client::{ApiConnector, request_with_connector};
 use serde_json::{Value, json};
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -22,9 +22,9 @@ const KEYS: [&str; 4] = [
 ];
 /// A fork's provenance, written on its pane by the same writer.
 pub(crate) const FORK_KEYS: [&str; 3] = [
-    crate::wire::FORK_PANE_TOKEN,
-    crate::wire::FORK_SESSION_TOKEN,
-    crate::wire::FORK_SOURCE_SESSION_TOKEN,
+    crate::engine::tokens::FORK_PANE_TOKEN,
+    crate::engine::tokens::FORK_SESSION_TOKEN,
+    crate::engine::tokens::FORK_SOURCE_SESSION_TOKEN,
 ];
 #[derive(Clone, Debug, PartialEq)]
 struct Patch {
@@ -87,7 +87,7 @@ pub(crate) struct Writer {
 impl Writer {
     pub(crate) fn new(
         device: String,
-        connector: Arc<dyn ApiConnector>,
+        engine: SharedEngine,
         runtime: Weak<Mutex<Runtime>>,
     ) -> Result<Self, String> {
         let (sender, receiver) = mpsc::sync_channel::<Batch>(1);
@@ -107,7 +107,7 @@ impl Writer {
                         if stop.load(Ordering::Acquire) || runtime.upgrade().is_none() {
                             return;
                         }
-                        let result = write(connector.as_ref(), &patch);
+                        let result = write(engine.as_ref(), &patch);
                         let _ = done.try_send(Completion {
                             signature: signature(&patch),
                             generation: batch.generation,
@@ -131,7 +131,7 @@ impl Writer {
                         // earlier attempt was active. Never repeat a target
                         // that the durable writer has since completed.
                         let Some(work) = ledger.spawns.iter().find(|record| record.id == work.id).and_then(super::naming::Work::of) else { continue; };
-                        let names = super::naming::run(connector.as_ref(), &work);
+                        let names = super::naming::run(engine.as_ref(), &work);
                         let id = work.id.clone();
                         if let Err(error) = super::naming::save(&client, work, names) {
                             crate::diagnostic!(json!({"component":"spawn_naming", "kind":"checkpoint_failed", "spawn_id":id, "detail":error}));
@@ -489,7 +489,7 @@ fn plan(
         };
         if agent
             .tokens
-            .get(crate::wire::SERVER_MARK_TOKEN)
+            .get(crate::engine::tokens::SERVER_MARK_TOKEN)
             .and_then(Value::as_str)
             == Some(mark.as_str())
         {
@@ -500,11 +500,14 @@ fn plan(
             Some(patch) => {
                 patch
                     .tokens
-                    .insert(crate::wire::SERVER_MARK_TOKEN.to_owned(), value);
+                    .insert(crate::engine::tokens::SERVER_MARK_TOKEN.to_owned(), value);
             }
             None => patches.push(Patch {
                 pane: agent.pane_id.clone(),
-                tokens: BTreeMap::from([(crate::wire::SERVER_MARK_TOKEN.to_owned(), value)]),
+                tokens: BTreeMap::from([(
+                    crate::engine::tokens::SERVER_MARK_TOKEN.to_owned(),
+                    value,
+                )]),
             }),
         }
     }
@@ -582,24 +585,28 @@ fn lineage_patches(ledger: &Ledger, device: &str, agents: &[ProjectedAgent]) -> 
     }
     patches
 }
-fn write(connector: &dyn ApiConnector, patch: &Patch) -> Result<(), String> {
-    // The pinned public pane.report_metadata token patch: null clears one key.
-    request_with_connector(
-        connector,
-        "pane.report_metadata",
-        json!({"pane_id":patch.pane,"source":"hide","tokens":patch.tokens}),
-        Duration::from_secs(1),
-    )
-    .map(|_| ())
-    .map_err(|error| format!("{error}"))
+/// Reports a patch's tokens on its pane; a token without a value clears it.
+fn write(engine: &dyn Engine, patch: &Patch) -> Result<(), String> {
+    let tokens = patch
+        .tokens
+        .iter()
+        .map(|(key, value)| match value {
+            Value::Null => Ok((key.clone(), None)),
+            Value::String(text) => Ok((key.clone(), Some(text.clone()))),
+            _ => Err(format!("lineage token {key} is not text")),
+        })
+        .collect::<Result<BTreeMap<_, _>, String>>()?;
+    engine
+        .report_pane_tokens(Wait::Each(Duration::from_secs(1)), &patch.pane, &tokens)
+        .map_err(String::from)
 }
 pub(crate) fn write_record(
-    connector: &dyn ApiConnector,
+    engine: &dyn Engine,
     record: &AgentRecord,
     related: &AgentRecord,
 ) -> Result<(), String> {
     write(
-        connector,
+        engine,
         &Patch {
             pane: record.pane.clone(),
             tokens: desired(record, Some(related), record.actor.session.as_deref()),
@@ -629,7 +636,7 @@ mod tests {
                 name: id.into(),
                 kind: "codex".into(),
                 device_id: crate::node::TEST_NODE.into(),
-                session: crate::wire::session_digest(session),
+                session: crate::engine::tokens::session_digest(session),
             },
             ended: false,
             terminal_id: None,
@@ -780,7 +787,7 @@ mod tests {
             lineage_patches(&ledger, crate::node::TEST_NODE, &changed).len(),
             1
         );
-        changed[0].lineage_session = crate::wire::session_digest("replacement");
+        changed[0].lineage_session = crate::engine::tokens::session_digest("replacement");
         let patches = lineage_patches(&ledger, crate::node::TEST_NODE, &changed);
         assert_eq!(patches.len(), 2);
         assert!(
@@ -805,7 +812,12 @@ mod tests {
             agents: vec![parent.clone(), child.clone()],
             ..Default::default()
         };
-        let mark = |value: &str| (crate::wire::SERVER_MARK_TOKEN.to_owned(), json!(value));
+        let mark = |value: &str| {
+            (
+                crate::engine::tokens::SERVER_MARK_TOKEN.to_owned(),
+                json!(value),
+            )
+        };
         let marks = BTreeMap::from([
             (parent.pane.clone(), "server-1".to_owned()),
             (child.pane.clone(), "server-1".to_owned()),
@@ -830,7 +842,7 @@ mod tests {
         );
         let child_tokens = tokens(&child.pane);
         assert_eq!(
-            child_tokens.get(crate::wire::SERVER_MARK_TOKEN),
+            child_tokens.get(crate::engine::tokens::SERVER_MARK_TOKEN),
             Some(&json!("server-1"))
         );
         assert!(
@@ -1421,7 +1433,8 @@ mod tests {
             .native
             .tokens
             .insert("unrelated".into(), json!("keep"));
-        fixture.native.lineage_session = crate::wire::session_digest("unregistered-replacement");
+        fixture.native.lineage_session =
+            crate::engine::tokens::session_digest("unregistered-replacement");
         let patches = lineage_patches(
             &fixture.ledger,
             crate::node::TEST_NODE,

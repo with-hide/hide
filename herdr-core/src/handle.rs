@@ -238,8 +238,9 @@ impl Core {
 
     /// `own_node` answers for the machine this core runs on (PRD
     /// core-host-node D-21); the core reaches that machine only through it.
-    /// `own_herdr` is that node's connection to the Herdr server at
-    /// `options.herdr_socket_path`, given exactly when a socket is.
+    /// `own_engine` is the engine that runs that machine's panes, the Herdr
+    /// server at `options.herdr_socket_path`, given exactly when a socket is
+    /// (PRD engine-bundle-1 D-2).
     /// `devices` opens the transport to each registered device.
     /// `terminals` reaches every node's terminal service, and `reports` is
     /// what those services answer (PRD core-host-node-terminal D-05): the
@@ -248,13 +249,13 @@ impl Core {
     pub fn create(
         options: CoreOptions,
         own_node: std::sync::Arc<dyn crate::node_access::NodeLink>,
-        own_herdr: Option<std::sync::Arc<dyn hide_herdr_client::ApiConnector>>,
+        own_engine: Option<crate::engine::EngineHandle>,
         devices: std::sync::Arc<dyn crate::remote::DeviceConnector>,
         terminals: std::sync::Arc<dyn hide_node_link::terminal::TerminalRoutes>,
         reports: crate::terminal_reports::TerminalReports,
     ) -> Option<Box<Self>> {
         Self::create_with_product_analytics(
-            options, own_node, own_herdr, devices, terminals, reports, None,
+            options, own_node, own_engine, devices, terminals, reports, None,
         )
     }
 
@@ -263,14 +264,14 @@ impl Core {
     pub fn create_with_product_analytics(
         options: CoreOptions,
         own_node: Arc<dyn crate::node_access::NodeLink>,
-        own_herdr: Option<Arc<dyn hide_herdr_client::ApiConnector>>,
+        own_engine: Option<crate::engine::EngineHandle>,
         devices: Arc<dyn crate::remote::DeviceConnector>,
         terminals: Arc<dyn hide_node_link::terminal::TerminalRoutes>,
         reports: crate::terminal_reports::TerminalReports,
         analytics: Option<Arc<dyn crate::product_analytics::Sink>>,
     ) -> Option<Box<Self>> {
         if validate_options(&options).is_err()
-            || options.herdr_socket_path.is_some() != own_herdr.is_some()
+            || options.herdr_socket_path.is_some() != own_engine.is_some()
         {
             return None;
         }
@@ -452,14 +453,14 @@ impl Core {
                 None
             }
         };
-        let session_sync = if let (Some(socket_path), Some(own_herdr)) =
-            (options.herdr_socket_path.as_deref(), own_herdr)
+        let session_sync = if let (Some(socket_path), Some(own_engine)) =
+            (options.herdr_socket_path.as_deref(), own_engine)
         {
             live::install(
                 &runtime,
                 notifier.clone(),
                 Arc::clone(&own_node),
-                own_herdr,
+                own_engine.shared(),
                 socket_path,
                 usage_paths,
             )
@@ -942,17 +943,17 @@ impl Core {
         accepted
     }
 
-    /// The Herdr API connection the core holds for a connected SSH device;
-    /// `None` when the device is not connected. The daemon reads and writes
-    /// a device pane through it without joining the attach set.
-    pub fn remote_herdr_api(
-        &self,
-        device_id: &str,
-    ) -> Option<std::sync::Arc<dyn hide_herdr_client::ApiConnector>> {
-        if !check_owner_thread(self, "remote_herdr_api") {
+    /// The engine the core holds for a connected device; `None` when the
+    /// device is not connected. The daemon reads and writes a device pane
+    /// through it without joining the attach set, and asks it off the
+    /// runtime lock: only taking the handle is under the lock.
+    pub fn device_engine(&self, device_id: &str) -> Option<crate::engine::EngineHandle> {
+        if !check_owner_thread(self, "device_engine") {
             return None;
         }
-        lock_recover(&self.runtime).remote_herdr_api(device_id)
+        lock_recover(&self.runtime)
+            .device_engine(device_id)
+            .map(crate::engine::EngineHandle::new)
     }
 
     /// The gate a writer that bypasses a node's terminal (a phone's reply)

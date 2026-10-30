@@ -25,6 +25,7 @@ import { AddDeviceScene } from "./AddDeviceScene";
 import { HideAiSettingsScene } from "./HideAiSettingsScene";
 import { SessionWorkScene } from "./SessionWorkScene";
 import { PrCardScene } from "./PrCardScene";
+import { PrListScene } from "./PrListScene";
 import { CloseTreeScene } from "./CloseTreeScene";
 import { ViewsCloseScene } from "./ViewsCloseScene";
 import { MissionScene } from "./MissionScene";
@@ -78,6 +79,10 @@ export function mountGallery(root: Root) {
     }
     if (scene === "pr-card") {
       root.render(<StrictMode><PrCardScene params={params} /></StrictMode>);
+      return;
+    }
+    if (scene === "pr-list") {
+      root.render(<StrictMode><PrListScene params={params} /></StrictMode>);
       return;
     }
     if (scene === "mission") {

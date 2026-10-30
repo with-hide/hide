@@ -599,7 +599,7 @@ impl Runtime {
     pub fn ingest_pane_find(
         &mut self,
         pane_id: &str,
-        result: Result<live::PaneFindOutcome, String>,
+        result: Result<crate::find::pane::PaneFindOutcome, String>,
     ) -> bool {
         let outcome = match result {
             Ok(outcome) => outcome,
@@ -637,7 +637,7 @@ impl Runtime {
     }
     /// ⌘F on a pane whose agent has its own find: a worker opens the
     /// agent's search, or answers that Hide's find bar should open because
-    /// Herdr holds the pane's history (`live::spawn_agent_find`).
+    /// Herdr holds the pane's history (`crate::find::pane::spawn_agent_find`).
     pub(super) fn open_pane_find(&mut self, pane_id: String, request_id: String) -> bool {
         let find = self
             .agent_row(&pane_id)
@@ -653,7 +653,7 @@ impl Runtime {
             Ok(route) => route,
             Err(reason) => return self.ingest_agent_find(&pane_id, request_id, Err(reason)),
         };
-        if let Err(message) = live::spawn_agent_find(
+        if let Err(message) = crate::find::pane::spawn_agent_find(
             route,
             request_id.clone(),
             find,
@@ -834,7 +834,7 @@ impl Runtime {
             }
         };
         self.viewport_scrolls.insert(pane_id.to_owned(), 0);
-        if let Err(message) = live::spawn_viewport_scroll(route, lines) {
+        if let Err(message) = crate::find::pane::spawn_viewport_scroll(route, lines) {
             self.viewport_scrolls.remove(pane_id);
             self.set_error("terminal.scroll_failed", message, true);
             return true;
@@ -846,7 +846,10 @@ impl Runtime {
     pub fn ingest_viewport_scroll(
         &mut self,
         pane_id: &str,
-        result: Result<Option<live::PaneScroll>, live::ViewportScrollError>,
+        result: Result<
+            Option<crate::find::pane::PaneScroll>,
+            crate::find::pane::ViewportScrollError,
+        >,
     ) -> bool {
         let Some(pending) = self.viewport_scrolls.remove(pane_id) else {
             return false;
@@ -861,10 +864,10 @@ impl Runtime {
                 pane_id,
                 "Herdr has no history to move for this pane, and only the client controlling it can scroll the program",
             ),
-            Err(live::ViewportScrollError::Refused(message)) => {
+            Err(crate::find::pane::ViewportScrollError::Refused(message)) => {
                 self.hold_scroll_elsewhere(pane_id, &message)
             }
-            Err(live::ViewportScrollError::Unreachable(message)) => {
+            Err(crate::find::pane::ViewportScrollError::Unreachable(message)) => {
                 self.push_diagnostic(
                     "terminal.scroll_failed",
                     format!("Pane {pane_id} was not scrolled: {message}"),
@@ -902,12 +905,15 @@ impl Runtime {
     /// Where a pane's socket requests go: this machine's Herdr, or the
     /// device's Herdr under the id that Herdr knows the pane by. The error is
     /// the reason, worded for the operator.
-    pub(super) fn pane_api_route(&self, pane_id: &str) -> Result<live::PaneApiRoute, String> {
+    pub(super) fn pane_api_route(
+        &self,
+        pane_id: &str,
+    ) -> Result<crate::find::pane::PaneApiRoute, String> {
         if !pane_id.starts_with("remote:") {
             return self
                 .live
                 .as_ref()
-                .map(|context| live::PaneApiRoute::local(context, pane_id))
+                .map(|context| crate::find::pane::PaneApiRoute::local(context, pane_id))
                 .ok_or_else(|| "This pane needs a live Herdr connection".to_owned());
         }
         let (device, source_pane_id) = self
@@ -930,7 +936,11 @@ impl Runtime {
             .get(&device.id)
             .filter(|_| connected)
             .ok_or_else(|| format!("{} is not connected", device.label))?;
-        Ok(live::PaneApiRoute::remote(context, pane_id, source_pane_id))
+        Ok(crate::find::pane::PaneApiRoute::remote(
+            context,
+            pane_id,
+            source_pane_id,
+        ))
     }
     pub fn ingest_pane_control_result(
         &mut self,
