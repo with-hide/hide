@@ -1166,3 +1166,77 @@ fn a_turn_ending_with_a_background_task_is_never_announced_done() {
         [NoticeState::Done]
     );
 }
+
+/// D-9: Claude Code's Esc sends no Stop and, often, no `idle_prompt`. The
+/// hook's working turn stands until the session read, made under the later
+/// Herdr state Herdr moved to at rest, finds the interruption; the row then
+/// stops with nothing asked of the operator, and the next prompt's hook
+/// starts the turn again.
+#[test]
+fn a_hook_turn_ends_when_the_session_file_reads_an_interruption_after_it() {
+    use hide_node_link::panes::{HookStatusReport, HookTurn};
+    use hide_session::turns::{TurnMark, TurnTracker};
+    let mut runtime = runtime();
+    let claude = |status: &str, seq: u64| {
+        let mut payload = projection(SESSION);
+        for agent in &mut payload.agents {
+            agent.agent_status = Some(status.to_owned());
+            agent.state_change_seq = Some(seq);
+        }
+        payload
+    };
+    let hook = |runtime: &mut Runtime, turn| {
+        let report = HookStatusReport {
+            runtime: "claude-code".to_owned(),
+            version: hide_agent_hooks::HOOK_VERSION,
+            session: Some(SESSION.to_owned()),
+            turn: Some(turn),
+            counts: None,
+            session_start: false,
+        };
+        runtime
+            .ingest_hook_status(crate::node::TEST_NODE, PANE, &report)
+            .unwrap();
+    };
+    let read = |seq: u64, interrupted: bool| {
+        let mut turns = TurnTracker::default();
+        turns.fold(0, &TurnMark::HumanTurn);
+        if interrupted {
+            turns.fold(10, &TurnMark::Interrupted);
+        }
+        let record = PaneRecord {
+            owner: hide_session::label_reference_token("claude", "id", SESSION),
+            turns: Some(turns),
+            turns_seq: Some(seq),
+            ..PaneRecord::default()
+        };
+        LabelOverlay::of_records([(&PANE.to_owned(), &record)], true, false)
+    };
+    let axes = |runtime: &Runtime| {
+        let row = row(runtime);
+        (
+            row["activity"].as_str().unwrap().to_owned(),
+            row["demand"].as_str().unwrap().to_owned(),
+        )
+    };
+
+    hook(&mut runtime, HookTurn::Working);
+    runtime.ingest_session(Ok(claude("working", 4)));
+    assert_eq!(axes(&runtime).0, "working");
+
+    // Esc: Herdr reads the agent done at once, and the session read under
+    // that state has not landed yet; the hook's turn still stands.
+    runtime.ingest_session(Ok(claude("done", 5)));
+    assert_eq!(axes(&runtime).0, "working");
+
+    // The read under that state finds the interruption.
+    runtime.set_label_overlay(read(5, true));
+    runtime.ingest_session(Ok(claude("done", 5)));
+    assert_eq!(axes(&runtime), ("stopped".to_owned(), "none".to_owned()));
+
+    // A new prompt: the hook's turn is laid under the state the read was
+    // made under, which says nothing of it.
+    hook(&mut runtime, HookTurn::Working);
+    runtime.ingest_session(Ok(claude("done", 5)));
+    assert_eq!(axes(&runtime).0, "working");
+}

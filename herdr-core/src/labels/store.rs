@@ -357,6 +357,12 @@ impl PaneRecord {
         ))
     }
 
+    /// How the session's last turn ended, with the Herdr state it was read
+    /// under; `None` while it runs or the read does not settle it.
+    pub(crate) fn turn_ended(&self) -> Option<(u64, hide_session::turns::TurnEnded)> {
+        Some((self.turns_seq?, self.turns.as_ref()?.ended()?))
+    }
+
     pub(crate) fn user_turn(&self) -> Option<(u64, hide_session::turns::UserTurnFact)> {
         Some((self.turns_seq?, self.turns.as_ref()?.user_turn()?))
     }

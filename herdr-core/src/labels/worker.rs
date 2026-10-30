@@ -1650,14 +1650,24 @@ impl LabelWorker {
         record.incarnation = Some(transcript.confirmed.incarnation.clone());
         // The wait is bound to the state the read was asked under, and known
         // only once the backlog is read (D-06).
-        let waited = (record.turn_read(), record.user_turn(), record.wake_read());
+        let waited = (
+            record.turn_read(),
+            record.user_turn(),
+            record.wake_read(),
+            record.turn_ended(),
+        );
         let lost_before = record
             .turns
             .as_ref()
             .and_then(hide_session::turns::TurnTracker::wake_loss);
         record.turns = transcript.turns.clone();
         record.turns_seq = asked_seq.filter(|_| !transcript.has_more);
-        changed |= (record.turn_read(), record.user_turn(), record.wake_read()) != waited;
+        changed |= (
+            record.turn_read(),
+            record.user_turn(),
+            record.wake_read(),
+            record.turn_ended(),
+        ) != waited;
         // The read the turn's end was owed landed. The read moved `turns_seq`
         // to the state it was owed for, so the release is published with it.
         if record.turn_end_owed.is_some() && record.turn_end_owed == record.turns_seq {

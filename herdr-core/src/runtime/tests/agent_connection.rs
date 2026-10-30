@@ -1162,3 +1162,62 @@ fn a_waiting_hook_report_reaches_the_row_as_an_approval_until_the_turn_runs_agai
     publish(&mut runtime);
     assert_eq!(row(&runtime), ("none".into(), "working".into()));
 }
+
+/// An agent exited and started again in the same pane: Herdr dropped the
+/// agent, then lists it again under the session that ended, and the new
+/// session's hook, proven to run in the pane, decides the row.
+#[test]
+fn an_agent_started_again_in_its_pane_follows_its_hook_over_herdrs_earlier_session() {
+    use hide_node_link::panes::HookTurn;
+    let mut runtime = runtime();
+    runtime.ingest_hook_diagnosis(diagnosis(installed(), installed()));
+    let listed = |runtime: &mut Runtime, status: &str| {
+        let mut herdr = session(&[("w1:p1", "claude", false)]);
+        herdr["agents"][0]["agent_status"] = status.into();
+        herdr["agents"][0]["agent_session"]["value"] = "session-old".into();
+        runtime.ingest_session(Ok(
+            crate::sidebar::owned_label_fixture(herdr).expect("session payload")
+        ));
+    };
+    let report = |runtime: &mut Runtime, session: &str, turn| {
+        let report = hide_node_link::panes::HookStatusReport {
+            runtime: "claude-code".to_owned(),
+            version: hide_agent_hooks::HOOK_VERSION,
+            session: Some(session.to_owned()),
+            turn,
+            counts: None,
+            session_start: turn.is_none(),
+        };
+        runtime
+            .ingest_hook_status(crate::node::TEST_NODE, "w1:p1", &report)
+            .expect("the report is recorded");
+    };
+    let activity = |runtime: &Runtime| {
+        runtime
+            .snapshot
+            .navigator
+            .agents
+            .iter()
+            .find(|row| row.pane_id == "w1:p1")
+            .expect("the agent is a row")
+            .activity
+            .clone()
+    };
+    report(&mut runtime, "session-old", Some(HookTurn::Done));
+    listed(&mut runtime, "idle");
+    // The agent exits: Herdr lists no agent, and its facts go.
+    let mut gone = session(&[("w1:p1", "claude", false)]);
+    gone["agents"] = serde_json::json!([]);
+    runtime.ingest_session(Ok(
+        crate::sidebar::owned_label_fixture(gone).expect("session payload")
+    ));
+    // Started again: the new session reports, Herdr names the old one and
+    // reads it idle.
+    report(&mut runtime, "session-new", None);
+    report(&mut runtime, "session-new", Some(HookTurn::Working));
+    listed(&mut runtime, "idle");
+    assert_eq!(activity(&runtime), "working");
+    report(&mut runtime, "session-new", Some(HookTurn::Done));
+    listed(&mut runtime, "working");
+    assert_eq!(activity(&runtime), "stopped");
+}

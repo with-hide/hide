@@ -56,6 +56,12 @@ struct SessionFact {
     counts: Option<HookCounts>,
     #[serde(skip)]
     turn: Option<HookTurn>,
+    /// Herdr's state sequence for the agent when `turn` was first laid on it:
+    /// a turn end the session read finds under a later state ended this
+    /// turn, which no hook event of the session may follow (Claude Code's
+    /// interruption, which sends neither `Stop` nor always `idle_prompt`).
+    #[serde(skip)]
+    turn_seq: Option<u64>,
 }
 
 #[derive(Clone, Debug, Default, Eq, PartialEq, Deserialize, Serialize)]
@@ -65,6 +71,15 @@ struct PaneFacts {
     /// A projection laid a session on an agent Herdr listed here, so a pane
     /// that lists none afterwards has lost its agent.
     seen_agent: bool,
+    /// The session id Herdr last named for the pane's agent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    herdr_session: Option<String>,
+    /// A hook reported since Herdr last named another session for the pane:
+    /// the hook's session, proven to run in the pane, is then the pane's
+    /// current one even where Herdr still names an earlier one (an agent
+    /// started again in the same pane).
+    #[serde(skip)]
+    reported_since_herdr: bool,
 }
 
 #[derive(Deserialize, Serialize)]
@@ -182,8 +197,11 @@ impl HookFacts {
                 session: None,
                 counts: None,
                 turn: None,
+                turn_seq: None,
             },
         };
+        facts.reported_since_herdr = true;
+        let turn_before = fact.turn;
         fact.version = report.version;
         if report.session.is_some() {
             fact.session.clone_from(&report.session);
@@ -201,6 +219,9 @@ impl HookFacts {
             (Some(turn), _) => Some(turn),
             (None, kept) => kept,
         };
+        if fact.turn != turn_before {
+            fact.turn_seq = None;
+        }
         facts.sessions.push(fact);
         if facts.sessions.len() > SESSIONS_PER_PANE {
             facts.sessions.remove(0);
@@ -238,9 +259,21 @@ impl HookFacts {
                 facts.seen_agent = true;
                 moved = true;
             }
+            if let Some(named) = herdr_session(agent)
+                && facts.herdr_session.as_deref() != Some(named)
+            {
+                // Herdr naming another session than before is newer than
+                // every report so far; its first naming is not.
+                if facts.herdr_session.is_some() {
+                    facts.reported_since_herdr = false;
+                }
+                facts.herdr_session = Some(named.to_owned());
+                moved = true;
+            }
             let Some(fact) = bound(facts, agent) else {
                 continue;
             };
+            end_by_session_read(fact, agent);
             agent.hook = fact.turn;
             tokens.insert(
                 pane,
@@ -281,22 +314,68 @@ impl HookFacts {
     }
 }
 
-/// The session fact that speaks for `agent`: of the agent's runtime, and the
-/// session Herdr reports for it when Herdr names one by id.
-fn bound<'a>(facts: &'a mut PaneFacts, agent: &SessionAgentPayload) -> Option<&'a mut SessionFact> {
-    let runtime = hide_agent_adapter::adapter(agent.agent.as_deref()?)?.id;
-    let reported = agent
+/// The session id Herdr names for `agent`, when it names one by id.
+fn herdr_session(agent: &SessionAgentPayload) -> Option<&str> {
+    agent
         .agent_session
         .as_ref()
         .filter(|session| session.kind == "id")
-        .map(|session| session.value.as_str());
-    facts.sessions.iter_mut().rev().find(|fact| {
+        .map(|session| session.value.as_str())
+}
+
+/// Ends the hook's running or waiting turn when the session read, made under
+/// a later Herdr state than the one the turn was first laid under and with
+/// Herdr reading the agent at rest, finds the session's last turn ended. The
+/// read is the later fact, so the turn stands until the session's next hook
+/// event or that read, and no timer is involved (D-9).
+fn end_by_session_read(fact: &mut SessionFact, agent: &SessionAgentPayload) {
+    if fact.turn.is_some() && fact.turn_seq.is_none() {
+        fact.turn_seq = agent.state_change_seq;
+    }
+    let (Some(HookTurn::Working | HookTurn::Waiting), Some(since), Some(now)) =
+        (fact.turn, fact.turn_seq, agent.state_change_seq)
+    else {
+        return;
+    };
+    let at_rest = matches!(agent.agent_status.as_deref(), Some("idle" | "done"));
+    let ended = agent.facts.as_ref().and_then(|facts| facts.turn_ended);
+    if now > since && at_rest {
+        fact.turn = match ended {
+            Some(hide_session::turns::TurnEnded::Completed) => Some(HookTurn::Done),
+            Some(hide_session::turns::TurnEnded::Interrupted) => Some(HookTurn::Idle),
+            None => return,
+        };
+    }
+}
+
+/// The session fact that speaks for `agent`: of the agent's runtime, and the
+/// session Herdr reports for it when Herdr names one by id. Where none has
+/// that id and a hook reported since Herdr last changed the id it names, the
+/// session that reported last speaks: the hook proves its process runs in
+/// the pane, and Herdr can keep naming the session of an agent that ended
+/// there.
+fn bound<'a>(facts: &'a mut PaneFacts, agent: &SessionAgentPayload) -> Option<&'a mut SessionFact> {
+    let runtime = hide_agent_adapter::adapter(agent.agent.as_deref()?)?.id;
+    let reported = herdr_session(agent);
+    let named = facts.sessions.iter().rposition(|fact| {
         fact.runtime == runtime
             && match (reported, fact.session.as_deref()) {
                 (Some(reported), Some(kept)) => reported == kept,
                 _ => true,
             }
-    })
+    });
+    let at = named.or_else(|| {
+        facts
+            .reported_since_herdr
+            .then(|| {
+                facts
+                    .sessions
+                    .iter()
+                    .rposition(|fact| fact.runtime == runtime)
+            })
+            .flatten()
+    })?;
+    facts.sessions.get_mut(at)
 }
 
 /// A pane's facts from the records its hooks kept: no turn, which no record
@@ -318,16 +397,18 @@ fn seeded_facts(records: Vec<hide_agent_hooks::counters::SessionRecord>) -> Pane
             version: record.version,
             session: record.session,
             turn: None,
+            turn_seq: None,
         })
         .collect();
     PaneFacts {
         sessions,
-        seen_agent: false,
+        ..PaneFacts::default()
     }
 }
 
 fn stored_part_moved(before: &PaneFacts, after: &PaneFacts) -> bool {
     before.seen_agent != after.seen_agent
+        || before.herdr_session != after.herdr_session
         || before.sessions.len() != after.sessions.len()
         || before
             .sessions
@@ -383,6 +464,35 @@ mod tests {
         let mut laid = payload(session);
         lay(facts, &mut laid);
         laid.agents[0].hook
+    }
+
+    /// An agent started again in its pane: Herdr can keep naming the session
+    /// that ended there, and the session the hook reported since speaks for
+    /// the pane until Herdr names yet another one.
+    #[test]
+    fn the_session_the_hook_reported_since_herdr_last_changed_its_id_speaks_for_the_pane() {
+        let mut facts = HookFacts::default();
+        facts
+            .record("w1:p1", &report(Some("s-new"), Some(HookTurn::Working)))
+            .unwrap();
+        assert_eq!(laid_turn(&mut facts, "s-old"), Some(HookTurn::Working));
+        // Herdr names another session after the report: Herdr is the newer
+        // word, and no fact of that session is kept.
+        assert_eq!(laid_turn(&mut facts, "s-other"), None);
+        // The hook reports again: its session speaks again.
+        facts
+            .record("w1:p1", &report(Some("s-new"), Some(HookTurn::Done)))
+            .unwrap();
+        assert_eq!(laid_turn(&mut facts, "s-other"), Some(HookTurn::Done));
+        // A session Herdr names that has its own fact keeps speaking, even
+        // when another session in the pane reported later (`claude -p`).
+        facts
+            .record("w1:p1", &report(Some("s-other"), Some(HookTurn::Waiting)))
+            .unwrap();
+        facts
+            .record("w1:p1", &report(Some("s-print"), Some(HookTurn::Working)))
+            .unwrap();
+        assert_eq!(laid_turn(&mut facts, "s-other"), Some(HookTurn::Waiting));
     }
 
     #[test]

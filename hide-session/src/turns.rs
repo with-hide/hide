@@ -16,6 +16,17 @@ pub use content::{UserTurnContent, UserTurnFact, UserTurnKind};
 
 use serde::{Deserialize, Serialize};
 
+/// How the session's last turn ended, as its records say.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TurnEnded {
+    /// The agent finished the turn.
+    Completed,
+    /// The operator interrupted it (Claude Code's `[Request interrupted`
+    /// record, Codex's aborted turn).
+    Interrupted,
+}
+
 /// What the last turn leaves the operator to do.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -454,6 +465,20 @@ impl TurnTracker {
             .iter()
             .map(|device| device.expires_at_unix_ms)
             .collect()
+    }
+
+    /// How the last turn the records read ended, while no one has written
+    /// since; `None` for a turn still running, one a person answered, or
+    /// records that do not settle it.
+    pub fn ended(&self) -> Option<TurnEnded> {
+        if self.unreadable {
+            return None;
+        }
+        let turn = self.last.as_ref().filter(|turn| !turn.answered)?;
+        match turn.end? {
+            End::Completed => Some(TurnEnded::Completed),
+            End::Aborted => Some(TurnEnded::Interrupted),
+        }
     }
 
     /// The devices the agent waited for died with the process that ran them,

@@ -51,6 +51,9 @@ struct ProvenLabel {
     /// the Herdr state it was read under.
     turn: Option<(u64, Option<Waiting>)>,
     user_turn: Option<(u64, hide_session::turns::UserTurnFact)>,
+    /// How the session's last turn ended, with the Herdr state it was read
+    /// under.
+    turn_ended: Option<(u64, hide_session::turns::TurnEnded)>,
     /// The expiries of the background tasks the session read proves alive,
     /// with the Herdr state it was read under.
     wake: Option<(u64, WakeRead)>,
@@ -89,6 +92,7 @@ impl LabelOverlay {
                     facts: row_facts(&record.facts),
                     turn: record.turn_read(),
                     user_turn: record.user_turn(),
+                    turn_ended: record.turn_ended(),
                     wake: record.wake_read(),
                     turn_end_owed: record.turn_end_owed,
                 });
@@ -231,6 +235,10 @@ impl LabelOverlay {
             facts.user_turn = label.user_turn.as_ref().and_then(|(seq, fact)| {
                 (agent.state_change_seq == Some(*seq)).then(|| fact.clone())
             });
+            facts.turn_ended = label
+                .turn_ended
+                .filter(|(seq, _)| agent.state_change_seq == Some(*seq))
+                .map(|(_, ended)| ended);
             if let Some((_, read)) = label
                 .wake
                 .as_ref()
@@ -315,6 +323,7 @@ fn row_facts(facts: &SessionFacts) -> RowFacts {
         wake_devices: 0,
         turn_end_unread: false,
         wake_vanished: false,
+        turn_ended: None,
     }
 }
 
