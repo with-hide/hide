@@ -132,7 +132,7 @@ export function DetailPanel({ actions }: { actions: Actions }) {
         ) : null}
         {item.kind === "mission" ? (
           <Hint label={t("mission.settings")}>
-            <Button variant="ghost" size="icon-sm" className="text-muted-foreground" aria-label={t("mission.settings")} onClick={() => actions.openSettings("conductor")} data-detail-conductor-settings="true">
+            <Button variant="ghost" size="icon-sm" className="text-muted-foreground" aria-label={t("mission.settings")} onClick={() => actions.openMissionSettings()} data-detail-conductor-settings="true">
               <SettingsIcon />
             </Button>
           </Hint>

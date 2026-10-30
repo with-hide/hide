@@ -403,7 +403,19 @@ export type PullRequestWork = {
   /** Its place in the base branch's merge queue; `unknown` while the queue could not be read. */
   queue: { state: "unknown" | "not_queued" } | { state: "at"; position: number };
   review_requested_at_unix_ms: number | null;
+  /** Each reviewer and where they stand, approvals and change requests first; null while unknown (never "nobody"). Settled pull requests have none (PRD pr-review-status). */
+  reviewers?: PrReviewer[] | null;
+  /** Reviewers past the list's cap, counted only (`+N`). */
+  reviewers_more?: number;
+  /** The approvals the base requires; null when review is not required or the count could not be read (no `n/m` then). */
+  required_approvals?: number | null;
 };
+
+/** Where one reviewer stands (`PrReviewerState`): a pending request wins over an earlier review. */
+export type PrReviewerState = "changes_requested" | "approved" | "requested" | "commented" | "dismissed";
+
+/** One person or team a pull request's review involves (`PrReviewer`). */
+export type PrReviewer = { login: string; team: boolean; state: PrReviewerState; at_unix_ms: number | null };
 
 /** What a pull request's card reads beyond the list, per head commit (`PrCardSnapshot`). */
 export type PrCard = {
@@ -450,8 +462,8 @@ export type GithubStatus = {
   unread_queries?: ExtraQuery[];
 };
 
-/** A question the pull request read asks beside the list: the signed-in account, the review requests, the merge queue. */
-export type ExtraQuery = "account" | "review_requests" | "merge_queue";
+/** A question the pull request read asks beside the list: the signed-in account, the review requests, the merge queue, each reviewer's latest review. */
+export type ExtraQuery = "account" | "review_requests" | "merge_queue" | "reviews";
 
 export type IssueReference = { repository: string; number: number };
 
@@ -2613,8 +2625,8 @@ export type SuggestionSettingsPatch = { suggestions_enabled?: boolean; quantity?
 
 /** Where a pull request's issue link comes from: GitHub's closing reference or Hide's branch link. */
 export type LinkIssueSource = "closes" | "hide";
-/** `created`: the session printed the pull request's address when GitHub made it. */
-export type LinkSessionRole = "created" | "worked";
+/** `created`: the session printed the pull request's address when GitHub made it; `reviewed`: a pre-check of the pull request started it. */
+export type LinkSessionRole = "created" | "worked" | "reviewed";
 /** Whether the session's own file is still there; `unknown` for a device's file. */
 export type LinkFileState = "present" | "missing" | "unknown";
 export type LinkTarget = { kind: "pr"; number: number } | { kind: "issue"; key: string };

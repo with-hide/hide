@@ -66,7 +66,7 @@ function projectStatuses(workspace: Workspace): GithubStatus[] {
   return workspace.checkouts.flatMap((checkout) => (checkout.github ? [checkout.github] : []));
 }
 
-const EXTRA_QUERIES: readonly ExtraQuery[] = ["account", "review_requests", "merge_queue"];
+const EXTRA_QUERIES: readonly ExtraQuery[] = ["account", "review_requests", "merge_queue", "reviews"];
 
 /**
  * The warning in the PRs tool while GitHub reading is not whole, or null when

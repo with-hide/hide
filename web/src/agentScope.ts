@@ -170,7 +170,7 @@ export type ProjectTasksScope = {
 };
 
 /** Why a pull request stands where it does, as a kind the web words (`Reason`, PRD work-tab-pr-lens D-16). */
-export type PrReasonKind = "merge" | "update" | "assign_reviewer" | "review" | "team_review" | "reply" | "check" | "working" | "conflict" | "failed" | "changes" | "ci" | "waiting_review" | "draft" | "queued" | "merged" | "checking" | "unjudged";
+export type PrReasonKind = "merge" | "update" | "assign_reviewer" | "assign_reviewer_optional" | "review" | "team_review" | "reply" | "check" | "working" | "conflict" | "failed" | "changes" | "ci" | "waiting_review" | "draft" | "queued" | "merged" | "checking" | "unjudged";
 
 export type PrReason = {
   kind: PrReasonKind;
