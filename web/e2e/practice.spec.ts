@@ -9,6 +9,7 @@
 // from the run before carries into the next.
 
 import { expect, test, type Locator, type Page } from "@playwright/test";
+import { clickClosingItsPage } from "./closing-click";
 import { startHerdr } from "./herdr-fixture";
 import { startHided, type Daemon } from "./hided-fixture";
 
@@ -222,9 +223,7 @@ test("the bubble's Exit closes the practice from any step, keeping where the cha
   await withPractice(page, async (practice) => {
     await practice.locator('[data-practice-hub-chapter="switch"] [data-practice-play]').click();
     await pressTo(practice, "switch", 1);
-    const closed = practice.waitForEvent("close");
-    await practice.locator('[data-practice-chapter="switch"] [data-practice-exit]').click();
-    await closed;
+    await clickClosingItsPage(practice.locator('[data-practice-chapter="switch"] [data-practice-exit]'));
     // The step reached went to the shell before the window went, so the list opened again offers to continue there.
     await page.locator("[data-help-menu-trigger]").click();
     const reopened = page.context().waitForEvent("page");
@@ -242,9 +241,7 @@ test("the first chapter ends by asking what next, and Use Hide now closes the pr
     await practice.keyboard.press("Enter");
     const choice = practice.locator('[data-practice-chapter="overview"] [data-practice-choice]');
     await expect(choice.locator("[data-practice-choice-way]")).toHaveCount(3);
-    const closed = practice.waitForEvent("close");
-    await choice.locator('[data-practice-choice-way="leave"]').click();
-    await closed;
+    await clickClosingItsPage(choice.locator('[data-practice-choice-way="leave"]'));
   });
 });
 
