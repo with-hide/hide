@@ -986,7 +986,10 @@ mod tests {
         assert_eq!(rows[0].id, "ssh:Config.Ubuntu");
         assert!(!rows[0].herdr);
         assert_eq!(rows[0].ssh_host.as_deref(), Some("Config.Ubuntu"));
-        assert_eq!(rows[0].address.as_deref(), Some("ubuntu@config-ubuntu.example:22"));
+        assert_eq!(
+            rows[0].address.as_deref(),
+            Some("ubuntu@config-ubuntu.example:22")
+        );
         connect(&mut runtime, "ssh:Config.Ubuntu", true);
         let registrations = &runtime.snapshot.ui_state.device_registrations;
         assert_eq!(registrations.len(), 1);
