@@ -60,6 +60,8 @@ const READING = [
   "[data-editor-codemirror]:not(:has(.cm-content))",
   "[data-patch-view]:not(:has(.cm-content))",
 ].join(", ");
+/** The editor an open gives the keyboard: a Markdown Live body before its frontmatter pane, which keeps drawn until the operator clicks in it. */
+const editorContent = (area: HTMLElement) => area.querySelector<HTMLElement>("[data-editor-body] .cm-content") ?? area.querySelector<HTMLElement>(".cm-content");
 function ViewTree({ layout, deviceId, path, actions }: { layout: ViewLayoutSnapshot; deviceId: string; path: string; actions: Actions }) {
   const { t } = useInterfaceTranslation();
   const owner = useKeyboardOwner();
@@ -101,13 +103,13 @@ function ViewTree({ layout, deviceId, path, actions }: { layout: ViewLayoutSnaps
         focusBrowserDisplay(key, browserId);
         return;
       }
-      const content = area.querySelector<HTMLElement>(".cm-content");
+      const content = editorContent(area);
       const tab = area.querySelector<HTMLElement>('[role="tab"][aria-selected="true"]');
       (content ?? tab)?.focus({ preventScroll: true });
       if (content || !tab || !area.querySelector(READING)) return;
       const waitingRevision = keyboardInputRevision();
       const watch = new MutationObserver(() => {
-        const mounted = area.querySelector<HTMLElement>(".cm-content");
+        const mounted = editorContent(area);
         if (keyboardInputRevision() !== waitingRevision || document.activeElement !== tab || (!mounted && !area.querySelector(READING))) watch.disconnect();
         else if (mounted) {
           watch.disconnect();

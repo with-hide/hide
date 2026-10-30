@@ -23,7 +23,7 @@ const AWAY = "intro\n\n";
 
 describe("markdown live plan", () => {
   it("styles a heading line and hides its hashes", () => {
-    expect(shown(`${AWAY}# Title`)).toEqual(["hide:#", "heading:# Title"]);
+    expect(shown(`${AWAY}# Title`)).toEqual(["hide:# ", "heading:# Title"]);
   });
 
   it("reveals the heading's own markup while the caret is on its line", () => {
