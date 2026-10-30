@@ -487,8 +487,10 @@ function sideRead<T>(read: () => Promise<T>): Promise<T | string> {
  * where the private daemon had started and no view had reported its size: the
  * host's log of its discovery and window, each window as the main process
  * sees it (address path, whether it is loading or its renderer is gone, what
- * the page drew), and each page Playwright reports with what it requested.
- * Paths only: an address's hash carries the daemon's token.
+ * the page drew), and each page Playwright reports with the requests its
+ * performance entries list and their status (`pageSide`). Why a request
+ * failed is not recorded: nothing attaches `keepFailedRequests` to these
+ * pages. Paths only: an address's hash carries the daemon's token.
  */
 async function shellWaitSides(app: ElectronApplication): Promise<unknown> {
   const windows = await sideRead(() =>
