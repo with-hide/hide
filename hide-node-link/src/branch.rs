@@ -80,6 +80,27 @@ pub enum MergeOutcome {
     /// The branch's tip is already in the base, so there was nothing to do.
     /// `commit` is the base's head now, which a retry after a merge finds.
     AlreadyMerged { commit: String },
+    /// Git failed at `step` while the merge was written; nothing was
+    /// written, or a merge that stopped halfway was aborted. A failure no
+    /// step names stays an error.
+    Failed { step: MergeStep },
+}
+
+/// Where a merge stopped on git's own failure, decided by the command that
+/// failed and never by git's words, so a screen can say what to fix.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum MergeStep {
+    /// The operator's `commit.gpgSign` asked for a signed merge commit and
+    /// `commit-tree -S` failed or did not finish: the signing program is
+    /// missing, refused, or waited for a passphrase.
+    Sign,
+    /// A git command that writes the merge did not finish within the node's
+    /// change deadline.
+    TimedOut,
+    /// `git worktree list` names a worktree that holds the base, and its
+    /// folder is gone.
+    WorktreeMissing,
 }
 
 /// What a merge-and-push request did (`Call::BranchMergePush`). `Pushed` and
@@ -115,10 +136,17 @@ pub enum MergePushOutcome {
     PushFailed { reverted: bool },
 }
 
-/// How long a caller waits for a `BranchMergePush` answer: the node's fetch,
-/// merge and push are each bounded by its change deadline (10 minutes), with
-/// a minute for its reads and the link.
-pub const MERGE_PUSH_WAIT: std::time::Duration = std::time::Duration::from_secs(3 * 10 * 60 + 60);
+/// How long a caller waits for a `BranchMerge` answer: the node's trial
+/// merge, merge commit and worktree merge are each bounded by its change
+/// deadline (10 minutes), with a minute for its reads and the link, so a
+/// signing program that waits is answered rather than left unknown.
+pub const MERGE_WAIT: std::time::Duration = std::time::Duration::from_secs(3 * 10 * 60 + 60);
+
+/// How long a caller waits for a `BranchMergePush` answer: a merge's wait,
+/// and the fetch, the base's catch-up and the push, each bounded by the
+/// node's change deadline (10 minutes).
+pub const MERGE_PUSH_WAIT: std::time::Duration =
+    MERGE_WAIT.saturating_add(std::time::Duration::from_secs(3 * 10 * 60));
 
 /// What a discard request did. Only `Deleted` changes the repository.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]

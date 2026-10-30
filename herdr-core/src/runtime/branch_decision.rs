@@ -11,13 +11,16 @@
 
 use super::memory_promotion::{Retire, panes_in, retire_attempt, worktree_path};
 use crate::node::NodeId;
+use crate::node_access::LinkError;
 use crate::node_access::NodeLink;
-use hide_node_link::branch::{BranchFacts, DiscardOutcome, MergeOutcome, MergePushOutcome};
+use hide_node_link::branch::{
+    BranchFacts, DiscardOutcome, MergeOutcome, MergePushOutcome, MergeStep,
+};
 use hide_node_link::protocol::Call;
 use serde_json::json;
 use std::time::Duration;
 
-/// How long a facts read may take; a merge gets the long bound of a change.
+/// How long a facts read may take; a discard gets the long bound of a change.
 const READ_TIMEOUT: Duration = Duration::from_secs(30);
 const CHANGE_TIMEOUT: Duration = Duration::from_secs(120);
 
@@ -76,7 +79,8 @@ pub(super) enum Landing {
 /// take it (`Call::BranchMergePush`). `tip` is the commit the operator was
 /// shown: a branch its agent moved since is not merged. On a merge the
 /// attempt's agent ends and its worktree goes; the branch stays. The node's
-/// words can name paths, so a failure is answered as a code alone (B27).
+/// words can name paths, so a failure is answered as a code alone, and a
+/// call the node did not answer is logged by its kind and error code (B27).
 pub(super) fn land(
     connector: Option<&dyn hide_herdr_client::ApiConnector>,
     link: &dyn NodeLink,
@@ -97,9 +101,10 @@ pub(super) fn land(
             },
             hide_node_link::branch::MERGE_PUSH_WAIT,
         )
-        .map_or(Landing::Refused("merge_failed"), |outcome| {
-            pushed_landing(&outcome)
-        })
+        .map_or_else(
+            |error| unanswered(place, &error),
+            |outcome| pushed_landing(&outcome),
+        )
     } else {
         crate::node_access::call_as::<MergeOutcome>(
             link,
@@ -110,11 +115,12 @@ pub(super) fn land(
                 base: place.base.clone(),
                 message: format!("Merge branch '{}'", place.branch),
             },
-            CHANGE_TIMEOUT,
+            hide_node_link::branch::MERGE_WAIT,
         )
-        .map_or(Landing::Refused("merge_failed"), |outcome| {
-            merged_landing(&outcome)
-        })
+        .map_or_else(
+            |error| unanswered(place, &error),
+            |outcome| merged_landing(&outcome),
+        )
     };
     if matches!(landing, Landing::Merged(_))
         && let Some(connector) = connector
@@ -135,6 +141,25 @@ pub(super) fn land(
         );
     }
     landing
+}
+
+/// A merge the node did not answer: a device not connected or busy sent
+/// nothing (`merge_unreachable`), a call whose effect is unknown is merged
+/// again by `다시 시도`, which finds a merge that landed (`merge_unknown`),
+/// and an error the node answered is git's that no step names
+/// (`merge_failed`).
+fn unanswered(place: &BranchPlace, error: &LinkError) -> Landing {
+    let (link, code, error_code) = match error {
+        LinkError::NotConnected(_) => ("not_connected", "merge_unreachable", None),
+        LinkError::Busy => ("busy", "merge_unreachable", None),
+        LinkError::Unknown(_) => ("unknown", "merge_unknown", None),
+        LinkError::Refused(error) => ("refused", "merge_failed", Some(error.code.as_str())),
+    };
+    crate::diagnostic!(json!({
+        "component": "branch_decision", "kind": "merge.unanswered",
+        "project_id": place.project_id, "link": link, "error": error_code,
+    }));
+    Landing::Refused(code)
 }
 
 fn merged_landing(outcome: &MergeOutcome) -> Landing {
@@ -262,6 +287,9 @@ pub(super) fn refusal_code(outcome: &MergeOutcome) -> Option<&'static str> {
         MergeOutcome::Merged { .. }
         | MergeOutcome::AlreadyMerged { .. }
         | MergeOutcome::BranchMissing => None,
+        // The base's worktree is partway through a merge, rebase,
+        // cherry-pick or revert, which the operator finishes there first.
+        MergeOutcome::Dirty { files } if files.is_empty() => Some("merge_in_progress"),
         // B7: the operator's own uncommitted work on the same files.
         MergeOutcome::Dirty { .. } => Some("merge_dirty"),
         // B8: the base moved and the branch has to be made again on it.
@@ -271,6 +299,18 @@ pub(super) fn refusal_code(outcome: &MergeOutcome) -> Option<&'static str> {
         // The agent committed after the operator looked: the row is read
         // again and the operator looks at what it holds now.
         MergeOutcome::BranchMoved => Some("merge_branch_moved"),
+        // Git stopped at a step the operator can see to: the signing their
+        // `commit.gpgSign` asks for, a command that ran out of time, or a
+        // base worktree whose folder is gone.
+        MergeOutcome::Failed {
+            step: MergeStep::Sign,
+        } => Some("merge_sign_failed"),
+        MergeOutcome::Failed {
+            step: MergeStep::TimedOut,
+        } => Some("merge_timed_out"),
+        MergeOutcome::Failed {
+            step: MergeStep::WorktreeMissing,
+        } => Some("merge_worktree_missing"),
     }
 }
 

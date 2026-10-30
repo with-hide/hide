@@ -259,7 +259,11 @@ use crate::error::HostError;
 /// its upstream, putting the local base back when the remote does not take it
 /// (`Call::BranchMergePush`, [`crate::branch::MergePushOutcome`]). A helper on
 /// 61 would refuse it, so it is refused at Hello and upgraded.
-pub const PROTOCOL_VERSION: u32 = 62;
+/// 63: a merge answers where git failed while it wrote the merge
+/// (`MergeOutcome::Failed`, [`crate::branch::MergeStep`]) instead of an
+/// error whose words name paths. A core on 62 cannot read that answer, so it
+/// is refused at Hello and upgraded.
+pub const PROTOCOL_VERSION: u32 = 63;
 
 /// What agy's index held in a checkout before Hide typed `/fork`
 /// ([`Call::AntigravityForkMark`]).

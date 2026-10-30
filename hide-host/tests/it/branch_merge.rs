@@ -11,7 +11,7 @@ use std::process::Command;
 use hide_host::ErrorCode;
 use hide_host::branch_merge::{catch_up, diff, discard, facts, merge, merge_push};
 use hide_node_link::branch::{
-    CatchUpOutcome, DiscardOutcome, FILES_MAX, MergeOutcome, MergePushOutcome,
+    CatchUpOutcome, DiscardOutcome, FILES_MAX, MergeOutcome, MergePushOutcome, MergeStep,
 };
 use hide_node_link::git::DiffNotice;
 
@@ -374,6 +374,98 @@ fn a_worktree_in_the_middle_of_a_merge_is_not_merged_into() {
     assert_eq!(outcome, MergeOutcome::Dirty { files: Vec::new() });
     assert_eq!(snapshot(&fixture.main), before);
     assert!(git_dir(&fixture.main).join("MERGE_HEAD").exists());
+}
+
+/// The operator's signing setting asks every commit signed, by a signing
+/// program that is not there.
+fn sign_with_a_missing_program(fixture: &Fixture) {
+    let missing = fixture.main.parent().unwrap().join("no-such-signer");
+    git(&fixture.main, &["config", "commit.gpgsign", "true"]);
+    git(&fixture.main, &["config", "gpg.format", "ssh"]);
+    git(
+        &fixture.main,
+        &["config", "gpg.ssh.program", missing.to_str().unwrap()],
+    );
+    git(
+        &fixture.main,
+        &[
+            "config",
+            "user.signingkey",
+            "key::ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIFixtureKeyThatSignsNothing",
+        ],
+    );
+}
+
+fn builds_merge_commits() -> bool {
+    hide_host::git_run::version().is_some_and(|version| version >= (2, 38))
+}
+
+#[test]
+fn a_merge_commit_whose_signing_fails_answers_the_signing_with_nothing_moved() {
+    if !builds_merge_commits() {
+        return;
+    }
+    let fixture = fixture();
+    let base = commit(&fixture.main, "main-only.txt", "m\n");
+    commit(&fixture.feat, "feat-only.txt", "f\n");
+    sign_with_a_missing_program(&fixture);
+    let before = snapshot(&fixture.main);
+    let outcome = merge(&fixture.main, "feat", None, "main", "Merge feat").unwrap();
+    assert_eq!(
+        outcome,
+        MergeOutcome::Failed {
+            step: MergeStep::Sign
+        }
+    );
+    assert_eq!(snapshot(&fixture.main), before);
+    assert_eq!(git(&fixture.main, &["rev-parse", "main"]), base);
+    // The base checked out nowhere builds the same commit and answers the same.
+    git(&fixture.main, &["checkout", "-q", "-b", "elsewhere"]);
+    let outcome = merge(&fixture.main, "feat", None, "main", "Merge feat").unwrap();
+    assert_eq!(
+        outcome,
+        MergeOutcome::Failed {
+            step: MergeStep::Sign
+        }
+    );
+    assert_eq!(git(&fixture.main, &["rev-parse", "main"]), base);
+}
+
+#[test]
+fn a_signing_setting_does_not_stop_a_fast_forward_which_builds_no_commit() {
+    let fixture = fixture();
+    let tip = commit(&fixture.feat, "b.txt", "new\n");
+    sign_with_a_missing_program(&fixture);
+    let outcome = merge(&fixture.main, "feat", None, "main", "Merge feat").unwrap();
+    assert_eq!(
+        outcome,
+        MergeOutcome::Merged {
+            commit: tip,
+            fast_forward: true
+        }
+    );
+}
+
+#[test]
+fn a_base_worktree_whose_folder_is_gone_answers_that_with_nothing_moved() {
+    let fixture = fixture();
+    let base = git(&fixture.main, &["rev-parse", "main"]);
+    commit(&fixture.feat, "b.txt", "new\n");
+    git(&fixture.main, &["checkout", "-q", "-b", "elsewhere"]);
+    let holder = fixture.main.parent().unwrap().join("holder");
+    git(
+        &fixture.main,
+        &["worktree", "add", "-q", holder.to_str().unwrap(), "main"],
+    );
+    fs::remove_dir_all(&holder).unwrap();
+    let outcome = merge(&fixture.main, "feat", None, "main", "Merge feat").unwrap();
+    assert_eq!(
+        outcome,
+        MergeOutcome::Failed {
+            step: MergeStep::WorktreeMissing
+        }
+    );
+    assert_eq!(git(&fixture.main, &["rev-parse", "main"]), base);
 }
 
 /// The base is checked out nowhere: main's worktree moves to another branch,
