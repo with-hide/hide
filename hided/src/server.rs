@@ -1871,6 +1871,31 @@ async fn scoped_client_loop(
                                     })?
                                 }
                                 ScopedRequest::Action(action) => {
+                                    // A file outside every checkout of this
+                                    // machine is the window's to grant; the
+                                    // core gets the grant alone.
+                                    let boundary = roots.boundary();
+                                    let outside = (caller_node.is_none()
+                                        && boundary.names_this_node(Some(&cap.context.device_id)))
+                                    .then(|| {
+                                        crate::outside_open::outside_target(&action, boundary, || {
+                                            crate::server::roots_current(&roots)
+                                        })
+                                    })
+                                    .flatten();
+                                    let action = match outside {
+                                        Some((path, page)) => {
+                                            if desktop_renderers.load(Ordering::SeqCst) == 0 {
+                                                return Err((
+                                                    "outside_file_no_window".to_owned(),
+                                                    "Open the Hide desktop app on this computer and retry",
+                                                ));
+                                            }
+                                            crate::outside_open::grant(&browser_control, &path, page)
+                                                .map_err(|(reason, next_action)| (reason.to_owned(), next_action))?
+                                        }
+                                        None => action,
+                                    };
                                     if matches!(action, herdr_core::workspace_control::Action::OpenBrowser { .. }) && desktop_renderers.load(Ordering::SeqCst) == 0 {
                                         return Err(("browser_unsupported".to_owned(), "Open the Hide desktop app and retry"));
                                     }

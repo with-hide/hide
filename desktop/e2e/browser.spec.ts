@@ -470,10 +470,12 @@ test("browser: a page opens from an agent's pane, follows its area, moves withou
   await page.locator('[data-explorer-menu] [data-menu-item="open-browser"]').click();
   await expect(tab(page, "Local report")).toBeVisible({ timeout: 20_000 });
   expect((await views()).some((view) => view.url.startsWith("file://") && view.title === "Local report")).toBe(true);
-  // A file outside every checkout is refused by the daemon and never shown.
-  const outside = path.join(run.root, "outside.html");
-  fs.writeFileSync(outside, "<title>Outside</title>");
-  expect(await openFromCli(outside)).toMatchObject({ ok: false, reason: "path_outside_checkout" });
+  // A file outside every checkout is judged by this window's grant, not by
+  // the core: one that is not a page is refused and shows nothing
+  // (outside-files.spec.ts opens one that is).
+  const outside = path.join(run.root, "outside.txt");
+  fs.writeFileSync(outside, "not a page");
+  expect(await openFromCli(outside)).toMatchObject({ ok: false, reason: "not_html" });
 
   // Closing B's display ends its renderer process. Without the tree both
   // areas show again, B's tab among them (behind Page C, which opened beside A).
