@@ -465,9 +465,9 @@ export function fontInstalled(name: string): boolean {
   const context = canvas();
   const text = "mmmmmmmmmmlli10WQ@#";
   return ["monospace", "serif", "sans-serif"].some((generic) => {
-    context.font = `72px ${generic}`;
+    context.font = `${PROBE_SIZE}px ${generic}`;
     const fallback = context.measureText(text).width;
-    context.font = `72px ${cssFamily(name)}, ${generic}`;
+    context.font = `${PROBE_SIZE}px ${cssFamily(name)}, ${generic}`;
     return context.measureText(text).width !== fallback;
   });
 }
