@@ -1,23 +1,26 @@
-import { expect, type Locator } from "@playwright/test";
+import type { Locator } from "@playwright/test";
 
 /**
  * Clicks a control whose handler closes the page it sits on, and returns once
  * the page has closed.
  *
- * Playwright's own click waits for the page to answer the pointer release,
- * and that answer is sent after the handler ran: when the handler's
- * `window.close()` takes the page down first, the click throws "Target page,
- * context or browser has been closed" although the close is the outcome
- * (with-hide/hide-private#325). Here the page answers the evaluate before the
- * click runs on its next task, so nothing the test sent is waiting on the page
- * when it closes, and the close itself is what the test waits for.
+ * The click is Playwright's own pointer click, so a control that is hidden,
+ * covered or disabled fails as it would anywhere. Its reply is sent after the
+ * handler ran: when the handler's `window.close()` takes the page down first,
+ * the click throws "Target page, context or browser has been closed" although
+ * the close is the outcome (with-hide/hide-private#325). That one error is the
+ * click's success only because the close it names is awaited next; any other
+ * error is the test's failure.
  */
 export async function clickClosingItsPage(control: Locator): Promise<void> {
   const page = control.page();
-  await expect(control).toBeVisible();
   const closed = page.waitForEvent("close");
-  await control.evaluate((element: HTMLElement) => {
-    setTimeout(() => element.click(), 0);
-  });
+  // A click that fails leaves this wait behind; its own end is not the test's.
+  closed.catch(() => undefined);
+  try {
+    await control.click();
+  } catch (error) {
+    if (!(error instanceof Error) || !error.message.includes("Target page, context or browser has been closed")) throw error;
+  }
   await closed;
 }
