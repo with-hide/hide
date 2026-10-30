@@ -889,8 +889,9 @@ struct BranchOverlay {
 
 /// Lays the branch facts on the rows: no document fix in a folder that is
 /// not a git repository (B16), a new fix held while five branches wait for
-/// a decision (D-17, B28), `합치는 중` on a branch being merged (B6), and
-/// the checkout each branch is in.
+/// a decision (D-17, B28), `합치는 중` on a branch being merged (B6), which
+/// moves its row to 반영 중 while Hide works on it, and the checkout each
+/// branch is in.
 fn lay_branches(project: &mut ProjectSuggestionsSnapshot, overlay: &BranchOverlay) {
     if !overlay.git {
         project
@@ -919,6 +920,8 @@ fn lay_branches(project: &mut ProjectSuggestionsSnapshot, overlay: &BranchOverla
         };
         if attempt.phase == SuggestionAttemptPhase::Ready && overlay.merging.contains(&row.id) {
             attempt.phase = SuggestionAttemptPhase::Merging;
+            row.group = SuggestionGroup::of_attempt(attempt.phase);
+            row.state = SuggestionState::HideAiWorking;
         }
         if let Some(branch) = attempt.branch.as_mut() {
             branch.checkout = overlay.checkouts.get(&branch.name).cloned();
@@ -930,6 +933,9 @@ fn lay_branches(project: &mut ProjectSuggestionsSnapshot, overlay: &BranchOverla
                 .unwrap_or_default();
         }
     }
+    project
+        .rows
+        .sort_by_key(crate::model::SuggestionRowSnapshot::drawing_rank);
 }
 
 /// Names each notebook attempt's live agent by the pane the agent lists

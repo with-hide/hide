@@ -227,7 +227,7 @@ pub(super) fn lay_memory_rows(project: &mut ProjectSuggestionsSnapshot, facts: &
                 let mut row = row(
                     *number,
                     title,
-                    SuggestionGroup::Applying,
+                    SuggestionGroup::of_attempt(SuggestionAttemptPhase::Failed),
                     SuggestionState::MyTurn,
                 );
                 row.cause = start_failure
@@ -253,7 +253,7 @@ pub(super) fn lay_memory_rows(project: &mut ProjectSuggestionsSnapshot, facts: &
                 let mut row = row(
                     *number,
                     title,
-                    SuggestionGroup::Applying,
+                    SuggestionGroup::of_attempt(SuggestionAttemptPhase::Failed),
                     SuggestionState::MyTurn,
                 );
                 row.cause = reason.clone();
@@ -295,12 +295,9 @@ pub(super) fn lay_memory_rows(project: &mut ProjectSuggestionsSnapshot, facts: &
             project.rows.push(row);
         }
     }
-    let rank = |group: SuggestionGroup| match group {
-        SuggestionGroup::Choose => 0,
-        SuggestionGroup::Applying => 1,
-        SuggestionGroup::Applied => 2,
-    };
-    project.rows.sort_by_key(|row| rank(row.group));
+    project
+        .rows
+        .sort_by_key(SuggestionRowSnapshot::drawing_rank);
     let applied = project
         .rows
         .iter()
@@ -382,15 +379,24 @@ fn batch_row(
         .min_by_key(|card| state_rank(card.promotion.state))?;
     let promotion = &card.promotion;
     let working = (SuggestionGroup::Applying, SuggestionState::HideAiWorking);
-    let mine = (SuggestionGroup::Applying, SuggestionState::MyTurn);
+    let mine = |phase| (SuggestionGroup::of_attempt(phase), SuggestionState::MyTurn);
     let (phase, (group, state)) = match promotion.state {
         MemoryPromotionState::Running
         | MemoryPromotionState::Building
         | MemoryPromotionState::Unconfirmed => (SuggestionAttemptPhase::Working, working),
-        MemoryPromotionState::Ready => (SuggestionAttemptPhase::Ready, mine),
+        MemoryPromotionState::Ready => (
+            SuggestionAttemptPhase::Ready,
+            mine(SuggestionAttemptPhase::Ready),
+        ),
         MemoryPromotionState::PrOpen => match turn {
-            Some(HomeTurn::PrReview { .. }) => (SuggestionAttemptPhase::PrOpen, mine),
-            Some(HomeTurn::CiFailed { .. }) => (SuggestionAttemptPhase::CiFailed, mine),
+            Some(HomeTurn::PrReview { .. }) => (
+                SuggestionAttemptPhase::PrOpen,
+                mine(SuggestionAttemptPhase::PrOpen),
+            ),
+            Some(HomeTurn::CiFailed { .. }) => (
+                SuggestionAttemptPhase::CiFailed,
+                mine(SuggestionAttemptPhase::CiFailed),
+            ),
             _ => (SuggestionAttemptPhase::PrOpen, working),
         },
         MemoryPromotionState::Merged => (
@@ -510,7 +516,8 @@ mod tests {
 
     /// D-02, B11, B12: each Memory question and promotion becomes the row
     /// the 제안 tab draws it as, in the tab's group order; a card with both
-    /// a question and a promotion is drawn once.
+    /// a question and a promotion is drawn once. A failed or unbuilt card
+    /// waits for the operator's choice in 고를 것, ahead of new suggestions.
     #[test]
     fn a_cards_way_into_the_documents_is_drawn_as_a_suggestion_row() {
         let mut project = tab();
@@ -560,9 +567,9 @@ mod tests {
         assert_eq!(
             drawn(&project),
             [
+                ("m2", G::Choose, S::MyTurn),
+                ("m3", G::Choose, S::MyTurn),
                 ("m1", G::Choose, S::New),
-                ("m2", G::Applying, S::MyTurn),
-                ("m3", G::Applying, S::MyTurn),
                 ("m4", G::Applying, S::HideAiWorking),
                 ("m5", G::Applying, S::MyTurn),
                 ("m6", G::Applying, S::HideAiWorking),

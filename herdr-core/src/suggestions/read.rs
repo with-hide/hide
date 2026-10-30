@@ -177,32 +177,22 @@ fn group_and_state(line: &Line, life: &LineLife) -> Option<(SuggestionGroup, Sug
         // that was asked waits for the investigation (`lower_unwritten`).
         Stage::Suggested if !line.names_its_fix() => return None,
         Stage::Suggested => (SuggestionGroup::Choose, SuggestionState::New),
-        Stage::Applying => {
-            let state = match life.attempt.as_ref().map(|attempt| attempt.phase) {
-                Some(AttemptPhase::Starting | AttemptPhase::Working) | None => {
-                    SuggestionState::HideAiWorking
-                }
-                Some(
-                    AttemptPhase::Ready
-                    | AttemptPhase::PrOpen
-                    | AttemptPhase::CiFailed
-                    | AttemptPhase::IssueOpen
-                    | AttemptPhase::Failed
-                    | AttemptPhase::Merged
-                    | AttemptPhase::Closed,
-                ) => SuggestionState::MyTurn,
-            };
-            (SuggestionGroup::Applying, state)
-        }
+        Stage::Applying => match life.attempt.as_ref().map(|attempt| phase(attempt.phase)) {
+            Some(SuggestionAttemptPhase::Starting | SuggestionAttemptPhase::Working) | None => {
+                (SuggestionGroup::Applying, SuggestionState::HideAiWorking)
+            }
+            Some(phase) => (SuggestionGroup::of_attempt(phase), SuggestionState::MyTurn),
+        },
         Stage::Watching => (SuggestionGroup::Applied, SuggestionState::Watching),
         Stage::Effective => (SuggestionGroup::Applied, SuggestionState::Effective),
         Stage::Settled => (SuggestionGroup::Applied, SuggestionState::Applied),
     })
 }
 
-fn attempt(life: &LineLife) -> Option<SuggestionAttemptSnapshot> {
-    let attempt = life.attempt.as_ref()?;
-    let phase = match attempt.phase {
+/// An attempt's phase as the row draws it; a closed pull request reads as a
+/// failed attempt.
+fn phase(phase: AttemptPhase) -> SuggestionAttemptPhase {
+    match phase {
         AttemptPhase::Starting => SuggestionAttemptPhase::Starting,
         AttemptPhase::Working => SuggestionAttemptPhase::Working,
         AttemptPhase::Ready => SuggestionAttemptPhase::Ready,
@@ -211,9 +201,13 @@ fn attempt(life: &LineLife) -> Option<SuggestionAttemptSnapshot> {
         AttemptPhase::Failed | AttemptPhase::Closed => SuggestionAttemptPhase::Failed,
         AttemptPhase::IssueOpen => SuggestionAttemptPhase::IssueOpen,
         AttemptPhase::Merged => SuggestionAttemptPhase::Merged,
-    };
+    }
+}
+
+fn attempt(life: &LineLife) -> Option<SuggestionAttemptSnapshot> {
+    let attempt = life.attempt.as_ref()?;
     Some(SuggestionAttemptSnapshot {
-        phase,
+        phase: phase(attempt.phase),
         started_at_unix_ms: attempt.started_at_unix_ms,
         pr_number: attempt.pr.as_ref().map(|pr| pr.number),
         url: attempt
@@ -409,19 +403,14 @@ pub fn project(input: &ReadInput<'_>) -> ProjectSuggestionsSnapshot {
             })
         })
         .collect::<Vec<_>>();
-    let order = |group: SuggestionGroup| match group {
-        SuggestionGroup::Choose => 0,
-        SuggestionGroup::Applying => 1,
-        SuggestionGroup::Applied => 2,
-    };
     let updated = |id: &str| {
         line_of_row(id)
             .and_then(|line| input.notebook.line(line))
             .map_or(0, |line| line.updated_at_unix_ms)
     };
     rows.sort_by(|a, b| {
-        order(a.group)
-            .cmp(&order(b.group))
+        a.drawing_rank()
+            .cmp(&b.drawing_rank())
             .then(updated(&b.id).cmp(&updated(&a.id)))
             .then(a.id.cmp(&b.id))
     });
