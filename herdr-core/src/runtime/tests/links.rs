@@ -1972,9 +1972,24 @@ fn a_pre_check_reaches_the_record_as_its_session_and_a_failed_or_closed_start_is
     runtime.feed_link_reviews();
     assert!(runtime.links_work.pre_checks.is_empty());
 
-    // A pane that closed before its agent named a session.
+    // A pane the session list has not shown yet is waited for; one that it
+    // showed and that closed before its agent named a session ends it.
     runtime.follow_pre_check("r-3".into(), "acme/app".into(), 9);
     runtime.snapshot.task_operation = Some(pre_check_operation("r-3", Some("p-closed"), "started"));
+    runtime.feed_link_reviews();
+    assert_eq!(runtime.links_work.pre_checks.len(), 1, "not listed yet");
+    runtime.snapshot.navigator.workspaces = vec![record_workspace(
+        crate::node::TEST_NODE,
+        "app",
+        &["p-check", "p-closed"],
+    )];
+    runtime.feed_link_reviews();
+    assert_eq!(runtime.links_work.pre_checks.len(), 1, "listed, no session");
+    runtime.snapshot.navigator.workspaces = vec![record_workspace(
+        crate::node::TEST_NODE,
+        "app",
+        &["p-check"],
+    )];
     runtime.feed_link_reviews();
     assert!(runtime.links_work.pre_checks.is_empty());
     assert_eq!(client.review_facts_for_test().unwrap().len(), 1);

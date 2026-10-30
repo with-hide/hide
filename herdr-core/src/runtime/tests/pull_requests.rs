@@ -388,26 +388,47 @@ fn a_pre_check_starts_like_any_delegation_and_is_followed_to_its_session() {
         PullRequestBadge::Open,
         None,
     )]);
+    let client = crate::links::worker::LinkClient::full_mailbox_for_test();
+    runtime.links_work.client = Some(client.clone());
     assert!(runtime.dispatch_json(&event(
         "pr_delegate",
         serde_json::json!({"workspace_id": "w", "pr_number": 7, "provider": "claude", "prompt": "리뷰만 해줘", "request_id": "r-check", "intent": "review"}),
     )));
     let operation = runtime.snapshot().task_operation.clone().unwrap();
     assert_eq!(operation.kind, "agent_start");
-    let followed = &runtime.links_work.pre_checks;
-    assert_eq!(followed.len(), 1);
-    assert_eq!(
-        (followed[0].request_id.as_str(), followed[0].number),
-        ("r-check", 7)
-    );
+    // A second pre-check while the first start runs is refused, and a
+    // refused start is not followed.
     runtime.dispatch_json(&event(
         "pr_delegate",
-        serde_json::json!({"workspace_id": "w", "pr_number": 7, "provider": "claude", "request_id": "r-other", "intent": "approve"}),
+        serde_json::json!({"workspace_id": "w", "pr_number": 7, "provider": "claude", "prompt": "", "request_id": "r-busy", "intent": "review"}),
     ));
+    assert_eq!(runtime.links_work.pre_checks.len(), 1);
+
+    // The start answers with its pane, and the window acknowledges the slot
+    // before the agent names its session.
+    let slot = runtime.snapshot.task_operation.as_mut().unwrap();
+    slot.phase = "done".into();
+    slot.agent_phase = Some("started".into());
+    slot.pane_id = Some("w1:p1".into());
+    let id = slot.id;
+    assert!(runtime.dispatch_json(&event("task_operation_ack", serde_json::json!({"id": id}),)));
+    assert!(runtime.snapshot().task_operation.is_none());
+    assert!(client.review_facts_for_test().is_none());
+
+    // Herdr's next session update names the agent's session.
+    super::agent_connection::feed(&mut runtime, &[("w1:p1", "claude", false)]);
+    let facts = client
+        .review_facts_for_test()
+        .expect("the review reaches the worker");
     assert_eq!(
-        runtime.links_work.pre_checks.len(),
-        1,
-        "no intent but the review is taken"
+        *facts,
+        vec![crate::links::ReviewFact {
+            device_id: crate::node::TEST_NODE.into(),
+            agent: "claude".into(),
+            session_id: "session-w1:p1".into(),
+            repo_name: "acme/project".into(),
+            number: 7,
+        }]
     );
 }
 

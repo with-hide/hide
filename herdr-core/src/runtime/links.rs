@@ -51,6 +51,10 @@ pub(super) struct PreCheck {
     pub(super) number: u64,
     /// The pane the start made, once the start's answer named it.
     pub(super) pane_id: Option<String>,
+    /// Whether the session list has shown that pane: the start can name it
+    /// before Herdr's next update lists it, and only a pane that was listed
+    /// can have closed.
+    pub(super) pane_seen: bool,
     pub(super) asked_at: std::time::Instant,
 }
 
@@ -540,6 +544,7 @@ impl Runtime {
             repo_name,
             number,
             pane_id: None,
+            pane_seen: false,
             asked_at: std::time::Instant::now(),
         });
     }
@@ -590,11 +595,15 @@ impl Runtime {
                 pre_check.pane_id = operation.pane_id.clone();
             }
             if let Some(pane_id) = &pre_check.pane_id {
-                let Some(device) = devices.get(pane_id) else {
+                let device = devices.get(pane_id);
+                if device.is_none() && pre_check.pane_seen {
                     pre_check_dropped(pre_check, "pane_closed");
                     return false;
-                };
-                if let Some((agent, session)) = sessions.get(pane_id) {
+                }
+                pre_check.pane_seen |= device.is_some();
+                if let Some(device) = device
+                    && let Some((agent, session)) = sessions.get(pane_id)
+                {
                     facts.push(ReviewFact {
                         device_id: device.clone(),
                         agent: (*agent).to_owned(),
