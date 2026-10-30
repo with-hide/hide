@@ -14,7 +14,7 @@ import { useUiStore } from "../ui";
 import type { LaneFrame, LaneSizes, WorkspaceView } from "../workspace";
 import { memorySceneProject } from "./MemoryScene";
 
-export const HIDE_AI_SCENE_STATES = ["new", "improvement", "applying", "applied", "settings", "settings_unread", "off", "first_run", "not_investigated", "memory", "empty", "memory_empty", "suggestions_off", "global", "global_unusable", "memory_offer", "asking", "ready"] as const;
+export const HIDE_AI_SCENE_STATES = ["new", "improvement", "applying", "applied", "settings", "settings_unread", "off", "first_run", "not_investigated", "memory", "empty", "memory_empty", "suggestions_off", "global", "global_unusable", "memory_offer", "asking", "ready", "ready_local"] as const;
 export type HideAiSceneState = (typeof HIDE_AI_SCENE_STATES)[number];
 export type HideAiSceneLanguage = "en" | "ko" | "zh-CN" | "ja";
 export type HideAiSceneParams = { theme: "light" | "dark"; state: HideAiSceneState; width: number; language: HideAiSceneLanguage };
@@ -189,6 +189,8 @@ export function hideAiSceneProject(state: HideAiSceneState, workspaceId = "herdr
     case "memory_offer": return { ...base, rows: [MEMORY_OFFER, ...NEW_ROWS.slice(0, 2)], counts: { suggestions: 3, rail: 3 } };
     case "asking": return { ...base, rows: [ASKING_ROW, ...APPLYING_ROWS.slice(1), ...APPLIED_ROWS], counts: { suggestions: 2, rail: 3 } };
     case "ready": return { ...base, rows: [READY_ROW, ...APPLYING_ROWS.slice(1), ...APPLIED_ROWS], counts: { suggestions: 3, rail: 4 } };
+    // The same branch in a Project without GitHub: the local main is the real one, so it offers `main에 합치기` in place of `PR 올리기`.
+    case "ready_local": return { ...base, github: "missing", rows: [READY_ROW, ...APPLYING_ROWS.slice(1), ...APPLIED_ROWS], counts: { suggestions: 3, rail: 4 } };
     case "suggestions_off": return { ...base, status: "off", settings: { ...base.settings, suggestions_enabled: false }, counts: { suggestions: 0, rail: 0 } };
   }
 }
@@ -211,9 +213,9 @@ export function HideAiScene({ theme, state, width, language }: HideAiSceneParams
   }) as unknown as SnapshotRest, [language]);
   useLayoutEffect(() => {
     const memory = { ...memorySceneProject(state === "off" || state === "settings_unread" ? "off" : state === "memory_empty" ? "empty" : "correction"), workspace_id: "herdr-ide" };
-    const shown = state === "ready" ? { ...rest, pr_work: { link: null, feedback: null, branch_diffs: HIDE_AI_SCENE_DIFFS } } as SnapshotRest : rest;
+    const shown = state === "ready" || state === "ready_local" ? { ...rest, pr_work: { link: null, feedback: null, branch_diffs: HIDE_AI_SCENE_DIFFS } } as SnapshotRest : rest;
     useShellStore.setState({ rest: shown, agents: (state === "asking" ? HIDE_AI_SCENE_AGENTS : []) as never, memory: { project: memory }, suggestions: { project: hideAiSceneProject(state) }, connection: "gone" });
-    useUiStore.setState({ hideAiTab: state === "memory" || state === "memory_empty" ? "memory" : "suggestions", openSuggestion: state === "new" ? "s12" : state === "improvement" ? "s18" : state === "global" ? "s21" : state === "memory_offer" ? "m569" : state === "ready" ? "s12" : null });
+    useUiStore.setState({ hideAiTab: state === "memory" || state === "memory_empty" ? "memory" : "suggestions", openSuggestion: state === "new" ? "s12" : state === "improvement" ? "s18" : state === "global" ? "s21" : state === "memory_offer" ? "m569" : state === "ready" || state === "ready_local" ? "s12" : null });
     document.documentElement.classList.toggle("dark", theme === "dark");
     document.documentElement.classList.toggle("light", theme === "light");
   }, [rest, state, theme]);

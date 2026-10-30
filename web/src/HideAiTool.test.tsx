@@ -271,7 +271,7 @@ describe("the Hide AI tool", () => {
     },
   });
 
-  it("offers a ready branch's three choices and opens its card, or its one file's diff, in the 보기 slot (hide-ai-branch-first-apply B3, B4, B6-B10)", async () => {
+  it("offers a ready branch a PR and no local merge where GitHub is connected, and opens its card, or its one file's diff, in the 보기 slot (hide-ai-branch-first-apply B3, B4, B6-B10)", async () => {
     await render(suggestionsProject({ rows: [
       suggestionRow("s1", ready(null)),
       suggestionRow("s2", ready(null, 1)),
@@ -279,15 +279,19 @@ describe("the Hide AI tool", () => {
       suggestionRow("s4", ready("merge_conflict")),
       suggestionRow("s5", { group: "applying", state: "hide_ai_working", attempt: { phase: "working", started_at_unix_ms: Date.now(), pr_number: null, url: null, agent_pane: null, failure: null, purpose: "branch" } }),
       suggestionRow("s6", { group: "applying", state: "my_turn", attempt: { phase: "failed", started_at_unix_ms: 1, pr_number: null, url: null, agent_pane: null, failure: "no_change", purpose: "branch" } }),
+      suggestionRow("m7", { source: "memory", memory_cards: [7, 9, 12], ...ready(null) }),
     ] }));
+    expect(q('[data-suggestion-merge="m7"]')).toBeNull();
+    expect(q('[data-suggestion-open-pr="m7"]')?.textContent).toBe("Open a PR");
     expect(q('[data-suggestion="s1"] [data-suggestion-mark]')?.getAttribute("data-suggestion-mark")).toBe("my_turn");
     expect(q('[data-suggestion-branch="hide-suggestion-s1-x"]')?.textContent).toContain("See what changed");
     expect(q('[data-suggestion="s1"] [data-suggestion-branch]')?.textContent).toContain("2 files+6−1");
-    expect(q('[data-suggestion-merge="s1"]')?.textContent).toBe("Merge into main");
+    expect(q('[data-suggestion-merge="s1"]')).toBeNull();
     expect(q('[data-suggestion-open-pr="s1"]')?.textContent).toBe("Open a PR");
     expect(q('[data-suggestion-discard="s1"]')?.textContent).toBe("Discard");
     expect(q('[data-suggestion="s3"] [data-suggestion-attempt]')?.textContent).toContain("main has unsaved changes in the same files");
-    expect(q('[data-suggestion-merge="s3"]')?.textContent).toBe("Try again");
+    expect(q('[data-suggestion-merge="s3"]')).toBeNull();
+    expect(q('[data-suggestion-open-pr="s3"]')).not.toBeNull();
     expect(q('[data-suggestion="s4"] [data-suggestion-attempt]')?.textContent).toContain("main changed, so it has to be made again");
     expect(q('[data-suggestion-merge="s4"]')).toBeNull();
     expect(q('[data-suggestion-rebase="s4"]')?.textContent).toBe("Make it again");
@@ -296,7 +300,6 @@ describe("the Hide AI tool", () => {
     expect(q('[data-suggestion-retry="s6"]')).not.toBeNull();
     await click('[data-suggestion-branch-view="s1"]');
     await click('[data-suggestion-branch-view="s2"]');
-    await click('[data-suggestion-merge="s1"]');
     await click('[data-suggestion-open-pr="s1"]');
     await click('[data-suggestion-rebase="s4"]');
     await click('[data-suggestion-discard="s1"]');
@@ -305,22 +308,27 @@ describe("the Hide AI tool", () => {
       { item: { kind: "branch", workspace_id: "p", row: "s2", path: "AGENTS.md" } },
     ]);
     expect(sent("suggestion_action")).toEqual([
-      { workspace_id: "p", id: "s1", action: "merge" },
       { workspace_id: "p", id: "s1", action: "open_pr" },
       { workspace_id: "p", id: "s4", action: "rebase" },
       { workspace_id: "p", id: "s1", action: "discard" },
     ]);
   });
 
-  it("offers no PR without GitHub, fixes the docs without it, and holds a new fix while five branches wait (hide-ai-branch-first-apply B1, B9, B28)", async () => {
+  it("offers a local merge and no PR without GitHub, fixes the docs without it, and holds a new fix while five branches wait (hide-ai-branch-first-apply B1, B7, B9, B28)", async () => {
     await render(suggestionsProject({ github: "missing", rows: [
       suggestionRow("s1", ready(null)),
       suggestionRow("s2"),
       suggestionRow("s3", { hold: "branches_full" }),
       suggestionRow("m7", { source: "memory", memory_cards: [7, 9, 12], ...ready(null) }),
+      suggestionRow("s4", ready("merge_dirty")),
     ] }));
-    expect(q('[data-suggestion-merge="s1"]')).not.toBeNull();
+    expect(q('[data-suggestion-merge="s1"]')?.textContent).toBe("Merge into main");
     expect(q('[data-suggestion-open-pr="s1"]')).toBeNull();
+    expect(q('[data-suggestion-merge="m7"]')?.textContent).toBe("Merge into main");
+    expect(q('[data-suggestion-open-pr="m7"]')).toBeNull();
+    expect(q('[data-suggestion-merge="s4"]')?.textContent).toBe("Try again");
+    await click('[data-suggestion-merge="s1"]');
+    expect(sent("suggestion_action")).toEqual([{ workspace_id: "p", id: "s1", action: "merge" }]);
     expect(q('[data-suggestion="s2"] [data-suggestion-apply]')?.textContent).toBe("Fix the docs");
     expect(q('[data-suggestion="s2"] [data-suggestion-github-needed]')).toBeNull();
     expect(q('[data-suggestion="s3"] [data-suggestion-apply]')).toBeNull();

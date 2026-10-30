@@ -344,6 +344,7 @@ impl Runtime {
     /// B6-B12, B20, B21). A merge or a discard runs on the Project's machine
     /// off the lock and moves every card of the batch; `PR 올리기` and `다시
     /// 맞추기` start an agent on the same branch, its old agent ended first.
+    /// A merge is refused where GitHub is connected (`local_merge_allowed`).
     pub(super) fn decide_memory_batch(
         &mut self,
         workspace_id: &str,
@@ -360,6 +361,9 @@ impl Runtime {
         let Some((node, root, branch, cards)) = self.ready_batch(workspace_id, number) else {
             return refused("not_ready");
         };
+        if decision == BatchDecision::Merge && !self.local_merge_allowed(&node, &root) {
+            return refused("github_connected");
+        }
         let Some(project_id) = self.project_memory.project_id.clone() else {
             return refused("project_unavailable");
         };

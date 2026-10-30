@@ -601,6 +601,17 @@ impl Runtime {
         }
     }
 
+    /// Whether a ready Hide AI branch may be merged into the Project's local
+    /// base: only where GitHub is missing, since there the local base is the
+    /// real one. Where GitHub is connected its main moves by pull request, and
+    /// a local merge would never reach it and splits local main from the
+    /// remote's, so the branch goes up as a pull request instead. An unread or
+    /// unreachable GitHub counts as connected, as `suggestions_github` reads
+    /// it, so Hide never merges locally before it knows.
+    pub(super) fn local_merge_allowed(&self, node: &crate::node::NodeId, root: &str) -> bool {
+        self.suggestions_github(node, root) == SuggestionsGithub::Missing
+    }
+
     fn suggestion_facts(&self) -> Option<LockFacts> {
         let opened = self.suggestions_work.opened.as_ref()?;
         Some(LockFacts {

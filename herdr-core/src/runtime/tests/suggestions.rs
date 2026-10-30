@@ -810,9 +810,10 @@ fn a_run_investigates_only_while_hide_ai_can() {
 /// PRD hide-ai-branch-first-apply B3, B6, B13: a ready branch is read from
 /// the repository itself on the Project's node, and `main에 합치기` merges it
 /// into its base there: the base holds the branch's commit, the branch is
-/// kept, and nothing is pushed.
+/// kept, and nothing is pushed. A Project whose GitHub is connected is
+/// refused the merge and keeps both, since its main moves by pull request.
 #[test]
-fn a_ready_branch_is_read_from_git_and_merged_into_its_base() {
+fn a_ready_branch_is_read_from_git_and_merged_into_its_base_only_without_github() {
     use crate::suggestions::apply::FollowedAttempt;
     use crate::suggestions::lifecycle::{AttemptMove, AttemptPhase, AttemptPurpose, BranchSummary};
     use crate::suggestions::notebook::{LineId, Outcome};
@@ -922,11 +923,36 @@ fn a_ready_branch_is_read_from_git_and_merged_into_its_base() {
         node: node.clone(),
         path: root.clone(),
     };
-    assert!(shared.lock().unwrap().decide_suggestion_branch(
-        &project,
-        2,
-        crate::runtime::suggestion_apply::BranchDecision::Merge
-    ));
+    let merge = || {
+        shared.lock().unwrap().decide_suggestion_branch(
+            &project,
+            2,
+            crate::runtime::suggestion_apply::BranchDecision::Merge,
+        )
+    };
+    assert!(!merge(), "GitHub not known to be missing reads as connected");
+    assert!(
+        commands.recv_timeout(Duration::from_millis(200)).is_err(),
+        "a refused merge hands the worker nothing"
+    );
+    let main = git(&["rev-parse", "main"]);
+    assert_ne!(main, tip, "main is left as it was");
+    assert_eq!(git(&["rev-parse", "hide-suggestion-s2-x"]), tip, "the branch stays");
+
+    shared
+        .lock()
+        .unwrap()
+        .github
+        .projects
+        .push(crate::model::GithubProjectSnapshot {
+            root_path: root.clone(),
+            status: crate::model::GithubStatusSnapshot {
+                failure_category: Some(hide_node_link::gh::GithubFailureCategory::NoGithubRemote),
+                ..Default::default()
+            },
+            ..Default::default()
+        });
+    assert!(merge(), "without GitHub the local main is the real one");
     match moved() {
         AttemptMove::Merged {
             pr: None,

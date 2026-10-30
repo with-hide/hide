@@ -555,24 +555,27 @@ function Buttons({ row, project, actions }: { row: SuggestionRow; project: Proje
 }
 
 /**
- * A ready branch's three choices (PRD hide-ai-branch-first-apply D-03,
- * B6-B10): `main에 합치기`, `PR 올리기` only while GitHub is connected, and a
- * quiet `버리기`. A refused merge puts its answer first: `다시 시도` merges
- * again, `다시 맞추기` makes the branch again on its base.
+ * A ready branch's choices (PRD hide-ai-branch-first-apply D-03, B6-B10, as
+ * changed for GitHub Projects): where GitHub is connected, main moves by pull
+ * request, so the branch offers `PR 올리기` and never a local merge; without
+ * GitHub it offers `main에 합치기`. A quiet `버리기` either way. A refused
+ * merge puts its answer first: `다시 시도` merges again, `다시 맞추기` makes
+ * the branch again on its base.
  */
 export function BranchButtons({ row, project, actions, again, className }: { row: SuggestionRow; project: ProjectSuggestions; actions: Actions; again: BranchChoice["again"]; className?: string }) {
   const { t } = useInterfaceTranslation();
   const id = project.workspace_id;
   const base = row.attempt?.branch?.base ?? "main";
-  const pr = project.github === "connected" && row.outcome === "pr";
+  const github = project.github === "connected";
+  const pr = github && row.outcome === "pr";
   return (
     <div className={cn("col-start-2 flex flex-wrap items-center gap-xs pt-xxs", className)} data-suggestion-branch-buttons={row.id}>
       {again === "rebase" ? (
         <Button className="pointer-events-auto" size="sm" onClick={() => actions.suggestionAction(id, row.id, "rebase")} data-suggestion-rebase={row.id}>{t("suggestions.branch.rebase")}</Button>
-      ) : (
+      ) : github ? null : (
         <Button className="pointer-events-auto" size="sm" onClick={() => actions.suggestionAction(id, row.id, "merge")} data-suggestion-merge={row.id}>{t(again === "merge" ? "suggestions.retry" : "suggestions.branch.merge", { base })}</Button>
       )}
-      {pr ? <Button className="pointer-events-auto" size="sm" variant="outline" onClick={() => actions.suggestionAction(id, row.id, "open_pr")} data-suggestion-open-pr={row.id}>{t("suggestions.branch.openPr")}</Button> : null}
+      {pr ? <Button className="pointer-events-auto" size="sm" variant={again === "rebase" ? "outline" : "default"} onClick={() => actions.suggestionAction(id, row.id, "open_pr")} data-suggestion-open-pr={row.id}>{t("suggestions.branch.openPr")}</Button> : null}
       <Button className="pointer-events-auto text-muted-foreground" size="sm" variant="ghost" onClick={() => actions.suggestionAction(id, row.id, "discard")} data-suggestion-discard={row.id}>{t("suggestions.branch.discard")}</Button>
     </div>
   );

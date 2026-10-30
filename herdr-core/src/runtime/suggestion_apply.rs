@@ -421,7 +421,8 @@ impl Runtime {
     /// The operator's `main에 합치기` or `버리기` on a ready 제안 line (PRD
     /// hide-ai-branch-first-apply D-05, D-07, B6-B8, B10): Hide merges or
     /// deletes the branch on the Project's machine, off the lock, and hands
-    /// the worker what came of it. A press while one runs is dropped.
+    /// the worker what came of it. A press while one runs is dropped, and a
+    /// merge is refused where GitHub is connected (`local_merge_allowed`).
     pub(super) fn decide_suggestion_branch(
         &mut self,
         project: &ProjectRef,
@@ -453,6 +454,9 @@ impl Runtime {
         else {
             return refused("not_ready");
         };
+        if decision == BranchDecision::Merge && !self.local_merge_allowed(&project.node, &project.path) {
+            return refused("github_connected");
+        }
         let deciding = (attempt.project_id.clone(), line);
         if self.suggestions_work.apply.deciding.contains_key(&deciding) {
             return refused("deciding");
