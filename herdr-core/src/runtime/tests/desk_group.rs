@@ -133,6 +133,8 @@ fn a_start_that_failed_after_its_tab_opened_joins_the_group_and_its_card_follows
     let desk = Actor::hide(HIDE_DESK_ROLE, crate::node::TEST_NODE);
     let command = Command::Spawn {
         mission: None,
+        plan_node: None,
+        plan: None,
         parent: None,
         machine: None,
         name: "child-fix".into(),

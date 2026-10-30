@@ -1517,6 +1517,8 @@ mod tests {
     fn spawn_command(branch: &str, machine: Option<&str>) -> AgentCommand {
         AgentCommand::Spawn {
             mission: None,
+            plan_node: None,
+            plan: None,
             parent: None,
             machine: machine.map(str::to_owned),
             name: format!("child-{branch}"),

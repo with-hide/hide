@@ -513,6 +513,8 @@ fn a_spawn_desk_asks_for_starts_with_no_record_made_beforehand_and_takes_its_pla
         let command = crate::delivery::Command::Agents {
             command: Command::Spawn {
                 mission: None,
+                plan_node: None,
+                plan: None,
                 parent: None,
                 machine: Some(DEVICE.into()),
                 // The device's Herdr names its one agent `worker`.
