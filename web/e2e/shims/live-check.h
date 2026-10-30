@@ -514,18 +514,18 @@ static int journey(int argc, char **argv) {
   } else if (journey_new_id()) return 2;
   if (journey_open_session(resume != NULL)) { fputs("journey fixture: session file unavailable\n", stderr); return 2; }
   raw_terminal();
+  journey_screen(journey_composer());
+  /* A real CLI takes seconds to start before it runs its start hooks and
+     reads its first prompt (Claude Code and Codex took 2 to 4 here). A start
+     hook run at once asks Hide before it has connected the pane and gets no
+     Memory (`pane_not_connected`), and a turn that ended before Hide learned
+     the session would never read working on its row. */
+  struct timespec boot = {JOURNEY_BOOT_SECONDS, 0};
+  nanosleep(&boot, NULL);
   static char payload[16384];
   journey_payload(payload, sizeof payload, "SessionStart", resume ? ",\"source\":\"resume\"" : ",\"source\":\"startup\"");
   journey_hooks("SessionStart", payload, journey_start, sizeof journey_start);
-  journey_screen(journey_composer());
-  /* A real CLI takes seconds to start before it reads its first prompt
-     (Claude Code and Codex took 2 to 4 here); a turn that ended before Hide
-     learned the session would never read working on its row. */
-  if (prompt && !resume) {
-    struct timespec boot = {JOURNEY_BOOT_SECONDS, 0};
-    nanosleep(&boot, NULL);
-    if (journey_turn(prompt)) return 2;
-  }
+  if (prompt && !resume && journey_turn(prompt)) return 2;
   static char line[1 << 16];
   size_t used = 0;
   int escape = 0;

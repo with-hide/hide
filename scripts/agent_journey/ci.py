@@ -67,8 +67,9 @@ FIXTURE_LIMITS = [
     "The working and idle screens and titles and the session file format are the stand-in's copies of the CLI's.",
     "Codex's app-server, through which Hide records folder and hook trust, is the trust tests' stand-in "
     "(hide-agent-hooks/tests/fixtures/fake-codex.py), which keeps trust beside config.toml, not in it.",
-    "A stand-in waits 5 s before its first turn, as a CLI's start takes seconds, so a first turn that ends "
-    "sooner than Hide learns the session is not exercised.",
+    "A stand-in waits 5 s before its start hooks and its first turn, as a CLI's start takes seconds, so a start "
+    "hook that runs before Hide has connected the pane, or a first turn that ends sooner than Hide learns the "
+    "session, is not exercised.",
 ]
 
 
