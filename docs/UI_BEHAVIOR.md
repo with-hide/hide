@@ -981,7 +981,7 @@ Its outputs are every View its session opened that is still open (32 at most), e
 A job whose session conducts a mission carries it as a `미션 k/n` chip: the mission's status (`planning`, `running`, `merge_wait`, `done` or `cancelled`), its nodes done out of those not dropped, a tone, and whether it waits on the operator's decision; the card draws no node rows.
 Its state comes from the ledger and the row the sidebar draws for it, never from a model call:
 
-- `queued` with its place (`대기 중 · n번째`): Desk's places (Settings, 8 at most) are taken; it starts by itself when one frees, and the queue survives a restart. `취소` leaves it `cancelled` and moves the ones behind it up; `다시 맡기기` puts it at the back.
+- `queued` with its place (`대기 중 · n번째`), drawn with the spawn's answer: Desk's places (Settings, 8 at most) are taken; it starts by itself when one frees, and the queue survives a restart. `취소` leaves it `cancelled` and moves the ones behind it up; `다시 맡기기` puts it at the back.
 - `starting`, `working` (now line, plan n/m, outputs), `asking` (the question and `답하기`, with what it asks: `question`, `approval`, `decision` for a Conductor's mission, `plan_review`, or `blocked`), `done` (the last turn's summary line, its pull requests with their PR mark state, outputs).
 - `sleeping` while Hide holds it asleep (`hide agent sleep`); it takes no place.
 - `failed` with its reason: `spawn_failed`, `exited`, or `device_disconnected` for a job asked of a device whose link was down; `다시 시도` queues it again. A failed job takes no place, and nothing times out.

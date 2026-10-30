@@ -74,7 +74,16 @@ impl Runtime {
             id: 0,
             job_id: intent.clone(),
         });
+        // Its card is drawn with the answer, not at the next refresh.
+        self.compose_desk_jobs();
         Ok(Some(queued_answer(intent, waiting + 1)))
+    }
+
+    /// What follows a spawn Desk's queue took: its card and line were made
+    /// under the lock, so the screen is told once the lock is let go.
+    pub(in crate::runtime) fn desk_queued_after(&self) -> Option<crate::delivery::worker::After> {
+        let notifier = self.desk.handle.as_ref()?.notifier.clone();
+        Some(Box::new(move |_: &Result<Value, String>| notifier.notify()))
     }
 
     /// Its place in the queue, from 1, while it waits.
@@ -1799,6 +1808,36 @@ mod tests {
             chips(&runtime),
             (Some(done), (Some(done), Some("claude".into())))
         );
+    }
+
+    #[test]
+    fn a_queued_spawn_s_card_is_drawn_with_its_answer_and_the_screen_is_told() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        let root = tempfile::tempdir().unwrap();
+        let mut runtime = desk(root.path(), 1, &["a"]);
+        let told = Arc::new(AtomicUsize::new(0));
+        let counted = Arc::clone(&told);
+        runtime.desk.handle = Some(DeskHandle {
+            runtime: std::sync::Weak::new(),
+            notifier: crate::handle::ChangeNotifier::announcing(move || {
+                counted.fetch_add(1, Ordering::SeqCst);
+            }),
+        });
+
+        let answer = admit(&mut runtime, "b").expect("queued");
+        assert_eq!(answer["position"], 1);
+        let cards = &runtime.snapshot.desk_jobs.as_ref().expect("the cards").jobs;
+        let queued = cards
+            .iter()
+            .find(|job| job.id == "intent-b")
+            .expect("the queued card, before any refresh");
+        assert_eq!(
+            (queued.state, queued.queue_position),
+            (DeskJobState::Queued, Some(1))
+        );
+        assert_eq!(told.load(Ordering::SeqCst), 0, "told after the lock");
+        runtime.desk_queued_after().expect("Desk's handle")(&Ok(answer));
+        assert_eq!(told.load(Ordering::SeqCst), 1);
     }
 
     #[test]

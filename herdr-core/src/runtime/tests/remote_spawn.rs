@@ -573,6 +573,19 @@ fn a_spawn_desk_asks_for_starts_with_no_record_made_beforehand_and_takes_its_pla
         (&waiting["queued"], &waiting["position"]),
         (&json!(true), &json!(1))
     );
+    // Its card is in the snapshot with that answer, not at the next refresh.
+    let runtime = spawner.runtime.lock().unwrap();
+    let queued = runtime
+        .snapshot
+        .desk_jobs
+        .as_ref()
+        .unwrap()
+        .jobs
+        .iter()
+        .find(|job| job.id == "second")
+        .map(|job| (job.state, job.queue_position));
+    assert_eq!(queued, Some((crate::model::DeskJobState::Queued, Some(1))));
+    drop(runtime);
     assert_eq!(spawner.count("agent.start"), 1);
 }
 
