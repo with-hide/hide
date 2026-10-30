@@ -378,7 +378,7 @@ export function startupScreen(rest: SnapshotRest | null, hasFront: boolean): "wo
 }
 
 /** What All projects, an Overview or the Agents list asked to bring forward (B2, B12, B21). */
-export type OpenTarget = { checkoutId: string; deviceId: string; path: string | null; workspaceId?: string; expanded?: boolean; tool?: Tool } | { paneId: string } | { startRequestId: string };
+export type OpenTarget = { checkoutId: string; deviceId: string; path: string | null; workspaceId?: string; expanded?: boolean; tool?: Tool } | { paneId: string } | { startRequestId: string; startKind?: "agent_start" | "worktree_create" };
 
 /**
  * A Workspace or agent asked for and not yet in front. The screen changes
@@ -396,7 +396,7 @@ export function openingLanded(rest: SnapshotRest | null, target: OpenTarget): bo
   const front = frontCheckout(rest);
   if (!front) return false;
   if ("startRequestId" in target) {
-    const answer = startAnswer(rest, target.startRequestId);
+    const answer = startAnswer(rest, target.startRequestId, target.startKind);
     return answer.phase === "ready" && answer.paneId !== null && rest?.focused?.pane_id === answer.paneId
       && front.tabs.some((tab) => tab.panes.some((pane) => pane.id === answer.paneId));
   }
@@ -415,7 +415,7 @@ export function openingLanded(rest: SnapshotRest | null, target: OpenTarget): bo
 export function openingProgress(rest: SnapshotRest | null, opening: Opening): "landed" | string | null {
   const target = opening.target;
   if ("startRequestId" in target) {
-    const answer = startAnswer(rest, target.startRequestId);
+    const answer = startAnswer(rest, target.startRequestId, target.startKind);
     // The start panel owns its refusal and draft. This intent only presents
     // the core's accepted selection; it never sends another focus request.
     if (answer.phase === "refused" || answer.phase === "failed") return "cancelled";

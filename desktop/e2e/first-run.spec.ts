@@ -9,6 +9,7 @@
 import { expect, type ElectronApplication } from "@playwright/test";
 import fs from "node:fs";
 import path from "node:path";
+import { clickClosingItsPage } from "../../web/e2e/closing-click";
 import { startHerdr, type HerdrFixture } from "../../web/e2e/herdr-fixture";
 import { hostLog, isolate, launch, nodeOf, screenshot, test, type Isolated } from "./fixture";
 
@@ -237,9 +238,7 @@ test("practice first ends the wizard over the empty Home and opens the practice 
   expect(beside.bounds.x + beside.bounds.width).toBe(main.x + main.width);
   expect(beside.bounds.y + beside.bounds.height).toBe(main.y + main.height);
   // Back to Hide closes it and leaves the main window.
-  const closed = practice.waitForEvent("close");
-  await practice.locator("[data-practice-leave]").click();
-  await closed;
+  await clickClosingItsPage(practice.locator("[data-practice-leave]"));
   expect(await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().length)).toBe(1);
   await page.reload();
   await expect(page.locator("[data-main-screen], [data-workspace-screen]").first()).toBeVisible({ timeout: 30_000 });

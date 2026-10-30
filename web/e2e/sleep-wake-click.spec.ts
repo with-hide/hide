@@ -8,7 +8,8 @@
 // runs a software WebGL context as `terminal-webgl.spec.ts` does.
 
 import { expect, test } from "@playwright/test";
-import { claudeProjects, setFixtureSession, startHerdr, writeFixtureTranscript } from "./herdr-fixture";
+import { dumpOnFailure } from "./failure-dump";
+import { claudeProjects, setFixtureSession, startHerdr, writeFixtureTranscript, type HerdrFixture } from "./herdr-fixture";
 import { startHided, type Daemon } from "./hided-fixture";
 import { screenshot } from "./wire";
 
@@ -51,10 +52,21 @@ test("a mouse click at the center of Wake agent over a WebGL terminal wakes the 
 
     const resumed = () =>
       (herdr.run(["pane", "process-info", "--pane", sleeper]) as ProcessInfo).result.process_info.foreground_processes.map((process) => process.argv?.join(" "));
-    await expect.poll(resumed, { timeout: 30_000 }).toContain(`claude --resume ${SESSION}`);
+    // Once in a while on Linux the wake's start was answered but no resumed
+    // agent ever held the pane (with-hide/hide-private#322); what the shell's
+    // line showed then says whether the line was typed, mangled or ran.
+    await dumpOnFailure("woken pane", () => wokenPane(herdr, sleeper), () => expect.poll(resumed, { timeout: 30_000 }).toContain(`claude --resume ${SESSION}`));
     await expect(pane.locator("[data-pane-sleep]")).toHaveCount(0, { timeout: 30_000 });
   } finally {
     daemon?.stop();
     herdr.stop();
   }
 });
+
+/** The pane's screen, its foreground processes and Herdr's agent on it, as Herdr answers now. */
+function wokenPane(herdr: HerdrFixture, pane: string): unknown {
+  const screen = herdr.run(["pane", "read", pane, "--source", "recent", "--lines", "20", "--format", "text"]);
+  const processes = herdr.run(["pane", "process-info", "--pane", pane]);
+  const agents = (herdr.run(["agent", "list"]) as { result: { agents: { pane_id: string }[] } }).result.agents.filter((agent) => agent.pane_id === pane);
+  return { screen, processes, agents };
+}

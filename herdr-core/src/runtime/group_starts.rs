@@ -715,12 +715,15 @@ impl Runtime {
         }
     }
 
+    /// An agent start and a new worktree both bring their pane forward, so
+    /// both hold this permission and its catalog follow.
     pub(super) fn capture_task_start_focus(&mut self, task: u64, kind: &str) {
-        self.task_start_focus = (kind == "agent_start").then(|| TaskStartFocus {
-            task,
-            global_focus: Some(self.start_focus()),
-            pending_focus: None,
-        });
+        self.task_start_focus =
+            matches!(kind, "agent_start" | "worktree_create").then(|| TaskStartFocus {
+                task,
+                global_focus: Some(self.start_focus()),
+                pending_focus: None,
+            });
     }
 
     /// One pending follow belongs to the current start, never a shell-side

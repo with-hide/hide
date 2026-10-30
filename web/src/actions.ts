@@ -109,6 +109,7 @@ import {
   type ViewWorkspace,
 } from "./viewLayout";
 import { workspaceViewOf, type LaneView, type Tool } from "./workspace";
+import { startRequestId } from "./startAnswer";
 
 /** The `device_id` an event carries: none for the core's own node, which the core takes as the default. */
 function deviceField(device: string, node: string): { device_id?: string } {
@@ -1754,8 +1755,12 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
     },
 
     /** An agent started on a pull request's branch with `prompt` (D-12); it reports through `task_operation`. */
-    delegatePullRequest(workspaceId: string, prNumber: number, provider: ProviderKind, model: string | null, prompt: string) {
-      dispatch({ schema_version: 2, kind: "pr_delegate", payload: { workspace_id: workspaceId, pr_number: prNumber, provider, ...(model ? { model } : {}), prompt } });
+    delegatePullRequest(workspace: { id: string; device_id: string }, prNumber: number, provider: ProviderKind, model: string | null, prompt: string, startKind: "agent_start" | "worktree_create") {
+      // A start on this machine comes forward through the core's follow, as
+      // `createWorktree`'s does; a device's is opened once listed (`followStartedPane`).
+      const requestId = workspace.device_id === localDeviceId(rest()) ? startRequestId() : null;
+      if (requestId) beginOpening({ startRequestId: requestId, startKind });
+      dispatch({ schema_version: 2, kind: "pr_delegate", payload: { workspace_id: workspace.id, pr_number: prNumber, provider, ...(model ? { model } : {}), prompt, ...(requestId ? { request_id: requestId } : {}) } });
     },
 
     /**
@@ -2375,11 +2380,18 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
       taskKey?: string | null;
       prompt?: string | null;
     }) {
+      // A worktree on this machine comes forward through its start's follow
+      // in the core; the page only presents what the core selected, as for an
+      // agent start, and a device's worktree is opened once listed instead
+      // (`followStartedPane`).
+      const local = request.deviceId === localDeviceId(rest());
+      const requestId = request.requestId ?? (local ? startRequestId() : undefined);
+      if (local && requestId) beginOpening({ startRequestId: requestId, startKind: "worktree_create" });
       dispatch({
         schema_version: 2,
         kind: "create_worktree",
         payload: {
-          ...(request.requestId ? { request_id: request.requestId } : {}),
+          ...(requestId ? { request_id: requestId } : {}),
           device_id: request.deviceId,
           repository_root: request.repositoryRoot,
           branch: request.branch,

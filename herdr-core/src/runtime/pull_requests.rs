@@ -789,14 +789,14 @@ impl Runtime {
                 provider: payload.provider,
                 prompt,
                 model: payload.model,
-                request_id: None,
+                request_id: payload.request_id,
                 resume_session_id: None,
                 resume_session_path: None,
                 stay_behind: false,
             }),
-            None => self.start_worktree_task(
+            None => self.start_answered_worktree_task(
                 CreateWorktreePayload {
-                    request_id: None,
+                    request_id: payload.request_id,
                     device_id: machine,
                     repository_root: workspace.path.clone(),
                     branch: pull_request.head_branch.clone(),

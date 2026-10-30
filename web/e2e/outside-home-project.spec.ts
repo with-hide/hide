@@ -7,6 +7,7 @@ import { expect, test, type Page } from "@playwright/test";
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
+import { dumpOnFailure, herdrTabs } from "./failure-dump";
 import { startHerdr } from "./herdr-fixture";
 import { startHided, type Daemon } from "./hided-fixture";
 import { sendEvent, showExplorer } from "./wire";
@@ -20,20 +21,23 @@ function git(cwd: string, args: string[]): string {
   return execFileSync("git", ["-c", "user.name=e2e", "-c", "user.email=e2e@example.invalid", "-c", "init.defaultBranch=main", "-c", "commit.gpgsign=false", ...args], { cwd, encoding: "utf8" });
 }
 
-type Seen = { paths: string[] | null; unread: Set<number> };
+type Seen = { paths: string[] | null; unread: Set<number>; paned: Set<string> };
+type Listed = { id: string; checkouts?: { tabs?: { panes?: unknown[] }[] }[] };
 
 /**
- * The folders the core lists as registered, and when it refused a worktree
- * because it had not read the repository's worktrees yet, from the snapshots
- * the page receives.
+ * The folders the core lists as registered, the projects it lists with a
+ * pane, and when it refused a worktree because it had not read the
+ * repository's worktrees yet, from the snapshots the page receives.
  */
 function watchCore(page: Page): Seen {
-  const seen: Seen = { paths: null, unread: new Set() };
+  const seen: Seen = { paths: null, unread: new Set(), paned: new Set() };
   page.on("websocket", (socket) => socket.on("framereceived", ({ payload }) => {
     try {
-      const frame = JSON.parse(String(payload)) as { payload?: { rest?: { ui_state?: { workspace_registrations?: { path: string }[] }; status?: { last_error?: { kind: string; occurred_at: number } | null } } } };
+      const frame = JSON.parse(String(payload)) as { payload?: { rest?: { ui_state?: { workspace_registrations?: { path: string }[] }; navigator?: { workspaces?: Listed[] }; status?: { last_error?: { kind: string; occurred_at: number } | null } } } };
       const listed = frame.payload?.rest?.ui_state?.workspace_registrations;
       if (listed) seen.paths = listed.map((registration) => registration.path);
+      const rows = frame.payload?.rest?.navigator?.workspaces;
+      if (rows) seen.paned = new Set(rows.filter((row) => row.checkouts?.some((checkout) => checkout.tabs?.some((tab) => (tab.panes?.length ?? 0) > 0))).map((row) => row.id));
       const error = frame.payload?.rest?.status?.last_error;
       if (error?.kind === "worktree.create_unread") seen.unread.add(error.occurred_at);
     } catch { /* Terminal frames are binary. */ }
@@ -79,9 +83,16 @@ test("a project outside home is asked about again after its removal, and its wor
     await expect.poll(() => registered.paths, { timeout: 30_000 }).toContain(toPage(repo));
 
     // B20: removing it removes the permission, so adding it again asks again.
+    // Removal closes the panes the core lists under the project, so it waits
+    // for the first one: removed before the core had published it, the
+    // project lost its registration with Herdr's workspace still open there
+    // (with-hide/hide-private#311).
     const id = await project.first().getAttribute("data-project");
+    await expect.poll(() => registered.paned.has(id!), { timeout: 30_000 }).toBe(true);
     await sendEvent(page, daemon, "remove_workspace", { workspace_id: id });
-    await expect.poll(() => registered.paths, { timeout: 30_000 }).not.toContain(toPage(repo));
+    await dumpOnFailure("registrations after removal", () => ({ registered: registered.paths, paned: [...registered.paned], herdr: herdrTabs(herdr) }), () =>
+      expect.poll(() => registered.paths, { timeout: 30_000 }).not.toContain(toPage(repo)),
+    );
     expect(await asked()).toBe("needs_confirmation");
     await sendEvent(page, daemon, "create_workspace", add(true));
     await expect.poll(() => registered.paths, { timeout: 30_000 }).toContain(toPage(repo));
@@ -102,11 +113,10 @@ test("a project outside home is asked about again after its removal, and its wor
       return worktreesOf(repo).length;
     }, { timeout: 60_000 }).toBe(1);
     const worktree = project.locator("[data-checkout-row]").filter({ has: page.locator(`[data-checkout][aria-label^="${BRANCH}"]`) });
-    // A worktree with no agent yet stands in this fold (session UI B9).
-    const quiet = project.getByRole("button", { name: /^Worktrees with no agents/ });
-    await expect(quiet).toBeVisible({ timeout: 60_000 });
-    await quiet.click();
-    await expect(worktree).toBeVisible({ timeout: 30_000 });
+    // The made worktree comes forward as the front checkout once the core
+    // lists its pane, so it stands on its own line rather than in the fold of
+    // worktrees with no agents (docs/ARCHITECTURE.md, a created worktree's pane).
+    await expect(worktree).toBeVisible({ timeout: 60_000 });
     const [made] = worktreesOf(repo);
     await worktree.locator("[data-checkout]").first().click();
     await showExplorer(page);

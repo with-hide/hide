@@ -47,6 +47,7 @@ import {
   removalFor,
   taskFor,
 } from "./workspaceManage";
+import { followStartedPane } from "./opening";
 
 /** The row a dialog names, among this machine's projects or a connected device's workspaces (a remote purpose). */
 function findTarget(workspaceId: string, checkoutId?: string): { workspace: Workspace; checkout: Checkout | null } | null {
@@ -289,7 +290,7 @@ function NewWorktreeDialog({ actions, workspace, onClose }: { actions: Actions; 
     // The core focused the created pane; the agent's answer, if one was
     // chosen, is reported by the task notice after this dialog is gone.
     if (task.agent_phase) useUiStore.getState().setWatchedTask(task.id);
-    if (task.pane_id) useUiStore.getState().setFocusWhenListed(task.pane_id);
+    if (task.pane_id) followStartedPane(task.pane_id);
     onClose();
   }, [task, onClose]);
 
@@ -619,12 +620,10 @@ export function WorkspaceNotices({ actions }: { actions: Actions }) {
     if (watchedTask !== null && operation && operation.id !== watchedTask) useUiStore.getState().setWatchedTask(null);
   }, [watchedTask, operation]);
 
-  // The created worktree's pane is where the operator goes next (B13). The
-  // core selects it when the creation lands, but only a focus request is
-  // tracked until Herdr confirms it, so the move is made explicit once the
-  // pane is listed: a late focus event for the pane left behind cannot undo it.
-  // It is opened as an agent row opens its pane, so a worktree started from
-  // an Overview (Start, New agent) brings its Workspace to the front.
+  // A pane the page opens once it is listed, as an agent row opens its pane, so
+  // a start from an Overview brings its Workspace to the front: a start on a
+  // device (`followStartedPane`) and a resume. A start on this machine is not
+  // here: its follow in the core brings it forward (B13).
   const focusWhenListed = useUiStore((s) => s.focusWhenListed);
   const listed = useShellStore((s) =>
     focusWhenListed !== null &&

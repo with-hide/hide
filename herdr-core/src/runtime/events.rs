@@ -1154,6 +1154,9 @@ pub(super) struct PrDelegatePayload {
     /// The model the agent CLI is started with; absent is its own default.
     #[serde(default)]
     pub(super) model: Option<String>,
+    /// The id the page follows this start's answer by, as for any start.
+    #[serde(default)]
+    pub(super) request_id: Option<String>,
 }
 
 /// `issue_set_open`: close or reopen a Local issue.

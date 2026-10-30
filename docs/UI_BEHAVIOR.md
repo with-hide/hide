@@ -2483,6 +2483,8 @@ A newer page visit cancels that pending presentation; the answer never sends a s
 An agent that fails to start after its tab opened puts its text back in the draft with the reason, unless a new draft took its place, so the next ⌘N shows both; the reason stays until the text changes.
 A start with no answer in 90 seconds, the core's own limit for one, says so inside the panel.
 New worktree, Start from an issue and 맡기기 carry the same kind and model menus with the remembered choice preselected, and what they start becomes the next default; New worktree's kind menu starts with `Terminal only`, which is never remembered.
+A worktree created on this machine, from New worktree, the panel, Start from an issue or 맡기기, comes forward the way a start does: the core selects its new pane once its checkout is listed, and only while the operator has visited nothing else since, within the 90 seconds and with the same Herdr connection; otherwise it stays where it is, and the page never sends a focus of its own for it (with-hide/hide-private#311).
+A worktree created on a device is opened once that device lists its pane, through the device's own focus.
 A new worktree's branch starts from `origin/<base>` as Hide last fetched it when the local base has no commits of its own, so a base the operator fetched but never pulled is not where new work begins; a local base with unpushed commits, or with no fetched copy, is started from as it is, and the new branch tracks no upstream either way ([ARCHITECTURE.md](ARCHITECTURE.md), `live::new_branch_start`).
 Settings > Agents > Starting work has no default agent of its own.
 

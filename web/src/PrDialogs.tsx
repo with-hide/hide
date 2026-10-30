@@ -26,6 +26,7 @@ import { coreErrorKey, coreErrorText, type CoreError } from "./coreError";
 import { issueFailureText } from "./issueFailure";
 import { useErrorSince } from "./errorSince";
 import { fieldLabel } from "./shortcutLabels";
+import { followStartedPane } from "./opening";
 
 /** A request this dialog sent, by the id the core answers under. */
 type Sent = { id: string; at: number };
@@ -261,13 +262,13 @@ export function PrDelegateDialog({ actions, workspace, pr, intent, onClose }: { 
   useEffect(() => {
     if (started?.phase !== "ready") return;
     if (started.agent_phase) useUiStore.getState().setWatchedTask(started.id);
-    if (started.pane_id) useUiStore.getState().setFocusWhenListed(started.pane_id);
+    if (started.pane_id) followStartedPane(started.pane_id);
     onClose();
   }, [started, onClose]);
   const submit = () => {
     if (working || !branch || agent.kind === "terminal") return;
     setRequest({ afterId: actions.taskIdNow(), at: Date.now(), newWorktree: checkout === null });
-    actions.delegatePullRequest(workspace.id, pr.number, agent.kind, modelToSend(agent), prompt);
+    actions.delegatePullRequest(workspace, pr.number, agent.kind, modelToSend(agent), prompt, checkout === null ? "worktree_create" : "agent_start");
   };
   return (
     <Dialog open onOpenChange={(next) => { if (!next) onClose(); }}>

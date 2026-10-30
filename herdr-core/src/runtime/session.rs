@@ -4122,19 +4122,23 @@ impl Runtime {
                 // reads them; for an agent they wait for its start
                 // (`ingest_task_agent_result`).
                 let input_ready = operation.agent_phase.is_none().then(|| pane_id.clone());
-                let waits_for_local_catalog = operation.kind == "agent_start"
-                    && device.is_none()
-                    && !self
-                        .created_pane_place(&pane_id)
-                        .is_some_and(|(owner, tab)| {
-                            owner == path && tab_id.as_deref().is_none_or(|id| id == tab)
-                        })
-                    && !self.start_pane_is_listed(
-                        self.node.as_str(),
-                        &path,
-                        tab_id.as_deref(),
-                        &pane_id,
-                    );
+                // A new worktree's pane is in a workspace Herdr just opened,
+                // which the catalog may not list yet; focused before, its
+                // checkout would never come forward (with-hide/hide-private#311).
+                let waits_for_local_catalog =
+                    matches!(operation.kind.as_str(), "agent_start" | "worktree_create")
+                        && device.is_none()
+                        && !self
+                            .created_pane_place(&pane_id)
+                            .is_some_and(|(owner, tab)| {
+                                owner == path && tab_id.as_deref().is_none_or(|id| id == tab)
+                            })
+                        && !self.start_pane_is_listed(
+                            self.node.as_str(),
+                            &path,
+                            tab_id.as_deref(),
+                            &pane_id,
+                        );
                 crate::diagnostic!(serde_json::json!({
                     "component": "agent_start",
                     "kind": "start.focus_disposition",

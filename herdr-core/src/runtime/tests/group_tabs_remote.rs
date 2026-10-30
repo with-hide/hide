@@ -1216,6 +1216,89 @@ fn a_local_start_from_an_empty_checkout_keeps_its_visit_through_catalog_restore(
     }
 }
 
+/// A new worktree's tab comes forward once the catalog lists its pane under
+/// the worktree, as a start's does, rather than focusing a pane the catalog
+/// does not place yet and leaving the old checkout in front
+/// (with-hide/hide-private#311).
+#[test]
+fn a_local_worktree_result_waits_for_its_catalog_before_it_comes_forward() {
+    for boundary in ["catalog", "newer-visit"] {
+        let t = tree();
+        let (mut runtime, main_checkout) = live_tab_order_runtime(&t.main);
+        let old = tab_order_payload(&t.main, &["w-order:t1"], &["w-order:t1"], "w-order:t1");
+        runtime.ingest_session_with_catalog(Ok(old.clone()), None);
+        let task = runtime
+            .begin_task_operation(
+                "worktree_create",
+                Some(t.main.clone()),
+                Some("feature".into()),
+                None,
+                None,
+            )
+            .unwrap();
+        runtime.ingest_task_operation_result(
+            task,
+            Ok(live::WorktreeTaskOutcome {
+                path: t.linked.clone(),
+                pane_id: "w-linked:t1:p".into(),
+                created_tab_id: Some("w-linked:t1".into()),
+                purpose_error: None,
+                unconfirmed_purpose_token: None,
+                issue_error: None,
+                shell: crate::agent_start::ShellStart::Plain,
+            }),
+        );
+        assert_eq!(
+            runtime.snapshot.navigator.focused_checkout_id.as_deref(),
+            Some(main_checkout.as_str()),
+            "{boundary}: nothing moves before the catalog lists the pane"
+        );
+        if boundary == "newer-visit" {
+            dispatch(
+                &mut runtime,
+                "focus_device",
+                json!({"device_id":crate::node::TEST_NODE}),
+            );
+        }
+        let mut landed =
+            tab_order_payload(&t.linked, &["w-linked:t1"], &["w-linked:t1"], "w-linked:t1");
+        landed.workspaces[0].workspace_id = "w-linked".into();
+        landed.tabs[0].workspace_id = "w-linked".into();
+        landed.layouts[0].workspace_id = "w-linked".into();
+        landed.workspaces.extend(old.workspaces.clone());
+        landed.tabs.extend(old.tabs.clone());
+        landed.layouts.extend(old.layouts.clone());
+        landed.panes.extend(old.panes.clone());
+        landed.focused_workspace_id = old.focused_workspace_id.clone();
+        landed.focused_pane_id = old.focused_pane_id.clone();
+        runtime.ingest_session_with_catalog(Ok(landed), None);
+        let front = runtime
+            .snapshot
+            .navigator
+            .focused_checkout_id
+            .clone()
+            .unwrap_or_default();
+        let worktree = runtime
+            .snapshot
+            .navigator
+            .workspaces
+            .iter()
+            .flat_map(|workspace| &workspace.checkouts)
+            .find(|checkout| checkout.path == t.linked)
+            .map(|checkout| checkout.id.clone())
+            .expect("the catalog lists the new worktree");
+        if boundary == "catalog" {
+            assert_eq!(front, worktree, "the new worktree comes forward");
+            assert_eq!(
+                runtime.snapshot.focused.pane_id.as_deref(),
+                Some("w-linked:t1:p")
+            );
+        } else {
+            assert_eq!(front, main_checkout, "a newer visit keeps its checkout");
+        }
+    }
+}
+
 #[test]
 fn a_first_local_home_catalog_does_not_supersede_its_start_result() {
     let t = tree();

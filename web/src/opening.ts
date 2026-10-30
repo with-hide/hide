@@ -3,8 +3,21 @@
 // front, or says why it did not come (`navigation.ts`, openingProgress).
 
 import type { OpenTarget } from "./navigation";
+import { remoteTargetOfPane } from "./remote";
 import { useShellStore } from "./store";
 import { useUiStore } from "./ui";
+
+/**
+ * After a start's answer names its pane: a device's pane is opened from the
+ * page once it is listed, through that device's own focus. One on this
+ * machine is the core's to bring forward: its start holds the follow and
+ * cancels it on a newer visit, a changed connection or the 90-second bound,
+ * and the action that sent the start began the opening that shows what the
+ * core selected, so the page sends no focus of its own.
+ */
+export function followStartedPane(paneId: string): void {
+  if (remoteTargetOfPane(useShellStore.getState().rest, paneId)) useUiStore.getState().setFocusWhenListed(paneId);
+}
 
 /** Remembers what was asked to come forward; `CenterScreen` shows it once it is in front. */
 export function beginOpening(target: OpenTarget): void {

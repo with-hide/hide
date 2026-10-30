@@ -14,6 +14,8 @@ type Snapshot = {
   layouts: { tab_id: string; splits: { direction: string; ratio: number }[] }[];
 };
 const snapshot = (herdr: HerdrFixture) => (herdr.run(["api", "snapshot"]) as { result: { snapshot: Snapshot } }).result.snapshot;
+const listsAgent = (herdr: HerdrFixture, pane: string) =>
+  (herdr.run(["agent", "list"]) as { result: { agents: { pane_id: string }[] } }).result.agents.some((agent) => agent.pane_id === pane);
 test.describe.configure({ timeout: 120_000 });
 
 test("Opening a new terminal and splitting it keeps one real Herdr tab and both terminal identities", async ({ page }) => {
@@ -86,6 +88,11 @@ test("cold restoration failure retains a sleeping row and visiting it does not w
     await page.locator(`[data-pane-menu="${sleeper}"]`).click();
     await page.locator('[data-menu-item="sleep_agent"]').click();
     await expect(page.locator('[data-pane-sleep="sleeping"]')).toBeVisible();
+    // Hide draws the pane asleep once its shell holds the terminal again, and
+    // Herdr drops the agent from its own list only on its next look at the
+    // pane: a restart before that saves the agent into the session the cold
+    // restore lists again, which is not the state this test restores from.
+    await expect.poll(() => listsAgent(herdr, sleeper)).toBe(false);
     const other = herdr.run(["tab", "create", "--workspace", herdr.workspace, "--cwd", path.join(herdr.root, "fixture"), "--label", "other", "--no-focus"]) as { result: { tab: { tab_id: string } } };
     await page.locator(`[data-tab="${other.result.tab.tab_id}"]`).click();
     const folder = path.join(herdr.root, "fixture");
@@ -102,8 +109,7 @@ test("cold restoration failure retains a sleeping row and visiting it does not w
     await expect(row.locator('[data-agent-status="sleeping"]')).toBeVisible();
     await expect(page.locator("[data-agent-wake]")).toHaveCount(0);
     expect(sent.get("agent_wake") ?? 0).toBe(0);
-    const agents = (herdr.run(["agent", "list"]) as { result: { agents: { pane_id: string }[] } }).result.agents;
-    expect(agents.some((agent) => agent.pane_id === sleeper)).toBe(false);
+    expect(listsAgent(herdr, sleeper)).toBe(false);
     await failed.getByRole("button", { name: "Close pane", exact: true }).click();
     await expect.poll(() => snapshot(herdr).panes.some((pane) => pane.pane_id === sleeper)).toBe(false);
     await expect(row).toHaveCount(0);
