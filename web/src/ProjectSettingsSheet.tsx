@@ -18,6 +18,7 @@ import { issueSourceChoices, issueSourceName } from "./settings";
 import { catalogWorkspaces } from "./snapshot";
 import { useShellStore } from "./store";
 import { useUiStore } from "./ui";
+import { composingKey } from "./keys";
 
 type Page = "connections" | "work" | "memory";
 const PAGES = [{ id: "connections", icon: LinkIcon }, { id: "work", icon: GitBranchIcon }, { id: "memory", icon: BrainIcon }] as const;
@@ -133,7 +134,7 @@ function ProjectSettingsBody({ target, actions, initialPage }: { target: Project
                     </Select>
                   </Row>
                   {repositoryEditing ? <Row label={t("projectSettings.override")} detail={repositoryInvalid ? <Note tone="error">{t("projectSettings.repositoryInvalid")}</Note> : undefined}>
-                    <div className="flex min-w-0 max-w-full flex-wrap gap-xs"><Input aria-label={t("projectSettings.repositoryHint")} placeholder={t("projectSettings.repositoryHint")} value={repositoryDraft} disabled={blocked} onChange={(event) => { setRepositoryDraft(event.target.value); setRepositoryInvalid(false); }} onKeyDown={(event) => { if (event.key === "Enter" && !event.nativeEvent.isComposing) applyRepository(); }} /><Button size="sm" disabled={blocked} onClick={applyRepository}>{t("projectSettings.apply")}</Button></div>
+                    <div className="flex min-w-0 max-w-full flex-wrap gap-xs"><Input aria-label={t("projectSettings.repositoryHint")} placeholder={t("projectSettings.repositoryHint")} value={repositoryDraft} disabled={blocked} onChange={(event) => { setRepositoryDraft(event.target.value); setRepositoryInvalid(false); }} onKeyDown={(event) => { if (event.key === "Enter" && !composingKey(event)) applyRepository(); }} /><Button size="sm" disabled={blocked} onClick={applyRepository}>{t("projectSettings.apply")}</Button></div>
                   </Row> : null}
                 </Group>
                 <Group title={t("issueSettings.sourceMenu")}>

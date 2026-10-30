@@ -19,6 +19,7 @@ import type { BackgroundAi, ConductorCandidate, ConductorSettings, MissionScope,
 import { useShellStore } from "../store";
 import { coreErrorText } from "../coreError";
 import { useErrorSince } from "../errorSince";
+import { composingKey } from "../keys";
 
 // Settings › Conductor (PRD software-factory-conductor D-31, B48, B49): how
 // many agents a mission runs at once, how far a mission goes when it does not
@@ -167,7 +168,7 @@ function CandidateRow({ candidate, onChange }: { candidate: ConductorCandidate; 
           )}
           <Input value={purpose} placeholder={t("conductor.purposePlaceholder")} aria-label={t("conductor.column.purpose")} className="min-w-0" onChange={(event) => setPurpose(event.target.value)}
             onBlur={() => purpose !== candidate.purpose && onChange({ ...candidate, purpose })}
-            onKeyDown={(event) => { if (event.key === "Enter") event.currentTarget.blur(); }}
+            onKeyDown={(event) => { if (event.key === "Enter" && !composingKey(event)) event.currentTarget.blur(); }}
             data-candidate-purpose="true" />
         </>
       )}

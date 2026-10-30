@@ -17,6 +17,7 @@ import { PRACTICE_CHANNEL, type ChapterProgress, type PracticeMessage, type Prac
 import { holdPageClipboard } from "./clipboard";
 import { HUB_CSS } from "./coachStyle";
 import { PracticePlayer, type OperatorChoices } from "./PracticePlayer";
+import { composingKey } from "../keys";
 
 export type ChapterStatus = "new" | "paused" | "done" | "changed";
 
@@ -150,7 +151,7 @@ function PracticeHub({ progress, unsaved, onStart, onLeave }: { progress: Practi
 
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
-      if (event.metaKey || event.ctrlKey || event.altKey || event.isComposing) return;
+      if (event.metaKey || event.ctrlKey || event.altKey || composingKey(event)) return;
       if (event.key === "ArrowDown" || event.key === "ArrowUp") {
         event.preventDefault();
         setChosen((at) => Math.max(0, Math.min(rows.length - 1, at + (event.key === "ArrowDown" ? 1 : -1))));

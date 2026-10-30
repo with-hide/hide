@@ -91,3 +91,17 @@ it("sends each edit as its own field, so a second edit before the first one's an
     expect(tab.sent).toEqual([{ default_strength: "thorough" }, { other_vendor: false }]);
   } finally { await tab.unmount(); }
 });
+
+it("leaves a purpose field focused on the Enter that confirms an input method's syllable, so the syllable is not committed twice, and the next Enter saves it", async () => {
+  const tab = await mount({ ...DEFAULT_CONDUCTOR, candidates: [{ agent: "claude", purpose: "" }] });
+  try {
+    const field = document.querySelector<HTMLInputElement>("[data-candidate-purpose]")!;
+    await act(async () => field.focus());
+    // Chromium marks the confirming Enter as composing; Safari sends it after compositionend with only keyCode 229.
+    await act(async () => field.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true, isComposing: true })));
+    await act(async () => field.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true, keyCode: 229 })));
+    expect(document.activeElement).toBe(field);
+    await act(async () => field.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true })));
+    expect(document.activeElement).not.toBe(field);
+  } finally { await tab.unmount(); }
+});

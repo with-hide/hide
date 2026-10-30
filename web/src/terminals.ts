@@ -845,8 +845,10 @@ function createInstance(paneId: string, dispatch: DispatchFn, actions: TerminalA
   // Its own stacking context: xterm gives its layers z-indexes up to 11 (the
   // WebGL canvases, the helpers, the scrollbar), which would otherwise paint
   // over, and take the clicks of, whatever a pane draws on top of its terminal
-  // (issue 1279).
-  element.className = "absolute inset-0 isolate";
+  // (issue 1279). It stands inset from the pane's edges, so the text never
+  // touches the pane border; the inset is on the box the fit measures, never a
+  // padding inside it, so the grid sent out is the one that fits the inset box.
+  element.className = "absolute inset-x-sm inset-y-xs isolate";
   element.dataset.terminal = paneId;
   const link: LinkState = { hovered: false };
   watchFontPixelRatio();
