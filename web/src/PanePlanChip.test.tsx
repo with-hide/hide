@@ -346,3 +346,36 @@ it("says a child works without a plan, and draws no count and no way to a pane t
     expect(detail.querySelector("[data-plan-child-go]")).toBeNull();
   } finally { await early.unmount(); }
 });
+
+it("draws no step and no count for a child whose device does not answer, only its row's state (PRD hide-plan-delegate B32)", async () => {
+  const away = { ...CHILD_SESSION, device_id: "phone" };
+  const handedAway = delegatingPlan();
+  handedAway.steps = handedAway.steps.map((one) => (one.delegation ? { ...one, delegation: { ...one.delegation, session: away } } : one));
+  const view = await mount([handedAway, { ...childPlan(), session: away }], "map", family());
+  try {
+    expect(view.container.querySelector("[data-step-line=web]")?.textContent).toBe("web-ui·In progress");
+    await act(async () => view.container.querySelector<HTMLElement>("[data-plan-step=web]")!.click());
+    const detail = document.querySelector<HTMLElement>("[data-plan-step-detail=web]")!;
+    // Neither its last checklist nor a claim that it works without one.
+    expect(detail.querySelector("[data-plan-child-plan]")).toBeNull();
+  } finally { await view.unmount(); }
+  const chip = await mount([handedAway, { ...childPlan(), session: away }], "chip", family());
+  try {
+    await act(async () => chip.chip()!.focus());
+    expect(chip.popover()?.querySelector("[data-plan-row=web]")?.textContent).toBe("web titleweb-ui");
+  } finally { await chip.unmount(); }
+});
+
+it("leaves out the finished count while a child's device does not answer (PRD hide-plan-delegate B29)", async () => {
+  const finishedChild = (device: string) => family().map((row) => (row.pane_id === "c2" ? { ...row, group: "done", device_id: device } : row));
+  const here = await mount([delegatingPlan(), childPlan()], "chip", finishedChild("mac"));
+  try {
+    await act(async () => here.chip()!.focus());
+    expect(here.popover()?.querySelector("[data-pane-plan-children]")?.textContent).toBe("Delegated 1· 1 finished");
+  } finally { await here.unmount(); }
+  const away = await mount([delegatingPlan(), childPlan()], "chip", finishedChild("phone"));
+  try {
+    await act(async () => away.chip()!.focus());
+    expect(away.popover()?.querySelector("[data-pane-plan-children]")?.textContent).toBe("Delegated 1");
+  } finally { await away.unmount(); }
+});

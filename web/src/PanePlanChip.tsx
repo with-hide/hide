@@ -195,12 +195,14 @@ function Delegated({ paneId, plan }: { paneId: string; plan: PlanView }) {
   const { t } = useInterfaceTranslation();
   const agents = usePaneAgents();
   const rest = useShellStore((s) => s.rest);
-  const children = useMemo(() => {
+  const { children, unavailable } = useMemo(() => {
     const handed = handedPanes(plan);
-    return (paneChildren(paneId, agents, rest)?.children ?? []).filter((child) => !handed.has(child.pane_id));
+    const all = paneChildren(paneId, agents, rest);
+    return { children: (all?.children ?? []).filter((child) => !handed.has(child.pane_id)), unavailable: Boolean(all?.unavailableDevice) };
   }, [paneId, plan, agents, rest]);
   if (children.length === 0) return null;
-  const done = children.filter((child) => child.group === "done").length;
+  // A device that does not answer leaves the finished count unknown, so it is not said.
+  const done = unavailable ? 0 : children.filter((child) => child.group === "done").length;
   return (
     <p className="flex items-baseline gap-xs px-sm pb-sm text-micro font-medium text-muted-foreground" data-pane-plan-children={children.length}>
       {t("sessionWork.delegatedCount", { count: children.length })}

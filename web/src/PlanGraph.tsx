@@ -14,7 +14,7 @@ import { useInterfaceTranslation } from "./i18n/client";
 import { cn } from "./lib/utils";
 import { usePaneAgents } from "./PaneHeaderBand";
 import { DelegationWord, PlanChecklist } from "./PlanChecklist";
-import { childNow, childPlanOf, evidenceWords, planCount, planGraph, stepDelegationWord, stepMark, waitingOn } from "./plans";
+import { childNow, childPlanOf, childReachable, evidenceWords, planCount, planGraph, stepDelegationWord, stepMark, waitingOn } from "./plans";
 import type { PlanDelegation, PlanStep, PlanView } from "./snapshot";
 import { useShellStore } from "./store";
 
@@ -231,6 +231,8 @@ function StepCard({ plan, step, open, onOpen, openPane }: { plan: PlanView; step
 function ChildDetail({ step, delegation, openPane }: { step: PlanStep; delegation: PlanDelegation; openPane?: (paneId: string) => void }) {
   const { t } = useInterfaceTranslation();
   const child = useShellStore((s) => childPlanOf(s.rest, step));
+  // A child on a device that does not answer is not said to work without a plan.
+  const reachable = useShellStore((s) => childReachable(s.rest, step));
   const paneId = delegation.pane_id;
   return (
     <>
@@ -242,7 +244,7 @@ function ChildDetail({ step, delegation, openPane }: { step: PlanStep; delegatio
           </p>
           <PlanChecklist plan={child} />
         </div>
-      ) : delegation.session ? (
+      ) : delegation.session && reachable ? (
         <p className="border-t border-border pt-sm text-caption text-muted-foreground" data-plan-child-plan="none">
           {t("plan.delegation.noPlan")}
         </p>

@@ -1,4 +1,5 @@
 import type { TFunction } from "i18next";
+import { deviceConnected } from "./devices";
 import type { CellTone } from "./missions";
 import { layerDependencies, orderByDependencies, type LayeredGraph } from "./projectBoard";
 import type { PlanEvidence, PlanStep, PlanView, RowMark, SnapshotRest, WorkSession } from "./snapshot";
@@ -106,10 +107,22 @@ export function evidenceWords(evidence: PlanEvidence): string {
   return parts[parts.length - 1] || evidence.path;
 }
 
-/** The plan of the child a step is handed to, found by the child's session (B20); null while the child has none or it is not read yet (B32). */
+/**
+ * The plan of the child a step is handed to, found by the child's session
+ * (B20); null while the child has none or it is not read yet, and while the
+ * child's device does not answer, since its step and count would be a value
+ * nobody can vouch for (B32, design principle 10).
+ */
 export function childPlanOf(rest: SnapshotRest | null | undefined, step: PlanStep): PlanView | null {
   const session = step.delegation?.session;
-  return session ? planOfSession(rest, session) : null;
+  if (!session || !childReachable(rest, step)) return null;
+  return planOfSession(rest, session);
+}
+
+/** Whether the device of the child a step is handed to answers now; a child with no session yet is not on another device. */
+export function childReachable(rest: SnapshotRest | null | undefined, step: PlanStep): boolean {
+  const session = step.delegation?.session;
+  return !session || deviceConnected(rest ?? null, session.device_id);
 }
 
 /** The child's current step and its count, `<step> n/m`, from the child's own plan; null without one, or once it has no current step (B25, B32). */
