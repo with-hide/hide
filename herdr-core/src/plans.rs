@@ -699,15 +699,21 @@ pub(crate) fn judge(
         }
         let prior = was(&step.key);
         if prior.is_none_or(|prior| prior.status != StepStatus::Done) {
-            if step.delegation.as_ref().is_some_and(|delegation| {
-                delegation.active() && delegation.reported_at_unix_ms.is_none()
-            }) {
+            let handed = step.delegation.as_ref().is_some_and(Delegation::active);
+            if handed
+                && step
+                    .delegation
+                    .as_ref()
+                    .is_some_and(|delegation| delegation.reported_at_unix_ms.is_none())
+            {
                 return Err(refused("plan_report_missing", &step.key));
             }
+            // A handed file step ends on its child's report: the file is on
+            // the child's branch until the main takes it in (B13).
             let needed = match step.output {
                 Some(Output::Pr) => Some("--pr"),
-                Some(Output::File) => Some("--file"),
-                Some(Output::None) | None => None,
+                Some(Output::File) if !handed => Some("--file"),
+                Some(Output::File | Output::None) | None => None,
             };
             let carried = match &step.evidence {
                 Some(Evidence::Pr { .. }) => Some("--pr"),
@@ -1526,6 +1532,15 @@ mod tests {
             node(&pr, "pr", Done).unwrap_err(),
             crate::coordination::refusal("plan_evidence_missing", "pr --pr")
         );
+        // A handed file step ends on the report: the main takes the file in.
+        let mut file = set(
+            None,
+            vec![output(step("spec", &[], Planned), Output::File)],
+            false,
+        )
+        .unwrap();
+        handed(&mut file, "spec", DelegationState::Reported, true);
+        assert!(node(&file, "spec", Done).unwrap().is_some());
     }
 
     #[test]
