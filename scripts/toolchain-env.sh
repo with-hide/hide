@@ -46,6 +46,15 @@ if [[ -n "$hide_toolchain_shim" ]]; then
     if [[ -d "$hide_toolchain_rustup_home" ]]; then
         export CARGO_HOME="${CARGO_HOME:-$hide_toolchain_cargo_home}"
         export RUSTUP_HOME="${RUSTUP_HOME:-$hide_toolchain_rustup_home}"
+        # hide-vt's prepared build inputs (the pinned Zig and libghostty-vt
+        # source) are the same kind of machine download as the toolchain, so
+        # a runner HOME reads them from the same home instead of downloading
+        # its own copy. Windows keeps them under %LOCALAPPDATA%, which no
+        # runner HOME moves. docs/BUILD.md, "The terminal parser and Zig".
+        case "$(uname -s)" in
+            MINGW*|MSYS*|CYGWIN*) ;;
+            *) export HIDE_BUILD_CACHE="${HIDE_BUILD_CACHE:-$(dirname "$hide_toolchain_cargo_home")/.cache/hide-build}" ;;
+        esac
     fi
 fi
 unset hide_toolchain_shim hide_toolchain_cargo_home hide_toolchain_rustup_home

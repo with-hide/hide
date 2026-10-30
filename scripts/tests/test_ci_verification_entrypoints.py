@@ -38,9 +38,20 @@ class EntryPoints(unittest.TestCase):
                             " sys.exit(0)\n"
                             "sys.exit(int(os.environ.get('FAIL_COMMAND', '0')))\n")
             file.chmod(0o755)
+        # hide-vt's preparation, standing in for the download: it records each
+        # call and fails on demand (scripts/prepare-vt-inputs.py).
+        (self.root / "scripts" / "prepare-vt-inputs.py").write_text(
+            "import os, sys\n"
+            "with open(os.environ['PREPARE_RECORD'], 'a') as f:\n"
+            " f.write(' '.join(sys.argv[1:]) + '\\n')\n"
+            "if os.environ.get('FAIL_PREPARE'):\n"
+            " print('prepare-vt-inputs: could not download the pinned Zig', file=sys.stderr)\n"
+            " sys.exit(1)\n")
+        self.prepared = self.root / "prepare.log"
         self.record = self.root / "record.jsonl"
         self.env = {**os.environ, "PATH": str(self.bin) + os.pathsep + os.environ["PATH"],
-                    "RECORD": str(self.record), "CARGO_TARGET_DIR": str(self.root / "foreign"),
+                    "RECORD": str(self.record), "PREPARE_RECORD": str(self.prepared),
+                    "CARGO_TARGET_DIR": str(self.root / "foreign"),
                     "HERDR_SOCKET_PATH": "operator-server", "HERDR_ENV": "1",
                     "HCOORD_HOME": "operator-legacy-state",
                     "HIDE_E2E_HERDR_BIN": "explicit-test-binary"}
@@ -301,6 +312,20 @@ if name == 'playwright' and '--list' in args:
         self.assertFalse(any(key.startswith(("HERDR_", "HCOORD_")) for key in received["env"]))
         self.assertEqual(received["env"]["HIDE_E2E_HERDR_BIN"], "explicit-test-binary")
         self.assertEqual(self.run_entry("verify-cargo.sh", "check", "--workspace", FAIL_COMMAND="23").returncode, 23)
+
+    def test_a_build_that_can_reach_hide_vt_prepares_its_inputs_first(self):
+        self.assertEqual(self.run_entry("verify-cargo.sh", "test").returncode, 0)
+        self.assertEqual(self.run_entry("verify-cargo.sh", "nextest", "-p", "hide-vt").returncode, 0)
+        self.assertEqual(self.prepared.read_text().splitlines(), ["--quiet", "--quiet"])
+        self.assertEqual(self.run_entry("verify-cargo.sh", "test-scoped", "-p", "hide-platform").returncode, 0)
+        self.assertEqual(len(self.prepared.read_text().splitlines()), 2)
+
+    def test_a_failed_preparation_stops_before_cargo_and_names_the_command_to_run(self):
+        result = self.run_entry("verify-cargo.sh", "check", "--workspace", FAIL_PREPARE="1")
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("could not download the pinned Zig", result.stderr)
+        self.assertIn("Run `python3 scripts/prepare-vt-inputs.py` once on this machine where", result.stderr)
+        self.assertEqual(self.records(), [])
 
     def test_invalid_cargo_mode_or_artifact_redirection_never_calls_cargo(self):
         for args in [("unknown",), ("build", "--target-dir", "elsewhere"),

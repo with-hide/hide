@@ -1,0 +1,56 @@
+# hide-vt's prepared build inputs and Zig's compiled output, for every job
+# that builds hide-vt. docs/BUILD.md, "The terminal parser and Zig", owns the
+# keys and why each one holds what it holds; scripts/tests/test_vt_cache.py
+# holds every job to this action.
+#
+# The inputs (the pinned Zig, the Herdr source archive's libghostty-vt and the
+# Zig packages) are keyed by the pin file alone, since that file names every
+# digest in them. Zig's caches are keyed by the pins and hide-vt/build.rs, which
+# fixes the target mapping and the optimize mode, and by the system and
+# architecture, which are the target. `scripts/verify-cargo.sh` prepares the
+# inputs itself when the entry is missing, so a miss costs a download, never a
+# failure.
+name: hide-vt build inputs
+description: Restore, and on main save, hide-vt's prepared inputs and Zig's caches for this system.
+
+inputs:
+  save:
+    description: Whether this job saves the entries; true only for their one builder per system on main.
+    required: true
+
+runs:
+  using: composite
+  steps:
+    - name: Name the folders the build reads
+      # Fixed paths per runner: Zig's C-header cache keys include the
+      # compiler's installation path, so a restored cache matches only when the
+      # prepared Zig sits where it sat when the entry was saved. Both stay out
+      # of target/, which the workspace set's rust-cache entry holds.
+      shell: bash
+      run: |
+        echo "HIDE_BUILD_CACHE=$RUNNER_TEMP/hide-build" >> "$GITHUB_ENV"
+        echo "HIDE_VT_ZIG_CACHE=$RUNNER_TEMP/vt-zig-cache" >> "$GITHUB_ENV"
+    - name: Restore the prepared inputs
+      if: inputs.save != 'true'
+      uses: actions/cache/restore@v4
+      with:
+        path: ${{ runner.temp }}/hide-build/vt
+        key: vt-inputs-v1-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('hide-vt/build-inputs.json') }}
+    - name: Restore and save the prepared inputs
+      if: inputs.save == 'true'
+      uses: actions/cache@v4
+      with:
+        path: ${{ runner.temp }}/hide-build/vt
+        key: vt-inputs-v1-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('hide-vt/build-inputs.json') }}
+    - name: Restore Zig's caches
+      if: inputs.save != 'true'
+      uses: actions/cache/restore@v4
+      with:
+        path: ${{ runner.temp }}/vt-zig-cache
+        key: vt-zig-v1-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('hide-vt/build-inputs.json', 'hide-vt/build.rs') }}
+    - name: Restore and save Zig's caches
+      if: inputs.save == 'true'
+      uses: actions/cache@v4
+      with:
+        path: ${{ runner.temp }}/vt-zig-cache
+        key: vt-zig-v1-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('hide-vt/build-inputs.json', 'hide-vt/build.rs') }}

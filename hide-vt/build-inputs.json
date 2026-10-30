@@ -1,0 +1,90 @@
+{
+  "zig": {
+    "version": "0.16.0",
+    "archives": {
+      "aarch64-macos": {
+        "url": "https://ziglang.org/download/0.16.0/zig-aarch64-macos-0.16.0.tar.xz",
+        "sha256": "b23d70deaa879b5c2d486ed3316f7eaa53e84acf6fc9cc747de152450d401489"
+      },
+      "x86_64-macos": {
+        "url": "https://ziglang.org/download/0.16.0/zig-x86_64-macos-0.16.0.tar.xz",
+        "sha256": "0387557ed1877bc6a2e1802c8391953baddba76081876301c522f52977b52ba7"
+      },
+      "x86_64-linux": {
+        "url": "https://ziglang.org/download/0.16.0/zig-x86_64-linux-0.16.0.tar.xz",
+        "sha256": "70e49664a74374b48b51e6f3fdfbf437f6395d42509050588bd49abe52ba3d00"
+      },
+      "aarch64-linux": {
+        "url": "https://ziglang.org/download/0.16.0/zig-aarch64-linux-0.16.0.tar.xz",
+        "sha256": "ea4b09bfb22ec6f6c6ceac57ab63efb6b46e17ab08d21f69f3a48b38e1534f17"
+      },
+      "x86_64-windows": {
+        "url": "https://ziglang.org/download/0.16.0/zig-x86_64-windows-0.16.0.zip",
+        "sha256": "68659eb5f1e4eb1437a722f1dd889c5a322c9954607f5edcf337bc3684a75a7e"
+      },
+      "aarch64-windows": {
+        "url": "https://ziglang.org/download/0.16.0/zig-aarch64-windows-0.16.0.zip",
+        "sha256": "aee38316ee4111717900f45dd3130145c39289e105541d737eb8c5ed653c78ef"
+      }
+    }
+  },
+  "source": {
+    "release": "v0.9.5",
+    "commit": "2ecf19a92fc3a7fff75b6ce3655ef04f4625ec01",
+    "url": "https://github.com/herdrdev/herdr/archive/2ecf19a92fc3a7fff75b6ce3655ef04f4625ec01.tar.gz",
+    "sha256": "cbd4354f1c44530d9f094c2797380208c50f19b4d6350b6e5206e220133c3168",
+    "root": "herdr-2ecf19a92fc3a7fff75b6ce3655ef04f4625ec01",
+    "tree": "vendor/libghostty-vt",
+    "libghostty_vt": {
+      "commit": "44f2a44df7e8c4a0c6df3f7d872ef3d7ead88e51",
+      "dist": "libghostty-vt-1.3.2-HEAD-+44f2a44df"
+    },
+    "files": {
+      "LICENSE": "c71d239df91726fc519c6eb72d318ec65820627232b2f796219e87dcf35d0ab4",
+      "vendor/libghostty-vt/LICENSE": "386211873e5b7a02f663ae4d7adf96285999f91608f8f9f31fecfd0f4095e6f1",
+      "vendor/libghostty-vt.vendor.json": "16f64038ab246d5d842b814f19fdab17c46176364b1ab3e79c30768c7d857fb9",
+      "vendor/libghostty-vt.patches.md": "ada2bf5882f27244a7e6d80c122e0469ba3c639b57e0d4c2499b8a1868b0f6b9"
+    },
+    "patches": {
+      "vendor/patches/libghostty-vt/0002-expose-modify-other-keys-mode.patch": "03e0f42ae3bf98b8173cbbf4faa8252338669d3cdce3e06e6751ab0770cca7d3",
+      "vendor/patches/libghostty-vt/0004-fix-hosted-wuffs-builds.patch": "db61a780094025264a0b35958dc7ae5bbb8cbbe108dfb200430f75a8751743c1",
+      "vendor/patches/libghostty-vt/0005-bounded-word-selection.patch": "860a12e7db762e45174ea056cdbe4017dc91080df22b7cd795473a4ee4c4ae0e",
+      "vendor/patches/libghostty-vt/0006-clear-screen-preserving-cursor-line.patch": "8570226466679fe75f743cabc43bafae9bfe50f57d864f45c247a110fa15c325",
+      "vendor/patches/libghostty-vt/0007-experimental-png-retention.patch": "c584e68d01e3f12c81d10492b314368fb9d3f8d49810483b686679bb208dab4a"
+    }
+  },
+  "packages": [
+    {
+      "hash": "uucode-0.2.0-ZZjBPlK5VADj7fdoq7G8LIHzD5o6FSkcBXXrRWr4jnrA",
+      "url": "https://deps.files.ghostty.org/uucode-2826a37a4562284fdacd8fa029d49509cc9bffcd.tar.gz"
+    },
+    {
+      "hash": "translate_c-0.0.0-Q_BUWhVNBwDOEcIqub4VFPJPB6D9dgwzUMHTX5KWr8Xr",
+      "url": "https://codeberg.org/vancluever/translate-c/archive/4e879eb8aba615de112eabd1231ea6e01920cead.tar.gz"
+    },
+    {
+      "hash": "aro-0.0.0-JSD1Qk6lNgDdcDV4Vh7Sfy-34m2TluIVOdPzMmj_0BjX",
+      "url": "https://github.com/vancluever/arocc/archive/f97cdfc3779aec4b242299e2fc9a1c828c3547c6.tar.gz"
+    },
+    {
+      "hash": "N-V-__8AAEFmBABuDGOKxAI6VMg41b9euMZ-z7HS9EcUdaor",
+      "url": "https://deps.files.ghostty.org/ghostty-themes-release-20260831-151010-752a9c0.tgz"
+    },
+    {
+      "hash": "N-V-__8AAGmZhABbsPJLfbqrh6JTHsXhY6qCaLAQyx25e0XE",
+      "url": "https://deps.files.ghostty.org/highway-66486a10623fa0d72fe91260f96c892e41aceb06.tar.gz"
+    },
+    {
+      "hash": "N-V-__8AAP5JWgCGP_AD0teWpa4krRvE9VPZzvviGdbmN4jI",
+      "url": "https://deps.files.ghostty.org/wuffs-7411f488fe2e2c205c3d3b3d28638b7356522930.tar.gz"
+    },
+    {
+      "hash": "N-V-__8AADYiAAB_80AWnH1AxXC0tql9thT-R-DYO1gBqTLc",
+      "url": "https://deps.files.ghostty.org/pixels-12207ff340169c7d40c570b4b6a97db614fe47e0d83b5801a932dcd44917424c8806.tar.gz"
+    },
+    {
+      "hash": "N-V-__8AAB0eQwD-0MdOEBmz7intriBReIsIDNlukNVoNu6o",
+      "url": "https://deps.files.ghostty.org/zlib-1220fed0c74e1019b3ee29edae2051788b080cd96e90d56836eea857b0b966742efb.tar.gz"
+    }
+  ]
+}

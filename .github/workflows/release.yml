@@ -67,6 +67,12 @@ jobs:
         with:
           set: workspace
           save: false
+      # The workspace tests build hide-vt, so this job prepares its Zig inputs
+      # too; the app it releases carries none of them (docs/BUILD.md, "The
+      # terminal parser and Zig").
+      - uses: ./.github/actions/vt-cache
+        with:
+          save: false
       - name: Test the workspace
         run: bash scripts/verify-cargo.sh test
       - name: Typecheck, lint, unit test and build the web shell and the desktop app

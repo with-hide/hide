@@ -1,0 +1,133 @@
+# The terminal parser, hide-vt, on every system it is built for.
+#
+# hide-vt links libghostty-vt, which Zig builds from inputs
+# `scripts/prepare-vt-inputs.py` downloads and checks against
+# `hide-vt/build-inputs.json`. Each leg prepares those inputs, builds the crate
+# from empty Zig caches and again from kept ones, measuring both, runs its
+# tests and Clippy, builds it with the network denied (macOS and Linux), and
+# shows that a missing Zig, another Zig version and a download of other bytes
+# each stop the build with its reason. docs/BUILD.md, "The terminal parser and
+# Zig", owns the reasons; `pr.yml` runs this lane for a change to hide-vt or
+# its scripts, and every full plan runs it, which is how main's entries in the
+# vt cache are saved.
+name: vt
+
+on:
+  workflow_call:
+    inputs:
+      systems:
+        description: The systems to run, as a JSON array of `linux`, `macos` and `windows`.
+        type: string
+        required: true
+    # The development issues App's key (docs/TESTING.md, Flaky tests). A run
+    # without it, such as a fork's, files no issue and passes as before.
+    secrets:
+      HIDE_ISSUES_APP_KEY:
+        required: false
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: vt (${{ matrix.system }})
+    runs-on: ${{ fromJSON('{"linux":"ubuntu-latest","macos":"macos-15","windows":"windows-latest"}')[matrix.system] }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        system: ${{ fromJSON(inputs.systems) }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Keep line endings as committed
+        run: git config --global core.autocrlf false
+      - uses: actions/checkout@v7
+      # This lane is each system's one saver of the vt entries.
+      - uses: ./.github/actions/vt-cache
+        with:
+          save: ${{ github.ref == 'refs/heads/main' }}
+      - name: Prepare the build inputs
+        # A download only when the restored entry is missing.
+        timeout-minutes: 10
+        run: python3 scripts/measure-build.py prepare -- python3 scripts/prepare-vt-inputs.py | tail -n 1 | tee -a "$RUNNER_TEMP/vt-measure.jsonl"
+      - name: Build hide-vt from empty Zig caches
+        timeout-minutes: 15
+        run: |
+          cold="$RUNNER_TEMP/vt-zig-cold"
+          HIDE_VT_ZIG_CACHE="$cold" python3 scripts/measure-build.py first-build -- bash scripts/verify-cargo.sh build -p hide-vt | tail -n 1 | tee -a "$RUNNER_TEMP/vt-measure.jsonl"
+          echo "{\"measure\": \"zig-cache-mib\", \"value\": $(du -sm "$cold" | cut -f1)}" | tee -a "$RUNNER_TEMP/vt-measure.jsonl"
+          rm -rf "$cold"
+      - name: Build hide-vt from the kept Zig caches
+        # The first build fills the kept caches when the restore missed; the
+        # build script's change makes the second one run Zig again on them.
+        timeout-minutes: 15
+        run: |
+          bash scripts/verify-cargo.sh build -p hide-vt
+          touch hide-vt/build.rs
+          python3 scripts/measure-build.py cached-build -- bash scripts/verify-cargo.sh build -p hide-vt | tail -n 1 | tee -a "$RUNNER_TEMP/vt-measure.jsonl"
+          echo "{\"measure\": \"inputs-mib\", \"value\": $(du -sm "$HIDE_BUILD_CACHE/vt" | cut -f1)}" | tee -a "$RUNNER_TEMP/vt-measure.jsonl"
+          echo "{\"measure\": \"kept-zig-cache-mib\", \"value\": $(du -sm "$HIDE_VT_ZIG_CACHE" | cut -f1)}" | tee -a "$RUNNER_TEMP/vt-measure.jsonl"
+      - name: Install cargo-nextest
+        timeout-minutes: 3
+        run: bash scripts/install-nextest.sh
+      - name: hide-vt's tests and Clippy
+        timeout-minutes: 10
+        run: |
+          bash scripts/verify-cargo.sh nextest --profile ci -p hide-vt
+          bash scripts/verify-cargo.sh clippy -p hide-vt --all-targets -- -D warnings
+      - name: Build with the network denied
+        # The build runs Zig with package fetching off, so a reachable network
+        # proves nothing: each wrapper first shows that it denies the network,
+        # then the build must still pass from the prepared inputs alone.
+        if: matrix.system != 'windows'
+        timeout-minutes: 15
+        run: |
+          case "${{ matrix.system }}" in
+            linux)
+              # The image restricts unprivileged user namespaces through AppArmor.
+              sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+              offline=(unshare --net --map-current-user)
+              ;;
+            macos) offline=(sandbox-exec -p '(version 1)(allow default)(deny network*)') ;;
+          esac
+          if "${offline[@]}" curl -sS --max-time 10 -o /dev/null https://ziglang.org/; then
+            echo 'the network was reachable inside the wrapper' >&2
+            exit 1
+          fi
+          touch hide-vt/build.rs
+          "${offline[@]}" bash scripts/verify-cargo.sh build -p hide-vt
+      - name: A wrong input stops the build with its reason
+        timeout-minutes: 15
+        run: bash scripts/check-vt-build-refusals.sh
+      - name: Record the measurements
+        if: ${{ !cancelled() }}
+        run: |
+          {
+            echo '### hide-vt build (${{ matrix.system }})'
+            echo '```'
+            cat "$RUNNER_TEMP/vt-measure.jsonl" 2>/dev/null || echo 'no measurement'
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+          cat "$RUNNER_TEMP/vt-measure.jsonl" 2>/dev/null || true
+      - name: Mint the development issues token
+        # Development issues live in with-hide/hide-private (docs/TESTING.md,
+        # Flaky tests); one App token reads this run here and files there.
+        id: issues-token
+        if: ${{ !cancelled() }}
+        continue-on-error: true
+        timeout-minutes: 2
+        uses: actions/create-github-app-token@v3
+        with:
+          client-id: ${{ vars.HIDE_ISSUES_APP_CLIENT_ID }}
+          private-key: ${{ secrets.HIDE_ISSUES_APP_KEY }}
+          owner: with-hide
+          repositories: hide,hide-private
+      - name: Report flaky and failed tests
+        if: ${{ !cancelled() }}
+        continue-on-error: true
+        timeout-minutes: 5
+        env:
+          GH_TOKEN: ${{ steps.issues-token.outputs.token }}
+        run: python3 scripts/ci-flaky-report.py --suite rust --junit target/nextest/ci/junit*.xml

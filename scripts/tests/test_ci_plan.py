@@ -16,16 +16,16 @@ CRATES = ci.cargo_crates(ROOT)
 EVERY_PACKAGE = sorted(crate["name"] for crate in CRATES.values())
 # The lanes that take a macOS runner; every other check on macOS is a job of
 # `nightly.yml`.
-MACOS_LANES = {"os-contract-macos", "desktop-e2e", "package", "omp-contract"}
+MACOS_LANES = {"os-contract-macos", "vt", "desktop-e2e", "package", "omp-contract"}
 # What a push, the nightly and an unclassified path plan: every lane but
 # `package` and `agent-clis`, which are planned by their own paths only.
 FULL = [
-    "policy", "rust", "checks", "os-contract", "os-contract-macos", "agy-contract", "omp-contract", "agent-journey",
+    "policy", "rust", "checks", "os-contract", "os-contract-macos", "vt", "agy-contract", "omp-contract", "agent-journey",
     "windows-check", "windows-e2e", "windows-desktop", "windows-wsl", "web-e2e", "remote-mailbox", "desktop-e2e",
 ]
 # Every lane, independently named: CI edits must exercise the planner's decisions.
 ALL = [
-    "policy", "rust", "checks", "os-contract", "os-contract-macos", "agy-contract", "omp-contract", "agent-journey",
+    "policy", "rust", "checks", "os-contract", "os-contract-macos", "vt", "agy-contract", "omp-contract", "agent-journey",
     "agent-clis", "windows-check", "windows-e2e", "windows-desktop", "windows-wsl", "web-e2e", "remote-mailbox", "desktop-e2e",
     "package",
 ]
@@ -240,11 +240,12 @@ class Selection(unittest.TestCase):
             <= set(result["lanes"])
         )
         self.assertNotIn("desktop-e2e", result["lanes"])
-        # The data-only adapter and the text-only shell reader are independent, and
-        # workspace-hack depends on no member; every other crate consumes the platform layer.
+        # The data-only adapter, the text-only shell reader and the terminal
+        # parser are independent, and workspace-hack depends on no member;
+        # every other crate consumes the platform layer.
         self.assertEqual(result["rust_packages"],
                          [name for name in EVERY_PACKAGE
-                          if name not in ("hide-agent-adapter", "hide-shell", "workspace-hack")])
+                          if name not in ("hide-agent-adapter", "hide-shell", "hide-vt", "workspace-hack")])
         self.assertFalse(result["full"])
 
     def test_an_adapter_change_tests_its_real_consumers_and_compiles_on_windows(self):
@@ -801,7 +802,7 @@ def runner_jobs(block):
     if "uses: ./.github/workflows/desktop-e2e.yml" in block:
         # Each shard builds in place.
         return int(re.search(r"\n      shards: (\d+)", block).group(1))
-    if any(f"uses: ./.github/workflows/{name}.yml" in block for name in ("os-contract", "agy-contract", "omp-contract", "agent-clis")):
+    if any(f"uses: ./.github/workflows/{name}.yml" in block for name in ("os-contract", "vt", "agy-contract", "omp-contract", "agent-clis")):
         return len(json.loads(re.search(r"systems: '(\[[^']*\])'", block).group(1)))
     if "uses: ./.github/workflows/wsl-device.yml" in block:
         # Windows cannot build the Linux programs the distribution runs.
@@ -923,8 +924,9 @@ class Workflows(unittest.TestCase):
         # does not serialize the daemon and shell builds. The refreshed
         # twenty-run median requires six web shards. The WSL device lane's
         # Linux build and Windows run add two, planned only for the crates the
-        # WSL link crosses.
-        self.assertLessEqual(most, 35, "a run starts more jobs than the suites and native SDK contracts need")
+        # WSL link crosses. The vt lane's three legs, planned only for a change
+        # to hide-vt's build, add three.
+        self.assertLessEqual(most, 38, "a run starts more jobs than the suites and native SDK contracts need")
         testing = (ROOT / "docs/TESTING.md").read_text()
         self.assertIn(f"starts at most {most} jobs", testing)
 
