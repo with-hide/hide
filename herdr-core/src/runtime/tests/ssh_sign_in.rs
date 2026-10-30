@@ -521,6 +521,25 @@ fn a_changed_server_key_stays_the_rows_reason_until_an_attempt_ends_otherwise() 
     assert_eq!(reason(&shared.lock().unwrap()), changed);
 }
 
+/// A Hide an app update replaced cannot start ssh until it is opened
+/// again (macOS): the row says so, and nothing tries again by itself, as it
+/// does for a server that did not answer.
+#[test]
+fn a_hide_an_update_replaced_waits_to_be_opened_again() {
+    for (problem, shown, retried) in [
+        (SshProblem::HideUpdated, "hide_updated", false),
+        (SshProblem::Unreachable, "cannot_connect", true),
+    ] {
+        let (shared, asked) = ssh_runtime();
+        *asked.fails_with.lock().unwrap() = Some(problem);
+        shared.lock().unwrap().connect_registered_devices();
+        settled(&shared);
+        let runtime = shared.lock().unwrap();
+        assert_eq!(row(&runtime).problem.as_deref(), Some(shown));
+        assert_eq!(!no_retry_waits(&runtime), retried, "{problem:?}");
+    }
+}
+
 /// B26: a run leaves the device's slot as nothing of it runs any more, and
 /// a device's slot with it, so attempts of removed devices are not kept
 /// until the core stops.
@@ -678,6 +697,12 @@ fn hide_device_reads_a_failure_as_the_rows_action() {
             SshProblem::HostKeyChanged,
             "check_host_key",
             "ssh mini",
+            None,
+        ),
+        (
+            SshProblem::HideUpdated,
+            "reopen_hide",
+            "quit Hide and open it again",
             None,
         ),
         (

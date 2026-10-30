@@ -7,7 +7,7 @@ import { useInterfaceTranslation } from "../i18n/client";
 import { cn } from "../lib/utils";
 import { moveMachines } from "../screenMachine";
 import { useShellStore } from "../store";
-import { deviceProblemLine, retrySignsIn } from "../settings";
+import { deviceProblemLine, retryCanHelp, retrySignsIn } from "../settings";
 import type { DeviceProblem } from "../snapshot";
 import { FixCommand } from "./FixCommand";
 import { SignInPrompt } from "./SignInPrompt";
@@ -252,8 +252,9 @@ export function CoreMoveDialog({ request, asked: first, giveUp = false, actions,
             <>
               <Button variant="secondary" onClick={onClose}>{t("common.close")}</Button>
               {/* A sign-in's check again reads Sign in, as the device row's Retry does: the checks may ask. A changed
-                  server key offers none: it is checked in a terminal, and a check again would meet the same key. */}
-              {view?.ssh_problem === "host_key_changed" ? null : (
+                  server key offers none: it is checked in a terminal, and a check again would meet the same key; nor
+                  does a Hide an update replaced, which checks again only once it is opened again. */}
+              {!retryCanHelp(view?.ssh_problem) ? null : (
                 <Button data-core-move-recheck="true" onClick={() => ask(request, false)}>{retrySignsIn(view?.ssh_problem) ? t("devices.signIn.start") : t("coreMove.recheck")}</Button>
               )}
             </>

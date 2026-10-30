@@ -272,9 +272,20 @@ export function deviceProblemLine(problem: DeviceProblem | null | undefined, ali
       return { headline: t("devices.problem.cannotConnect"), note: t("devices.problem.opensshOld"), command: null };
     case "unsupported":
       return { headline: t("devices.problem.cannotConnect"), note: t("devices.problem.unsupported"), command: null };
+    case "hide_updated":
+      return { headline: t("devices.problem.cannotConnect"), note: t("devices.problem.hideUpdated"), command: null };
     default:
       return null;
   }
+}
+
+/**
+ * Whether trying the connection again from this Hide can help: a changed
+ * server key is checked in a terminal, and a Hide an update replaced
+ * connects only once it is opened again.
+ */
+export function retryCanHelp(problem: DeviceProblem | null | undefined): boolean {
+  return problem !== "host_key_changed" && problem !== "hide_updated";
 }
 
 /** Whether the row's Retry starts a sign-in, which it then reads as (B8, B14). */
@@ -459,7 +470,7 @@ export function socketProblem(path: string, t: Translate): string | null {
  * the terminal check as its one action: a retry before it is refused again.
  */
 export function canRetryDevice(device: Device, remote: RemoteStatus | undefined): boolean {
-  return device.kind === "remote" && device.state !== "ready" && device.sign_in == null && device.problem !== "host_key_changed" && deviceState(device, remote).tone !== "pending";
+  return device.kind === "remote" && device.state !== "ready" && device.sign_in == null && retryCanHelp(device.problem) && deviceState(device, remote).tone !== "pending";
 }
 
 /**

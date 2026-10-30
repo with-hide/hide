@@ -11,6 +11,7 @@ import {
   deviceIdFor,
   deviceAwayLine as deviceAwayLineIn,
   deviceProblemLine as deviceProblemLineIn,
+  retryCanHelp,
   retrySignsIn,
   deviceRemovalLines as deviceRemovalLinesIn,
   deviceLine as deviceLineIn,
@@ -89,6 +90,17 @@ describe("where settings live and what a device reported", () => {
     expect(deviceProblemLine("cannot_connect", "studio")).toEqual({ headline: "Couldn't connect", note: null, command: null });
     expect(deviceProblemLine("openssh_old", "studio")?.note).toContain("8.4");
     expect(deviceProblemLine(null, "studio")).toBeNull();
+  });
+
+  it("says a Hide an update replaced connects once it is opened again, and offers no retry from it", () => {
+    expect(deviceProblemLine("hide_updated", "studio")).toEqual({
+      headline: "Couldn't connect",
+      note: "Hide was updated after it started. Quit Hide and open it again to connect.",
+      command: null,
+    });
+    expect(retryCanHelp("hide_updated")).toBe(false);
+    expect(retryCanHelp("host_key_changed")).toBe(false);
+    expect(retryCanHelp("cannot_connect")).toBe(true);
   });
 
   it("says how to install ssh on the system the core runs on (B20)", () => {

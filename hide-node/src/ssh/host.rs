@@ -1967,26 +1967,49 @@ impl ChildEnding {
                     }
                 }
                 let killed = status.is_none();
-                if killed {
-                    let _ = child.kill_tree();
-                    status = child.wait().ok();
-                }
+                // A tied child's status comes only with its whole tree
+                // confirmed gone; an error here is an end nothing confirmed.
+                let ended = if killed {
+                    child.kill_tree().and_then(|_| child.wait()).map(Some)
+                } else {
+                    Ok(status)
+                };
                 if input_open {
                     close_unless_writing(&input);
                 }
-                crate::diagnostic!(json!({
-                    "component": "remote_host",
-                    "kind": "host.child_ended",
-                    "target": target,
-                    "pid": pid,
-                    "code": status.and_then(|status| status.code()),
-                    "killed": killed,
-                    "write_deadline_passed": late,
-                    "after_ms": since.elapsed().as_millis() as u64,
-                }));
-                // The attempt this child was started for has nothing of it
-                // left running only now.
-                drop(held);
+                match ended {
+                    Ok(status) => {
+                        crate::diagnostic!(json!({
+                            "component": "remote_host",
+                            "kind": "host.child_ended",
+                            "target": target,
+                            "pid": pid,
+                            "code": status.and_then(|status| status.code()),
+                            "killed": killed,
+                            "write_deadline_passed": late,
+                            "after_ms": since.elapsed().as_millis() as u64,
+                        }));
+                        // The attempt this child was started for has
+                        // nothing of it left running only now.
+                        drop(held);
+                    }
+                    Err(error) => {
+                        crate::diagnostic!(json!({
+                            "component": "remote_host",
+                            "kind": "host.child_end_unconfirmed",
+                            "target": target,
+                            "pid": pid,
+                            "killed": killed,
+                            "error": error.to_string(),
+                            "after_ms": since.elapsed().as_millis() as u64,
+                        }));
+                        // Something of the child's tree may still run, so
+                        // its attempt never counts as ended.
+                        if let Some(held) = held {
+                            held.outlived();
+                        }
+                    }
+                }
             })?;
         Ok(Self {
             told: Some(Arc::new(told)),

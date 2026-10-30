@@ -1346,7 +1346,8 @@ pub struct DeviceHostSnapshot {
 
 /// Why a device's ssh did not connect, as its row draws it: one of three
 /// states by what the operator does ([`SshProblem::action`]), sign in, check
-/// the server key in a terminal, or retry. A retry over ssh's last line is
+/// the server key in a terminal, or retry, and a fourth for a Hide an app
+/// update replaced, which only Hide opened again can connect from. A retry over ssh's last line is
 /// `cannot_connect`; the three retries ssh has no line for carry their own
 /// value, which the row words in the operator's language. The finer
 /// [`SshProblem`] stays in the diagnostic log (PRD system-ssh-device-link
@@ -1363,6 +1364,7 @@ pub enum DeviceProblem {
     SshMissing,
     OpenSshOld,
     Unsupported,
+    HideUpdated,
 }
 
 impl DeviceProblem {
@@ -1372,6 +1374,7 @@ impl DeviceProblem {
             (FailureAction::SignIn, SshProblem::SignInRefused) => Self::SignInRefused,
             (FailureAction::SignIn, _) => Self::SignInNeeded,
             (FailureAction::CheckHostKey, _) => Self::HostKeyChanged,
+            (FailureAction::ReopenHide, _) => Self::HideUpdated,
             (FailureAction::Retry, SshProblem::SshMissing) => Self::SshMissing,
             (FailureAction::Retry, SshProblem::OpenSshOld) => Self::OpenSshOld,
             (FailureAction::Retry, SshProblem::Unsupported) => Self::Unsupported,
@@ -1388,6 +1391,7 @@ impl DeviceProblem {
             Self::SshMissing => "ssh_missing",
             Self::OpenSshOld => "openssh_old",
             Self::Unsupported => "unsupported",
+            Self::HideUpdated => "hide_updated",
         }
     }
 }
@@ -9494,6 +9498,7 @@ mod wire_enum_tests {
             DeviceProblem::SshMissing,
             DeviceProblem::OpenSshOld,
             DeviceProblem::Unsupported,
+            DeviceProblem::HideUpdated,
         ];
         for variant in problems {
             match variant {
@@ -9503,7 +9508,8 @@ mod wire_enum_tests {
                 | DeviceProblem::CannotConnect
                 | DeviceProblem::SshMissing
                 | DeviceProblem::OpenSshOld
-                | DeviceProblem::Unsupported => {}
+                | DeviceProblem::Unsupported
+                | DeviceProblem::HideUpdated => {}
             }
         }
         assert_wire(
@@ -9576,5 +9582,6 @@ mod wire_enum_tests {
         assert_eq!(row(SshProblem::SshMissing), "ssh_missing");
         assert_eq!(row(SshProblem::OpenSshOld), "openssh_old");
         assert_eq!(row(SshProblem::Unsupported), "unsupported");
+        assert_eq!(row(SshProblem::HideUpdated), "hide_updated");
     }
 }

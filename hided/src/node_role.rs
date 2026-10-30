@@ -163,7 +163,8 @@ pub enum LinkFailure {
     /// `ssh` failed on what only the operator can change (an
     /// [`SshProblem`](hide_node_link::device::SshProblem) Hide does not
     /// retry): a sign-in it could not ask, a refused sign-in or access
-    /// policy, a changed server key, or this computer's `ssh`. Nothing
+    /// policy, a changed server key, this computer's `ssh`, or a Hide an
+    /// update replaced on disk. Nothing
     /// dials again until a window connects ([`NodeRole::connect_again`]),
     /// so no background attempt repeats it at the server.
     Operator(SshFailure),
@@ -1562,6 +1563,7 @@ mod tests {
             SshProblem::PolicyRefused,
             SshProblem::SshMissing,
             SshProblem::OpenSshOld,
+            SshProblem::HideUpdated,
         ] {
             let reason = attach_failure(SessionError::Ssh(SshFailure {
                 problem,

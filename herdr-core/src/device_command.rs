@@ -262,6 +262,7 @@ fn connection(
         FailureAction::CheckHostKey => format!(
             "Ask the operator to run ssh {alias} in a terminal and check why the server's key changed, then run hide device retry {id}"
         ),
+        FailureAction::ReopenHide => "Ask the operator to quit Hide and open it again: an update replaced this Hide, and no retry of it can start ssh".to_owned(),
         FailureAction::Retry => format!(
             "Fix what detail names, or ask the operator to, then run hide device retry {id}"
         ),
@@ -277,7 +278,9 @@ fn connection(
             // account and server, and their action says all there is to do.
             "detail": match action {
                 FailureAction::Retry => device.message.as_deref(),
-                FailureAction::SignIn | FailureAction::CheckHostKey => None,
+                FailureAction::SignIn
+                | FailureAction::CheckHostKey
+                | FailureAction::ReopenHide => None,
             },
         })),
         next_action: Some(next_action),
