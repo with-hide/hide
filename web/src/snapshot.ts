@@ -685,7 +685,8 @@ export type PrFeedback = {
 };
 
 /** The Overview's pull-request work in flight (`PrWorkSnapshot`), one slot each. */
-export type PrWork = { link: PrLink | null; feedback: PrFeedback | null; cards?: PrCard[]; branch_diff?: BranchDiff | null };
+/** `branch_diffs`: the Hide AI branch files read now, the 보기 slot's and the open 제안 row's, at most two. */
+export type PrWork = { link: PrLink | null; feedback: PrFeedback | null; cards?: PrCard[]; branch_diffs?: BranchDiff[] };
 
 /** One file's committed diff on a Hide AI branch against its base, read on the Project's machine (PRD hide-ai-branch-first-apply B4). */
 export type BranchDiff = { workspace_id: string; row: string; path: string; reading: boolean; failed: boolean; text: string | null; notice: DiffNotice | null };
@@ -2482,6 +2483,10 @@ export type SuggestionLocal = {
   failure: SuggestionLocalFailure | null;
 };
 
+export type SuggestionPlan = { title: string; path: string; new_file: boolean; draft: string };
+
+export type SuggestionMemory = { body: string | null; human_sessions: number; pulled_sessions: number };
+
 /** One row of the 제안 tab, in the core's drawing order; `id` (`s12`, `m72`) names it in every `suggestion_action`. */
 export type SuggestionRow = {
   id: string;
@@ -2493,8 +2498,12 @@ export type SuggestionRow = {
   discomfort: string | null;
   /** 놓친 것, one sentence. */
   cause: string | null;
-  /** 고칠 것. */
+  /** 고칠 것 in one text: an issue's, and a document fix written before fixes carried a plan. */
   fix: string | null;
+  /** A document fix as the row shows it before the press: the result, the file (a new one when the repository has none) and the words it writes. Absent on older daemons. */
+  plan?: SuggestionPlan | null;
+  /** A Memory card offered for the documents: its text and how much the operator leaned on it. Absent on older daemons. */
+  memory?: SuggestionMemory | null;
   outcome: SuggestionOutcome;
   basis: SuggestionBasis | null;
   /** Hide applied it by itself (`자동`, D-29). */
@@ -2511,8 +2520,8 @@ export type SuggestionRow = {
     started_at_unix_ms: number;
     pr_number: number | null;
     url: string | null;
-    /** The applying agent's registration id while it lives. */
-    agent_id: string | null;
+    /** The applying agent's pane while it lives, as the agent lists name it. Absent on older daemons. */
+    agent_pane?: string | null;
     /** Why a failed attempt failed, as a code; on a ready branch, why the last merge did not happen. */
     failure: string | null;
     /** The branch while it waits for the operator's decision. Absent on older daemons. */

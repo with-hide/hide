@@ -5,7 +5,7 @@
 //! tab never move for it (B25).
 
 use super::*;
-use crate::model::BranchDiffSnapshot;
+use crate::model::{BranchDiffSnapshot, DetailItem};
 use hide_node_link::git::{Diff, DiffNotice};
 use hide_node_link::protocol::Call;
 use serde_json::json;
@@ -22,14 +22,78 @@ struct DiffPlace {
     tip: Option<String>,
 }
 
+/// A file of a row's branch: the Project, the row and the path.
+pub(super) type BranchFile = (String, String, String);
+
+/// The most branch diffs held at once: the 보기 slot's file and the open
+/// 제안 row's.
+const BRANCH_DIFFS: usize = 2;
+
+fn shows(diff: &BranchDiffSnapshot, target: &BranchFile) -> bool {
+    diff.workspace_id == target.0 && diff.row == target.1 && diff.path == target.2
+}
+
 impl Runtime {
-    /// Starts the read of `path` on the branch of row `row`, or forgets the
-    /// diff when the slot shows no branch file.
-    pub(super) fn read_branch_diff(&mut self, target: Option<(String, String, String)>) {
-        let Some((workspace_id, row, path)) = target else {
-            self.snapshot.pr_work.branch_diff = None;
-            return;
-        };
+    /// The files whose diffs are wanted now: the one the 보기 slot shows and
+    /// the one the open 제안 row unfolded.
+    fn wanted_branch_diffs(&self) -> Vec<BranchFile> {
+        let mut wanted = Vec::with_capacity(BRANCH_DIFFS);
+        if let Some(DetailItem::Branch {
+            workspace_id,
+            row,
+            path: Some(path),
+        }) = self.snapshot.ui_state.detail.top()
+        {
+            wanted.push((workspace_id.clone(), row.clone(), path.clone()));
+        }
+        if let Some(target) = &self.suggestions_work.row_file
+            && !wanted.contains(target)
+        {
+            wanted.push(target.clone());
+        }
+        wanted
+    }
+
+    /// Keeps the diffs wanted now, forgets the others and starts the read of
+    /// one not held yet, or of `again` once more.
+    pub(super) fn sync_branch_diffs(&mut self, again: Option<&BranchFile>) {
+        let wanted = self.wanted_branch_diffs();
+        self.snapshot
+            .pr_work
+            .branch_diffs
+            .retain(|diff| wanted.iter().any(|target| shows(diff, target)));
+        for target in wanted {
+            let held = self
+                .snapshot
+                .pr_work
+                .branch_diffs
+                .iter()
+                .any(|diff| shows(diff, &target));
+            if !held || again == Some(&target) {
+                self.read_branch_diff(target);
+            }
+        }
+    }
+
+    /// The open 제안 row's file whose diff it unfolds, or none (PRD
+    /// hide-ai-branch-first-apply B4: the diff the 보기 slot reads, read here
+    /// for the row too).
+    pub(super) fn show_row_branch_file(&mut self, payload: RowBranchFilePayload) -> bool {
+        let target = payload
+            .path
+            .map(|path| (payload.workspace_id, payload.row, path));
+        if self.suggestions_work.row_file == target {
+            return false;
+        }
+        self.suggestions_work.row_file = target;
+        self.sync_branch_diffs(None);
+        true
+    }
+
+    /// Starts the read of `path` on the branch of row `row`; what it held
+    /// for that file before is replaced.
+    fn read_branch_diff(&mut self, target: BranchFile) {
+        let (workspace_id, row, path) = target.clone();
         let mut shown = BranchDiffSnapshot {
             workspace_id: workspace_id.clone(),
             row: row.clone(),
@@ -37,49 +101,55 @@ impl Runtime {
             reading: true,
             ..BranchDiffSnapshot::default()
         };
-        let Some(place) = self.branch_diff_place(&workspace_id, &row, &path) else {
-            log(&workspace_id, &row, "no_branch");
-            shown.reading = false;
-            shown.failed = true;
-            self.snapshot.pr_work.branch_diff = Some(shown);
-            return;
-        };
+        let place = self.branch_diff_place(&workspace_id, &row, &path);
         // Stamped before any answer, so a failed read is not read again
         // until the branch moves (`follow_branch_diff`).
-        shown.tip = place.tip.clone();
-        let link = match self.node_link(&place.node) {
-            Ok(link) => link,
-            Err(_) => {
-                log(&workspace_id, &row, "node_unavailable");
-                shown.reading = false;
-                shown.failed = true;
-                self.snapshot.pr_work.branch_diff = Some(shown);
-                return;
+        shown.tip = place.as_ref().and_then(|place| place.tip.clone());
+        let link = match &place {
+            None => {
+                log(&workspace_id, &row, "no_branch");
+                None
             }
+            Some(place) => match self.node_link(&place.node) {
+                Ok(link) => Some(link),
+                Err(_) => {
+                    log(&workspace_id, &row, "node_unavailable");
+                    None
+                }
+            },
+        };
+        if link.is_none() {
+            shown.reading = false;
+            shown.failed = true;
+        }
+        let diffs = &mut self.snapshot.pr_work.branch_diffs;
+        diffs.retain(|diff| !shows(diff, &target));
+        diffs.push(shown);
+        let (Some(place), Some(link)) = (place, link) else {
+            return;
         };
         let tip = place.tip.clone();
-        self.snapshot.pr_work.branch_diff = Some(shown);
         let call = Call::BranchDiff {
             root: place.root,
             branch: place.branch,
             base: place.base,
-            path: path.clone(),
+            path,
         };
+        let asked = target.clone();
         let started = self.spawn_issue_worker(
             "branch-diff",
             move || crate::node_access::call_as::<Diff>(link.as_ref(), call, READ_TIMEOUT),
             move |runtime, answer| {
-                let Some(shown) = runtime.snapshot.pr_work.branch_diff.as_mut() else {
+                // The diff left, or the branch moved, while the read ran.
+                let Some(shown) = runtime
+                    .snapshot
+                    .pr_work
+                    .branch_diffs
+                    .iter_mut()
+                    .find(|diff| shows(diff, &asked) && diff.tip == tip)
+                else {
                     return false;
                 };
-                // The slot moved on, or the branch did, while the read ran.
-                if shown.workspace_id != workspace_id
-                    || shown.row != row
-                    || shown.path != path
-                    || shown.tip != tip
-                {
-                    return false;
-                }
                 shown.reading = false;
                 match answer {
                     Ok(diff) => {
@@ -90,7 +160,7 @@ impl Runtime {
                         shown.text = Some(diff.text);
                     }
                     Err(_) => {
-                        log(&workspace_id, &row, "read_failed");
+                        log(&asked.0, &asked.1, "read_failed");
                         shown.failed = true;
                     }
                 }
@@ -98,30 +168,35 @@ impl Runtime {
             },
         );
         if started.is_err()
-            && let Some(shown) = self.snapshot.pr_work.branch_diff.as_mut()
+            && let Some(shown) = self
+                .snapshot
+                .pr_work
+                .branch_diffs
+                .iter_mut()
+                .find(|diff| shows(diff, &target))
         {
             shown.reading = false;
             shown.failed = true;
         }
     }
 
-    /// Reads the open file again when its row's branch moved since it was
-    /// read: an agent that committed after the card opened must not leave
-    /// the operator looking at the older diff.
+    /// Reads an open file again when its row's branch moved since it was
+    /// read: an agent that committed after the diff opened must not leave
+    /// the operator looking at the older one.
     pub(super) fn follow_branch_diff(&mut self) {
-        let Some(shown) = self.snapshot.pr_work.branch_diff.as_ref() else {
-            return;
-        };
-        let target = (
-            shown.workspace_id.clone(),
-            shown.row.clone(),
-            shown.path.clone(),
-        );
-        let Some(place) = self.branch_diff_place(&target.0, &target.1, &target.2) else {
-            return;
-        };
-        if place.tip != shown.tip {
-            self.read_branch_diff(Some(target));
+        let moved = self
+            .snapshot
+            .pr_work
+            .branch_diffs
+            .iter()
+            .filter_map(|diff| {
+                let target = (diff.workspace_id.clone(), diff.row.clone(), diff.path.clone());
+                let place = self.branch_diff_place(&target.0, &target.1, &target.2)?;
+                (place.tip != diff.tip).then_some(target)
+            })
+            .collect::<Vec<_>>();
+        for target in moved {
+            self.read_branch_diff(target);
         }
     }
 
@@ -155,6 +230,15 @@ impl Runtime {
             tip: branch.tip.clone(),
         })
     }
+}
+
+/// `suggestion_branch_file`: the file the open 제안 row unfolds, or none.
+#[derive(Debug, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(super) struct RowBranchFilePayload {
+    workspace_id: String,
+    row: String,
+    path: Option<String>,
 }
 
 /// Ids and a code only: never the path, the branch or the text (B27).

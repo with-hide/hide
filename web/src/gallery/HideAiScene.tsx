@@ -68,21 +68,21 @@ const IMPROVEMENT_ROW: SuggestionRow = row("s18", {
 const APPLYING_ROWS: SuggestionRow[] = [
   row("s9", {
     group: "applying", state: "hide_ai_working", discomfort: "에이전트가 같은 파일을 두 번 고쳐요", cause: "작업 트리를 나누라는 말이 없어요",
-    attempt: { phase: "working", started_at_unix_ms: Date.now() - 4 * MINUTE, pr_number: null, url: null, agent_id: "hide-ai-s9", failure: null },
+    attempt: { phase: "working", started_at_unix_ms: Date.now() - 4 * MINUTE, pr_number: null, url: null, agent_pane: "hide-ai-s9", failure: null },
   }),
   row("s7", {
     group: "applying", state: "my_turn", discomfort: "리뷰 요청이 늦게 와요", cause: "PR을 열면 운영자에게 알리라는 말이 없어요", auto: true,
-    attempt: { phase: "pr_open", started_at_unix_ms: Date.now() - 50 * MINUTE, pr_number: 1712, url: "https://github.com/hide/hide/pull/1712", agent_id: null, failure: null },
+    attempt: { phase: "pr_open", started_at_unix_ms: Date.now() - 50 * MINUTE, pr_number: 1712, url: "https://github.com/hide/hide/pull/1712", agent_pane: null, failure: null },
   }),
   row("m72", {
     source: "memory", group: "applying", state: "my_turn", discomfort: "앱 교체는 운영자가 요청할 때만 한다", cause: "이 기억이 아직 문서에 없어요",
-    attempt: { phase: "ci_failed", started_at_unix_ms: Date.now() - 3 * 60 * MINUTE, pr_number: 1709, url: "https://github.com/hide/hide/pull/1709", agent_id: null, failure: null },
+    attempt: { phase: "ci_failed", started_at_unix_ms: Date.now() - 3 * 60 * MINUTE, pr_number: 1709, url: "https://github.com/hide/hide/pull/1709", agent_pane: null, failure: null },
   }),
 ];
 
 const APPLIED_ROWS: SuggestionRow[] = [
-  row("s3", { group: "applied", state: "watching", discomfort: "에이전트가 앱을 마음대로 교체해요", attempt: { phase: "merged", started_at_unix_ms: Date.now() - 2 * 1440 * MINUTE, pr_number: 1690, url: "https://github.com/hide/hide/pull/1690", agent_id: null, failure: null }, watch: { sessions_seen: 2, sessions_needed: 5 } }),
-  row("s2", { group: "applied", state: "effective", discomfort: "커밋 메시지에 도구 이름이 들어가요", attempt: { phase: "merged", started_at_unix_ms: Date.now() - 6 * 1440 * MINUTE, pr_number: 1661, url: "https://github.com/hide/hide/pull/1661", agent_id: null, failure: null } }),
+  row("s3", { group: "applied", state: "watching", discomfort: "에이전트가 앱을 마음대로 교체해요", attempt: { phase: "merged", started_at_unix_ms: Date.now() - 2 * 1440 * MINUTE, pr_number: 1690, url: "https://github.com/hide/hide/pull/1690", agent_pane: null, failure: null }, watch: { sessions_seen: 2, sessions_needed: 5 } }),
+  row("s2", { group: "applied", state: "effective", discomfort: "커밋 메시지에 도구 이름이 들어가요", attempt: { phase: "merged", started_at_unix_ms: Date.now() - 6 * 1440 * MINUTE, pr_number: 1661, url: "https://github.com/hide/hide/pull/1661", agent_pane: null, failure: null } }),
 ];
 
 const GLOBAL_PATH = "~/.hide/state/global-instruction.md";

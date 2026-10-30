@@ -5053,11 +5053,12 @@ pub struct PrWorkSnapshot {
     /// most [`PR_CARD_LIMIT`] (PRD work-tab-pr-lens D-06).
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub cards: Vec<PrCardSnapshot>,
-    /// The diff of one file of a Hide AI branch the 보기 slot's branch card
-    /// shows (PRD hide-ai-branch-first-apply B4); absent while the slot shows
-    /// no branch file.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub branch_diff: Option<BranchDiffSnapshot>,
+    /// The diffs of Hide AI branch files shown now (PRD
+    /// hide-ai-branch-first-apply B4): the one the 보기 slot's branch card
+    /// shows and the one the open 제안 row unfolds, at most two; empty while
+    /// neither shows a file.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub branch_diffs: Vec<BranchDiffSnapshot>,
 }
 
 /// One file's committed diff on a Hide AI branch against its base, read on

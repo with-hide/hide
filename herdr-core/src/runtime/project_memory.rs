@@ -2010,6 +2010,12 @@ PRAGMA user_version=16;",
             None,
         )
         .unwrap();
+        // A card offered for the documents carries its text for the 제안 row.
+        let offered = load
+            .suggestions
+            .iter()
+            .map(|suggestion| suggestion.number)
+            .collect::<Vec<_>>();
 
         let mut runtime = crate::runtime::tests::runtime();
         runtime.ingest_session(Ok(crate::runtime::tests::context_payload()));
@@ -2061,7 +2067,7 @@ PRAGMA user_version=16;",
                 .rows
                 .iter()
                 .filter(|row| row.number != 3)
-                .all(|row| row.body_preview.is_none())
+                .all(|row| row.body_preview.is_some() == offered.contains(&row.number))
         );
         assert_eq!(
             project

@@ -57,6 +57,8 @@ pub(super) struct SuggestionsWork {
     changes_requested: HashSet<String>,
     /// The open row's excerpts (PRD memory-self-improve B7).
     pub(super) evidence: super::suggestion_evidence::EvidenceWork,
+    /// The ready branch file the open row unfolds, whose diff is read.
+    pub(super) row_file: Option<super::branch_card::BranchFile>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]

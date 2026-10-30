@@ -238,10 +238,10 @@ describe("the Hide AI tool", () => {
   it("marks a row being applied by whose turn it is, and offers 다시 시도 and 넘어가기 when it failed (B11, B12, B13)", async () => {
     const started = Date.now() - 120_000;
     await render(suggestionsProject({ rows: [
-      suggestionRow("s1", { group: "applying", state: "hide_ai_working", auto: true, attempt: { phase: "working", started_at_unix_ms: started, pr_number: null, url: null, agent_id: null, failure: null } }),
-      suggestionRow("s2", { group: "applying", state: "my_turn", attempt: { phase: "pr_open", started_at_unix_ms: started, pr_number: 1711, url: "https://github.com/acme/one/pull/1711", agent_id: null, failure: null } }),
-      suggestionRow("s3", { group: "applying", state: "my_turn", attempt: { phase: "ci_failed", started_at_unix_ms: started, pr_number: 1712, url: "https://github.com/acme/one/pull/1712", agent_id: null, failure: null } }),
-      suggestionRow("s4", { group: "applying", state: "my_turn", attempt: { phase: "failed", started_at_unix_ms: started, pr_number: null, url: null, agent_id: null, failure: "agent_not_started" } }),
+      suggestionRow("s1", { group: "applying", state: "hide_ai_working", auto: true, attempt: { phase: "working", started_at_unix_ms: started, pr_number: null, url: null, agent_pane: null, failure: null } }),
+      suggestionRow("s2", { group: "applying", state: "my_turn", attempt: { phase: "pr_open", started_at_unix_ms: started, pr_number: 1711, url: "https://github.com/acme/one/pull/1711", agent_pane: null, failure: null } }),
+      suggestionRow("s3", { group: "applying", state: "my_turn", attempt: { phase: "ci_failed", started_at_unix_ms: started, pr_number: 1712, url: "https://github.com/acme/one/pull/1712", agent_pane: null, failure: null } }),
+      suggestionRow("s4", { group: "applying", state: "my_turn", attempt: { phase: "failed", started_at_unix_ms: started, pr_number: null, url: null, agent_pane: null, failure: "agent_not_started" } }),
     ] }));
     const working = q('[data-suggestion="s1"]');
     expect(working?.querySelector("[data-suggestion-mark]")?.getAttribute("data-suggestion-mark")).toBe("working");
@@ -266,7 +266,7 @@ describe("the Hide AI tool", () => {
     group: "applying" as const,
     state: "my_turn" as const,
     attempt: {
-      phase: "ready" as const, started_at_unix_ms: 1, pr_number: null, url: null, agent_id: null, failure, purpose: "branch" as const,
+      phase: "ready" as const, started_at_unix_ms: 1, pr_number: null, url: null, agent_pane: null, failure, purpose: "branch" as const,
       branch: { name: "hide-suggestion-s1-x", base: "main", checkout: "/wt", files: [{ path: "AGENTS.md", added: 4, removed: 1, binary: false }, { path: "docs/a.md", added: 2, removed: 0, binary: false }].slice(0, files), files_total: files, added: 6, removed: 1 },
     },
   });
@@ -277,8 +277,8 @@ describe("the Hide AI tool", () => {
       suggestionRow("s2", ready(null, 1)),
       suggestionRow("s3", ready("merge_dirty")),
       suggestionRow("s4", ready("merge_conflict")),
-      suggestionRow("s5", { group: "applying", state: "hide_ai_working", attempt: { phase: "working", started_at_unix_ms: Date.now(), pr_number: null, url: null, agent_id: null, failure: null, purpose: "branch" } }),
-      suggestionRow("s6", { group: "applying", state: "my_turn", attempt: { phase: "failed", started_at_unix_ms: 1, pr_number: null, url: null, agent_id: null, failure: "no_change", purpose: "branch" } }),
+      suggestionRow("s5", { group: "applying", state: "hide_ai_working", attempt: { phase: "working", started_at_unix_ms: Date.now(), pr_number: null, url: null, agent_pane: null, failure: null, purpose: "branch" } }),
+      suggestionRow("s6", { group: "applying", state: "my_turn", attempt: { phase: "failed", started_at_unix_ms: 1, pr_number: null, url: null, agent_pane: null, failure: "no_change", purpose: "branch" } }),
     ] }));
     expect(q('[data-suggestion="s1"] [data-suggestion-mark]')?.getAttribute("data-suggestion-mark")).toBe("my_turn");
     expect(q('[data-suggestion-branch="hide-suggestion-s1-x"]')?.textContent).toContain("See what changed");
@@ -329,7 +329,7 @@ describe("the Hide AI tool", () => {
   });
 
   it("words a Memory card's failed way into the documents, with its card id and the core's detail (D-02, B12)", async () => {
-    const failed = (failure: string, cause: string | null) => ({ group: "applying" as const, state: "my_turn" as const, source: "memory" as const, cause, attempt: { phase: "failed" as const, started_at_unix_ms: 1, pr_number: null, url: null, agent_id: null, failure } });
+    const failed = (failure: string, cause: string | null) => ({ group: "applying" as const, state: "my_turn" as const, source: "memory" as const, cause, attempt: { phase: "failed" as const, started_at_unix_ms: 1, pr_number: null, url: null, agent_pane: null, failure } });
     await render(suggestionsProject({ rows: [
       suggestionRow("m8", failed("shell_starting", "[oh-my-zsh] Would you like to update? [Y/n]")),
       suggestionRow("m14", failed("unbuilt", "The backlog screen is not built yet")),
@@ -427,7 +427,7 @@ describe("the Hide AI tool", () => {
   it("opens on the row a Needs You row named, in 제안 (B11)", async () => {
     await act(async () => useUiStore.getState().showHideAiTab("memory"));
     await act(async () => useUiStore.getState().showHideAiTab("suggestions", "m72"));
-    await render(suggestionsProject({ rows: [suggestionRow("s1"), suggestionRow("m72", { source: "memory", group: "applying", state: "my_turn", attempt: { phase: "pr_open", started_at_unix_ms: 1, pr_number: 924, url: "https://github.com/acme/one/pull/924", agent_id: null, failure: null } })] }));
+    await render(suggestionsProject({ rows: [suggestionRow("s1"), suggestionRow("m72", { source: "memory", group: "applying", state: "my_turn", attempt: { phase: "pr_open", started_at_unix_ms: 1, pr_number: 924, url: "https://github.com/acme/one/pull/924", agent_pane: null, failure: null } })] }));
     expect(q('[data-hide-ai-tool-tab="suggestions"]')?.getAttribute("aria-selected")).toBe("true");
     expect(q('[data-suggestion="m72"]')?.getAttribute("data-suggestion-open")).toBe("true");
     expect(q('[data-suggestion="s1"]')?.getAttribute("data-suggestion-open")).toBeNull();
@@ -481,5 +481,64 @@ describe("the Hide AI tool", () => {
     expect(q("[data-lane-header]")?.textContent).not.toContain("Codex");
     await press("[data-hide-ai-settings-open]");
     expect(q("[data-hide-ai-provider-chip]")?.textContent).toBe("Codex");
+  });
+
+  it("shows a document fix's result, why, its file and draft before the press, and names the file on the button", async () => {
+    await render(suggestionsProject({ rows: [
+      suggestionRow("s1", { discomfort: "머지할 때마다 같은 절차를 말했어요", plan: { title: "Write the merge steps down", path: "docs/CONTRIBUTING.md", new_file: true, draft: "+ Merge in merge-order's order." } }),
+      suggestionRow("s2"),
+    ] }));
+    const row = q('[data-suggestion="s1"]')!;
+    expect(row.querySelector("[title]")?.textContent).toBe("Write the merge steps down");
+    expect(row.querySelector("[data-suggestion-reason]")?.textContent).toBe("머지할 때마다 같은 절차를 말했어요");
+    expect(row.querySelector("[data-suggestion-plan]")?.textContent).toContain("docs/CONTRIBUTING.md");
+    expect(row.querySelector("[data-suggestion-plan-new]")?.textContent).toBe("New file");
+    expect(row.querySelector("[data-suggestion-draft]")?.textContent).toBe("+ Merge in merge-order's order.");
+    expect(q('[data-suggestion-apply="pr"]')?.textContent).toBe("Fix CONTRIBUTING.md");
+    // A line written before plans keeps its fix sentence and the plain button.
+    expect(q('[data-suggestion="s2"] [data-suggestion-fix]')?.textContent).toContain("fix s2");
+    expect(q('[data-suggestion="s2"] [data-suggestion-apply="pr"]')?.textContent).toBe("Fix the docs");
+  });
+
+  it("opens an offered Memory card to its text, its evidence and who picks the document", async () => {
+    await render(suggestionsProject({ rows: [
+      suggestionRow("m569", { source: "memory", discomfort: "premerge-check는 공용 잠금으로 한 번에 하나씩", cause: null, fix: null, memory: { body: "Run premerge-check under the shared lock.", human_sessions: 3, pulled_sessions: 0 } }),
+    ] }));
+    expect(q("[data-suggestion-memory-card]")?.textContent).toBe("You said it in 3 sessions");
+    expect(q("[data-suggestion-memory-body]")).toBeNull();
+    await click('[data-suggestion-toggle="m569"]');
+    expect(q("[data-suggestion-memory-body]")?.textContent).toBe("Run premerge-check under the shared lock.");
+    expect(q("[data-suggestion-memory-where]")?.textContent).toBe("The agent picks the document, and you see what changed before it merges");
+  });
+
+  it("shows the applying agent's question with the way to its session, and links the agent by its pane", async () => {
+    const asking = { id: "herdr-7", pane_id: "w1:p2", agent_kind: "claude", identity_label: "fix s1", mark: "turn", status_code: "question", group: "", state: { asking: true, working: false, line: { text: "Make the commit title English?", mode: "request" } } };
+    await render(suggestionsProject({ rows: [
+      suggestionRow("s1", { group: "applying", state: "hide_ai_working", attempt: { phase: "working", started_at_unix_ms: Date.now(), pr_number: null, url: null, agent_pane: "w1:p2", failure: null, purpose: "branch" } }),
+    ] }));
+    await act(async () => useShellStore.setState({ agents: [asking] as never }));
+    expect(q("[data-suggestion-asking]")?.textContent).toContain("The agent is asking");
+    expect(q("[data-suggestion-asking]")?.textContent).toContain("Make the commit title English?");
+    expect(q('[data-suggestion-agent="w1:p2"]')).not.toBeNull();
+    await click('[data-suggestion-answer="w1:p2"]');
+    expect(sent("focus_pane")).toEqual([expect.objectContaining({ pane_id: "w1:p2" })]);
+  });
+
+  it("unfolds a ready branch's files and the chosen file's diff inside its open row, with the evidence folded", async () => {
+    await render(suggestionsProject({ rows: [
+      suggestionRow("s1", { ...ready(null), evidence: [{ kind: "pr", signal: "check_failed", improvement: null, agent: null, session_id: null, pr_number: 12, url: "https://github.com/acme/one/pull/12", at_unix_ms: 1, gone: false }] }),
+    ] }));
+    expect(q("[data-suggestion-branch-files]")).toBeNull();
+    await click('[data-suggestion-toggle="s1"]');
+    expect(q("[data-suggestion-branch-files]")?.textContent).toContain("AGENTS.md");
+    expect(q("[data-suggestion-evidence-folded]")?.textContent).toContain("1 piece of evidence");
+    expect(q("[data-suggestion-evidence]")).toBeNull();
+    await click('[data-suggestion-branch-file="docs/a.md"]');
+    expect(sent("suggestion_branch_file").at(-1)).toEqual({ workspace_id: "p", row: "s1", path: "docs/a.md" });
+    expect(sent("suggestion_branch_file")[0]).toEqual({ workspace_id: "p", row: "s1", path: "AGENTS.md" });
+    await click('[data-suggestion-evidence-unfold="s1"]');
+    expect(q("[data-suggestion-evidence]")).not.toBeNull();
+    await click('[data-suggestion-toggle="s1"]');
+    expect(sent("suggestion_branch_file").at(-1)).toEqual({ workspace_id: "p", row: "s1", path: null });
   });
 });
