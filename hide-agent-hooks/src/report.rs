@@ -220,7 +220,10 @@ mod tests {
             started + REPORT_TIMEOUT,
         );
         assert!(
-            matches!(outcome.as_deref(), Err("cli" | "unavailable")),
+            matches!(
+                outcome.as_ref().map_err(String::as_str),
+                Err("cli" | "unavailable")
+            ),
             "{outcome:?}"
         );
         assert!(started.elapsed() < REPORT_TIMEOUT);

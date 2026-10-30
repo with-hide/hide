@@ -1275,20 +1275,22 @@ mod tests {
             let path = helper(&fixture);
             install(runtime, fixture.home(), &path).unwrap();
             let mut document = fixture.read(runtime);
-            let current = hook_matcher(runtime, HookEvent::PreToolUse).unwrap();
+            // Claude Code's entry selected eight tools before it took every
+            // tool, so an approval of any other tool cleared.
+            let current = hook_matcher(runtime, HookEvent::PreToolUse);
             let earlier = match runtime {
-                AgentRuntime::ClaudeCode => current.to_owned(),
-                AgentRuntime::Codex => "Bash|request_user_input".to_owned(),
+                AgentRuntime::ClaudeCode => {
+                    "Bash|AskUserQuestion|ExitPlanMode|Edit|Write|MultiEdit|NotebookEdit|Read"
+                }
+                AgentRuntime::Codex => "Bash|request_user_input",
             };
-            document["hooks"]["PreToolUse"][0]["matcher"] = Value::from(earlier.clone());
+            document["hooks"]["PreToolUse"][0]["matcher"] = Value::from(earlier);
             fixture.write(runtime, &serde_json::to_string_pretty(&document).unwrap());
-            let stale = earlier != current;
-            assert_eq!(
+            assert!(
                 matches!(
                     status(runtime, fixture.home()),
                     HookStatus::Outdated { version } if version == crate::runtime::HOOK_ENTRY_VERSION
                 ),
-                stale,
                 "{runtime:?}"
             );
             install(runtime, fixture.home(), &path).unwrap();
@@ -1300,7 +1302,9 @@ mod tests {
                 "{runtime:?}"
             );
             assert_eq!(
-                fixture.read(runtime)["hooks"]["PreToolUse"][0]["matcher"],
+                fixture.read(runtime)["hooks"]["PreToolUse"][0]
+                    .get("matcher")
+                    .and_then(Value::as_str),
                 current
             );
         }
