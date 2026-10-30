@@ -184,20 +184,31 @@ test("a first-compile step that does not end by its deadline is ended, with noth
 
 // What lets the first compile on Windows run without a tree owner: each of
 // its steps, counted here in a job, is one process, the compiler's exit is
-// its tree's end, and the program it links runs. The variables that would
-// have clang's driver start cc1 as a second process are set around it, as an
-// account or a CI image may set them.
+// its tree's end, and the program it links runs. What would have clang's
+// driver start cc1 as a second process is set around it, as an account or a
+// CI image may set it: the variables, and a default config file turning on
+// `-fproc-stat-report` in the folder clang searches first, which the same
+// compile without `--no-default-config` shows is read.
 test("each step of the first compile on Windows runs a single process", { timeout: 120_000 }, async (context) => {
   if (!windows) return context.skip();
   const dir = scratch();
+  const source = fileURLToPath(new URL("./shims/noop.c", import.meta.url));
+  const compile = { ...bounds, timeoutMs: 60_000, outputBytes: 1024 * 1024 };
+  const configDir = path.join(dir, "config");
+  fs.mkdirSync(configDir);
+  fs.writeFileSync(path.join(configDir, "clang.cfg"), "-fproc-stat-report\n");
+  const searched = `--config-user-dir=${configDir}`;
   const spawning = { CC_PRINT_PROC_STAT: "1", CCC_OVERRIDE_OPTIONS: "+-fno-integrated-cc1" };
   const before = Object.fromEntries(Object.keys(spawning).map((name) => [name, process.env[name]]));
-  Object.assign(process.env, spawning);
   try {
+    const configured = await runBounded("clang.exe", [searched, "-c", "-O1", "-fintegrated-cc1", "-fno-crash-diagnostics", "-o", path.join(dir, "configured.obj"), source], compile);
+    expect(configured.status, configured.stdout + configured.stderr).toBe(0);
+    expect(configured.processes).toBeGreaterThan(1);
+    Object.assign(process.env, spawning);
     const output = path.join(dir, "noop.exe");
     const steps: BoundedResult[] = [];
-    const linked = await compileInSteps("clang.exe", fileURLToPath(new URL("./shims/noop.c", import.meta.url)), output, async (program, args, env) => {
-      const step = await runBounded(program, args, { ...bounds, timeoutMs: 60_000, outputBytes: 1024 * 1024, env });
+    const linked = await compileInSteps("clang.exe", source, output, async (program, args, env) => {
+      const step = await runBounded(program, program === "clang.exe" ? [searched, ...args] : args, { ...compile, env });
       steps.push(step);
       return step;
     });

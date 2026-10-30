@@ -114,7 +114,9 @@ export async function buildFixtureShims(packageDir: string, programs: readonly F
  * The variables that make clang's driver start cc1 as a process of its own
  * or rewrite its arguments: `CC_PRINT_PROC_STAT` measures cc1 in a process
  * of its own, `CLANG_SPAWN_CC1` asks for one, and `CCC_OVERRIDE_OPTIONS` can
- * add `-fno-integrated-cc1` after this build's own arguments.
+ * add `-fno-integrated-cc1` after this build's own arguments. A default
+ * config file can do the same, through `-fproc-stat-report`; clang reads
+ * none here (`--no-default-config`).
  */
 const SPAWNS_CC1 = ["CC_PRINT_PROC_STAT", "CLANG_SPAWN_CC1", "CCC_OVERRIDE_OPTIONS"];
 
@@ -122,9 +124,10 @@ const SPAWNS_CC1 = ["CC_PRINT_PROC_STAT", "CLANG_SPAWN_CC1", "CCC_OVERRIDE_OPTIO
  * Compiles `source` to `output` with clang in steps that each run a single
  * process, through `run`, and returns the last step that ran: clang compiles
  * in its own process (`-fintegrated-cc1`, `-c`, no crash report, which would
- * start a second clang, and none of `SPAWNS_CC1` in its environment), and the
- * link is the one lld-link command clang's driver plans for `-###` without
- * running it, where the driver would have started it as a child. A step's
+ * start a second clang, no default config file and none of `SPAWNS_CC1` in
+ * its environment), and the link is the one lld-link command clang's driver
+ * plans for `-###` without running it, where the driver would have started
+ * it as a child. A step's
  * own exit is then the end of its tree, which the first compile on Windows
  * needs, before `hide-processes` exists to own one; the Windows unit suite
  * counts each step's processes in a job (`bounded-child.unit.ts`).
@@ -136,9 +139,9 @@ export async function compileInSteps(compiler: string, source: string, output: s
   // A step whose end was not confirmed may still write the object.
   let held = false;
   try {
-    const compiled = await run(compiler, ["-c", "-O1", "-fintegrated-cc1", "-fno-crash-diagnostics", "-o", object, source], env);
+    const compiled = await run(compiler, ["--no-default-config", "-c", "-O1", "-fintegrated-cc1", "-fno-crash-diagnostics", "-o", object, source], env);
     if (compiled.status !== 0) return compiled;
-    const planned = await run(compiler, ["-###", "-fuse-ld=lld", "-o", output, object], env);
+    const planned = await run(compiler, ["--no-default-config", "-###", "-fuse-ld=lld", "-o", output, object], env);
     if (planned.status !== 0) return planned;
     const [linker, ...args] = plannedLink(planned.stderr);
     return await run(linker!, args, env);
