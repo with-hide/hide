@@ -1125,6 +1125,27 @@ pub(crate) fn apply(
             {
                 return Err(refusal("mission_cap_reached", &admission.cap.to_string()));
             }
+            // So does a plan step's start under its main's cap.
+            if let Some(admission) = plan
+                && let Some(record) = ledger
+                    .spawns
+                    .iter()
+                    .find(|record| &record.parent == parent && &record.intent == intent)
+                && record.child.is_none()
+                && !record.completed
+                && now.saturating_sub(record.reserved_at_unix_ms) >= MISSION_RESERVATION_HOLD_MS
+                && plan_children(
+                    ledger,
+                    &admission.link.parent_session,
+                    &admission.asleep,
+                    now,
+                ) >= crate::plans::PLAN_DELEGATE_LIMIT
+            {
+                return Err(refusal(
+                    "plan_delegate_full",
+                    &crate::plans::PLAN_DELEGATE_LIMIT.to_string(),
+                ));
+            }
             if let Some(record) = ledger
                 .spawns
                 .iter_mut()
@@ -1154,7 +1175,10 @@ pub(crate) fn apply(
                 if record.task.is_none() {
                     record.task.clone_from(task);
                 }
-                if record.mission.is_some() && record.child.is_none() && !record.completed {
+                if (record.mission.is_some() || record.plan.is_some())
+                    && record.child.is_none()
+                    && !record.completed
+                {
                     record.reserved_at_unix_ms = now;
                 }
                 return Ok(json!(record));
@@ -2408,6 +2432,107 @@ mod tests {
         apply(&mut ledger, &caller, &worker("mission-1:b"), gone).unwrap();
         assert_eq!(mission_workers(&ledger, "mission-1", gone), 1);
     }
+    /// A main's plans hand steps to at most three children at once, counted
+    /// at the reserve with the starts still being made, so a fourth start is
+    /// refused whatever the order; the same start asked again still answers
+    /// its spawn, and a child that ended or sleeps frees its place (PRD
+    /// hide-plan-delegate B5).
+    #[test]
+    fn a_mains_fourth_plan_child_is_refused_until_one_ends_or_sleeps() {
+        let mut ledger = Ledger::default();
+        let main = record("main", "native-main", None);
+        let caller = main.actor.clone();
+        let id = register(&mut ledger, main, &caller);
+        let session = crate::links::ledger::SessionIdentity {
+            device_id: "mac".into(),
+            agent: "codex".into(),
+            session_id: "native-main".into(),
+        };
+        let step = |key: &str, asleep: &[&str]| {
+            let link = PlanLink {
+                plan: "1000".into(),
+                step: key.into(),
+                attempt: 1,
+                parent_session: session.clone(),
+            };
+            let mut spawn = command(&plan_intent(&link));
+            if let Command::Spawn { plan: slot, .. } = &mut spawn {
+                *slot = Some(PlanAdmission {
+                    link,
+                    asleep: asleep.iter().map(|id| (*id).to_owned()).collect(),
+                });
+            }
+            Mutation::Reserve {
+                parent: id.clone(),
+                command: spawn,
+            }
+        };
+        let first = apply(&mut ledger, &caller, &step("a", &[]), 2).unwrap();
+        assert_eq!(first["plan"]["step"], "a");
+        assert_eq!(first["intent"], "plan:1000:a:1");
+        apply(&mut ledger, &caller, &step("b", &[]), 3).unwrap();
+        apply(&mut ledger, &caller, &step("c", &[]), 4).unwrap();
+        assert_eq!(
+            split_refusal(&apply(&mut ledger, &caller, &step("d", &[]), 5).unwrap_err()),
+            ("plan_delegate_full", Some("3"))
+        );
+        // The same start again is the spawn it made, not a fourth.
+        assert_eq!(
+            apply(&mut ledger, &caller, &step("a", &[]), 6).unwrap()["id"],
+            first["id"]
+        );
+        // An intent the core did not make for the step is refused.
+        let mut forged = step("d", &[]);
+        if let Mutation::Reserve {
+            command: Command::Spawn { intent, .. },
+            ..
+        } = &mut forged
+        {
+            *intent = "plan:1000:d:9".into();
+        }
+        assert_eq!(
+            apply(&mut ledger, &caller, &forged, 7).unwrap_err(),
+            "invalid_spawn"
+        );
+        // `a`'s child came up: it counts while it runs, not once it sleeps
+        // or ends.
+        let child = register(
+            &mut ledger,
+            record("child", "native-child", Some(id.clone())),
+            &caller,
+        );
+        let spawn = ledger
+            .spawns
+            .iter_mut()
+            .find(|spawn| spawn.intent == "plan:1000:a:1")
+            .unwrap();
+        spawn.child = Some(child.clone());
+        spawn.completed = true;
+        assert_eq!(plan_children(&ledger, &session, &[], 8), 3);
+        assert_eq!(
+            plan_children(&ledger, &session, std::slice::from_ref(&child), 8),
+            2
+        );
+        apply(&mut ledger, &caller, &step("d", &[&child]), 9).unwrap();
+        assert_eq!(
+            split_refusal(&apply(&mut ledger, &caller, &step("e", &[&child]), 10).unwrap_err()),
+            ("plan_delegate_full", Some("3"))
+        );
+        ledger
+            .agents
+            .iter_mut()
+            .find(|agent| agent.id == child)
+            .unwrap()
+            .ended = true;
+        assert_eq!(plan_children(&ledger, &session, &[], 11), 3);
+        // Another main's plans have their own places.
+        let other = crate::links::ledger::SessionIdentity {
+            session_id: "native-other".into(),
+            ..session.clone()
+        };
+        assert_eq!(plan_children(&ledger, &other, &[], 11), 0);
+    }
+
     /// A session that takes a mission over gets its workers: asking a start
     /// again under the same intent answers the worker it already has, the
     /// worker is its child, and the watch on the worker, which a report

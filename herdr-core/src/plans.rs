@@ -1615,6 +1615,119 @@ mod tests {
         assert_ne!(next.id(), done.id());
     }
 
+    /// A session's checkout on branch `main-branch`, where pull request 1 is
+    /// from it, 2 from a child's branch, 3 from another branch, 4 from a
+    /// fork, 5 is not there and 6 cannot be asked about; `docs/spec.md` is
+    /// there, `docs/link.md` leads out of the checkout.
+    struct Checkout;
+
+    impl crate::node_access::NodeLink for Checkout {
+        fn call(
+            &self,
+            call: hide_node_link::protocol::Call,
+            _timeout: std::time::Duration,
+        ) -> Result<crate::node_access::LinkAnswer, hide_node_link::LinkError> {
+            use hide_node_link::catalog::{PathFact, PathFacts, RepositoryPlace};
+            use hide_node_link::gh::{GhAnswer, GithubFailureCategory};
+            use hide_node_link::protocol::Call;
+            let answer = match call {
+                Call::PathFacts { paths } => {
+                    let fact = |path: &str| {
+                        let (comparison, exists) = match path {
+                            "/work/app" => ("/work/app", true),
+                            "/work/app/docs/spec.md" => ("/work/app/docs/spec.md", true),
+                            "/work/app/docs/link.md" => ("/etc/passwd", true),
+                            other => (other, false),
+                        };
+                        PathFact {
+                            comparison: comparison.into(),
+                            exists,
+                            project: None,
+                            project_unread: None,
+                            repository: (path == "/work/app").then(|| RepositoryPlace {
+                                root: "/work/app".into(),
+                                main_root: "/work/app".into(),
+                                branch: Some("main-branch".into()),
+                                head_oid: None,
+                            }),
+                        }
+                    };
+                    serde_json::to_value(PathFacts {
+                        paths: paths
+                            .iter()
+                            .map(|path| (path.clone(), fact(path)))
+                            .collect(),
+                        ..PathFacts::default()
+                    })
+                    .unwrap()
+                }
+                Call::Gh { args, .. } => {
+                    let head = |branch: &str, fork: bool| GhAnswer::Output {
+                        stdout: json!({
+                            "headRefName": branch, "isCrossRepository": fork,
+                            "url": "https://github.com/acme/app/pull/1",
+                        })
+                        .to_string(),
+                    };
+                    let failed = |reason: &str| GhAnswer::Failed {
+                        category: GithubFailureCategory::NetworkOrRateLimit,
+                        reason: reason.into(),
+                    };
+                    serde_json::to_value(match args[2].as_str() {
+                        "1" => head("main-branch", false),
+                        "2" => head("child-branch", false),
+                        "3" => head("someone-else", false),
+                        "4" => head("main-branch", true),
+                        "5" => failed(
+                            "GraphQL: Could not resolve to a PullRequest with the number of 5.",
+                        ),
+                        _ => failed("error connecting to api.github.com"),
+                    })
+                    .unwrap()
+                }
+                other => panic!("not asked: {other:?}"),
+            };
+            Ok(answer.into())
+        }
+    }
+
+    #[test]
+    fn a_pull_request_is_the_sessions_by_its_branch_and_a_file_by_where_its_machine_finds_it() {
+        let proof = PlanProof {
+            link: Arc::new(Checkout),
+            root: "/work/app".into(),
+            branches: BTreeSet::from(["child-branch".to_owned()]),
+            asks: Asks {
+                prs: BTreeSet::from([1, 2, 3, 4, 5, 6]),
+                files: BTreeSet::from([
+                    "docs/spec.md".to_owned(),
+                    "docs/gone.md".to_owned(),
+                    "docs/link.md".to_owned(),
+                ]),
+            },
+            plan: "1000".into(),
+            session_id: "s1".into(),
+        };
+        let mut proofs = Proofs::default();
+        proof.run(&mut proofs);
+        let yours = PrProof::Yours {
+            repo: "acme/app".into(),
+        };
+        assert_eq!(proofs.prs[&1], yours, "made from the session's branch");
+        assert_eq!(proofs.prs[&2], yours, "made from a child's branch");
+        assert_eq!(proofs.prs[&3], PrProof::NotYours);
+        assert_eq!(
+            proofs.prs[&4],
+            PrProof::NotYours,
+            "a fork's branch of the same name"
+        );
+        assert_eq!(proofs.prs[&5], PrProof::NotYours, "no such pull request");
+        assert_eq!(proofs.prs[&6], PrProof::Unconfirmed);
+        assert_eq!(proofs.files["docs/spec.md"], FileProof::Present);
+        assert_eq!(proofs.files["docs/gone.md"], FileProof::Missing);
+        assert_eq!(proofs.files["docs/link.md"], FileProof::Outside);
+    }
+
     #[test]
     fn a_first_plan_is_approved_unless_it_asks_and_a_replan_keeps_the_review() {
         use StepStatus::*;
