@@ -402,8 +402,11 @@ it("glues the other agents checking a node under its card, each with its face, t
 });
 
 it("shows how long a node took and how long a decision held it from its events, and no number without them or while the device is gone (B28, B35)", async () => {
-  // The page's clock moves by whole minutes.
+  // The page reads its own clock, so the test holds it: read twice, a minute
+  // turning between this line and the render drew 'held 26m'.
   const now = Math.floor(Date.now() / 60_000) * 60_000;
+  vi.useFakeTimers({ toFake: ["Date"] });
+  vi.setSystemTime(now);
   const at = (minutes: number) => now - minutes * 60_000;
   const nodes = [node("a", { status: "done", pr: 3, pr_state: "merged" }), node("b", { status: "held" }), node("c", { status: "working" })];
   const move = (minutes: number, key: string, status: MissionNode["status"]): MissionEvent => ({ at_unix_ms: at(minutes), kind: "node", node: key, status });
@@ -470,7 +473,10 @@ it("opens the picked node's panel: its head, where it is, what it made, its fini
     }),
     node("verify", { title: "세 PR 함께 확인", kind: "verify", delivery: null, depends_on: ["engine"] }),
   ];
+  // Held, as in the B28 test: the panel reads the clock again when it draws.
   const minute = Math.floor(Date.now() / 60_000) * 60_000;
+  vi.useFakeTimers({ toFake: ["Date"] });
+  vi.setSystemTime(minute);
   const events: MissionEvent[] = [{ at_unix_ms: minute - 60_000, kind: "node", node: "engine", status: "working" }, { at_unix_ms: minute - 30_000, kind: "pr_opened", node: "engine", pr: 1704 }];
   const map = await mount({ items: [mission({ nodes })] }, [], [], { mission_events: { mission: "mission-1", events, dropped: 0 } });
   try {

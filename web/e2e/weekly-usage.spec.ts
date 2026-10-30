@@ -55,6 +55,10 @@ test("weekly usage: a loading, an available and an unavailable row, and the hint
     await expect(trigger).toHaveAccessibleName("Claude Code, …");
     await expect.poll(() => hints.some((hint) => hint.usage_window_visible === true)).toBe(true);
 
+    // The countdown is the page's clock against a reset on the whole hour, so
+    // the test holds the page at half past: read from the fixture's own clock,
+    // an hour turning before the popover drew made it a different answer.
+    await page.clock.setFixedTime(usage.weeklyResetAt - (5 * 24 + 4.5) * 3_600_000);
     await trigger.click();
     const popover = page.locator("[data-usage-popover]");
     await expect(popover.getByText("Usage", { exact: true })).toBeVisible();
@@ -70,11 +74,12 @@ test("weekly usage: a loading, an available and an unavailable row, and the hint
     usage.release();
     const week = claudeRow.locator('[data-usage-window-row="weekly"]:not([data-usage-bucket])');
     await expect(week.locator("[data-usage-value]")).toHaveText("62%", { timeout: 20_000 });
-    await expect(week.locator("[data-usage-reset]")).toHaveText(/^· in 5d [45]h$/);
+    await expect(week.locator("[data-usage-reset]")).toHaveText("· in 5d 4h");
     const fable = claudeRow.locator('[data-usage-bucket="Fable"]');
     await expect(fable.locator("[data-usage-value]")).toHaveText("6%");
-    await expect(fable.locator("[data-usage-reset]")).toHaveText(/^· in 5d [45]h$/);
+    await expect(fable.locator("[data-usage-reset]")).toHaveText("· in 5d 4h");
     await screenshot(page, "usage-popover-available");
+    await page.clock.setSystemTime(Date.now());
 
     await page.keyboard.press("Escape");
     await expect(popover).toHaveCount(0);
