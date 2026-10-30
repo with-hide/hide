@@ -866,3 +866,63 @@ fn a_summary_lays_an_ended_childs_pull_request_on_its_parents_row() {
         "an unchanged list publishes nothing"
     );
 }
+
+/// The review of #1859: a lineage whose only pull request lies past the
+/// 2,000-session walk drew no list and logged nothing; the crossing is
+/// logged though the list stays empty.
+#[test]
+fn a_lineage_past_the_walk_is_logged_when_its_only_pull_request_lies_beyond() {
+    let mut runtime = runtime();
+    let _dirs = hold_dirs(&mut runtime);
+    runtime.snapshot.navigator.agents = project_agents(serde_json::from_value(json!({
+        "agents": [{"pane_id":"lead", "agent":"claude", "agent_status":"idle", "state_change_seq":1}]
+    })).unwrap()).agents;
+    runtime.snapshot.navigator.agents[0].session_id = Some("s-0".into());
+    let session = |index: usize| crate::links::ledger::SessionIdentity {
+        device_id: runtime.node.to_string(),
+        agent: "claude".into(),
+        session_id: format!("s-{index}"),
+    };
+    let last = crate::agent_state::work::family::SESSION_LIMIT + 1;
+    let project = crate::links::ProjectLinkSummary {
+        work: (1..=last)
+            .map(|index| crate::links::ledger::SessionWorkSummary {
+                session: session(index),
+                title: format!("step {index}"),
+                fallback_title: String::new(),
+                native_title: None,
+                manual_title: None,
+                cwd: None,
+                ended_at_unix_ms: Some(1),
+                open_missed: 0,
+                subtree_open_missed: 0,
+                missed: Vec::new(),
+                open_asks: 0,
+                parent: Some(session(index - 1)),
+            })
+            .collect(),
+        creators: vec![crate::links::ledger::OutputCreator {
+            source: session(last),
+            kind: "pr".into(),
+            repository: "acme/app".into(),
+            number: 7,
+            url: "https://github.com/acme/app/pull/7".into(),
+            title: "Past the walk".into(),
+            state: "merged".into(),
+            last_read_at_unix_ms: Some(5_000),
+        }],
+        ..Default::default()
+    };
+    let (_, logged) = crate::diagnostics::capture(|| {
+        runtime.ingest_link_summaries([("project".to_owned(), project)].into())
+    });
+    assert_eq!(runtime.snapshot.navigator.agents[0].pulls, None);
+    let crossings: Vec<_> = logged
+        .iter()
+        .filter(|record| record["kind"] == "pulls.capacity")
+        .collect();
+    assert_eq!(crossings.len(), 1, "{logged:?}");
+    assert_eq!(crossings[0]["pane_id"], "lead");
+    assert_eq!(crossings[0]["lineage_capped"], true);
+    assert_eq!(crossings[0]["omitted"], 0);
+}

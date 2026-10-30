@@ -618,7 +618,7 @@ impl Runtime {
     fn lay_session_pulls(&mut self, rows: &mut [SidebarAgentSnapshot]) {
         use crate::agent_state::work::family;
         let sessions = self.session_row_identities();
-        let laid: Vec<Option<family::SessionPulls>> = {
+        let laid: Vec<family::SessionPulls> = {
             let sources = family::Sources::new(
                 rows.iter(),
                 &sessions,
@@ -634,9 +634,8 @@ impl Runtime {
                 })
                 .collect()
         };
-        for (row, pulls) in rows.iter_mut().zip(laid) {
-            let omitted = pulls.as_ref().map_or(0, |list| list.omitted);
-            let lineage_capped = pulls.as_ref().is_some_and(|list| list.lineage_capped);
+        for (row, list) in rows.iter_mut().zip(laid) {
+            let (omitted, lineage_capped) = (list.omitted, list.lineage_capped);
             if omitted == 0 && !lineage_capped {
                 self.pulls_over_cap.remove(&row.pane_id);
             } else if self.pulls_over_cap.insert(row.pane_id.clone()) {
@@ -646,7 +645,7 @@ impl Runtime {
                     "lineage_capped": lineage_capped, "session_limit": family::SESSION_LIMIT,
                 }));
             }
-            row.pulls = pulls;
+            row.pulls = (!list.pulls.is_empty()).then_some(list);
         }
     }
 

@@ -289,29 +289,26 @@ impl<'a> Sources<'a> {
     /// The list of the session that `row` hosts or that `session` names, and
     /// of every descendant: the live ones by Herdr's lineage, the ended ones
     /// by the record's. `recorded` is what the link record keeps, freshest
-    /// first. `None` when it has none.
+    /// first. An empty list still says whether the walk went past its cap.
     pub(crate) fn pulls(
         &self,
         row: Option<usize>,
         session: Option<&SessionIdentity>,
         recorded: &[&Recorded],
-    ) -> Option<SessionPulls> {
+    ) -> SessionPulls {
         let Gathered {
             items,
             lineage_capped,
         } = self.gather(row, session, recorded);
-        if items.is_empty() {
-            return None;
-        }
         let mut pulls: Vec<SessionPull> = items.into_values().collect();
         pulls.sort_by(|a, b| a.state.cmp(&b.state).then_with(|| b.number.cmp(&a.number)));
         let omitted = pulls.len().saturating_sub(PULL_LIMIT);
         pulls.truncate(PULL_LIMIT);
-        Some(SessionPulls {
+        SessionPulls {
             pulls,
             omitted,
             lineage_capped,
-        })
+        }
     }
 
     fn gather(
@@ -341,14 +338,17 @@ impl<'a> Sources<'a> {
                     .flat_map(|request| &request.pull_requests)
                     .filter(|pull| pull.duty || pull.provisional)
                 {
+                    // The read chosen across machines, as an ended one's; the
+                    // row's own copy only when no machine's list holds it.
                     let read = self.github.get(pull.url.as_str());
                     add(
                         &mut items,
                         SessionPull {
                             url: pull.url.clone(),
                             number: pull.number,
-                            title: pull.title.clone(),
-                            state: pull.state(),
+                            title: read
+                                .map_or_else(|| pull.title.clone(), |read| read.title.to_owned()),
+                            state: read.map_or_else(|| pull.state(), |read| read.state),
                             own,
                             holders: vec![agent.identity_label.clone()],
                             stale: read.is_some_and(|read| read.stale),
@@ -456,9 +456,14 @@ impl<'a> Sources<'a> {
     /// named child (a live child Herdr has not named a session for yet) stays
     /// in this session's group, so the section holds exactly the list.
     fn groups(&self, record: &SessionRecord, recorded: &[&Recorded]) -> (Vec<PrGroup>, Capped) {
-        let Some(all) = self.pulls(None, Some(&record.session), recorded) else {
-            return (Vec::new(), Capped::default());
-        };
+        let all = self.pulls(None, Some(&record.session), recorded);
+        if all.pulls.is_empty() {
+            let capped = Capped {
+                omitted: 0,
+                lineage: all.lineage_capped,
+            };
+            return (Vec::new(), capped);
+        }
         // The children the record keeps, the ones the link record has kept
         // since, then a live child neither has read yet.
         let mut children: Vec<(SessionIdentity, String)> = record
@@ -751,9 +756,7 @@ mod tests {
             ),
         ])]);
         let sources = Sources::new(rows.iter(), &sessions, [&github]);
-        let lead = sources
-            .pulls(Some(0), sessions[0].as_ref(), &[&recorded])
-            .unwrap();
+        let lead = sources.pulls(Some(0), sessions[0].as_ref(), &[&recorded]);
         assert_eq!(
             numbers(&lead),
             [
@@ -767,9 +770,7 @@ mod tests {
         assert_eq!(ended.holders, ["ended child"]);
         assert!(!ended.own, "a descendant's is not the lead's own");
         // The ended child's own row is gone; its live sibling lists only its own.
-        let live = sources
-            .pulls(Some(1), sessions[1].as_ref(), &[&recorded])
-            .unwrap();
+        let live = sources.pulls(Some(1), sessions[1].as_ref(), &[&recorded]);
         assert_eq!(numbers(&live), [(3, PrState::Mergeable)]);
         assert!(live.pulls[0].own);
     }
@@ -785,7 +786,7 @@ mod tests {
         holds(&mut rows[0], &merged);
         let github = github(vec![closed, merged]);
         let sources = Sources::new(rows.iter(), &sessions, [&github]);
-        let list = sources.pulls(Some(0), None, &[]).unwrap();
+        let list = sources.pulls(Some(0), None, &[]);
         assert_eq!(numbers(&list), [(5, PrState::Merged), (4, PrState::Closed)]);
     }
 
@@ -806,7 +807,7 @@ mod tests {
         holds(&mut rows[1], &foreign);
         let github = github(vec![shared, foreign]);
         let sources = Sources::new(rows.iter(), &sessions, [&github]);
-        let list = sources.pulls(Some(0), None, &[]).unwrap();
+        let list = sources.pulls(Some(0), None, &[]);
         assert_eq!(
             numbers(&list),
             [(42, PrState::Failed), (42, PrState::Mergeable)]
@@ -828,7 +829,7 @@ mod tests {
             &[(6, "merged"), (7, "review")],
         )])]);
         let sources = Sources::new(rows.iter(), &sessions, [&github]);
-        let list = sources.pulls(Some(0), None, &[&recorded]).unwrap();
+        let list = sources.pulls(Some(0), None, &[&recorded]);
         assert_eq!(
             numbers(&list),
             [(7, PrState::Pending), (6, PrState::Merged)]
@@ -912,13 +913,11 @@ mod tests {
             )],
         );
         let sources = Sources::new(rows.iter(), &sessions, [&github]);
-        let row = sources
-            .pulls(
-                Some(0),
-                sessions[0].as_ref(),
-                &[&Recorded::from_summaries([&summary(made)])],
-            )
-            .unwrap();
+        let row = sources.pulls(
+            Some(0),
+            sessions[0].as_ref(),
+            &[&Recorded::from_summaries([&summary(made)])],
+        );
         let mut laid = tree.clone();
         sources.lay_groups(&mut laid, &[&Recorded::from_record(&tree)]);
         let grouped: Vec<(Option<&str>, u32, PrState)> = laid
@@ -979,8 +978,13 @@ mod tests {
     #[test]
     fn the_same_pull_request_read_on_several_machines_takes_the_fresh_latest_read_in_any_order() {
         let (mut rows, sessions) = rows(&[("agent", "s-agent", &[])]);
+        // The row still holds the open pull request it was given; the
+        // freshest read says GitHub merged it since.
+        holds(
+            &mut rows[0],
+            &listed(42, PullRequestBadge::Open, PullRequestChecks::Pending),
+        );
         let merged = listed(42, PullRequestBadge::Merged, PullRequestChecks::Passing);
-        holds(&mut rows[0], &merged);
         let here = read(vec![merged], 9_000, false);
         let stale_newer = read(
             vec![listed(
@@ -1007,7 +1011,7 @@ mod tests {
         ];
         for order in orders {
             let sources = Sources::new(rows.iter(), &sessions, order);
-            let list = sources.pulls(Some(0), None, &[]).unwrap();
+            let list = sources.pulls(Some(0), None, &[]);
             assert_eq!(
                 numbers(&list),
                 [(42, PrState::Merged)],
@@ -1021,9 +1025,7 @@ mod tests {
             Recorded::from_summaries([&summary(&[("s-ended", None, "ended", &[(42, "review")])])]);
         for order in orders {
             let sources = Sources::new(rows.iter(), &sessions, order);
-            let list = sources
-                .pulls(None, Some(&session("s-ended")), &[&recorded])
-                .unwrap();
+            let list = sources.pulls(None, Some(&session("s-ended")), &[&recorded]);
             assert_eq!(numbers(&list), [(42, PrState::Merged)]);
         }
     }
@@ -1046,9 +1048,7 @@ mod tests {
                 at,
                 stale,
             );
-            Sources::new(rows.iter(), &sessions, [&github])
-                .pulls(Some(0), None, &[&recorded])
-                .unwrap()
+            Sources::new(rows.iter(), &sessions, [&github]).pulls(Some(0), None, &[&recorded])
         };
         assert_eq!(list(9_000, false), list(19_000, false));
         let stale = list(9_000, true);
@@ -1099,9 +1099,7 @@ mod tests {
             ],
         );
         let sources = Sources::new(rows.iter(), &sessions, [&github]);
-        let row = sources
-            .pulls(Some(0), sessions[0].as_ref(), &[&summaries])
-            .unwrap();
+        let row = sources.pulls(Some(0), sessions[0].as_ref(), &[&summaries]);
         assert_eq!((row.pulls.len(), row.omitted), (PULL_LIMIT, 1));
         let mut laid = tree.clone();
         let tree_recorded = Recorded::from_record(&tree);
@@ -1133,9 +1131,11 @@ mod tests {
         assert_eq!(laid.children[1].pr_omitted, 0);
     }
 
-    /// A lineage past [`SESSION_LIMIT`] says so instead of ending quietly.
+    /// A lineage past [`SESSION_LIMIT`] says so instead of ending quietly,
+    /// also when the only pull request lies past it (the review of #1859:
+    /// an empty list used to drop the fact).
     #[test]
-    fn a_lineage_past_the_session_limit_is_reported() {
+    fn a_lineage_past_the_session_limit_is_reported_with_nothing_found_before_it() {
         let ids: Vec<String> = (0..=SESSION_LIMIT)
             .map(|index| format!("s-{index}"))
             .collect();
@@ -1144,21 +1144,35 @@ mod tests {
             .enumerate()
             .map(|(index, id)| {
                 let parent = index.checked_sub(1).map(|parent| ids[parent].as_str());
-                let made: &[(u32, &str)] = if index == 0 { &[(1, "merged")] } else { &[] };
+                let made: &[(u32, &str)] = if index == SESSION_LIMIT {
+                    &[(1, "merged")]
+                } else {
+                    &[]
+                };
                 (id.as_str(), parent, "step", made)
             })
             .collect();
         let recorded = Recorded::from_summaries([&summary(&chain)]);
         let github = github(Vec::new());
         let sources = Sources::new([], &[], [&github]);
-        let list = sources
-            .pulls(None, Some(&session("s-0")), &[&recorded])
-            .unwrap();
-        assert!(list.lineage_capped);
+        let past = sources.pulls(None, Some(&session("s-0")), &[&recorded]);
+        assert!(past.pulls.is_empty() && past.lineage_capped);
+        let mut alone = record("s-0", "step", Vec::new(), Vec::new());
+        let capped = sources.lay_groups(&mut alone, &[&recorded]);
+        assert_eq!(
+            capped,
+            Capped {
+                omitted: 0,
+                lineage: true
+            },
+            "the record says so too"
+        );
+        assert!(alone.pr_groups.is_empty());
         let within = sources.pulls(None, Some(&session("s-1")), &[&recorded]);
+        assert_eq!(numbers(&within), [(1, PrState::Merged)]);
         assert!(
-            within.is_none(),
-            "the rest of the chain made nothing and stays within the limit"
+            !within.lineage_capped,
+            "2,000 sessions are within the limit"
         );
     }
 
@@ -1181,12 +1195,8 @@ mod tests {
                      sessions: &[Option<SessionIdentity>],
                      summaries: &Recorded| {
             let sources = Sources::new(rows.iter(), sessions, [&github]);
-            let a = sources
-                .pulls(Some(0), sessions[0].as_ref(), &[summaries])
-                .unwrap();
-            let b = sources
-                .pulls(Some(1), sessions[1].as_ref(), &[summaries])
-                .unwrap();
+            let a = sources.pulls(Some(0), sessions[0].as_ref(), &[summaries]);
+            let b = sources.pulls(Some(1), sessions[1].as_ref(), &[summaries]);
             assert_eq!(
                 numbers(&b),
                 [(41, PrState::Mergeable), (42, PrState::Merged)]
