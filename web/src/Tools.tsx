@@ -1,4 +1,4 @@
-import { BrainIcon, BriefcaseIcon, EllipsisIcon, FileDiffIcon, FilesIcon, FolderIcon, FolderOpenIcon, GitBranchIcon, PinIcon, XIcon, type LucideIcon } from "lucide-react";
+import { BrainIcon, BriefcaseIcon, EllipsisIcon, FileDiffIcon, FilesIcon, FolderIcon, FolderOpenIcon, GitBranchIcon, PinIcon, WaypointsIcon, XIcon, type LucideIcon } from "lucide-react";
 import { Fragment, useState } from "react";
 import type { Actions } from "./actions";
 import { Button } from "./components/ui/button";
@@ -9,6 +9,7 @@ import { ExplorerTree } from "./ExplorerTree";
 import { HistoryList } from "./HistoryList";
 import { HideAiTool } from "./HideAiTool";
 import { useMemoryProject } from "./MemoryTab";
+import { MissionTool, useMissionTurnCount } from "./MissionTool";
 import { ProjectTool } from "./ProjectTool";
 import { frontProject } from "./projectStatus";
 import { memoryTabCount } from "./suggestionList";
@@ -37,10 +38,10 @@ import type { MessageKey } from "./i18n/catalogs";
 // lane is up, whether it is expanded and which column a stacked lane draws
 // are this page's (`ui.ts`).
 
-const TOOL_NAMES = { explorer: "panes.lane.explorer", changes: "panes.lane.changes", project: "projectTool.title", memory: "panes.lane.memory" } as const satisfies Record<Tool, MessageKey>;
-const TOOL_ICONS: Record<Tool, LucideIcon> = { explorer: FolderOpenIcon, changes: FileDiffIcon, project: BriefcaseIcon, memory: BrainIcon };
+const TOOL_NAMES = { explorer: "panes.lane.explorer", changes: "panes.lane.changes", project: "projectTool.title", memory: "panes.lane.memory", mission: "missionTool.title" } as const satisfies Record<Tool, MessageKey>;
+const TOOL_ICONS: Record<Tool, LucideIcon> = { explorer: FolderOpenIcon, changes: FileDiffIcon, project: BriefcaseIcon, memory: BrainIcon, mission: WaypointsIcon };
 /** The command whose chord the rail icon's hint shows (D-08). */
-const LANE_TOOL_COMMAND = { project: "toggle_lane_project", memory: "toggle_lane_memory", explorer: "toggle_lane_explorer", changes: "toggle_lane_changes" } as const satisfies Record<Tool, CommandId>;
+const LANE_TOOL_COMMAND = { project: "toggle_lane_project", memory: "toggle_lane_memory", mission: "toggle_lane_mission", explorer: "toggle_lane_explorer", changes: "toggle_lane_changes" } as const satisfies Record<Tool, CommandId>;
 
 /** Whether a lane drawn this way is on screen. */
 export function laneUp(mode: LaneFrame["mode"]): boolean {
@@ -85,6 +86,8 @@ export function ToolRail({ actions }: { actions: Actions }) {
     const opened = s.suggestions?.project;
     return project && opened && opened.workspace_id === project.id ? opened.counts : null;
   });
+  // The Mission tool's number is its missions with anything in their `내 차례` (PRD mission-tool D-08, B2).
+  const missionTurns = useMissionTurnCount();
   const scope = useScope(checkout);
   const uiState = useShellStore((s) => s.rest?.ui_state);
   const up = laneUp(drawn.mode);
@@ -122,9 +125,9 @@ export function ToolRail({ actions }: { actions: Actions }) {
         const Icon = TOOL_ICONS[tool];
         const pressed = up && drawn.tool === tool;
         const name = t(TOOL_NAMES[tool]);
-        const needs = tool === "project" ? todo : tool === "memory" ? (hideAi?.rail ?? 0) : 0;
+        const needs = tool === "project" ? todo : tool === "memory" ? (hideAi?.rail ?? 0) : tool === "mission" ? missionTurns : 0;
         // What the number counts, in the hint and for a reader.
-        const needsWords = needs === 0 ? "" : tool === "project" ? t("projectTool.todoCount", { count: needs }) : t("hideAiTool.railCount", { suggestions: hideAi?.suggestions ?? 0, memory: hideAi ? memoryTabCount({ counts: hideAi }) : 0 });
+        const needsWords = needs === 0 ? "" : tool === "project" ? t("projectTool.todoCount", { count: needs }) : tool === "mission" ? t("mission.turn", { count: needs }) : t("hideAiTool.railCount", { suggestions: hideAi?.suggestions ?? 0, memory: hideAi ? memoryTabCount({ counts: hideAi }) : 0 });
         // One short rule where the Project's tools end and the checkout's begin (D-37).
         const before = TOOLS[index - 1];
         const boundary = before !== undefined && TOOL_SCOPES[before] !== TOOL_SCOPES[tool];
@@ -287,8 +290,8 @@ function ToolColumn({ tool, width, checkout, actions }: { tool: Tool; width: num
   const scope = useScope(checkout);
   return (
     <aside className={cn("flex min-h-0 min-w-0 flex-col text-foreground", width === null ? "flex-1" : "shrink-0")} style={width === null ? undefined : { width }} aria-label={t(TOOL_NAMES[tool])} data-lane={tool} data-lane-column="tool">
-      {/* The Project tool has its own head: the project, where it is, ⚙ and × (B26); so has the Hide AI tool: its switch, ⚙ and × (PRD hide-ai-suggestions B1, B3). */}
-      {tool === "project" ? <ProjectTool actions={actions} /> : tool === "memory" ? <HideAiTool actions={actions} /> : <>
+      {/* The Project tool has its own head: the project, where it is, ⚙ and × (B26); so has the Hide AI tool: its switch, ⚙ and × (PRD hide-ai-suggestions B1, B3); and the Mission tool: `+`, ⚙ and × (PRD mission-tool B8, B9). */}
+      {tool === "project" ? <ProjectTool actions={actions} /> : tool === "memory" ? <HideAiTool actions={actions} /> : tool === "mission" ? <MissionTool actions={actions} /> : <>
       <div className="flex h-[var(--size-tab-strip)] shrink-0 items-center gap-xxs border-b border-border pl-md pr-xs text-caption" data-lane-header="true">
         <span className="min-w-0 flex-1 truncate" data-lane-scope={scope(tool)} data-lane-scope-kind={TOOL_SCOPES[tool]}>
           <span className="font-semibold text-foreground">{t(TOOL_NAMES[tool])}</span>
