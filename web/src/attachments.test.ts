@@ -218,8 +218,10 @@ describe("thread input (B29)", () => {
     const requestId = submitThreadInput(3, "w1:p1", "이거 봐줘", [{ name: "shot.png", bytes: new Uint8Array([1, 2]) }]);
     expect(requestId).toMatch(/^[0-9a-f-]{36}$/);
     expect(events.map((event) => event.kind)).toEqual(["attachment_stage", "thread_input"]);
-    expect(events[0].payload).toEqual({ request_id: `${requestId}-0`, name: "shot.png", size: 2, clipboard: false });
-    expect(events[1].payload).toEqual({ generation: 3, pane_id: "w1:p1", request_id: requestId, text: "이거 봐줘", stages: [`${requestId}-0`] });
+    expect(events.map((event) => event.payload)).toEqual([
+      { request_id: `${requestId}-0`, name: "shot.png", size: 2, clipboard: false },
+      { generation: 3, pane_id: "w1:p1", request_id: requestId, text: "이거 봐줘", stages: [`${requestId}-0`] },
+    ]);
     expect(binaries).toHaveLength(1);
   });
 
