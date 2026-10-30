@@ -18,6 +18,8 @@
   "plan_step_status": ["planned", "working", "done", "dropped"],
   "plan_review": ["approved", "proposed"],
   "plan_output": ["pr", "file", "none"],
+  "plan_delegation_state": ["working", "reported", "blocked", "closed"],
+  "plan_evidence_kind": ["pr", "file"],
   "detail_item_kind": ["pull_request", "record", "mission", "worktrees", "cost", "plan", "branch"],
   "agent_onboarding": ["pending", "done"],
   "agent_wait": ["children", "background", "reply", "checks"],
