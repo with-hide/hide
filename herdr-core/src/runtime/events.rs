@@ -2514,7 +2514,7 @@ impl Runtime {
                         return false;
                     }
                     let path = payload.path.clone();
-                    let result = live::spawn_workspace_creation(
+                    let result = crate::checkout_owner::open::spawn_workspace_creation(
                         context,
                         self.node.clone(),
                         payload.path,
@@ -3393,7 +3393,7 @@ impl Runtime {
                 }
                 self.sync_input_requests();
                 self.push_diagnostic("pane.fork.requested", format!("Forking pane {pane_id}"));
-                if let Err(message) = live::spawn_agent_fork(context, request) {
+                if let Err(message) = crate::fork::worker::spawn_agent_fork(context, request) {
                     // A worker that never started is a fork that failed, and
                     // the operator is owed the same notice and the same
                     // stderr diagnostic either way.
@@ -3845,7 +3845,7 @@ impl Runtime {
                 } else {
                     0
                 };
-                let request = live::PaneFindRequest {
+                let request = crate::find::pane::PaneFindRequest {
                     term: payload.term.clone(),
                     options: crate::find::PaneFindOptions {
                         case_sensitive: payload.case_sensitive,
@@ -3855,7 +3855,7 @@ impl Runtime {
                     step: payload.step,
                     current_index,
                 };
-                if let Err(message) = live::spawn_pane_find(route, request) {
+                if let Err(message) = crate::find::pane::spawn_pane_find(route, request) {
                     self.set_error("pane.find_worker_failed", message, true);
                 }
                 false

@@ -1095,7 +1095,7 @@ fn native_archive_current_journey(kind: &'static str, flag: &str) {
                     crate::handle::ChangeNotifier::noop(),
                 );
                 runtime.install_remote_control(remote.clone());
-                let target = live::TabTarget::device(&remote);
+                let target = crate::worktree_control::TabTarget::device(&remote);
                 runtime.install_remote_control(live::RemoteControlContext::new(
                     "remote",
                     Arc::clone(&replacement_connector),
@@ -1104,7 +1104,8 @@ fn native_archive_current_journey(kind: &'static str, flag: &str) {
                 ));
                 target
             } else {
-                let target = live::TabTarget::local(&context, runtime.live_generation);
+                let target =
+                    crate::worktree_control::TabTarget::local(&context, runtime.live_generation);
                 if case == "local-before" {
                     context.engine = Arc::clone(&replacement_connector);
                     runtime.set_live(context);
@@ -1115,9 +1116,9 @@ fn native_archive_current_journey(kind: &'static str, flag: &str) {
                 target
             }
         };
-        live::spawn_checkout_tab_create(
+        crate::worktree_control::spawn_checkout_tab_create(
             target,
-            live::CheckoutTabRequest {
+            crate::worktree_control::CheckoutTabRequest {
                 start: None,
                 id,
                 agent_kind: Some(kind.into()),

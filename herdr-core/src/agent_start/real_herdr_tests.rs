@@ -1,5 +1,5 @@
 //! The start against the pinned Herdr itself, in a tab Hide makes the way
-//! the product does (`shell_launch`, then `live::create_tab_in`, which runs
+//! the product does (`shell_launch`, then `crate::checkout_owner::open::create_tab_in`, which runs
 //! the launch through `layout.apply`), whose shell's own startup files ask a
 //! one-key question first, as oh-my-zsh's update prompt does with
 //! `read -k 1`. In the incident this replays, the start typed into that
@@ -304,7 +304,7 @@ impl PrivateHerdr {
         std::fs::create_dir_all(&cwd).unwrap();
         let mut env = launch.map(|launch| launch.env.clone()).unwrap_or_default();
         env.insert("PATH".into(), pane_path(self));
-        let tab = crate::live::create_tab_in(
+        let tab = crate::checkout_owner::open::create_tab_in(
             self.engine().as_ref(),
             workspace,
             cwd.to_str().unwrap(),
@@ -332,9 +332,9 @@ impl PrivateHerdr {
             .unwrap();
         let mut env = launch.env.clone();
         env.insert("PATH".into(), pane_path(self));
-        let tab = crate::live::replace_tab(
+        let tab = crate::checkout_owner::open::replace_tab(
             self.engine().as_ref(),
-            crate::live::OwnedTab {
+            crate::checkout_owner::open::OwnedTab {
                 initial_label: None,
                 workspace_id: workspace_id.clone(),
                 tab_id: tab_id.clone(),

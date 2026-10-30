@@ -93,7 +93,10 @@ fn run_coordinator(
     let mut purpose_mirror = if context.is_local()
         && let Some(node) = context.node()
     {
-        match live::PurposeMirror::new(Arc::clone(&context.engine), Arc::clone(node)) {
+        match crate::worktree_control::PurposeMirror::new(
+            Arc::clone(&context.engine),
+            Arc::clone(node),
+        ) {
             Ok(mirror) => Some(mirror),
             Err(message) => {
                 crate::diagnostic!(json!({
@@ -1333,7 +1336,7 @@ fn publish_replica(
     context: &SessionSyncContext,
     replica: &mut SessionReplica,
     catalog_cache: &mut CatalogState,
-    purpose_mirror: &mut Option<live::PurposeMirror>,
+    purpose_mirror: &mut Option<crate::worktree_control::PurposeMirror>,
     labels: &mut Option<LabelWorker>,
     arrivals: &mut Vec<HerdrArrival>,
 ) -> bool {

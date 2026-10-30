@@ -20,7 +20,8 @@ use super::{
     PaneJoinResult, PanePlace, PaneProcessGroup, PaneProof, PaneSession, PaneText, PreparedStart,
     ServerPong, SharedEngine, StartedAgent, StopEvents, Wait, Zoom,
 };
-use crate::live::{PaneResizeDirection, PaneScroll, PaneSplitDirection};
+use crate::find::pane::PaneScroll;
+use crate::live::{PaneResizeDirection, PaneSplitDirection};
 use crate::recent_closed::{ClosedLayout, ClosedLayoutNode, ClosedSplitDirection};
 use crate::session_sync::{ProjectedAgent, ProjectionState};
 use crate::sidebar::{SessionLayoutPayload, SessionSnapshotPayload};

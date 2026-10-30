@@ -873,12 +873,12 @@ fn durable_dormant_journey_in(kind: &'static str, interference: &'static str, op
         assert!(persisted_dormant(&path, &id).is_null());
         let (changed, effects) = runtime.ingest_close_capture_result(
             &retired_capture,
-            Ok(live::CloseCaptureOutcome { item: None }),
+            Ok(crate::recent_closed::capture::CloseCaptureOutcome { item: None }),
         );
         assert!(!changed);
         assert!(effects.is_empty());
         assert!(!runtime.ingest_close_effect_result(
-            &live::CloseEffectRequest {
+            &crate::recent_closed::capture::CloseEffectRequest {
                 safety: None,
                 failed_terminals: Vec::new(),
                 retain_for_reopen: false,
@@ -1844,7 +1844,7 @@ fn failed_terminal_close_errors_keep_the_sleeping_row_and_failure() {
             .failed_terminal_id = Some("failed-terminal".into());
         runtime.ingest_session(Ok(failed));
         let mut request = close_capture_request("failed-sleep");
-        request.target = live::CloseCaptureTarget::Pane {
+        request.target = crate::recent_closed::capture::CloseCaptureTarget::Pane {
             pane_id: SLEEPER.into(),
         };
         request.context.tab_id = "w-order:t2".into();

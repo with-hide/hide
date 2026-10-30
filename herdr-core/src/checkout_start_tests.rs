@@ -1,6 +1,8 @@
 //! Controller regressions at the typed socket and node boundaries.
 use super::*;
 use crate::fake_herdr::FakeHerdr;
+use crate::live::ControlFailure;
+use crate::worktree_control::{CheckoutStart, CheckoutTabRequest, WorktreeTaskOutcome};
 use hide_herdr_client::{
     ApiConnector, ApiError, ApiStream, ConnectionShutdown, LocalSocketConnector,
 };

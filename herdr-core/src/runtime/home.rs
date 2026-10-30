@@ -79,13 +79,13 @@ impl Runtime {
             return true;
         }
         let target = if local {
-            self.live
-                .as_ref()
-                .map(|context| live::TabTarget::local(context, self.live_generation))
+            self.live.as_ref().map(|context| {
+                crate::worktree_control::TabTarget::local(context, self.live_generation)
+            })
         } else {
             self.remote_controls
                 .get(device)
-                .map(live::TabTarget::device)
+                .map(crate::worktree_control::TabTarget::device)
         };
         let Some(target) = target else {
             self.set_request_error(
@@ -136,13 +136,13 @@ impl Runtime {
             .entry(device.to_owned())
             .or_default()
             .requested = Some(projects.clone());
-        let request = live::HomeStartRequest {
+        let request = crate::worktree_control::HomeStartRequest {
             id,
             device_id: device.to_owned(),
             projects,
             host,
         };
-        if let Err(message) = live::spawn_home_start(target, request) {
+        if let Err(message) = crate::worktree_control::spawn_home_start(target, request) {
             self.forget_home_sync(device);
             return self.ingest_task_operation_result(id, Err(message.into()));
         }
@@ -157,7 +157,7 @@ impl Runtime {
         device: &str,
         projects: &[String],
         synced: Result<HomeSynced, LinkError>,
-    ) -> Option<live::CheckoutTabRequest> {
+    ) -> Option<crate::worktree_control::CheckoutTabRequest> {
         if synced.is_err() {
             self.forget_home_sync(device);
         }
@@ -221,7 +221,7 @@ impl Runtime {
         ));
         // A registration that changed while this sync ran is caught up now.
         self.request_home_link_syncs();
-        Some(live::CheckoutTabRequest {
+        Some(crate::worktree_control::CheckoutTabRequest {
             start: None,
             resume_reference: None,
             id,
@@ -362,9 +362,12 @@ impl Runtime {
             state.requested = Some(projects.clone());
             state.in_flight = true;
             state.deferred = false;
-            if let Err(message) =
-                live::spawn_home_link_sync(context.clone(), device.clone(), projects, host)
-            {
+            if let Err(message) = crate::worktree_control::spawn_home_link_sync(
+                context.clone(),
+                device.clone(),
+                projects,
+                host,
+            ) {
                 if let Some(state) = self.home_links.get_mut(&device) {
                     state.in_flight = false;
                 }

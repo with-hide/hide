@@ -5,10 +5,13 @@
 //! like any other, and the confirmation closes those panes before it removes.
 //! All inspection and filesystem effects run on the existing action-worker
 //! path, never under the runtime lock.
-use super::{CONTROL_WAIT, ChangeNotifier, GhPlace, Runtime, failed};
 use crate::engine::{EngineError, SharedEngine};
+use crate::handle::ChangeNotifier;
+use crate::live::{CONTROL_WAIT, failed};
 use crate::model::ListeningPortSnapshot;
 use crate::node_access::{NodeLink, call_as};
+use crate::runtime::Runtime;
+use crate::worktree_control::GhPlace;
 use crate::{disk, github};
 use hide_node_link::cleanup::{
     CleanRemoval, FolderJudgments, FolderToJudge, FolderVerdict, PathState, RepositoryDirs,
@@ -266,7 +269,10 @@ pub(crate) struct CleanupPlace {
 
 impl CleanupPlace {
     /// This machine's project: its Herdr and the core's own node.
-    pub(crate) fn local(context: super::LiveContext, github: Result<GhPlace, String>) -> Self {
+    pub(crate) fn local(
+        context: crate::live::LiveContext,
+        github: Result<GhPlace, String>,
+    ) -> Self {
         Self {
             runtime: context.runtime,
             notifier: context.notifier,
@@ -278,7 +284,7 @@ impl CleanupPlace {
 
     /// A node's project: the node's Herdr and its link.
     pub(crate) fn node(
-        control: &super::RemoteControlContext,
+        control: &crate::live::RemoteControlContext,
         node: Arc<dyn NodeLink>,
         github: Result<GhPlace, String>,
     ) -> Self {
@@ -1597,13 +1603,13 @@ fn close_checkout(
     if to_close.is_empty() {
         return Ok(());
     }
-    super::close_checkout_panes(
+    crate::worktree_control::close_checkout_panes(
         context.engine.as_ref(),
         context.node.as_ref(),
         &[path.to_owned()],
         &to_close,
-        super::ProcessWait::for_folder_removal(true),
-        super::CONFIRM_TIMEOUT,
+        crate::worktree_control::ProcessWait::for_folder_removal(true),
+        crate::worktree_control::CONFIRM_TIMEOUT,
     )
     .map_err(|message| Refusal::failed("close_refused", message))
 }

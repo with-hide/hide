@@ -522,7 +522,7 @@ fn reveal_and_reopen_open_ordinary_tabs() {
         .back()
         .cloned()
         .expect("the closed file");
-    let request = live::ReopenRequest {
+    let request = crate::recent_closed::reopen::ReopenRequest {
         codex_daemon: Default::default(),
         item,
         workspace_exists: true,
@@ -533,8 +533,10 @@ fn reveal_and_reopen_open_ordinary_tabs() {
     runtime.reopen_in_flight = Some(request.item.key().to_owned());
     assert!(runtime.ingest_reopen_result(
         &request,
-        Ok(live::FileReopenResultOrHerdr::File(
-            live::FileReopenResult::Opened(Box::new(files::tests::open_local(&target)))
+        Ok(crate::recent_closed::reopen::FileReopenResultOrHerdr::File(
+            crate::recent_closed::reopen::FileReopenResult::Opened(Box::new(
+                files::tests::open_local(&target)
+            ))
         )),
     ));
     assert_eq!(

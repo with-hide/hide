@@ -1806,7 +1806,7 @@ mod tests {
         assert!(branch.contains("a script or an automated check"));
         assert!(branch.contains("seen as failed_tool `cargo test` in 4 records"));
         assert!(branch.contains("Korean"));
-        assert!(crate::live::prompt_argument(&branch).is_ok());
+        assert!(crate::worktree_control::prompt_argument(&branch).is_ok());
 
         brief.pr = Some(PrRef {
             number: 9,

@@ -54,7 +54,7 @@ pub(crate) fn spawn_dormant_status(
                             .as_ref()
                             .ok_or_else(|| "The saved checkout is unavailable".to_owned())
                             .and_then(|owner| {
-                                crate::live::inspect_sleep_tab(
+                                crate::recent_closed::reopen::inspect_sleep_tab(
                                     context.engine.as_ref(),
                                     work.id.as_str(),
                                     &work.record.context,
@@ -105,7 +105,7 @@ pub(crate) fn spawn_dormant_tab(
             } else if !crate::node_access::is_directory(context.node.as_ref(), &work.record.cwd) {
                 DormantTabOutcome::NotCreated("The saved working folder is unavailable. Restore it before retrying; no tab was created.")
             } else {
-                match crate::live::create_sleep_tab(
+                match crate::recent_closed::reopen::create_sleep_tab(
                     context.engine.gated(wake_gate(&context, &work)).as_ref(),
                     context.node.as_ref(),
                     work.id.as_str(),
@@ -188,7 +188,7 @@ fn work_is_current(context: &LiveContext, work: &DormantWork) -> bool {
 #[derive(Clone)]
 enum CurrentIntent {
     Wake(Arc<DormantWork>),
-    Close(Arc<crate::live::CloseEffectRequest>),
+    Close(Arc<crate::recent_closed::capture::CloseEffectRequest>),
 }
 
 fn wake_gate(context: &LiveContext, work: &DormantWork) -> Gate<'static> {
@@ -203,7 +203,7 @@ fn wake_gate(context: &LiveContext, work: &DormantWork) -> Gate<'static> {
 /// each request is written.
 pub(crate) fn dormant_close_gate(
     context: &LiveContext,
-    effect: &crate::live::CloseEffectRequest,
+    effect: &crate::recent_closed::capture::CloseEffectRequest,
 ) -> Gate<'static> {
     let before = context.clone();
     let key = effect.key.clone();

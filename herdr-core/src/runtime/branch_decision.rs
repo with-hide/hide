@@ -11,8 +11,7 @@
 
 use super::memory_promotion::{Retire, agents_listed, panes_in, retire_attempt, worktree_path};
 use crate::node::NodeId;
-use crate::node_access::LinkError;
-use crate::node_access::NodeLink;
+use crate::node_access::{LinkError, NodeLink};
 use hide_node_link::branch::{
     BaseSyncOutcome, BranchFacts, DiscardOutcome, MergeOutcome, MergePushOutcome, MergeStep,
 };
@@ -321,13 +320,13 @@ pub(super) fn discard(
             return Err("another agent works in the worktree".into());
         }
         let all = own.iter().chain(&others).cloned().collect::<Vec<_>>();
-        crate::live::close_checkout_panes(
+        crate::worktree_control::close_checkout_panes(
             connector,
             link,
             std::slice::from_ref(&path),
             &all,
-            crate::live::ProcessWait::for_folder_removal(true),
-            crate::live::CONFIRM_TIMEOUT,
+            crate::worktree_control::ProcessWait::for_folder_removal(true),
+            crate::worktree_control::CONFIRM_TIMEOUT,
         )?;
         crate::node_access::call_as::<()>(
             link,
@@ -366,13 +365,13 @@ pub(super) fn end_agent(
     link: &dyn NodeLink,
     pane: &str,
 ) -> Result<(), String> {
-    crate::live::close_checkout_panes(
+    crate::worktree_control::close_checkout_panes(
         connector,
         link,
         &[],
         &[pane.to_owned()],
-        crate::live::ProcessWait::for_folder_removal(false),
-        crate::live::CONFIRM_TIMEOUT,
+        crate::worktree_control::ProcessWait::for_folder_removal(false),
+        crate::worktree_control::CONFIRM_TIMEOUT,
     )
 }
 

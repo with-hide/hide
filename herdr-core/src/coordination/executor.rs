@@ -885,7 +885,7 @@ fn spawn(
                         pane
                     }
                     (None, None) => {
-                        let tab = crate::live::open_owner_tab(
+                        let tab = crate::checkout_owner::open::open_owner_tab(
                             engine.as_ref(),
                             &owner,
                             &existing,
@@ -916,7 +916,7 @@ fn spawn(
                 // Herdr, the folder's own HEAD.
                 let start = node
                     .as_deref()
-                    .and_then(|node| crate::live::new_branch_start(node, repo, None));
+                    .and_then(|node| crate::worktree_control::new_branch_start(node, repo, None));
                 let created = engine
                     .create_worktree(
                         Wait::Each(WORKTREE_CREATE_TIMEOUT),
@@ -932,9 +932,9 @@ fn spawn(
                         error => worktree_create_refusal(error),
                     })?;
                 let launch = crate::agent_start::shell_launch(node.as_deref(), &reserved.id);
-                let tab = crate::live::replace_tab(
+                let tab = crate::checkout_owner::open::replace_tab(
                     engine.as_ref(),
-                    crate::live::OwnedTab {
+                    crate::checkout_owner::open::OwnedTab {
                         initial_label: Some(created.tab_label),
                         workspace_id: created.workspace_id,
                         tab_id: created.tab_id,

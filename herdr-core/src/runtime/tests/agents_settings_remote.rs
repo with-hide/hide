@@ -2291,7 +2291,7 @@ fn remote_purpose_results_update_clear_and_preserve_the_exact_checkout() {
     let id = begin_remote_purpose_operation(&mut runtime);
     assert!(runtime.ingest_purpose_operation_result(
         id,
-        Ok(live::PurposeTaskOutcome::Saved {
+        Ok(crate::worktree_control::PurposeTaskOutcome::Saved {
             purpose: "Remote updated".to_owned(),
             token_written: true,
         })
@@ -2311,7 +2311,7 @@ fn remote_purpose_results_update_clear_and_preserve_the_exact_checkout() {
     let id = begin_remote_purpose_operation(&mut runtime);
     assert!(runtime.ingest_purpose_operation_result(
         id,
-        Ok(live::PurposeTaskOutcome::Saved {
+        Ok(crate::worktree_control::PurposeTaskOutcome::Saved {
             purpose: String::new(),
             token_written: true,
         })

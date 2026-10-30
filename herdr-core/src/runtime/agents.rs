@@ -982,7 +982,7 @@ impl Runtime {
             .filter_map(|pane| {
                 let source = remote_pane_source_id(&target_id, &pane.id)?;
                 scope_pane_ids.contains(&source.to_owned()).then_some(())?;
-                Some(live::ClosePeer {
+                Some(crate::recent_closed::capture::ClosePeer {
                     pane_id: source.to_owned(),
                     terminal_id: pane.terminal_id.clone()?,
                     session: session
@@ -1021,7 +1021,7 @@ impl Runtime {
             action,
             connection_generation,
             failed_terminals,
-            live::CloseSafety {
+            crate::recent_closed::capture::CloseSafety {
                 pane_ids: scope_pane_ids,
                 approved_peers,
                 deadline: std::time::Instant::now()

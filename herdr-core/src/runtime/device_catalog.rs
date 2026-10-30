@@ -1216,7 +1216,7 @@ impl Runtime {
     }
 
     /// A project just registered on `device` opens on one terminal, as one
-    /// on this machine does (`live::spawn_workspace_creation`): the request
+    /// on this machine does (`crate::checkout_owner::open::spawn_workspace_creation`): the request
     /// New tab sends, started by the registration rather than by a second
     /// event from the shell, once the device's helper has confirmed the
     /// folder (`request_device_facts`), since an unconfirmed checkout opens no

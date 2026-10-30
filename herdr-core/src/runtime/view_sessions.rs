@@ -160,7 +160,7 @@ impl Runtime {
     /// sleep's, which only Hide asks for and which keeps them (D-14, D-27).
     pub(super) fn closing_view_sessions(
         &self,
-        request: &live::CloseCaptureRequest,
+        request: &crate::recent_closed::capture::CloseCaptureRequest,
         pane_ids: &[String],
     ) -> Vec<SessionScope> {
         let archive = pane_ids.iter().any(|pane| self.archive_closes_pane(pane));

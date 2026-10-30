@@ -1,10 +1,25 @@
 //! Worktree actions cross the socket boundary before publishing removal readiness.
-use super::*;
+use std::sync::{Arc, Mutex, Weak};
+use std::thread;
+use std::time::{Duration, Instant};
+
+use crate::engine::{Engine, EngineError, SharedEngine, Wait};
+use serde_json::json;
+
+use crate::checkout_owner::open::{OwnedTab, create_tab_in, open_owner_tab, replace_tab};
+use crate::handle::ChangeNotifier;
+use crate::model::WorkspaceSnapshot;
+use crate::runtime::Runtime;
+use crate::workspace;
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::Path;
 use std::sync::mpsc::{SyncSender, TrySendError, sync_channel};
 
 use crate::agent_start::StartError;
+use crate::live::{
+    CONTROL_WAIT, ControlFailure, LiveContext, RemoteControlContext, current_session, failed,
+};
+use crate::recent_closed::reopen::export_reopen_layout;
 use hide_node_link::git::{BranchConfigKey, GitCommand};
 use hide_node_link::process::ProcessStart;
 use hide_node_link::protocol::Call;
@@ -1950,8 +1965,8 @@ fn create_checked_checkout_tab(
     if request.start.is_none() {
         return create_checkout_tab(engine, request, launch);
     }
-    super::checkout_start::run(
-        &super::checkout_start::Control {
+    crate::checkout_start::run(
+        &crate::checkout_start::Control {
             engine,
             node,
             check,
@@ -2125,7 +2140,7 @@ fn create_checkout_tab(
     let env = launch.map(|launch| launch.env.clone()).unwrap_or_default();
     let command = launch.map(|launch| launch.command.as_slice());
     let tab = match &request.host {
-        crate::checkout_owner::TabHost::Workspace(workspace_id) => super::create_tab_in(
+        crate::checkout_owner::TabHost::Workspace(workspace_id) => create_tab_in(
             engine,
             workspace_id,
             &request.cwd,
@@ -2134,7 +2149,7 @@ fn create_checkout_tab(
             env,
             command,
         ),
-        crate::checkout_owner::TabHost::Open(owner) => super::open_owner_tab(
+        crate::checkout_owner::TabHost::Open(owner) => open_owner_tab(
             engine,
             owner,
             &request.cwd,
@@ -2252,9 +2267,9 @@ fn create_worktree_observing_purpose(
                 &format!("herdr-core:task:{}:worktree", request.id),
             )
         });
-        let tab = super::replace_tab(
+        let tab = replace_tab(
             engine,
-            super::OwnedTab {
+            OwnedTab {
                 initial_label: Some(created.tab_label.clone()),
                 workspace_id: created.workspace_id.clone(),
                 tab_id: created.tab_id.clone(),

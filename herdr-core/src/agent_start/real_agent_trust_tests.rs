@@ -61,7 +61,7 @@ fn claude_in(herdr: &PrivateHerdr, claude: &Path, folder: &Path, label: &str) ->
     .map(|(key, value)| (key.to_owned(), value.to_owned()))
     .collect();
     let command = [claude.to_str().unwrap().to_owned()];
-    let tab = crate::live::create_tab_in(
+    let tab = crate::checkout_owner::open::create_tab_in(
         herdr.engine().as_ref(),
         &workspace,
         folder.to_str().unwrap(),

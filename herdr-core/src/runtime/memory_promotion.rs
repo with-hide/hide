@@ -1619,13 +1619,13 @@ fn release_attempt(
         if agents.iter().any(|agent| panes.contains(&agent.pane_id)) {
             return Ok("active");
         }
-        crate::live::close_checkout_panes(
+        crate::worktree_control::close_checkout_panes(
             connector,
             node,
             std::slice::from_ref(&path),
             &panes,
-            crate::live::ProcessWait::for_folder_removal(true),
-            crate::live::CONFIRM_TIMEOUT,
+            crate::worktree_control::ProcessWait::for_folder_removal(true),
+            crate::worktree_control::CONFIRM_TIMEOUT,
         )?;
         // What ran in the panes until they closed may have committed or
         // written there: that work stays.
@@ -1781,13 +1781,13 @@ pub(super) fn retire_attempt(
             .into_iter()
             .map(|agent| agent.pane_id.clone())
             .collect::<Vec<_>>();
-        crate::live::close_checkout_panes(
+        crate::worktree_control::close_checkout_panes(
             connector,
             node,
             &[],
             &attempt,
-            crate::live::ProcessWait::for_folder_removal(true),
-            crate::live::CONFIRM_TIMEOUT,
+            crate::worktree_control::ProcessWait::for_folder_removal(true),
+            crate::worktree_control::CONFIRM_TIMEOUT,
         )?;
         if !others.is_empty() {
             return Ok((Retired::Kept, "another agent works in it"));
@@ -1818,13 +1818,13 @@ pub(super) fn retire_attempt(
         if !status.trim().is_empty() {
             return Ok((Retired::Kept, "it holds uncommitted changes"));
         }
-        crate::live::close_checkout_panes(
+        crate::worktree_control::close_checkout_panes(
             connector,
             node,
             std::slice::from_ref(&path),
             &remaining,
-            crate::live::ProcessWait::for_folder_removal(true),
-            crate::live::CONFIRM_TIMEOUT,
+            crate::worktree_control::ProcessWait::for_folder_removal(true),
+            crate::worktree_control::CONFIRM_TIMEOUT,
         )?;
         crate::node_access::call_as::<()>(
             node,
@@ -2417,7 +2417,7 @@ pub(super) fn spawn_hide_agent(
         .ok_or("agent_not_startable")?;
     let args = vec![
         dialect.prompt_flag().to_owned(),
-        crate::live::prompt_argument(&spawn.prompt)?,
+        crate::worktree_control::prompt_argument(&spawn.prompt)?,
     ];
     crate::coordination::register_code_owned(&start.client, &start.authority, &start.actor)?;
     let view = crate::coordination::run(
@@ -4105,7 +4105,7 @@ mod tests {
             assert!(prompt.contains(step), "{step}");
         }
         assert!(!prompt.contains("open one PR"), "a batch commits and stops");
-        assert!(crate::live::prompt_argument(&prompt).is_ok());
+        assert!(crate::worktree_control::prompt_argument(&prompt).is_ok());
         assert!(
             super::prompt(
                 &[7],

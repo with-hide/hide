@@ -187,7 +187,7 @@ jobs:
           The core carries behavior assumptions about a specific Herdr build - that
           \`pane.close\` removes an emptied tab without a separate event
           (\`session_sync/coordinator.rs\`), that \`terminal.scroll\` publishes no new attach frame on
-          its own (\`live.rs\`), and the tab reorder ordering a live server was observed
+          its own (\`find/pane.rs\`), and the tab reorder ordering a live server was observed
           to answer with (\`runtime.rs\`). Every test covering those feeds fixtures this
           repository wrote, so a green suite says the code is self-consistent, not that
           v${latest} still behaves that way.

@@ -1950,7 +1950,7 @@ pub struct WorkspaceSnapshot {
     pub disk: ProjectDiskSnapshot,
     /// The disk cleanup review or run of this project, while there is one.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub cleanup: Option<crate::live::cleanup::CleanupSnapshot>,
+    pub cleanup: Option<crate::worktree_cleanup::CleanupSnapshot>,
 }
 
 /// What a project's agents are doing, decided by the core so the shell only

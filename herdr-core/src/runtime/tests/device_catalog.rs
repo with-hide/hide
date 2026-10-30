@@ -3185,7 +3185,7 @@ fn a_device_created_worktrees_first_tab_stays_in_its_worktree_while_the_pane_rep
         .device_id = Some(TARGET.to_owned());
     assert!(runtime.ingest_task_operation_result(
         id,
-        Ok(live::WorktreeTaskOutcome {
+        Ok(crate::worktree_control::WorktreeTaskOutcome {
             path: t.linked.clone(),
             pane_id: "w2p".to_owned(),
             created_tab_id: Some("t2".to_owned()),

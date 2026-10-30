@@ -413,7 +413,7 @@ fn a_closed_agent_takes_its_choice_to_the_pane_its_reopen_makes() {
     let item = closed_file("closed", "/repo/closed.rs");
     runtime.push_recent_closed(item.clone());
     runtime.reopen_in_flight = Some("closed".to_owned());
-    let request = live::ReopenRequest {
+    let request = crate::recent_closed::reopen::ReopenRequest {
         codex_daemon: Default::default(),
         item,
         workspace_exists: true,
@@ -423,19 +423,23 @@ fn a_closed_agent_takes_its_choice_to_the_pane_its_reopen_makes() {
     };
     assert!(runtime.ingest_reopen_result(
         &request,
-        Ok(live::FileReopenResultOrHerdr::Herdr(live::ReopenOutcome {
-            tab_id: None,
-            consumed: true,
-            focused_pane_id: None,
-            notices: vec![],
-            agents: vec![live::ReopenedAgent {
-                pane_id: "w-order:t3:p".into(),
-                kind: "claude".into(),
-                name: "reopen-closed-0".into(),
-                launch: launch.clone(),
-                session_id: Some(SESSION.into()),
-            }],
-        })),
+        Ok(
+            crate::recent_closed::reopen::FileReopenResultOrHerdr::Herdr(
+                crate::recent_closed::reopen::ReopenOutcome {
+                    tab_id: None,
+                    consumed: true,
+                    focused_pane_id: None,
+                    notices: vec![],
+                    agents: vec![crate::recent_closed::reopen::ReopenedAgent {
+                        pane_id: "w-order:t3:p".into(),
+                        kind: "claude".into(),
+                        name: "reopen-closed-0".into(),
+                        launch: launch.clone(),
+                        session_id: Some(SESSION.into()),
+                    }],
+                }
+            )
+        ),
     ));
     assert_eq!(
         runtime

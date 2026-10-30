@@ -1759,7 +1759,7 @@ fn a_node_s_merged_worktree_is_removed_on_the_node_and_a_changed_one_is_refused(
     };
     // What the core showed and answered when the review's answer was
     // announced. Asserted afterwards: the announcement swallows a panic.
-    type Pressed = (crate::live::cleanup::CleanupSnapshot, Option<u64>, bool);
+    type Pressed = (crate::worktree_cleanup::CleanupSnapshot, Option<u64>, bool);
     let pressed = Arc::new(Mutex::new(None::<Pressed>));
     {
         let mut runtime = shared.lock().unwrap();

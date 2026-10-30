@@ -315,7 +315,7 @@ impl Runtime {
         } else {
             self.github_place(node.as_deref(), &workspace.path)
                 .map(|place| {
-                    Some(crate::live::GhPlace {
+                    Some(crate::worktree_control::GhPlace {
                         node: self.own_node(),
                         place,
                     })
@@ -344,7 +344,7 @@ impl Runtime {
                     .as_mut()
                     .expect("the task operation was begun above");
                 operation.phase = "failed".into();
-                operation.failure = Some(crate::live::TaskFailure::from(message).code);
+                operation.failure = Some(crate::worktree_control::TaskFailure::from(message).code);
                 return Ok(());
             }
         };
@@ -377,7 +377,7 @@ impl Runtime {
                 (session, previous)
             }
         };
-        let request = crate::live::PurposeTaskRequest {
+        let request = crate::worktree_control::PurposeTaskRequest {
             id,
             checkout_id: checkout.id.clone(),
             repository_root: workspace.path,
@@ -395,12 +395,12 @@ impl Runtime {
             Some(node) => self.device_worktree_target(node),
         };
         let result = target.and_then(|target| {
-            crate::live::spawn_issue_write(target, read, request.clone(), previous)
+            crate::worktree_control::spawn_issue_write(target, read, request.clone(), previous)
         });
         if let Err(error) = result {
             self.ingest_issue_operation_result(
                 &request,
-                Err(crate::live::IssueWriteFailure::unchanged(error)),
+                Err(crate::worktree_control::IssueWriteFailure::unchanged(error)),
             );
         }
         Ok(())
@@ -408,8 +408,11 @@ impl Runtime {
 
     pub(crate) fn ingest_issue_operation_result(
         &mut self,
-        request: &crate::live::PurposeTaskRequest,
-        result: Result<Option<crate::issues::IssueSnapshot>, crate::live::IssueWriteFailure>,
+        request: &crate::worktree_control::PurposeTaskRequest,
+        result: Result<
+            Option<crate::issues::IssueSnapshot>,
+            crate::worktree_control::IssueWriteFailure,
+        >,
     ) -> bool {
         let Some(pending) = self
             .issue_write_pending
@@ -518,8 +521,11 @@ impl Runtime {
     fn ingest_node_issue_write(
         &mut self,
         node: &str,
-        request: &crate::live::PurposeTaskRequest,
-        result: Result<Option<crate::issues::IssueSnapshot>, crate::live::IssueWriteFailure>,
+        request: &crate::worktree_control::PurposeTaskRequest,
+        result: Result<
+            Option<crate::issues::IssueSnapshot>,
+            crate::worktree_control::IssueWriteFailure,
+        >,
     ) -> bool {
         match result {
             Ok(issue) => {

@@ -1912,7 +1912,7 @@ pub struct Runtime {
     disk_generation: u64,
     /// The Projects tab's disk sweep, per machine (`disk_sweep.rs`).
     disk_sweeps: disk_sweep::Sweeps,
-    cleanup: Option<live::cleanup::CleanupSnapshot>,
+    cleanup: Option<crate::worktree_cleanup::CleanupSnapshot>,
     /// The node whose session last carried `cleanup`, so a cleanup that
     /// replaces it on another project also leaves that node's rows.
     cleanup_published_node: Option<String>,

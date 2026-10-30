@@ -233,7 +233,7 @@ mod tests {
     #[cfg(windows)]
     #[test]
     fn cleanup_keeps_a_checkout_in_use_when_a_listener_starts_through_another_spelling() {
-        use crate::live::cleanup::{CheckoutFacts, read_in_use};
+        use crate::worktree_cleanup::{CheckoutFacts, read_in_use};
         use hide_platform::fs::{identity, link};
         use std::io::{BufRead, BufReader};
         use std::path::PathBuf;

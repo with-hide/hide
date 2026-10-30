@@ -1,9 +1,17 @@
 //! A saved start creates one explicitly claimed terminal, then joins that
 //! terminal into the requested tab without replacing any existing PTY.
-use super::*;
-use crate::recent_closed::ClosedLayout;
+use std::time::{Duration, Instant};
+
+use crate::engine::{Engine, EngineError};
+
+use crate::checkout_owner::open::ensure_owner;
+use crate::live::{CONTROL_WAIT, ControlFailure, fetch_session, mutation_failure};
+use crate::recent_closed::reopen::export_reopen_layout;
+use crate::recent_closed::{ClosedLayout, ClosedLayoutNode};
 use crate::start_claim::{BoundPane, Effect};
+use crate::worktree_control::{CheckoutTabRequest, WorktreeTaskOutcome};
 use hide_node_link::panes::PaneIdentity;
+use hide_node_link::protocol::Call;
 use hide_node_link::protocol::ShellLaunch;
 
 #[cfg(test)]

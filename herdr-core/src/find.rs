@@ -11,6 +11,8 @@
 //! match can be turned into a scroll distance. Fetching either one is
 //! [`crate::live`]'s job, off the runtime mutex.
 
+pub(crate) mod pane;
+
 /// How a term is compared. Every option applies to the whole buffer: an option
 /// that searched only the visible rows would put back the counter this module
 /// exists to fix.

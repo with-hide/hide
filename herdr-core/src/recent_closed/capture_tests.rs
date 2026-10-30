@@ -1,7 +1,9 @@
 use super::*;
 use crate::fake_herdr::FakeHerdr;
+use crate::live::{RemoteControlAction, RemoteControlOutcome, execute_local_control};
+use crate::recent_closed::reopen::REOPEN_INTENT_ENV;
 use hide_herdr_client::HERDR_PROTOCOL_REVISION;
-use serde_json::Value;
+use serde_json::{Value, json};
 
 /// B5: authorization never follows a failed pane into another tab or covers
 /// a new/now-active peer in the tab the user selected.

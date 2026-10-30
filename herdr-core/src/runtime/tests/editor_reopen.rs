@@ -1626,7 +1626,7 @@ fn close_capture_completion_cannot_invert_user_close_order() {
 
     let (_, early_effects) = runtime.ingest_close_capture_result(
         &second,
-        Ok(live::CloseCaptureOutcome {
+        Ok(crate::recent_closed::capture::CloseCaptureOutcome {
             item: Some(closed_file("second", "/repo/second.rs")),
         }),
     );
@@ -1642,7 +1642,7 @@ fn close_capture_completion_cannot_invert_user_close_order() {
 
     let (_, ordered_effects) = runtime.ingest_close_capture_result(
         &first,
-        Ok(live::CloseCaptureOutcome {
+        Ok(crate::recent_closed::capture::CloseCaptureOutcome {
             item: Some(closed_file("first", "/repo/first.rs")),
         }),
     );
@@ -1681,7 +1681,7 @@ fn rejected_close_removes_only_its_reserved_item() {
     runtime.push_recent_closed(closed_file("second", "/repo/second.rs"));
 
     runtime.ingest_close_effect_result(
-        &live::CloseEffectRequest {
+        &crate::recent_closed::capture::CloseEffectRequest {
             safety: None,
             failed_terminals: Vec::new(),
             retain_for_reopen: true,
@@ -1689,7 +1689,7 @@ fn rejected_close_removes_only_its_reserved_item() {
             replacement: None,
             key: "first".to_owned(),
             connection_generation: 0,
-            target: live::CloseCaptureTarget::Tab {
+            target: crate::recent_closed::capture::CloseCaptureTarget::Tab {
                 tab_id: "tab:first".to_owned(),
             },
         },
@@ -1718,7 +1718,7 @@ fn ambiguous_close_result_keeps_the_reserved_item_for_reconciliation() {
         let mut runtime = runtime();
         runtime.push_recent_closed(closed_file("first", "/repo/first.rs"));
         runtime.ingest_close_effect_result(
-            &live::CloseEffectRequest {
+            &crate::recent_closed::capture::CloseEffectRequest {
                 safety: None,
                 failed_terminals: Vec::new(),
                 retain_for_reopen: true,
@@ -1726,7 +1726,7 @@ fn ambiguous_close_result_keeps_the_reserved_item_for_reconciliation() {
                 replacement: None,
                 key: "first".to_owned(),
                 connection_generation: 0,
-                target: live::CloseCaptureTarget::Tab {
+                target: crate::recent_closed::capture::CloseCaptureTarget::Tab {
                     tab_id: "tab:first".to_owned(),
                 },
             },
@@ -1797,7 +1797,7 @@ fn recent_closed_failure_retains_and_missing_file_consumes() {
     let mut runtime = runtime();
     let item = closed_file("reopen-fixture", "/repo/gone.rs");
     runtime.push_recent_closed(item.clone());
-    let request = live::ReopenRequest {
+    let request = crate::recent_closed::reopen::ReopenRequest {
         codex_daemon: Default::default(),
         item,
         workspace_exists: true,
@@ -1816,8 +1816,8 @@ fn recent_closed_failure_retains_and_missing_file_consumes() {
     runtime.reopen_in_flight = Some("reopen-fixture".to_owned());
     assert!(runtime.ingest_reopen_result(
         &request,
-        Ok(live::FileReopenResultOrHerdr::File(
-            live::FileReopenResult::Missing,
+        Ok(crate::recent_closed::reopen::FileReopenResultOrHerdr::File(
+            crate::recent_closed::reopen::FileReopenResult::Missing,
         )),
     ));
     let consumed = runtime.snapshot();
@@ -1838,7 +1838,7 @@ fn reopen_completion_preserves_a_newer_close() {
     runtime.push_recent_closed(first.clone());
     runtime.reopen_in_flight = Some("first".to_owned());
     runtime.push_recent_closed(closed_file("second", "/repo/second.rs"));
-    let request = live::ReopenRequest {
+    let request = crate::recent_closed::reopen::ReopenRequest {
         codex_daemon: Default::default(),
         item: first,
         workspace_exists: true,
@@ -1849,13 +1849,17 @@ fn reopen_completion_preserves_a_newer_close() {
 
     assert!(runtime.ingest_reopen_result(
         &request,
-        Ok(live::FileReopenResultOrHerdr::Herdr(live::ReopenOutcome {
-            tab_id: None,
-            consumed: true,
-            focused_pane_id: None,
-            notices: vec![],
-            agents: Vec::new(),
-        },)),
+        Ok(
+            crate::recent_closed::reopen::FileReopenResultOrHerdr::Herdr(
+                crate::recent_closed::reopen::ReopenOutcome {
+                    tab_id: None,
+                    consumed: true,
+                    focused_pane_id: None,
+                    notices: vec![],
+                    agents: Vec::new(),
+                },
+            )
+        ),
     ));
 
     let snapshot = runtime.snapshot();
@@ -1869,40 +1873,45 @@ fn reopen_completion_preserves_a_newer_close() {
 
 #[test]
 fn every_consuming_reopen_result_removes_only_its_request_key() {
-    let assert_newer_close_survives = |result: live::FileReopenResultOrHerdr, first_path: &str| {
-        let mut runtime = runtime();
-        let first = closed_file("first", first_path);
-        runtime.push_recent_closed(first.clone());
-        runtime.reopen_in_flight = Some("first".to_owned());
-        runtime.push_recent_closed(closed_file("second", "/repo/second.rs"));
-        let request = live::ReopenRequest {
-            codex_daemon: Default::default(),
-            item: first,
-            workspace_exists: true,
-            tab_exists: true,
-            fallback_pane_id: None,
-            owner: None,
+    let assert_newer_close_survives =
+        |result: crate::recent_closed::reopen::FileReopenResultOrHerdr, first_path: &str| {
+            let mut runtime = runtime();
+            let first = closed_file("first", first_path);
+            runtime.push_recent_closed(first.clone());
+            runtime.reopen_in_flight = Some("first".to_owned());
+            runtime.push_recent_closed(closed_file("second", "/repo/second.rs"));
+            let request = crate::recent_closed::reopen::ReopenRequest {
+                codex_daemon: Default::default(),
+                item: first,
+                workspace_exists: true,
+                tab_exists: true,
+                fallback_pane_id: None,
+                owner: None,
+            };
+            assert!(runtime.ingest_reopen_result(&request, Ok(result)));
+            assert_eq!(runtime.snapshot().recent_closed.count, 1);
+            assert_eq!(
+                runtime.snapshot().recent_closed.top_label.as_deref(),
+                Some("second.rs")
+            );
         };
-        assert!(runtime.ingest_reopen_result(&request, Ok(result)));
-        assert_eq!(runtime.snapshot().recent_closed.count, 1);
-        assert_eq!(
-            runtime.snapshot().recent_closed.top_label.as_deref(),
-            Some("second.rs")
-        );
-    };
 
     assert_newer_close_survives(
-        live::FileReopenResultOrHerdr::File(live::FileReopenResult::Missing),
+        crate::recent_closed::reopen::FileReopenResultOrHerdr::File(
+            crate::recent_closed::reopen::FileReopenResult::Missing,
+        ),
         "/repo/missing.rs",
     );
     assert_newer_close_survives(
-        live::FileReopenResultOrHerdr::Herdr(live::ReopenOutcome {
-            tab_id: None,
-            consumed: true,
-            focused_pane_id: None,
-            notices: vec![],
-            agents: Vec::new(),
-        }),
+        crate::recent_closed::reopen::FileReopenResultOrHerdr::Herdr(
+            crate::recent_closed::reopen::ReopenOutcome {
+                tab_id: None,
+                consumed: true,
+                focused_pane_id: None,
+                notices: vec![],
+                agents: Vec::new(),
+            },
+        ),
         "/repo/pane-placeholder.rs",
     );
 
@@ -1915,7 +1924,9 @@ fn every_consuming_reopen_result_removes_only_its_request_key() {
     std::fs::write(&path, "fn main() {}\n").unwrap();
     let opened = crate::files::tests::open_local(&path);
     assert_newer_close_survives(
-        live::FileReopenResultOrHerdr::File(live::FileReopenResult::Opened(Box::new(opened))),
+        crate::recent_closed::reopen::FileReopenResultOrHerdr::File(
+            crate::recent_closed::reopen::FileReopenResult::Opened(Box::new(opened)),
+        ),
         path.to_str().unwrap(),
     );
 }
@@ -1932,7 +1943,7 @@ fn completion_is_safe_after_the_in_flight_item_was_evicted() {
             &format!("/repo/newer-{index}.rs"),
         ));
     }
-    let request = live::ReopenRequest {
+    let request = crate::recent_closed::reopen::ReopenRequest {
         codex_daemon: Default::default(),
         item: first,
         workspace_exists: true,
@@ -1943,13 +1954,17 @@ fn completion_is_safe_after_the_in_flight_item_was_evicted() {
 
     assert!(runtime.ingest_reopen_result(
         &request,
-        Ok(live::FileReopenResultOrHerdr::Herdr(live::ReopenOutcome {
-            tab_id: None,
-            consumed: true,
-            focused_pane_id: None,
-            notices: vec![],
-            agents: Vec::new(),
-        },)),
+        Ok(
+            crate::recent_closed::reopen::FileReopenResultOrHerdr::Herdr(
+                crate::recent_closed::reopen::ReopenOutcome {
+                    tab_id: None,
+                    consumed: true,
+                    focused_pane_id: None,
+                    notices: vec![],
+                    agents: Vec::new(),
+                },
+            )
+        ),
     ));
 
     let snapshot = runtime.snapshot();

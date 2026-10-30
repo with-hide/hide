@@ -10,6 +10,7 @@ mod ai;
 mod changes;
 mod checkout_git;
 mod checkout_owner;
+mod checkout_start;
 mod codex_launch;
 mod composer_checks;
 mod composer_store;
@@ -91,6 +92,8 @@ mod view_layout;
 pub mod workspace;
 pub mod workspace_control;
 pub mod workspace_views;
+pub(crate) mod worktree_cleanup;
+mod worktree_control;
 mod worktrees;
 mod zoneinfo;
 

@@ -1546,8 +1546,8 @@ fn closed_file(key: &str, path: &str) -> ClosedItem {
     }
 }
 
-fn close_capture_request(key: &str) -> live::CloseCaptureRequest {
-    live::CloseCaptureRequest {
+fn close_capture_request(key: &str) -> crate::recent_closed::capture::CloseCaptureRequest {
+    crate::recent_closed::capture::CloseCaptureRequest {
         failed_terminals: Vec::new(),
         retain_for_reopen: true,
         key: key.to_owned(),
@@ -1570,7 +1570,7 @@ fn close_capture_request(key: &str) -> live::CloseCaptureRequest {
             tab_name: Default::default(),
         },
         panes: vec![],
-        target: live::CloseCaptureTarget::Tab {
+        target: crate::recent_closed::capture::CloseCaptureTarget::Tab {
             tab_id: format!("tab:{key}"),
         },
     }

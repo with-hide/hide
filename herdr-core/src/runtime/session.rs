@@ -4006,7 +4006,10 @@ impl Runtime {
     pub fn ingest_task_operation_result(
         &mut self,
         id: u64,
-        result: Result<live::WorktreeTaskOutcome, live::TaskFailure>,
+        result: Result<
+            crate::worktree_control::WorktreeTaskOutcome,
+            crate::worktree_control::TaskFailure,
+        >,
     ) -> bool {
         let Some(operation) = self.snapshot.task_operation.as_ref() else {
             return false;
@@ -4029,7 +4032,7 @@ impl Runtime {
         let adds_pane = self.group_start_adds_pane(id);
         match result {
             Ok(outcome) => {
-                let live::WorktreeTaskOutcome {
+                let crate::worktree_control::WorktreeTaskOutcome {
                     path,
                     pane_id,
                     created_tab_id,
@@ -4257,7 +4260,7 @@ impl Runtime {
     pub fn ingest_purpose_operation_result(
         &mut self,
         id: u64,
-        result: Result<live::PurposeTaskOutcome, String>,
+        result: Result<crate::worktree_control::PurposeTaskOutcome, String>,
     ) -> bool {
         let Some(operation) = self.snapshot.task_operation.as_ref() else {
             return false;
@@ -4275,14 +4278,14 @@ impl Runtime {
             .cloned();
         let mut visible_purpose = None;
         let (phase, message, diagnostic) = match result {
-            Ok(live::PurposeTaskOutcome::Saved {
+            Ok(crate::worktree_control::PurposeTaskOutcome::Saved {
                 purpose,
                 token_written,
             }) => {
                 visible_purpose = Some((purpose, token_written));
                 ("ready", None, None)
             }
-            Ok(live::PurposeTaskOutcome::GitFailed {
+            Ok(crate::worktree_control::PurposeTaskOutcome::GitFailed {
                 purpose,
                 token_written,
                 detail,
@@ -4961,7 +4964,10 @@ impl Runtime {
         }
     }
 
-    pub(crate) fn pending_task_agent_start(&self, id: u64) -> Option<live::PendingAgentStart> {
+    pub(crate) fn pending_task_agent_start(
+        &self,
+        id: u64,
+    ) -> Option<crate::worktree_control::PendingAgentStart> {
         let operation = self.snapshot.task_operation.as_ref()?;
         if operation.id != id
             || operation.phase != "ready"
@@ -4979,7 +4985,7 @@ impl Runtime {
             .task_agent_launch
             .as_ref()
             .filter(|launch| launch.task == id);
-        Some(live::PendingAgentStart {
+        Some(crate::worktree_control::PendingAgentStart {
             // Only these tasks make the worktree their agent starts in.
             made_worktree: matches!(
                 operation.kind.as_str(),
@@ -5028,7 +5034,7 @@ impl Runtime {
     pub(crate) fn ingest_task_agent_result(
         &mut self,
         id: u64,
-        outcome: live::TaskAgentOutcome,
+        outcome: crate::worktree_control::TaskAgentOutcome,
     ) -> bool {
         if !self
             .snapshot
@@ -5042,11 +5048,13 @@ impl Runtime {
         }
         // A definite failure keeps the prompt for Retry; any other answer
         // settles it, since the agent may be running.
-        let launch = if !matches!(outcome, live::TaskAgentOutcome::Failed(_))
-            && self
-                .task_agent_launch
-                .as_ref()
-                .is_some_and(|launch| launch.task == id)
+        let launch = if !matches!(
+            outcome,
+            crate::worktree_control::TaskAgentOutcome::Failed(_)
+        ) && self
+            .task_agent_launch
+            .as_ref()
+            .is_some_and(|launch| launch.task == id)
         {
             self.task_agent_launch.take().map(|launch| launch.launch)
         } else {
@@ -5055,7 +5063,8 @@ impl Runtime {
         // The pane keeps the choice its agent started with, for the restarts
         // Hide makes of it, under the name the start gave the agent: the task
         // worker names it from Herdr's own id for the pane.
-        if let (live::TaskAgentOutcome::Started, Some(launch)) = (&outcome, &launch)
+        if let (crate::worktree_control::TaskAgentOutcome::Started, Some(launch)) =
+            (&outcome, &launch)
             && let Some((pane_id, kind, name)) =
                 self.snapshot.task_operation.as_ref().and_then(|operation| {
                     let pane_id = operation.pane_id.clone()?;
@@ -5075,15 +5084,19 @@ impl Runtime {
         };
         // A start that definitely failed ran no prompt, so its pane no
         // longer holds one a close could drop.
-        if matches!(outcome, live::TaskAgentOutcome::Failed(_))
-            && let Some(pane_id) = &operation.pane_id
+        if matches!(
+            outcome,
+            crate::worktree_control::TaskAgentOutcome::Failed(_)
+        ) && let Some(pane_id) = &operation.pane_id
         {
             self.start_prompts.remove(pane_id);
         }
         let (phase, failure) = match outcome {
-            live::TaskAgentOutcome::Started => ("started", None),
-            live::TaskAgentOutcome::Failed(failure) => ("failed", Some(failure)),
-            live::TaskAgentOutcome::Unknown(failure) => ("unknown", Some(failure)),
+            crate::worktree_control::TaskAgentOutcome::Started => ("started", None),
+            crate::worktree_control::TaskAgentOutcome::Failed(failure) => ("failed", Some(failure)),
+            crate::worktree_control::TaskAgentOutcome::Unknown(failure) => {
+                ("unknown", Some(failure))
+            }
         };
         let started_pane = (phase == "started" && operation.device_id.is_none())
             .then(|| operation.pane_id.clone());
@@ -5179,13 +5192,15 @@ impl Runtime {
         operation.agent_phase = Some("starting".into());
         operation.agent_reason = None;
         operation.agent_line = None;
-        if let Err(message) = live::spawn_task_agent_start(context, id) {
+        if let Err(message) = crate::worktree_control::spawn_task_agent_start(context, id) {
             return self.ingest_task_agent_result(
                 id,
-                live::TaskAgentOutcome::Failed(live::AgentFailure::with_detail(
-                    "agent_start.worker_unavailable",
-                    message,
-                )),
+                crate::worktree_control::TaskAgentOutcome::Failed(
+                    crate::worktree_control::AgentFailure::with_detail(
+                        "agent_start.worker_unavailable",
+                        message,
+                    ),
+                ),
             );
         }
         true
@@ -6245,7 +6260,10 @@ impl Runtime {
     pub fn ingest_workspace_creation(
         &mut self,
         request_path: &str,
-        result: Result<live::WorkspaceCreationOutcome, live::WorkspaceCreationFailure>,
+        result: Result<
+            crate::checkout_owner::open::WorkspaceCreationOutcome,
+            crate::checkout_owner::open::WorkspaceCreationFailure,
+        >,
         elapsed_ms: u128,
     ) -> bool {
         self.workspace_creations_in_flight.remove(request_path);

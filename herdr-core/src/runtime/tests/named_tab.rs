@@ -130,7 +130,7 @@ fn tab_t1(runtime: &Runtime) -> Option<TabSnapshot> {
 }
 
 /// The capture Herdr answers, as a pane close records it for Reopen.
-fn captured(runtime: &mut Runtime) -> live::CloseEffectRequest {
+fn captured(runtime: &mut Runtime) -> crate::recent_closed::capture::CloseEffectRequest {
     let request = the_close(runtime).request.clone();
     let item = ClosedItem::Pane {
         key: request.key.clone(),
@@ -144,8 +144,10 @@ fn captured(runtime: &mut Runtime) -> live::CloseEffectRequest {
             target_was_first: false,
         },
     };
-    let (_, effects) = runtime
-        .ingest_close_capture_result(&request, Ok(live::CloseCaptureOutcome { item: Some(item) }));
+    let (_, effects) = runtime.ingest_close_capture_result(
+        &request,
+        Ok(crate::recent_closed::capture::CloseCaptureOutcome { item: Some(item) }),
+    );
     let [effect] = effects.as_slice() else {
         panic!("one close effect, got {effects:?}");
     };
@@ -289,7 +291,7 @@ fn a_reopened_tab_the_operator_named_is_named_again() {
     let context = runtime
         .close_context(&tab_t1(&runtime).unwrap())
         .expect("the tab's context");
-    let request = live::ReopenRequest {
+    let request = crate::recent_closed::reopen::ReopenRequest {
         codex_daemon: Default::default(),
         item: ClosedItem::Tab {
             key: "reopen".into(),
@@ -317,13 +319,17 @@ fn a_reopened_tab_the_operator_named_is_named_again() {
     runtime.reopen_in_flight = Some("reopen".into());
     runtime.ingest_reopen_result(
         &request,
-        Ok(live::FileReopenResultOrHerdr::Herdr(live::ReopenOutcome {
-            tab_id: Some("w-order:t9".into()),
-            consumed: true,
-            focused_pane_id: None,
-            notices: Vec::new(),
-            agents: Vec::new(),
-        })),
+        Ok(
+            crate::recent_closed::reopen::FileReopenResultOrHerdr::Herdr(
+                crate::recent_closed::reopen::ReopenOutcome {
+                    tab_id: Some("w-order:t9".into()),
+                    consumed: true,
+                    focused_pane_id: None,
+                    notices: Vec::new(),
+                    agents: Vec::new(),
+                },
+            ),
+        ),
     );
     assert_eq!(
         runtime
@@ -352,7 +358,7 @@ fn close_tab_closes_a_named_tab_and_its_name() {
 #[test]
 fn a_delegated_tab_and_a_failed_terminal_are_not_kept() {
     let runtime = started("Planning", true);
-    let target = live::CloseCaptureTarget::Pane {
+    let target = crate::recent_closed::capture::CloseCaptureTarget::Pane {
         pane_id: AGENT.into(),
     };
     let tab = tab_t1(&runtime).unwrap();
