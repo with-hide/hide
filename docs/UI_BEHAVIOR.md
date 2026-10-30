@@ -956,7 +956,8 @@ The Desk agent is no session in a pane: it is not in the sidebar, Sessions, Need
 
 ### Desk's jobs
 
-A session Desk starts is the operator's own: a real Agent tab in its checkout, which the core puts in the checkout's `◆ Desk` group (made when missing) once, without changing the screen in front or the keyboard; a job on another device keeps the tab where that device made it.
+A session Desk starts is the operator's own: a real Agent tab in its checkout, which the core puts in the checkout's `◆ Desk` group (made when missing) once, without changing the screen in front or the keyboard.
+A job on another device keeps its tab where that device made it, outside the group: the core finds the tab holding a pane only among this machine's checkouts (`checkout_tab_holding_pane`), and a device's tabs reach it through the link's projection under qualified pane ids. Mapping a device job's pane to its checkout tab through that projection, then placing it with the same group move, closes the gap.
 Work Desk hands to a session that already runs is a letter, and every letter Desk sends leaves a line with the session, its project, the letter's kind and first line, and `읽음` once the session's runtime took it in: a `request` is work handed (`편지로 맡김`), any other kind word passed on (`보냄`). It changes no state and takes no place.
 Where a task works follows Settings › Desk: per task (the default, a new `desk/<task name>` branch for work that touches code another session is changing or ends in a pull request), always a new branch, or always the checkout's current branch; Desk is told the setting with its first message and again when it changes, and a place the operator names for a task wins for that task.
 
