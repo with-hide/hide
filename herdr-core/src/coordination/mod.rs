@@ -614,6 +614,51 @@ fn resolve_by(ledger: &Ledger, is: impl Fn(&AgentRecord) -> bool) -> Option<&Act
     found.next().is_none().then_some(&first.actor)
 }
 
+/// What a caller does about each refusal `hide agent sleep` gives.
+pub fn sleep_next_action(code: &str) -> &'static str {
+    match code {
+        "agent_sleep_device" => {
+            "Agents on a device Hide connects to cannot sleep; leave it, or end it with hide agent end"
+        }
+        "agent_sleep_unsupported" => {
+            "This kind of agent cannot sleep; leave it, or end its registration with hide agent end"
+        }
+        "agent_sleep_core_machine_only" => {
+            "This kind of agent sleeps only on the machine Hide's core runs on"
+        }
+        "agent_sleep_working" => "The agent is working; ask again once its turn ends",
+        "agent_sleep_waiting_for_you" => {
+            "The agent is waiting for the operator; ask again once the operator has answered it"
+        }
+        "agent_sleep_activity_unknown" => {
+            "Hide cannot tell whether the agent rests; ask again once its row shows it idle"
+        }
+        "agent_sleep_no_conversation" => {
+            "The agent has reported no conversation to resume yet; ask again after its first turn"
+        }
+        "agent_sleep_on_screen" => {
+            "The operator has the agent on screen; ask again once it is off screen"
+        }
+        "agent_sleep_waking" => "The agent is waking; ask again once it is awake",
+        "agent_sleep_unreachable" => {
+            "Hide has no live Herdr connection to the agent's machine; retry once it reconnects"
+        }
+        "agent_sleep_not_started" | "agent_sleep_busy" => {
+            "The agent's pane is busy with another change; retry in a moment"
+        }
+        "agent_ended" => "The registration has ended; there is no agent to put to sleep",
+        "agent_unavailable" => {
+            "Check the id with hide agent list; the agent must still run in its registered pane"
+        }
+        "parent_authority_required" => {
+            "Only the agent itself or its parent can put it to sleep; ask its parent"
+        }
+        "actor_identity_conflict" => "--actor must name your own registration; leave it out",
+        "agent_pane_required" => "Run hide agent sleep from an agent's own Hide pane",
+        _ => "Retry; the reason is in Hide's diagnostic log",
+    }
+}
+
 /// The id `hide agent show` and `--parent` take for the caller itself.
 pub const HERE: &str = "here";
 

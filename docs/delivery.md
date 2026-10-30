@@ -27,6 +27,9 @@ A pane on another machine is reached by the agent's name or registration ID, or 
 The same reading applies to the pane IDs of `--actor` and `--observer`.
 A name that two machines share, such as the default `hide-claude-w1-p2`, is refused `target_ambiguous`.
 Each refusal's `next_action` says so: `target_ambiguous` points to the registration ID from `hide agent list` or the full address, and `target_unavailable` says a bare pane ID names a pane on the caller's own machine and points to the name or registration ID; neither is told to retry.
+A letter may also go to a registered agent Hide put to sleep, by its name, registration ID or the pane it sleeps in (PRD mission-worker-sleep B1): the agent no longer runs, so no observation answers for it, and the registration whose pane keeps its sleep record for the same session, or whose ID a dormant record holds, is the recipient ([ARCHITECTURE.md: Sleep by mission, letter and command](ARCHITECTURE.md#sleep-by-mission-letter-and-command)).
+The letter is pending at once; a `request` or `block` wakes the agent with its conversation resumed, at most four such wakes at a time, in the order the letters came, and the letter is handed over by the usual bell once the agent is back, while a `report` or `progress` waits for whatever wakes it next.
+A wake that fails leaves the `request` and `block` letters that waited on it `undelivered`, which ends their answer waits, and the sender's inbox gets a letter from `hide:wake` naming the recipient and why; the next `request` or `block` tries the wake again.
 A connected device recipient uses its node's pane service over that device's existing SSH link; the credential fixes its device, link, pane, sender and kind, and losing the link revokes that credential immediately.
 The only ledger remains on the controlling daemon.
 A disconnected device hook finishes within its two-second budget with no letters, leaving them pending in that ledger.
@@ -427,7 +430,7 @@ Every `capacity` refusal of a letter writes one `letter.capacity_refused` diagno
 
 | Resource or clock | Bound |
 | --- | --- |
-| Pending delivery deadline | 60 minutes of the recipient's machine being reachable (wall time on the core's own machine), then `undelivered`; visible through CLI |
+| Pending delivery deadline | 60 minutes of the recipient's machine being reachable (wall time on the core's own machine), not counting the time the recipient sleeps or wakes, then `undelivered`; visible through CLI |
 | Quiet period | 30 seconds since hide last routed a key and since Herdr last changed the pane's status |
 | Doorbell reservations per letter | Three total, persisted across restart |
 | First inactivity warning | 20 minutes without activity (30 for a code-owned observer); one minute (one tick) when the target stopped on a question or is held at a Herdr-blocked prompt and the observer is a pane |
@@ -442,6 +445,8 @@ Every `capacity` refusal of a letter writes one `letter.capacity_refused` diagno
 
 Automatic doorbells apply only to `pending` letters, and the deadline turns only a `pending` letter `undelivered`, while watch clocks remain distinct.
 
+The deadline of a letter to an agent Hide put to sleep does not run while it sleeps or wakes (PRD mission-worker-sleep D-13): the store's pass reads the asleep recipients from the core's sleep records each time (`Runtime::delivery_asleep`), expires none of their letters, and on the pass after one wakes moves each of its waiting letters' start by the time it slept, once (`Ledger::resume_woken`), so a letter that waited 50 minutes before the sleep has 10 left and one sent during it the whole hour; on a machine with a clock the sleep is taken as reachable time, which only ever leaves a letter more of its hour.
+The ledger keeps no new field for it, and a restart reads the sleepers again from the records.
 The deadline of a letter to an agent on another machine counts only the time that machine is reachable (PRD core-host-node-move B13, D-11): the core holds that machine's Herdr connection and its link has not ended, so a MacBook that is closed, asleep or away holds its letters at the core and they are handed over when it is back, with the hours away not counted.
 The ledger keeps one clock per machine a letter awaits intake on (`node_clocks`, keyed by its registration id: the reachable time in ended stretches and the start of the one running now), and each letter records where on its machine's clock its wait began (`intake_from`); a letter to the core's own machine, and one written before this rule, waits in wall time from its creation as before.
 The store reads which machines are reachable under the runtime lock on each pass (`Runtime::delivery_reach`); a node's link end is read there at once, before the sync that notices its Herdr is gone.

@@ -605,6 +605,27 @@ impl Core {
         Ok(answer)
     }
 
+    /// Runs `hide agent sleep` (PRD mission-worker-sleep D-20): the end it
+    /// starts is the runtime's, so it is asked under the lock.
+    pub fn agent_sleep(
+        &self,
+        device: &str,
+        caller: &str,
+        expected: &crate::workspace_control::Context,
+        id: &str,
+        actor: Option<&str>,
+    ) -> Result<serde_json::Value, String> {
+        if !check_owner_thread(self, "agent.sleep") {
+            return Err("agent_unavailable".into());
+        }
+        let (answer, changed) =
+            lock_recover(&self.runtime).agent_sleep_command(device, caller, expected, id, actor)?;
+        if changed {
+            notify_change(self);
+        }
+        Ok(answer)
+    }
+
     /// Runs a `hide plan` command (PRD hide-plan D-27): one change under the
     /// lock, saved by the link worker.
     pub fn plan_command(

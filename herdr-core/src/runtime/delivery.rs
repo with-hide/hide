@@ -1131,6 +1131,16 @@ impl Runtime {
                 if matches.next().is_some() {
                     return Err("target_ambiguous".into());
                 }
+                // An agent Hide put to sleep takes letters, which wait for
+                // its wake (PRD mission-worker-sleep B1).
+                let first = match (&command, first) {
+                    (Command::Send { .. }, None) => self
+                        .delivery_ledger
+                        .as_ref()
+                        .ok()
+                        .and_then(|ledger| self.sleeping_target(ledger, registered, &pane)),
+                    (_, first) => first,
+                };
                 if first.is_none() && !self.delivery_overflow.is_empty() {
                     return Err("capacity".into());
                 }
@@ -1267,6 +1277,9 @@ impl Runtime {
 
     pub(crate) fn publish_delivery(&mut self, ledger: Arc<Ledger>, transitions: bool) -> bool {
         let now = unix_milliseconds();
+        // A new letter may wait on a sleeping recipient (PRD
+        // mission-worker-sleep B2).
+        self.letter_wakes.touch();
         let graph_changed = self.delivery_ledger.as_ref().ok().is_none_or(|previous| {
             !self
                 .snapshot
@@ -1401,6 +1414,8 @@ impl Runtime {
         caller == actor.pane_id
             && (*actor == Actor::hide(crate::delivery::HIDE_MEMORY_ROLE, self.node.as_str())
                 || *actor == Actor::hide(super::missions::CONDUCTOR_ROLE, self.node.as_str())
+                || *actor
+                    == Actor::hide(super::agent_sleep::letters::WAKE_ROLE, self.node.as_str())
                 || *actor == Actor::operator(self.node.as_str()))
     }
 

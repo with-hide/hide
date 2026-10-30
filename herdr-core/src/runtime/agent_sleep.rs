@@ -13,8 +13,12 @@ use crate::agent_sleep::{
     SleepScope, WakeMode, valid_after_hours,
 };
 use crate::agent_sleep_herdr::{self, SleepTarget, WakeOutcome, WakeRequest};
+use crate::model::AgentActionRefusal;
 
+mod command;
 mod dormant;
+pub(in crate::runtime) mod letters;
+pub(in crate::runtime) mod missions;
 pub(in crate::runtime) use dormant::Takeover;
 
 /// Ends in flight at once. A first enable over a long day's panes would
@@ -54,16 +58,22 @@ impl Runtime {
     /// coordinator's tick. A tick inside the minute is one integer comparison.
     /// A core waiting for its move's link puts nothing to sleep.
     pub(crate) fn tick_agent_sleep(&mut self, now_unix_ms: u64) -> bool {
-        if now_unix_ms < self.agent_sleep_next_decision_unix_ms
-            || self.live.is_none()
-            || self.effects_held()
-        {
+        if self.live.is_none() || self.effects_held() {
             return false;
         }
+        // Letter wakes move with the ledger and the records, not the minute.
+        let woke = self.drive_letter_wakes();
+        if now_unix_ms < self.agent_sleep_next_decision_unix_ms {
+            return woke;
+        }
         self.agent_sleep_next_decision_unix_ms = now_unix_ms.saturating_add(DECISION_INTERVAL_MS);
+        // A wake that waited for a connection or a free transition tries
+        // again at least once a minute.
+        self.letter_wakes.touch();
         let changed =
             self.expire_dormant_confirmation(now_unix_ms) | self.fail_unstarted_wakes(now_unix_ms);
-        self.decide_agent_sleep(None, now_unix_ms) | changed
+        let changed = self.decide_agent_sleep(None, now_unix_ms) | changed | woke;
+        self.sleep_finished_mission_agents(now_unix_ms) | changed
     }
 
     /// Fails each wake whose agent has not appeared in its pane by the
@@ -87,6 +97,7 @@ impl Runtime {
             .map(|(pane_id, _)| pane_id.clone())
             .collect::<Vec<_>>();
         for pane_id in &unstarted {
+            self.letter_wakes.touch();
             self.agent_wake_started.remove(pane_id);
             if let Some(record) = self.snapshot.ui_state.agent_sleep.records.get_mut(pane_id) {
                 let reason = agent_sleep_herdr::WAKE_NOT_READY.to_owned();
@@ -217,6 +228,8 @@ impl Runtime {
         if settled.is_empty() {
             return;
         }
+        // A woken or closed sleeper frees its letter wake's place.
+        self.letter_wakes.touch();
         for event in &settled {
             let (pane_id, kind, phase) = match event {
                 Settled::Woke { pane_id, phase } => (pane_id, "agent_sleep.awake", Some(*phase)),
@@ -370,45 +383,54 @@ impl Runtime {
     /// Sleep agent from the pane menu (B15): the same end, without the time
     /// or the screen, because the person asking has already looked.
     pub(super) fn request_agent_sleep(&mut self, pane_id: &str) -> bool {
+        match self.sleep_pane(pane_id, "manual") {
+            Ok(changed) => changed,
+            Err(SleepRefused::Unreachable) => {
+                self.set_error(
+                    "pane.control_unavailable",
+                    "Putting an agent to sleep requires a live Herdr connection",
+                    true,
+                );
+                true
+            }
+            Err(refused) => {
+                self.set_error("agent_sleep.refused", refused.detail(), false);
+                true
+            }
+        }
+    }
+
+    /// Starts the end of the agent in `pane_id` by the pane menu's rules,
+    /// or says why it may not: the one check the menu and `hide agent
+    /// sleep` share (PRD mission-worker-sleep D-10).
+    fn sleep_pane(&mut self, pane_id: &str, trigger: &str) -> Result<bool, SleepRefused> {
         let device = pane_device(pane_id);
         let machine = self.sleep_machine_of_pane(pane_id);
-        let refusal = match self
+        let agent = self
             .sleep_agents(device)
             .iter()
             .find(|agent| agent.pane_id == pane_id)
+            .ok_or(SleepRefused::NoAgent)?;
+        if self
+            .snapshot
+            .ui_state
+            .agent_sleep
+            .records
+            .contains_key(pane_id)
         {
-            None => Some("This pane has no agent"),
-            Some(_)
-                if self
-                    .snapshot
-                    .ui_state
-                    .agent_sleep
-                    .records
-                    .contains_key(pane_id) =>
-            {
-                Some("This agent is already asleep")
-            }
-            Some(agent) => {
-                crate::agent_sleep::sleep_refusal(agent, machine).map(|refusal| refusal.detail())
-            }
-        };
-        if let Some(reason) = refusal {
-            self.set_error("agent_sleep.refused", reason, false);
-            return true;
+            return Err(SleepRefused::Agent(AgentActionRefusal::Asleep));
+        }
+        if let Some(refusal) = crate::agent_sleep::sleep_refusal(agent, machine) {
+            return Err(SleepRefused::Agent(refusal));
         }
         let reachable = match device {
             None => self.live.is_some(),
             Some(device) => self.remote_herdr_api(device).is_some(),
         };
         if !reachable {
-            self.set_error(
-                "pane.control_unavailable",
-                "Putting an agent to sleep requires a live Herdr connection",
-                true,
-            );
-            return true;
+            return Err(SleepRefused::Unreachable);
         }
-        self.begin_agent_sleep(pane_id, "manual", unix_milliseconds())
+        Ok(self.begin_agent_sleep(pane_id, trigger, unix_milliseconds()))
     }
 
     /// Wake agent, Retry, and Start new session (B12-B14). A wake asked for
@@ -455,6 +477,8 @@ impl Runtime {
         result: Result<u64, String>,
     ) -> bool {
         let now = unix_milliseconds();
+        // A letter that came while the agent was ending may wake it now.
+        self.letter_wakes.touch();
         let store = &mut self.snapshot.ui_state.agent_sleep;
         let Some(record) = store.records.get_mut(pane_id) else {
             // The pane closed while its agent was ending.
@@ -475,6 +499,7 @@ impl Runtime {
                 let pending_wake = record.pending_wake.take();
                 // Keys for the sleeping pane are dropped at its node from now.
                 self.sync_terminal_intents();
+                self.mission_sleep_landed(pane_id);
                 crate::diagnostic!(serde_json::json!({
                     "component": "agent_sleep",
                     "kind": "agent_sleep.slept",
@@ -528,6 +553,7 @@ impl Runtime {
         mode: WakeMode,
         outcome: WakeOutcome,
     ) -> bool {
+        self.letter_wakes.touch();
         let Some(record) = self.snapshot.ui_state.agent_sleep.records.get_mut(pane_id) else {
             crate::diagnostic!(serde_json::json!({
                 "component": "agent_sleep",
@@ -956,6 +982,24 @@ impl Runtime {
             .find(|pane| pane.id == pane_id)
             .map(|pane| pane.cwd.clone())
             .filter(|cwd| !cwd.trim().is_empty())
+    }
+}
+
+/// Why an agent was not put to sleep.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) enum SleepRefused {
+    NoAgent,
+    Agent(AgentActionRefusal),
+    Unreachable,
+}
+
+impl SleepRefused {
+    fn detail(self) -> &'static str {
+        match self {
+            Self::NoAgent => "This pane has no agent",
+            Self::Agent(refusal) => refusal.detail(),
+            Self::Unreachable => "Putting an agent to sleep requires a live Herdr connection",
+        }
     }
 }
 

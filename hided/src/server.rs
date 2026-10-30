@@ -1494,6 +1494,12 @@ enum ScopedRequest {
     Ps {
         all: bool,
     },
+    /// `hide agent sleep <id> [--actor <id>]`: the runtime's own end of a
+    /// registered agent.
+    AgentSleep {
+        id: String,
+        actor: Option<String>,
+    },
     /// `hide device`: the core's own device registrations.
     Device(herdr_core::device_command::DeviceCommand),
     /// `hide <path>`: a folder of the caller's machine opened as a project
@@ -1515,6 +1521,7 @@ impl ScopedRequest {
                 | Self::Plan(..)
                 | Self::AgentCatalog(..)
                 | Self::Ps { .. }
+                | Self::AgentSleep { .. }
                 | Self::Device(..)
                 | Self::ProjectOpen(..)
         )
@@ -1636,6 +1643,30 @@ async fn scoped_client_loop(
                             Some(Value::Bool(true)) => Some(ScopedRequest::Ps { all: true }),
                             _ => None,
                         },
+                        Some("agent_sleep") => {
+                            let text = |value: &Value| -> Option<String> {
+                                value
+                                    .as_str()
+                                    .filter(|text| {
+                                        !text.is_empty()
+                                            && text.len() <= 256
+                                            && !text.chars().any(char::is_control)
+                                    })
+                                    .map(str::to_owned)
+                            };
+                            match (text(&value["id"]), value.get("actor")) {
+                                (Some(id), None | Some(Value::Null)) => {
+                                    Some(ScopedRequest::AgentSleep { id, actor: None })
+                                }
+                                (Some(id), Some(actor)) => {
+                                    text(actor).map(|actor| ScopedRequest::AgentSleep {
+                                        id,
+                                        actor: Some(actor),
+                                    })
+                                }
+                                _ => None,
+                            }
+                        }
                         Some("device") => serde_json::from_value::<
                             herdr_core::device_command::DeviceCommand,
                         >(value["command"].clone())
@@ -1786,6 +1817,13 @@ async fn scoped_client_loop(
                                     core.ps(&cap.context.device_id, &cap.pane_id, all)
                                         .map_err(|code| {
                                             let next = crate::server::delivery_next_action(&code);
+                                            (code, next)
+                                        })?
+                                }
+                                ScopedRequest::AgentSleep { id, actor } => {
+                                    core.agent_sleep(&cap.context.device_id, &cap.pane_id, &cap.context, id, actor)
+                                        .map_err(|code| {
+                                            let next = herdr_core::coordination::sleep_next_action(&code);
                                             (code, next)
                                         })?
                                 }

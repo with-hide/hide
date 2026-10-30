@@ -28,6 +28,11 @@ pub enum CommandKind {
     },
     /// `hide ps [--all] [--here] [--json]`.
     Ps(crate::ps_cli::Options),
+    /// `hide agent sleep <id> [--actor <id>]`.
+    AgentSleep {
+        id: String,
+        actor: Option<String>,
+    },
     Device(crate::device_cli::DeviceCli),
     Help,
     AgentSpawnHelp,
@@ -288,6 +293,18 @@ pub fn parse_args(args: &[String]) -> Result<CommandKind, String> {
         }
         Some("dev") => Ok(CommandKind::Dev),
         Some("agent") if args[2..] == ["spawn", "--help"] => Ok(CommandKind::AgentSpawnHelp),
+        Some("agent") if args.get(2).map(String::as_str) == Some("sleep") => {
+            crate::cli_contract::admit(&args[1..])
+                .map_err(|refusal| format!("{refusal}\n{}", usage(crate::agent_cli::USAGE)))?;
+            let args = args[3..]
+                .iter()
+                .filter(|arg| *arg != "--json")
+                .cloned()
+                .collect::<Vec<_>>();
+            crate::agent_cli::parse_sleep(&args)
+                .map(|(id, actor)| CommandKind::AgentSleep { id, actor })
+                .map_err(|reason| wrong(reason, crate::agent_cli::USAGE))
+        }
         Some("agent") if args.get(2).map(String::as_str) == Some("catalog") => {
             crate::cli_contract::admit(&args[1..])
                 .map_err(|refusal| format!("{refusal}\n{}", usage(crate::agent_cli::USAGE)))?;
@@ -732,6 +749,7 @@ pub fn run(kind: CommandKind) -> Result<(), String> {
                     | CommandKind::Plan(_)
                     | CommandKind::AgentCatalog { .. }
                     | CommandKind::Ps(_)
+                    | CommandKind::AgentSleep { .. }
                     | CommandKind::Device(_)
                     | CommandKind::WorkspaceInfo
                     | CommandKind::WorkspaceHookInfo
@@ -764,6 +782,7 @@ pub fn run(kind: CommandKind) -> Result<(), String> {
         CommandKind::Plan(command) => crate::plan_cli::run(&env, command),
         CommandKind::AgentCatalog { machine } => crate::mission_cli::run_catalog(&env, machine),
         CommandKind::Ps(options) => crate::ps_cli::run(&env, &options),
+        CommandKind::AgentSleep { id, actor } => crate::agent_cli::run_sleep(&env, id, actor),
         CommandKind::Device(cli) => crate::device_cli::run(&env, &cli),
         CommandKind::Delivery(command) => {
             if matches!(&command, herdr_core::delivery::Command::Agents { .. }) {

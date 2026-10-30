@@ -163,6 +163,8 @@ Every worker's brief, change or verify, says in its first line what the node is,
   Start every reviewer and verifier yourself, as a worker of the mission, so the cap counts it; tell a worker not to start agents of its own.
   Then bind it to its line: `hide mission node <key> --reviewer <agent-N>` (or `--verifier`), which Hide refuses for the node's own worker (`mission_checker_is_worker`) or an agent it does not know (`mission_checker_unknown`).
   End a finished worker with `hide agent end <id>` to free its place, and start the next node then.
+- When a node is done, failed or dropped, its pull request merges or closes, or the mission closes, Hide puts that node's worker and checkers to sleep once they rest and are off the operator's screen (never you); a sleeping worker still counts against the cap until you end it.
+  A `request` or `block` letter wakes it again with its conversation, so send a reworked node's worker its new work as a letter; `hide agent sleep <id>` puts a resting worker to sleep yourself.
 - When a `hide mission` command answers `mission_unavailable`, Hide could not read its mission record: start no worker and tell the operator, since nothing then counts your workers against the cap.
 - When the usage `hide agent catalog` reports is close to a limit, start nothing new, say why with `hide mission delay --line <why>`, and tell the operator in conversation if it holds for long. Clear it when you go on.
 

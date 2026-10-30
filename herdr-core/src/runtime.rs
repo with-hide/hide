@@ -1819,6 +1819,9 @@ pub struct Runtime {
     /// When Herdr took each wake's start, for the panes still waking: one
     /// whose agent has not appeared by the start's deadline failed.
     agent_wake_started: HashMap<String, u64>,
+    /// The wakes letters to sleeping agents ask for, and the letters a
+    /// failed one leaves undelivered (PRD mission-worker-sleep).
+    letter_wakes: agent_sleep::letters::LetterWakes,
     /// Panes with a Reopen running or just refused, until the pane connects,
     /// leaves, or stops showing a connection chip (B29). One entry per pane,
     /// so a second press while one runs starts nothing.
@@ -2483,6 +2486,7 @@ impl Runtime {
             node_sleep_shown_tabs: HashMap::new(),
             agent_sleep_backoff: HashMap::new(),
             agent_wake_started: HashMap::new(),
+            letter_wakes: Default::default(),
             pane_reopens: HashMap::new(),
             update_badges: HashMap::new(),
             fork_sequence: 0,

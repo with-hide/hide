@@ -29,6 +29,8 @@ hide inbox
 - `request` asks and waits for a reply; `block` says you cannot go on without one; `progress` is an interim report, such as a plan, and ends nothing; `report` says the work is finished and ends your parent's watch on you.
 - A recipient that is working reads a letter after five minutes of its work; `--now` hands it over at its next tool call instead, so keep `--now` for what cannot wait.
 - A prompt that begins with 🦉 is Hide waking you for a letter: the letter comes with it, and `hide inbox` shows it if it did not; answer with `hide request reply`.
+- An agent Hide put to sleep still takes letters: a `request` or `block` wakes it, resuming its conversation, and is handed over once it is awake; a `report` or `progress` waits for its next wake, and the hour a letter waits does not run while it sleeps.
+  When it cannot be woken, the letter ends undelivered and Hide's own letter tells you whom and why; send again to try once more.
 
 ## Agents
 
@@ -38,6 +40,8 @@ hide ps [--all] [--here] [--json]
 hide agent list
 hide agent show <id|here>
 hide agent catalog [--machine <device id>]
+hide agent sleep <id> [--actor <id>]
+hide agent end <id> [--actor <id>]
 ```
 
 {session_rules}
@@ -46,6 +50,8 @@ hide agent catalog [--machine <device id>]
 - `hide agent list` shows the agents Hide knows, with their machine; `hide agent show here` is your own registration: your id, parent, origin, machine and the watch on you.
 - `hide agent catalog` lists the agents installed here, their models, efforts and usage, so you can choose `--kind`, `--model` and `--effort`.
 - A child of yours belongs to you: answer its letters, and tell the operator only what they have to decide.
+- `hide agent sleep <id>` puts a resting child of yours (or yourself) to sleep: its process ends, its conversation is kept, and a `request` or `block` letter wakes it; it answers `{"state":"ending"}`, or `asleep` when asked again, and refuses with a reason while the agent works, waits for the operator or is on the operator's screen.
+  `hide agent end <id>` instead ends only its registration and leaves its process running.
 
 ## Devices
 
