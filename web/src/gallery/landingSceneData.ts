@@ -534,7 +534,7 @@ export function landingUsage(nowMs: number): NodeUsage {
       agents: [{ agent: "claude", micro_usd: share(0.58) }, { agent: "codex", micro_usd: share(0.34) }, { agent: "opencode", micro_usd: share(0.08) }],
       unpriced_agents: [], partial: false, waiting: false, stale: false, limited: false,
       tasks: LANDING_TASKS.map((task) => landingTask(task, total, nowMs)), tasks_total: LANDING_TASKS.length,
-      week: { merged_prs: 9, open_prs: 4, missions: 1, mission_reopened: 1, merged_by_day: [1, 2, 0, 2, 1, 2, 1], per_pr: { micro_usd: share(0.06), tokens: 3_100_000, elapsed_ms: 172 * MINUTE, worked_ms: 248 * MINUTE }, no_result_tasks: 2, no_result_micro_usd: share(0.07) },
+      week: { merged_prs: 9, open_prs: 4, missions: 1, mission_reopened: 1, merged_by_day: [1, 2, 0, 2, 1, 2, 1], per_pr: { micro_usd: share(0.06), tokens: 3_100_000, elapsed_ms: 172 * MINUTE, worked_ms: 248 * MINUTE, unpriced: false }, no_result_tasks: 2, no_result_micro_usd: share(0.07), no_result_unpriced: false },
     }],
   };
 }

@@ -705,7 +705,8 @@ mod tests {
                     open_missed: 0,
                     subtree_open_missed: 0,
                     missed: Vec::new(),
-                    open_asks: 0,
+                    last_line: None,
+                    committed_at_unix_ms: None,
                     parent: parent.map(session),
                 })
                 .collect(),

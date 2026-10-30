@@ -168,3 +168,24 @@ fn a_reorder_of_the_tab_does_not_measure_a_failed_project_again() {
     watch(&mut runtime, &["b", "a", "c"]);
     assert_eq!(measuring(&runtime), ["/c"]);
 }
+
+/// PRD project-panel-results B20: the project the lane measures stops when
+/// the last watch on it goes, before its answer, and is measured anew when a
+/// watch shows it again; a project measured while it showed is not.
+#[test]
+fn a_measurement_no_watch_shows_stops_and_starts_again_when_shown() {
+    let mut runtime = folders();
+    watch(&mut runtime, &["a", "b"]);
+    assert_eq!(measuring(&runtime), ["/a"]);
+    watch(&mut runtime, &["b"]);
+    assert_eq!(measuring(&runtime), ["/b"], "the unwatched read stops");
+    runtime.ingest_swept_disk(None, measured("/b", Some(3), None), true);
+    watch(&mut runtime, &[]);
+    assert!(measuring(&runtime).is_empty());
+    watch(&mut runtime, &["a", "b"]);
+    assert_eq!(
+        measuring(&runtime),
+        ["/a"],
+        "the fresh one is not measured again"
+    );
+}

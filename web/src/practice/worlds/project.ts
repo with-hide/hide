@@ -123,7 +123,7 @@ function usage(nowMs: number): NodeUsage {
       agents: [{ agent: "claude", micro_usd: total - codex }, { agent: "codex", micro_usd: codex }],
       unpriced_agents: [], partial: false, waiting: false, stale: false, limited: false,
       tasks: [], tasks_total: 0,
-      week: { merged_prs: 3, open_prs: 2, missions: 0, mission_reopened: 0, merged_by_day: [0, 1, 0, 0, 1, 0, 1], per_pr: { micro_usd: Math.round(total / 3), tokens: 1_400_000, elapsed_ms: 3 * HOUR_MS, worked_ms: 2 * HOUR_MS }, no_result_tasks: 0, no_result_micro_usd: 0 },
+      week: { merged_prs: 3, open_prs: 2, missions: 0, mission_reopened: 0, merged_by_day: [0, 1, 0, 0, 1, 0, 1], per_pr: { micro_usd: Math.round(total / 3), tokens: 1_400_000, elapsed_ms: 3 * HOUR_MS, worked_ms: 2 * HOUR_MS, unpriced: false }, no_result_tasks: 0, no_result_micro_usd: 0, no_result_unpriced: false },
     }],
   };
 }

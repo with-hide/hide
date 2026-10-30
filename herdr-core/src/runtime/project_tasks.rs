@@ -2,9 +2,11 @@
 //! the ledger worker's per-session spends become each project's tasks and
 //! week here, with the record's sessions, the missions, the live rows and
 //! the catalog's pull requests and checkouts. It runs when the worker
-//! reports, when the record's summaries change and when a local agent ends
-//! a turn, never per keystroke; the work grows with the seven days'
-//! sessions, which the worker already bounded.
+//! reports, when the record's summaries change and when the agent scopes
+//! are built again (their compared input holds the agents, pull requests and
+//! Git facts a result reads, and the minute), never per keystroke; the work
+//! grows with the seven days' sessions, which the worker already bounded,
+//! and a build that changes nothing leaves the frame alone.
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
@@ -18,14 +20,29 @@ impl Runtime {
     /// Builds every local project's tasks from the last spends and puts
     /// the result on the usage frame; true when the frame changed.
     pub(super) fn publish_project_tasks(&mut self) -> bool {
+        // The zone is read once per publication, not per project.
+        let zone = jiff::tz::TimeZone::system();
+        let mut capped = HashSet::new();
         let published = self.ledger_spends.as_ref().map(|spends| {
             Arc::new(
                 spends
                     .iter()
-                    .map(|cost| self.project_tasks(cost))
+                    .map(|cost| self.project_tasks(cost, &zone, &mut capped))
                     .collect::<Vec<_>>(),
             )
         });
+        // A cap crossing is logged once, when a project first crosses it.
+        for workspace_id in capped.difference(&self.tasks_capped) {
+            crate::diagnostic!(serde_json::json!({
+                "component": "usage_ledger",
+                "kind": "project_tasks_capacity",
+                "workspace_id": workspace_id,
+                "tasks": tasks::TASK_LIMIT,
+                "sessions": tasks::TASK_SESSION_LIMIT,
+                "mission_nodes": tasks::MISSION_NODE_LIMIT,
+            }));
+        }
+        self.tasks_capped = capped;
         let own = &mut self.snapshot.usage.nodes[0];
         if own.projects == published {
             return false;
@@ -35,7 +52,12 @@ impl Runtime {
         true
     }
 
-    fn project_tasks(&self, cost: &ProjectCost) -> ProjectCost {
+    fn project_tasks(
+        &self,
+        cost: &ProjectCost,
+        zone: &jiff::tz::TimeZone,
+        capped: &mut HashSet<String>,
+    ) -> ProjectCost {
         let mut cost = cost.clone();
         let Some(project) = self
             .snapshot
@@ -71,6 +93,8 @@ impl Runtime {
                         made: numbers(true),
                         worked_on: numbers(false),
                         cwd: work.cwd.clone(),
+                        line: work.last_line.clone(),
+                        committed_at_unix_ms: work.committed_at_unix_ms,
                     },
                 );
             }
@@ -95,7 +119,12 @@ impl Runtime {
         let last_lines = rows
             .iter()
             .filter_map(|(session, row)| {
-                let line = row.message.as_deref()?.lines().last()?.trim();
+                let line = row
+                    .message
+                    .as_deref()?
+                    .lines()
+                    .find(|line| !line.trim().is_empty())?
+                    .trim();
                 (!line.is_empty()).then(|| ((*session).to_owned(), line.to_owned()))
             })
             .collect();
@@ -125,10 +154,8 @@ impl Runtime {
                 Some(Place {
                     path: checkout.path.clone(),
                     left: worktree.dirty || checkout.unpushed.as_ref().is_some_and(|u| u.count > 0),
-                    base: checkout.branch.is_some() && checkout.branch == checkout.base_branch,
-                    last_commit_ms: worktree
-                        .last_commit_unix_seconds
-                        .map(|s| s.saturating_mul(1000)),
+                    landed: (checkout.branch.is_some() && checkout.branch == checkout.base_branch)
+                        || worktree.merged == Some(true),
                 })
             })
             .collect();
@@ -160,8 +187,7 @@ impl Runtime {
                 started_at_unix_ms: mission.started_at_unix_ms,
             })
             .collect();
-        let zone = jiff::tz::TimeZone::system();
-        let day_of = move |at: u64| crate::usage_ledger::local_day(at, &zone).ok();
+        let day_of = |at: u64| crate::usage_ledger::local_day(at, zone).ok();
         let facts = Facts {
             recorded,
             missions,
@@ -173,10 +199,13 @@ impl Runtime {
             day_of: Some(&day_of),
             open_prs: project.agent_scope.status.prs.open,
         };
-        let (tasks, total, week) = tasks::build(&cost.spends, &facts);
-        cost.tasks = tasks;
-        cost.tasks_total = total;
-        cost.week = week;
+        let built = tasks::build(&cost.spends, &facts);
+        if built.capped {
+            capped.insert(project.id.clone());
+        }
+        cost.tasks = built.tasks;
+        cost.tasks_total = built.total;
+        cost.week = built.week;
         cost
     }
 }

@@ -831,7 +831,8 @@ fn a_summary_lays_an_ended_childs_pull_request_on_its_parents_row() {
         open_missed: 0,
         subtree_open_missed: 0,
         missed: Vec::new(),
-        open_asks: 0,
+        last_line: None,
+        committed_at_unix_ms: None,
         parent: Some(session("s-lead")),
     };
     let project = crate::links::ProjectLinkSummary {
@@ -897,7 +898,8 @@ fn a_lineage_past_the_walk_is_logged_when_its_only_pull_request_lies_beyond() {
                 open_missed: 0,
                 subtree_open_missed: 0,
                 missed: Vec::new(),
-                open_asks: 0,
+                last_line: None,
+                committed_at_unix_ms: None,
                 parent: Some(session(index - 1)),
             })
             .collect(),

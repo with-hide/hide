@@ -553,7 +553,7 @@ type StrayInput = (
 /// unpushed count, commits since its base, whether it has a pull request,
 /// is primary and has landed.
 type GitInput = (
-    Option<(bool, bool, bool, Option<u32>)>,
+    Option<(bool, bool, bool, Option<u32>, Option<bool>)>,
     Option<u32>,
     u32,
     bool,
@@ -784,9 +784,9 @@ impl Cache {
                         .iter()
                         .map(|c| {
                             (
-                                c.worktree
-                                    .as_ref()
-                                    .map(|w| (w.missing, w.is_main, w.dirty, w.behind_upstream)),
+                                c.worktree.as_ref().map(|w| {
+                                    (w.missing, w.is_main, w.dirty, w.behind_upstream, w.merged)
+                                }),
                                 c.unpushed.as_ref().map(|u| u.count),
                                 c.ahead,
                                 c.pull_request.is_some(),

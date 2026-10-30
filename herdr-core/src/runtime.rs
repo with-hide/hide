@@ -1875,6 +1875,9 @@ pub struct Runtime {
     /// Each local project's seven days of spends as the ledger worker last
     /// built them; `publish_project_tasks` makes the frame's tasks from them.
     ledger_spends: Option<Arc<Vec<crate::usage_ledger::project_cost::ProjectCost>>>,
+    /// The projects whose last task build crossed a cap, so the crossing is
+    /// logged once (`project_tasks_capacity`).
+    tasks_capped: HashSet<String>,
     /// Where each local project is in the re-read cycle: five minutes after a
     /// good answer, sooner after a failed read (`reread_stale_github`).
     github_clock: HashMap<String, projects::GithubClock>,
@@ -2546,6 +2549,7 @@ impl Runtime {
             worktree_project_generations: HashMap::new(),
             turn_working_panes: HashSet::new(),
             ledger_spends: None,
+            tasks_capped: HashSet::new(),
             github_clock: HashMap::new(),
             github_wanted: HashSet::new(),
             github_sighted: HashMap::new(),

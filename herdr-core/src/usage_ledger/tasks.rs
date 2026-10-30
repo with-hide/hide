@@ -6,8 +6,9 @@
 //! Conductor's sessions and its workers'. Each session counts in one task,
 //! so the tasks never add up past the seven days' total. The result is read
 //! from live facts: a session working, its pull request, changes left where
-//! it ran, a commit there, or none. Built on the runtime when the worker
-//! reports or what a result reads moves; it reads no file and runs nothing.
+//! it ran, a `git commit` the record kept that landed in the default branch,
+//! or none. Built on the runtime when the worker reports or what a result
+//! reads moves; it reads no file and runs nothing.
 use std::collections::{BTreeMap, HashMap, HashSet};
 
 use serde::Serialize;
@@ -45,8 +46,8 @@ pub struct TaskCost {
     pub sessions: Vec<TaskSession>,
     pub sessions_total: usize,
     pub result: TaskResult,
-    /// What its root session said last, while a live row still holds it
-    /// (B32).
+    /// What its root session said last (B32, D-21): the line the record
+    /// kept for its last judged turn, else its live row's first line.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub last_line: Option<String>,
 }
@@ -76,6 +77,8 @@ pub struct TaskMission {
     pub merged: usize,
     pub reopened: u32,
     pub nodes: Vec<MissionNodeCost>,
+    /// Every node, `nodes` listing the first `MISSION_NODE_LIMIT`.
+    pub nodes_total: usize,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
@@ -126,6 +129,8 @@ pub struct ProjectWeek {
     pub per_pr: Option<PerPr>,
     pub no_result_tasks: usize,
     pub no_result_micro_usd: u64,
+    /// A task with no result had calls with no price (B23).
+    pub no_result_unpriced: bool,
 }
 
 #[derive(Clone, Debug, Default, Eq, PartialEq, Serialize)]
@@ -134,10 +139,13 @@ pub struct PerPr {
     pub tokens: u64,
     pub elapsed_ms: u64,
     pub worked_ms: u64,
+    /// A task in the average had calls with no price (B23).
+    pub unpriced: bool,
 }
 
 /// A session the project's record holds: its agent, the session that
-/// started it, the pull requests it made, where it ran and when it ended.
+/// started it, the pull requests it made, where it ran, its last judged
+/// line and its last `git commit` call.
 #[derive(Clone, Debug, Default)]
 pub struct Recorded {
     pub agent: String,
@@ -145,6 +153,8 @@ pub struct Recorded {
     pub made: Vec<u32>,
     pub worked_on: Vec<u32>,
     pub cwd: Option<String>,
+    pub line: Option<String>,
+    pub committed_at_unix_ms: Option<u64>,
 }
 
 /// A mission of the project as its map stands: the Conductor's session and
@@ -181,10 +191,9 @@ pub struct Place {
     pub path: String,
     /// Changes not committed or commits not pushed.
     pub left: bool,
-    /// It is on the default branch.
-    pub base: bool,
-    /// Its newest commit's time.
-    pub last_commit_ms: Option<u64>,
+    /// What is committed here is in the default branch: the checkout is on
+    /// it, or its worktree reads merged (D-20).
+    pub landed: bool,
 }
 
 /// Everything a project's tasks read beside the spends.
@@ -194,7 +203,7 @@ pub struct Facts<'a> {
     pub missions: Vec<Mission>,
     /// Sessions whose live agent works or waits on the operator.
     pub working: HashSet<String>,
-    /// Each live session's last words.
+    /// Each live session's first line of its last words.
     pub last_lines: HashMap<String, String>,
     pub pulls: HashMap<u32, Pull>,
     pub places: Vec<Place>,
@@ -204,19 +213,52 @@ pub struct Facts<'a> {
     pub open_prs: usize,
 }
 
-/// The project's tasks, costliest first and cut at `TASK_LIMIT`, how many
-/// there are in all, and the week drawn from them.
-pub fn build(spends: &[SessionSpend], facts: &Facts) -> (Vec<TaskCost>, usize, ProjectWeek) {
+/// A project's tasks as [`build`] gives them: costliest first and cut at
+/// `TASK_LIMIT`, how many there are in all, the week drawn from them, and
+/// whether a cap cut a chain, a task's sessions or a mission's nodes.
+pub struct Built {
+    pub tasks: Vec<TaskCost>,
+    pub total: usize,
+    pub week: ProjectWeek,
+    pub capped: bool,
+}
+
+pub fn build(spends: &[SessionSpend], facts: &Facts) -> Built {
     let mission_of = mission_sessions(facts);
+    let mut capped = false;
     let mut groups: BTreeMap<String, Vec<(&SessionSpend, usize)>> = BTreeMap::new();
     for spend in spends {
-        let (key, depth) = task_of(&spend.session_id, facts, &mission_of);
+        let (key, depth, cut) = task_of(&spend.session_id, facts, &mission_of);
+        capped |= cut;
         groups.entry(key).or_default().push((spend, depth));
+    }
+    // Changes left in a checkout are the result of the task that ran there
+    // last, not of every earlier task there.
+    let mut last_here: HashMap<&str, u64> = HashMap::new();
+    for (key, members) in &groups {
+        if let Some(place) = place_of(&root_of(key, facts), facts) {
+            let ended = members
+                .iter()
+                .map(|(spend, _)| spend.last_ms)
+                .max()
+                .unwrap_or_default();
+            let last = last_here.entry(place.path.as_str()).or_default();
+            *last = (*last).max(ended);
+        }
     }
     let mut tasks: Vec<TaskCost> = groups
         .into_iter()
-        .map(|(key, members)| task(key, members, facts))
+        .map(|(key, members)| {
+            capped |= members.len() > TASK_SESSION_LIMIT;
+            task(key, members, facts, &last_here)
+        })
         .collect();
+    capped |= tasks.len() > TASK_LIMIT
+        || tasks.iter().any(|task| {
+            task.mission
+                .as_ref()
+                .is_some_and(|mission| mission.nodes_total > MISSION_NODE_LIMIT)
+        });
     tasks.sort_by(|a, b| {
         b.micro_usd
             .cmp(&a.micro_usd)
@@ -226,7 +268,36 @@ pub fn build(spends: &[SessionSpend], facts: &Facts) -> (Vec<TaskCost>, usize, P
     let week = week(&tasks, facts);
     let total = tasks.len();
     tasks.truncate(TASK_LIMIT);
-    (tasks, total, week)
+    Built {
+        tasks,
+        total,
+        week,
+        capped,
+    }
+}
+
+/// The session a task is rooted at: a mission's Conductor, else the task's
+/// own root.
+fn root_of(key: &str, facts: &Facts) -> String {
+    match key.strip_prefix("mission:") {
+        Some(id) => facts
+            .missions
+            .iter()
+            .find(|mission| mission.id == id)
+            .and_then(|mission| mission.conductor.clone())
+            .unwrap_or_default(),
+        None => key.trim_start_matches("task:").to_owned(),
+    }
+}
+
+/// The checkout a session ran in: the deepest one holding its folder.
+fn place_of<'a>(session: &str, facts: &'a Facts) -> Option<&'a Place> {
+    let cwd = facts.recorded.get(session)?.cwd.as_deref()?;
+    facts
+        .places
+        .iter()
+        .filter(|place| crate::files::path_inside_root(&place.path, cwd, true).is_ok())
+        .max_by_key(|place| place.path.len())
 }
 
 /// Each session that belongs to a mission: its Conductor's and, by the
@@ -240,17 +311,24 @@ fn mission_sessions(facts: &Facts) -> HashMap<String, usize> {
         .collect()
 }
 
-/// The task a session counts in, with its depth under the task's root: the
-/// mission one of its forebears conducts; else the nearest forebear (itself
-/// included) that made a pull request or has no parent.
-fn task_of(session: &str, facts: &Facts, missions: &HashMap<String, usize>) -> (String, usize) {
+/// The task a session counts in, with its depth under the task's root and
+/// whether `DEPTH_LIMIT` cut its chain: the mission one of its forebears
+/// conducts; else the nearest forebear (itself included) that made a pull
+/// request or has no parent.
+fn task_of(
+    session: &str,
+    facts: &Facts,
+    missions: &HashMap<String, usize>,
+) -> (String, usize, bool) {
     let mut chain = vec![session.to_owned()];
-    while chain.len() <= DEPTH_LIMIT {
+    let mut cut = false;
+    loop {
         let current = chain.last().unwrap();
         if let Some(index) = missions.get(current) {
             return (
                 format!("mission:{}", facts.missions[*index].id),
                 chain.len() - 1,
+                false,
             );
         }
         match facts
@@ -258,6 +336,10 @@ fn task_of(session: &str, facts: &Facts, missions: &HashMap<String, usize>) -> (
             .get(current)
             .and_then(|row| row.parent.clone())
         {
+            Some(_) if chain.len() > DEPTH_LIMIT => {
+                cut = true;
+                break;
+            }
             Some(parent) if !chain.contains(&parent) => chain.push(parent),
             _ => break,
         }
@@ -271,18 +353,20 @@ fn task_of(session: &str, facts: &Facts, missions: &HashMap<String, usize>) -> (
                 .is_some_and(|row| !row.made.is_empty())
         })
         .unwrap_or(chain.len() - 1);
-    (format!("task:{}", chain[root]), root)
+    (format!("task:{}", chain[root]), root, cut)
 }
 
-fn task(key: String, mut members: Vec<(&SessionSpend, usize)>, facts: &Facts) -> TaskCost {
+fn task(
+    key: String,
+    mut members: Vec<(&SessionSpend, usize)>,
+    facts: &Facts,
+    last_here: &HashMap<&str, u64>,
+) -> TaskCost {
     members.sort_by(|a, b| a.1.cmp(&b.1).then_with(|| a.0.first_ms.cmp(&b.0.first_ms)));
     let mission = key
         .strip_prefix("mission:")
         .and_then(|id| facts.missions.iter().find(|mission| mission.id == id));
-    let root_id = match mission {
-        Some(mission) => mission.conductor.clone().unwrap_or_default(),
-        None => key.trim_start_matches("task:").to_owned(),
-    };
+    let root_id = root_of(&key, facts);
     let root_agent = facts
         .recorded
         .get(&root_id)
@@ -314,21 +398,36 @@ fn task(key: String, mut members: Vec<(&SessionSpend, usize)>, facts: &Facts) ->
         .iter()
         .map(|(spend, _)| spend.session_id.as_str())
         .collect();
-    let made: Vec<u32> = members
-        .iter()
-        .filter_map(|(spend, _)| facts.recorded.get(&spend.session_id))
-        .flat_map(|row| row.made.iter().chain(&row.worked_on).copied())
+    // The pull requests the task made; one it only worked on stands for it
+    // when it made none, so a pull request counts in one task's result.
+    let rows = || {
+        members
+            .iter()
+            .filter_map(|(spend, _)| facts.recorded.get(&spend.session_id))
+    };
+    let mut made: Vec<u32> = rows()
+        .flat_map(|row| row.made.iter().copied())
         .chain(
             mission
                 .into_iter()
                 .flat_map(|mission| mission.nodes.iter().filter_map(|node| node.pr)),
         )
         .collect();
+    if made.is_empty() {
+        made = rows()
+            .flat_map(|row| row.worked_on.iter().copied())
+            .collect();
+    }
     let merged_at = made
         .iter()
         .filter_map(|number| facts.pulls.get(number)?.merged_at_unix_ms)
         .max();
-    let result = result(&root_id, &sessions, &made, started, ended, facts);
+    let latest_here = place_of(&root_id, facts).is_some_and(|place| {
+        last_here
+            .get(place.path.as_str())
+            .is_some_and(|last| *last <= ended)
+    });
+    let result = result(&root_id, &sessions, &made, latest_here, facts);
     let mission = mission.map(|mission| mission_cost(mission, &members, facts));
     TaskCost {
         id: key,
@@ -362,23 +461,28 @@ fn task(key: String, mut members: Vec<(&SessionSpend, usize)>, facts: &Facts) ->
             .collect(),
         sessions_total: members.len(),
         last_line: (result.kind == "none")
-            .then(|| facts.last_lines.get(&root_id).cloned())
+            .then(|| {
+                facts
+                    .recorded
+                    .get(&root_id)
+                    .and_then(|row| row.line.clone())
+                    .or_else(|| facts.last_lines.get(&root_id).cloned())
+            })
             .flatten(),
         mission,
         result,
     }
 }
 
-/// B30: a session working or waiting; else the newest pull request it made
-/// or worked on; else changes left in the checkout it last ran in, while no
-/// later task ran there; else a commit there during the task, on the
-/// default branch or since landed; else none.
+/// B30: a session working or waiting; else the newest pull request it made;
+/// else changes left in the checkout its root ran in, when no later task ran
+/// there (`latest_here`); else a `git commit` one of its sessions ran in a
+/// checkout whose commits are in the default branch (D-20); else none.
 fn result(
     root: &str,
     sessions: &HashSet<&str>,
     made: &[u32],
-    started: u64,
-    ended: u64,
+    latest_here: bool,
     facts: &Facts,
 ) -> TaskResult {
     if sessions.iter().any(|id| facts.working.contains(*id)) || facts.working.contains(root) {
@@ -393,28 +497,18 @@ fn result(
             state: facts.pulls.get(number).map(|pull| pull.state),
         };
     }
-    let place = facts
-        .recorded
-        .get(root)
-        .and_then(|row| row.cwd.as_deref())
-        .and_then(|cwd| {
-            facts
-                .places
-                .iter()
-                .filter(|place| crate::files::path_inside_root(&place.path, cwd, true).is_ok())
-                .max_by_key(|place| place.path.len())
-        });
-    if let Some(place) = place {
-        if place.left {
-            return TaskResult::of("changes");
-        }
-        if place.base
-            && place
-                .last_commit_ms
-                .is_some_and(|at| at >= started && at <= ended + super::project_cost::WORK_GAP_MS)
-        {
-            return TaskResult::of("commit");
-        }
+    if latest_here && place_of(root, facts).is_some_and(|place| place.left) {
+        return TaskResult::of("changes");
+    }
+    let committed = sessions.iter().any(|session| {
+        facts
+            .recorded
+            .get(*session)
+            .is_some_and(|row| row.committed_at_unix_ms.is_some())
+            && place_of(session, facts).is_some_and(|place| place.landed)
+    });
+    if committed {
+        return TaskResult::of("commit");
     }
     TaskResult::of("none")
 }
@@ -490,6 +584,7 @@ fn mission_cost(
                 }
             })
             .collect(),
+        nodes_total: mission.nodes.len(),
     }
 }
 
@@ -580,12 +675,14 @@ fn week(tasks: &[TaskCost], facts: &Facts) -> ProjectWeek {
             tokens: average(|task| task.tokens),
             elapsed_ms: average(|task| task.elapsed_ms),
             worked_ms: average(|task| task.worked_ms),
+            unpriced: landed.iter().any(|task| task.unpriced),
         }),
         no_result_tasks: none.len(),
         no_result_micro_usd: none
             .iter()
             .map(|task| task.micro_usd)
             .fold(0, u64::saturating_add),
+        no_result_unpriced: none.iter().any(|task| task.unpriced),
     }
 }
 

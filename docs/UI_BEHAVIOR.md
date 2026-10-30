@@ -913,7 +913,7 @@ Pressing a row brings the session that last worked there forward with the keyboa
 `남은 것` lists the changed files, each opening its diff when the worktree is in front, and the unpushed commits from the front checkout's header read, or the committed files of another worktree.
 Hovered or focused, a row's age gives way to `마무리 맡기기` and `놔두기`, both reached with Tab and read by name (B10).
 `마무리 맡기기` writes fixed words for what is left to that session (`커밋하고 PR 열어줘`, `브랜치 푸시하고 PR 열어줘`, `#N CI 실패 원인 고쳐줘`, together when several apply), or, with no session open, starts an agent of the same kind there (else the one the operator last started) with the same words (B11).
-While it sends the button shows progress and a second press sends nothing; once the agent works the row goes and the session shows as working on the left (B12); a failure keeps the row and goes to the diagnostic log (B13).
+While it sends the button shows progress, and once sent it stays off until the row goes, so a second press sends nothing; once the agent works the row goes and the session shows as working on the left (B12); a failure keeps the row, turns the button back on and goes to the diagnostic log (B13).
 When that agent ends with something still left the row comes back (B14).
 `놔두기` takes the row out and leaves `되돌리기` in its place for a few seconds; a new commit in the worktree or a new CI failure on its pull request brings the row back (B15).
 The core keeps 256 놔두기; past that the oldest goes, its row comes back, and the diagnostic log says so (B16).
@@ -932,13 +932,13 @@ The 작업 비용 table opens in the viewing column as `작업 비용 · <projec
 Below 520px the tokens and working time move under the task's name, so every item stays at the 360px minimum (B35).
 A task is a top-level session with its children and grandchildren; a child that made its own pull request is a task of its own, so the tasks never add up past the seven days' total (B28).
 Unfolded, a task lists its sessions under their parents with agent, cost, tokens and working time, `가격 없음` for an agent with no price (B29).
-The result is the first of `작업 중` (a session works or waits on the operator), its pull request (open, merged or closed), `변경 남음`, `main 커밋` and `결과 없음` (B30).
+The result is the first of `작업 중` (a session works or waits on the operator), the pull request it made (open, merged or closed; one it only worked on when it made none), `변경 남음` (changes left in the checkout it ran in, for the task that ran there last), `main 커밋` (a `git commit` one of its sessions ran, as its session file recorded it, in a checkout on the default branch or whose worktree reads merged) and `결과 없음` (B30, D-20).
 A mission is one row with its pull requests merged out of made; unfolded it lists each node with its pull request, cost, retries and reopenings (B31).
-Under 결과 없음 the result column holds `마지막에 한 말` and `대화 보기`, which brings the session forward while it is open and otherwise opens its record; the words are empty when no open session holds them (B32).
+Under 결과 없음 the result column holds `마지막에 한 말` and `대화 보기`, which brings the session forward while it is open and otherwise opens its record; the words are the line the record kept for the session's last judged turn, else the first line of its open row's last words, and empty when neither is left (B32, D-21).
 A filter with nothing reads `이 필터에 맞는 작업이 없어요` with `전체 보기`, a project with no task in seven days `최근 7일 작업이 없어요` (B33), and past 200 tasks a line says `나머지 N개는 7일 합계에만 들어 있어요` (B34).
 Hide AI's own use is in no task and stands under the table as `Hide AI 사용 $X` (B24).
 
-The core derives the counts and 흘린 것 only on a publish whose inputs moved, and builds the tasks only when the ledger worker reports, the record's summaries change or a local agent starts or ends a turn; nothing on those paths reads a file or runs a process (B37; [ARCHITECTURE.md](ARCHITECTURE.md#project-status-and-cost)).
+The core derives the counts and 흘린 것 only on a publish whose inputs moved, and builds the tasks only when the ledger worker reports, the record's summaries change or those counts are derived again; nothing on those paths reads a file or runs a process (B37; [ARCHITECTURE.md](ARCHITECTURE.md#project-status-and-cost)).
 
 ## Hide AI: the Hide AI tool
 
@@ -2197,7 +2197,8 @@ Each checkout is measured under its own limit of one million entries and 30 seco
 An incomplete measurement has no total, and allocated blocks are not a promise of reclaimable space, so the result states only the volume's free space before and after.
 A node's project is measured and cleaned up on that node; a project of a device the core dials is neither measured nor cleaned.
 The Overview's [Projects](#projects) tab is where a project's size shows: while it is on screen the core measures its projects one at a time in the order shown and keeps each answer for ten minutes, and its disk number, `머지됨 N → 정리` and the project panel's `정리` open the sheet below.
-The Project tool and the worktree table measure the one project they show, through the same watch and the same ten-minute answers, so opening the panel on a project measured in the last ten minutes measures nothing, and closing and opening it while a measurement runs leaves that one measurement (PRD project-panel-results D-15, B20).
+The Project tool and the worktree table measure the projects they show, through the same watch and the same ten-minute answers, so opening the panel on a project measured in the last ten minutes measures nothing.
+Closing the last of them stops a measurement still running before its next checkout, and opening it again measures that project anew (PRD project-panel-results D-15, B20).
 The lane counts the panel and the table as one holder per project and tells the core nothing once both are gone; the Overview's Projects tab takes the watch over while it is open.
 When nothing watches a machine any more, its running measurement stops before the next checkout, and the node stops walking between checkouts, so a closed panel costs at most one checkout's walk.
 

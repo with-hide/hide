@@ -337,7 +337,7 @@
       "description": "The seven days' results (PRD project-panel-results B21, B22): pull requests merged and open, missions and how often they were opened again, merged pull requests per day under the day bars, the averages over the tasks whose pull request merged, and the tasks that ended with no result.",
       "type": "object",
       "additionalProperties": false,
-      "required": ["merged_prs", "open_prs", "missions", "mission_reopened", "merged_by_day", "per_pr", "no_result_tasks", "no_result_micro_usd"],
+      "required": ["merged_prs", "open_prs", "missions", "mission_reopened", "merged_by_day", "per_pr", "no_result_tasks", "no_result_micro_usd", "no_result_unpriced"],
       "properties": {
         "merged_prs": { "type": "integer", "minimum": 0 },
         "open_prs": { "type": "integer", "minimum": 0 },
@@ -349,19 +349,21 @@
             {
               "type": "object",
               "additionalProperties": false,
-              "required": ["micro_usd", "tokens", "elapsed_ms", "worked_ms"],
+              "required": ["micro_usd", "tokens", "elapsed_ms", "worked_ms", "unpriced"],
               "properties": {
                 "micro_usd": { "type": "integer", "minimum": 0 },
                 "tokens": { "type": "integer", "minimum": 0 },
                 "elapsed_ms": { "type": "integer", "minimum": 0 },
-                "worked_ms": { "type": "integer", "minimum": 0 }
+                "worked_ms": { "type": "integer", "minimum": 0 },
+                "unpriced": { "description": "A task in the average had calls with no price, so the cost is a lower bound (B23).", "type": "boolean" }
               }
             },
             { "type": "null" }
           ]
         },
         "no_result_tasks": { "type": "integer", "minimum": 0 },
-        "no_result_micro_usd": { "type": "integer", "minimum": 0 }
+        "no_result_micro_usd": { "type": "integer", "minimum": 0 },
+        "no_result_unpriced": { "description": "A task with no result had calls with no price, so its cost is a lower bound (B23).", "type": "boolean" }
       }
     },
     "taskCost": {
@@ -406,13 +408,13 @@
         },
         "sessions_total": { "type": "integer", "minimum": 0 },
         "result": { "$ref": "#/$defs/taskResult" },
-        "last_line": { "description": "What it said last, for a task with no result (B32): the record's turn line, else its conversation's last answer; absent when neither is left.", "type": ["string", "null"] }
+        "last_line": { "description": "What it said last, for a task with no result (B32, D-21): the line the record kept for its root session's last judged turn, else the first line of its live row's last words; absent when neither is left.", "type": ["string", "null"] }
       }
     },
     "taskMission": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["id", "title", "prs", "merged", "reopened", "nodes"],
+      "required": ["id", "title", "prs", "merged", "reopened", "nodes", "nodes_total"],
       "properties": {
         "id": { "type": "string" },
         "title": { "type": "string" },
@@ -437,11 +439,12 @@
               "worked_ms": { "type": "integer", "minimum": 0 }
             }
           }
-        }
+        },
+        "nodes_total": { "description": "Every node of the mission; `nodes` lists the first 64.", "type": "integer", "minimum": 0 }
       }
     },
     "taskResult": {
-      "description": "What a task left (B30): `working` while one of its sessions works, else its pull request, else changes left in its worktree, else a commit in the default branch, else none.",
+      "description": "What a task left (B30): `working` while one of its sessions works, else the pull request it made, else changes left in the checkout it ran in last, else a `git commit` its record kept in a checkout whose commits are in the default branch, else none.",
       "type": "object",
       "additionalProperties": false,
       "required": ["kind"],

@@ -39,9 +39,12 @@ impl Runtime {
 
     fn refresh_agent_scopes_at(&mut self, now: u64) -> bool {
         self.read_worktrees_after_turns();
-        self.agent_scope_cache.refresh(&mut self.snapshot, now)
-            | self.refresh_pane_headers()
-            | self.refresh_overview_graph_sessions()
+        let scopes = self.agent_scope_cache.refresh(&mut self.snapshot, now);
+        // A task's result reads what the scopes read: the agents, the pull
+        // requests and the checkouts' Git facts (PRD project-panel-results
+        // B30), so the tasks are built again exactly when the scopes are.
+        let tasks = scopes && self.publish_project_tasks();
+        scopes | tasks | self.refresh_pane_headers() | self.refresh_overview_graph_sessions()
     }
 
     /// Reads a project's worktrees again once an agent in it stops working,
@@ -83,12 +86,7 @@ impl Runtime {
         for path in projects {
             self.refresh_project_worktrees(&path);
         }
-        // A task's result reads which sessions work (B30).
-        let moved = working != self.turn_working_panes;
         self.turn_working_panes = working;
-        if moved {
-            self.publish_project_tasks();
-        }
     }
 
     /// Lays the block on this Mac's rows, whose pull requests come from

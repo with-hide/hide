@@ -521,7 +521,7 @@ export interface TaskCost {
   sessions_total: number;
   result: TaskResult;
   /**
-   * What it said last, for a task with no result (B32): the record's turn line, else its conversation's last answer; absent when neither is left.
+   * What it said last, for a task with no result (B32, D-21): the line the record kept for its root session's last judged turn, else the first line of its live row's last words; absent when neither is left.
    */
   last_line?: string | null;
 }
@@ -544,9 +544,13 @@ export interface TaskMission {
     tokens: number;
     worked_ms: number;
   }[];
+  /**
+   * Every node of the mission; `nodes` lists the first 64.
+   */
+  nodes_total: number;
 }
 /**
- * What a task left (B30): `working` while one of its sessions works, else its pull request, else changes left in its worktree, else a commit in the default branch, else none.
+ * What a task left (B30): `working` while one of its sessions works, else the pull request it made, else changes left in the checkout it ran in last, else a `git commit` its record kept in a checkout whose commits are in the default branch, else none.
  */
 export interface TaskResult {
   kind: "working" | "pr" | "changes" | "commit" | "none";
@@ -570,9 +574,17 @@ export interface ProjectWeek {
     tokens: number;
     elapsed_ms: number;
     worked_ms: number;
+    /**
+     * A task in the average had calls with no price, so the cost is a lower bound (B23).
+     */
+    unpriced: boolean;
   } | null;
   no_result_tasks: number;
   no_result_micro_usd: number;
+  /**
+   * A task with no result had calls with no price, so its cost is a lower bound (B23).
+   */
+  no_result_unpriced: boolean;
 }
 export interface ClientEvent {
   schema_version: 2;

@@ -632,6 +632,10 @@ impl Engine {
         match self.store.ai_record(&batch.parts, &batch.unknown) {
             Ok(recorded) => {
                 self.ai_dirty = true;
+                // The projects' cost carries the week's Hide AI figure
+                // (PRD project-panel-results B24), rebuilt at most every
+                // `COST_REBUILD`.
+                self.costs.dirty = true;
                 if recorded.refused > 0 {
                     diagnostic("ai_usage_row_capacity", None, recorded.refused as u64);
                 }

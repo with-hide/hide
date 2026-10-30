@@ -265,3 +265,33 @@ fn a_hand_off_goes_once_per_request() {
         [("r1", "failed")]
     );
 }
+
+/// B17, D-21: an agent that stops working has the worktrees of its project
+/// read again once, so changes it left unstaged reach the 흘린 것; an agent
+/// that keeps working, or one already stopped, reads nothing.
+#[test]
+fn an_agent_that_stops_working_has_its_project_s_worktrees_read_again() {
+    let mut runtime = runtime();
+    runtime.snapshot.navigator.agents = vec![agent("p1", "working")];
+    project(&mut runtime, vec![worktree("emails", 0, "aaa", Some("p1"))]);
+    let generation = |runtime: &Runtime| {
+        runtime
+            .worktree_project_generations
+            .get("/fixture")
+            .copied()
+            .unwrap_or(0)
+    };
+    let before = generation(&runtime);
+    runtime.refresh_agent_scopes();
+    assert_eq!(
+        generation(&runtime),
+        before,
+        "a working agent reads nothing"
+    );
+    runtime.snapshot.navigator.agents = vec![agent("p1", "idle")];
+    runtime.refresh_agent_scopes();
+    assert_eq!(generation(&runtime), before + 1);
+    assert!(runtime.snapshot.git_worktrees_loading);
+    runtime.refresh_agent_scopes();
+    assert_eq!(generation(&runtime), before + 1, "once per stop");
+}
