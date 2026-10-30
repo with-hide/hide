@@ -31,7 +31,7 @@ export function PlanSummaryLine({ plan }: { plan: PlanView }) {
   const elapsed = useElapsed(plan.updated_at_unix_ms);
   const finished = plan.progress.finished;
   const count = planProposed(plan) ? t("plan.steps", { count: plan.progress.total }) : planCount(plan);
-  const when = finished ? formatElapsed(requireInterfaceLanguage(i18n.language), plan.updated_at_unix_ms - plan.created_at_unix_ms) : elapsed ? t("plan.updated", { elapsed }) : null;
+  const when = finished ? t("plan.took", { elapsed: formatElapsed(requireInterfaceLanguage(i18n.language), plan.updated_at_unix_ms - plan.created_at_unix_ms) }) : elapsed ? t("plan.updated", { elapsed }) : null;
   return (
     <span className="flex min-w-0 items-baseline gap-xs" data-plan-summary={finished ? "finished" : plan.review}>
       <span className="text-muted-foreground">{finished ? t("plan.finished") : t("plan.title")}</span>
@@ -67,7 +67,7 @@ function PlanBody({ plan, actions }: { plan: PlanView; actions: Actions }) {
         <PlanSummaryLine plan={plan} />
       </div>
       <div className="min-h-0 flex-1 overflow-auto px-md pb-md pt-xs" data-plan-scroll="true">
-        <PlanGraph plan={plan} />
+        <PlanGraph plan={plan} openPane={(paneId) => actions.openAgent(paneId)} />
       </div>
     </div>
   );

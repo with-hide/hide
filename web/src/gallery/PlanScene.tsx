@@ -1,5 +1,7 @@
 // A session's own plan over invented values (PRD hide-plan), one state per
-// `state` parameter: running, review, finished. The checklist the pane chip
+// `state` parameter: running, review, finished, and a plan whose steps are
+// handed to other agents, at work (`delegated`) and finished
+// (`delegated-finished`, PRD hide-plan-delegate B25-B30). The checklist the pane chip
 // opens (PRD mission-plan-visibility B3-B6) sits beside the map the 보기 slot
 // draws, both the real components. Nothing leaves this scene.
 import { useLayoutEffect, useMemo } from "react";
@@ -9,7 +11,7 @@ import { useFollowInterfaceLanguage } from "../i18n/translator";
 import { requireInterfaceLanguage } from "../i18n/locale";
 import { PlanChecklist } from "../components/plan-checklist";
 import { PlanMap, PlanSummaryLine } from "../PlanMap";
-import type { PlanStep, PlanView, SnapshotRest } from "../snapshot";
+import type { PlanDelegation, PlanStep, PlanView, SnapshotRest, WorkSession } from "../snapshot";
 import { useShellStore } from "../store";
 
 const MINUTE = 60_000;
@@ -53,23 +55,63 @@ export function planFixture(state: string, now: number): PlanView {
   };
 }
 
+const CHILD = { device_id: "local", agent: "codex", session_id: "gallery-plan-child" };
+
+function handed(state: PlanDelegation["state"], name: string, agent: string, session: WorkSession | null): PlanDelegation {
+  return { state, attempt: 1, agent_id: `gallery-${name}`, name, agent, pane_id: session ? `w1:${name}` : null, session };
+}
+
+/** The mockup's handing plan: the spec done with its file, the core mine, the web screen with web-ui, the review still to hand. */
+function delegated(finished: boolean, now: number): PlanView[] {
+  const done = (extra: Partial<PlanStep>): Partial<PlanStep> => (finished ? { status: "done", ...extra } : {});
+  const steps = [
+    step("spec", "스펙 쓰기", "done", [], { output: "file", evidence: { kind: "file", path: "docs/plans/delegate-spec.md" } }),
+    step("core", "코어 이벤트", "working", ["spec"], { line: "테스트 쓰는 중", ...done({ line: null }) }),
+    step("web", "웹 화면 지도와 팝오버, 긴 이름이 섞인 단계", "working", ["spec"], { output: "pr", delegation: handed(finished ? "reported" : "working", "web-ui", "codex", finished ? null : CHILD), ...done({ evidence: { kind: "pr", repo: "with-hide/hide", number: 1879 } }) }),
+    step("review", "리뷰", "planned", ["core", "web"], { waiting: !finished, delegate: true, ...done({ delegation: handed("reported", "reviewer", "claude", null) }) }),
+    step("pr", "PR 열기", "planned", ["review"], { waiting: !finished, output: "pr", ...done({ evidence: { kind: "pr", repo: "with-hide/hide", number: 1880 } }) }),
+  ];
+  const main: PlanView = {
+    pane_id: "w1:p2",
+    session: SESSION,
+    steps,
+    review: "approved",
+    ask: null,
+    progress: { current: finished ? null : "core", next: finished ? null : "review", done: finished ? 5 : 1, total: 5, finished },
+    created_at_unix_ms: now - 18 * MINUTE,
+    updated_at_unix_ms: finished ? now : now - 2 * MINUTE,
+  };
+  const child: PlanView = {
+    pane_id: "",
+    session: CHILD,
+    steps: [step("parts", "컴포넌트", "done", []), step("store", "스토어", "done", ["parts"]), step("map", "지도 그리기", "working", ["store"]), step("e2e", "e2e", "planned", ["map"], { waiting: true })],
+    review: "approved",
+    ask: null,
+    progress: { current: "map", next: "e2e", done: 2, total: 4, finished: false },
+    created_at_unix_ms: now - 10 * MINUTE,
+    updated_at_unix_ms: now - MINUTE,
+  };
+  return finished ? [main] : [main, child];
+}
+
 export function PlanScene({ params }: { params: URLSearchParams }) {
   useFollowInterfaceLanguage(requireInterfaceLanguage(params.get("lang") ?? "ko"));
   const theme = params.get("theme") === "light" ? "light" : "dark";
   const state = params.get("state") ?? "running";
-  const shown = useMemo(() => planFixture(state, Date.now()), [state]);
+  const plans = useMemo(() => (state.startsWith("delegated") ? delegated(state === "delegated-finished", Date.now()) : [planFixture(state, Date.now())]), [state]);
+  const [shown] = plans as [PlanView, ...PlanView[]];
   const actions = useMemo(() => createActions(() => true), []);
   useLayoutEffect(() => {
-    useShellStore.setState({ rest: { plans: { items: [shown] } } as unknown as SnapshotRest, agents: [], connection: "live" });
+    useShellStore.setState({ rest: { plans: { items: plans } } as unknown as SnapshotRest, agents: [], connection: "live" });
     document.documentElement.classList.toggle("dark", theme === "dark");
     document.documentElement.classList.toggle("light", theme === "light");
     document.documentElement.style.setProperty("--interface-scale", params.get("scale") ?? "1");
-  }, [shown, theme, params]);
+  }, [plans, theme, params]);
   const width = Number(params.get("width") ?? 1080);
   return (
     <TooltipProvider>
       <div style={{ width }} className="flex h-full min-w-0 gap-lg bg-background p-lg text-foreground" data-gallery-scene="plan" data-plan-scene={state}>
-        <div className="flex w-(--size-pr-popover) shrink-0 flex-col self-start rounded-md border border-border bg-popover text-caption" data-plan-scene-popover="true">
+        <div className="flex w-(--size-pr-popover) shrink-0 flex-col self-start rounded-md border border-border bg-popover text-caption [word-break:keep-all]" data-plan-scene-popover="true">
           <div className="px-sm pt-sm"><PlanSummaryLine plan={shown} /></div>
           <div className="px-xs py-sm"><PlanChecklist plan={shown} popover /></div>
         </div>
