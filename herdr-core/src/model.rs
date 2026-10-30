@@ -113,7 +113,7 @@ pub struct Snapshot {
     /// column shows, read by that worktree's path on a read of its own, so
     /// it never waits on the checkout in front. Absent while nothing shows
     /// it; it carries no diff text.
-    pub remains: Option<ChangesSnapshot>,
+    pub remains: Option<RemainsSnapshot>,
     pub worktree_removal: Option<WorktreeRemovalSnapshot>,
     pub task_operation: Option<TaskOperationSnapshot>,
     pub repository_clone: Option<RepositoryCloneSnapshot>,
@@ -5585,6 +5585,17 @@ pub struct EditorConflictSnapshot {
     /// What the file holds now; absent when it was removed or could not be
     /// read.
     pub disk_revision: Option<String>,
+}
+
+/// `남은 것`'s read with the checkout it was read for: a nested worktree's
+/// folder lies inside its primary checkout's, so the view matches the
+/// checkout, never a folder prefix.
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct RemainsSnapshot {
+    pub workspace_id: String,
+    pub checkout_id: String,
+    #[serde(flatten)]
+    pub changes: ChangesSnapshot,
 }
 
 /// One checkout's Git working-tree state, plus the diff of the file the user

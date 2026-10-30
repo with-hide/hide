@@ -164,7 +164,7 @@ section!(RestSections, Snapshot, s, {
     git_worktrees: Option<ProjectWorktreesSnapshot> => s.git_worktrees,
     git_worktrees_loading: bool => s.git_worktrees_loading,
     git_worktrees_remote: bool => s.git_worktrees_remote,
-    remains: Option<ChangesSnapshot> => s.remains,
+    remains: Option<RemainsSnapshot> => s.remains,
     worktree_removal: Option<WorktreeRemovalSnapshot> => s.worktree_removal,
     task_operation: Option<TaskOperationSnapshot> => s.task_operation,
     repository_clone: Option<RepositoryCloneSnapshot> => s.repository_clone,

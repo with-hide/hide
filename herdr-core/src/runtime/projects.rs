@@ -302,17 +302,46 @@ impl Runtime {
 
     /// What `남은 것` needs read: the worktree's own changes and committed
     /// group by its path, apart from the checkout in front, with no row and
-    /// no diff. `None` while nothing shows it.
-    pub fn remains_request(&mut self) -> Option<crate::changes::ChangesRequest> {
-        let (workspace_id, checkout_id, root_path) = self.remains_target()?;
-        let root = self.document_root(&workspace_id, &checkout_id).ok()?;
+    /// no diff; `None` while nothing shows it. The flag is true when this
+    /// call changed the snapshot: nothing shown clears the held read, and a
+    /// worktree this daemon did not open is published as unreadable rather
+    /// than left waiting.
+    pub fn remains_request(&mut self) -> (Option<crate::changes::ChangesRequest>, bool) {
+        let Some((workspace_id, checkout_id, root_path)) = self.remains_target() else {
+            return (None, self.snapshot.remains.take().is_some());
+        };
+        let root = match self.document_root(&workspace_id, &checkout_id) {
+            Ok(root) => root,
+            Err(detail) => {
+                let refused = crate::model::RemainsSnapshot {
+                    workspace_id,
+                    checkout_id,
+                    changes: crate::model::ChangesSnapshot {
+                        root_path: Some(root_path),
+                        unavailable_reason: Some("host.root_not_opened".to_owned()),
+                        ..Default::default()
+                    },
+                };
+                if self.snapshot.remains.as_ref() == Some(&refused) {
+                    return (None, false);
+                }
+                crate::diagnostic!(serde_json::json!({
+                    "component": "changes",
+                    "kind": "remains.unavailable",
+                    "error": "host.root_not_opened",
+                    "reason": detail,
+                }));
+                self.snapshot.remains = Some(refused);
+                return (None, true);
+            }
+        };
         let channel = self
             .changes_channel(&root.device_id)
             .map(crate::changes::ChannelRef);
         let base_branch = self
             .catalog_checkout(&workspace_id, &checkout_id)
             .and_then(|(_, checkout)| checkout.base_branch.clone());
-        Some(crate::changes::ChangesRequest {
+        let request = crate::changes::ChangesRequest {
             root,
             channel,
             root_path,
@@ -320,47 +349,52 @@ impl Runtime {
             selected_committed: false,
             base_branch,
             diffs: Vec::new(),
-        })
+        };
+        (Some(request), false)
     }
 
     /// Takes a `남은 것` read when it still describes the worktree shown; an
-    /// answer for one the operator has left is dropped, and nothing shown
-    /// empties it. A failed read of the worktree already listed keeps that
-    /// list, marked stale. True when the snapshot changed.
+    /// answer for one the operator has left is dropped. A failed read of the
+    /// worktree already listed keeps that list, marked stale. True when the
+    /// snapshot changed.
     pub fn ingest_remains(&mut self, answer: crate::changes::ChangesAnswer) -> bool {
-        let key = self
-            .remains_target()
-            .and_then(|(workspace_id, checkout_id, root_path)| {
-                let (workspace, _) = self.catalog_checkout(&workspace_id, &checkout_id)?;
-                Some(crate::changes::ChangesKey {
-                    device_id: workspace.device_id.clone(),
-                    root_path,
-                })
-            });
-        if answer.key != key {
+        let Some((workspace_id, checkout_id, root_path)) = self.remains_target() else {
+            return false;
+        };
+        let Some((workspace, _)) = self.catalog_checkout(&workspace_id, &checkout_id) else {
+            return false;
+        };
+        let key = crate::changes::ChangesKey {
+            device_id: workspace.device_id.clone(),
+            root_path,
+        };
+        if answer.key.as_ref() != Some(&key) {
             return false;
         }
-        let next = answer.key.map(|_| {
-            let mut changes = answer.changes;
-            if let Some(reason) = changes.unavailable_reason.clone()
-                && let Some(held) = self.snapshot.remains.as_ref()
-                && held.unavailable_reason.is_none()
-                && held.root_path == changes.root_path
-            {
-                let mut kept = held.clone();
-                kept.stale_reason = Some(reason);
-                changes = kept;
-            }
-            changes
+        let mut changes = answer.changes;
+        if let Some(reason) = changes.unavailable_reason.clone()
+            && let Some(held) = self.snapshot.remains.as_ref()
+            && held.checkout_id == checkout_id
+            && held.changes.unavailable_reason.is_none()
+        {
+            let mut kept = held.changes.clone();
+            kept.stale_reason = Some(reason);
+            changes = kept;
+        }
+        let next = Some(crate::model::RemainsSnapshot {
+            workspace_id,
+            checkout_id,
+            changes,
         });
         if self.snapshot.remains == next {
             return false;
         }
-        if let Some(reason) = next.as_ref().and_then(|changes| {
-            changes
+        if let Some(reason) = next.as_ref().and_then(|remains| {
+            remains
+                .changes
                 .unavailable_reason
                 .clone()
-                .or_else(|| changes.stale_reason.clone())
+                .or_else(|| remains.changes.stale_reason.clone())
         }) {
             crate::diagnostic!(serde_json::json!({
                 "component": "changes",

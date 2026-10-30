@@ -308,7 +308,7 @@ fn the_remains_view_reads_its_worktree_apart_from_the_checkout_in_front() {
     runtime.ui_attached = true;
     runtime.snapshot.ui_state.right_panel_visible = true;
     runtime.snapshot.ui_state.right_panel_section = RightPanelSection::Changes;
-    assert!(runtime.remains_request().is_none(), "nothing shows it yet");
+    assert!(runtime.remains_request().0.is_none(), "nothing shows it yet");
     assert!(event(
         &mut runtime,
         "detail_open",
@@ -319,6 +319,7 @@ fn the_remains_view_reads_its_worktree_apart_from_the_checkout_in_front() {
         .expect("the Changes section reads the front");
     let remains = runtime
         .remains_request()
+        .0
         .expect("the remains view reads its own");
     assert_eq!(front.root_path, "/fixture");
     assert_eq!(remains.root_path, "/fixture/emails");
@@ -343,20 +344,75 @@ fn the_remains_view_reads_its_worktree_apart_from_the_checkout_in_front() {
         "another folder's answer is dropped"
     );
     assert!(runtime.ingest_remains(answer(Some(remains.key()), "/fixture/emails")));
+    let held = runtime.snapshot.remains.as_ref().expect("the read is held");
     assert_eq!(
-        runtime
-            .snapshot
-            .remains
-            .as_ref()
-            .and_then(|r| r.root_path.as_deref()),
-        Some("/fixture/emails")
+        (held.checkout_id.as_str(), held.changes.root_path.as_deref()),
+        ("emails", Some("/fixture/emails")),
+        "the read names its checkout, not only a folder inside the primary's"
     );
     assert!(event(
         &mut runtime,
         "detail_show",
         serde_json::json!({"shown": false})
     ));
-    assert!(runtime.remains_request().is_none());
-    assert!(runtime.ingest_remains(answer(None, "")));
+    assert_eq!(
+        runtime.remains_request(),
+        (None, true),
+        "nothing shown clears the held read"
+    );
+    assert!(!runtime.ingest_remains(answer(None, "")));
     assert!(runtime.snapshot.remains.is_none());
+}
+
+/// A worktree this daemon did not open cannot be read; `남은 것` says so
+/// instead of waiting, and a failed read of a listed worktree keeps its list
+/// marked stale rather than showing nothing left.
+#[test]
+fn the_remains_view_states_a_failed_read_instead_of_nothing_left() {
+    let mut runtime = runtime();
+    project(&mut runtime, vec![worktree("emails", 4, "aaa", None)]);
+    runtime.ui_attached = true;
+    assert!(event(
+        &mut runtime,
+        "detail_open",
+        serde_json::json!({"item": {"kind": "remains", "workspace_id": "project", "checkout_id": "emails"}})
+    ));
+    let request = runtime.remains_request().0.expect("readable");
+    let answer = |reason: Option<&str>, files: usize| crate::changes::ChangesAnswer {
+        key: Some(request.key()),
+        detail: None,
+        selection: (None, false),
+        changes: crate::model::ChangesSnapshot {
+            root_path: Some("/fixture/emails".into()),
+            entries: (0..files)
+                .map(|n| crate::model::ChangedFileSnapshot {
+                    path: format!("/fixture/emails/f{n}.rs"),
+                    relative_path: format!("f{n}.rs"),
+                    previous_relative_path: None,
+                    status: crate::model::ChangedFileStatus::Untracked,
+                    added_lines: None,
+                    removed_lines: None,
+                })
+                .collect(),
+            unavailable_reason: reason.map(str::to_owned),
+            ..Default::default()
+        },
+    };
+    assert!(runtime.ingest_remains(answer(None, 2)));
+    assert!(runtime.ingest_remains(answer(Some("link.not_connected"), 0)));
+    let held = &runtime.snapshot.remains.as_ref().expect("held").changes;
+    assert_eq!(
+        (held.entries.len(), held.stale_reason.as_deref(), held.unavailable_reason.as_deref()),
+        (2, Some("link.not_connected"), None)
+    );
+
+    runtime.file_roots = Some(crate::files::FileRoots::from_identities(Vec::new()));
+    assert_eq!(runtime.remains_request(), (None, true));
+    let refused = &runtime.snapshot.remains.as_ref().expect("published").changes;
+    assert_eq!(refused.unavailable_reason.as_deref(), Some("host.root_not_opened"));
+    assert_eq!(
+        runtime.remains_request(),
+        (None, false),
+        "a refusal already shown is not published again"
+    );
 }

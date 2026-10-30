@@ -238,7 +238,8 @@ function StrayRow({ project, stray, actions, onDismiss }: { project: Workspace; 
   const receipt = useShellStore((s) => (request ? s.rest?.status?.stray_hand_offs?.find((row) => row.request_id === request) ?? null : null));
   // Once sent, the words go once (B12): the button stays off until the row
   // leaves as the agent starts, or the hand-off fails. A receipt the core let
-  // go after `sent` still reads sent.
+  // go after `sent` still reads sent. A row that comes back (B14) is a new
+  // row, keyed by its checkout, and starts over.
   const [sent, setSent] = useState(false);
   useEffect(() => {
     if (receipt?.state === "sent") setSent(true);
@@ -247,11 +248,6 @@ function StrayRow({ project, stray, actions, onDismiss }: { project: Workspace; 
       setRequest(null);
     }
   }, [receipt?.state]);
-  // A row that comes back after its agent ended starts over (B14).
-  useEffect(() => {
-    setSent(false);
-    setRequest(null);
-  }, [stray.since_unix_ms]);
   const sending = request !== null && !sent && (receipt === null || receipt.state === "sending");
   const handedOff = request !== null && (sending || sent);
   const parts = strayParts(stray);

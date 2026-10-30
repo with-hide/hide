@@ -8,6 +8,7 @@ import { Button } from "./components/ui/button";
 import { Hint } from "./components/ui/tooltip";
 import { readsHere } from "./devices";
 import { entranceBytes, layerLines } from "./diskCleanup";
+import { readFailureText } from "./fileFailure";
 import { useDiskWatch } from "./diskWatch";
 import { LAYER_DOT, openDiskCleanup } from "./DiskCleanupSheet";
 import { formatBytes } from "./i18n/format";
@@ -347,31 +348,32 @@ function MissionNodes({ mission }: { mission: TaskMission }) {
 /**
  * 남은 것 (B9): what a worktree left, as its 흘린 것 row opened it: the
  * changed files not committed and the commits not pushed. The core reads the
- * worktree's changes for this view while it is on top (`changes_target`);
- * the commit list is the front checkout's header read, so another worktree
- * shows its committed files instead. A file of the front checkout opens its
- * diff.
+ * worktree by its own path, apart from the checkout in front, and names the
+ * checkout it read; the commit list is the front checkout's header read, so
+ * another worktree shows its committed files instead. A failed read says so,
+ * never "nothing left". A file of the front checkout opens its diff.
  */
 export function RemainsView({ workspaceId, checkoutId, actions }: { workspaceId: string; checkoutId: string; actions: Actions }) {
   const { t } = useInterfaceTranslation();
   const project = useProject(workspaceId);
   const checkout = project?.checkouts.find((row) => row.id === checkoutId) ?? null;
-  // The core reads the worktree shown by its own path, apart from the
-  // checkout in front: the checkout's folder, or a registered folder below it.
   const changes = useShellStore((s) => {
     const remains = s.rest?.remains ?? null;
-    const root = remains?.root_path;
-    return checkout && root && (root === checkout.path || root.startsWith(`${checkout.path}/`)) ? remains : null;
+    return remains && remains.workspace_id === workspaceId && remains.checkout_id === checkoutId ? remains : null;
   });
   const front = useShellStore((s) => frontCheckout(s.rest)?.id === checkoutId);
   const git = useShellStore((s) => (front ? (s.rest?.workspace_view as WorkspaceView | undefined)?.git ?? null : null));
   if (!project || !checkout) return <Missing />;
   if (!changes) return <div role="status" aria-label={t("projectTool.remains.reading")} className="m-md h-(--size-control-lg) rounded-sm bg-muted" data-remains-view="pending" />;
+  if (changes.unavailable_reason) {
+    return <p className="break-words px-md py-md text-caption text-warning" data-remains-view="unavailable" data-reason={changes.unavailable_reason}>{t("projectTool.remains.unavailable", { reason: readFailureText(changes.unavailable_reason, t) })}</p>;
+  }
   const unpushed = git?.facts?.recent_commits?.filter((commit) => git.facts?.unpushed_commits?.includes(commit.sha)) ?? null;
   const open = (path: string, committed: boolean) => front ? actions.selectChange(path, committed, true) : undefined;
   const empty = changes.entries.length === 0 && (unpushed ? unpushed.length === 0 : changes.committed.length === 0);
   return (
     <div className="min-h-0 flex-1 space-y-md overflow-y-auto px-md py-md text-caption" data-remains-view={checkout.id}>
+      {changes.stale_reason ? <p className="break-words text-warning" data-remains-state="stale">{t("projectTool.remains.stale", { reason: readFailureText(changes.stale_reason, t) })}</p> : null}
       {empty ? <p className="text-muted-foreground">{t("projectTool.remains.gone")}</p> : null}
       {changes.entries.length > 0 ? <FileList title={t("projectTool.remains.changes")} files={changes.entries} onOpen={front ? (path) => open(path, false) : null} kind="changes" /> : null}
       {unpushed ? (

@@ -1725,6 +1725,9 @@ export type ChangedFileSnapshot = {
  * Explorer surface is visible, so the web asks for it by sending that ui state
  * rather than by opening a second read path (PRD B1).
  */
+/** `남은 것`'s read with the checkout it was read for; a nested worktree's folder lies inside its primary's, so the view matches the checkout. */
+export type RemainsSnapshot = ChangesSnapshot & { workspace_id: string; checkout_id: string };
+
 export type ChangesSnapshot = {
   root_path: string | null;
   entries: ChangedFileSnapshot[];
@@ -2833,7 +2836,7 @@ export type SnapshotRest = {
   plans?: PlansSnapshot;
   git_worktrees_loading?: boolean;
   /** The Project tool's `남은 것`: the shown worktree's changes, read by its own path (PRD project-panel-results B9). */
-  remains?: ChangesSnapshot | null;
+  remains?: RemainsSnapshot | null;
   navigator?: {
     agent_scope?: AgentScope;
     focused_workspace_id?: string | null;

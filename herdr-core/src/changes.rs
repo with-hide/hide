@@ -248,12 +248,15 @@ impl ChangesPump {
                     if header_changed {
                         notifier.notify();
                     }
-                    let Ok((request, remains_request)) = runtime
+                    let Ok((request, (remains_request, remains_moved))) = runtime
                         .lock()
                         .map(|mut runtime| (runtime.changes_request(), runtime.remains_request()))
                     else {
                         break;
                     };
+                    if remains_moved {
+                        notifier.notify();
+                    }
                     let answer = (request.is_some() || !resting)
                         .then(|| reader.read_if_due(request))
                         .flatten();

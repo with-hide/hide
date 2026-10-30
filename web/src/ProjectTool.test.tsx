@@ -185,11 +185,23 @@ describe("the Project tool", () => {
   it("lists another worktree's 남은 것 from its own read, never from the checkout in front (B9)", async () => {
     const shown = snapshot(status({ strays: [stray()], strays_total: 1 }), { kind: "remains", workspace_id: "p", checkout_id: "w" });
     const file = (path: string) => ({ path: `/w/${path}`, relative_path: path, status: "modified" });
-    await render({ ...shown, remains: { root_path: "/p", entries: [file("front.ts")], committed: [] } } as unknown as SnapshotRest);
+    // The primary checkout's read holds the worktree's folder too; it is matched by checkout, never by folder.
+    await render({ ...shown, remains: { workspace_id: "p", checkout_id: "c", root_path: "/w", entries: [file("front.ts")], committed: [] } } as unknown as SnapshotRest);
     expect(container.querySelector('[data-remains-view="pending"]')).not.toBeNull();
-    await render({ ...shown, remains: { root_path: "/w", entries: [file("mailer.ts")], committed: [] } } as unknown as SnapshotRest);
+    await render({ ...shown, remains: { workspace_id: "p", checkout_id: "w", root_path: "/w", entries: [file("mailer.ts")], committed: [] } } as unknown as SnapshotRest);
     expect(container.querySelector('[data-remains-file="mailer.ts"]')).not.toBeNull();
     expect(container.querySelector('[data-remains-file="front.ts"]')).toBeNull();
+  });
+
+  it("says a 남은 것 read failed instead of nothing left, and marks a held list stale (B9)", async () => {
+    const shown = snapshot(status({ strays: [stray()], strays_total: 1 }), { kind: "remains", workspace_id: "p", checkout_id: "w" });
+    const read = (fields: object) => ({ ...shown, remains: { workspace_id: "p", checkout_id: "w", root_path: "/w", entries: [], committed: [], ...fields } }) as unknown as SnapshotRest;
+    await render(read({ unavailable_reason: "link.not_connected" }));
+    expect(container.querySelector('[data-remains-view="unavailable"]')?.textContent).toContain("The device is not connected");
+    expect(container.textContent).not.toContain("This worktree has nothing left");
+    await render(read({ entries: [{ path: "/w/a.ts", relative_path: "a.ts", status: "modified" }], stale_reason: "link.not_connected" }));
+    expect(container.querySelector('[data-remains-state="stale"]')).not.toBeNull();
+    expect(container.querySelector('[data-remains-file="a.ts"]')).not.toBeNull();
   });
 
   it("asks the core to keep 놔두기, and its 되돌리기 to take it back (B15)", async () => {

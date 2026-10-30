@@ -1886,6 +1886,7 @@ impl Runtime {
                     items: Vec::new(),
                     failed,
                 };
+                self.publish_project_tasks();
             }
             self.missions.views = ViewsMadeFrom::default();
             return;
@@ -1962,6 +1963,8 @@ impl Runtime {
         let next = MissionsSnapshot { items, failed };
         if self.snapshot.missions != next {
             self.snapshot.missions = next;
+            // The 작업 비용 tasks read the missions' nodes and PRs.
+            self.publish_project_tasks();
         }
         self.missions.views = ViewsMadeFrom {
             book_edit: self.missions.book_edit,
