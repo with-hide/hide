@@ -392,7 +392,7 @@ function NodeCard({ mission, node, selected, dimmed, onSelect, events, end }: { 
           {shown ? (
             <span className="flex min-w-auto max-w-max flex-1 items-center" title={shown.text}>
               <span className="grid min-w-(--size-mission-run-min) grid-cols-[minmax(0,1fr)]">
-                <span className={cn("flex min-w-0 items-center gap-xxs", shown.attention && "text-mission-failed")} data-node-line={shown.attention ? "attention" : "true"}>
+                <span className={cn("flex min-w-0 items-center gap-xxs overflow-hidden", shown.attention && "text-mission-failed")} data-node-line={shown.attention ? "attention" : "true"}>
                   {waits.length > 0 ? <WaitsFor nodes={waits} stale={mission.github_stale} /> : <span className="truncate">{shown.text}</span>}
                 </span>
               </span>
@@ -430,8 +430,8 @@ function WaitsFor({ nodes, stale }: { nodes: MissionNode[]; stale: boolean }) {
   return (
     <span className="flex min-w-0 items-center gap-xxs">
       {head ? <span className="shrink-0">{head.trim()}</span> : null}
-      {nodes.map((dep) => (dep.pr != null ? <MissionPrMark key={dep.key} number={dep.pr} state={dep.pr_state} stale={stale} /> : <span key={dep.key} className="truncate">{dep.title}</span>))}
-      {tail ? <span className="shrink-0">{tail.trim()}</span> : null}
+      {nodes.map((dep) => (dep.pr != null ? <MissionPrMark key={dep.key} number={dep.pr} state={dep.pr_state} stale={stale} className="shrink" /> : <span key={dep.key} className="min-w-0 truncate">{dep.title}</span>))}
+      {tail ? <span className="min-w-0 truncate">{tail.trim()}</span> : null}
     </span>
   );
 }

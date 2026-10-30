@@ -422,7 +422,7 @@ describe("a finished mission's results and the map's summary (PRD mission-tool B
   });
 
   it("names next the nodes whose every dependency finished, none held by a failure", () => {
-    const open = mission("m", { nodes: [node("a", { status: "done" }), node("b", { status: "working" }), node("c", { depends_on: ["a"] }), node("d", { depends_on: ["b"] }), node("e", { status: "waiting", depends_on: ["a"], blocked: "upstream_failed" }), node("f", { status: "held", depends_on: ["a"] })] });
+    const open = mission("m", { nodes: [node("a", { status: "done" }), node("b", { status: "working" }), node("c", { depends_on: ["a"] }), node("d", { depends_on: ["b"] }), node("e", { status: "waiting", depends_on: ["a"], blocked: "upstream_failed" }), node("f", { status: "held", depends_on: ["a"] }), node("out", { kind: "external", delivery: null, external: { pr: 9 }, status: "waiting" })] });
     expect(nextNodes(open).map((one) => one.key)).toEqual(["c"]);
   });
 

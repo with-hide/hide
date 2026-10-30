@@ -455,7 +455,7 @@ const ko: Catalog<typeof missionsEnglish> = {
   "mission.badge.reopened_other": "결함으로 {{count}}번 다시 열림",
   "mission.time.held": "판단 {{elapsed}}",
   "mission.conductor": "Conductor",
-  "mission.conductor.state.working": "일하는 중",
+  "mission.conductor.state.working": "작업 중",
   "mission.conductor.state.deciding": "판단 기다리는 중",
   "mission.conductor.state.resting": "쉬는 중",
   "mission.conductor.state.asleep": "잠듦",

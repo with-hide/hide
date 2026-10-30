@@ -772,11 +772,12 @@ export function reportLine(plain: string, title: string): string | null {
 
 /**
  * The nodes a worker can start next (B19): planned or waiting, not held by a
- * failed or dropped node, with every node they wait on finished or dropped.
+ * failed or dropped node, with every node they wait on finished or dropped;
+ * an outside node is no worker's to start.
  */
 export function nextNodes(mission: Mission): MissionNode[] {
   const byKey = new Map(mission.nodes.map((node) => [node.key, node]));
-  return orderedNodes(mission).filter((node) => (node.status === "planned" || node.status === "waiting") && !node.blocked && node.depends_on.every((key) => {
+  return orderedNodes(mission).filter((node) => node.kind !== "external" && (node.status === "planned" || node.status === "waiting") && !node.blocked && node.depends_on.every((key) => {
     const dep = byKey.get(key);
     return !dep || dep.status === "done" || dep.status === "dropped";
   }));

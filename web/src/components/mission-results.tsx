@@ -29,9 +29,9 @@ export function ResultTiles({ mission }: { mission: Mission }) {
   if (counts.landed) tiles.push({ key: "landed", value: `${counts.landed.landed} / ${counts.landed.total}`, label: t("mission.tile.landed") });
   if (tiles.length === 0) return null;
   return (
-    <dl aria-label={t("mission.results")} className="mx-md mb-sm grid grid-cols-[repeat(auto-fit,minmax(var(--size-flow-title),1fr))] gap-xs" data-mission-results={tiles.map((tile) => tile.key).join(" ")}>
+    <dl aria-label={t("mission.results")} className="mx-md mb-sm grid grid-cols-2 gap-xs mission-wide:flex" data-mission-results={tiles.map((tile) => tile.key).join(" ")}>
       {tiles.map((tile) => (
-        <div key={tile.key} className="flex min-w-0 flex-col-reverse gap-xxs rounded-md border border-border bg-card px-sm py-xs" data-mission-tile={tile.key}>
+        <div key={tile.key} className="flex min-w-0 flex-col-reverse gap-xxs rounded-md border border-border bg-card px-sm py-xs mission-wide:flex-1" data-mission-tile={tile.key}>
           <dt className="min-w-0 break-words text-caption text-muted-foreground">{tile.label}</dt>
           <dd className="text-headline font-semibold tabular-nums" data-mission-tile-value="true">{tile.value}</dd>
         </div>

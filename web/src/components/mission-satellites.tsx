@@ -60,7 +60,7 @@ function Satellite({ mission, line, onSelect }: { mission: Mission; line: Satell
       >
         <AgentMark kind={checker.worker.agent} className="size-(--size-agent-mark)!" />
         {state === "pass" || state === "fail" ? (
-          <span aria-hidden="true" className={cn("absolute -right-xxs -bottom-xxs flex size-(--size-agent-mark) items-center justify-center rounded-full text-status-foreground", state === "pass" ? "bg-mission-done" : "bg-mission-failed")}>
+          <span aria-hidden="true" className={cn("absolute -right-xs -bottom-xs flex size-(--size-agent-mark) items-center justify-center rounded-full text-status-foreground ring-2 ring-background", state === "pass" ? "bg-mission-done" : "bg-mission-failed")}>
             {state === "pass" ? <CheckIcon strokeWidth={3} className="size-full p-px" /> : <XIcon strokeWidth={3} className="size-full p-px" />}
           </span>
         ) : null}
