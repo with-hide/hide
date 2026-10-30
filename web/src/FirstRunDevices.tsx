@@ -81,7 +81,8 @@ export function FirstRunDevices({ actions, primary, onBack, onNext }: {
   };
   const states = new Map(rows.map((profile) => [profile.id, rowState(profile)] as const));
   const busy = [...states.values()].some((state) => state === "connecting" || state === "installing");
-  const targets = rows.filter((profile) => selected.has(profile.id) && ["saved", "failed"].includes(states.get(profile.id)!) && profile.enabled && !profile.problem);
+  // A failed row is tried again by its own action only (Sign in, Retry, none for a changed server key).
+  const targets = rows.filter((profile) => selected.has(profile.id) && states.get(profile.id) === "saved" && profile.enabled && !profile.problem);
   const connect = (only?: HerdrProfile) => {
     if (busy) return;
     const chosen = only ? [only] : targets;
