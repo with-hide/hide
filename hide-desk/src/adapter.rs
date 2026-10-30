@@ -144,13 +144,16 @@ impl AdapterId {
         }
     }
 
-    /// `_meta` for `session/new` and `session/load`.
+    /// `_meta` for `session/new` and `session/load`. Claude's own plan mode
+    /// is denied: entering it needs no permission and leaves the ask mode,
+    /// which ends the session as one that cannot ask (D-53), and leaving it
+    /// offers modes that ask less.
     pub fn session_meta(self) -> Option<Value> {
         match self {
             Self::Claude => Some(json!({"claudeCode": {"options": {
                 "settingSources": [],
                 "allowDangerouslySkipPermissions": false,
-                "settings": {"permissions": {"ask": ["Bash"]}},
+                "settings": {"permissions": {"ask": ["Bash"], "deny": ["EnterPlanMode"]}},
             }}})),
             Self::Codex | Self::Pi => None,
         }
@@ -303,6 +306,7 @@ mod tests {
         assert_eq!(options["settingSources"], json!([]));
         assert_eq!(options["allowDangerouslySkipPermissions"], json!(false));
         assert_eq!(options["settings"]["permissions"]["ask"], json!(["Bash"]));
+        assert_eq!(options["settings"]["permissions"]["deny"], json!(["EnterPlanMode"]));
     }
 
     #[test]

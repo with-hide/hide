@@ -2066,7 +2066,7 @@ Its working folder is `~/.hide/state/desk/work`, which no checkout holds, so no 
 
 Each adapter is held in its ask mode, which ignores the operator's global auto-allow (D-53):
 
-- Claude's session starts with no setting source of the operator's (`settingSources: []`, so no `~/.claude` allow rule, default mode, hook, `CLAUDE.md` or skill), `Bash` always asked, and `session/set_mode default`; its sign-in is the CLI's own.
+- Claude's session starts with no setting source of the operator's (`settingSources: []`, so no `~/.claude` allow rule, default mode, hook, `CLAUDE.md` or skill), `Bash` always asked, its own `EnterPlanMode` denied (entering plan mode asks nothing and leaves the ask mode, which would end the session as one that cannot ask), and `session/set_mode default`; its sign-in is the CLI's own.
 - Codex starts in `read-only` (`INITIAL_AGENT_MODE`), whose sandbox refuses writes and the network whatever `~/.codex/config.toml` says; a reading shell command inside that sandbox runs without asking, which Desk counts as a file read.
 - Pi has no mode, so Desk loads an extension of its own (`hide-desk/src/pi_desk.js`, through a launcher `PI_ACP_PI_COMMAND` names) that asks through `ctx.ui.confirm` before every tool call but a read; its marker, naming a pid under the Desk process, proves it loaded, and without it the session is not used.
 
