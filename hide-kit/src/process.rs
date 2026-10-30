@@ -246,14 +246,15 @@ mod tests {
     /// start-up without `SystemRoot`. Node is required, not optional, as in
     /// hide-agent-hooks' `windows_scripts.rs`.
     ///
-    /// This is the first Node a CI job starts, and a fresh runner reads and
-    /// scans `node.exe` on that first start: it took from 2.5 s to past the
-    /// 30 s hang guard (issue 202), and the next Node in the job 0.1 s. So
-    /// the first start is paid before the guard begins, as `stand_ins` does
-    /// for any program a test runs against a deadline, and it runs the
-    /// script the guarded run does: `--version` answers before Node starts
-    /// its engine and crypto, and after it the guarded run still passed 30 s
-    /// (with-hide/hide-private#329).
+    /// The test is about what the kit hands the program, not how fast Node
+    /// starts: the 30 s is only a hang guard. This is the first Node a CI job
+    /// starts, and a fresh runner reads and scans `node.exe` on that first
+    /// start: it took from 2.5 s to past the guard (issue 202), and the next
+    /// Node in the job 0.1 s. So the first start is paid before the guard
+    /// begins, as `stand_ins` does for any program a test runs against a
+    /// deadline, and it runs the script the guarded run does: `--version`
+    /// answers before Node starts its engine and crypto, and after it the
+    /// guarded run still passed 30 s (with-hide/hide-private#329).
     #[cfg(windows)]
     #[test]
     fn a_windows_program_that_runs_node_starts_in_the_kits_environment() {
