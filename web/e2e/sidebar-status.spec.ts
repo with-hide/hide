@@ -76,8 +76,9 @@ test("roots stay in one sidebar, open their children in place, and the header's 
     // The parent's tree button opens the tree popover; Escape returns to it (B18, B19, B21).
     const treeButton = page.locator(`[data-pane-view="${parent}"] [data-pane-tree="${parent}"]`);
     const tree = page.locator(`[data-agent-tree="${parent}"]`);
-    await expect(page.locator(`[data-pane-view="${parent}"] > header [data-pane-tree]`)).toHaveCount(0);
-    await expect(page.locator(`[data-pane-view="${parent}"] [data-pane-header-band="children"] [data-pane-tree]`)).toBeVisible();
+    // One line, the default, keeps the tree button on the head: nothing is drawn over the terminal.
+    await expect(page.locator(`[data-pane-view="${parent}"] [data-pane-header-band]`)).toHaveCount(0);
+    await expect(page.locator(`[data-pane-view="${parent}"] > header [data-pane-tree]`)).toBeVisible();
     await expect(treeButton).toHaveAccessibleName(/Child agents 1.*Child requests: 1/);
     await expect(treeButton).not.toHaveAccessibleName(/needing you/);
     await treeButton.focus();

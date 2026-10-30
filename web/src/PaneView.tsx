@@ -19,7 +19,7 @@ import { PaneLetterButton } from "./components/letter-mark";
 import { StatusMark } from "./components/status-mark";
 import { Button } from "./components/ui/button";
 import { Hint } from "./components/ui/tooltip";
-import { PaneAskMark, PaneForkMark, PaneHeaderBand, PanePrChip, PaneRecordButton, usePaneAgents } from "./PaneHeaderBand";
+import { PaneAskMark, PaneForkMark, PaneHeadTurn, PaneHeaderBand, PanePrChip, PaneRecordButton, usePaneAgents } from "./PaneHeaderBand";
 import { PaneWorkChip } from "./PaneMissionChip";
 import { PaneViews } from "./ViewComments";
 import { PaneConnectionChip } from "./PaneConnection";
@@ -396,7 +396,7 @@ export const PaneView = memo(function PaneView({
                 {markSymbol ? <StatusMark mark={markSymbol} label={markStatus ? markWords(t, { mark: markSymbol, status_code: markStatus }) : undefined} className={markTone} data-pane-status-mark={markSymbol} /> : null}
                 <Hint label={agentProductName(agentKind)}><span data-pane-move-excluded="true" className="flex shrink-0"><AgentMark kind={agentKind} /></span></Hint>
                 <Hint label={`${title}\n${agentProductName(agentKind)}`} reveals>
-                  <span data-pane-move-title="true" className="flex min-w-0 flex-1 items-center">{titleContent}<span className="sr-only">, {agentProductName(agentKind)}</span></span>
+                  <span data-pane-move-title="true" className="flex min-w-0 items-center pane-turn-room:min-w-(--size-pane-title-min)">{titleContent}<span className="sr-only">, {agentProductName(agentKind)}</span></span>
                 </Hint>
               </>
             }
@@ -421,7 +421,8 @@ export const PaneView = memo(function PaneView({
         {agentKind ? <PaneViews paneId={paneId} name={title} actions={actions} /> : null}
         {agentKind ? <PaneAskMark paneId={paneId} header={header} actions={actions} /> : null}
         {agentKind && lettersWaiting > 0 ? <PaneLetterButton paneId={paneId} letters={lettersWaiting} onDeliver={actions.deliverLettersNow} /> : null}
-        <span data-pane-move-blank="true" className="h-full flex-1" />
+        {/* An agent's turn fills the unused space after its marks in one line, and its children button stands before the tools. */}
+        {agentKind ? <PaneHeadTurn paneId={paneId} header={header} actions={actions} /> : <span data-pane-move-blank="true" className="h-full flex-1" />}
         <PaneConnectionChip pane={pane} agentKind={agentKind} actions={actions} local={local} />
         {agentKind ? <PaneMention paneId={paneId} actions={actions} className={tools} /> : null}
         {zoomed ? (

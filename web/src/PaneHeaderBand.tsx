@@ -3,7 +3,7 @@ import { useMemo, type ReactNode } from "react";
 import type { TFunction } from "i18next";
 import type { Actions } from "./actions";
 import { agentProductName } from "./agentAdapters";
-import { askWhat, VerbText } from "./components/agent-tree";
+import { askVerb, askWhat, VerbText } from "./components/agent-tree";
 import { AgentPrMark } from "./components/pr-mark";
 import { rowPulls } from "./prMark";
 import { AgentTreePopover } from "./components/agent-tree-popover";
@@ -82,18 +82,14 @@ function ForkSourceButton({ paneId, source, actions }: { paneId: string; source:
 }
 
 /**
- * The pane's second row over its terminal (docs/UI_BEHAVIOR.md, Agent panes and
- * the Agents explorer): the child-tree entry, then the turn the core selects,
- * `<request> → <answer>`, where the answer is an ask, the pane agent's own
- * progress or a finished turn's result. A working turn with nothing beyond
- * its request shows the request alone: the status mark and the working line
- * already say it works. The View menu's mode shapes it: one line cuts the
- * request and the answer, an ask included, two lines give the request its own
- * line, and off leaves only the children button, the pane's own ask riding the
- * head as `PaneAskMark`. Neither the terminal viewport nor its PTY grid moves
- * for it.
+ * What a pane's turn shows now, read once for both places that draw it: the
+ * head, after the title, in one line (`PaneHeadTurn`), and the second row
+ * over the terminal in two lines (`PaneHeaderBand`). The answer is an ask,
+ * the pane agent's own progress, a finished turn's result or a wait on
+ * working children; off draws none of them, the pane's own ask riding the
+ * head as `PaneAskMark`.
  */
-export function PaneHeaderBand({ paneId, header, actions }: { paneId: string; header: PaneHeader | undefined; actions: Actions }) {
+function usePaneTurn(paneId: string, header: PaneHeader | undefined) {
   const { t } = useInterfaceTranslation();
   const relation = useUiStore((state) => state.relation);
   const outcome = useShellStore((state) => state.rest?.status?.pane_focus_request);
@@ -108,9 +104,9 @@ export function PaneHeaderBand({ paneId, header, actions }: { paneId: string; he
   // mission-plan-visibility B9, D-21).
   const mission = useShellStore((state) => missionOfPane(state.rest, allAgents(state.agents, state.rest?.status?.remote), paneId));
   const missionLine = mission ? missionWorkLine(mission, t) : null;
-  // Off keeps only the children button; a raised descendant's ask stays on
-  // its warning border. A waiting decision is the operator's to answer and
-  // the Conductor's own work left is not, so the decision takes its place.
+  // Off draws no turn; a raised descendant's ask stays on the children
+  // button's warning border. A waiting decision is the operator's to answer
+  // and the Conductor's own work left is not, so the decision takes its place.
   const ownBand = off ? null : header?.band ?? null;
   const band = ownBand?.kind === "stopped" && !ownBand.raised && missionLine?.decision ? null : ownBand;
   // A running plan's current step and its line take the progress place (PRD hide-plan B7).
@@ -123,45 +119,142 @@ export function PaneHeaderBand({ paneId, header, actions }: { paneId: string; he
   const finished = !band && !off && (header?.finished ?? false);
   // A Conductor's mission line already names the work its children do.
   const waitingOnChildren = band || off || missionLine ? null : header?.waiting_on_children ?? null;
-  // Before any early return: a hook runs on every render.
   const unreachable = useUnreachable(band?.action?.pane_id ?? null);
-  const workingLine = header?.working ? <div className="pointer-events-none absolute inset-x-0 top-0 z-10 h-[calc(2*var(--size-hairline))] bg-agent-working" data-pane-working-line={paneId} /> : null;
-  if (!band && !children && !ownProgress && !request && !finished && !waitingOnChildren) return workingLine;
   const tracked = band?.action && relation?.sourcePaneId === paneId && relation.targetPaneId === band.action.pane_id ? relation : null;
   const progress = relationState(tracked, outcome, t);
   const navigation = progress?.phase === "failed" ? progress.message : progress?.phase === "pending" ? t("panes.relation.opening", { name: tracked!.label }) : null;
-  const tree = children ? <PaneTreeButton paneId={paneId} children={children} agents={agents} actions={actions} connection={childConnection} /> : null;
+  // The one thing the turn says now, the request aside.
+  const kind = band?.kind ?? (finished ? "finished" : ownProgress ? "progress" : waitingOnChildren ? "waiting" : null);
+  return { mode, agents, children, childConnection, missionLine, band, ownProgress, request, finished, waitingOnChildren, unreachable, progress, navigation, kind };
+}
+
+type PaneTurn = ReturnType<typeof usePaneTurn>;
+
+/**
+ * The pane's turn on its head in one line, the default (docs/UI_BEHAVIOR.md,
+ * Pane turn row mode): after the title and its marks, `·` and the one thing
+ * the turn says now, an ask in the warning colour, a finished turn's result,
+ * a wait on children or the agent's progress, and never the request, which
+ * the turn card this text opens keeps. It fills the head's unused space, so
+ * its blank still moves the pane; progress gives way before the title and an
+ * ask shares the room with it, so the ask's verb stays in sight. On a pane too
+ * narrow for words the status mark alone says it. The children button stands
+ * before the head's tools in one line and off, so neither adds a row over the
+ * terminal.
+ */
+export function PaneHeadTurn({ paneId, header, actions }: { paneId: string; header: PaneHeader | undefined; actions: Actions }) {
+  const turn = usePaneTurn(paneId, header);
+  const { mode, band, kind, childConnection } = turn;
+  const tree = turn.children && mode !== "two_lines" ? <PaneTreeButton paneId={paneId} children={turn.children} agents={turn.agents} actions={actions} connection={childConnection} /> : null;
+  const shown = mode === "one_line" && (kind !== null || childConnection !== null);
+  const ask = band !== null;
+  return <>
+    {/* Progress takes only the room the title leaves; an ask shares the
+        shrinking with the title, so its verb stays in sight. */}
+    <span data-pane-move-blank="true" className={cn("flex h-full min-w-0 items-center gap-xs overflow-hidden", ask ? "flex-auto" : "flex-1")}>
+      {shown ? (
+        <span className="hidden min-w-0 items-center gap-xs pane-turn-room:flex" data-pane-head-turn={kind ?? "children"} data-pane-turn-row-mode={mode}>
+          <span aria-hidden="true" className="shrink-0 text-subtle-foreground">·</span>
+          {kind ? <PaneTurnCard paneId={paneId} actions={actions} trigger={(state) => <HeadTurnButton paneId={paneId} turn={turn} state={state} />} /> : null}
+          {band?.action ? <BandOpen paneId={paneId} band={band} turn={turn} actions={actions} /> : null}
+          {band && !tree ? <MoreAsks paneId={paneId} band={band} agents={turn.agents} actions={actions} /> : null}
+          {childConnection ? <span className={cn("min-w-0 truncate text-muted-foreground", kind ? "max-w-1/4 shrink" : "flex-1")} title={childConnection} data-pane-child-connection={paneId}>{childConnection}</span> : null}
+        </span>
+      ) : null}
+    </span>
+    {tree}
+  </>;
+}
+
+/**
+ * The head's turn words as one button: a press or focus opens the turn card
+ * under it, the pointer passing over does not, and it never takes the
+ * keyboard from the terminal. Its name carries the request the head leaves out.
+ */
+function HeadTurnButton({ paneId, turn, state }: { paneId: string; turn: PaneTurn; state: TurnCardTrigger }) {
+  const { t } = useInterfaceTranslation();
+  const { band, request } = turn;
+  const ask = useAskWords(band);
+  const read = band !== null && !band.raised && band.read;
+  const words = band ? [ask.verb, ask.originTitle, turn.navigation ?? ask.what].filter(Boolean).join(" ") : turn.finished ? [t("paneTurn.finished"), turn.ownProgress].filter(Boolean).join(" ") : turn.ownProgress ?? waitingWords(t, turn.waitingOnChildren);
+  const label = [words, request ? `${t("paneTurn.request")}: ${requestWords(t, request)}` : null].filter(Boolean).join(", ");
+  return (
+    <button
+      type="button"
+      aria-label={label}
+      aria-expanded={state.open}
+      data-pane-turn-trigger={paneId}
+      data-state={state.open ? "open" : "closed"}
+      className={cn("flex min-w-0 items-center gap-xs rounded-xs px-xxs -mx-xxs text-muted-foreground underline decoration-border decoration-dotted underline-offset-4 outline-none hover:bg-accent focus-visible:ring-1 focus-visible:ring-ring data-[state=open]:bg-secondary", read && "opacity-(--opacity-read-status)")}
+      data-pane-band-read={read ? "true" : undefined}
+      onMouseDown={(event) => event.preventDefault()}
+      onClick={state.onToggle}
+      onFocus={state.onFocus}
+      onBlur={state.onBlur}
+      onKeyDown={state.onKeyDown}
+    >
+      {band ? <>
+        <AskVerb band={band} />
+        {ask.raised && ask.originTitle ? <span className="flex max-w-(--size-pane-child-chip-max) shrink-0 items-center gap-xxs overflow-hidden font-semibold text-foreground" data-pane-band-who={ask.raised.raised_pane_id}><span className="min-w-0 truncate">{ask.originTitle}</span><span className="shrink-0 text-muted-foreground">({t(ask.originDepth > 2 ? "panes.children.descendant" : "panes.children.direct")})</span></span> : null}
+        {turn.navigation ?? ask.what ? <span className={cn("min-w-0 truncate", turn.progress?.phase === "failed" ? "text-destructive" : unfinished(band) ? "text-muted-foreground" : "text-warning")} role={turn.progress?.phase === "failed" ? "alert" : turn.navigation ? "status" : undefined} data-pane-band-navigation={turn.navigation ? turn.progress?.phase === "failed" ? "failed" : "pending" : undefined}>{turn.navigation ?? ask.what}</span> : null}
+      </> : <>
+        {turn.finished ? <span className="shrink-0 font-medium text-success" data-pane-finished={paneId}>{t("paneTurn.finished")}</span> : null}
+        {turn.waitingOnChildren ? <span className="min-w-0 truncate" data-pane-children-wait={paneId}>{waitingWords(t, turn.waitingOnChildren)}</span> : null}
+        {turn.ownProgress ? <span className={cn("min-w-0 truncate", turn.missionLine?.decision && "text-mission-hold")} data-pane-own-progress={paneId} data-pane-mission-line={turn.missionLine ? (turn.missionLine.decision ? "decision" : "running") : undefined}>{turn.ownProgress}</span> : null}
+      </>}
+    </button>
+  );
+}
+
+/** The words a wait on working children says, the ones its sidebar row says. */
+function waitingWords(t: TFunction<"translation">, count: number | null): string {
+  return count ? [waitWord(t, "children"), t("agents.line.children", { count })].join(" · ") : "";
+}
+
+/**
+ * The pane's second row over its terminal in two lines (docs/UI_BEHAVIOR.md,
+ * Agent panes and the Agents explorer): the child-tree entry and the request
+ * on one line, the arrow and the answer on the line under it, each cut. A
+ * working turn with nothing beyond its request shows the request alone: the
+ * status mark and the working line already say it works. One line and off
+ * draw the turn on the head instead, so this row is only the working line
+ * then. Neither the terminal viewport nor its PTY grid moves for it.
+ */
+export function PaneHeaderBand({ paneId, header, actions }: { paneId: string; header: PaneHeader | undefined; actions: Actions }) {
+  const { t } = useInterfaceTranslation();
+  const turn = usePaneTurn(paneId, header);
+  const { mode, band, children, childConnection, ownProgress, request, finished, waitingOnChildren, unreachable, progress, navigation } = turn;
+  const workingLine = header?.working ? <div className="pointer-events-none absolute inset-x-0 top-0 z-10 h-[calc(2*var(--size-hairline))] bg-agent-working" data-pane-working-line={paneId} /> : null;
+  if (mode !== "two_lines" || (!band && !children && !ownProgress && !request && !finished && !waitingOnChildren)) return workingLine;
+  const tree = children ? <PaneTreeButton paneId={paneId} children={children} agents={turn.agents} actions={actions} connection={childConnection} /> : null;
   const answer = <>
     {band ? <AskBand paneId={paneId} band={band} navigation={navigation} unreachable={unreachable} failed={progress?.phase === "failed"} actions={actions} hasTree={children !== null} /> : <>
       {finished ? <span className="shrink-0 font-medium text-success" data-pane-finished={paneId}>{t("paneTurn.finished")}</span> : null}
-      {waitingOnChildren ? <span className="min-w-0 flex-1 truncate" data-pane-children-wait={paneId}>{[waitWord(t, "children"), t("agents.line.children", { count: waitingOnChildren })].join(" · ")}</span> : null}
-      {ownProgress ? <Hint label={ownProgress}><span className={cn("min-w-0 flex-1 truncate", missionLine?.decision && "text-mission-hold")} data-pane-own-progress={paneId} data-pane-mission-line={missionLine ? (missionLine.decision ? "decision" : "running") : undefined}>{ownProgress}</span></Hint> : null}
+      {waitingOnChildren ? <span className="min-w-0 flex-1 truncate" data-pane-children-wait={paneId}>{waitingWords(t, waitingOnChildren)}</span> : null}
+      {ownProgress ? <Hint label={ownProgress}><span className={cn("min-w-0 flex-1 truncate", turn.missionLine?.decision && "text-mission-hold")} data-pane-own-progress={paneId} data-pane-mission-line={turn.missionLine ? (turn.missionLine.decision ? "decision" : "running") : undefined}>{ownProgress}</span></Hint> : null}
       {childConnection ? <span className={cn("min-w-0 truncate", ownProgress ? "max-w-1/4 shrink" : "flex-1")} title={childConnection} data-pane-child-connection={paneId}>{childConnection}</span> : null}
     </>}
-    {band?.action ? <button type="button" data-pane-band-open={paneId} disabled={unreachable !== null || progress?.phase === "pending" || (progress?.phase === "failed" && !progress.retryable)} aria-busy={progress?.phase === "pending"} className="shrink-0 rounded-xs border border-border bg-background px-xs py-xxs text-micro text-foreground outline-none hover:brightness-95 focus-visible:ring-1 focus-visible:ring-ring disabled:opacity-50" onClick={() => actions.followRelation(paneId, band.action!.pane_id, band.action!.label)}>{progress?.phase === "failed" && progress.retryable ? t("common.retry") : t("common.open")}</button> : null}
+    {band?.action ? <BandOpen paneId={paneId} band={band} turn={turn} actions={actions} /> : null}
   </>;
-  const kind = band?.kind ?? (finished ? "finished" : ownProgress ? "progress" : waitingOnChildren ? "waiting" : request ? "request" : "children");
+  const kind = turn.kind ?? (request ? "request" : "children");
   // A working turn with no word beyond its request, or a parent with no turn
   // to show, draws no answer at all, so two lines never add an empty one.
   const answered = (kind !== "request" && kind !== "children") || childConnection !== null;
   // An ask is the one row the operator acts on, so it keeps the raised
   // surface; work left and a quiet turn sit in the head's surface.
   const tone = band && !unfinished(band) ? "bg-secondary border-l-2 border-warning text-foreground" : "bg-card border-t border-border text-muted-foreground";
-  const twoLines = mode === "two_lines";
   return <div className="absolute inset-x-0 top-0 z-10 bg-background">
-    {/* One row whether or not it leads with a request, so the tree's
-        popover stays open when the request comes or goes. One line caps the
-        request at two fifths when an answer follows and cuts each part, so
-        no turn grows over the terminal; two lines stack the parts, each cut. */}
-    <div className={cn("flex min-w-0 gap-x-xs px-sm text-caption", twoLines ? "flex-col items-stretch" : "flex-nowrap items-center", tone)} data-pane-header-band={kind} data-pane-turn={request ? paneId : undefined} data-pane-turn-row-mode={mode}>
+    {/* One block whether or not it leads with a request, so the tree's
+        popover stays open when the request comes or goes. */}
+    <div className={cn("flex min-w-0 flex-col items-stretch gap-x-xs px-sm text-caption", tone)} data-pane-header-band={kind} data-pane-turn={request ? paneId : undefined} data-pane-turn-row-mode={mode}>
       {tree || request ? (
-        <div key="request" className={cn("flex h-(--size-pane-header) min-w-0 shrink items-center gap-xs", !twoLines && answered ? "max-w-2/5" : "max-w-full")} data-pane-turn-part="request">
+        <div key="request" className="flex h-(--size-pane-header) min-w-0 max-w-full shrink items-center gap-xs" data-pane-turn-part="request">
           {tree}
           {request ? <PaneTurnCard paneId={paneId} actions={actions} trigger={(state) => <TurnRequestButton paneId={paneId} request={request} state={state} />} /> : null}
         </div>
       ) : null}
       {answered ? (
-        <div key="answer" className={cn("flex h-(--size-pane-header) min-w-0 max-w-full items-center gap-xs", !twoLines && "grow", !twoLines && !request && "basis-0")} data-pane-turn-part="answer">
+        <div key="answer" className="flex h-(--size-pane-header) min-w-0 max-w-full items-center gap-xs" data-pane-turn-part="answer">
           {request ? <span aria-hidden="true" className="shrink-0 text-subtle-foreground">→</span> : null}
           {answer}
         </div>
@@ -169,6 +262,17 @@ export function PaneHeaderBand({ paneId, header, actions }: { paneId: string; he
     </div>
     {workingLine}
   </div>;
+}
+
+/** Open on a raised descendant's ask: it goes to that agent, disabled while its device is away or a move is pending. */
+function BandOpen({ paneId, band, turn, actions }: { paneId: string; band: PaneBand; turn: PaneTurn; actions: Actions }) {
+  const { t } = useInterfaceTranslation();
+  const { progress, unreachable } = turn;
+  const action = band.action!;
+  // Off its row the reason has no words of its own beside Open, so Open's name and hint carry it.
+  const reason = turn.mode === "one_line" && unreachable && !turn.navigation ? unreachable : null;
+  const button = <button type="button" data-pane-band-open={paneId} aria-label={reason ? `${t("common.open")} · ${reason}` : undefined} disabled={unreachable !== null || progress?.phase === "pending" || (progress?.phase === "failed" && !progress.retryable)} aria-busy={progress?.phase === "pending"} className="shrink-0 rounded-xs border border-border bg-background px-xs py-xxs text-micro text-foreground outline-none hover:brightness-95 focus-visible:ring-1 focus-visible:ring-ring disabled:opacity-50" onClick={() => actions.followRelation(paneId, action.pane_id, action.label)}>{progress?.phase === "failed" && progress.retryable ? t("common.retry") : t("common.open")}</button>;
+  return reason ? <Hint label={reason}><span className="flex shrink-0" data-pane-band-unreachable="true">{button}</span></Hint> : button;
 }
 
 /**
@@ -245,30 +349,44 @@ function unfinished(band: PaneBand): boolean {
 }
 
 /**
- * An ask, led by whose it is: the pane's own approval, answer, block or stop
- * starts with its verb, and a raised descendant's starts with that agent's
- * name and relationship, so the row never reads as its parent's own ask.
- * The pane's own ask dims once the operator has looked and stays until it is
- * answered. The older more-asks trigger remains only when it is the
- * available tree access.
+ * Whose ask it is and what it asks, as the row and the head both word it:
+ * the pane's own approval, answer, block or stop by its verb, a raised
+ * descendant by its verb, then that agent's name and relationship, so it
+ * never reads as its parent's own ask.
  */
-function AskBand({ paneId, band, navigation, unreachable, failed, actions, hasTree }: { paneId: string; band: PaneBand; navigation: string | null; unreachable: string | null; failed: boolean; actions: Actions; hasTree: boolean }) {
+function useAskWords(band: PaneBand | null) {
   const { t } = useInterfaceTranslation();
   const agents = usePaneAgents();
-  const self = agentsByPane(agents).get(paneId);
-  const raised = band.raised ?? null;
+  const raised = band?.raised ?? null;
   const origin = raised?.verb === "draft" ? agentsByPane(agents).get(raised.raised_pane_id) : null;
-  const originTitle = raised?.origin_title ?? (raised?.verb === "draft" ? origin?.identity_label : raised?.title);
+  const originTitle = raised?.origin_title ?? (raised?.verb === "draft" ? origin?.identity_label : raised?.title) ?? null;
   const originDepth = raised ? raised.path.length + (raised.verb === "draft" ? 1 : 0) : 0;
-  const what = raised ? askWhat(t, raised.verb, raised.what, raised.subject) : band.kind === "approval" || band.kind === "answer" ? askWhat(t, band.kind, band.reason, band.subject) : band.reason;
-  const minutes = band.since_unix_ms == null ? null : Math.max(0, Math.floor((Date.now() - band.since_unix_ms) / 60_000));
+  const what = !band ? null : raised ? askWhat(t, raised.verb, raised.what, raised.subject) : band.kind === "approval" || band.kind === "answer" ? askWhat(t, band.kind, band.reason, band.subject) : band.reason;
+  const verb = !band ? null : raised ? askVerb(t, raised.verb) : bandVerbWords(t, band.kind);
+  const minutes = band?.since_unix_ms == null ? null : Math.max(0, Math.floor((Date.now() - band.since_unix_ms) / 60_000));
   // The path from the root already ends with the agent named; the wait is its verb's (B5).
   const who = raised ? [
     raised.verb === "draft" ? origin && agentProductName(origin.agent_kind) : agentProductName(raised.agent_kind),
     (raised.verb === "draft" && originTitle ? [...raised.path, originTitle] : raised.path).join(" › "),
     [raised.verb === "draft" ? origin?.checkout_label : raised.checkout, minutes === null ? null : t("agentSessions.waited", { minutes, verb: t(`agentSessions.verb.${raised.verb}`) })].filter(Boolean).join(" · "),
   ].filter(Boolean).join("\n") : null;
-  const more = !hasTree && band.more > 0 && self ? <AgentTreePopover
+  return { raised, originTitle, originDepth, what, verb, minutes, who };
+}
+
+/** An ask's leading word: a raised descendant's verb or the pane's own approval and question in the warning colour, work left in the foreground's. */
+function AskVerb({ band }: { band: PaneBand }) {
+  const { t } = useInterfaceTranslation();
+  if (band.raised) return <VerbText verb={band.raised.verb} />;
+  if (band.kind === "approval" || band.kind === "answer") return <VerbText verb={band.kind} />;
+  return <span className={cn("shrink-0 font-semibold", unfinished(band) ? "text-foreground" : "text-warning")} data-verb={band.kind}>{bandVerbWords(t, band.kind)}</span>;
+}
+
+/** The older more-asks trigger, kept only where no children button is the tree's way in. */
+function MoreAsks({ paneId, band, agents, actions }: { paneId: string; band: PaneBand; agents: AgentRow[]; actions: Actions }) {
+  const { t } = useInterfaceTranslation();
+  const self = agentsByPane(agents).get(paneId);
+  if (band.more <= 0 || !self) return null;
+  return <AgentTreePopover
     parent={self}
     agents={agents}
     raised
@@ -277,18 +395,28 @@ function AskBand({ paneId, band, navigation, unreachable, failed, actions, hasTr
     returnFocus={() => document.querySelector<HTMLButtonElement>(`[data-pane-band-more="${paneId}"]`)?.focus()}
     triggerLabel={t("agentSessions.moreAsks", { count: band.more })}
     trigger={<button type="button" data-pane-band-more={paneId} className="shrink-0 rounded-xs px-xs py-xxs text-micro text-muted-foreground underline-offset-2 outline-none hover:text-foreground hover:underline focus-visible:ring-1 focus-visible:ring-ring">{t("agentSessions.moreAsks", { count: band.more })}</button>}
-  /> : null;
+  />;
+}
+
+/**
+ * An ask on the second row, led by whose it is (`useAskWords`). The pane's
+ * own ask dims once the operator has looked and stays until it is answered.
+ */
+function AskBand({ paneId, band, navigation, unreachable, failed, actions, hasTree }: { paneId: string; band: PaneBand; navigation: string | null; unreachable: string | null; failed: boolean; actions: Actions; hasTree: boolean }) {
+  const { t } = useInterfaceTranslation();
+  const agents = usePaneAgents();
+  const { raised, originTitle, originDepth, what, minutes, who } = useAskWords(band);
   const read = !raised && band.read;
   return <>
     <span className={cn("flex min-w-0 flex-[3] items-center gap-xs", read && "opacity-(--opacity-read-status)")} data-pane-band-read={read ? "true" : undefined}>
-      {raised ? <VerbText verb={raised.verb} /> : band.kind === "approval" || band.kind === "answer" ? <VerbText verb={band.kind} /> : <span className={cn("shrink-0 font-semibold", unfinished(band) ? "text-foreground" : "text-warning")} data-verb={band.kind}>{bandVerbWords(t, band.kind)}</span>}
+      <AskVerb band={band} />
       {raised && originTitle ? <Hint label={who!}><span className="flex min-w-0 max-w-1/3 shrink items-center gap-xxs font-semibold" data-pane-band-who={raised.raised_pane_id}><span className="min-w-0 truncate">{originTitle}</span><span className="shrink-0 text-muted-foreground">({t(originDepth > 2 ? "panes.children.descendant" : "panes.children.direct")})</span></span></Hint> : null}
       <Hint label={navigation ?? what ?? ""}><span className={cn("min-w-0 flex-1 truncate", failed && "text-destructive")} role={failed ? "alert" : navigation ? "status" : undefined} data-pane-band-navigation={navigation ? failed ? "failed" : "pending" : undefined}>{navigation ?? what}</span></Hint>
     </span>
     {unreachable && !navigation ? <span className="min-w-0 max-w-1/4 shrink truncate text-muted-foreground" title={unreachable} data-pane-band-unreachable="true">{unreachable}</span> : null}
     {raised?.unreceived_by && minutes !== null ? <span className="min-w-0 max-w-1/4 flex-1 truncate text-muted-foreground" data-pane-band-unreceived="true">{t("agentSessions.unreceived", { name: raised.unreceived_by, minutes })}</span> : null}
     {raised?.unreceived_by ? null : <Elapsed since={band.since_unix_ms} className={cn("shrink-0 font-mono text-micro text-muted-foreground", read && "opacity-(--opacity-read-status)")} />}
-    {more}
+    {hasTree ? null : <MoreAsks paneId={paneId} band={band} agents={agents} actions={actions} />}
   </>;
 }
 
@@ -347,10 +475,11 @@ export function PaneRecordButton({ paneId, title, product, actions, children, pl
   return (
     // The button names the agent as the plain head does, then what a press
     // does. The pointer opens nothing here: the turn card opens from the
-    // request on the second row only, and the record shows the whole title.
+    // turn's own trigger only, and the record shows the whole title.
     <button
       type="button"
-      className="flex min-w-0 items-center gap-sm rounded-sm px-xxs -mx-xxs outline-none hover:bg-accent hover:text-foreground focus-visible:ring-1 focus-visible:ring-ring"
+      // The turn on the head gives way before the identity's first words do.
+      className="flex min-w-0 items-center gap-sm rounded-sm px-xxs -mx-xxs outline-none pane-turn-room:min-w-(--size-pane-title-min) hover:bg-accent hover:text-foreground focus-visible:ring-1 focus-visible:ring-ring"
       aria-label={[title, product, words, t("record.recordHint")].filter(Boolean).join(", ")}
       onMouseDown={(event) => event.preventDefault()}
       onClick={() => actions.togglePaneRecord(session)}

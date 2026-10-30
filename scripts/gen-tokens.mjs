@@ -50,6 +50,8 @@ export function generate(root = process.cwd()) {
   if (overviewPanel?.type !== 'number') throw new Error('Expected numeric --size-overview-panel-breakpoint');
   const paneBreakpoint = tokens['--size-pane-parent-breakpoint'];
   if (paneBreakpoint?.type !== 'number') throw new Error('Expected numeric --size-pane-parent-breakpoint');
+  const paneTurn = tokens['--size-pane-turn-breakpoint'];
+  if (paneTurn?.type !== 'number') throw new Error('Expected numeric --size-pane-turn-breakpoint');
   const missionWide = tokens['--size-mission-wide'];
   if (missionWide?.type !== 'number') throw new Error('Expected numeric --size-mission-wide');
   const theme = [], mapped = [], light = [], dark = [], hideLight = [], hideDark = [], rest = [];
@@ -92,6 +94,8 @@ export function generate(root = process.cwd()) {
     `@custom-variant overview-narrow (@media (width < ${overviewPanel.value}px));`,
     // A pane wide enough for its header to carry words beside its marks.
     `@custom-variant pane-wide (@container pane (min-width: ${paneBreakpoint.value}px));`,
+    // A pane wide enough for its head to carry the turn's words after the title; narrower, the status mark alone says it.
+    `@custom-variant pane-turn-room (@container pane (min-width: ${paneTurn.value}px));`,
     // A mission page wide enough for its node panel beside the map, else under it (PRD mission-map-git-criteria D-04).
     `@custom-variant mission-wide (@container mission (min-width: ${missionWide.value}px));`,
     '',

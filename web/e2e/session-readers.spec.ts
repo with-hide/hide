@@ -74,7 +74,7 @@ test(`${kind} native title and durable sleep wake the exact conversation in a fr
       await expect.poll(() => observed()?.user_turn, { timeout: 30_000 }).toEqual(question);
       await expect(row.locator('[data-agent-status="question"]')).toBeVisible();
       await row.click();
-      await expect(page.locator(`[data-pane-view="${sourcePane}"] [data-pane-header-band]`)).toHaveAttribute("data-pane-header-band", "answer");
+      await expect(page.locator(`[data-pane-view="${sourcePane}"] [data-pane-head-turn]`)).toHaveAttribute("data-pane-head-turn", "answer");
       await screenshot(page, "omp-current-title-question");
       appendOmpQuestion(session, true);
       await expect.poll(() => observed()?.user_turn, { timeout: 30_000 }).toBeUndefined();
