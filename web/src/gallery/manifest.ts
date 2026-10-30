@@ -1,17 +1,17 @@
-// Every System part and the states its `System / <Name>` sheet in
-// design/hide-ui.lib.pen draws, by the same names. The gallery types each
-// section's renderers from this list, so TypeScript refuses a state the page
-// does not render, and scripts/check-pen-gallery.mjs refuses a list that is
-// not the Pen library's. Keep it a plain literal: the check reads it as JSON.
+// Every System part in web/src/components/ui and the states the gallery draws
+// for it. The gallery types each section's renderers from this list, so
+// TypeScript refuses a state the page does not render. Keep it a plain literal.
 
 export const GALLERY = {
-  "Button": ["Default", "Default Hover", "Default Focus", "Default Disabled", "Pending", "Secondary", "Secondary Hover", "Outline", "Ghost", "Ghost Hover", "Destructive", "Destructive Hover", "Link", "Small", "Large", "Icon", "Icon Small"],
+  "Button": ["Default", "Default Hover", "Default Focus", "Default Disabled", "Pending", "Secondary", "Secondary Hover", "Outline", "Ghost", "Ghost Hover", "Destructive", "Destructive Hover", "Link", "Text", "Text Hover", "Text Link", "Text Link Hover", "Small", "Large", "Icon", "Icon Small", "Icon Extra Small"],
   "Input": ["Default", "Placeholder", "Filled", "Focus", "Invalid", "Disabled", "Mono"],
+  "Textarea": ["Default", "Placeholder", "Focus", "Invalid", "Disabled", "Bare"],
+  "Row Button": ["Default", "Hover", "Focus", "Disabled", "Overlay", "Overlay Hover"],
   "Select": ["Default", "Placeholder", "Focus", "Disabled", "Open"],
   "Checkbox": ["Unchecked", "Checked", "Indeterminate", "Focus", "Disabled", "Checked Disabled"],
   "Switch": ["Off", "On", "Focus", "Disabled"],
   "Radio Group": ["Default", "Focus", "Disabled"],
-  "Toggle Group": ["Default", "Hover", "Focus", "Disabled"],
+  "Toggle Group": ["Default", "Hover", "Focus", "Disabled", "Extra Small"],
   "Slider": ["Default", "Focus", "Disabled"],
   "Tabs": ["Default", "Hover", "Focus", "Disabled"],
   "Badge": ["Default", "Secondary", "Destructive", "Outline"],

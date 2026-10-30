@@ -21,15 +21,18 @@ A file may only go down: a new raw control fails, and a file with fewer than its
 
 | You need | Use | Notes |
 | --- | --- | --- |
-| An action | `Button` | `variant`: `default` (the one primary action), `secondary`, `outline`, `ghost` (toolbar and row actions), `destructive`, `link`; `size`: `default`, `sm`, `lg`, `icon`, `icon-sm`. |
-| An icon-only control | `Button size="icon"` or `"icon-sm"` inside `Hint` | The hint's label is the control's accessible name. |
-| One of a few options, all visible | `ToggleGroup type="single"` + `ToggleGroupItem` | Roving focus and arrow keys come with it; `size="sm"` for caption text. |
+| An action | `Button` | `variant`: `default` (the one primary action), `secondary`, `outline`, `ghost` (toolbar and row actions), `destructive`, `link`, `text`, `text-link`; `size`: `default`, `sm`, `lg`, `icon`, `icon-sm`, `icon-xs`, `inline`. |
+| An action that reads as words in a row or a sentence (더 보기, 접기, 열기) | `Button variant="text" size="inline"`; `variant="text-link"` when it underlines on hover | Set the text size with `className` (`text-caption`, `text-micro`). |
+| An icon-only control | `Button size="icon"`, `"icon-sm"` or `"icon-xs"` (a dense row) inside `Hint` | The hint's label is the control's accessible name. |
+| A whole row that is one action | `RowButton` | You lay out its content; it spans the line, reads left to right and lights on hover. |
+| A row that is one action but holds controls of its own | `RowOverlayButton` behind the content | Content gets `pointer-events-none relative`, each control inside `pointer-events-auto`; `aria-label` names the row's action. |
+| One of a few options, all visible | `ToggleGroup type="single"` + `ToggleGroupItem` | Roving focus and arrow keys come with it; `size="sm"` for caption text, `"xs"` for micro text. |
 | Panels switched by a strip | `Tabs`, `TabsList`, `TabsTrigger`, `TabsContent` | |
 | An on/off setting | `Switch` | |
 | Several independent choices | `Checkbox` | |
 | One of a short list, shown as rows | `RadioGroup`, `RadioGroupItem` | |
 | One of a long list | `Select` | |
-| A text field | `Input` | No multi-line part exists yet; add one to `components/ui` instead of styling a `<textarea>` in a screen. |
+| A text field | `Input`; `Textarea` for several lines | `Textarea bare` inside a composer whose container is the frame. |
 | A range | `Slider` | |
 | A menu from a button | `DropdownMenu` | Hide's action menus are `EntryDropdown`, `EntryContextMenu` and `EntryPointMenu` in `components/entry-menu.tsx`. |
 | A menu on right-click | `ContextMenu` | |

@@ -3,8 +3,10 @@ import { Slot } from "radix-ui";
 import type { ComponentProps } from "react";
 import { cn } from "../../lib/utils";
 
-// shadcn Button on hide tokens: the `System / Button` sheet in
-// design/hide-ui.lib.pen draws each variant and size under the same names.
+// shadcn Button on hide tokens; the gallery's Button section draws each
+// variant and size under the same names (docs/DESIGN_GUIDE.md, Which part).
+// `text` and `text-link` are actions that read as words in a row or a line of
+// copy; with `size="inline"` they take the text's own height.
 const buttonVariants = cva(
   "inline-flex shrink-0 items-center justify-center gap-xs whitespace-nowrap rounded-sm text-body font-medium outline-none transition-colors focus-visible:ring-1 focus-visible:ring-ring focus-visible:ring-offset-1 focus-visible:ring-offset-background disabled:pointer-events-none disabled:opacity-(--opacity-disabled) aria-invalid:ring-1 aria-invalid:ring-destructive [&_svg]:pointer-events-none [&_svg]:shrink-0 [&_svg:not([class*='size-'])]:size-(--size-icon)",
   {
@@ -16,6 +18,8 @@ const buttonVariants = cva(
         secondary: "border border-border bg-secondary text-secondary-foreground hover:bg-accent",
         ghost: "text-subtle-foreground hover:bg-accent hover:text-accent-foreground",
         link: "text-primary underline-offset-4 hover:underline",
+        text: "font-normal text-subtle-foreground hover:text-foreground",
+        "text-link": "font-normal text-subtle-foreground underline-offset-4 hover:text-foreground hover:underline",
       },
       size: {
         default: "h-(--size-control) px-md",
@@ -23,6 +27,8 @@ const buttonVariants = cva(
         lg: "h-(--size-control-lg) px-lg",
         icon: "size-(--size-control)",
         "icon-sm": "size-(--size-control-sm)",
+        "icon-xs": "rounded-xs p-xxs [&_svg:not([class*='size-'])]:size-(--size-icon-sm)",
+        inline: "h-auto rounded-xs p-0",
       },
     },
     defaultVariants: { variant: "default", size: "default" },

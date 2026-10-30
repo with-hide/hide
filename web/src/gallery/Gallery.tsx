@@ -19,6 +19,8 @@ import { ContextMenu, ContextMenuContent, ContextMenuItem, ContextMenuSeparator,
 import { Dialog, DialogBody, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "../components/ui/dialog";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuShortcut, DropdownMenuTrigger } from "../components/ui/dropdown-menu";
 import { Input } from "../components/ui/input";
+import { RowButton, RowOverlayButton } from "../components/ui/row-button";
+import { Textarea } from "../components/ui/textarea";
 import { Kbd, KbdGroup } from "../components/ui/kbd";
 import { Popover, PopoverContent, PopoverTrigger } from "../components/ui/popover";
 import { RadioGroup, RadioGroupItem } from "../components/ui/radio-group";
@@ -119,6 +121,10 @@ const renderers: Renderers = {
     "Destructive": () => <Button variant="destructive">Delete worktree</Button>,
     "Destructive Hover": () => <Button variant="destructive" data-gallery-state="hover">Delete worktree</Button>,
     "Link": () => <Button variant="link">Open log</Button>,
+    "Text": () => <Button variant="text" size="inline" className="text-caption">Show 3 more</Button>,
+    "Text Hover": () => <Button variant="text" size="inline" className="text-caption" data-gallery-state="hover">Show 3 more</Button>,
+    "Text Link": () => <Button variant="text-link" size="inline" className="text-caption">Open the session</Button>,
+    "Text Link Hover": () => <Button variant="text-link" size="inline" className="text-caption" data-gallery-state="hover">Open the session</Button>,
     "Small": () => <Button size="sm">Retry</Button>,
     "Large": () => <Button size="lg">Register project</Button>,
     "Icon": () => (
@@ -135,6 +141,33 @@ const renderers: Renderers = {
         </Button>
       </Hint>
     ),
+    "Icon Extra Small": () => (
+      <Hint label="More">
+        <Button variant="ghost" size="icon-xs">
+          <SettingsIcon />
+        </Button>
+      </Hint>
+    ),
+  },
+  "Textarea": {
+    "Default": () => <Textarea aria-label="First instruction" rows={3} defaultValue="" className="w-(--size-settings-control-w)" />,
+    "Placeholder": () => <Textarea aria-label="First instruction" rows={3} placeholder="What should the agent do first?" className="w-(--size-settings-control-w)" />,
+    "Focus": () => <Textarea aria-label="First instruction" rows={3} defaultValue="결제 모듈의 재시도 로직을 정리해 줘" data-gallery-state="focus" className="w-(--size-settings-control-w)" />,
+    "Invalid": () => <Textarea aria-label="First instruction" rows={3} defaultValue="" aria-invalid className="w-(--size-settings-control-w)" />,
+    "Disabled": () => <Textarea aria-label="First instruction" rows={3} defaultValue="결제 모듈의 재시도 로직을 정리해 줘" disabled className="w-(--size-settings-control-w)" />,
+    "Bare": () => (
+      <div className="w-(--size-settings-control-w) rounded-sm border border-border">
+        <Textarea bare aria-label="First instruction" rows={3} placeholder="What should the agent do first?" className="p-md" />
+      </div>
+    ),
+  },
+  "Row Button": {
+    "Default": () => <GalleryRowButton />,
+    "Hover": () => <GalleryRowButton state="hover" />,
+    "Focus": () => <GalleryRowButton state="focus" />,
+    "Disabled": () => <GalleryRowButton disabled />,
+    "Overlay": () => <GalleryOverlayRow />,
+    "Overlay Hover": () => <GalleryOverlayRow state="hover" />,
   },
   "Input": {
     "Default": () => <Input aria-label="Purpose" defaultValue="" className="w-(--size-settings-control-w)" />,
@@ -176,6 +209,7 @@ const renderers: Renderers = {
     "Hover": () => <GalleryToggle state="hover" />,
     "Focus": () => <GalleryToggle state="focus" />,
     "Disabled": () => <GalleryToggle disabled />,
+    "Extra Small": () => <GalleryToggle size="xs" />,
   },
   "Slider": {
     "Default": () => <Slider aria-label="Interface font" defaultValue={[13]} min={11} max={17} step={1} className="w-(--size-settings-control-w)" />,
@@ -343,15 +377,39 @@ function GalleryRadio({ disabled, state }: { disabled?: boolean; state?: "focus"
   );
 }
 
-function GalleryToggle({ disabled, state }: { disabled?: boolean; state?: "hover" | "focus" }) {
+function GalleryToggle({ disabled, state, size }: { disabled?: boolean; state?: "hover" | "focus"; size?: "xs" }) {
   return (
     <ToggleGroup type="single" defaultValue="agents" aria-label="Layout" disabled={disabled}>
-      <ToggleGroupItem value="agents">Agents</ToggleGroupItem>
-      <ToggleGroupItem value="together" data-gallery-state={state}>
+      <ToggleGroupItem value="agents" size={size}>Agents</ToggleGroupItem>
+      <ToggleGroupItem value="together" size={size} data-gallery-state={state}>
         Together
       </ToggleGroupItem>
-      <ToggleGroupItem value="views">Views</ToggleGroupItem>
+      <ToggleGroupItem value="views" size={size}>Views</ToggleGroupItem>
     </ToggleGroup>
+  );
+}
+
+function GalleryRowButton({ disabled, state }: { disabled?: boolean; state?: "hover" | "focus" }) {
+  return (
+    <div className="w-(--size-settings-control-w)">
+      <RowButton disabled={disabled} data-gallery-state={state}>
+        <FolderIcon className="size-(--size-icon-sm) text-muted-foreground" />
+        <span className="min-w-0 flex-1 truncate text-body text-foreground">payments-retry</span>
+        <span className="text-caption text-muted-foreground">3분 전</span>
+      </RowButton>
+    </div>
+  );
+}
+
+function GalleryOverlayRow({ state }: { state?: "hover" }) {
+  return (
+    <div className="relative w-(--size-settings-control-w)">
+      <RowOverlayButton aria-label="Expand card 12" data-gallery-state={state} />
+      <div className="pointer-events-none relative flex min-w-0 items-center gap-xs px-xs py-sm">
+        <span className="min-w-0 flex-1 truncate text-body text-foreground">답변은 한국어로</span>
+        <Button variant="text" size="inline" className="pointer-events-auto text-caption">Forget</Button>
+      </div>
+    </div>
   );
 }
 
