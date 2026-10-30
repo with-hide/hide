@@ -23,7 +23,7 @@ vi.mock("./overviewGraphLayout", () => ({
   useGraphTheme: () => "light",
 }));
 // The map's node budget is 400; what these tests claim holds for a project past any budget, and filling
-// 400 nodes made the overflow case take up to 5.8 s on the Windows runner (with-hide/hide-private#145).
+// 400 nodes made the overflow case take up to 5.8 s on the Windows runner (hide-private issue 145).
 // Every project takes its name and one access slot, so BUDGET / 2 projects fill the map and one more is left out.
 const { BUDGET } = vi.hoisted(() => ({ BUDGET: 8 }));
 vi.mock("./dependencyLayout", async (importOriginal) => ({ ...await importOriginal<typeof import("./dependencyLayout")>(), LAYOUT_NODE_LIMIT: BUDGET }));
