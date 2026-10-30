@@ -90,7 +90,7 @@ fn image<'a>(block: &'a Value, session_path: &Path) -> Option<Part<'a>> {
     match data.strip_prefix("blob:sha256:") {
         Some(hash) => blob(session_path, hash).map(|path| Part::ImagePath {
             path,
-            mime: Some(mime),
+            mime: Some(mime.to_owned()),
         }),
         None => Some(Part::Image { data, mime }),
     }

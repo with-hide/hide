@@ -28,6 +28,7 @@ use crate::{Agent, ReadRefusal, SessionReadScope};
 
 pub use agent_client_protocol_schema::v1 as acp;
 
+mod antigravity;
 mod build;
 mod claude;
 mod codex;
@@ -115,7 +116,8 @@ const fn reader(format: SessionFormat) -> Reader {
         SessionFormat::Grok => Reader::Lines(grok::LINES),
         SessionFormat::Pi | SessionFormat::Omp => Reader::Lines(pi::LINES),
         SessionFormat::OpenCode => Reader::OpenCode,
-        SessionFormat::Antigravity | SessionFormat::Cursor => Reader::Unsupported,
+        SessionFormat::Antigravity => Reader::Lines(antigravity::LINES),
+        SessionFormat::Cursor => Reader::Unsupported,
     }
 }
 
@@ -208,7 +210,7 @@ fn read_lines(
     for (_, record) in &records {
         (lines.record)(record, &session, &mut thread);
     }
-    thread.forget_awaiting();
+    thread.end_turn();
     if thread.nothing_readable() {
         return Err("thread_records_unreadable".to_owned());
     }

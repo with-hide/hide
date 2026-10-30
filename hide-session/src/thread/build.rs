@@ -5,7 +5,7 @@
 //! words. A converter never builds an ACP value itself, so every format draws
 //! the same thread for the same kind of record.
 
-use std::collections::{BTreeMap, BTreeSet, VecDeque};
+use std::collections::{BTreeMap, BTreeSet};
 
 use agent_client_protocol_schema::v1::{
     Content, ContentBlock, ContentChunk, Diff, ImageContent, Meta, Plan, PlanEntry,
@@ -30,7 +30,7 @@ pub(crate) enum Part<'a> {
     /// when the record states it.
     ImagePath {
         path: String,
-        mime: Option<&'a str>,
+        mime: Option<String>,
     },
 }
 
@@ -144,12 +144,17 @@ pub(crate) struct Step {
 pub(crate) struct Thread {
     updates: Vec<SessionUpdate>,
     skipped: BTreeMap<&'static str, usize>,
-    /// Calls waiting for a result that names no call, oldest first: a format
-    /// whose results follow their calls in order pairs them here (D-10).
-    awaiting: VecDeque<String>,
+    /// One turn's calls whose results name no call, and the results that
+    /// arrived since, both in order: a format whose results follow its calls
+    /// pairs them here when the turn ends (D-10).
+    awaiting: Vec<String>,
+    arrived: Vec<Outcome<'static>>,
     /// The calls this page has drawn, so a call a record states again
     /// refines the one drawn rather than drawing a second.
     called: BTreeSet<String>,
+    /// The file changes of this page's calls, so a result that replaces a
+    /// call's content with its text keeps the change in front of it.
+    changes: BTreeMap<String, Vec<ToolCallContent>>,
     /// Whether a record that should hold conversation could not be read.
     unreadable: bool,
 }
@@ -240,6 +245,9 @@ impl Thread {
             .map(|path| ToolCallLocation::new(wire(path)))
             .collect::<Vec<_>>();
         let content = call.diffs.into_iter().map(diff_content).collect::<Vec<_>>();
+        if !content.is_empty() {
+            self.changes.insert(call.id.clone(), content.clone());
+        }
         if !self.called.insert(call.id.clone()) {
             let fields = ToolCallUpdateFields::new()
                 .title(call.title)
@@ -270,22 +278,28 @@ impl Thread {
 
     /// A call whose result will follow it in order, with no id of its own.
     pub fn call_awaiting_result(&mut self, call: Call) {
-        self.awaiting.push_back(call.id.clone());
+        self.awaiting.push(call.id.clone());
         self.call(call);
     }
 
-    /// The next result in order belongs to the oldest call still waiting;
-    /// with none waiting, the result is passed over and counted.
-    pub fn result_in_order(&mut self, outcome: Outcome<'_>) {
-        match self.awaiting.pop_front() {
-            Some(id) => self.result(&id, outcome),
-            None => self.skip("result_without_call"),
-        }
+    /// A result that names no call; it is paired when the turn ends.
+    pub fn result_in_order(&mut self, outcome: Outcome<'static>) {
+        self.arrived.push(outcome);
     }
 
-    /// Calls that never met their result keep their call alone (B8).
-    pub fn forget_awaiting(&mut self) {
-        self.awaiting.clear();
+    /// Ends a turn of order-paired calls: as many results as calls pair in
+    /// order; any other count pairs nothing, so no call shows another's
+    /// result and each call stays without one (B8).
+    pub fn end_turn(&mut self) {
+        let awaiting = std::mem::take(&mut self.awaiting);
+        let arrived = std::mem::take(&mut self.arrived);
+        if awaiting.len() == arrived.len() {
+            for (id, outcome) in awaiting.iter().zip(arrived) {
+                self.result(id, outcome);
+            }
+        } else {
+            self.skip("result_order_mismatch");
+        }
     }
 
     pub fn result(&mut self, id: &str, outcome: Outcome<'_>) {
@@ -294,6 +308,17 @@ impl Thread {
             .into_iter()
             .map(diff_content)
             .collect::<Vec<_>>();
+        let says_more = outcome
+            .output
+            .as_deref()
+            .is_some_and(|output| !output.is_empty())
+            || !outcome.images.is_empty();
+        if content.is_empty()
+            && says_more
+            && let Some(changes) = self.changes.get(id)
+        {
+            content.extend(changes.iter().cloned());
+        }
         if let Some(output) = outcome.output.filter(|output| !output.is_empty()) {
             content.push(ToolCallContent::Content(Content::new(text_block(
                 &output, None,
@@ -428,7 +453,7 @@ fn media_block(part: Part<'_>) -> Option<ContentBlock> {
         Part::ImagePath { path, mime } => {
             let path = wire(&path);
             let name = path.rsplit('/').next().unwrap_or(&path).to_owned();
-            let mime = mime.map(str::to_owned).or_else(|| image_mime(&path));
+            let mime = mime.or_else(|| image_mime(&path));
             Some(ContentBlock::ResourceLink(
                 ResourceLink::new(name, format!("file://{}", file_uri_path(&path))).mime_type(mime),
             ))
@@ -541,23 +566,42 @@ mod tests {
         assert_eq!(image.meta.unwrap()["hide"]["truncated"], json!(true));
     }
 
-    #[test]
-    fn order_pairing_gives_each_result_to_the_oldest_waiting_call() {
-        let mut thread = Thread::default();
-        thread.call_awaiting_result(Call::new("a", "run", ToolKind::Execute));
-        thread.call_awaiting_result(Call::new("b", "read", ToolKind::Read));
-        thread.result_in_order(Outcome::default());
-        thread.forget_awaiting();
-        thread.result_in_order(Outcome::default());
+    fn result_ids(thread: Thread) -> (Vec<String>, BTreeMap<&'static str, usize>) {
         let (updates, skipped) = thread.into_parts();
-        let results = updates
+        let ids = updates
             .iter()
             .filter_map(|update| match update {
                 SessionUpdate::ToolCallUpdate(update) => Some(update.tool_call_id.0.to_string()),
                 _ => None,
             })
-            .collect::<Vec<_>>();
-        assert_eq!(results, ["a"]);
-        assert_eq!(skipped.get("result_without_call"), Some(&1));
+            .collect();
+        (ids, skipped)
+    }
+
+    #[test]
+    fn a_turn_whose_results_match_its_calls_pairs_them_in_order() {
+        let mut thread = Thread::default();
+        thread.call_awaiting_result(Call::new("a", "run", ToolKind::Execute));
+        thread.call_awaiting_result(Call::new("b", "read", ToolKind::Read));
+        thread.result_in_order(Outcome::default());
+        thread.result_in_order(Outcome::default());
+        thread.end_turn();
+        assert_eq!(result_ids(thread).0, ["a", "b"]);
+    }
+
+    #[test]
+    fn a_turn_with_a_missing_or_extra_result_pairs_none() {
+        for results in [1, 3] {
+            let mut thread = Thread::default();
+            thread.call_awaiting_result(Call::new("a", "run", ToolKind::Execute));
+            thread.call_awaiting_result(Call::new("b", "read", ToolKind::Read));
+            for _ in 0..results {
+                thread.result_in_order(Outcome::default());
+            }
+            thread.end_turn();
+            let (ids, skipped) = result_ids(thread);
+            assert!(ids.is_empty(), "{results} results");
+            assert_eq!(skipped.get("result_order_mismatch"), Some(&1));
+        }
     }
 }

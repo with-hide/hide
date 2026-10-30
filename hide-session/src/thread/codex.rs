@@ -532,7 +532,11 @@ mod tests {
             "export function greet(name) {\n  return `Hello, ${name}!`;\n}\n"
         );
         assert_eq!(updates[3]["status"], "completed");
-        assert_eq!(updates[3]["content"][0]["content"]["text"], "Success.");
+        // An update replaces the call's content, so the diffs stay ahead of
+        // the output.
+        let content = updates[3]["content"].as_array().unwrap();
+        assert_eq!(content[..2], diffs[..]);
+        assert_eq!(content[2]["content"]["text"], "Success.");
         assert_eq!(updates[4]["sessionUpdate"], "plan");
         assert_eq!(updates[4]["entries"][0]["status"], "in_progress");
         assert_eq!(updates.len(), 5);

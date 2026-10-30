@@ -268,7 +268,7 @@ fn file(file: &Value) -> Option<Part<'_>> {
     }
     url.strip_prefix("file://").map(|path| Part::ImagePath {
         path: path.to_owned(),
-        mime: Some(mime),
+        mime: Some(mime.to_owned()),
     })
 }
 

@@ -162,7 +162,7 @@ fn part(block: &ContentBlock) -> Option<Part<'_>> {
                 .strip_prefix("file://")
                 .map(|path| Part::ImagePath {
                     path: path.to_owned(),
-                    mime: link.mime_type.as_deref(),
+                    mime: link.mime_type.clone(),
                 })
         }
         _ => None,

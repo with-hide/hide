@@ -115,6 +115,45 @@ const SAMPLES: &[Sample] = &[
             (database, scope("ses_e734b9580ffek8rvRhfLo6NEsw", cwd))
         },
     },
+    Sample {
+        format: SessionFormat::Antigravity,
+        place: |home, cwd| {
+            let id = "c776c564-b0a3-4856-a0cf-85b005a64314";
+            let transcript = hide_session::antigravity::transcript(home, id);
+            install(
+                &fixtures().join("antigravity-1.4.11/transcript_full.jsonl"),
+                &transcript,
+                cwd,
+            );
+            // agy's index row is what proves the conversation's checkout.
+            let folder = home.join(".gemini/antigravity-cli");
+            std::fs::create_dir_all(folder.join("conversations")).unwrap();
+            std::fs::write(folder.join("conversations").join(format!("{id}.db")), b"").unwrap();
+            let index =
+                rusqlite::Connection::open(folder.join("conversation_summaries.db")).unwrap();
+            index
+                .execute_batch(
+                    &std::fs::read_to_string(
+                        Path::new(env!("CARGO_MANIFEST_DIR"))
+                            .join("tests/fixtures/adapters/antigravity-1.3.6/summaries.sql"),
+                    )
+                    .unwrap(),
+                )
+                .unwrap();
+            let wire = hide_platform::path::to_wire(cwd).unwrap();
+            let slash = if wire.starts_with('/') { "" } else { "/" };
+            let uri = format!("file://{slash}{}", wire.replace(' ', "%20"));
+            index
+                .execute(
+                    "INSERT INTO conversation_summaries (conversation_id, title, last_modified_time, \
+                     workspace_uris, parent_conversation_id, last_user_input_time, app_data_dir) \
+                     VALUES (?1, 'login card', ?3, ?2, '', ?3, 'antigravity-cli')",
+                    rusqlite::params![id, json!([uri]).to_string(), "2026-10-30 12:22:45+00:00"],
+                )
+                .unwrap();
+            (transcript, scope(id, cwd))
+        },
+    },
 ];
 
 /// OpenCode's database in `home`, built from a fixture's SQL for `cwd`.
