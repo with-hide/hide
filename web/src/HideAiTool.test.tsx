@@ -533,6 +533,13 @@ describe("the Hide AI tool", () => {
     expect(q("[data-suggestion-branch-files]")?.textContent).toContain("AGENTS.md");
     expect(q("[data-suggestion-evidence-folded]")?.textContent).toContain("1 piece of evidence");
     expect(q("[data-suggestion-evidence]")).toBeNull();
+    // Inside the row the file list already names the file, so its diff starts at its first hunk.
+    const text = "diff --git a/AGENTS.md b/AGENTS.md\n--- a/AGENTS.md\n+++ b/AGENTS.md\n@@ -1,1 +1,2 @@\n keep\n+added\n";
+    await act(async () => useShellStore.setState((state) => ({ rest: { ...state.rest, pr_work: { link: null, feedback: null, branch_diffs: [{ workspace_id: "p", row: "s1", path: "AGENTS.md", reading: false, failed: false, notice: null, text }] } } as never })));
+    const shown = q('[data-branch-card-diff="AGENTS.md"] .cm-content')?.textContent ?? "";
+    expect(shown.startsWith("@@ -1,1 +1,2 @@")).toBe(true);
+    expect(shown).not.toContain("diff --git");
+    expect(shown).toContain("+added");
     await click('[data-suggestion-branch-file="docs/a.md"]');
     expect(sent("suggestion_branch_file").at(-1)).toEqual({ workspace_id: "p", row: "s1", path: "docs/a.md" });
     expect(sent("suggestion_branch_file")[0]).toEqual({ workspace_id: "p", row: "s1", path: "AGENTS.md" });

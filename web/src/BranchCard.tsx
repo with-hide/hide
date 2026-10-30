@@ -98,7 +98,7 @@ export function BranchFileDiff({ workspaceId, rowId, path, inline = false }: { w
       ) : (
         <>
           {diff.notice ? <div className="border-b border-border px-md py-xs text-caption text-warning" data-diff-notice={diff.notice.code}>{diffNoticeText(diff.notice, t)}</div> : null}
-          {diff.text ? <PlainPatchView text={diff.text} wrap={inline} scale={scale} /> : <div className="min-h-0 flex-1" data-diff-empty="true" />}
+          {diff.text ? <PlainPatchView text={diff.text} wrap={inline} scale={scale} compact={inline} /> : <div className="min-h-0 flex-1" data-diff-empty="true" />}
         </>
       )}
     </section>
