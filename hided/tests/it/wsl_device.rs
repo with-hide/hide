@@ -612,19 +612,25 @@ fn a_wsl_distribution_connects_works_and_ends_with_its_link() {
     woken.node.host.close("the test is done");
 }
 
-/// How long a journey runs before its watch says where it stands: past the
-/// slowest green run (42 to 65 s on GitHub's Windows runner) and short of
-/// the lane's 120 s hang guard, which ends the test saying nothing of it.
-const STALLED: Duration = Duration::from_secs(100);
+/// The journey's own hang guard: past the slowest green run (42 to 65 s on
+/// GitHub's Windows runner) and short of the lane's 120 s, which ends the
+/// test saying nothing of where it stood (with-hide/hide-private#339).
+const JOURNEY_GUARD: Duration = Duration::from_secs(105);
+/// How long the distribution's process list may take once the guard fired.
+const PROBE_GUARD: Duration = Duration::from_secs(10);
+/// The most lines of the journey's record kept; the oldest go first.
+const RECORD_CAP: usize = 256;
 
-/// The journey's steps, printed as each starts, and a watch that, when the
-/// journey still runs at [`STALLED`], prints its step and what the
-/// distribution runs, so a hung step names itself before the lane ends the
-/// test (with-hide/hide-private#339). A journey that ends in time prints
-/// nothing but its steps.
+/// What the journey did, kept in memory and printed only when it fails: its
+/// steps and the Hide AI request's progress, each with its time since the
+/// start. A failed assertion prints the record as the test unwinds; a
+/// journey still running at [`JOURNEY_GUARD`] fails there, printing the
+/// record and what the distribution runs, read by an owned `ps` bounded by
+/// [`PROBE_GUARD`], and ends the test process. A journey that ends in time
+/// prints nothing.
 struct Journey {
     started: Instant,
-    step: Arc<Mutex<String>>,
+    record: Arc<Mutex<std::collections::VecDeque<String>>>,
     done: Option<mpsc::Sender<()>>,
     watch: Option<std::thread::JoinHandle<()>>,
 }
@@ -632,53 +638,85 @@ struct Journey {
 impl Journey {
     fn start(distro: &str) -> Self {
         let started = Instant::now();
-        let step = Arc::new(Mutex::new("start".to_owned()));
+        let record = Arc::new(Mutex::new(std::collections::VecDeque::new()));
         let (done, ended) = mpsc::channel::<()>();
-        let at = Arc::clone(&step);
+        let kept = Arc::clone(&record);
         let distro = distro.to_owned();
         let watch = std::thread::spawn(move || {
-            if ended.recv_timeout(STALLED) != Err(mpsc::RecvTimeoutError::Timeout) {
+            if ended.recv_timeout(JOURNEY_GUARD) != Err(mpsc::RecvTimeoutError::Timeout) {
                 return;
             }
-            let step = at.lock().unwrap().clone();
-            eprintln!("the journey still runs at {STALLED:?}, in step: {step}");
-            let processes = Command::new("wsl.exe")
-                .args(["-d", &distro, "-u", "root", "-e", "ps", "-eo"])
-                .arg("pid,ppid,stat,etime,args")
-                .output();
-            match processes {
-                Ok(output) => eprintln!(
-                    "processes in {distro}:\n{}{}",
-                    String::from_utf8_lossy(&output.stdout),
-                    String::from_utf8_lossy(&output.stderr)
-                ),
-                Err(error) => eprintln!("processes in {distro} unread: {error}"),
-            }
+            eprintln!("the journey still ran at {JOURNEY_GUARD:?}");
+            print_record(&kept);
+            eprintln!("processes in {distro}: {}", processes(&distro));
+            std::process::exit(101);
         });
         Self {
             started,
-            step,
+            record,
             done: Some(done),
             watch: Some(watch),
         }
     }
 
     fn step(&self, name: &str) {
-        println!("step {name} at {} ms", self.started.elapsed().as_millis());
-        *self.step.lock().unwrap() = name.to_owned();
+        self.note(&format!("step {name}"));
     }
 
     fn note(&self, what: &str) {
-        println!("  {what} at {} ms", self.started.elapsed().as_millis());
+        let line = format!("{what} at {} ms", self.started.elapsed().as_millis());
+        let mut record = self.record.lock().unwrap();
+        if record.len() == RECORD_CAP {
+            record.pop_front();
+        }
+        record.push_back(line);
     }
 }
 
 impl Drop for Journey {
     fn drop(&mut self) {
+        // Ends the watch's wait at once; a watch past its guard is already
+        // ending the process within PROBE_GUARD.
         self.done.take();
         if let Some(watch) = self.watch.take() {
             let _ = watch.join();
         }
+        if std::thread::panicking() {
+            print_record(&self.record);
+        }
+    }
+}
+
+fn print_record(record: &Mutex<std::collections::VecDeque<String>>) {
+    let record = record
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    eprintln!("the journey's record:");
+    for line in record.iter() {
+        eprintln!("  {line}");
+    }
+}
+
+/// What the distribution runs, read by a `ps` this test owns and ends
+/// within [`PROBE_GUARD`].
+fn processes(distro: &str) -> String {
+    let mut command = Command::new("wsl.exe");
+    command
+        .args(["-d", distro, "-u", "root", "-e", "ps", "-eo"])
+        .arg("pid,ppid,stat,etime,args")
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    match hide_platform::process::OwnedChild::spawn(&mut command) {
+        Ok(mut child) => match child.capture_until(Instant::now() + PROBE_GUARD, 64 * 1024) {
+            Ok(output) => format!(
+                "\n{}{}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            ),
+            Err(error) => format!("unread: {error}"),
+        },
+        Err(error) => format!("unread: {error}"),
     }
 }
 

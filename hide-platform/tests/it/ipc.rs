@@ -847,10 +847,40 @@ fn shutdown_from_another_thread_frees_a_blocked_read() {
 /// rounds are what this needs: a lost end shows only now and then. Unix
 /// only: a Windows shutdown cancels this end's own reads and writes, and its
 /// peer hears the end when the handle closes.
+///
+/// The rounds run in an exact-test subprocess the test owns and bounds: a
+/// read that missed its end cannot be woken from inside its process, so a
+/// failed round ends with the subprocess, killed and reaped, not with a
+/// thread left in the test binary.
 #[test]
 #[cfg(unix)]
 fn a_shutdown_ends_the_peers_blocked_read_every_time() {
+    const TEST: &str = "ipc::a_shutdown_ends_the_peers_blocked_read_every_time";
     const ROUNDS: usize = 5000;
+    if std::env::var(ROLE).as_deref() != Ok(TEST) {
+        let mut command = Command::new(std::env::current_exe().unwrap());
+        command
+            .args(["--exact", TEST, "--nocapture"])
+            .env(ROLE, TEST)
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
+        // A hang guard over all the rounds, which take well under a second.
+        let output = hide_platform::process::OwnedChild::spawn(&mut command)
+            .expect("the rounds start")
+            .capture_until(Instant::now() + Duration::from_secs(60), 64 * 1024)
+            .expect("the rounds end and their process is reaped");
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert!(
+            String::from_utf8_lossy(&output.stdout).contains("test result: ok. 1 passed;"),
+            "the rounds must run, not be filtered out: {output:?}"
+        );
+        return;
+    }
     for round in 0..ROUNDS {
         let (mut left, right) = LocalStream::pair().unwrap();
         let (done, finished) = mpsc::channel();
@@ -871,8 +901,6 @@ fn a_shutdown_ends_the_peers_blocked_read_every_time() {
         let sent = (round % 8) * 1024;
         left.write_all(&vec![7_u8; sent]).unwrap();
         left.shutdown_handle().shutdown();
-        // A read that missed the end is left to the test process's exit:
-        // nothing the test can do wakes it.
         let heard = finished
             .recv_timeout(Duration::from_secs(10))
             .unwrap_or_else(|_| panic!("round {round}: the peer's read never heard the shutdown"));

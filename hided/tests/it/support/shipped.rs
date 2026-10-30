@@ -50,34 +50,32 @@ pub fn place(source: &Path, at: &Path, environment: &Environment) -> Result<()> 
     let (family, kept) = name_of(source)?;
     let shipped = store.join(&kept);
     if !shipped.exists() {
-        // An earlier version of the same executable is never asked for
-        // again by this build folder.
+        // An earlier version of the same executable, finished or left half
+        // made by a test process that was killed, is never asked for again
+        // by this build folder; nor is this version's half-made copy.
         for entry in fs::read_dir(&store)? {
             let entry = entry?;
             let name = entry.file_name().to_string_lossy().into_owned();
-            if name.starts_with(&family) && name != kept {
+            if name.strip_prefix('.').unwrap_or(&name).starts_with(&family) {
                 fs::remove_file(entry.path())?;
             }
         }
         let making = store.join(format!(".{kept}"));
-        // A copy a killed test process left half made.
-        if let Err(error) = fs::remove_file(&making)
-            && error.kind() != ErrorKind::NotFound
-        {
-            return Err(error.into());
+        let made = make(source, &making, environment).and_then(|()| {
+            fs::rename(&making, &shipped)?;
+            Ok(())
+        });
+        if let Err(error) = made {
+            if let Err(cleanup) = fs::remove_file(&making)
+                && cleanup.kind() != ErrorKind::NotFound
+            {
+                return Err(error.context(format!(
+                    "and {} could not be removed: {cleanup}",
+                    making.display()
+                )));
+            }
+            return Err(error);
         }
-        byte_copy(source, &making)?;
-        fs::set_permissions(&making, fs::Permissions::from_mode(0o755))?;
-        let mut strip = environment.command("/usr/bin/strip");
-        strip.arg(&making);
-        successful(strip)?;
-        #[cfg(target_os = "macos")]
-        {
-            let mut sign = environment.command("/usr/bin/codesign");
-            sign.args(["--force", "--sign", "-"]).arg(&making);
-            successful(sign)?;
-        }
-        fs::rename(&making, &shipped)?;
     }
     if at.exists() {
         bail!("{} already holds a file", at.display());
@@ -86,6 +84,22 @@ pub fn place(source: &Path, at: &Path, environment: &Environment) -> Result<()> 
     // `main` (docs/TESTING.md, Writing a Rust test, rule 8).
     byte_copy(&shipped, at)?;
     fs::set_permissions(at, fs::Permissions::from_mode(0o755))?;
+    Ok(())
+}
+
+/// Writes at `making` a stripped copy of `source`, ad-hoc signed on macOS.
+fn make(source: &Path, making: &Path, environment: &Environment) -> Result<()> {
+    byte_copy(source, making)?;
+    fs::set_permissions(making, fs::Permissions::from_mode(0o755))?;
+    let mut strip = environment.command("/usr/bin/strip");
+    strip.arg(making);
+    successful(strip)?;
+    #[cfg(target_os = "macos")]
+    {
+        let mut sign = environment.command("/usr/bin/codesign");
+        sign.args(["--force", "--sign", "-"]).arg(making);
+        successful(sign)?;
+    }
     Ok(())
 }
 
