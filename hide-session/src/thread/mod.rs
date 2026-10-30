@@ -90,10 +90,13 @@ pub struct ThreadPage {
     pub start: ThreadCursor,
     /// The page before this one, `None` at the session's start.
     pub before: Option<ThreadCursor>,
-    /// Where the page after this one begins, when a forward read stopped
-    /// short of the session's end; `None` when it read to the end.
+    /// Where the page's records end and the page after it begins: the
+    /// cursor a forward read of what the session writes next starts from.
+    pub end: ThreadCursor,
+    /// Whether a forward read stopped before the session's end, with
+    /// records already written past [`ThreadPage::end`].
     #[serde(default)]
-    pub after: Option<ThreadCursor>,
+    pub more: bool,
     /// The records the page passed over, by reason, such as a record past
     /// the page cap (`line_capacity`) or one whose shape the converter does
     /// not know.
@@ -203,7 +206,7 @@ pub fn read_thread(
 /// The page of `agent`'s session that begins at `from`, read forward: the
 /// records from there toward the session's end, ending past
 /// [`THREAD_TAIL_BYTES`] at a record a page may begin at, its
-/// [`ThreadPage::after`] naming where the rest begins. A record still being
+/// [`ThreadPage::more`] saying whether records follow its end already. A record still being
 /// written is left for the next read. Refused as [`read_thread`] refuses,
 /// and a page that holds no record yet is answered empty.
 pub fn read_thread_from(
@@ -339,21 +342,27 @@ fn read_lines(
     if thread.nothing_readable() {
         return Err("thread_records_unreadable".to_owned());
     }
-    let start = ThreadCursor {
-        position: start,
-        incarnation,
+    let cursor = |position| ThreadCursor {
+        position,
+        incarnation: incarnation.clone(),
     };
-    Ok(page_of(thread, start, None))
+    Ok(page_of(
+        thread,
+        cursor(start),
+        cursor(page.end_offset),
+        false,
+    ))
 }
 
 /// The page a converted run of records makes.
-fn page_of(thread: Thread, start: ThreadCursor, after: Option<ThreadCursor>) -> ThreadPage {
+fn page_of(thread: Thread, start: ThreadCursor, end: ThreadCursor, more: bool) -> ThreadPage {
     let (updates, skipped) = thread.into_parts();
     ThreadPage {
         updates,
         before: (!start.at_start()).then(|| start.clone()),
         start,
-        after,
+        end,
+        more,
         skipped: skipped
             .into_iter()
             .map(|(reason, count)| (reason.to_owned(), count))
@@ -417,11 +426,11 @@ fn read_lines_from(path: &Path, lines: Lines, from: &ThreadCursor) -> Result<Thr
     if thread.nothing_readable() {
         return Err("thread_records_unreadable".to_owned());
     }
-    let after = after.map(|position| ThreadCursor {
-        position,
-        incarnation: incarnation.clone(),
-    });
-    Ok(page_of(thread, from.clone(), after))
+    let end = ThreadCursor {
+        position: after.unwrap_or(offset),
+        incarnation,
+    };
+    Ok(page_of(thread, from.clone(), end, after.is_some()))
 }
 
 /// The next whole line `reader` holds and how many bytes it took: the line

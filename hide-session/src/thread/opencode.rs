@@ -55,20 +55,25 @@ pub(super) fn read(
                 cwd: Some(&scope.cwd),
             },
         )?;
-        let (start, messages, after) = match read {
+        let (start, messages, more) = match read {
             ThreadRead::Newest => {
                 let (start, messages) = page(connection, schema, &scope.id, None)?;
-                (start, messages, None)
+                (start, messages, false)
             }
             ThreadRead::Before(cursor) => {
                 let (start, messages) = page(connection, schema, &scope.id, Some(cursor.position))?;
-                (start, messages, None)
+                (start, messages, false)
             }
             ThreadRead::From(cursor) => {
-                let (messages, after) = page_from(connection, schema, &scope.id, cursor.position)?;
-                (cursor.position, messages, after)
+                let (messages, more) = page_from(connection, schema, &scope.id, cursor.position)?;
+                (
+                    cursor.position.min(count(connection, schema, &scope.id)?),
+                    messages,
+                    more,
+                )
             }
         };
+        let end = start + messages.len() as u64;
         let mut thread = Thread::default();
         for message in &messages {
             draw(message, schema, &mut thread);
@@ -80,19 +85,19 @@ pub(super) fn read(
             position,
             incarnation: incarnation.clone(),
         };
-        Ok(super::page_of(thread, cursor(start), after.map(cursor)))
+        Ok(super::page_of(thread, cursor(start), cursor(end), more))
     })?
 }
 
 /// The messages from index `start` on, oldest first, ending past
-/// [`THREAD_TAIL_BYTES`] or at the page's message cap, and the index of the
-/// first message left out when the page ended before the session's end.
+/// [`THREAD_TAIL_BYTES`] or at the page's message cap, and whether
+/// messages follow the last one already.
 fn page_from(
     connection: &Connection,
     schema: Schema,
     session: &str,
     start: u64,
-) -> Result<(Vec<Message>, Option<u64>), ReadRefusal> {
+) -> Result<(Vec<Message>, bool), ReadRefusal> {
     let total = count(connection, schema, session)?;
     let start = start.min(total);
     let end = total.min(start.saturating_add(MESSAGES_PER_PAGE));
@@ -113,7 +118,7 @@ fn page_from(
             message.parts = parts(connection, &message.id)?;
         }
     }
-    Ok((messages, (next < total).then_some(next)))
+    Ok((messages, next < total))
 }
 
 /// The messages that end at index `end` (the newest without one), as many

@@ -741,7 +741,11 @@ fn an_opencode_1_session_reads_from_its_parts() {
         updates,
         "a forward read from the page's start"
     );
-    assert!(forward.after.is_none());
+    assert!(!forward.more);
+    assert_eq!(
+        forward.end, page.end,
+        "the newest page ends where the session does"
+    );
     assert_eq!(
         updates[0]["content"]["text"],
         "요청 보기를 만들어줘\n긴 요청의 둘째 줄"
@@ -797,7 +801,12 @@ fn a_working_session_read_forward_from_its_page_adds_only_whole_new_records() {
     std::io::Write::write_all(&mut file, &half.as_bytes()[..half.len() / 2]).unwrap();
     let grown = placed.read_from(&newest.start).unwrap();
     assert_eq!(texts(&grown), ["one", "two", "three"]);
-    assert!(grown.after.is_none(), "the page reached the session's end");
+    assert_eq!(
+        texts(&placed.read_from(&newest.end).unwrap()),
+        ["three"],
+        "from where the newest page ended, only what was written since"
+    );
+    assert!(!grown.more, "the page reached the session's end");
 
     std::io::Write::write_all(&mut file, &half.as_bytes()[half.len() / 2..]).unwrap();
     assert_eq!(
@@ -834,10 +843,10 @@ fn forward_pages_end_past_the_tail_size_and_together_read_the_session_once() {
             "a forward page holds less than the session"
         );
         read.extend(texts(&page));
-        match page.after {
-            Some(after) => from = after,
-            None => break,
+        if !page.more {
+            break;
         }
+        from = page.end;
     }
     assert!(pages >= 3, "{pages} pages");
     assert_eq!(read, texts(&newest));
@@ -860,13 +869,11 @@ fn a_record_past_the_tail_size_is_a_forward_page_and_a_replaced_file_refuses_its
     loop {
         let page = placed.read_from(&from).unwrap();
         firsts.push(texts(&page).first().map(|text| text[..1].to_owned()));
-        match page.after {
-            Some(after) => {
-                afters.push(after.clone());
-                from = after;
-            }
-            None => break,
+        if !page.more {
+            break;
         }
+        afters.push(page.end.clone());
+        from = page.end;
     }
     assert_eq!(
         firsts,
