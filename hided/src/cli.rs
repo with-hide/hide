@@ -34,6 +34,8 @@ pub enum CommandKind {
         actor: Option<String>,
     },
     Device(crate::device_cli::DeviceCli),
+    /// `hide pane …`, `hide agent read` and `hide workspace purpose`.
+    Pane(crate::pane_cli::PaneCli),
     Help,
     AgentSpawnHelp,
     /// `hide <command> … --help`: that command's usage, printed to stdout.
@@ -172,7 +174,8 @@ fn topic_usage(topic: &str) -> Option<String> {
         "file" => FILE_USAGE.to_owned(),
         "diff" => DIFF_USAGE.to_owned(),
         "view" => VIEW_USAGE.to_owned(),
-        "workspace" => "usage: hide workspace info".to_owned(),
+        "pane" => usage(crate::pane_cli::USAGE),
+        "workspace" => usage("hide workspace info\nhide workspace purpose <text>"),
         "status" => "usage: hide status [--json]".to_owned(),
         "stop" => "usage: hide stop".to_owned(),
         "open" => OPEN_USAGE.to_owned(),
@@ -200,6 +203,7 @@ fn help_text() -> String {
         crate::device_cli::USAGE,
         crate::mission_cli::USAGE,
         crate::plan_cli::USAGE,
+        crate::pane_cli::USAGE,
         "hide workspace info",
         FILE_USAGE.trim_start_matches("usage: "),
         DIFF_USAGE.trim_start_matches("usage: "),
@@ -308,6 +312,20 @@ pub fn parse_args(args: &[String]) -> Result<CommandKind, String> {
                 .map(|(id, actor)| CommandKind::AgentSleep { id, actor })
                 .map_err(|reason| wrong(reason, crate::agent_cli::USAGE))
         }
+        Some("agent") if args.get(2).map(String::as_str) == Some("read") => {
+            crate::cli_contract::admit(&args[1..])
+                .map_err(|refusal| format!("{refusal}\n{}", usage(crate::pane_cli::USAGE)))?;
+            crate::pane_cli::parse_agent_read(&args[3..])
+                .map(CommandKind::Pane)
+                .map_err(|reason| wrong(reason, crate::pane_cli::USAGE))
+        }
+        Some("pane") => {
+            crate::cli_contract::admit(&args[1..])
+                .map_err(|refusal| format!("{refusal}\n{}", usage(crate::pane_cli::USAGE)))?;
+            crate::pane_cli::parse(&args[2..])
+                .map(CommandKind::Pane)
+                .map_err(|reason| wrong(reason, crate::pane_cli::USAGE))
+        }
         Some("agent") if args.get(2).map(String::as_str) == Some("catalog") => {
             crate::cli_contract::admit(&args[1..])
                 .map_err(|refusal| format!("{refusal}\n{}", usage(crate::agent_cli::USAGE)))?;
@@ -381,6 +399,13 @@ pub fn parse_args(args: &[String]) -> Result<CommandKind, String> {
                 parse_workspace_memory(&words)
             }
             Some("bootstrap") if iter.next().is_none() => Ok(CommandKind::WorkspaceBootstrap),
+            Some("purpose") => {
+                crate::cli_contract::admit(&args[1..])
+                    .map_err(|refusal| format!("{refusal}\n{}", usage(crate::pane_cli::USAGE)))?;
+                crate::pane_cli::parse_purpose(&args[3..])
+                    .map(CommandKind::Pane)
+                    .map_err(|reason| wrong(reason, crate::pane_cli::USAGE))
+            }
             Some("status") => match (iter.next().map(String::as_str), iter.next()) {
                 (Some("--hook"), None) => Ok(CommandKind::StatusHook),
                 _ => Err("usage: hide workspace status --hook < report".to_owned()),
@@ -390,7 +415,7 @@ pub fn parse_args(args: &[String]) -> Result<CommandKind, String> {
                 (Some("--hook"), None) => Ok(CommandKind::WorkspaceHookInfo),
                 _ => Err("usage: hide workspace info [--hook]".to_owned()),
             },
-            _ => Err("usage: hide workspace info".to_owned()),
+            _ => Err("usage: hide workspace info | purpose <text>".to_owned()),
         },
         Some("file") => parse_open(iter, true),
         Some("diff") => parse_open(iter, false),
@@ -758,6 +783,7 @@ pub fn run(kind: CommandKind) -> Result<(), String> {
                     | CommandKind::Ps(_)
                     | CommandKind::AgentSleep { .. }
                     | CommandKind::Device(_)
+                    | CommandKind::Pane(_)
                     | CommandKind::WorkspaceInfo
                     | CommandKind::WorkspaceHookInfo
                     | CommandKind::ObservationHook { .. }
@@ -792,6 +818,7 @@ pub fn run(kind: CommandKind) -> Result<(), String> {
         CommandKind::Ps(options) => crate::ps_cli::run(&env, &options),
         CommandKind::AgentSleep { id, actor } => crate::agent_cli::run_sleep(&env, id, actor),
         CommandKind::Device(cli) => crate::device_cli::run(&env, &cli),
+        CommandKind::Pane(cli) => crate::pane_cli::run(&env, cli),
         CommandKind::Delivery(command) => {
             if matches!(&command, herdr_core::delivery::Command::Agents { .. }) {
                 crate::agent_cli::run(&env, command)

@@ -33,6 +33,10 @@ pub struct Prepared {
     actor: Actor,
     target: Option<Observation>,
     command: Command,
+    /// For a new `--force` letter, the engine of its recipient's machine,
+    /// whose composer is read before the letter is recorded (PRD
+    /// engine-bundle-1 D-14).
+    forced: Option<crate::engine::SharedEngine>,
 }
 
 /// Immutable notification receipt. Reserving it consumes the attempt before
@@ -142,7 +146,15 @@ impl Prepared {
             actor,
             target,
             command,
+            forced: None,
         }
+    }
+
+    /// Reads the recipient's composer through `engine` before a forced
+    /// letter is recorded.
+    pub(crate) fn forced_through(mut self, engine: crate::engine::SharedEngine) -> Self {
+        self.forced = Some(engine);
+        self
     }
 
     /// Called by the request worker after owner-thread preparation. Its wait
@@ -150,6 +162,22 @@ impl Prepared {
     pub fn run(self, timeout: Duration) -> Result<Value, String> {
         if let Command::Agents { command } = self.command {
             return crate::coordination::run(self.client, self.authority, self.actor, command);
+        }
+        // A forced letter is recorded only when its recipient shows nothing
+        // of a person's in its composer now; nothing is recorded or typed
+        // otherwise. The doorbell reads it again before it types.
+        if let (Some(engine), Some(target)) = (&self.forced, &self.target)
+            && let Err(code) = super::composer::forced_clear(
+                engine.as_ref(),
+                &target.raw_pane_id,
+                &target.actor.kind,
+            )
+        {
+            crate::diagnostic!(
+                json!({"component":"delivery","kind":"delivery.forced_refused",
+                "pane_id":target.actor.pane_id,"reason":code})
+            );
+            return Err(code.to_owned());
         }
         self.client.submit(
             Effect::Command {
@@ -243,6 +271,12 @@ pub(crate) enum Effect {
         id: String,
         recipient: Actor,
         sent: bool,
+    },
+    /// A forced letter whose recipient's composer showed text when the
+    /// doorbell was about to type it: it stays, as an ordinary letter.
+    Deferred {
+        id: String,
+        recipient: Actor,
     },
 }
 
@@ -666,6 +700,16 @@ fn apply(ledger: &mut Ledger, request: &Request, now: u64) -> Result<(Value, boo
                 } else {
                     letter.bell_errors = letter.bell_errors.saturating_add(1).min(3);
                 }
+            }
+            return Ok((Value::Null, false));
+        }
+        Effect::Deferred { id, recipient } => {
+            if let Some(letter) = ledger.letters.iter_mut().find(|letter| {
+                letter.id == *id
+                    && letter.recipient.same_identity(recipient)
+                    && letter.state == super::ledger::State::Pending
+            }) {
+                letter.forced = false;
             }
             return Ok((Value::Null, false));
         }
@@ -1711,6 +1755,7 @@ mod tests {
                 body: "private".into(),
                 kind: "request".into(),
                 now: false,
+                force: false,
             },
         ] {
             assert_eq!(
@@ -1768,6 +1813,7 @@ mod tests {
                 body: "private".into(),
                 kind: "request".into(),
                 now: false,
+                force: false,
             };
             assert_eq!(
                 client
@@ -1864,6 +1910,7 @@ mod tests {
                         body: "private fixture".into(),
                         kind: "request".into(),
                         now: false,
+                        force: false,
                     }),
                 },
                 Duration::from_secs(5),
@@ -2166,6 +2213,7 @@ mod tests {
                     body: body.into(),
                     kind: "request".into(),
                     now: false,
+                    force: false,
                 }),
             },
             reply: mpsc::sync_channel(1).0,

@@ -581,6 +581,7 @@ impl Runtime {
                             // Hide reads no answer, and the note wakes no one.
                             kind: "progress".into(),
                             now: false,
+                            force: false,
                         },
                     );
                     if let Err(code) = prepared.run(NOTE_CALL) {

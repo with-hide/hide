@@ -146,7 +146,7 @@ Every worker's brief, change or verify, says in its first line what the node is,
 - the branch and worktree the spawn made, and that commits go on that branch only;
 - the checks the diff touches, by the repository's own commands;
 - the pull request rules: the repository's template, its title form, no agent attribution anywhere;
-- the limits: start no agents of its own, merge nothing, never touch the operator's app or Herdr server, never force push or rebase, stop and write a letter when the goal or scope would change;
+- the limits: start no agents of its own, merge nothing, never touch the operator's app, terminals or panes, never force push or rebase, stop and write a letter when the goal or scope would change;
 - what to send back and when: a `--kind progress` letter with its plan before code, and a `--kind report` letter with the pull request number and the evidence when done.
 
 ## 3. Starting

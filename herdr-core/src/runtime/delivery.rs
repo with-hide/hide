@@ -1168,7 +1168,26 @@ impl Runtime {
                 .actor
                 .require_native_identity()?;
         }
-        Ok(Prepared::new(
+        // A forced letter is typed into a pane that runs now, so its
+        // composer can be read; a sleeping recipient is woken by an ordinary
+        // letter instead (PRD engine-bundle-1 D-14).
+        let forced = match (&command, &target) {
+            (Command::Send { force: true, .. }, Some(target)) if !repeated => {
+                let live = self
+                    .delivery_observations
+                    .get(&target.actor.pane_id)
+                    .is_some_and(|observation| observation.actor.same_identity(&target.actor));
+                if !live {
+                    return Err("force_target_asleep".into());
+                }
+                Some(
+                    self.delivery_engine(&target.actor.device_id)
+                        .ok_or("delivery_unavailable")?,
+                )
+            }
+            _ => None,
+        };
+        let prepared = Prepared::new(
             self.delivery_client.clone().ok_or("delivery_unavailable")?,
             Authority {
                 caller: caller.to_owned(),
@@ -1177,7 +1196,11 @@ impl Runtime {
             actor,
             target,
             command,
-        ))
+        );
+        Ok(match forced {
+            Some(engine) => prepared.forced_through(engine),
+            None => prepared,
+        })
     }
 
     pub(crate) fn install_delivery_client(&mut self, client: Client) {
@@ -1828,6 +1851,7 @@ pub(crate) mod tests {
     const WAITED: crate::delivery::doorbell::Patience = crate::delivery::doorbell::Patience {
         arrived_at_unix_ms: 0,
         now: false,
+        forced: false,
     };
     use crate::delivery::worker::Worker;
     use crate::handle::ChangeNotifier;
@@ -2272,6 +2296,7 @@ pub(crate) mod tests {
             let patience = Patience {
                 arrived_at_unix_ms: 0,
                 now: true,
+                forced: false,
             };
             assert_eq!(
                 judge(&observed(&guard, "recipient"), patience, u64::MAX),
@@ -2995,6 +3020,7 @@ pub(crate) mod tests {
             body: format!("{intent} body"),
             kind: "request".into(),
             now,
+            force: false,
         };
         let sender_context = authority(&sender).context;
         let mut sent = Vec::new();
@@ -3190,6 +3216,7 @@ pub(crate) mod tests {
                     body: "done".into(),
                     kind: "report".into(),
                     now: false,
+                    force: false,
                 },
             )
             .unwrap();
@@ -3260,6 +3287,7 @@ pub(crate) mod tests {
             body: "done".into(),
             kind: "report".into(),
             now: false,
+            force: false,
         }
     }
 
@@ -3438,6 +3466,7 @@ pub(crate) mod tests {
                 body: "hello".into(),
                 kind: "request".into(),
                 now: false,
+                force: false,
             },
             Command::Inbox,
             Command::WatchStart {
@@ -3527,6 +3556,7 @@ pub(crate) mod tests {
                         body: "private".into(),
                         kind: "request".into(),
                         now: false,
+                        force: false,
                     },
                 )
                 .unwrap()
@@ -4119,6 +4149,7 @@ pub(crate) mod tests {
                 body: "read me after a restart".into(),
                 kind: "request".into(),
                 now: false,
+                force: false,
             },
         )
         .unwrap();

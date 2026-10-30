@@ -26,6 +26,11 @@ pub enum Command {
         /// letters-to-busy-agents D-05).
         #[serde(default)]
         now: bool,
+        /// `hide request send --force`: typed into the recipient's input now,
+        /// even while it works, once its composer was read empty (PRD
+        /// engine-bundle-1 D-14); see `Letter::forced`.
+        #[serde(default)]
+        force: bool,
     },
     Reply {
         id: String,
@@ -214,6 +219,7 @@ pub(crate) fn send(
         bell_line: None,
         bell_turn: None,
         immediate: false,
+        forced: false,
         tool_handovers: 0,
         // A letter to a machine with a clock waits on that clock from now;
         // the store gives one to a machine a letter waits on.
@@ -245,6 +251,7 @@ pub fn apply(
             body,
             kind,
             now: immediate,
+            force,
             ..
         } => {
             let mut letter = send(
@@ -257,13 +264,14 @@ pub fn apply(
                 None,
                 now,
             )?;
-            if *immediate
+            if (*immediate || *force)
                 && let Some(stored) = ledger
                     .letters
                     .iter_mut()
                     .find(|stored| stored.id == letter.id)
             {
                 stored.immediate = true;
+                stored.forced = *force;
                 letter = stored.clone();
             }
             Ok(json!(letter))
@@ -817,6 +825,7 @@ mod tests {
                 body: "private".into(),
                 kind: "request".into(),
                 now: false,
+                force: false,
             },
         ] {
             assert_eq!(
@@ -967,6 +976,7 @@ mod tests {
                 body: "changed".into(),
                 kind: "request".into(),
                 now: false,
+                force: false,
             },
             2,
         )

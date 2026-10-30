@@ -164,6 +164,7 @@ impl AnswerWork {
         crate::delivery::doorbell::Patience {
             arrived_at_unix_ms: self.at_unix_ms,
             now: false,
+            forced: false,
         }
     }
 }

@@ -991,6 +991,7 @@ mod tests {
             bell_turn: None,
             intake_from: None,
             immediate: false,
+            forced: false,
             tool_handovers: 0,
         }
     }

@@ -1315,6 +1315,15 @@ pub(crate) fn delivery_next_action(code: &str) -> &'static str {
             "Install the agent CLI on the device so it is on the device's PATH, then run the command again"
         }
         "spawn_busy" => "The first request is still running; wait, then run the same command again",
+        "composer_not_empty" => {
+            "Someone is typing in the recipient's input, so nothing was typed or recorded; send it again without --force, and it is delivered once they submit"
+        }
+        "composer_unconfirmed" => {
+            "Hide could not read the recipient's input as empty (a menu or dialog may be open), so nothing was typed or recorded; send it again without --force"
+        }
+        "force_target_asleep" => {
+            "The recipient is asleep; send it again without --force, and a request or block wakes it"
+        }
         "machine_not_permitted" => {
             "Run the command from an agent on the machine that runs Hide, or leave out --machine"
         }
@@ -1501,6 +1510,9 @@ enum ScopedRequest {
     },
     /// `hide device`: the core's own device registrations.
     Device(herdr_core::device_command::DeviceCommand),
+    /// `hide pane`, `hide agent read` and `hide workspace purpose`: run
+    /// through the core's engine, which needs no shell.
+    Pane(herdr_core::pane_command::PaneCommand),
     /// `hide <path>`: a folder of the caller's machine opened as a project
     /// (`project_open`).
     ProjectOpen(String),
@@ -1522,6 +1534,7 @@ impl ScopedRequest {
                 | Self::Ps { .. }
                 | Self::AgentSleep { .. }
                 | Self::Device(..)
+                | Self::Pane(..)
                 | Self::ProjectOpen(..)
         )
     }
@@ -1672,6 +1685,11 @@ async fn scoped_client_loop(
                         .ok()
                         .filter(herdr_core::device_command::DeviceCommand::valid)
                         .map(ScopedRequest::Device),
+                        Some("pane") => serde_json::from_value::<
+                            herdr_core::pane_command::PaneCommand,
+                        >(value["command"].clone())
+                        .ok()
+                        .map(ScopedRequest::Pane),
                         Some("project_open") => value["path"]
                             .as_str()
                             .filter(|path| herdr_core::project_open::valid_path(path))
@@ -1684,6 +1702,7 @@ async fn scoped_client_loop(
                         || (value["type"] != "delivery"
                             && value["type"] != "mission"
                             && value["type"] != "plan"
+                            && value["type"] != "pane"
                             && text.len() > 16 * 1024)
                         || request_id.is_empty()
                         || request_id.len() > 64
@@ -1834,6 +1853,16 @@ async fn scoped_client_loop(
                                     &path,
                                     &command_request_id,
                                 )?,
+                                ScopedRequest::Pane(command) => {
+                                    let refusal = |code: String| {
+                                        let next = herdr_core::pane_command::next_action(&code)
+                                            .unwrap_or_else(|| crate::server::delivery_next_action(&code));
+                                        (code, next)
+                                    };
+                                    core.prepare_pane(&cap.context.device_id, &cap.pane_id, &cap.context, command)
+                                        .and_then(herdr_core::pane_command::Prepared::run)
+                                        .map_err(refusal)?
+                                }
                                 ScopedRequest::Device(command) => {
                                     core.device_command(&cap.context.device_id, command)
                                         .map_err(|code| {
