@@ -10,6 +10,7 @@ import os from "node:os";
 import path from "node:path";
 import { linkFixtureTranscripts, type HerdrFixture } from "../../web/e2e/herdr-fixture";
 import { bundledExecutable, linkBundle } from "../../web/e2e/bundled-app";
+import { dumpOnFailure, pageSide } from "../../web/e2e/failure-dump";
 import { aiSettingsFile } from "../../web/e2e/hided-fixture";
 import { ownUntilWorkerExit } from "../../web/e2e/worker-owned";
 import { endWindowsProcesses, fixtureExecutable, fixtureHomeEnv, fixtureLoginShellPath, fixtureOpenCommand, fixtureToolPath, inheritedFixtureEnv } from "../../web/e2e/platform-fixture";
@@ -425,19 +426,21 @@ export async function launch(
  */
 export async function relaunch(env: Record<string, string>, { appDir = DESKTOP_DIR }: { appDir?: string } = {}): Promise<ElectronApplication> {
   const app = await start(appDir, env);
-  await expect
-    .poll(
-      () =>
-        app.evaluate(async ({ BrowserWindow }) => {
-          const window = BrowserWindow.getAllWindows()[0];
-          if (!window || window.webContents.isLoading()) return false;
-          return window.webContents
-            .executeJavaScript("document.querySelector('[data-main-screen], [data-workspace-screen]') !== null")
-            .catch(() => false) as Promise<boolean>;
-        }),
-      { timeout: 30_000 },
-    )
-    .toBe(true);
+  await dumpOnFailure("shell wait", () => shellWaitSides(app), () =>
+    expect
+      .poll(
+        () =>
+          app.evaluate(async ({ BrowserWindow }) => {
+            const window = BrowserWindow.getAllWindows()[0];
+            if (!window || window.webContents.isLoading()) return false;
+            return window.webContents
+              .executeJavaScript("document.querySelector('[data-main-screen], [data-workspace-screen]') !== null")
+              .catch(() => false) as Promise<boolean>;
+          }),
+        { timeout: 30_000 },
+      )
+      .toBe(true),
+  );
   return app;
 }
 
@@ -448,22 +451,83 @@ export async function relaunch(env: Record<string, string>, { appDir = DESKTOP_D
  */
 export async function shellPage(app: ElectronApplication): Promise<Page> {
   let shell: Page | null = null;
-  await expect
-    .poll(
-      async () => {
-        for (const page of app.windows()) {
-          const drawn = await page.locator("[data-main-screen], [data-workspace-screen]").count().catch(() => 0);
-          if (drawn > 0) {
-            shell = page;
-            return true;
+  await dumpOnFailure("shell wait", () => shellWaitSides(app), () =>
+    expect
+      .poll(
+        async () => {
+          for (const page of app.windows()) {
+            const drawn = await page.locator("[data-main-screen], [data-workspace-screen]").count().catch(() => 0);
+            if (drawn > 0) {
+              shell = page;
+              return true;
+            }
           }
-        }
-        return false;
-      },
-      { timeout: 30_000 },
-    )
-    .toBe(true);
+          return false;
+        },
+        { timeout: 30_000 },
+      )
+      .toBe(true),
+  );
   return shell!;
+}
+
+/** The longest one read of a side may take: a renderer or a main process that stopped answering is itself the finding. */
+const SIDE_READ_MS = 5_000;
+
+function sideRead<T>(read: () => Promise<T>): Promise<T | string> {
+  let timer: NodeJS.Timeout | undefined;
+  const late = new Promise<string>((resolve) => {
+    timer = setTimeout(() => resolve(`no answer within ${SIDE_READ_MS} ms`), SIDE_READ_MS);
+  });
+  return Promise.race([read().catch((error: unknown) => `failed: ${String(error)}`), late]).finally(() => clearTimeout(timer));
+}
+
+/**
+ * Each side of a wait for the shell that gave up (with-hide/hide-private#328),
+ * where the private daemon had started and no view had reported its size: the
+ * host's log of its discovery and window, each window as the main process
+ * sees it (address path, whether it is loading or its renderer is gone, what
+ * the page drew), and each page Playwright reports with what it requested.
+ * Paths only: an address's hash carries the daemon's token.
+ */
+async function shellWaitSides(app: ElectronApplication): Promise<unknown> {
+  const windows = await sideRead(() =>
+    app.evaluate(({ BrowserWindow }) =>
+      Promise.all(
+        BrowserWindow.getAllWindows().map(async (window) => {
+          const contents = window.webContents;
+          const drawn = contents.isCrashed() || contents.isLoading()
+            ? null
+            : await contents
+                .executeJavaScript(
+                  "({ readyState: document.readyState, mounted: (document.getElementById('root')?.childElementCount ?? 0) > 0, shell: document.querySelector('[data-main-screen], [data-workspace-screen]') !== null, status: document.querySelector('[data-status]:not([hidden])')?.getAttribute('data-status') ?? null, text: (document.body?.innerText ?? '').slice(0, 200) })",
+                )
+                .catch((error: unknown) => `failed: ${String(error)}`);
+          return {
+            id: window.id,
+            visible: window.isVisible(),
+            path: (() => {
+              try {
+                const url = new URL(contents.getURL());
+                return `${url.protocol}//${url.host}${url.pathname}`;
+              } catch {
+                return contents.getURL().split("#")[0];
+              }
+            })(),
+            loading: contents.isLoading(),
+            crashed: contents.isCrashed(),
+            drawn,
+          };
+        }),
+      ),
+    ),
+  );
+  const pages = await Promise.all(app.windows().map((page) => sideRead(() => pageSide(page))));
+  // The host's own log, the last of it: discovery, the CLI's connect records and the window's loads.
+  const logs = await sideRead(() => app.evaluate(({ app: host }) => host.getPath("logs")));
+  const log = typeof logs === "string" && path.isAbsolute(logs) ? path.join(logs, "desktop.log") : null;
+  const host = log && fs.existsSync(log) ? fs.readFileSync(log, "utf8").split("\n").filter(Boolean).slice(-40) : `no host log (${logs})`;
+  return { windows, pages, host };
 }
 
 /**
