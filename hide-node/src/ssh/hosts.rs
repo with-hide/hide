@@ -133,10 +133,12 @@ impl Reader<'_> {
                         Err(error) => {
                             // A folder that could not be read names unknown
                             // Hosts, as a config that could not be read does;
-                            // a bound that cut the read leaves it incomplete.
+                            // a bound that cut the read leaves it incomplete,
+                            // and never clears what an earlier file could
+                            // not read.
                             self.found.aliases.clear();
                             self.found.truncated = true;
-                            self.found.unreadable = error == IncludeError::Unreadable;
+                            self.found.unreadable |= error == IncludeError::Unreadable;
                             self.found.include_failed = true;
                             return;
                         }

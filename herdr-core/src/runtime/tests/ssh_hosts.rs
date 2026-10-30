@@ -376,3 +376,33 @@ fn an_include_folder_that_cannot_be_opened_fails_the_first_run_read_with_retry()
         Some(crate::model::FirstRunStep::Devices)
     );
 }
+
+/// A file the config includes that could not be read keeps the read
+/// unreadable even when a later wildcard Include is then cut at the file
+/// bound: the step still answers with Retry, not with an incomplete list.
+#[test]
+fn an_unreadable_include_stays_unreadable_past_a_later_include_bound() {
+    let shared = first_run_runtime(
+        "Host first\nInclude unreadable\nInclude many/*\n",
+        Arc::new(|_, _, _| panic!("an unreadable config resolves nothing")),
+    );
+    let home = shared.lock().unwrap().home_path.clone().unwrap();
+    // A folder where a config file should be cannot be read as one.
+    std::fs::create_dir_all(home.join(".ssh/unreadable")).unwrap();
+    std::fs::create_dir_all(home.join(".ssh/many")).unwrap();
+    for index in 0..=64 {
+        std::fs::write(home.join(format!(".ssh/many/{index:03}")), "Host extra\n").unwrap();
+    }
+    assert!(
+        shared
+            .lock()
+            .unwrap()
+            .dispatch_json(&event("herdr_profiles_list"))
+    );
+    wait(&shared, "the device listing", |runtime| {
+        runtime.snapshot().status.herdr_profiles.state != "loading"
+    });
+    let runtime = shared.lock().unwrap();
+    assert_eq!(runtime.snapshot().status.herdr_profiles.state, "failed");
+    assert!(runtime.snapshot().status.herdr_profiles.profiles.is_empty());
+}
