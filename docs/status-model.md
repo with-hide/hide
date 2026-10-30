@@ -57,6 +57,11 @@ A decision the Conductor waits on reaches the operator through the Conductor's o
 The row then stands in Needs You, its line reads `판단 · <line>` (`mission.askDecision`) and its row and mission chips keep the mission's progress with a `!` in the decision colour; a decision answered from the map or in the Conductor's pane, cleared by the Conductor, or ended with the mission is lifted from the row at once, and a new one replaces the line.
 A wake the core sends the Conductor for a pull request change is a letter from `hide:conductor`, delivered and read like any other ([delivery.md: Missions](delivery.md#missions)).
 
+### A handed plan step adds no status
+
+A child a plan step was handed to (`hide agent spawn --parent here --plan-node <key>`, PRD hide-plan-delegate) is an ordinary delegated child: its row reads Working or Seen like any delegated row, its report or block reaches its parent as a letter and turns the parent unread as a descendant's change does, and its sleep follows the same rule.
+Where the step stands, 보고 옴, 막힘 or 닫힘, lives only on the plan's step (`delegation.state`) and is drawn only on the plan's chip and map ([delivery.md: Handing a step to a child](delivery.md#handing-a-step-to-a-child)); it adds no attention state, group, mark or notification.
+
 ### A plan waiting for review is a question
 
 A plan an agent put up with `--ask` (PRD hide-plan D-12, D-30), and a mission decision on its Conductor's row (above), adds no status, mark, colour or group: the core lays it on the agent's row as the question it is, a `user_turn` of kind question with no text and the row's `ask_subject` `{cause: "plan_review", steps}`, before the read axis and the lineage run, so the row waits on the operator and the ask's own path carries it once.
