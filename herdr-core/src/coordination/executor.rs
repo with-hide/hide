@@ -923,9 +923,7 @@ fn spawn(
                 // Herdr, the folder's own HEAD.
                 let start = node
                     .as_deref()
-                    .map(|node| crate::live::new_branch_start(node, repo, None))
-                    .transpose()?
-                    .flatten();
+                    .and_then(|node| crate::live::new_branch_start(node, repo, None));
                 let mut params =
                     crate::wire::worktree_create_params(repo, branch, start.as_deref(), false)?;
                 params["label"] = json!(format!("hide:{}", reserved.id));

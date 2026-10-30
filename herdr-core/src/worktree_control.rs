@@ -869,7 +869,7 @@ pub fn spawn_worktree_create(
             context.host.as_ref(),
             &request.repository_root,
             request.base_branch.take(),
-        )?;
+        );
         Ok(())
     })
 }
@@ -886,7 +886,7 @@ pub(crate) fn new_branch_start(
     host: &dyn crate::node_access::NodeLink,
     repository_root: &str,
     base: Option<String>,
-) -> Result<Option<String>, String> {
+) -> Option<String> {
     newest_start(&NodeGit(host), repository_root, base)
 }
 
@@ -894,38 +894,49 @@ fn newest_start(
     git: &dyn GitCommands,
     repository_root: &str,
     base: Option<String>,
-) -> Result<Option<String>, String> {
+) -> Option<String> {
     // A detached folder has no branch to compare; Herdr starts from its HEAD.
     let branch = match &base {
         Some(base) => base.clone(),
         None => match git.run(repository_root, GitCommand::CurrentBranch) {
             Ok(branch) => branch.trim().to_owned(),
-            Err(_) => return Ok(None),
+            Err(_) => return None,
         },
     };
-    let remote = format!("origin/{branch}");
+    if branch == "HEAD" {
+        return base;
+    }
     let Ok(remote_commit) = git.run(
         repository_root,
         GitCommand::RefCommit {
-            name: remote.clone(),
+            name: format!("origin/{branch}"),
         },
     ) else {
-        return Ok(base);
+        return base;
     };
-    let unpushed = git
-        .run(
-            repository_root,
-            GitCommand::CountCommits {
-                base: remote,
-                head: branch.clone(),
-            },
-        )
-        .map_err(|error| format!("compare {branch} with origin/{branch}: {error}"))?;
-    Ok(if unpushed.trim() == "0" {
-        Some(remote_commit.trim().to_owned())
-    } else {
-        base
-    })
+    let remote_commit = remote_commit.trim().to_owned();
+    // The comparison is against the commit read above, so a fetch landing
+    // between the two reads cannot start the branch somewhere unchecked.
+    // One that cannot be made (no local branch of that name, a link that
+    // stopped answering) starts from the base as given, as before.
+    match git.run(
+        repository_root,
+        GitCommand::CountCommits {
+            base: remote_commit.clone(),
+            head: branch.clone(),
+        },
+    ) {
+        Ok(unpushed) if unpushed.trim() == "0" => Some(remote_commit),
+        Ok(_) => base,
+        Err(error) => {
+            crate::diagnostic!(serde_json::json!({
+                "component": "worktree_control",
+                "kind": "worktree_start.unread",
+                "message": error,
+            }));
+            base
+        }
+    }
 }
 
 /// A worktree on a branch that already exists, a pull request's (PRD
@@ -4958,7 +4969,10 @@ mod tests {
         std::fs::create_dir_all(&origin).unwrap();
         git_in(&origin, &["init", "-q", "-b", "main"]);
         git_in(&origin, &["config", "user.name", "Fixture"]);
-        git_in(&origin, &["config", "user.email", "fixture@example.invalid"]);
+        git_in(
+            &origin,
+            &["config", "user.email", "fixture@example.invalid"],
+        );
         git_in(&origin, &["config", "commit.gpgsign", "false"]);
         let local_head = commit_in(&origin, "a");
         let clone = folder.join("clone");
@@ -4988,28 +5002,41 @@ mod tests {
         let root = clone.to_str().unwrap();
         // Named, and taken from the folder's own branch when none is named.
         assert_eq!(
-            new_branch_start(&host, root, Some("main".into())).unwrap(),
+            new_branch_start(&host, root, Some("main".into())),
             Some(fetched.clone())
         );
-        assert_eq!(new_branch_start(&host, root, None).unwrap(), Some(fetched));
+        assert_eq!(new_branch_start(&host, root, None), Some(fetched));
     }
 
     #[test]
-    fn a_local_base_with_unpushed_commits_or_no_fetched_copy_is_started_from_as_given() {
+    fn a_local_base_with_unpushed_commits_no_fetched_copy_or_no_local_branch_is_started_from_as_given()
+     {
         let folder = tempfile::tempdir().unwrap();
         let (clone, _, _) = clone_behind_origin(folder.path());
         let host = OwnHost(hide_host::serve::Env::standalone(None));
         let root = clone.to_str().unwrap();
         commit_in(&clone, "mine");
         assert_eq!(
-            new_branch_start(&host, root, Some("main".into())).unwrap(),
+            new_branch_start(&host, root, Some("main".into())),
             Some("main".into())
         );
-        assert_eq!(new_branch_start(&host, root, None).unwrap(), None);
+        assert_eq!(new_branch_start(&host, root, None), None);
         git_in(&clone, &["branch", "-q", "local-only"]);
         assert_eq!(
-            new_branch_start(&host, root, Some("local-only".into())).unwrap(),
+            new_branch_start(&host, root, Some("local-only".into())),
             Some("local-only".into())
+        );
+        // A base only origin has cannot be compared and is handed on as given.
+        let origin = folder.path().join("origin");
+        git_in(&origin, &["branch", "-q", "remote-only"]);
+        git_in(&clone, &["fetch", "-q", "origin"]);
+        assert_eq!(
+            new_branch_start(&host, root, Some("remote-only".into())),
+            Some("remote-only".into())
+        );
+        assert_eq!(
+            new_branch_start(&host, root, Some("HEAD".into())),
+            Some("HEAD".into())
         );
     }
 }
