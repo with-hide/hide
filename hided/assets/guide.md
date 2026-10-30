@@ -125,6 +125,7 @@ hide memory search <words> | show <card> | add <text> | stale <card> <reason>
 ## Where to go next
 
 - A web page, a local app in a browser, or what a page shows: run `hide browser help` and follow it.
-- A goal to carry out with several agents, or a mission to start or take over as its Conductor: run `hide mission help` and follow it. This guide is the way in for a mission; there is no separate Conductor skill.
+- Work the operator wants split across several agents: plan it and hand only the steps that deliver something to other agents, as `hide plan help` says; research stays with your own subagents.
+- A mission the operator asks for or agrees to, or one to take over as its Conductor: run `hide mission help` and follow it. This guide is the way in for a mission; there is no separate Conductor skill.
 - A worker or reviewer of a mission node: record your lines with `hide mission record`, as `hide mission help` says under For workers and checkers.
 - A task of more than a few steps, or an operator who asks you to plan first or have the plan reviewed: run `hide plan help` and follow it.

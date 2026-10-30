@@ -427,6 +427,8 @@ impl Spawner {
             self.actor.clone(),
             Command::Spawn {
                 mission: None,
+                plan_node: None,
+                plan: None,
                 parent: parent.map(str::to_owned),
                 machine: machine.map(str::to_owned),
                 name: "worker".into(),
@@ -511,6 +513,8 @@ fn a_spawn_desk_asks_for_starts_with_no_record_made_beforehand_and_takes_its_pla
         let command = crate::delivery::Command::Agents {
             command: Command::Spawn {
                 mission: None,
+                plan_node: None,
+                plan: None,
                 parent: None,
                 machine: Some(DEVICE.into()),
                 // The device's Herdr names its one agent `worker`.
@@ -1093,6 +1097,8 @@ fn a_spawn_by_a_device_caller_is_refused_before_anything_is_made() {
             actor.clone(),
             Command::Spawn {
                 mission: None,
+                plan_node: None,
+                plan: None,
                 parent: Some("here".into()),
                 machine: Some(machine.into()),
                 name: "worker".into(),

@@ -3,8 +3,8 @@
 use crate::env::{self, Env};
 use herdr_core::{coordination::Command, delivery::Command as Delivery};
 use std::collections::BTreeMap;
-pub const USAGE: &str = "hide agent register [--check] [--machine <device id>] --host-scope <scope> --session <session> --instance <terminal> --name <name> --pane <pane> [--parent <id>] [--project <path>]\nhide agent list\nhide agent show <id|here>\nhide agent end <id> [--actor <id>]\nhide agent sleep <id> [--actor <id>]\nhide agent archive <id> [--actor <id>]\nhide agent catalog [--machine <device id>]\nhide agent spawn [--parent <here|id>] [--machine <device id>] [--beside] --name <name> --intent <key> --kind <kind> --repo <path> --branch <branch> [--path <path>] [--model <model>] [--effort <effort>] [--brief <text> | --brief-file <path>] [-- <native args>]";
-pub const SPAWN_HELP: &str = "hide agent spawn [--parent <here|id>] [--machine <device id>] [--beside] --name <name> --intent <key> --kind <kind> --repo <path> --branch <branch> [--path <path>] [--model <model>] [--effort <effort>] [--brief <text> | --brief-file <path>] [-- <native args>]
+pub const USAGE: &str = "hide agent register [--check] [--machine <device id>] --host-scope <scope> --session <session> --instance <terminal> --name <name> --pane <pane> [--parent <id>] [--project <path>]\nhide agent list\nhide agent show <id|here>\nhide agent end <id> [--actor <id>]\nhide agent sleep <id> [--actor <id>]\nhide agent archive <id> [--actor <id>]\nhide agent catalog [--machine <device id>]\nhide agent spawn [--parent <here|id>] [--machine <device id>] [--beside] --name <name> (--intent <key> | --plan-node <key>) --kind <kind> --repo <path> --branch <branch> [--path <path>] [--model <model>] [--effort <effort>] [--brief <text> | --brief-file <path>] [-- <native args>]";
+pub const SPAWN_HELP: &str = "hide agent spawn [--parent <here|id>] [--machine <device id>] [--beside] --name <name> (--intent <key> | --plan-node <key>) --kind <kind> --repo <path> --branch <branch> [--path <path>] [--model <model>] [--effort <effort>] [--brief <text> | --brief-file <path>] [-- <native args>]
 
 Choose the model and effort with --model and --effort, not after --:
   Hide starts the agent with them and starts it with them again whenever it wakes, forks or reopens the agent.
@@ -16,6 +16,13 @@ Give the agent its brief with --brief <text> or --brief-file <path> (at most 16 
   without anyone typing and a later wake finds it. A mission node's worker (an intent of the form
   <mission-id>:<node-key>) needs one; without it the spawn is refused with mission_brief_missing.
   Running the same command again never submits the brief twice.
+
+Hand a step of your own plan to the agent with --parent here --plan-node <key> instead of --intent:
+  Hide makes the intent from your plan, the step and its attempt, and the step shows the agent on your plan's map.
+  The step's earlier steps must be done or dropped, the plan must not wait for the operator's review, and
+  your plans' children that have not ended or gone to sleep number at most 3. Running the same command again
+  returns the same agent while it works; after it sent block or its pane closed, the same command hands the
+  step to a new agent. An agent a plan or a mission started cannot start agents. See hide plan help.
 
 Choose responsibility when spawning:
   With --parent here (or your own id): delegate work you will supervise.
@@ -89,6 +96,7 @@ pub fn parse<'a>(mut args: impl Iterator<Item = &'a String>) -> Result<Parsed, S
                         "--machine",
                         "--name",
                         "--intent",
+                        "--plan-node",
                         "--kind",
                         "--repo",
                         "--branch",
@@ -157,7 +165,21 @@ pub fn parse<'a>(mut args: impl Iterator<Item = &'a String>) -> Result<Parsed, S
         }
         "spawn" => {
             let name = take("--name")?;
-            let intent = take("--intent")?;
+            // A plan step's intent is the core's to make from the plan, the
+            // step and its attempt (PRD hide-plan-delegate B1).
+            let plan_node = take("--plan-node").ok();
+            if plan_node
+                .as_deref()
+                .is_some_and(|key| key.starts_with('-') || !herdr_core::dag::valid_key(key))
+            {
+                return Err("--plan-node takes a step key of your plan".into());
+            }
+            let intent = match (&plan_node, take("--intent").ok()) {
+                (Some(_), Some(_)) => return Err("Give --intent or --plan-node, not both".into()),
+                (Some(_), None) => "plan".to_owned(),
+                (None, Some(intent)) => intent,
+                (None, None) => return Err("--intent is required".into()),
+            };
             let kind = take("--kind")?;
             let repo = take("--repo")?;
             let branch = take("--branch")?;
@@ -172,6 +194,8 @@ pub fn parse<'a>(mut args: impl Iterator<Item = &'a String>) -> Result<Parsed, S
                 command: Delivery::Agents {
                     command: Command::Spawn {
                         mission: None,
+                        plan_node,
+                        plan: None,
                         brief,
                         parent: flags.remove("--parent"),
                         machine: flags.remove("--machine"),
@@ -533,6 +557,39 @@ mod tests {
     /// the command runs, never both, with line breaks kept, and refused
     /// before the daemon is asked when it is blank or past a letter's body
     /// (PRD mission fixes (a)).
+    #[test]
+    fn a_plan_step_spawn_names_its_step_and_leaves_the_intent_to_the_core() {
+        fn args(intent: Option<&'static str>, step: Option<&'static str>) -> Vec<&'static str> {
+            let mut args = vec![
+                "spawn", "--parent", "here", "--name", "web", "--kind", "codex", "--repo",
+                "/fixture", "--branch", "web",
+            ];
+            if let Some(intent) = intent {
+                args.extend(["--intent", intent]);
+            }
+            if let Some(step) = step {
+                args.extend(["--plan-node", step]);
+            }
+            args
+        }
+        let Delivery::Agents {
+            command: Command::Spawn {
+                plan_node, plan, ..
+            },
+        } = parsed(&args(None, Some("web"))).unwrap().command
+        else {
+            panic!("spawn")
+        };
+        assert_eq!(plan_node.as_deref(), Some("web"));
+        assert_eq!(plan, None);
+        assert!(parsed(&args(Some("one"), Some("web"))).is_err());
+        assert_eq!(
+            parsed(&args(None, None)).unwrap_err(),
+            "--intent is required"
+        );
+        assert!(SPAWN_HELP.contains("--plan-node <key>"));
+    }
+
     #[test]
     fn spawn_takes_its_brief_from_text_or_a_file_and_explains_it_in_its_help() {
         let spawn = |extra: &[&str]| {
