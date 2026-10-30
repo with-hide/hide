@@ -769,6 +769,24 @@ impl Runtime {
                     return true;
                 }
             };
+        let pre_check = if payload.intent == Some(super::events::PrDelegateIntent::Review) {
+            match (&payload.request_id, repository_of_url(&pull_request.url)) {
+                (Some(request_id), Some(repo_name)) => Some((request_id.clone(), repo_name)),
+                // Without either the session cannot be told apart: it is
+                // still started, and its line reads as worked.
+                (request_id, repo_name) => {
+                    crate::diagnostic!(serde_json::json!({
+                        "component": "pull_requests", "kind": "pr_delegate.review_unfollowed",
+                        "pr": pull_request.number, "request": request_id,
+                        "repository_known": repo_name.is_some(),
+                    }));
+                    None
+                }
+            }
+        } else {
+            None
+        };
+        let number = u64::from(pull_request.number);
         let prompt = Some(payload.prompt.trim().to_owned()).filter(|prompt| !prompt.is_empty());
         let checkout = workspace
             .checkouts
@@ -779,7 +797,7 @@ impl Runtime {
             "project": workspace.path, "pr": pull_request.number, "node": machine,
             "checkout": checkout.map(|checkout| checkout.id.clone()),
         }));
-        match checkout {
+        let changed = match checkout {
             Some(checkout) => self.agent_start_in_checkout(AgentStartInCheckoutPayload {
                 target: None,
                 confirm_only: false,
@@ -809,7 +827,19 @@ impl Runtime {
                 },
                 true,
             ),
+        };
+        // Followed only once the start holds the slot: a refused start has
+        // already said so through the request's error.
+        if let Some((request_id, repo_name)) = pre_check
+            && self
+                .snapshot
+                .task_operation
+                .as_ref()
+                .is_some_and(|operation| operation.request_id.as_deref() == Some(&request_id))
+        {
+            self.follow_pre_check(request_id, repo_name, number);
         }
+        changed
     }
 }
 
@@ -1166,4 +1196,14 @@ impl Runtime {
             look_again: false,
         });
     }
+}
+
+/// `owner/name`, lowercase, of a pull request's GitHub address
+/// (`https://<host>/<owner>/<name>/pull/<n>`), as the link record keys it.
+fn repository_of_url(url: &str) -> Option<String> {
+    let path = url.split_once("://")?.1.split_once('/')?.1;
+    let mut parts = path.split('/');
+    let (owner, name) = (parts.next()?, parts.next()?);
+    (parts.next() == Some("pull") && !owner.is_empty() && !name.is_empty())
+        .then(|| format!("{owner}/{name}").to_ascii_lowercase())
 }

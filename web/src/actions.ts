@@ -1762,12 +1762,15 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
     },
 
     /** An agent started on a pull request's branch with `prompt` (D-12); it reports through `task_operation`. */
-    delegatePullRequest(workspace: { id: string; device_id: string }, prNumber: number, provider: ProviderKind, model: string | null, prompt: string, startKind: "agent_start" | "worktree_create") {
+    delegatePullRequest(workspace: { id: string; device_id: string }, prNumber: number, provider: ProviderKind, model: string | null, prompt: string, startKind: "agent_start" | "worktree_create", intent?: "review") {
       // A start on this machine comes forward through the core's follow, as
       // `createWorktree`'s does; a device's is opened once listed (`followStartedPane`).
-      const requestId = workspace.device_id === localDeviceId(rest()) ? startRequestId() : null;
-      if (requestId) beginOpening({ startRequestId: requestId, startKind });
-      dispatch({ schema_version: 2, kind: "pr_delegate", payload: { workspace_id: workspace.id, pr_number: prNumber, provider, ...(model ? { model } : {}), prompt, ...(requestId ? { request_id: requestId } : {}) } });
+      // A pre-check carries its request on a device too: the core follows
+      // it to the session it records as the pull request's agent review.
+      const local = workspace.device_id === localDeviceId(rest());
+      const requestId = local || intent === "review" ? startRequestId() : null;
+      if (requestId && local) beginOpening({ startRequestId: requestId, startKind });
+      dispatch({ schema_version: 2, kind: "pr_delegate", payload: { workspace_id: workspace.id, pr_number: prNumber, provider, ...(model ? { model } : {}), prompt, ...(requestId ? { request_id: requestId } : {}), ...(intent ? { intent } : {}) } });
     },
 
     /**

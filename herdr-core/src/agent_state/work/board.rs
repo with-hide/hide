@@ -313,7 +313,15 @@ fn standing(pr: &PullRequestSnapshot) -> Option<Placed> {
                 if !work.review_requests.is_empty() {
                     return Some(place("waiting", waiting_review(pr)));
                 }
-                return Some(place("needs_you", Reason::of("assign_reviewer")));
+                // Unless GitHub says review is still required its block is
+                // not review's, so the row does not say nobody was asked
+                // (PRD pr-review-status B4).
+                let kind = if pr.review == Some(ReviewDecision::ReviewRequired) {
+                    "assign_reviewer"
+                } else {
+                    "assign_reviewer_optional"
+                };
+                return Some(place("needs_you", Reason::of(kind)));
             }
             MergeState::Dirty | MergeState::Draft | MergeState::Unknown => return None,
         }
@@ -367,6 +375,7 @@ fn unjudged(query: ExtraQuery) -> Placed {
         ExtraQuery::Account => "account",
         ExtraQuery::ReviewRequests => "review_requests",
         ExtraQuery::MergeQueue => "merge_queue",
+        ExtraQuery::Reviews => "reviews",
     };
     place("waiting", Reason::of("unjudged").text(slug))
 }
@@ -620,7 +629,7 @@ fn rank(row: &Row) -> u8 {
         "review" => 2,
         "merge" => 3,
         "update" => 4,
-        "assign_reviewer" => 5,
+        "assign_reviewer" | "assign_reviewer_optional" => 5,
         "queued" => 0,
         _ => 6,
     }
@@ -730,13 +739,26 @@ mod tests {
         running.work.pending_checks = 4;
         let mut unreviewed = pr(4);
         unreviewed.work.merge_state = MergeState::Blocked;
+        unreviewed.review = Some(ReviewDecision::ReviewRequired);
+        // GitHub blocks it with no review decision: a block that is not review's.
+        let mut unrequired = pr(6);
+        unrequired.work.merge_state = MergeState::Blocked;
+        // Approved and still blocked: by a rule that is not review's.
+        let mut approved = pr(7);
+        approved.work.merge_state = MergeState::Blocked;
+        approved.review = Some(ReviewDecision::Approved);
         let mut asked = pr(5);
         asked.work.merge_state = MergeState::Blocked;
         asked.work.review_requests = vec![ReviewRequest {
             kind: ReviewRequestKind::User,
             name: "ann".into(),
         }];
-        let board = board(vec![dirty, behind, running, unreviewed, asked], &[]);
+        let board = board(
+            vec![
+                dirty, behind, running, unreviewed, asked, unrequired, approved,
+            ],
+            &[],
+        );
         let place = |n| (row(&board, n).group, row(&board, n).reason.kind);
         assert_eq!(place(1), ("blocked", "conflict"));
         assert_eq!(place(2), ("needs_you", "update"));
@@ -744,6 +766,8 @@ mod tests {
         assert_eq!(row(&board, 3).reason.count, Some(4));
         assert_eq!(place(4), ("needs_you", "assign_reviewer"));
         assert_eq!(place(5), ("waiting", "waiting_review"));
+        assert_eq!(place(6), ("needs_you", "assign_reviewer_optional"));
+        assert_eq!(place(7), ("needs_you", "assign_reviewer_optional"));
     }
 
     #[test]

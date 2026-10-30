@@ -18,8 +18,8 @@ use super::store::{
     ArchivedSession, CapacityCrossings, IssueLinks, LinkStore, LocalFiles, Opened, PrLinks,
 };
 use super::{
-    BACKFILL_MS, PaneFact, ParentFact, ProjectFacts, ProjectLinkSummary, files_present, link_code,
-    now_ms,
+    BACKFILL_MS, PaneFact, ParentFact, ProjectFacts, ProjectLinkSummary, ReviewFact, files_present,
+    link_code, now_ms,
 };
 use crate::node_access::NodeLink;
 use hide_session::links::{self, Candidate, ReadRequest};
@@ -109,6 +109,7 @@ struct Mailbox {
     projects: Option<Arc<Vec<ProjectFacts>>>,
     panes: Option<Arc<Vec<PaneFact>>>,
     parents: Option<Arc<Vec<ParentFact>>>,
+    reviews: Option<Arc<Vec<ReviewFact>>>,
     panel: Option<PanelRequest>,
     /// The open panel closed: its reads stop following writes.
     panel_closed: bool,
@@ -207,6 +208,10 @@ impl LinkClient {
     #[cfg(test)]
     pub(crate) fn parent_facts_for_test(&self) -> Option<Arc<Vec<ParentFact>>> {
         self.0.0.lock().unwrap().parents.clone()
+    }
+    #[cfg(test)]
+    pub(crate) fn review_facts_for_test(&self) -> Option<Arc<Vec<ReviewFact>>> {
+        self.0.0.lock().unwrap().reviews.clone()
     }
     #[cfg(test)]
     pub(crate) fn prime_context_for_test(&self, session: SessionIdentity, context: LedgerContext) {
@@ -379,6 +384,12 @@ impl LinkClient {
         self.post(|mailbox| mailbox.parents = Some(parents));
     }
 
+    /// The sessions pull request pre-checks started (PRD pr-review-status
+    /// D-11), handed whole when they change.
+    pub fn reviews(&self, reviews: Arc<Vec<ReviewFact>>) {
+        self.post(|mailbox| mailbox.reviews = Some(reviews));
+    }
+
     /// The sessions the archive holds now, which retention also answers for.
     pub fn archived(&self, archived: Arc<Vec<ArchivedSession>>) {
         self.post(|mailbox| mailbox.archived = Some(archived));
@@ -482,6 +493,8 @@ pub(in crate::links) struct State {
     panes: Arc<Vec<PaneFact>>,
     /// Parents posted but not yet written.
     parents: Option<Arc<Vec<ParentFact>>>,
+    /// Pre-check sessions posted but not yet written.
+    reviews: Option<Arc<Vec<ReviewFact>>>,
     panel: Option<PanelRequest>,
     panel_answer: Option<Result<PanelAnswer, String>>,
     summaries: BTreeMap<String, ProjectLinkSummary>,
@@ -523,6 +536,7 @@ impl State {
             projects_due: false,
             panes: Arc::default(),
             parents: None,
+            reviews: None,
             panel: None,
             panel_answer: None,
             summaries: BTreeMap::new(),
@@ -692,6 +706,7 @@ fn run(client: &LinkClient, paths: &Paths, own: &dyn NodeLink, sink: &impl Sink)
             && mailbox.projects.is_none()
             && mailbox.panes.is_none()
             && mailbox.parents.is_none()
+            && mailbox.reviews.is_none()
             && mailbox.panel.is_none()
             && !mailbox.panel_closed
             && mailbox.ledger.is_empty()
@@ -737,6 +752,7 @@ fn run(client: &LinkClient, paths: &Paths, own: &dyn NodeLink, sink: &impl Sink)
         let projects = mailbox.projects.take();
         let panes = mailbox.panes.take();
         let parents = mailbox.parents.take();
+        let reviews = mailbox.reviews.take();
         let panel = mailbox.panel.take();
         let panel_closed = std::mem::take(&mut mailbox.panel_closed);
         let ledger = std::mem::take(&mut mailbox.ledger);
@@ -813,6 +829,9 @@ fn run(client: &LinkClient, paths: &Paths, own: &dyn NodeLink, sink: &impl Sink)
         }
         if let Some(parents) = parents {
             state.parents = Some(parents);
+        }
+        if let Some(reviews) = reviews {
+            state.reviews = Some(reviews);
         }
         let store = match store.as_mut() {
             Ok(store) => store,
@@ -923,6 +942,15 @@ fn run(client: &LinkClient, paths: &Paths, own: &dyn NodeLink, sink: &impl Sink)
                 state.parents.get_or_insert(parents);
             }
             state.wrote(children.map(|_| ()), "parents");
+            state.dirty_at.get_or_insert_with(Instant::now);
+        }
+        if let Some(reviews) = state.reviews.take() {
+            let written = store.apply_reviews(&reviews, now_ms());
+            if written.is_err() {
+                // Kept for the next pass.
+                state.reviews.get_or_insert(reviews);
+            }
+            state.wrote(written, "reviews");
             state.dirty_at.get_or_insert_with(Instant::now);
         }
         if state.ledger_retry_at.is_none_or(|at| at <= Instant::now()) {

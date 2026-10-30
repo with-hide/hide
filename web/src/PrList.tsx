@@ -17,6 +17,8 @@ import { cn } from "./lib/utils";
 import { issueDate } from "./projectBoard";
 import { FOLDED_GROUPS, opensCard, type PrEntry, type PrGroupView, type PrListModel } from "./prWork";
 import { GROUP_TONE, ReasonLine } from "./prReason";
+import { approvalCount, prReview } from "./prReview";
+import { ApprovalCount, ReviewerMarks } from "./PrReviewers";
 import { IssuePicker } from "./PrLinks";
 import { beginAgentDrag } from "./agentReference";
 import { useShellStore } from "./store";
@@ -154,6 +156,8 @@ function PrRow({ entry, actions, showProject, folded }: { entry: PrEntry; action
   const mine = pr.work?.mine === true;
   const author = !mine && pr.work?.author ? pr.work.author : null;
   const lastMoved = folded === "old" && pr.updated_at_unix_ms != null ? issueDate(pr.updated_at_unix_ms, requireInterfaceLanguage(i18n.language)) : null;
+  // Who reviews it and how many approvals it has (PRD pr-review-status B2-B4): nothing on a settled, draft or unread one, or where review neither applies nor started.
+  const review = prReview(pr);
   return (
     <li className="flex flex-col" data-pr={pr.number} data-pr-project={project.id} data-pr-row-group={group}>
       <div className={cn("group/pr-row relative flex min-w-0 flex-col gap-xxs rounded-xs px-xs py-xs hover:bg-accent focus-within:bg-accent", group === "merged" && "opacity-(--opacity-secondary)")}>
@@ -174,13 +178,14 @@ function PrRow({ entry, actions, showProject, folded }: { entry: PrEntry; action
           {showProject ? <span className="max-w-[40%] shrink truncate rounded-xs bg-secondary px-xs text-micro text-muted-foreground" data-pr-project-name={project.id}>{entry.device ? `${entry.device} · ${project.label}` : project.label}</span> : null}
           {author ? <span className="max-w-[30%] shrink-0 truncate text-micro text-muted-foreground group-focus-within/pr-row:invisible group-hover/pr-row:invisible group-has-data-[state=open]/pr-row:invisible" data-pr-author={author}>{t("work.row.author", { name: author })}</span> : null}
           <AgentMarks entry={entry} actions={actions} />
+          {review ? <ReviewerMarks review={review} /> : null}
           <span className="relative flex shrink-0 items-center justify-end">
             <Elapsed since={pr.updated_at_unix_ms} className={cn("shrink-0 text-micro text-muted-foreground", "group-focus-within/pr-row:invisible group-hover/pr-row:invisible group-has-data-[state=open]/pr-row:invisible", entry.agents.length > 0 && "absolute right-0")} data-pr-age={pr.number} />
             <RowActions entry={entry} actions={actions} linking={linking} onLinking={setLinking} inFlow={entry.agents.length > 0} />
           </span>
         </div>
         <div className="pointer-events-none relative flex min-w-0 pl-[calc(var(--size-pr-icon)+var(--spacing-xs))]">
-          <ReasonLine reason={reason} group={group} noAgent={group === "blocked"} className="whitespace-normal break-words" />
+          <ReasonLine reason={reason} group={group} noAgent={group === "blocked"} approvals={review && approvalCount(review) ? <ApprovalCount review={review} /> : null} className="whitespace-normal break-words" />
           {lastMoved ? <span className="ml-xs shrink-0 truncate text-micro text-muted-foreground" data-pr-last-moved="true">· {t("work.fold.lastMoved", { date: lastMoved })}</span> : null}
         </div>
       </div>
