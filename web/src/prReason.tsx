@@ -31,6 +31,8 @@ export function reasonText(t: ReturnType<typeof useInterfaceTranslation>["t"], r
       return t("work.reason.update", { base: reason.base ?? "" });
     case "assign_reviewer":
       return t("work.reason.assign_reviewer");
+    case "assign_reviewer_optional":
+      return t("work.reason.assign_reviewer_optional");
     case "review":
       return reason.name ? t("work.reason.review", { name: reason.name, time: when }) : t("work.reason.reviewAnon", { time: when });
     case "team_review":

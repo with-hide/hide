@@ -43,6 +43,7 @@ export function primaryAction(kind: PrReason["kind"]): PrimaryAction {
     case "changes":
       return "assign";
     case "assign_reviewer":
+    case "assign_reviewer_optional":
       return "assign_reviewer";
     default:
       return "github";

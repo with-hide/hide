@@ -22,6 +22,7 @@ describe("primaryAction", () => {
     expect(primaryAction("check")).toBe("view_pane");
     expect(primaryAction("conflict")).toBe("assign");
     expect(primaryAction("assign_reviewer")).toBe("assign_reviewer");
+    expect(primaryAction("assign_reviewer_optional")).toBe("assign_reviewer");
     expect(primaryAction("queued")).toBe("github");
   });
 });
