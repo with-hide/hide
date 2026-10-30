@@ -807,180 +807,318 @@ fn a_run_investigates_only_while_hide_ai_can() {
     assert_eq!(chosen(true), "tag_grouping", "OpenCode cannot investigate");
 }
 
+/// Runs git in `repo` and answers its trimmed stdout.
+fn git_in(repo: &std::path::Path, args: &[&str]) -> String {
+    let output = std::process::Command::new("git")
+        .arg("-C")
+        .arg(repo)
+        .args([
+            "-c",
+            "user.name=t",
+            "-c",
+            "user.email=t@t",
+            "-c",
+            "commit.gpgsign=false",
+        ])
+        .args(args)
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "git {args:?}: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    String::from_utf8_lossy(&output.stdout).trim().to_owned()
+}
+
+/// A Project whose agent left one commit on `hide-suggestion-s2-x`, read as
+/// a ready line 2 by a runtime with a worker; with `remote`, its main follows
+/// `origin/main` in a bare repository beside it.
+struct ReadyBranch {
+    _folder: tempfile::TempDir,
+    repo: std::path::PathBuf,
+    remote: std::path::PathBuf,
+    tip: String,
+    shared: SharedRuntime,
+    commands: std::sync::mpsc::Receiver<crate::suggestions::worker::Command>,
+    project: crate::suggestions::worker::ProjectRef,
+}
+
+impl ReadyBranch {
+    fn new(remote: bool) -> Self {
+        use crate::suggestions::apply::FollowedAttempt;
+        use crate::suggestions::lifecycle::{
+            AttemptMove, AttemptPhase, AttemptPurpose, BranchSummary,
+        };
+        use crate::suggestions::notebook::{LineId, Outcome};
+        use crate::suggestions::store::ProjectLocation;
+        use crate::suggestions::worker::{ProjectRef, SuggestionClient};
+        let folder = scratch_dir("herdr-core-branch-merge-");
+        let repo = folder.path().join("repo");
+        let origin = folder.path().join("origin.git");
+        std::fs::create_dir_all(&repo).unwrap();
+        git_in(&repo, &["init", "-q", "-b", "main"]);
+        std::fs::write(repo.join("AGENTS.md"), "one\n").unwrap();
+        git_in(&repo, &["add", "."]);
+        git_in(&repo, &["commit", "-q", "-m", "first"]);
+        if remote {
+            git_in(
+                folder.path(),
+                &[
+                    "init",
+                    "-q",
+                    "--bare",
+                    "-b",
+                    "main",
+                    origin.to_str().unwrap(),
+                ],
+            );
+            git_in(
+                &repo,
+                &["remote", "add", "origin", origin.to_str().unwrap()],
+            );
+            git_in(&repo, &["push", "-q", "-u", "origin", "main"]);
+        }
+        git_in(&repo, &["checkout", "-q", "-b", "hide-suggestion-s2-x"]);
+        std::fs::write(repo.join("AGENTS.md"), "one\ntwo\n").unwrap();
+        git_in(&repo, &["commit", "-q", "-am", "fix the docs"]);
+        let tip = git_in(&repo, &["rev-parse", "HEAD"]);
+        git_in(&repo, &["checkout", "-q", "main"]);
+        let root = repo.to_string_lossy().into_owned();
+
+        let mut runtime = runtime();
+        let (client, commands) = SuggestionClient::for_test();
+        runtime.suggestions_work.client = Some(client);
+        let node = runtime.node.clone();
+        let shared = SharedRuntime::new(runtime);
+        shared
+            .lock()
+            .unwrap()
+            .install_worker_context(shared.weak(), ChangeNotifier::noop());
+        let mut attempt = FollowedAttempt {
+            project_id: "p".into(),
+            location: ProjectLocation {
+                node: node.as_str().to_owned(),
+                path: root.clone(),
+            },
+            line: LineId(2),
+            started_at_unix_ms: 1,
+            outcome: Outcome::Pr,
+            phase: AttemptPhase::Ready,
+            branch: "hide-suggestion-s2-x".into(),
+            agent_id: None,
+            repository: None,
+            pr: None,
+            issue_url: None,
+            issue_title: None,
+            issue_since: None,
+            reviewed: false,
+            purpose: AttemptPurpose::Branch,
+            branch_facts: Some(BranchSummary {
+                base: "main".into(),
+                tip: "0".repeat(40),
+                ahead: 0,
+                files: Vec::new(),
+                files_total: 0,
+                added: 0,
+                removed: 0,
+            }),
+            failure: None,
+        };
+        let fixture = Self {
+            _folder: folder,
+            repo,
+            remote: origin,
+            tip,
+            shared,
+            commands,
+            project: ProjectRef { node, path: root },
+        };
+        fixture
+            .shared
+            .lock()
+            .unwrap()
+            .follow_suggestion_attempts(vec![attempt.clone()], Vec::new());
+        let AttemptMove::Ready(facts) = fixture.moved() else {
+            panic!("the branch read as ready");
+        };
+        assert_eq!((facts.tip.as_str(), facts.ahead), (fixture.tip.as_str(), 1));
+        assert_eq!((facts.added, facts.removed, facts.files_total), (1, 0, 1));
+        assert_eq!(facts.files[0].path, "AGENTS.md");
+        attempt.branch_facts = Some(facts);
+        fixture
+            .shared
+            .lock()
+            .unwrap()
+            .follow_suggestion_attempts(vec![attempt], Vec::new());
+        fixture
+    }
+
+    fn git(&self, args: &[&str]) -> String {
+        git_in(&self.repo, args)
+    }
+
+    /// The next move the runtime hands the worker for an attempt.
+    fn moved(&self) -> crate::suggestions::lifecycle::AttemptMove {
+        loop {
+            match self.commands.recv_timeout(Duration::from_secs(30)) {
+                Ok(crate::suggestions::worker::Command::Attempted { change, .. }) => {
+                    return change;
+                }
+                Ok(_) => {}
+                Err(_) => panic!("the attempt moved"),
+            }
+        }
+    }
+
+    /// Nothing reaches the worker for a while: a refused press.
+    fn moves_nothing(&self) {
+        assert!(
+            !matches!(
+                self.commands.recv_timeout(Duration::from_millis(200)),
+                Ok(crate::suggestions::worker::Command::Attempted { .. })
+            ),
+            "a refused press hands the worker nothing"
+        );
+    }
+
+    fn press(&self, decision: crate::runtime::suggestion_apply::BranchDecision) -> bool {
+        self.shared
+            .lock()
+            .unwrap()
+            .decide_suggestion_branch(&self.project, 2, decision)
+    }
+
+    /// Records what GitHub answers for the Project: `None` for no GitHub
+    /// remote, or the base's push rule.
+    fn github(&self, push: Option<crate::model::SuggestionBranchPush>) {
+        let mut runtime = self.shared.lock().unwrap();
+        match push {
+            None => runtime
+                .github
+                .projects
+                .push(crate::model::GithubProjectSnapshot {
+                    root_path: self.project.path.clone(),
+                    status: crate::model::GithubStatusSnapshot {
+                        failure_category: Some(
+                            hide_node_link::gh::GithubFailureCategory::NoGithubRemote,
+                        ),
+                        ..Default::default()
+                    },
+                    ..Default::default()
+                }),
+            Some(push) => {
+                let (node, root) = (self.project.node.clone(), self.project.path.clone());
+                runtime.answer_base_push_for_test(&node, &root, "main", push);
+            }
+        }
+    }
+
+    fn merged_commit(&self) -> String {
+        match self.moved() {
+            crate::suggestions::lifecycle::AttemptMove::Merged {
+                pr: None,
+                base: Some(base),
+                merge_commit: Some(commit),
+                ..
+            } => {
+                assert_eq!(base, "main");
+                commit
+            }
+            other => panic!("merged, not {other:?}"),
+        }
+    }
+}
+
 /// PRD hide-ai-branch-first-apply B3, B6, B13: a ready branch is read from
 /// the repository itself on the Project's node, and `main에 합치기` merges it
 /// into its base there: the base holds the branch's commit, the branch is
-/// kept, and nothing is pushed. A Project whose GitHub is connected is
-/// refused the merge and keeps both, since its main moves by pull request.
+/// kept, and nothing is pushed. A Project whose GitHub is connected, or not
+/// known to be missing, is refused the local merge and keeps both.
 #[test]
 fn a_ready_branch_is_read_from_git_and_merged_into_its_base_only_without_github() {
-    use crate::suggestions::apply::FollowedAttempt;
-    use crate::suggestions::lifecycle::{AttemptMove, AttemptPhase, AttemptPurpose, BranchSummary};
-    use crate::suggestions::notebook::{LineId, Outcome};
-    use crate::suggestions::store::ProjectLocation;
-    use crate::suggestions::worker::{Command, ProjectRef, SuggestionClient};
-    let folder = scratch_dir("herdr-core-branch-merge-");
-    let repo = folder.path().join("repo");
-    std::fs::create_dir_all(&repo).unwrap();
-    let git = |args: &[&str]| {
-        let output = std::process::Command::new("git")
-            .arg("-C")
-            .arg(&repo)
-            .args([
-                "-c",
-                "user.name=t",
-                "-c",
-                "user.email=t@t",
-                "-c",
-                "commit.gpgsign=false",
-            ])
-            .args(args)
-            .output()
-            .unwrap();
-        assert!(
-            output.status.success(),
-            "git {args:?}: {}",
-            String::from_utf8_lossy(&output.stderr)
-        );
-        String::from_utf8_lossy(&output.stdout).trim().to_owned()
-    };
-    git(&["init", "-q", "-b", "main"]);
-    std::fs::write(repo.join("AGENTS.md"), "one\n").unwrap();
-    git(&["add", "."]);
-    git(&["commit", "-q", "-m", "first"]);
-    git(&["branch", "hide-suggestion-s2-x"]);
-    git(&["checkout", "-q", "hide-suggestion-s2-x"]);
-    std::fs::write(repo.join("AGENTS.md"), "one\ntwo\n").unwrap();
-    git(&["commit", "-q", "-am", "fix the docs"]);
-    let tip = git(&["rev-parse", "HEAD"]);
-    git(&["checkout", "-q", "main"]);
-    let root = repo.to_string_lossy().into_owned();
-
-    let mut runtime = runtime();
-    let (client, commands) = SuggestionClient::for_test();
-    runtime.suggestions_work.client = Some(client);
-    let node = runtime.node.clone();
-    let shared = SharedRuntime::new(runtime);
-    shared
-        .lock()
-        .unwrap()
-        .install_worker_context(shared.weak(), ChangeNotifier::noop());
-    let mut attempt = FollowedAttempt {
-        project_id: "p".into(),
-        location: ProjectLocation {
-            node: node.as_str().to_owned(),
-            path: root.clone(),
-        },
-        line: LineId(2),
-        started_at_unix_ms: 1,
-        outcome: Outcome::Pr,
-        phase: AttemptPhase::Ready,
-        branch: "hide-suggestion-s2-x".into(),
-        agent_id: None,
-        repository: None,
-        pr: None,
-        issue_url: None,
-        issue_title: None,
-        issue_since: None,
-        reviewed: false,
-        purpose: AttemptPurpose::Branch,
-        branch_facts: Some(BranchSummary {
-            base: "main".into(),
-            tip: "0".repeat(40),
-            ahead: 0,
-            files: Vec::new(),
-            files_total: 0,
-            added: 0,
-            removed: 0,
-        }),
-        failure: None,
-    };
-    let moved = || loop {
-        match commands.recv_timeout(Duration::from_secs(30)) {
-            Ok(Command::Attempted { change, .. }) => return change,
-            Ok(_) => {}
-            Err(_) => panic!("the attempt moved"),
-        }
-    };
-
-    shared
-        .lock()
-        .unwrap()
-        .follow_suggestion_attempts(vec![attempt.clone()], Vec::new());
-    let AttemptMove::Ready(facts) = moved() else {
-        panic!("the branch read as ready");
-    };
-    assert_eq!((facts.tip.as_str(), facts.ahead), (tip.as_str(), 1));
-    assert_eq!((facts.added, facts.removed, facts.files_total), (1, 0, 1));
-    assert_eq!(facts.files[0].path, "AGENTS.md");
-
-    attempt.branch_facts = Some(facts);
-    shared
-        .lock()
-        .unwrap()
-        .follow_suggestion_attempts(vec![attempt], Vec::new());
-    let project = ProjectRef {
-        node: node.clone(),
-        path: root.clone(),
-    };
-    let merge = || {
-        shared.lock().unwrap().decide_suggestion_branch(
-            &project,
-            2,
-            crate::runtime::suggestion_apply::BranchDecision::Merge,
-        )
-    };
+    use crate::runtime::suggestion_apply::BranchDecision;
+    let fixture = ReadyBranch::new(false);
+    let main = fixture.git(&["rev-parse", "main"]);
     assert!(
-        !merge(),
-        "GitHub not known to be missing reads as connected"
+        !fixture.press(BranchDecision::Merge),
+        "GitHub not known to be missing"
     );
+    fixture.moves_nothing();
     assert!(
-        commands.recv_timeout(Duration::from_millis(200)).is_err(),
-        "a refused merge hands the worker nothing"
+        !fixture.press(BranchDecision::MergePush),
+        "a push needs GitHub to say the base takes one"
     );
-    let main = git(&["rev-parse", "main"]);
-    assert_ne!(main, tip, "main is left as it was");
+    fixture.moves_nothing();
     assert_eq!(
-        git(&["rev-parse", "hide-suggestion-s2-x"]),
-        tip,
-        "the branch stays"
+        fixture.git(&["rev-parse", "main"]),
+        main,
+        "main is left as it was"
     );
 
-    shared
-        .lock()
-        .unwrap()
-        .github
-        .projects
-        .push(crate::model::GithubProjectSnapshot {
-            root_path: root.clone(),
-            status: crate::model::GithubStatusSnapshot {
-                failure_category: Some(hide_node_link::gh::GithubFailureCategory::NoGithubRemote),
-                ..Default::default()
-            },
-            ..Default::default()
-        });
-    assert!(merge(), "without GitHub the local main is the real one");
-    match moved() {
-        AttemptMove::Merged {
-            pr: None,
-            base: Some(base),
-            merge_commit: Some(commit),
-            ..
-        } => {
-            assert_eq!(base, "main");
-            assert_eq!(commit, tip, "a fast-forward");
-        }
-        other => panic!("merged, not {other:?}"),
-    }
-    assert_eq!(git(&["rev-parse", "main"]), tip, "main holds the fix");
+    fixture.github(None);
+    assert!(
+        !fixture.press(BranchDecision::MergePush),
+        "nothing to push to without GitHub"
+    );
+    fixture.moves_nothing();
+    assert!(
+        fixture.press(BranchDecision::Merge),
+        "the local main is the real one"
+    );
+    assert_eq!(fixture.merged_commit(), fixture.tip, "a fast-forward");
     assert_eq!(
-        std::fs::read_to_string(repo.join("AGENTS.md")).unwrap(),
+        fixture.git(&["rev-parse", "main"]),
+        fixture.tip,
+        "main holds the fix"
+    );
+    assert_eq!(
+        std::fs::read_to_string(fixture.repo.join("AGENTS.md")).unwrap(),
         "one\ntwo\n",
         "and so does its folder"
     );
     assert_eq!(
-        git(&["rev-parse", "hide-suggestion-s2-x"]),
-        tip,
+        fixture.git(&["rev-parse", "hide-suggestion-s2-x"]),
+        fixture.tip,
+        "the branch stays"
+    );
+}
+
+/// A GitHub Project's ready branch goes up by `{base}에 바로 올리기` only
+/// while GitHub said its base takes a direct push; then the local main and
+/// GitHub's are the same commit, and nothing is merged locally alone.
+#[test]
+fn a_github_projects_branch_is_pushed_only_while_its_base_takes_a_push() {
+    use crate::model::SuggestionBranchPush;
+    use crate::runtime::suggestion_apply::BranchDecision;
+    let fixture = ReadyBranch::new(true);
+    let main = fixture.git(&["rev-parse", "main"]);
+    for (push, said) in [
+        (SuggestionBranchPush::Unknown, "an unread rule"),
+        (
+            SuggestionBranchPush::PrOnly,
+            "a base that takes pull requests only",
+        ),
+    ] {
+        fixture.github(Some(push));
+        assert!(!fixture.press(BranchDecision::MergePush), "{said}");
+        fixture.moves_nothing();
+    }
+    fixture.github(Some(SuggestionBranchPush::Allowed));
+    assert!(
+        !fixture.press(BranchDecision::Merge),
+        "never a local merge alone"
+    );
+    fixture.moves_nothing();
+    assert_eq!(fixture.git(&["rev-parse", "main"]), main);
+
+    assert!(fixture.press(BranchDecision::MergePush));
+    assert_eq!(fixture.merged_commit(), fixture.tip);
+    assert_eq!(fixture.git(&["rev-parse", "main"]), fixture.tip);
+    assert_eq!(git_in(&fixture.remote, &["rev-parse", "main"]), fixture.tip);
+    assert_eq!(
+        fixture.git(&["rev-parse", "hide-suggestion-s2-x"]),
+        fixture.tip,
         "the branch stays"
     );
 }

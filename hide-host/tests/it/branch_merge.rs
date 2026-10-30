@@ -784,9 +784,19 @@ fn with_remote() -> (Fixture, PathBuf) {
     let remote = fixture._folder.path().join("origin.git");
     git(
         fixture._folder.path(),
-        &["init", "-q", "--bare", "-b", "main", remote.to_str().unwrap()],
+        &[
+            "init",
+            "-q",
+            "--bare",
+            "-b",
+            "main",
+            remote.to_str().unwrap(),
+        ],
     );
-    git(&fixture.main, &["remote", "add", "origin", remote.to_str().unwrap()]);
+    git(
+        &fixture.main,
+        &["remote", "add", "origin", remote.to_str().unwrap()],
+    );
     git(&fixture.main, &["push", "-q", "-u", "origin", "main"]);
     (fixture, remote)
 }
@@ -819,7 +829,11 @@ fn a_merge_push_moves_the_base_here_and_on_its_remote_to_the_same_commit() {
     assert_eq!(git(&remote, &["rev-parse", "main"]), tip);
     assert_eq!(git(&fixture.main, &["rev-parse", "origin/main"]), tip);
     assert_eq!(git(&fixture.main, &["status", "--porcelain"]), "");
-    assert_eq!(git(&fixture.main, &["rev-parse", "feat"]), tip, "the branch stays");
+    assert_eq!(
+        git(&fixture.main, &["rev-parse", "feat"]),
+        tip,
+        "the branch stays"
+    );
 }
 
 #[test]
@@ -830,7 +844,12 @@ fn a_base_behind_its_remote_catches_up_first_and_pushes_one_merge_commit() {
     let other = fixture._folder.path().join("other");
     git(
         fixture._folder.path(),
-        &["clone", "-q", remote.to_str().unwrap(), other.to_str().unwrap()],
+        &[
+            "clone",
+            "-q",
+            remote.to_str().unwrap(),
+            other.to_str().unwrap(),
+        ],
     );
     git(&other, &["config", "user.name", "Other"]);
     git(&other, &["config", "user.email", "other@example.invalid"]);
@@ -848,9 +867,18 @@ fn a_base_behind_its_remote_catches_up_first_and_pushes_one_merge_commit() {
     };
     assert_eq!(git(&remote, &["rev-parse", "main"]), commit);
     assert_eq!(git(&fixture.main, &["rev-parse", "main"]), commit);
-    assert_eq!(git(&fixture.main, &["rev-parse", &format!("{commit}^1")]), theirs);
-    assert_eq!(git(&fixture.main, &["rev-parse", &format!("{commit}^2")]), tip);
-    assert_eq!(fs::read_to_string(fixture.main.join("c.txt")).unwrap(), "theirs\n");
+    assert_eq!(
+        git(&fixture.main, &["rev-parse", &format!("{commit}^1")]),
+        theirs
+    );
+    assert_eq!(
+        git(&fixture.main, &["rev-parse", &format!("{commit}^2")]),
+        tip
+    );
+    assert_eq!(
+        fs::read_to_string(fixture.main.join("c.txt")).unwrap(),
+        "theirs\n"
+    );
 }
 
 #[test]
@@ -864,9 +892,17 @@ fn a_push_the_remote_turns_away_puts_the_base_back_and_keeps_the_branch() {
 
     let outcome = merge_push(&fixture.main, "feat", Some(&tip), "main", "Merge feat").unwrap();
     assert_eq!(outcome, MergePushOutcome::PushRefused { reverted: true });
-    assert_eq!(snapshot(&fixture.main), before, "the base and its files are back");
+    assert_eq!(
+        snapshot(&fixture.main),
+        before,
+        "the base and its files are back"
+    );
     assert_eq!(git(&remote, &["rev-parse", "main"]), remote_before);
-    assert_eq!(git(&fixture.main, &["rev-parse", "feat"]), tip, "the branch stays");
+    assert_eq!(
+        git(&fixture.main, &["rev-parse", "feat"]),
+        tip,
+        "the branch stays"
+    );
 }
 
 #[test]
@@ -898,7 +934,12 @@ fn a_base_ahead_of_or_apart_from_its_remote_is_refused_with_nothing_moved() {
     let other = fixture._folder.path().join("other");
     git(
         fixture._folder.path(),
-        &["clone", "-q", remote.to_str().unwrap(), other.to_str().unwrap()],
+        &[
+            "clone",
+            "-q",
+            remote.to_str().unwrap(),
+            other.to_str().unwrap(),
+        ],
     );
     git(&other, &["config", "user.name", "Other"]);
     git(&other, &["config", "user.email", "other@example.invalid"]);

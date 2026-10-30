@@ -13,7 +13,7 @@ use super::*;
 use crate::node::NodeId;
 use crate::suggestions::lifecycle::{AttemptPurpose, BranchFileSummary, BranchSummary};
 use hide_memory::{BatchPurpose, MemoryStore, Promotion, PromotionState};
-use hide_node_link::branch::{BranchFacts, MergeOutcome};
+use hide_node_link::branch::BranchFacts;
 use serde_json::json;
 
 /// One batch whose branch the tracker reads: its agent stopped with the
@@ -293,7 +293,10 @@ fn log_batch(check: &BatchCheck, kind: &str, outcome: &str) {
 /// The operator's decision on a ready batch, pressed on its row.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) enum BatchDecision {
+    /// `main에 합치기`, without GitHub.
     Merge,
+    /// `{base}에 바로 올리기`, a merge pushed to GitHub's base.
+    MergePush,
     OpenPr,
     Discard,
     Rebase,
@@ -344,7 +347,8 @@ impl Runtime {
     /// B6-B12, B20, B21). A merge or a discard runs on the Project's machine
     /// off the lock and moves every card of the batch; `PR 올리기` and `다시
     /// 맞추기` start an agent on the same branch, its old agent ended first.
-    /// A merge is refused where GitHub is connected (`local_merge_allowed`).
+    /// A merge the Project's GitHub does not allow is refused
+    /// (`merge_refused`).
     pub(super) fn decide_memory_batch(
         &mut self,
         workspace_id: &str,
@@ -361,9 +365,6 @@ impl Runtime {
         let Some((node, root, branch, cards)) = self.ready_batch(workspace_id, number) else {
             return refused("not_ready");
         };
-        if decision == BatchDecision::Merge && !self.local_merge_allowed(&node, &root) {
-            return refused("github_connected");
-        }
         let Some(project_id) = self.project_memory.project_id.clone() else {
             return refused("project_unavailable");
         };
@@ -383,6 +384,12 @@ impl Runtime {
         let Some(base) = base else {
             return refused("no_base");
         };
+        if matches!(decision, BatchDecision::Merge | BatchDecision::MergePush)
+            && let Some(reason) =
+                self.merge_refused(&node, &root, &base, decision == BatchDecision::MergePush)
+        {
+            return refused(reason);
+        }
         let start = match decision {
             BatchDecision::OpenPr | BatchDecision::Rebase => {
                 match self.promotion_start(&node, &root) {
@@ -398,7 +405,7 @@ impl Runtime {
                     Err(reason) => return refused(&reason),
                 }
             }
-            BatchDecision::Merge | BatchDecision::Discard => None,
+            BatchDecision::Merge | BatchDecision::MergePush | BatchDecision::Discard => None,
         };
         let own = self.memory_batch_agents(&project_id, &cards);
         let place = BranchPlace {
@@ -415,6 +422,8 @@ impl Runtime {
             .deciding
             .insert(key.clone(), decision);
         let carried = key.clone();
+        let pushed = (decision == BatchDecision::MergePush)
+            .then(|| (place.node.clone(), place.root.clone(), place.base.clone()));
         let spawned = self.spawn_issue_worker(
             "memory-decide",
             move || {
@@ -432,6 +441,11 @@ impl Runtime {
             },
             move |runtime, unseen| {
                 runtime.project_memory.promotions.deciding.remove(&carried);
+                // Whatever GitHub answered the push, its rules are read again
+                // before the button is offered again.
+                if let Some((node, root, base)) = &pushed {
+                    runtime.forget_base_push(node, root, base);
+                }
                 if let Some((key, start)) = unseen {
                     runtime.project_memory.promotions.add_unseen(key, start);
                 }
@@ -508,7 +522,9 @@ impl Runtime {
                 .promotions
                 .deciding
                 .get(&(project_id.clone(), branch.clone()))
-                == Some(&BatchDecision::Merge);
+                .is_some_and(|decision| {
+                    matches!(decision, BatchDecision::Merge | BatchDecision::MergePush)
+                });
             let entry = branches.entry(branch).or_insert(None);
             if merging && entry.is_none() {
                 *entry = Some(format!("m{}", row.number));
@@ -606,24 +622,22 @@ fn decide(
         }
     };
     match decision {
-        BatchDecision::Merge => {
-            match branch_decision::merge(connector.as_deref(), link.as_ref(), place, own, tip) {
-                Ok(MergeOutcome::Merged { .. } | MergeOutcome::AlreadyMerged { .. }) => {
-                    branch_decision::log(place, &subject, "merge", "merged");
+        BatchDecision::Merge | BatchDecision::MergePush => {
+            let push = decision == BatchDecision::MergePush;
+            let kind = if push { "merge_push" } else { "merge" };
+            match branch_decision::land(connector.as_deref(), link.as_ref(), place, own, tip, push)
+            {
+                branch_decision::Landing::Merged(_) => {
+                    branch_decision::log(place, &subject, kind, "merged");
                     move_all(&mut store, PromotionState::Merged);
                 }
-                Ok(MergeOutcome::BranchMissing) => {
-                    branch_decision::log(place, &subject, "merge", "branch_missing");
+                branch_decision::Landing::BranchMissing => {
+                    branch_decision::log(place, &subject, kind, "branch_missing");
                     move_all(&mut store, PromotionState::Dismissed);
                 }
-                Ok(outcome) => {
-                    let code = branch_decision::refusal_code(&outcome).unwrap_or("merge_failed");
-                    branch_decision::log(place, &subject, "merge", code);
+                branch_decision::Landing::Refused(code) => {
+                    branch_decision::log(place, &subject, kind, code);
                     refuse_all(&mut store, code);
-                }
-                Err(_) => {
-                    branch_decision::log(place, &subject, "merge", "merge_failed");
-                    refuse_all(&mut store, "merge_failed");
                 }
             }
             None

@@ -100,8 +100,12 @@ enum SuggestionActionKind {
     Retry,
     /// Takes a global instruction line back out (B9).
     Revert,
-    /// `main에 합치기` on a ready branch (PRD hide-ai-branch-first-apply D-05).
+    /// `main에 합치기` on a ready branch (PRD hide-ai-branch-first-apply D-05),
+    /// offered only without GitHub.
     Merge,
+    /// `{base}에 바로 올리기` on a ready branch of a GitHub Project whose base
+    /// takes a direct push: merged and pushed together.
+    MergePush,
     /// `PR 올리기` on a ready branch (D-06).
     OpenPr,
     /// `버리기` on a ready branch (D-07).
@@ -270,6 +274,9 @@ impl Runtime {
         if let Some(number) = super::suggestion_memory::card_of_row(&payload.id) {
             let decision = match payload.action {
                 SuggestionActionKind::Merge => Some(super::memory_branch::BatchDecision::Merge),
+                SuggestionActionKind::MergePush => {
+                    Some(super::memory_branch::BatchDecision::MergePush)
+                }
                 SuggestionActionKind::OpenPr => Some(super::memory_branch::BatchDecision::OpenPr),
                 SuggestionActionKind::Discard => Some(super::memory_branch::BatchDecision::Discard),
                 SuggestionActionKind::Rebase => Some(super::memory_branch::BatchDecision::Rebase),
@@ -282,6 +289,7 @@ impl Runtime {
                 SuggestionActionKind::Apply | SuggestionActionKind::Retry => MemoryAction::Promote,
                 SuggestionActionKind::Dismiss => MemoryAction::Dismiss,
                 SuggestionActionKind::Merge
+                | SuggestionActionKind::MergePush
                 | SuggestionActionKind::OpenPr
                 | SuggestionActionKind::Discard
                 | SuggestionActionKind::Rebase
@@ -303,6 +311,9 @@ impl Runtime {
         let action = match payload.action {
             SuggestionActionKind::Merge => {
                 return decide(self, super::suggestion_apply::BranchDecision::Merge);
+            }
+            SuggestionActionKind::MergePush => {
+                return decide(self, super::suggestion_apply::BranchDecision::MergePush);
             }
             SuggestionActionKind::Discard => {
                 return decide(self, super::suggestion_apply::BranchDecision::Discard);
@@ -601,17 +612,6 @@ impl Runtime {
         }
     }
 
-    /// Whether a ready Hide AI branch may be merged into the Project's local
-    /// base: only where GitHub is missing, since there the local base is the
-    /// real one. Where GitHub is connected its main moves by pull request, and
-    /// a local merge would never reach it and splits local main from the
-    /// remote's, so the branch goes up as a pull request instead. An unread or
-    /// unreachable GitHub counts as connected, as `suggestions_github` reads
-    /// it, so Hide never merges locally before it knows.
-    pub(super) fn local_merge_allowed(&self, node: &crate::node::NodeId, root: &str) -> bool {
-        self.suggestions_github(node, root) == SuggestionsGithub::Missing
-    }
-
     fn suggestion_facts(&self) -> Option<LockFacts> {
         let opened = self.suggestions_work.opened.as_ref()?;
         Some(LockFacts {
@@ -686,6 +686,11 @@ impl Runtime {
                 project.counts = self.suggestion_counts(&project);
                 project
             });
+        if let (Some(opened), Some(project)) = (self.suggestions_work.opened.clone(), &project)
+            && project.github == SuggestionsGithub::Connected
+        {
+            self.read_base_push(&opened.node, &opened.root, ready_bases(project));
+        }
         let next = SuggestionsSnapshot { project };
         if self
             .snapshot
@@ -764,7 +769,7 @@ impl Runtime {
             if work
                 .deciding
                 .get(&(attempt.project_id.clone(), attempt.line.0))
-                == Some(&super::suggestion_apply::BranchDecision::Merge)
+                .is_some_and(|decision| decision.merges())
             {
                 merging.insert(crate::suggestions::read::row_id(attempt.line));
             }
@@ -780,10 +785,12 @@ impl Runtime {
                 merging.insert(row);
             }
         }
+        let push = self.base_push_answers(&opened.node, &opened.root);
         BranchOverlay {
             git,
             merging,
             checkouts,
+            push,
         }
     }
 
@@ -853,6 +860,17 @@ fn lay_facts(project: &mut ProjectSuggestionsSnapshot, facts: LockFacts, memory_
     }
 }
 
+/// The bases the opened Project's ready branches merge into.
+fn ready_bases(project: &ProjectSuggestionsSnapshot) -> BTreeSet<String> {
+    project
+        .rows
+        .iter()
+        .filter_map(|row| row.attempt.as_ref())
+        .filter(|attempt| attempt.phase == SuggestionAttemptPhase::Ready)
+        .filter_map(|attempt| attempt.branch.as_ref()?.base.clone())
+        .collect()
+}
+
 /// What the lock adds to the rows about their branches (PRD
 /// hide-ai-branch-first-apply).
 #[derive(Debug, Default)]
@@ -865,6 +883,8 @@ struct BranchOverlay {
     /// Where each attempt branch is checked out, which a branch card's file
     /// opens.
     checkouts: HashMap<String, String>,
+    /// Whether GitHub's base takes a direct push, by base.
+    push: HashMap<String, crate::model::SuggestionBranchPush>,
 }
 
 /// Lays the branch facts on the rows: no document fix in a folder that is
@@ -902,6 +922,12 @@ fn lay_branches(project: &mut ProjectSuggestionsSnapshot, overlay: &BranchOverla
         }
         if let Some(branch) = attempt.branch.as_mut() {
             branch.checkout = overlay.checkouts.get(&branch.name).cloned();
+            branch.push = branch
+                .base
+                .as_ref()
+                .and_then(|base| overlay.push.get(base))
+                .copied()
+                .unwrap_or_default();
         }
     }
 }

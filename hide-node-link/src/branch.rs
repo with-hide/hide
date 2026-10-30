@@ -118,8 +118,7 @@ pub enum MergePushOutcome {
 /// How long a caller waits for a `BranchMergePush` answer: the node's fetch,
 /// merge and push are each bounded by its change deadline (10 minutes), with
 /// a minute for its reads and the link.
-pub const MERGE_PUSH_WAIT: std::time::Duration =
-    std::time::Duration::from_secs(3 * 10 * 60 + 60);
+pub const MERGE_PUSH_WAIT: std::time::Duration = std::time::Duration::from_secs(3 * 10 * 60 + 60);
 
 /// What a discard request did. Only `Deleted` changes the repository.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]

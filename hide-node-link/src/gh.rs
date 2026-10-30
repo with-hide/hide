@@ -1643,7 +1643,12 @@ mod tests {
             assert!(branch_push_arguments(read, "acme/app", "-main").is_none());
             assert!(branch_push_arguments(read, "acme/app", "a..b").is_none());
         }
-        assert!(!allowed(&["api", "--jq", ".", "repos/acme/app/branches/main"]));
+        assert!(!allowed(&[
+            "api",
+            "--jq",
+            ".",
+            "repos/acme/app/branches/main"
+        ]));
         assert!(!allowed(&[
             "api",
             "--jq",

@@ -500,12 +500,14 @@ fn upstream_of(root: &Path, base: &str) -> HostResult<Option<Upstream>> {
     let branch = field("--format=%(upstream:remoteref)")?;
     let tracking = field("--format=%(upstream)")?;
     let named = !remote.is_empty() && remote != ".";
-    Ok((named && branch.starts_with("refs/heads/") && tracking.starts_with("refs/remotes/"))
-        .then_some(Upstream {
-            remote,
-            branch,
-            tracking,
-        }))
+    Ok(
+        (named && branch.starts_with("refs/heads/") && tracking.starts_with("refs/remotes/"))
+            .then_some(Upstream {
+                remote,
+                branch,
+                tracking,
+            }),
+    )
 }
 
 /// A run that reaches the remote, with the operator's ssh and no prompt
@@ -517,9 +519,13 @@ fn run_remote(root: &Path, args: &[&str]) -> HostResult<Output> {
         .env("LC_ALL", "C")
         .args(["-c", "gc.auto=0", "-c", "maintenance.auto=false"])
         .args(args);
-    crate::git_run::output(&mut command, crate::git_run::CHANGE_DEADLINE, Some(READ_LIMIT))
-        .map_err(|error| failed(format!("git could not be run: {error}")))?
-        .ok_or_else(|| failed(format!("git {} did not finish", args[0])))
+    crate::git_run::output(
+        &mut command,
+        crate::git_run::CHANGE_DEADLINE,
+        Some(READ_LIMIT),
+    )
+    .map_err(|error| failed(format!("git could not be run: {error}")))?
+    .ok_or_else(|| failed(format!("git {} did not finish", args[0])))
 }
 
 /// Moves `refs/heads/<base>` from `local` to `upstream`, a fast-forward the
@@ -571,9 +577,11 @@ fn put_base_back(root: &Path, base: &str, before: &str, merged: &str) -> bool {
                     return Ok(false);
                 }
                 let args = ["reset", "--quiet", "--keep", before];
-                Ok(run_within(&worktree, &args, crate::git_run::CHANGE_DEADLINE)?
-                    .status
-                    .success())
+                Ok(
+                    run_within(&worktree, &args, crate::git_run::CHANGE_DEADLINE)?
+                        .status
+                        .success(),
+                )
             }
             None => {
                 let args = ["update-ref", &reference, before, merged];

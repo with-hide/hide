@@ -43,8 +43,19 @@ type AttemptKey = (String, u64, u64);
 /// `PR 올리기` and `다시 맞추기` start an agent instead.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) enum BranchDecision {
+    /// `main에 합치기`, without GitHub.
     Merge,
+    /// `{base}에 바로 올리기`, a merge pushed to GitHub's base.
+    MergePush,
     Discard,
+}
+
+impl BranchDecision {
+    /// Whether it lands the branch in its base, which the row reads as
+    /// `합치는 중` while it runs.
+    pub(super) fn merges(self) -> bool {
+        matches!(self, Self::Merge | Self::MergePush)
+    }
 }
 
 /// An agent to end before a spawn, with the Herdr and node of its machine.
@@ -422,7 +433,7 @@ impl Runtime {
     /// hide-ai-branch-first-apply D-05, D-07, B6-B8, B10): Hide merges or
     /// deletes the branch on the Project's machine, off the lock, and hands
     /// the worker what came of it. A press while one runs is dropped, and a
-    /// merge is refused where GitHub is connected (`local_merge_allowed`).
+    /// merge the Project's GitHub does not allow is refused (`merge_refused`).
     pub(super) fn decide_suggestion_branch(
         &mut self,
         project: &ProjectRef,
@@ -454,10 +465,15 @@ impl Runtime {
         else {
             return refused("not_ready");
         };
-        if decision == BranchDecision::Merge
-            && !self.local_merge_allowed(&project.node, &project.path)
+        if decision.merges()
+            && let Some(reason) = self.merge_refused(
+                &project.node,
+                &project.path,
+                &facts.base,
+                decision == BranchDecision::MergePush,
+            )
         {
-            return refused("github_connected");
+            return refused(reason);
         }
         let deciding = (attempt.project_id.clone(), line);
         if self.suggestions_work.apply.deciding.contains_key(&deciding) {
@@ -490,24 +506,25 @@ impl Runtime {
             .apply
             .deciding
             .insert(deciding.clone(), decision);
-        let carried = (key.clone(), deciding.clone());
+        let pushed = (decision == BranchDecision::MergePush)
+            .then(|| (place.node.clone(), place.root.clone(), place.base.clone()));
+        let carried = (key.clone(), deciding.clone(), pushed);
         let spawned = self.spawn_issue_worker(
             "suggestion-decide",
             move || match decision {
-                BranchDecision::Merge => {
-                    let merged = super::branch_decision::merge(
+                BranchDecision::Merge | BranchDecision::MergePush => {
+                    let push = decision == BranchDecision::MergePush;
+                    let kind = if push { "merge_push" } else { "merge" };
+                    match super::branch_decision::land(
                         connector.as_deref(),
                         link.as_ref(),
                         &place,
                         &own,
                         Some(facts.tip.as_str()),
-                    );
-                    match merged {
-                        Ok(
-                            hide_node_link::branch::MergeOutcome::Merged { commit, .. }
-                            | hide_node_link::branch::MergeOutcome::AlreadyMerged { commit },
-                        ) => {
-                            super::branch_decision::log(&place, &subject, "merge", "merged");
+                        push,
+                    ) {
+                        super::branch_decision::Landing::Merged(commit) => {
+                            super::branch_decision::log(&place, &subject, kind, "merged");
                             AttemptMove::Merged {
                                 pr: None,
                                 at_unix_ms: unix_milliseconds(),
@@ -515,26 +532,13 @@ impl Runtime {
                                 merge_commit: Some(commit),
                             }
                         }
-                        Ok(hide_node_link::branch::MergeOutcome::BranchMissing) => {
-                            super::branch_decision::log(
-                                &place,
-                                &subject,
-                                "merge",
-                                "branch_missing",
-                            );
+                        super::branch_decision::Landing::BranchMissing => {
+                            super::branch_decision::log(&place, &subject, kind, "branch_missing");
                             AttemptMove::Discarded
                         }
-                        Ok(outcome) => {
-                            let code = super::branch_decision::refusal_code(&outcome)
-                                .unwrap_or("merge_failed");
-                            super::branch_decision::log(&place, &subject, "merge", code);
+                        super::branch_decision::Landing::Refused(code) => {
+                            super::branch_decision::log(&place, &subject, kind, code);
                             AttemptMove::DecisionRefused(code.to_owned())
-                        }
-                        // The node's words can name paths; the log keeps the
-                        // code alone (B27).
-                        Err(_) => {
-                            super::branch_decision::log(&place, &subject, "merge", "merge_failed");
-                            AttemptMove::DecisionRefused("merge_failed".into())
                         }
                     }
                 }
@@ -566,8 +570,16 @@ impl Runtime {
                 }
             },
             move |runtime, change| {
-                let (key, deciding) = carried;
+                let (key, deciding, pushed) = carried;
                 runtime.suggestions_work.apply.deciding.remove(&deciding);
+                // GitHub turned a push away that its rules allowed when read:
+                // they are read again before the button is offered again.
+                if let (Some((node, root, base)), AttemptMove::DecisionRefused(code)) =
+                    (&pushed, &change)
+                    && code.starts_with("push_")
+                {
+                    runtime.forget_base_push(node, root, base);
+                }
                 // A branch its agent moved after the operator read it is
                 // read again at the next tick, not a minute later, so the
                 // row shows what it holds now before the next press.
