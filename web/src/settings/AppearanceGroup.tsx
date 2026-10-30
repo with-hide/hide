@@ -100,7 +100,7 @@ function TextSizeRow({ label, sliderLabel, row, marker, size, min, max, detail, 
  * The installed font terminals draw in, by name: it is sent when the field
  * is left or Enter is pressed, and Escape puts the stored name back. A name
  * this machine does not have says so, since the terminals then draw in the
- * default font; otherwise the note says the CJK fit follows the chosen font.
+ * default font; otherwise the note says icons are fitted to the chosen font.
  */
 function TerminalFontRow({ actions, onCommit }: { actions: Actions; onCommit: () => void }) {
   const { t } = useInterfaceTranslation();

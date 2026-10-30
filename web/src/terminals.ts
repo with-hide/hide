@@ -274,7 +274,7 @@ export function applyTerminalFontFamily(family: string) {
   for (const instance of instances.values()) applyFont(instance, true);
 }
 
-/** Fits the fallbacks for the base size before a terminal asks for them, so the first one draws its icons and CJK at once. */
+/** Fits the icon font for the base size before a terminal asks for it, so the first one draws its icons at once. */
 function warmTerminalFonts() {
   holdTerminalFont(fontSizeAt(1), token("--font-mono")).release();
 }
