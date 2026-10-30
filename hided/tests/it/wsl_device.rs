@@ -612,10 +612,81 @@ fn a_wsl_distribution_connects_works_and_ends_with_its_link() {
     woken.node.host.close("the test is done");
 }
 
+/// How long a journey runs before its watch says where it stands: past the
+/// slowest green run (42 to 65 s on GitHub's Windows runner) and short of
+/// the lane's 120 s hang guard, which ends the test saying nothing of it.
+const STALLED: Duration = Duration::from_secs(100);
+
+/// The journey's steps, printed as each starts, and a watch that, when the
+/// journey still runs at [`STALLED`], prints its step and what the
+/// distribution runs, so a hung step names itself before the lane ends the
+/// test (with-hide/hide-private#339). A journey that ends in time prints
+/// nothing but its steps.
+struct Journey {
+    started: Instant,
+    step: Arc<Mutex<String>>,
+    done: Option<mpsc::Sender<()>>,
+    watch: Option<std::thread::JoinHandle<()>>,
+}
+
+impl Journey {
+    fn start(distro: &str) -> Self {
+        let started = Instant::now();
+        let step = Arc::new(Mutex::new("start".to_owned()));
+        let (done, ended) = mpsc::channel::<()>();
+        let at = Arc::clone(&step);
+        let distro = distro.to_owned();
+        let watch = std::thread::spawn(move || {
+            if ended.recv_timeout(STALLED) != Err(mpsc::RecvTimeoutError::Timeout) {
+                return;
+            }
+            let step = at.lock().unwrap().clone();
+            eprintln!("the journey still runs at {STALLED:?}, in step: {step}");
+            let processes = Command::new("wsl.exe")
+                .args(["-d", &distro, "-u", "root", "-e", "ps", "-eo"])
+                .arg("pid,ppid,stat,etime,args")
+                .output();
+            match processes {
+                Ok(output) => eprintln!(
+                    "processes in {distro}:\n{}{}",
+                    String::from_utf8_lossy(&output.stdout),
+                    String::from_utf8_lossy(&output.stderr)
+                ),
+                Err(error) => eprintln!("processes in {distro} unread: {error}"),
+            }
+        });
+        Self {
+            started,
+            step,
+            done: Some(done),
+            watch: Some(watch),
+        }
+    }
+
+    fn step(&self, name: &str) {
+        println!("step {name} at {} ms", self.started.elapsed().as_millis());
+        *self.step.lock().unwrap() = name.to_owned();
+    }
+
+    fn note(&self, what: &str) {
+        println!("  {what} at {} ms", self.started.elapsed().as_millis());
+    }
+}
+
+impl Drop for Journey {
+    fn drop(&mut self) {
+        self.done.take();
+        if let Some(watch) = self.watch.take() {
+            let _ = watch.join();
+        }
+    }
+}
+
 #[test]
 #[ignore = "a real WSL 2 distribution of the runner's own; the windows wsl lane sets it up"]
 fn a_wsl_device_keeps_a_windows_drive_project_its_page_and_hide_ai_across_a_reconnect() {
     let distro = std::env::var("HIDE_E2E_WSL_DISTRO").expect("set HIDE_E2E_WSL_DISTRO");
+    let journey = Journey::start(&distro);
     let sink = Arc::new(Sink::default());
     let connector = connector(sink.clone());
     let transport = connector.wsl_transport("wsl-journey", &distro).unwrap();
@@ -638,6 +709,7 @@ fn a_wsl_device_keeps_a_windows_drive_project_its_page_and_hide_ai_across_a_reco
     let project = format!("{SCENARIO_WSL}/app");
 
     // B2: consent, install, connect.
+    journey.step("first connection");
     let (first, closed) = establish(&*transport, &consent(None), Wake::Allowed);
     let first = first.unwrap_or_else(|error| panic!("connection: {error}"));
     assert_eq!(first.node.hello.os, "linux");
@@ -655,6 +727,7 @@ fn a_wsl_device_keeps_a_windows_drive_project_its_page_and_hide_ai_across_a_reco
     );
     let link = Arc::clone(&first.node.host);
 
+    journey.step("the Windows drive project");
     // B8, D-02: a folder outside the distribution's home is a project only
     // with the operator's confirmation of it, and its files read through
     // the link.
@@ -703,6 +776,7 @@ fn a_wsl_device_keeps_a_windows_drive_project_its_page_and_hide_ai_across_a_reco
 
     // B9: the project's own server, started in its pane inside WSL, is
     // previewed through a forward on the link.
+    journey.step("the page server in its pane");
     let created = herdr(
         &*transport,
         "workspace.create",
@@ -728,14 +802,17 @@ fn a_wsl_device_keeps_a_windows_drive_project_its_page_and_hide_ai_across_a_reco
         1,
     );
     let runtime = tokio::runtime::Runtime::new().unwrap();
+    journey.step("the page through the link");
     page_over(&runtime, &link);
 
     // B12: Hide AI answered by a CLI inside WSL, as the distribution's user.
     let answer = json!({"summary": format!("Linux {USER}")});
-    assert_eq!(ask_ai(&*link, 1), answer);
+    journey.step("Hide AI");
+    assert_eq!(ask_ai(&*link, 1, &journey), answer);
 
     // B26: after a reconnection the same server still answers in its pane,
     // the project is still registrable and Hide AI answers again.
+    journey.step("the reconnection");
     link.close("the journey reconnects");
     closed
         .recv_timeout(TIMEOUT)
@@ -750,8 +827,10 @@ fn a_wsl_device_keeps_a_windows_drive_project_its_page_and_hide_ai_across_a_reco
     assert!(!again.installed);
     let link = Arc::clone(&again.node.host);
     assert_eq!(registrable(&*link, &project).root, project);
+    journey.step("the page again");
     page_over(&runtime, &link);
-    assert_eq!(ask_ai(&*link, 2), answer);
+    journey.step("Hide AI again");
+    assert_eq!(ask_ai(&*link, 2, &journey), answer);
     link.close("the journey is done");
 }
 
@@ -809,7 +888,7 @@ fn page_over(runtime: &tokio::runtime::Runtime, link: &Arc<dyn NodeLink>) {
 
 /// One Hide AI request to the device's Pi backend `instance`, which runs
 /// the stand-in.
-fn ask_ai(link: &dyn NodeLink, instance: u64) -> Value {
+fn ask_ai(link: &dyn NodeLink, instance: u64, journey: &Journey) -> Value {
     let request: AiRequest = serde_json::from_value(json!({
         "feature_id": "wsl_journey",
         "request_id": format!("wsl-journey-{instance}"),
@@ -833,9 +912,13 @@ fn ask_ai(link: &dyn NodeLink, instance: u64) -> Value {
             request,
         },
         TIMEOUT,
-        |_| true,
+        |progress: Value| {
+            journey.note(&format!("Hide AI progress {progress}"));
+            true
+        },
     )
     .expect("the device answers Hide AI");
+    journey.note("Hide AI answered");
     answer
         .value
         .unwrap_or_else(|error| panic!("the stand-in's answer: {error:?}"))
