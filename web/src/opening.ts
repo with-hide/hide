@@ -13,7 +13,7 @@ import { useUiStore } from "./ui";
  * machine is the core's to bring forward: its start holds the follow and
  * cancels it on a newer visit, a changed connection or the 90-second bound,
  * and the action that sent the start began the opening that shows what the
- * core selected, so the page sends no focus of its own (with-hide/hide-private#311).
+ * core selected, so the page sends no focus of its own.
  */
 export function followStartedPane(paneId: string): void {
   if (remoteTargetOfPane(useShellStore.getState().rest, paneId)) useUiStore.getState().setFocusWhenListed(paneId);

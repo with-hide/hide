@@ -12,7 +12,7 @@ import { useUiStore } from "./ui";
 import { WorkspaceDialogs, WorkspaceNotices } from "./WorkspaceDialogs";
 import type { DispatchFn } from "./ws";
 
-// with-hide/hide-private#311: a worktree created on this machine comes forward
+// A worktree created on this machine comes forward
 // only through its start's follow in the core, which a newer visit cancels.
 // The page must not send a focus of its own when the pane is listed later.
 
