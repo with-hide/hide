@@ -1348,6 +1348,43 @@ mod tests {
         );
     }
 
+    /// A device's thread is read by that device's node; one the core cannot
+    /// reach says so and waits 5 s before it is asked again.
+    #[test]
+    fn a_device_thread_whose_node_cannot_be_reached_is_dimmed_and_waits_to_ask_again() {
+        let node = Arc::new(ScriptedNode::default());
+        let mut runtime = runtime(&node);
+        let payload: SessionSnapshotPayload = serde_json::from_value(json!({
+            "agents": [{"id": "worker", "pane_id": "w1:p1", "agent": "claude",
+                "agent_status": "working", "state_change_seq": 1, "lineage_session": "s",
+                "agent_session": {"kind": "id", "value": SESSION}}],
+            "panes": [{"pane_id": "w1:p1", "terminal_id": "t1"}],
+        }))
+        .unwrap();
+        runtime.observe_delivery("mini", &payload, None, None);
+        runtime.open_session_thread(ThreadOpenPayload {
+            pane_id: "remote:mini:pane:w1:p1".to_owned(),
+        });
+        let shown = thread(&runtime);
+        assert_eq!(shown.machine.as_deref(), Some("mini"));
+        assert!(!shown.connected);
+        assert_eq!(shown.state, ThreadState::Loading);
+        assert!(
+            node.asked().is_empty(),
+            "this machine's node never reads a device's session"
+        );
+        let retry = |runtime: &Runtime| runtime.session_thread.open.as_ref().unwrap().retry_at_ms;
+        let due = retry(&runtime).expect("a retry is set");
+        assert!(due >= unix_milliseconds() + UNREACHABLE_RETRY_MS - 1_000);
+        assert!(!runtime.tick_session_thread(due - 1));
+        assert_eq!(
+            retry(&runtime),
+            Some(due),
+            "nothing is asked before it is due"
+        );
+        assert!(node.asked().is_empty());
+    }
+
     #[test]
     fn input_reaches_the_threads_pane_with_its_files_and_nothing_reaches_a_pane_that_changed() {
         let node = Arc::new(ScriptedNode::default());
