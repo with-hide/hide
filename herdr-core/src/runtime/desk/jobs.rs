@@ -1842,7 +1842,7 @@ mod tests {
             .iter()
             .rev()
             .find_map(|item| match item {
-                DeskItem::Reply { steps, .. } => Some(steps.clone()),
+                DeskItem::Reply { steps, .. } => Some(*steps),
                 _ => None,
             })
             .expect("the turn's reply");

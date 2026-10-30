@@ -1803,7 +1803,7 @@ fn allocate(ledger: &mut Ledger, prefix: &str) -> Result<String, String> {
 
 #[cfg(test)]
 pub(crate) use executor::{SPAWN, SPAWN_TURN};
-pub(crate) use executor::{link_fork, link_started, register_code_owned, run};
+pub(crate) use executor::{link_fork, link_started, run};
 
 #[cfg(test)]
 mod tests {
