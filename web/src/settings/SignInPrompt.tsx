@@ -116,7 +116,7 @@ function SecretAnswer({ id, wait, actions, answer, onCancel }: { id: string; wai
           onChange={(event) => setText(event.target.value)}
           data-device-sign-in-field={id}
         />
-        <Button type="submit" size="sm" data-device-sign-in-submit={id}>
+        <Button type="submit" variant="secondary" size="sm" data-device-sign-in-submit={id}>
           {t("devices.signIn.submit")}
         </Button>
         <Button type="button" variant="secondary" size="sm" onClick={onCancel} data-device-sign-in-cancel={id}>

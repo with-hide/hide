@@ -306,7 +306,7 @@ function Buttons({ project, pr, entry, card, actions, children }: { project: Wor
           {card!.merge!.methods.map((each) => <option key={each} value={each}>{t(`work.card.method.${each}`)}</option>)}
         </select>
       ) : null}
-      <Button variant="secondary" size="sm" disabled={why !== null || queued || !canAsk} onClick={() => head !== null && setConfirm({ action: "merge", head, method, queue })} data-pr-card-merge={queue ? "queue" : "merge"}>
+      <Button variant={primary === "merge" ? "default" : "secondary"} size="sm" disabled={why !== null || queued || !canAsk} onClick={() => head !== null && setConfirm({ action: "merge", head, method, queue })} data-pr-card-merge={queue ? "queue" : "merge"}>
         {queue ? t("work.card.mergeQueue") : t("work.card.merge")}
       </Button>
     </span>
