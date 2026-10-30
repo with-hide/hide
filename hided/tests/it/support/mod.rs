@@ -8,4 +8,5 @@ pub mod remote_core;
 pub mod remote_delivery;
 pub mod run;
 pub mod screen;
+pub mod shipped;
 pub mod sshd;

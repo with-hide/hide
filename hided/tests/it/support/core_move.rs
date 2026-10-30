@@ -300,18 +300,7 @@ impl Fixture {
             let cli = root.join("cli");
             fs::create_dir(&cli)?;
             for name in ["hide", "hided", "hide-agent-hooks"] {
-                let staged = cli.join(name);
-                fs::copy(source_cli.join(name), &staged)?;
-                hide_platform::fs::private::restrict_to_owner(&staged)?;
-                let mut strip = source_env.command("/usr/bin/strip");
-                strip.arg(&staged);
-                successful(strip)?;
-                #[cfg(target_os = "macos")]
-                {
-                    let mut sign = source_env.command("/usr/bin/codesign");
-                    sign.args(["--force", "--sign", "-"]).arg(&staged);
-                    successful(sign)?;
-                }
+                super::shipped::place(&source_cli.join(name), &cli.join(name), &source_env)?;
             }
             // The target already holds this build, as a device that connected
             // before does, so its helper is ready within `READY_BOUND`: sending
