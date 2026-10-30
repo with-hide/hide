@@ -207,9 +207,9 @@ pub(crate) fn fetch_agent_launch(
 fn session_error_from_engine(error: EngineError) -> SessionFetchError {
     match error {
         EngineError::NotRunning(message) => SessionFetchError::SocketMissing(message),
-        EngineError::Transport(message) | EngineError::Refused { message, .. } => {
-            SessionFetchError::Unreachable(message)
-        }
+        EngineError::Transport(message)
+        | EngineError::Unanswered(message)
+        | EngineError::Refused { message, .. } => SessionFetchError::Unreachable(message),
         EngineError::Protocol {
             message,
             expected_protocol,
@@ -235,14 +235,16 @@ pub(crate) fn connect_failure_from_engine(
 ) -> SessionFetchError {
     match error {
         EngineError::NotRunning(message) => SessionFetchError::SocketMissing(message),
-        EngineError::Transport(message) | EngineError::Refused { message, .. }
+        EngineError::Transport(message)
+        | EngineError::Unanswered(message)
+        | EngineError::Refused { message, .. }
             if has_projection =>
         {
             SessionFetchError::Stale(message)
         }
-        EngineError::Transport(message) | EngineError::Refused { message, .. } => {
-            SessionFetchError::Unreachable(message)
-        }
+        EngineError::Transport(message)
+        | EngineError::Unanswered(message)
+        | EngineError::Refused { message, .. } => SessionFetchError::Unreachable(message),
         other => session_error_from_engine(other),
     }
 }

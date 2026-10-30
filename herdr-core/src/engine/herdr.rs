@@ -214,16 +214,24 @@ impl ApiConnector for GatedConnector<'_> {
 fn into_api(error: EngineError) -> ApiError {
     match error {
         EngineError::NotRunning(message) => ApiError::NotRunning(message),
+        EngineError::Transport(message) | EngineError::Unanswered(message) => {
+            ApiError::Transport(message)
+        }
         EngineError::Refused { code, message } => ApiError::Remote { code, message },
         EngineError::Malformed(message) => ApiError::Malformed(message),
         other => ApiError::Transport(other.to_string()),
     }
 }
 
-/// The engine boundary's words for a failure of Herdr's transport.
+/// The engine boundary's words for a failure of Herdr's transport. The
+/// transport's own reading of a request written and never answered is the
+/// only place that tells [`EngineError::Unanswered`] from a send that never
+/// happened.
 pub(crate) fn from_api(error: ApiError) -> EngineError {
+    let unanswered = error.reply_unknown();
     match error {
         ApiError::NotRunning(message) => EngineError::NotRunning(message),
+        ApiError::Transport(message) if unanswered => EngineError::Unanswered(message),
         ApiError::Transport(message) => EngineError::Transport(message),
         ApiError::Remote { code, message } => EngineError::Refused { code, message },
         ApiError::Malformed(message) => EngineError::Malformed(message),
@@ -1024,5 +1032,46 @@ impl EngineHandle {
     /// (`hide_node::herdr`), which owns the socket.
     pub fn herdr(connector: Arc<dyn ApiConnector>) -> Self {
         Self::new(HerdrEngine::shared(connector))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::io::{BufRead, BufReader};
+
+    use hide_platform::ipc::LocalListener;
+
+    use super::*;
+
+    /// A call that reached the engine and was never answered is the one
+    /// failure a caller reconciles after; a call that found no engine did
+    /// nothing.
+    #[test]
+    fn a_call_sent_and_never_answered_is_unanswered_and_one_with_no_server_is_not_running() {
+        let root = tempfile::Builder::new().prefix("heu-").tempdir().unwrap();
+        let socket = root.path().join("h.sock");
+        let missing = local(&socket)
+            .ping(Wait::Each(Duration::from_secs(2)))
+            .unwrap_err();
+        assert!(matches!(missing, EngineError::NotRunning(_)), "{missing:?}");
+        assert!(!missing.reply_unknown());
+
+        let listener = LocalListener::bind(&socket).unwrap();
+        let server = std::thread::spawn(move || {
+            let mut stream = listener.accept().unwrap();
+            let mut request = String::new();
+            BufReader::new(&mut stream).read_line(&mut request).unwrap();
+            // The connection closes here with the request unanswered.
+            request
+        });
+        let unanswered = local(&socket)
+            .ping(Wait::Each(Duration::from_secs(5)))
+            .unwrap_err();
+        assert!(server.join().unwrap().contains("\"ping\""));
+        assert!(
+            matches!(unanswered, EngineError::Unanswered(_)),
+            "{unanswered:?}"
+        );
+        assert!(unanswered.reply_unknown());
     }
 }

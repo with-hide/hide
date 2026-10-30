@@ -1410,7 +1410,11 @@ fn close_pane(engine: &dyn Engine, pane: &str) -> Result<(), String> {
 /// with the device and the spawn it belongs to.
 fn device_unreachable(engine: &dyn Engine, device: &str, spawn: &str, reason: String) -> String {
     match engine.agents(Wait::Each(Duration::from_secs(2))) {
-        Err(error @ (EngineError::NotRunning(_) | EngineError::Transport(_))) => {
+        Err(
+            error @ (EngineError::NotRunning(_)
+            | EngineError::Transport(_)
+            | EngineError::Unanswered(_)),
+        ) => {
             crate::diagnostic!(json!({
                 "component": "spawn", "kind": "device_unreachable", "device": device,
                 "spawn": spawn, "reason": reason, "cause": error.to_string()
@@ -1645,7 +1649,7 @@ mod tests {
             "response was empty",
         ] {
             assert_eq!(
-                worktree_create_refusal(EngineError::Transport(lost.into())),
+                worktree_create_refusal(EngineError::Unanswered(lost.into())),
                 WORKTREE_UNCONFIRMED,
                 "{lost}"
             );

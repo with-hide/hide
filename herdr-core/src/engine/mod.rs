@@ -43,9 +43,13 @@ pub(crate) enum Wait {
 pub enum EngineError {
     /// No engine runs where the core looked for it.
     NotRunning(String),
-    /// The engine could not be reached, or it was asked and its answer never
-    /// came ([`EngineError::reply_unknown`] tells the two apart).
+    /// The engine could not be reached or the call could not be sent:
+    /// nothing was done.
     Transport(String),
+    /// The call was sent and its answer never came: a read that timed out or
+    /// a connection that closed unanswered. The engine may have done what was
+    /// asked, so a caller that made a change reconciles before it asks again.
+    Unanswered(String),
     /// The engine answered with a refusal, under its stable code.
     Refused { code: String, message: String },
     /// The engine's answer could not be read as an answer at all.
@@ -74,12 +78,10 @@ impl EngineError {
         }
     }
 
-    /// Whether the call was sent and its answer never came: a read that
-    /// timed out or a connection that closed unanswered. The engine may have
-    /// done what was asked, so a caller that made a change reconciles before
-    /// it asks again; a refused connect or send did nothing.
+    /// Whether the call was sent and its answer never came
+    /// ([`EngineError::Unanswered`]); a refused connect or send did nothing.
     pub fn reply_unknown(&self) -> bool {
-        matches!(self, Self::Transport(message) if message.starts_with("response "))
+        matches!(self, Self::Unanswered(_))
     }
 
     /// Whether the engine was reached and said something: a refusal, or an
@@ -113,6 +115,7 @@ impl fmt::Display for EngineError {
         match self {
             Self::NotRunning(message)
             | Self::Transport(message)
+            | Self::Unanswered(message)
             | Self::Malformed(message)
             | Self::Request(message)
             | Self::Answer(message)
@@ -157,8 +160,9 @@ pub(crate) type Answer<T> = Result<T, EngineError>;
 /// What the core asks the engine. Every method is one call: it blocks until
 /// the engine answers or `wait` ends, and none is ever made under the
 /// runtime lock. A method that changes something says what changed in its
-/// answer, and a caller that met [`EngineError::reply_unknown`] reads the
-/// engine again before it asks for the change twice.
+/// answer. A call that was sent and never answered fails with
+/// [`EngineError::Unanswered`], never with another kind, and a caller that
+/// met it reads the engine again before it asks for the change twice.
 pub(crate) trait Engine: Send + Sync {
     /// This engine, with every call first passing `gate`.
     fn gated<'a>(&'a self, gate: Gate<'a>) -> Box<dyn Engine + 'a>;
