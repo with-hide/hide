@@ -13,6 +13,7 @@ mod agent_sleep;
 mod agents;
 mod attachments;
 mod backlog;
+mod base_push;
 mod branch_card;
 mod branch_decision;
 mod checkout_git;
@@ -1597,6 +1598,8 @@ pub struct Runtime {
     project_memory: project_memory::ProjectMemoryWork,
     /// The Hide AI tool's 제안 tab (`runtime/suggestions.rs`).
     suggestions_work: suggestions::SuggestionsWork,
+    /// Whether GitHub's base of a Project takes a direct push.
+    base_push_work: base_push::BasePushWork,
     editor_tab_history: Vec<String>,
     worker_context: Option<RuntimeWorkerContext>,
     /// The last moment any agent was working or waiting on the user. The pet
@@ -2408,6 +2411,7 @@ impl Runtime {
             memory_work: Default::default(),
             project_memory: Default::default(),
             suggestions_work: Default::default(),
+            base_push_work: Default::default(),
             editor_tab_history: Vec::new(),
             worker_context: None,
             pending_session_resolutions: BTreeMap::new(),

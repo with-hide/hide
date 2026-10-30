@@ -6,12 +6,13 @@
 //!
 //! Everything here runs on a worker thread, off `Mutex<Runtime>`: the git
 //! work is the node's, on the machine that holds the checkout (B25), and the
-//! panes are that machine's Herdr. Nothing here pushes.
+//! panes are that machine's Herdr. Only `{base}에 바로 올리기` pushes, and
+//! only the base, to its upstream.
 
 use super::memory_promotion::{Retire, panes_in, retire_attempt, worktree_path};
 use crate::node::NodeId;
 use crate::node_access::NodeLink;
-use hide_node_link::branch::{BranchFacts, DiscardOutcome, MergeOutcome};
+use hide_node_link::branch::{BranchFacts, DiscardOutcome, MergeOutcome, MergePushOutcome};
 use hide_node_link::protocol::Call;
 use serde_json::json;
 use std::time::Duration;
@@ -55,34 +56,68 @@ pub(super) fn read_facts(
     .map_err(|error| error.to_string())
 }
 
-/// The operator's `main에 합치기` (B6-B8): the node merges the branch into
-/// the base where the base is checked out, fast-forward when it can, and
-/// changes nothing when it cannot. `tip` is the commit the operator was
+/// How a merge, pushed or not, ended for the row that asked it.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(super) enum Landing {
+    /// The base holds the branch at this commit, on its upstream too when the
+    /// merge was pushed.
+    Merged(String),
+    /// The branch is gone, merged or deleted outside Hide.
+    BranchMissing,
+    /// Nothing landed; the code the row words.
+    Refused(&'static str),
+}
+
+/// The operator's `main에 합치기` (B6-B8), or with `push` the GitHub
+/// Project's `{base}에 바로 올리기`: the node merges the branch into the base
+/// where the base is checked out, fast-forward when it can, and changes
+/// nothing when it cannot; with `push` it fetches the base's upstream first
+/// and pushes the base after, putting the base back when the remote does not
+/// take it (`Call::BranchMergePush`). `tip` is the commit the operator was
 /// shown: a branch its agent moved since is not merged. On a merge the
-/// attempt's agent ends and its worktree goes; the branch stays.
-pub(super) fn merge(
+/// attempt's agent ends and its worktree goes; the branch stays. The node's
+/// words can name paths, so a failure is answered as a code alone (B27).
+pub(super) fn land(
     connector: Option<&dyn hide_herdr_client::ApiConnector>,
     link: &dyn NodeLink,
     place: &BranchPlace,
     own_panes: &[String],
     tip: Option<&str>,
-) -> Result<MergeOutcome, String> {
-    let outcome = crate::node_access::call_as::<MergeOutcome>(
-        link,
-        Call::BranchMerge {
-            root: place.root.clone(),
-            branch: place.branch.clone(),
-            tip: tip.map(str::to_owned),
-            base: place.base.clone(),
-            message: format!("Merge branch '{}'", place.branch),
-        },
-        CHANGE_TIMEOUT,
-    )
-    .map_err(|error| error.to_string())?;
-    if matches!(
-        outcome,
-        MergeOutcome::Merged { .. } | MergeOutcome::AlreadyMerged { .. }
-    ) && let Some(connector) = connector
+    push: bool,
+) -> Landing {
+    let landing = if push {
+        crate::node_access::call_as::<MergePushOutcome>(
+            link,
+            Call::BranchMergePush {
+                root: place.root.clone(),
+                branch: place.branch.clone(),
+                tip: tip.map(str::to_owned),
+                base: place.base.clone(),
+                message: format!("Merge branch '{}'", place.branch),
+            },
+            hide_node_link::branch::MERGE_PUSH_WAIT,
+        )
+        .map_or(Landing::Refused("merge_failed"), |outcome| {
+            pushed_landing(&outcome)
+        })
+    } else {
+        crate::node_access::call_as::<MergeOutcome>(
+            link,
+            Call::BranchMerge {
+                root: place.root.clone(),
+                branch: place.branch.clone(),
+                tip: tip.map(str::to_owned),
+                base: place.base.clone(),
+                message: format!("Merge branch '{}'", place.branch),
+            },
+            CHANGE_TIMEOUT,
+        )
+        .map_or(Landing::Refused("merge_failed"), |outcome| {
+            merged_landing(&outcome)
+        })
+    };
+    if matches!(landing, Landing::Merged(_))
+        && let Some(connector) = connector
     {
         // The merge stands whatever the retire answers; a worktree kept is
         // logged and found in the cleanup review.
@@ -99,7 +134,37 @@ pub(super) fn merge(
             false,
         );
     }
-    Ok(outcome)
+    landing
+}
+
+fn merged_landing(outcome: &MergeOutcome) -> Landing {
+    match outcome {
+        MergeOutcome::Merged { commit, .. } | MergeOutcome::AlreadyMerged { commit } => {
+            Landing::Merged(commit.clone())
+        }
+        MergeOutcome::BranchMissing => Landing::BranchMissing,
+        refused => Landing::Refused(refusal_code(refused).unwrap_or("merge_failed")),
+    }
+}
+
+/// A merge and push's answer as the row words it. A push the remote did not
+/// take put the base back (`push_refused`, `push_failed`) unless the base
+/// moved on after the merge, when the merge stays unpushed (`push_kept`).
+fn pushed_landing(outcome: &MergePushOutcome) -> Landing {
+    match outcome {
+        MergePushOutcome::Pushed { commit, .. } | MergePushOutcome::AlreadyMerged { commit } => {
+            Landing::Merged(commit.clone())
+        }
+        MergePushOutcome::NotMerged { merge } => merged_landing(merge),
+        MergePushOutcome::NoUpstream => Landing::Refused("push_no_upstream"),
+        MergePushOutcome::FetchFailed => Landing::Refused("push_fetch_failed"),
+        MergePushOutcome::BaseAhead => Landing::Refused("push_base_ahead"),
+        MergePushOutcome::BaseDiverged => Landing::Refused("push_base_diverged"),
+        MergePushOutcome::PushRefused { reverted: true } => Landing::Refused("push_refused"),
+        MergePushOutcome::PushFailed { reverted: true } => Landing::Refused("push_failed"),
+        MergePushOutcome::PushRefused { reverted: false }
+        | MergePushOutcome::PushFailed { reverted: false } => Landing::Refused("push_kept"),
+    }
 }
 
 /// The operator's `버리기` (D-07, B10): the attempt's agent ends, and its

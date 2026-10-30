@@ -405,6 +405,21 @@ pub struct SuggestionBranchSnapshot {
     /// read an open file's diff again when the branch moves.
     #[serde(skip)]
     pub tip: Option<String>,
+    /// Whether GitHub's base takes a direct push, which offers `{base}에 바로
+    /// 올리기` in a Project whose GitHub is connected.
+    pub push: SuggestionBranchPush,
+}
+
+/// What GitHub said of a ready branch's base: it takes a direct push, it
+/// takes pull requests only, or it has not said (unread, not answered to
+/// this account, or no GitHub).
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SuggestionBranchPush {
+    Allowed,
+    PrOnly,
+    #[default]
+    Unknown,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]

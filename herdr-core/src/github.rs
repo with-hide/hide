@@ -1334,6 +1334,40 @@ fn parse_merge_commit(output: &str) -> Result<Option<String>, String> {
     }
 }
 
+/// Whether GitHub's `base` of the repository checked out at `root` takes a
+/// direct push from the account `gh` is signed in as: its classic protection,
+/// read only when the branch is protected, and its rulesets both have to
+/// allow it (`hide_node_link::gh::BranchPushRead`). An answer GitHub does not
+/// give, as the protection of a repository the account does not administer,
+/// is an error, which leaves the question open. The error is a code alone.
+pub(crate) fn base_push(node: &dyn NodeLink, root: &Path, base: &str) -> Result<bool, String> {
+    use hide_node_link::gh::{BranchPushRead, branch_push_arguments};
+    let repository = issue_repository(node, &Where::Checkout(root.to_path_buf()))
+        .map_err(|_| "branch_push_repository_unread".to_owned())?;
+    let read = |kind: BranchPushRead| -> Result<String, String> {
+        let arguments = branch_push_arguments(kind, &repository, base)
+            .ok_or_else(|| "branch_push_invalid".to_owned())?;
+        let arguments = arguments.iter().map(String::as_str).collect::<Vec<_>>();
+        gh_at(node, &Where::Repository(repository.clone()), &arguments)
+            .map(|output| output.trim().to_owned())
+            .map_err(|_| "branch_push_unread".to_owned())
+    };
+    let verdict = |answer: String| match answer.as_str() {
+        "push" => Ok(true),
+        "pr_only" => Ok(false),
+        _ => Err("branch_push_unreadable".to_owned()),
+    };
+    let protected = match read(BranchPushRead::Protected)?.as_str() {
+        "true" => true,
+        "false" => false,
+        _ => return Err("branch_push_unreadable".to_owned()),
+    };
+    if protected && !verdict(read(BranchPushRead::Protection)?)? {
+        return Ok(false);
+    }
+    verdict(read(BranchPushRead::Rules)?)
+}
+
 /// Whether `head` has `commit` in its history, by GitHub's compare of the
 /// two: `ahead` or `identical` says it has, `behind` or `diverged` that it
 /// has not; anything else is not known and an error.

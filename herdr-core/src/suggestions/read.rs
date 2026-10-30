@@ -261,6 +261,7 @@ pub(crate) fn branch(
         added: facts.map_or(0, |facts| facts.added),
         removed: facts.map_or(0, |facts| facts.removed),
         tip: facts.map(|facts| facts.tip.clone()),
+        push: crate::model::SuggestionBranchPush::Unknown,
     }
 }
 

@@ -1268,6 +1268,19 @@ pub fn handle_with_progress(
             &base,
             &message,
         )?),
+        Call::BranchMergePush {
+            root,
+            branch,
+            tip,
+            base,
+            message,
+        } => to_value(crate::branch_merge::merge_push(
+            &absolute(&root)?,
+            &branch,
+            tip.as_deref(),
+            &base,
+            &message,
+        )?),
         Call::BranchDiff {
             root,
             branch,

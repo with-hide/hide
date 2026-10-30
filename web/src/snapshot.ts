@@ -2459,6 +2459,8 @@ export type SuggestionBranch = {
   files_total: number;
   added: number;
   removed: number;
+  /** Whether GitHub's base takes a direct push, which offers `{base}에 바로 올리기` while GitHub is connected. */
+  push: "allowed" | "pr_only" | "unknown";
 };
 
 export type SuggestionBasis = { signal: SuggestionSignal; tag: string };
@@ -2589,7 +2591,7 @@ export type ProjectSuggestions = {
 export type SuggestionsSection = { project: ProjectSuggestions | null };
 
 /** What the operator does to one row (`suggestion_action`). */
-export type SuggestionAction = "apply" | "dismiss" | "restore" | "retry" | "revert" | "merge" | "open_pr" | "discard" | "rebase";
+export type SuggestionAction = "apply" | "dismiss" | "restore" | "retry" | "revert" | "merge" | "merge_push" | "open_pr" | "discard" | "rebase";
 
 /** Where ⚙'s 읽을 곳 reads (D-52): the session records' four signals or GitHub's two; one switch turns its group. */
 export type SuggestionSignalGroup = "session" | "github";

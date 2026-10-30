@@ -255,7 +255,11 @@ use crate::error::HostError;
 /// fast-forward only and never fetching (`Call::BranchCatchUp`,
 /// [`crate::branch::CatchUpOutcome`]). A helper on 60 would refuse it, so it
 /// is refused at Hello and upgraded.
-pub const PROTOCOL_VERSION: u32 = 61;
+/// 62: a node merges a Hide AI branch into its base and pushes the base to
+/// its upstream, putting the local base back when the remote does not take it
+/// (`Call::BranchMergePush`, [`crate::branch::MergePushOutcome`]). A helper on
+/// 61 would refuse it, so it is refused at Hello and upgraded.
+pub const PROTOCOL_VERSION: u32 = 62;
 
 /// What agy's index held in a checkout before Hide typed `/fork`
 /// ([`Call::AntigravityForkMark`]).
@@ -544,6 +548,19 @@ pub enum Call {
         branch: String,
         /// The commit the operator read; a branch that moved since is not
         /// merged (`MergeOutcome::BranchMoved`).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        tip: Option<String>,
+        base: String,
+        message: String,
+    },
+    /// Merges `branch` into `base` as [`Call::BranchMerge`] does and pushes
+    /// the base to its upstream (`hide_host::branch_merge::merge_push`): the
+    /// upstream is fetched first and the local base caught up to it, fast
+    /// forward only, and a push the remote does not take puts the local base
+    /// back. The answer is a [`crate::branch::MergePushOutcome`].
+    BranchMergePush {
+        root: String,
+        branch: String,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         tip: Option<String>,
         base: String,
@@ -1123,6 +1140,7 @@ impl Call {
             | Self::HomeSync { .. }
             | Self::BranchFacts { .. }
             | Self::BranchMerge { .. }
+            | Self::BranchMergePush { .. }
             | Self::BranchDiscard { .. }
             | Self::BranchCatchUp { .. }
             | Self::BranchDiff { .. }
@@ -1432,7 +1450,18 @@ mod tests {
             serde_json::to_value(&catch_up).unwrap(),
             serde_json::json!({"op": "branch_catch_up", "root": "/repo", "head": "c".repeat(40)})
         );
-        for call in [facts, merge, discard, diff, catch_up] {
+        let merge_push = Call::BranchMergePush {
+            root: "/repo".into(),
+            branch: "feat".into(),
+            tip: Some("b".repeat(40)),
+            base: "main".into(),
+            message: "Merge feat".into(),
+        };
+        assert_eq!(
+            serde_json::to_value(&merge_push).unwrap()["op"],
+            "branch_merge_push"
+        );
+        for call in [facts, merge, merge_push, discard, diff, catch_up] {
             let text = serde_json::to_string(&call).unwrap();
             assert_eq!(serde_json::from_str::<Call>(&text).unwrap(), call);
             assert!(call.answered_by_device());
