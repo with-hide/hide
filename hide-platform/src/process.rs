@@ -4296,7 +4296,8 @@ mod sys {
     use windows_sys::Win32::System::JobObjects::{
         AssignProcessToJobObject, CreateJobObjectW, IsProcessInJob,
         JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE, JOBOBJECT_BASIC_ACCOUNTING_INFORMATION,
-        JOBOBJECT_EXTENDED_LIMIT_INFORMATION, JobObjectBasicAccountingInformation,
+        JOBOBJECT_BASIC_PROCESS_ID_LIST, JOBOBJECT_EXTENDED_LIMIT_INFORMATION,
+        JobObjectBasicAccountingInformation, JobObjectBasicProcessIdList,
         JobObjectExtendedLimitInformation, OpenJobObjectW, QueryInformationJobObject,
         SetInformationJobObject, TerminateJobObject,
     };
@@ -4307,8 +4308,8 @@ mod sys {
     use windows_sys::Win32::System::SystemServices::JOB_OBJECT_QUERY;
     use windows_sys::Win32::System::Threading::{
         CREATE_NEW_PROCESS_GROUP, CREATE_NO_WINDOW, CREATE_SUSPENDED, DETACHED_PROCESS,
-        GetCurrentProcess, GetExitCodeProcess, GetProcessTimes, OpenProcess, OpenThread,
-        PROCESS_QUERY_LIMITED_INFORMATION, PROCESS_SYNCHRONIZE, PROCESS_TERMINATE,
+        GetCurrentProcess, GetExitCodeProcess, GetProcessId, GetProcessTimes, OpenProcess,
+        OpenThread, PROCESS_QUERY_LIMITED_INFORMATION, PROCESS_SYNCHRONIZE, PROCESS_TERMINATE,
         QueryFullProcessImageNameW, ResumeThread, THREAD_SUSPEND_RESUME, TerminateProcess,
         WaitForSingleObject,
     };
@@ -4360,9 +4361,10 @@ mod sys {
     }
 
     /// The job a child lives in. Closing it ends everything still in it.
-    /// The child's job, whether the child was put in it, and, for a tied
-    /// child, the bound its tree's end is confirmed within.
-    pub(super) struct Tie(Owned, bool, Option<Duration>);
+    /// The child's job, whether the child was put in it, for a tied child
+    /// the bound its tree's end is confirmed within, and the processes the
+    /// job ran when it was ended, held until each has ended (`hold_members`).
+    pub(super) struct Tie(Owned, bool, Option<Duration>, Vec<Owned>);
 
     pub(super) fn spawn(
         command: &mut Command,
@@ -4440,7 +4442,7 @@ mod sys {
             if let Some(deadline) = deadline {
                 let owned = OwnedChild {
                     child,
-                    tie: Tie(job, false, None),
+                    tie: Tie(job, false, None, Vec::new()),
                     tied: false,
                     ended: false,
                     reaped: false,
@@ -4457,7 +4459,7 @@ mod sys {
             if let Some(deadline) = deadline {
                 let owned = OwnedChild {
                     child,
-                    tie: Tie(job, true, None),
+                    tie: Tie(job, true, None, Vec::new()),
                     tied: false,
                     ended: false,
                     reaped: false,
@@ -4470,7 +4472,7 @@ mod sys {
             let _ = child.wait();
             return Err(error);
         }
-        let tie = Tie(job, true, None);
+        let tie = Tie(job, true, None, Vec::new());
         if let Some(deadline) = deadline.filter(|deadline| Instant::now() >= *deadline) {
             let owned = OwnedChild {
                 child,
@@ -4721,22 +4723,21 @@ mod sys {
     }
 
     /// Ends everything in a tied child's job and waits, up to `limit`, until
-    /// the job counts nothing running: `TerminateJobObject` returns before
+    /// it has all ended (`tree_ended`): `TerminateJobObject` returns before
     /// its processes have ended.
-    fn end_job(tie: &Tie, limit: Duration) -> io::Result<bool> {
+    fn end_job(tie: &mut Tie, limit: Duration) -> io::Result<bool> {
         if !tie.1 {
             // Assignment failed before the suspended child could run, so the
             // child was alone and its exit was seen first.
             return Ok(false);
         }
         let running = active_processes(tie)?;
-        // SAFETY: the job handle is open for as long as `tie` lives.
-        if running > 0 && unsafe { TerminateJobObject((tie.0).0, 1) } == 0 {
-            return Err(io::Error::last_os_error());
+        if running > 0 {
+            terminate_job(tie)?;
         }
         let until = Instant::now() + limit;
         loop {
-            let left = active_processes(tie)?;
+            let left = left_running(tie)?;
             if left == 0 {
                 return super::Ending::Confirmed {
                     ended_any: running > 0,
@@ -4744,10 +4745,7 @@ mod sys {
                 .result();
             }
             if Instant::now() >= until {
-                return super::Ending::Unconfirmed {
-                    left: Some(left as usize),
-                }
-                .result();
+                return super::Ending::Unconfirmed { left: Some(left) }.result();
             }
             pause_until(Instant::now() + Duration::from_millis(1));
         }
@@ -4797,22 +4795,154 @@ mod sys {
             return Ok(true);
         }
         let active = active_processes(tie)?;
+        terminate_job(tie)?;
+        Ok(active > 0)
+    }
+
+    /// Ends every process in the child's job, holding each first so its end
+    /// can be waited on (`hold_members`). A process that could not be held
+    /// is still ended, and the failure to hold it is the answer.
+    fn terminate_job(tie: &mut Tie) -> io::Result<()> {
+        let held = hold_members(tie);
         // SAFETY: the job handle is open for as long as `tie` lives.
         if unsafe { TerminateJobObject((tie.0).0, 1) } == 0 {
             return Err(io::Error::last_os_error());
         }
-        Ok(active > 0)
+        held
     }
 
-    /// Whether nothing is left running in the child's job. A terminated job
-    /// ends its processes after `TerminateJobObject` returns, so this is
-    /// asked until it holds. A child whose assignment failed is alone in its
-    /// tree, and its exit was seen before this is asked.
+    /// Holds every process the job runs, so its end can be waited on. The
+    /// system counts a process out of its job before it has closed the
+    /// handles the process held, and signals the process's object only after
+    /// (Microsoft's "Terminating a Process" lists the handles closed before
+    /// the object signalled), so a job that counts nothing running can still
+    /// hold a file or a folder its last process used. A pid read from the
+    /// list is held only when the process it opens is in this job: a later
+    /// process that took an ended one's pid is not. Already held processes
+    /// that have ended are let go, so the hold never outgrows what runs.
+    fn hold_members(tie: &mut Tie) -> io::Result<()> {
+        let mut held = Vec::with_capacity(tie.3.len());
+        for process in tie.3.drain(..) {
+            if !signalled(&process)? {
+                held.push(process);
+            }
+        }
+        tie.3 = held;
+        for pid in job_process_ids(tie)? {
+            // SAFETY: each handle is open while `tie` holds it.
+            if tie
+                .3
+                .iter()
+                .any(|process| unsafe { GetProcessId(process.0) } == pid)
+            {
+                continue;
+            }
+            let process = match open(pid, PROCESS_SYNCHRONIZE | PROCESS_QUERY_LIMITED_INFORMATION) {
+                Ok(process) => process,
+                // No handle keeps its object: it has ended whole.
+                Err(error) if error.kind() == io::ErrorKind::NotFound => continue,
+                Err(error) => return Err(error),
+            };
+            let mut member = 0;
+            // SAFETY: both handles are open and `member` is writable.
+            if unsafe { IsProcessInJob(process.0, (tie.0).0, &mut member) } == 0 {
+                return Err(io::Error::last_os_error());
+            }
+            if member != 0 {
+                tie.3.push(process);
+            }
+        }
+        Ok(())
+    }
+
+    /// The most processes one child's job is read for; a job running more is
+    /// an error, not a longer list.
+    const JOB_PROCESS_LIMIT: usize = 4096;
+
+    /// The pids of the processes the job counts as running.
+    fn job_process_ids(tie: &Tie) -> io::Result<Vec<u32>> {
+        use windows_sys::Win32::Foundation::ERROR_MORE_DATA;
+        let word = std::mem::size_of::<usize>();
+        let header = std::mem::offset_of!(JOBOBJECT_BASIC_PROCESS_ID_LIST, ProcessIdList) / word;
+        let mut room = 64;
+        loop {
+            // Words, so the list is aligned as the structure needs.
+            let mut buffer = vec![0usize; header + room];
+            // SAFETY: the job handle is open for as long as `tie` lives and
+            // `buffer` is writable for the size passed.
+            let queried = unsafe {
+                QueryInformationJobObject(
+                    (tie.0).0,
+                    JobObjectBasicProcessIdList,
+                    buffer.as_mut_ptr().cast(),
+                    (buffer.len() * word) as u32,
+                    std::ptr::null_mut(),
+                )
+            };
+            if queried == 0 {
+                let error = io::Error::last_os_error();
+                if error.raw_os_error() != Some(ERROR_MORE_DATA as i32) {
+                    return Err(error);
+                }
+            }
+            // SAFETY: the buffer starts with the structure's header, which
+            // the call wrote in both answers.
+            let list = unsafe { &*buffer.as_ptr().cast::<JOBOBJECT_BASIC_PROCESS_ID_LIST>() };
+            let (assigned, listed) = (
+                list.NumberOfAssignedProcesses as usize,
+                list.NumberOfProcessIdsInList as usize,
+            );
+            if queried != 0 && listed >= assigned {
+                return Ok(buffer[header..header + listed]
+                    .iter()
+                    .map(|&pid| pid as u32)
+                    .collect());
+            }
+            if assigned > JOB_PROCESS_LIMIT {
+                return Err(io::Error::other(format!(
+                    "the job runs {assigned} processes, more than {JOB_PROCESS_LIMIT}"
+                )));
+            }
+            // Processes may start between two reads.
+            room = assigned.max(room) + 16;
+        }
+    }
+
+    /// Whether `process` has ended: its object is signalled.
+    fn signalled(process: &Owned) -> io::Result<bool> {
+        // SAFETY: the handle is open with the access a wait needs.
+        match unsafe { WaitForSingleObject(process.0, 0) } {
+            WAIT_OBJECT_0 => Ok(true),
+            WAIT_TIMEOUT => Ok(false),
+            _ => Err(io::Error::last_os_error()),
+        }
+    }
+
+    /// How many processes of the job have not ended, at least: the more of
+    /// those it counts as running and those held when it was ended that have
+    /// not closed their handles yet.
+    fn left_running(tie: &Tie) -> io::Result<usize> {
+        let active = active_processes(tie)? as usize;
+        let mut held = 0;
+        for process in &tie.3 {
+            if !signalled(process)? {
+                held += 1;
+            }
+        }
+        Ok(active.max(held))
+    }
+
+    /// Whether everything in the child's job has ended: the job counts
+    /// nothing running and every process held when it was ended has closed
+    /// its handles (`hold_members`). A terminated job ends its processes
+    /// after `TerminateJobObject` returns, so this is asked until it holds.
+    /// A child whose assignment failed is alone in its tree, and its exit was
+    /// seen before this is asked.
     pub(super) fn tree_ended(_: &Child, tie: &Tie) -> io::Result<bool> {
         if !tie.1 {
             return Ok(true);
         }
-        Ok(active_processes(tie)? == 0)
+        Ok(left_running(tie)? == 0)
     }
 
     fn active_processes(tie: &Tie) -> io::Result<u32> {
