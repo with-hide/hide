@@ -13,7 +13,7 @@ use super::super::notebook::{Line, Notebook, Stage};
 use super::super::policy;
 
 pub(crate) const FEATURE: &str = "suggestions_investigation";
-pub(crate) const SCHEMA_VERSION: &str = "suggestions_investigation.v2";
+pub(crate) const SCHEMA_VERSION: &str = "suggestions_investigation.v3";
 
 const SYSTEM: &str = r#"You keep a notebook of recurring problems in one software project, for the person who runs its coding agents. Each line of the notebook is one problem. Each day you are handed the notebook as it stands and the fresh records: facts Hide counted without reading anything, each with a number, its signal and a tag (a command that still failed when its turn ended, an agent stopped to wait on the person, a correction the person made, a problem a turn left over, a point where a turn lost time though nothing failed, a failed CI check, a review change request merged after). Edit the notebook so that each line is one problem with one root cause, the kind the person reads and says: I missed that, fix it.
 
@@ -32,11 +32,11 @@ Edits, at most eight a turn, applied in order:
 - merge: two lines that turned out to be one problem (from goes into into).
 - split: records of a line that are a different problem, which become a new line.
 - strike: a line that is not a problem to fix (normal work in progress, already fixed, a one-off), with the reason.
-- write_cause: once you have looked, the cause in one sentence (what was missed), the fix and the outcome: pr when the place to fix is a file in the repository, issue when the cause is outside it or it is a CI problem whose place is not known yet. For pr, the fix names the file by its path, the section or place in it, and the sentence or rule to add or change, quoted as it would be written: a short draft, not a summary of one. For issue, the fix says what was seen (the check's name, the error line, how often) and what to look at first.
+- write_cause: once you have looked, the cause in one sentence (what was missed) and the outcome: pr when the place to fix is a file in the repository, issue when the cause is outside it or it is a CI problem whose place is not known yet. For pr, give title, path and draft: title is what changes, as a result the person reads before pressing (a few words, such as "write the merge steps in the contributing guide"); path is the one file to change, from the repository root, which Hide looks for and shows as a new file when it is not there; draft is the words to add or change in that file, as they would be written, with the place in the file first when it matters: a short draft, not a summary of one. For issue, give fix: what was seen (the check's name, the error line, how often) and what to look at first.
 - pass: records you looked at that belong to no problem.
 
 Rules:
-- A tag is the key Hide grouped records by, not a problem. A line with a basis and no cause was grouped by its tag alone before anyone looked: check it before you keep it, split off records that are a different problem, and strike it with the reason when its records share no cause you can name.
+- A tag is the key Hide grouped records by, not a problem. A line with a basis and no cause was grouped by its tag alone before anyone looked: check it before you keep it, split off records that are a different problem, and strike it with the reason when its records share no cause you can name. Hide offers a pr line to the person only once write_cause gave it a title, a path and a draft, so write them for every line you keep.
 - A CI check's name, such as a lane or a job, says where it failed, not why. Read the log, put each failure on the line of its own cause, and pass failures that are only the pull request's unfinished work.
 - An improvement record's tag is how the analysis at that turn's end described where the agent lost time though nothing failed, and its kind says how: no_doc, searched_again, wrong_guess or tool_friction. Records in different words can share one cause, so read their sessions before you join them.
 - A shell command's head (cat, rg, grep, sed, ls, head, find and the like) is usually a search that found nothing while the agent was exploring, which is normal work. Pass such records unless the session shows the agent was stuck on them, and strike a line that holds only those.
@@ -146,10 +146,20 @@ fn edit_schemas() -> Value {
         ),
         edit(
             "write_cause",
-            &["line", "cause", "fix", "outcome"],
+            &["line", "cause", "outcome", "title", "path", "draft"],
             json!({
-                "line": id, "cause": text(policy::CAUSE_CHARS),
-                "fix": text(policy::FIX_CHARS), "outcome": outcome
+                "line": id, "cause": text(policy::CAUSE_CHARS), "outcome": {"const": "pr"},
+                "title": text(policy::PLAN_TITLE_CHARS),
+                "path": text(policy::READ_PATH_CHARS),
+                "draft": text(policy::DRAFT_CHARS)
+            })
+        ),
+        edit(
+            "write_cause",
+            &["line", "cause", "outcome", "fix"],
+            json!({
+                "line": id, "cause": text(policy::CAUSE_CHARS), "outcome": {"const": "issue"},
+                "fix": text(policy::FIX_CHARS)
             })
         ),
         edit("pass", &["records"], json!({"records": records})),
@@ -358,6 +368,11 @@ fn notebook(notebook: &Notebook) -> Value {
                 }
                 if let Some(fix) = &line.fix {
                     item["fix"] = json!(fix);
+                }
+                if let Some(plan) = &line.plan {
+                    item["title"] = json!(plan.title);
+                    item["path"] = json!(plan.path);
+                    item["draft"] = json!(plan.draft);
                 }
                 if let Some(outcome) = line.outcome {
                     item["outcome"] = json!(outcome);

@@ -21,7 +21,7 @@ const MEMORY = { kind: "memory_promote", target: "m72" };
 
 function open(agents: Partial<AgentRow>[]) {
   const rest = { navigator: { devices: [{ id: "mac", kind: "local" }], workspaces: [{ id: "ws-1", device_id: "mac", path: "/repo", checkouts: [] }], focused_device_id: "mac" }, status: { remote: [] } } as unknown as SnapshotRest;
-  useShellStore.setState({ rest, agents: agents as AgentRow[], connection: "live" });
+  useShellStore.setState({ rest, agents: agents.map((agent) => ({ state: { asking: false }, ...agent })) as AgentRow[], connection: "live" });
   const events: Parameters<DispatchFn>[0][] = [];
   const actions = createActions((event) => (events.push(event), true));
   return { events, actions };
@@ -46,6 +46,16 @@ it("opens the Hide AI tool's 제안 tab on the attempt's row for a row its home 
     expect(events.map((event) => event.kind), pane).toContain("focus_pane");
     expect(events.some((event) => event.kind === "memory_open"), pane).toBe(false);
   }
+});
+
+// An asking Hide AI agent waits on an answer only its session takes, so its row opens the pane, not the home.
+it("opens the pane of a Hide AI agent that asks, even for a row its home owns", () => {
+  const { events, actions } = open([
+    { pane_id: "w1:p1", state: { asking: true } as AgentRow["state"], hide_ai: { task: MEMORY, home: "suggestions", workspace_id: "ws-1" } },
+  ]);
+  actions.openListedAgent("w1:p1");
+  expect(events.map((event) => event.kind)).toContain("focus_pane");
+  expect(events.some((event) => event.kind === "memory_open")).toBe(false);
 });
 
 // The core's answer to opening the pane already focused moves nothing, so the

@@ -94,6 +94,12 @@ impl ReadTools for Shelf {
     }
     fn file(&mut self, path: &str, _: u32, _: u32) -> Result<Excerpt, ReadRefused> {
         self.asked.lock().unwrap().push(format!("file {path}"));
+        if path.starts_with("docs/missing") {
+            return Err(ReadRefused::NotFound);
+        }
+        if path.starts_with("docs/offline") {
+            return Err(ReadRefused::Unavailable("node_unavailable".into()));
+        }
         Ok(Excerpt {
             text: "#!/bin/sh\ncargo test --workspace".into(),
             truncated: false,
@@ -226,7 +232,8 @@ fn an_investigation_reads_through_hide_and_writes_each_edit_through_the_pen() {
                 json!([]),
                 json!([
                     {"edit": "write_cause", "line": 1, "cause": "테스트 스크립트가 빌드를 먼저 하지 않는다",
-                     "fix": "scripts/test.sh에서 빌드를 먼저 돌린다", "outcome": "pr"},
+                     "outcome": "pr", "title": "테스트 전에 빌드하기", "path": "scripts/test.sh",
+                     "draft": "cargo build --workspace\ncargo test --workspace"},
                     {"edit": "pass", "records": [3]}
                 ]),
                 true,
@@ -241,12 +248,18 @@ fn an_investigation_reads_through_hide_and_writes_each_edit_through_the_pen() {
     assert_eq!(line.records, [RecordId(1), RecordId(2)]);
     assert_eq!(line.outcome, Some(Outcome::Pr));
     assert!(line.cause.is_some());
+    let plan = line.plan.as_ref().unwrap();
+    assert_eq!(
+        (plan.title.as_str(), plan.path.as_str(), plan.new_file),
+        ("테스트 전에 빌드하기", "scripts/test.sh", false),
+        "the file was found on the node"
+    );
     assert_eq!(pen.written.len(), 3, "the refused attach changed nothing");
 
     assert_eq!(
         *run.shelf.asked.lock().unwrap(),
-        ["session a", "file scripts/test.sh"],
-        "the credential file was never asked of the node"
+        ["session a", "file scripts/test.sh", "file scripts/test.sh"],
+        "the credential file was never asked of the node, and the fix's file was looked for"
     );
     let inputs = run.provider.inputs();
     assert_eq!(inputs.len(), 2, "one call a turn");
@@ -652,4 +665,36 @@ fn an_investigation_that_gets_no_answer_raises_nothing_and_says_so() {
         "the turn and the final turn were asked"
     );
     drop(worker);
+}
+
+/// A document fix's file is looked for on the Project's machine: one that is
+/// not there is saved as a new file, and one that cannot be looked for is
+/// refused to the model rather than saved unchecked.
+#[test]
+fn a_fix_file_that_is_missing_is_a_new_file_and_one_that_cannot_be_checked_is_refused() {
+    let cause = |path: &str| {
+        json!({"edit": "write_cause", "line": 1, "cause": "머지 절차가 문서에 없다", "outcome": "pr",
+               "title": "머지 절차를 문서에 적어 두기", "path": path, "draft": "머지는 merge-order 순서대로"})
+    };
+    let run = Run::new(
+        vec![
+            turn(
+                json!([]),
+                json!([
+                    {"edit": "new_line", "discomfort": "머지할 때마다 같은 절차를 말한다", "records": [1, 2]},
+                    cause("docs/offline/merge.md")
+                ]),
+                false,
+            ),
+            turn(json!([]), json!([cause("docs/missing/merge.md")]), true),
+        ],
+        30,
+    );
+    let mut pen = run.pen();
+    assert_eq!(run.investigate(&mut pen), AnalysisEnd::Done);
+    let plan = pen.notebook.line(LineId(1)).unwrap().plan.clone().unwrap();
+    assert_eq!(plan.path, "docs/missing/merge.md");
+    assert!(plan.new_file);
+    let refused = &run.provider.inputs()[1]["last_turn"]["edits"][1];
+    assert_eq!(refused["refused"]["refused"], "target_unchecked");
 }

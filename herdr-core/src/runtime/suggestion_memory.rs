@@ -9,8 +9,8 @@ use super::*;
 use crate::model::{
     HomeTurn, MemoryAction, MemoryPromotionSnapshot, MemoryPromotionState, MemoryQuestionSnapshot,
     MemoryRowSnapshot, MemoryStartFailureCode, ProjectSuggestionsSnapshot, SuggestionAttemptPhase,
-    SuggestionAttemptSnapshot, SuggestionGroup, SuggestionRowSnapshot, SuggestionSource,
-    SuggestionState,
+    SuggestionAttemptSnapshot, SuggestionGroup, SuggestionMemorySnapshot, SuggestionRowSnapshot,
+    SuggestionSource, SuggestionState,
 };
 use crate::suggestions::notebook::Outcome;
 use crate::suggestions::policy::APPLIED_ROWS;
@@ -29,6 +29,9 @@ pub(super) struct MemoryFacts {
     /// What the tracker knows of each promoting card's batch branch, in the
     /// order of `promoting` (PRD hide-ai-branch-first-apply D-13).
     batches: Vec<Option<super::memory_branch::BatchBranchFacts>>,
+    /// The text of each card offered for the documents, which its row shows
+    /// when it opens, by card.
+    bodies: Vec<(u64, Option<String>)>,
 }
 
 /// A card on its way into the documents, from the Memory list.
@@ -58,7 +61,7 @@ impl Runtime {
             .as_ref()
             .and_then(|memory| memory.project.as_ref())
             .filter(|memory| memory.workspace_id == workspace_id && memory.enabled)?;
-        let questions = memory
+        let questions: Vec<MemoryQuestionSnapshot> = memory
             .questions
             .iter()
             .filter(|question| !question.memory_tab_owns())
@@ -103,8 +106,24 @@ impl Runtime {
                 self.memory_batch_facts(branch).cloned()
             })
             .collect();
+        let bodies = questions
+            .iter()
+            .filter_map(|question| match *question {
+                MemoryQuestionSnapshot::Promote { number, .. } => Some(number),
+                _ => None,
+            })
+            .map(|number| {
+                let body = memory
+                    .rows
+                    .iter()
+                    .find(|row| row.number == number)
+                    .and_then(|row| row.body_preview.clone());
+                (number, body)
+            })
+            .collect();
         Some(MemoryFacts {
             workspace_id: workspace_id.to_owned(),
+            bodies,
             questions,
             promoting: self.suggestions_work.promoting.promoting.clone(),
             turns,
@@ -173,17 +192,32 @@ pub(super) fn lay_memory_rows(project: &mut ProjectSuggestionsSnapshot, facts: &
     let mut drawn = BTreeSet::new();
     for question in &facts.questions {
         let row = match question {
-            MemoryQuestionSnapshot::Promote { number, title, .. } => {
+            MemoryQuestionSnapshot::Promote {
+                number,
+                title,
+                human_session_count,
+                pulled_session_count,
+            } => {
                 if !offered || room == 0 {
                     continue;
                 }
                 room -= 1;
-                row(
+                let mut row = row(
                     *number,
                     title,
                     SuggestionGroup::Choose,
                     SuggestionState::New,
-                )
+                );
+                row.memory = Some(SuggestionMemorySnapshot {
+                    body: facts
+                        .bodies
+                        .iter()
+                        .find(|(card, _)| card == number)
+                        .and_then(|(_, body)| body.clone()),
+                    human_sessions: *human_session_count,
+                    pulled_sessions: *pulled_session_count,
+                });
+                row
             }
             MemoryQuestionSnapshot::Failed {
                 number,
@@ -294,6 +328,7 @@ fn row(
         discomfort: Some(title.to_owned()),
         cause: None,
         fix: None,
+        plan: None,
         outcome: Outcome::Pr,
         basis: None,
         auto: false,
@@ -306,6 +341,7 @@ fn row(
         local: None,
         evidence_unconfirmed: false,
         memory_cards: Vec::new(),
+        memory: None,
     }
 }
 
@@ -324,6 +360,7 @@ fn ended(started_at_unix_ms: u64, failure: &str) -> SuggestionAttemptSnapshot {
         pr_number: None,
         url: None,
         agent_id: None,
+        agent_pane: None,
         failure: Some(failure.to_owned()),
         branch: None,
         purpose: crate::suggestions::lifecycle::AttemptPurpose::Branch,
@@ -376,6 +413,11 @@ fn batch_row(
         agent_id: cards
             .iter()
             .find_map(|card| card.promotion.agent.as_ref()?.agent_id.clone()),
+        // The promotion names its agent's pane as the agent lists do, for
+        // as long as the agent lives.
+        agent_pane: cards
+            .iter()
+            .find_map(|card| card.promotion.agent.as_ref()?.pane_id.clone()),
         failure: promotion.failure.clone(),
         branch: promotion.branch.as_ref().map(|name| {
             let summary = batch.and_then(|batch| batch.summary.as_ref());
@@ -472,6 +514,7 @@ mod tests {
     fn a_cards_way_into_the_documents_is_drawn_as_a_suggestion_row() {
         let mut project = tab();
         let facts = MemoryFacts {
+            bodies: Vec::new(),
             workspace_id: "w".into(),
             questions: vec![
                 MemoryQuestionSnapshot::Promote {
@@ -562,6 +605,7 @@ mod tests {
             pulled_session_count: 0,
         };
         let facts = MemoryFacts {
+            bodies: Vec::new(),
             workspace_id: "w".into(),
             questions: vec![promote(1), promote(2), promote(3)],
             promoting: vec![promoting(4, MemoryPromotionState::Running)],

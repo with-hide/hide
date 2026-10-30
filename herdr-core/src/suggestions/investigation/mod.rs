@@ -31,7 +31,7 @@ use serde_json::{Value, json};
 use super::analysis::{
     Analysis, AnalysisEnd, AnalysisInput, NotebookPen, PartialReason, PenRefused, Written,
 };
-use super::notebook::NotebookEdit;
+use super::notebook::{EditRefused, NotebookEdit, Outcome};
 use super::policy;
 use reads::{Read, ReadTools};
 
@@ -129,6 +129,16 @@ impl Host<'_> {
                 return Step::Stop;
             }
             let kind = edit.kind();
+            let edit = match self.checked_target(edit) {
+                Ok(edit) => edit,
+                Err(refused) => {
+                    self.tally.edits_refused += 1;
+                    self.carried
+                        .edits
+                        .push(json!({"edit": kind, "ok": false, "refused": refused}));
+                    continue;
+                }
+            };
             let outcome = match self.pen.write(edit) {
                 Ok(written) => {
                     *self.tally.edits.entry(kind).or_default() += 1;
@@ -153,6 +163,42 @@ impl Host<'_> {
             self.carried.edits.push(outcome);
         }
         Step::Continue
+    }
+
+    /// A document fix's file, looked for on the Project's machine before the
+    /// plan is saved: one that is there is edited, one that is not is made
+    /// and the row says so, and one that cannot be looked for is refused so
+    /// the model names another or tries again, never saved unchecked.
+    fn checked_target(&mut self, edit: NotebookEdit) -> Result<NotebookEdit, EditRefused> {
+        let NotebookEdit::WriteCause {
+            line,
+            cause,
+            outcome: Outcome::Pr,
+            fix,
+            title,
+            path: Some(path),
+            draft,
+            ..
+        } = edit
+        else {
+            return Ok(edit);
+        };
+        reads::readable_path(path.trim()).map_err(|_| EditRefused::TargetRefused)?;
+        let new_file = match self.reads.file(path.trim(), 1, 1) {
+            Ok(_) => false,
+            Err(reads::ReadRefused::NotFound) => true,
+            Err(reads::ReadRefused::Unavailable(_)) => return Err(EditRefused::TargetUnchecked),
+        };
+        Ok(NotebookEdit::WriteCause {
+            line,
+            cause,
+            outcome: Outcome::Pr,
+            fix,
+            title,
+            path: Some(path),
+            draft,
+            new_file,
+        })
     }
 
     fn read(&mut self, reads: Vec<Read>) -> Step {

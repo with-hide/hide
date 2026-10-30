@@ -267,6 +267,7 @@ mod tests {
             discomfort: None,
             cause: None,
             fix: None,
+            plan: None,
             outcome: None,
             basis: Some((Signal::FailedTool, "cargo test".into())),
             records: Vec::new(),

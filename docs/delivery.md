@@ -598,6 +598,8 @@ The sidebar, the Overview's tasks, ancestor unread state, descendant marks and w
 PR and issue panels retain the handed-off session through its own branch facts and show no delegation line from origin.
 
 A completed spawn stores a durable receipt for its caller and intent, so retries return the same agent and preserve ended registrations and closed watches.
+The CLI waits up to 30 seconds for a spawn on its own machine, against 10 for other commands, because a Codex start with its brief commonly takes 10 to 15 seconds.
+A spawn that still answers `request_timeout` goes on without its caller: running the same command with the same intent returns its agent or its reason, and a spawn that stopped partway is logged as `spawn.unfinished` with the spawn and the reason.
 Changing only responsibility mode on the same intent returns `intent_conflict` before creating anything.
 Only incomplete intents resume their recorded creation and registration steps; starting a new watch after completion requires explicit `hide watch start`.
 Remote starts through a caller's own device use Hide's existing device start path with the same caller, modes and focus rules.
@@ -695,6 +697,7 @@ Codex 0.163.0 runs the session hook that Herdr's integration reports from only w
 Instead of failing after a fixed time, such a registration waits in the ledger (`identity_waits`, `coordination::identity_wait`) until Herdr shows the session, and the core finishes it then.
 
 `hide agent spawn` still waits up to 5 seconds for the child's session.
+The agent runs by then, so an agent list Herdr does not answer inside that wait is logged as `identity.read_failed` and read again, never taken as the spawn's failure: a spawn that ended on that read left a running child that no wait and no registration tracked.
 When none shows in that time it records the wait and answers `native_identity_unavailable`, an error with no agent, whose next action says the agent started and Hide registers it when it reports its session; the pane and the agent stay as they are, and nothing is typed again.
 Until the child is bound, `hide agent list` does not show it, the parent has no watch on it and its pane carries no lineage tokens.
 Once Herdr shows the session in the spawn's pane under the spawn's agent name, the lineage writer binds the child as the spawn's own answer would: the registration with its parent, or for a handoff its origin, the initial watch of a delegated child, and the lineage tokens on its pane, logged as `identity_wait.bound` with the wait, the agent and the pane.

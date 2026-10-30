@@ -3825,10 +3825,20 @@ impl Runtime {
     }
 
     pub(super) fn create_project_worktree(&mut self, payload: CreateWorktreePayload) -> bool {
+        self.start_answered_worktree_task(payload, false)
+    }
+
+    /// `start_worktree_task`, with the answer, its task or its refusal,
+    /// carrying the request id the page follows it by.
+    pub(super) fn start_answered_worktree_task(
+        &mut self,
+        payload: CreateWorktreePayload,
+        existing_branch: bool,
+    ) -> bool {
         let request_id = payload.request_id.clone();
         let before_id = self.snapshot.task_operation.as_ref().map(|task| task.id);
         let before_error = self.snapshot.status.last_error.clone();
-        let changed = self.start_worktree_task(payload, false);
+        let changed = self.start_worktree_task(payload, existing_branch);
         if let Some(request_id) = request_id {
             if let Some(operation) = self.snapshot.task_operation.as_mut()
                 && Some(operation.id) != before_id

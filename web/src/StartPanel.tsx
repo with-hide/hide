@@ -23,6 +23,7 @@ import { catalogWorkspaces, localDeviceId } from "./snapshot";
 import { projectBaseBranch } from "./projectSettings";
 import { branchProblem } from "./workspaceManage";
 import { composingKey } from "./keys";
+import { followStartedPane } from "./opening";
 
 // The start panel (PRD home-device-rail D-17..D-21, B23-B31): ⌘K's position
 // and width, no backdrop, the keyboard in the text box. What is written is the
@@ -50,10 +51,10 @@ function useStartAnswer() {
       const ui = useUiStore.getState();
       // A watched task reports the agent's own start after the panel is gone (the notice bar).
       if (answer.agentPhase) ui.setWatchedTask(answer.taskId);
-      // An agent start's core result owns selection and ordered Herdr focus.
-      // Opening it again here would undo a newer visit made while it waited.
-      // Worktree creation retains its separate open-when-listed flow.
-      if (answer.paneId && requestKind === "worktree_create") ui.setFocusWhenListed(answer.paneId);
+      // A start's core result owns selection and ordered Herdr focus.
+      // Opening it again here would undo a newer visit made while it waited;
+      // only a device's worktree is opened from the page once listed.
+      if (answer.paneId && requestKind === "worktree_create") followStartedPane(answer.paneId);
       if (answer.agentPhase === "failed") panel.fail(agentFailure(answer.agentReason, answer.agentLine));
       else panel.finish(answer.agentPhase === "starting" ? answer.taskId : null);
       return true;

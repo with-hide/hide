@@ -109,13 +109,25 @@ fn wait_native_identity(
     // The public socket start acknowledges the typed command before the
     // process and its native session are detected. Wait for that observation,
     // never send another start, and keep every read within one finite deadline.
+    // The agent runs by now, so a read Herdr did not answer says nothing of
+    // it: the wait reads again, and at its deadline the spawn leaves the
+    // registration to an identity wait rather than an agent nothing tracks.
     let deadline = Instant::now() + Duration::from_secs(5);
     loop {
         let remaining = deadline.saturating_duration_since(Instant::now());
         if remaining.is_zero() {
             return Err("native_identity_unavailable".into());
         }
-        let observed = agents_with_timeout(connector, remaining.min(Duration::from_secs(2)))?;
+        let observed = match agents_with_timeout(connector, remaining.min(Duration::from_secs(2))) {
+            Ok(observed) => observed,
+            Err(detail) => {
+                crate::diagnostic!(json!({
+                    "component": "spawn", "kind": "identity.read_failed", "pane_id": pane,
+                    "detail": detail,
+                }));
+                Vec::new()
+            }
+        };
         if let Some(agent) = observed.into_iter().find(|agent| {
             native_matches(agent, pane, name, kind)
                 && agent.lineage_session.is_some()
@@ -1187,6 +1199,13 @@ fn spawn(
     // never holds the lock for the probe below.
     drop(single);
     placed.map_err(|reason| {
+        // The caller may have stopped waiting for this answer, so the log is
+        // where a spawn that stopped partway is seen; the same intent
+        // continues it.
+        crate::diagnostic!(json!({
+            "component": "spawn", "kind": "spawn.unfinished", "spawn": spawn_id,
+            "reason": reason,
+        }));
         if on_device {
             device_unreachable(connector.as_ref(), &child_device, &spawn_id, reason)
         } else {

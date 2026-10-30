@@ -2375,7 +2375,7 @@ fn a_node_pull_request_with_no_checkout_gets_its_worktree_on_the_node() {
         &shared,
         "pr_delegate",
         serde_json::json!({"workspace_id": workspace_id, "pr_number": 7, "provider": "claude",
-            "prompt": "Fix the failing checks"}),
+            "prompt": "Fix the failing checks", "request_id": "start-pr-7"}),
     );
     herdr.wait_for_requests(1, Duration::from_secs(10));
     let asked = herdr.calls();
@@ -2395,9 +2395,14 @@ fn a_node_pull_request_with_no_checkout_gets_its_worktree_on_the_node() {
     assert!(own.calls.lock().unwrap().is_empty());
     let runtime = shared.lock().unwrap();
     let operation = runtime.snapshot.task_operation.as_ref().unwrap();
+    // The page follows the answer by the id it sent, as for any start.
     assert_eq!(
-        (operation.kind.as_str(), operation.device_id.as_deref()),
-        ("worktree_create", Some(NODE))
+        (
+            operation.kind.as_str(),
+            operation.device_id.as_deref(),
+            operation.request_id.as_deref()
+        ),
+        ("worktree_create", Some(NODE), Some("start-pr-7"))
     );
 }
 

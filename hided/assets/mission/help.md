@@ -157,6 +157,8 @@ Every worker's brief, change or verify, says in its first line what the node is,
   The brief is the worker's first prompt: Hide submits it once the agent takes input and keeps it as a delivered letter under the node's intent, so the worker starts on it without anyone typing and a wake later finds it.
   A node's worker without a brief is refused (`mission_brief_missing`); a brief holds at most 16 KiB, so a longer one goes in a file the brief names.
   Retrying a node uses the same intent, so it never makes a second agent or submits the brief twice; a new attempt with another worker uses a new intent.
+- When a spawn answers anything but an agent (`request_timeout`, `native_identity_unavailable`, `spawn_busy`), run the same command again until it answers the agent's id, and only then record or bind it.
+  An agent whose pane is up but whose spawn never answered its id is not registered: the mission cannot bind it, and its `hide mission record` is refused (`mission_criterion_not_yours`).
 - Then record it: `hide mission node <key> --status working --agent-id <agent-N>`.
 - A worker runs only on the machine the project is on (`mission_machine_refused`).
 - At most the mission's cap of workers run at once, reviewers and verifiers included and you not counted; Hide refuses one more (`mission_cap_reached`).

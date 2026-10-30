@@ -1154,6 +1154,9 @@ pub(super) struct PrDelegatePayload {
     /// The model the agent CLI is started with; absent is its own default.
     #[serde(default)]
     pub(super) model: Option<String>,
+    /// The id the page follows this start's answer by, as for any start.
+    #[serde(default)]
+    pub(super) request_id: Option<String>,
 }
 
 /// `issue_set_open`: close or reopen a Local issue.
@@ -1662,6 +1665,7 @@ pub(super) enum Event {
     MemoryOpen(MemoryOpenPayload),
     SuggestionAction(super::suggestions::SuggestionActionPayload),
     SuggestionEvidence(super::suggestion_evidence::SuggestionEvidencePayload),
+    SuggestionBranchFile(super::branch_card::RowBranchFilePayload),
     SuggestionSettings(super::suggestions::SuggestionSettingsPayload),
     HideAiSwitch(super::suggestions::HideAiSwitchPayload),
     SuggestionsIntroSeen,
@@ -1969,6 +1973,10 @@ pub(super) fn validate_event(event: EventEnvelope) -> Result<Event, EventValidat
             super::suggestion_evidence::SuggestionEvidencePayload,
             SuggestionEvidence
         ),
+        "suggestion_branch_file" => decode!(
+            super::branch_card::RowBranchFilePayload,
+            SuggestionBranchFile
+        ),
         "suggestion_settings" => decode!(
             super::suggestions::SuggestionSettingsPayload,
             SuggestionSettings
@@ -2241,6 +2249,7 @@ impl Runtime {
             }
             Event::SuggestionAction(payload) => self.apply_suggestion_action(payload),
             Event::SuggestionEvidence(payload) => self.open_suggestion_evidence(payload),
+            Event::SuggestionBranchFile(payload) => self.show_row_branch_file(payload),
             Event::SuggestionSettings(payload) => self.apply_suggestion_settings(payload),
             Event::HideAiSwitch(payload) => self.apply_hide_ai_switch(payload),
             Event::SuggestionsIntroSeen => self.note_suggestions_intro_seen(),

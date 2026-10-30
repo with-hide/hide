@@ -56,6 +56,8 @@ pub(crate) struct ApplyBrief {
     pub discomfort: Option<String>,
     pub cause: Option<String>,
     pub fix: Option<String>,
+    /// The document fix the operator read on the row before pressing it.
+    pub plan: Option<super::notebook::FixPlan>,
     pub basis: Option<(Signal, String)>,
     /// How strong a fix the line asks for (D-13): 0 a document, 1 a script
     /// or check, 2 a hook.
@@ -241,6 +243,7 @@ fn brief(line: &Line, index: &RecordIndex, pr: Option<PrRef>) -> ApplyBrief {
         discomfort: line.discomfort.clone(),
         cause: line.cause.clone(),
         fix: line.fix.clone().or_else(|| said_fix(line, index)),
+        plan: line.plan.clone(),
         basis: line.basis.clone(),
         level: line.level,
         prs,
@@ -489,6 +492,7 @@ mod tests {
             discomfort: Some("the same check fails".into()),
             cause: None,
             fix: None,
+            plan: None,
             outcome: None,
             basis: Some((Signal::CheckFailed, "verify".into())),
             records: Vec::new(),

@@ -109,6 +109,7 @@ import {
   type ViewWorkspace,
 } from "./viewLayout";
 import { workspaceViewOf, type LaneView, type Tool } from "./workspace";
+import { startRequestId } from "./startAnswer";
 
 /** The `device_id` an event carries: none for the core's own node, which the core takes as the default. */
 function deviceField(device: string, node: string): { device_id?: string } {
@@ -1754,8 +1755,12 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
     },
 
     /** An agent started on a pull request's branch with `prompt` (D-12); it reports through `task_operation`. */
-    delegatePullRequest(workspaceId: string, prNumber: number, provider: ProviderKind, model: string | null, prompt: string) {
-      dispatch({ schema_version: 2, kind: "pr_delegate", payload: { workspace_id: workspaceId, pr_number: prNumber, provider, ...(model ? { model } : {}), prompt } });
+    delegatePullRequest(workspace: { id: string; device_id: string }, prNumber: number, provider: ProviderKind, model: string | null, prompt: string, startKind: "agent_start" | "worktree_create") {
+      // A start on this machine comes forward through the core's follow, as
+      // `createWorktree`'s does; a device's is opened once listed (`followStartedPane`).
+      const requestId = workspace.device_id === localDeviceId(rest()) ? startRequestId() : null;
+      if (requestId) beginOpening({ startRequestId: requestId, startKind });
+      dispatch({ schema_version: 2, kind: "pr_delegate", payload: { workspace_id: workspace.id, pr_number: prNumber, provider, ...(model ? { model } : {}), prompt, ...(requestId ? { request_id: requestId } : {}) } });
     },
 
     /**
@@ -2150,6 +2155,11 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
       dispatch({ schema_version: 2, kind: "suggestion_evidence", payload: { workspace_id: workspaceId, id } });
     },
 
+    /** The file of its ready branch the open 제안 row unfolds, whose diff the core reads; null when it unfolds none. */
+    suggestionBranchFile(workspaceId: string, row: string, path: string | null) {
+      dispatch({ schema_version: 2, kind: "suggestion_branch_file", payload: { workspace_id: workspaceId, row, path } });
+    },
+
     /** Hands a file Hide owns, such as the Hide global instruction, to the system's editor; refusals are the host's to log. */
     openOwnedFile(path: string) {
       const bridge = hostBridge();
@@ -2225,14 +2235,16 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
     /**
      * An agent chosen in a list that shows only what the operator has to do
      * (the sidebar, Sessions, a digit): a row its home owns opens the home,
-     * the Hide AI tool's 제안 tab with that attempt's row open, and any other
-     * row its pane (PRD hide-ai-work-home B11, PRD hide-ai-suggestions B11).
-     * Its pane stays one link away from there.
+     * the Hide AI tool's 제안 tab with that attempt's row open, while the
+     * home waits on the operator's decision; a Hide AI agent that asks
+     * something opens its pane, where the question is answered, as any
+     * other row does (PRD hide-ai-work-home B11, PRD hide-ai-suggestions
+     * B11).
      */
     openListedAgent(paneId: string) {
       const state = useShellStore.getState();
       const agent = agentsByPane(allPaneAgents(state.agents, state.rest?.status?.remote)).get(paneId);
-      const home = homeOpening(state.rest, agent);
+      const home = agent?.state.asking ? null : homeOpening(state.rest, agent);
       if (home) return this.openSuggestion(home.deviceId, home.workspaceId, home.row);
       this.openAgent(paneId, agent?.look);
     },
@@ -2368,11 +2380,18 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
       taskKey?: string | null;
       prompt?: string | null;
     }) {
+      // A worktree on this machine comes forward through its start's follow
+      // in the core; the page only presents what the core selected, as for an
+      // agent start, and a device's worktree is opened once listed instead
+      // (`followStartedPane`).
+      const local = request.deviceId === localDeviceId(rest());
+      const requestId = request.requestId ?? (local ? startRequestId() : undefined);
+      if (local && requestId) beginOpening({ startRequestId: requestId, startKind: "worktree_create" });
       dispatch({
         schema_version: 2,
         kind: "create_worktree",
         payload: {
-          ...(request.requestId ? { request_id: request.requestId } : {}),
+          ...(requestId ? { request_id: requestId } : {}),
           device_id: request.deviceId,
           repository_root: request.repositoryRoot,
           branch: request.branch,

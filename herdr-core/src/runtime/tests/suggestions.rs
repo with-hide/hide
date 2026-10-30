@@ -95,6 +95,7 @@ fn the_tab_shows_the_workers_read_with_hide_ai_and_github_laid_on_it() {
         discomfort: None,
         cause: None,
         fix: None,
+        plan: None,
         outcome,
         basis: None,
         auto: false,
@@ -107,6 +108,7 @@ fn the_tab_shows_the_workers_read_with_hide_ai_and_github_laid_on_it() {
         local: None,
         evidence_unconfirmed: false,
         memory_cards: Vec::new(),
+        memory: None,
     };
     runtime.ingest_suggestions_read(
         workspace.clone(),
