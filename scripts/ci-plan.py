@@ -303,6 +303,25 @@ AGENT_CLI_LANES = {"agent-clis"}
 JOURNEY_CRATE_FILES = ("hide-session/examples/journey_conversation.rs", "hide-memory/examples/journey_memory.rs",
                        "hide-agent-adapter/examples/journey_composer.rs",
                        "hide-agent-hooks/tests/fixtures/fake-codex.py")
+# The product code the journey's cells judge: what a crate builds into the
+# programs the journey runs (`hided`, `hide`, the hooks and the examples
+# above), which every workspace crate reaches. A Memory, guidance, spawn,
+# letter, sleep or conversation change breaks a cell here before the nightly
+# canary blames an agent release for it (with-hide/hide-private#358, from
+# #1816). A crate's tests, test modules and other examples build into none
+# of those programs.
+JOURNEY_PRODUCT_FILES = ("Cargo.toml", "build.rs")
+
+
+def is_journey_product(path):
+    """True for a crate path that builds into the programs the journey runs."""
+    parts = path.parts
+    if len(parts) == 2:
+        return parts[1] in JOURNEY_PRODUCT_FILES
+    return (len(parts) > 2 and parts[1] == "src" and "tests" not in parts[2:-1]
+            and path.stem != "tests" and not path.stem.endswith("_tests"))
+
+
 # The live check's code, which the journey runs and `agent-live-check.spec.ts`
 # drives in the web e2e; its unit tests are `policy`'s.
 LIVE_CHECK_LANES = {"web-e2e"} | JOURNEY_LANES
@@ -457,7 +476,7 @@ def classify(path, status, crates, root):
             lanes.update(OS_LANES)
         if crate["name"] in AGY_CRATES:
             lanes.add("agy-contract")
-        if path.as_posix() in JOURNEY_CRATE_FILES:
+        if path.as_posix() in JOURNEY_CRATE_FILES or is_journey_product(path):
             lanes.update(JOURNEY_LANES)
         return lanes, f"crate {crate['name']}: {path}", packages
     if parts[0] == "web" and len(parts) > 1:

@@ -49,17 +49,19 @@ FIXTURE_UNTRUSTED = "not measured: a stand-in has no folder question; the fake m
 FIXTURE_AGENTS = ("claude-code", "codex")
 # Why the stand-in lane leaves every other agent unstarted.
 FIXTURE_ONLY = "a stand-in imitates Claude Code and Codex only; the fake model lane measures this agent"
-# Cells the C stand-in does not imitate: it answers no question from its
-# start's context, draws no composer, forks nothing, writes no title and no
-# token usage. The keyless lane measures them once it runs the pinned CLIs on a fake model.
+# Cells the C stand-in does not imitate: it draws no composer, forks
+# nothing, writes no title and no token usage. The keyless lane measures them
+# once it runs the pinned CLIs on a fake model. It does answer from its
+# start's Memory index, as the fake model does, so `guidance_memory` is its.
 FIXTURE_UNIMITATED = {cell: "the C stand-in does not imitate it; the fake model lane measures it"
-                      for cell in ("guidance_memory", "composer", "fork", "title", "usage")}
+                      for cell in ("composer", "fork", "title", "usage")}
 FIXTURE_CELLS = tuple(name for name in cells.CELLS
                       if name != "start_untrusted" and name not in FIXTURE_UNIMITATED)
 
 # What a fixture stand-in cannot show, said in its report (PRD B27).
 FIXTURE_LIMITS = [
-    "A stand-in answers with the token its prompt or its hook context carries; no model reads the prompt.",
+    "A stand-in answers with the token its prompt or its hook context carries, or else the one in the Memory "
+    "index its start hook printed, as the fake model does; no model reads the prompt.",
     "Herdr's integration runs from the hook commands the kit installed, fed the payload the stand-in writes, "
     "so a change in the real CLI's hook payload is not seen.",
     "The working and idle screens and titles and the session file format are the stand-in's copies of the CLI's.",

@@ -9,7 +9,8 @@
 # each system supports).
 # `windows-forms` runs the journey's Windows process jobs, private files and
 # pane shell commands on Windows itself. `pr.yml` runs both when the
-# journey's code or the shims change, `nightly.yml` and `release.yml` every time.
+# journey's code, the shims or a crate's product code change, `nightly.yml`
+# and `release.yml` every time.
 #
 # With `fake`, the `fake` job runs the real CLIs at the versions
 # contracts/agent-clis.json pins, with Hide's real kit, answered by the
