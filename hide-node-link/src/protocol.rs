@@ -574,7 +574,10 @@ pub enum Call {
     /// fast-forward only, no fetch, no push, and only while `HEAD` is still
     /// `head`, the commit the operator was shown. The answer is a
     /// [`crate::branch::CatchUpOutcome`] and only `Updated` changes anything.
-    BranchCatchUp { root: String, head: String },
+    BranchCatchUp {
+        root: String,
+        head: String,
+    },
     /// Retires a worktree owned by a completed or discarded background task.
     WorktreeRetire {
         root: String,

@@ -4966,7 +4966,12 @@ mod tests {
         let clone = folder.join("clone");
         git_in(
             folder,
-            &["clone", "-q", origin.to_str().unwrap(), clone.to_str().unwrap()],
+            &[
+                "clone",
+                "-q",
+                origin.to_str().unwrap(),
+                clone.to_str().unwrap(),
+            ],
         );
         git_in(&clone, &["config", "user.name", "Fixture"]);
         git_in(&clone, &["config", "user.email", "fixture@example.invalid"]);

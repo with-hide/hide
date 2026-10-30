@@ -386,7 +386,10 @@ fn catch_up_is_not_started_from_a_header_that_does_not_offer_it() {
     header_with(&mut runtime, &target, behind('a', 2, 5));
     assert!(!press(&mut runtime, 'a'), "commits to send");
     header_with(&mut runtime, &target, behind('a', 0, 5));
-    assert!(!press(&mut runtime, 'b'), "a HEAD the operator was not shown");
+    assert!(
+        !press(&mut runtime, 'b'),
+        "a HEAD the operator was not shown"
+    );
     assert_eq!(shown_catch_up(&runtime), None);
 }
 
@@ -440,7 +443,10 @@ fn catch_up_refused_by_the_operators_files_shows_their_count_and_a_late_answer_i
             total: 3
         })
     ));
-    assert_eq!(shown_catch_up(&runtime), Some(CatchUpView::Refused { files: 3 }));
+    assert_eq!(
+        shown_catch_up(&runtime),
+        Some(CatchUpView::Refused { files: 3 })
+    );
     let second = target(&runtime, 2);
     header_with(&mut runtime, &second, behind('a', 0, 5));
     running(&mut runtime, &second, 'a');
@@ -451,4 +457,3 @@ fn catch_up_refused_by_the_operators_files_shows_their_count_and_a_late_answer_i
         "the answer for the first target leaves the second's run alone"
     );
 }
-

@@ -257,13 +257,18 @@ impl Runtime {
                 // offers it from the `HEAD` it started from: a new `HEAD`, the
                 // one it landed or one the operator moved to, or nothing left
                 // to receive.
-                if self.checkout_header.catch_up.as_ref().is_some_and(|catch_up| {
-                    !matches!(catch_up.phase, CatchUpPhase::Running)
-                        && !header
-                            .facts
-                            .as_ref()
-                            .is_some_and(|facts| offers_catch_up(facts, &catch_up.head))
-                }) {
+                if self
+                    .checkout_header
+                    .catch_up
+                    .as_ref()
+                    .is_some_and(|catch_up| {
+                        !matches!(catch_up.phase, CatchUpPhase::Running)
+                            && !header
+                                .facts
+                                .as_ref()
+                                .is_some_and(|facts| offers_catch_up(facts, &catch_up.head))
+                    })
+                {
                     self.checkout_header.catch_up = None;
                     unread_moved = true;
                 }
@@ -416,12 +421,14 @@ impl Runtime {
             catch_up_diagnostic("checkout_catch_up.not_in_front", &payload.device_id, None);
             return false;
         };
-        if self.checkout_header.catch_up.as_ref().is_some_and(|catch_up| {
-            matches!(
-                catch_up.phase,
-                CatchUpPhase::Running | CatchUpPhase::Landed
-            )
-        }) {
+        if self
+            .checkout_header
+            .catch_up
+            .as_ref()
+            .is_some_and(|catch_up| {
+                matches!(catch_up.phase, CatchUpPhase::Running | CatchUpPhase::Landed)
+            })
+        {
             return false;
         }
         let offered = self

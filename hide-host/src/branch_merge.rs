@@ -484,10 +484,7 @@ fn upstream_commit(worktree: &Path) -> HostResult<Option<String>> {
         Some(1) => return Ok(None),
         _ => return Err(describe(&args, &output)),
     };
-    let upstream = read_text(
-        worktree,
-        &["for-each-ref", "--format=%(upstream)", &branch],
-    )?;
+    let upstream = read_text(worktree, &["for-each-ref", "--format=%(upstream)", &branch])?;
     if upstream.is_empty() {
         return Ok(None);
     }

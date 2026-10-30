@@ -751,10 +751,19 @@ fn a_branch_with_its_own_commits_a_moved_head_and_no_upstream_are_left_alone() {
     let (head, _) = behind_upstream(&fixture);
     let own = commit(&fixture.feat, "b.txt", "mine\n");
     let before = snapshot(&fixture.feat);
-    assert_eq!(catch_up(&fixture.feat, &head).unwrap(), CatchUpOutcome::HeadMoved);
-    assert_eq!(catch_up(&fixture.feat, &own).unwrap(), CatchUpOutcome::Diverged);
+    assert_eq!(
+        catch_up(&fixture.feat, &head).unwrap(),
+        CatchUpOutcome::HeadMoved
+    );
+    assert_eq!(
+        catch_up(&fixture.feat, &own).unwrap(),
+        CatchUpOutcome::Diverged
+    );
     git(&fixture.feat, &["branch", "-q", "--unset-upstream"]);
-    assert_eq!(catch_up(&fixture.feat, &own).unwrap(), CatchUpOutcome::NoUpstream);
+    assert_eq!(
+        catch_up(&fixture.feat, &own).unwrap(),
+        CatchUpOutcome::NoUpstream
+    );
     assert_eq!(snapshot(&fixture.feat), before);
 }
 
