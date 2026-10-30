@@ -106,11 +106,12 @@ pub(in crate::runtime) struct LetterWakes {
     running: BTreeSet<Route>,
     /// Letters a failed wake leaves undelivered, by id (D-16).
     failed: BTreeMap<String, Failure>,
-    /// Letters whose wake started, by id: each wakes its recipient once, so
-    /// a letter nobody takes in cannot wake the agent after every sleep.
-    /// Memory only, bounded by the ledger's pending letters; a restart lets
-    /// each wake once more.
-    woke: BTreeSet<String>,
+    /// Letters whose wake started, by id, with when: each wakes its
+    /// recipient once, so a letter nobody takes in cannot wake the agent
+    /// after every sleep, and its hour runs through a later sleep. Memory
+    /// only, bounded by the ledger's pending letters; a restart lets each
+    /// wake once more.
+    woke: BTreeMap<String, u64>,
     /// A thread is telling senders; it is the only one.
     noting: bool,
 }
@@ -201,6 +202,12 @@ impl Runtime {
         panes.chain(dormant).collect()
     }
 
+    /// The letters whose one wake started, with when, for the delivery
+    /// store's pass: a later sleep does not pause their hour.
+    pub(crate) fn delivery_wakes_started(&self) -> crate::delivery::ledger::Woken {
+        self.letter_wakes.woke.clone()
+    }
+
     /// The letters a failed wake leaves undelivered, with its reason, for
     /// the delivery store's pass (D-16).
     pub(crate) fn delivery_wake_failures(&self) -> BTreeMap<String, String> {
@@ -287,7 +294,7 @@ impl Runtime {
                     // A letter whose bell rang or that woke its recipient
                     // once waits for it to look, as one to an awake agent.
                     && !letter.bell_sent
-                    && !self.letter_wakes.woke.contains(&letter.id)
+                    && !self.letter_wakes.woke.contains_key(&letter.id)
             })
             .filter_map(|letter| self.asleep_route(&letter.recipient))
             .filter(|(_, stage)| matches!(stage, Stage::Sleeping | Stage::Failed(_)))
@@ -358,6 +365,8 @@ impl Runtime {
     /// left as it is (B5, D-15). A wake that fails before it starts fails
     /// its letters at once.
     fn start_letter_wake(&mut self, ledger: &Ledger, route: Route) -> bool {
+        // Read before the wake, which may take the record with it.
+        let letters = self.route_letters(ledger, &route);
         let changed = match &route {
             // No connection to wake it on, or a terminal Herdr could not
             // restore: no wake is tried, so its letters wait rather than
@@ -391,16 +400,23 @@ impl Runtime {
         };
         match self.route_stage(&route) {
             Some(Stage::Waking) => {
-                let letters = self.route_letters(ledger, &route);
-                self.letter_wakes.woke.extend(letters);
+                self.mark_woken(letters);
                 self.letter_wakes.running.insert(route);
             }
             Some(Stage::Failed(reason)) => self.fail_letters(ledger, &route, &reason),
             // No connection to wake it on yet: it waits for the next move.
             Some(Stage::Sleeping | Stage::Ending) => self.letter_wakes.queue.push_back(route),
-            None => {}
+            // Awake already: the wake ran to its end in the start.
+            None => self.mark_woken(letters),
         }
         changed
+    }
+
+    fn mark_woken(&mut self, letters: Vec<String>) {
+        let now = crate::runtime::unix_milliseconds();
+        for id in letters {
+            self.letter_wakes.woke.entry(id).or_insert(now);
+        }
     }
 
     /// Fails the `request` and `block` letters waiting on `route`'s wake
@@ -444,15 +460,14 @@ impl Runtime {
     /// pending.
     fn forget_failures(&mut self, ledger: &Ledger) {
         if !self.letter_wakes.woke.is_empty() {
+            let woke = &self.letter_wakes.woke;
             let pending = ledger
                 .letters
                 .iter()
-                .filter(|letter| letter.state == State::Pending)
-                .map(|letter| letter.id.as_str())
-                .collect::<std::collections::HashSet<_>>();
-            self.letter_wakes
-                .woke
-                .retain(|id| pending.contains(id.as_str()));
+                .filter(|letter| letter.state == State::Pending && woke.contains_key(&letter.id))
+                .map(|letter| letter.id.clone())
+                .collect::<BTreeSet<_>>();
+            self.letter_wakes.woke.retain(|id, _| pending.contains(id));
         }
         self.letter_wakes.failed.retain(|id, failure| {
             ledger

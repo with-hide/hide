@@ -831,10 +831,11 @@ fn run(
                     guard.delivery_registration_rebinds(),
                     guard.delivery_reach(),
                     guard.delivery_asleep(),
+                    guard.delivery_wakes_started(),
                     guard.delivery_wake_failures(),
                 ))
             });
-        let (state, gone, rebinds, reach, asleep, wake_failed) = match state {
+        let (state, gone, rebinds, reach, asleep, woken, wake_failed) = match state {
             Ok(state) => state,
             Err(code) => {
                 for request in batch {
@@ -859,7 +860,7 @@ fn run(
                 && !state.reach_moves(&reach, now)
                 && !state.letters.iter().any(|letter| {
                     (letter.intake_overdue(&state.node_clocks, now)
-                        && ledger::Sleeper::of(&asleep, letter).is_none())
+                        && ledger::Sleeper::pausing(&asleep, &woken, letter).is_none())
                         || letter.answer_overdue(now)
                         || !letter.retained(now)
                         || (letter.state == ledger::State::Pending
@@ -877,6 +878,7 @@ fn run(
             rebinds,
             asleep,
             woke,
+            woken,
             wake_failed,
         };
         let Settled {
@@ -1148,6 +1150,9 @@ struct Upkeep {
     /// mission-worker-sleep D-13).
     asleep: ledger::Asleep,
     woke: ledger::Asleep,
+    /// The letters whose one wake started, with when: those wake no one
+    /// in a later sleep, and their hour runs through it.
+    woken: ledger::Woken,
     /// The letters a failed wake leaves undelivered, with the wake's reason
     /// (D-16).
     wake_failed: std::collections::BTreeMap<String, String>,
@@ -1165,8 +1170,8 @@ impl Upkeep {
         // First, so a deadline and a letter sent in this batch read the
         // machines' clocks as they are now.
         ledger.observe_reach(&self.reach, now);
-        ledger.resume_woken(&self.woke, now);
-        ledger.expire_awake(now, &self.asleep);
+        ledger.resume_woken(&self.woke, &self.woken, now);
+        ledger.expire_awake(now, &self.asleep, &self.woken);
         ledger.fail_woken(&self.wake_failed, now);
         ledger.end_overdue_answer_waits(now);
         let moved = crate::coordination::rebind(ledger, &self.rebinds);
@@ -2224,6 +2229,7 @@ mod tests {
         Upkeep {
             asleep: Default::default(),
             woke: Default::default(),
+            woken: Default::default(),
             wake_failed: Default::default(),
             reach: ledger::Reach::new(),
             gone: Default::default(),

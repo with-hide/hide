@@ -29,7 +29,7 @@ hide inbox
 - `request` asks and waits for a reply; `block` says you cannot go on without one; `progress` is an interim report, such as a plan, and ends nothing; `report` says the work is finished and ends your parent's watch on you.
 - A recipient that is working reads a letter after five minutes of its work; `--now` hands it over at its next tool call instead, so keep `--now` for what cannot wait.
 - A prompt that begins with 🦉 is Hide waking you for a letter: the letter comes with it, and `hide inbox` shows it if it did not; answer with `hide request reply`.
-- An agent Hide put to sleep still takes letters: a `request` or `block` wakes it, resuming its conversation, and is handed over once it is awake; a `report` or `progress` waits for its next wake, and the hour a letter waits does not run while it sleeps. Each letter wakes it once: a letter it already rang for or already woke it for waits for it to look.
+- An agent Hide put to sleep still takes letters: a `request` or `block` wakes it, resuming its conversation, and is handed over once it is awake; a `report` or `progress` waits for its next wake, and the hour a letter waits does not run while it sleeps. Each letter wakes it once: a letter that already rang or already woke it does not wake it again, and its hour runs while it sleeps.
   When it cannot be woken, the letter ends undelivered and Hide's own letter tells you whom and why; send again to try once more.
 
 ## Agents

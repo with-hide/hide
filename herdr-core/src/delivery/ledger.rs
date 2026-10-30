@@ -142,12 +142,32 @@ pub struct Sleeper {
     pub since: u64,
 }
 
+/// The letters whose wake of their recipient started, with when: each
+/// wakes it once (PRD mission-worker-sleep D-14).
+pub type Woken = BTreeMap<String, u64>;
+
 impl Sleeper {
     /// The sleeper `letter` waits on, if its recipient is one.
     pub(crate) fn of<'a>(asleep: &'a Asleep, letter: &Letter) -> Option<&'a Self> {
         asleep.get(&letter.recipient.pane_id).filter(|sleeper| {
             sleeper.device_id == letter.recipient.device_id
                 && sleeper.session == letter.recipient.session
+        })
+    }
+
+    /// The sleeper whose wake `letter` waits for, its deadline paused (D-13).
+    /// A letter whose bell rang, or whose one wake started before this sleep,
+    /// wakes no one now, so its hour runs as it would for an awake agent.
+    pub(crate) fn pausing<'a>(
+        asleep: &'a Asleep,
+        woken: &Woken,
+        letter: &Letter,
+    ) -> Option<&'a Self> {
+        Self::of(asleep, letter).filter(|sleeper| {
+            !letter.bell_sent
+                && woken
+                    .get(&letter.id)
+                    .is_none_or(|started| *started >= sleeper.since)
         })
     }
 }
@@ -407,17 +427,19 @@ impl Ledger {
     }
 
     pub fn expire(&mut self, now: u64) -> bool {
-        self.expire_awake(now, &Asleep::new())
+        self.expire_awake(now, &Asleep::new(), &Woken::new())
     }
 
     /// Ends the wait of each letter past its delivery deadline, except a
-    /// letter to a recipient asleep now: its wait is paused until it wakes
-    /// (`Ledger::resume_woken`).
-    pub fn expire_awake(&mut self, now: u64, asleep: &Asleep) -> bool {
+    /// letter waiting for its recipient's wake: its wait is paused until it
+    /// wakes (`Sleeper::pausing`, `Ledger::resume_woken`).
+    pub fn expire_awake(&mut self, now: u64, asleep: &Asleep, woken: &Woken) -> bool {
         let mut changed = self.cleanup(now);
         let clocks = &self.node_clocks;
         for letter in &mut self.letters {
-            if !letter.intake_overdue(clocks, now) || Sleeper::of(asleep, letter).is_some() {
+            if !letter.intake_overdue(clocks, now)
+                || Sleeper::pausing(asleep, woken, letter).is_some()
+            {
                 continue;
             }
             if letter.state == State::Pending {
@@ -444,12 +466,14 @@ impl Ledger {
     /// a letter that waited 50 minutes before its recipient slept has 10 left
     /// when it wakes, and one sent while it slept has the whole hour. On a
     /// machine with a clock the sleep is taken as reachable time, which can
-    /// only give a letter more of its hour, never less.
-    pub fn resume_woken(&mut self, woke: &Asleep, now: u64) -> bool {
+    /// only give a letter more of its hour, never less. A letter whose hour
+    /// ran through the sleep (`Sleeper::pausing`) keeps it.
+    pub fn resume_woken(&mut self, woke: &Asleep, woken: &Woken, now: u64) -> bool {
         let mut changed = false;
         for index in 0..self.letters.len() {
             let letter = &self.letters[index];
-            let Some(sleeper) = Sleeper::of(woke, letter).filter(|_| letter.awaiting_intake())
+            let Some(sleeper) =
+                Sleeper::pausing(woke, woken, letter).filter(|_| letter.awaiting_intake())
             else {
                 continue;
             };
@@ -946,14 +970,14 @@ mod tests {
             since: 50 * MINUTE,
         };
         let asleep: Asleep = [("recipient".to_owned(), sleeper)].into();
-        assert!(!ledger.expire_awake(170 * MINUTE, &asleep));
+        assert!(!ledger.expire_awake(170 * MINUTE, &asleep, &Woken::new()));
         assert!(
             ledger
                 .letters
                 .iter()
                 .all(|letter| letter.state == State::Pending)
         );
-        assert!(ledger.resume_woken(&asleep, 170 * MINUTE));
+        assert!(ledger.resume_woken(&asleep, &Woken::new(), 170 * MINUTE));
         ledger.expire(179 * MINUTE);
         assert_eq!(ledger.letters[0].state, State::Pending);
         ledger.expire(180 * MINUTE);
@@ -962,6 +986,35 @@ mod tests {
         assert_eq!(ledger.letters[1].state, State::Pending);
         ledger.expire(230 * MINUTE);
         assert_eq!(ledger.letters[1].state, State::Undelivered);
+    }
+
+    /// A letter that already rang, or whose one wake started before this
+    /// sleep, wakes no one now, so its hour runs through the sleep; one whose
+    /// wake is this sleep's waits it out.
+    #[test]
+    fn only_a_letter_waiting_for_its_recipients_wake_pauses_its_hour() {
+        let sleeper = Sleeper {
+            device_id: "local".into(),
+            session: Some("recipient-native".into()),
+            since: 50 * MINUTE,
+        };
+        let asleep: Asleep = [("recipient".to_owned(), sleeper)].into();
+        let mut rung = letter_to("local", 0);
+        rung.letters[0].bell_sent = true;
+        rung.expire_awake(60 * MINUTE, &asleep, &Woken::new());
+        assert_eq!(rung.letters[0].state, State::Undelivered);
+        let mut woke_before = letter_to("local", 0);
+        let id = woke_before.letters[0].id.clone();
+        let before: Woken = [(id.clone(), 10 * MINUTE)].into();
+        woke_before.expire_awake(60 * MINUTE, &asleep, &before);
+        assert_eq!(woke_before.letters[0].state, State::Undelivered);
+        let mut woke_now = letter_to("local", 0);
+        let now: Woken = [(id, 55 * MINUTE)].into();
+        woke_now.expire_awake(60 * MINUTE, &asleep, &now);
+        assert_eq!(woke_now.letters[0].state, State::Pending);
+        assert!(woke_now.resume_woken(&asleep, &now, 70 * MINUTE));
+        woke_now.expire(79 * MINUTE);
+        assert_eq!(woke_now.letters[0].state, State::Pending);
     }
 
     /// D-16: a failed wake leaves its pending letter undelivered and its
