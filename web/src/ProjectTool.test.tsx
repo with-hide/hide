@@ -39,7 +39,7 @@ const task = (id: string, result: TaskCost["result"], extra: Partial<TaskCost> =
 const cost = (overrides: Partial<ProjectCost> = {}): ProjectCost => ({
   workspace_id: "p", micro_usd: 3_000_000, tokens: 3_000, days: [], models: [], agents: [], unpriced_agents: [], partial: false, waiting: false, stale: false, limited: false,
   tasks: [], tasks_total: 0,
-  week: { merged_prs: 0, open_prs: 0, missions: 0, mission_reopened: 0, merged_by_day: [], per_pr: null, no_result_tasks: 0, no_result_micro_usd: 0 },
+  week: { merged_prs: 0, open_prs: 0, missions: 0, mission_reopened: 0, merged_by_day: [], per_pr: null, no_result_tasks: 0, no_result_micro_usd: 0, no_result_unpriced: false },
   ...overrides,
 });
 
@@ -161,6 +161,25 @@ describe("the Project tool", () => {
     expect(handOffs[0]).toMatchObject({ workspace_id: "p", checkout_id: "w" });
     expect(container.querySelector('[data-stray-row="w"] [role="status"]')).not.toBeNull();
     expect(container.querySelector("[data-stray-dismiss]")).toBeNull();
+  });
+
+  it("keeps the hand-off off once sent while the row stands, and back on after it failed (B12)", async () => {
+    const rows = snapshot(status({ strays: [stray()], strays_total: 1 }));
+    await render(rows);
+    await press('[data-stray-hand-off="w"]');
+    const first = (sent("stray_hand_off") as { request_id: string }[])[0]!.request_id;
+    const receipt = (state: "sent" | "failed") => ({ ...rows, status: { stray_hand_offs: [{ request_id: first, checkout_id: "w", state }] } }) as SnapshotRest;
+    await render(receipt("sent"));
+    expect(container.querySelector('[data-stray-row="w"] [role="status"]')).toBeNull();
+    await press('[data-stray-hand-off="w"]');
+    expect(sent("stray_hand_off")).toHaveLength(1);
+    // A receipt the core let go after `sent` still reads sent.
+    await render(rows);
+    await press('[data-stray-hand-off="w"]');
+    expect(sent("stray_hand_off")).toHaveLength(1);
+    await render(receipt("failed"));
+    await press('[data-stray-hand-off="w"]');
+    expect(sent("stray_hand_off")).toHaveLength(2);
   });
 
   it("asks the core to keep 놔두기, and its 되돌리기 to take it back (B15)", async () => {

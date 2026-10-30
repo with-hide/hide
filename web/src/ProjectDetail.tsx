@@ -261,6 +261,10 @@ function TaskRow({ task, project, noResult, open: openFirst, actions }: { task: 
   const { t, i18n } = useInterfaceTranslation();
   const language = requireInterfaceLanguage(i18n.language);
   const [open, setOpen] = useState(openFirst);
+  // The panel's 비싼 작업 unfolds its task in a table already showing (B25).
+  useEffect(() => {
+    if (openFirst) setOpen(true);
+  }, [openFirst]);
   const agents = useShellStore((s) => allAgents(s.agents, s.rest?.status?.remote));
   const links = useShellStore((s) => s.linkSummaries);
   const name = taskName(task, agents, links, project.id) ?? t("projectTool.cost.session", { agent: agentProductName(task.root.agent) });

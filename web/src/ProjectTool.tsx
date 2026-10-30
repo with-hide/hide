@@ -220,6 +220,9 @@ function Strays({ project, status, actions }: { project: Workspace; status: Proj
         <Button variant="text" size="inline" className="self-start px-xs text-caption" onClick={() => setOpen(true)} data-project-strays-more={view.more}>
           {t("projectTool.strays.more", { count: view.more })}
         </Button>
+      ) : view.more > 0 ? (
+        // Past the core's cap the rest are counted, not listed (B8).
+        <span className="px-xs text-caption text-muted-foreground" data-project-strays-more={view.more}>{t("projectTool.strays.more", { count: view.more })}</span>
       ) : null}
     </section>
   );
@@ -233,7 +236,19 @@ function StrayRow({ project, stray, actions, onDismiss }: { project: Workspace; 
   const language = requireInterfaceLanguage(i18n.language);
   const [request, setRequest] = useState<string | null>(null);
   const receipt = useShellStore((s) => (request ? s.rest?.status?.stray_hand_offs?.find((row) => row.request_id === request) ?? null : null));
-  const sending = request !== null && (receipt === null || receipt.state === "sending");
+  // Once sent, the words go once (B12): the button stays off until the row
+  // leaves as the agent starts, or the hand-off fails. A receipt the core let
+  // go after `sent` still reads sent.
+  const [sent, setSent] = useState(false);
+  useEffect(() => {
+    if (receipt?.state === "sent") setSent(true);
+    if (receipt?.state === "failed") {
+      setSent(false);
+      setRequest(null);
+    }
+  }, [receipt?.state]);
+  const sending = request !== null && !sent && (receipt === null || receipt.state === "sending");
+  const handedOff = request !== null && (sending || sent);
   const parts = strayParts(stray);
   const first = parts[0]!;
   const Icon = STRAY_ICON[first.kind];
@@ -254,9 +269,9 @@ function StrayRow({ project, stray, actions, onDismiss }: { project: Workspace; 
           <span className="truncate text-caption text-foreground" title={name}>{name}</span>
           <span className="truncate text-micro text-muted-foreground" title={words}>{words}</span>
         </span>
-        <span className={cn("shrink-0 text-micro text-muted-foreground", !sending && "group-focus-within:hidden group-hover:hidden")} data-stray-age={age ?? ""}>{sending ? null : age}</span>
-        <span className={cn("pointer-events-auto shrink-0 items-center gap-xxs", sending ? "flex" : "hidden group-focus-within:flex group-hover:flex")}>
-          <Button size="sm" variant="secondary" disabled={sending} onClick={() => { const id = `stray-${crypto.randomUUID()}`; setRequest(id); actions.handOffStray(project.id, stray.checkout_id, id); }} data-stray-hand-off={stray.checkout_id}>
+        <span className={cn("shrink-0 text-micro text-muted-foreground", !handedOff && "group-focus-within:hidden group-hover:hidden")} data-stray-age={age ?? ""}>{handedOff ? null : age}</span>
+        <span className={cn("pointer-events-auto shrink-0 items-center gap-xxs", handedOff ? "flex" : "hidden group-focus-within:flex group-hover:flex")}>
+          <Button size="sm" variant="secondary" disabled={handedOff} onClick={() => { const id = `stray-${crypto.randomUUID()}`; setRequest(id); actions.handOffStray(project.id, stray.checkout_id, id); }} data-stray-hand-off={stray.checkout_id}>
             {sending ? <LoaderCircleIcon role="status" aria-label={t("projectTool.strays.sending")} className="animate-spin" /> : null}
             {t("projectTool.strays.handOff")}
           </Button>
@@ -349,7 +364,7 @@ function Week({ project, actions }: { project: Workspace; actions: Actions }) {
         <SectionHead title={t("projectTool.week")} />
         <div className="grid grid-cols-2 gap-xs px-xs">
           <Figure label={t("projectTool.week.merged")} value={String(week?.merged_prs ?? 0)} note={t("projectTool.week.open", { count: week?.open_prs ?? 0 })} kind="merged" />
-          <Figure label={t("projectTool.week.perPrCost")} value={week?.per_pr ? usd(week.per_pr.micro_usd, language) : "–"} note={week?.per_pr ? t("projectTool.week.tokens", { tokens: tokenWords(language, week.per_pr.tokens) }) : null} kind="per-pr-cost" />
+          <Figure label={t("projectTool.week.perPrCost")} value={week?.per_pr ? `${week.per_pr.unpriced ? "≥ " : ""}${usd(week.per_pr.micro_usd, language)}` : "–"} note={week?.per_pr ? t("projectTool.week.tokens", { tokens: tokenWords(language, week.per_pr.tokens) }) : null} kind="per-pr-cost" />
           <Figure label={t("projectTool.week.perPrTime")} value={week?.per_pr ? durationWords(language, week.per_pr.elapsed_ms) : "–"} note={week?.per_pr ? t("projectTool.week.worked", { time: durationWords(language, week.per_pr.worked_ms) }) : null} kind="per-pr-time" />
           <Figure label={t("projectTool.week.missions")} value={String(week?.missions ?? 0)} note={week && week.mission_reopened > 0 ? t("projectTool.week.reopened", { count: week.mission_reopened }) : null} kind="missions" />
         </div>
@@ -375,7 +390,7 @@ function Week({ project, actions }: { project: Workspace; actions: Actions }) {
         </div>
         {week && week.no_result_tasks > 0 ? (
           <Button variant="text" size="inline" className="mx-xs self-start text-caption text-warning hover:text-warning" onClick={() => openTable("none")} data-week-no-result={week.no_result_tasks}>
-            {t("projectTool.week.noResult", { count: week.no_result_tasks, cost: usd(week.no_result_micro_usd, language) })}
+            {t("projectTool.week.noResult", { count: week.no_result_tasks, cost: `${week.no_result_unpriced ? "≥ " : ""}${usd(week.no_result_micro_usd, language)}` })}
           </Button>
         ) : null}
       </section>
