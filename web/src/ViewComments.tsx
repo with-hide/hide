@@ -127,13 +127,14 @@ export function CommentCount({ display }: { display: Pick<ViewDisplaySnapshot, "
 
 // --- a pane's views (B8) ---------------------------------------------------------
 
-/** `N views` after a pane's PR chip: the Views its agent opened that the layout shows, those the operator has not looked at marked. */
+/** `N views` after a pane's PR chip: the Views its agent opened that the layout shows, those the operator has not looked at marked on their rows and once on the chip. */
 export function PaneViews({ paneId, name, actions }: { paneId: string; name: string; actions: Actions }) {
   const { t } = useInterfaceTranslation();
   const opened = useShellStore((s) => workspaceViewOf(s.rest)?.feedback?.opened);
   const rows = useMemo(() => (opened ?? []).filter((row) => row.pane_id === paneId), [opened, paneId]);
   if (rows.length === 0) return null;
   const label = t("feedback.views", { count: rows.length });
+  const unseen = rows.some((row) => row.unseen);
   return (
     <DropdownMenu>
       <Hint label={t("feedback.views.hint")}>
@@ -141,9 +142,14 @@ export function PaneViews({ paneId, name, actions }: { paneId: string; name: str
           <button
             type="button"
             data-pane-views={paneId}
+            data-pane-views-unseen={unseen ? "true" : undefined}
             className="flex h-(--size-sidebar-line-detail) shrink-0 items-center gap-xxs rounded-xs px-xs outline-none hover:bg-popover focus-visible:ring-1 focus-visible:ring-ring data-[state=open]:bg-secondary"
           >
-            <FilesIcon aria-hidden="true" className="size-(--size-icon-sm)" />
+            <span className="relative flex shrink-0">
+              <FilesIcon aria-hidden="true" className="size-(--size-icon-sm)" />
+              {/* Any View still unseen dots the chip's icon: the row's 볼 것 eye already says there is something to look at, the dot says it is in here (PRD unseen-agent-views B10). */}
+              {unseen ? <span role="img" aria-label={t("agents.mark.look")} className="absolute -right-xxs -top-xxs size-(--size-tab-status-dot) rounded-full bg-warning" /> : null}
+            </span>
             <span>{label}</span>
           </button>
         </DropdownMenuTrigger>

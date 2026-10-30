@@ -513,6 +513,7 @@ Opening, waiting and unavailable Views retain a path toolbar with the same opene
 Pressing it brings the agent's pane forward with the keyboard, leaving the View selected; an agent whose pane closed is found again by its session in another pane, and one found nowhere draws its mark dimmed with `(closed)` in the hint and goes nowhere.
 A pane whose agent opened Views that are open shows `N views` after its PR mark, a list of each View's kind mark, name, address or path and unsent comment count, counted once however many tabs show it; a row brings that View forward.
 A View the operator has not looked at since the agent opened it ends its row with the `볼 것` mark, an eye in the warning badge, whose hover says `볼 것` (PRD unseen-agent-views B10).
+While any of them is unseen, the icon of `N views` carries a warning dot, so the list need not be opened to know one waits; it is a dot and not a second eye, because the agent's own mark already shows the eye.
 
 Comments: a page's toolbar Comment button turns Comment mode on, with `Click an element or drag an area · Esc` over the page, an outline on the element under the pointer, and the page's clicks taken as comment targets until Comment or Esc turns it off.
 The button shows on only once the page is held for Comment; until then the page still takes its own clicks, and a second press takes the turn-on back.

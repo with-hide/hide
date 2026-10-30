@@ -12,6 +12,7 @@ const toggleVariants = cva(
       size: {
         default: "h-(--size-control-sm) px-sm",
         sm: "h-(--size-badge-height) px-xs text-caption",
+        xs: "h-auto px-xs py-px text-micro",
       },
     },
     defaultVariants: { size: "default" },

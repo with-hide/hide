@@ -96,7 +96,7 @@ test("the PR list groups by whose move it is and says why on each row", async ({
   await openWork(page, async ({ work }) => {
     // The rail is the documents button, then Project · Memory | Explorer · Changes; the list is the sidebar's (PRD lane-two-columns B25, B41).
     await expect(page.locator("[data-lane-tool]")).toHaveCount(5);
-    await expect(page.locator('[data-sidebar-lens-option="prs"]')).toHaveAttribute("aria-pressed", "true");
+    await expect(page.locator('[data-sidebar-lens-option="prs"]')).toHaveAttribute("aria-checked", "true");
     // The Project icon counts its to-do: the three Needs You PRs (B35, B38).
     await expect(page.locator('[data-lane-tool="project"] [data-lane-todo-count]')).toHaveText("3");
 

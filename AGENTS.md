@@ -186,11 +186,11 @@ Conventions:
 ## Design Reference
 
 Read [docs/UI_BEHAVIOR.md](docs/UI_BEHAVIOR.md) before changing any surface a user looks at; it owns what the UI does.
-Read [docs/DESIGN_WORKFLOW.md](docs/DESIGN_WORKFLOW.md) before making a design change; it owns how a change moves from scratch to a shipped PR, including the token/System-part/Component procedures and the screen transplant procedure.
+Read [docs/DESIGN_GUIDE.md](docs/DESIGN_GUIDE.md) before changing a screen or a token; it says which part to build from and the rules that keep screens alike, and a `PreToolUse` hook (`scripts/hooks/design-guide-first.sh`, registered for Claude Code in `.claude/settings.json` and for Codex in `~/.codex/hooks.json`) refuses the first such edit of a session until it has been read.
+Read [docs/DESIGN_WORKFLOW.md](docs/DESIGN_WORKFLOW.md) before making a design change; it owns how a change moves from proposal to a shipped PR and how it is visually reviewed.
 Numeric authority is `design/tokens.json`, and code authority is `web/src/components/ui` and `web/src/components`.
 `scripts/gen-tokens.mjs` writes `web/src/tokens.css` and `web/src/generated/accents.ts` from the tokens.
 Run `node scripts/check-design-contract.mjs` before delivery; it is the entrypoint `design-contract.yml` runs.
 
-Original design boards, proposal tools and maintainer skills are maintained separately.
-The public checkout must build and pass its gates without access to them.
-Use the production gallery and isolated app captures for public visual review, following [DESIGN_WORKFLOW.md](docs/DESIGN_WORKFLOW.md).
+The public checkout builds and passes its gates without any design tool or private repository.
+The production gallery and isolated app captures are the visual reference and the review evidence, following [DESIGN_WORKFLOW.md](docs/DESIGN_WORKFLOW.md).
