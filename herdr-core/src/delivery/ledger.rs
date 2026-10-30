@@ -128,6 +128,53 @@ impl NodeClock {
 /// each with whether a letter can reach it now (PRD core-host-node-move B13).
 pub type Reach = BTreeMap<String, bool>;
 
+/// The recipients asleep now, by pane (PRD mission-worker-sleep D-13): an
+/// agent Hide put to sleep, whose letters wait for its wake, and whose wait
+/// while it sleeps or wakes does not count against the delivery deadline.
+pub type Asleep = BTreeMap<String, Sleeper>;
+
+/// The execution asleep in a pane: the session the letters to it address,
+/// and when it went to sleep on the core's wall clock.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Sleeper {
+    pub device_id: String,
+    pub session: Option<String>,
+    pub since: u64,
+}
+
+/// The letters whose wake of their recipient started, with when: each
+/// wakes it once (PRD mission-worker-sleep D-14).
+pub type Woken = BTreeMap<String, u64>;
+
+impl Sleeper {
+    /// The sleeper `letter` waits on, if its recipient is one.
+    pub(crate) fn of<'a>(asleep: &'a Asleep, letter: &Letter) -> Option<&'a Self> {
+        asleep.get(&letter.recipient.pane_id).filter(|sleeper| {
+            sleeper.device_id == letter.recipient.device_id
+                && sleeper.session == letter.recipient.session
+        })
+    }
+
+    /// The sleeper whose wake `letter` waits for, its deadline paused (D-13).
+    /// A `request` or `block` whose bell rang, or whose one wake started
+    /// before this sleep, wakes no one now, so its hour runs as it would for
+    /// an awake agent; a `report` or `progress` wakes no one at all and waits
+    /// for the next wake paused, rung or not (B3).
+    pub(crate) fn pausing<'a>(
+        asleep: &'a Asleep,
+        woken: &Woken,
+        letter: &Letter,
+    ) -> Option<&'a Self> {
+        let wakes = matches!(letter.kind.as_str(), "request" | "block");
+        Self::of(asleep, letter).filter(|sleeper| {
+            !(wakes && letter.bell_sent)
+                && woken
+                    .get(&letter.id)
+                    .is_none_or(|started| *started >= sleeper.since)
+        })
+    }
+}
+
 /// How often a reachable machine's running stretch is written into its clock,
 /// which bounds what a core that stops without a last save loses of it.
 pub const CLOCK_FOLD_MS: u64 = 60_000;
@@ -383,10 +430,19 @@ impl Ledger {
     }
 
     pub fn expire(&mut self, now: u64) -> bool {
+        self.expire_awake(now, &Asleep::new(), &Woken::new())
+    }
+
+    /// Ends the wait of each letter past its delivery deadline, except a
+    /// letter waiting for its recipient's wake: its wait is paused until it
+    /// wakes (`Sleeper::pausing`, `Ledger::resume_woken`).
+    pub fn expire_awake(&mut self, now: u64, asleep: &Asleep, woken: &Woken) -> bool {
         let mut changed = self.cleanup(now);
         let clocks = &self.node_clocks;
         for letter in &mut self.letters {
-            if !letter.intake_overdue(clocks, now) {
+            if !letter.intake_overdue(clocks, now)
+                || Sleeper::pausing(asleep, woken, letter).is_some()
+            {
                 continue;
             }
             if letter.state == State::Pending {
@@ -403,6 +459,55 @@ impl Ledger {
                     letter.finished_at_unix_ms.get_or_insert(now);
                 }
             }
+            changed = true;
+        }
+        changed
+    }
+
+    /// Takes the time each recipient in `woke` slept out of the waits of
+    /// the letters it had awaiting intake (PRD mission-worker-sleep D-13), so
+    /// a letter that waited 50 minutes before its recipient slept has 10 left
+    /// when it wakes, and one sent while it slept has the whole hour. On a
+    /// machine with a clock the sleep is taken as reachable time, which can
+    /// only give a letter more of its hour, never less. A letter whose hour
+    /// ran through the sleep (`Sleeper::pausing`) keeps it.
+    pub fn resume_woken(&mut self, woke: &Asleep, woken: &Woken, now: u64) -> bool {
+        let mut changed = false;
+        for index in 0..self.letters.len() {
+            let letter = &self.letters[index];
+            let Some(sleeper) =
+                Sleeper::pausing(woke, woken, letter).filter(|_| letter.awaiting_intake())
+            else {
+                continue;
+            };
+            let waited = letter.intake_waited(&self.node_clocks, now);
+            let slept = now.saturating_sub(sleeper.since.max(letter.created_at_unix_ms));
+            let kept = waited.saturating_sub(slept);
+            let from = match self.node_clocks.get(&letter.recipient.device_id) {
+                Some(clock) => clock.reading(now).saturating_sub(kept),
+                None => now.saturating_sub(kept),
+            };
+            if self.letters[index].intake_from != Some(from) {
+                self.letters[index].intake_from = Some(from);
+                changed = true;
+            }
+        }
+        changed
+    }
+
+    /// Ends the wait of each pending letter in `failed`, whose recipient's
+    /// wake failed (PRD mission-worker-sleep D-16): it is undelivered and its
+    /// sender waits for no answer. The reason goes to the sender in Hide's
+    /// own letter, not into this one.
+    pub fn fail_woken(&mut self, failed: &BTreeMap<String, String>, now: u64) -> bool {
+        let mut changed = false;
+        for letter in &mut self.letters {
+            if letter.state != State::Pending || !failed.contains_key(&letter.id) {
+                continue;
+            }
+            letter.state = State::Undelivered;
+            letter.waiting_answer = false;
+            letter.finished_at_unix_ms = Some(now);
             changed = true;
         }
         changed
@@ -848,6 +953,93 @@ mod tests {
         assert_eq!(ledger.letters[0].state, State::Undelivered);
         ledger.observe_reach(&reach("mini", true), 180 * MINUTE);
         assert!(ledger.node_clocks.is_empty());
+    }
+
+    /// PRD mission-worker-sleep D-13: the deadline does not run while the
+    /// recipient sleeps. A letter that waited 50 minutes before its
+    /// recipient slept for two hours has 10 left once it wakes, and one sent
+    /// while it slept has the whole hour.
+    #[test]
+    fn a_letter_waits_out_its_recipients_sleep_without_its_deadline_running() {
+        let mut ledger = letter_to("local", 0);
+        let mut later = letter_to("local", 100 * MINUTE);
+        let mut sent = later.letters.remove(0);
+        sent.id = "letter-2".into();
+        sent.intent = "twice".into();
+        ledger.letters.push(sent);
+        let sleeper = Sleeper {
+            device_id: "local".into(),
+            session: Some("recipient-native".into()),
+            since: 50 * MINUTE,
+        };
+        let asleep: Asleep = [("recipient".to_owned(), sleeper)].into();
+        assert!(!ledger.expire_awake(170 * MINUTE, &asleep, &Woken::new()));
+        assert!(
+            ledger
+                .letters
+                .iter()
+                .all(|letter| letter.state == State::Pending)
+        );
+        assert!(ledger.resume_woken(&asleep, &Woken::new(), 170 * MINUTE));
+        ledger.expire(179 * MINUTE);
+        assert_eq!(ledger.letters[0].state, State::Pending);
+        ledger.expire(180 * MINUTE);
+        assert_eq!(ledger.letters[0].state, State::Undelivered);
+        ledger.expire(229 * MINUTE);
+        assert_eq!(ledger.letters[1].state, State::Pending);
+        ledger.expire(230 * MINUTE);
+        assert_eq!(ledger.letters[1].state, State::Undelivered);
+    }
+
+    /// A letter that already rang, or whose one wake started before this
+    /// sleep, wakes no one now, so its hour runs through the sleep; one whose
+    /// wake is this sleep's waits it out.
+    #[test]
+    fn only_a_letter_waiting_for_its_recipients_wake_pauses_its_hour() {
+        let sleeper = Sleeper {
+            device_id: "local".into(),
+            session: Some("recipient-native".into()),
+            since: 50 * MINUTE,
+        };
+        let asleep: Asleep = [("recipient".to_owned(), sleeper)].into();
+        let mut rung = letter_to("local", 0);
+        rung.letters[0].bell_sent = true;
+        let mut rung_report = rung.clone();
+        rung_report.letters[0].kind = "report".into();
+        rung.expire_awake(60 * MINUTE, &asleep, &Woken::new());
+        assert_eq!(rung.letters[0].state, State::Undelivered);
+        rung_report.expire_awake(60 * MINUTE, &asleep, &Woken::new());
+        assert_eq!(
+            rung_report.letters[0].state,
+            State::Pending,
+            "a report waits for the wake"
+        );
+        let mut woke_before = letter_to("local", 0);
+        let id = woke_before.letters[0].id.clone();
+        let before: Woken = [(id.clone(), 10 * MINUTE)].into();
+        woke_before.expire_awake(60 * MINUTE, &asleep, &before);
+        assert_eq!(woke_before.letters[0].state, State::Undelivered);
+        let mut woke_now = letter_to("local", 0);
+        let now: Woken = [(id, 55 * MINUTE)].into();
+        woke_now.expire_awake(60 * MINUTE, &asleep, &now);
+        assert_eq!(woke_now.letters[0].state, State::Pending);
+        assert!(woke_now.resume_woken(&asleep, &now, 70 * MINUTE));
+        woke_now.expire(79 * MINUTE);
+        assert_eq!(woke_now.letters[0].state, State::Pending);
+    }
+
+    /// D-16: a failed wake leaves its pending letter undelivered and its
+    /// sender waiting for no answer.
+    #[test]
+    fn a_failed_wake_leaves_its_letter_undelivered() {
+        let mut ledger = letter_to("local", 0);
+        let id = ledger.letters[0].id.clone();
+        assert!(ledger.fail_woken(&[(id, "agent_wake.not_started".into())].into(), 5));
+        let letter = &ledger.letters[0];
+        assert_eq!(letter.state, State::Undelivered);
+        assert!(!letter.waiting_answer);
+        assert_eq!(letter.finished_at_unix_ms, Some(5));
+        ledger.validate().unwrap();
     }
 
     /// A letter keeps the wait it had when its recipient's machine changes

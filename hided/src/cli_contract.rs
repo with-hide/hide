@@ -242,6 +242,35 @@ pub const COMMANDS: &[Spec] = &[
         &[optional("--actor", Text), switch("--json")],
         &["agent"],
     ),
+    // The answer is `{id, state}`, state `ending` or `asleep`; asking again
+    // answers the same (PRD mission-worker-sleep D-20).
+    Spec {
+        words: &["agent", "sleep"],
+        arguments: AGENT_ID,
+        repeats: None,
+        options: &[optional("--actor", Text), switch("--json")],
+        rest: None,
+        answers: &["agent"],
+        refusals: &[
+            "agent_pane_required",
+            "agent_unavailable",
+            "agent_ended",
+            "parent_authority_required",
+            "actor_identity_conflict",
+            "agent_sleep_unsupported",
+            "agent_sleep_device",
+            "agent_sleep_core_machine_only",
+            "agent_sleep_working",
+            "agent_sleep_waiting_for_you",
+            "agent_sleep_activity_unknown",
+            "agent_sleep_no_conversation",
+            "agent_sleep_on_screen",
+            "agent_sleep_waking",
+            "agent_sleep_unreachable",
+            "agent_sleep_busy",
+            "agent_sleep_not_started",
+        ],
+    },
     Spec {
         words: &["agent", "spawn"],
         arguments: &[],
@@ -1093,6 +1122,7 @@ mod tests {
                 | CommandKind::Plan(_)
                 | CommandKind::AgentCatalog { .. }
                 | CommandKind::Ps(_)
+                | CommandKind::AgentSleep { .. }
                 | CommandKind::Device(_))
         )
     }

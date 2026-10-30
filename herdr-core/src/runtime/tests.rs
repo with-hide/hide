@@ -79,6 +79,8 @@ mod lineage;
 mod links;
 #[path = "tests/memory.rs"]
 mod memory;
+#[path = "tests/mission_worker_sleep.rs"]
+mod mission_worker_sleep;
 #[path = "tests/missions.rs"]
 mod missions;
 #[path = "tests/named_tab.rs"]

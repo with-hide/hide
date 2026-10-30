@@ -3,7 +3,7 @@
 use crate::env::{self, Env};
 use herdr_core::{coordination::Command, delivery::Command as Delivery};
 use std::collections::BTreeMap;
-pub const USAGE: &str = "hide agent register [--check] [--machine <device id>] --host-scope <scope> --session <session> --instance <terminal> --name <name> --pane <pane> [--parent <id>] [--project <path>]\nhide agent list\nhide agent show <id|here>\nhide agent end <id> [--actor <id>]\nhide agent catalog [--machine <device id>]\nhide agent spawn [--parent <here|id>] [--machine <device id>] [--beside] --name <name> --intent <key> --kind <kind> --repo <path> --branch <branch> [--path <path>] [--model <model>] [--effort <effort>] [--brief <text> | --brief-file <path>] [-- <native args>]";
+pub const USAGE: &str = "hide agent register [--check] [--machine <device id>] --host-scope <scope> --session <session> --instance <terminal> --name <name> --pane <pane> [--parent <id>] [--project <path>]\nhide agent list\nhide agent show <id|here>\nhide agent end <id> [--actor <id>]\nhide agent sleep <id> [--actor <id>]\nhide agent catalog [--machine <device id>]\nhide agent spawn [--parent <here|id>] [--machine <device id>] [--beside] --name <name> --intent <key> --kind <kind> --repo <path> --branch <branch> [--path <path>] [--model <model>] [--effort <effort>] [--brief <text> | --brief-file <path>] [-- <native args>]";
 pub const SPAWN_HELP: &str = "hide agent spawn [--parent <here|id>] [--machine <device id>] [--beside] --name <name> --intent <key> --kind <kind> --repo <path> --branch <branch> [--path <path>] [--model <model>] [--effort <effort>] [--brief <text> | --brief-file <path>] [-- <native args>]
 
 Choose the model and effort with --model and --effort, not after --:
@@ -209,6 +209,33 @@ pub fn parse<'a>(mut args: impl Iterator<Item = &'a String>) -> Result<Parsed, S
     })
 }
 
+/// `hide agent sleep <id> [--actor <id>]`: the registration to put to sleep
+/// and the caller's own registration when it names one.
+pub fn parse_sleep(args: &[String]) -> Result<(String, Option<String>), String> {
+    let value = |value: &String| {
+        (!value.is_empty() && !value.starts_with("--") && !value.chars().any(char::is_control))
+            .then(|| value.clone())
+    };
+    match args {
+        [id] => value(id).map(|id| (id, None)),
+        [id, flag, actor] | [flag, actor, id] if flag == "--actor" => value(id)
+            .zip(value(actor))
+            .map(|(id, actor)| (id, Some(actor))),
+        _ => None,
+    }
+    .ok_or_else(|| USAGE.to_owned())
+}
+
+/// Runs `hide agent sleep`, printed in the same envelope as every `hide
+/// agent` answer.
+pub fn run_sleep(env: &Env, id: String, actor: Option<String>) -> Result<(), String> {
+    let result = (|| {
+        let mut credential = crate::workspace_cli::Credential::acquire(env)?;
+        crate::workspace_cli::request_agent_sleep(&mut credential, &id, actor.as_deref())
+    })();
+    print_answer(result)
+}
+
 /// Reads the brief `--brief-file` names, in the caller's own account, and
 /// refuses it before the daemon is asked when it cannot be read, is blank or
 /// is past a letter's body limit.
@@ -250,6 +277,10 @@ pub fn run(env: &Env, command: Delivery) -> Result<(), String> {
         let hint = std::env::var(env::HERDR_PANE_ID).ok();
         crate::workspace_cli::request_delivery(&mut credential, command, hint.as_deref())
     })();
+    print_answer(result)
+}
+
+fn print_answer(result: Result<serde_json::Value, String>) -> Result<(), String> {
     match result {
         Ok(answer) if answer["ok"] == true => {
             println!(
@@ -297,6 +328,34 @@ mod tests {
         let args = args.iter().map(|arg| arg.to_string()).collect::<Vec<_>>();
         parse(args.iter())
     }
+    /// `hide agent sleep` takes the id and, before or after it, the
+    /// caller's own registration as `--actor`, and nothing else.
+    #[test]
+    fn sleep_takes_an_id_and_an_optional_actor() {
+        let args = |args: &[&str]| args.iter().map(|arg| arg.to_string()).collect::<Vec<_>>();
+        assert_eq!(
+            parse_sleep(&args(&["agent-2"])),
+            Ok(("agent-2".into(), None))
+        );
+        for order in [
+            ["agent-2", "--actor", "agent-1"],
+            ["--actor", "agent-1", "agent-2"],
+        ] {
+            assert_eq!(
+                parse_sleep(&args(&order)),
+                Ok(("agent-2".into(), Some("agent-1".into())))
+            );
+        }
+        for refused in [
+            &[][..],
+            &["--actor", "agent-1"],
+            &["agent-2", "agent-3"],
+            &["--now"],
+        ] {
+            assert!(parse_sleep(&args(refused)).is_err(), "{refused:?}");
+        }
+    }
+
     #[test]
     fn spawn_preserves_native_arguments_and_refuses_retired_flags() {
         let args = [

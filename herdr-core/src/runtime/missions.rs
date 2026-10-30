@@ -247,6 +247,14 @@ pub(crate) struct MissionRuntime {
     pub(crate) events_made: (Option<String>, u64),
     /// The outside nodes' reads (B19, B20).
     pub(super) outside: super::mission_outside::Outside,
+    /// The nodes finished as the book last read, by mission and node, so a
+    /// save tells a node that has just finished (PRD mission-worker-sleep
+    /// D-17). Set from the book read at start, so a restart sleeps nothing
+    /// for a finish it already saw.
+    pub(super) finished: std::collections::HashSet<(String, String)>,
+    /// The agents a finish asks to put to sleep, in the order they finished
+    /// (D-19). Memory only: a restart leaves them to the hours rule.
+    pub(super) sleep_marks: Vec<super::agent_sleep::missions::SleepMark>,
 }
 
 #[derive(Default)]
@@ -392,6 +400,7 @@ impl Runtime {
         }
         self.missions.store = Some(store);
         self.missions.book_edit = self.missions.book_edit.wrapping_add(1);
+        self.missions.finished = super::agent_sleep::missions::finished_nodes(&self.missions.book);
     }
 
     /// Follows mission `id`'s outside nodes and waiting branches now, for a
@@ -442,6 +451,7 @@ impl Runtime {
 
     pub(super) fn save_missions(&mut self) {
         self.missions.book_edit = self.missions.book_edit.wrapping_add(1);
+        self.note_mission_finishes();
         // A book that could not be read is kept as it is on disk: the empty
         // one in memory is not the operator's missions.
         if self.missions.unreadable.is_some() {

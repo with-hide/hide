@@ -802,6 +802,9 @@ fn run(
     stop: Arc<AtomicBool>,
 ) {
     let mut maintenance_at = 0;
+    // The recipients asleep at the last saved pass, so the pass after one
+    // wakes takes its sleep out of its letters' waits once.
+    let mut asleep_before = ledger::Asleep::new();
     while !stop.load(Ordering::Acquire) {
         let mut batch = Vec::new();
         match requests.recv_timeout(Duration::from_millis(250)) {
@@ -827,9 +830,12 @@ fn run(
                     guard.delivery_registrations_gone(),
                     guard.delivery_registration_rebinds(),
                     guard.delivery_reach(),
+                    guard.delivery_asleep(),
+                    guard.delivery_wakes_started(),
+                    guard.delivery_wake_failures(),
                 ))
             });
-        let (state, gone, rebinds, reach) = match state {
+        let (state, gone, rebinds, reach, asleep, woken, wake_failed) = match state {
             Ok(state) => state,
             Err(code) => {
                 for request in batch {
@@ -839,6 +845,11 @@ fn run(
             }
         };
         let now = now();
+        let woke: ledger::Asleep = asleep_before
+            .iter()
+            .filter(|(pane, before)| asleep.get(*pane) != Some(*before))
+            .map(|(pane, sleeper)| (pane.clone(), sleeper.clone()))
+            .collect();
         if batch.is_empty() {
             if now.saturating_sub(maintenance_at) < 1_000 {
                 continue;
@@ -848,11 +859,16 @@ fn run(
                 && rebinds.is_empty()
                 && !state.reach_moves(&reach, now)
                 && !state.letters.iter().any(|letter| {
-                    letter.intake_overdue(&state.node_clocks, now)
+                    (letter.intake_overdue(&state.node_clocks, now)
+                        && ledger::Sleeper::pausing(&asleep, &woken, letter).is_none())
                         || letter.answer_overdue(now)
                         || !letter.retained(now)
+                        || (letter.state == ledger::State::Pending
+                            && (wake_failed.contains_key(&letter.id)
+                                || ledger::Sleeper::of(&woke, letter).is_some()))
                 })
             {
+                asleep_before = asleep;
                 continue;
             }
         }
@@ -860,6 +876,10 @@ fn run(
             reach,
             gone,
             rebinds,
+            asleep,
+            woke,
+            woken,
+            wake_failed,
         };
         let Settled {
             ledger: candidate,
@@ -887,6 +907,7 @@ fn run(
                     "code":error.code(),"persistence":error.diagnostic()}));
         }
         if saved.is_ok() {
+            asleep_before = upkeep.asleep.clone();
             if changed {
                 for (letter, why) in answer_waits_ended(&state, &candidate) {
                     crate::diagnostic!(json!({"component":"delivery","kind":"answer_wait.ended",
@@ -1092,6 +1113,9 @@ fn current(
                         }
                         let current = if target.actor.code_owned() {
                             false
+                        } else if matches!(command, Command::Send { .. }) {
+                            // A sleeping recipient takes letters too.
+                            guard.delivery_recipient_current(&target.actor)
                         } else {
                             guard.delivery_identity_current(&target.actor)
                         };
@@ -1121,6 +1145,17 @@ struct Upkeep {
     reach: ledger::Reach,
     gone: std::collections::BTreeMap<String, crate::coordination::PaneGone>,
     rebinds: std::collections::BTreeMap<String, crate::coordination::Rebind>,
+    /// The recipients asleep now, whose letters' deadlines are paused, and
+    /// those asleep at the last pass that are not now (PRD
+    /// mission-worker-sleep D-13).
+    asleep: ledger::Asleep,
+    woke: ledger::Asleep,
+    /// The letters whose one wake started, with when: those wake no one
+    /// in a later sleep, and their hour runs through it.
+    woken: ledger::Woken,
+    /// The letters a failed wake leaves undelivered, with the wake's reason
+    /// (D-16).
+    wake_failed: std::collections::BTreeMap<String, String>,
 }
 
 type Moved = Vec<(String, Actor)>;
@@ -1135,7 +1170,9 @@ impl Upkeep {
         // First, so a deadline and a letter sent in this batch read the
         // machines' clocks as they are now.
         ledger.observe_reach(&self.reach, now);
-        ledger.expire(now);
+        ledger.resume_woken(&self.woke, &self.woken, now);
+        ledger.expire_awake(now, &self.asleep, &self.woken);
+        ledger.fail_woken(&self.wake_failed, now);
         ledger.end_overdue_answer_waits(now);
         let moved = crate::coordination::rebind(ledger, &self.rebinds);
         let ended = crate::coordination::end_gone(ledger, &self.gone, now);
@@ -2190,6 +2227,10 @@ mod tests {
 
     fn upkeep() -> Upkeep {
         Upkeep {
+            asleep: Default::default(),
+            woke: Default::default(),
+            woken: Default::default(),
+            wake_failed: Default::default(),
             reach: ledger::Reach::new(),
             gone: Default::default(),
             rebinds: Default::default(),

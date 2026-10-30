@@ -1952,6 +1952,57 @@
             "answers": [
                 "agent"
             ],
+            "arguments": [
+                {
+                    "name": "id",
+                    "value": {
+                        "type": "text"
+                    }
+                }
+            ],
+            "command": "agent sleep",
+            "options": [
+                {
+                    "name": "--actor",
+                    "required": false,
+                    "requires": [],
+                    "value": {
+                        "type": "text"
+                    }
+                },
+                {
+                    "name": "--json",
+                    "required": false,
+                    "requires": [],
+                    "value": null
+                }
+            ],
+            "refusals": [
+                "agent_pane_required",
+                "agent_unavailable",
+                "agent_ended",
+                "parent_authority_required",
+                "actor_identity_conflict",
+                "agent_sleep_unsupported",
+                "agent_sleep_device",
+                "agent_sleep_core_machine_only",
+                "agent_sleep_working",
+                "agent_sleep_waiting_for_you",
+                "agent_sleep_activity_unknown",
+                "agent_sleep_no_conversation",
+                "agent_sleep_on_screen",
+                "agent_sleep_waking",
+                "agent_sleep_unreachable",
+                "agent_sleep_busy",
+                "agent_sleep_not_started"
+            ],
+            "repeats_at_most": null,
+            "rest": null
+        },
+        {
+            "answers": [
+                "agent"
+            ],
             "arguments": [],
             "command": "agent spawn",
             "options": [
@@ -3608,7 +3659,7 @@
             "rest": null
         }
     ],
-    "digest": "sha256:6e5e8ab27883bef8eadc0c46f08c3c3a4d62ffdcd266a1fcab603fe22d96def1",
+    "digest": "sha256:0826270596fd45f7884584e06cb8b1447ea7abb392f60949609f66d18536e3bd",
     "envelopes": {
         "agent": {
             "answer": "value",

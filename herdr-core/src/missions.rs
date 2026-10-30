@@ -143,7 +143,7 @@ pub enum NodeStatus {
 }
 
 impl NodeStatus {
-    fn finished(self) -> bool {
+    pub(crate) fn finished(self) -> bool {
         matches!(self, Self::Done | Self::Failed | Self::Dropped)
     }
 }

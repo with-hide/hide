@@ -102,6 +102,14 @@ enum Command {
         all: bool,
         reply: Sender<Result<serde_json::Value, String>>,
     },
+    AgentSleep {
+        device_id: String,
+        pane_id: String,
+        expected: Context,
+        id: String,
+        actor: Option<String>,
+        reply: Sender<Result<serde_json::Value, String>>,
+    },
     Device {
         device_id: String,
         command: herdr_core::device_command::DeviceCommand,
@@ -449,6 +457,29 @@ impl CoreHandle {
         result
             .recv()
             .map_err(|_| "catalog_unavailable".to_owned())?
+    }
+
+    /// `hide agent sleep`, run on the owner thread.
+    pub fn agent_sleep(
+        &self,
+        device: &str,
+        pane: &str,
+        expected: &Context,
+        id: String,
+        actor: Option<String>,
+    ) -> Result<serde_json::Value, String> {
+        let (reply, result) = mpsc::channel();
+        self.commands
+            .send(Command::AgentSleep {
+                device_id: device.to_owned(),
+                pane_id: pane.to_owned(),
+                expected: expected.clone(),
+                id,
+                actor,
+                reply,
+            })
+            .map_err(|_| "agent_unavailable".to_owned())?;
+        result.recv().map_err(|_| "agent_unavailable".to_owned())?
     }
 
     /// `hide ps`, read on the owner thread.
@@ -1143,6 +1174,22 @@ fn owner_loop(
                 reply,
             } => {
                 let _ = reply.send(core.ps(&device_id, &pane_id, all));
+            }
+            Command::AgentSleep {
+                device_id,
+                pane_id,
+                expected,
+                id,
+                actor,
+                reply,
+            } => {
+                let _ = reply.send(core.agent_sleep(
+                    &device_id,
+                    &pane_id,
+                    &expected,
+                    &id,
+                    actor.as_deref(),
+                ));
             }
 
             Command::Device {
