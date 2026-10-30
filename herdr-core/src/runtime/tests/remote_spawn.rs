@@ -121,8 +121,9 @@ fn agent_row(session: Option<&str>, shows: bool) -> Value {
 /// once it has one; closing its pane ends it. A start whose agent
 /// does not show holds its name (`held`) until the test says Herdr's deadline
 /// passed; `agent.get` then answers the name is gone. The pane shows its
-/// shell's first-prompt mark once `unmarked` reads of it have passed, and
-/// `refused` makes Herdr refuse the next start before typing anything.
+/// shell's first-prompt mark once `unmarked` reads of it have passed,
+/// `refused` makes Herdr refuse the next start before typing anything, and
+/// `list_fails` is how many agent lists after the start Herdr fails to answer.
 fn device_herdr(
     started: Arc<AtomicBool>,
     session: Arc<Mutex<Option<String>>>,
@@ -130,6 +131,7 @@ fn device_herdr(
     held: Arc<AtomicBool>,
     unmarked: Arc<AtomicUsize>,
     refused: Arc<AtomicBool>,
+    list_fails: Arc<AtomicUsize>,
 ) -> FakeHerdr {
     FakeHerdr::start_with_errors("remote-spawn", move |method, _| {
         Ok(match method {
@@ -174,6 +176,16 @@ fn device_herdr(
                 started.store(true, Ordering::SeqCst);
                 held.store(true, Ordering::SeqCst);
                 json!({"type": "agent_started", "argv": [], "agent": agent_row(None, true)})
+            }
+            "agent.list"
+                if started.load(Ordering::SeqCst)
+                    && list_fails
+                        .try_update(Ordering::SeqCst, Ordering::SeqCst, |left| {
+                            left.checked_sub(1)
+                        })
+                        .is_ok() =>
+            {
+                return Err(("internal_error".into(), "the agent list timed out".into()));
             }
             "agent.list" => {
                 let shows = shows.load(Ordering::SeqCst);
@@ -222,6 +234,8 @@ struct Spawner {
     unmarked: Arc<AtomicUsize>,
     /// Whether Herdr refuses the next start.
     refused: Arc<AtomicBool>,
+    /// How many agent lists after the start Herdr fails to answer.
+    list_fails: Arc<AtomicUsize>,
     herdr: FakeHerdr,
     path: PathBuf,
     _worker: Worker,
@@ -254,6 +268,7 @@ fn spawner() -> Spawner {
     let held = Arc::new(AtomicBool::new(false));
     let unmarked = Arc::new(AtomicUsize::new(0));
     let refused = Arc::new(AtomicBool::new(false));
+    let list_fails = Arc::new(AtomicUsize::new(0));
     let herdr = device_herdr(
         started,
         session.clone(),
@@ -261,6 +276,7 @@ fn spawner() -> Spawner {
         held.clone(),
         unmarked.clone(),
         refused.clone(),
+        list_fails.clone(),
     );
     let node = Arc::new(Node {
         repository: AtomicBool::new(true),
@@ -378,6 +394,7 @@ fn spawner() -> Spawner {
         held,
         unmarked,
         refused,
+        list_fails,
         herdr,
         path,
         _worker: worker,
@@ -1110,6 +1127,23 @@ fn a_child_that_reports_its_session_late_is_bound_by_the_core_and_its_intent_ans
     assert_eq!(answer["id"], child.as_str());
     assert_eq!(answer["watch"]["parent"]["pane_id"], "sender");
     assert_eq!(spawner.published().agents.len(), 2);
+    assert_eq!(spawner.count("agent.start"), 1);
+}
+
+/// A child whose first agent list after its start Herdr fails to answer, as
+/// a loaded Herdr does past the read's deadline, is still registered: the
+/// spawn reads again within its wait, so the child is bound on this answer
+/// and no running agent is left that nothing tracks.
+#[test]
+fn a_child_whose_first_agent_list_fails_after_its_start_is_still_registered() {
+    let spawner = spawner();
+    spawner.list_fails.store(1, Ordering::SeqCst);
+    let child = spawner
+        .spawn(Some("here"), Some(DEVICE), "list-fails")
+        .expect("the spawn reads the agent list again");
+    let ledger = spawner.published();
+    assert_eq!(ledger.spawns[0].child.as_deref(), child["id"].as_str());
+    assert!(ledger.spawns[0].completed);
     assert_eq!(spawner.count("agent.start"), 1);
 }
 
