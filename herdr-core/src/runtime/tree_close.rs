@@ -865,7 +865,7 @@ impl Runtime {
             TreeFinal::Worktree { removal_id, .. } => self.ingest_worktree_close_result(
                 *removal_id,
                 &[],
-                Err(crate::live::RemovalFailure::new(
+                Err(crate::worktree_control::RemovalFailure::new(
                     crate::model::WorktreeRemovalNotice::CloseFailed,
                     message,
                 )),

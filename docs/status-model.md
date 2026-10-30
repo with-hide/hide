@@ -68,7 +68,7 @@ A row that has both a plan waiting for review and a mission decision carries the
 
 ## agent_status provenance and background waits
 
-Herdr owns the raw `agent_status`; Hide reads it through `agent.list`/`agent.get`, converts it at `herdr-core/src/wire.rs` and derives its axes in `agent_state/axes.rs`.
+Herdr owns the raw `agent_status`; Hide reads it through `agent.list`/`agent.get`, converts it at `herdr-core/src/engine/herdr/wire.rs` and derives its axes in `agent_state/axes.rs`.
 For Claude Code and Codex, Herdr's [official agent reference](https://herdr.dev/docs/agents/) describes terminal-screen inference as the lifecycle source, rather than lifecycle state reported by their session hooks.
 A native session reference or display-only hook token does not prove that a tool is running or that its command completed.
 Other integrations can have full lifecycle reporting, so this screen-inference statement is specific to those two agents, not every agent Herdr supports.
@@ -455,7 +455,7 @@ The operating-system identity is the platform UUID on macOS and the machine-id o
 A delegated `hide agent spawn --machine <device id>` child is a remote child of a local parent: its tokens are written on the device's pane and `parent_machine` names the spawner's machine, the same resolution as any cross-machine relationship above.
 The existing one-second agent refresh writes only panes whose tokens differ, with a complete reconciliation on startup or reconnect and an immediate write after spawn.
 The same writer writes the read axis's server mark ([Across a Herdr restart](#across-a-herdr-restart)), in the pane's lineage report when it has one.
-`wire.rs` and `agent_state/axes.rs` remain the readers of this contract.
+`engine/tokens.rs` names this contract for every engine; `wire.rs` and `agent_state/axes.rs` remain its readers.
 A connected device's immutable machine identity comes from its consented helper's connection greeting, outside the runtime mutex; an unavailable identity leaves the parent unresolved and records a diagnostic.
 A declaration whose machine cannot be matched stays a root and records one diagnostic for that pane instead of guessing.
 

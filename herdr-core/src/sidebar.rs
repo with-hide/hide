@@ -780,7 +780,7 @@ fn project_agent(agent: SessionAgentPayload) -> Result<SidebarAgentSnapshot, Str
             .filter(|name| !crate::fork::hide_made_name(name, agent_kind, &pane_id))
             .map(str::to_owned),
         started_name: non_empty(agent.name.as_deref()).map(str::to_owned),
-        declared_fork: crate::wire::fork_declaration(
+        declared_fork: crate::engine::tokens::fork_declaration(
             &agent.tokens,
             non_empty(agent.lineage_session.as_deref()),
         ),
@@ -865,7 +865,7 @@ fn project_agent(agent: SessionAgentPayload) -> Result<SidebarAgentSnapshot, Str
         declared_parent_session: non_empty(agent.declared_parent_session.as_deref())
             .map(str::to_owned),
         lineage_session: non_empty(agent.lineage_session.as_deref()).map(str::to_owned),
-        server_mark: crate::wire::server_mark(&agent.tokens),
+        server_mark: crate::engine::tokens::server_mark(&agent.tokens),
         delegated: false,
         descendant_counts: crate::model::DescendantCountsSnapshot::default(),
         direct_child_counts: crate::model::DescendantCountsSnapshot::default(),
@@ -946,7 +946,7 @@ fn non_empty(value: Option<&str>) -> Option<&str> {
 /// written for (`wire::session_digest`).
 #[cfg(test)]
 pub(crate) fn fixture_lineage_session() -> String {
-    crate::wire::session_digest("fixture-lineage-session").unwrap()
+    crate::engine::tokens::session_digest("fixture-lineage-session").unwrap()
 }
 
 /// A declared parent is proven by sessions (`wire::session_holds`), and the
@@ -2540,7 +2540,7 @@ mod tests {
             "state_change_seq": seq,
             "completion_seq": completion,
             "agent_session": {"kind":"id","value":session},
-            "lineage_session": crate::wire::session_digest(session).unwrap(),
+            "lineage_session": crate::engine::tokens::session_digest(session).unwrap(),
             "tokens": {"activity":"0000000000001"}
         })
     }
@@ -2777,7 +2777,7 @@ mod tests {
     fn a_hide_restart_on_the_same_server_shows_work_done_while_away() {
         let marked = |status: &str, seq: u64| {
             let mut row = pane("a", status, seq, Some(seq), "s1");
-            row["tokens"][crate::wire::SERVER_MARK_TOKEN] = json!(SERVER);
+            row["tokens"][crate::engine::tokens::SERVER_MARK_TOKEN] = json!(SERVER);
             row
         };
         let mut saved = Saved::default();
@@ -2817,7 +2817,7 @@ mod tests {
             if linked {
                 row["spawned_from_pane_id"] = json!("root");
                 row["declared_parent_session"] =
-                    json!(crate::wire::session_digest("s-root").unwrap());
+                    json!(crate::engine::tokens::session_digest("s-root").unwrap());
             }
             row
         };

@@ -167,7 +167,7 @@ fn machine_identity_resolves_lineage_in_both_directions_and_restores_after_recon
 /// remote child its local parent for `s-local-parent`; each pane runs the
 /// session the relationship was written for.
 fn attest_cross_machine_sessions(runtime: &mut Runtime) {
-    let digest = |session: &str| crate::wire::session_digest(session);
+    let digest = |session: &str| crate::engine::tokens::session_digest(session);
     for agent in &mut runtime.snapshot.navigator.agents {
         match agent.pane_id.as_str() {
             "local-parent" => agent.lineage_session = digest("s-local-parent"),
@@ -223,7 +223,7 @@ fn a_parent_pane_on_another_machine_reused_by_another_agent_adopts_no_local_chil
         .agents
     {
         if agent.pane_id == "remote:mini:pane:remote-parent" {
-            agent.lineage_session = crate::wire::session_digest("s-another-agent");
+            agent.lineage_session = crate::engine::tokens::session_digest("s-another-agent");
         }
     }
     runtime.refresh_agent_lineage();
@@ -1042,8 +1042,9 @@ fn a_strip_entry_carries_its_one_agents_identity_and_mark() {
 
 #[test]
 fn moving_a_delegated_child_asks_for_a_new_tab_in_the_workspace_it_is_already_in() {
-    let params = crate::wire::pane_move_to_new_tab_params("w1:p2", "w1", "Implementor")
-        .expect("params encode");
+    let params =
+        crate::engine::herdr::wire::pane_move_to_new_tab_params("w1:p2", "w1", "Implementor")
+            .expect("params encode");
     assert_eq!(
         params,
         serde_json::json!({
@@ -1060,22 +1061,36 @@ fn a_move_herdr_declined_is_an_error_rather_than_a_silent_success() {
     // Herdr reports a refusal as an unchanged move with a reason, not as an
     // error, so the decision has to read `changed` rather than assume that a
     // successful request moved anything.
-    let refused = crate::wire::move_outcome(false, Some("SameTab".to_owned()), None)
+    let moved = |changed: bool, reason: Option<&str>, created: Option<&str>| {
+        crate::engine::PaneJoinResult {
+            changed,
+            reason: reason.map(str::to_owned),
+            workspace_id: "w1".into(),
+            tab_id: "w1:t2".into(),
+            pane_id: "w1:p1".into(),
+            terminal_id: "term_1".into(),
+            previous_workspace_id: "w1".into(),
+            previous_tab_id: "w1:t1".into(),
+            previous_pane_id: "w1:p1".into(),
+            closed_tab_id: None,
+            closed_workspace_id: None,
+            created_tab_id: created.map(str::to_owned),
+        }
+    };
+    let refused = moved(false, Some("same_tab"), None)
+        .created_tab()
         .expect_err("a refusal is not a move");
     assert!(
-        refused.contains("declined") && refused.contains("SameTab"),
+        refused.contains("declined") && refused.contains("same_tab"),
         "got {refused}"
     );
     assert!(
-        crate::wire::move_outcome(false, None, Some("t2".to_owned())).is_err(),
+        moved(false, None, Some("t2")).created_tab().is_err(),
         "an unchanged move is a refusal even when a tab id came back"
     );
-    assert_eq!(
-        crate::wire::move_outcome(true, None, Some("t2".to_owned())).unwrap(),
-        "t2"
-    );
+    assert_eq!(moved(true, None, Some("t2")).created_tab().unwrap(), "t2");
     assert!(
-        crate::wire::move_outcome(true, None, None).is_err(),
+        moved(true, None, None).created_tab().is_err(),
         "a move with no tab to show for it is not a success"
     );
 }
@@ -2795,7 +2810,7 @@ fn a_quiet_row_waits_on_children_then_a_proven_device_then_a_reply() {
     );
 
     // An agent that took the peer's pane over is not who was asked.
-    rows[peer].lineage_session = crate::wire::session_digest("another-agent");
+    rows[peer].lineage_session = crate::engine::tokens::session_digest("another-agent");
     crate::agent_state::apply_lineage(&mut rows, &[], &[]);
     assert_eq!(wait_of(&rows, "child"), None);
 }
@@ -2902,7 +2917,7 @@ fn rows_and_checkouts_hide_started_are_marked_from_the_ledger_alone() {
     // An agent that took the pane later holds another session: no mark.
     for agent in &mut runtime.snapshot.navigator.agents {
         if agent.pane_id == "local-child" {
-            agent.lineage_session = crate::wire::session_digest("s-another-agent");
+            agent.lineage_session = crate::engine::tokens::session_digest("s-another-agent");
         }
     }
     runtime.refresh_agent_lineage();

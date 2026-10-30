@@ -3,7 +3,9 @@
 //! A fork asks Herdr to create a pane and start the new agent, then
 //! registers both exact executions in Hide and publishes lineage. This
 //! module decides which panes can be forked and spells each agent's resume
-//! arguments; running the calls is [`crate::live`]'s job.
+//! arguments; running the calls is [`worker`]'s job.
+
+pub(crate) mod worker;
 
 /// The agents whose own fork command this shell knows how to spell.
 ///
@@ -86,10 +88,10 @@ impl ForkableAgent {
             // its server forks the session instead and the pane opens the new
             // one ([`opencode_forked_arguments`]).
             // Which one a session takes is its node's to read
-            // (`live::fork_arguments`).
+            // (`crate::fork::worker::fork_arguments`).
             Self::OpenCode => vec!["-s".to_owned(), session_id.to_owned(), "--fork".to_owned()],
             // agy 1.4.0 forks only through its `/fork` command, typed once
-            // the resumed conversation is up (`live::fork_antigravity`).
+            // the resumed conversation is up (`crate::fork::worker::fork_antigravity`).
             Self::Antigravity => vec!["--conversation".to_owned(), session_id.to_owned()],
         }
     }

@@ -25,7 +25,7 @@ import {
   ownCriteria,
   shortCommit,
 } from "./missions";
-import { PlanChecklist } from "./PlanChecklist";
+import { PlanChecklist } from "./components/plan-checklist";
 import { planNowLine } from "./plans";
 import { sessionOfAgent } from "./sessionWork";
 import type { Mission, MissionCriterion, MissionEvent, MissionNode } from "./snapshot";

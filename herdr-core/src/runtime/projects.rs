@@ -557,7 +557,7 @@ impl Runtime {
         &self,
         node: Option<&str>,
         workspace: &WorkspaceSnapshot,
-    ) -> Vec<live::cleanup::CheckoutFacts> {
+    ) -> Vec<crate::worktree_cleanup::CheckoutFacts> {
         let mut facts = crate::agent_state::cleanup_facts(&self.snapshot, workspace);
         let Some(node) = node else {
             return facts;
@@ -587,7 +587,7 @@ impl Runtime {
     pub(crate) fn cleanup_facts(
         &self,
         workspace_id: &str,
-    ) -> Option<Vec<live::cleanup::CheckoutFacts>> {
+    ) -> Option<Vec<crate::worktree_cleanup::CheckoutFacts>> {
         let (node, workspace) = self.cleanup_workspace(workspace_id)?;
         Some(self.checkout_facts(node, workspace))
     }
@@ -599,7 +599,7 @@ impl Runtime {
     pub(crate) fn cleanup_input(
         &self,
         workspace_id: &str,
-    ) -> Option<(Option<String>, live::cleanup::ReviewInput)> {
+    ) -> Option<(Option<String>, crate::worktree_cleanup::ReviewInput)> {
         let (node, workspace) = self.cleanup_workspace(workspace_id)?;
         let listed = match node {
             None => self.worktree_catalog.project(&workspace.path).cloned(),
@@ -622,7 +622,7 @@ impl Runtime {
         let base = listed
             .as_ref()
             .and_then(|project| project.base_branch.clone());
-        let merge = live::cleanup::MergeBasis {
+        let merge = crate::worktree_cleanup::MergeBasis {
             heads: match node {
                 None => crate::worktrees::merged_heads(
                     self.github.project(&workspace.path),
@@ -648,7 +648,7 @@ impl Runtime {
                 .filter(|(_, focused, _)| focused.id == workspace.id)
                 .map(|(_, _, checkout)| PathBuf::from(&checkout.path)),
         };
-        let input = live::cleanup::ReviewInput {
+        let input = crate::worktree_cleanup::ReviewInput {
             workspace_id: workspace.id.clone(),
             repository_root: workspace.path.clone(),
             root: PathBuf::from(&workspace.path),
@@ -676,13 +676,13 @@ impl Runtime {
         &mut self,
         node: Option<&str>,
         root: &str,
-    ) -> Result<live::cleanup::CleanupPlace, String> {
+    ) -> Result<crate::worktree_cleanup::CleanupPlace, String> {
         // A node's project whose GitHub repository is not named has no
         // squash-merge proof to read, and its rows say why; its worktrees
         // merged by Git still go.
         let github = self
             .github_place(node, root)
-            .map(|place| crate::live::GhPlace {
+            .map(|place| crate::worktree_control::GhPlace {
                 node: self.own_node(),
                 place,
             });
@@ -690,12 +690,14 @@ impl Runtime {
             let context = self.live.clone().ok_or_else(|| {
                 "A live Herdr connection is required to verify what is in use. Connect and review again.".to_owned()
             })?;
-            return Ok(live::cleanup::CleanupPlace::local(context, github));
+            return Ok(crate::worktree_cleanup::CleanupPlace::local(
+                context, github,
+            ));
         };
         let control = self.remote_controls.get(node).cloned().ok_or_else(|| {
             "The node's Herdr connection is unavailable. Reconnect and review again.".to_owned()
         })?;
-        Ok(live::cleanup::CleanupPlace::node(
+        Ok(crate::worktree_cleanup::CleanupPlace::node(
             &control,
             self.node_link(node)?,
             github,
@@ -733,7 +735,10 @@ impl Runtime {
         }
     }
 
-    pub(crate) fn ingest_cleanup(&mut self, answer: live::cleanup::CleanupSnapshot) -> bool {
+    pub(crate) fn ingest_cleanup(
+        &mut self,
+        answer: crate::worktree_cleanup::CleanupSnapshot,
+    ) -> bool {
         if self
             .cleanup
             .as_ref()
@@ -783,7 +788,7 @@ impl Runtime {
     fn keep_review_merge_proofs(
         &mut self,
         node: Option<&str>,
-        answer: &live::cleanup::CleanupSnapshot,
+        answer: &crate::worktree_cleanup::CleanupSnapshot,
     ) -> bool {
         if answer.merge_proofs.is_empty() {
             return false;
@@ -860,7 +865,7 @@ impl Runtime {
             return false;
         };
         self.next_cleanup_id = self.next_cleanup_id.wrapping_add(1).max(1);
-        let mut review = live::cleanup::CleanupSnapshot {
+        let mut review = crate::worktree_cleanup::CleanupSnapshot {
             id: self.next_cleanup_id,
             workspace_id: workspace_id.to_owned(),
             repository_root: input.repository_root.clone(),
@@ -874,7 +879,7 @@ impl Runtime {
         let root = input.repository_root.clone();
         let started = self
             .cleanup_place(node.as_deref(), &root)
-            .and_then(|place| live::cleanup::spawn_review(place, review.id, input));
+            .and_then(|place| crate::worktree_cleanup::spawn_review(place, review.id, input));
         if started.is_ok() {
             self.cleanup_worker = Some(review.id);
         }
@@ -920,12 +925,12 @@ impl Runtime {
         paths.sort();
         // A worktree goes with everything in it, so its own cells are not
         // emptied one by one.
-        let mut cells: Vec<live::cleanup::CellChoice> = Vec::new();
+        let mut cells: Vec<crate::worktree_cleanup::CellChoice> = Vec::new();
         for cell in payload.cells.into_iter().take(limit) {
             let Some(layer) = hide_node_link::disk::Layer::from_code(&cell.layer) else {
                 continue;
             };
-            let choice = live::cleanup::CellChoice {
+            let choice = crate::worktree_cleanup::CellChoice {
                 path: cell.path,
                 layer,
             };
@@ -949,7 +954,7 @@ impl Runtime {
         let started = self
             .cleanup_place(node.as_deref(), &review.repository_root)
             .and_then(|place| {
-                live::cleanup::spawn_confirm(place, review.clone(), input, paths, cells)
+                crate::worktree_cleanup::spawn_confirm(place, review.clone(), input, paths, cells)
             });
         if started.is_ok() {
             self.cleanup_worker = Some(review.id);
@@ -1933,9 +1938,12 @@ impl Runtime {
             );
             return true;
         };
-        if let Err(message) =
-            live::spawn_worktree_open(context, checkout_path.clone(), repository_root, newest_pane)
-        {
+        if let Err(message) = crate::worktree_control::spawn_worktree_open(
+            context,
+            checkout_path.clone(),
+            repository_root,
+            newest_pane,
+        ) {
             self.ingest_worktree_open_result(checkout_path, Err(message));
         }
         true
@@ -2098,13 +2106,14 @@ impl Runtime {
             Some(device) => self.device_worktree_target(device),
             None => self.local_worktree_target(),
         };
-        let result =
-            context.and_then(|context| live::spawn_worktree_preflight(context, id, outside));
+        let result = context.and_then(|context| {
+            crate::worktree_control::spawn_worktree_preflight(context, id, outside)
+        });
         if let Err(reason) = result {
             self.ingest_worktree_preflight_result(
                 id,
                 Vec::new(),
-                Err(live::RemovalFailure::new(
+                Err(crate::worktree_control::RemovalFailure::new(
                     crate::model::WorktreeRemovalNotice::WorkerUnavailable,
                     reason,
                 )),
@@ -2118,7 +2127,7 @@ impl Runtime {
         &mut self,
         id: u64,
         outside: Vec<String>,
-        result: Result<(), live::RemovalFailure>,
+        result: Result<(), crate::worktree_control::RemovalFailure>,
     ) -> bool {
         let Some(removal) = self
             .snapshot
@@ -2236,18 +2245,20 @@ impl Runtime {
                 return self.ingest_worktree_close_result(
                     id,
                     &[],
-                    Err(live::RemovalFailure::new(
+                    Err(crate::worktree_control::RemovalFailure::new(
                         crate::model::WorktreeRemovalNotice::CloseFailed,
                         format!("Deleting a worktree needs a live Herdr connection: {message}"),
                     )),
                 );
             }
         };
-        if let Err(message) = live::spawn_worktree_close(context, id, checkout_path, pane_ids) {
+        if let Err(message) =
+            crate::worktree_control::spawn_worktree_close(context, id, checkout_path, pane_ids)
+        {
             self.ingest_worktree_close_result(
                 id,
                 &[],
-                Err(live::RemovalFailure::new(
+                Err(crate::worktree_control::RemovalFailure::new(
                     crate::model::WorktreeRemovalNotice::WorkerUnavailable,
                     message,
                 )),
@@ -2743,9 +2754,12 @@ impl Runtime {
         };
         self.workspace_removals_in_flight
             .insert(workspace_id.clone());
-        if let Err(message) =
-            live::spawn_workspace_close(context, workspace_id.clone(), checkout_paths, pane_ids)
-        {
+        if let Err(message) = crate::worktree_control::spawn_workspace_close(
+            context,
+            workspace_id.clone(),
+            checkout_paths,
+            pane_ids,
+        ) {
             self.ingest_workspace_close_result(&workspace_id, Err(message));
         }
         true
@@ -2989,7 +3003,7 @@ impl Runtime {
         &mut self,
         id: u64,
         closed_pane_ids: &[String],
-        result: Result<(), live::RemovalFailure>,
+        result: Result<(), crate::worktree_control::RemovalFailure>,
     ) -> bool {
         let Some(active) = self.snapshot.worktree_removal.as_ref() else {
             return false;
@@ -3056,12 +3070,12 @@ impl Runtime {
                 });
             if identity_changed || pane_reappeared {
                 result = Err(if pane_reappeared {
-                    live::RemovalFailure::new(
+                    crate::worktree_control::RemovalFailure::new(
                         crate::model::WorktreeRemovalNotice::PaneAppeared,
                         "A pane appeared in the worktree while deletion was being confirmed",
                     )
                 } else {
-                    live::RemovalFailure::new(
+                    crate::worktree_control::RemovalFailure::new(
                         crate::model::WorktreeRemovalNotice::ChangedWhileClosing,
                         "The worktree identity or deletion gate changed while panes were closing",
                     )
@@ -3166,7 +3180,7 @@ impl Runtime {
     pub(crate) fn ingest_worktree_removal_result(
         &mut self,
         id: u64,
-        result: Result<hide_node_link::worktrees::Removed, live::RemovalFailure>,
+        result: Result<hide_node_link::worktrees::Removed, crate::worktree_control::RemovalFailure>,
     ) -> bool {
         let Some(removal) = self
             .snapshot
@@ -3239,10 +3253,14 @@ impl Runtime {
     }
 
     /// This machine's Herdr and file host, for a worktree task here.
-    pub(super) fn local_worktree_target(&self) -> Result<live::WorktreeTarget, String> {
+    pub(super) fn local_worktree_target(
+        &self,
+    ) -> Result<crate::worktree_control::WorktreeTarget, String> {
         self.live
             .as_ref()
-            .map(|context| live::WorktreeTarget::local(context, Arc::clone(&self.own_node)))
+            .map(|context| {
+                crate::worktree_control::WorktreeTarget::local(context, Arc::clone(&self.own_node))
+            })
             .ok_or_else(|| "A live Herdr connection is required".to_owned())
     }
 
@@ -3252,14 +3270,16 @@ impl Runtime {
     pub(super) fn device_worktree_target(
         &mut self,
         device: &str,
-    ) -> Result<live::WorktreeTarget, String> {
+    ) -> Result<crate::worktree_control::WorktreeTarget, String> {
         let control = self
             .remote_controls
             .get(device)
             .cloned()
             .ok_or_else(|| "The device's Herdr connection is unavailable".to_owned())?;
         let host = self.node_link(device)?;
-        Ok(live::WorktreeTarget::device(&control, host))
+        Ok(crate::worktree_control::WorktreeTarget::device(
+            &control, host,
+        ))
     }
 
     pub fn disk_request(&self) -> crate::disk::DiskRequest {
@@ -3952,7 +3972,7 @@ impl Runtime {
         let prompt = payload.agent_kind.as_ref().and(payload.prompt.clone());
         if let Some(message) = prompt
             .as_deref()
-            .and_then(|prompt| live::prompt_argument(prompt).err())
+            .and_then(|prompt| crate::worktree_control::prompt_argument(prompt).err())
         {
             self.set_error("worktree.create_invalid_prompt", message, false);
             return true;
@@ -3983,7 +4003,7 @@ impl Runtime {
         if let Some(operation) = self.snapshot.task_operation.as_mut() {
             operation.device_id = device.clone();
         }
-        let request = live::WorktreeTaskRequest {
+        let request = crate::worktree_control::WorktreeTaskRequest {
             id,
             repository_root: payload.repository_root,
             branch,
@@ -4017,9 +4037,9 @@ impl Runtime {
             }
         };
         let spawned = if existing_branch {
-            live::spawn_existing_branch_worktree(context, request)
+            crate::worktree_control::spawn_existing_branch_worktree(context, request)
         } else {
-            live::spawn_worktree_create(context, request)
+            crate::worktree_control::spawn_worktree_create(context, request)
         };
         if let Err(message) = spawned {
             return self.ingest_task_operation_result(id, Err(message.into()));
@@ -4152,7 +4172,7 @@ impl Runtime {
                 "checkout_purpose.no_target",
             );
         }
-        let request = live::PurposeTaskRequest {
+        let request = crate::worktree_control::PurposeTaskRequest {
             id,
             checkout_id: payload.checkout_id,
             repository_root,
@@ -4165,13 +4185,15 @@ impl Runtime {
                 .get(target_id)
                 .cloned()
                 .ok_or_else(|| "The remote Herdr connection is unavailable".to_owned())
-                .and_then(|context| live::spawn_remote_purpose_write(context, request))
+                .and_then(|context| {
+                    crate::worktree_control::spawn_remote_purpose_write(context, request)
+                })
         } else {
             self.live
                 .as_ref()
                 .cloned()
                 .ok_or_else(|| "A live Herdr connection is required".to_owned())
-                .and_then(|context| live::spawn_purpose_write(context, request))
+                .and_then(|context| crate::worktree_control::spawn_purpose_write(context, request))
         };
         if let Err(message) = spawn_result {
             return self.ingest_purpose_operation_result(id, Err(message));
@@ -4317,7 +4339,7 @@ impl Runtime {
         // tab or Home sync, so nothing is left behind.
         if let Some(message) = prompt
             .as_deref()
-            .and_then(|prompt| live::prompt_argument(prompt).err())
+            .and_then(|prompt| crate::worktree_control::prompt_argument(prompt).err())
         {
             self.set_request_error(
                 "agent_start.invalid_prompt",
@@ -4488,7 +4510,7 @@ impl Runtime {
         let cwd = cwd
             .filter(|cwd| hide_platform::path::wire_relative(&checkout_path, cwd).is_ok())
             .unwrap_or_else(|| checkout_path.clone());
-        let request = live::CheckoutTabRequest {
+        let request = crate::worktree_control::CheckoutTabRequest {
             start: prepared.as_ref().map(|prepared| prepared.request.clone()),
             id,
             agent_kind,
@@ -4512,12 +4534,14 @@ impl Runtime {
         let target = if local {
             self.live
                 .as_ref()
-                .map(|context| live::TabTarget::local(context, self.live_generation))
+                .map(|context| {
+                    crate::worktree_control::TabTarget::local(context, self.live_generation)
+                })
                 .ok_or("start an agent: a live Herdr connection is required")
         } else {
             self.remote_controls
                 .get(&device)
-                .map(live::TabTarget::device)
+                .map(crate::worktree_control::TabTarget::device)
                 .ok_or("agent_start.device_unavailable")
         };
         let target = match target {
@@ -4528,8 +4552,12 @@ impl Runtime {
             .as_ref()
             .is_some_and(|prepared| prepared.request.recovery_only);
         let spawned = match prepared {
-            Some(prepared) => live::spawn_targeted_checkout_start(target, request, prepared.saved),
-            None => live::spawn_checkout_tab_create(target, request),
+            Some(prepared) => crate::worktree_control::spawn_targeted_checkout_start(
+                target,
+                request,
+                prepared.saved,
+            ),
+            None => crate::worktree_control::spawn_checkout_tab_create(target, request),
         };
         if let Err(message) = spawned {
             self.group_start_failed(id, recovery_only);
@@ -4698,7 +4726,7 @@ impl Runtime {
                 return true;
             }
         };
-        let request = live::WorktreeTaskRequest {
+        let request = crate::worktree_control::WorktreeTaskRequest {
             id,
             repository_root: payload.repository_root,
             branch: branch.unwrap_or_default(),
@@ -4712,9 +4740,11 @@ impl Runtime {
             return self
                 .ingest_task_operation_result(id, Err("workspace.control_unavailable".into()));
         };
-        if let Err(message) =
-            live::spawn_branch_migration(context, Arc::clone(&self.own_node), request)
-        {
+        if let Err(message) = crate::worktree_control::spawn_branch_migration(
+            context,
+            Arc::clone(&self.own_node),
+            request,
+        ) {
             return self.ingest_task_operation_result(id, Err(message.into()));
         }
         true

@@ -3,12 +3,56 @@ import { cn } from "../lib/utils";
 import { Hint } from "./ui/tooltip";
 
 /**
+ * The task row's body (PRD session-docs-and-assistant D-72): the marks at the
+ * left, then the title line and the lines under it. The sidebar's agent row,
+ * `SessionRow` and the session record's children all draw it, so a session
+ * reads the same wherever it is listed; the row around it owns the press, the
+ * hover and the tree.
+ *
+ * `row` is the sidebar's shape, its marks and title on one line height.
+ * `record` is the session record's child, a medium caption title over a micro
+ * line, its mark set down to the title's first line.
+ */
+export function SessionRowBody({
+  mark,
+  head,
+  children,
+  size = "row",
+  markHidden = false,
+  className,
+  markClassName,
+}: {
+  /** The status mark, and in the sidebar the agent's mark beside it. */
+  mark: ReactNode;
+  /** The title line: the title, its chips and the right end. */
+  head: ReactNode;
+  /** The lines under the title. */
+  children?: ReactNode;
+  size?: "row" | "record";
+  /** The row's own name already says what the marks say. */
+  markHidden?: boolean;
+  className?: string;
+  markClassName?: string;
+}) {
+  const record = size === "record";
+  return (
+    <span className={cn("flex min-w-0 flex-1 items-start", record ? "gap-sm" : "gap-xs", className)} data-session-row-body={size}>
+      <span className={cn("flex shrink-0", record ? "mt-xs" : "min-h-(--size-sidebar-line) items-center gap-xs", markClassName)} aria-hidden={markHidden || undefined}>{mark}</span>
+      <span className={cn("min-w-0 flex-1", !record && "flex flex-col")}>
+        <span className={record ? "block min-w-0" : "flex min-h-(--size-sidebar-line) min-w-0 items-center gap-xs"}>{head}</span>
+        {children}
+      </span>
+    </span>
+  );
+}
+
+/**
  * One session or milestone as a row in the shape of the sidebar's agent row
  * (PRD pr-card-and-session-record-redesign D-07, D-13, B7-B9, B16): the mark
  * at the left, then the title, its chips, and the right slot holding the
- * time, and under the title a caption line. The PR card's timeline and the
- * session record's children both draw this one part, so the operator learns
- * one shape.
+ * time, and under the title a caption line. The PR card's timeline draws it,
+ * on the same `SessionRowBody` as the sidebar's row and the session record's
+ * children, so the operator learns one shape.
  *
  * Nothing grows or moves under the pointer or the keyboard: `reveal` takes the
  * right slot's place while the pointer or focus is on the row (an ended
@@ -75,9 +119,10 @@ export function SessionRow({
       className={cn("group/row relative flex min-w-0 items-start gap-xs rounded-sm py-xs pr-xs pl-xs text-body outline-none hover:bg-accent focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-ring", onPress && "cursor-pointer", className)}
       data-session-row="true"
     >
-      <span className="flex min-h-(--size-sidebar-line) shrink-0 items-center gap-xs" aria-hidden="true">{mark}</span>
-      <span className="flex min-w-0 flex-1 flex-col">
-        <span className="flex min-h-(--size-sidebar-line) min-w-0 items-center gap-xs">
+      <SessionRowBody
+        mark={mark}
+        markHidden
+        head={<>
           <span className={cn("min-w-0 flex-auto truncate", titleClassName ?? "text-foreground")} data-session-row-title="true">{title}</span>
           {chips}
           {reveal ? (
@@ -86,11 +131,12 @@ export function SessionRow({
               {right ? <span className="flex shrink-0 items-center group-focus-within/row:hidden group-hover/row:hidden hoverless:hidden" data-session-row-right="true">{right}</span> : null}
             </>
           ) : right ? <span className="flex shrink-0 items-center" data-session-row-right="true">{right}</span> : null}
-        </span>
+        </>}
+      >
         {line ? <span className={cn("text-caption leading-(--size-sidebar-line-detail)", line.wrap ? "whitespace-normal break-keep [overflow-wrap:anywhere]" : "truncate", line.className ?? "text-muted-foreground")} data-session-row-line="true">{line.text}</span> : null}
         {below ? <span className="flex min-w-0 flex-wrap items-center gap-xs pt-xxs">{below}</span> : null}
         {children}
-      </span>
+      </SessionRowBody>
     </li>
   );
   return hint ? <Hint label={hint} reveals>{row}</Hint> : row;

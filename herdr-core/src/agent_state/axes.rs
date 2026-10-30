@@ -93,7 +93,7 @@ fn apply_fork_sources(agents: &mut [SidebarAgentSnapshot], by_pane: &BTreeMap<St
         };
         let source = by_pane.get(&pane).copied().filter(|&source| {
             source != index
-                && crate::wire::session_holds(
+                && crate::engine::tokens::session_holds(
                     session.as_deref(),
                     agents[source].lineage_session.as_deref(),
                 )
@@ -161,7 +161,7 @@ pub fn apply_lineage(
         let Some(parent) = parents[index] else {
             continue;
         };
-        if !crate::wire::session_holds(
+        if !crate::engine::tokens::session_holds(
             agents[index].declared_parent_session.as_deref(),
             agents[parent].lineage_session.as_deref(),
         ) {
@@ -425,7 +425,7 @@ fn answer_in_progress(
     progress_below: bool,
 ) -> bool {
     recipient.sleep.is_none()
-        && crate::wire::session_holds(
+        && crate::engine::tokens::session_holds(
             reply.recipient_session.as_deref(),
             recipient.lineage_session.as_deref(),
         )

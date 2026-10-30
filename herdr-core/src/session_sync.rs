@@ -1,7 +1,6 @@
 //! Event-driven projection of Herdr's authoritative session state.
 
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
-use std::io::BufRead;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{Receiver, RecvTimeoutError, Sender, channel};
@@ -11,8 +10,7 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use serde_json::{Value, json};
 
-use crate::wire::{self, parse_subscription_line};
-
+use crate::engine::{EngineError, SharedEngine, Wait};
 use crate::handle::ChangeNotifier;
 use crate::live::{LiveContext, SessionFetchError};
 use crate::model::{
@@ -25,7 +23,6 @@ use crate::sidebar::{
     SessionTabPayload, SessionWorkspacePayload,
 };
 use crate::workspace;
-use hide_herdr_client::{self, ApiConnector, ApiError};
 
 const SYNC_REQUEST_TIMEOUT: Duration = Duration::from_secs(1);
 const REMOTE_SYNC_REQUEST_TIMEOUT: Duration = Duration::from_secs(3);
@@ -52,33 +49,6 @@ const ACTIVE_TAB_READ_ATTEMPT_LIMIT: u32 = 8;
 const CATALOG_REFRESH_INTERVAL: Duration = Duration::from_secs(30);
 const RECONNECT_INITIAL_DELAY: Duration = Duration::from_millis(100);
 const RECONNECT_MAX_DELAY: Duration = Duration::from_secs(5);
-
-const TOPOLOGY_SUBSCRIPTIONS: &[&str] = &[
-    "workspace.created",
-    "workspace.updated",
-    "workspace.metadata_updated",
-    "workspace.renamed",
-    "workspace.moved",
-    "workspace.reordered",
-    "workspace.closed",
-    "workspace.focused",
-    "worktree.created",
-    "worktree.opened",
-    "worktree.removed",
-    "tab.created",
-    "tab.closed",
-    "tab.focused",
-    "tab.renamed",
-    "tab.moved",
-    "pane.created",
-    "pane.closed",
-    "pane.updated",
-    "pane.focused",
-    "pane.moved",
-    "pane.exited",
-    "pane.agent_detected",
-    "layout.updated",
-];
 
 /// A workspace catalog built outside the runtime mutex, together with the
 /// registrations it came from so Runtime can reject a stale computation.
@@ -134,7 +104,7 @@ pub(crate) struct SessionSyncContext {
     /// for a node that dials this core: its pull requests are read here by
     /// repository name (PRD core-host-node-remote-core D-16).
     login: Option<Arc<dyn crate::node_access::NodeLink>>,
-    api_connector: Arc<dyn ApiConnector>,
+    engine: SharedEngine,
     runtime: Weak<Mutex<Runtime>>,
     notifier: ChangeNotifier,
     /// The core's hook facts, which a device's coordinator lays on its
@@ -154,7 +124,7 @@ impl SessionSyncContext {
             node: Some(node),
             inbound: None,
             login: None,
-            api_connector: Arc::clone(&context.api_connector),
+            engine: Arc::clone(&context.engine),
             runtime: context.runtime.clone(),
             notifier: context.notifier.clone(),
             hook_facts: None,
@@ -164,7 +134,7 @@ impl SessionSyncContext {
     pub(crate) fn remote(
         target_id: impl Into<String>,
         label: impl Into<String>,
-        api_connector: Arc<dyn ApiConnector>,
+        engine: SharedEngine,
         runtime: Weak<Mutex<Runtime>>,
         notifier: ChangeNotifier,
     ) -> Self {
@@ -176,7 +146,7 @@ impl SessionSyncContext {
             node: None,
             inbound: None,
             login: None,
-            api_connector,
+            engine,
             runtime,
             notifier,
             hook_facts: None,
@@ -360,7 +330,7 @@ pub(crate) enum CoordinatorMessage {
     Stop,
     SubscriptionLine {
         generation: u64,
-        line: String,
+        line: Box<crate::engine::EventLine>,
         /// When the reader pulled the line off the socket, which is what
         /// places it before or after the bootstrap snapshot.
         received_at: Instant,
@@ -411,13 +381,13 @@ impl RepublishWaker {
 
 pub(crate) struct ActiveSubscription {
     generation: u64,
-    shutdown: Box<dyn hide_herdr_client::ConnectionShutdown>,
+    stopper: Box<dyn crate::engine::StopEvents>,
     worker: Option<JoinHandle<()>>,
 }
 
 impl ActiveSubscription {
     fn stop(mut self) {
-        self.shutdown.shutdown();
+        self.stopper.stop();
         // A reader is blocked in its socket read. Waiting for it here made a
         // disconnect hold the coordinator until the peer happened to close
         // its copy, so the reconnect deadline was no longer meaningful.
@@ -445,14 +415,14 @@ pub(crate) use coordinator::agent_tick_needs_publish;
 pub(crate) use coordinator::spawn;
 pub(crate) use projection::{
     ProjectedAgent, ProjectedPane, ProjectedTab, ProjectedWorkspace, ProjectedWorktree,
-    ProjectionState, project_snapshot,
+    ProjectionState,
 };
 #[cfg(test)]
 pub(crate) use replica::SNAPSHOT_FIELDS_THE_REPLICA_READS;
 pub(crate) use replica::{ApplyMode, PaneMove, ReplicaEvent, SessionReplica, SubscriptionLine};
 pub(crate) use replica::{remote_pane_id, remote_tab_id};
 #[cfg(test)]
-pub(crate) use subscription::connect_failure_from_api;
+pub(crate) use subscription::connect_failure_from_engine;
 pub(crate) use subscription::{
     Connected, connect, fetch_agent_launch, fetch_agents, fetch_focused_workspace, fetch_pane_cwd,
     fetch_workspace_active_tab, log_sync_failure, stop_subscription,
@@ -461,10 +431,9 @@ use sync_reads::{ActiveTabRead, SyncRead, SyncReadAnswer, SyncReader};
 
 /// A worker's authoritative read uses the same device projection as the replica.
 pub(crate) fn project_remote_read(
-    value: Value,
+    state: ProjectionState,
     device: &str,
 ) -> Result<(SessionSnapshotPayload, RemoteSessionSnapshot), SessionFetchError> {
-    let state = wire::snapshot_response(value)?;
     let payload = state.project();
     let (remote, _) =
         replica::SessionReplica::project_remote_state(&state, device, payload.clone())?;

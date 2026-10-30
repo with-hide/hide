@@ -14,7 +14,7 @@ import { useUiStore } from "../ui";
 import type { LaneFrame, LaneSizes, WorkspaceView } from "../workspace";
 import { memorySceneProject } from "./MemoryScene";
 
-export const HIDE_AI_SCENE_STATES = ["new", "improvement", "applying", "applied", "settings", "settings_unread", "off", "first_run", "not_investigated", "memory", "empty", "memory_empty", "suggestions_off", "global", "global_unusable", "memory_offer", "asking", "ready", "ready_pr_only", "ready_local", "ready_folded", "ready_failed", "ready_apart", "ready_synced"] as const;
+export const HIDE_AI_SCENE_STATES = ["new", "improvement", "applying", "applied", "settings", "settings_unread", "off", "first_run", "not_investigated", "memory", "empty", "memory_empty", "suggestions_off", "global", "global_unusable", "memory_offer", "memory_pressed", "asking", "ready", "ready_pr_only", "ready_local", "ready_folded", "ready_failed", "ready_apart", "ready_synced"] as const;
 export type HideAiSceneState = (typeof HIDE_AI_SCENE_STATES)[number];
 export type HideAiSceneLanguage = "en" | "ko" | "zh-CN" | "ja";
 export type HideAiSceneParams = { theme: "light" | "dark"; state: HideAiSceneState; width: number; language: HideAiSceneLanguage };
@@ -93,6 +93,18 @@ const MEMORY_OFFER: SuggestionRow = row("m569", {
   source: "memory", discomfort: "premerge-check는 공용 잠금으로 한 번에 하나씩", outcome: "pr",
   memory: { body: "premerge-check를 여러 개 동시에 돌리면 부하가 200을 넘겨 20분 넘게 걸려요. lockf -k /tmp/hide-premerge.lock으로 감싸 한 번에 하나씩 돌려요.", human_sessions: 3, pulled_sessions: 2 },
 });
+
+/** A Memory card's `문서 고치기` the moment it is pressed: working before its agent exists, and a press Memory refused, drawn on its own row. */
+const MEMORY_PRESSED: SuggestionRow[] = [
+  row("m400", {
+    source: "memory", group: "choose", state: "my_turn", discomfort: "빠르고 되돌릴 수 있는 배포 경로", cause: "Merge or discard a waiting branch before starting another",
+    attempt: { phase: "failed", started_at_unix_ms: Date.now() - MINUTE, pr_number: null, url: null, agent_pane: null, failure: "branches_full", purpose: "branch" },
+  }),
+  row("m146", {
+    source: "memory", group: "applying", state: "hide_ai_working", discomfort: "외부 PR은 승인 기여자만 열고 나머지는 자동 닫기",
+    attempt: { phase: "working", started_at_unix_ms: Date.now(), pr_number: null, url: null, agent_pane: null, failure: null, purpose: "branch" },
+  }),
+];
 
 /** The applying agent stopped on a question for the operator. */
 const ASKING_ROW: SuggestionRow = { ...APPLYING_ROWS[0]!, plan: { title: "작업 트리를 나눠 쓰게 하기", path: "AGENTS.md", new_file: false, draft: "+ 브랜치마다 작업 트리를 따로 연다." } };
@@ -212,6 +224,7 @@ export function hideAiSceneProject(state: HideAiSceneState, workspaceId = "herdr
     case "global": return { ...base, global: { path: GLOBAL_PATH, unusable: null }, rows: [LOCAL_NEW, LOCAL_RECURRED, ...NEW_ROWS.slice(0, 1), LOCAL_APPLIED, ...APPLIED_ROWS], counts: { suggestions: 3, rail: 4 } };
     case "global_unusable": return { ...base, global: { path: GLOBAL_PATH, unusable: "too_large" }, rows: [LOCAL_HELD, ...NEW_ROWS.slice(1, 2)], counts: { suggestions: 2, rail: 3 } };
     case "memory_offer": return { ...base, rows: [MEMORY_OFFER, ...NEW_ROWS.slice(0, 2)], counts: { suggestions: 3, rail: 3 } };
+    case "memory_pressed": return { ...base, rows: [MEMORY_PRESSED[0]!, MEMORY_OFFER, MEMORY_PRESSED[1]!], counts: { suggestions: 2, rail: 2 } };
     case "asking": return { ...base, rows: [CI_FAILED_ROW, ASKING_ROW, ...APPLYING_ROWS.slice(1), ...APPLIED_ROWS], counts: { suggestions: 2, rail: 3 } };
     case "ready":
     case "ready_folded": return { ...base, rows: readyRows(READY_ROW), counts: { suggestions: 3, rail: 4 } };

@@ -632,7 +632,7 @@ The packaged app replaces that pane value with its own bundled `herdr`, but the 
 <!-- herdr-provenance:start -->
 hide distributes the [upstream Herdr release v0.9.5](https://github.com/herdrdev/herdr/releases/tag/v0.9.5).
 The bundled binary's code is not modified by hide; a macOS release replaces only its ad-hoc signature with hide's Developer ID one, which notarization requires.
-The daily `herdr-update.yml` workflow proposes upstream stable releases with `--repo herdrdev/herdr`; updates must pass contract and runtime checks.
+`herdr-update.yml` proposes an upstream stable release with `--repo herdrdev/herdr` only when run by hand, since the pin holds while Hide moves to its own engine; updates must pass contract and runtime checks.
 <!-- herdr-provenance:end -->
 
 ### An agent cannot start

@@ -17,6 +17,7 @@ pub(crate) const PROJECT_OPEN_WAIT: std::time::Duration = std::time::Duration::f
 /// How often `hide <path>` reads its receipt again while it waits.
 const PROJECT_OPEN_POLL: std::time::Duration = std::time::Duration::from_millis(100);
 
+use herdr_core::engine::EngineHandle;
 use herdr_core::node_access::NodeLink;
 use herdr_core::workspace_control::{
     Action, ActionMaterial, ActionPreparation, ActionResult, Context, Query, QueryResult, Refusal,
@@ -147,9 +148,9 @@ enum Command {
     WorkspaceRemoteRoutes {
         reply: Sender<Vec<herdr_core::WorkspaceRemoteRoute>>,
     },
-    RemoteHerdrApi {
+    DeviceEngine {
         device_id: String,
-        reply: Sender<Option<Arc<dyn hide_herdr_client::ApiConnector>>>,
+        reply: Sender<Option<EngineHandle>>,
     },
     InputGate {
         reply: Sender<Arc<herdr_core::input_gate::PaneInputGate>>,
@@ -236,6 +237,10 @@ pub struct CoreHandle {
     /// The core's state folder, which holds the Hide global instruction a
     /// session start reads without the owner thread.
     state_dir: std::path::PathBuf,
+    /// This machine's engine, the same one the core holds: a pane's proof
+    /// and a phone's read ask it without the owner thread or the runtime
+    /// lock. `None` when the daemon runs without a Herdr server.
+    engine: Option<EngineHandle>,
     /// What a shutdown ends, taken out by the first one, so a second
     /// shutdown or the `Drop` after it finds nothing left to close.
     running: Mutex<Option<Running>>,
@@ -638,11 +643,17 @@ impl CoreHandle {
             reports,
         ));
         let routes = Arc::clone(&terminals);
+        let engine = options
+            .herdr_socket_path
+            .as_deref()
+            .map(|socket| EngineHandle::herdr(hide_node::herdr(std::path::Path::new(socket))));
+        let core_engine = engine.clone();
         let thread = thread::Builder::new()
             .name("hided-core".into())
             .spawn(move || {
                 owner_loop(
                     options,
+                    core_engine,
                     panes,
                     (routes, terminal_reports),
                     command_rx,
@@ -662,6 +673,7 @@ impl CoreHandle {
             hub,
             outputs,
             state_dir,
+            engine,
             running: Mutex::new(Some(Running { thread, local })),
         })
     }
@@ -708,15 +720,18 @@ impl CoreHandle {
             .map_err(|_| "core owner thread dropped remote routes".to_owned())
     }
 
-    /// The Herdr API connection the core holds for a connected SSH device;
-    /// see `Core::remote_herdr_api`.
-    pub fn remote_herdr_api(
-        &self,
-        device_id: &str,
-    ) -> Result<Option<Arc<dyn hide_herdr_client::ApiConnector>>, String> {
+    /// This machine's engine; `None` when the daemon runs without a Herdr
+    /// server.
+    pub fn engine(&self) -> Option<&EngineHandle> {
+        self.engine.as_ref()
+    }
+
+    /// The engine the core holds for a connected SSH device; see
+    /// `Core::device_engine`.
+    pub fn device_engine(&self, device_id: &str) -> Result<Option<EngineHandle>, String> {
         let (reply, rx) = mpsc::channel();
         self.commands
-            .send(Command::RemoteHerdrApi {
+            .send(Command::DeviceEngine {
                 device_id: device_id.to_owned(),
                 reply,
             })
@@ -1006,6 +1021,7 @@ fn local_attacher(options: &CoreOptions) -> Box<dyn Attacher> {
 
 fn owner_loop(
     options: CoreOptions,
+    own_engine: Option<EngineHandle>,
     panes: hide_node::ssh::PaneEventsSlot,
     (terminals, terminal_reports): (Arc<Router>, herdr_core::terminal_reports::TerminalReports),
     commands: Receiver<Command>,
@@ -1043,10 +1059,6 @@ fn owner_loop(
             home.as_deref(),
         ));
     }
-    let own_herdr = options
-        .herdr_socket_path
-        .as_deref()
-        .map(|socket| hide_node::herdr(std::path::Path::new(socket)));
     // The program builds devices run, and the `hide` that answers ssh's
     // sign-in questions, ship beside this binary; a daemon anywhere else
     // carries none, which leaves each device's node `unsupported` with that
@@ -1097,7 +1109,7 @@ fn owner_loop(
     let Some(core) = Core::create_with_product_analytics(
         options,
         std::sync::Arc::new(own_node),
-        own_herdr,
+        own_engine,
         std::sync::Arc::new(devices),
         terminals,
         terminal_reports,
@@ -1281,8 +1293,8 @@ fn owner_loop(
             Command::WorkspaceRemoteRoutes { reply } => {
                 let _ = reply.send(core.workspace_remote_routes());
             }
-            Command::RemoteHerdrApi { device_id, reply } => {
-                let _ = reply.send(core.remote_herdr_api(&device_id));
+            Command::DeviceEngine { device_id, reply } => {
+                let _ = reply.send(core.device_engine(&device_id));
             }
             Command::InputGate { reply } => {
                 let _ = reply.send(core.input_gate());

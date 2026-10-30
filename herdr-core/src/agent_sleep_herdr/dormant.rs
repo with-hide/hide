@@ -2,10 +2,9 @@
 use super::*;
 use crate::agent_sleep::{DormantRecord, SleepId};
 use crate::checkout_owner::OwnerOpen;
+use crate::engine::Gate;
 use crate::live::LiveContext;
 use crate::sidebar::SessionSnapshotPayload;
-use hide_herdr_client::{ApiStream, ConnectionShutdown};
-use std::io::{self, Read, Write};
 
 #[derive(Clone)]
 pub(crate) struct DormantWork {
@@ -41,7 +40,7 @@ pub(crate) fn spawn_dormant_status(
     thread::Builder::new()
         .name("hide-sleep-status".into())
         .spawn(move || {
-            let result = crate::live::fetch_session_with_connector(context.api_connector.as_ref())
+            let result = crate::live::fetch_session(context.engine.as_ref())
                 .map_err(|_| {
                     crate::diagnostic!(serde_json::json!({
                         "component": "agent_sleep", "kind": "agent_sleep.status_failed",
@@ -55,8 +54,8 @@ pub(crate) fn spawn_dormant_status(
                             .as_ref()
                             .ok_or_else(|| "The saved checkout is unavailable".to_owned())
                             .and_then(|owner| {
-                                crate::live::inspect_sleep_tab(
-                                    context.api_connector.as_ref(),
+                                crate::recent_closed::reopen::inspect_sleep_tab(
+                                    context.engine.as_ref(),
                                     work.id.as_str(),
                                     &work.record.context,
                                     owner,
@@ -106,11 +105,8 @@ pub(crate) fn spawn_dormant_tab(
             } else if !crate::node_access::is_directory(context.node.as_ref(), &work.record.cwd) {
                 DormantTabOutcome::NotCreated("The saved working folder is unavailable. Restore it before retrying; no tab was created.")
             } else {
-                match crate::live::create_sleep_tab(
-                    &CurrentWorkConnector {
-                        context: context.clone(),
-                        intent: CurrentIntent::Wake(Arc::new(work.clone())),
-                    },
+                match crate::recent_closed::reopen::create_sleep_tab(
+                    context.engine.gated(wake_gate(&context, &work)).as_ref(),
                     context.node.as_ref(),
                     work.id.as_str(),
                     &work.record.context,
@@ -156,10 +152,7 @@ pub(crate) fn spawn_dormant_start(
                 return;
             }
             let outcome = start_dormant(
-                &CurrentWorkConnector {
-                    context: context.clone(),
-                    intent: CurrentIntent::Wake(Arc::new(work.clone())),
-                },
+                context.engine.gated(wake_gate(&context, &work)).as_ref(),
                 context.node.as_ref(),
                 &work,
                 args,
@@ -189,27 +182,82 @@ fn work_is_current(context: &LiveContext, work: &DormantWork) -> bool {
 }
 
 /// Shell readiness and topology reads may block. Check the exact saved
-/// intent again at every socket write, rather than only at worker entry.
-/// The guard is released before I/O and never holds the runtime mutex over it.
-struct CurrentWorkConnector {
-    context: LiveContext,
-    intent: CurrentIntent,
-}
-
+/// intent again at every request, once Herdr is reached and just before the
+/// request is written, rather than only at worker entry. The check is
+/// released before I/O and never holds the runtime mutex over it.
 #[derive(Clone)]
 enum CurrentIntent {
     Wake(Arc<DormantWork>),
-    Close(Arc<crate::live::CloseEffectRequest>),
+    Close(Arc<crate::recent_closed::capture::CloseEffectRequest>),
 }
 
-pub(crate) fn fenced_dormant_close_connector(
+fn wake_gate(context: &LiveContext, work: &DormantWork) -> Gate<'static> {
+    let context = context.clone();
+    let intent = CurrentIntent::Wake(Arc::new(work.clone()));
+    Gate::new(|| Ok(()), move || still_current(&context, &intent))
+}
+
+/// A saved close goes on only while its sleeping session still holds it and
+/// the session's route is confirmed, checked before Herdr is reached; and
+/// only while the close is still the current intent, checked again before
+/// each request is written.
+pub(crate) fn dormant_close_gate(
     context: &LiveContext,
-    effect: &crate::live::CloseEffectRequest,
-) -> Box<dyn ApiConnector> {
-    Box::new(CurrentWorkConnector {
-        context: context.clone(),
-        intent: CurrentIntent::Close(Arc::new(effect.clone())),
+    effect: &crate::recent_closed::capture::CloseEffectRequest,
+) -> Gate<'static> {
+    let before = context.clone();
+    let key = effect.key.clone();
+    let at_send = context.clone();
+    let intent = CurrentIntent::Close(Arc::new(effect.clone()));
+    Gate::new(
+        move || close_route_confirmed(&before, &key),
+        move || still_current(&at_send, &intent),
+    )
+}
+
+fn close_route_confirmed(context: &LiveContext, key: &str) -> Result<(), EngineError> {
+    let record = context
+        .runtime
+        .upgrade()
+        .and_then(|runtime| {
+            runtime
+                .lock()
+                .ok()?
+                .snapshot()
+                .ui_state
+                .agent_sleep
+                .dormant
+                .values()
+                .find(|record| record.close_key.as_deref() == Some(key))
+                .cloned()
+        })
+        .ok_or_else(|| EngineError::Refused {
+            code: "sleep_intent_superseded".into(),
+            message: "Sleeping session changed".into(),
+        })?;
+    crate::live::confirm_session_launch(
+        context.node.as_ref(),
+        &record.kind,
+        &record.native_session_id,
+        Some(&record.cwd),
+        record.source_reference.as_ref(),
+    )
+    .map_err(|reason| EngineError::Refused {
+        code: reason,
+        message: "Session route is unconfirmed".into(),
     })
+}
+
+/// A superseded intent stops the request as its write would have failed:
+/// nothing reached Herdr, and the caller reads the result as unknown.
+fn still_current(context: &LiveContext, intent: &CurrentIntent) -> Result<(), EngineError> {
+    if intent_is_current(context, intent) {
+        Ok(())
+    } else {
+        Err(EngineError::Transport(
+            "request could not be written: sleep intent superseded".into(),
+        ))
+    }
 }
 
 fn intent_is_current(context: &LiveContext, intent: &CurrentIntent) -> bool {
@@ -220,92 +268,6 @@ fn intent_is_current(context: &LiveContext, intent: &CurrentIntent) -> bool {
             CurrentIntent::Close(effect) => runtime.dormant_close_effect_is_current(effect),
         }
     })
-}
-
-impl ApiConnector for CurrentWorkConnector {
-    fn connect(&self) -> Result<Box<dyn ApiStream>, ApiError> {
-        if let CurrentIntent::Close(effect) = &self.intent {
-            let record = self
-                .context
-                .runtime
-                .upgrade()
-                .and_then(|runtime| {
-                    runtime
-                        .lock()
-                        .ok()?
-                        .snapshot()
-                        .ui_state
-                        .agent_sleep
-                        .dormant
-                        .values()
-                        .find(|record| record.close_key.as_deref() == Some(effect.key.as_str()))
-                        .cloned()
-                })
-                .ok_or_else(|| ApiError::Remote {
-                    code: "sleep_intent_superseded".into(),
-                    message: "Sleeping session changed".into(),
-                })?;
-            crate::live::confirm_session_launch(
-                self.context.node.as_ref(),
-                &record.kind,
-                &record.native_session_id,
-                Some(&record.cwd),
-                record.source_reference.as_ref(),
-            )
-            .map_err(|reason| ApiError::Remote {
-                code: reason,
-                message: "Session route is unconfirmed".into(),
-            })?;
-        }
-        let stream = self.context.api_connector.connect()?;
-        Ok(Box::new(CurrentWorkStream {
-            stream,
-            context: self.context.clone(),
-            intent: self.intent.clone(),
-        }))
-    }
-}
-
-struct CurrentWorkStream {
-    stream: Box<dyn ApiStream>,
-    context: LiveContext,
-    intent: CurrentIntent,
-}
-
-impl Read for CurrentWorkStream {
-    fn read(&mut self, bytes: &mut [u8]) -> io::Result<usize> {
-        self.stream.read(bytes)
-    }
-}
-
-impl Write for CurrentWorkStream {
-    fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
-        if !intent_is_current(&self.context, &self.intent) {
-            return Err(io::Error::new(
-                io::ErrorKind::ConnectionAborted,
-                "sleep intent superseded",
-            ));
-        }
-        self.stream.write(bytes)
-    }
-    fn flush(&mut self) -> io::Result<()> {
-        self.stream.flush()
-    }
-}
-
-impl ApiStream for CurrentWorkStream {
-    fn set_read_timeout(&self, timeout: Option<Duration>) -> Result<(), ApiError> {
-        self.stream.set_read_timeout(timeout)
-    }
-    fn set_write_timeout(&self, timeout: Option<Duration>) -> Result<(), ApiError> {
-        self.stream.set_write_timeout(timeout)
-    }
-    fn read_line_with_timeout(&mut self, timeout: Duration) -> Result<String, ApiError> {
-        self.stream.read_line_with_timeout(timeout)
-    }
-    fn shutdown_handle(&self) -> Result<Box<dyn ConnectionShutdown>, ApiError> {
-        self.stream.shutdown_handle()
-    }
 }
 
 /// The name a dormant session wakes under. One that held a registration
@@ -320,7 +282,7 @@ pub(crate) fn wake_name(work: &DormantWork) -> String {
 }
 
 fn start_dormant(
-    connector: &dyn ApiConnector,
+    engine: &dyn Engine,
     node: &dyn NodeLink,
     work: &DormantWork,
     args: Vec<String>,
@@ -332,14 +294,14 @@ fn start_dormant(
         return DormantStartOutcome::NotStarted;
     }
     let name = wake_name(work);
-    let params = match wire::agent_start_params(
-        pane,
-        &name,
-        &work.record.kind,
+    let start = match engine.prepare_start(AgentLaunch {
+        pane_id: pane.to_owned(),
+        name,
+        kind: work.record.kind.clone(),
         args,
-        crate::codex_launch::CodexDaemon::Unsupported,
-    ) {
-        Ok(params) => params,
+        codex_daemon: crate::codex_launch::CodexDaemon::Unsupported,
+    }) {
+        Ok(start) => start,
         Err(_) => return DormantStartOutcome::NotStarted,
     };
     let confirm = || {
@@ -357,46 +319,48 @@ fn start_dormant(
     // until it has forgotten that agent.
     let started = if work.record.registration.is_some() {
         crate::agent_start::start_at_shell_reusing_name(
-            connector,
+            engine,
             Some(node),
             &correlation,
-            pane,
             crate::agent_start::ShellStart::Plain,
-            params,
+            &start,
             answer_timeout,
             &confirm,
         )
     } else {
         crate::agent_start::start_at_shell_checked(
-            connector,
+            engine,
             Some(node),
             &correlation,
-            pane,
             crate::agent_start::ShellStart::Plain,
-            params,
+            &start,
             answer_timeout,
             &confirm,
         )
     };
     match started {
-        Ok(_) => match super::report_resumed_session(
-            connector,
-            pane,
-            &work.record.kind,
-            &work.record.native_session_id,
-        ) {
-            Ok(()) => DormantStartOutcome::Started,
-            Err(error) => {
-                crate::diagnostic!(serde_json::json!({
-                    "component": "agent_sleep", "kind": "agent_sleep.session_report_failed",
-                    "sleep_id": work.id.as_str(), "pane_id": pane, "message": error.to_string(),
-                }));
-                DormantStartOutcome::Unknown
+        // An answer in a shape the start does not promise is still Herdr
+        // taking the start.
+        Ok(_) | Err(StartError::Herdr(EngineError::Answer(_))) => {
+            match super::report_resumed_session(
+                engine,
+                pane,
+                &work.record.kind,
+                &work.record.native_session_id,
+            ) {
+                Ok(()) => DormantStartOutcome::Started,
+                Err(error) => {
+                    crate::diagnostic!(serde_json::json!({
+                        "component": "agent_sleep", "kind": "agent_sleep.session_report_failed",
+                        "sleep_id": work.id.as_str(), "pane_id": pane, "message": error.to_string(),
+                    }));
+                    DormantStartOutcome::Unknown
+                }
             }
-        },
+        }
         Err(StartError::NotStarted { .. })
         | Err(StartError::ShellStarting(_))
-        | Err(StartError::Herdr(ApiError::Remote { .. })) => DormantStartOutcome::NotStarted,
+        | Err(StartError::Herdr(EngineError::Refused { .. })) => DormantStartOutcome::NotStarted,
         Err(StartError::Herdr(_)) => {
             crate::diagnostic!(serde_json::json!({
                 "component": "agent_sleep", "kind": "agent_sleep.resume_unconfirmed",
@@ -476,7 +440,7 @@ mod tests {
         };
         let node = hide_node::Local::of_process();
         let outcome = start_dormant(
-            &herdr.connector(),
+            herdr.engine().as_ref(),
             &node,
             &work,
             vec!["--resume".into(), work.record.native_session_id.clone()],
@@ -504,7 +468,7 @@ mod tests {
 
     /// What `report_resumed_session` does for a record of `kind` against a
     /// Herdr that accepts or refuses session reports, with the requests it got.
-    fn report_of(kind: &str, accepts: bool) -> (Result<(), ApiError>, Vec<serde_json::Value>) {
+    fn report_of(kind: &str, accepts: bool) -> (Result<(), EngineError>, Vec<serde_json::Value>) {
         let mut record = fixture_record("w1:p1");
         record.kind = kind.into();
         let reports = Arc::new(Mutex::new(Vec::new()));
@@ -528,7 +492,7 @@ mod tests {
             record,
         };
         let result = super::super::report_resumed_session(
-            &herdr.connector(),
+            herdr.engine().as_ref(),
             "w1:p9",
             &work.record.kind,
             &work.record.native_session_id,

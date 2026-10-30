@@ -4,11 +4,10 @@
 //! comes back is the core's, because those are its domain shapes.
 
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
 
 use crate::domain::{DomainEvent, DomainProjection, DomainSnapshot, HostScope};
 
-pub use crate::herdr_contract::HERDR_PROTOCOL_REVISION as REMOTE_PROTOCOL_REVISION;
+pub(crate) use crate::engine::herdr::contract::HERDR_PROTOCOL_REVISION as REMOTE_PROTOCOL_REVISION;
 pub use hide_node_link::device::{
     Arrived, Attempt, Cancel, CapabilityReport, CapabilityResult, CapabilityState, DEFAULT_CLI_DIR,
     DEFAULT_HELPER_ROOT, DeviceConnector, DeviceTransport, DialedTransport, EstablishError,
@@ -29,24 +28,11 @@ pub struct RemoteSnapshotEnvelope {
 
 #[cfg(test)]
 pub fn decode_remote_snapshot(
-    value: &Value,
+    value: &serde_json::Value,
     operation_id: &str,
     host: &HostScope,
 ) -> RemoteResult<RemoteSnapshotEnvelope> {
-    crate::wire::remote_snapshot(value, operation_id, host)
-}
-
-/// Decodes the snapshot a device's connection test fetched
-/// (`hide_node_link::device::SnapshotCheck`): Herdr names no host in its
-/// snapshot, so the device's host id and the socket it answered on are the
-/// identity the envelope carries.
-pub fn check_test_snapshot(value: &Value, host_id: &str, socket: &str) -> RemoteResult<u32> {
-    let host = HostScope {
-        host_id: host_id.to_owned(),
-        session_id: socket.to_owned(),
-    };
-    crate::wire::remote_snapshot(value, "remote-herdr-snapshot", &host)
-        .map(|snapshot| snapshot.protocol)
+    crate::engine::herdr::wire::remote_snapshot(value, operation_id, host)
 }
 
 pub struct RemoteHerdrProjection {
@@ -173,7 +159,11 @@ impl RemoteHerdrProjection {
     /// server-specific layout payload. Keeping that distinction explicit prevents a
     /// decoded ID envelope from being mistaken for a complete event baseline.
     #[cfg(test)]
-    pub fn apply_wire_snapshot(&mut self, value: &Value, operation_id: &str) -> RemoteResult<()> {
+    pub fn apply_wire_snapshot(
+        &mut self,
+        value: &serde_json::Value,
+        operation_id: &str,
+    ) -> RemoteResult<()> {
         let envelope = match decode_remote_snapshot(value, operation_id, &self.host_scope) {
             Ok(envelope) => envelope,
             Err(error) => {
@@ -312,7 +302,8 @@ mod tests {
 
         let subscription = hide_herdr_client::subscribe_with_connector(
             &*connector,
-            crate::wire::subscription_params(&["pane.updated"]).expect("subscription params"),
+            crate::engine::herdr::wire::subscription_params(&["pane.updated"])
+                .expect("subscription params"),
             SSH_OPERATION_TIMEOUT,
         )
         .expect("official remote event subscription starts");

@@ -88,7 +88,12 @@ fn read_saved_binding(path: &Path) -> BoundPane {
 fn setup(
     node: Arc<ShellNode>,
     server: &FakeHerdr,
-) -> (SharedRuntime, u64, PathBuf, live::WorktreeTarget) {
+) -> (
+    SharedRuntime,
+    u64,
+    PathBuf,
+    crate::worktree_control::WorktreeTarget,
+) {
     let (runtime, _) = tab_order_runtime(PATH);
     let mut runtime = with_new_views(runtime, "agent-start-incarnation");
     record_terminals(&mut runtime);
@@ -141,7 +146,7 @@ fn setup(
     assert_eq!(saved.try_recv().unwrap(), Ok(()));
     assert!(runtime.ingest_task_operation_result(
         task,
-        Ok(live::WorktreeTaskOutcome {
+        Ok(crate::worktree_control::WorktreeTaskOutcome {
             path: PATH.into(),
             pane_id: PANE.into(),
             created_tab_id: Some(TAB.into()),
@@ -163,10 +168,10 @@ fn setup(
         socket_path: server.socket_path().to_path_buf(),
         runtime: runtime.weak(),
         notifier: ChangeNotifier::noop(),
-        api_connector: Arc::new(server.connector()),
+        engine: server.engine(),
         node: node.clone(),
     };
-    let target = live::WorktreeTarget::local(&context, node);
+    let target = crate::worktree_control::WorktreeTarget::local(&context, node);
     runtime.lock().unwrap().set_live(context);
     {
         let guard = runtime.lock().unwrap();
@@ -224,7 +229,7 @@ fn admission_case(change: Option<&str>) {
     // Declared after runtime/server: on panic release their blocked worker
     // before either owner's Drop waits for it.
     let mut gate = ReadinessGate(Some(release));
-    live::spawn_task_agent_start(target, task).unwrap();
+    crate::worktree_control::spawn_task_agent_start(target, task).unwrap();
     readiness.recv_timeout(Duration::from_secs(10)).unwrap_or_else(|error| {
         panic!(
             "worker did not reach shell readiness: {error:?}; operation={:?}; methods={:?}; inspections={:?}",
