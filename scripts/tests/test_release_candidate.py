@@ -94,11 +94,24 @@ class ReleaseCandidate(unittest.TestCase):
         self.assertEqual(packages["with"]["macos-signing"], "adhoc")
         self.assertNotIn("secrets", packages)
 
-    def test_receipt_waits_for_packages_and_selected_journey_of_the_same_commit(self):
+    def test_receipt_waits_for_the_builds_and_the_journey_uploads_nothing_a_release_takes(self):
+        # The private publisher takes every artifact below from one attempt and
+        # lets only `agent-journey / ` jobs run again after it (hide-private
+        # release/workflow.mjs), so a journey-only failure is retried with
+        # "Re-run failed jobs". That holds while the receipt does not wait for
+        # the journey and the journey uploads none of these names.
         jobs = yaml.safe_load((WORKFLOWS / "release-candidate.yml").read_text())["jobs"]
         receipt = jobs["receipt"]
-        self.assertEqual(set(receipt["needs"]), {"validate", "packages", "macos-binaries", "agent-journey"})
+        self.assertEqual(set(receipt["needs"]), {"validate", "packages", "macos-binaries"})
         self.assertNotIn("if", receipt)  # default success(), never always()
+        taken = {"hide-release-candidate", "hide-package-linux", "hide-package-windows", "hide-device-helper-linux-x86_64",
+                 "hide-device-helper-linux-aarch64", "hide-macos-release-binaries", "hide-device-bundles"}
+        journey = yaml.safe_load((WORKFLOWS / "agent-journey.yml").read_text())["jobs"]
+        uploads = [step["with"]["name"] for job in journey.values() for step in job.get("steps", [])
+                   if step.get("uses", "").startswith("actions/upload-artifact@")]
+        self.assertTrue(uploads)
+        for name in uploads:
+            self.assertFalse(name.startswith("hide-") or name in taken, name)
         for job in [jobs["packages"], jobs["agent-journey"]]:
             self.assertEqual(job["needs"], "validate")
             self.assertEqual(job["with"]["source-sha"], "${{ inputs.public_sha }}")

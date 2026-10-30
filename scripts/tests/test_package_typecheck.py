@@ -174,7 +174,9 @@ class PackageTypecheckWorkflow(unittest.TestCase):
         self.assertEqual(jobs["packages"]["with"]["source-sha"], "${{ inputs.public_sha }}")
         self.assertEqual(jobs["packages"]["needs"], "validate")
         source = next(step for step in jobs["validate"]["steps"] if step.get("id") == "source")
-        self.assertEqual(source["env"]["VERIFICATION_RUN"], "${{ inputs.verification_run_id }}")
+        # The run id reaches the checker through the dispatch event's inputs,
+        # which it validates before reading the run.
+        self.assertNotIn("VERIFICATION_RUN", source["env"])
         self.assertEqual(source["env"]["PUBLIC_SHA"], "${{ inputs.public_sha }}")
         self.assertIn("node scripts/release-candidate.mjs source", source["run"])
         receipt = next(step for step in jobs["receipt"]["steps"] if "RECEIPT" in step.get("env", {}))

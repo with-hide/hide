@@ -2,6 +2,8 @@
 // this boundary refuses unverified sources before any build or journey.
 import fs from "node:fs";
 import path from "node:path";
+import { execFileSync } from "node:child_process";
+import { setTimeout as sleep } from "node:timers/promises";
 import { pathToFileURL } from "node:url";
 import { releaseKind } from "./check-release-assets.mjs";
 import { deviceHelperDigests, HELPER_PROGRAMS } from "../desktop/scripts/device-helpers.mjs";
@@ -12,8 +14,48 @@ const SHA = /^[a-f0-9]{40}$/;
 const DECIMAL = /^[1-9][0-9]*$/;
 // A verify run that has started, or has passed. A `pending` run waits behind
 // another main run, and the next push to main replaces it (pr.yml's
-// concurrency), so a candidate naming it could name a run that never runs.
+// concurrency), so a candidate naming it could name a run that never runs:
+// the candidate waits for it to start (`awaitStartedVerification`), and a
+// replaced run ends `cancelled`, which refuses it.
 const STARTED = new Set(["queued", "in_progress"]);
+const PENDING = "pending";
+// A main merge queues its verify behind the run before it, about 15 minutes
+// each (with-hide/hide-private#357); past this the queue is not moving.
+export const VERIFY_START_LIMIT_MS = 45 * 60_000;
+const VERIFY_POLL_MS = 30_000;
+
+function checkVerificationIdentity(inputs, verification) {
+  if (String(verification.id) !== inputs.verification_run_id
+    || verification.repository?.full_name !== REPOSITORY
+    || verification.path !== ".github/workflows/pr.yml" || verification.name !== "verify"
+    || verification.event !== "push" || verification.head_branch !== "main"
+    || verification.head_sha !== inputs.public_sha || !Array.isArray(verification.pull_requests)
+    || verification.pull_requests.length !== 0) {
+    throw new Error("verification_run_id must be the verify push/main run of public_sha");
+  }
+}
+
+/**
+ * The named verify run once it is no longer `pending`, read again every
+ * `intervalMs` for at most `limitMs`. A wrong run is refused at the first
+ * read; what the run became is judged by `candidateReceipt`.
+ */
+export async function awaitStartedVerification(inputs, read, {
+  limitMs = VERIFY_START_LIMIT_MS, intervalMs = VERIFY_POLL_MS, now = Date.now, wait = sleep,
+} = {}) {
+  const since = now();
+  for (;;) {
+    const verification = await read();
+    checkVerificationIdentity(inputs, verification);
+    const waitedMs = now() - since;
+    if (verification.status !== PENDING) return { verification, waitedMs };
+    if (waitedMs + intervalMs > limitMs) {
+      throw new Error(`verify run ${verification.id} still waits behind another main run after ${Math.round(waitedMs / 60_000)} minutes: `
+        + "dispatch again once it runs");
+    }
+    await wait(intervalMs);
+  }
+}
 
 export function candidateReceipt(inputs, context, verification) {
   if (context.repository !== REPOSITORY || context.event !== "workflow_dispatch"
@@ -31,17 +73,10 @@ export function candidateReceipt(inputs, context, verification) {
       throw new Error(`${key} must be a positive safe decimal integer`);
     }
   }
-  if (String(verification.id) !== inputs.verification_run_id
-    || verification.repository?.full_name !== REPOSITORY
-    || verification.path !== ".github/workflows/pr.yml" || verification.name !== "verify"
-    || verification.event !== "push" || verification.head_branch !== "main"
-    || verification.head_sha !== inputs.public_sha || !Array.isArray(verification.pull_requests)
-    || verification.pull_requests.length !== 0) {
-    throw new Error("verification_run_id must be the verify push/main run of public_sha");
-  }
+  checkVerificationIdentity(inputs, verification);
   if (!STARTED.has(verification.status) && !(verification.status === "completed" && verification.conclusion === "success")) {
     throw new Error(`verify run ${verification.id} is ${verification.status}${verification.conclusion ? `/${verification.conclusion}` : ""}: `
-      + "dispatch while it runs or after it passed, never while it waits behind another main run or after it failed");
+      + "dispatch while it is pending, runs or after it passed, never after it failed or a later main run replaced it");
   }
   return {
     schema: 4, repository: REPOSITORY, public_sha: inputs.public_sha, tag: inputs.tag,
@@ -80,10 +115,18 @@ if (process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.ar
   try {
     const [action, ...files] = process.argv.slice(2);
     let receipt;
-    if (action === "source" && files.length === 1) {
+    if (action === "source" && files.length === 0) {
       const event = JSON.parse(fs.readFileSync(process.env.GITHUB_EVENT_PATH, "utf8"));
-      const verification = JSON.parse(fs.readFileSync(files[0], "utf8"));
-      receipt = candidateReceipt(event.inputs ?? {}, {
+      const inputs = event.inputs ?? {};
+      if (!DECIMAL.test(inputs.verification_run_id ?? "")) throw new Error("verification_run_id must be a positive decimal integer");
+      const read = () => JSON.parse(execFileSync("gh", ["api", `repos/${process.env.GITHUB_REPOSITORY}/actions/runs/${inputs.verification_run_id}`],
+        { encoding: "utf8", timeout: 30_000, maxBuffer: 1024 * 1024 }));
+      const { verification, waitedMs } = await awaitStartedVerification(inputs, read);
+      if (waitedMs > 0 && process.env.GITHUB_STEP_SUMMARY) {
+        fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY,
+          `Waited ${Math.round(waitedMs / 60_000)} minutes for verify run ${verification.id} to start behind another main run.\n`);
+      }
+      receipt = candidateReceipt(inputs, {
         repository: process.env.GITHUB_REPOSITORY, event: process.env.GITHUB_EVENT_NAME,
         ref: process.env.GITHUB_REF, sha: process.env.GITHUB_SHA,
         workflowSha: process.env.GITHUB_WORKFLOW_SHA, runId: process.env.GITHUB_RUN_ID,
@@ -92,7 +135,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.ar
     } else if (action === "builds" && files.length === 3) {
       receipt = withMacosBinaries(withDeviceHelpers(JSON.parse(fs.readFileSync(files[0], "utf8")), files[1]), files[2]);
     } else {
-      throw new Error("usage: node scripts/release-candidate.mjs source verification-run.json | builds receipt.json device-helpers-folder macos-binaries-folder");
+      throw new Error("usage: node scripts/release-candidate.mjs source | builds receipt.json device-helpers-folder macos-binaries-folder");
     }
     console.log(JSON.stringify(receipt));
   } catch (error) {
