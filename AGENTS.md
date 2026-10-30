@@ -43,6 +43,7 @@ Do these three things, at these three moments, on every task; `python3 scripts/m
 1. Before the first line of code: start on an open pull request's branch, and open yours with `--base <that branch>`, only when the work needs what that pull request adds (an API, state, schema or contract); work that only might touch the same files starts from main, like work that does not.
 2. After the first push: run `python3 scripts/merge-order.py <number>` (or `--branch <name>` before the pull request exists) and act on its `Do:` line and nothing else; `Stay as you are` is the usual answer, and a stack is only ever joined by merging the layer below, never by rebasing and never by merging main into an upper layer.
 3. Before a merge, the lead only, and this includes a merge `/ship` is about to make: run `python3 scripts/merge-order.py` with no argument first and take the green pull requests in the order it prints, each through `python3 scripts/premerge-check.py <number>` and the merge command that prints; a delegated session never merges.
+   [`.claude/skills/merge-green/SKILL.md`](.claude/skills/merge-green/SKILL.md) is that procedure step by step, for any agent runtime: the check runs under the machine's shared lock (`lockf -k /tmp/hide-premerge.lock …`), a pass merges without asking the operator again, and the merged branch's worktree is removed.
 
 A documents-only overlap (`*.md`, `*.pen`, `site/`) never stacks; it is resolved once, by merging main right before the merge.
 
