@@ -381,7 +381,8 @@ function Detail({ row, project, actions }: { row: SuggestionRow; project: Projec
   return (
     <div className="col-start-2 flex min-w-0 flex-col gap-sm pt-xs" data-suggestion-detail={row.id}>
       {row.local && row.group !== "choose" ? <LocalFix row={row} line={row.local.line} open /> : null}
-      {row.plan && row.group !== "choose" ? <PlanFix row={row} plan={row.plan} open /> : null}
+      {/* A finished branch shows what it wrote, so the words planned before it give way. */}
+      {row.plan && row.group !== "choose" && !row.attempt?.branch ? <PlanFix row={row} plan={row.plan} open /> : null}
       {row.fix && !row.local && !row.plan && row.group !== "choose" ? (
         <div className="flex flex-col gap-xxs">
           <span className="text-micro text-muted-foreground">{t("suggestions.fix")}</span>

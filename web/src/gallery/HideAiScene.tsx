@@ -14,7 +14,7 @@ import { useUiStore } from "../ui";
 import type { LaneFrame, LaneSizes, WorkspaceView } from "../workspace";
 import { memorySceneProject } from "./MemoryScene";
 
-export const HIDE_AI_SCENE_STATES = ["new", "improvement", "applying", "applied", "settings", "settings_unread", "off", "first_run", "not_investigated", "memory", "empty", "memory_empty", "suggestions_off", "global", "global_unusable"] as const;
+export const HIDE_AI_SCENE_STATES = ["new", "improvement", "applying", "applied", "settings", "settings_unread", "off", "first_run", "not_investigated", "memory", "empty", "memory_empty", "suggestions_off", "global", "global_unusable", "memory_offer", "asking", "ready"] as const;
 export type HideAiSceneState = (typeof HIDE_AI_SCENE_STATES)[number];
 export type HideAiSceneLanguage = "en" | "ko" | "zh-CN" | "ja";
 export type HideAiSceneParams = { theme: "light" | "dark"; state: HideAiSceneState; width: number; language: HideAiSceneLanguage };
@@ -41,7 +41,8 @@ const NEW_ROWS: SuggestionRow[] = [
   row("s12", {
     discomfort: "에이전트가 테스트를 돌릴 때마다 같은 곳에서 막혀요",
     cause: "cargo test 대신 scripts/verify-cargo.sh를 써야 한다는 말이 AGENTS.md에 없어요",
-    fix: "AGENTS.md의 Build Output 절에 Rust 검증은 scripts/verify-cargo.sh로만 돌린다는 줄을 넣어요.",
+    fix: null,
+    plan: { title: "Rust 검증은 verify-cargo.sh로만 돌리게 하기", path: "AGENTS.md", new_file: false, draft: "## Build Output Belongs To Its Worktree\n+ - Rust를 검증할 때는 cargo test 대신 scripts/verify-cargo.sh를 쓴다." },
     evidence: [
       { kind: "session", signal: "failed_tool", improvement: null, agent: "claude", session_id: "c1", pr_number: null, url: null, at_unix_ms: Date.now() - 40 * MINUTE, gone: false },
       { kind: "session", signal: "correction", improvement: null, agent: "codex", session_id: "c2", pr_number: null, url: null, at_unix_ms: Date.now() - 1440 * MINUTE, gone: false },
@@ -49,8 +50,8 @@ const NEW_ROWS: SuggestionRow[] = [
     ],
   }),
   row("s14", { basis: { signal: "failed_tool", tag: "pnpm lint" }, cause: "lint가 무엇을 막는지 문서에 없어요", outcome: "issue" }),
-  row("s16", { discomfort: "리뷰 전에 브랜치가 main보다 뒤처져 있어요", cause: "PR을 열기 전에 main을 합치라는 말이 없어요", fix: "CONTRIBUTING.md에 PR을 열기 전 main을 합치는 줄을 넣어요.", returned_after_skip: true }),
-  row("s15", { discomfort: "PR마다 스크린샷이 빠졌다는 리뷰가 달려요", cause: "화면 PR의 스크린샷 규칙이 CONTRIBUTING.md에만 있어요", hold: "github_needed" }),
+  row("s16", { discomfort: "리뷰 전에 브랜치가 main보다 뒤처져 있어요", cause: "PR을 열기 전에 main을 합치라는 말이 없어요", plan: { title: "PR을 열기 전에 main을 합치게 하기", path: "CONTRIBUTING.md", new_file: false, draft: "+ PR을 열기 전에 main을 합친다." }, returned_after_skip: true }),
+  row("s15", { discomfort: "PR마다 스크린샷이 빠졌다는 리뷰가 달려요", cause: "화면 PR의 스크린샷 규칙이 CONTRIBUTING.md에만 있어요", plan: { title: "화면 PR에 스크린샷을 붙이게 하기", path: "docs/screenshots.md", new_file: true, draft: "# 화면 PR의 스크린샷\n+ web/src를 바꾼 PR은 Summary에 바뀐 화면을 붙인다." }, hold: "github_needed" }),
 ];
 
 /** A line that rose from improvements alone, each session's evidence naming how it lost time (B25). */
@@ -84,6 +85,34 @@ const APPLIED_ROWS: SuggestionRow[] = [
   row("s3", { group: "applied", state: "watching", discomfort: "에이전트가 앱을 마음대로 교체해요", attempt: { phase: "merged", started_at_unix_ms: Date.now() - 2 * 1440 * MINUTE, pr_number: 1690, url: "https://github.com/hide/hide/pull/1690", agent_pane: null, failure: null }, watch: { sessions_seen: 2, sessions_needed: 5 } }),
   row("s2", { group: "applied", state: "effective", discomfort: "커밋 메시지에 도구 이름이 들어가요", attempt: { phase: "merged", started_at_unix_ms: Date.now() - 6 * 1440 * MINUTE, pr_number: 1661, url: "https://github.com/hide/hide/pull/1661", agent_pane: null, failure: null } }),
 ];
+
+/** A Memory card offered for the documents, opened to its text and evidence. */
+const MEMORY_OFFER: SuggestionRow = row("m569", {
+  source: "memory", discomfort: "premerge-check는 공용 잠금으로 한 번에 하나씩", outcome: "pr",
+  memory: { body: "premerge-check를 여러 개 동시에 돌리면 부하가 200을 넘겨 20분 넘게 걸려요. lockf -k /tmp/hide-premerge.lock으로 감싸 한 번에 하나씩 돌려요.", human_sessions: 3, pulled_sessions: 2 },
+});
+
+/** The applying agent stopped on a question for the operator. */
+const ASKING_ROW: SuggestionRow = { ...APPLYING_ROWS[0]!, plan: { title: "작업 트리를 나눠 쓰게 하기", path: "AGENTS.md", new_file: false, draft: "+ 브랜치마다 작업 트리를 따로 연다." } };
+
+/** A branch Hide AI finished, opened to its files and the first one's diff. */
+const READY_ROW: SuggestionRow = row("s12", {
+  ...NEW_ROWS[0]!, group: "applying", state: "my_turn",
+  attempt: {
+    phase: "ready", started_at_unix_ms: Date.now() - 6 * MINUTE, pr_number: null, url: null, agent_pane: null, failure: null, purpose: "branch",
+    branch: { name: "hide-suggestion-s12-verify", base: "main", checkout: "/projects/herdr-ide-s12", files: [{ path: "AGENTS.md", added: 1, removed: 0, binary: false }, { path: "docs/BUILD.md", added: 16, removed: 0, binary: false }], files_total: 2, added: 17, removed: 0 },
+  },
+});
+
+export const HIDE_AI_SCENE_AGENTS = [{
+  id: "hide-ai-s9", pane_id: "hide-ai-s9", agent_kind: "claude", identity_label: "작업 트리 나누기", mark: "turn", status_code: "question", group: "",
+  state: { asking: true, working: false, line: { text: "AGENTS.md와 CONTRIBUTING.md 중 어디에 넣을까요?", mode: "request" } },
+}];
+
+export const HIDE_AI_SCENE_DIFFS = [{
+  workspace_id: "herdr-ide", row: "s12", path: "AGENTS.md", reading: false, failed: false, notice: null,
+  text: "diff --git a/AGENTS.md b/AGENTS.md\n--- a/AGENTS.md\n+++ b/AGENTS.md\n@@ -142,6 +142,7 @@ ## Build Output Belongs To Its Worktree\n - `scripts/verify-cargo.sh` and `scripts/verify-web.sh` are the only Rust and web verification entrypoints.\n+- Rust를 검증할 때는 cargo test 대신 scripts/verify-cargo.sh를 쓴다.\n - Every script that calls cargo sources `scripts/toolchain-env.sh`.\n",
+}];
 
 const GLOBAL_PATH = "~/.hide/state/global-instruction.md";
 
@@ -157,6 +186,9 @@ export function hideAiSceneProject(state: HideAiSceneState, workspaceId = "herdr
     case "memory_empty": return { ...base, status: "none_today", rows: [], counts: { suggestions: 0, rail: 0 } };
     case "global": return { ...base, global: { path: GLOBAL_PATH, unusable: null }, rows: [LOCAL_NEW, LOCAL_RECURRED, ...NEW_ROWS.slice(0, 1), LOCAL_APPLIED, ...APPLIED_ROWS], counts: { suggestions: 3, rail: 4 } };
     case "global_unusable": return { ...base, global: { path: GLOBAL_PATH, unusable: "too_large" }, rows: [LOCAL_HELD, ...NEW_ROWS.slice(1, 2)], counts: { suggestions: 2, rail: 3 } };
+    case "memory_offer": return { ...base, rows: [MEMORY_OFFER, ...NEW_ROWS.slice(0, 2)], counts: { suggestions: 3, rail: 3 } };
+    case "asking": return { ...base, rows: [ASKING_ROW, ...APPLYING_ROWS.slice(1), ...APPLIED_ROWS], counts: { suggestions: 2, rail: 3 } };
+    case "ready": return { ...base, rows: [READY_ROW, ...APPLYING_ROWS.slice(1), ...APPLIED_ROWS], counts: { suggestions: 3, rail: 4 } };
     case "suggestions_off": return { ...base, status: "off", settings: { ...base.settings, suggestions_enabled: false }, counts: { suggestions: 0, rail: 0 } };
   }
 }
@@ -179,8 +211,9 @@ export function HideAiScene({ theme, state, width, language }: HideAiSceneParams
   }) as unknown as SnapshotRest, [language]);
   useLayoutEffect(() => {
     const memory = { ...memorySceneProject(state === "off" || state === "settings_unread" ? "off" : state === "memory_empty" ? "empty" : "correction"), workspace_id: "herdr-ide" };
-    useShellStore.setState({ rest, memory: { project: memory }, suggestions: { project: hideAiSceneProject(state) }, connection: "gone" });
-    useUiStore.setState({ hideAiTab: state === "memory" || state === "memory_empty" ? "memory" : "suggestions", openSuggestion: state === "new" ? "s12" : state === "improvement" ? "s18" : state === "global" ? "s21" : null });
+    const shown = state === "ready" ? { ...rest, pr_work: { link: null, feedback: null, branch_diffs: HIDE_AI_SCENE_DIFFS } } as SnapshotRest : rest;
+    useShellStore.setState({ rest: shown, agents: (state === "asking" ? HIDE_AI_SCENE_AGENTS : []) as never, memory: { project: memory }, suggestions: { project: hideAiSceneProject(state) }, connection: "gone" });
+    useUiStore.setState({ hideAiTab: state === "memory" || state === "memory_empty" ? "memory" : "suggestions", openSuggestion: state === "new" ? "s12" : state === "improvement" ? "s18" : state === "global" ? "s21" : state === "memory_offer" ? "m569" : state === "ready" ? "s12" : null });
     document.documentElement.classList.toggle("dark", theme === "dark");
     document.documentElement.classList.toggle("light", theme === "light");
   }, [rest, state, theme]);
