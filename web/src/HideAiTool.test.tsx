@@ -262,16 +262,16 @@ describe("the Hide AI tool", () => {
   });
 
   /** A ready branch as the core sends it (PRD hide-ai-branch-first-apply B3). */
-  const ready = (failure: string | null, files = 2) => ({
+  const ready = (failure: string | null, files = 2, push: "allowed" | "pr_only" | "unknown" = "allowed") => ({
     group: "applying" as const,
     state: "my_turn" as const,
     attempt: {
       phase: "ready" as const, started_at_unix_ms: 1, pr_number: null, url: null, agent_pane: null, failure, purpose: "branch" as const,
-      branch: { name: "hide-suggestion-s1-x", base: "main", checkout: "/wt", files: [{ path: "AGENTS.md", added: 4, removed: 1, binary: false }, { path: "docs/a.md", added: 2, removed: 0, binary: false }].slice(0, files), files_total: files, added: 6, removed: 1 },
+      branch: { name: "hide-suggestion-s1-x", base: "main", checkout: "/wt", files: [{ path: "AGENTS.md", added: 4, removed: 1, binary: false }, { path: "docs/a.md", added: 2, removed: 0, binary: false }].slice(0, files), files_total: files, added: 6, removed: 1, push },
     },
   });
 
-  it("offers a ready branch a PR and no local merge where GitHub is connected, and opens its card, or its one file's diff, in the 보기 slot (hide-ai-branch-first-apply B3, B4, B6-B10)", async () => {
+  it("offers a ready branch a PR, and a merge and push only while GitHub's base takes one, where GitHub is connected, and opens its card, or its one file's diff, in the 보기 slot (hide-ai-branch-first-apply B3, B4, B6-B10)", async () => {
     await render(suggestionsProject({ rows: [
       suggestionRow("s1", ready(null)),
       suggestionRow("s2", ready(null, 1)),
@@ -280,18 +280,33 @@ describe("the Hide AI tool", () => {
       suggestionRow("s5", { group: "applying", state: "hide_ai_working", attempt: { phase: "working", started_at_unix_ms: Date.now(), pr_number: null, url: null, agent_pane: null, failure: null, purpose: "branch" } }),
       suggestionRow("s6", { group: "applying", state: "my_turn", attempt: { phase: "failed", started_at_unix_ms: 1, pr_number: null, url: null, agent_pane: null, failure: "no_change", purpose: "branch" } }),
       suggestionRow("m7", { source: "memory", memory_cards: [7, 9, 12], ...ready(null) }),
+      suggestionRow("s7", ready(null, 2, "pr_only")),
+      suggestionRow("s8", ready(null, 2, "unknown")),
+      suggestionRow("s9", ready("push_refused")),
     ] }));
     expect(q('[data-suggestion-merge="m7"]')).toBeNull();
     expect(q('[data-suggestion-open-pr="m7"]')?.textContent).toBe("Open a PR");
+    expect(q('[data-suggestion-merge-push="m7"]')?.textContent).toBe("Merge and push to main");
+    expect(q('[data-suggestion-merge-push="s7"]')).toBeNull();
+    expect(q('[data-suggestion-pr-only="s7"]')?.textContent).toBe("This repository takes PRs only");
+    expect(q('[data-suggestion-open-pr="s7"]')).not.toBeNull();
+    expect(q('[data-suggestion-merge-push="s8"]')).toBeNull();
+    expect(q('[data-suggestion-pr-only="s8"]')).toBeNull();
+    expect(q('[data-suggestion-open-pr="s8"]')).not.toBeNull();
+    expect(q('[data-suggestion="s9"] [data-suggestion-attempt]')?.textContent).toContain("GitHub did not take the push, so the merge was put back");
+    expect(q('[data-suggestion-merge-push="s9"]')).toBeNull();
+    expect(q('[data-suggestion-open-pr="s9"]')).not.toBeNull();
     expect(q('[data-suggestion="s1"] [data-suggestion-mark]')?.getAttribute("data-suggestion-mark")).toBe("my_turn");
     expect(q('[data-suggestion-branch="hide-suggestion-s1-x"]')?.textContent).toContain("See what changed");
     expect(q('[data-suggestion="s1"] [data-suggestion-branch]')?.textContent).toContain("2 files+6−1");
     expect(q('[data-suggestion-merge="s1"]')).toBeNull();
     expect(q('[data-suggestion-open-pr="s1"]')?.textContent).toBe("Open a PR");
+    expect(q('[data-suggestion-merge-push="s1"]')?.textContent).toBe("Merge and push to main");
     expect(q('[data-suggestion-discard="s1"]')?.textContent).toBe("Discard");
     expect(q('[data-suggestion="s3"] [data-suggestion-attempt]')?.textContent).toContain("main has unsaved changes in the same files");
     expect(q('[data-suggestion-merge="s3"]')).toBeNull();
     expect(q('[data-suggestion-open-pr="s3"]')).not.toBeNull();
+    expect(q('[data-suggestion-merge-push="s3"]')?.textContent).toBe("Try again");
     expect(q('[data-suggestion="s4"] [data-suggestion-attempt]')?.textContent).toContain("main changed, so it has to be made again");
     expect(q('[data-suggestion-merge="s4"]')).toBeNull();
     expect(q('[data-suggestion-rebase="s4"]')?.textContent).toBe("Make it again");
@@ -301,6 +316,7 @@ describe("the Hide AI tool", () => {
     await click('[data-suggestion-branch-view="s1"]');
     await click('[data-suggestion-branch-view="s2"]');
     await click('[data-suggestion-open-pr="s1"]');
+    await click('[data-suggestion-merge-push="s1"]');
     await click('[data-suggestion-rebase="s4"]');
     await click('[data-suggestion-discard="s1"]');
     expect(sent("detail_open")).toEqual([
@@ -309,6 +325,7 @@ describe("the Hide AI tool", () => {
     ]);
     expect(sent("suggestion_action")).toEqual([
       { workspace_id: "p", id: "s1", action: "open_pr" },
+      { workspace_id: "p", id: "s1", action: "merge_push" },
       { workspace_id: "p", id: "s4", action: "rebase" },
       { workspace_id: "p", id: "s1", action: "discard" },
     ]);
@@ -326,6 +343,8 @@ describe("the Hide AI tool", () => {
     expect(q('[data-suggestion-open-pr="s1"]')).toBeNull();
     expect(q('[data-suggestion-merge="m7"]')?.textContent).toBe("Merge into main");
     expect(q('[data-suggestion-open-pr="m7"]')).toBeNull();
+    expect(q('[data-suggestion-merge-push="s1"]')).toBeNull();
+    expect(q('[data-suggestion-merge-push="m7"]')).toBeNull();
     expect(q('[data-suggestion-merge="s4"]')?.textContent).toBe("Try again");
     await click('[data-suggestion-merge="s1"]');
     expect(sent("suggestion_action")).toEqual([{ workspace_id: "p", id: "s1", action: "merge" }]);

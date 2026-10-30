@@ -69,8 +69,8 @@ export function fileName(path: string): string {
  */
 export type AttemptLine = { text: string; tone: "muted" | "warning" | "destructive"; retry: boolean; branch?: BranchChoice };
 
-/** A ready branch's buttons: the action that answers its last refusal, if any (B7, B8). */
-export type BranchChoice = { again: "merge" | "rebase" | "discard" | null };
+/** A ready branch's buttons: the action that answers its last refusal, if any (B7, B8); `pr` after a push GitHub did not take. */
+export type BranchChoice = { again: "merge" | "rebase" | "discard" | "pr" | null };
 
 /** The line of a row being applied (B2-B12, B14): what the attempt is doing, in words; null before one started. */
 export function attemptLine(t: TFunction<"translation">, row: Pick<SuggestionRow, "outcome" | "attempt">): AttemptLine | null {
@@ -88,7 +88,7 @@ export function attemptLine(t: TFunction<"translation">, row: Pick<SuggestionRow
     case "ready": {
       const code = attempt.failure;
       const reason = code ? failureWords(t, code, base) : null;
-      const again = code === "merge_conflict" ? "rebase" : code === "discard_failed" ? "discard" : code ? "merge" : null;
+      const again = code === "merge_conflict" ? "rebase" : code === "discard_failed" ? "discard" : code?.startsWith("push_") ? "pr" : code ? "merge" : null;
       return { text: reason ?? t("suggestions.branch.view"), tone: code ? "warning" : "muted", retry: false, branch: { again } };
     }
     case "merging": return { text: t("suggestions.attempt.merging"), tone: "muted", retry: false };
@@ -121,6 +121,13 @@ const FAILURE_KEYS: Record<string, MessageKey> = {
   merge_branch_moved: "suggestions.failure.merge_branch_moved",
   merge_failed: "suggestions.failure.merge_failed",
   discard_failed: "suggestions.failure.discard_failed",
+  push_refused: "suggestions.failure.push_refused",
+  push_failed: "suggestions.failure.push_failed",
+  push_kept: "suggestions.failure.push_kept",
+  push_base_ahead: "suggestions.failure.push_base_ahead",
+  push_base_diverged: "suggestions.failure.push_base_diverged",
+  push_fetch_failed: "suggestions.failure.push_fetch_failed",
+  push_no_upstream: "suggestions.failure.push_no_upstream",
 };
 
 function failureWords(t: TFunction<"translation">, code: string, base: string): string | null {

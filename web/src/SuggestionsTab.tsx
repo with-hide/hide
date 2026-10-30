@@ -556,18 +556,23 @@ function Buttons({ row, project, actions }: { row: SuggestionRow; project: Proje
 
 /**
  * A ready branch's choices (PRD hide-ai-branch-first-apply D-03, B6-B10, as
- * changed for GitHub Projects): where GitHub is connected, main moves by pull
- * request, so the branch offers `PR 올리기` and never a local merge; without
- * GitHub it offers `main에 합치기`. A quiet `버리기` either way. A refused
- * merge puts its answer first: `다시 시도` merges again, `다시 맞추기` makes
- * the branch again on its base.
+ * changed for GitHub Projects). Without GitHub the local main is the real one:
+ * `main에 합치기`. Where GitHub is connected main moves on GitHub, never by a
+ * local merge alone: `PR 올리기` first, and `{base}에 바로 올리기`, which
+ * merges and pushes, only while the core read that GitHub's base takes a
+ * direct push; a base that takes pull requests only says so in its place, and
+ * an unread one shows nothing. A quiet `버리기` either way. A refused merge
+ * puts its answer first: `다시 시도` merges again, `다시 맞추기` makes the
+ * branch again on its base, and a push GitHub did not take leaves `PR 올리기`.
  */
 export function BranchButtons({ row, project, actions, again, className }: { row: SuggestionRow; project: ProjectSuggestions; actions: Actions; again: BranchChoice["again"]; className?: string }) {
   const { t } = useInterfaceTranslation();
   const id = project.workspace_id;
-  const base = row.attempt?.branch?.base ?? "main";
+  const branch = row.attempt?.branch;
+  const base = branch?.base ?? "main";
   const github = project.github === "connected";
   const pr = github && row.outcome === "pr";
+  const push = pr && again !== "pr" ? branch?.push ?? "unknown" : "unknown";
   return (
     <div className={cn("col-start-2 flex flex-wrap items-center gap-xs pt-xxs", className)} data-suggestion-branch-buttons={row.id}>
       {again === "rebase" ? (
@@ -576,6 +581,11 @@ export function BranchButtons({ row, project, actions, again, className }: { row
         <Button className="pointer-events-auto" size="sm" onClick={() => actions.suggestionAction(id, row.id, "merge")} data-suggestion-merge={row.id}>{t(again === "merge" ? "suggestions.retry" : "suggestions.branch.merge", { base })}</Button>
       )}
       {pr ? <Button className="pointer-events-auto" size="sm" variant={again === "rebase" ? "outline" : "default"} onClick={() => actions.suggestionAction(id, row.id, "open_pr")} data-suggestion-open-pr={row.id}>{t("suggestions.branch.openPr")}</Button> : null}
+      {push === "allowed" ? (
+        <Button className="pointer-events-auto" size="sm" variant="outline" onClick={() => actions.suggestionAction(id, row.id, "merge_push")} data-suggestion-merge-push={row.id}>{t(again === "merge" ? "suggestions.retry" : "suggestions.branch.mergePush", { base })}</Button>
+      ) : push === "pr_only" ? (
+        <span className="text-caption text-muted-foreground" data-suggestion-pr-only={row.id}>{t("suggestions.branch.prOnly")}</span>
+      ) : null}
       <Button className="pointer-events-auto text-muted-foreground" size="sm" variant="ghost" onClick={() => actions.suggestionAction(id, row.id, "discard")} data-suggestion-discard={row.id}>{t("suggestions.branch.discard")}</Button>
     </div>
   );
