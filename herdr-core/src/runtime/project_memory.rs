@@ -50,6 +50,9 @@ pub(super) struct ProjectMemoryWork {
     enable_after_hook_read: Option<String>,
     /// The tracker of the cards on their way into the repository.
     pub(super) promotions: super::memory_promotion::PromotionTracking,
+    /// The 제안 rows' presses on cards, from the press until a read shows
+    /// what each did.
+    pub(super) presses: super::suggestion_memory::RowPresses,
 }
 
 /// One read in flight and at most one waiting; a read whose generation is
@@ -362,6 +365,7 @@ impl Runtime {
                     // The tracker follows every Project's promotions and may
                     // be mid-check; closing a read must not drop its flight.
                     promotions: std::mem::take(&mut self.project_memory.promotions),
+                    presses: std::mem::take(&mut self.project_memory.presses),
                     ..ProjectMemoryWork::default()
                 };
                 self.project_memory.reads.generation += 1;
@@ -636,6 +640,7 @@ impl Runtime {
         if !lands {
             return false;
         }
+        self.project_memory.presses.shown(generation);
         let load = match result {
             Ok(load) => {
                 self.project_memory.reads.succeeded();
@@ -895,17 +900,34 @@ impl Runtime {
     /// from its Memory tab. One action runs at a time; another is refused
     /// with the reason.
     pub(super) fn apply_memory_action(&mut self, payload: events::MemoryActionPayload) -> bool {
+        let workspace = payload.workspace_id.clone();
+        let action = payload.action;
+        if let Err(refusal) = self.begin_memory_action(payload) {
+            self.memory_action_failed(
+                &workspace,
+                action,
+                refusal.kind,
+                refusal.message,
+                refusal.retryable,
+            );
+        }
+        true
+    }
+
+    /// Starts `payload`'s action on the write thread, or answers why it
+    /// cannot start; a 제안 row's press draws that answer on its row.
+    pub(super) fn begin_memory_action(
+        &mut self,
+        payload: events::MemoryActionPayload,
+    ) -> Result<(), MemoryRefusal> {
         let (node, path) = match self.memory_folder(&payload.workspace_id) {
             Ok(folder) => folder,
             Err(_) => {
-                self.memory_action_failed(
-                    &payload.workspace_id,
-                    payload.action,
+                return Err(MemoryRefusal::new(
                     "memory.project_unavailable",
                     "This Project is no longer registered",
                     false,
-                );
-                return true;
+                ));
             }
         };
         let sessions_node = match self.memory_node(node.as_str()) {
@@ -915,38 +937,29 @@ impl Runtime {
                     "component": "memory", "kind": "memory.action_unreachable",
                     "workspace_id": payload.workspace_id, "device": node.as_str(), "reason": reason,
                 }));
-                self.memory_action_failed(
-                    &payload.workspace_id,
-                    payload.action,
+                return Err(MemoryRefusal::new(
                     "memory.project_unreachable",
                     crate::memory_command::next_action(reason),
                     true,
-                );
-                return true;
+                ));
             }
         };
         if self.project_memory.enable_after_hook_update.is_some() {
-            self.memory_action_failed(
-                &payload.workspace_id,
-                payload.action,
+            return Err(MemoryRefusal::new(
                 "memory.action_busy",
                 "Wait for the pending Memory change to finish",
                 false,
-            );
-            return true;
+            ));
         }
         if let Some((_, running)) = &self.project_memory.action {
-            self.memory_action_failed(
-                &payload.workspace_id,
-                payload.action,
+            return Err(MemoryRefusal::new(
                 "memory.action_busy",
                 format!(
                     "Wait for the Memory change \"{}\" to finish",
                     running.as_str()
                 ),
                 false,
-            );
-            return true;
+            ));
         }
         if payload.action == MemoryAction::Enable && !self.hooks_support_memory() {
             // Turning Memory on is the operator's word to bring the agent
@@ -962,19 +975,16 @@ impl Runtime {
                     .as_ref()
                     .is_some_and(|held| *held != payload.workspace_id)
                 {
-                    self.memory_action_failed(
-                        &payload.workspace_id,
-                        payload.action,
+                    return Err(MemoryRefusal::new(
                         "memory.action_busy",
                         "Wait for Memory to turn on in the other Project",
                         false,
-                    );
-                    return true;
+                    ));
                 }
                 self.project_memory.failure = None;
                 self.project_memory.enable_after_hook_read = Some(payload.workspace_id);
                 self.sync_project_memory();
-                return true;
+                return Ok(());
             }
             let parts = self.local_hook_parts_to_repair();
             if !parts.is_empty() {
@@ -983,33 +993,27 @@ impl Runtime {
                 self.project_memory.failure = None;
                 self.project_memory.enable_after_hook_update = Some(payload.workspace_id);
                 self.sync_project_memory();
-                return true;
+                return Ok(());
             }
             // No agent here takes Memory's hooks; Memory is on for the ones
             // installed later, which the kit sets up with Memory.
         }
         let Some(context) = self.worker_context.clone() else {
-            self.memory_action_failed(
-                &payload.workspace_id,
-                payload.action,
+            return Err(MemoryRefusal::new(
                 "memory.worker_unavailable",
                 "The Project Memory writer is unavailable",
                 true,
-            );
-            return true;
+            ));
         };
         // A recheck is finished by Hide AI's check, so it is refused while
         // Hide AI is off, as `hide memory recheck` is (PRD
         // memory-self-improve D-41).
         if payload.action == MemoryAction::Recheck && !self.ai_active() {
-            self.memory_action_failed(
-                &payload.workspace_id,
-                payload.action,
+            return Err(MemoryRefusal::new(
                 "memory.recheck_ai_off",
                 "Rechecking needs Hide AI; turn it on in Settings > Hide AI",
                 false,
-            );
-            return true;
+            ));
         }
         // The Project's id is only known once the worker read the folder; a
         // pass is stopped now and again when the switch is written.
@@ -1027,14 +1031,11 @@ impl Runtime {
                 "component": "memory", "kind": "promotion.refused",
                 "workspace_id": payload.workspace_id, "reason": kind,
             }));
-            self.memory_action_failed(
-                &payload.workspace_id,
-                payload.action,
+            return Err(MemoryRefusal::new(
                 kind,
                 "Documents are fixed on a git branch; this folder is not a git repository",
                 false,
-            );
-            return true;
+            ));
         }
         let start = match payload.action {
             MemoryAction::Promote => match self.promotion_start(&node, &path) {
@@ -1046,14 +1047,11 @@ impl Runtime {
                         "workspace_id": payload.workspace_id,
                         "reason": reason,
                     }));
-                    self.memory_action_failed(
-                        &payload.workspace_id,
-                        payload.action,
+                    return Err(MemoryRefusal::new(
                         "memory.promotion_unavailable",
                         "Hide cannot start an agent for this Project right now",
                         true,
-                    );
-                    return true;
+                    ));
                 }
             },
             _ => None,
@@ -1061,13 +1059,22 @@ impl Runtime {
         let action = payload.action;
         let number = payload.number;
         self.project_memory.failure = None;
-        let action_workspace = payload.workspace_id.clone();
-        self.project_memory.action = Some((action_workspace.clone(), action));
+        self.project_memory.action = Some((payload.workspace_id.clone(), action));
         self.sync_project_memory();
         let database = self.memory_database_path();
         let spawn = thread::Builder::new()
             .name("hide-project-memory-write".to_owned())
             .spawn(move || {
+                // A promotion's cards are written as running before its agent
+                // is started, which can take tens of seconds: the read that
+                // shows them is asked for as soon as they are.
+                let reserved = || {
+                    if let Some(runtime) = context.runtime.upgrade()
+                        && let Ok(mut guard) = runtime.lock()
+                    {
+                        guard.refresh_project_memory();
+                    }
+                };
                 let result = mutate_memory(
                     &node,
                     sessions_node.as_ref(),
@@ -1075,6 +1082,7 @@ impl Runtime {
                     &path,
                     &payload,
                     start,
+                    &reserved,
                 );
                 let Some(runtime) = context.runtime.upgrade() else {
                     return;
@@ -1090,18 +1098,17 @@ impl Runtime {
             });
         if let Err(error) = spawn {
             self.project_memory.action = None;
-            self.memory_action_failed(
-                &action_workspace,
-                action,
+            self.sync_project_memory();
+            return Err(MemoryRefusal::new(
                 "memory.worker_failed",
                 format!("The Project Memory writer could not start: {error}"),
                 true,
-            );
+            ));
         }
-        true
+        Ok(())
     }
 
-    fn memory_action_failed(
+    pub(super) fn memory_action_failed(
         &mut self,
         workspace: &str,
         action: MemoryAction,
@@ -1141,6 +1148,7 @@ impl Runtime {
                 MemoryQuestionSnapshot::DocsDisagree { .. } => true,
             });
         }
+        let refused = result.as_ref().err().cloned();
         match result {
             Ok(outcome) => {
                 if let Some((kind, message)) = outcome.diagnostic {
@@ -1173,9 +1181,9 @@ impl Runtime {
                 }
             }
             Err(message) => {
-                if let Some(workspace) = workspace {
+                if let Some(workspace) = &workspace {
                     self.memory_action_failed(
-                        &workspace,
+                        workspace,
                         action,
                         "memory.action_failed",
                         message,
@@ -1186,6 +1194,14 @@ impl Runtime {
         }
         self.sync_project_memory();
         self.refresh_project_memory();
+        if let (Some(workspace), Some(number)) = (workspace.as_deref(), number) {
+            let shown_by = self.project_memory.reads.generation;
+            let refused = refused.map(|reason| {
+                super::suggestion_memory::Refusal::of("memory.action_failed", reason)
+            });
+            self.settle_row_press(workspace, number, refused.map_or(Ok(shown_by), Err));
+        }
+        self.run_row_presses();
         true
     }
 
@@ -1260,6 +1276,24 @@ impl Runtime {
     }
 }
 
+/// Why a Memory action did not start: the error's kind and message, and
+/// whether asking again may succeed.
+pub(super) struct MemoryRefusal {
+    pub(super) kind: &'static str,
+    pub(super) message: String,
+    pub(super) retryable: bool,
+}
+
+impl MemoryRefusal {
+    fn new(kind: &'static str, message: impl Into<String>, retryable: bool) -> Self {
+        Self {
+            kind,
+            message: message.into(),
+            retryable,
+        }
+    }
+}
+
 struct MemoryActionOutcome {
     project_id: String,
     diagnostic: Option<(String, String)>,
@@ -1275,6 +1309,7 @@ fn mutate_memory(
     checkout_path: &str,
     payload: &events::MemoryActionPayload,
     start: Option<super::memory_promotion::PromotionStart>,
+    reserved: &dyn Fn(),
 ) -> Result<MemoryActionOutcome, String> {
     let identity = project_identity(sessions_node, node, checkout_path)?;
     let mut store =
@@ -1361,6 +1396,7 @@ fn mutate_memory(
                 &identity.id,
                 &numbers,
                 start,
+                reserved,
             )?;
             Ok(MemoryActionOutcome {
                 unseen: unseen.map(|(attempt, start)| (number, attempt, start)),
@@ -1783,6 +1819,7 @@ mod tests {
                     &root,
                     &payload,
                     None,
+                    &|| (),
                 )
                 .is_err()
             );

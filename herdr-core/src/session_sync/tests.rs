@@ -1,9 +1,10 @@
-use std::io::{Read, Write};
+use std::io::{BufRead, Read, Write};
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
 use super::*;
+use crate::engine::herdr::wire;
 use crate::model::{CoreOptions, SCHEMA_VERSION};
 use hide_herdr_client::HERDR_PROTOCOL_REVISION;
 use hide_platform::ipc::{LocalListener, LocalStream};
@@ -79,7 +80,7 @@ fn remote_session_sync_accepts_responses_after_the_local_read_deadline() {
     let context = SessionSyncContext::remote(
         "fixture-device",
         "Fixture device",
-        Arc::new(herdr.connector()),
+        herdr.engine(),
         Weak::new(),
         ChangeNotifier::noop(),
     );
@@ -126,7 +127,7 @@ fn a_refused_subscription_reads_the_protocol_the_server_pings_with() {
         let context = SessionSyncContext::remote(
             "fixture-device",
             "Fixture device",
-            Arc::new(herdr.connector()),
+            herdr.engine(),
             Weak::new(),
             ChangeNotifier::noop(),
         );
@@ -410,7 +411,7 @@ fn two_tab_snapshot() -> Value {
 
 fn event(kind: &str, data: Value) -> ReplicaEvent {
     let raw = json!({"event": kind, "data": data});
-    match parse_subscription_line(&raw.to_string()).expect("event parses") {
+    match wire::parse_subscription_line(&raw.to_string()).expect("event parses") {
         SubscriptionLine::Event(event) => event,
         SubscriptionLine::EventsLost { .. } | SubscriptionLine::Error { .. } => unreachable!(),
     }
@@ -484,7 +485,7 @@ fn every_applied_tab_focus_is_one_move_and_the_latest_are_kept() {
     assert!(moves.since(moves.generation + 1, 3).is_none());
 
     assert!(
-        crate::session_sync::project_snapshot(&two_tab_snapshot())
+        wire::project_snapshot(&two_tab_snapshot())
             .unwrap()
             .tab_moves
             .is_none()
@@ -925,7 +926,7 @@ fn context_for_fixture(runtime: &Arc<Mutex<Runtime>>, socket_path: &Path) -> Ses
         socket_path: socket_path.to_path_buf(),
         runtime: Arc::downgrade(runtime),
         notifier: crate::handle::ChangeNotifier::noop(),
-        api_connector: Arc::new(hide_herdr_client::LocalSocketConnector::new(socket_path)),
+        engine: crate::engine::herdr::local(socket_path),
         node: Arc::new(hide_node::Local::of_process()),
     };
     SessionSyncContext::local(&live, std::sync::Arc::new(hide_node::Local::of_process()))
@@ -2594,7 +2595,7 @@ fn a_stream_error_is_an_explicit_stream_result() {
         }
     })
     .to_string();
-    match parse_subscription_line(&line).expect("typed error") {
+    match wire::parse_subscription_line(&line).expect("typed error") {
         SubscriptionLine::Error { code, message } => {
             assert_eq!(code, "internal");
             assert!(message.contains("closed"));
@@ -2607,10 +2608,12 @@ fn a_stream_error_is_an_explicit_stream_result() {
 
 #[test]
 fn subscription_failure_is_stale_only_when_a_projection_already_exists() {
-    let initial = connect_failure_from_api(ApiError::Transport("socket closed".to_owned()), false);
+    let initial =
+        connect_failure_from_engine(EngineError::Transport("socket closed".to_owned()), false);
     assert_eq!(initial.state(), "unreachable");
 
-    let reconnect = connect_failure_from_api(ApiError::Transport("socket closed".to_owned()), true);
+    let reconnect =
+        connect_failure_from_engine(EngineError::Transport("socket closed".to_owned()), true);
     assert_eq!(reconnect.state(), "stale");
 }
 
@@ -3407,7 +3410,7 @@ fn registrations_end_only_on_a_fresh_snapshot_never_during_the_resync() {
                 name: id.into(),
                 kind: "claude".into(),
                 device_id: node.clone(),
-                session: crate::wire::session_digest(&format!("{id}-native")),
+                session: crate::engine::tokens::session_digest(&format!("{id}-native")),
             },
             ended: false,
             terminal_id: None,
@@ -3514,7 +3517,7 @@ mod lineage_sessions {
     use crate::model::SidebarAgentSnapshot;
 
     fn digest(session: &str) -> String {
-        wire::session_digest(session).expect("a session names itself")
+        crate::engine::tokens::session_digest(session).expect("a session names itself")
     }
 
     fn listed(pane: &str, session: Option<&str>, tokens: Value) -> Value {

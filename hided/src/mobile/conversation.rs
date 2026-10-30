@@ -23,10 +23,8 @@
 mod opencode;
 
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
 
-use herdr_core::wire::{self, PaneSessionKind};
-use hide_herdr_client::ApiConnector;
+use herdr_core::engine::{EngineHandle, PaneSessionKind};
 use hide_session::{
     Agent, EventKind, SessionError, SessionIdentity, SessionLocator, parse_events_at,
     read_page_before,
@@ -111,21 +109,14 @@ pub struct Source {
 
 /// The pane's transcript source; `None` when its agent has no conversation
 /// reader or reported no session.
-pub fn source(
-    connector: &Arc<dyn ApiConnector>,
-    pane_id: &str,
-) -> Result<Option<Source>, PaneError> {
-    let value = hide_herdr_client::request_with_connector(
-        connector.as_ref(),
-        "pane.get",
-        serde_json::json!({"pane_id": pane_id}),
-        TIMEOUT,
-    )
-    .map_err(|error| match error.code() {
-        Some(code) if code.contains("not_found") => PaneError::Gone,
-        _ => PaneError::Unavailable(error.to_string()),
-    })?;
-    let (cwd, session) = wire::pane_session(value).map_err(PaneError::Unavailable)?;
+pub fn source(engine: &EngineHandle, pane_id: &str) -> Result<Option<Source>, PaneError> {
+    let (cwd, session) =
+        engine
+            .pane_session(pane_id, TIMEOUT)
+            .map_err(|error| match error.code() {
+                Some(code) if code.contains("not_found") => PaneError::Gone,
+                _ => PaneError::Unavailable(error.to_string()),
+            })?;
     let Some(session) = session else {
         return Ok(None);
     };

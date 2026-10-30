@@ -113,7 +113,7 @@ impl LabelServices {
         node: Arc<dyn NodeLink>,
         wake: Wake,
         language: hide_ai::OutputLanguage,
-        connector: Arc<dyn hide_herdr_client::ApiConnector>,
+        engine: crate::engine::SharedEngine,
     ) -> Result<Option<LabelWorker>, String> {
         if self.home.is_none() {
             return Ok(None);
@@ -137,7 +137,7 @@ impl LabelServices {
             },
             Arc::clone(&self.store),
             Arc::clone(&self.analyzer),
-            Arc::new(NodeTranscripts::new(own_channel(&node)).with_connector(connector)),
+            Arc::new(NodeTranscripts::new(own_channel(&node)).with_engine(engine)),
             wake,
         )
         .map(Some)
@@ -163,7 +163,7 @@ impl LabelServices {
         runtime: Weak<Mutex<Runtime>>,
         wake: Wake,
         language: hide_ai::OutputLanguage,
-        connector: Arc<dyn hide_herdr_client::ApiConnector>,
+        engine: crate::engine::SharedEngine,
     ) -> Result<LabelWorker, String> {
         LabelWorker::spawn(
             WorkerConfig {
@@ -181,9 +181,7 @@ impl LabelServices {
             },
             Arc::clone(&self.store),
             Arc::clone(&self.analyzer),
-            Arc::new(
-                NodeTranscripts::new(device_channel(device_id, runtime)).with_connector(connector),
-            ),
+            Arc::new(NodeTranscripts::new(device_channel(device_id, runtime)).with_engine(engine)),
             wake,
         )
     }
@@ -228,19 +226,19 @@ pub(crate) type ChannelSource =
 /// process, a device's through its helper.
 pub(crate) struct NodeTranscripts {
     channel: ChannelSource,
-    connector: Option<Arc<dyn hide_herdr_client::ApiConnector>>,
+    engine: Option<crate::engine::SharedEngine>,
 }
 
 impl NodeTranscripts {
     pub(crate) fn new(channel: ChannelSource) -> Self {
         Self {
             channel,
-            connector: None,
+            engine: None,
         }
     }
 
-    fn with_connector(mut self, connector: Arc<dyn hide_herdr_client::ApiConnector>) -> Self {
-        self.connector = Some(connector);
+    fn with_engine(mut self, engine: crate::engine::SharedEngine) -> Self {
+        self.engine = Some(engine);
         self
     }
 }
@@ -270,19 +268,21 @@ impl TranscriptSource for NodeTranscripts {
         pane: &str,
         agent: hide_session::Agent,
     ) -> Result<Option<(String, String)>, ReadFailure> {
-        let connector = self
-            .connector
+        let engine = self
+            .engine
             .as_ref()
             .ok_or_else(|| ReadFailure::Unavailable("session_process_unavailable".into()))?;
-        let params = crate::wire::pane_process_info_params(pane).map_err(ReadFailure::Refused)?;
-        let value = hide_herdr_client::request_small_response(
-            connector.as_ref(),
-            "pane.process_info",
-            params,
-            Duration::from_secs(1),
-        )
-        .map_err(|_| ReadFailure::Unavailable("session_process_unavailable".into()))?;
-        crate::wire::resumed_session_reference(value, pane, agent).map_err(ReadFailure::Refused)
+        engine
+            .resumed_session(
+                crate::engine::Wait::Small(Duration::from_secs(1)),
+                pane,
+                agent,
+            )
+            .map_err(|error| match error {
+                crate::engine::EngineError::Request(detail)
+                | crate::engine::EngineError::Answer(detail) => ReadFailure::Refused(detail),
+                _ => ReadFailure::Unavailable("session_process_unavailable".into()),
+            })
     }
 
     fn read(&self, request: &LabelTranscriptRequest) -> Result<LabelTranscript, ReadFailure> {

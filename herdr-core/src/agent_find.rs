@@ -7,7 +7,7 @@
 //! scrolls to each match, so ⌘F hands such a pane to it and the agent's own
 //! prompt, keys and count take over. An agent that draws inline leaves its
 //! conversation in Herdr's history, and Hide's find bar searches that, so the
-//! decision also asks Herdr whether it holds any (`live::spawn_agent_find`).
+//! decision also asks Herdr whether it holds any (`crate::find::pane::spawn_agent_find`).
 //!
 //! The shared adapter selects a find dialect; this module owns its keys.
 //! An agent without one keeps Hide's find bar.

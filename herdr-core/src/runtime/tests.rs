@@ -546,7 +546,7 @@ pub(super) fn live_runtime() -> Runtime {
         socket_path: socket_path.clone().into(),
         runtime: std::sync::Weak::new(),
         notifier: crate::handle::ChangeNotifier::noop(),
-        api_connector: Arc::new(hide_herdr_client::LocalSocketConnector::new(&socket_path)),
+        engine: crate::engine::herdr::local(&socket_path),
         node: Arc::new(hide_node::Local::of_process()),
     });
     runtime
@@ -968,7 +968,7 @@ fn live_tab_order_runtime(checkout_path: &str) -> (Runtime, String) {
         socket_path: socket_path.clone().into(),
         runtime: std::sync::Weak::new(),
         notifier: crate::handle::ChangeNotifier::noop(),
-        api_connector: Arc::new(hide_herdr_client::LocalSocketConnector::new(&socket_path)),
+        engine: crate::engine::herdr::local(&socket_path),
         node: Arc::new(hide_node::Local::of_process()),
     });
     (runtime, checkout_id)
@@ -1546,8 +1546,8 @@ fn closed_file(key: &str, path: &str) -> ClosedItem {
     }
 }
 
-fn close_capture_request(key: &str) -> live::CloseCaptureRequest {
-    live::CloseCaptureRequest {
+fn close_capture_request(key: &str) -> crate::recent_closed::capture::CloseCaptureRequest {
+    crate::recent_closed::capture::CloseCaptureRequest {
         failed_terminals: Vec::new(),
         retain_for_reopen: true,
         key: key.to_owned(),
@@ -1570,7 +1570,7 @@ fn close_capture_request(key: &str) -> live::CloseCaptureRequest {
             tab_name: Default::default(),
         },
         panes: vec![],
-        target: live::CloseCaptureTarget::Tab {
+        target: crate::recent_closed::capture::CloseCaptureTarget::Tab {
             tab_id: format!("tab:{key}"),
         },
     }
@@ -1580,7 +1580,7 @@ fn close_capture_request(key: &str) -> live::CloseCaptureRequest {
 fn a_device_that_is_not_connected_lends_no_herdr_api_to_a_phone() {
     // The phone's detail reads this as "the device is not connected" (mobile-companion B28).
     let runtime = runtime();
-    assert!(runtime.remote_herdr_api("ssh-mini").is_none());
+    assert!(runtime.device_engine("ssh-mini").is_none());
 }
 
 #[test]

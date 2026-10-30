@@ -1501,3 +1501,100 @@ fn a_skip_takes_the_row_out_while_the_store_is_too_busy_to_read() {
     });
     drop(holder);
 }
+
+impl OfferedCard {
+    /// m1 as the 제안 tab draws it on the next delta.
+    fn row(runtime: &mut Runtime) -> crate::model::SuggestionRowSnapshot {
+        tab(runtime)
+            .rows
+            .into_iter()
+            .find(|row| row.id == "m1")
+            .expect("m1 stays in the 제안 tab")
+    }
+
+    fn press(&self, runtime: &mut Runtime) -> bool {
+        runtime.dispatch_json(&event(
+            "suggestion_action",
+            serde_json::json!({"workspace_id": self.workspace, "id": "m1", "action": "apply"}),
+        ))
+    }
+}
+
+/// `문서 고치기` stayed on pressed rows for the tens of seconds a
+/// promotion's agent took to start, so the operator pressed again
+/// (2026-10-30). The row reads working from the press, before its write
+/// has run; a start that ends without an agent is drawn failed on the row,
+/// and the row never goes back to its button on the way.
+#[test]
+fn a_pressed_memory_row_reads_working_before_its_write_runs() {
+    use crate::model::{SuggestionAttemptPhase, SuggestionGroup, SuggestionState};
+    let offered = offered_card();
+    let ledger = scratch_dir("herdr-core-press-ledger-");
+    let (_worker, client) = crate::delivery::worker::Worker::spawn(
+        Arc::downgrade(&offered.runtime),
+        crate::handle::ChangeNotifier::noop(),
+        ledger.path().join("ledger.sqlite3"),
+    )
+    .unwrap();
+    let mut guard = offered.runtime.lock().unwrap();
+    guard.install_delivery_client(client);
+    assert!(offered.press(&mut guard));
+    // The write waits for the lock this test holds: the store has nothing
+    // of the press yet.
+    let row = OfferedCard::row(&mut guard);
+    assert_eq!(
+        (row.group, row.state),
+        (SuggestionGroup::Applying, SuggestionState::HideAiWorking)
+    );
+    assert_eq!(
+        row.attempt.map(|attempt| attempt.phase),
+        Some(SuggestionAttemptPhase::Working)
+    );
+    assert!(!offered.press(&mut guard), "a second press is the same one");
+    drop(guard);
+    // No Herdr serves this test, so the agent cannot start.
+    wait_for("m1 to end failed on its row", || {
+        let row = OfferedCard::row(&mut offered.runtime.lock().unwrap());
+        assert_ne!(row.state, SuggestionState::New, "back at its button");
+        row.attempt
+            .is_some_and(|attempt| attempt.phase == SuggestionAttemptPhase::Failed)
+    });
+}
+
+/// Memory runs one action at a time: a press behind another waits on its
+/// row rather than being refused where the tab does not show it, and a
+/// start Memory then refuses is drawn on the row with why.
+#[test]
+fn a_press_behind_another_memory_change_waits_and_a_refusal_shows_on_its_row() {
+    use crate::model::{MemoryAction, SuggestionGroup, SuggestionState};
+    let offered = offered_card();
+    let mut guard = offered.runtime.lock().unwrap();
+    guard.project_memory.action = Some((offered.workspace.clone(), MemoryAction::Recheck));
+    assert!(offered.press(&mut guard));
+    let row = OfferedCard::row(&mut guard);
+    assert_eq!(
+        row.state,
+        SuggestionState::HideAiWorking,
+        "waiting its turn"
+    );
+    // The change ahead ends; this test installed no delivery client, so
+    // Hide cannot start the agent and Memory refuses the promotion.
+    guard.project_memory.action = None;
+    guard.run_row_presses();
+    let row = OfferedCard::row(&mut guard);
+    assert_eq!(
+        (row.group, row.state),
+        (SuggestionGroup::Choose, SuggestionState::MyTurn)
+    );
+    assert_eq!(
+        row.attempt.and_then(|attempt| attempt.failure).as_deref(),
+        Some("promotion_unavailable"),
+        "a code the tab words"
+    );
+    assert!(
+        row.cause
+            .is_some_and(|cause| cause.contains("cannot start an agent"))
+    );
+    // The refusal stays on the row; pressing it again asks again.
+    assert!(offered.press(&mut guard));
+}

@@ -9,10 +9,9 @@
 //! panes are that machine's Herdr. Only `{base}에 바로 올리기` pushes, and
 //! only the base, to its upstream.
 
-use super::memory_promotion::{Retire, panes_in, retire_attempt, worktree_path};
+use super::memory_promotion::{Retire, agents_listed, panes_in, retire_attempt, worktree_path};
 use crate::node::NodeId;
-use crate::node_access::LinkError;
-use crate::node_access::NodeLink;
+use crate::node_access::{LinkError, NodeLink};
 use hide_node_link::branch::{
     BaseSyncOutcome, BranchFacts, DiscardOutcome, MergeOutcome, MergePushOutcome, MergeStep,
 };
@@ -99,7 +98,7 @@ enum Asked {
 /// words can name paths, so a failure is answered as a code alone, and a
 /// call the node did not answer is logged by its kind and error code (B27).
 pub(super) fn land(
-    connector: Option<&dyn hide_herdr_client::ApiConnector>,
+    engine: Option<&dyn crate::engine::Engine>,
     link: &dyn NodeLink,
     place: &BranchPlace,
     own_panes: &[String],
@@ -146,12 +145,12 @@ pub(super) fn land(
         (landing, None)
     };
     if matches!(landing, Landing::Merged(_))
-        && let Some(connector) = connector
+        && let Some(engine) = engine
     {
         // The merge stands whatever the retire answers; a worktree kept is
         // logged and found in the cleanup review.
         retire_attempt(
-            connector,
+            engine,
             link,
             &Retire {
                 node: place.node.clone(),
@@ -305,42 +304,33 @@ pub(super) fn sync_day(unix_ms: u64) -> String {
 /// worktree and branch are deleted without asking. A worktree another agent
 /// works in is left, and the discard fails for the operator to see again.
 pub(super) fn discard(
-    connector: &dyn hide_herdr_client::ApiConnector,
+    engine: &dyn crate::engine::Engine,
     link: &dyn NodeLink,
     place: &BranchPlace,
     own_panes: &[String],
     tip: Option<&str>,
 ) -> Result<(), String> {
-    if let Some(path) = worktree_path(connector, &place.root, &place.branch)? {
+    if let Some(path) = worktree_path(engine, &place.root, &place.branch)? {
         // The branch checked out in the Project's own folder is the
         // operator's, never an attempt's worktree.
         if path.trim_end_matches('/') == place.root.trim_end_matches('/') {
             return Err("the branch is checked out in the Project's own folder".into());
         }
-        let panes = panes_in(connector, &path)?;
+        let panes = panes_in(engine, &path)?;
         let (own, others): (Vec<_>, Vec<_>) =
             panes.into_iter().partition(|pane| own_panes.contains(pane));
-        let agents = hide_herdr_client::request_with_connector(
-            connector,
-            "agent.list",
-            crate::wire::empty_params(),
-            Duration::from_secs(5),
-        )
-        .map_err(|error| error.to_string())
-        .and_then(|listed| {
-            crate::wire::agents_response(listed).map_err(|_| "agent.list is malformed".to_owned())
-        })?;
+        let agents = agents_listed(engine)?;
         if agents.iter().any(|agent| others.contains(&agent.pane_id)) {
             return Err("another agent works in the worktree".into());
         }
         let all = own.iter().chain(&others).cloned().collect::<Vec<_>>();
-        crate::live::close_checkout_panes(
-            connector,
+        crate::worktree_control::close_checkout_panes(
+            engine,
             link,
             std::slice::from_ref(&path),
             &all,
-            crate::live::ProcessWait::for_folder_removal(true),
-            crate::live::CONFIRM_TIMEOUT,
+            crate::worktree_control::ProcessWait::for_folder_removal(true),
+            crate::worktree_control::CONFIRM_TIMEOUT,
         )?;
         crate::node_access::call_as::<()>(
             link,
@@ -375,17 +365,17 @@ pub(super) fn discard(
 /// Ends the agent of an attempt whose branch a new agent takes over (`PR
 /// 올리기`, `다시 맞추기`), so one worktree never holds two of Hide's agents.
 pub(super) fn end_agent(
-    connector: &dyn hide_herdr_client::ApiConnector,
+    engine: &dyn crate::engine::Engine,
     link: &dyn NodeLink,
     pane: &str,
 ) -> Result<(), String> {
-    crate::live::close_checkout_panes(
-        connector,
+    crate::worktree_control::close_checkout_panes(
+        engine,
         link,
         &[],
         &[pane.to_owned()],
-        crate::live::ProcessWait::for_folder_removal(false),
-        crate::live::CONFIRM_TIMEOUT,
+        crate::worktree_control::ProcessWait::for_folder_removal(false),
+        crate::worktree_control::CONFIRM_TIMEOUT,
     )
 }
 

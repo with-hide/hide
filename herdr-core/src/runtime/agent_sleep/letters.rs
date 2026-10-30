@@ -147,7 +147,7 @@ impl Runtime {
             && record
                 .session_id
                 .as_deref()
-                .and_then(crate::wire::session_digest)
+                .and_then(crate::engine::tokens::session_digest)
                 == actor.session
         {
             return Some((Route::Pane(actor.pane_id.clone()), Stage::of_pane(record)));
@@ -180,7 +180,7 @@ impl Runtime {
                         session: record
                             .session_id
                             .as_deref()
-                            .and_then(crate::wire::session_digest),
+                            .and_then(crate::engine::tokens::session_digest),
                         since: record.since_unix_ms,
                     },
                 )

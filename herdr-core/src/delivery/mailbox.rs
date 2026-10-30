@@ -367,7 +367,7 @@ pub fn apply(
             let session = session
                 .as_deref()
                 .filter(|session| super::valid_session(session))
-                .and_then(crate::wire::session_digest)
+                .and_then(crate::engine::tokens::session_digest)
                 .filter(|session| actor.session.as_ref() == Some(session))
                 .ok_or("session_mismatch")?;
             let digest = prompt_digest
@@ -1061,7 +1061,7 @@ mod tests {
             let mut ledger = Ledger::default();
             let mut recipient = actor("recipient");
             recipient.kind = "grok".into();
-            recipient.session = crate::wire::session_digest("native-session");
+            recipient.session = crate::engine::tokens::session_digest("native-session");
             let ids = pending_for(&mut ledger, &recipient, 2);
             // A receipt-less legacy acknowledgement follows the new letter,
             // just as it does at a context-carrying prompt hook.
@@ -1152,7 +1152,7 @@ mod tests {
         let mut ledger = Ledger::default();
         let mut recipient = actor("recipient");
         recipient.kind = "grok".into();
-        recipient.session = crate::wire::session_digest("native-session");
+        recipient.session = crate::engine::tokens::session_digest("native-session");
         pending_for(&mut ledger, &recipient, 1);
         ring(&mut ledger, 0, LINE);
         for text in [LINE, "the operator's own prompt"] {

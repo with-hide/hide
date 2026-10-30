@@ -5,8 +5,8 @@ use crate::delivery::{
     ledger::Ledger,
     worker::{Client, Effect},
 };
+use crate::engine::{Engine, Wait};
 use crate::session_sync::ProjectionState;
-use hide_herdr_client::{ApiConnector, request_with_connector};
 use serde::{Deserialize, Serialize};
 use std::time::Duration;
 
@@ -75,15 +75,10 @@ impl Work {
     }
 }
 
-fn snapshot(connector: &dyn ApiConnector) -> Result<ProjectionState, String> {
-    let value = request_with_connector(
-        connector,
-        "session.snapshot",
-        crate::wire::empty_params(),
-        Duration::from_secs(1),
-    )
-    .map_err(|error| error.to_string())?;
-    crate::wire::snapshot_response(value).map_err(|error| error.message().to_owned())
+fn snapshot(engine: &dyn Engine) -> Result<ProjectionState, String> {
+    engine
+        .session(Wait::Each(Duration::from_secs(1)))
+        .map_err(String::from)
 }
 
 /// No marker, no unique current identity, or another terminal means no rename.
@@ -163,10 +158,10 @@ fn target(state: &ProjectionState, work: &Work, workspace: bool) -> Option<(Stri
     }
 }
 
-fn rename(connector: &dyn ApiConnector, work: &Work, workspace: bool) -> Result<Outcome, String> {
+fn rename(engine: &dyn Engine, work: &Work, workspace: bool) -> Result<Outcome, String> {
     // Fresh read immediately before each target, including the second after a
     // partial success. Herdr has no rename CAS, so a check-to-write race remains.
-    let state = snapshot(connector)?;
+    let state = snapshot(engine)?;
     let Some((id, name, already_named)) = target(&state, work, workspace) else {
         return Ok(Outcome::Preserved);
     };
@@ -192,26 +187,23 @@ fn rename(connector: &dyn ApiConnector, work: &Work, workspace: bool) -> Result<
     if !still_marked {
         return Ok(Outcome::Preserved);
     }
-    let (method, params) = if workspace {
-        (
-            "workspace.rename",
-            crate::wire::workspace_rename_params(&id, &name)?,
-        )
+    let wait = Wait::Each(Duration::from_secs(1));
+    if workspace {
+        engine.rename_workspace(wait, &id, &name)
     } else {
-        ("tab.rename", crate::wire::tab_rename_params(&id, &name)?)
-    };
-    request_with_connector(connector, method, params, Duration::from_secs(1))
-        .map_err(|error| error.to_string())?;
+        engine.rename_tab(wait, &id, &name)
+    }
+    .map_err(String::from)?;
     Ok(Outcome::Applied)
 }
 
-pub(crate) fn run(connector: &dyn ApiConnector, work: &Work) -> Names {
+pub(crate) fn run(engine: &dyn Engine, work: &Work) -> Names {
     let mut names = work.names.clone();
     for (workspace, result) in [(true, &mut names.workspace), (false, &mut names.tab)] {
         if result.finished() {
             continue;
         }
-        *result = rename(connector, work, workspace).unwrap_or_else(|error| {
+        *result = rename(engine, work, workspace).unwrap_or_else(|error| {
             crate::diagnostic!(serde_json::json!({"component":"spawn_naming", "kind":"rename_failed", "spawn_id":work.id, "target":if workspace {"workspace"} else {"tab"}, "detail":error}));
             Outcome::Failed
         });
@@ -274,7 +266,7 @@ mod tests {
     }
     fn state() -> Value {
         json!({"type":"session_snapshot","snapshot":{
-            "version":"fixture", "protocol":crate::herdr_contract::HERDR_PROTOCOL_REVISION,
+            "version":"fixture", "protocol":crate::engine::herdr::contract::HERDR_PROTOCOL_REVISION,
             "workspaces":[{"workspace_id":"w1","number":1,"label":"hide:spawn-1","focused":false,"pane_count":1,"tab_count":1,"active_tab_id":"w1:t1","agent_status":"idle",
                 "worktree":{"repo_key":"fixture","repo_name":"project","repo_root":"/fixture","checkout_path":"/fixture/task","is_linked_worktree":true}}],
             "tabs":[{"workspace_id":"w1","tab_id":"w1:t1","number":1,"label":"hide:spawn-1","focused":false,"pane_count":1,"agent_status":"idle"}],
@@ -307,7 +299,7 @@ mod tests {
                 other => panic!("unexpected request {other}"),
             });
         let mut work = work();
-        work.names = run(&herdr.connector(), &work);
+        work.names = run(herdr.engine().as_ref(), &work);
         assert_eq!(
             work.names,
             Names {
@@ -315,9 +307,9 @@ mod tests {
                 tab: Outcome::Failed
             }
         );
-        work.names = run(&herdr.connector(), &work);
+        work.names = run(herdr.engine().as_ref(), &work);
         assert!(work.names.finished());
-        let observed = snapshot(&herdr.connector()).unwrap();
+        let observed = snapshot(herdr.engine().as_ref()).unwrap();
         assert_eq!(observed.workspaces[0].label, "task-branch");
         assert_eq!(observed.tabs[0].label, "검토 작업");
         assert_eq!(
@@ -329,7 +321,7 @@ mod tests {
             1
         );
         let calls = herdr.methods().len();
-        assert_eq!(run(&herdr.connector(), &work), work.names);
+        assert_eq!(run(herdr.engine().as_ref(), &work), work.names);
         assert_eq!(
             herdr.methods().len(),
             calls,
@@ -339,7 +331,7 @@ mod tests {
         // The next connection observes the names and records completion
         // without repeating either mutation.
         work.names = Names::default();
-        work.names = run(&herdr.connector(), &work);
+        work.names = run(herdr.engine().as_ref(), &work);
         assert_eq!(
             work.names,
             Names {
@@ -376,7 +368,7 @@ mod tests {
                 label: "1".into(),
             });
             assert_eq!(
-                run(&herdr.connector(), &work).tab,
+                run(herdr.engine().as_ref(), &work).tab,
                 if allowed {
                     Outcome::Applied
                 } else {
@@ -427,7 +419,7 @@ mod tests {
                 Ok(state.clone())
             });
             assert_eq!(
-                run(&herdr.connector(), &work()),
+                run(herdr.engine().as_ref(), &work()),
                 Names {
                     workspace: Outcome::Preserved,
                     tab: Outcome::Preserved

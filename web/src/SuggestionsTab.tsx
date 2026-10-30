@@ -228,7 +228,7 @@ function Lines({ row, open, project, actions }: { row: SuggestionRow; open: bool
         <span className="min-w-0 break-words text-muted-foreground" data-suggestion-moved-to={row.attempt.branch.moved_to}>{t("suggestions.branch.movedTo", { branch: row.attempt.branch.moved_to })}</span>
       ) : null}
       {row.attempt?.phase === "ready" && row.attempt.branch ? <BranchLine row={row} branch={row.attempt.branch} project={project} actions={actions} /> : null}
-      {row.attempt?.phase === "failed" && row.cause ? (
+      {row.attempt?.phase === "failed" && row.cause && !attempt?.worded ? (
         <span className={cn("min-w-0 break-words text-muted-foreground", !open && "truncate")} title={row.cause} data-suggestion-failure-detail="true">{row.cause}</span>
       ) : null}
       {row.group === "applied" && row.state === "watching" && row.watch ? (
@@ -527,8 +527,7 @@ function Evidence({ evidence, project, actions }: { evidence: SuggestionEvidence
 
 /**
  * A choice's `문서 고치기` or `이슈로 남기기` (B10, B14), `GitHub 연결 필요`
- * or `결정을 기다리는 브랜치가 5개예요` in its place (B18; PRD
- * hide-ai-branch-first-apply B28), a ready branch's choices, and a failed
+ * in its place (B18), a ready branch's choices, and a failed
  * attempt's `다시 시도` (B12), each
  * with a quiet `넘어가기` beside it (D-51, B16). A global instruction row
  * offers `Hide 전역 지시에 넣기` with the preview it was shown, held while it

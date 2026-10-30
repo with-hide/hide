@@ -77,6 +77,8 @@ describe("readingWarning", () => {
     expect(readingWarning({ state: "partial", unread: ["account"] }, t)).toBe("GitHub read incomplete · could not read the signed-in account");
     expect(readingWarning({ state: "partial", unread: ["review_requests"] }, t)).toBe("GitHub read incomplete · could not read review requests");
     expect(readingWarning({ state: "partial", unread: ["merge_queue"] }, t)).toBe("GitHub read incomplete · could not read the merge queue");
+    // The facts query fails whole: the queue and the reviewers are named together (PRD pr-review-status B15).
+    expect(readingWarning({ state: "partial", unread: ["merge_queue", "reviews"] }, t)).toBe("GitHub read incomplete · could not read the merge queue, reviews");
     expect(readingWarning({ state: "partial", unread: ["account", "review_requests", "merge_queue"] }, t)).toBe("GitHub read incomplete · could not read the signed-in account, review requests, the merge queue");
   });
 

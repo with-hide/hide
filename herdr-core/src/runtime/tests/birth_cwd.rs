@@ -156,7 +156,7 @@ fn a_created_worktrees_first_tab_joins_its_row_while_its_pane_reports_the_birth_
         .expect("creation operation");
     assert!(runtime.ingest_task_operation_result(
         id,
-        Ok(live::WorktreeTaskOutcome {
+        Ok(crate::worktree_control::WorktreeTaskOutcome {
             path: linked_path.clone(),
             pane_id: "w-wt:t1:p".to_owned(),
             created_tab_id: Some("w-wt:t1".to_owned()),
