@@ -141,6 +141,22 @@ class FakeModel(unittest.TestCase):
                         value["table"][row["id"]][name] = {"status": "pass", "reason": "claimed support"}
                         self.assertFalse(lane.judge(value, "fake")[0])
 
+    def test_a_run_asked_for_some_agents_stands_for_those_alone(self):
+        # The agent canary reruns only the agents whose latest release failed, at their pins.
+        value = report({}, [], fake_model=True)
+        value["table"] = {"codex": value["table"]["codex"]}
+        self.assertEqual(lane.judge(value, "fake", agents=["codex"]), (True, []))
+        self.assertFalse(lane.judge(value, "fake")[0])
+        value["table"]["codex"]["letter"] = {"status": "fail", "reason": "no bell"}
+        passed, notes = lane.judge(value, "fake", agents=["codex"])
+        self.assertFalse(passed)
+        self.assertIn("::error title=agent journey codex::letter: no bell", notes)
+        # An agent asked for but not in the report fails; an unknown or empty selection is refused.
+        self.assertFalse(lane.judge(value, "fake", agents=["codex", "claude-code"])[0])
+        for agents in (["no-such-agent"], []):
+            with self.subTest(agents=agents):
+                self.assertFalse(lane.judge(report({}, [], fake_model=True), "fake", agents=agents)[0])
+
 
 class MalformedReport(unittest.TestCase):
     def test_missing_tables_or_invalid_cells_fail_with_an_annotation(self):
