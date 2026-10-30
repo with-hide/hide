@@ -1,0 +1,1156 @@
+//! The Desk room in the runtime (PRD Desk 1차 B1-B13): the operator's
+//! messages, the agent's replies, approval cards, the agent, model and
+//! effort chosen, and the settings. The core decides each state here; the
+//! worker (`desk/worker.rs`) owns the one Desk process and does every call,
+//! and the shell only shows the `desk` and `desk_live` sections and
+//! dispatches the `desk_*` events.
+//!
+//! A permission request Hide cannot read, or answer with a one-time
+//! allowance, does not run (D-60); a card waits for `한 번 허용` or `거절`,
+//! and a new conversation, a restart or the process's end closes it as a
+//! refusal (D-52). `allow_always` is never chosen.
+
+mod worker;
+
+use std::collections::BTreeMap;
+use std::sync::{Arc, Mutex, Weak};
+
+use serde::Deserialize;
+use serde_json::{Value, json};
+
+use super::Runtime;
+use crate::desk::{
+    AdapterId, Conversation, DeskPlatform, DeskStore, KnownChoices, MAX_MENTIONS,
+    MAX_MESSAGE_BYTES, MAX_REPLY_BYTES, Stored,
+};
+use crate::handle::ChangeNotifier;
+use crate::model::{
+    DESK_CAP_MAX, DeskAgentSnapshot, DeskAgentState, DeskApprovalState, DeskChoiceSnapshot,
+    DeskConversationSnapshot, DeskHostSnapshot, DeskHostState, DeskItem, DeskLiveSnapshot,
+    DeskLocation, DeskMention, DeskNotice, DeskReplyState, DeskSnapshot,
+};
+use hide_desk::session::{Choice, Choices, OpenError};
+use worker::{Order, Report, TurnOutcome};
+
+/// A mention's id or name; a longer one is refused with its message.
+const MAX_MENTION_BYTES: usize = 1024;
+
+#[derive(Default)]
+pub(super) struct Desk {
+    store: Option<DeskStore>,
+    stored: Stored,
+    worker: Option<worker::Handle>,
+    agents: BTreeMap<AdapterId, (DeskAgentState, Option<String>)>,
+    host: Host,
+    /// The turn under way: its tag and the reply written so far.
+    turn: Option<Turn>,
+    next_tag: u64,
+    approvals: Vec<Approval>,
+}
+
+#[derive(Default)]
+struct Host {
+    state: Option<DeskHostState>,
+    detail: Option<String>,
+    /// A session is open in the Desk process.
+    open: bool,
+}
+
+struct Turn {
+    tag: u64,
+    agent: AdapterId,
+    text: String,
+    cut: bool,
+}
+
+/// A card waiting for the operator, and how to answer the agent.
+struct Approval {
+    item: u64,
+    rpc_id: Value,
+    allow: String,
+    reject: Option<String>,
+}
+
+/// What the shell asked (`desk_*`).
+#[derive(Debug)]
+pub(super) enum DeskEvent {
+    Send(SendPayload),
+    Stop,
+    Approval(ApprovalPayload),
+    NewConversation,
+    Restart,
+    Select(SelectPayload),
+    Install(InstallPayload),
+    SettingsSet(SettingsPayload),
+}
+
+#[derive(Debug, Deserialize)]
+pub(super) struct SendPayload {
+    text: String,
+    #[serde(default)]
+    mentions: Vec<DeskMention>,
+}
+
+#[derive(Debug, Deserialize)]
+pub(super) struct ApprovalPayload {
+    id: u64,
+    allow: bool,
+}
+
+#[derive(Debug, Deserialize)]
+pub(super) struct SelectPayload {
+    agent: Option<AdapterId>,
+    model: Option<String>,
+    effort: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+pub(super) struct InstallPayload {
+    agent: AdapterId,
+}
+
+#[derive(Debug, Deserialize)]
+pub(super) struct SettingsPayload {
+    /// `null` clears it; absent leaves it.
+    #[serde(default, deserialize_with = "present")]
+    default_agent: Option<Option<AdapterId>>,
+    location: Option<DeskLocation>,
+    cap: Option<u8>,
+}
+
+fn present<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Option<Option<AdapterId>>, D::Error> {
+    Option::<AdapterId>::deserialize(deserializer).map(Some)
+}
+
+impl DeskEvent {
+    pub(super) const KINDS: [&'static str; 8] = [
+        "desk_send",
+        "desk_stop",
+        "desk_approval",
+        "desk_new_conversation",
+        "desk_restart",
+        "desk_select",
+        "desk_install",
+        "desk_settings_set",
+    ];
+
+    pub(super) fn decode(kind: &str, payload: Value) -> Option<Self> {
+        fn parse<T: serde::de::DeserializeOwned>(payload: Value) -> Option<T> {
+            serde_json::from_value(payload).ok()
+        }
+        Some(match kind {
+            "desk_send" => Self::Send(parse(payload)?),
+            "desk_stop" => Self::Stop,
+            "desk_approval" => Self::Approval(parse(payload)?),
+            "desk_new_conversation" => Self::NewConversation,
+            "desk_restart" => Self::Restart,
+            "desk_select" => Self::Select(parse(payload)?),
+            "desk_install" => Self::Install(parse(payload)?),
+            "desk_settings_set" => Self::SettingsSet(parse(payload)?),
+            _ => return None,
+        })
+    }
+}
+
+impl Runtime {
+    /// Desk's store, read before the lock by the caller.
+    pub(crate) fn install_desk_store(&mut self, store: DeskStore, stored: Stored) {
+        self.desk.store = Some(store);
+        self.desk.stored = stored;
+        self.compose_desk();
+    }
+
+    /// Starts Desk's worker with what `hided` provides, and looks at the
+    /// agents.
+    pub(crate) fn install_desk(
+        &mut self,
+        platform: Arc<dyn DeskPlatform>,
+        runtime: Weak<Mutex<Runtime>>,
+        notifier: ChangeNotifier,
+    ) {
+        match worker::start(platform, runtime, notifier) {
+            Ok(handle) => {
+                let _ = handle.orders.send(Order::Check);
+                self.desk.worker = Some(handle);
+            }
+            Err(error) => crate::diagnostic!(json!({
+                "component": "desk",
+                "kind": "desk.worker_start_failed",
+                "error": error.to_string(),
+            })),
+        }
+        self.compose_desk();
+    }
+
+    pub(super) fn desk_event(&mut self, event: DeskEvent) -> bool {
+        if self.desk.worker.is_none() {
+            return refused("desk_unavailable");
+        }
+        let changed = match event {
+            DeskEvent::Send(payload) => self.desk_send(payload),
+            DeskEvent::Stop => self.desk_stop(),
+            DeskEvent::Approval(payload) => self.desk_answer(payload.id, payload.allow),
+            DeskEvent::NewConversation => self.desk_new_conversation(),
+            DeskEvent::Restart => self.desk_restart(),
+            DeskEvent::Select(payload) => self.desk_select(payload),
+            DeskEvent::Install(payload) => {
+                self.order(Order::Install(payload.agent));
+                false
+            }
+            DeskEvent::SettingsSet(payload) => self.desk_settings(payload),
+        };
+        if changed {
+            self.save_desk();
+            self.compose_desk();
+        }
+        changed
+    }
+
+    /// Whether the Desk process runs with a session open: only then does a
+    /// `hide:desk` capability act.
+    pub(super) fn desk_running(&self) -> bool {
+        self.desk.worker.is_some() && self.desk.host.open
+    }
+
+    /// The context and identity a Desk command acts with, on this machine
+    /// alone and while the Desk process runs.
+    pub(super) fn desk_authority(
+        &self,
+        device: &str,
+    ) -> Result<(crate::workspace_control::Context, crate::delivery::Actor), String> {
+        if self.node != device || !self.desk_running() {
+            return Err("desk_not_running".into());
+        }
+        Ok((
+            crate::desk::desk_context(self.node.as_str()),
+            crate::delivery::Actor::hide(crate::delivery::HIDE_DESK_ROLE, self.node.as_str()),
+        ))
+    }
+
+    fn order(&self, order: Order) {
+        if let Some(worker) = &self.desk.worker {
+            let _ = worker.orders.send(order);
+        }
+    }
+
+    fn desk_send(&mut self, payload: SendPayload) -> bool {
+        let text = payload.text.trim();
+        if text.is_empty() || text.len() > MAX_MESSAGE_BYTES {
+            return refused("message_size");
+        }
+        if payload.mentions.len() > MAX_MENTIONS
+            || payload.mentions.iter().any(|mention| {
+                mention.id.is_empty()
+                    || mention.id.len() > MAX_MENTION_BYTES
+                    || mention.name.len() > MAX_MENTION_BYTES
+            })
+        {
+            return refused("mentions");
+        }
+        let Some(agent) = self.desk.stored.selection.agent else {
+            return refused("no_agent");
+        };
+        if !matches!(
+            self.desk.agents.get(&agent).map(|(state, _)| *state),
+            Some(DeskAgentState::Ready | DeskAgentState::LoginNeeded)
+        ) {
+            return refused("agent_not_ready");
+        }
+        if self.desk.turn.is_some() {
+            return refused("turn_under_way");
+        }
+        let carried = (!self.desk.host.open)
+            .then(|| self.desk.stored.conversation.carried())
+            .flatten();
+        let id = self.desk.stored.conversation.next_id();
+        self.desk.stored.conversation.push(DeskItem::User {
+            id,
+            text: text.to_owned(),
+            at_ms: crate::links::now_ms(),
+            mentions: payload.mentions,
+        });
+        self.desk.next_tag += 1;
+        let tag = self.desk.next_tag;
+        self.desk.turn = Some(Turn {
+            tag,
+            agent,
+            text: String::new(),
+            cut: false,
+        });
+        let resume = self
+            .desk
+            .stored
+            .sessions
+            .iter()
+            .find(|(adapter, _)| *adapter == agent)
+            .map(|(_, session)| session.clone());
+        self.order(Order::Send(worker::Send {
+            tag,
+            adapter: agent,
+            text: text.to_owned(),
+            carried,
+            resume,
+            model: self.desk.stored.selection.model.clone(),
+            effort: self.desk.stored.selection.effort.clone(),
+        }));
+        self.desk.host.state = Some(if self.desk.host.open {
+            DeskHostState::Thinking
+        } else {
+            DeskHostState::Starting
+        });
+        self.desk.host.detail = None;
+        self.compose_desk_live();
+        true
+    }
+
+    fn desk_stop(&mut self) -> bool {
+        if self.desk.turn.is_none() {
+            return false;
+        }
+        // The agent answers each request it is waiting on as cancelled.
+        let cancelled = json!({"outcome": {"outcome": "cancelled"}});
+        for approval in std::mem::take(&mut self.desk.approvals) {
+            self.order(Order::Answer {
+                rpc_id: approval.rpc_id,
+                outcome: cancelled.clone(),
+            });
+            self.set_approval(approval.item, DeskApprovalState::Closed);
+        }
+        self.order(Order::Cancel);
+        true
+    }
+
+    fn desk_answer(&mut self, item: u64, allow: bool) -> bool {
+        let Some(index) = self
+            .desk
+            .approvals
+            .iter()
+            .position(|approval| approval.item == item)
+        else {
+            return refused("approval_unknown");
+        };
+        let approval = self.desk.approvals.remove(index);
+        let (option, state) = if allow {
+            (Some(approval.allow), DeskApprovalState::Allowed)
+        } else {
+            (approval.reject, DeskApprovalState::Rejected)
+        };
+        let outcome = match option {
+            Some(option) => json!({"outcome": {"outcome": "selected", "optionId": option}}),
+            None => json!({"outcome": {"outcome": "cancelled"}}),
+        };
+        self.order(Order::Answer {
+            rpc_id: approval.rpc_id,
+            outcome,
+        });
+        self.set_approval(item, state);
+        true
+    }
+
+    fn desk_new_conversation(&mut self) -> bool {
+        self.end_desk_process();
+        let agent = self.desk.stored.selection.agent;
+        self.desk
+            .stored
+            .sessions
+            .retain(|(adapter, _)| Some(*adapter) != agent);
+        self.desk.stored.conversation.clear();
+        if let Some(default) = self.desk.stored.settings.default_agent
+            && Some(default) != agent
+        {
+            self.desk.stored.selection = crate::model::DeskSelection {
+                agent: Some(default),
+                ..Default::default()
+            };
+        }
+        true
+    }
+
+    fn desk_restart(&mut self) -> bool {
+        self.end_desk_process();
+        self.order(Order::Check);
+        true
+    }
+
+    /// Ends the Desk process from the room: the reply under way stops, and
+    /// each waiting card closes as a refusal.
+    fn end_desk_process(&mut self) {
+        self.order(Order::End);
+        self.close_approvals();
+        self.finish_turn(DeskReplyState::Stopped);
+        self.desk.host = Host {
+            state: Some(DeskHostState::Idle),
+            ..Host::default()
+        };
+    }
+
+    fn close_approvals(&mut self) {
+        for approval in std::mem::take(&mut self.desk.approvals) {
+            self.set_approval(approval.item, DeskApprovalState::Closed);
+        }
+    }
+
+    fn desk_select(&mut self, payload: SelectPayload) -> bool {
+        let selection = self.desk.stored.selection.clone();
+        if let Some(agent) = payload.agent
+            && Some(agent) != selection.agent
+        {
+            if self.desk.turn.is_some() {
+                self.order(Order::Cancel);
+            }
+            self.end_desk_process();
+            let carried = self.desk.stored.conversation.carried_extent();
+            let id = self.desk.stored.conversation.next_id();
+            self.desk.stored.conversation.push(DeskItem::Switch {
+                id,
+                from: selection.agent,
+                to: agent,
+                carried,
+            });
+            // The new agent's session starts with the conversation carried.
+            self.desk
+                .stored
+                .sessions
+                .retain(|(adapter, _)| *adapter != agent);
+            self.desk.stored.selection = crate::model::DeskSelection {
+                agent: Some(agent),
+                model: payload.model,
+                effort: payload.effort,
+            };
+            if matches!(
+                self.desk.agents.get(&agent).map(|(state, _)| *state),
+                Some(DeskAgentState::NotInstalled | DeskAgentState::InstallFailed)
+            ) {
+                self.order(Order::Install(agent));
+            }
+            return true;
+        }
+        let model = payload.model.or(selection.model.clone());
+        let effort = payload.effort.or(selection.effort.clone());
+        if model == selection.model && effort == selection.effort {
+            return false;
+        }
+        let known = selection.agent.and_then(|agent| self.known_choices(agent));
+        for (config, value, before) in [
+            (
+                known.as_ref().and_then(|known| known.model_config.clone()),
+                &model,
+                &selection.model,
+            ),
+            (
+                known.as_ref().and_then(|known| known.effort_config.clone()),
+                &effort,
+                &selection.effort,
+            ),
+        ] {
+            if let (Some(config_id), Some(value)) = (config, value)
+                && value != before.as_ref().unwrap_or(&String::new())
+            {
+                self.order(Order::SetChoice {
+                    config_id,
+                    value: value.clone(),
+                });
+            }
+        }
+        let id = self.desk.stored.conversation.next_id();
+        self.desk.stored.conversation.push(DeskItem::Model {
+            id,
+            model: model.clone(),
+            effort: effort.clone(),
+        });
+        self.desk.stored.selection.model = model;
+        self.desk.stored.selection.effort = effort;
+        true
+    }
+
+    fn desk_settings(&mut self, payload: SettingsPayload) -> bool {
+        let settings = &mut self.desk.stored.settings;
+        let before = *settings;
+        if let Some(agent) = payload.default_agent {
+            settings.default_agent = agent;
+        }
+        if let Some(location) = payload.location {
+            settings.location = location;
+        }
+        if let Some(cap) = payload.cap {
+            if !(1..=DESK_CAP_MAX).contains(&cap) {
+                return refused("cap_range");
+            }
+            settings.cap = cap;
+        }
+        if self.desk.stored.selection.agent.is_none() {
+            self.desk.stored.selection.agent = settings.default_agent;
+        }
+        before != self.desk.stored.settings
+    }
+
+    fn known_choices(&self, agent: AdapterId) -> Option<KnownChoices> {
+        self.desk
+            .stored
+            .choices
+            .iter()
+            .find(|(adapter, _)| *adapter == agent)
+            .map(|(_, known)| known.clone())
+    }
+
+    fn set_approval(&mut self, item: u64, state: DeskApprovalState) {
+        for entry in &mut self.desk.stored.conversation.items {
+            if let DeskItem::Approval {
+                id, state: current, ..
+            } = entry
+                && *id == item
+            {
+                *current = state;
+            }
+        }
+    }
+
+    fn push_notice(
+        &mut self,
+        notice: DeskNotice,
+        agent: Option<AdapterId>,
+        detail: Option<String>,
+    ) {
+        let id = self.desk.stored.conversation.next_id();
+        self.desk.stored.conversation.push(DeskItem::Notice {
+            id,
+            notice,
+            agent,
+            detail,
+        });
+    }
+
+    /// The agent the room talks to now, which a notice about the process
+    /// names.
+    fn selected_agent(&self) -> Option<AdapterId> {
+        self.desk.stored.selection.agent
+    }
+
+    /// Ends the turn: its reply joins the conversation.
+    fn finish_turn(&mut self, state: DeskReplyState) {
+        let Some(turn) = self.desk.turn.take() else {
+            return;
+        };
+        if !turn.text.is_empty() {
+            let id = self.desk.stored.conversation.next_id();
+            self.desk.stored.conversation.push(DeskItem::Reply {
+                id,
+                agent: turn.agent,
+                text: turn.text,
+                at_ms: crate::links::now_ms(),
+                state: if turn.cut {
+                    DeskReplyState::Stopped
+                } else {
+                    state
+                },
+            });
+        }
+        self.compose_desk_live();
+    }
+
+    /// What the worker learned, applied under the lock.
+    fn desk_report(&mut self, report: Report) -> bool {
+        match report {
+            Report::Availability(states) => {
+                let mut changed = false;
+                for (adapter, state, detail) in states {
+                    let was = self.desk.agents.get(&adapter).map(|(state, _)| *state);
+                    // An install that ended without the agent is said in
+                    // the conversation, where its start was.
+                    if was == Some(DeskAgentState::Preparing)
+                        && matches!(
+                            state,
+                            DeskAgentState::InstallFailed | DeskAgentState::NodeMissing
+                        )
+                    {
+                        self.push_notice(DeskNotice::InstallFailed, Some(adapter), detail.clone());
+                        self.save_desk();
+                    }
+                    let entry = (state, detail);
+                    if self.desk.agents.get(&adapter) != Some(&entry) {
+                        self.desk.agents.insert(adapter, entry);
+                        changed = true;
+                    }
+                }
+                if !changed {
+                    return false;
+                }
+            }
+            Report::Installing(adapter) => {
+                self.desk
+                    .agents
+                    .insert(adapter, (DeskAgentState::Preparing, None));
+                self.push_notice(DeskNotice::Preparing, Some(adapter), None);
+                self.save_desk();
+            }
+            Report::Starting => {
+                self.desk.host.state = Some(DeskHostState::Starting);
+            }
+            Report::Opened {
+                adapter,
+                session_id,
+                resume_failed,
+                choices,
+            } => {
+                self.desk.host = Host {
+                    state: Some(DeskHostState::Thinking),
+                    detail: None,
+                    open: true,
+                };
+                self.desk
+                    .agents
+                    .insert(adapter, (DeskAgentState::Ready, None));
+                self.desk
+                    .stored
+                    .sessions
+                    .retain(|(stored, _)| *stored != adapter);
+                self.desk.stored.sessions.push((adapter, session_id));
+                self.learn_choices(adapter, &choices);
+                if resume_failed {
+                    self.push_notice(DeskNotice::ResumeFailed, Some(adapter), None);
+                }
+                self.save_desk();
+            }
+            Report::OpenFailed { adapter, error } => {
+                let (state, notice, detail) = match error {
+                    OpenError::Login => (
+                        DeskAgentState::LoginNeeded,
+                        DeskNotice::LoginNeeded,
+                        Some(adapter.login_command().to_owned()),
+                    ),
+                    OpenError::AskModeUnconfirmed(detail) => (
+                        DeskAgentState::NoAskMode,
+                        DeskNotice::NoAskMode,
+                        Some(detail),
+                    ),
+                    OpenError::Failed(detail) => {
+                        crate::diagnostic!(json!({
+                            "component": "desk",
+                            "kind": "desk.open_failed",
+                            "adapter": adapter.as_str(),
+                            "detail": detail,
+                        }));
+                        self.desk.host = Host {
+                            state: Some(DeskHostState::Stopped),
+                            detail: Some(detail.clone()),
+                            open: false,
+                        };
+                        self.push_notice(DeskNotice::HostStopped, Some(adapter), Some(detail));
+                        self.save_desk();
+                        self.compose_desk();
+                        return true;
+                    }
+                };
+                self.desk.agents.insert(adapter, (state, detail.clone()));
+                self.desk.host = Host {
+                    state: Some(DeskHostState::Idle),
+                    ..Host::default()
+                };
+                self.push_notice(notice, Some(adapter), detail);
+                self.save_desk();
+            }
+            Report::Text { tag, text } => {
+                let Some(turn) = self.desk.turn.as_mut().filter(|turn| turn.tag == tag) else {
+                    return false;
+                };
+                if turn.cut {
+                    return false;
+                }
+                let room = MAX_REPLY_BYTES.saturating_sub(turn.text.len());
+                if text.len() > room {
+                    let mut end = room;
+                    while !text.is_char_boundary(end) {
+                        end -= 1;
+                    }
+                    turn.text.push_str(&text[..end]);
+                    turn.cut = true;
+                } else {
+                    turn.text.push_str(&text);
+                }
+                self.compose_desk_live();
+                return true;
+            }
+            Report::TurnEnded { tag, outcome } => {
+                if self.desk.turn.as_ref().is_none_or(|turn| turn.tag != tag) {
+                    return false;
+                }
+                // Requests the agent made in the turn end with it.
+                self.close_approvals();
+                match outcome {
+                    TurnOutcome::Done => self.finish_turn(DeskReplyState::Done),
+                    TurnOutcome::Cancelled => self.finish_turn(DeskReplyState::Stopped),
+                    TurnOutcome::Failed(detail) => {
+                        self.finish_turn(DeskReplyState::Stopped);
+                        let agent = self.selected_agent();
+                        self.push_notice(DeskNotice::TurnFailed, agent, Some(detail));
+                    }
+                }
+                if self.desk.host.open {
+                    self.desk.host.state = Some(DeskHostState::Ready);
+                }
+                self.save_desk();
+            }
+            Report::Ask {
+                rpc_id,
+                allow,
+                reject,
+                card,
+                command,
+                folder,
+                reason,
+            } => {
+                let id = self.desk.stored.conversation.next_id();
+                self.desk.stored.conversation.push(DeskItem::Approval {
+                    id,
+                    card,
+                    command,
+                    folder,
+                    reason,
+                    state: DeskApprovalState::Waiting,
+                });
+                self.desk.approvals.push(Approval {
+                    item: id,
+                    rpc_id,
+                    allow,
+                    reject,
+                });
+                self.save_desk();
+            }
+            Report::Blocked(title) => {
+                let agent = self.selected_agent();
+                self.push_notice(
+                    DeskNotice::Blocked,
+                    agent,
+                    Some(title).filter(|t| !t.is_empty()),
+                );
+                self.save_desk();
+            }
+            Report::Choices { adapter, choices } => {
+                if !self.learn_choices(adapter, &choices) {
+                    return false;
+                }
+                self.save_desk();
+            }
+            Report::Ended { unexpected, detail } => {
+                self.close_approvals();
+                self.finish_turn(DeskReplyState::Stopped);
+                if unexpected {
+                    self.desk.host = Host {
+                        state: Some(DeskHostState::Stopped),
+                        detail: detail.clone(),
+                        open: false,
+                    };
+                    let agent = self.selected_agent();
+                    self.push_notice(DeskNotice::HostStopped, agent, detail);
+                    self.save_desk();
+                } else {
+                    self.desk.host.open = false;
+                    if self.desk.host.state != Some(DeskHostState::Stopped) {
+                        self.desk.host.state = Some(DeskHostState::Idle);
+                    }
+                }
+            }
+        }
+        self.compose_desk();
+        true
+    }
+
+    /// Keeps what the session offers to choose; the selection follows the
+    /// session's current values where the operator chose none.
+    fn learn_choices(&mut self, adapter: AdapterId, choices: &Choices) -> bool {
+        let mut known = self.known_choices(adapter).unwrap_or_default();
+        let before = known.clone();
+        let list = |choice: &Choice| {
+            choice
+                .values
+                .iter()
+                .map(|(id, label)| DeskChoiceSnapshot {
+                    id: id.clone(),
+                    label: label.clone(),
+                })
+                .collect::<Vec<_>>()
+        };
+        if let Some(model) = &choices.model {
+            known.model_config = Some(model.config_id.clone());
+            known.models = list(model);
+        }
+        if let Some(effort) = &choices.effort {
+            known.effort_config = Some(effort.config_id.clone());
+            known.efforts = list(effort);
+        }
+        let selection = &mut self.desk.stored.selection;
+        let mut changed = known != before;
+        if selection.agent == Some(adapter) {
+            for (current, chosen) in [
+                (choices.model.as_ref(), &mut selection.model),
+                (choices.effort.as_ref(), &mut selection.effort),
+            ] {
+                if let Some(value) = current.and_then(|choice| choice.current.clone())
+                    && chosen.as_ref() != Some(&value)
+                {
+                    *chosen = Some(value);
+                    changed = true;
+                }
+            }
+        }
+        self.desk
+            .stored
+            .choices
+            .retain(|(stored, _)| *stored != adapter);
+        self.desk.stored.choices.push((adapter, known));
+        changed
+    }
+
+    fn save_desk(&self) {
+        if let Some(store) = &self.desk.store {
+            store.save(self.desk.stored.clone());
+        }
+    }
+
+    /// The `desk` section, a new `Arc` whenever it is composed.
+    fn compose_desk(&mut self) {
+        if self.desk.worker.is_none() {
+            return;
+        }
+        let desk = &self.desk;
+        let agents = AdapterId::ALL
+            .into_iter()
+            .map(|id| {
+                let (state, detail) = desk
+                    .agents
+                    .get(&id)
+                    .cloned()
+                    .unwrap_or((DeskAgentState::Checking, None));
+                let known = desk
+                    .stored
+                    .choices
+                    .iter()
+                    .find(|(adapter, _)| *adapter == id)
+                    .map(|(_, known)| known.clone())
+                    .unwrap_or_default();
+                DeskAgentSnapshot {
+                    id,
+                    label: id.label(),
+                    state,
+                    detail,
+                    login_command: id.login_command(),
+                    models: known.models,
+                    efforts: known.efforts,
+                }
+            })
+            .collect();
+        let Conversation {
+            generation,
+            items,
+            dropped,
+            ..
+        } = &desk.stored.conversation;
+        self.snapshot.desk = Some(Arc::new(DeskSnapshot {
+            selection: desk.stored.selection.clone(),
+            agents,
+            host: DeskHostSnapshot {
+                state: desk.host.state.unwrap_or(DeskHostState::Idle),
+                detail: desk.host.detail.clone(),
+            },
+            conversation: DeskConversationSnapshot {
+                generation: *generation,
+                items: items.clone(),
+                dropped: *dropped,
+            },
+            approvals_waiting: desk.approvals.len(),
+            settings: desk.stored.settings,
+        }));
+    }
+
+    fn compose_desk_live(&mut self) {
+        if self.desk.worker.is_none() {
+            return;
+        }
+        self.snapshot.desk_live = Some(Arc::new(DeskLiveSnapshot {
+            text: self.desk.turn.as_ref().map(|turn| turn.text.clone()),
+        }));
+    }
+}
+
+fn refused(reason: &str) -> bool {
+    crate::diagnostic!(json!({
+        "component": "desk",
+        "kind": "desk.event_refused",
+        "reason": reason,
+    }));
+    false
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::mpsc::{self, Receiver};
+
+    use serde_json::json;
+
+    use super::*;
+    use crate::model::DeskItem;
+
+    /// A runtime whose Desk worker is a channel the test reads, with Claude
+    /// and Codex installed.
+    fn runtime(root: &std::path::Path) -> (Runtime, Receiver<Order>) {
+        let state = root.join("state");
+        hide_platform::fs::private::create_dir_all(&state).unwrap();
+        let options: crate::model::CoreOptions = serde_json::from_value(json!({
+            "schema_version": crate::model::SCHEMA_VERSION, "node_id": "test-node", "home": root,
+            "herdr_socket_path": null, "app_state_path": state.join("app.json"),
+        }))
+        .unwrap();
+        let mut runtime = Runtime::new(
+            options,
+            crate::environment::EnvironmentReport {
+                statuses: Vec::new(),
+                home_path: Some(root.to_owned()),
+                codex_home: None,
+            },
+            Arc::new(hide_node::Local::new(Some(root.to_owned()))),
+            crate::node::test_devices(),
+        );
+        let (orders, received) = mpsc::channel();
+        runtime.desk.worker = Some(worker::Handle { orders });
+        runtime.desk_report(Report::Availability(vec![
+            (AdapterId::Claude, DeskAgentState::Ready, None),
+            (AdapterId::Codex, DeskAgentState::Ready, None),
+        ]));
+        (runtime, received)
+    }
+
+    fn event(runtime: &mut Runtime, kind: &str, payload: serde_json::Value) -> bool {
+        runtime.desk_event(DeskEvent::decode(kind, payload).expect(kind))
+    }
+
+    fn sent(received: &Receiver<Order>) -> worker::Send {
+        loop {
+            match received.try_recv().expect("no Send order") {
+                Order::Send(send) => return send,
+                _ => continue,
+            }
+        }
+    }
+
+    fn items(runtime: &Runtime) -> Vec<DeskItem> {
+        runtime
+            .snapshot
+            .desk
+            .as_ref()
+            .unwrap()
+            .conversation
+            .items
+            .clone()
+    }
+
+    fn opened(runtime: &mut Runtime, adapter: AdapterId) {
+        runtime.desk_report(Report::Opened {
+            adapter,
+            session_id: format!("{}-session", adapter.as_str()),
+            resume_failed: false,
+            choices: Choices::default(),
+        });
+    }
+
+    fn ask(runtime: &mut Runtime) -> u64 {
+        runtime.desk_report(Report::Ask {
+            rpc_id: json!(7),
+            allow: "allow-once".into(),
+            reject: Some("reject-once".into()),
+            card: crate::model::DeskCardKind::Command,
+            command: "touch x".into(),
+            folder: None,
+            reason: None,
+        });
+        items(runtime).last().unwrap().id()
+    }
+
+    #[test]
+    fn a_message_starts_the_agent_and_its_reply_joins_the_conversation() {
+        let root = tempfile::tempdir().unwrap();
+        let (mut runtime, received) = runtime(root.path());
+        assert!(event(
+            &mut runtime,
+            "desk_select",
+            json!({"agent": "claude"})
+        ));
+        assert!(event(
+            &mut runtime,
+            "desk_send",
+            json!({"text": "  what runs now?  "})
+        ));
+        let send = sent(&received);
+        assert_eq!(send.adapter, AdapterId::Claude);
+        assert_eq!(send.text, "what runs now?");
+        assert_eq!(send.resume, None);
+        assert!(!event(&mut runtime, "desk_send", json!({"text": "again"})));
+
+        opened(&mut runtime, AdapterId::Claude);
+        runtime.desk_report(Report::Text {
+            tag: send.tag,
+            text: "two ".into(),
+        });
+        runtime.desk_report(Report::Text {
+            tag: send.tag,
+            text: "sessions".into(),
+        });
+        let live = runtime.snapshot.desk_live.as_ref().unwrap();
+        assert_eq!(live.text.as_deref(), Some("two sessions"));
+        runtime.desk_report(Report::TurnEnded {
+            tag: send.tag,
+            outcome: TurnOutcome::Done,
+        });
+
+        let desk = runtime.snapshot.desk.as_ref().unwrap();
+        assert_eq!(desk.host.state, DeskHostState::Ready);
+        assert!(matches!(
+            desk.conversation.items.last(),
+            Some(DeskItem::Reply { text, state: DeskReplyState::Done, .. }) if text == "two sessions"
+        ));
+        assert_eq!(runtime.snapshot.desk_live.as_ref().unwrap().text, None);
+    }
+
+    #[test]
+    fn a_card_answers_the_agent_once_with_the_one_time_allowance() {
+        let root = tempfile::tempdir().unwrap();
+        let (mut runtime, received) = runtime(root.path());
+        event(&mut runtime, "desk_select", json!({"agent": "codex"}));
+        event(&mut runtime, "desk_send", json!({"text": "make a file"}));
+        sent(&received);
+        opened(&mut runtime, AdapterId::Codex);
+        let card = ask(&mut runtime);
+        assert_eq!(runtime.snapshot.desk.as_ref().unwrap().approvals_waiting, 1);
+
+        assert!(event(
+            &mut runtime,
+            "desk_approval",
+            json!({"id": card, "allow": true})
+        ));
+        let answered = received
+            .try_iter()
+            .find_map(|order| match order {
+                Order::Answer { rpc_id, outcome } => Some((rpc_id, outcome)),
+                _ => None,
+            })
+            .expect("no answer");
+        assert_eq!(
+            answered,
+            (
+                json!(7),
+                json!({"outcome": {"outcome": "selected", "optionId": "allow-once"}})
+            )
+        );
+        assert!(!event(
+            &mut runtime,
+            "desk_approval",
+            json!({"id": card, "allow": false})
+        ));
+        assert!(matches!(
+            items(&runtime).last(),
+            Some(DeskItem::Approval {
+                state: DeskApprovalState::Allowed,
+                ..
+            })
+        ));
+    }
+
+    #[test]
+    fn a_restart_closes_a_waiting_card_and_resumes_the_session_after() {
+        let root = tempfile::tempdir().unwrap();
+        let (mut runtime, received) = runtime(root.path());
+        event(&mut runtime, "desk_select", json!({"agent": "claude"}));
+        event(&mut runtime, "desk_send", json!({"text": "edit it"}));
+        let first = sent(&received);
+        opened(&mut runtime, AdapterId::Claude);
+        let card = ask(&mut runtime);
+
+        assert!(event(&mut runtime, "desk_restart", json!({})));
+        let orders: Vec<Order> = received.try_iter().collect();
+        assert!(orders.iter().any(|order| matches!(order, Order::End)));
+        assert!(orders.iter().any(|order| matches!(order, Order::Check)));
+        let closed = items(&runtime).into_iter().find(|item| item.id() == card);
+        assert!(matches!(
+            closed,
+            Some(DeskItem::Approval {
+                state: DeskApprovalState::Closed,
+                ..
+            })
+        ));
+        assert!(!event(
+            &mut runtime,
+            "desk_approval",
+            json!({"id": card, "allow": true})
+        ));
+        // The reply under way stopped with the process.
+        runtime.desk_report(Report::TurnEnded {
+            tag: first.tag,
+            outcome: TurnOutcome::Done,
+        });
+
+        event(&mut runtime, "desk_send", json!({"text": "go on"}));
+        assert_eq!(sent(&received).resume.as_deref(), Some("claude-session"));
+    }
+
+    #[test]
+    fn a_switch_carries_the_conversation_to_the_new_agent_s_first_session() {
+        let root = tempfile::tempdir().unwrap();
+        let (mut runtime, received) = runtime(root.path());
+        event(&mut runtime, "desk_select", json!({"agent": "claude"}));
+        event(&mut runtime, "desk_send", json!({"text": "hello"}));
+        let first = sent(&received);
+        opened(&mut runtime, AdapterId::Claude);
+        runtime.desk_report(Report::Text {
+            tag: first.tag,
+            text: "hi".into(),
+        });
+        runtime.desk_report(Report::TurnEnded {
+            tag: first.tag,
+            outcome: TurnOutcome::Done,
+        });
+
+        assert!(event(
+            &mut runtime,
+            "desk_select",
+            json!({"agent": "codex"})
+        ));
+        assert!(matches!(
+            items(&runtime).last(),
+            Some(DeskItem::Switch {
+                to: AdapterId::Codex,
+                carried: crate::model::DeskCarried::All,
+                ..
+            })
+        ));
+        event(&mut runtime, "desk_send", json!({"text": "continue"}));
+        let send = sent(&received);
+        assert_eq!(send.adapter, AdapterId::Codex);
+        assert_eq!(send.carried.as_deref(), Some("Operator: hello\nClaude: hi"));
+    }
+
+    #[test]
+    fn a_message_past_its_cap_or_without_an_installed_agent_is_refused() {
+        let root = tempfile::tempdir().unwrap();
+        let (mut runtime, received) = runtime(root.path());
+        assert!(!event(
+            &mut runtime,
+            "desk_send",
+            json!({"text": "no agent yet"})
+        ));
+        event(&mut runtime, "desk_select", json!({"agent": "pi"}));
+        assert!(!event(
+            &mut runtime,
+            "desk_send",
+            json!({"text": "pi is not ready"})
+        ));
+        event(&mut runtime, "desk_select", json!({"agent": "claude"}));
+        let long = "x".repeat(crate::desk::MAX_MESSAGE_BYTES + 1);
+        assert!(!event(&mut runtime, "desk_send", json!({"text": long})));
+        assert!(
+            received
+                .try_iter()
+                .all(|order| !matches!(order, Order::Send(_)))
+        );
+    }
+}

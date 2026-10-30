@@ -535,6 +535,15 @@ A kind this build does not know loads from the ledger as it was written, so a re
 A new spawn of a kind with no home is refused `task_kind_unknown`, and the first time an agent of such a kind is seen the diagnostic log records `hide_ai.task_kind_unknown` once.
 
 
+### Desk
+
+`hide:desk` is Desk's agent (PRD Desk 1차, [ARCHITECTURE.md: Desk](ARCHITECTURE.md#desk)): the process the core starts for the agent the operator chose, which has no pane and no checkout.
+Its `hide` presents a capability hided binds to that process's pid and start time (`Binding::Desk`), recorded with the caller id `hide:desk` (`workspace_control::DESK_CALLER`) and the context `desk_context`: this machine, workspace and checkout `hide:desk`, no path.
+A delivery command on it (`hide agent`, `hide request`, `hide inbox`, `hide watch`) acts as `Actor::hide("desk")` while the core says Desk runs a session (`desk_authority`), and on this machine only; with Desk ended it is refused `desk_not_running`, and the capability is revoked with the process.
+Every Workspace, View, Memory, mission or plan command refuses it `desk_has_no_checkout`, so Desk opens nothing on the operator's screen and reads no Project's Memory.
+A spawn Desk makes without `--parent` is a handoff whose origin is `hide:desk`: the agent is the operator's own, and `hide_started` leaves it out of Hide AI's work.
+`hide:desk` is in `code_owned_authority_current` only while Desk runs, so a letter it queued is refused once its process ends.
+
 ## The operator's View feedback
 
 The operator is a third code-owned identity, `operator` of kind `operator` (`Actor::operator`), the sender of the letter a View feedback Send makes ([UI_BEHAVIOR.md](UI_BEHAVIOR.md#view-openers-and-comments), PRD view-opener-feedback D-17).

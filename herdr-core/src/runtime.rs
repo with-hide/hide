@@ -22,6 +22,7 @@ mod clone;
 mod control_lane;
 pub(crate) mod core_move;
 pub(crate) mod delivery;
+mod desk;
 mod detail;
 mod device_analytics;
 mod device_catalog;
@@ -1402,6 +1403,8 @@ pub struct Runtime {
     /// Moving the operator's older Herdr server onto this app's Herdr
     /// (`runtime/herdr_takeover.rs`); session-only.
     herdr_takeover: herdr_takeover::Takeover,
+    /// The Desk room and its one Desk process (`runtime/desk.rs`).
+    desk: desk::Desk,
     /// When this Mac's kit is next re-read while Settings is on screen.
     local_kit_next_status: Option<Instant>,
     /// A Settings tab asked for one read of this Mac's kit.
@@ -2351,6 +2354,7 @@ impl Runtime {
             local_kit_pending: None,
             first_run_apply: None,
             herdr_takeover: herdr_takeover::Takeover::default(),
+            desk: desk::Desk::default(),
             local_kit_next_status: None,
             local_kit_check_requested: false,
             device_kit_pending: BTreeMap::new(),

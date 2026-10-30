@@ -96,6 +96,8 @@ export type Frame = {
     documents?: DocumentsSection | null;
     memory?: import("./snapshot").MemorySection;
     suggestions?: import("./snapshot").SuggestionsSection;
+    desk?: import("./snapshot").DeskSection;
+    desk_live?: import("./snapshot").DeskLive;
     link_panel?: import("./snapshot").LinkPanel;
     link_summaries?: import("./snapshot").LinkSummaries;
     session_record?: import("./snapshot").SessionRecordSection | null;
@@ -174,6 +176,14 @@ type Store = {
    * what the store holds.
    */
   suggestions: import("./snapshot").SuggestionsSection | null;
+  /**
+   * The Desk room (`desk`, PRD Desk 1차), its own section with its own
+   * revision: absent until hided starts Desk; a delta without it keeps what
+   * the store holds.
+   */
+  desk: import("./snapshot").DeskSection | null;
+  /** The Desk reply being written (`desk_live`), apart so a chunk never resends the conversation. */
+  deskLive: import("./snapshot").DeskLive | null;
   /** The link record of the open PR or issue panel (`link_panel`); null until one opens. */
   linkPanel: import("./snapshot").LinkPanel | null;
   /** Each Project's link counts and chips (`link_summaries`). */
@@ -318,6 +328,8 @@ export const useShellStore = create<Store>((set, get) => ({
   documents: NO_DOCUMENTS,
   memory: null,
   suggestions: null,
+  desk: null,
+  deskLive: null,
   linkPanel: null,
   linkSummaries: null,
   sessionRecord: null,
@@ -413,6 +425,8 @@ export const useShellStore = create<Store>((set, get) => ({
         documents: payload.documents ? mergeDocuments(NO_DOCUMENTS, payload.documents) : NO_DOCUMENTS,
         memory: payload.memory ?? null,
         suggestions: payload.suggestions ?? null,
+        desk: payload.desk ?? null,
+        deskLive: payload.desk_live ?? null,
         linkPanel: payload.link_panel ?? null,
         linkSummaries: payload.link_summaries ?? null,
         sessionRecord: payload.session_record ?? null,
@@ -424,6 +438,7 @@ export const useShellStore = create<Store>((set, get) => ({
       payload.documents !== undefined ||
       payload.memory !== undefined ||
       payload.suggestions !== undefined ||
+      payload.desk !== undefined || payload.desk_live !== undefined ||
       payload.link_panel !== undefined || payload.link_summaries !== undefined ||
       payload.session_record !== undefined || payload.session_work_search !== undefined
     ) {
@@ -433,6 +448,8 @@ export const useShellStore = create<Store>((set, get) => ({
         documents: payload.documents ? mergeDocuments(get().documents, payload.documents) : get().documents,
         memory: payload.memory ? share(get().memory, payload.memory) : get().memory,
         suggestions: payload.suggestions ? share(get().suggestions, payload.suggestions) : get().suggestions,
+        desk: payload.desk ? share(get().desk, payload.desk) : get().desk,
+        deskLive: payload.desk_live ?? get().deskLive,
         linkPanel: payload.link_panel ? share(get().linkPanel, payload.link_panel) : get().linkPanel,
         linkSummaries: payload.link_summaries ? share(get().linkSummaries, payload.link_summaries) : get().linkSummaries,
         sessionRecord: payload.session_record !== undefined ? payload.session_record && share(get().sessionRecord, payload.session_record) : get().sessionRecord,

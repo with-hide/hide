@@ -42,10 +42,17 @@ pub(crate) fn hide_started(ledger: &Ledger) -> HideStarted {
     // Hide's own identities are one or two records, found once; the ledger's
     // spawns are then filtered by a parent in that short list, so a publish
     // with no Hide AI start costs one pass over the agents and one over the spawns.
+    // Desk's sessions are the operator's own work, which Desk starts on the
+    // operator's word, not Hide AI's (PRD Desk 1차).
+    let desk = format!(
+        "{}{}",
+        crate::delivery::HIDE_PREFIX,
+        crate::delivery::HIDE_DESK_ROLE
+    );
     let origins: Vec<&str> = ledger
         .agents
         .iter()
-        .filter(|agent| agent.actor.hide_owned())
+        .filter(|agent| agent.actor.hide_owned() && agent.actor.pane_id != desk)
         .map(|agent| agent.id.as_str())
         .collect();
     if origins.is_empty() {
@@ -242,6 +249,24 @@ pub(crate) mod tests {
         let origin = register(&mut ledger, &hide);
         spawn(&mut ledger, &hide, &origin, false, task, branch, child).unwrap();
         ledger
+    }
+
+    #[test]
+    fn a_session_desk_started_is_not_hide_ai_work() {
+        let mut ledger = Ledger::default();
+        let desk = Actor::hide("desk", NODE);
+        let origin = register(&mut ledger, &desk);
+        spawn(
+            &mut ledger,
+            &desk,
+            &origin,
+            false,
+            None,
+            "desk/fix",
+            here("w1:p1"),
+        )
+        .unwrap();
+        assert_eq!(hide_started(&ledger), HideStarted::default());
     }
 
     fn here(pane: &str) -> Child<'_> {

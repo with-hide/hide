@@ -2593,6 +2593,53 @@ export type ProjectSuggestions = {
   global?: { path: string; unusable: GlobalInstructionUnusable | null } | null;
 };
 
+/** An agent Desk talks to over ACP (PRD Desk 1차); `contracts/snapshot-wire-enums.json` `desk_agent`. */
+export type DeskAgentId = "claude" | "codex" | "pi";
+export type DeskAgentState = "checking" | "ready" | "preparing" | "not_installed" | "install_failed" | "node_missing" | "cli_missing" | "login_needed" | "no_ask_mode";
+export type DeskHostState = "idle" | "starting" | "ready" | "thinking" | "stopped";
+export type DeskApprovalState = "waiting" | "allowed" | "rejected" | "closed";
+export type DeskNotice = "blocked" | "preparing" | "host_stopped" | "resume_failed" | "login_needed" | "install_failed" | "no_ask_mode" | "turn_failed";
+export type DeskLocation = "desk" | "worktree" | "checkout";
+export type DeskChoice = { id: string; label: string };
+export type DeskMention = { kind: "session" | "project"; id: string; name: string };
+
+export type DeskAgent = {
+  id: DeskAgentId;
+  label: string;
+  state: DeskAgentState;
+  /** What the state names: the Node version found, the install's last line, the missing CLI. */
+  detail: string | null;
+  /** Shown with `login_needed`. */
+  login_command: string;
+  /** What the agent's last session offered; empty until one opened. */
+  models: DeskChoice[];
+  efforts: DeskChoice[];
+};
+
+/** One line of the Desk conversation. A message's text holds a mention as `@session(<id> <name>)` or `@project(<path> <name>)`. */
+export type DeskItem =
+  | { kind: "user"; id: number; text: string; at_ms: number; mentions: DeskMention[] }
+  | { kind: "reply"; id: number; agent: DeskAgentId; text: string; at_ms: number; state: "done" | "stopped" }
+  | { kind: "switch"; id: number; from: DeskAgentId | null; to: DeskAgentId; carried: "all" | "trimmed" | "none" }
+  | { kind: "model"; id: number; model: string | null; effort: string | null }
+  | { kind: "approval"; id: number; card: "command" | "edit" | "other"; command: string; folder: string | null; reason: string | null; state: DeskApprovalState }
+  /** `detail` is the install's last line, the sign-in command for `login_needed`, or the blocked call. */
+  | { kind: "notice"; id: number; notice: DeskNotice; agent: DeskAgentId | null; detail: string | null };
+
+/** The `desk` section: absent until hided starts Desk. */
+export type DeskSection = {
+  selection: { agent: DeskAgentId | null; model: string | null; effort: string | null };
+  agents: DeskAgent[];
+  host: { state: DeskHostState; detail: string | null };
+  /** `generation` moves on 새 대화; `dropped` items left the front past the cap. */
+  conversation: { generation: number; items: DeskItem[]; dropped: number };
+  approvals_waiting: number;
+  settings: { default_agent: DeskAgentId | null; location: DeskLocation; cap: number };
+};
+
+/** The `desk_live` section: the reply being written, `null` between turns. */
+export type DeskLive = { text: string | null };
+
 /** The `suggestions` section: absent until the Hide AI tool opens a Project. */
 export type SuggestionsSection = { project: ProjectSuggestions | null };
 

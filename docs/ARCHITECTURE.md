@@ -2019,6 +2019,7 @@ The following table describes Hide's current macOS startup path, not an operator
 | hided | `hide connect` serializes discovery in its state folder, returns a matching healthy daemon or starts the sibling `hided`; the daemon owns the core and its background work. | `hide stop`, a stop signal or idle expiry; default idle expiry is 600 s with no clients and an unreachable Herdr, unless daemon keep-alive or paired-phone Mobile keep-alive holds it. A bundled connect also replaces a healthy daemon of another build in that same state folder, except a core its login item runs, which it updates or refuses (Updating the core); an unbundled CLI refuses it. | Continues; no-window screen readers pause, while label work and the daemon's own lifetime policy remain active. | The old process is gone; `hide connect` starts another on demand. These discovery paths install no hided login service. |
 | Device node (`hided node serve`) | The core starts one `ssh <alias>` for a consented device, whose start script execs the node; the node serves that child's stdin/stdout and, for the link's life only, its panes' bootstrap socket (`hide-host/src/panes.rs`). | EOF, unusable request framing or output failure ends admission and closes the pane socket, its streams and its folder; scoped workers finish before node exit. Core close/revoke ends the `ssh` child, which ends the node; consent revocation drains admitted work up to its bound. | A helper may continue while the surviving daemon retains its connection; window closure alone is not helper shutdown. | The process/channel is gone. A later consented connection starts another helper; this helper path installs no login service. |
 | Node-role hided (M) | `hide connect` on a machine whose state folder has a placement record starts the sibling `hided`, which runs the node role; it owns its one SSH connection to C, the attach channel, the relays, the local forward and the watch thread, all ended with it. | `hide stop`, a stop signal, or idle: no screen open and its Herdr not answering, by the same rule as the core role (`server::watch_idle`). | Continues; the host does not signal it. | Gone; the next `hide connect` starts it. Nothing is installed to start it. |
+| Desk process (the chosen agent's ACP adapter) | The core's Desk worker (`herdr-core/src/runtime/desk/worker.rs`) starts it tied to hided (`OwnedChild::spawn_tied`) on the operator's first message, and is its one owner; see [Desk](#desk). | `새 대화`, `다시 시작`, a switch to another agent, the stream's end, the tree crossing 48 processes or 4 GiB after a turn, the session leaving its ask mode, or the worker's end; each ends the whole tree and revokes its capability. | Continues with hided; ends with it, however hided ends. | Gone; the next message starts another and loads the last session. Nothing is installed to start it. |
 | Attach role (`hided attach`, C) | C's sshd starts it on the exec channel M opens; it starts no core and pipes the channel to C's running core. | Its channel ends, C's core socket closes, or 30 s pass without a byte from M. | Not the app's. | Gone with sshd; M dials again. |
 
 The local executable authorities are `desktop/src/main/{host,herdr,spawn}.ts`, `hided/src/{cli,env,lib,server}.rs`, `hide-node/src/ssh/host.rs` and `hide-host/src/serve.rs` with `hided/src/node_cli.rs`.
@@ -2032,6 +2033,42 @@ hided's replacement checks the named daemon's health and process identity before
 The device helper admits 4 running requests and 32 queued requests on the core connection; revocation's drain bound is 250 s, while each call has its own deadline (`hide-node/src/ssh/host.rs`, `hide-host/src/serve.rs`).
 A device has one connection, the `ssh` child whose standard streams are the node's link, and Herdr, files, Git, terminals and pages are that link's calls and streams; its pane service holds at most sixteen callers and eight streams, and at most four devices dial at once (`MAX_DIALING`, `hide-node/src/ssh/device.rs`).
 Desktop CLI children, attach streams, provider children and bridge helpers have narrower owners than these session services; their cleanup and budget belong to their existing feature sections and the [resident work ledger](PERFORMANCE_TESTING.md#resident-ticks-timers-and-watchers).
+
+## Desk
+
+Desk (PRD Desk 1차) is a room where the operator talks to an agent they choose (Claude, Codex or Pi) over ACP, and that agent starts and follows real sessions through the `hide` CLI.
+Three parts hold it, each with one job.
+
+- `hide-desk` is the ACP boundary and keeps no state: the ndjson JSON-RPC connection (`rpc.rs`, a line capped at 8 MiB and 16 calls waiting), the session in each adapter's ask mode (`session.rs`), the adapters and their pins (`adapter.rs`, `contracts/desk-adapters/`), their install (`install.rs`), the process (`host.rs`) and the permission rule (`permission.rs`).
+- The core owns the room: the conversation, the choices, the approval cards and the one Desk process (`herdr-core/src/runtime/desk.rs`, its worker in `desk/worker.rs`), its store `~/.hide/state/desk/desk.json` written off the lock (`herdr-core/src/desk.rs`), and the `desk` and `desk_live` snapshot sections.
+- hided gives the process its identity (`hided/src/desk_host.rs`): a capability bound to the process's pid and start time (`Binding::Desk` in `pane_auth.rs`), whose reference file is all the process's `HIDE_CAP_REF` names.
+
+The worker is the process's one owner (engineering practice: resident processes).
+Every ACP call, install and file check runs on it, never under `Mutex<Runtime>`; what it learns reaches the runtime as a report under a short lock.
+The agent's own messages queue to the worker; past 4096 waiting, reply text is dropped and logged once, while requests and answers still queue, since the agent waits on them.
+After each turn the tree is measured, and past 48 processes or 4 GiB it ends, which the room shows as stopped with `다시 시작`.
+The process starts tied to hided, so it and everything it started end with hided however hided ends.
+
+The process starts with Hide's environment cut to the login variables, the shell, the language and the network route: no `HERDR_*` and no `HIDE_*` but its capability, so no pane hook reads it as a pane's session and it is no pane, row or Memory session.
+Its working folder is `~/.hide/state/desk/work`, which no checkout holds, so no project's settings or instructions load into it.
+
+Each adapter is held in its ask mode, which ignores the operator's global auto-allow (D-53):
+
+- Claude's session starts with no setting source of the operator's (`settingSources: []`, so no `~/.claude` allow rule, default mode, hook, `CLAUDE.md` or skill), `Bash` always asked, and `session/set_mode default`; its sign-in is the CLI's own.
+- Codex starts in `read-only` (`INITIAL_AGENT_MODE`), whose sandbox refuses writes and the network whatever `~/.codex/config.toml` says; a reading shell command inside that sandbox runs without asking, which Desk counts as a file read.
+- Pi has no mode, so Desk loads an extension of its own (`hide-desk/src/pi_desk.js`, through a launcher `PI_ACP_PI_COMMAND` names) that asks through `ctx.ui.confirm` before every tool call but a read; its marker, naming a pid under the Desk process, proves it loaded, and without it the session is not used.
+
+A session whose mode cannot be set, or that leaves its mode, is ended and the agent shown as `no_ask_mode`.
+What the agent asks to run is decided by the Desk worker in hided, with `hide_desk::permission::decide`: a file read and a `hide` command from the list Desk uses run without a card; any other command, an edit or anything else waits on an approval card for `한 번 허용` or `거절`; and a request Hide cannot read, or answer with a one-time allowance, does not run (D-60).
+`allow_always` is never chosen.
+A new conversation, a restart, a stop or the process's end closes every waiting card as a refusal (D-52).
+
+The instructions the agent gets are code-owned (`hide-desk/src/instructions.md`): its role, the `hide` commands it acts with, and to answer in the operator's language.
+They go before the first message of a session that starts new, with the conversation so far when the operator switched agents (at most 64 KiB, the oldest left out).
+The ACP session id is kept, so the next start loads it (`session/load`) when the adapter can; one that cannot be loaded starts new with the conversation carried, and says so.
+
+The conversation keeps 500 items and 2 MiB of text, dropping the oldest; a message is at most 64 KiB and a reply 256 KiB.
+The reply being written is its own section, `desk_live`, so a streamed chunk resends that text alone and never the conversation.
 
 ## The bundled Herdr runtime
 

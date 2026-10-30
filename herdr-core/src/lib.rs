@@ -16,6 +16,7 @@ mod composer_store;
 pub mod coordination;
 pub mod dag;
 pub mod delivery;
+pub mod desk;
 mod device_catalog;
 pub mod device_command;
 pub mod diagnostics;

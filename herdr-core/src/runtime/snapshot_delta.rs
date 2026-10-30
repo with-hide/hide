@@ -36,6 +36,11 @@ pub(super) struct DeltaState {
     suggestions_revision: u64,
     /// `None` until the Hide AI tool opens a Project.
     last_suggestions: Option<Arc<crate::model::SuggestionsSnapshot>>,
+    desk_revision: u64,
+    /// `None` until Desk is installed.
+    last_desk: Option<Arc<crate::model::DeskSnapshot>>,
+    desk_live_revision: u64,
+    last_desk_live: Option<Arc<crate::model::DeskLiveSnapshot>>,
     link_summaries_revision: u64,
     last_link_summaries: Option<Arc<crate::links::LinkSummariesSnapshot>>,
     link_panel_revision: u64,
@@ -163,6 +168,29 @@ impl Runtime {
             self.delta.suggestions_revision = self.delta.revision;
             self.delta.last_suggestions = Some(Arc::clone(suggestions));
         }
+        // Each Desk section is a new Arc whenever it changes.
+        if let Some(desk) = &self.snapshot.desk
+            && self
+                .delta
+                .last_desk
+                .as_ref()
+                .is_none_or(|last| !Arc::ptr_eq(last, desk))
+        {
+            self.delta.revision += 1;
+            self.delta.desk_revision = self.delta.revision;
+            self.delta.last_desk = Some(Arc::clone(desk));
+        }
+        if let Some(live) = &self.snapshot.desk_live
+            && self
+                .delta
+                .last_desk_live
+                .as_ref()
+                .is_none_or(|last| !Arc::ptr_eq(last, live))
+        {
+            self.delta.revision += 1;
+            self.delta.desk_live_revision = self.delta.revision;
+            self.delta.last_desk_live = Some(Arc::clone(live));
+        }
         if let Some(summaries) = &self.snapshot.link_summaries
             && self.delta.last_link_summaries.as_deref() != Some(summaries)
         {
@@ -263,6 +291,18 @@ impl Runtime {
                 .last_suggestions
                 .as_ref()
                 .filter(|_| self.delta.suggestions_revision > have_revision)
+                .map(Arc::clone),
+            desk: self
+                .delta
+                .last_desk
+                .as_ref()
+                .filter(|_| self.delta.desk_revision > have_revision)
+                .map(Arc::clone),
+            desk_live: self
+                .delta
+                .last_desk_live
+                .as_ref()
+                .filter(|_| self.delta.desk_live_revision > have_revision)
                 .map(Arc::clone),
             link_summaries: self
                 .delta

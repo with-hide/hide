@@ -921,6 +921,38 @@ Past five rows the list shows five in that order and `+N 더`, which shows the r
 
 The core derives the counts and the 할 일 only on a publish whose inputs moved, and nothing on that path reads a file or runs a process (B42; [ARCHITECTURE.md](ARCHITECTURE.md#project-status-and-cost)).
 
+## Desk
+
+Desk (`◆ Desk` in the sidebar, PRD Desk 1차) is a room where the operator talks to an agent they choose, and that agent starts and follows real sessions through the `hide` CLI.
+The core decides every state below and sends it as the `desk` and `desk_live` sections; the screen words them and sends one `desk_*` event per action.
+Core owner: `herdr-core/src/runtime/desk.rs`, `herdr-core/src/model/desk.rs`; the process and its rules are in [ARCHITECTURE.md: Desk](ARCHITECTURE.md#desk).
+
+The selector lists Claude, Codex and Pi with each one's state:
+
+- `ready`: a message starts it; `preparing`: its adapter is installing, which choosing it starts.
+- `not_installed` and `install_failed`: choosing it installs it, and a failed install says its last line with `다시 받기`.
+- `node_missing`: the line `이 에이전트는 Node 22 이상이 필요해요` with how to install Node, in the same place as the not-installed line; Hide does not install Node ([INSTALL.md: Desk's agents](INSTALL.md#desks-agents)).
+- `cli_missing`: Pi's adapter runs the operator's own `pi`, which is not on the login shell's `PATH`.
+- `login_needed`: the agent's own sign-in command (`claude /login`, `codex login`, `pi /login`).
+- `no_ask_mode`: Hide could not hold the agent in its ask mode, so it is not used.
+
+A message goes to the chosen agent, model and effort; while a reply is being written, the next message waits and `중지` ends the turn.
+The models and efforts are the ones the agent's last session offered, and a change shows as a line in the conversation.
+Switching agents shows a line saying whether the conversation went with it, and the new agent's first session receives it.
+`새 대화` clears the conversation and starts the next session new; `다시 시작` ends the process and the next message loads the last session, or says it could not and started a new one.
+
+What the agent runs is decided by Hide, never by the agent's own settings:
+
+- A file read, and a `hide` command from the list Desk uses (`hide agent list`, `show`, `spawn`, `hide request`, `hide inbox`, `hide watch`, `hide ps` among them), run without asking.
+- Codex runs in its read-only sandbox, which refuses writes and the network, so a reading shell command inside it (`ls`, `git log`) counts as a file read and runs without asking; Claude's shell commands, reading ones included, always ask.
+- Any other command, a file edit, and `hide agent archive` wait on an approval card that shows the command or files, the folder and the agent's reason, with `한 번 허용` and `거절`; nothing is ever allowed for good.
+- A request Hide cannot read does not run, and the conversation says `막힘` with what the agent asked.
+- `새 대화`, `다시 시작`, `중지` and the process's end close a waiting card as refused.
+
+Desk does not read the operator's `CLAUDE.md`, skills, agent settings or hooks, and the operator's global auto-allow does not apply to it.
+Its instructions are Hide's own: its role, the `hide` commands it uses, and to answer in the operator's language.
+The Desk agent is no session in a pane: it is not in the sidebar, Sessions, Needs You or Memory, and it opens nothing on the operator's screen.
+
 ## Hide AI: the Hide AI tool
 
 Web owners: `web/src/HideAiTool.tsx` (the head, the tabs, the one-time line, the off state), `web/src/SuggestionsTab.tsx` and `web/src/suggestionList.ts` (the 제안 tab), `web/src/HideAiSettings.tsx` (⚙), `web/src/MemoryTab.tsx` and `web/src/memoryList.ts` (the Memory tab); core owners: `herdr-core/src/model/suggestions.rs` and `herdr-core/src/runtime/suggestions.rs` (the `suggestions` section), `herdr-core/src/runtime/project_memory.rs` and `herdr-core/src/runtime/memory_promotion.rs` (Memory).

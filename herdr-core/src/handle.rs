@@ -385,9 +385,12 @@ impl Core {
                 }
                 _ => std::collections::HashMap::new(),
             };
+            let desk = crate::desk::DeskStore::new(hide_kit::layout::desk_store(directory));
+            let desk_restored = desk.restore();
             let mut guard = lock_recover(&runtime);
             guard.install_mission_store(missions, restored);
             guard.install_mission_events(events, logs);
+            guard.install_desk_store(desk, desk_restored);
             drop(guard);
         }
         // Before any coordinator starts, because each builds its label worker
@@ -824,6 +827,21 @@ impl Core {
                 Arc::downgrade(&self.runtime),
                 self.notifier.clone(),
             );
+        }
+    }
+
+    /// What gives the Desk process its identity and places (PRD Desk 1차);
+    /// starts Desk's worker, which looks at the agents at once.
+    pub fn set_desk(&self, platform: Arc<dyn crate::desk::DeskPlatform>) {
+        if check_owner_thread(self, "set_desk") {
+            let mut runtime = lock_recover(&self.runtime);
+            runtime.install_desk(
+                platform,
+                Arc::downgrade(&self.runtime),
+                self.notifier.clone(),
+            );
+            drop(runtime);
+            notify_change(self);
         }
     }
 

@@ -673,7 +673,7 @@ A new agent follows [Adding an agent](#adding-an-agent), which starts from these
 ### ACP servers
 
 The [Agent Client Protocol](https://agentclientprotocol.com) is how an editor drives a coding agent over stdio and receives its conversation as typed updates (messages, tool calls with their kind, diffs and output, plans).
-Hide drives no agent over ACP: it runs each agent in a Herdr pane and reads the agent's own session files (`hide-session/`).
+Hide runs each agent in a Herdr pane and reads the agent's own session files (`hide-session/`); the one agent it drives over ACP is Desk's, through the pinned adapters in `contracts/desk-adapters/` ([ARCHITECTURE.md: Desk](ARCHITECTURE.md#desk)), with no pane and no hook.
 An agent's ACP server is still the vendor's own answer to how its conversation is shaped, so it is the reference to read before mapping that agent's session records onto a conversation view.
 
 Find an agent's server in the ACP registry: [zed.dev/acp](https://zed.dev/acp) lists every registered agent with its page, and the machine-readable list is `https://cdn.agentclientprotocol.com/registry/v1/latest/registry.json`, which names each server's version, launch command and per-system download with its sha256.

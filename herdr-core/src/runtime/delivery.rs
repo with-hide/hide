@@ -958,13 +958,6 @@ impl Runtime {
         hint: Option<&str>,
         mut command: Command,
     ) -> Result<Prepared, String> {
-        let context = self
-            .workspace_control_query(device, caller, Query::Info)
-            .map_err(|refusal| refusal.reason.to_owned())?
-            .context;
-        if context != *expected {
-            return Err("caller_context_changed".into());
-        }
         // Herdr numbers panes per machine and an agent learns the numbers from
         // its own machine's Herdr, so a bare pane id names a pane on the
         // caller's machine; the core's panes are observed under their bare ids
@@ -980,18 +973,35 @@ impl Runtime {
         };
         // Only Hide's pane attestation names the agent a command acts as; a
         // checkout-bound caller has no pane, and a hint cannot lend it one.
-        let Caller::Pane(actor_pane) = Caller::parse(caller) else {
-            return Err("agent_pane_required".into());
+        // The Desk process acts as Hide's own `hide:desk` while it runs.
+        let (context, actor) = if Caller::parse(caller) == Caller::Desk {
+            if hint.is_some() {
+                return Err("caller_identity_conflict".into());
+            }
+            self.desk_authority(device)?
+        } else {
+            let context = self
+                .workspace_control_query(device, caller, Query::Info)
+                .map_err(|refusal| refusal.reason.to_owned())?
+                .context;
+            let Caller::Pane(actor_pane) = Caller::parse(caller) else {
+                return Err("agent_pane_required".into());
+            };
+            if hint.is_some_and(|hint| qualify(hint) != actor_pane) {
+                return Err("caller_identity_conflict".into());
+            }
+            let actor = self
+                .delivery_observations
+                .get(actor_pane)
+                .ok_or("agent_pane_required")?
+                .actor
+                .clone();
+            (context, actor)
         };
-        if hint.is_some_and(|hint| qualify(hint) != actor_pane) {
-            return Err("caller_identity_conflict".into());
+        if context != *expected {
+            return Err("caller_context_changed".into());
         }
-        let actor = self
-            .delivery_observations
-            .get(actor_pane)
-            .ok_or("agent_pane_required")?
-            .actor
-            .clone();
+        let actor_pane = actor.pane_id.as_str();
         actor.require_native_identity()?;
         if crate::delivery::reserved_name(&actor.name) {
             // A pane named like a Factory would read as one (D-14).
@@ -1418,6 +1428,8 @@ impl Runtime {
                 || *actor == Actor::hide(super::missions::CONDUCTOR_ROLE, self.node.as_str())
                 || *actor
                     == Actor::hide(super::agent_sleep::letters::WAKE_ROLE, self.node.as_str())
+                || (*actor == Actor::hide(crate::delivery::HIDE_DESK_ROLE, self.node.as_str())
+                    && self.desk_running())
                 || *actor == Actor::operator(self.node.as_str()))
     }
 

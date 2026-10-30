@@ -26,10 +26,13 @@ pub enum Query {
 /// A desktop window's browser gateway, acting for a CDP client on a page in
 /// that checkout, is `gateway:<key>:<canonical path>`, its key one per window.
 /// Herdr pane ids are `w..:p..` and remote ones `remote:<device>:pane:<id>`, so
-/// neither prefix can collide with a pane.
+/// neither prefix can collide with a pane. The Desk process (PRD Desk 1차)
+/// is [`DESK_CALLER`]: it has no pane and no checkout, and acts as Hide's own
+/// `hide:desk` identity in delivery commands alone.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Caller<'a> {
     Pane(&'a str),
+    Desk,
     Checkout {
         key: &'a str,
         path: &'a str,
@@ -40,8 +43,14 @@ pub enum Caller<'a> {
 const CHECKOUT_CALLER_PREFIX: &str = "checkout:";
 const GATEWAY_CALLER_PREFIX: &str = "gateway:";
 
+/// The caller id hided records for the Desk process's capability.
+pub const DESK_CALLER: &str = "hide:desk";
+
 impl<'a> Caller<'a> {
     pub fn parse(id: &'a str) -> Self {
+        if id == DESK_CALLER {
+            return Caller::Desk;
+        }
         id.strip_prefix(CHECKOUT_CALLER_PREFIX)
             .map(|rest| (rest, false))
             .or_else(|| {
