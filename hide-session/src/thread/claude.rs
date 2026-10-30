@@ -9,7 +9,8 @@ use super::Lines;
 use super::build::{Call, FileDiff, Origin, Outcome, Part, Step, Thread};
 
 pub(super) const LINES: Lines = Lines {
-    record,
+    header: false,
+    record: |record_, _, thread| record(record_, thread),
     may_start_page: |_| true,
 };
 

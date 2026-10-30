@@ -32,19 +32,36 @@ struct Sample {
     place: fn(home: &Path, cwd: &Path) -> (PathBuf, SessionReadScope),
 }
 
-const SAMPLES: &[Sample] = &[Sample {
-    format: SessionFormat::Claude,
-    place: |home, cwd| {
-        let id = "b92ea92e-9a98-4f83-b0cd-566cf1cdc37a";
-        let path = home.join(format!(".claude/projects/-work-app/{id}.jsonl"));
-        install(
-            &fixtures().join(format!("claude-2.1.314/projects/-work-app/{id}.jsonl")),
-            &path,
-            cwd,
-        );
-        (path, scope(id, cwd))
+const SAMPLES: &[Sample] = &[
+    Sample {
+        format: SessionFormat::Claude,
+        place: |home, cwd| {
+            let id = "b92ea92e-9a98-4f83-b0cd-566cf1cdc37a";
+            let path = home.join(format!(".claude/projects/-work-app/{id}.jsonl"));
+            install(
+                &fixtures().join(format!("claude-2.1.314/projects/-work-app/{id}.jsonl")),
+                &path,
+                cwd,
+            );
+            (path, scope(id, cwd))
+        },
     },
-}];
+    Sample {
+        format: SessionFormat::Codex,
+        place: |home, cwd| {
+            let name = "rollout-2026-10-30T12-07-30-01a18cb5-3c3a-7060-b86b-164ca517dc11.jsonl";
+            let path = home.join(".codex/sessions/2026/10/30").join(name);
+            install(
+                &fixtures()
+                    .join("codex-0.166.0/sessions/2026/10/30")
+                    .join(name),
+                &path,
+                cwd,
+            );
+            (path, scope("01a18cb5-3c3a-7060-b86b-164ca517dc11", cwd))
+        },
+    },
+];
 
 /// Copies a fixture file, naming the real checkout wherever the fixture
 /// names its placeholder, in the JSON spelling of this system's path.
@@ -233,14 +250,18 @@ fn every_agents_sample_reads_to_the_task_it_recorded() {
         let placed = Placed::new(sample);
         let updates = placed.read_all();
 
-        let first = &updates[0];
-        assert_eq!(first["sessionUpdate"], "user_message_chunk", "{name}");
-        assert!(
-            first["content"]["text"]
-                .as_str()
-                .is_some_and(|text| text.contains(TASK)),
-            "{name}: the task opens the thread"
-        );
+        let opening = updates
+            .iter()
+            .find(|update| update["_meta"]["hide"]["origin"].is_null())
+            .unwrap();
+        assert_eq!(opening["sessionUpdate"], "user_message_chunk", "{name}");
+        let task = updates
+            .iter()
+            .skip_while(|update| !update["_meta"]["hide"]["origin"].is_null())
+            .take_while(|update| update["sessionUpdate"] == "user_message_chunk")
+            .filter_map(|update| update["content"]["text"].as_str())
+            .any(|text| text.contains(TASK));
+        assert!(task, "{name}: the operator's task opens the thread");
         assert_eq!(
             updates.last().unwrap()["sessionUpdate"],
             "agent_message_chunk",

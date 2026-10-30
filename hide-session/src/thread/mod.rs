@@ -30,12 +30,16 @@ pub use agent_client_protocol_schema::v1 as acp;
 
 mod build;
 mod claude;
+mod codex;
 
 use build::Thread;
 
 /// The most record bytes one page reads; a record longer than this is
 /// passed over and counted as `line_capacity`.
 pub const THREAD_PAGE_BYTES: u64 = 4 * 1024 * 1024;
+/// The most bytes the session's first record may hold when a format reads
+/// every record beside it.
+const HEADER_BYTES: usize = 1024 * 1024;
 /// The most characters one message, output or file side keeps; past it the
 /// text is cut and marked `_meta.hide.truncated`.
 pub const TEXT_LIMIT_CHARS: usize = 20_000;
@@ -77,8 +81,12 @@ enum Reader {
 
 #[derive(Clone, Copy)]
 struct Lines {
-    /// What one record adds to the thread.
-    record: fn(&Value, &mut Thread),
+    /// Whether the session's first record says how the others are written
+    /// (Codex's history mode), so each record is read beside it.
+    header: bool,
+    /// What one record adds to the thread, beside the session's first
+    /// record when the format asks for it (`Value::Null` otherwise).
+    record: fn(&Value, &Value, &mut Thread),
     /// Whether a page may begin at this record: a format whose results
     /// follow their calls in order keeps a call and its results on one page.
     may_start_page: fn(&Value) -> bool,
@@ -87,8 +95,8 @@ struct Lines {
 const fn reader(format: SessionFormat) -> Reader {
     match format {
         SessionFormat::Claude => Reader::Lines(claude::LINES),
-        SessionFormat::Codex
-        | SessionFormat::Grok
+        SessionFormat::Codex => Reader::Lines(codex::LINES),
+        SessionFormat::Grok
         | SessionFormat::Pi
         | SessionFormat::Omp
         | SessionFormat::OpenCode
@@ -173,8 +181,13 @@ fn read_lines(
         start = records[first].0;
         records.drain(..first);
     }
+    let header = if lines.header {
+        first_record(path)?
+    } else {
+        Value::Null
+    };
     for (_, record) in &records {
-        (lines.record)(record, &mut thread);
+        (lines.record)(record, &header, &mut thread);
     }
     thread.forget_awaiting();
     if thread.nothing_readable() {
@@ -189,6 +202,15 @@ fn read_lines(
         }),
         skipped,
     })
+}
+
+/// The session's first record, read on its own whatever page is asked for.
+fn first_record(path: &Path) -> Result<Value, String> {
+    let file = crate::open_session_file(path).map_err(|_| "thread_file_unreadable".to_owned())?;
+    let line = crate::read_bounded_line(&mut std::io::BufReader::new(file), HEADER_BYTES)
+        .map_err(|_| "thread_header_unreadable".to_owned())?
+        .ok_or_else(|| "thread_header_unreadable".to_owned())?;
+    serde_json::from_slice(&line).map_err(|_| "thread_header_unreadable".to_owned())
 }
 
 fn incarnation(path: &Path) -> Result<String, String> {
