@@ -1,5 +1,7 @@
 //! A branch against its base, and the local merge of one into the other
-//! (`Call::BranchFacts`, `Call::BranchMerge`; PRD hide-ai-branch-first-apply).
+//! (`Call::BranchFacts`, `Call::BranchMerge`; PRD hide-ai-branch-first-apply),
+//! and a checkout's branch moved to its upstream as last fetched
+//! (`Call::BranchCatchUp`), which only ever fast-forwards.
 //!
 //! The base is usually the operator's own main, so a merge changes nothing
 //! it cannot finish cleanly: every refusal is decided before the first write
@@ -32,8 +34,8 @@ use std::process::Output;
 use std::time::Duration;
 
 use hide_node_link::branch::{
-    BranchFacts, BranchFile, DIRTY_FILES_MAX, DiscardOutcome, FILES_MAX, MergeOutcome, check_diff,
-    check_discard, check_facts, check_merge,
+    BranchFacts, BranchFile, CatchUpOutcome, DIRTY_FILES_MAX, DiscardOutcome, FILES_MAX,
+    MergeOutcome, check_catch_up, check_diff, check_discard, check_facts, check_merge,
 };
 use hide_node_link::git::{Diff, DiffNotice};
 
@@ -379,6 +381,15 @@ fn changed_paths(root: &Path, fork: &str, tip: &str) -> HostResult<BTreeSet<Stri
         .collect())
 }
 
+/// The worktree's uncommitted and ignored paths that writing `changed`
+/// would overwrite.
+fn overwritten_in(worktree: &Path, changed: &BTreeSet<String>) -> HostResult<BTreeSet<String>> {
+    let local = status_paths(worktree)?
+        .into_iter()
+        .chain(ignored_paths(worktree)?);
+    Ok(overwritten(local, changed))
+}
+
 fn dirty(paths: impl IntoIterator<Item = String>) -> MergeOutcome {
     MergeOutcome::Dirty {
         files: paths.into_iter().take(DIRTY_FILES_MAX).collect(),
@@ -462,6 +473,96 @@ pub fn merge(
     }
 }
 
+/// The commit the upstream of the branch checked out in `worktree` points
+/// at, or `None` when `HEAD` is detached, the branch has no upstream, or the
+/// upstream ref is gone.
+fn upstream_commit(worktree: &Path) -> HostResult<Option<String>> {
+    let args = ["symbolic-ref", "--quiet", "HEAD"];
+    let output = run(worktree, &args)?;
+    let branch = match output.status.code() {
+        Some(0) => String::from_utf8_lossy(&output.stdout).trim().to_owned(),
+        Some(1) => return Ok(None),
+        _ => return Err(describe(&args, &output)),
+    };
+    let upstream = read_text(
+        worktree,
+        &["for-each-ref", "--format=%(upstream)", &branch],
+    )?;
+    if upstream.is_empty() {
+        return Ok(None);
+    }
+    let spec = format!("{upstream}^{{commit}}");
+    let args = ["rev-parse", "--verify", "-q", &spec];
+    let output = run(worktree, &args)?;
+    match output.status.code() {
+        Some(0) => Ok(Some(
+            String::from_utf8_lossy(&output.stdout).trim().to_owned(),
+        )),
+        Some(1) => Ok(None),
+        _ => Err(describe(&args, &output)),
+    }
+}
+
+fn dirty_catch_up(paths: BTreeSet<String>) -> CatchUpOutcome {
+    CatchUpOutcome::Dirty {
+        total: u32::try_from(paths.len()).unwrap_or(u32::MAX),
+        files: paths.into_iter().take(DIRTY_FILES_MAX).collect(),
+    }
+}
+
+/// Moves the branch checked out in `worktree` to its upstream as last
+/// fetched, fast-forward only: never a fetch, a merge commit or a rebase.
+/// `head` is the commit the operator was shown; a `HEAD` that moved since is
+/// left alone. Every refusal is decided before the write, as a merge's are,
+/// and git's own fast-forward refuses an ignored file that appears after.
+pub fn catch_up(worktree: &Path, head: &str) -> HostResult<CatchUpOutcome> {
+    check_catch_up(head).map_err(invalid)?;
+    let current = read_text(worktree, &["rev-parse", "--verify", "HEAD"])?;
+    if current != head {
+        return Ok(CatchUpOutcome::HeadMoved);
+    }
+    let Some(upstream) = upstream_commit(worktree)? else {
+        return Ok(CatchUpOutcome::NoUpstream);
+    };
+    let unknown = || failed("git could not tell how the branch and its upstream relate");
+    if is_ancestor(worktree, &upstream, &current)?.ok_or_else(unknown)? {
+        return Ok(CatchUpOutcome::AlreadyCurrent { commit: current });
+    }
+    if !is_ancestor(worktree, &current, &upstream)?.ok_or_else(unknown)? {
+        return Ok(CatchUpOutcome::Diverged);
+    }
+    if in_progress(&git_dir(worktree)?) {
+        return Ok(CatchUpOutcome::InProgress);
+    }
+    let changed = changed_paths(worktree, &current, &upstream)?;
+    let overlap = overwritten_in(worktree, &changed)?;
+    if !overlap.is_empty() {
+        return Ok(dirty_catch_up(overlap));
+    }
+    let args = [
+        "merge",
+        "--ff-only",
+        "--no-stat",
+        "--no-overwrite-ignore",
+        &upstream,
+    ];
+    let output = run_within(worktree, &args, crate::git_run::CHANGE_DEADLINE)?;
+    let now = read_text(worktree, &["rev-parse", "--verify", "HEAD"])?;
+    if output.status.success() {
+        return Ok(CatchUpOutcome::Updated { commit: now });
+    }
+    // A fast-forward writes nothing it refuses; what git could refuse over is
+    // a head that moved under it or a path that appeared in the way.
+    if now != current {
+        return Ok(CatchUpOutcome::HeadMoved);
+    }
+    let overlap = overwritten_in(worktree, &changed)?;
+    if !overlap.is_empty() {
+        return Ok(dirty_catch_up(overlap));
+    }
+    Err(describe(&args, &output))
+}
+
 /// Deletes `refs/heads/<branch>` and nothing else. With `tip` the delete is
 /// a compare-and-swap on it; without, on the commit read here. A branch a
 /// worktree has checked out is left alone.
@@ -526,7 +627,7 @@ impl Plan<'_> {
             })?
         };
         let changed = changed_paths(root, &fork, &self.tip)?;
-        let overlap = self.overwritten_in(worktree, &changed)?;
+        let overlap = overwritten_in(worktree, &changed)?;
         if !overlap.is_empty() {
             return Ok(dirty(overlap));
         }
@@ -549,19 +650,6 @@ impl Plan<'_> {
             return Ok(MergeOutcome::BaseMoved);
         }
         self.write(worktree, target.as_deref())
-    }
-
-    /// The worktree's uncommitted and ignored paths that a merge writing
-    /// `changed` would overwrite.
-    fn overwritten_in(
-        &self,
-        worktree: &Path,
-        changed: &BTreeSet<String>,
-    ) -> HostResult<BTreeSet<String>> {
-        let local = status_paths(worktree)?
-            .into_iter()
-            .chain(ignored_paths(worktree)?);
-        Ok(overwritten(local, changed))
     }
 
     /// Moves the worktree on `HEAD` to `target`, a commit that has the base
@@ -653,7 +741,7 @@ impl Plan<'_> {
                 .unwrap_or_else(|| self.base_tip.clone()),
             &self.tip,
         )?;
-        let overlap = self.overwritten_in(worktree, &changed)?;
+        let overlap = overwritten_in(worktree, &changed)?;
         if !overlap.is_empty() {
             return Ok(dirty(overlap));
         }

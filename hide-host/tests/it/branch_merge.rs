@@ -8,8 +8,8 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use hide_host::ErrorCode;
-use hide_host::branch_merge::{diff, discard, facts, merge};
-use hide_node_link::branch::{DiscardOutcome, FILES_MAX, MergeOutcome};
+use hide_host::branch_merge::{catch_up, diff, discard, facts, merge};
+use hide_node_link::branch::{CatchUpOutcome, DiscardOutcome, FILES_MAX, MergeOutcome};
 use hide_node_link::git::DiffNotice;
 
 /// Runs git in `dir` and answers its trimmed stdout.
@@ -680,5 +680,87 @@ fn a_branch_file_diff_of_a_gone_branch_or_a_bad_path_is_refused() {
         assert_eq!(error.code, ErrorCode::InvalidRequest, "{path:?}");
     }
     let error = diff(&fixture.main, "--output=x", "main", "b.txt").unwrap_err();
+    assert_eq!(error.code, ErrorCode::InvalidRequest);
+}
+
+/// `feat` tracks `main` as its upstream, as a branch tracks `origin/main`,
+/// and `main` has moved on by one commit to `a.txt`.
+fn behind_upstream(fixture: &Fixture) -> (String, String) {
+    git(&fixture.feat, &["branch", "-q", "--set-upstream-to=main"]);
+    let head = git(&fixture.feat, &["rev-parse", "HEAD"]);
+    let upstream = commit(&fixture.main, "a.txt", "one\ntwo\nthree\nfour\n");
+    (head, upstream)
+}
+
+#[test]
+fn a_branch_only_behind_its_upstream_catches_up_and_a_retry_finds_it_current() {
+    let fixture = fixture();
+    let (head, upstream) = behind_upstream(&fixture);
+    assert_eq!(
+        catch_up(&fixture.feat, &head).unwrap(),
+        CatchUpOutcome::Updated {
+            commit: upstream.clone()
+        }
+    );
+    assert_eq!(git(&fixture.feat, &["rev-parse", "HEAD"]), upstream);
+    assert_eq!(
+        fs::read_to_string(fixture.feat.join("a.txt")).unwrap(),
+        "one\ntwo\nthree\nfour\n"
+    );
+    assert_eq!(git(&fixture.feat, &["status", "--porcelain"]), "");
+    assert_eq!(
+        catch_up(&fixture.feat, &upstream).unwrap(),
+        CatchUpOutcome::AlreadyCurrent { commit: upstream }
+    );
+}
+
+#[test]
+fn an_uncommitted_change_the_upstream_would_overwrite_refuses_with_its_count_and_nothing_moved() {
+    let fixture = fixture();
+    let (head, _) = behind_upstream(&fixture);
+    write(&fixture.feat, "a.txt", "operator's edit\n");
+    let before = snapshot(&fixture.feat);
+    assert_eq!(
+        catch_up(&fixture.feat, &head).unwrap(),
+        CatchUpOutcome::Dirty {
+            files: vec!["a.txt".into()],
+            total: 1
+        }
+    );
+    assert_eq!(snapshot(&fixture.feat), before);
+}
+
+#[test]
+fn an_uncommitted_change_the_upstream_does_not_touch_is_kept_through_the_catch_up() {
+    let fixture = fixture();
+    let (head, upstream) = behind_upstream(&fixture);
+    write(&fixture.feat, "z.txt", "operator's edit\n");
+    assert_eq!(
+        catch_up(&fixture.feat, &head).unwrap(),
+        CatchUpOutcome::Updated { commit: upstream }
+    );
+    assert_eq!(
+        fs::read_to_string(fixture.feat.join("z.txt")).unwrap(),
+        "operator's edit\n"
+    );
+}
+
+#[test]
+fn a_branch_with_its_own_commits_a_moved_head_and_no_upstream_are_left_alone() {
+    let fixture = fixture();
+    let (head, _) = behind_upstream(&fixture);
+    let own = commit(&fixture.feat, "b.txt", "mine\n");
+    let before = snapshot(&fixture.feat);
+    assert_eq!(catch_up(&fixture.feat, &head).unwrap(), CatchUpOutcome::HeadMoved);
+    assert_eq!(catch_up(&fixture.feat, &own).unwrap(), CatchUpOutcome::Diverged);
+    git(&fixture.feat, &["branch", "-q", "--unset-upstream"]);
+    assert_eq!(catch_up(&fixture.feat, &own).unwrap(), CatchUpOutcome::NoUpstream);
+    assert_eq!(snapshot(&fixture.feat), before);
+}
+
+#[test]
+fn a_catch_up_request_with_a_head_that_is_not_an_object_name_is_refused() {
+    let fixture = fixture();
+    let error = catch_up(&fixture.feat, "HEAD~1").unwrap_err();
     assert_eq!(error.code, ErrorCode::InvalidRequest);
 }

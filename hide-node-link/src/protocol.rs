@@ -251,7 +251,11 @@ use crate::error::HostError;
 /// (`GitCommand::Version`) over the link it has, where it used to report Git
 /// without asking (PRD system-ssh-device-link B25). A helper on 59 would
 /// refuse the command, so it is refused at Hello and upgraded.
-pub const PROTOCOL_VERSION: u32 = 60;
+/// 61: a node moves a checkout's branch to its upstream as last fetched,
+/// fast-forward only and never fetching (`Call::BranchCatchUp`,
+/// [`crate::branch::CatchUpOutcome`]). A helper on 60 would refuse it, so it
+/// is refused at Hello and upgraded.
+pub const PROTOCOL_VERSION: u32 = 61;
 
 /// What agy's index held in a checkout before Hide typed `/fork`
 /// ([`Call::AntigravityForkMark`]).
@@ -565,6 +569,12 @@ pub enum Call {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         tip: Option<String>,
     },
+    /// Moves the branch checked out in the worktree at `root` to its
+    /// upstream as last fetched (`hide_host::branch_merge::catch_up`):
+    /// fast-forward only, no fetch, no push, and only while `HEAD` is still
+    /// `head`, the commit the operator was shown. The answer is a
+    /// [`crate::branch::CatchUpOutcome`] and only `Updated` changes anything.
+    BranchCatchUp { root: String, head: String },
     /// Retires a worktree owned by a completed or discarded background task.
     WorktreeRetire {
         root: String,
@@ -1111,6 +1121,7 @@ impl Call {
             | Self::BranchFacts { .. }
             | Self::BranchMerge { .. }
             | Self::BranchDiscard { .. }
+            | Self::BranchCatchUp { .. }
             | Self::BranchDiff { .. }
             | Self::WorktreeRetire { .. }
             | Self::WorktreeRemove { .. }
@@ -1410,7 +1421,15 @@ mod tests {
             base: "main".into(),
             path: "src/a.rs".into(),
         };
-        for call in [facts, merge, discard, diff] {
+        let catch_up = Call::BranchCatchUp {
+            root: "/repo".into(),
+            head: "c".repeat(40),
+        };
+        assert_eq!(
+            serde_json::to_value(&catch_up).unwrap(),
+            serde_json::json!({"op": "branch_catch_up", "root": "/repo", "head": "c".repeat(40)})
+        );
+        for call in [facts, merge, discard, diff, catch_up] {
             let text = serde_json::to_string(&call).unwrap();
             assert_eq!(serde_json::from_str::<Call>(&text).unwrap(), call);
             assert!(call.answered_by_device());

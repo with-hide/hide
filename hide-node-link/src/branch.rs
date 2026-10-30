@@ -94,6 +94,34 @@ pub enum DiscardOutcome {
     Moved,
 }
 
+/// What a catch-up request did. Only `Updated` changes the repository.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "outcome", rename_all = "snake_case")]
+pub enum CatchUpOutcome {
+    /// The branch and the worktree moved to the upstream's commit, `commit`.
+    Updated { commit: String },
+    /// The upstream holds nothing `HEAD` does not, which is where a retry
+    /// after an update ends; `commit` is `HEAD`.
+    AlreadyCurrent { commit: String },
+    /// `HEAD` has commits the upstream does not, so only a merge or a rebase
+    /// could take the upstream's; nothing was done.
+    Diverged,
+    /// `HEAD` is no longer the commit the request named; nothing was done.
+    HeadMoved,
+    /// `HEAD` is detached, or its branch has no upstream or one that is gone.
+    NoUpstream,
+    /// The worktree is partway through a merge, rebase, cherry-pick or revert.
+    InProgress,
+    /// Uncommitted or ignored paths the upstream's commits would overwrite:
+    /// at most [`DIRTY_FILES_MAX`] of them, and how many there are.
+    Dirty { files: Vec<String>, total: u32 },
+}
+
+/// A `BranchCatchUp` request's values, or why they cannot make a git command.
+pub fn check_catch_up(head: &str) -> Result<(), String> {
+    check_tip(head).map(|_| ())
+}
+
 /// A branch name a request may carry (`git::branch_name`).
 pub fn check_branch(value: &str) -> Result<&str, String> {
     crate::git::branch_name(value)
