@@ -23,7 +23,7 @@ const buttonVariants = cva(
         link: "text-primary underline-offset-4 hover:underline",
         text: "font-normal text-subtle-foreground hover:text-foreground",
         "text-link": "font-normal text-subtle-foreground underline-offset-4 hover:text-foreground hover:underline",
-        "row-action": "text-muted-foreground hover:bg-secondary hover:text-foreground data-[state=open]:bg-secondary",
+        "row-action": "font-normal text-muted-foreground hover:bg-secondary hover:text-foreground data-[state=open]:bg-secondary",
       },
       size: {
         default: "h-(--size-control) px-md text-body",
