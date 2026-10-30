@@ -4,7 +4,7 @@ use hide_agent_adapter::{ADAPTERS, Feature};
 
 #[test]
 fn an_unknown_captured_start_kind_and_its_arguments_remain_byte_exact() {
-    let params = crate::wire::agent_start_params(
+    let params = crate::engine::herdr::wire::agent_start_params(
         "pane",
         "name",
         " Future-Agent ",

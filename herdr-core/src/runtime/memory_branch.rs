@@ -51,7 +51,7 @@ pub(super) struct BatchBranchFacts {
 
 /// How a batch's machine is reached: its Herdr and its node.
 pub(super) type BatchReach = (
-    Arc<dyn hide_herdr_client::ApiConnector>,
+    Arc<dyn crate::engine::Engine>,
     Arc<dyn crate::node_access::NodeLink>,
 );
 
@@ -378,7 +378,7 @@ impl Runtime {
         let Ok(link) = self.node_link(node.as_str()) else {
             return refused("node_unavailable");
         };
-        let connector = self.delivery_connector(node.as_str());
+        let connector = self.delivery_engine(node.as_str());
         let facts = self.project_memory.promotions.branches.get(&key).cloned();
         let base = facts
             .as_ref()
@@ -588,7 +588,7 @@ type Unseen = Option<((String, u64, u32), PromotionStart)>;
 #[allow(clippy::too_many_arguments)]
 fn decide(
     decision: BatchDecision,
-    connector: Option<Arc<dyn hide_herdr_client::ApiConnector>>,
+    connector: Option<Arc<dyn crate::engine::Engine>>,
     link: Arc<dyn crate::node_access::NodeLink>,
     place: &BranchPlace,
     own: &[String],
@@ -618,7 +618,7 @@ fn decide(
 #[allow(clippy::too_many_arguments)]
 fn decide_batch(
     decision: BatchDecision,
-    connector: Option<Arc<dyn hide_herdr_client::ApiConnector>>,
+    connector: Option<Arc<dyn crate::engine::Engine>>,
     link: Arc<dyn crate::node_access::NodeLink>,
     place: &BranchPlace,
     own: &[String],

@@ -1409,9 +1409,7 @@ fn a_tab_in_a_device_registration_without_a_workspace_creates_one_there() {
         1
     );
     assert_eq!(runtime.snapshot.status.last_error, None);
-    let connector: Arc<dyn hide_herdr_client::ApiConnector> = Arc::new(
-        hide_herdr_client::LocalSocketConnector::new("/tmp/herdr-core-never-connect.sock"),
-    );
+    let connector = crate::engine::herdr::local("/tmp/herdr-core-never-connect.sock");
     runtime.install_remote_control(RemoteControlContext::new(
         TARGET,
         connector,
@@ -1622,7 +1620,7 @@ fn a_refused_registration_terminal_is_logged_and_leaves_the_project_on_its_start
         .unwrap()
         .install_remote_control(RemoteControlContext::new(
             TARGET,
-            Arc::new(herdr.connector()),
+            herdr.engine(),
             Arc::downgrade(&shared),
             ChangeNotifier::noop(),
         ));
@@ -1719,9 +1717,9 @@ fn a_device_tab_moves_on_its_own_herdr_and_a_file_tab_keeps_the_slot_it_was_drop
     let requests = Arc::new(Mutex::new(Vec::new()));
     runtime.install_remote_control(RemoteControlContext::new(
         TARGET,
-        Arc::new(RecordingHerdr {
+        crate::engine::herdr::HerdrEngine::shared(Arc::new(RecordingHerdr {
             requests: requests.clone(),
-        }),
+        })),
         Weak::new(),
         ChangeNotifier::noop(),
     ));
@@ -1997,9 +1995,7 @@ fn a_device_agent_chosen_brings_the_device_forward_and_moves_no_column() {
     raw.focused_workspace_id = Some(format!("remote:{TARGET}:workspace:w1"));
     raw.focused_checkout_id = Some(format!("remote:{TARGET}:checkout:w1"));
     runtime.ingest_remote_session(TARGET, Ok(raw));
-    let connector: Arc<dyn hide_herdr_client::ApiConnector> = Arc::new(
-        hide_herdr_client::LocalSocketConnector::new("/tmp/herdr-core-never-connect.sock"),
-    );
+    let connector = crate::engine::herdr::local("/tmp/herdr-core-never-connect.sock");
     runtime.install_remote_control(RemoteControlContext::new(
         TARGET,
         connector,
@@ -2116,9 +2112,7 @@ fn a_refused_device_request_does_not_bring_the_device_forward() {
         catalog: Default::default(),
         unreachable_since_unix_ms: None,
     });
-    let connector: Arc<dyn hide_herdr_client::ApiConnector> = Arc::new(
-        hide_herdr_client::LocalSocketConnector::new("/tmp/herdr-core-never-connect.sock"),
-    );
+    let connector = crate::engine::herdr::local("/tmp/herdr-core-never-connect.sock");
     runtime.install_remote_control(RemoteControlContext::new(
         TARGET,
         connector,
@@ -2432,9 +2426,9 @@ fn recording_device(runtime: &mut Runtime) -> Arc<Mutex<Vec<serde_json::Value>>>
     let requests = Arc::new(Mutex::new(Vec::new()));
     runtime.install_remote_control(RemoteControlContext::new(
         TARGET,
-        Arc::new(RecordingHerdr {
+        crate::engine::herdr::HerdrEngine::shared(Arc::new(RecordingHerdr {
             requests: requests.clone(),
-        }),
+        })),
         Weak::new(),
         ChangeNotifier::noop(),
     ));

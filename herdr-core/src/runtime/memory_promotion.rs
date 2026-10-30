@@ -140,7 +140,7 @@ pub(super) struct PromotionStart {
     /// The Herdr and node of the machine that holds the Project, which
     /// release a failed attempt's worktree; none when that machine cannot be
     /// reached now, and the worktree then stays for the next attempt.
-    connector: Option<Arc<dyn hide_herdr_client::ApiConnector>>,
+    connector: Option<Arc<dyn crate::engine::Engine>>,
     node: Option<Arc<dyn crate::node_access::NodeLink>>,
 }
 
@@ -362,7 +362,7 @@ impl Runtime {
             machine: (*node != self.node).then(|| node.as_str().to_owned()),
             kind,
             launch,
-            connector: self.delivery_connector(node.as_str()),
+            connector: self.delivery_engine(node.as_str()),
             node: self.node_link(node.as_str()).ok(),
         })
     }
@@ -1153,7 +1153,7 @@ fn track_promotions(
         let mut reach = HashMap::new();
         for node in nodes {
             if let (Some(connector), Ok(link)) = (
-                guard.delivery_connector(node.as_str()),
+                guard.delivery_engine(node.as_str()),
                 guard.node_link(node.as_str()),
             ) {
                 reach.insert(node.clone(), (connector, link));
@@ -1539,18 +1539,28 @@ fn fail_start(
 /// The worktree of `branch` in the repository at `repo`, `None` when there
 /// is none.
 pub(super) fn worktree_path(
-    connector: &dyn hide_herdr_client::ApiConnector,
+    engine: &dyn crate::engine::Engine,
     repo: &str,
     branch: &str,
 ) -> Result<Option<String>, String> {
-    hide_herdr_client::request_with_connector(
-        connector,
-        "worktree.list",
-        crate::wire::worktree_list_params(repo)?,
-        std::time::Duration::from_secs(5),
-    )
-    .map_err(|error| error.to_string())
-    .and_then(|listed| crate::wire::listed_worktree_path(listed, branch))
+    engine
+        .worktree_path(READ_WAIT, repo, branch)
+        .map_err(String::from)
+}
+
+/// How long one of Herdr's reads here may take.
+const READ_WAIT: crate::engine::Wait = crate::engine::Wait::Each(std::time::Duration::from_secs(5));
+
+/// Every agent Herdr runs now.
+pub(super) fn agents_listed(
+    engine: &dyn crate::engine::Engine,
+) -> Result<Vec<crate::session_sync::ProjectedAgent>, String> {
+    engine.agents(READ_WAIT).map_err(|error| match error {
+        crate::engine::EngineError::Answer(_) | crate::engine::EngineError::Protocol { .. } => {
+            "agent.list is malformed".to_owned()
+        }
+        error => error.to_string(),
+    })
 }
 
 /// Releases what a failed attempt made (engineering principle 14): its
@@ -1560,7 +1570,7 @@ pub(super) fn worktree_path(
 /// (`start_promotion`), so retries never pile worktrees up. What happened is
 /// logged; a failure leaves the worktree for that next attempt too.
 fn release_attempt(
-    connector: &dyn hide_herdr_client::ApiConnector,
+    connector: &dyn crate::engine::Engine,
     node: &dyn crate::node_access::NodeLink,
     repo: &str,
     branch: &str,
@@ -1605,16 +1615,7 @@ fn release_attempt(
         let panes = panes_in(connector, &path)?;
         // An agent there, or a start whose name Herdr still holds, may yet
         // do the attempt's work: nothing of it is closed.
-        let agents = hide_herdr_client::request_with_connector(
-            connector,
-            "agent.list",
-            crate::wire::empty_params(),
-            std::time::Duration::from_secs(5),
-        )
-        .map_err(|error| error.to_string())
-        .and_then(|listed| {
-            crate::wire::agents_response(listed).map_err(|_| "agent.list is malformed".into())
-        })?;
+        let agents = agents_listed(connector)?;
         if agents.iter().any(|agent| panes.contains(&agent.pane_id)) {
             return Ok("active");
         }
@@ -1748,7 +1749,7 @@ pub(super) enum Retired {
 /// branch always stays, for the merge or the operator to reuse. What
 /// happened is logged; a worktree that stays says why.
 pub(super) fn retire_attempt(
-    connector: &dyn hide_herdr_client::ApiConnector,
+    connector: &dyn crate::engine::Engine,
     node: &dyn crate::node_access::NodeLink,
     retire: &Retire,
     own: &[String],
@@ -1769,16 +1770,7 @@ pub(super) fn retire_attempt(
         if path.trim_end_matches('/') == repo.trim_end_matches('/') {
             return Ok((Retired::Kept, "the Project's own folder"));
         }
-        let agents = hide_herdr_client::request_with_connector(
-            connector,
-            "agent.list",
-            crate::wire::empty_params(),
-            std::time::Duration::from_secs(5),
-        )
-        .map_err(|error| error.to_string())
-        .and_then(|listed| {
-            crate::wire::agents_response(listed).map_err(|_| "agent.list is malformed".to_owned())
-        })?;
+        let agents = agents_listed(connector)?;
         let panes = panes_in(connector, &path)?;
         let (attempt, others): (Vec<_>, Vec<_>) = agents
             .iter()
@@ -1807,14 +1799,9 @@ pub(super) fn retire_attempt(
             .filter(|pane| !attempt.contains(pane))
             .collect::<Vec<_>>();
         for pane in &remaining {
-            let held = hide_herdr_client::request_with_connector(
-                connector,
-                "pane.process_info",
-                crate::wire::pane_process_info_params(pane)?,
-                std::time::Duration::from_secs(5),
-            )
-            .map_err(|error| error.to_string())
-            .and_then(crate::wire::pane_process_group)?;
+            let held = connector
+                .pane_processes(READ_WAIT, pane)
+                .map_err(String::from)?;
             if !held.foreground_pids.is_empty() && !held.shell_holds_terminal() {
                 return Ok((Retired::Kept, "a program is running in it"));
             }
@@ -1886,17 +1873,15 @@ fn within(cwd: &str, path: &str) -> bool {
 }
 
 pub(super) fn panes_in(
-    connector: &dyn hide_herdr_client::ApiConnector,
+    engine: &dyn crate::engine::Engine,
     path: &str,
 ) -> Result<Vec<String>, String> {
-    let snapshot = hide_herdr_client::request_with_connector(
-        connector,
-        "session.snapshot",
-        crate::wire::empty_params(),
-        std::time::Duration::from_secs(5),
-    )
-    .map_err(|error| error.to_string())?;
-    let snapshot = crate::wire::snapshot_response(snapshot).map_err(|_| "snapshot_unavailable")?;
+    let snapshot = engine.session(READ_WAIT).map_err(|error| match error {
+        crate::engine::EngineError::Answer(_) | crate::engine::EngineError::Protocol { .. } => {
+            "snapshot_unavailable".to_owned()
+        }
+        error => error.to_string(),
+    })?;
     Ok(snapshot
         .panes
         .into_iter()
@@ -3479,14 +3464,14 @@ mod tests {
             .panes
             .push(("w2:p1".into(), "/r.worktrees/first/docs".into()));
         let herdr = herdr(&repository);
-        let connector = herdr.connector();
+        let connector = herdr.engine();
         let failed = Promotion {
             state: PromotionState::Failed,
             ..running(None, 1)
         };
 
         release_attempt(
-            &connector,
+            connector.as_ref(),
             &Machine(Arc::clone(&repository)),
             "/r",
             &first,
@@ -3515,7 +3500,7 @@ mod tests {
         );
         // Asked again, nothing is left to release.
         release_attempt(
-            &connector,
+            connector.as_ref(),
             &Machine(Arc::clone(&repository)),
             "/r",
             &first,
@@ -3542,9 +3527,9 @@ mod tests {
                 repository.changed = changed;
             }
             let herdr = herdr(&repository);
-            let connector = herdr.connector();
+            let connector = herdr.engine();
             release_attempt(
-                &connector,
+                connector.as_ref(),
                 &Machine(Arc::clone(&repository)),
                 "/r",
                 &first,
@@ -3598,7 +3583,7 @@ mod tests {
             }
             let herdr = herdr(&repository);
             release_attempt(
-                &herdr.connector(),
+                herdr.engine().as_ref(),
                 &Machine(Arc::clone(&repository)),
                 "/r",
                 &first,
@@ -3653,7 +3638,7 @@ mod tests {
         let retire = retire_of(&branch(7, 1));
         assert_eq!(
             retire_attempt(
-                &herdr.connector(),
+                herdr.engine().as_ref(),
                 &Machine(Arc::clone(&repository)),
                 &retire,
                 &own(),
@@ -3698,7 +3683,7 @@ mod tests {
             let retire = retire_of(&branch(7, 1));
             for _ in 0..2 {
                 assert_eq!(
-                    retire_attempt(&herdr.connector(), &machine, &retire, &own(), false),
+                    retire_attempt(herdr.engine().as_ref(), &machine, &retire, &own(), false),
                     Retired::Kept,
                     "{case}"
                 );
@@ -3733,7 +3718,7 @@ mod tests {
         let first = herdr(&repository);
         assert_eq!(
             retire_attempt(
-                &first.connector(),
+                first.engine().as_ref(),
                 &Machine(Arc::clone(&repository)),
                 &retire_of(&branch(7, 1)),
                 &own(),
@@ -3758,7 +3743,7 @@ mod tests {
         let second = herdr(&repository);
         assert_eq!(
             retire_attempt(
-                &second.connector(),
+                second.engine().as_ref(),
                 &Machine(Arc::clone(&repository)),
                 &retire_of(&branch(7, 1)),
                 &[],
@@ -3852,7 +3837,7 @@ mod tests {
         let herdr = herdr(&repository);
         let release = || {
             release_attempt(
-                &herdr.connector(),
+                herdr.engine().as_ref(),
                 &Machine(Arc::clone(&repository)),
                 "/r",
                 &retire.branch,
@@ -3884,7 +3869,7 @@ mod tests {
         let herdr = herdr(&repository);
         assert_eq!(
             retire_attempt(
-                &herdr.connector(),
+                herdr.engine().as_ref(),
                 &Machine(Arc::clone(&repository)),
                 &retire_of(&branch(7, 1)),
                 &own(),
@@ -3904,7 +3889,7 @@ mod tests {
         let herdr = herdr(&repository);
         assert_eq!(
             retire_attempt(
-                &herdr.connector(),
+                herdr.engine().as_ref(),
                 &Machine(Arc::clone(&repository)),
                 &retire_of(&branch(7, 1)),
                 &own(),
@@ -3931,7 +3916,7 @@ mod tests {
         let repository = settled_repository(|_| {});
         assert_eq!(
             retire_attempt(
-                &Down,
+                crate::engine::herdr::HerdrEngine::shared(Arc::new(Down)).as_ref(),
                 &Machine(Arc::clone(&repository)),
                 &retire_of(&branch(7, 1)),
                 &own(),

@@ -22,20 +22,16 @@ pub(crate) fn connect(
     generation: &mut u64,
     has_projection: bool,
 ) -> Result<Connected, SessionFetchError> {
-    let params = crate::wire::subscription_params(TOPOLOGY_SUBSCRIPTIONS)
-        .map_err(SessionFetchError::Malformed)?;
-    let subscription = hide_herdr_client::subscribe_with_connector(
-        context.api_connector.as_ref(),
-        params,
-        context.request_timeout(),
-    )
-    .map_err(|error| match error {
-        ApiError::NotRunning(_) => connect_failure_from_api(error, has_projection),
-        error => protocol_behind_refusal(context)
-            .unwrap_or_else(|| connect_failure_from_api(error, has_projection)),
-    })?;
+    let events = context
+        .engine
+        .subscribe(context.request_timeout())
+        .map_err(|error| match error {
+            EngineError::NotRunning(_) => connect_failure_from_engine(error, has_projection),
+            error => protocol_behind_refusal(context)
+                .unwrap_or_else(|| connect_failure_from_engine(error, has_projection)),
+        })?;
     *generation = generation.saturating_add(1);
-    let subscription = spawn_subscription_reader(subscription, *generation, sender.clone())
+    let subscription = spawn_subscription_reader(events, *generation, sender.clone())
         .map_err(SessionFetchError::Unreachable)?;
     let replica = match fetch_replica(context) {
         Ok(replica) => replica,
@@ -57,39 +53,35 @@ pub(crate) fn connect(
 /// it. A ping that fails, or names this build's protocol, leaves the
 /// subscription's own failure.
 fn protocol_behind_refusal(context: &SessionSyncContext) -> Option<SessionFetchError> {
-    let pong = hide_herdr_client::request_with_connector(
-        context.api_connector.as_ref(),
-        "ping",
-        crate::wire::ping_params().ok()?,
-        context.request_timeout(),
-    )
-    .ok()
-    .and_then(|answer| crate::wire::server_pong(answer).ok())?;
-    let protocol = u64::from(pong.protocol);
-    (protocol != hide_herdr_client::HERDR_PROTOCOL_REVISION)
-        .then(|| crate::wire::protocol_mismatch(protocol, Some(pong.version)))
+    let pong = context
+        .engine
+        .ping(Wait::Each(context.request_timeout()))
+        .ok()?;
+    crate::engine::herdr::protocol_refusal(pong)
 }
 
 fn spawn_subscription_reader(
-    subscription: hide_herdr_client::Subscription,
+    events: crate::engine::EventStream,
     generation: u64,
     sender: Sender<CoordinatorMessage>,
 ) -> Result<ActiveSubscription, String> {
-    let (mut reader, shutdown) = subscription.into_parts();
+    let crate::engine::EventStream {
+        mut reader,
+        stopper,
+    } = events;
     let worker = thread::Builder::new()
         .name("herdr-core-event-reader".to_owned())
         .spawn(move || {
             loop {
-                let mut line = String::new();
-                match reader.read_line(&mut line) {
-                    Ok(0) => {
+                match reader.next_event() {
+                    Ok(None) => {
                         let _ = sender.send(CoordinatorMessage::SubscriptionEnded {
                             generation,
                             message: "socket reached EOF".to_owned(),
                         });
                         return;
                     }
-                    Ok(_) => {
+                    Ok(Some(line)) => {
                         if sender
                             .send(CoordinatorMessage::SubscriptionLine {
                                 generation,
@@ -101,10 +93,10 @@ fn spawn_subscription_reader(
                             return;
                         }
                     }
-                    Err(error) => {
+                    Err(message) => {
                         let _ = sender.send(CoordinatorMessage::SubscriptionEnded {
                             generation,
-                            message: format!("socket read failed: {error}"),
+                            message,
                         });
                         return;
                     }
@@ -114,7 +106,7 @@ fn spawn_subscription_reader(
         .map_err(|error| format!("subscription reader could not be started: {error}"))?;
     Ok(ActiveSubscription {
         generation,
-        shutdown,
+        stopper,
         worker: Some(worker),
     })
 }
@@ -126,33 +118,26 @@ pub(crate) fn stop_subscription(subscription: &mut Option<ActiveSubscription>) {
 }
 
 fn fetch_replica(context: &SessionSyncContext) -> Result<SessionReplica, SessionFetchError> {
-    let result = hide_herdr_client::request_with_connector(
-        context.api_connector.as_ref(),
-        "session.snapshot",
-        json!({}),
-        context.request_timeout(),
-    )
-    .map_err(session_error_from_api)?;
-    SessionReplica::from_decoded(wire::snapshot_response(result)?)
+    let state = context
+        .engine
+        .session(Wait::Each(context.request_timeout()))
+        .map_err(session_error_from_engine)?;
+    SessionReplica::from_decoded(state)
 }
 
 pub(crate) fn fetch_agents(
     context: &SessionSyncContext,
 ) -> Result<Vec<ProjectedAgent>, SessionFetchError> {
-    let result = hide_herdr_client::request_with_connector(
-        context.api_connector.as_ref(),
-        "agent.list",
-        json!({}),
-        context.request_timeout(),
-    )
-    .map_err(|error| match error {
-        // A server refusal is an answered query, not a delayed transport.
-        ApiError::Remote { code, message } => {
-            SessionFetchError::Stale(format!("agent.list refused ({code}): {message}"))
-        }
-        error => session_error_from_api(error),
-    })?;
-    wire::agents_response(result)
+    context
+        .engine
+        .agents(Wait::Each(context.request_timeout()))
+        .map_err(|error| match error {
+            // A server refusal is an answered query, not a delayed transport.
+            EngineError::Refused { code, message } => {
+                SessionFetchError::Stale(format!("agent.list refused ({code}): {message}"))
+            }
+            error => session_error_from_engine(error),
+        })
 }
 
 /// Reads which tab a workspace now holds as active. It is the one read the
@@ -163,14 +148,10 @@ pub(crate) fn fetch_workspace_active_tab(
     context: &SessionSyncContext,
     workspace_id: &str,
 ) -> Result<String, SessionFetchError> {
-    let result = hide_herdr_client::request_with_connector(
-        context.api_connector.as_ref(),
-        "workspace.get",
-        wire::workspace_target_params(workspace_id).map_err(SessionFetchError::Malformed)?,
-        context.request_timeout(),
-    )
-    .map_err(session_error_from_api)?;
-    wire::workspace_active_tab(result).map_err(SessionFetchError::Malformed)
+    context
+        .engine
+        .workspace_active_tab(Wait::Each(context.request_timeout()), workspace_id)
+        .map_err(session_error_from_engine)
 }
 
 /// Reads the workspace Herdr has in focus now, the answer a replica waits
@@ -179,14 +160,10 @@ pub(crate) fn fetch_workspace_active_tab(
 pub(crate) fn fetch_focused_workspace(
     context: &SessionSyncContext,
 ) -> Result<Option<String>, SessionFetchError> {
-    let result = hide_herdr_client::request_with_connector(
-        context.api_connector.as_ref(),
-        "workspace.list",
-        wire::workspace_list_params().map_err(SessionFetchError::Malformed)?,
-        context.request_timeout(),
-    )
-    .map_err(session_error_from_api)?;
-    wire::listed_focused_workspace(result).map_err(SessionFetchError::Malformed)
+    context
+        .engine
+        .focused_workspace(Wait::Each(context.request_timeout()))
+        .map_err(session_error_from_engine)
 }
 
 /// Reads the cwd Herdr holds for a pane now, the confirmation a pane
@@ -197,18 +174,14 @@ pub(crate) fn fetch_pane_cwd(
     context: &SessionSyncContext,
     pane_id: &str,
 ) -> Result<Option<String>, SessionFetchError> {
-    let result = match hide_herdr_client::request_with_connector(
-        context.api_connector.as_ref(),
-        "pane.get",
-        wire::pane_target_params(pane_id).map_err(SessionFetchError::Malformed)?,
-        context.request_timeout(),
-    ) {
-        Ok(result) => result,
-        Err(error) if error.code() == Some("pane_not_found") => return Ok(None),
-        Err(error) => return Err(session_error_from_api(error)),
-    };
-    let (cwd, _) = wire::pane_session(result).map_err(SessionFetchError::Malformed)?;
-    Ok(cwd)
+    match context
+        .engine
+        .pane_session(Wait::Each(context.request_timeout()), pane_id)
+    {
+        Ok((cwd, _)) => Ok(cwd),
+        Err(error) if error.code() == Some("pane_not_found") => Ok(None),
+        Err(error) => Err(session_error_from_engine(error)),
+    }
 }
 
 /// Reads a pane's agent with `agent.get`, which is the read on which Herdr
@@ -219,43 +192,58 @@ pub(crate) fn fetch_agent_launch(
     context: &SessionSyncContext,
     pane_id: &str,
 ) -> Result<(), SessionFetchError> {
-    let result = match hide_herdr_client::request_with_connector(
-        context.api_connector.as_ref(),
-        "agent.get",
-        wire::agent_target_params(pane_id).map_err(SessionFetchError::Malformed)?,
-        context.request_timeout(),
-    ) {
-        Ok(result) => result,
-        Err(error) if error.code() == Some("agent_not_found") => return Ok(()),
-        Err(error) => return Err(session_error_from_api(error)),
-    };
-    wire::agent_state(result)
-        .map(drop)
-        .map_err(SessionFetchError::Malformed)
+    match context
+        .engine
+        .agent_state(Wait::Each(context.request_timeout()), pane_id)
+    {
+        Ok(_) => Ok(()),
+        Err(error) if error.code() == Some("agent_not_found") => Ok(()),
+        Err(error) => Err(session_error_from_engine(error)),
+    }
 }
 
-fn session_error_from_api(error: ApiError) -> SessionFetchError {
+/// A read's failure as the session sync reports it: no server, a server it
+/// could not reach or that refused, or an answer it could not read.
+fn session_error_from_engine(error: EngineError) -> SessionFetchError {
     match error {
-        ApiError::NotRunning(message) => SessionFetchError::SocketMissing(message),
-        ApiError::Transport(message) | ApiError::Remote { message, .. } => {
+        EngineError::NotRunning(message) => SessionFetchError::SocketMissing(message),
+        EngineError::Transport(message) | EngineError::Refused { message, .. } => {
             SessionFetchError::Unreachable(message)
         }
-        ApiError::Malformed(message) => SessionFetchError::Malformed(message),
+        EngineError::Protocol {
+            message,
+            expected_protocol,
+            received_protocol,
+            received_version,
+        } => SessionFetchError::Protocol {
+            message,
+            expected_protocol,
+            received_protocol,
+            received_version,
+        },
+        EngineError::Malformed(message)
+        | EngineError::Request(message)
+        | EngineError::Answer(message) => SessionFetchError::Malformed(message),
     }
 }
 
 /// A subscription that failed to open. With a projection already on screen
 /// the failure is what makes it stale; without one the server is unreachable.
-pub(crate) fn connect_failure_from_api(error: ApiError, has_projection: bool) -> SessionFetchError {
+pub(crate) fn connect_failure_from_engine(
+    error: EngineError,
+    has_projection: bool,
+) -> SessionFetchError {
     match error {
-        ApiError::NotRunning(message) => SessionFetchError::SocketMissing(message),
-        ApiError::Malformed(message) => SessionFetchError::Malformed(message),
-        ApiError::Transport(message) | ApiError::Remote { message, .. } if has_projection => {
+        EngineError::NotRunning(message) => SessionFetchError::SocketMissing(message),
+        EngineError::Transport(message) | EngineError::Refused { message, .. }
+            if has_projection =>
+        {
             SessionFetchError::Stale(message)
         }
-        ApiError::Transport(message) | ApiError::Remote { message, .. } => {
+        EngineError::Transport(message) | EngineError::Refused { message, .. } => {
             SessionFetchError::Unreachable(message)
         }
+        other => session_error_from_engine(other),
     }
 }
 

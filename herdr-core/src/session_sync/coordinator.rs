@@ -43,7 +43,7 @@ fn run_coordinator(
     let mut lineage_writer = match context.ledger_machine().and_then(|machine| {
         crate::coordination::lineage::Writer::new(
             machine,
-            Arc::clone(&context.api_connector),
+            Arc::clone(&context.engine),
             context.runtime.clone(),
         )
     }) {
@@ -93,7 +93,7 @@ fn run_coordinator(
     let mut purpose_mirror = if context.is_local()
         && let Some(node) = context.node()
     {
-        match live::PurposeMirror::new(Arc::clone(&context.api_connector), Arc::clone(node)) {
+        match live::PurposeMirror::new(Arc::clone(&context.engine), Arc::clone(node)) {
             Ok(mirror) => Some(mirror),
             Err(message) => {
                 crate::diagnostic!(json!({
@@ -115,10 +115,10 @@ fn run_coordinator(
     // (issue 799). A device's files are the device's, so only the local
     // coordinator has one.
     let mut hook_token_restorer = hook_home.clone().and_then(|home| {
-        match crate::coordination::hook_tokens::Restorer::new(
-            home,
-            Arc::clone(&context.api_connector),
-        ) {
+        match crate::engine::herdr::hook_token_connector(&context.engine)
+            .ok_or_else(|| "the engine is not Herdr".to_owned())
+            .and_then(|connector| crate::coordination::hook_tokens::Restorer::new(home, connector))
+        {
             Ok(restorer) => Some(restorer),
             Err(message) => {
                 crate::diagnostic!(json!({
@@ -629,7 +629,7 @@ fn run_coordinator(
                 } else {
                     ApplyMode::Strict
                 };
-                match parse_subscription_line(&line) {
+                match line {
                     Ok(SubscriptionLine::Event(event)) => {
                         if context.is_local() {
                             let (tab_id, pane_id, layout) = event.subject();
@@ -1356,7 +1356,7 @@ fn publish_replica(
         && let Ok(mut guard) = runtime.lock()
     {
         if let SessionSyncTarget::Remote { target_id, .. } = &context.target
-            && !guard.remote_coordinator_is_current(target_id, &context.api_connector)
+            && !guard.remote_coordinator_is_current(target_id, &context.engine)
         {
             return false;
         }
@@ -1469,7 +1469,7 @@ fn publish_replica(
         };
         let changed = match runtime.lock() {
             Ok(mut guard) => {
-                if !guard.remote_coordinator_is_current(target_id, &context.api_connector) {
+                if !guard.remote_coordinator_is_current(target_id, &context.engine) {
                     return false;
                 }
                 guard.ingest_remote_session(target_id, fetched)
@@ -1717,7 +1717,7 @@ fn spawn_focus_readback(
     context: &SessionSyncContext,
     first: crate::runtime::PendingPaneFocusControl,
 ) -> Result<(), String> {
-    let connector = Arc::clone(&context.api_connector);
+    let engine = Arc::clone(&context.engine);
     let runtime = context.runtime.clone();
     let notifier = context.notifier.clone();
     thread::Builder::new()
@@ -1737,7 +1737,7 @@ fn spawn_focus_readback(
             let mut slot = Slot(runtime.clone(), true);
             let mut next = Some(first);
             while let Some(identity) = next.take() {
-                let answer = live::confirm_pane_focus(connector.as_ref(), &identity.target_id);
+                let answer = live::confirm_pane_focus(engine.as_ref(), &identity.target_id);
                 let Some(runtime) = runtime.upgrade() else {
                     return;
                 };
@@ -1781,7 +1781,7 @@ fn start_label_worker(
                 Arc::clone(node),
                 wake,
                 language,
-                Arc::clone(&context.api_connector),
+                Arc::clone(&context.engine),
             ),
             None => Ok(None),
         },
@@ -1791,7 +1791,7 @@ fn start_label_worker(
                 context.runtime.clone(),
                 wake,
                 language,
-                Arc::clone(&context.api_connector),
+                Arc::clone(&context.engine),
             )
             .map(Some),
     };
@@ -1949,7 +1949,7 @@ fn begin_delivery_pane_read(context: &SessionSyncContext) -> bool {
     let device = match &context.target {
         SessionSyncTarget::Local { .. } => guard.node().to_string(),
         SessionSyncTarget::Remote { target_id, .. } => {
-            if !guard.remote_coordinator_is_current(target_id, &context.api_connector) {
+            if !guard.remote_coordinator_is_current(target_id, &context.engine) {
                 return false;
             }
             target_id.clone()
@@ -1967,7 +1967,7 @@ fn publish_failure(context: &SessionSyncContext, error: SessionFetchError) -> bo
         Ok(mut guard) => match &context.target {
             SessionSyncTarget::Local { .. } => guard.ingest_session_with_catalog(Err(error), None),
             SessionSyncTarget::Remote { target_id, .. } => {
-                if !guard.remote_coordinator_is_current(target_id, &context.api_connector) {
+                if !guard.remote_coordinator_is_current(target_id, &context.engine) {
                     return false;
                 }
                 guard.ingest_remote_session(target_id, Err(error))
@@ -2525,9 +2525,7 @@ mod worktree_observer_tests {
                     socket_path: socket_path.clone(),
                     runtime: Arc::downgrade(&runtime),
                     notifier,
-                    api_connector: Arc::new(hide_herdr_client::LocalSocketConnector::new(
-                        &socket_path,
-                    )),
+                    engine: crate::engine::herdr::local(&socket_path),
                     node: Arc::new(hide_node::Local::of_process()),
                 },
                 std::sync::Arc::new(hide_node::Local::of_process()),
@@ -2769,7 +2767,7 @@ mod focus_readback_order_tests {
                 socket_path: herdr.socket_path().to_path_buf(),
                 runtime: Arc::downgrade(runtime),
                 notifier: ChangeNotifier::noop(),
-                api_connector: Arc::new(herdr.connector()),
+                engine: herdr.engine(),
                 node: Arc::new(hide_node::Local::of_process()),
             },
             std::sync::Arc::new(hide_node::Local::of_process()),
@@ -3105,7 +3103,7 @@ mod focus_readback_order_tests {
     /// One Herdr event as the subscription delivers it.
     fn event(kind: &str, data: Value) -> ReplicaEvent {
         let line = json!({"event": kind, "data": data}).to_string();
-        match parse_subscription_line(&line).expect("event parses") {
+        match crate::engine::herdr::wire::parse_subscription_line(&line).expect("event parses") {
             SubscriptionLine::Event(event) => event,
             SubscriptionLine::EventsLost { .. } | SubscriptionLine::Error { .. } => unreachable!(),
         }
@@ -3475,7 +3473,7 @@ mod pane_cwd_confirmation_tests {
 
     fn event(kind: &str, data: Value) -> ReplicaEvent {
         let line = json!({"event": kind, "data": data}).to_string();
-        match parse_subscription_line(&line).expect("event parses") {
+        match crate::engine::herdr::wire::parse_subscription_line(&line).expect("event parses") {
             SubscriptionLine::Event(event) => event,
             SubscriptionLine::EventsLost { .. } | SubscriptionLine::Error { .. } => unreachable!(),
         }
@@ -3487,7 +3485,7 @@ mod pane_cwd_confirmation_tests {
                 socket_path: herdr.socket_path().to_path_buf(),
                 runtime: Weak::new(),
                 notifier: ChangeNotifier::noop(),
-                api_connector: Arc::new(herdr.connector()),
+                engine: herdr.engine(),
                 node: Arc::new(hide_node::Local::of_process()),
             },
             std::sync::Arc::new(hide_node::Local::of_process()),
@@ -3878,7 +3876,7 @@ mod pending_core_tests {
                 socket_path: herdr.socket_path().to_path_buf(),
                 runtime: Arc::downgrade(&runtime),
                 notifier: ChangeNotifier::noop(),
-                api_connector: Arc::new(herdr.connector()),
+                engine: herdr.engine(),
                 node: Arc::new(hide_node::Local::of_process()),
             },
             Arc::new(hide_node::Local::of_process()),
@@ -3979,7 +3977,7 @@ mod window_reads_tests {
                 socket_path: socket_path.clone(),
                 runtime: Arc::downgrade(&runtime),
                 notifier: ChangeNotifier::noop(),
-                api_connector: Arc::new(hide_herdr_client::LocalSocketConnector::new(&socket_path)),
+                engine: crate::engine::herdr::local(&socket_path),
                 node: Arc::new(hide_node::Local::of_process()),
             },
             Arc::new(hide_node::Local::of_process()),
@@ -4147,7 +4145,9 @@ mod focus_read_tests {
             ),
         ] {
             let line = json!({"event": kind, "data": data}).to_string();
-            let SubscriptionLine::Event(event) = parse_subscription_line(&line).unwrap() else {
+            let SubscriptionLine::Event(event) =
+                crate::engine::herdr::wire::parse_subscription_line(&line).unwrap()
+            else {
                 unreachable!()
             };
             replica
@@ -4163,7 +4163,7 @@ mod focus_read_tests {
                 socket_path: herdr.socket_path().to_path_buf(),
                 runtime: Weak::new(),
                 notifier: ChangeNotifier::noop(),
-                api_connector: Arc::new(herdr.connector()),
+                engine: herdr.engine(),
                 node: Arc::new(hide_node::Local::of_process()),
             },
             std::sync::Arc::new(hide_node::Local::of_process()),

@@ -369,7 +369,7 @@ fn spawned_record(
             name: format!("name-{id}"),
             kind: kind.into(),
             device_id: crate::node::TEST_NODE.into(),
-            session: crate::wire::session_digest(session),
+            session: crate::engine::tokens::session_digest(session),
         },
         ended: false,
         terminal_id: None,
@@ -1009,8 +1009,7 @@ fn native_archive_current_journey(kind: &'static str, flag: &str) {
             }
             panic!("unexpected current-server request: {method}")
         });
-        let replacement_connector: Arc<dyn hide_herdr_client::ApiConnector> =
-            Arc::new(replacement.connector());
+        let replacement_connector = replacement.engine();
         let changed_runtime = Arc::downgrade(&shared);
         let changed_connector = Arc::clone(&replacement_connector);
         let armed = Arc::new(std::sync::atomic::AtomicBool::new(false));
@@ -1028,7 +1027,7 @@ fn native_archive_current_journey(kind: &'static str, flag: &str) {
                         let runtime = changed_runtime.upgrade().unwrap();
                         let mut runtime = runtime.lock().unwrap();
                         let mut next = runtime.live.as_ref().unwrap().clone();
-                        next.api_connector = Arc::clone(&changed_connector);
+                        next.engine = Arc::clone(&changed_connector);
                         runtime.set_live(next);
                     }
                     serde_json::json!({"type":"tab_created", "tab":{
@@ -1052,45 +1051,46 @@ fn native_archive_current_journey(kind: &'static str, flag: &str) {
         let connect_runtime = shared.weak();
         let connect_replacement = Arc::clone(&replacement_connector);
         let reader_home = home.path().to_path_buf();
-        let old_connector = Arc::new(HerdrConnectTransition {
-            connector: old.connector(),
-            armed,
-            worker: "herdr-core-checkout-tab-create",
-            transition: Box::new(move || {
-                let runtime = connect_runtime.upgrade().unwrap();
-                let mut runtime = runtime.lock().unwrap();
-                match case {
-                    "reader-during-start-connect" => {
-                        runtime.own_node =
-                            Arc::new(hide_node::Local::new(Some(reader_home.clone())));
+        let old_connector =
+            crate::engine::herdr::HerdrEngine::shared(Arc::new(HerdrConnectTransition {
+                connector: old.connector(),
+                armed,
+                worker: "herdr-core-checkout-tab-create",
+                transition: Box::new(move || {
+                    let runtime = connect_runtime.upgrade().unwrap();
+                    let mut runtime = runtime.lock().unwrap();
+                    match case {
+                        "reader-during-start-connect" => {
+                            runtime.own_node =
+                                Arc::new(hide_node::Local::new(Some(reader_home.clone())));
+                        }
+                        "intent-during-start-connect" => {
+                            runtime
+                                .task_agent_launch
+                                .as_mut()
+                                .unwrap()
+                                .args
+                                .push("replacement-intent".into());
+                        }
+                        _ => {
+                            let mut next = runtime.live.as_ref().unwrap().clone();
+                            next.engine = Arc::clone(&connect_replacement);
+                            runtime.set_live(next);
+                        }
                     }
-                    "intent-during-start-connect" => {
-                        runtime
-                            .task_agent_launch
-                            .as_mut()
-                            .unwrap()
-                            .args
-                            .push("replacement-intent".into());
-                    }
-                    _ => {
-                        let mut next = runtime.live.as_ref().unwrap().clone();
-                        next.api_connector = Arc::clone(&connect_replacement);
-                        runtime.set_live(next);
-                    }
-                }
-            }),
-        });
+                }),
+            }));
         let target = {
             let mut runtime = shared.lock().unwrap();
             let mut context = runtime.live.as_ref().unwrap().clone();
             context.runtime = Arc::downgrade(&shared);
-            context.api_connector = old_connector;
+            context.engine = old_connector;
             runtime.set_live(context.clone());
             if case == "remote-before" {
                 runtime.snapshot.task_operation.as_mut().unwrap().device_id = Some("remote".into());
                 let remote = live::RemoteControlContext::new(
                     "remote",
-                    Arc::clone(&context.api_connector),
+                    Arc::clone(&context.engine),
                     Arc::downgrade(&shared),
                     crate::handle::ChangeNotifier::noop(),
                 );
@@ -1106,7 +1106,7 @@ fn native_archive_current_journey(kind: &'static str, flag: &str) {
             } else {
                 let target = live::TabTarget::local(&context, runtime.live_generation);
                 if case == "local-before" {
-                    context.api_connector = Arc::clone(&replacement_connector);
+                    context.engine = Arc::clone(&replacement_connector);
                     runtime.set_live(context);
                 } else if case == "kind-before" {
                     runtime.snapshot.task_operation.as_mut().unwrap().agent_kind =
@@ -1326,8 +1326,7 @@ fn native_fork_current_journey(kind: &'static str) {
             focus_answer(method, params, &replacement_focus)
                 .unwrap_or_else(|| panic!("unexpected replacement-server request: {method}"))
         });
-        let replacement_connector: Arc<dyn hide_herdr_client::ApiConnector> =
-            Arc::new(replacement.connector());
+        let replacement_connector = replacement.engine();
         let armed = Arc::new(std::sync::atomic::AtomicBool::new(false));
         let arm_connect = Arc::clone(&armed);
         let old_focus = std::sync::Mutex::new(String::new());
@@ -1470,23 +1469,24 @@ fn native_fork_current_journey(kind: &'static str) {
             other => panic!("unexpected original-server request: {other}"),
         });
         let connect_runtime = shared.weak();
-        let connector = Arc::new(HerdrConnectTransition {
-            connector: old.connector(),
-            armed,
-            worker: "herdr-core-agent-fork",
-            transition: Box::new(move || {
-                let runtime = connect_runtime.upgrade().unwrap();
-                let mut runtime = runtime.lock().unwrap();
-                let mut next = runtime.live.as_ref().unwrap().clone();
-                next.api_connector = Arc::clone(&replacement_connector);
-                runtime.set_live(next);
-            }),
-        });
+        let connector =
+            crate::engine::herdr::HerdrEngine::shared(Arc::new(HerdrConnectTransition {
+                connector: old.connector(),
+                armed,
+                worker: "herdr-core-agent-fork",
+                transition: Box::new(move || {
+                    let runtime = connect_runtime.upgrade().unwrap();
+                    let mut runtime = runtime.lock().unwrap();
+                    let mut next = runtime.live.as_ref().unwrap().clone();
+                    next.engine = Arc::clone(&replacement_connector);
+                    runtime.set_live(next);
+                }),
+            }));
         {
             let mut runtime = shared.lock().unwrap();
             let mut context = runtime.live.as_ref().unwrap().clone();
             context.runtime = shared.weak();
-            context.api_connector = connector;
+            context.engine = connector;
             runtime.set_live(context);
             assert!(runtime.dispatch_json(&serde_json::to_vec(&serde_json::json!({
                 "schema_version":SCHEMA_VERSION,"kind":"fork_pane","payload":{"pane_id":parent,"placement":"tab","origin":"operator"}
@@ -1689,9 +1689,9 @@ fn a_parents_request_stays_the_childs_work_when_the_parents_screen_title_changes
     )];
     let payload: SessionSnapshotPayload = serde_json::from_value(serde_json::json!({"agents":[
         {"id":"lead","pane_id":"lead","agent":"claude","agent_status":"idle","state_change_seq":1,
-         "lineage_session":crate::wire::session_digest("lead-native")},
+         "lineage_session":crate::engine::tokens::session_digest("lead-native")},
         {"id":"worker","pane_id":"worker","agent":"claude","agent_status":"idle","state_change_seq":1,
-         "lineage_session":crate::wire::session_digest("worker-native")},
+         "lineage_session":crate::engine::tokens::session_digest("worker-native")},
     ]}))
     .unwrap();
     runtime.observe_delivery(crate::node::TEST_NODE, &payload, Some("scope"), None);

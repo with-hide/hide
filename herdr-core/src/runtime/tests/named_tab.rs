@@ -378,7 +378,7 @@ fn retry_reuses_the_shell_in_the_tab_and_makes_another_only_when_it_is_gone() {
         .unwrap();
     runtime.ingest_close_effect_result(
         &effect,
-        Err(hide_herdr_client::ApiError::Remote {
+        Err(crate::engine::EngineError::Refused {
             code: "fixture_refused".into(),
             message: "refused".into(),
         }),
@@ -422,7 +422,7 @@ fn retry_closes_beside_a_shell_the_worker_made_but_could_not_hand_over() {
     runtime.note_shell_in_tab(&effect.key, SHELL);
     runtime.ingest_close_effect_result(
         &effect,
-        Err(hide_herdr_client::ApiError::Remote {
+        Err(crate::engine::EngineError::Refused {
             code: "replacement_failed".into(),
             message: "pane.split response is missing pane.pane_id".into(),
         }),

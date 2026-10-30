@@ -13,7 +13,7 @@ mod tests;
 /// All blocking work remains on the existing task worker. Saving crosses
 /// the same coalesced settings writer as the original intent.
 pub(super) struct Control<'a> {
-    pub connector: &'a dyn ApiConnector,
+    pub engine: &'a dyn Engine,
     pub node: &'a dyn crate::node_access::NodeLink,
     pub save: &'a dyn Fn(&Effect) -> Result<(), String>,
     pub check: &'a dyn Fn() -> Result<(), String>,
@@ -40,9 +40,9 @@ fn save(control: &Control<'_>, effect: &Effect) -> Result<(), ControlFailure> {
     (control.save)(effect).map_err(ControlFailure::Ambiguous)
 }
 
-fn export(control: &Control<'_>, marker: &str, tab: &str) -> Result<ClosedLayout, ControlFailure> {
+fn export(control: &Control<'_>, tab: &str) -> Result<ClosedLayout, ControlFailure> {
     (control.check)().map_err(ControlFailure::Ambiguous)?;
-    export_reopen_layout(control.connector, marker, tab).map_err(ControlFailure::Ambiguous)
+    export_reopen_layout(control.engine, tab).map_err(ControlFailure::Ambiguous)
 }
 
 fn leaves<'a>(node: &'a ClosedLayoutNode, output: &mut Vec<(&'a str, &'a ClosedLayoutNode)>) {
@@ -76,7 +76,7 @@ fn discover(
     effect: &Effect,
 ) -> Result<(ClosedLayout, String, Option<Vec<String>>), ControlFailure> {
     (control.check)().map_err(ControlFailure::Ambiguous)?;
-    let snapshot = fetch_session_with_connector(control.connector).map_err(|_| {
+    let snapshot = fetch_session(control.engine).map_err(|_| {
         uncertain("The start's topology could not be checked. Reconnect and check its status.")
     })?;
     let tabs: Vec<_> = snapshot
@@ -98,7 +98,7 @@ fn discover(
                 "Start confirmation timed out. Check the same start's status again.",
             ));
         }
-        let layout = export(control, marker, &tab.tab_id)?;
+        let layout = export(control, &tab.tab_id)?;
         if layout.workspace_id != effect.workspace_id || layout.tab_id != tab.tab_id {
             return Err(uncertain(
                 "The start's owner changed. Inspect its original checkout.",
@@ -140,13 +140,12 @@ fn discover(
 
 fn validate_target(
     control: &Control<'_>,
-    marker: &str,
     effect: &Effect,
 ) -> Result<Option<ClosedLayout>, ControlFailure> {
     let Some(target) = &effect.target else {
         return Ok(None);
     };
-    let layout = export(control, marker, &target.tab_id)?;
+    let layout = export(control, &target.tab_id)?;
     let mut nodes = Vec::new();
     leaves(&layout.root, &mut nodes);
     if layout.workspace_id != effect.workspace_id
@@ -192,12 +191,12 @@ pub(super) fn run(
                 crate::checkout_owner::TabHost::Workspace(id) => (id.clone(), None),
                 crate::checkout_owner::TabHost::Open(owner) => {
                     let (workspace, first) =
-                        ensure_owner(control.connector, owner, false, Default::default())?;
+                        ensure_owner(control.engine, owner, false, Default::default())?;
                     (workspace, first.map(|(tab, _, _)| tab))
                 }
             };
             let target = if let Some(tab) = &start.tab_id {
-                let layout = export(control, &start.marker, tab)?;
+                let layout = export(control, tab)?;
                 if layout.workspace_id != workspace_id || layout.tab_id != *tab {
                     return Err(ControlFailure::Definite(
                         "The selected tab no longer belongs to this checkout. Refresh and retry."
@@ -232,11 +231,12 @@ pub(super) fn run(
             "The checkout's owner changed. Inspect the original start before continuing.",
         ));
     }
-    validate_target(control, &start.marker, &effect)?;
+    validate_target(control, &effect)?;
     let mut acknowledged = None;
     if !start.recovery_only && effect.binding.is_none() {
         (control.check)().map_err(ControlFailure::Ambiguous)?;
-        let params = wire::checkout_start_tab_params(
+        match control.engine.launch_checkout_tab(
+            CONTROL_WAIT,
             &effect.workspace_id,
             effect.seed_tab_id.as_deref(),
             &request.cwd,
@@ -244,11 +244,16 @@ pub(super) fn run(
             effect.shell_env.clone(),
             effect.expected_command.as_deref(),
             &claim,
-        )?;
-        match mutation_request(control.connector, "layout.apply", params) {
-            Ok(value) => acknowledged = wire::launched_tab(value).ok(),
-            Err(failure) if !failure.is_ambiguous() => return Err(failure),
-            Err(_) => {}
+        ) {
+            Ok(tab) => acknowledged = Some(tab),
+            // Herdr took the layout; its answer only goes unread.
+            Err(EngineError::Answer(_)) => {}
+            Err(error) => {
+                let failure = mutation_failure("layout.apply")(error);
+                if !failure.is_ambiguous() {
+                    return Err(failure);
+                }
+            }
         }
     }
     let (mut layout, pane, _) = discover(control, &start.marker, &effect)?;
@@ -304,7 +309,7 @@ pub(super) fn run(
         .expect("the observed incarnation was saved");
     if let Some(target) = &effect.target {
         if layout.tab_id != target.tab_id {
-            let before = validate_target(control, &start.marker, &effect)?.expect("target exists");
+            let before = validate_target(control, &effect)?.expect("target exists");
             let mut source_nodes = Vec::new();
             leaves(&layout.root, &mut source_nodes);
             if source_nodes.len() != 1 || layout.zoomed {
@@ -314,18 +319,22 @@ pub(super) fn run(
             }
             if before.zoomed {
                 (control.check)().map_err(ControlFailure::Ambiguous)?;
-                mutation_request(
-                    control.connector,
-                    "pane.zoom",
-                    wire::pane_unzoom_params(&target.pane_id)?,
-                )
-                .map_err(|_| {
-                    uncertain(
-                        "The terminal was created, but its tab could not be prepared. Check this start's status before continuing.",
-                    )
-                })?;
-                let unzoomed =
-                    validate_target(control, &start.marker, &effect)?.expect("target exists");
+                match control.engine.set_zoom(
+                    CONTROL_WAIT,
+                    &target.pane_id,
+                    crate::engine::Zoom::Off,
+                ) {
+                    Ok(()) => {}
+                    Err(EngineError::Request(message)) => {
+                        return Err(ControlFailure::Definite(message));
+                    }
+                    Err(_) => {
+                        return Err(uncertain(
+                            "The terminal was created, but its tab could not be prepared. Check this start's status before continuing.",
+                        ));
+                    }
+                }
+                let unzoomed = validate_target(control, &effect)?.expect("target exists");
                 if unzoomed.zoomed || unzoomed.root != before.root {
                     return Err(uncertain(
                         "The selected layout changed while starting. Inspect it before continuing.",
@@ -334,22 +343,32 @@ pub(super) fn run(
             }
             verify_bound(control, bound)?;
             (control.check)().map_err(ControlFailure::Ambiguous)?;
-            let moved = mutation_request(
-                control.connector,
-                "pane.move",
-                wire::pane_join_params(&pane, &target.tab_id, &target.pane_id)?,
-            );
-            if let Ok(value) = moved {
-                let answer = wire::joined_pane(value).map_err(ControlFailure::Ambiguous)?;
-                if !answer.changed && answer.reason.as_deref() != Some("same_tab") {
-                    return Err(uncertain(
-                        "The terminal could not join the selected tab. Check its status after the layout settles.",
-                    ));
+            match control.engine.move_pane_beside(
+                CONTROL_WAIT,
+                &pane,
+                &target.tab_id,
+                &target.pane_id,
+                false,
+            ) {
+                Ok(answer) => {
+                    if !answer.changed && answer.reason.as_deref() != Some("same_tab") {
+                        return Err(uncertain(
+                            "The terminal could not join the selected tab. Check its status after the layout settles.",
+                        ));
+                    }
                 }
-            } else if let Err(failure) = moved
-                && !failure.is_ambiguous()
-            {
-                return Err(ControlFailure::Ambiguous(failure.message().to_owned()));
+                Err(EngineError::Request(message)) => {
+                    return Err(ControlFailure::Definite(message));
+                }
+                Err(EngineError::Answer(message)) => {
+                    return Err(ControlFailure::Ambiguous(message));
+                }
+                Err(error) => {
+                    let failure = mutation_failure("pane.move")(error);
+                    if !failure.is_ambiguous() {
+                        return Err(ControlFailure::Ambiguous(failure.message().to_owned()));
+                    }
+                }
             }
             let (joined, found_pane, _) = discover(control, &start.marker, &effect)?;
             if found_pane != pane || joined.tab_id != target.tab_id {
@@ -371,7 +390,7 @@ pub(super) fn run(
             }
             layout = joined;
         }
-        validate_target(control, &start.marker, &effect)?;
+        validate_target(control, &effect)?;
     }
     verify_bound(control, bound)?;
     let saved_launch = effect.expected_command.map(|command| ShellLaunch {

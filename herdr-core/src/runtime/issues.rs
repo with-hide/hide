@@ -1846,7 +1846,7 @@ struct LinkTokens<'a> {
 impl<'a> LinkTokens<'a> {
     /// `agents` carry the lineage that names a pane's descendants.
     fn new(
-        tokens: &'a crate::wire::IssueTokens,
+        tokens: &'a crate::engine::tokens::IssueTokens,
         unconfirmed: Option<&'a BTreeMap<String, UnconfirmedIssueToken>>,
         agents: &[crate::model::SidebarAgentSnapshot],
         invalid: &'a InvalidLinks,

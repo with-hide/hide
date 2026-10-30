@@ -72,7 +72,7 @@ fn a_new_terminal_on_either_device_link_keeps_its_group_while_an_agent_start_is_
             .unwrap()
             .install_remote_control(RemoteControlContext::new(
                 DEVICE,
-                Arc::new(herdr.connector()),
+                herdr.engine(),
                 Arc::downgrade(&shared),
                 ChangeNotifier::noop(),
             ));
@@ -269,7 +269,7 @@ fn remote_terminal_clicks_reserve_capacity_and_only_replays_are_deduplicated() {
             .unwrap()
             .install_remote_control(RemoteControlContext::new(
                 DEVICE,
-                Arc::new(herdr.connector()),
+                herdr.engine(),
                 Arc::downgrade(&shared),
                 ChangeNotifier::noop(),
             ));
@@ -514,9 +514,9 @@ fn a_global_remote_start_follows_checkout_and_home_once_across_result_and_catalo
         let requests = Arc::new(Mutex::new(Vec::new()));
         runtime.install_remote_control(RemoteControlContext::new(
             DEVICE,
-            Arc::new(RecordingHerdr {
+            crate::engine::herdr::HerdrEngine::shared(Arc::new(RecordingHerdr {
                 requests: requests.clone(),
-            }),
+            })),
             Weak::new(),
             ChangeNotifier::noop(),
         ));
@@ -623,9 +623,9 @@ fn an_archived_remote_root_keeps_its_pending_follow_before_automatic_descendants
         let requests = Arc::new(Mutex::new(Vec::new()));
         runtime.install_remote_control(RemoteControlContext::new(
             DEVICE,
-            Arc::new(RecordingHerdr {
+            crate::engine::herdr::HerdrEngine::shared(Arc::new(RecordingHerdr {
                 requests: requests.clone(),
-            }),
+            })),
             Weak::new(),
             ChangeNotifier::noop(),
         ));
@@ -1432,9 +1432,9 @@ fn successful_remote_checkout_pane_and_tab_visits_supersede_a_global_start() {
         let (mut runtime, _saved) = setup(LinkOrigin::Inbound, &t.main);
         runtime.install_remote_control(RemoteControlContext::new(
             DEVICE,
-            Arc::new(RecordingHerdr {
+            crate::engine::herdr::HerdrEngine::shared(Arc::new(RecordingHerdr {
                 requests: Arc::new(Mutex::new(Vec::new())),
-            }),
+            })),
             Weak::new(),
             ChangeNotifier::noop(),
         ));
@@ -1601,9 +1601,9 @@ fn inbound_and_ssh_explicit_agent_navigation_reveals_its_group_and_releases_hidd
         let requests = Arc::new(Mutex::new(Vec::new()));
         runtime.install_remote_control(RemoteControlContext::new(
             DEVICE,
-            Arc::new(RecordingHerdr {
+            crate::engine::herdr::HerdrEngine::shared(Arc::new(RecordingHerdr {
                 requests: requests.clone(),
-            }),
+            })),
             Weak::new(),
             ChangeNotifier::noop(),
         ));

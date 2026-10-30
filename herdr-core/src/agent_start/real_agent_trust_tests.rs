@@ -48,7 +48,7 @@ fn git(cwd: &Path, args: &[&str]) {
 
 /// A tab running `claude` in `folder`, in a workspace of its own.
 fn claude_in(herdr: &PrivateHerdr, claude: &Path, folder: &Path, label: &str) -> String {
-    let (workspace, _, _) = crate::wire::created_workspace(herdr.request(
+    let (workspace, _, _) = crate::engine::herdr::wire::created_workspace(herdr.request(
         "workspace.create",
         json!({"cwd": folder, "label": label, "focus": false}),
     ))
@@ -62,7 +62,7 @@ fn claude_in(herdr: &PrivateHerdr, claude: &Path, folder: &Path, label: &str) ->
     .collect();
     let command = [claude.to_str().unwrap().to_owned()];
     let tab = crate::live::create_tab_in(
-        &herdr.connector(),
+        herdr.engine().as_ref(),
         &workspace,
         folder.to_str().unwrap(),
         label,

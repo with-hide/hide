@@ -151,7 +151,7 @@ fn live_runtime(payload: SessionSnapshotPayload) -> Runtime {
         socket_path: socket_path.clone().into(),
         runtime: std::sync::Weak::new(),
         notifier: crate::handle::ChangeNotifier::noop(),
-        api_connector: Arc::new(hide_herdr_client::LocalSocketConnector::new(&socket_path)),
+        engine: crate::engine::herdr::local(&socket_path),
         node: Arc::new(hide_node::Local::of_process()),
     });
     assert!(runtime.ingest_session_with_catalog(Ok(payload), Some(tree_catalog())));
@@ -729,9 +729,7 @@ fn a_device_descendant_closes_through_the_device_and_fails_when_it_disconnects()
         "mini".to_owned(),
         live::RemoteControlContext::new(
             "mini",
-            Arc::new(hide_herdr_client::LocalSocketConnector::new(
-                "/tmp/hide-tree-close-none.sock",
-            )),
+            crate::engine::herdr::local("/tmp/hide-tree-close-none.sock"),
             std::sync::Weak::new(),
             crate::handle::ChangeNotifier::noop(),
         ),

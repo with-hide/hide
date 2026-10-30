@@ -7193,7 +7193,7 @@ pub struct RemoteSessionSnapshot {
     /// issue link from them (`Runtime::project_node_issues`), so they are not
     /// sent to the shell either.
     #[serde(skip)]
-    pub issue_tokens: crate::wire::IssueTokens,
+    pub issue_tokens: crate::engine::tokens::IssueTokens,
     /// The GitHub issues a node project's checkouts link to, by project
     /// root, made with its rows (`Runtime::project_node_issues`) for the
     /// node's GitHub read to bring the ones its open list leaves out; empty

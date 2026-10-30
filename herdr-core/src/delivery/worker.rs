@@ -95,45 +95,16 @@ impl HumanNotice {
     /// `Ok` means Herdr showed it; `Err` is the stable reason code the log
     /// records: Herdr's own `reason` for a `shown: false` answer, or
     /// `call_failed` / `answer_unreadable` when there was no usable answer.
-    pub fn notify_herdr(
-        &self,
-        connector: &dyn hide_herdr_client::ApiConnector,
-    ) -> Result<(), &'static str> {
-        // The pinned request schema requires title and accepts body/sound.
+    pub fn notify_herdr(&self, engine: &crate::engine::EngineHandle) -> Result<(), &'static str> {
         // This outcome is an external effect receipt, never a core input.
-        let params =
-            json!({"title":self.english_title(),"body":self.english_body(),"sound":"request"});
-        let value = hide_herdr_client::request_small_response(
-            connector,
-            "notification.show",
-            params,
-            Duration::from_millis(500),
-        )
-        .map_err(|_| "call_failed")?;
-        herdr_notice_answer(&value)
-    }
-}
-
-/// Reads `notification.show`'s answer. Herdr names why nothing showed in
-/// `reason` (`NotificationShowReason`); a reason outside that set is
-/// recorded as `not_shown` rather than echoed into the log.
-fn herdr_notice_answer(value: &Value) -> Result<(), &'static str> {
-    match value.get("shown").and_then(Value::as_bool) {
-        Some(true) => Ok(()),
-        Some(false) => Err(
-            match value
-                .get("reason")
-                .and_then(Value::as_str)
-                .unwrap_or_default()
-            {
-                "disabled" => "disabled",
-                "rate_limited" => "rate_limited",
-                "no_foreground_client" => "no_foreground_client",
-                "busy" => "busy",
-                _ => "not_shown",
-            },
-        ),
-        None => Err("answer_unreadable"),
+        engine
+            .shared()
+            .notify(
+                crate::engine::Wait::Small(Duration::from_millis(500)),
+                &self.english_title(),
+                &self.english_body(),
+            )
+            .map_err(|_| "call_failed")?
     }
 }
 
@@ -1316,41 +1287,17 @@ mod tests {
     }
 
     #[test]
-    fn herdr_notice_names_why_nothing_showed() {
-        for (answer, expected) in [
-            (json!({"shown": true, "reason": "shown"}), Ok(())),
-            (
-                json!({"shown": false, "reason": "disabled"}),
-                Err("disabled"),
-            ),
-            (
-                json!({"shown": false, "reason": "rate_limited"}),
-                Err("rate_limited"),
-            ),
-            (
-                json!({"shown": false, "reason": "no_foreground_client"}),
-                Err("no_foreground_client"),
-            ),
-            (json!({"shown": false, "reason": "busy"}), Err("busy")),
-            (json!({"shown": false}), Err("not_shown")),
-            (json!({"shown": false, "reason": "other"}), Err("not_shown")),
-            (json!({"reason": "disabled"}), Err("answer_unreadable")),
-        ] {
-            assert_eq!(herdr_notice_answer(&answer), expected, "{answer}");
-        }
-    }
-
-    #[test]
     fn notify_herdr_reports_herdr_reason_or_a_failed_call() {
         let herdr = crate::fake_herdr::FakeHerdr::start("notice-reason", |method, _| {
             assert_eq!(method, "notification.show");
             json!({"type": "notification_show", "shown": false, "reason": "disabled"})
         });
         let notice = undelivered_notice();
-        assert_eq!(notice.notify_herdr(&herdr.connector()), Err("disabled"));
-        let gone = hide_herdr_client::LocalSocketConnector::new(
+        let engine = crate::engine::EngineHandle::new(herdr.engine());
+        assert_eq!(notice.notify_herdr(&engine), Err("disabled"));
+        let gone = crate::engine::EngineHandle::new(crate::engine::herdr::local(
             herdr.socket_path().with_file_name("absent.sock"),
-        );
+        ));
         assert_eq!(notice.notify_herdr(&gone), Err("call_failed"));
     }
 

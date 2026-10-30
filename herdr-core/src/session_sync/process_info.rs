@@ -27,7 +27,7 @@ impl Drop for ProcessReader {
 
 impl ProcessReader {
     pub(super) fn new(context: &SessionSyncContext) -> Self {
-        let connector = Arc::clone(&context.api_connector);
+        let engine = Arc::clone(&context.engine);
         let owner = context.runtime.clone();
         let target = context.log_target().to_owned();
         let cancelled = Arc::new(AtomicBool::new(false));
@@ -43,17 +43,9 @@ impl ProcessReader {
                         if worker_cancelled.load(Ordering::Acquire) || owner.upgrade().is_none() {
                             break;
                         }
-                        let result = wire::pane_process_info_params(pane_id)
-                            .and_then(|params| {
-                                hide_herdr_client::request_small_response(
-                                    connector.as_ref(),
-                                    "pane.process_info",
-                                    params,
-                                    SYNC_REQUEST_TIMEOUT,
-                                )
-                                .map_err(|error| error.to_string())
-                            })
-                            .and_then(|value| wire::foreground_process(value, pane_id));
+                        let result = engine
+                            .foreground_program(Wait::Small(SYNC_REQUEST_TIMEOUT), pane_id)
+                            .map_err(String::from);
                         let name = match result {
                             Ok(name) => name,
                             Err(message) => {
@@ -172,7 +164,7 @@ mod tests {
         let context = SessionSyncContext::remote(
             "fixture",
             "Fixture",
-            Arc::new(herdr.connector()),
+            herdr.engine(),
             Arc::downgrade(&runtime),
             ChangeNotifier::noop(),
         );

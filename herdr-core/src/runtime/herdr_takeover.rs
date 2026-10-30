@@ -271,7 +271,7 @@ impl Runtime {
                     server_version: offer.server_version.clone(),
                     version: offer.version.clone(),
                     same_protocol: offer.server_protocol
-                        == hide_herdr_client::HERDR_PROTOCOL_REVISION,
+                        == crate::engine::herdr::HERDR_PROTOCOL_REVISION,
                     failure: failure.map(str::to_owned),
                     path_herdr: None,
                 })

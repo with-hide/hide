@@ -71,7 +71,7 @@ pub struct PathHerdr {
 impl PathHerdr {
     /// Whether its commands are refused by a server on this build's protocol.
     pub fn behind(&self) -> bool {
-        self.protocol != Some(hide_herdr_client::HERDR_PROTOCOL_REVISION)
+        self.protocol != Some(crate::engine::herdr::HERDR_PROTOCOL_REVISION)
     }
 }
 

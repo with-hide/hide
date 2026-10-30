@@ -588,7 +588,12 @@ impl Runtime {
         tree(record, &mut sessions);
         let sessions: Vec<(&SessionIdentity, Option<String>)> = sessions
             .into_iter()
-            .map(|session| (session, crate::wire::session_digest(&session.session_id)))
+            .map(|session| {
+                (
+                    session,
+                    crate::engine::tokens::session_digest(&session.session_id),
+                )
+            })
             .collect();
         let whose = |display: &Display| {
             sessions.iter().find_map(|(session, digest)| {

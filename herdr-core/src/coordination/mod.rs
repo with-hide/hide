@@ -798,7 +798,7 @@ pub(crate) fn validate_records(ledger: &Ledger) -> Result<(), String> {
             || kept_session(&record.session).is_err()
             || !record.actor.valid()
             || record.actor.device_id != record.machine
-            || record.actor.session != crate::wire::session_digest(&record.session)
+            || record.actor.session != crate::engine::tokens::session_digest(&record.session)
             || record.origin.as_ref().is_some_and(|origin| {
                 record.parent.is_some()
                     || origin == &record.id
@@ -1770,7 +1770,7 @@ mod tests {
                 name: pane.into(),
                 kind: "codex".into(),
                 device_id: "local".into(),
-                session: crate::wire::session_digest(session),
+                session: crate::engine::tokens::session_digest(session),
             },
             ended: false,
             terminal_id: None,
@@ -2157,7 +2157,7 @@ mod tests {
         );
         // The pane's session moved on: its record belongs to the old one.
         let mut handed_off = caller.clone();
-        handed_off.session = crate::wire::session_digest("observer-after-compaction");
+        handed_off.session = crate::engine::tokens::session_digest("observer-after-compaction");
         assert_eq!(
             here(&ledger, &handed_off).err(),
             Some("participant_session_changed")
@@ -2933,7 +2933,7 @@ mod tests {
             ledger.spawns[0].kind = "pi".into();
             child.session = session.clone();
             child.actor.kind = "pi".into();
-            child.actor.session = crate::wire::session_digest(&session);
+            child.actor.session = crate::engine::tokens::session_digest(&session);
             let bound = apply(
                 &mut ledger,
                 &caller,
@@ -2958,7 +2958,7 @@ mod tests {
             assert_eq!(registered.parent.as_ref(), Some(&parent));
             let past = format!("{session}{}", "x".repeat(crate::delivery::SESSION_LIMIT));
             registered.session = past[..=crate::delivery::SESSION_LIMIT].to_owned();
-            registered.actor.session = crate::wire::session_digest(&registered.session);
+            registered.actor.session = crate::engine::tokens::session_digest(&registered.session);
             assert!(read.bytes().is_err());
         }
     }
@@ -3737,7 +3737,7 @@ mod tests {
                 name: "woken".into(),
                 kind: "codex".into(),
                 device_id: "local".into(),
-                session: crate::wire::session_digest("other-session"),
+                session: crate::engine::tokens::session_digest("other-session"),
             },
         );
         let before = ledger.clone();

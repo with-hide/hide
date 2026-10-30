@@ -373,7 +373,7 @@ impl Runtime {
                 agent
                     .session_id
                     .as_deref()
-                    .and_then(crate::wire::session_digest)
+                    .and_then(crate::engine::tokens::session_digest)
                     .is_some_and(|digest| registration.actor.session.as_deref() == Some(&digest))
             });
             match pane {

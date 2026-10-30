@@ -389,7 +389,7 @@ impl Runtime {
             .filter(|tab| tab.delegated)
             .filter_map(|tab| tab.id.clone())
             .collect::<HashSet<_>>();
-        self.issue_tokens = crate::wire::issue_tokens(payload);
+        self.issue_tokens = crate::engine::tokens::issue_tokens(payload);
         // The catalog reads what the core's own node says of its paths, so
         // the sync coordinator asks and builds it before taking the runtime
         // lock. A precomputation whose registrations or worktrees no longer match current
@@ -2658,8 +2658,8 @@ impl Runtime {
         // snapshot already matched, so Settings can show real values (B5).
         let protocol_details = match fetched.as_ref() {
             Ok(payload) => Some((
-                u64::from(crate::herdr_contract::HERDR_PROTOCOL_REVISION),
-                u64::from(crate::herdr_contract::HERDR_PROTOCOL_REVISION),
+                u64::from(crate::engine::herdr::contract::HERDR_PROTOCOL_REVISION),
+                u64::from(crate::engine::herdr::contract::HERDR_PROTOCOL_REVISION),
                 payload.herdr_version.clone(),
             )),
             Err(error) => error
@@ -4875,7 +4875,7 @@ impl Runtime {
     pub(crate) fn task_session_control_is_current(
         &self,
         id: u64,
-        connector: &Arc<dyn hide_herdr_client::ApiConnector>,
+        engine: &crate::engine::SharedEngine,
         generation: Option<u64>,
     ) -> bool {
         let Some(operation) = self
@@ -4888,14 +4888,14 @@ impl Runtime {
         };
         match operation.device_id.as_deref() {
             Some(device) if device != self.node.as_str() => {
-                self.remote_coordinator_is_current(device, connector)
+                self.remote_coordinator_is_current(device, engine)
             }
             _ => {
                 generation == Some(self.live_generation)
                     && self
                         .live
                         .as_ref()
-                        .is_some_and(|live| Arc::ptr_eq(&live.api_connector, connector))
+                        .is_some_and(|live| crate::engine::same_engine(&live.engine, engine))
             }
         }
     }
@@ -4903,9 +4903,9 @@ impl Runtime {
     pub(crate) fn task_session_control_generation(
         &self,
         id: u64,
-        connector: &Arc<dyn hide_herdr_client::ApiConnector>,
+        engine: &crate::engine::SharedEngine,
     ) -> Option<u64> {
-        self.task_session_control_is_current(id, connector, Some(self.live_generation))
+        self.task_session_control_is_current(id, engine, Some(self.live_generation))
             .then_some(self.live_generation)
     }
 

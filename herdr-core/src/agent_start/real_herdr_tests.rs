@@ -20,9 +20,11 @@ use std::path::Path;
 use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
 
-use hide_herdr_client::LocalSocketConnector;
+use hide_herdr_client::{ApiConnector, ApiError, LocalSocketConnector, request_with_connector};
 use hide_host::shell_integration::UserShell;
-use serde_json::json;
+use serde_json::{Value, json};
+
+use crate::engine::herdr::wire;
 
 use super::*;
 
@@ -80,7 +82,7 @@ fn a_new_worktrees_seed_tab_is_named_from_creation_proof_without_shell_replaceme
     }))
     .unwrap();
     let work = crate::coordination::naming::Work::of(&record).unwrap();
-    let names = crate::coordination::naming::run(&herdr.connector(), &work);
+    let names = crate::coordination::naming::run(herdr.engine().as_ref(), &work);
     assert_eq!(
         names.workspace,
         crate::coordination::naming::Outcome::Applied
@@ -251,6 +253,11 @@ impl PrivateHerdr {
         LocalSocketConnector::new(&self.socket)
     }
 
+    /// This Herdr as the core's engine.
+    pub(super) fn engine(&self) -> crate::engine::SharedEngine {
+        crate::engine::herdr::local(&self.socket)
+    }
+
     pub(super) fn request(&self, method: &str, params: Value) -> Value {
         request_with_connector(&self.connector(), method, params, READ_TIMEOUT)
             .unwrap_or_else(|error| panic!("{method}: {error}"))
@@ -298,7 +305,7 @@ impl PrivateHerdr {
         let mut env = launch.map(|launch| launch.env.clone()).unwrap_or_default();
         env.insert("PATH".into(), pane_path(self));
         let tab = crate::live::create_tab_in(
-            &self.connector(),
+            self.engine().as_ref(),
             workspace,
             cwd.to_str().unwrap(),
             label,
@@ -317,15 +324,16 @@ impl PrivateHerdr {
     fn replaced_first_tab(&self, label: &str, launch: &ShellLaunch) -> String {
         let cwd = self.home.join(label);
         std::fs::create_dir_all(&cwd).unwrap();
-        let (workspace_id, tab_id, pane_id) = crate::wire::created_workspace(self.request(
-            "workspace.create",
-            json!({"cwd": cwd, "label": label, "focus": false}),
-        ))
-        .unwrap();
+        let (workspace_id, tab_id, pane_id) =
+            crate::engine::herdr::wire::created_workspace(self.request(
+                "workspace.create",
+                json!({"cwd": cwd, "label": label, "focus": false}),
+            ))
+            .unwrap();
         let mut env = launch.env.clone();
         env.insert("PATH".into(), pane_path(self));
         let tab = crate::live::replace_tab(
-            &self.connector(),
+            self.engine().as_ref(),
             crate::live::OwnedTab {
                 initial_label: None,
                 workspace_id: workspace_id.clone(),
@@ -583,22 +591,23 @@ fn start(
     name: &str,
     shell: ShellStart,
     wait: Duration,
-) -> Result<Value, StartError> {
-    let params = wire::agent_start_params(
-        pane,
-        name,
-        "claude",
-        vec!["--".into(), format!("promote {name}")],
-        crate::codex_launch::CodexDaemon::Unknown,
-    )
-    .unwrap();
+) -> Result<crate::engine::StartedAgent, StartError> {
+    let engine = herdr.engine();
+    let start = engine
+        .prepare_start(crate::engine::AgentLaunch {
+            pane_id: pane.to_owned(),
+            name: name.to_owned(),
+            kind: "claude".into(),
+            args: vec!["--".into(), format!("promote {name}")],
+            codex_daemon: crate::codex_launch::CodexDaemon::Unknown,
+        })
+        .unwrap();
     start_within(
-        &herdr.connector(),
+        engine.as_ref(),
         None,
         name,
-        pane,
         shell,
-        params,
+        &start,
         Duration::from_secs(10),
         wait,
         Duration::ZERO,
@@ -1079,20 +1088,22 @@ fn sleep_and_wake(shell: &str, variable: &str) {
         .unwrap()
         .to_owned();
     let pane = herdr.tab(&workspace, "slept", None);
+    let engine = herdr.engine();
+    let start = engine
+        .prepare_start(crate::engine::AgentLaunch {
+            pane_id: pane.clone(),
+            name: "slept".into(),
+            kind: "codex".into(),
+            args: Vec::new(),
+            codex_daemon: crate::codex_launch::CodexDaemon::Unsupported,
+        })
+        .unwrap();
     start_within(
-        &herdr.connector(),
+        engine.as_ref(),
         None,
         "slept",
-        &pane,
         ShellStart::Plain,
-        wire::agent_start_params(
-            &pane,
-            "slept",
-            "codex",
-            Vec::new(),
-            crate::codex_launch::CodexDaemon::Unsupported,
-        )
-        .unwrap(),
+        &start,
         Duration::from_secs(10),
         Duration::from_secs(30),
         Duration::ZERO,
@@ -1131,7 +1142,13 @@ fn sleep_and_wake(shell: &str, variable: &str) {
         release: std::sync::Arc::clone(&release),
     };
     assert!(
-        crate::agent_sleep_herdr::end_agent(&watched, &node, &pane, "codex").is_ok(),
+        crate::agent_sleep_herdr::end_agent(
+            crate::engine::herdr::HerdrEngine::shared(std::sync::Arc::new(watched)).as_ref(),
+            &node,
+            &pane,
+            "codex"
+        )
+        .is_ok(),
         "the agent quit; pane shows:\n{}",
         herdr.screen(&pane)
     );
@@ -1140,7 +1157,7 @@ fn sleep_and_wake(shell: &str, variable: &str) {
         "the stand-in quit only on its release"
     );
     let woke = crate::agent_sleep_herdr::start_agent(
-        &herdr.connector(),
+        herdr.engine().as_ref(),
         &node,
         &crate::agent_sleep_herdr::WakeRequest {
             pane_id: pane.clone(),

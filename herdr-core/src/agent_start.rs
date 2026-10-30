@@ -50,15 +50,11 @@
 use std::thread;
 use std::time::{Duration, Instant};
 
-use hide_herdr_client::{
-    ApiConnector, ApiError, request_with_connector, request_with_correlation_id,
-};
 use hide_node_link::process::LineInput;
 use hide_node_link::protocol::{Call, ShellLaunch};
-use serde_json::Value;
 
+use crate::engine::{Engine, EngineError, PaneProcessGroup, PreparedStart, StartedAgent, Wait};
 use crate::node_access::NodeLink;
-use crate::wire;
 
 /// How long a pane's shell gets to reach its prompt: the pinned Herdr's own
 /// default wait for an agent's readiness.
@@ -77,14 +73,13 @@ const READ_TIMEOUT: Duration = Duration::from_secs(5);
 /// Runs on the existing fork worker, with no Runtime lock or new timer.
 #[allow(clippy::disallowed_methods)] // bounded production polling, not a test sleep
 pub(crate) fn confirm_fork_started(
-    connector: &dyn ApiConnector,
+    engine: &dyn Engine,
     pane: &str,
     name: &str,
     kind: &str,
     current: &dyn Fn() -> Result<(), String>,
     deadline: Instant,
 ) -> Result<(), String> {
-    let params = wire::agent_target_params(name)?;
     let mut last_read_error = None;
     loop {
         current()?;
@@ -95,14 +90,10 @@ pub(crate) fn confirm_fork_started(
                 None => "The fork's input readiness deadline elapsed.".into(),
             });
         }
-        let agent = request_with_connector(
-            connector,
-            "agent.get",
-            params.clone(),
-            remaining.min(READ_TIMEOUT),
-        )
-        .map_err(|error| format!("The fork's agent could not be confirmed: {error}"))
-        .and_then(wire::delivery_agent);
+        let agent = match engine.delivery_agent(Wait::Each(remaining.min(READ_TIMEOUT)), name) {
+            Err(EngineError::Request(message)) => return Err(message),
+            agent => agent.map_err(|error| error.within("The fork's agent could not be confirmed")),
+        };
         // A transient read failure proves neither readiness nor a closed
         // pane. Keep refusing input until a positive answer or the deadline.
         if let Ok(agent) = agent {
@@ -237,8 +228,9 @@ pub(crate) enum StartError {
     /// not marked its first prompt within the wait, stopped in its startup
     /// files (a question waiting for a key). Carries the screen's last line.
     ShellStarting(Option<String>),
-    /// Herdr's own answer to `agent.start`: a refusal, or no answer at all.
-    Herdr(ApiError),
+    /// Herdr's own answer to `agent.start`: a refusal, no answer at all, or
+    /// an answer in a shape the start does not promise (`Answer`).
+    Herdr(EngineError),
 }
 
 /// Records, on the node that will run it, that `kind` may work in `path`, a
@@ -376,22 +368,20 @@ pub(crate) fn shell_starting_message(screen: Option<&str>) -> String {
 /// be reached, which only a start with such a line minds.
 #[allow(clippy::too_many_arguments)] // one start: its pane, how its shell says it is ready, and its effect admission
 pub(crate) fn start_at_shell_checked(
-    connector: &dyn ApiConnector,
+    engine: &dyn Engine,
     node: Option<&dyn NodeLink>,
     correlation_id: &str,
-    pane_id: &str,
     shell: ShellStart,
-    params: Value,
+    start: &PreparedStart,
     answer_timeout: Duration,
     check: &dyn Fn() -> Result<(), String>,
-) -> Result<Value, StartError> {
+) -> Result<StartedAgent, StartError> {
     start_within(
-        connector,
+        engine,
         node,
         correlation_id,
-        pane_id,
         shell,
-        params,
+        start,
         answer_timeout,
         SHELL_WAIT,
         Duration::ZERO,
@@ -406,22 +396,20 @@ pub(crate) fn start_at_shell_checked(
 /// attempt.
 #[allow(clippy::too_many_arguments)] // one start: its pane, how its shell says it is ready, and its effect admission
 pub(crate) fn start_at_shell_reusing_name(
-    connector: &dyn ApiConnector,
+    engine: &dyn Engine,
     node: Option<&dyn NodeLink>,
     correlation_id: &str,
-    pane_id: &str,
     shell: ShellStart,
-    params: Value,
+    start: &PreparedStart,
     answer_timeout: Duration,
     check: &dyn Fn() -> Result<(), String>,
-) -> Result<Value, StartError> {
+) -> Result<StartedAgent, StartError> {
     start_within(
-        connector,
+        engine,
         node,
         correlation_id,
-        pane_id,
         shell,
-        params,
+        start,
         answer_timeout,
         SHELL_WAIT,
         NAME_RELEASE_WAIT,
@@ -432,28 +420,28 @@ pub(crate) fn start_at_shell_reusing_name(
 #[allow(clippy::disallowed_methods)] // a production wait, not test code
 #[allow(clippy::too_many_arguments)] // one bounded start with shell/name waits and effect admission
 fn start_within(
-    connector: &dyn ApiConnector,
+    engine: &dyn Engine,
     node: Option<&dyn NodeLink>,
     correlation_id: &str,
-    pane_id: &str,
-    start: ShellStart,
-    params: Value,
+    shell_start: ShellStart,
+    start: &PreparedStart,
     answer_timeout: Duration,
     wait: Duration,
     name_release_wait: Duration,
     check: &dyn Fn() -> Result<(), String>,
-) -> Result<Value, StartError> {
+) -> Result<StartedAgent, StartError> {
     let started = Instant::now();
     let deadline = started + wait;
     let name_deadline = started + name_release_wait;
+    let pane_id = start.launch().pane_id.as_str();
     let shell = Shell {
-        connector,
+        engine,
         node,
         correlation_id,
         pane_id,
-        line: wire::agent_start_line_bytes(&params),
-        awaits_mark: std::cell::Cell::new(matches!(start, ShellStart::Integrated { .. })),
-        program: match start {
+        line: start.line(),
+        awaits_mark: std::cell::Cell::new(matches!(shell_start, ShellStart::Integrated { .. })),
+        program: match shell_start {
             ShellStart::Integrated { program } => Some(program),
             ShellStart::Plain => None,
         },
@@ -463,13 +451,7 @@ fn start_within(
     loop {
         shell.wait(started, deadline)?;
         check().map_err(StartError::refused)?;
-        match request_with_correlation_id(
-            connector,
-            correlation_id,
-            "agent.start",
-            params.clone(),
-            answer_timeout,
-        ) {
+        match engine.start_agent(Wait::Each(answer_timeout), start) {
             // Herdr refused before typing anything: something besides the
             // shell runs in the pane. A prompt hook can take the terminal
             // between the read and the start, and on Windows Herdr refuses a
@@ -480,7 +462,7 @@ fn start_within(
             // inside the same deadline, never at once (Windows CI,
             // 2026-10-22: 5,613 refusals in 30 s held the spawn lock and
             // slowed every other Herdr call).
-            Err(ApiError::Remote { code, message }) if code == PANE_BUSY => {
+            Err(EngineError::Refused { code, message }) if code == PANE_BUSY => {
                 busy += 1;
                 let now = Instant::now();
                 if now >= deadline {
@@ -492,14 +474,14 @@ fn start_within(
                         "refusals": busy,
                         "waited_ms": started.elapsed().as_millis() as u64,
                     }));
-                    return Err(StartError::Herdr(ApiError::Remote { code, message }));
+                    return Err(StartError::Herdr(EngineError::Refused { code, message }));
                 }
                 thread::sleep(POLL_INTERVAL.min(deadline - now));
             }
             // Herdr has not yet forgotten the agent this start replaces. It
             // refused before typing anything, so the same start is sent again
             // until it has, inside the name wait.
-            Err(ApiError::Remote { code, .. })
+            Err(EngineError::Refused { code, .. })
                 if code == NAME_TAKEN && Instant::now() < name_deadline =>
             {
                 thread::sleep(POLL_INTERVAL);
@@ -508,18 +490,21 @@ fn start_within(
             // never showed and whose deadline has passed, which it settles
             // only when the name is read: read it once, and send the start
             // again when that let it go.
-            Err(ApiError::Remote { code, message }) if code == NAME_TAKEN && !settled => {
+            Err(EngineError::Refused { code, message }) if code == NAME_TAKEN && !settled => {
                 settled = true;
-                if !shell.settle_name(&params) {
-                    return Err(StartError::Herdr(ApiError::Remote { code, message }));
+                if !shell.settle_name(&start.launch().name) {
+                    return Err(StartError::Herdr(EngineError::Refused { code, message }));
                 }
             }
             answer => {
                 // The session sync reads a start Herdr then holds open only
                 // when it knows Hide made it and when (herdrdev/herdr#3853).
-                if let Some(terminal) = answer.as_ref().ok().and_then(wire::started_agent_terminal)
+                if let Some(terminal) = answer
+                    .as_ref()
+                    .ok()
+                    .and_then(|started| started.terminal_id.as_deref())
                 {
-                    crate::session_sync::record_start(&terminal, Instant::now());
+                    crate::session_sync::record_start(terminal, Instant::now());
                 }
                 return answer.map_err(StartError::Herdr);
             }
@@ -530,7 +515,7 @@ fn start_within(
 /// The pane a start waits on, how many bytes its start line types, whether
 /// its first prompt's mark is still awaited, and from which shell.
 struct Shell<'a> {
-    connector: &'a dyn ApiConnector,
+    engine: &'a dyn Engine,
     node: Option<&'a dyn NodeLink>,
     correlation_id: &'a str,
     pane_id: &'a str,
@@ -555,17 +540,11 @@ impl Shell<'_> {
     /// line over whole.
     #[allow(clippy::disallowed_methods)] // a production wait, not test code
     fn wait(&self, started: Instant, deadline: Instant) -> Result<(), StartError> {
-        let params = wire::pane_process_info_params(self.pane_id).map_err(shell_unreadable)?;
         loop {
-            let group = request_with_connector(
-                self.connector,
-                "pane.process_info",
-                params.clone(),
-                READ_TIMEOUT,
-            )
-            .map_err(|error| format!("pane.process_info failed: {error}"))
-            .and_then(wire::pane_process_group)
-            .map_err(shell_unreadable)?;
+            let group = self
+                .engine
+                .pane_processes(Wait::Each(READ_TIMEOUT), self.pane_id)
+                .map_err(|error| shell_unreadable(error.within("pane.process_info failed")))?;
             // An unmarked shell is still starting whoever else holds the
             // terminal with it (a startup file's own program, or fish's
             // completion generator beside a question); the limit of a
@@ -624,7 +603,7 @@ impl Shell<'_> {
 
     /// Whether the start still waits for the first prompt's mark: only for a
     /// shell the integration reaches, and only until the mark is seen once.
-    fn awaits_prompt(&self, group: &wire::PaneProcessGroup) -> Result<bool, StartError> {
+    fn awaits_prompt(&self, group: &PaneProcessGroup) -> Result<bool, StartError> {
         if !self.awaits_mark.get() {
             return Ok(false);
         }
@@ -648,13 +627,10 @@ impl Shell<'_> {
             self.awaits_mark.set(false);
             return Ok(false);
         }
-        let marked = wire::pane_target_params(self.pane_id)
-            .and_then(|params| {
-                request_with_connector(self.connector, "pane.get", params, READ_TIMEOUT)
-                    .map_err(|error| format!("pane.get failed: {error}"))
-            })
-            .and_then(|pane| wire::pane_token(pane, PROMPT_TOKEN))
-            .map_err(shell_unreadable)?
+        let marked = self
+            .engine
+            .pane_token(Wait::Each(READ_TIMEOUT), self.pane_id, PROMPT_TOKEN)
+            .map_err(|error| shell_unreadable(error.within("pane.get failed")))?
             .is_some();
         self.awaits_mark.set(!marked);
         Ok(!marked)
@@ -664,12 +640,9 @@ impl Shell<'_> {
     /// characters: what a shell stopped in its startup files is asking.
     /// `None` when the screen could not be read or shows nothing.
     fn last_screen_line(&self) -> Option<String> {
-        let text = wire::pane_read_params(self.pane_id, "visible", 40)
-            .and_then(|params| {
-                request_with_connector(self.connector, "pane.read", params, READ_TIMEOUT)
-                    .map_err(|error| error.to_string())
-            })
-            .and_then(wire::pane_text)
+        let text = self
+            .engine
+            .read_pane(Wait::Each(READ_TIMEOUT), self.pane_id, "visible", 40)
             .ok()?
             .text;
         let line = text
@@ -703,17 +676,10 @@ impl Shell<'_> {
     /// read, and an answer that the name names no agent any more means the
     /// start can be sent again. A name still held is an agent's, or a start
     /// that may still show one, and Herdr's refusal is the answer.
-    fn settle_name(&self, params: &Value) -> bool {
-        let Some(name) = params["name"].as_str() else {
-            return false;
-        };
-        let read = wire::agent_target_params(name)
-            .map_err(ApiError::Transport)
-            .and_then(|params| {
-                request_with_connector(self.connector, "agent.get", params, READ_TIMEOUT)
-            });
+    fn settle_name(&self, name: &str) -> bool {
+        let read = self.engine.delivery_agent(Wait::Each(READ_TIMEOUT), name);
         let released =
-            matches!(&read, Err(ApiError::Remote { code, .. }) if code == AGENT_NOT_FOUND);
+            matches!(&read, Err(EngineError::Refused { code, .. }) if code == AGENT_NOT_FOUND);
         crate::diagnostic!(serde_json::json!({
             "component": "agent_start",
             "kind": "held_name.read",
@@ -773,6 +739,27 @@ mod tests {
     use serde_json::{Value, json};
 
     use super::*;
+
+    /// A start as the core prepares it, from the parameters a test names.
+    fn prepared(params: Value) -> PreparedStart {
+        let text = |key: &str, default: &str| params[key].as_str().unwrap_or(default).to_owned();
+        crate::engine::herdr::local("/nonexistent/prepare-only.sock")
+            .prepare_start(crate::engine::AgentLaunch {
+                pane_id: text("pane_id", "w1:p1"),
+                name: text("name", "agent"),
+                kind: text("kind", "claude"),
+                args: params["args"]
+                    .as_array()
+                    .map(|args| {
+                        args.iter()
+                            .map(|arg| arg.as_str().unwrap().to_owned())
+                            .collect()
+                    })
+                    .unwrap_or_default(),
+                codex_daemon: crate::codex_launch::CodexDaemon::Unsupported,
+            })
+            .unwrap()
+    }
     use crate::fake_herdr::FakeHerdr;
 
     const SHELL: u32 = 4100;
@@ -799,7 +786,7 @@ mod tests {
                         reply
                     });
                     let result = confirm_fork_started(
-                        &herdr.connector(),
+                        herdr.engine().as_ref(),
                         "w1:p1",
                         "fork-one",
                         agent.kind(),
@@ -834,7 +821,7 @@ mod tests {
             }})
         });
         let result = confirm_fork_started(
-            &herdr.connector(),
+            herdr.engine().as_ref(),
             "w1:p1",
             "fork-one",
             "claude",
@@ -861,7 +848,7 @@ mod tests {
             }})
         });
         confirm_fork_started(
-            &herdr.connector(),
+            herdr.engine().as_ref(),
             "w1:p1",
             "fork-one",
             "claude",
@@ -911,7 +898,7 @@ mod tests {
                     Duration::from_millis(200)
                 };
             let result = confirm_fork_started(
-                &herdr.connector(),
+                herdr.engine().as_ref(),
                 "w1:p1",
                 "fork-one",
                 "claude",
@@ -949,14 +936,13 @@ mod tests {
         }})
     }
 
-    fn start(herdr: &FakeHerdr, wait: Duration) -> Result<Value, StartError> {
+    fn start(herdr: &FakeHerdr, wait: Duration) -> Result<StartedAgent, StartError> {
         start_within(
-            &herdr.connector(),
+            herdr.engine().as_ref(),
             None,
             "test:start",
-            "w1:p1",
             ShellStart::Plain,
-            json!({"pane_id": "w1:p1"}),
+            &prepared(json!({"pane_id": "w1:p1"})),
             Duration::from_secs(5),
             wait,
             Duration::ZERO,
@@ -964,14 +950,16 @@ mod tests {
         )
     }
 
-    fn start_reusing_name(herdr: &FakeHerdr, name_wait: Duration) -> Result<Value, StartError> {
+    fn start_reusing_name(
+        herdr: &FakeHerdr,
+        name_wait: Duration,
+    ) -> Result<StartedAgent, StartError> {
         start_within(
-            &herdr.connector(),
+            herdr.engine().as_ref(),
             None,
             "test:start",
-            "w1:p1",
             ShellStart::Plain,
-            json!({"pane_id": "w1:p1"}),
+            &prepared(json!({"pane_id": "w1:p1"})),
             Duration::from_secs(5),
             Duration::from_secs(5),
             name_wait,
@@ -1049,7 +1037,7 @@ mod tests {
                 other => panic!("unexpected {other}"),
             });
         let wait = Duration::from_millis(600);
-        let Err(StartError::Herdr(ApiError::Remote { code, .. })) = start(&herdr, wait) else {
+        let Err(StartError::Herdr(EngineError::Refused { code, .. })) = start(&herdr, wait) else {
             panic!("a pane Herdr never frees is not a start");
         };
         assert_eq!(code, PANE_BUSY);
@@ -1075,12 +1063,11 @@ mod tests {
             });
             let checks = std::cell::Cell::new(0);
             let answer = start_within(
-                &herdr.connector(),
+                herdr.engine().as_ref(),
                 None,
                 "checked",
-                "w1:p1",
                 ShellStart::Plain,
-                json!({"pane_id":"w1:p1"}),
+                &prepared(json!({"pane_id":"w1:p1"})),
                 Duration::from_secs(5),
                 Duration::from_secs(5),
                 Duration::ZERO,
@@ -1132,7 +1119,7 @@ mod tests {
             )),
             other => panic!("unexpected {other}"),
         });
-        let Err(StartError::Herdr(ApiError::Remote { code, .. })) =
+        let Err(StartError::Herdr(EngineError::Refused { code, .. })) =
             start(&herdr, Duration::from_secs(5))
         else {
             panic!("a refusal other than a busy pane is not retried");
@@ -1161,14 +1148,13 @@ mod tests {
         assert_eq!(starts.load(Ordering::SeqCst), 3);
     }
 
-    fn start_named(herdr: &FakeHerdr) -> Result<Value, StartError> {
+    fn start_named(herdr: &FakeHerdr) -> Result<StartedAgent, StartError> {
         start_within(
-            &herdr.connector(),
+            herdr.engine().as_ref(),
             None,
             "test:start",
-            "w1:p1",
             ShellStart::Plain,
-            json!({"pane_id": "w1:p1", "name": "factory-hide-t1", "kind": "claude"}),
+            &prepared(json!({"pane_id": "w1:p1", "name": "factory-hide-t1", "kind": "claude"})),
             Duration::from_secs(5),
             Duration::from_secs(5),
             Duration::ZERO,
@@ -1226,7 +1212,7 @@ mod tests {
                     "agent_status": "unknown", "revision": 0, "launch_pending": true}})),
                 other => panic!("unexpected {other}"),
             });
-        let Err(StartError::Herdr(ApiError::Remote { code, .. })) = start_named(&herdr) else {
+        let Err(StartError::Herdr(EngineError::Refused { code, .. })) = start_named(&herdr) else {
             panic!("a name someone else holds is refused");
         };
         assert_eq!(code, NAME_TAKEN);
@@ -1246,14 +1232,14 @@ mod tests {
                 "agent.start" => Err((NAME_TAKEN.into(), "agent name two is already used".into())),
                 other => panic!("unexpected {other}"),
             });
-        let Err(StartError::Herdr(ApiError::Remote { code, .. })) =
+        let Err(StartError::Herdr(EngineError::Refused { code, .. })) =
             start_reusing_name(&herdr, Duration::from_millis(300))
         else {
             panic!("a name that is never released is refused");
         };
         assert_eq!(code, NAME_TAKEN);
         let before = herdr.methods().len();
-        let Err(StartError::Herdr(ApiError::Remote { code, .. })) =
+        let Err(StartError::Herdr(EngineError::Refused { code, .. })) =
             start(&herdr, Duration::from_secs(5))
         else {
             panic!("an ordinary start takes the refusal as the answer");
@@ -1316,14 +1302,13 @@ mod tests {
         node: Option<&dyn NodeLink>,
         bytes: usize,
         wait: Duration,
-    ) -> Result<Value, StartError> {
+    ) -> Result<StartedAgent, StartError> {
         start_within(
-            &herdr.connector(),
+            herdr.engine().as_ref(),
             node,
             "test:start",
-            "w1:p1",
             ShellStart::Plain,
-            json!({"pane_id": "w1:p1", "args": ["--", "가".repeat(bytes / 3)]}),
+            &prepared(json!({"pane_id": "w1:p1", "args": ["--", "가".repeat(bytes / 3)]})),
             Duration::from_secs(5),
             wait,
             Duration::ZERO,
@@ -1432,16 +1417,15 @@ mod tests {
             "agent_status": "idle", "revision": 0, "tokens": tokens}})
     }
 
-    fn start_integrated(herdr: &FakeHerdr, wait: Duration) -> Result<Value, StartError> {
+    fn start_integrated(herdr: &FakeHerdr, wait: Duration) -> Result<StartedAgent, StartError> {
         start_within(
-            &herdr.connector(),
+            herdr.engine().as_ref(),
             None,
             "test:start",
-            "w1:p1",
             ShellStart::Integrated {
                 program: "zsh".into(),
             },
-            json!({"pane_id": "w1:p1"}),
+            &prepared(json!({"pane_id": "w1:p1"})),
             Duration::from_secs(5),
             wait,
             Duration::ZERO,
@@ -1559,14 +1543,13 @@ mod tests {
             other => panic!("unexpected {other}"),
         });
         let answer = start_within(
-            &herdr.connector(),
+            herdr.engine().as_ref(),
             None,
             "test:start",
-            "w1:p1",
             ShellStart::Integrated {
                 program: "powershell".into(),
             },
-            json!({"pane_id": "w1:p1"}),
+            &prepared(json!({"pane_id": "w1:p1"})),
             Duration::from_secs(5),
             Duration::from_millis(300),
             Duration::ZERO,

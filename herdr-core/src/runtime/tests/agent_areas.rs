@@ -701,7 +701,7 @@ fn replacement_unknown_claim_survives_refusal_and_dismissal() {
             replacement: Some(request.context.clone()),
             allow_replacement_create: true,
         },
-        Err(hide_herdr_client::ApiError::Remote {
+        Err(crate::engine::EngineError::Refused {
             code: "replacement_failed".into(),
             message: "created but acknowledgement lost".into(),
         }),
@@ -1031,7 +1031,7 @@ fn close_tab(runtime: &mut Runtime, tab_id: &str) {
 
 /// Herdr's answer to the close's `layout.export`, which captures the tab as
 /// a reopen item, and then to its close.
-fn answer_close(runtime: &mut Runtime, result: Result<(), hide_herdr_client::ApiError>) {
+fn answer_close(runtime: &mut Runtime, result: Result<(), crate::engine::EngineError>) {
     let request = runtime
         .close_operations
         .values()
@@ -1094,7 +1094,7 @@ fn a_closing_tab_leaves_its_area_at_once_and_a_refusal_puts_it_and_the_operator_
 
     answer_close(
         &mut runtime,
-        Err(hide_herdr_client::ApiError::Remote {
+        Err(crate::engine::EngineError::Refused {
             code: "tab_not_closable".into(),
             message: "refused".into(),
         }),
@@ -1295,7 +1295,7 @@ fn entered_from_elsewhere(tabs: &[&str]) -> (Runtime, String, String) {
 fn refuse_close(runtime: &mut Runtime) {
     answer_close(
         runtime,
-        Err(hide_herdr_client::ApiError::Remote {
+        Err(crate::engine::EngineError::Refused {
             code: "tab_not_closable".into(),
             message: "refused".into(),
         }),
@@ -1501,7 +1501,7 @@ fn a_reopen_waiting_for_a_refused_close_is_dropped_and_never_reopens_an_older_cl
     reopen(&mut runtime);
     answer_close(
         &mut runtime,
-        Err(hide_herdr_client::ApiError::Remote {
+        Err(crate::engine::EngineError::Refused {
             code: "tab_not_closable".into(),
             message: "refused".into(),
         }),
@@ -2342,9 +2342,7 @@ fn fork_worker_panic_and_runtime_teardown_discard_the_node_request() {
             socket_path: Default::default(),
             runtime: Arc::downgrade(&runtime),
             notifier: crate::handle::ChangeNotifier::noop(),
-            api_connector: Arc::new(hide_herdr_client::LocalSocketConnector::new(
-                std::path::PathBuf::new(),
-            )),
+            engine: crate::engine::herdr::local(std::path::PathBuf::new()),
             node: Arc::new(hide_node::Local::of_process()),
         };
         if panic_worker {

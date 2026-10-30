@@ -18,7 +18,7 @@
 //!     "pane.focus" => json!({"type": "pane_info", "pane": {...}}),
 //!     other => panic!("unexpected {other}"),
 //! });
-//! focus_pane(&herdr.connector(), "w1:p1");
+//! focus_pane(herdr.engine().as_ref(), "w1:p1");
 //! assert_eq!(herdr.methods(), ["pane.focus"]);
 //! ```
 //!
@@ -40,7 +40,7 @@ use std::time::{Duration, Instant};
 
 use serde_json::Value;
 
-use crate::wire;
+use crate::engine::herdr::wire;
 use hide_herdr_client::LocalSocketConnector;
 use hide_platform::ipc::{LocalListener, LocalStream};
 
@@ -167,6 +167,11 @@ impl FakeHerdr {
 
     pub(crate) fn socket_path(&self) -> &Path {
         &self.socket_path
+    }
+
+    /// The engine that asks this fake, as the core holds one.
+    pub(crate) fn engine(&self) -> crate::engine::SharedEngine {
+        crate::engine::herdr::HerdrEngine::shared(std::sync::Arc::new(self.connector()))
     }
 
     pub(crate) fn connector(&self) -> LocalSocketConnector {

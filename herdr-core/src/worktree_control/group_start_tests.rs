@@ -163,7 +163,7 @@ fn setup(
         socket_path: server.socket_path().to_path_buf(),
         runtime: runtime.weak(),
         notifier: ChangeNotifier::noop(),
-        api_connector: Arc::new(server.connector()),
+        engine: server.engine(),
         node: node.clone(),
     };
     let target = live::WorktreeTarget::local(&context, node);

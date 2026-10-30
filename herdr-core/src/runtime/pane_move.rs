@@ -1,10 +1,10 @@
 //! Existing-terminal relocation. Reservations cover both tabs, a saved intent
 //! precedes every external effect, and recovery only reads authoritative state.
 use super::*;
+use crate::engine::{Engine, SharedEngine, Wait, Zoom};
 use crate::sidebar::SessionSnapshotPayload;
 use crate::split_tree::Edge;
-use crate::{wire, workspace_views};
-use hide_herdr_client::{ApiConnector, request_with_connector};
+use crate::workspace_views;
 use serde::{Deserialize, Serialize};
 use std::sync::mpsc::{Receiver, SyncSender, sync_channel};
 use std::time::Duration;
@@ -202,15 +202,13 @@ impl Runtime {
         self.pane_operation_scope(pane)
             .is_some_and(|tab| self.pane_move_holds_tab(&tab))
     }
-    fn pane_move_connector(&self, device: &str) -> Result<Arc<dyn ApiConnector>, String> {
+    fn pane_move_engine(&self, device: &str) -> Result<SharedEngine, String> {
         if device == self.node.as_str() {
-            self.live
-                .as_ref()
-                .map(|live| Arc::clone(&live.api_connector))
+            self.live.as_ref().map(|live| Arc::clone(&live.engine))
         } else {
             self.remote_controls
                 .get(device)
-                .map(|remote| remote.api_connector())
+                .map(|remote| remote.engine())
         }
         .ok_or_else(|| "The terminal connection is unavailable".into())
     }
@@ -488,7 +486,7 @@ impl Runtime {
             );
             return true;
         }
-        let connector = match self.pane_move_connector(&key.0) {
+        let engine = match self.pane_move_engine(&key.0) {
             Ok(value) => value,
             Err(message) => {
                 self.reject_pane_move(request, message);
@@ -535,7 +533,7 @@ impl Runtime {
         let id = intent.request.request_id.clone();
         if let Err(error) = thread::Builder::new()
             .name("hide-pane-move".into())
-            .spawn(move || run(context, connector, intent, Some(saved), false))
+            .spawn(move || run(context, engine, intent, Some(saved), false))
         {
             self.finish_pane_move(
                 &id,
@@ -682,7 +680,7 @@ impl Runtime {
             );
             return true;
         }
-        let connector = match self.pane_move_connector(&intent.request.workspace.device_id) {
+        let engine = match self.pane_move_engine(&intent.request.workspace.device_id) {
             Ok(value) => value,
             Err(message) => {
                 self.finish_pane_move(&check.request_id, "unknown", Some(message), None);
@@ -705,7 +703,7 @@ impl Runtime {
         );
         if let Err(error) = thread::Builder::new()
             .name("hide-pane-move-check".into())
-            .spawn(move || run(context, connector, intent, None, true))
+            .spawn(move || run(context, engine, intent, None, true))
         {
             self.finish_pane_move(&check.request_id, "unknown", Some(error.to_string()), None);
         }
@@ -1210,15 +1208,8 @@ fn locate<'a>(
         .ok_or("The original terminal has no confirmed layout")?;
     Ok((pane, &layout.tab_id, &layout.workspace_id))
 }
-fn ask(
-    connector: &dyn ApiConnector,
-    method: &str,
-    params: serde_json::Value,
-) -> Result<serde_json::Value, String> {
-    request_with_connector(connector, method, params, CALL_TIMEOUT)
-        .map_err(|error| error.to_string())
-}
-fn execute(connector: &dyn ApiConnector, intent: &Intent, local: bool) -> Result<(), String> {
+const CALL_WAIT: Wait = Wait::Each(CALL_TIMEOUT);
+fn execute(engine: &dyn Engine, intent: &Intent, local: bool) -> Result<(), String> {
     let request = &intent.request;
     let device = &request.workspace.device_id;
     let raw = |kind: &str, id: &str| -> Result<String, String> {
@@ -1234,19 +1225,15 @@ fn execute(connector: &dyn ApiConnector, intent: &Intent, local: bool) -> Result
     let source_tab = raw("tab", &request.source.tab_id)?;
     let mut current = source.clone();
     // Explicit off is harmless for a nonzoomed tab and never runs during drag.
-    ask(connector, "pane.zoom", wire::pane_unzoom_params(&source)?)?;
+    engine.set_zoom(CALL_WAIT, &source, Zoom::Off)?;
     if let Some((tab, pane, edge)) = request.destination.target() {
         let tab = raw("tab", tab)?;
         let pane = raw("pane", pane)?;
         if tab != source_tab {
-            ask(connector, "pane.zoom", wire::pane_unzoom_params(&pane)?)?;
+            engine.set_zoom(CALL_WAIT, &pane, Zoom::Off)?;
         }
         if tab == source_tab {
-            let result = wire::joined_pane(ask(
-                connector,
-                "pane.move",
-                wire::pane_move_to_new_tab_params(&current, &intent.workspace_id, "")?,
-            )?)?;
+            let result = engine.move_pane_apart(CALL_WAIT, &current, &intent.workspace_id, "")?;
             if !result.changed {
                 return Err(format!("Herdr refused the pane move: {:?}", result.reason));
             }
@@ -1255,11 +1242,13 @@ fn execute(connector: &dyn ApiConnector, intent: &Intent, local: bool) -> Result
             }
             current = result.pane_id;
         }
-        let result = wire::joined_pane(ask(
-            connector,
-            "pane.move",
-            wire::pane_insert_params(&current, &tab, &pane, matches!(edge, Edge::Up | Edge::Down))?,
-        )?)?;
+        let result = engine.move_pane_beside(
+            CALL_WAIT,
+            &current,
+            &tab,
+            &pane,
+            matches!(edge, Edge::Up | Edge::Down),
+        )?;
         if !result.changed {
             return Err(format!("Herdr refused the pane move: {:?}", result.reason));
         }
@@ -1267,18 +1256,10 @@ fn execute(connector: &dyn ApiConnector, intent: &Intent, local: bool) -> Result
             return Err("Herdr returned a different terminal identity".into());
         }
         if matches!(edge, Edge::Left | Edge::Up) {
-            ask(
-                connector,
-                "pane.swap",
-                wire::pane_swap_params(&result.pane_id, &pane)?,
-            )?;
+            engine.swap_panes(CALL_WAIT, &result.pane_id, &pane)?;
         }
     } else {
-        let result = wire::joined_pane(ask(
-            connector,
-            "pane.move",
-            wire::pane_move_to_new_tab_params(&current, &intent.workspace_id, "")?,
-        )?)?;
+        let result = engine.move_pane_apart(CALL_WAIT, &current, &intent.workspace_id, "")?;
         if !result.changed {
             return Err(format!("Herdr refused the pane move: {:?}", result.reason));
         }
@@ -1290,7 +1271,7 @@ fn execute(connector: &dyn ApiConnector, intent: &Intent, local: bool) -> Result
 }
 fn run(
     context: RuntimeWorkerContext,
-    connector: Arc<dyn ApiConnector>,
+    engine: SharedEngine,
     intent: Intent,
     saved: Option<Receiver<Result<(), String>>>,
     check_only: bool,
@@ -1316,7 +1297,7 @@ fn run(
             }
         }
     }
-    let baseline = live::fetch_session_with_connector(connector.as_ref());
+    let baseline = live::fetch_session(engine.as_ref());
     let mut effect = Ok(());
     let mut executed = false;
     if !check_only {
@@ -1402,16 +1383,19 @@ fn run(
                 drop(guard);
                 context.notifier.notify();
                 executed = true;
-                execute(connector.as_ref(), &intent, local)
+                execute(engine.as_ref(), &intent, local)
             });
     }
     // Even a malformed/lost answer is followed by an authoritative read.
     // Recovery never executes the mutation above a second time.
     let read_final = || {
-        ask(connector.as_ref(), "session.snapshot", wire::empty_params()).and_then(|value| {
-            session_sync::project_remote_read(value, &intent.request.workspace.device_id)
-                .map_err(|error| error.message().to_owned())
-        })
+        engine
+            .session(CALL_WAIT)
+            .map_err(String::from)
+            .and_then(|state| {
+                session_sync::project_remote_read(state, &intent.request.workspace.device_id)
+                    .map_err(|error| error.message().to_owned())
+            })
     };
     let mut final_payload = read_final();
     let mut restore_failed = false;
@@ -1424,7 +1408,7 @@ fn run(
         })
     {
         let before = baseline.as_ref().expect("checked");
-        if let Err(error) = restore_refused_presentation(connector.as_ref(), before, &intent) {
+        if let Err(error) = restore_refused_presentation(engine.as_ref(), before, &intent) {
             restore_failed = true;
             effect = Err(format!(
                 "The move was refused; its previous zoom or focus could not be restored: {error}"
@@ -1547,19 +1531,15 @@ fn affected_before<'a>(
     })
 }
 fn restore_refused_presentation(
-    connector: &dyn ApiConnector,
+    engine: &dyn Engine,
     before: &SessionSnapshotPayload,
     intent: &Intent,
 ) -> Result<(), String> {
     for layout in affected_before(before, intent).filter(|layout| layout.zoomed) {
-        ask(
-            connector,
-            "pane.zoom",
-            wire::pane_restore_zoom_params(&layout.focused_pane_id)?,
-        )?;
+        engine.set_zoom(CALL_WAIT, &layout.focused_pane_id, Zoom::On)?;
     }
     if let Some(pane) = before.focused_pane_id.as_deref() {
-        ask(connector, "pane.focus", wire::pane_target_params(pane)?)?;
+        engine.focus_pane(CALL_WAIT, pane)?;
     }
     Ok(())
 }
@@ -1998,7 +1978,7 @@ mod tests {
                 }
                 other => panic!("unexpected request {other}"),
             });
-            execute(&server.connector(), &intent(edge, "w1:t1"), true).unwrap();
+            execute(server.engine().as_ref(), &intent(edge, "w1:t1"), true).unwrap();
             let calls = server.calls();
             let moving = calls
                 .iter()
@@ -2037,7 +2017,7 @@ mod tests {
             "pane.move" => Err(("target_pane_not_found".into(), "target ended".into())),
             other => panic!("unexpected {other}"),
         });
-        assert!(execute(&server.connector(), &intent(Edge::Left, "w1:t2"), true).is_err());
+        assert!(execute(server.engine().as_ref(), &intent(Edge::Left, "w1:t2"), true).is_err());
         assert_eq!(server.methods(), ["pane.zoom", "pane.zoom", "pane.move"]);
     }
 
@@ -2049,9 +2029,13 @@ mod tests {
             other => panic!("unexpected {other}"),
         });
         assert!(
-            execute(&server.connector(), &intent(Edge::Right, "w1:t1"), true)
-                .unwrap_err()
-                .contains("different terminal")
+            execute(
+                server.engine().as_ref(),
+                &intent(Edge::Right, "w1:t1"),
+                true
+            )
+            .unwrap_err()
+            .contains("different terminal")
         );
         assert_eq!(server.methods(), ["pane.zoom", "pane.move"]);
     }
@@ -2110,7 +2094,7 @@ mod tests {
                 runtime: runtime.weak(),
                 notifier: ChangeNotifier::noop(),
             },
-            Arc::new(server.connector()),
+            server.engine(),
             intent.clone(),
             Some(saved),
             false,
@@ -2147,8 +2131,12 @@ mod tests {
         let server = FakeHerdr::start("pane-move-restore-zoom", |_, _| json!({"type":"ok"}));
         let mut before = payload(rect(0, 0, 40, 24), rect(40, 0, 40, 24));
         before.layouts[0].zoomed = true;
-        restore_refused_presentation(&server.connector(), &before, &intent(Edge::Right, "w1:t1"))
-            .unwrap();
+        restore_refused_presentation(
+            server.engine().as_ref(),
+            &before,
+            &intent(Edge::Right, "w1:t1"),
+        )
+        .unwrap();
         assert_eq!(
             server.calls(),
             vec![
@@ -2161,7 +2149,7 @@ mod tests {
         let layout =
             moved("w1:p1", "w1:t1", "term-original")["move_result"]["target_layout"].clone();
         json!({"type":"session_snapshot","snapshot":{
-            "protocol":crate::herdr_contract::HERDR_PROTOCOL_REVISION,"version":"fixture",
+            "protocol":crate::engine::herdr::contract::HERDR_PROTOCOL_REVISION,"version":"fixture",
             "focused_workspace_id":"w1","focused_tab_id":"w1:t1","focused_pane_id":"w1:p1",
             "workspaces":[{"workspace_id":"w1","number":1,"label":"fixture","focused":true,"pane_count":1,"tab_count":1,"active_tab_id":"w1:t1","agent_status":"unknown"}],
             "tabs":[{"tab_id":"w1:t1","workspace_id":"w1","number":1,"label":"fixture","focused":true,"pane_count":1,"agent_status":"unknown"}],
@@ -2184,7 +2172,7 @@ mod tests {
                 runtime: runtime.weak(),
                 notifier: ChangeNotifier::noop(),
             },
-            Arc::new(server.connector()),
+            server.engine(),
             intent.clone(),
             None,
             true,

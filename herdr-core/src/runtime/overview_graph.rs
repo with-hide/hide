@@ -23,7 +23,7 @@ impl Runtime {
                 .filter(|launch| {
                     hide_agent_adapter::canonical_kind(&agent.agent_kind) == launch.kind
                         && launch.session.as_ref().is_some_and(|session| {
-                            crate::wire::session_digest(session).as_ref() == Some(digest)
+                            crate::engine::tokens::session_digest(session).as_ref() == Some(digest)
                         })
                 })
                 .map(|launch| &launch.choice);

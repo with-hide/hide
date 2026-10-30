@@ -6,9 +6,9 @@ use std::sync::{Arc, Mutex, Weak};
 use std::thread;
 use std::time::{Duration, Instant};
 
-use crate::wire;
+use crate::engine::{Engine, EngineError, PaneText, SharedEngine, Wait};
 use serde::Deserialize;
-use serde_json::{Value, json};
+use serde_json::json;
 
 use crate::agent_find::AgentFind;
 use crate::checkout_owner::OwnerOpen;
@@ -29,12 +29,6 @@ use crate::sidebar::{
     SessionLayoutPanePayload, SessionLayoutPayload, SessionLayoutRect, SessionSnapshotPayload,
 };
 use crate::workspace;
-#[cfg(test)]
-use hide_herdr_client::HERDR_PROTOCOL_REVISION;
-use hide_herdr_client::{
-    ApiConnector, ApiError, request_small_response, request_with_connector,
-    request_with_correlation_id,
-};
 use hide_node_link::project::ProjectCreated;
 use hide_node_link::protocol::Call;
 
@@ -66,7 +60,8 @@ pub struct LiveContext {
     pub socket_path: PathBuf,
     pub runtime: Weak<Mutex<Runtime>>,
     pub notifier: ChangeNotifier,
-    pub(crate) api_connector: Arc<dyn ApiConnector>,
+    /// This machine's engine.
+    pub(crate) engine: SharedEngine,
     /// The core's own node, which does this machine's work (PRD
     /// core-host-node D-21).
     pub(crate) node: Arc<dyn crate::node_access::NodeLink>,
@@ -242,10 +237,9 @@ pub fn spawn_workspace_creation(
                         workspace::PathIndex::ask(context.node.as_ref(), wanted)
                             .map_err(WorkspaceCreationFailure::failed)
                     };
-                    let before = fetch_session_with_connector(context.api_connector.as_ref())
-                        .map_err(|error| {
-                            WorkspaceCreationFailure::from_session_read("before", &error)
-                        })?;
+                    let before = fetch_session(context.engine.as_ref()).map_err(|error| {
+                        WorkspaceCreationFailure::from_session_read("before", &error)
+                    })?;
                     let before_paths = ask(&before)?;
                     let before_spaces = Runtime::session_spaces(&before, &before_paths);
                     let before_catalog = workspace::build_catalog(
@@ -264,7 +258,7 @@ pub fn spawn_workspace_creation(
                     let created = needs_herdr_workspace
                         .then(|| {
                             ensure_owner(
-                                context.api_connector.as_ref(),
+                                context.engine.as_ref(),
                                 &registered_owner(
                                     &node,
                                     &before_paths,
@@ -278,9 +272,9 @@ pub fn spawn_workspace_creation(
                         })
                         .transpose()?;
                     let session = if created.is_some() {
-                        fetch_session_with_connector(context.api_connector.as_ref()).map_err(
-                            |error| WorkspaceCreationFailure::from_session_read("after", &error),
-                        )?
+                        fetch_session(context.engine.as_ref()).map_err(|error| {
+                            WorkspaceCreationFailure::from_session_read("after", &error)
+                        })?
                     } else {
                         before
                     };
@@ -577,7 +571,7 @@ impl From<String> for ControlFailure {
 #[derive(Clone)]
 pub struct RemoteControlContext {
     target_id: String,
-    api_connector: Arc<dyn ApiConnector>,
+    engine: SharedEngine,
     runtime: Weak<Mutex<Runtime>>,
     notifier: ChangeNotifier,
 }
@@ -585,13 +579,13 @@ pub struct RemoteControlContext {
 impl RemoteControlContext {
     pub(crate) fn new(
         target_id: impl Into<String>,
-        api_connector: Arc<dyn ApiConnector>,
+        engine: SharedEngine,
         runtime: Weak<Mutex<Runtime>>,
         notifier: ChangeNotifier,
     ) -> Self {
         Self {
             target_id: target_id.into(),
-            api_connector,
+            engine,
             runtime,
             notifier,
         }
@@ -601,14 +595,14 @@ impl RemoteControlContext {
         &self.target_id
     }
 
-    /// The Herdr API connection this device's control requests use.
-    pub(crate) fn api_connector(&self) -> Arc<dyn ApiConnector> {
-        Arc::clone(&self.api_connector)
+    /// The engine this device's control requests use.
+    pub(crate) fn engine(&self) -> SharedEngine {
+        Arc::clone(&self.engine)
     }
 }
 
 fn execute_remote_control(
-    connector: &dyn ApiConnector,
+    engine: &dyn Engine,
     action: &RemoteControlAction,
 ) -> Result<RemoteControlOutcome, ControlFailure> {
     let (created_tab_id, created_pane_id) = match action {
@@ -616,7 +610,7 @@ fn execute_remote_control(
             PaneControlAction::Focus { .. }
             | PaneControlAction::Split { .. }
             | PaneControlAction::ToggleZoom { .. }
-            | PaneControlAction::Close { .. } => match execute_pane_control(connector, action)? {
+            | PaneControlAction::Close { .. } => match execute_pane_control(engine, action)? {
                 PaneControlOutcome::Acknowledged { created_pane_id } => (None, created_pane_id),
                 PaneControlOutcome::Unchanged => (None, None),
                 PaneControlOutcome::Projected { .. } => {
@@ -636,15 +630,15 @@ fn execute_remote_control(
             }
         },
         RemoteControlAction::FocusWorkspace { workspace_id } => {
-            mutation_request(
-                connector,
-                "workspace.focus",
-                wire::workspace_target_params(workspace_id)?,
-            )?;
+            engine
+                .focus_workspace(CONTROL_WAIT, workspace_id)
+                .map_err(mutation_failure("workspace.focus"))?;
             (None, None)
         }
         RemoteControlAction::FocusTab { tab_id } => {
-            mutation_request(connector, "tab.focus", wire::tab_target_params(tab_id)?)?;
+            engine
+                .focus_tab(CONTROL_WAIT, tab_id)
+                .map_err(mutation_failure("tab.focus"))?;
             (None, None)
         }
         RemoteControlAction::CreateTab {
@@ -654,18 +648,16 @@ fn execute_remote_control(
             admission_id,
             ..
         } => {
-            let result = mutation_request(
-                connector,
-                "tab.create",
-                wire::tab_create_with_env_params(
+            let (tab_id, pane_id) = engine
+                .create_tab(
+                    CONTROL_WAIT,
                     workspace_id,
                     cwd,
                     label,
                     true,
                     local_create_env(*admission_id),
-                )?,
-            )?;
-            let (tab_id, pane_id) = wire::created_tab(result).map_err(ControlFailure::Ambiguous)?;
+                )
+                .map_err(mutation_failure("tab.create"))?;
             (Some(tab_id), Some(pane_id))
         }
         RemoteControlAction::OpenOwner {
@@ -676,7 +668,7 @@ fn execute_remote_control(
             ..
         } => {
             let tab = open_owner_tab(
-                connector,
+                engine,
                 owner,
                 cwd,
                 label,
@@ -687,15 +679,15 @@ fn execute_remote_control(
             (Some(tab.tab_id), Some(tab.pane_id))
         }
         RemoteControlAction::CloseTab { tab_id } => {
-            mutation_request(connector, "tab.close", wire::tab_target_params(tab_id)?)?;
+            engine
+                .close_tab(CONTROL_WAIT, tab_id)
+                .map_err(mutation_failure("tab.close"))?;
             (None, None)
         }
         RemoteControlAction::RenameTab { tab_id, label, .. } => {
-            mutation_request(
-                connector,
-                "tab.rename",
-                wire::tab_rename_params(tab_id, label)?,
-            )?;
+            engine
+                .rename_tab(CONTROL_WAIT, tab_id, label)
+                .map_err(mutation_failure("tab.rename"))?;
             (None, None)
         }
         RemoteControlAction::MoveTab {
@@ -706,12 +698,9 @@ fn execute_remote_control(
             // `tab.move` answers with the workspace's whole tab list in its
             // new order, so the caller can check what Herdr actually did
             // instead of assuming the request landed as asked.
-            let result = mutation_request(
-                connector,
-                "tab.move",
-                wire::tab_move_params(tab_id, *insert_index)?,
-            )?;
-            let tab_ids = wire::moved_tabs(result).map_err(ControlFailure::Ambiguous)?;
+            let tab_ids = engine
+                .move_tab(CONTROL_WAIT, tab_id, *insert_index)
+                .map_err(mutation_failure("tab.move"))?;
             return Ok(RemoteControlOutcome::TabsOrdered { tab_ids });
         }
     };
@@ -752,7 +741,7 @@ static FOLDER_OWNER_OPEN: std::sync::Mutex<()> = std::sync::Mutex::new(());
 /// owner's first tab, which Herdr starts with its own shell, is replaced by
 /// one that does (PRD agent-start-shell-ready D-10).
 pub(crate) fn open_owner_tab(
-    connector: &dyn ApiConnector,
+    engine: &dyn Engine,
     owner: &OwnerOpen,
     cwd: &str,
     label: &str,
@@ -760,10 +749,10 @@ pub(crate) fn open_owner_tab(
     env: std::collections::BTreeMap<String, String>,
     command: Option<&[String]>,
 ) -> Result<OwnedTab, ControlFailure> {
-    let (workspace_id, first_tab) = ensure_owner(connector, owner, focus, env.clone())?;
+    let (workspace_id, first_tab) = ensure_owner(engine, owner, focus, env.clone())?;
     let owned = match first_tab {
         Some((tab_id, pane_id, initial_label)) if command.is_some() => replace_tab(
-            connector,
+            engine,
             OwnedTab {
                 initial_label,
                 workspace_id,
@@ -782,11 +771,9 @@ pub(crate) fn open_owner_tab(
             // request carries, as `tab.create` would give it; the tab is real
             // either way.
             if !label.trim().is_empty()
-                && let Err(error) = mutation_request(
-                    connector,
-                    "tab.rename",
-                    wire::tab_rename_params(&tab_id, label)?,
-                )
+                && let Err(error) = engine
+                    .rename_tab(CONTROL_WAIT, &tab_id, label)
+                    .map_err(mutation_failure("tab.rename"))
             {
                 crate::diagnostic!(json!({
                     "component": "checkout_owner",
@@ -804,7 +791,7 @@ pub(crate) fn open_owner_tab(
                 launched: matches!(owner, OwnerOpen::Folder { .. }),
             }
         }
-        None => create_tab_in(connector, &workspace_id, cwd, label, focus, env, command)?,
+        None => create_tab_in(engine, &workspace_id, cwd, label, focus, env, command)?,
     };
     crate::diagnostic!(json!({
         "component": "checkout_owner",
@@ -824,7 +811,7 @@ pub(crate) fn open_owner_tab(
 type FirstTab = (String, String, Option<String>);
 
 fn ensure_owner(
-    connector: &dyn ApiConnector,
+    engine: &dyn Engine,
     owner: &OwnerOpen,
     focus: bool,
     env: std::collections::BTreeMap<String, String>,
@@ -835,12 +822,9 @@ fn ensure_owner(
             repository_root,
             label,
         } => {
-            let opened = wire::opened_worktree(mutation_request(
-                connector,
-                "worktree.open",
-                wire::worktree_open_params(path, repository_root, focus)?,
-            )?)
-            .map_err(ControlFailure::Ambiguous)?;
+            let opened = engine
+                .open_worktree(CONTROL_WAIT, path, repository_root, focus)
+                .map_err(mutation_failure("worktree.open"))?;
             if opened.already_open {
                 return Ok((opened.workspace_id, None));
             }
@@ -848,11 +832,9 @@ fn ensure_owner(
             // checkout's name (D-14); the tab is real either way.
             if !label.trim().is_empty()
                 && opened.label != *label
-                && let Err(error) = mutation_request(
-                    connector,
-                    "workspace.rename",
-                    wire::workspace_rename_params(&opened.workspace_id, label)?,
-                )
+                && let Err(error) = engine
+                    .rename_workspace(CONTROL_WAIT, &opened.workspace_id, label)
+                    .map_err(mutation_failure("workspace.rename"))
             {
                 crate::diagnostic!(json!({
                     "component": "checkout_owner",
@@ -873,37 +855,29 @@ fn ensure_owner(
             let _serialized = FOLDER_OWNER_OPEN
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner);
-            let listed = request_with_connector(
-                connector,
-                "workspace.list",
-                wire::workspace_list_params()?,
-                Duration::from_secs(5),
-            )
-            .map_err(|error| ControlFailure::Definite(format!("workspace.list failed: {error}")))
-            .and_then(|value| {
-                wire::listed_workspace_tokens(value, crate::checkout_owner::OWNER_TOKEN)
-                    .map_err(ControlFailure::Definite)
-            })?;
+            let listed = engine
+                .workspace_tokens(CONTROL_WAIT, crate::checkout_owner::OWNER_TOKEN)
+                .map_err(|error| ControlFailure::Definite(error.within("workspace.list failed")))?;
             if let Some((workspace_id, _)) = listed
                 .into_iter()
                 .find(|(_, value)| value.as_deref().is_some_and(|value| owner.marks(value)))
             {
                 return Ok((workspace_id, None));
             }
-            let created = mutation_request(
-                connector,
-                "workspace.create",
-                wire::workspace_create_with_env_params(path, label, focus, env)?,
-            )?;
-            let (workspace_id, tab_id, pane_id) =
-                wire::created_workspace(created).map_err(ControlFailure::Ambiguous)?;
+            let (workspace_id, tab_id, pane_id) = engine
+                .create_workspace(CONTROL_WAIT, path, label, focus, env)
+                .map_err(mutation_failure("workspace.create"))?;
             // The tab is real either way; without its mark only the next tab
             // in this folder makes another owner.
-            if let Err(error) = mutation_request(
-                connector,
-                "workspace.report_metadata",
-                wire::workspace_owner_mark_params(&workspace_id, mark)?,
-            ) {
+            if let Err(error) = engine
+                .report_workspace_token(
+                    CONTROL_WAIT,
+                    &workspace_id,
+                    crate::checkout_owner::OWNER_TOKEN,
+                    Some(mark),
+                )
+                .map_err(mutation_failure("workspace.report_metadata"))
+            {
                 crate::diagnostic!(json!({
                     "component": "checkout_owner",
                     "kind": "owner.mark_failed",
@@ -921,7 +895,7 @@ fn ensure_owner(
 /// `command` when there is one (`layout.apply`) and Herdr's own shell
 /// otherwise (`tab.create`).
 pub(crate) fn create_tab_in(
-    connector: &dyn ApiConnector,
+    engine: &dyn Engine,
     workspace_id: &str,
     cwd: &str,
     label: &str,
@@ -930,18 +904,22 @@ pub(crate) fn create_tab_in(
     command: Option<&[String]>,
 ) -> Result<OwnedTab, ControlFailure> {
     let (tab_id, pane_id) = match command {
-        Some(command) => wire::launched_tab(mutation_request(
-            connector,
-            "layout.apply",
-            wire::launched_tab_params(workspace_id, None, label, focus, cwd, env, command)?,
-        )?),
-        None => wire::created_tab(mutation_request(
-            connector,
-            "tab.create",
-            wire::tab_create_with_env_params(workspace_id, cwd, label, focus, env)?,
-        )?),
-    }
-    .map_err(ControlFailure::Ambiguous)?;
+        Some(command) => engine
+            .launch_tab(
+                CONTROL_WAIT,
+                workspace_id,
+                None,
+                label,
+                focus,
+                cwd,
+                env,
+                command,
+            )
+            .map_err(mutation_failure("layout.apply")),
+        None => engine
+            .create_tab(CONTROL_WAIT, workspace_id, cwd, label, focus, env)
+            .map_err(mutation_failure("tab.create")),
+    }?;
     Ok(OwnedTab {
         initial_label: None,
         workspace_id: workspace_id.to_owned(),
@@ -959,7 +937,7 @@ pub(crate) fn create_tab_in(
 /// launched, and the failure is logged.
 #[allow(clippy::too_many_arguments)] // the tab to replace and what its pane runs
 pub(crate) fn replace_tab(
-    connector: &dyn ApiConnector,
+    engine: &dyn Engine,
     tab: OwnedTab,
     cwd: &str,
     label: &str,
@@ -970,18 +948,18 @@ pub(crate) fn replace_tab(
     let Some(command) = command else {
         return tab;
     };
-    let replaced = wire::launched_tab_params(
-        &tab.workspace_id,
-        Some(&tab.tab_id),
-        label,
-        focus,
-        cwd,
-        env,
-        command,
-    )
-    .map_err(ControlFailure::Definite)
-    .and_then(|params| mutation_request(connector, "layout.apply", params))
-    .and_then(|answer| wire::launched_tab(answer).map_err(ControlFailure::Ambiguous));
+    let replaced = engine
+        .launch_tab(
+            CONTROL_WAIT,
+            &tab.workspace_id,
+            Some(&tab.tab_id),
+            label,
+            focus,
+            cwd,
+            env,
+            command,
+        )
+        .map_err(mutation_failure("layout.apply"));
     crate::diagnostic!(json!({
         "component": "agent_start",
         "kind": "launched_tab.replaced",
@@ -1003,16 +981,18 @@ pub(crate) fn replace_tab(
 }
 
 fn execute_pane_control(
-    connector: &dyn ApiConnector,
+    engine: &dyn Engine,
     action: &PaneControlAction,
 ) -> Result<PaneControlOutcome, ControlFailure> {
     if let PaneControlAction::Project { pane_id } = action {
-        return fetch_pane_layout(connector, pane_id)
+        return fetch_pane_layout(engine, pane_id)
             .map(|layout| PaneControlOutcome::Projected { layout })
             .map_err(ControlFailure::Definite);
     }
     if let PaneControlAction::Focus { pane_id } = action {
-        mutation_request(connector, "pane.focus", wire::pane_target_params(pane_id)?)?;
+        engine
+            .focus_pane(CONTROL_WAIT, pane_id)
+            .map_err(mutation_failure("pane.focus"))?;
         return Ok(PaneControlOutcome::Acknowledged {
             created_pane_id: None,
         });
@@ -1023,12 +1003,9 @@ fn execute_pane_control(
         amount,
     } = action
     {
-        let result = mutation_request(
-            connector,
-            "pane.resize",
-            wire::pane_resize_params(pane_id, *direction, *amount)?,
-        )?;
-        let changed = wire::pane_resize_changed(result).map_err(ControlFailure::Ambiguous)?;
+        let changed = engine
+            .resize_pane(CONTROL_WAIT, pane_id, *direction, *amount)
+            .map_err(mutation_failure("pane.resize"))?;
         return Ok(if changed {
             PaneControlOutcome::Acknowledged {
                 created_pane_id: None,
@@ -1038,8 +1015,9 @@ fn execute_pane_control(
         });
     }
     if let PaneControlAction::ToggleZoom { pane_id } = action {
-        let result = mutation_request(connector, "pane.zoom", wire::pane_zoom_params(pane_id)?)?;
-        let changed = wire::pane_zoom_changed(result).map_err(ControlFailure::Ambiguous)?;
+        let changed = engine
+            .toggle_zoom(CONTROL_WAIT, pane_id)
+            .map_err(mutation_failure("pane.zoom"))?;
         return Ok(if changed {
             PaneControlOutcome::Acknowledged {
                 created_pane_id: None,
@@ -1058,12 +1036,16 @@ fn execute_pane_control(
             // The user split to work in the new pane, so Herdr focuses it as
             // part of the split and the pane_focused event lands the shell's
             // selection there with no second round trip.
-            let params = wire::pane_split_params(pane_id, *direction, cwd.as_deref())?;
-            let result = mutation_request(connector, "pane.split", params)?;
-            Some(wire::split_pane(result).map_err(ControlFailure::Ambiguous)?)
+            Some(
+                engine
+                    .split_pane(CONTROL_WAIT, pane_id, *direction, cwd.as_deref())
+                    .map_err(mutation_failure("pane.split"))?,
+            )
         }
         PaneControlAction::Close { pane_id } => {
-            mutation_request(connector, "pane.close", wire::pane_target_params(pane_id)?)?;
+            engine
+                .close_pane(CONTROL_WAIT, pane_id)
+                .map_err(mutation_failure("pane.close"))?;
             None
         }
         PaneControlAction::MoveToNewTab {
@@ -1071,11 +1053,11 @@ fn execute_pane_control(
             workspace_id,
             label,
         } => {
-            let params = wire::pane_move_to_new_tab_params(pane_id, workspace_id, label)?;
-            let result = mutation_request(connector, "pane.move", params)?;
-            // The created tab is checked here so a refusal Herdr reported as
-            // an unchanged move fails the action rather than reading as done.
-            wire::moved_pane_tab(result).map_err(ControlFailure::Ambiguous)?;
+            // The created tab is checked so a refusal Herdr reported as an
+            // unchanged move fails the action rather than reading as done.
+            engine
+                .move_pane_to_new_tab(CONTROL_WAIT, pane_id, workspace_id, label)
+                .map_err(mutation_failure("pane.move"))?;
             None
         }
         PaneControlAction::Project { .. }
@@ -1086,48 +1068,26 @@ fn execute_pane_control(
     Ok(PaneControlOutcome::Acknowledged { created_pane_id })
 }
 
-fn control_request(
-    connector: &dyn ApiConnector,
-    method: &str,
-    params: Value,
-) -> Result<Value, String> {
-    request_with_connector(connector, method, params, Duration::from_secs(5))
-        .map_err(|error| format!("{method} failed: {error}"))
+/// The bound of one control call: each step within five seconds.
+pub(crate) const CONTROL_WAIT: Wait = Wait::Each(Duration::from_secs(5));
+
+/// A failed read or change `operation` as a control step reports it.
+pub(crate) fn failed(operation: &str) -> impl FnOnce(EngineError) -> String + '_ {
+    move |error| error.within(&format!("{operation} failed"))
 }
 
-fn mutation_request(
-    connector: &dyn ApiConnector,
-    method: &str,
-    params: Value,
-) -> Result<Value, ControlFailure> {
-    request_with_connector(connector, method, params, Duration::from_secs(5)).map_err(|error| {
-        match error {
-            ApiError::Remote { code, message } => {
-                ControlFailure::Definite(format!("{method} was refused: {code}: {message}"))
-            }
-            ApiError::NotRunning(message)
-            | ApiError::Transport(message)
-            | ApiError::Malformed(message) => {
-                ControlFailure::Ambiguous(format!("{method} result is unknown: {message}"))
-            }
+/// A failed change `operation` as the control lane reports it: a refusal
+/// or a request the engine never got is definite, and a call whose answer
+/// never came or could not be read may have happened.
+pub(crate) fn mutation_failure(operation: &str) -> impl FnOnce(EngineError) -> ControlFailure + '_ {
+    move |error| match error {
+        EngineError::Refused { code, message } => {
+            ControlFailure::Definite(format!("{operation} was refused: {code}: {message}"))
         }
-    })
-}
-
-fn reopen_request(
-    connector: &dyn ApiConnector,
-    request_id: &str,
-    method: &str,
-    params: Value,
-) -> Result<Value, String> {
-    request_with_correlation_id(
-        connector,
-        request_id,
-        method,
-        params,
-        Duration::from_secs(5),
-    )
-    .map_err(|error| format!("{method} failed: {error}"))
+        EngineError::Request(message) => ControlFailure::Definite(message),
+        EngineError::Answer(message) => ControlFailure::Ambiguous(message),
+        other => ControlFailure::Ambiguous(format!("{operation} result is unknown: {other}")),
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -1191,7 +1151,7 @@ pub fn spawn_close_capture(
     thread::Builder::new()
         .name("herdr-core-close-capture".to_owned())
         .spawn(move || {
-            let result = capture_close_item(context.api_connector.as_ref(), &request);
+            let result = capture_close_item(context.engine.as_ref(), &request);
             let Some(runtime) = context.runtime.upgrade() else {
                 return;
             };
@@ -1203,7 +1163,7 @@ pub fn spawn_close_capture(
             if changed {
                 context.notifier.notify();
             }
-            run_close_effects(&context, effects);
+            run_close_effects(&context, context.engine.as_ref(), effects);
         })
         .map(|_| ())
         .map_err(|error| format!("close capture worker could not be started: {error}"))
@@ -1212,24 +1172,25 @@ pub fn spawn_close_capture(
 /// Continues the same close operation after a durable sleeping-session
 /// receipt. It neither captures another item nor sends an extra close.
 pub(crate) fn spawn_saved_close_effect(
-    mut context: LiveContext,
+    context: LiveContext,
     effect: CloseEffectRequest,
 ) -> Result<(), String> {
-    context.api_connector = Arc::from(crate::agent_sleep_herdr::fenced_dormant_close_connector(
-        &context, &effect,
-    ));
     thread::Builder::new()
         .name("herdr-core-saved-close".into())
-        .spawn(move || run_close_effects(&context, vec![effect]))
+        .spawn(move || {
+            let gate = crate::agent_sleep_herdr::dormant_close_gate(&context, &effect);
+            let engine = context.engine.gated(gate);
+            run_close_effects(&context, engine.as_ref(), vec![effect]);
+        })
         .map(|_| ())
         .map_err(|_| "The saved close worker could not start".into())
 }
 
-fn run_close_effects(context: &LiveContext, effects: Vec<CloseEffectRequest>) {
+fn run_close_effects(context: &LiveContext, engine: &dyn Engine, effects: Vec<CloseEffectRequest>) {
     for effect in effects {
         let prepared = if let Some(replacement) = &effect.replacement {
             prepare_close_replacement(
-                context.api_connector.as_ref(),
+                engine,
                 &effect.key,
                 replacement,
                 &effect.target,
@@ -1251,15 +1212,14 @@ fn run_close_effects(context: &LiveContext, effects: Vec<CloseEffectRequest>) {
                 context.notifier.notify();
                 Ok(())
             })
-            .map_err(|message| ApiError::Remote {
+            .map_err(|message| EngineError::Refused {
                 code: "replacement_failed".into(),
                 message,
             })
         } else {
             Ok(())
         };
-        let result =
-            prepared.and_then(|()| run_close_effect(context.api_connector.as_ref(), &effect));
+        let result = prepared.and_then(|()| run_close_effect(engine, &effect));
         let Some(runtime) = context.runtime.upgrade() else {
             return;
         };
@@ -1275,7 +1235,7 @@ fn run_close_effects(context: &LiveContext, effects: Vec<CloseEffectRequest>) {
 }
 
 fn capture_close_item(
-    connector: &dyn ApiConnector,
+    engine: &dyn Engine,
     request: &CloseCaptureRequest,
 ) -> Result<CloseCaptureOutcome, String> {
     // A terminal Herdr could not recreate has no live layout to export.
@@ -1294,13 +1254,9 @@ fn capture_close_item(
     {
         return Ok(CloseCaptureOutcome { item: None });
     }
-    let layout_value = reopen_request(
-        connector,
-        &format!("herdr-core:{}:export", request.key),
-        "layout.export",
-        wire::layout_export_params(&request.context.tab_id)?,
-    )?;
-    let layout = wire::exported_layout(layout_value)?;
+    let layout = engine
+        .export_layout(CONTROL_WAIT, &request.context.tab_id)
+        .map_err(failed("layout.export"))?;
     let item = match &request.target {
         CloseCaptureTarget::Pane { pane_id } => {
             let pane = request
@@ -1362,7 +1318,7 @@ impl From<&str> for ReplacementFailure {
 /// primary workspace, or a pane in the closing tab beside the pane `target`
 /// closes when `replacement_in_tab`.
 fn prepare_close_replacement(
-    connector: &dyn ApiConnector,
+    engine: &dyn Engine,
     key: &str,
     context: &ClosedContext,
     target: &CloseCaptureTarget,
@@ -1372,11 +1328,10 @@ fn prepare_close_replacement(
         let CloseCaptureTarget::Pane { pane_id } = target else {
             return Err("a shell inside the tab needs the pane it stands beside".into());
         };
-        return prepare_shell_in_tab(connector, key, context, pane_id, allow_create);
+        return prepare_shell_in_tab(engine, key, context, pane_id, allow_create);
     }
     let started = Instant::now();
-    let snapshot =
-        fetch_session_with_connector(connector).map_err(|error| error.message().to_owned())?;
+    let snapshot = fetch_session(engine).map_err(|error| error.message().to_owned())?;
     if !snapshot
         .workspaces
         .iter()
@@ -1401,7 +1356,7 @@ fn prepare_close_replacement(
         if started.elapsed() > Duration::from_secs(5) {
             return Err("replacement inspection timed out".into());
         }
-        let layout = export_reopen_layout(connector, key, &tab.tab_id)?;
+        let layout = export_reopen_layout(engine, &tab.tab_id)?;
         if layout.tab_id != tab.tab_id || layout.workspace_id != tab.workspace_id {
             return Err("The tab changed during start confirmation. Retry confirmation.".into());
         }
@@ -1420,21 +1375,18 @@ fn prepare_close_replacement(
             );
         }
         None => {
-            let value = reopen_request(
-                connector,
-                &format!("herdr-core:{key}:replacement"),
-                "tab.create",
-                wire::replacement_tab_params(
+            engine
+                .create_replacement_tab(
+                    CONTROL_WAIT,
                     &context.workspace_id,
                     &context.checkout_path,
                     reopen_intent_env(key, ReopenIntentStage::CloseReplacement),
-                )?,
-            )?;
-            wire::created_tab(value)?.0
+                )
+                .map_err(failed("tab.create"))?
+                .0
         }
     };
-    let mut snapshot =
-        fetch_session_with_connector(connector).map_err(|error| error.message().to_owned())?;
+    let mut snapshot = fetch_session(engine).map_err(|error| error.message().to_owned())?;
     if !snapshot
         .tabs
         .iter()
@@ -1450,17 +1402,17 @@ fn prepare_close_replacement(
 /// that pane at the checkout, unfocused, and stamped with the close's marker,
 /// which is the only proof a retry adopts it by.
 fn prepare_shell_in_tab(
-    connector: &dyn ApiConnector,
+    engine: &dyn Engine,
     key: &str,
     context: &ClosedContext,
     closing_pane: &str,
     allow_create: bool,
 ) -> Result<(String, SessionSnapshotPayload), ReplacementFailure> {
-    let pane_id = match marked_shells_in_tab(connector, key, &context.tab_id)?.as_slice() {
+    let pane_id = match marked_shells_in_tab(engine, key, &context.tab_id)?.as_slice() {
         [] if !allow_create => {
             return Err("The replacement shell disappeared; retry to make another".into());
         }
-        [] => split_shell_in_tab(connector, key, context, closing_pane)?,
+        [] => split_shell_in_tab(engine, key, context, closing_pane)?,
         [id] => id.clone(),
         _ => return Err("multiple shells carry the same close intent".into()),
     };
@@ -1468,8 +1420,7 @@ fn prepare_shell_in_tab(
         message,
         shell_in_tab: Some(pane_id.clone()),
     };
-    let mut snapshot = fetch_session_with_connector(connector)
-        .map_err(|error| held(error.message().to_owned()))?;
+    let mut snapshot = fetch_session(engine).map_err(|error| held(error.message().to_owned()))?;
     if !snapshot.layouts.iter().any(|layout| {
         layout.tab_id == context.tab_id && layout.panes.iter().any(|pane| pane.pane_id == pane_id)
     }) {
@@ -1487,11 +1438,11 @@ fn prepare_shell_in_tab(
 }
 
 fn marked_shells_in_tab(
-    connector: &dyn ApiConnector,
+    engine: &dyn Engine,
     key: &str,
     tab_id: &str,
 ) -> Result<Vec<String>, String> {
-    let layout = export_reopen_layout(connector, key, tab_id)?;
+    let layout = export_reopen_layout(engine, tab_id)?;
     let marker = reopen_intent_marker(key, ReopenIntentStage::CloseReplacement);
     let mut owned = Vec::new();
     pane_ids_with_reopen_marker(&layout.root, &marker, &mut owned);
@@ -1501,32 +1452,31 @@ fn marked_shells_in_tab(
 /// A lost or malformed answer can follow a split Herdr made, so a failed
 /// split reads the tab once more for the marked pane a retry would adopt.
 fn split_shell_in_tab(
-    connector: &dyn ApiConnector,
+    engine: &dyn Engine,
     key: &str,
     context: &ClosedContext,
     closing_pane: &str,
 ) -> Result<String, ReplacementFailure> {
-    let params = wire::replacement_pane_params(
-        closing_pane,
-        &context.checkout_path,
-        reopen_intent_env(key, ReopenIntentStage::CloseReplacement),
-    )?;
-    reopen_request(
-        connector,
-        &format!("herdr-core:{key}:replacement"),
-        "pane.split",
-        params,
-    )
-    .and_then(wire::split_pane)
-    .map_err(|message| ReplacementFailure {
-        message,
-        shell_in_tab: marked_shells_in_tab(connector, key, &context.tab_id)
-            .ok()
-            .and_then(|owned| match owned.as_slice() {
-                [id] => Some(id.clone()),
-                _ => None,
-            }),
-    })
+    engine
+        .split_replacement(
+            CONTROL_WAIT,
+            closing_pane,
+            &context.checkout_path,
+            reopen_intent_env(key, ReopenIntentStage::CloseReplacement),
+        )
+        .map_err(|error| match error {
+            // Nothing was sent, so no split can be standing in the tab.
+            EngineError::Request(message) => ReplacementFailure::from(message),
+            error => ReplacementFailure {
+                message: error.within("pane.split failed"),
+                shell_in_tab: marked_shells_in_tab(engine, key, &context.tab_id)
+                    .ok()
+                    .and_then(|owned| match owned.as_slice() {
+                        [id] => Some(id.clone()),
+                        _ => None,
+                    }),
+            },
+        })
 }
 
 /// Herdr reads a new pane's cwd off its process, which still has the
@@ -1555,65 +1505,42 @@ fn place_replacement_at_its_checkout(
     }
 }
 
-fn run_close_effect(
-    connector: &dyn ApiConnector,
-    request: &CloseEffectRequest,
-) -> Result<(), ApiError> {
-    run_close_effect_with_clock(connector, request, &Instant::now)
+fn run_close_effect(engine: &dyn Engine, request: &CloseEffectRequest) -> Result<(), EngineError> {
+    run_close_effect_with_clock(engine, request, &Instant::now)
 }
 
 fn run_close_effect_with_clock(
-    connector: &dyn ApiConnector,
+    engine: &dyn Engine,
     request: &CloseEffectRequest,
     now: &dyn Fn() -> Instant,
-) -> Result<(), ApiError> {
+) -> Result<(), EngineError> {
     check_failed_terminals(
-        connector,
+        engine,
         &request.failed_terminals,
         &request.target,
         request.safety.as_ref(),
         now,
     )?;
-    let (method, params) = match &request.target {
-        CloseCaptureTarget::Pane { pane_id } => (
-            "pane.close",
-            wire::pane_target_params(pane_id).map_err(ApiError::Malformed)?,
-        ),
-        CloseCaptureTarget::Tab { tab_id } => (
-            "tab.close",
-            wire::tab_target_params(tab_id).map_err(ApiError::Malformed)?,
-        ),
-    };
-    request_with_correlation_id(
-        connector,
-        &format!("herdr-core:{}:close", request.key),
-        method,
-        params,
-        close_remaining(request.safety.as_ref(), now())?,
-    )
-    .map(|_| ())
+    let wait = Wait::Each(close_remaining(request.safety.as_ref(), now())?);
+    match &request.target {
+        CloseCaptureTarget::Pane { pane_id } => engine.close_pane(wait, pane_id),
+        CloseCaptureTarget::Tab { tab_id } => engine.close_tab(wait, tab_id),
+    }
 }
 
 /// One fresh read per close, on its existing worker, with no runtime lock held.
 /// Refuse the old authorization if any failed terminal was replaced or recovered.
 fn check_failed_terminals(
-    connector: &dyn ApiConnector,
+    engine: &dyn Engine,
     expected: &[(String, String)],
     target: &CloseCaptureTarget,
     safety: Option<&CloseSafety>,
     now: &dyn Fn() -> Instant,
-) -> Result<(), ApiError> {
+) -> Result<(), EngineError> {
     if expected.is_empty() {
         return Ok(());
     }
-    let value = request_with_connector(
-        connector,
-        "session.snapshot",
-        wire::empty_params(),
-        close_remaining(safety, now())?,
-    )?;
-    let snapshot = wire::snapshot_response(value)
-        .map_err(|error| ApiError::Malformed(error.message().to_owned()))?;
+    let snapshot = engine.session(Wait::Each(close_remaining(safety, now())?))?;
     let scope_valid = match target {
         CloseCaptureTarget::Pane { pane_id } => expected.len() == 1 && expected[0].0 == *pane_id,
         CloseCaptureTarget::Tab { tab_id } => safety.is_some_and(|safety| {
@@ -1666,7 +1593,7 @@ fn check_failed_terminals(
     {
         Ok(())
     } else {
-        Err(ApiError::Remote {
+        Err(EngineError::Refused {
             code: "close_target_changed".into(),
             message:
                 "The terminal changed before closing. Check its current state and close it again."
@@ -1675,12 +1602,12 @@ fn check_failed_terminals(
     }
 }
 
-fn close_remaining(safety: Option<&CloseSafety>, now: Instant) -> Result<Duration, ApiError> {
+fn close_remaining(safety: Option<&CloseSafety>, now: Instant) -> Result<Duration, EngineError> {
     match safety {
         None => Ok(Duration::from_secs(5)),
         Some(safety) => safety.deadline.checked_duration_since(now)
             .filter(|remaining| !remaining.is_zero())
-            .ok_or_else(|| ApiError::Remote {
+            .ok_or_else(|| EngineError::Refused {
                 code: "close_deadline_expired".into(),
                 message: "The close expired before it was sent. Check its current state and close it again.".into(),
             }),
@@ -1721,7 +1648,7 @@ pub fn spawn_close_status_checks(
     thread::Builder::new()
         .name("herdr-core-close-status-check".to_owned())
         .spawn(move || {
-            let result = fetch_session_with_connector(context.api_connector.as_ref());
+            let result = fetch_session(context.engine.as_ref());
             let Some(runtime) = context.runtime.upgrade() else {
                 return;
             };
@@ -1851,22 +1778,16 @@ fn layout_has_reopen_marker(layout: &crate::recent_closed::ClosedLayout, marker:
 }
 
 fn export_reopen_layout(
-    connector: &dyn ApiConnector,
-    key: &str,
+    engine: &dyn Engine,
     tab_id: &str,
 ) -> Result<crate::recent_closed::ClosedLayout, String> {
-    let exported = reopen_request(
-        connector,
-        &format!("herdr-core:{key}:inspect:{tab_id}"),
-        "layout.export",
-        wire::layout_export_params(tab_id)?,
-    )?;
-    wire::exported_layout(exported)
+    engine
+        .export_layout(CONTROL_WAIT, tab_id)
+        .map_err(failed("layout.export"))
 }
 
 fn restore_tab_position(
-    connector: &dyn ApiConnector,
-    key: &str,
+    engine: &dyn Engine,
     context: &ClosedContext,
     layout: crate::recent_closed::ClosedLayout,
     notices: &mut Vec<String>,
@@ -1878,22 +1799,9 @@ fn restore_tab_position(
     if layout.workspace_id != context.workspace_id {
         return layout;
     }
-    let params = match wire::tab_move_params(&layout.tab_id, context.tab_index) {
-        Ok(params) => params,
-        Err(message) => {
-            notices.push(format!(
-                "The tab reopened but its original position could not be restored: {message}"
-            ));
-            return layout;
-        }
-    };
-    let move_result = reopen_request(
-        connector,
-        &format!("herdr-core:{key}:tab-position"),
-        "tab.move",
-        params,
-    )
-    .and_then(wire::moved_tabs);
+    let move_result = engine
+        .move_tab(CONTROL_WAIT, &layout.tab_id, context.tab_index)
+        .map_err(failed("tab.move"));
     if let Err(message) = move_result {
         notices.push(format!(
             "The tab reopened but its original position could not be restored: {message}"
@@ -1945,7 +1853,7 @@ pub fn spawn_reopen(context: LiveContext, request: ReopenRequest) -> Result<(), 
         .spawn(move || {
             let node = context.node.as_ref();
             let folders = |path: &str| crate::node_access::is_directory(node, path);
-            let result = run_herdr_reopen(context.api_connector.as_ref(), &folders, &request)
+            let result = run_herdr_reopen(context.engine.as_ref(), &folders, &request)
                 .map(FileReopenResultOrHerdr::Herdr);
             let Some(runtime) = context.runtime.upgrade() else {
                 return;
@@ -2014,7 +1922,7 @@ fn run_file_reopen(
 /// `folders` says whether a closed pane's folder is still a directory on the
 /// node that held it.
 fn run_herdr_reopen(
-    connector: &dyn ApiConnector,
+    engine: &dyn Engine,
     folders: &dyn Fn(&str) -> bool,
     request: &ReopenRequest,
 ) -> Result<ReopenOutcome, String> {
@@ -2024,14 +1932,14 @@ fn run_herdr_reopen(
             context,
             pane,
             placement,
-        } => reopen_pane(connector, folders, key, context, pane, placement, request),
+        } => reopen_pane(engine, folders, key, context, pane, placement, request),
         ClosedItem::Tab {
             key,
             context,
             layout,
             panes,
         } => reopen_tab(
-            connector,
+            engine,
             folders,
             key,
             context,
@@ -2049,7 +1957,7 @@ fn run_herdr_reopen(
 /// Creates or adopts exactly one intent-marked wake tab in the current
 /// checkout owner. No folder substitution or fresh-agent fallback is allowed.
 pub(crate) fn create_sleep_tab(
-    connector: &dyn ApiConnector,
+    engine: &dyn Engine,
     node: &dyn crate::node_access::NodeLink,
     key: &str,
     context: &ClosedContext,
@@ -2067,15 +1975,14 @@ pub(crate) fn create_sleep_tab(
         env: Default::default(),
     };
     let mut notices = Vec::new();
-    let layout =
-        ensure_workspace_and_tab(connector, key, context, owner, false, &root, &mut notices)?;
+    let layout = ensure_workspace_and_tab(engine, key, context, owner, false, &root, &mut notices)?;
     // Position notices do not change the owned tab/pane identity or cwd.
     for _ in notices {
         crate::diagnostic!(
             serde_json::json!({"component":"agent_sleep", "kind":"agent_sleep.wake_tab_position_unconfirmed", "sleep_id":key})
         );
     }
-    let snapshot = fetch_session_with_connector(connector)
+    let snapshot = fetch_session(engine)
         .map_err(|_| "The wake tab exists but its current topology could not be read".to_owned())?;
     Ok((layout.tab_id, layout.focused_pane_id, snapshot))
 }
@@ -2089,7 +1996,7 @@ struct ReopenIntentMatch {
 /// Searches only current-owner tabs carrying the exact intent marker.
 /// This part of reopen is read-only and is also used to inspect uncertain wakes.
 fn find_reopen_intent(
-    connector: &dyn ApiConnector,
+    engine: &dyn Engine,
     key: &str,
     context: &ClosedContext,
     owner: &OwnerOpen,
@@ -2139,7 +2046,7 @@ fn find_reopen_intent(
         if started.elapsed() > Duration::from_secs(5) {
             return Err("Saved-intent inspection timed out".into());
         }
-        let layout = export_reopen_layout(connector, key, &tab.tab_id)?;
+        let layout = export_reopen_layout(engine, &tab.tab_id)?;
         if layout_has_reopen_marker(&layout, &layout_marker) {
             recovered_layouts.push(layout);
         } else if layout_has_reopen_marker(&layout, &workspace_marker) {
@@ -2166,13 +2073,13 @@ fn find_reopen_intent(
 }
 
 pub(crate) fn inspect_sleep_tab(
-    connector: &dyn ApiConnector,
+    engine: &dyn Engine,
     key: &str,
     context: &ClosedContext,
     owner: &OwnerOpen,
     snapshot: &SessionSnapshotPayload,
 ) -> Result<Option<(String, String)>, String> {
-    let found = find_reopen_intent(connector, key, context, owner, snapshot)?;
+    let found = find_reopen_intent(engine, key, context, owner, snapshot)?;
     match found.layout {
         Some(layout) if layout.root.pane_count() == 1 => {
             Ok(Some((layout.tab_id, layout.focused_pane_id)))
@@ -2183,7 +2090,7 @@ pub(crate) fn inspect_sleep_tab(
 }
 
 fn ensure_workspace_and_tab(
-    connector: &dyn ApiConnector,
+    engine: &dyn Engine,
     key: &str,
     context: &ClosedContext,
     owner: &OwnerOpen,
@@ -2194,14 +2101,12 @@ fn ensure_workspace_and_tab(
     if tab_exists {
         return Err("the requested tab already exists".into());
     }
-    let snapshot = fetch_session_with_connector(connector)
+    let snapshot = fetch_session(engine)
         .map_err(|error| format!("session.snapshot before reopen failed: {}", error.message()))?;
-    let found = find_reopen_intent(connector, key, context, owner, &snapshot)?;
+    let found = find_reopen_intent(engine, key, context, owner, &snapshot)?;
     if let Some(layout) = found.layout {
-        let layout = repair_incomplete_tab_layout(connector, key, context, root, layout, notices)?;
-        return Ok(restore_tab_position(
-            connector, key, context, layout, notices,
-        ));
+        let layout = repair_incomplete_tab_layout(engine, key, context, root, layout, notices)?;
+        return Ok(restore_tab_position(engine, context, layout, notices));
     }
     let (workspace_id, seed_tab_id) = if let Some(seed) = found.workspace_seed {
         (seed.0, Some(seed.1))
@@ -2210,7 +2115,7 @@ fn ensure_workspace_and_tab(
     } else {
         // The owner's first tab is the seed the layout replaces.
         let (workspace_id, first_tab) = ensure_owner(
-            connector,
+            engine,
             owner,
             true,
             reopen_intent_env(key, ReopenIntentStage::Workspace),
@@ -2219,26 +2124,21 @@ fn ensure_workspace_and_tab(
         (workspace_id, first_tab.map(|(tab_id, _, _)| tab_id))
     };
     let tagged_root = tag_reopen_layout(root, key, ReopenIntentStage::Layout);
-    let applied = reopen_request(
-        connector,
-        &format!("herdr-core:{key}:layout"),
-        "layout.apply",
-        wire::layout_apply_params(
+    let layout = engine
+        .apply_layout(
+            CONTROL_WAIT,
             &workspace_id,
             seed_tab_id.as_deref(),
             context.herdr_tab_label(),
             &tagged_root,
-        )?,
-    )?;
-    let layout = wire::applied_layout(applied)?;
-    let layout = repair_incomplete_tab_layout(connector, key, context, root, layout, notices)?;
-    Ok(restore_tab_position(
-        connector, key, context, layout, notices,
-    ))
+        )
+        .map_err(failed("layout.apply"))?;
+    let layout = repair_incomplete_tab_layout(engine, key, context, root, layout, notices)?;
+    Ok(restore_tab_position(engine, context, layout, notices))
 }
 
 fn repair_incomplete_tab_layout(
-    connector: &dyn ApiConnector,
+    engine: &dyn Engine,
     key: &str,
     context: &ClosedContext,
     root: &ClosedLayoutNode,
@@ -2255,18 +2155,15 @@ fn repair_incomplete_tab_layout(
             "the reopened tab returned {first_actual} panes, expected {expected}; extra panes were not adopted or overwritten and retry is available"
         ));
     }
-    let repaired = reopen_request(
-        connector,
-        &format!("herdr-core:{key}:layout-repair"),
-        "layout.apply",
-        wire::layout_apply_params(
+    layout = engine
+        .apply_layout(
+            CONTROL_WAIT,
             &layout.workspace_id,
             Some(&layout.tab_id),
             context.herdr_tab_label(),
             &tag_reopen_layout(root, key, ReopenIntentStage::Layout),
-        )?,
-    )?;
-    layout = wire::applied_layout(repaired)?;
+        )
+        .map_err(failed("layout.apply"))?;
     let repaired_actual = layout.root.pane_count();
     if repaired_actual > expected {
         return Err(format!(
@@ -2283,7 +2180,7 @@ fn repair_incomplete_tab_layout(
 }
 
 fn reopen_pane(
-    connector: &dyn ApiConnector,
+    engine: &dyn Engine,
     folders: &dyn Fn(&str) -> bool,
     key: &str,
     context: &ClosedContext,
@@ -2294,7 +2191,7 @@ fn reopen_pane(
     let mut notices = Vec::new();
     let cwd = restored_cwd(folders, &pane.cwd, &context.checkout_path, &mut notices);
     let (restored_pane_id, restored_tab_id) = if request.tab_exists {
-        let current_layout = export_reopen_layout(connector, key, &context.tab_id)?;
+        let current_layout = export_reopen_layout(engine, &context.tab_id)?;
         let marker = reopen_intent_marker(key, ReopenIntentStage::Pane);
         let mut recovered_panes = Vec::new();
         pane_ids_with_reopen_marker(&current_layout.root, &marker, &mut recovered_panes);
@@ -2315,19 +2212,17 @@ fn reopen_pane(
                     "the original sibling pane {target} is no longer available"
                 ));
             }
-            let value = reopen_request(
-                connector,
-                &format!("herdr-core:{key}:pane"),
-                "pane.split",
-                wire::pane_split_with_ratio_params(
+            let pane_id = engine
+                .split_pane_at(
+                    CONTROL_WAIT,
                     target,
                     placement.direction,
                     &cwd,
                     placement.ratio,
                     reopen_intent_env(key, ReopenIntentStage::Pane),
-                )?,
-            )?;
-            (wire::split_pane(value)?, false)
+                )
+                .map_err(failed("pane.split"))?;
+            (pane_id, false)
         } else {
             let pane_root = tag_reopen_layout(
                 &ClosedLayoutNode::Pane {
@@ -2348,20 +2243,17 @@ fn reopen_pane(
                 placement.ratio,
                 placement.target_was_first,
             )?;
-            let value = reopen_request(
-                connector,
-                &format!("herdr-core:{key}:pane-layout"),
-                "layout.apply",
-                // The tab is still there under the name it has now, which
-                // may be a rename made after the close.
-                wire::layout_apply_params(
+            // The tab is still there under the name it has now, which may
+            // be a rename made after the close.
+            let applied = engine
+                .apply_layout(
+                    CONTROL_WAIT,
                     &current_layout.workspace_id,
                     Some(&context.tab_id),
                     None,
                     &root,
-                )?,
-            )?;
-            let applied = wire::applied_layout(value)?;
+                )
+                .map_err(failed("layout.apply"))?;
             let mut owned = Vec::new();
             pane_ids_with_reopen_marker(&applied.root, &marker, &mut owned);
             if owned.len() != 1 {
@@ -2374,12 +2266,9 @@ fn reopen_pane(
         };
         if current_target_was_first != placement.target_was_first
             && let Some(target) = placement.neighbor_pane_id.as_ref()
-            && let Err(message) = reopen_request(
-                connector,
-                &format!("herdr-core:{key}:swap"),
-                "pane.swap",
-                wire::pane_swap_params(&new_pane_id, target)?,
-            )
+            && let Err(message) = engine
+                .swap_panes(CONTROL_WAIT, &new_pane_id, target)
+                .map_err(failed("pane.swap"))
         {
             notices.push(format!(
                 "The pane reopened but its original side could not be restored: {message}"
@@ -2395,7 +2284,7 @@ fn reopen_pane(
             env: Default::default(),
         };
         let layout = ensure_workspace_and_tab(
-            connector,
+            engine,
             key,
             context,
             reopen_owner(request)?,
@@ -2410,7 +2299,7 @@ fn reopen_pane(
         .as_ref()
         .and_then(|agent| {
             start_or_degrade_agent(
-                connector,
+                engine,
                 key,
                 0,
                 &restored_pane_id,
@@ -2507,7 +2396,7 @@ fn reopen_owner(request: &ReopenRequest) -> Result<&OwnerOpen, String> {
 
 #[allow(clippy::too_many_arguments)] // one closed tab with its owner, layout and folders
 fn reopen_tab(
-    connector: &dyn ApiConnector,
+    engine: &dyn Engine,
     folders: &dyn Fn(&str) -> bool,
     key: &str,
     context: &ClosedContext,
@@ -2532,7 +2421,7 @@ fn reopen_tab(
         return Err("the closed tab contained no panes".into());
     };
     let layout = ensure_workspace_and_tab(
-        connector,
+        engine,
         key,
         context,
         owner,
@@ -2559,7 +2448,7 @@ fn reopen_tab(
         }
         if let Some(agent) = &pane.agent {
             agents.extend(start_or_degrade_agent(
-                connector,
+                engine,
                 key,
                 index,
                 new_id,
@@ -2617,7 +2506,7 @@ fn restored_cwd(
 /// the resume does not take, each with the launch choice it was started
 /// with; answers what started, or none when only the shell was kept.
 fn start_or_degrade_agent(
-    connector: &dyn ApiConnector,
+    engine: &dyn Engine,
     key: &str,
     index: usize,
     pane_id: &str,
@@ -2642,7 +2531,7 @@ fn start_or_degrade_agent(
         launch: agent.launch.clone(),
         session_id: session_id.cloned(),
     };
-    let interrupted_reused_agent = interrupt_reused_agent(connector, key, index, pane_id);
+    let interrupted_reused_agent = interrupt_reused_agent(engine, pane_id);
     let pane_was_clear = matches!(&interrupted_reused_agent, Ok(false));
     let resume = resume_arguments(agent);
     if let Some(mut args) = resume {
@@ -2650,7 +2539,7 @@ fn start_or_degrade_agent(
         // A resume line is a session id, far under every terminal's line
         // limit, so the restore asks no node.
         let result = start_agent(
-            connector,
+            engine,
             None,
             &format!("herdr-core:{key}:agent:{index}:resume"),
             pane_id,
@@ -2660,7 +2549,7 @@ fn start_or_degrade_agent(
             args,
             codex_daemon,
         );
-        if result.is_ok() || (pane_was_clear && agent_is_running(connector, pane_id, &agent.kind)) {
+        if result.is_ok() || (pane_was_clear && agent_is_running(engine, pane_id, &agent.kind)) {
             return Some(started(agent.session_id.as_ref()));
         }
         let preparation = interrupted_reused_agent
@@ -2677,7 +2566,7 @@ fn start_or_degrade_agent(
             .push("Previous conversation could not be resumed; started a new conversation".into());
     }
     if let Err(message) = start_agent(
-        connector,
+        engine,
         None,
         &format!("herdr-core:{key}:agent:{index}:fresh"),
         pane_id,
@@ -2686,7 +2575,7 @@ fn start_or_degrade_agent(
         &agent.kind,
         launch,
         codex_daemon,
-    ) && !(pane_was_clear && agent_is_running(connector, pane_id, &agent.kind))
+    ) && !(pane_was_clear && agent_is_running(engine, pane_id, &agent.kind))
     {
         notices.push(format!(
             "Agent could not be started; the shell was kept: {message}"
@@ -2702,13 +2591,8 @@ fn start_or_degrade_agent(
 /// here returns the restored pane to its shell prompt; the start waits for
 /// that prompt (`agent_start`) and `agent.start` remains the single owner of
 /// session resumption.
-fn interrupt_reused_agent(
-    connector: &dyn ApiConnector,
-    key: &str,
-    index: usize,
-    pane_id: &str,
-) -> Result<bool, String> {
-    let snapshot = fetch_session_with_connector(connector).map_err(|error| {
+fn interrupt_reused_agent(engine: &dyn Engine, pane_id: &str) -> Result<bool, String> {
+    let snapshot = fetch_session(engine).map_err(|error| {
         format!(
             "session.snapshot before agent resume failed: {}",
             error.message()
@@ -2721,17 +2605,14 @@ fn interrupt_reused_agent(
     {
         return Ok(false);
     }
-    reopen_request(
-        connector,
-        &format!("herdr-core:{key}:agent:{index}:interrupt-reused"),
-        "pane.send_text",
-        wire::pane_send_text_params(pane_id, "\u{3}")?,
-    )?;
+    engine
+        .send_text(CONTROL_WAIT, pane_id, "\u{3}")
+        .map_err(failed("pane.send_text"))?;
     Ok(true)
 }
 
-fn agent_is_running(connector: &dyn ApiConnector, pane_id: &str, kind: &str) -> bool {
-    fetch_session_with_connector(connector).is_ok_and(|snapshot| {
+fn agent_is_running(engine: &dyn Engine, pane_id: &str, kind: &str) -> bool {
+    fetch_session(engine).is_ok_and(|snapshot| {
         snapshot.agents.iter().any(|agent| {
             agent.pane_id.as_deref() == Some(pane_id)
                 && agent.agent.as_deref().is_some_and(|agent_kind| {
@@ -2748,7 +2629,7 @@ fn agent_is_running(connector: &dyn ApiConnector, pane_id: &str, kind: &str) -> 
 /// so the spawn that asked can say what the shell waits for.
 #[allow(clippy::too_many_arguments)] // the start identity and the pane's node
 pub(crate) fn start_agent(
-    connector: &dyn ApiConnector,
+    engine: &dyn Engine,
     node: Option<&dyn crate::node_access::NodeLink>,
     request_id: &str,
     pane_id: &str,
@@ -2759,7 +2640,7 @@ pub(crate) fn start_agent(
     codex_daemon: crate::codex_launch::CodexDaemon,
 ) -> Result<String, String> {
     start_agent_checked(
-        connector,
+        engine,
         node,
         request_id,
         pane_id,
@@ -2777,7 +2658,7 @@ pub(crate) fn start_agent(
         ),
         // Herdr refused the pane as busy until the start's deadline: nothing
         // was typed, and the same intent asks again in the same pane.
-        crate::agent_start::StartError::Herdr(ApiError::Remote { code, .. })
+        crate::agent_start::StartError::Herdr(EngineError::Refused { code, .. })
             if code == crate::agent_start::PANE_BUSY =>
         {
             PANE_BUSY_REFUSAL.to_owned()
@@ -2791,7 +2672,7 @@ pub(crate) const PANE_BUSY_REFUSAL: &str = "pane_busy";
 
 #[allow(clippy::too_many_arguments)] // the existing start identity plus its effect admission
 fn start_agent_checked(
-    connector: &dyn ApiConnector,
+    engine: &dyn Engine,
     node: Option<&dyn crate::node_access::NodeLink>,
     request_id: &str,
     pane_id: &str,
@@ -2802,25 +2683,36 @@ fn start_agent_checked(
     codex_daemon: crate::codex_launch::CodexDaemon,
     check: &dyn Fn() -> Result<(), String>,
 ) -> Result<String, crate::agent_start::StartError> {
-    let answer = crate::agent_start::start_at_shell_checked(
-        connector,
+    let start = engine
+        .prepare_start(crate::engine::AgentLaunch {
+            pane_id: pane_id.to_owned(),
+            name: name.to_owned(),
+            kind: kind.to_owned(),
+            args,
+            codex_daemon,
+        })
+        .map_err(|detail| crate::agent_start::StartError::NotStarted {
+            reason: "agent_start.failed".into(),
+            detail,
+        })?;
+    match crate::agent_start::start_at_shell_checked(
+        engine,
         node,
         request_id,
-        pane_id,
         shell,
-        wire::agent_start_params(pane_id, name, kind, args, codex_daemon).map_err(|detail| {
-            crate::agent_start::StartError::NotStarted {
-                reason: "agent_start.failed".into(),
-                detail,
-            }
-        })?,
+        &start,
         Duration::from_secs(5),
         check,
-    )?;
-    wire::started_agent(answer).map_err(|detail| crate::agent_start::StartError::NotStarted {
-        reason: "agent_start.unconfirmed".into(),
-        detail,
-    })
+    ) {
+        Ok(started) => Ok(started.pane_id),
+        Err(crate::agent_start::StartError::Herdr(EngineError::Answer(detail))) => {
+            Err(crate::agent_start::StartError::NotStarted {
+                reason: "agent_start.unconfirmed".into(),
+                detail,
+            })
+        }
+        Err(error) => Err(error),
+    }
 }
 
 /// A start's failure as an operator reads it.
@@ -2913,47 +2805,32 @@ pub(crate) fn confirm_session_launch(
     check()
 }
 
-fn fetch_pane_layout(
-    connector: &dyn ApiConnector,
-    pane_id: &str,
-) -> Result<PaneLayoutSnapshot, String> {
-    let result = control_request(connector, "pane.layout", wire::pane_layout_params(pane_id)?)?;
-    let layout = wire::pane_layout(result)?;
+fn fetch_pane_layout(engine: &dyn Engine, pane_id: &str) -> Result<PaneLayoutSnapshot, String> {
+    let layout = engine
+        .pane_layout(CONTROL_WAIT, pane_id)
+        .map_err(failed("pane.layout"))?;
     project_layout(&layout)
 }
 
 fn execute_pane_focus(
-    connector: &dyn ApiConnector,
+    engine: &dyn Engine,
     pane_id: &str,
 ) -> Result<PaneLayoutSnapshot, ControlFailure> {
-    execute_pane_focus_with_timeout(connector, pane_id, Duration::from_secs(5))
+    execute_pane_focus_with_timeout(engine, pane_id, Duration::from_secs(5))
 }
 
 fn execute_pane_focus_with_timeout(
-    connector: &dyn ApiConnector,
+    engine: &dyn Engine,
     pane_id: &str,
     response_timeout: Duration,
 ) -> Result<PaneLayoutSnapshot, ControlFailure> {
     // These three responses share the established absolute read deadline and
     // 64 KiB frame cap. A lost mutation response has a different outcome from
     // an authoritative read failing after Herdr already acknowledged it.
-    request_small_response(
-        connector,
-        "pane.focus",
-        wire::pane_target_params(pane_id)?,
-        response_timeout,
-    )
-    .map_err(|error| match error {
-        ApiError::Remote { code, message } => {
-            ControlFailure::Definite(format!("pane.focus was refused: {code}: {message}"))
-        }
-        ApiError::NotRunning(message)
-        | ApiError::Transport(message)
-        | ApiError::Malformed(message) => {
-            ControlFailure::Ambiguous(format!("pane.focus result is unknown: {message}"))
-        }
-    })?;
-    confirm_pane_focus_with_timeout(connector, pane_id, response_timeout)
+    engine
+        .focus_pane(Wait::Small(response_timeout), pane_id)
+        .map_err(mutation_failure("pane.focus"))?;
+    confirm_pane_focus_with_timeout(engine, pane_id, response_timeout)
 }
 
 /// Herdr's answer to whether a pane holds its focus.
@@ -2971,8 +2848,8 @@ pub(crate) enum FocusReadback {
 /// Read current focus without producing another focus effect. Herdr's pinned
 /// event stream has no ordering cursor, so an external move needs this same
 /// confirmation before an older queued layout can replace Hide's selection.
-pub(crate) fn confirm_pane_focus(connector: &dyn ApiConnector, pane_id: &str) -> FocusReadback {
-    match read_pane_focus(connector, pane_id, Duration::from_secs(5)) {
+pub(crate) fn confirm_pane_focus(engine: &dyn Engine, pane_id: &str) -> FocusReadback {
+    match read_pane_focus(engine, pane_id, Duration::from_secs(5)) {
         Ok((layout, active_tab_id))
             if layout.focused_pane_id == pane_id && active_tab_id == layout.tab_id =>
         {
@@ -2984,11 +2861,11 @@ pub(crate) fn confirm_pane_focus(connector: &dyn ApiConnector, pane_id: &str) ->
 }
 
 fn confirm_pane_focus_with_timeout(
-    connector: &dyn ApiConnector,
+    engine: &dyn Engine,
     pane_id: &str,
     response_timeout: Duration,
 ) -> Result<PaneLayoutSnapshot, ControlFailure> {
-    let (layout, active_tab_id) = read_pane_focus(connector, pane_id, response_timeout)?;
+    let (layout, active_tab_id) = read_pane_focus(engine, pane_id, response_timeout)?;
     if layout.focused_pane_id != pane_id || active_tab_id != layout.tab_id {
         return Err(ControlFailure::Definite(format!(
             "Herdr did not confirm pane {pane_id}: pane {} is focused in tab {}, and workspace {} shows tab {active_tab_id}",
@@ -3001,26 +2878,17 @@ fn confirm_pane_focus_with_timeout(
 /// Herdr's layout of the tab holding `pane_id` and the tab its workspace
 /// shows.
 fn read_pane_focus(
-    connector: &dyn ApiConnector,
+    engine: &dyn Engine,
     pane_id: &str,
     response_timeout: Duration,
 ) -> Result<(PaneLayoutSnapshot, String), ControlFailure> {
-    let layout = request_small_response(
-        connector,
-        "pane.layout",
-        wire::pane_layout_params(pane_id)?,
-        response_timeout,
-    )
-    .map_err(|error| format!("pane.layout failed: {error}"))?;
-    let layout = project_layout(&wire::pane_layout(layout)?)?;
-    let workspace = request_small_response(
-        connector,
-        "workspace.get",
-        wire::workspace_target_params(&layout.workspace_id)?,
-        response_timeout,
-    )
-    .map_err(|error| format!("workspace.get failed: {error}"))?;
-    let active_tab_id = wire::workspace_active_tab(workspace)?;
+    let layout = engine
+        .pane_layout(Wait::Small(response_timeout), pane_id)
+        .map_err(failed("pane.layout"))?;
+    let layout = project_layout(&layout)?;
+    let active_tab_id = engine
+        .workspace_active_tab(Wait::Small(response_timeout), &layout.workspace_id)
+        .map_err(failed("workspace.get"))?;
     Ok((layout, active_tab_id))
 }
 
@@ -3042,14 +2910,14 @@ pub(crate) fn spawn_control_lane(first: LaneStart) -> Result<(), String> {
                         // dead worker would hold every later control behind
                         // it. The effect is unknown, so it is ambiguous.
                         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                            execute_local_control(context.api_connector.as_ref(), &action)
+                            execute_local_control(context.engine.as_ref(), &action)
                         }))
                         .unwrap_or_else(|_| Err(lane_worker_panicked(action.kind())));
                         (context, Finished::Tab(action, result))
                     }
                     LaneStart::PaneFocus { context, control } => {
                         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                            execute_pane_focus(context.api_connector.as_ref(), &control.target_id)
+                            execute_pane_focus(context.engine.as_ref(), &control.target_id)
                         }))
                         .unwrap_or_else(|_| Err(lane_worker_panicked("pane.focus")));
                         (context, Finished::PaneFocus(control, result))
@@ -3136,7 +3004,7 @@ pub fn spawn_pane_control_with_generation(
         .name(worker_name)
         .spawn(move || {
             let started = Instant::now();
-            let result = execute_pane_control(context.api_connector.as_ref(), &action);
+            let result = execute_pane_control(context.engine.as_ref(), &action);
             let elapsed_ms = started.elapsed().as_millis();
             let Some(runtime) = context.runtime.upgrade() else {
                 return;
@@ -3207,7 +3075,7 @@ pub struct PaneFindOutcome {
 pub struct PaneApiRoute {
     pane_id: String,
     herdr_pane_id: String,
-    api_connector: Arc<dyn ApiConnector>,
+    engine: SharedEngine,
     runtime: Weak<Mutex<Runtime>>,
     notifier: ChangeNotifier,
 }
@@ -3217,7 +3085,7 @@ impl PaneApiRoute {
         Self {
             pane_id: pane_id.to_owned(),
             herdr_pane_id: pane_id.to_owned(),
-            api_connector: Arc::clone(&context.api_connector),
+            engine: Arc::clone(&context.engine),
             runtime: context.runtime.clone(),
             notifier: context.notifier.clone(),
         }
@@ -3231,7 +3099,7 @@ impl PaneApiRoute {
         Self {
             pane_id: pane_id.to_owned(),
             herdr_pane_id: herdr_pane_id.to_owned(),
-            api_connector: Arc::clone(&context.api_connector),
+            engine: Arc::clone(&context.engine),
             runtime: context.runtime.clone(),
             notifier: context.notifier.clone(),
         }
@@ -3242,13 +3110,13 @@ impl PaneApiRoute {
     fn spawn<T: Send + 'static>(
         self,
         name: &str,
-        work: impl FnOnce(&dyn ApiConnector, &str) -> T + Send + 'static,
+        work: impl FnOnce(&dyn Engine, &str) -> T + Send + 'static,
         ingest: impl FnOnce(&mut Runtime, &str, T) -> bool + Send + 'static,
     ) -> Result<(), String> {
         thread::Builder::new()
             .name(name.to_owned())
             .spawn(move || {
-                let result = work(self.api_connector.as_ref(), &self.herdr_pane_id);
+                let result = work(self.engine.as_ref(), &self.herdr_pane_id);
                 let Some(runtime) = self.runtime.upgrade() else {
                     return;
                 };
@@ -3274,7 +3142,7 @@ impl PaneApiRoute {
 pub fn spawn_pane_find(route: PaneApiRoute, request: PaneFindRequest) -> Result<(), String> {
     route.spawn(
         "herdr-core-pane-find",
-        move |connector, herdr_pane_id| run_pane_find(connector, herdr_pane_id, &request),
+        move |engine, herdr_pane_id| run_pane_find(engine, herdr_pane_id, &request),
         |runtime, pane_id, result| runtime.ingest_pane_find(pane_id, result),
     )
 }
@@ -3292,15 +3160,15 @@ pub(crate) fn spawn_agent_find(
     let core_pane_id = route.pane_id.clone();
     route.spawn(
         "herdr-core-agent-find",
-        move |connector, herdr_pane_id| {
-            open_agent_find(connector, herdr_pane_id, find, &gate, &core_pane_id)
+        move |engine, herdr_pane_id| {
+            open_agent_find(engine, herdr_pane_id, find, &gate, &core_pane_id)
         },
         move |runtime, pane_id, result| runtime.ingest_agent_find(pane_id, request_id, result),
     )
 }
 
 fn open_agent_find(
-    connector: &dyn ApiConnector,
+    engine: &dyn Engine,
     pane_id: &str,
     find: AgentFind,
     gate: &Arc<crate::input_gate::PaneInputGate>,
@@ -3309,12 +3177,14 @@ fn open_agent_find(
     // An agent that draws inline leaves its conversation in Herdr's history,
     // where the find bar reaches all of it; its own search may not exist in
     // that mode (Claude Code's default renderer has none).
-    let pane = control_request(connector, "pane.get", wire::pane_target_params(pane_id)?)?;
-    if wire::pane_scroll(pane)?.is_some_and(|scroll| scroll.max_offset_from_bottom > 0) {
+    let scroll = engine
+        .pane_scroll(CONTROL_WAIT, pane_id)
+        .map_err(failed("pane.get"))?;
+    if scroll.is_some_and(|scroll| scroll.max_offset_from_bottom > 0) {
         return Ok(PaneFindRoute::Bar);
     }
     let visible = match find.already_open {
-        Some(_) => Some(read_pane_text(connector, pane_id, "visible")?.text),
+        Some(_) => Some(read_pane_text(engine, pane_id, "visible")?.text),
         None => None,
     };
     // The keys go into the agent's own search box; into the shell under a
@@ -3322,11 +3192,9 @@ fn open_agent_find(
     let _admission = gate
         .admit(core_pane_id)
         .map_err(|_| "The agent is asleep, so its own search is closed".to_owned())?;
-    control_request(
-        connector,
-        "pane.send_keys",
-        wire::pane_send_keys_params(pane_id, find.keys(visible.as_deref()))?,
-    )?;
+    engine
+        .send_keys(CONTROL_WAIT, pane_id, find.keys(visible.as_deref()))
+        .map_err(failed("pane.send_keys"))?;
     Ok(PaneFindRoute::Agent)
 }
 
@@ -3347,7 +3215,7 @@ pub struct PaneScroll {
 pub fn spawn_viewport_scroll(route: PaneApiRoute, lines: i32) -> Result<(), String> {
     route.spawn(
         "herdr-core-viewport-scroll",
-        move |connector, herdr_pane_id| scroll_viewport(connector, herdr_pane_id, lines),
+        move |engine, herdr_pane_id| scroll_viewport(engine, herdr_pane_id, lines),
         |runtime, pane_id, result| runtime.ingest_viewport_scroll(pane_id, result),
     )
 }
@@ -3363,32 +3231,27 @@ pub enum ViewportScrollError {
     Unreachable(String),
 }
 
-fn scroll_request(
-    connector: &dyn ApiConnector,
-    method: &str,
-    params: Value,
-) -> Result<Option<PaneScroll>, ViewportScrollError> {
-    let answer = request_with_connector(connector, method, params, Duration::from_secs(5))
-        .map_err(|error| match error {
-            ApiError::Remote { code, message } => {
-                ViewportScrollError::Refused(format!("{method} was refused: {code}: {message}"))
-            }
-            ApiError::NotRunning(message)
-            | ApiError::Transport(message)
-            | ApiError::Malformed(message) => {
-                ViewportScrollError::Unreachable(format!("{method} failed: {message}"))
-            }
-        })?;
-    wire::pane_scroll(answer).map_err(ViewportScrollError::Unreachable)
+fn scroll_failure(method: &str) -> impl FnOnce(EngineError) -> ViewportScrollError + '_ {
+    move |error| match error {
+        EngineError::Refused { code, message } => {
+            ViewportScrollError::Refused(format!("{method} was refused: {code}: {message}"))
+        }
+        EngineError::Request(message) | EngineError::Answer(message) => {
+            ViewportScrollError::Unreachable(message)
+        }
+        error => ViewportScrollError::Unreachable(format!("{method} failed: {error}")),
+    }
 }
 
 fn scroll_viewport(
-    connector: &dyn ApiConnector,
+    engine: &dyn Engine,
     pane_id: &str,
     lines: i32,
 ) -> Result<Option<PaneScroll>, ViewportScrollError> {
-    let target = wire::pane_target_params(pane_id).map_err(ViewportScrollError::Unreachable)?;
-    let Some(current) = scroll_request(connector, "pane.get", target)? else {
+    let Some(current) = engine
+        .pane_scroll(CONTROL_WAIT, pane_id)
+        .map_err(scroll_failure("pane.get"))?
+    else {
         return Ok(None);
     };
     let distance = u64::from(lines.unsigned_abs());
@@ -3400,13 +3263,13 @@ fn scroll_viewport(
     if target == current.offset_from_bottom {
         return Ok(Some(current));
     }
-    let params =
-        wire::pane_scroll_params(pane_id, target).map_err(ViewportScrollError::Unreachable)?;
-    scroll_request(connector, "pane.scroll", params)
+    engine
+        .scroll_pane(CONTROL_WAIT, pane_id, target)
+        .map_err(scroll_failure("pane.scroll"))
 }
 
 fn run_pane_find(
-    connector: &dyn ApiConnector,
+    engine: &dyn Engine,
     pane_id: &str,
     request: &PaneFindRequest,
 ) -> Result<PaneFindOutcome, String> {
@@ -3416,7 +3279,7 @@ fn run_pane_find(
             ..PaneFindOutcome::default()
         });
     }
-    let buffer = read_pane_text(connector, pane_id, "recent")?;
+    let buffer = read_pane_text(engine, pane_id, "recent")?;
     let matches = crate::find::find_matches(&buffer.text, &request.term, &request.options)?;
     let total = matches.len();
     if total == 0 {
@@ -3436,7 +3299,7 @@ fn run_pane_find(
     let next = (current - 1 + request.step).rem_euclid(count);
     let target = matches[next as usize];
 
-    let visible = read_pane_text(connector, pane_id, "visible")?;
+    let visible = read_pane_text(engine, pane_id, "visible")?;
     let viewport_rows = visible.text.lines().count();
     let scroll = crate::find::viewport_anchor(&buffer.text, &visible.text)
         .map(|top| crate::find::scroll_delta(target.line, top, viewport_rows))
@@ -3455,54 +3318,33 @@ fn run_pane_find(
     })
 }
 
-pub(crate) struct PaneText {
-    pub(crate) text: String,
-    pub(crate) truncated: bool,
+fn read_pane_text(engine: &dyn Engine, pane_id: &str, source: &str) -> Result<PaneText, String> {
+    engine
+        .read_pane(CONTROL_WAIT, pane_id, source, PANE_FIND_LINE_LIMIT)
+        .map_err(failed("pane.read"))
 }
 
-fn read_pane_text(
-    connector: &dyn ApiConnector,
-    pane_id: &str,
-    source: &str,
-) -> Result<PaneText, String> {
-    let response = control_request(
-        connector,
-        "pane.read",
-        wire::pane_read_params(pane_id, source, PANE_FIND_LINE_LIMIT)?,
-    )?;
-    wire::pane_text(response)
-}
-
-/// Topology reads and opening an SSH stream can wait. Recheck the same
-/// control, file node and admitted intent on both sides of every connection.
-/// The callback checks current runtime facts and, for a saved group start,
-/// its owning node's terminal incarnation outside Runtime's mutex.
-pub(crate) struct CurrentSessionConnector<'a> {
-    pub(crate) connector: &'a dyn ApiConnector,
-    pub(crate) current: &'a (dyn Fn() -> Result<(), String> + Sync),
-}
-
-/// The message of the refusal [`CurrentSessionConnector`] answers in Herdr's
-/// place, before anything reached Herdr: its `code` is Hide's own check's.
-pub(crate) const SESSION_CHANGED: &str = "The session execution changed; refresh before retrying";
-
-impl CurrentSessionConnector<'_> {
-    fn check(&self) -> Result<(), ApiError> {
-        (self.current)().map_err(|code| ApiError::Remote {
+/// `engine`, with `current` checked on both sides of reaching it for every
+/// request. Topology reads and opening an SSH stream can wait, so the same
+/// control, file node and admitted intent is checked again once connected.
+/// `current` checks current runtime facts and, for a saved group start, its
+/// owning node's terminal incarnation outside Runtime's mutex; its refusal
+/// answers in Herdr's place with its own code and [`SESSION_CHANGED`].
+pub(crate) fn current_session<'a>(
+    engine: &'a dyn Engine,
+    current: &'a (dyn Fn() -> Result<(), String> + Sync),
+) -> Box<dyn Engine + 'a> {
+    engine.gated(crate::engine::Gate::both(move || {
+        current().map_err(|code| EngineError::Refused {
             code,
             message: SESSION_CHANGED.into(),
         })
-    }
+    }))
 }
 
-impl ApiConnector for CurrentSessionConnector<'_> {
-    fn connect(&self) -> Result<Box<dyn hide_herdr_client::ApiStream>, ApiError> {
-        self.check()?;
-        let stream = self.connector.connect()?;
-        self.check()?;
-        Ok(stream)
-    }
-}
+/// The message of the refusal [`current_session`] answers in Herdr's place,
+/// before anything reached Herdr: its `code` is Hide's own check's.
+pub(crate) const SESSION_CHANGED: &str = "The session execution changed; refresh before retrying";
 
 pub fn spawn_agent_fork(context: LiveContext, request: ForkRequest) -> Result<(), String> {
     thread::Builder::new()
@@ -3514,7 +3356,7 @@ pub fn spawn_agent_fork(context: LiveContext, request: ForkRequest) -> Result<()
                 Instant::now() + crate::agent_start::AGENT_START_DEADLINE - Duration::from_secs(5);
             finish_fork_worker(&context, &request.parent_pane_id, || {
                 let pane = run_agent_fork_with_registration(
-                    context.api_connector.as_ref(),
+                    context.engine.as_ref(),
                     context.node.as_ref(),
                     &request,
                     &|| fork_execution_current(&context, &request),
@@ -3556,7 +3398,7 @@ fn wait_for_fork_input(
 ) {
     let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         crate::agent_start::confirm_fork_started(
-            context.api_connector.as_ref(),
+            context.engine.as_ref(),
             pane,
             &request.name,
             request.agent.kind(),
@@ -3618,7 +3460,7 @@ fn fork_execution_current(context: &LiveContext, request: &ForkRequest) -> Resul
         return Ok(());
     }
     let runtime = runtime.lock().map_err(|_| "runtime unavailable")?;
-    if !runtime.fork_request_is_current(request, &context.api_connector)
+    if !runtime.fork_request_is_current(request, &context.engine)
         || !Arc::ptr_eq(&runtime.own_node(), &context.node)
     {
         return Err("session_fork_execution_changed".into());
@@ -3632,17 +3474,17 @@ fn fork_execution_current(context: &LiveContext, request: &ForkRequest) -> Resul
 /// A pane whose agent never started is closed; registration never turns a
 /// working fork into a failure.
 fn run_agent_fork_with_registration(
-    connector: &dyn ApiConnector,
+    engine: &dyn Engine,
     node: &dyn crate::node_access::NodeLink,
     request: &ForkRequest,
     current: &(dyn Fn() -> Result<(), String> + Sync),
     created: impl FnOnce(Option<&str>, &str),
     register: impl FnOnce(&str, &str) -> Result<(), String>,
 ) -> Result<String, String> {
-    let checked = CurrentSessionConnector { connector, current };
+    let checked = current_session(engine, current);
     let proven = hide_session::Agent::from_kind(request.agent.kind())
         .is_some_and(hide_session::Agent::requires_native_proof);
-    let mutation_connector: &dyn ApiConnector = if proven { &checked } else { connector };
+    let mutation_engine: &dyn Engine = if proven { checked.as_ref() } else { engine };
     let check = || {
         current()?;
         confirm_session_launch(
@@ -3689,7 +3531,7 @@ fn run_agent_fork_with_registration(
                     .as_deref()
                     .filter(|cwd| !cwd.trim().is_empty())
                     .ok_or("Session fork has no confirmed checkout")?;
-                let snapshot = fetch_session_with_connector(mutation_connector)
+                let snapshot = fetch_session(mutation_engine)
                     .map_err(|error| error.message().to_owned())?;
                 let mut parents = snapshot.layouts.iter().filter(|layout| {
                     layout
@@ -3709,7 +3551,7 @@ fn run_agent_fork_with_registration(
                     .ok_or("Session fork has no checkout to name its tab in")?;
                 check()?;
                 let tab = create_tab_in(
-                    mutation_connector,
+                    mutation_engine,
                     &parent.workspace_id,
                     cwd,
                     label,
@@ -3727,23 +3569,21 @@ fn run_agent_fork_with_registration(
             }
             // `Fork agent to the side`: a split right of the source, in its tab.
             ForkPlacement::Side => {
-                let pane_id = control_request(
-                    mutation_connector,
-                    "pane.split",
-                    wire::fork_split_params(
+                let pane_id = mutation_engine
+                    .split_beside(
+                        CONTROL_WAIT,
                         &request.parent_pane_id,
                         request.cwd.as_deref(),
                         Default::default(),
-                    )?,
-                )
-                .and_then(wire::split_pane)?;
+                    )
+                    .map_err(failed("pane.split"))?;
                 made_pane = Some(pane_id.clone());
                 created(None, &pane_id);
                 pane_id
             }
         };
         let started = start_agent_checked(
-            mutation_connector,
+            mutation_engine,
             Some(node),
             &format!("herdr-core:fork:{}:start", request.name),
             &child_pane_id,
@@ -3757,7 +3597,7 @@ fn run_agent_fork_with_registration(
         .map_err(start_error_message);
         let started = started.and_then(|pane_id| {
             if request.agent == crate::fork::ForkableAgent::Antigravity {
-                fork_antigravity(mutation_connector, node, request, &pane_id)?;
+                fork_antigravity(mutation_engine, node, request, &pane_id)?;
             }
             Ok(pane_id)
         });
@@ -3777,11 +3617,9 @@ fn run_agent_fork_with_registration(
             Err(error) => {
                 // This child is already ours on the original server. Cleanup is
                 // not a new fork effect and must not target its replacement.
-                let closed = control_request(
-                    connector,
-                    "pane.close",
-                    wire::pane_target_params(&child_pane_id)?,
-                );
+                let closed = engine
+                    .close_pane(CONTROL_WAIT, &child_pane_id)
+                    .map_err(failed("pane.close"));
                 Err(match closed {
                     Ok(_) => error,
                     Err(close_error) => format!(
@@ -3794,7 +3632,9 @@ fn run_agent_fork_with_registration(
         if let Some(pane) = made_pane {
             // Closing can fail too, but must never prevent settling the hold.
             let closed = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                control_request(connector, "pane.close", wire::pane_target_params(&pane)?)
+                engine
+                    .close_pane(CONTROL_WAIT, &pane)
+                    .map_err(failed("pane.close"))
             }));
             if !matches!(closed, Ok(Ok(_))) {
                 crate::diagnostic!(json!({"component": "pane_fork", "kind": "pane.fork.close_failed", "pane_id": pane}));
@@ -3928,7 +3768,7 @@ fn read_past_writes<T: serde::de::DeserializeOwned>(
 /// the pane.
 #[allow(clippy::disallowed_methods)] // a production wait, not test code: polls Herdr and agy's index, bounded by a deadline
 fn fork_antigravity(
-    connector: &dyn ApiConnector,
+    engine: &dyn Engine,
     node: &dyn crate::node_access::NodeLink,
     request: &ForkRequest,
     pane_id: &str,
@@ -3938,8 +3778,9 @@ fn fork_antigravity(
         .as_deref()
         .ok_or("Session fork has no confirmed checkout")?;
     let deadline = Instant::now() + ANTIGRAVITY_FORK_WAIT;
-    while control_request(connector, "pane.get", wire::pane_target_params(pane_id)?)
-        .and_then(wire::pane_agent_status)?
+    while engine
+        .pane_agent_status(CONTROL_WAIT, pane_id)
+        .map_err(failed("pane.get"))?
         != "idle"
     {
         if Instant::now() >= deadline {
@@ -3960,21 +3801,20 @@ fn fork_antigravity(
         Instant::now() + ANTIGRAVITY_FORK_WAIT,
     )
     .map_err(|error| format!("agy's conversation to fork could not be read: {error}"))?;
-    clear_antigravity_composer(connector, pane_id, Instant::now() + ANTIGRAVITY_CLEAR_WAIT)?;
+    clear_antigravity_composer(engine, pane_id, Instant::now() + ANTIGRAVITY_CLEAR_WAIT)?;
     // The mark's read may have waited on agy writing its index, and the
     // composer's clearing on agy redrawing: `/fork` is typed only into a pane
     // still idle, never into a turn that began since.
-    if control_request(connector, "pane.get", wire::pane_target_params(pane_id)?)
-        .and_then(wire::pane_agent_status)?
+    if engine
+        .pane_agent_status(CONTROL_WAIT, pane_id)
+        .map_err(failed("pane.get"))?
         != "idle"
     {
         return Err("agy started working before /fork could be typed".into());
     }
-    control_request(
-        connector,
-        "pane.send_input",
-        wire::delivery_input_params(pane_id, "/fork")?,
-    )?;
+    engine
+        .submit_text(CONTROL_WAIT, pane_id, "/fork")
+        .map_err(failed("pane.send_input"))?;
     let deadline = Instant::now() + ANTIGRAVITY_FORK_WAIT;
     let forked = loop {
         let found: Option<String> = read_past_writes(
@@ -4001,12 +3841,9 @@ fn fork_antigravity(
         .map_or(0, |elapsed| {
             u64::try_from(elapsed.as_nanos()).unwrap_or(u64::MAX)
         });
-    control_request(
-        connector,
-        "pane.report_agent_session",
-        wire::report_agent_session_params(pane_id, request.agent.kind(), &forked, seq)?,
-    )
-    .map(drop)
+    engine
+        .report_agent_session(CONTROL_WAIT, pane_id, request.agent.kind(), &forked, seq)
+        .map_err(failed("pane.report_agent_session"))
 }
 
 /// Empties agy's composer in the fork's pane before `/fork` is typed. Herdr's
@@ -4023,7 +3860,7 @@ fn fork_antigravity(
 /// `deadline` and `ANTIGRAVITY_ERASE_LIMIT`.
 #[allow(clippy::disallowed_methods)] // a production wait, not test code: agy redraws between erases
 fn clear_antigravity_composer(
-    connector: &dyn ApiConnector,
+    engine: &dyn Engine,
     pane_id: &str,
     deadline: Instant,
 ) -> Result<(), String> {
@@ -4044,12 +3881,9 @@ fn clear_antigravity_composer(
         Ok(())
     };
     loop {
-        let screen = control_request(
-            connector,
-            "pane.read",
-            wire::composer_screen_params(pane_id)?,
-        )
-        .and_then(wire::pane_text)?;
+        let screen = engine
+            .read_screen(CONTROL_WAIT, pane_id)
+            .map_err(failed("pane.read"))?;
         // A cut screen may have lost the composer's rows.
         if screen.truncated {
             return unconfirmed("read_truncated", sent);
@@ -4061,11 +3895,13 @@ fn clear_antigravity_composer(
                 return unconfirmed("not_empty", sent);
             }
             Verdict::Holds => {
-                control_request(
-                    connector,
-                    "pane.send_keys",
-                    wire::pane_send_keys_params(pane_id, &["backspace"; ANTIGRAVITY_ERASE_BATCH])?,
-                )?;
+                engine
+                    .send_keys(
+                        CONTROL_WAIT,
+                        pane_id,
+                        &["backspace"; ANTIGRAVITY_ERASE_BATCH],
+                    )
+                    .map_err(failed("pane.send_keys"))?;
                 sent += ANTIGRAVITY_ERASE_BATCH;
                 thread::sleep(ANTIGRAVITY_FORK_POLL);
             }
@@ -4163,7 +3999,7 @@ pub(crate) fn spawn_remote_control_checked(
                 && let Some(target) = target
             {
                 run_close_effect(
-                    context.api_connector.as_ref(),
+                    context.engine.as_ref(),
                     &CloseEffectRequest {
                         safety: Some(safety),
                         failed_terminals,
@@ -4180,11 +4016,11 @@ pub(crate) fn spawn_remote_control_checked(
                     created_pane_id: None,
                 })
                 .map_err(|error| match error {
-                    ApiError::Remote { .. } => ControlFailure::Definite(error.to_string()),
+                    EngineError::Refused { .. } => ControlFailure::Definite(error.to_string()),
                     _ => ControlFailure::Ambiguous(error.to_string()),
                 })
             } else {
-                execute_remote_control(context.api_connector.as_ref(), &action)
+                execute_remote_control(context.engine.as_ref(), &action)
             };
             let elapsed_ms = started.elapsed().as_millis();
             let Some(runtime) = context.runtime.upgrade() else {
@@ -4220,14 +4056,14 @@ fn local_create_env(id: Option<u64>) -> std::collections::BTreeMap<String, Strin
         .unwrap_or_default()
 }
 fn execute_local_control(
-    connector: &dyn ApiConnector,
+    engine: &dyn Engine,
     action: &RemoteControlAction,
 ) -> Result<RemoteControlOutcome, ControlFailure> {
-    let result = execute_remote_control(connector, action);
+    let result = execute_remote_control(engine, action);
     if !result.as_ref().is_err_and(ControlFailure::is_ambiguous) {
         return result;
     }
-    match recover_local_creation(connector, action) {
+    match recover_local_creation(engine, action) {
         Ok(outcome) => Ok(outcome),
         Err(message) => {
             crate::diagnostic!(
@@ -4238,7 +4074,7 @@ fn execute_local_control(
     }
 }
 fn recover_local_creation(
-    connector: &dyn ApiConnector,
+    engine: &dyn Engine,
     action: &RemoteControlAction,
 ) -> Result<RemoteControlOutcome, String> {
     let (id, workspace) = match action {
@@ -4254,8 +4090,7 @@ fn recover_local_creation(
         _ => return Err("No local creation claim to recover".into()),
     };
     let started = Instant::now();
-    let snapshot =
-        fetch_session_with_connector(connector).map_err(|error| error.message().to_owned())?;
+    let snapshot = fetch_session(engine).map_err(|error| error.message().to_owned())?;
     let tabs = snapshot
         .tabs
         .iter()
@@ -4271,7 +4106,7 @@ fn recover_local_creation(
         if started.elapsed() > Duration::from_secs(5) {
             return Err("Creation recovery timed out".into());
         }
-        let layout = export_reopen_layout(connector, &key, &tab.tab_id)?;
+        let layout = export_reopen_layout(engine, &tab.tab_id)?;
         let mut panes = Vec::new();
         pane_ids_with_reopen_marker(&layout.root, &marker, &mut panes);
         if let Some(pane) = panes.first() {
@@ -4340,7 +4175,7 @@ impl SessionFetchError {
                 received_version,
                 ..
             } if received_protocol < expected_protocol => Self::Protocol {
-                message: crate::wire::device_protocol_behind(
+                message: crate::engine::herdr::device_protocol_behind(
                     received_protocol,
                     received_version.as_deref(),
                 ),
@@ -4374,7 +4209,7 @@ pub(crate) fn install(
     runtime: &Arc<Mutex<Runtime>>,
     notifier: ChangeNotifier,
     own_node: Arc<dyn crate::node_access::NodeLink>,
-    own_herdr: Arc<dyn ApiConnector>,
+    own_engine: SharedEngine,
     socket_path: &str,
     usage_paths: crate::usage::UsagePaths,
 ) -> Option<crate::session_sync::SessionSyncHandle> {
@@ -4382,7 +4217,7 @@ pub(crate) fn install(
         socket_path: PathBuf::from(socket_path),
         runtime: Arc::downgrade(runtime),
         notifier: notifier.clone(),
-        api_connector: own_herdr,
+        engine: own_engine,
         node: Arc::clone(&own_node),
     };
     if let Ok(mut guard) = runtime.lock() {
@@ -4415,27 +4250,28 @@ pub(crate) fn install(
     }
 }
 
-pub(crate) fn fetch_session_with_connector(
-    connector: &dyn ApiConnector,
+/// The whole session as the sidebar projects it, read once.
+pub(crate) fn fetch_session(
+    engine: &dyn Engine,
 ) -> Result<SessionSnapshotPayload, SessionFetchError> {
-    let result = request_with_connector(
-        connector,
-        "session.snapshot",
-        wire::empty_params(),
-        Duration::from_secs(5),
-    )
-    .map_err(|error| match error {
-        ApiError::NotRunning(message) => SessionFetchError::SocketMissing(message),
-        error => SessionFetchError::Unreachable(error.to_string()),
-    })?;
-    wire::live_session_response(result)
-}
-
-/// Maps the herdr wire snapshot into the sidebar session payload. Tokens are
-/// passed through verbatim so the unseen-vs-acknowledged state rules
-/// (INV-herdr-unseen-token) stay owned by the sidebar projection.
-pub fn project_session(snapshot: &Value) -> Result<SessionSnapshotPayload, SessionFetchError> {
-    crate::session_sync::project_snapshot(snapshot)
+    engine
+        .session_payload(CONTROL_WAIT)
+        .map_err(|error| match error {
+            EngineError::NotRunning(message) => SessionFetchError::SocketMissing(message),
+            EngineError::Protocol {
+                message,
+                expected_protocol,
+                received_protocol,
+                received_version,
+            } => SessionFetchError::Protocol {
+                message,
+                expected_protocol,
+                received_protocol,
+                received_version,
+            },
+            EngineError::Answer(message) => SessionFetchError::Malformed(message),
+            error => SessionFetchError::Unreachable(error.to_string()),
+        })
 }
 
 pub fn project_layout_for_pane(
@@ -4596,7 +4432,8 @@ mod tests {
     use serde_json::json;
     use std::path::Path;
 
-    use hide_herdr_client::LocalSocketConnector;
+    use hide_herdr_client::{ApiConnector, HERDR_PROTOCOL_REVISION, request_with_connector};
+    use serde_json::Value;
 
     use super::*;
     use crate::fake_herdr::FakeHerdr;
@@ -4700,7 +4537,7 @@ mod tests {
         };
         let mut notices = Vec::new();
         let started = start_or_degrade_agent(
-            &herdr.connector(),
+            herdr.engine().as_ref(),
             "key",
             0,
             "pane",
@@ -4766,7 +4603,7 @@ mod tests {
             });
             let mut notices = Vec::new();
             start_or_degrade_agent(
-                &herdr.connector(),
+                herdr.engine().as_ref(),
                 "key",
                 0,
                 "pane",
@@ -4795,18 +4632,18 @@ mod tests {
             other => panic!("unexpected {other}"),
         });
         assert!(agent_is_running(
-            &herdr.connector(),
+            herdr.engine().as_ref(),
             "pane",
             " CLAUDE_CODE "
         ));
         assert!(!agent_is_running(
-            &herdr.connector(),
+            herdr.engine().as_ref(),
             "other-pane",
             "claude_code"
         ));
-        assert!(!agent_is_running(&herdr.connector(), "pane", "codex"));
+        assert!(!agent_is_running(herdr.engine().as_ref(), "pane", "codex"));
         assert!(!agent_is_running(
-            &herdr.connector(),
+            herdr.engine().as_ref(),
             "pane",
             "future-agent"
         ));
@@ -4950,7 +4787,7 @@ mod tests {
             };
             let created = std::cell::RefCell::new(Vec::new());
             let result = run_agent_fork_with_registration(
-                &herdr.connector(),
+                herdr.engine().as_ref(),
                 &node,
                 &request,
                 &|| {
@@ -5142,7 +4979,7 @@ mod tests {
                 launch: Default::default(),
             };
             let result = run_agent_fork_with_registration(
-                &herdr.connector(),
+                herdr.engine().as_ref(),
                 &node,
                 &request,
                 &|| {
@@ -5312,7 +5149,7 @@ mod tests {
                 launch: Default::default(),
             };
             let result = run_agent_fork_with_registration(
-                &herdr.connector(),
+                herdr.engine().as_ref(),
                 &node,
                 &request,
                 &|| Ok(()),
@@ -5444,7 +5281,7 @@ mod tests {
                 launch: Default::default(),
             };
             let result = run_agent_fork_with_registration(
-                &herdr.connector(),
+                herdr.engine().as_ref(),
                 &node,
                 &request,
                 &|| {
@@ -5645,7 +5482,7 @@ mod tests {
                 placement: ForkPlacement::Tab,
                 launch: Default::default(),
             };
-            let result = fork_antigravity(&herdr.connector(), &node, &request, "child-pane");
+            let result = fork_antigravity(herdr.engine().as_ref(), &node, &request, "child-pane");
             // Eight erases of eight reach the limit of 64.
             let mut stuck = vec!["pane.get", "pane.get", "pane.read"];
             for _ in 0..8 {
@@ -5901,7 +5738,7 @@ mod tests {
         };
 
         let pane_id = run_agent_fork_with_registration(
-            &herdr.connector(),
+            herdr.engine().as_ref(),
             &hide_node::Local::new(None),
             &request,
             &|| Ok(()),
@@ -5929,7 +5766,7 @@ mod tests {
         });
         for label in ["이름", "", "refuse"] {
             let result = execute_remote_control(
-                &host.connector(),
+                host.engine().as_ref(),
                 &RemoteControlAction::RenameTab {
                     tab_id: "w1:t1".into(),
                     label: label.into(),
@@ -6039,7 +5876,7 @@ mod tests {
         };
 
         let outcome = reopen_pane(
-            &herdr.connector(),
+            herdr.engine().as_ref(),
             &|path| Path::new(path).is_dir(),
             "nested-intent",
             &context,
@@ -6092,7 +5929,8 @@ mod tests {
             tab_name: Default::default(),
         };
         let error = repair_incomplete_tab_layout(
-            &LocalSocketConnector::new("/tmp/hide-reopen-over-count-must-not-connect.sock"),
+            crate::engine::herdr::local("/tmp/hide-reopen-over-count-must-not-connect.sock")
+                .as_ref(),
             "over-count",
             &context,
             &expected_root,
@@ -6230,7 +6068,7 @@ mod tests {
         };
 
         let outcome = reopen_pane(
-            &herdr.connector(),
+            herdr.engine().as_ref(),
             &|path| Path::new(path).is_dir(),
             "first-attempt",
             &context,
@@ -6356,7 +6194,7 @@ mod tests {
         };
         let mut notices = Vec::new();
         let restored = ensure_workspace_and_tab(
-            &herdr.connector(),
+            herdr.engine().as_ref(),
             "layout-intent",
             &context,
             &OwnerOpen::Folder {
@@ -6474,7 +6312,7 @@ mod tests {
         };
         let mut notices = Vec::new();
         let restored = ensure_workspace_and_tab(
-            &herdr.connector(),
+            herdr.engine().as_ref(),
             "recovered-intent",
             &context,
             &OwnerOpen::Worktree {
@@ -6542,7 +6380,7 @@ mod tests {
         });
 
         assert!(
-            interrupt_reused_agent(&herdr.connector(), "fixture", 0, "w1:p1")
+            interrupt_reused_agent(herdr.engine().as_ref(), "w1:p1")
                 .expect("reused agent is interrupted")
         );
 
@@ -6608,7 +6446,7 @@ mod tests {
         });
 
         let outcome = execute_remote_control(
-            &herdr.connector(),
+            herdr.engine().as_ref(),
             &RemoteControlAction::OpenOwner {
                 owner: OwnerOpen::Worktree {
                     path: "/repo-feat".to_owned(),
@@ -6675,7 +6513,7 @@ mod tests {
             });
 
             let tab = open_owner_tab(
-                &herdr.connector(),
+                herdr.engine().as_ref(),
                 &OwnerOpen::Worktree {
                     path: "/repo".to_owned(),
                     repository_root: "/repo".to_owned(),
@@ -6713,7 +6551,7 @@ mod tests {
         });
 
         let failure = open_owner_tab(
-            &herdr.connector(),
+            herdr.engine().as_ref(),
             &OwnerOpen::Worktree {
                 path: "/gone".to_owned(),
                 repository_root: "/gone".to_owned(),
@@ -6781,7 +6619,7 @@ mod tests {
             };
 
             let first = open_owner_tab(
-                &herdr.connector(),
+                herdr.engine().as_ref(),
                 &owner,
                 "/notes",
                 "Tab 1",
@@ -6791,7 +6629,7 @@ mod tests {
             )
             .expect("first tab");
             let second = open_owner_tab(
-                &herdr.connector(),
+                herdr.engine().as_ref(),
                 &owner,
                 "/notes",
                 "Tab 2",
@@ -6836,7 +6674,7 @@ mod tests {
             "pane.close" => json!({"type": "ok"}),
             other => panic!("unexpected {other}"),
         });
-        let connector = herdr.connector();
+        let connector = herdr.engine();
         for action in [
             PaneControlAction::Split {
                 pane_id: "w1:p1".to_owned(),
@@ -6855,7 +6693,7 @@ mod tests {
                 pane_id: "w1:p1".to_owned(),
             },
         ] {
-            execute_pane_control(&connector, &action).expect("control request");
+            execute_pane_control(connector.as_ref(), &action).expect("control request");
         }
         assert_eq!(
             herdr.calls(),
@@ -6930,7 +6768,7 @@ mod tests {
                 other => panic!("unexpected {other}"),
             }
         });
-        let connector = herdr.connector();
+        let connector = herdr.engine();
         let zoom = |pane: &str| PaneControlAction::ToggleZoom {
             pane_id: pane.to_owned(),
         };
@@ -6945,7 +6783,8 @@ mod tests {
             (resize("w1:p1"), true),
             (resize("w1:p2"), false),
         ] {
-            let outcome = execute_pane_control(&connector, &action).expect("control request");
+            let outcome =
+                execute_pane_control(connector.as_ref(), &action).expect("control request");
             assert_eq!(
                 matches!(outcome, PaneControlOutcome::Unchanged),
                 unchanged,
@@ -6960,7 +6799,7 @@ mod tests {
     fn a_zoom_answer_without_its_result_is_ambiguous() {
         let herdr = FakeHerdr::start("pane-control-zoom-ok", |_, _| json!({"type": "ok"}));
         let failure = execute_pane_control(
-            &herdr.connector(),
+            herdr.engine().as_ref(),
             &PaneControlAction::ToggleZoom {
                 pane_id: "w1:p1".to_owned(),
             },
@@ -6983,7 +6822,7 @@ mod tests {
             }),
             other => panic!("unexpected {other}"),
         });
-        let connector = herdr.connector();
+        let connector = herdr.engine();
         let actions = [
             RemoteControlAction::FocusWorkspace {
                 workspace_id: "w1".to_owned(),
@@ -7003,9 +6842,9 @@ mod tests {
                 tab_id: "w1:t3".to_owned(),
             },
         ];
-        let mut outcomes = actions
-            .iter()
-            .map(|action| execute_remote_control(&connector, action).expect("control request"));
+        let mut outcomes = actions.iter().map(|action| {
+            execute_remote_control(connector.as_ref(), action).expect("control request")
+        });
         assert!(matches!(
             outcomes.next(),
             Some(RemoteControlOutcome::Acknowledged {
@@ -7073,6 +6912,7 @@ mod tests {
             .transport(std::path::Path::new(&home), "probe", &alias_name, None)
             .expect("SSH alias resolves")
             .herdr_api_connector();
+        let engine = crate::engine::herdr::HerdrEngine::shared(Arc::clone(&connector));
         let connector = &*connector;
 
         let response = request_with_connector(
@@ -7111,14 +6951,14 @@ mod tests {
             .to_owned();
 
         execute_remote_control(
-            connector,
+            engine.as_ref(),
             &RemoteControlAction::FocusWorkspace {
                 workspace_id: workspace_id.clone(),
             },
         )
         .expect("focus owned fixture workspace");
         execute_remote_control(
-            connector,
+            engine.as_ref(),
             &RemoteControlAction::FocusTab {
                 tab_id: original_tab_id,
             },
@@ -7129,7 +6969,7 @@ mod tests {
             created_tab_id: Some(created_tab_id),
             created_pane_id: Some(created_root_pane_id),
         } = execute_remote_control(
-            connector,
+            engine.as_ref(),
             &RemoteControlAction::CreateTab {
                 workspace_id: workspace_id.clone(),
                 cwd: cwd.clone(),
@@ -7148,7 +6988,7 @@ mod tests {
             created_tab_id: None,
             created_pane_id: Some(created_split_pane_id),
         } = execute_remote_control(
-            connector,
+            engine.as_ref(),
             &RemoteControlAction::Pane(PaneControlAction::Split {
                 pane_id: created_root_pane_id.clone(),
                 direction: PaneSplitDirection::Right,
@@ -7174,7 +7014,7 @@ mod tests {
                 pane_id: created_split_pane_id.clone(),
             }),
         ] {
-            execute_remote_control(connector, &action).expect("mutate only the fixture pane");
+            execute_remote_control(engine.as_ref(), &action).expect("mutate only the fixture pane");
         }
 
         remote_snapshot_until(
@@ -7244,7 +7084,7 @@ mod tests {
             socket_path: herdr.socket_path().to_path_buf(),
             runtime: Weak::new(),
             notifier: ChangeNotifier::noop(),
-            api_connector: Arc::new(herdr.connector()),
+            engine: herdr.engine(),
             node: Arc::new(hide_node::Local::of_process()),
         };
 
@@ -7308,7 +7148,7 @@ mod tests {
                 }
             });
 
-            let result = execute_pane_focus(&herdr.connector(), "fixture:p2");
+            let result = execute_pane_focus(herdr.engine().as_ref(), "fixture:p2");
             assert_eq!(
                 result.is_ok(),
                 confirmed,
@@ -7324,7 +7164,7 @@ mod tests {
             );
             // Checking a proposed stream move shares the confirmation
             // contract and must not produce another focus mutation.
-            let readback = confirm_pane_focus(&herdr.connector(), "fixture:p2");
+            let readback = confirm_pane_focus(herdr.engine().as_ref(), "fixture:p2");
             assert_eq!(
                 readback,
                 if confirmed {
@@ -7384,7 +7224,7 @@ mod tests {
                 Duration::from_millis(50)
             };
             let result = execute_pane_focus_with_timeout(
-                &LocalSocketConnector::new(&socket),
+                crate::engine::herdr::local(&socket).as_ref(),
                 "w1:p2",
                 timeout,
             );
@@ -7435,7 +7275,7 @@ mod tests {
                 }
             ]
         });
-        let payload = project_session(&snapshot).expect("projects");
+        let payload = crate::engine::herdr::wire::project_snapshot(&snapshot).expect("projects");
         assert_eq!(payload.agents.len(), 2);
         assert_eq!(payload.agents[0].pane_id.as_deref(), Some("w1:p1"));
         assert_eq!(payload.agents[0].workspace_label.as_deref(), Some("hide"));
@@ -7477,7 +7317,8 @@ mod tests {
             "agents": []
         });
 
-        let payload = project_session(&snapshot).expect("projects tab metadata");
+        let payload =
+            crate::engine::herdr::wire::project_snapshot(&snapshot).expect("projects tab metadata");
         assert_eq!(payload.tabs.len(), 1);
         assert_eq!(payload.tabs[0].tab_id, "w1:t1");
         assert_eq!(payload.tabs[0].label, "2");
@@ -7486,7 +7327,7 @@ mod tests {
     #[test]
     fn protocol_mismatch_is_an_explicit_failure() {
         let snapshot = json!({"protocol": 20, "workspaces": [], "agents": []});
-        let error = project_session(&snapshot).expect_err("must fail");
+        let error = crate::engine::herdr::wire::project_snapshot(&snapshot).expect_err("must fail");
         assert_eq!(error.state(), "protocol_mismatch");
         assert!(error.message().contains("20"));
     }
@@ -7519,7 +7360,8 @@ mod tests {
             }]
         });
 
-        let payload = project_session(&snapshot).expect("session projection");
+        let payload =
+            crate::engine::herdr::wire::project_snapshot(&snapshot).expect("session projection");
         let layout = project_layout_for_pane(&payload, "w1:p3").expect("layout projection");
         assert_eq!(layout.workspace_id, "w1");
         assert_eq!(layout.tab_id, "w1:t1");
@@ -7546,9 +7388,9 @@ mod tests {
 
     #[test]
     fn missing_socket_file_is_distinguished_from_unreachable() {
-        let error = fetch_session_with_connector(&LocalSocketConnector::new(
-            "/nonexistent/herdr-core-test.sock",
-        ))
+        let error = fetch_session(
+            crate::engine::herdr::local("/nonexistent/herdr-core-test.sock").as_ref(),
+        )
         .expect_err("must fail");
         assert_eq!(error.state(), "socket_missing");
     }

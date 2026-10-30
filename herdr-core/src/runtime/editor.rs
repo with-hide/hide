@@ -1929,7 +1929,7 @@ impl Runtime {
     pub(crate) fn ingest_close_effect_result(
         &mut self,
         request: &live::CloseEffectRequest,
-        result: Result<(), hide_herdr_client::ApiError>,
+        result: Result<(), crate::engine::EngineError>,
     ) -> bool {
         self.with_close_geometry(|runtime| runtime.apply_close_effect_result(request, result))
     }
@@ -1937,7 +1937,7 @@ impl Runtime {
     fn apply_close_effect_result(
         &mut self,
         request: &live::CloseEffectRequest,
-        result: Result<(), hide_herdr_client::ApiError>,
+        result: Result<(), crate::engine::EngineError>,
     ) -> bool {
         if !request.retain_for_reopen && !self.close_operations.contains_key(&request.key) {
             return false;
@@ -2004,7 +2004,7 @@ impl Runtime {
             .deadline_at_unix_ms
             .is_some_and(|deadline| deadline <= unix_milliseconds())
         {
-            Err(hide_herdr_client::ApiError::Transport(
+            Err(crate::engine::EngineError::Transport(
                 "close result arrived after its deadline".to_owned(),
             ))
         } else {
@@ -2018,7 +2018,7 @@ impl Runtime {
                 super::op_timing::Stage::HerdrAck,
                 std::time::Instant::now(),
             ),
-            Err(hide_herdr_client::ApiError::Remote { .. }) => {
+            Err(crate::engine::EngineError::Refused { .. }) => {
                 self.op_timings.finish(&timing_id, "refused")
             }
             Err(_) => self.op_timings.finish(&timing_id, "unknown"),
@@ -2041,7 +2041,7 @@ impl Runtime {
                     format!("Captured user close {}", request.key),
                 );
             }
-            Err(hide_herdr_client::ApiError::Remote { code, message }) => {
+            Err(crate::engine::EngineError::Refused { code, message }) => {
                 if let Some(operation) = self.close_operations.get_mut(&request.key) {
                     operation.phase = "refused".to_owned();
                     operation.stage = if code == "replacement_failed" {

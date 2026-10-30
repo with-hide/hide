@@ -73,7 +73,7 @@ impl BranchDecision {
 
 /// An agent to end before a spawn, with the Herdr and node of its machine.
 type EndFirst = (
-    Arc<dyn hide_herdr_client::ApiConnector>,
+    Arc<dyn crate::engine::Engine>,
     Arc<dyn crate::node_access::NodeLink>,
     String,
 );
@@ -202,7 +202,7 @@ impl Runtime {
             .and_then(|id| self.live_agent_pane(id))
             .and_then(|pane| {
                 Some((
-                    self.delivery_connector(node.as_str())?,
+                    self.delivery_engine(node.as_str())?,
                     self.node_link(node.as_str()).ok()?,
                     pane,
                 ))
@@ -496,7 +496,7 @@ impl Runtime {
         let Ok(link) = self.node_link(node.as_str()) else {
             return refused("node_unavailable");
         };
-        let connector = self.delivery_connector(node.as_str());
+        let connector = self.delivery_engine(node.as_str());
         if decision == BranchDecision::Discard && connector.is_none() {
             return refused("herdr_unavailable");
         }
@@ -1031,7 +1031,7 @@ impl Runtime {
         let Ok(link) = self.node_link(node.as_str()) else {
             return;
         };
-        let connector = self.delivery_connector(node.as_str());
+        let connector = self.delivery_engine(node.as_str());
         let own = attempt
             .agent_id
             .as_deref()

@@ -151,8 +151,12 @@ pub fn hand_off(ours: &Path, socket: &Path) -> Outcome {
             program: image.path,
         };
     }
-    let pong = match ask(socket, "ping", herdr_core::wire::ping_params())
-        .and_then(herdr_core::wire::server_pong)
+    let pong = match ask(
+        socket,
+        "ping",
+        herdr_core::engine::herdr::handoff::ping_params(),
+    )
+    .and_then(herdr_core::engine::herdr::handoff::server_pong)
     {
         Ok(pong) => pong,
         Err(detail) => {
@@ -321,9 +325,13 @@ impl LocalTakeover {
         if matches!(owner, Owner::Ours | Owner::AnotherApp) {
             return Ok(None);
         }
-        let pong = ask(&self.socket, "ping", herdr_core::wire::ping_params())
-            .and_then(herdr_core::wire::server_pong)
-            .map_err(|detail| ("ping", detail))?;
+        let pong = ask(
+            &self.socket,
+            "ping",
+            herdr_core::engine::herdr::handoff::ping_params(),
+        )
+        .and_then(herdr_core::engine::herdr::handoff::server_pong)
+        .map_err(|detail| ("ping", detail))?;
         let version = self.version().map_err(|detail| ("version", detail))?;
         let server_protocol = u64::from(pong.protocol);
         let kind = match device_step(&version, &pong.version, pong.live_handoff) {
@@ -701,7 +709,7 @@ fn hand_over(
     let started = Instant::now();
     ours.to_str()
         .ok_or_else(|| format!("{} is not a path Herdr can take", ours.display()))
-        .and_then(|ours| herdr_core::wire::live_handoff_params(ours, version))
+        .and_then(|ours| herdr_core::engine::herdr::handoff::live_handoff_params(ours, version))
         .and_then(|params| {
             hide_herdr_client::request_with_timeout(
                 socket,
@@ -711,7 +719,7 @@ fn hand_over(
             )
             .map_err(|error| error.to_string())
         })
-        .and_then(herdr_core::wire::live_handoff_done)
+        .and_then(herdr_core::engine::herdr::handoff::live_handoff_done)
         .map_err(|detail| ("handoff", detail))?;
     match program_on(socket) {
         Ok(Some((to_pid, now))) if now.file == *ours_file => Ok(Handed {
@@ -760,8 +768,12 @@ pub fn device_update(pinned: &Path, socket: &Path, record: &Path) -> HerdrUpdate
         }
         Err(error) => return failed("program", error.to_string(), Some(&version), None),
     };
-    let pong = match ask(socket, "ping", herdr_core::wire::ping_params())
-        .and_then(herdr_core::wire::server_pong)
+    let pong = match ask(
+        socket,
+        "ping",
+        herdr_core::engine::herdr::handoff::ping_params(),
+    )
+    .and_then(herdr_core::engine::herdr::handoff::server_pong)
     {
         Ok(pong) => pong,
         Err(reason) => return failed("ping", reason, Some(&version), None),
@@ -902,13 +914,13 @@ pub(crate) fn start_detached_device_server(pinned: &Path, socket: &Path) -> Resu
             if hide_herdr_client::request_with_timeout(
                 socket,
                 "ping",
-                herdr_core::wire::ping_params()?,
+                herdr_core::engine::herdr::handoff::ping_params()?,
                 deadline
                     .saturating_duration_since(Instant::now())
                     .min(ASK_WITHIN),
             )
             .map_err(|error| error.to_string())
-            .and_then(herdr_core::wire::server_pong)
+            .and_then(herdr_core::engine::herdr::handoff::server_pong)
             .is_ok()
             {
                 child.release();

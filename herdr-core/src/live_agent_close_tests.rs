@@ -1,5 +1,7 @@
 use super::*;
 use crate::fake_herdr::FakeHerdr;
+use hide_herdr_client::HERDR_PROTOCOL_REVISION;
+use serde_json::Value;
 
 /// B5: authorization never follows a failed pane into another tab or covers
 /// a new/now-active peer in the tab the user selected.
@@ -66,7 +68,7 @@ fn failed_tab_close_rechecks_membership_and_live_peers() {
             other => panic!("unexpected {other}"),
         });
         let result = run_close_effect(
-            &herdr.connector(),
+            herdr.engine().as_ref(),
             &CloseEffectRequest {
                 safety: Some(CloseSafety {
                     approved_peers: approved_terminal
@@ -111,7 +113,7 @@ fn failed_pane_close_preserves_a_new_working_descendant_in_another_tab() {
                 "agent_session":{"source":"herdr:claude","agent":"claude","kind":"id","value":"parent"}});
             let child = json!({"pane_id":"w1:p2","terminal_id":"child","workspace_id":"w1","tab_id":"w1:t2","focused":false,"agent":"claude","agent_status":"working","revision":1,
                 "agent_session":{"source":"herdr:claude","agent":"claude","kind":"id","value":"child"},
-                "tokens":{"parent_pane":"w1:p1","child_session":wire::session_digest("child"),"parent_session":wire::session_digest("parent")}});
+                "tokens":{"parent_pane":"w1:p1","child_session":crate::engine::tokens::session_digest("child"),"parent_session":crate::engine::tokens::session_digest("parent")}});
             value["snapshot"]["panes"] = json!([parent.clone(), child.clone()]);
             value["snapshot"]["agents"] = json!([parent, child]);
             value
@@ -126,7 +128,7 @@ fn failed_pane_close_preserves_a_new_working_descendant_in_another_tab() {
         other => panic!("unexpected {other}"),
     });
     let result = run_close_effect(
-        &herdr.connector(),
+        herdr.engine().as_ref(),
         &CloseEffectRequest {
             safety: Some(CloseSafety {
                 approved_peers: Vec::new(),
@@ -155,7 +157,7 @@ fn an_expired_failed_close_sends_no_snapshot_or_mutation() {
         panic!("expired close sent {method}")
     });
     let result = run_close_effect(
-        &herdr.connector(),
+        herdr.engine().as_ref(),
         &CloseEffectRequest {
             safety: Some(CloseSafety {
                 approved_peers: Vec::new(),
@@ -199,7 +201,7 @@ fn failed_close_cannot_mutate_after_its_fresh_read_consumes_the_deadline() {
         start + Duration::from_secs(if read == 0 { 0 } else { 6 })
     };
     let result = run_close_effect_with_clock(
-        &herdr.connector(),
+        herdr.engine().as_ref(),
         &CloseEffectRequest {
             safety: Some(CloseSafety {
                 approved_peers: Vec::new(),
@@ -247,7 +249,7 @@ fn failed_terminal_close_checks_incarnation_and_retains_refusals() {
             other => panic!("unexpected request {other}"),
         });
         let result = run_close_effect(
-            &herdr.connector(),
+            herdr.engine().as_ref(),
             &CloseEffectRequest {
                 safety: None,
                 failed_terminals: vec![("w1:p1".into(), "original".into())],
@@ -316,7 +318,7 @@ fn replacement_creation_failure_sends_no_close() {
         other => panic!("unexpected effect {other}"),
     });
     let error = prepare_close_replacement(
-        &herdr.connector(),
+        herdr.engine().as_ref(),
         "intent",
         &context(),
         &closed_tab(),
@@ -352,11 +354,17 @@ fn replacement_retry_after_close_refusal_adopts_its_shell_without_another_create
             other => panic!("unexpected effect {other}"),
         },
     );
-    let connector = herdr.connector();
+    let connector = herdr.engine();
     assert_eq!(
-        prepare_close_replacement(&connector, "intent", &context(), &closed_tab(), true)
-            .unwrap()
-            .0,
+        prepare_close_replacement(
+            connector.as_ref(),
+            "intent",
+            &context(),
+            &closed_tab(),
+            true
+        )
+        .unwrap()
+        .0,
         "w1:t2"
     );
     let close = CloseEffectRequest {
@@ -371,11 +379,17 @@ fn replacement_retry_after_close_refusal_adopts_its_shell_without_another_create
         },
         replacement: Some(context()),
     };
-    assert!(run_close_effect(&connector, &close).is_err());
+    assert!(run_close_effect(connector.as_ref(), &close).is_err());
     assert_eq!(
-        prepare_close_replacement(&connector, "intent", &context(), &closed_tab(), false)
-            .unwrap()
-            .0,
+        prepare_close_replacement(
+            connector.as_ref(),
+            "intent",
+            &context(),
+            &closed_tab(),
+            false
+        )
+        .unwrap()
+        .0,
         "w1:t2"
     );
     assert_eq!(
@@ -433,7 +447,7 @@ fn replacement_shell_is_placed_at_its_checkout_while_herdr_still_names_the_serve
         other => panic!("unexpected {other}"),
     });
     let (tab_id, payload) = prepare_close_replacement(
-        &herdr.connector(),
+        herdr.engine().as_ref(),
         "intent",
         &context(),
         &closed_tab(),
@@ -459,7 +473,7 @@ fn reuse_only_retry_cannot_create_when_its_shell_disappears_before_worker_reads(
         other => panic!("reuse-only retry must not send {other}"),
     });
     let error = prepare_close_replacement(
-        &herdr.connector(),
+        herdr.engine().as_ref(),
         "intent",
         &context(),
         &closed_tab(),
@@ -497,7 +511,7 @@ fn malformed_create_ack_is_recovered_by_its_marker_without_repeating_the_effect(
         other => panic!("unexpected {other}"),
     });
     let outcome = execute_local_control(
-        &herdr.connector(),
+        herdr.engine().as_ref(),
         &RemoteControlAction::CreateTab {
             workspace_id: "w1".into(),
             cwd: "/tmp".into(),
@@ -598,9 +612,9 @@ fn a_named_tabs_shell_is_split_into_its_tab_and_a_retry_adopts_it() {
             other => panic!("unexpected effect {other}"),
         },
     );
-    let connector = herdr.connector();
+    let connector = herdr.engine();
     let (shell, payload) = prepare_close_replacement(
-        &connector,
+        connector.as_ref(),
         "intent",
         &named_tab_context(),
         &closing_agent(),
@@ -630,9 +644,9 @@ fn a_named_tabs_shell_is_split_into_its_tab_and_a_retry_adopts_it() {
         target: closing_agent(),
         replacement: Some(named_tab_context()),
     };
-    assert!(run_close_effect(&connector, &close).is_err());
+    assert!(run_close_effect(connector.as_ref(), &close).is_err());
     let (adopted, _) = prepare_close_replacement(
-        &connector,
+        connector.as_ref(),
         "intent",
         &named_tab_context(),
         &closing_agent(),
@@ -665,7 +679,7 @@ fn a_named_tab_whose_shell_cannot_be_made_closes_nothing() {
         other => panic!("unexpected effect {other}"),
     });
     let error = prepare_close_replacement(
-        &herdr.connector(),
+        herdr.engine().as_ref(),
         "intent",
         &named_tab_context(),
         &closing_agent(),
@@ -695,7 +709,7 @@ fn a_named_tabs_shell_whose_split_answer_is_lost_is_named_by_its_marker() {
         other => panic!("unexpected effect {other}"),
     });
     let error = prepare_close_replacement(
-        &herdr.connector(),
+        herdr.engine().as_ref(),
         "intent",
         &named_tab_context(),
         &closing_agent(),
