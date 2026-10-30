@@ -36,11 +36,17 @@ jobs:
           cache: pnpm
           cache-dependency-path: pnpm-lock.yaml
       - run: bash scripts/verify-web.sh install --ignore-scripts
-      - name: Web shell unit suite, as windows check runs it
-        run: bash scripts/verify-web.sh web test
+      - name: Web shell unit suite, as windows check runs it, with the machine's disk and paging each second
+        run: |
+          mkdir -p diag-out
+          typeperf "\Processor(_Total)\% Processor Time" "\Memory\Pages Input/sec" "\Memory\Page Reads/sec" "\PhysicalDisk(*)\Disk Reads/sec" "\PhysicalDisk(*)\Disk Read Bytes/sec" "\PhysicalDisk(*)\Avg. Disk sec/Read" "\PhysicalDisk(*)\Current Disk Queue Length" -si 1 -sc 600 -f CSV -o diag-out/perf.csv -y > /dev/null 2>&1 &
+          status=0
+          bash scripts/verify-web.sh web test || status=$?
+          taskkill //IM typeperf.exe //F || true
+          exit $status
       - name: Diagnosis lines
         if: ${{ !cancelled() }}
-        run: cat diag-out/*.log | sort
+        run: cat diag-out/*.log | sort; head -3 diag-out/perf.csv
       - uses: actions/upload-artifact@v4
         if: ${{ !cancelled() }}
         with:

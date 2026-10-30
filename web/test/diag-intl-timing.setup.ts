@@ -52,7 +52,7 @@ if (!g.__diagIntl) {
   }
 }
 
-let file = "?";
+let file = String((globalThis as unknown as { __vitest_worker__?: { filepath?: string } }).__vitest_worker__?.filepath ?? "?").replace(/^.*[\\/]web[\\/]/, "");
 const fileStart = performance.now();
 let fileReported = false;
 let testWall = 0;
@@ -61,15 +61,27 @@ let testIntl: Totals = { ...totals };
 let faults = 0;
 let index = 0;
 
+let current = "(collect)";
+let lastTick = performance.now();
+let lastTickCpu = cpuMs();
+const ticker = setInterval(() => {
+  const now = performance.now();
+  const cpu = cpuMs();
+  if (now - lastTick > 400) write(`stall ${file} ${current.slice(0, 50)}: ${(now - lastTick - 100).toFixed(0)} ms, cpu ${(cpu - lastTickCpu).toFixed(0)} ms in it`);
+  lastTick = now;
+  lastTickCpu = cpu;
+}, 100);
+ticker.unref();
+
 const snapshot = () => ({ ...totals });
 const fmt = (value: number) => value.toFixed(0);
 
 beforeEach((context) => {
   if (!fileReported) {
     fileReported = true;
-    file = context.task.file.name;
     write(`file ${file}: uptime ${fmt(process.uptime() * 1000)} ms, before tests ${fmt(performance.now() - fileStart)} ms, intl so far wall ${fmt(totals.wall)} cpu ${fmt(totals.cpu)} calls ${totals.calls} slowest ${totals.slowest} ${fmt(totals.slowestWall)} ms`);
   }
+  current = context.task.name;
   testIntl = snapshot();
   faults = process.resourceUsage().majorPageFault;
   testCpu = cpuMs();
@@ -81,6 +93,7 @@ afterEach((context) => {
   const cpu = cpuMs() - testCpu;
   const intlWall = totals.wall - testIntl.wall;
   index += 1;
+  current = "(between tests)";
   if (index > 2 && wall < 400) return;
   const slowest = totals.slowestWall > testIntl.slowestWall ? ` slowest ${totals.slowest} ${fmt(totals.slowestWall)} ms` : "";
   write(`test ${file} #${index} ${context.task.name.slice(0, 60)}: wall ${fmt(wall)} cpu ${fmt(cpu)} faults ${process.resourceUsage().majorPageFault - faults} intl wall ${fmt(intlWall)} cpu ${fmt(totals.cpu - testIntl.cpu)} calls ${totals.calls - testIntl.calls}${slowest}`);
