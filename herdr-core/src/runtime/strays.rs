@@ -298,7 +298,6 @@ fn spawn_stray_prompt(
     )
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;

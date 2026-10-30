@@ -308,7 +308,10 @@ fn the_remains_view_reads_its_worktree_apart_from_the_checkout_in_front() {
     runtime.ui_attached = true;
     runtime.snapshot.ui_state.right_panel_visible = true;
     runtime.snapshot.ui_state.right_panel_section = RightPanelSection::Changes;
-    assert!(runtime.remains_request().0.is_none(), "nothing shows it yet");
+    assert!(
+        runtime.remains_request().0.is_none(),
+        "nothing shows it yet"
+    );
     assert!(event(
         &mut runtime,
         "detail_open",
@@ -402,14 +405,26 @@ fn the_remains_view_states_a_failed_read_instead_of_nothing_left() {
     assert!(runtime.ingest_remains(answer(Some("link.not_connected"), 0)));
     let held = &runtime.snapshot.remains.as_ref().expect("held").changes;
     assert_eq!(
-        (held.entries.len(), held.stale_reason.as_deref(), held.unavailable_reason.as_deref()),
+        (
+            held.entries.len(),
+            held.stale_reason.as_deref(),
+            held.unavailable_reason.as_deref()
+        ),
         (2, Some("link.not_connected"), None)
     );
 
     runtime.file_roots = Some(crate::files::FileRoots::from_identities(Vec::new()));
     assert_eq!(runtime.remains_request(), (None, true));
-    let refused = &runtime.snapshot.remains.as_ref().expect("published").changes;
-    assert_eq!(refused.unavailable_reason.as_deref(), Some("host.root_not_opened"));
+    let refused = &runtime
+        .snapshot
+        .remains
+        .as_ref()
+        .expect("published")
+        .changes;
+    assert_eq!(
+        refused.unavailable_reason.as_deref(),
+        Some("host.root_not_opened")
+    );
     assert_eq!(
         runtime.remains_request(),
         (None, false),
