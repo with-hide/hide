@@ -9,7 +9,8 @@ import { paneChildren } from "./paneChildren";
 import { usePaneAgents } from "./PaneHeaderBand";
 import { PlanChecklist } from "./PlanChecklist";
 import { PlanSummaryLine } from "./PlanMap";
-import { planCells, planCount, planOfPane, planProposed, stepOf } from "./plans";
+import { handedPanes, planCells, planCount, planOfPane, planProposed, stepOf } from "./plans";
+import type { PlanView } from "./snapshot";
 import { shellDragging } from "./shellDrag";
 import { useShellStore } from "./store";
 import { useUiStore } from "./ui";
@@ -88,9 +89,16 @@ export function PanePlanChip({ paneId, actions }: { paneId: string; actions: Act
             </button>
           </div>
           <div className="px-xs py-sm">
-            <PlanChecklist plan={plan} popover />
+            <PlanChecklist
+              plan={plan}
+              popover
+              openPane={(child) => {
+                close();
+                actions.openAgent(child);
+              }}
+            />
           </div>
-          <Delegated paneId={paneId} />
+          <Delegated paneId={paneId} plan={plan} />
         </div>
       </PopoverContent>
     </Popover>
@@ -178,17 +186,24 @@ export function usePaneChipPopover(paneId: string, present: boolean) {
   };
 }
 
-/** `맡긴 일 N · 끝남 k`: the pane's direct children, by the core's counts. */
-function Delegated({ paneId }: { paneId: string }) {
+/**
+ * `맡긴 일 N · 끝남 k`: the pane's direct children that no step of its plan
+ * is handed to, since a handed child is read on its step's row (PRD
+ * hide-plan-delegate B29); no line when there are none.
+ */
+function Delegated({ paneId, plan }: { paneId: string; plan: PlanView }) {
   const { t } = useInterfaceTranslation();
   const agents = usePaneAgents();
   const rest = useShellStore((s) => s.rest);
-  const children = useMemo(() => paneChildren(paneId, agents, rest), [paneId, agents, rest]);
-  if (!children) return null;
-  const done = children.parts.find((part) => part.kind === "result")?.count ?? 0;
+  const children = useMemo(() => {
+    const handed = handedPanes(plan);
+    return (paneChildren(paneId, agents, rest)?.children ?? []).filter((child) => !handed.has(child.pane_id));
+  }, [paneId, plan, agents, rest]);
+  if (children.length === 0) return null;
+  const done = children.filter((child) => child.group === "done").length;
   return (
-    <p className="flex items-baseline gap-xs px-sm pb-sm text-micro font-medium text-muted-foreground" data-pane-plan-children={children.children.length}>
-      {t("sessionWork.delegatedCount", { count: children.children.length })}
+    <p className="flex items-baseline gap-xs px-sm pb-sm text-micro font-medium text-muted-foreground" data-pane-plan-children={children.length}>
+      {t("sessionWork.delegatedCount", { count: children.length })}
       {done > 0 ? <span className="font-normal">· {t("plan.childrenDone", { count: done })}</span> : null}
     </p>
   );
