@@ -26,7 +26,7 @@ export default defineConfig({
     reporters: ["default", "./e2e/unit-failure-reporter.ts"],
     // Throwaway diagnosis for with-hide/hide-private issue 354, never merged.
     setupFiles: process.env.DIAG_VARIANT === "perfile" ? ["./test/diag-intl-timing.setup.ts", "./test/intl.setup.ts"] : process.env.DIAG_VARIANT ? ["./test/diag-intl-timing.setup.ts"] : [],
-    globalSetup: process.env.DIAG_VARIANT === "global" ? ["./test/diag-stall.global-setup.ts", "./test/diag-intl.global-setup.ts"] : process.env.DIAG_VARIANT ? ["./test/diag-stall.global-setup.ts"] : [],
+    globalSetup: process.env.DIAG_VARIANT === "global" ? ["./test/diag-stall.global-setup.ts", "./test/diag-intl.global-setup.ts"] : process.env.DIAG_VARIANT === "exe" ? ["./test/diag-stall.global-setup.ts", "./test/diag-exe.global-setup.ts"] : process.env.DIAG_VARIANT ? ["./test/diag-stall.global-setup.ts"] : [],
     include: ["src/**/*.test.{ts,tsx}", "e2e/windows-sockets.unit.ts", "e2e/platform-program.unit.ts", "e2e/bounded-child.unit.ts"],
   },
 });
