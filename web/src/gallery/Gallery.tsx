@@ -148,6 +148,8 @@ const renderers: Renderers = {
         </Button>
       </Hint>
     ),
+    "Row Action": () => <GalleryRowAction />,
+    "Row Action Hover": () => <GalleryRowAction state="hover" />,
   },
   "Textarea": {
     "Default": () => <Textarea aria-label="First instruction" rows={3} defaultValue="" className="w-(--size-settings-control-w)" />,
@@ -386,6 +388,19 @@ function GalleryToggle({ disabled, state, size }: { disabled?: boolean; state?: 
       </ToggleGroupItem>
       <ToggleGroupItem value="views" size={size}>Views</ToggleGroupItem>
     </ToggleGroup>
+  );
+}
+
+function GalleryRowAction({ state }: { state?: "hover" }) {
+  return (
+    <div className="flex w-(--size-settings-control-w) items-center gap-xs rounded-xs bg-accent px-xs py-xs">
+      <span className="min-w-0 flex-1 truncate text-body text-foreground">payments-retry</span>
+      <Hint label="More">
+        <Button variant="row-action" size="icon-xs" data-gallery-state={state}>
+          <SettingsIcon />
+        </Button>
+      </Hint>
+    </div>
   );
 }
 

@@ -6,7 +6,10 @@ import { cn } from "../../lib/utils";
 // shadcn Button on hide tokens; the gallery's Button section draws each
 // variant and size under the same names (docs/DESIGN_GUIDE.md, Which part).
 // `text` and `text-link` are actions that read as words in a row or a line of
-// copy; with `size="inline"` they take the text's own height.
+// copy; with `size="inline"` they take the text's own height. `row-action` is
+// an icon action inside a row that lights on hover itself, so it lights one
+// step further (secondary over the row's accent) and stays lit while its menu
+// is open.
 const buttonVariants = cva(
   "inline-flex shrink-0 items-center justify-center gap-xs whitespace-nowrap rounded-sm text-body font-medium outline-none transition-colors focus-visible:ring-1 focus-visible:ring-ring focus-visible:ring-offset-1 focus-visible:ring-offset-background disabled:pointer-events-none disabled:opacity-(--opacity-disabled) aria-invalid:ring-1 aria-invalid:ring-destructive [&_svg]:pointer-events-none [&_svg]:shrink-0 [&_svg:not([class*='size-'])]:size-(--size-icon)",
   {
@@ -20,6 +23,7 @@ const buttonVariants = cva(
         link: "text-primary underline-offset-4 hover:underline",
         text: "font-normal text-subtle-foreground hover:text-foreground",
         "text-link": "font-normal text-subtle-foreground underline-offset-4 hover:text-foreground hover:underline",
+        "row-action": "text-muted-foreground hover:bg-secondary hover:text-foreground data-[state=open]:bg-secondary",
       },
       size: {
         default: "h-(--size-control) px-md",
