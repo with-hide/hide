@@ -84,7 +84,7 @@
     "layer": 1
   },
   "web/src/PaneHeaderBand.tsx": {
-    "button": 7
+    "button": 6
   },
   "web/src/PaneMissionChip.tsx": {
     "button": 2
@@ -105,7 +105,7 @@
     "button": 1
   },
   "web/src/PrCard.tsx": {
-    "button": 7,
+    "button": 2,
     "select": 1,
     "layer": 1
   },
@@ -124,9 +124,6 @@
   "web/src/ProjectTool.tsx": {
     "button": 6
   },
-  "web/src/ProjectsTab.tsx": {
-    "button": 8
-  },
   "web/src/QuickAdd.tsx": {
     "input": 1
   },
@@ -137,7 +134,7 @@
     "button": 2
   },
   "web/src/SessionRecord.tsx": {
-    "button": 9
+    "button": 4
   },
   "web/src/SidebarProjectFilter.tsx": {
     "button": 3
@@ -147,7 +144,7 @@
     "layer": 1
   },
   "web/src/SuggestionsTab.tsx": {
-    "button": 9
+    "button": 1
   },
   "web/src/TaskLens.tsx": {
     "button": 3

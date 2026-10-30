@@ -22,6 +22,7 @@ import { settingsTarget } from "./projectSettings";
 import { useShellStore } from "./store";
 import { useUiStore, type OverviewPanel } from "./ui";
 import { primaryCheckout } from "./workspaceManage";
+import { RowOverlayButton } from "./components/ui/row-button";
 
 // The Projects tab (PRD overview-device-tasks D-14, D-15, D-24..D-28,
 // B47-B57): the device's disk on one line, then a row per project with its
@@ -87,9 +88,9 @@ export function OverviewProjects({ projects, deviceId, actions }: { projects: re
           <span role="columnheader">{t("overviewRedesign.rootTasks")}</span>
           <span role="columnheader">{t("overviewProjects.colBacklog")}</span>
           <span role="columnheader">
-            <button type="button" aria-pressed={bySize} className={cn(LINK, bySize && "text-foreground")} onClick={() => useUiStore.getState().setOverview({ bySize: !bySize })} data-projects-sort="size">
+            <Button variant="row-action" size="inline" aria-pressed={bySize} className={cn(LINK, bySize && "text-foreground")} onClick={() => useUiStore.getState().setOverview({ bySize: !bySize })} data-projects-sort="size">
               {t("overviewProjects.colDisk")}{bySize ? " ↓" : ""}
-            </button>
+            </Button>
           </span>
           <span role="columnheader">{t("overviewProjects.colCare")}</span>
           <span role="columnheader">{t("overviewProjects.colActivity")}</span>
@@ -98,10 +99,10 @@ export function OverviewProjects({ projects, deviceId, actions }: { projects: re
         {active.map((row) => <ProjectRow key={row.project.id} row={row} sessions={sessions.get(row.project.id)!} largest={largest} actions={actions} />)}
         {quiet.length > 0 ? (
           <>
-            <button type="button" aria-expanded={quietOpen} className="flex items-center gap-xxs rounded-sm px-sm py-xs text-left text-caption text-muted-foreground outline-none hover:bg-accent focus-visible:ring-1 focus-visible:ring-ring" onClick={() => useUiStore.getState().setOverview({ open: quietOpen ? useUiStore.getState().overview.open.filter((fold) => fold !== "quiet") : [...useUiStore.getState().overview.open, "quiet"] })} data-projects-quiet={quiet.length}>
+            <Button variant="ghost" size="inline" aria-expanded={quietOpen} className="self-start justify-start gap-xxs rounded-sm px-sm py-xs text-caption font-normal text-muted-foreground" onClick={() => useUiStore.getState().setOverview({ open: quietOpen ? useUiStore.getState().overview.open.filter((fold) => fold !== "quiet") : [...useUiStore.getState().overview.open, "quiet"] })} data-projects-quiet={quiet.length}>
               {quietBytes !== null ? t("overviewProjects.quiet", { count: quiet.length, size: formatBytes(language, quietBytes) }) : t("overviewProjects.quietNoSize", { count: quiet.length })}
               <ChevronRightIcon aria-hidden="true" className={cn("size-(--size-icon-sm)", quietOpen && "rotate-90")} />
-            </button>
+            </Button>
             {quietOpen ? quiet.map((row) => <ProjectRow key={row.project.id} row={row} sessions={sessions.get(row.project.id)!} largest={largest} actions={actions} />) : null}
           </>
         ) : null}
@@ -177,10 +178,10 @@ function DiskCell({ row, largest }: { row: ProjectRowModel; largest: number }) {
         </span>
       )}
       <Hint label={hint}>
-        <button type="button" className={cn(LINK, "shrink-0 font-mono text-caption")} disabled={row.folder || disk.bytes === null} onClick={() => openDiskCleanup(row.project.id, "all")} data-projects-disk-open={row.project.id}>
+        <Button variant="row-action" size="inline" className={cn(LINK, "shrink-0 font-mono text-caption text-foreground")} disabled={row.folder || disk.bytes === null} onClick={() => openDiskCleanup(row.project.id, "all")} data-projects-disk-open={row.project.id}>
           {size}
           {disk.failure ? <AlertTriangleIcon aria-label={t("overviewProjects.failed", { reason: disk.failure })} className="size-(--size-icon-sm) text-warning" /> : null}
-        </button>
+        </Button>
       </Hint>
       {busy ? <LoaderCircleIcon aria-hidden="true" className="size-(--size-icon-sm) shrink-0 animate-spin text-muted-foreground" /> : null}
     </span>
@@ -197,7 +198,7 @@ function ProjectRow({ row, sessions, largest, actions }: { row: ProjectRowModel;
   const activity = project.last_activity_unix_ms ?? null;
   return (
     <div role="row" className={cn(COLUMNS, "relative border-b border-border px-md py-xl text-body hover:bg-accent", selected && "bg-secondary")} data-projects-row={project.id}>
-      <button type="button" aria-label={project.label} aria-pressed={selected} className="absolute inset-0 rounded-sm outline-none focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-ring" onClick={() => useUiStore.getState().setOverview({ projectId: project.id, panel: null })} />
+      <RowOverlayButton hover={false} aria-label={project.label} aria-pressed={selected} className="rounded-sm" onClick={() => useUiStore.getState().setOverview({ projectId: project.id, panel: null })} />
       <span role="cell" className="pointer-events-none flex min-w-0 items-center gap-xs">
         {row.folder ? <FolderIcon aria-hidden="true" className="size-(--size-icon-sm) shrink-0 text-muted-foreground" /> : project.tasks?.source?.kind === "github" ? <GithubIcon aria-hidden="true" className="size-(--size-icon-sm) shrink-0 text-muted-foreground" data-projects-github="true" /> : <FolderGit2Icon aria-hidden="true" className="size-(--size-icon-sm) shrink-0 text-muted-foreground" />}
         <span className="min-w-0"><span className="block truncate text-title font-semibold text-foreground">{project.label}</span><span className="text-micro text-muted-foreground">{t("overviewRedesign.checkouts")} {project.checkouts.length}</span></span>
@@ -210,25 +211,25 @@ function ProjectRow({ row, sessions, largest, actions }: { row: ProjectRowModel;
       <span role="cell" className="pointer-events-none min-w-0"><NowCell now={row.now} /></span>
       <span role="cell">
         {row.backlog > 0 ? (
-          <button type="button" className={cn(LINK, "font-mono text-subtle-foreground")} onClick={() => { useUiStore.getState().setMainView("backlog"); useUiStore.getState().setOverview({ projectId: project.id, panel: null }); }} data-projects-backlog={row.backlog}>
+          <Button variant="row-action" size="inline" className={cn(LINK, "font-mono text-subtle-foreground")} onClick={() => { useUiStore.getState().setMainView("backlog"); useUiStore.getState().setOverview({ projectId: project.id, panel: null }); }} data-projects-backlog={row.backlog}>
             {row.backlog}<ChevronRightIcon aria-hidden="true" className="size-(--size-icon-sm)" />
-          </button>
+          </Button>
         ) : null}
       </span>
       <span role="cell" className="min-w-0"><DiskCell row={row} largest={largest} /></span>
       <span role="cell">
         {row.merged > 0 && cleans ? (
-          <button type="button" className={cn(LINK, "text-pr-merged")} onClick={() => openDiskCleanup(project.id, "done")} data-projects-merged={row.merged}>
+          <Button variant="row-action" size="inline" className={cn(LINK, "text-pr-merged")} onClick={() => openDiskCleanup(project.id, "done")} data-projects-merged={row.merged}>
             {t("overviewProjects.merged", { count: row.merged })}
-          </button>
+          </Button>
         ) : row.merged > 0 ? <span className="pointer-events-none text-pr-merged" data-projects-merged={row.merged}>{t("overviewProjects.mergedThere", { count: row.merged })}</span> : null}
       </span>
       <span role="cell" className="pointer-events-none truncate font-mono text-micro text-muted-foreground">{activity !== null ? ageWords(language, Date.now() - activity, t) : ""}</span>
       <span role="cell">
         <Hint label={t("overviewTasks.openHint", { project: project.label })}>
-          <button type="button" className={cn(LINK, "text-subtle-foreground")} aria-label={t("overviewTasks.openHint", { project: project.label })} onClick={() => openProject(project, actions)} data-projects-open={project.id}>
+          <Button variant="row-action" size="inline" className={cn(LINK, "text-subtle-foreground")} aria-label={t("overviewTasks.openHint", { project: project.label })} onClick={() => openProject(project, actions)} data-projects-open={project.id}>
             <ExternalLinkIcon aria-hidden="true" className="size-(--size-icon-sm)" />
-          </button>
+          </Button>
         </Hint>
       </span>
     </div>
@@ -287,9 +288,9 @@ export function ProjectPanel({ panel, projects, actions, onClose }: { panel: Ext
         <p className="flex min-w-0 flex-wrap items-center gap-sm" data-project-panel-backlog={backlog.rows.length}>
           <span className="shrink-0 font-medium text-subtle-foreground">{t("overviewProjects.colBacklog")}</span>
           <span className="text-muted-foreground">{t("overviewRedesign.mixedBacklog", { github: githubCount, local: memoCount })}</span>
-          <button type="button" className={cn(LINK, "text-subtle-foreground")} onClick={() => { useUiStore.getState().setMainView("backlog"); useUiStore.getState().setOverview({ projectId: project.id, panel: null }); }}>
+          <Button variant="row-action" size="inline" className={cn(LINK, "text-subtle-foreground")} onClick={() => { useUiStore.getState().setMainView("backlog"); useUiStore.getState().setOverview({ projectId: project.id, panel: null }); }}>
             {t("overviewProjects.panel.view")}<ArrowRightIcon aria-hidden="true" className="size-(--size-icon-sm)" />
-          </button>
+          </Button>
         </p>
         {cleans ? (
           <section className="space-y-xs" data-project-panel-storage="true">

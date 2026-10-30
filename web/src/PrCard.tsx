@@ -20,6 +20,7 @@ import { catalogWorkspaces, frontCheckout, type LinkPanel, type PrCard, type PrM
 import { useShellStore } from "./store";
 import { useUiStore } from "./ui";
 import { useRequestViewDemand } from "./requestViewDemand";
+import { RowButton } from "./components/ui/row-button";
 
 // The PR card keeps its list identity, CI counts, merge controls, timeline,
 // changed files and Markdown body in the lane's existing detail slot.
@@ -205,7 +206,7 @@ function DecisionBox({ project, pr, entry, card, actions }: { project: Workspace
         <div className="min-w-0 flex-1" data-pr-card-checks="true">
           <p className={cn("flex items-start gap-xs text-caption font-medium", failed ? "text-destructive" : passing ? "text-success" : "text-agent-working")}><Icon aria-hidden="true" className="mt-xxs size-(--size-icon-sm) shrink-0" /><span>{t(summary.key, summary.values)}</span></p>
           {counts && counts.total > 0 ? <p className="mt-xs flex flex-wrap gap-x-sm gap-y-xxs text-micro text-muted-foreground" data-pr-card-check-counts="true">{(["passed", "running", "waiting", "failed", "skipped", "unknown"] as const).filter((key) => counts[key] > 0).map((key) => <span key={key}>{t(`recordCard.ci.${key}`, { count: counts[key] })}</span>)}</p> : null}
-          <button type="button" className="mt-xs inline-flex items-center gap-xxs rounded-xs text-micro text-muted-foreground outline-none hover:underline focus-visible:ring-1 focus-visible:ring-ring" onClick={() => actions.openPullRequest(`${pr.url}/checks`, project.device_id, true)}>{t("recordCard.checksLink")}<ExternalLinkIcon aria-hidden="true" className="size-(--size-icon-sm)" /></button>
+          <Button variant="text-link" size="inline" className="mt-xs gap-xxs text-micro" onClick={() => actions.openPullRequest(`${pr.url}/checks`, project.device_id, true)}>{t("recordCard.checksLink")}<ExternalLinkIcon aria-hidden="true" className="size-(--size-icon-sm)" /></Button>
         </div>
       </Buttons>
       {entry && ["queued", "unjudged", "checking"].includes(entry.reason.kind) ? <ReasonLine reason={entry.reason} group={entry.row.group} className="whitespace-normal [overflow-wrap:anywhere]" /> : null}
@@ -233,10 +234,10 @@ function Blocked({ pr, entry, card, actions, projectId }: { pr: PullRequest; ent
         <li key={`${check.name ?? ""}:${index}`} className="flex min-w-0 items-center gap-xs text-caption" data-pr-card-failed={check.name ?? ""}>
           <span className="min-w-0 flex-1 truncate"><span className="text-pr-failed">✗</span> {check.name ? <span className="font-mono">{check.name}</span> : t("githubReason.unnamedCheck")}</span>
           {check.url ? (
-            <button type="button" className="inline-flex shrink-0 items-center gap-xxs rounded-xs text-micro text-muted-foreground outline-none hover:underline focus-visible:ring-1 focus-visible:ring-ring" onClick={() => actions.openPullRequest(check.url!, device, true)}>
+            <Button variant="text-link" size="inline" className="shrink-0 gap-xxs text-micro" onClick={() => actions.openPullRequest(check.url!, device, true)}>
               {t("work.card.checkLog")}
               <ExternalLinkIcon aria-hidden="true" className="size-(--size-icon-sm)" />
-            </button>
+            </Button>
           ) : null}
         </li>
       ))}
@@ -424,11 +425,11 @@ function FilesRow({ pr, project, card, actions, open, onToggle }: { pr: PullRequ
   const summary = files === null ? (card?.failed.includes("files") ? <span className="text-warning" data-pr-card-part-summary="files">{t("work.card.part.failed")}</span> : null) : <><span className="font-mono text-pr-mergeable">+{added}</span><span className="font-mono text-pr-failed">−{removed}</span></>;
   return (
     <section className="flex flex-col border-t border-border" aria-label={name} data-pr-card-row="files" data-open={open ? "true" : undefined}>
-      <button type="button" aria-expanded={open} onClick={onToggle} className="flex min-h-(--size-control) w-full min-w-0 items-center gap-xs rounded-xs py-xs text-left text-caption outline-none hover:bg-accent focus-visible:ring-1 focus-visible:ring-ring" data-pr-card-toggle="files">
+      <RowButton aria-expanded={open} onClick={onToggle} className="min-h-(--size-control) px-0 text-caption" data-pr-card-toggle="files">
         {open ? <ChevronDownIcon aria-hidden="true" className="size-(--size-icon-sm) shrink-0 text-muted-foreground" /> : <ChevronRightIcon aria-hidden="true" className="size-(--size-icon-sm) shrink-0 text-muted-foreground" />}
         <span className="shrink-0 font-medium text-foreground">{name}</span>
         <span className="flex min-w-0 flex-1 items-center justify-end gap-xs text-micro text-muted-foreground">{summary}</span>
-      </button>
+      </RowButton>
       {open ? (
         <div className="flex flex-col gap-sm pb-sm pl-md">
           {files === null ? <PartState part="files" card={card} actions={actions} projectId={project.id} number={pr.number} /> : (
@@ -436,10 +437,10 @@ function FilesRow({ pr, project, card, actions, open, onToggle }: { pr: PullRequ
               {split.shown.map((file) => <FileRow key={file.path} file={file} onOpen={() => openFile(file.path)} />)}
               {split.generated > 0 ? (
                 <li>
-                  <button type="button" aria-expanded={generatedOpen} onClick={() => setGeneratedOpen(!generatedOpen)} className="flex w-full items-center gap-xs rounded-xs py-xs text-left text-caption text-muted-foreground outline-none hover:bg-accent focus-visible:ring-1 focus-visible:ring-ring" data-pr-card-generated={split.generated}>
+                  <RowButton aria-expanded={generatedOpen} onClick={() => setGeneratedOpen(!generatedOpen)} className="px-0 text-caption text-muted-foreground" data-pr-card-generated={split.generated}>
                     {generatedOpen ? <ChevronDownIcon aria-hidden="true" className="size-(--size-icon-sm)" /> : <ChevronRightIcon aria-hidden="true" className="size-(--size-icon-sm)" />}
                     {t("work.card.generated", { count: split.generated })}
-                  </button>
+                  </RowButton>
                 </li>
               ) : null}
               {generatedOpen ? files.filter((file) => file.generated).map((file) => <FileRow key={file.path} file={file} onOpen={() => openFile(file.path)} />) : null}
@@ -455,11 +456,11 @@ function FilesRow({ pr, project, card, actions, open, onToggle }: { pr: PullRequ
 function FileRow({ file, onOpen }: { file: NonNullable<PrCard["files"]>[number]; onOpen: () => void }) {
   return (
     <li>
-      <button type="button" onClick={onOpen} className="flex w-full min-w-0 items-center gap-sm rounded-xs px-xs py-xs text-left text-caption outline-none hover:bg-accent focus-visible:ring-1 focus-visible:ring-ring" data-pr-card-file={file.path} title={file.path}>
+      <RowButton onClick={onOpen} className="gap-sm text-caption" data-pr-card-file={file.path} title={file.path}>
         <span className="min-w-0 flex-1 truncate font-mono">{file.path}</span>
         <span className="shrink-0 font-mono text-micro text-pr-mergeable">+{file.additions}</span>
         <span className="shrink-0 font-mono text-micro text-pr-failed">−{file.deletions}</span>
-      </button>
+      </RowButton>
     </li>
   );
 }

@@ -18,6 +18,7 @@ import { suggestionSteps } from "./hideAiSteps";
 import { useShellStore } from "./store";
 import { applyOffer, appliedSummary, attemptLine, fileName, localLine, offered, suggestionGroups, suggestionMark, suggestionReason, suggestionTitle, type BranchChoice, type SuggestionMark } from "./suggestionList";
 import { useUiStore } from "./ui";
+import { RowOverlayButton, RowButton } from "./components/ui/row-button";
 
 /**
  * The Hide AI tool's 제안 tab (PRD hide-ai-suggestions D-05..D-07, D-37,
@@ -59,11 +60,11 @@ export function SuggestionsTab({ project, actions }: { project: ProjectSuggestio
           <Group name={t("suggestions.group.applying")} rows={groups.applying} project={project} actions={actions} kind="applying" />
           {applied.count > 0 ? (
             <section className="flex min-w-0 flex-col" data-suggestions-group="applied">
-              <button type="button" aria-expanded={!folded} className="flex items-center gap-xs self-start py-sm text-caption text-muted-foreground outline-none hover:text-foreground focus-visible:ring-1 focus-visible:ring-ring" onClick={() => setFolded(!folded)} data-suggestions-fold={applied.count}>
+              <Button variant="text" size="inline" aria-expanded={!folded} className="gap-xs self-start py-sm text-caption" onClick={() => setFolded(!folded)} data-suggestions-fold={applied.count}>
                 <ChevronRightIcon aria-hidden="true" className={cn("size-(--size-icon-sm)", !folded && "rotate-90")} />
                 <span>{t("suggestions.group.applied")} {applied.count}</span>
                 {applied.effective > 0 ? <span>· {t("suggestions.appliedEffective", { count: applied.effective })}</span> : null}
-              </button>
+              </Button>
               {folded ? null : groups.applied.map((row) => <Row key={row.id} row={row} project={project} actions={actions} />)}
             </section>
           ) : null}
@@ -105,9 +106,9 @@ function OpenFile({ path, actions }: { path: string; actions: Actions }) {
   // The path is the core's machine's; a window elsewhere has no such file to open.
   if (!actions.onCoreMachine()) return null;
   return (
-    <button type="button" className="pointer-events-auto shrink-0 text-subtle-foreground underline-offset-4 hover:text-foreground hover:underline" title={path} onClick={() => actions.openOwnedFile(path)} data-suggestion-open-file={path}>
+    <Button variant="text-link" size="inline" className="pointer-events-auto shrink-0" title={path} onClick={() => actions.openOwnedFile(path)} data-suggestion-open-file={path}>
       {t("suggestions.local.openFile")}
-    </button>
+    </Button>
   );
 }
 
@@ -154,7 +155,7 @@ function Row({ row, project, actions }: { row: SuggestionRow; project: ProjectSu
   const toggle = () => useUiStore.getState().showHideAiTab("suggestions", open ? null : row.id);
   return (
     <div ref={self} className={cn("relative min-w-0 border-b border-border", open && "bg-card")} data-suggestion={row.id} data-suggestion-state={row.state} data-suggestion-source={row.source} data-suggestion-open={open ? "true" : undefined}>
-      <button type="button" className="absolute inset-0 rounded-xs outline-none hover:bg-accent focus-visible:ring-1 focus-visible:ring-ring" aria-label={t(open ? "suggestions.closeRow" : "suggestions.openRow", { row: title })} aria-expanded={open} onClick={toggle} data-suggestion-toggle={row.id} />
+      <RowOverlayButton aria-label={t(open ? "suggestions.closeRow" : "suggestions.openRow", { row: title })} aria-expanded={open} onClick={toggle} data-suggestion-toggle={row.id} />
       <div className="pointer-events-none relative grid min-w-0 grid-cols-[auto_1fr] gap-x-sm gap-y-xs px-xs py-sm">
         <SuggestionMarkIcon mark={mark} />
         <div className={cn("flex min-w-0 items-start gap-xs", working && "opacity-(--opacity-dimmed)")}>
@@ -247,9 +248,9 @@ function previousPrLabel(t: ReturnType<typeof useInterfaceTranslation>["t"], url
 function PrLink({ project, actions, url, label, className }: { project: ProjectSuggestions; actions: Actions; url: string; label: string; className?: string }) {
   const number = Number(/\/pull\/(\d+)/.exec(url)?.[1] ?? Number.NaN);
   return (
-    <button type="button" className={cn("pointer-events-auto shrink-0 text-subtle-foreground underline-offset-4 hover:text-foreground hover:underline", className)} title={label} onClick={() => (Number.isFinite(number) ? actions.openSessionPullRequest({ workspace_id: project.workspace_id, number, url }) : actions.openLink(url, false))} data-suggestion-link={url}>
+    <Button variant="text-link" size="inline" className={cn("pointer-events-auto shrink-0", className)} title={label} onClick={() => (Number.isFinite(number) ? actions.openSessionPullRequest({ workspace_id: project.workspace_id, number, url }) : actions.openLink(url, false))} data-suggestion-link={url}>
       {label}
-    </button>
+    </Button>
   );
 }
 
@@ -264,9 +265,9 @@ function AgentLink({ pane, actions }: { pane: string | null; actions: Actions })
   const agent = useAttemptAgent(pane);
   if (!agent) return null;
   return (
-    <button type="button" className="pointer-events-auto ml-auto shrink-0 text-subtle-foreground hover:text-foreground" aria-label={t("suggestions.openAgent")} onClick={() => actions.openAgent(agent.pane_id)} data-suggestion-agent={agent.pane_id}>
+    <Button variant="text" size="inline" className="pointer-events-auto ml-auto shrink-0" aria-label={t("suggestions.openAgent")} onClick={() => actions.openAgent(agent.pane_id)} data-suggestion-agent={agent.pane_id}>
       {t("suggestions.agent")}
-    </button>
+    </Button>
   );
 }
 
@@ -302,9 +303,9 @@ function BranchLine({ row, branch, project, actions }: { row: SuggestionRow; bra
   const only = branch.files_total === 1 && branch.files.length === 1 ? branch.files[0]!.path : null;
   return (
     <span className="flex min-w-0 items-center gap-sm" data-suggestion-branch={branch.name}>
-      <button type="button" className="pointer-events-auto shrink-0 text-warning underline-offset-4 hover:underline" onClick={() => actions.openBranchCard(project.workspace_id, row.id, only)} data-suggestion-branch-view={row.id}>
+      <Button variant="text-link" size="inline" className="pointer-events-auto shrink-0 text-warning hover:text-warning" onClick={() => actions.openBranchCard(project.workspace_id, row.id, only)} data-suggestion-branch-view={row.id}>
         {t("suggestions.branch.view")}
-      </button>
+      </Button>
       <span className="min-w-0 truncate font-mono text-subtle-foreground" title={branch.name}>{branch.name}</span>
       <span className="shrink-0 text-muted-foreground">{t("suggestions.branch.files", { count: branch.files_total })}</span>
       <span className="shrink-0 font-mono text-pr-mergeable">+{branch.added}</span>
@@ -418,7 +419,7 @@ function EvidenceList({ row, project, actions }: { row: SuggestionRow; project: 
     return (
       <div className="flex min-w-0 items-center gap-sm text-caption" data-suggestion-evidence-folded={row.evidence.length}>
         <span className="text-muted-foreground">{t("suggestions.evidenceFolded", { count: row.evidence.length })}</span>
-        <button type="button" className="pointer-events-auto shrink-0 text-subtle-foreground underline-offset-4 hover:text-foreground hover:underline" onClick={() => setUnfolded(true)} data-suggestion-evidence-unfold={row.id}>{t("suggestions.unfold")}</button>
+        <Button variant="text-link" size="inline" className="pointer-events-auto shrink-0" onClick={() => setUnfolded(true)} data-suggestion-evidence-unfold={row.id}>{t("suggestions.unfold")}</Button>
       </div>
     );
   }
@@ -460,7 +461,7 @@ function BranchFiles({ row, branch, project, actions }: { row: SuggestionRow; br
       <ul className="flex flex-col" role="list">
         {branch.files.map((file) => (
           <li key={file.path} className="flex min-w-0 flex-col gap-xxs">
-            <button type="button" aria-expanded={file.path === path} onClick={() => setChosen(file.path === path ? null : file.path)} className={cn("pointer-events-auto flex w-full min-w-0 items-center gap-xs rounded-xs px-xs py-xxs text-left text-caption outline-none hover:bg-accent focus-visible:ring-1 focus-visible:ring-ring", file.path === path && "bg-accent")} title={file.path} data-suggestion-branch-file={file.path}>
+            <RowButton aria-expanded={file.path === path} onClick={() => setChosen(file.path === path ? null : file.path)} className={cn("pointer-events-auto py-xxs text-caption", file.path === path && "bg-accent")} title={file.path} data-suggestion-branch-file={file.path}>
               <ChevronRightIcon aria-hidden="true" className={cn("size-(--size-icon-sm) shrink-0 text-muted-foreground", file.path === path && "rotate-90")} />
               <span className="min-w-0 flex-1 truncate font-mono">{file.path}</span>
               {file.binary ? <span className="shrink-0 text-micro text-muted-foreground">{t("suggestions.card.binary")}</span> : (
@@ -469,7 +470,7 @@ function BranchFiles({ row, branch, project, actions }: { row: SuggestionRow; br
                   <span className="shrink-0 font-mono text-micro text-pr-failed">−{file.removed}</span>
                 </>
               )}
-            </button>
+            </RowButton>
             {file.path === path ? <div className="pointer-events-auto min-w-0" data-suggestion-branch-diff={file.path}><BranchFileDiff workspaceId={workspace} rowId={row.id} path={file.path} inline /></div> : null}
           </li>
         ))}
