@@ -4116,9 +4116,13 @@ mod tests {
                         "Initial guide",
                     ],
                 ] {
+                    // The account's git settings, such as commit
+                    // signing, are not the fixture's.
                     let status = std::process::Command::new("git")
                         .args(args)
                         .current_dir(&fixture.root)
+                        .env("GIT_CONFIG_GLOBAL", "/dev/null")
+                        .env("GIT_CONFIG_NOSYSTEM", "1")
                         .env("GIT_AUTHOR_DATE", date)
                         .env("GIT_COMMITTER_DATE", date)
                         .status()

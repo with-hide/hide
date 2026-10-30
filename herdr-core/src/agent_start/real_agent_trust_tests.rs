@@ -24,7 +24,11 @@ const TRUST_QUESTION: &str = "Quick safety check";
 const PROMPT_BANNER: &str = "Claude Code v";
 
 fn git(cwd: &Path, args: &[&str]) {
+    // The account's git settings, such as commit signing, are not the
+    // fixture's.
     let output = Command::new("git")
+        .env("GIT_CONFIG_GLOBAL", "/dev/null")
+        .env("GIT_CONFIG_NOSYSTEM", "1")
         .current_dir(cwd)
         .args([
             "-c",
