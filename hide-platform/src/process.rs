@@ -4337,7 +4337,6 @@ mod sys {
         K32GetProcessMemoryInfo, PROCESS_MEMORY_COUNTERS,
     };
     use windows_sys::Win32::System::SystemServices::{
-        JOB_OBJECT_MSG_ABNORMAL_EXIT_PROCESS, JOB_OBJECT_MSG_EXIT_PROCESS,
         JOB_OBJECT_MSG_NEW_PROCESS, JOB_OBJECT_QUERY,
     };
     use windows_sys::Win32::System::Threading::INFINITE;
@@ -4416,8 +4415,10 @@ mod sys {
     /// the one completion port of this process, set on the job before the
     /// child is started; one thread reads that port for the life of the
     /// process (`serve`), and each notice costs it a fixed amount of work. It
-    /// holds each announced process until it is signalled, and lets go of
-    /// those the job says exited as they signal. A pid that no longer opens,
+    /// holds each announced process until it is signalled: each notice checks
+    /// the next few held processes in turn and lets go of those signalled, so
+    /// one slow to end holds up no other, and one whose exit notice never
+    /// came is let go on its turn. A pid that no longer opens,
     /// or opens as a process outside the job, had its object deleted, which
     /// happens only after its handles were closed, so it has ended whole.
     /// Microsoft does not guarantee a job's notices arrive, so the notices are
@@ -4440,8 +4441,8 @@ mod sys {
         announced: u64,
         /// Each announced process not yet seen signalled, by pid.
         held: HashMap<u32, Owned>,
-        /// Held pids the job said exited, oldest first.
-        exited: VecDeque<u32>,
+        /// Every held pid once, in the order they are next checked.
+        turns: VecDeque<u32>,
         lost: Option<String>,
     }
 
@@ -4906,9 +4907,12 @@ mod sys {
     /// refused at its start.
     const JOB_LIMIT: usize = 1024;
 
-    /// How many held processes the job said exited one notice checks for
-    /// their signal, so a notice costs the same however many are held.
-    const EXITED_CHECKS: usize = 2;
+    /// How many held processes one notice checks for their signal, so a
+    /// notice costs the same however many are held. Each held process came
+    /// with a notice that checked two, so checks outpace holds even when no
+    /// exit notice comes, and an ended one is let go within one turn of
+    /// them all.
+    const CHECKS_PER_NOTICE: usize = 2;
 
     /// The notices of this process, started with the first child. A thread
     /// that cannot start stops them, so every child after is refused.
@@ -4983,7 +4987,8 @@ mod sys {
         }
 
         /// The port is no longer read: every job followed now keeps the
-        /// reason and stops sending notices to it, and no job joins it after.
+        /// reason and has its notices taken off the port, which the system
+        /// can refuse and which is then only logged, and no job joins it after.
         fn stop(&self, reason: String) {
             let mut registry = lock(&self.registry);
             if registry.down.is_some() {
@@ -5060,7 +5065,7 @@ mod sys {
                 job: Owned(copy),
                 announced: 0,
                 held: HashMap::new(),
-                exited: VecDeque::new(),
+                turns: VecDeque::new(),
                 lost: None,
             }));
             let mut registry = lock(&notices.registry);
@@ -5095,25 +5100,19 @@ mod sys {
     }
 
     impl Followed {
-        /// One notice of the job's, at a fixed cost.
+        /// One notice of the job's, at a fixed cost. Whatever it says, the
+        /// next held processes are checked first, so one that ended makes
+        /// room for the process the notice announces.
         fn notice(&mut self, message: u32, pid: u32) {
-            match message {
-                JOB_OBJECT_MSG_NEW_PROCESS => {
-                    self.announced += 1;
-                    if self.lost.is_none()
-                        && let Err(error) = self.hold(pid)
-                    {
-                        self.lose(format!("process {pid}: {error}"));
-                    }
-                }
-                JOB_OBJECT_MSG_EXIT_PROCESS | JOB_OBJECT_MSG_ABNORMAL_EXIT_PROCESS
-                    if self.held.contains_key(&pid) && self.exited.len() < HELD_LIMIT =>
+            self.let_go_of_signalled();
+            if message == JOB_OBJECT_MSG_NEW_PROCESS {
+                self.announced += 1;
+                if self.lost.is_none()
+                    && let Err(error) = self.hold(pid)
                 {
-                    self.exited.push_back(pid);
+                    self.lose(format!("process {pid}: {error}"));
                 }
-                _ => {}
             }
-            self.let_go_of_exited();
         }
 
         /// Holds the process `pid` names while it is this job's and has not
@@ -5142,29 +5141,37 @@ mod sys {
                     "more than {HELD_LIMIT} processes left to end"
                 )));
             }
-            self.held.insert(pid, process);
+            self.keep(pid, process);
             Ok(())
         }
 
-        /// Lets go of the oldest processes the job said exited once they
-        /// are signalled, at most [`EXITED_CHECKS`] of them.
-        fn let_go_of_exited(&mut self) {
-            for _ in 0..EXITED_CHECKS {
-                let Some(&pid) = self.exited.front() else {
+        /// Holds `process` as `pid`, checked after every one held before it.
+        fn keep(&mut self, pid: u32, process: Owned) {
+            self.held.insert(pid, process);
+            self.turns.push_back(pid);
+        }
+
+        /// Checks the next [`CHECKS_PER_NOTICE`] held processes in turn and
+        /// lets go of those signalled; one that is not, or whose wait fails,
+        /// waits for its next turn behind the rest, and the failure is kept.
+        fn let_go_of_signalled(&mut self) {
+            for _ in 0..CHECKS_PER_NOTICE {
+                let Some(pid) = self.turns.pop_front() else {
                     return;
                 };
-                if let Some(process) = self.held.get(&pid) {
-                    match signalled(process) {
-                        Ok(true) => {}
-                        Ok(false) => return,
-                        Err(error) => {
-                            self.lose(format!("process {pid} could not be waited on: {error}"));
-                            return;
-                        }
+                let Some(process) = self.held.get(&pid) else {
+                    continue;
+                };
+                match signalled(process) {
+                    Ok(true) => {
+                        self.held.remove(&pid);
                     }
-                    self.held.remove(&pid);
+                    Ok(false) => self.turns.push_back(pid),
+                    Err(error) => {
+                        self.turns.push_back(pid);
+                        self.lose(format!("process {pid} could not be waited on: {error}"));
+                    }
                 }
-                self.exited.pop_front();
             }
         }
 
@@ -5181,7 +5188,7 @@ mod sys {
                 }
             });
             let held = &self.held;
-            self.exited.retain(|pid| held.contains_key(pid));
+            self.turns.retain(|pid| held.contains_key(pid));
             if let Some(reason) = failure {
                 self.lose(reason);
             }
@@ -5638,6 +5645,9 @@ mod sys {
 
     #[cfg(test)]
     mod tests {
+        use windows_sys::Win32::System::SystemServices::JOB_OBJECT_MSG_EXIT_PROCESS;
+        use windows_sys::Win32::System::Threading::{CreateEventW, SetEvent};
+
         use super::*;
 
         /// A member that ended on its own after it was held, as one often
@@ -5722,6 +5732,53 @@ mod sys {
             );
             followed.pop();
             Members::follow_on(notices, &extra).unwrap();
+        }
+
+        /// An event the test sets, standing in for a held process: the
+        /// notices read only whether its object is signalled.
+        fn object(signalled: bool) -> Owned {
+            // SAFETY: attributes and name may be null; manual reset.
+            let event = unsafe {
+                CreateEventW(std::ptr::null(), 1, i32::from(signalled), std::ptr::null())
+            };
+            assert!(!event.is_null(), "{}", io::Error::last_os_error());
+            Owned(event)
+        }
+
+        /// Held processes are checked in turn: one slow to end, held
+        /// before, holds up no ended one behind it, and an ended one whose
+        /// exit notice never came is let go within one turn of them all.
+        #[test]
+        fn an_ended_process_is_let_go_behind_one_slow_to_end_without_its_exit_notice() {
+            let mut followed = Followed {
+                job: empty_job(),
+                announced: 0,
+                held: HashMap::new(),
+                turns: VecDeque::new(),
+                lost: None,
+            };
+            let slow = object(false);
+            // Setting it later stands for the slow process ending.
+            let slow_handle = slow.0;
+            followed.keep(1, slow);
+            followed.keep(2, object(false));
+            followed.keep(3, object(false));
+            followed.keep(4, object(true));
+            // Only the slow one's exit is announced, over and over.
+            for _ in 0..followed.held.len().div_ceil(CHECKS_PER_NOTICE) {
+                followed.notice(JOB_OBJECT_MSG_EXIT_PROCESS, 1);
+            }
+            let mut held: Vec<u32> = followed.held.keys().copied().collect();
+            held.sort_unstable();
+            assert_eq!(held, [1, 2, 3], "the ended process is still held");
+            assert_eq!(followed.turns.len(), 3);
+            // SAFETY: the event is still held open by `followed`.
+            assert!(unsafe { SetEvent(slow_handle) } != 0);
+            for _ in 0..followed.held.len().div_ceil(CHECKS_PER_NOTICE) {
+                followed.notice(JOB_OBJECT_MSG_EXIT_PROCESS, 1);
+            }
+            assert!(!followed.held.contains_key(&1), "the slow one stayed held");
+            assert!(followed.lost.is_none(), "{:?}", followed.lost);
         }
     }
 }
