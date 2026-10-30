@@ -13,6 +13,7 @@ import { cycleIndex, quickAddChoice } from "./quickAddChoice";
 import { catalogWorkspaces, frontCheckout } from "./snapshot";
 import { useShellStore } from "./store";
 import { useUiStore } from "./ui";
+import { composingKey } from "./keys";
 
 /** How long the made line stays before the input closes (B40). */
 const CONFIRM_MS = 2400;
@@ -78,7 +79,7 @@ function QuickAddDialog({ actions }: { actions: Actions }) {
       }
       return;
     }
-    if (event.key !== "Enter" || event.nativeEvent.isComposing) return;
+    if (event.key !== "Enter" || composingKey(event)) return;
     event.preventDefault();
     if (!project || sending) return;
     // A failed add is tried again under its own intent, so an issue GitHub made before the failure is joined, not made twice (B41).

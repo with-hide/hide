@@ -23,6 +23,7 @@ import { holdsFieldModifier } from "./shortcuts";
 import type { HerdrTakeover } from "./snapshot";
 import { useShellStore } from "./store";
 import { checkForUpdates, readyVersion, restartIntoUpdate, useUpdateStatus } from "./updates";
+import { composingKey } from "./keys";
 
 /** How long a restart that went through holds its button while the core's look takes the offer away. */
 export const RESTART_HOLD_MS = 15_000;
@@ -388,7 +389,7 @@ export function HerdrGate({ actions, gate }: { actions: Actions; gate: Gate }) {
   primary.current = parts.primary;
   // ⌘↵ (Ctrl+Enter off macOS) anywhere on the screen, or Enter on the screen itself, presses its main button, as the wizard's does (B40).
   const onKeyDown = (event: KeyboardEvent) => {
-    if (event.key !== "Enter" || event.nativeEvent.isComposing) return;
+    if (event.key !== "Enter" || composingKey(event)) return;
     const target = event.target as HTMLElement;
     if (!holdsFieldModifier(event, keySystem()) && target.closest("button, a")) return;
     if (!primary.current) return;

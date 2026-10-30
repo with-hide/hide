@@ -35,6 +35,7 @@ import { useShellStore } from "../store";
 import { useUiStore } from "../ui";
 import { coreErrorText } from "../coreError";
 import { useRefusalSince } from "../errorSince";
+import { composingKey } from "../keys";
 
 export function ShortcutsTab({ actions }: { actions: Actions }) {
   const { t } = useInterfaceTranslation();
@@ -180,7 +181,7 @@ function ShortcutRow({
   const chordText = effective ? displayChord(effective, system) : null;
   const record = (event: KeyboardEvent<HTMLButtonElement>) => {
     // IME composition and lone modifiers are not chords; the recorder waits.
-    if (event.nativeEvent.isComposing || event.keyCode === 229) return;
+    if (composingKey(event)) return;
     if (["Meta", "Alt", "Shift", "Control", "CapsLock"].includes(event.key)) return;
     event.preventDefault();
     event.stopPropagation();

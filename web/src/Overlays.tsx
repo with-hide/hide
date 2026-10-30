@@ -27,6 +27,7 @@ import { AgentMark } from "./AgentMark";
 import { agentProductName } from "./agentAdapters";
 import { closeScope, closeSheet, stopWorkCopy, subtreeTitle, type StopWork, type Subtree } from "./close";
 import { RowMark, SubtreeList } from "./components/subtree-list";
+import { composingKey } from "./keys";
 
 const CYCLE_TITLE: Record<Cycle["kind"], MessageKey> = {
   area: "shell.recentViewTabs",
@@ -459,7 +460,7 @@ export function FindBar({ actions }: { actions: Actions }) {
         className="h-(--size-control-sm) flex-1"
         onChange={(event) => setTerm(event.target.value)}
         onKeyDown={(event) => {
-          if (event.nativeEvent.isComposing) return;
+          if (composingKey(event)) return;
           if (event.key === "Enter") {
             event.preventDefault();
             submit(event.shiftKey ? -1 : 1);

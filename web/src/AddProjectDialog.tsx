@@ -28,6 +28,7 @@ import type { FirstRunProjectForm, WorkspaceRegistration } from "./snapshot";
 import { hostBridge } from "./host";
 import { useShellStore } from "./store";
 import { useUiStore } from "./ui";
+import { composingKey } from "./keys";
 
 const NO_REGISTRATIONS: WorkspaceRegistration[] = [];
 
@@ -250,7 +251,7 @@ export function AddProjectViews({
                         onDraft?.({ project_path: spelled });
                       }}
                       onKeyDown={(event) => {
-                        if (event.nativeEvent.isComposing || event.key !== "Enter") return;
+                        if (composingKey(event) || event.key !== "Enter") return;
                         event.preventDefault();
                         submitField();
                       }}

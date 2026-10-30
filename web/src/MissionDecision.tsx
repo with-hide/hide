@@ -8,6 +8,7 @@ import { Input } from "./components/ui/input";
 import { useInterfaceTranslation } from "./i18n/client";
 import { cn } from "./lib/utils";
 import type { Mission, MissionAnswerState } from "./snapshot";
+import { composingKey } from "./keys";
 
 // The decision a mission waits on, answered where it is asked, first in the
 // page's 내 차례 (PRD mission-plan-visibility D-13, D-20, D-30, B25-B30, B39;
@@ -77,7 +78,7 @@ export function DecisionBanner({ mission, device, actions, onNode }: { mission: 
     setPressed({ key, text: sent.text, failed: mission.answer_failed, resend: true });
   };
   const onKey = (event: KeyboardEvent<HTMLInputElement>) => {
-    if (event.nativeEvent.isComposing) return;
+    if (composingKey(event)) return;
     if (event.key === "Escape") {
       event.preventDefault();
       event.stopPropagation();

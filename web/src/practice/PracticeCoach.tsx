@@ -16,6 +16,7 @@ import type { PracticeChapter, PracticeDrag, PracticeMenu, PracticePick, Practic
 import { FIRST_CHAPTER } from "./channel";
 import { COACH_CSS } from "./coachStyle";
 import type { PracticeWorld } from "./world";
+import { composingKey } from "../keys";
 
 type Rect = { x: number; y: number; w: number; h: number };
 type Point = { x: number; y: number };
@@ -500,7 +501,7 @@ export function PracticeCoach({ chapter, model, next, resume, onStep, onNext, on
   // untouched, and while a palette the shell opened is up every key is the palette's but the ⏎ held below.
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
-      if (!event.isTrusted || event.metaKey || event.ctrlKey || event.altKey || event.shiftKey || event.isComposing) return;
+      if (!event.isTrusted || event.metaKey || event.ctrlKey || event.altKey || event.shiftKey || composingKey(event)) return;
       if (ended) {
         if (event.key !== "Enter") return;
         event.preventDefault();

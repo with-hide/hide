@@ -1,4 +1,4 @@
-// The sidebar footer's View menu (PRD agent-logo-view-mode D-01, D-06, B1-B3):
+// The View menu at the device rail's foot, or the sidebar footer's while the rail is hidden (PRD agent-logo-view-mode D-01, D-06, B1-B3):
 // whether list rows and tabs draw the agent's logo, with a line that names the
 // key which shows them for as long as it is held, then how agent panes draw
 // their turn row. The core owns both choices; each check always reads what the
@@ -15,6 +15,7 @@ import { useShellStore } from "../store";
 import { Button } from "./ui/button";
 import { DropdownMenu, DropdownMenuCheckboxItem, DropdownMenuContent, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuShortcut, DropdownMenuTrigger } from "./ui/dropdown-menu";
 import { Hint } from "./ui/tooltip";
+import { hintSide, menuSide, type MenuPlace } from "./menu-place";
 
 const TURN_ROW_MODES = [
   ["one_line", "sidebar.view.turnRowOneLine"],
@@ -22,7 +23,7 @@ const TURN_ROW_MODES = [
   ["off", "sidebar.view.turnRowOff"],
 ] as const satisfies readonly (readonly [PaneTurnRowMode, string])[];
 
-export function ViewMenu({ actions }: { actions: Actions }) {
+export function ViewMenu({ actions, place = "footer" }: { actions: Actions; place?: MenuPlace }) {
   const { t } = useInterfaceTranslation();
   const mode: AgentLogoMode = useShellStore((s) => s.rest?.ui_state?.agent_logo_mode) ?? "hidden";
   const connected = useShellStore((s) => s.connection === "live");
@@ -37,14 +38,14 @@ export function ViewMenu({ actions }: { actions: Actions }) {
   };
   return (
     <DropdownMenu>
-      <Hint label={t("sidebar.view")}>
+      <Hint label={t("sidebar.view")} side={hintSide(place)}>
         <DropdownMenuTrigger asChild>
           <Button variant="ghost" size="icon-sm" aria-label={t("sidebar.view")} data-view-menu-trigger="true">
             <EyeIcon />
           </Button>
         </DropdownMenuTrigger>
       </Hint>
-      <DropdownMenuContent align="end" side="top" aria-label={t("sidebar.view")} data-view-menu="true">
+      <DropdownMenuContent align="end" side={menuSide(place)} aria-label={t("sidebar.view")} data-view-menu="true">
         <DropdownMenuLabel className="text-caption font-normal text-muted-foreground">{t("sidebar.view.logos")}</DropdownMenuLabel>
         <DropdownMenuCheckboxItem checked={mode === "shown"} disabled={!connected} data-view-item="shown" onSelect={() => choose("shown")}>
           {t("sidebar.view.logosShown")}

@@ -26,6 +26,7 @@ import { useInterfaceTranslation } from "./i18n/client";
 import { cloneFailureText, cloneStageText, coreErrorText } from "./coreError";
 import { QuotedLine } from "./QuotedLine";
 import { useErrorSince } from "./errorSince";
+import { composingKey } from "./keys";
 
 /** How long typing settles before hided is asked about the folder. */
 const TARGET_CHECK_DELAY_MS = 150;
@@ -127,7 +128,7 @@ export function CloneFromUrl({ actions, registrations, pickParent, onBack, draft
             data-clone-url="true"
             onChange={(event) => { setUrl(event.target.value); onDraft?.({ url: cloneUrlDraft(event.target.value) }); }}
             onKeyDown={(event) => {
-              if (event.nativeEvent.isComposing || event.key !== "Enter") return;
+              if (composingKey(event) || event.key !== "Enter") return;
               event.preventDefault();
               start();
             }}
