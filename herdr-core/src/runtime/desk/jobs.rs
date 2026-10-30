@@ -233,6 +233,8 @@ impl Runtime {
                     code: Some(code),
                 });
             }
+        } else if let Some(turn) = self.desk.turn.as_mut() {
+            turn.steps.count(hide_desk::permission::Step::Start);
         }
         self.desk_line(crate::model::DeskItem::Job {
             id: 0,
@@ -1797,6 +1799,54 @@ mod tests {
             chips(&runtime),
             (Some(done), (Some(done), Some("claude".into())))
         );
+    }
+
+    #[test]
+    fn a_turn_tells_the_sessions_it_started_and_not_a_start_that_was_refused() {
+        use super::super::{DeskEvent, Order, Report, TurnOutcome};
+        use hide_desk::permission::Step;
+        let root = tempfile::tempdir().unwrap();
+        let (mut runtime, received) = super::super::tests::runtime(root.path());
+        for (kind, payload) in [
+            ("desk_select", json!({"agent": "claude"})),
+            ("desk_send", json!({"text": "start two"})),
+        ] {
+            assert!(runtime.desk_event(DeskEvent::decode(kind, payload).unwrap()));
+        }
+        let tag = std::iter::from_fn(|| received.try_recv().ok())
+            .find_map(|order| match order {
+                Order::Send(send) => Some(send.tag),
+                _ => None,
+            })
+            .expect("a Send order");
+        runtime.desk_spawn_answered(spawn_command("a", None), Ok(json!({"id": "agent-1"})));
+        runtime.desk_spawn_answered(spawn_command("b", None), Err("parent_unavailable".into()));
+        runtime.desk_report(Report::Text {
+            tag,
+            text: "one started".into(),
+        });
+        runtime.desk_report(Report::Steps {
+            tag,
+            steps: vec![Step::Start, Step::Start, Step::Sessions],
+        });
+        runtime.desk_report(Report::TurnEnded {
+            tag,
+            outcome: TurnOutcome::Done,
+        });
+
+        let steps = runtime
+            .desk
+            .stored
+            .conversation
+            .items
+            .iter()
+            .rev()
+            .find_map(|item| match item {
+                DeskItem::Reply { steps, .. } => Some(steps.clone()),
+                _ => None,
+            })
+            .expect("the turn's reply");
+        assert_eq!((steps.starts, steps.sessions), (1, 1));
     }
 
     #[test]

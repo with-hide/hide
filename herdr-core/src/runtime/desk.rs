@@ -758,8 +758,13 @@ impl Runtime {
             }
             Report::Steps { tag, steps } => {
                 if let Some(turn) = self.desk.turn.as_mut().filter(|turn| turn.tag == tag) {
+                    // A start counts once its spawn answered that it started
+                    // (`desk_spawn_answered`), so a refused one is not told
+                    // as a thread started.
                     for step in steps {
-                        turn.steps.count(step);
+                        if step != hide_desk::permission::Step::Start {
+                            turn.steps.count(step);
+                        }
                     }
                 }
                 return false;
