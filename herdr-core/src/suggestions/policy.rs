@@ -128,6 +128,9 @@ pub(crate) const RECORD_CAP: usize = 20_000;
 pub(crate) const DISCOMFORT_CHARS: usize = 200;
 pub(crate) const CAUSE_CHARS: usize = 300;
 pub(crate) const FIX_CHARS: usize = 500;
+/// A document fix's result title, and the draft of what it writes.
+pub(crate) const PLAN_TITLE_CHARS: usize = 80;
+pub(crate) const DRAFT_CHARS: usize = 600;
 pub(crate) const REASON_CHARS: usize = 200;
 /// A record's tag, the key the deterministic grouping joins on; the
 /// longest is an improvement's text.

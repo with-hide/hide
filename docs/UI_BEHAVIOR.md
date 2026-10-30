@@ -740,6 +740,7 @@ The row's accessible name carries `Hide AI`, the task and the turn (`Hide AI · 
 An attempt with no live agent (a failure with no pull request, an open pull request after the operator closed the pane) never has a row; the 제안 tab alone shows it.
 
 Choosing the row, by click, by its digit or from its desktop notification, does not go to the pane: it opens the lane on the Hide AI tool's 제안 tab of the row's Project with that row open, and the `에이전트 ↗` link there opens the pane.
+A Hide AI agent that asks the operator something is the exception: its answer goes into the session, so choosing its row opens the pane as any agent's row does, and the 제안 tab opens only for a decision the screen takes, such as a ready branch.
 A row whose Project the core has not yet named opens the pane as any row does.
 The phone's Needs You row opens the agent's detail.
 The digits that number agent rows follow the drawn order, so a Hide AI row is numbered with the Needs You rows above the tree and no checkout of its own takes a digit.
@@ -938,7 +939,12 @@ The tab has one line for its state and no more (D-44): `다음에 Hide를 열 �
 A failure the operator cannot act on, such as a run that hit its turn or time limit or the usage limit, goes to the diagnostic log and draws nothing.
 
 The rows fall into `고를 것`, `반영 중` and the folded `반영됨`, each head with its count, and a row's mark says whose move it is (D-37): a green open circle for a new suggestion, a yellow dot for the operator's turn, a blue turning ring with dimmed text while Hide AI works; a row under 반영됨 has no mark.
-A suggestion's title is its discomfort in a person's words, or, for a line the grouping wrote alone, its signal and tag (`같은 명령이 계속 실패해요: cargo test`); under it `놓친 것 · <cause>`, then `고칠 것`, so what a press does is read before it, and its buttons (B10, D-51).
+A document fix is titled by what it changes (`Rust 검증은 verify-cargo.sh로만 돌리게 하기`), with why it is there on the line under it: the discomfort in a person's words, or, for a line the grouping wrote alone, its signal and tag (`같은 명령이 계속 실패해요: cargo test`).
+Under that is the file it changes, as a path with a file icon and `새 파일` when the repository has none yet, and the words it writes there in a tinted box, so what a press does is read before it; its button names the file (`AGENTS.md 고치기`), and `놓친 것 · <cause>` shows once the row is open.
+Hide AI offers a document fix only once its investigation named that file and those words, checking that the path is inside the repository and finding out whether the file exists; a line that has neither stays unoffered, and one offered before this rule shows its `고칠 것` sentence and `문서 고치기` until its next investigation.
+Any other suggestion is titled by its discomfort or its signal and tag, with `놓친 것 · <cause>`, then `고칠 것`, and its buttons under it (B10, D-51).
+A Memory card offered for the documents shows how often it was said (`내가 말한 세션 3개 · 에이전트가 꺼내 본 세션 2개`); opened, it shows the card's text under `기억 내용` and `넣을 문서는 에이전트가 고르고, 합치기 전에 바뀐 내용을 보여 드려요`.
+A card about behavior planned but not built yet is never offered for the documents.
 Pressing the row opens it in place to `근거`, each piece of evidence a line with its agent's logo, `세션` or `PR #n`, the signal and its time; a session opens its record and a pull request its card, and evidence whose session or pull request is gone stays dimmed and opens nothing.
 An improvement's evidence shows its kind as a small chip before `세션` in place of the signal (`문서 없음`, `다시 찾음`, `잘못 짐작`, `도구·설정 불편`; B25), and a line the grouping wrote alone from improvements reads `같은 곳에서 계속 헤매요: <what the turn's end said>`.
 Its button is `문서 고치기`, where an agent edits the repository's files in a worktree and commits them on a local branch without pushing (PRD hide-ai-branch-first-apply D-01, B1), in any git repository with or without GitHub or a remote, or, in the secondary style, `이슈로 남기기` when the fix is outside the repository or not settled yet, where Hide opens an issue from CI facts alone (B14); an issue's `고칠 것` is the core's reason, or `문서로는 못 고쳐요. CI 기록을 담아 이슈로 남겨요` when it gives none.
@@ -951,8 +957,10 @@ In a Project whose ⚙ says `자동으로 준비해 두기` a new suggestion goe
 Hide merges only when the operator presses `main에 합치기`, never by itself and never in the automatic mode, and it never pushes.
 
 A row being applied says what its agent does: `고치는 중` (`PR 만드는 중` after `PR 올리기`, `다시 맞추는 중` after `다시 맞추기`, `이슈 만드는 중`) with the time since it started and `에이전트 ↗` while the agent lives (B2).
+While that agent asks the operator something, the row shows `에이전트가 물어요` with the question, the same line the sidebar draws, and `세션으로 가서 답하기`, which opens the pane.
 When the agent committed on its branch and stopped, the row has the yellow dot and reads `바뀐 것 보기` with the branch's name, its file count and +/− lines (B3), and its buttons are `main에 합치기` (named for the Project's base), `PR 올리기` only while GitHub is connected and permitted, and a quiet `버리기` (D-03).
 `바뀐 것 보기` opens the branch's card in the lane's 보기 slot: the branch, `→ main`, each changed file with its +/−, and the same three buttons in its head; a file opens its diff against the base in the same slot, read on the Project's machine, and a branch of one file opens that diff straight away (B4).
+Opening the row shows the same thing inside it, above its buttons: `바뀐 파일 N` with each file and its +/−, and the chosen file's diff, the first one until another is pressed, from its first hunk and at the row's caption size since the list above names the file, so a branch can be read and decided without the 보기 slot; its evidence folds to `근거 N개` with `펼치기`.
 The card and its diff never move the checkout in front, its Agent tab or the keyboard; the card reads its row from the 제안 tab the rail keeps open for the Project in front, and says `지금 열린 프로젝트의 Hide AI 줄에 이 브랜치가 없어요` once the row left it.
 `main에 합치기` reads `합치는 중` while Hide merges on the Project's machine: a fast-forward when it can, else one merge commit, and nothing pushed; merged, the row folds under 반영됨, the worktree goes and the branch stays (B6).
 A merge that would touch files with uncommitted changes, or write over a file git does not track, an ignored one included, at the same path or a folder's path around it or inside it, changes nothing and reads `main에 저장 안 한 변경이 있어요` with `다시 시도` (B7); one the base moved under reads `main 브랜치가 바뀌어 다시 맞춰야 해요` with `다시 맞추기`, which has an agent make the same branch again on the base (B8, B12).

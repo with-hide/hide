@@ -1194,6 +1194,10 @@ impl Worker {
         if !state.settings.active() || state.uninvestigated {
             return;
         }
+        let notebook = match lower_unwritten(store, project, notebook, &lives, now) {
+            Ok(notebook) => notebook,
+            Err(code) => return log_store("raise", &code),
+        };
         let open = notebook
             .lines
             .iter()
@@ -1954,6 +1958,32 @@ fn begin_code(how: Begin) -> &'static str {
     }
 }
 
+/// Puts back on the list a suggestion raised before a document fix had to
+/// say what it changes (a line grouped by its tag alone): it is not offered
+/// until an investigation writes its plan, and it rises again then.
+fn lower_unwritten(
+    store: &mut SuggestionStore,
+    project: &str,
+    mut notebook: Notebook,
+    lives: &BTreeMap<LineId, super::lifecycle::LineLife>,
+    now: u64,
+) -> Result<Notebook, String> {
+    for line in &mut notebook.lines {
+        if line.stage != Stage::Suggested || line.struck.is_some() || line.names_its_fix() {
+            continue;
+        }
+        line.stage = Stage::Candidate;
+        line.updated_at_unix_ms = now;
+        let life = lives.get(&line.id).cloned().unwrap_or_default();
+        store.save_line(project, line, &life)?;
+        crate::diagnostic!(json!({
+            "component": "suggestions", "kind": "line.lowered",
+            "project_id": project, "line": line.id.0, "reason": "fix_unwritten",
+        }));
+    }
+    Ok(notebook)
+}
+
 fn log_store(during: &str, code: &str) {
     crate::diagnostic!(json!({
         "component": "suggestions", "kind": "store.failed", "during": during, "code": code,
@@ -2028,6 +2058,48 @@ mod tests {
         followed: Receiver<Vec<FollowedAttempt>>,
     }
 
+    /// The grouping, then a plan on each document line it left without
+    /// one, as an investigation that looked writes it: a document line is
+    /// offered only with what its press changes.
+    fn group_and_write(input: &AnalysisInput, pen: &mut dyn NotebookPen) -> AnalysisEnd {
+        let end = TagGrouping.run(input, pen);
+        let unwritten = pen
+            .notebook()
+            .lines
+            .iter()
+            .filter(|line| line.outcome == Some(Outcome::Pr) && !line.names_its_fix())
+            .map(|line| line.id)
+            .collect::<Vec<_>>();
+        for line in unwritten {
+            let _ = pen.write(NotebookEdit::WriteCause {
+                line,
+                cause: "the guide does not say it".into(),
+                outcome: Outcome::Pr,
+                fix: None,
+                title: Some("Write the step in the guide".into()),
+                path: Some("AGENTS.md".into()),
+                draft: Some("+ Build before the tests.".into()),
+                new_file: false,
+            });
+        }
+        end
+    }
+
+    /// [`group_and_write`] as the day's analysis.
+    struct Written;
+
+    impl Analysis for Written {
+        fn name(&self) -> &'static str {
+            "written"
+        }
+        fn uses_provider(&self) -> bool {
+            false
+        }
+        fn run(&mut self, input: &AnalysisInput, pen: &mut dyn NotebookPen) -> AnalysisEnd {
+            group_and_write(input, pen)
+        }
+    }
+
     struct Fixture {
         worker: Option<SuggestionWorker>,
         analysis: AnalysisFactory,
@@ -2043,7 +2115,7 @@ mod tests {
     impl Fixture {
         fn new() -> Self {
             Self::with_analysis(Arc::new(|_: &RunPlan<'_>| {
-                Box::new(TagGrouping) as Box<dyn Analysis>
+                Box::new(Written) as Box<dyn Analysis>
             }))
         }
 
@@ -2560,7 +2632,7 @@ mod tests {
             if self.fails.load(Ordering::SeqCst) {
                 return AnalysisEnd::Partial(PartialReason::Failed);
             }
-            TagGrouping.run(input, pen)
+            group_and_write(input, pen)
         }
     }
 
@@ -3097,7 +3169,7 @@ mod tests {
                     release.recv().unwrap();
                     return AnalysisEnd::Done;
                 }
-                TagGrouping.run(input, pen)
+                group_and_write(input, pen)
             }
         }
         let dir = tempfile::tempdir().unwrap();

@@ -415,15 +415,17 @@ impl Runtime {
             return;
         }
         // A branch file's diff is read while the slot shows it, and
-        // forgotten when it shows anything else.
-        self.read_branch_diff(match &top {
+        // forgotten when it shows anything else; opened again, it is read
+        // again.
+        let again = match &top {
             Some(DetailItem::Branch {
                 workspace_id,
                 row,
                 path: Some(path),
-            }) => Some((workspace_id.clone(), row.clone(), path.clone())),
+            }) if again => Some((workspace_id.clone(), row.clone(), path.clone())),
             _ => None,
-        });
+        };
+        self.sync_branch_diffs(again.as_ref());
         match top {
             Some(DetailItem::PullRequest {
                 workspace_id,

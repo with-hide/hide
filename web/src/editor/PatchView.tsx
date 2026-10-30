@@ -46,21 +46,40 @@ export function PatchView({ text, wrap, scale, comments }: { text: string; wrap:
   const model = useMemo(() => diffModel(rows), [rows]);
   const { host: commentHost, blocks: commentBlocks } = useLineComments({ view, ...comments, model, rows: rows.length, saved: text });
   const extension = useMemo(() => viewComments(commentHost), [commentHost]);
+  const size = useMemo(() => scaleTheme(scale), [scale]);
   return (
     <>
-      <PatchEditor text={text} rows={rows} wrap={wrap} scale={scale} extension={extension} onView={setView} />
+      <PatchEditor text={text} rows={rows} wrap={wrap} size={size} extension={extension} onView={setView} />
       {commentBlocks}
     </>
   );
 }
 
-/** A diff that takes no comments: one no View display holds, such as a Hide AI branch's file (PRD hide-ai-branch-first-apply B4). */
-export function PlainPatchView({ text, wrap, scale }: { text: string; wrap: boolean; scale: number }) {
-  const rows = useMemo(() => patchLines(text), [text]);
-  return <PatchEditor text={text} rows={rows} wrap={wrap} scale={scale} extension={null} onView={null} />;
+// A diff drawn inside a row of text reads at the row's caption size, not the editor's.
+const compactTheme = EditorView.theme({
+  ".cm-content": { fontSize: "var(--text-caption)", lineHeight: "1.5" },
+  ".cm-gutters": { fontSize: "var(--text-caption)" },
+});
+
+/** A patch from its first hunk: the `diff --git`, `---` and `+++` lines only name the file. */
+function fromFirstHunk(text: string): string {
+  const hunk = text.search(/^@@/m);
+  return hunk > 0 ? text.slice(hunk) : text;
 }
 
-function PatchEditor({ text, rows, wrap, scale, extension, onView }: { text: string; rows: ReturnType<typeof patchLines>; wrap: boolean; scale: number; extension: Extension | null; onView: ((view: EditorView | null) => void) | null }) {
+/**
+ * A diff that takes no comments: one no View display holds, such as a Hide AI
+ * branch's file (PRD hide-ai-branch-first-apply B4). `compact` draws it inside
+ * a row whose list already names the file: from its first hunk, at caption size.
+ */
+export function PlainPatchView({ text, wrap, scale, compact = false }: { text: string; wrap: boolean; scale: number; compact?: boolean }) {
+  const shown = compact ? fromFirstHunk(text) : text;
+  const rows = useMemo(() => patchLines(shown), [shown]);
+  const size = useMemo(() => (compact ? compactTheme : scaleTheme(scale)), [compact, scale]);
+  return <PatchEditor text={shown} rows={rows} wrap={wrap} size={size} extension={null} onView={null} />;
+}
+
+function PatchEditor({ text, rows, wrap, size, extension, onView }: { text: string; rows: ReturnType<typeof patchLines>; wrap: boolean; size: Extension; extension: Extension | null; onView: ((view: EditorView | null) => void) | null }) {
   const host = useRef<HTMLDivElement>(null);
   useEffect(() => {
     if (!host.current || !text) return;
@@ -79,7 +98,7 @@ function PatchEditor({ text, rows, wrap, scale, extension, onView }: { text: str
         ...baseTheme(),
         patchTheme,
         wrap ? EditorView.lineWrapping : unwrappedTheme,
-        scaleTheme(scale),
+        size,
         EditorState.readOnly.of(true),
         EditorView.editable.of(false),
         // Read-only, yet it takes the keyboard like an editor, so an opened
@@ -104,6 +123,6 @@ function PatchEditor({ text, rows, wrap, scale, extension, onView }: { text: str
       onView?.(null);
       editor.destroy();
     };
-  }, [text, wrap, scale, rows, extension, onView]);
+  }, [text, wrap, size, rows, extension, onView]);
   return <div ref={host} className="min-h-0 min-w-0 flex-1" data-patch-view="true" />;
 }

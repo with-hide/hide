@@ -33,12 +33,32 @@ export function suggestionMark(state: SuggestionState): SuggestionMark {
   }
 }
 
-/** A row's title: a Memory batch's `정정 N개 문서에 반영`, its discomfort in a person's words, else the signal and tag the grouping wrote it from. */
-export function suggestionTitle(t: TFunction<"translation">, row: Pick<SuggestionRow, "id" | "discomfort" | "basis" | "memory_cards">): string {
+/**
+ * A row's title: a Memory batch's `정정 N개 문서에 반영`, a document fix's
+ * result (what its press changes), else the discomfort in a person's words,
+ * else the signal and tag the grouping wrote it from.
+ */
+export function suggestionTitle(t: TFunction<"translation">, row: Pick<SuggestionRow, "id" | "discomfort" | "basis" | "memory_cards" | "plan">): string {
   if (row.memory_cards && row.memory_cards.length > 0) return t("suggestions.memoryBatch", { count: row.memory_cards.length });
+  if (row.plan) return row.plan.title;
+  return reasonText(t, row) ?? row.id;
+}
+
+/** Why a row is there: the discomfort in a person's words, else the signal and tag the grouping wrote it from. */
+function reasonText(t: TFunction<"translation">, row: Pick<SuggestionRow, "discomfort" | "basis">): string | null {
   if (row.discomfort) return row.discomfort;
   if (row.basis) return t(`suggestions.basis.${row.basis.signal}` as MessageKey, { tag: row.basis.tag });
-  return row.id;
+  return null;
+}
+
+/** The line under a document fix's title: why it is there, since its title says what it changes; null for a row whose title already says why. */
+export function suggestionReason(t: TFunction<"translation">, row: Pick<SuggestionRow, "discomfort" | "basis" | "plan">): string | null {
+  return row.plan ? reasonText(t, row) : null;
+}
+
+/** A repository path's last name, which a document fix's button names. */
+export function fileName(path: string): string {
+  return path.split("/").filter(Boolean).at(-1) ?? path;
 }
 
 /**

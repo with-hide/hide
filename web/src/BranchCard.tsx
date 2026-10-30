@@ -7,6 +7,7 @@ import type { ProjectSuggestions, SuggestionBranch, SuggestionRow } from "./snap
 import { useShellStore } from "./store";
 import { attemptLine } from "./suggestionList";
 import { BranchButtons } from "./SuggestionsTab";
+import { cn } from "./lib/utils";
 
 // The 보기 slot's branch card (PRD hide-ai-branch-first-apply D-02, D-03,
 // B4): a Hide AI branch waiting for the operator, its name and base, each
@@ -45,7 +46,7 @@ export function BranchCardView({ workspaceId, rowId, path, actions }: { workspac
         {line?.branch?.again ? <span className="text-caption text-warning" data-branch-card-failure={row.attempt?.failure ?? undefined}>{line.text}</span> : null}
         {row.attempt?.phase === "merging" ? <span className="text-caption text-muted-foreground">{t("suggestions.attempt.merging")}</span> : <BranchButtons row={row} project={project} actions={actions} again={line?.branch?.again ?? null} className="col-start-auto pt-0" />}
       </div>
-      {path ? <FileDiff workspaceId={workspaceId} rowId={rowId} path={path} /> : <Files branch={branch} onOpen={(file) => actions.openBranchCard(workspaceId, rowId, file)} />}
+      {path ? <BranchFileDiff workspaceId={workspaceId} rowId={rowId} path={path} /> : <Files branch={branch} onOpen={(file) => actions.openBranchCard(workspaceId, rowId, file)} />}
     </article>
   );
 }
@@ -81,26 +82,23 @@ function Files({ branch, onOpen }: { branch: SuggestionBranch; onOpen: (path: st
   );
 }
 
-/** One file's diff against the base, as the core read it for this card. */
-function FileDiff({ workspaceId, rowId, path }: { workspaceId: string; rowId: string; path: string }) {
+/** One file's diff against the base, as the core read it for this card or for the open 제안 row; `inline` draws it inside the row, without the path head. */
+export function BranchFileDiff({ workspaceId, rowId, path, inline = false }: { workspaceId: string; rowId: string; path: string; inline?: boolean }) {
   const { t } = useInterfaceTranslation();
-  const diff = useShellStore((state) => {
-    const shown = state.rest?.pr_work?.branch_diff ?? null;
-    return shown && shown.workspace_id === workspaceId && shown.row === rowId && shown.path === path ? shown : null;
-  });
+  const diff = useShellStore((state) => state.rest?.pr_work?.branch_diffs?.find((shown) => shown.workspace_id === workspaceId && shown.row === rowId && shown.path === path) ?? null);
   const scaleValue = useShellStore((state) => state.rest?.ui_state?.editor_text_scale);
   const scale = typeof scaleValue === "number" ? scaleValue : 1;
   return (
-    <section className="flex min-h-0 min-w-0 flex-1 flex-col" aria-label={path} data-branch-card-diff={path}>
-      <div className="shrink-0 truncate border-b border-border px-lg py-xs font-mono text-caption text-muted-foreground" title={path}>{path}</div>
+    <section className={cn("flex min-h-0 min-w-0 flex-col", inline ? "max-h-(--size-relationship-list-max) overflow-auto rounded-xs border border-border" : "flex-1")} aria-label={path} data-branch-card-diff={path}>
+      {inline ? null : <div className="shrink-0 truncate border-b border-border px-lg py-xs font-mono text-caption text-muted-foreground" title={path}>{path}</div>}
       {!diff || diff.reading ? (
-        <p className="p-lg text-caption text-muted-foreground" data-branch-card-diff-state="loading">{t("suggestions.card.readingDiff")}</p>
+        <p className={cn("text-caption text-muted-foreground", inline ? "p-sm" : "p-lg")} data-branch-card-diff-state="loading">{t("suggestions.card.readingDiff")}</p>
       ) : diff.failed ? (
-        <p className="p-lg text-caption text-warning" data-branch-card-diff-state="failed">{t("suggestions.card.diffFailed")}</p>
+        <p className={cn("text-caption text-warning", inline ? "p-sm" : "p-lg")} data-branch-card-diff-state="failed">{t("suggestions.card.diffFailed")}</p>
       ) : (
         <>
           {diff.notice ? <div className="border-b border-border px-md py-xs text-caption text-warning" data-diff-notice={diff.notice.code}>{diffNoticeText(diff.notice, t)}</div> : null}
-          {diff.text ? <PlainPatchView text={diff.text} wrap={false} scale={scale} /> : <div className="min-h-0 flex-1" data-diff-empty="true" />}
+          {diff.text ? <PlainPatchView text={diff.text} wrap={inline} scale={scale} compact={inline} /> : <div className="min-h-0 flex-1" data-diff-empty="true" />}
         </>
       )}
     </section>

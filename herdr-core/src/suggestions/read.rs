@@ -173,6 +173,9 @@ fn group_and_state(line: &Line, life: &LineLife) -> Option<(SuggestionGroup, Sug
     }
     Some(match line.stage {
         Stage::Candidate => return None,
+        // Offered only with what its press changes; a line raised before
+        // that was asked waits for the investigation (`lower_unwritten`).
+        Stage::Suggested if !line.names_its_fix() => return None,
         Stage::Suggested => (SuggestionGroup::Choose, SuggestionState::New),
         Stage::Applying => {
             let state = match life.attempt.as_ref().map(|attempt| attempt.phase) {
@@ -219,6 +222,7 @@ fn attempt(life: &LineLife) -> Option<SuggestionAttemptSnapshot> {
             .map(|pr| pr.url.clone())
             .or_else(|| attempt.issue_url.clone()),
         agent_id: attempt.agent_id.clone(),
+        agent_pane: None,
         failure: attempt.failure.clone(),
         branch: on_branch(attempt).then(|| branch(attempt)),
         purpose: attempt.purpose,
@@ -373,6 +377,7 @@ pub fn project(input: &ReadInput<'_>) -> ProjectSuggestionsSnapshot {
                 discomfort: line.discomfort.clone(),
                 cause: line.cause.clone(),
                 fix: line.fix.clone(),
+                plan: line.plan.clone(),
                 outcome: line.outcome.unwrap_or(Outcome::Pr),
                 basis: basis(line),
                 auto: life.attempt.as_ref().is_some_and(|attempt| attempt.auto),
@@ -399,6 +404,7 @@ pub fn project(input: &ReadInput<'_>) -> ProjectSuggestionsSnapshot {
                 local: local(line, life, input.index, input.global),
                 evidence_unconfirmed: false,
                 memory_cards: Vec::new(),
+                memory: None,
             })
         })
         .collect::<Vec<_>>();

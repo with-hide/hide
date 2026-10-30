@@ -1,4 +1,4 @@
-import { ChevronRightIcon } from "lucide-react";
+import { ChevronRightIcon, FileTextIcon } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import type { Actions } from "./actions";
 import { AgentLogo } from "./components/agent-logo";
@@ -10,11 +10,13 @@ import { useInterfaceTranslation } from "./i18n/client";
 import { requireInterfaceLanguage } from "./i18n/locale";
 import { cn } from "./lib/utils";
 import { sourceTime } from "./memoryList";
-import { allAgents } from "./navigation";
-import { catalogWorkspaces, type ProjectSuggestions, type SuggestionBranch, type SuggestionEvidence, type SuggestionRow } from "./snapshot";
+import { lineParts, sidebarLine } from "./agentRow";
+import { BranchFileDiff } from "./BranchCard";
+import { allAgents } from "./paneAgents";
+import { catalogWorkspaces, type AgentRow, type ProjectSuggestions, type SuggestionBranch, type SuggestionEvidence, type SuggestionPlan, type SuggestionRow } from "./snapshot";
 import { suggestionSteps } from "./hideAiSteps";
 import { useShellStore } from "./store";
-import { applyOffer, appliedSummary, attemptLine, localLine, suggestionGroups, suggestionMark, suggestionTitle, type BranchChoice, type SuggestionMark } from "./suggestionList";
+import { applyOffer, appliedSummary, attemptLine, fileName, localLine, suggestionGroups, suggestionMark, suggestionReason, suggestionTitle, type BranchChoice, type SuggestionMark } from "./suggestionList";
 import { useUiStore } from "./ui";
 
 /**
@@ -161,8 +163,10 @@ function Row({ row, project, actions }: { row: SuggestionRow; project: ProjectSu
           {row.auto ? <span className="mt-xxs shrink-0 rounded-sm bg-secondary px-xs text-micro font-medium text-subtle-foreground" data-suggestion-auto="true">{t("suggestions.auto")}</span> : null}
         </div>
         <Lines row={row} open={open} project={project} actions={actions} />
+        {row.group === "applying" ? <AgentAsk pane={row.attempt?.agent_pane ?? null} actions={actions} /> : null}
         <Fix row={row} open={open} />
         {open ? <Detail row={row} project={project} actions={actions} /> : null}
+        {open && row.attempt?.phase === "ready" && row.attempt.branch ? <BranchFiles row={row} branch={row.attempt.branch} project={project} actions={actions} /> : null}
         <Buttons row={row} project={project} actions={actions} />
       </div>
     </div>
@@ -175,8 +179,10 @@ function Lines({ row, open, project, actions }: { row: SuggestionRow; open: bool
   const working = row.state === "hide_ai_working";
   const attempt = attemptLine(t, row);
   const local = localLine(t, row, project.global?.unusable ?? null);
+  const reason = suggestionReason(t, row);
   return (
     <div className={cn("col-start-2 flex min-w-0 flex-col gap-xxs text-caption", working && "opacity-(--opacity-dimmed)")}>
+      {reason ? <span className={cn("min-w-0 break-words text-muted-foreground", !open && "line-clamp-2")} data-suggestion-reason="true">{reason}</span> : null}
       {local ? (
         <span className="flex min-w-0 flex-wrap items-center gap-x-sm" data-suggestion-local={row.local?.failure ?? (row.local?.recurred ? "recurred" : row.local?.present ? "present" : "held")}>
           <span className={cn("min-w-0 break-words", local.tone === "warning" ? "text-warning" : local.tone === "success" ? "text-success" : "text-muted-foreground")}>{local.text}</span>
@@ -190,7 +196,7 @@ function Lines({ row, open, project, actions }: { row: SuggestionRow; open: bool
         </span>
       ) : null}
       {row.returned_after_skip ? <span className="text-warning" data-suggestion-returned="true">{t("suggestions.returnedAfterSkip")}</span> : null}
-      {row.group === "choose" && row.cause ? (
+      {row.group === "choose" && row.cause && (open || !row.plan) ? (
         <span className={cn("min-w-0 text-muted-foreground", !open && "truncate")} title={row.cause} data-suggestion-cause="true">
           <span className="font-medium text-subtle-foreground">{t("suggestions.cause")}</span> · {row.cause}
         </span>
@@ -205,7 +211,7 @@ function Lines({ row, open, project, actions }: { row: SuggestionRow; open: bool
           )}
           {row.attempt && (row.attempt.phase === "starting" || row.attempt.phase === "working" || row.attempt.phase === "merging") ? <Elapsed since={row.attempt.started_at_unix_ms} className="shrink-0 text-muted-foreground" /> : null}
           {row.attempt?.url && row.attempt.phase !== "pr_open" ? <PrLink project={project} actions={actions} url={row.attempt.url} label={row.outcome === "issue" && row.attempt.pr_number === null ? t("suggestions.openIssue") : t("suggestions.openPr", { number: String(row.attempt.pr_number ?? "") })} /> : null}
-          <AgentLink agentId={row.attempt?.agent_id ?? null} actions={actions} />
+          <AgentLink pane={row.attempt?.agent_pane ?? null} actions={actions} />
         </span>
       ) : null}
       {row.group === "applying" && row.attempt?.phase === "ready" && row.attempt.branch ? <BranchLine row={row} branch={row.attempt.branch} project={project} actions={actions} /> : null}
@@ -235,19 +241,41 @@ function PrLink({ project, actions, url, label, className }: { project: ProjectS
   );
 }
 
+/** The applying agent's row in the agent lists, by its pane, while it lives; Hide AI's agents are in no list the operator works from, so every pane is searched. */
+function useAttemptAgent(pane: string | null): AgentRow | null {
+  return useShellStore((state) => (pane ? allAgents(state.agents, state.rest?.status?.remote).find((agent) => agent.pane_id === pane) ?? null : null));
+}
+
 /** `에이전트 ↗` while the applying agent lives: it opens that agent's pane. */
-function AgentLink({ agentId, actions }: { agentId: string | null; actions: Actions }) {
+function AgentLink({ pane, actions }: { pane: string | null; actions: Actions }) {
   const { t } = useInterfaceTranslation();
-  const pane = useShellStore((state) => {
-    if (!agentId) return null;
-    const rest = state.rest;
-    return allAgents(rest?.status?.remote, state.agents, rest?.navigator?.agent_scope, rest?.navigator?.devices).find((row) => row.agent.id === agentId)?.agent.pane_id ?? null;
-  });
-  if (!pane) return null;
+  const agent = useAttemptAgent(pane);
+  if (!agent) return null;
   return (
-    <button type="button" className="pointer-events-auto ml-auto shrink-0 text-subtle-foreground hover:text-foreground" aria-label={t("suggestions.openAgent")} onClick={() => actions.openAgent(pane)} data-suggestion-agent={agentId}>
+    <button type="button" className="pointer-events-auto ml-auto shrink-0 text-subtle-foreground hover:text-foreground" aria-label={t("suggestions.openAgent")} onClick={() => actions.openAgent(agent.pane_id)} data-suggestion-agent={agent.pane_id}>
       {t("suggestions.agent")}
     </button>
+  );
+}
+
+/**
+ * The applying agent's question (`에이전트가 물어요`), in the words the
+ * agent lists give it, with the way to its session, where it is answered;
+ * nothing while the agent asks nothing.
+ */
+function AgentAsk({ pane, actions }: { pane: string | null; actions: Actions }) {
+  const { t } = useInterfaceTranslation();
+  const agent = useAttemptAgent(pane);
+  if (!agent?.state.asking) return null;
+  const line = sidebarLine(agent);
+  const parts = line ? lineParts(t, agent, line) : null;
+  const question = [parts?.lead, parts?.text].filter(Boolean).join(" · ");
+  return (
+    <div className="pointer-events-auto col-start-2 flex min-w-0 flex-col gap-xxs rounded-xs bg-secondary px-sm py-xs text-caption" data-suggestion-asking={agent.pane_id}>
+      <span className="font-medium text-warning">{t("suggestions.asking")}</span>
+      {question ? <span className="min-w-0 break-words text-foreground">{question}</span> : null}
+      <Button className="self-start" size="sm" onClick={() => actions.openAgent(agent.pane_id)} data-suggestion-answer={agent.pane_id}>{t("suggestions.answerInSession")}</Button>
+    </div>
   );
 }
 
@@ -269,7 +297,7 @@ function BranchLine({ row, branch, project, actions }: { row: SuggestionRow; bra
       <span className="shrink-0 text-muted-foreground">{t("suggestions.branch.files", { count: branch.files_total })}</span>
       <span className="shrink-0 font-mono text-pr-mergeable">+{branch.added}</span>
       <span className="shrink-0 font-mono text-pr-failed">−{branch.removed}</span>
-      <AgentLink agentId={row.attempt?.agent_id ?? null} actions={actions} />
+      <AgentLink pane={row.attempt?.agent_pane ?? null} actions={actions} />
     </span>
   );
 }
@@ -283,12 +311,55 @@ function Fix({ row, open }: { row: SuggestionRow; open: boolean }) {
   const { t } = useInterfaceTranslation();
   if (row.group !== "choose") return null;
   if (row.local) return <LocalFix row={row} line={row.local.line} open={open} />;
+  if (row.plan) return <PlanFix row={row} plan={row.plan} open={open} />;
+  if (row.memory) return <MemoryFix row={row} open={open} />;
   const text = row.fix ?? (row.outcome === "issue" ? t("suggestions.issueFix") : null);
   if (!text) return null;
   return (
     <div className="col-start-2 flex min-w-0 flex-col gap-xxs" data-suggestion-fix={row.id}>
       <span className="text-micro text-muted-foreground">{t("suggestions.fix")}</span>
       <p className={cn("whitespace-pre-wrap break-words break-keep text-caption text-foreground", !open && "line-clamp-2")}>{text}</p>
+    </div>
+  );
+}
+
+/** A document fix before the press: the file it changes, `새 파일` when the repository has none yet, and the words it writes. */
+function PlanFix({ row, plan, open }: { row: SuggestionRow; plan: SuggestionPlan; open: boolean }) {
+  const { t } = useInterfaceTranslation();
+  return (
+    <div className="col-start-2 flex min-w-0 flex-col gap-xxs" data-suggestion-fix={row.id} data-suggestion-plan={plan.path}>
+      <span className="flex min-w-0 items-center gap-xs text-caption">
+        <FileTextIcon aria-hidden="true" className="size-(--size-icon-sm) shrink-0 text-muted-foreground" />
+        <span className="min-w-0 truncate font-mono text-foreground" title={plan.path}>{plan.path}</span>
+        {plan.new_file ? <Badge data-suggestion-plan-new="true">{t("suggestions.plan.newFile")}</Badge> : null}
+      </span>
+      <p className={cn("whitespace-pre-wrap break-words rounded-xs bg-secondary px-xs py-xxs font-mono text-caption text-foreground", !open && "line-clamp-3")} data-suggestion-draft="true">{plan.draft}</p>
+    </div>
+  );
+}
+
+/**
+ * A Memory card offered for the documents: how often the operator said it
+ * and agents read it, and, opened, the card itself and that the agent picks
+ * the document and shows the branch before it merges.
+ */
+function MemoryFix({ row, open }: { row: SuggestionRow; open: boolean }) {
+  const { t } = useInterfaceTranslation();
+  const memory = row.memory!;
+  const counts = [
+    memory.human_sessions > 0 ? t("suggestions.memory.said", { count: memory.human_sessions }) : null,
+    memory.pulled_sessions > 0 ? t("suggestions.memory.pulled", { count: memory.pulled_sessions }) : null,
+  ].filter(Boolean).join(" · ");
+  return (
+    <div className="col-start-2 flex min-w-0 flex-col gap-xxs text-caption" data-suggestion-fix={row.id} data-suggestion-memory-card={row.id}>
+      {counts ? <span className="text-muted-foreground">{counts}</span> : null}
+      {open && memory.body ? (
+        <>
+          <span className="text-micro text-muted-foreground">{t("suggestions.memory.body")}</span>
+          <p className="whitespace-pre-wrap break-words break-keep rounded-xs bg-secondary px-xs py-xxs text-foreground" data-suggestion-memory-body="true">{memory.body}</p>
+        </>
+      ) : null}
+      {open ? <span className="text-muted-foreground" data-suggestion-memory-where="true">{t("suggestions.memory.where")}</span> : null}
     </div>
   );
 }
@@ -310,19 +381,84 @@ function Detail({ row, project, actions }: { row: SuggestionRow; project: Projec
   return (
     <div className="col-start-2 flex min-w-0 flex-col gap-sm pt-xs" data-suggestion-detail={row.id}>
       {row.local && row.group !== "choose" ? <LocalFix row={row} line={row.local.line} open /> : null}
-      {row.fix && !row.local && row.group !== "choose" ? (
+      {/* A finished branch shows what it wrote, so the words planned before it give way. */}
+      {row.plan && row.group !== "choose" && !row.attempt?.branch ? <PlanFix row={row} plan={row.plan} open /> : null}
+      {row.fix && !row.local && !row.plan && row.group !== "choose" ? (
         <div className="flex flex-col gap-xxs">
           <span className="text-micro text-muted-foreground">{t("suggestions.fix")}</span>
           <p className="whitespace-pre-wrap break-words break-keep text-caption text-foreground">{row.fix}</p>
         </div>
       ) : null}
-      {row.evidence.length > 0 ? (
-        <div className="flex flex-col gap-xxs">
-          <span className="text-micro text-muted-foreground">{t("suggestions.evidence")}</span>
-          {row.evidence.map((evidence, index) => <Evidence key={index} evidence={evidence} project={project} actions={actions} />)}
-        </div>
-      ) : null}
+      {row.evidence.length > 0 ? <EvidenceList row={row} project={project} actions={actions} /> : null}
     </div>
+  );
+}
+
+/**
+ * The evidence a row rests on. A ready branch folds it to one line with
+ * `펼치기`, so what merges stays above its buttons.
+ */
+function EvidenceList({ row, project, actions }: { row: SuggestionRow; project: ProjectSuggestions; actions: Actions }) {
+  const { t } = useInterfaceTranslation();
+  const ready = row.attempt?.phase === "ready";
+  const [unfolded, setUnfolded] = useState(false);
+  if (ready && !unfolded) {
+    return (
+      <div className="flex min-w-0 items-center gap-sm text-caption" data-suggestion-evidence-folded={row.evidence.length}>
+        <span className="text-muted-foreground">{t("suggestions.evidenceFolded", { count: row.evidence.length })}</span>
+        <button type="button" className="pointer-events-auto shrink-0 text-subtle-foreground underline-offset-4 hover:text-foreground hover:underline" onClick={() => setUnfolded(true)} data-suggestion-evidence-unfold={row.id}>{t("suggestions.unfold")}</button>
+      </div>
+    );
+  }
+  return (
+    <div className="flex flex-col gap-xxs">
+      <span className="text-micro text-muted-foreground">{t("suggestions.evidence")}</span>
+      {row.evidence.map((evidence, index) => <Evidence key={index} evidence={evidence} project={project} actions={actions} />)}
+    </div>
+  );
+}
+
+/**
+ * A ready branch's changed files inside its open row, right above its
+ * buttons (PRD hide-ai-branch-first-apply B4): each file with its +/−, and
+ * the chosen one's diff against the base, the first file to begin with.
+ * The diff is the one the branch card reads, asked for while the row is open.
+ */
+function BranchFiles({ row, branch, project, actions }: { row: SuggestionRow; branch: SuggestionBranch; project: ProjectSuggestions; actions: Actions }) {
+  const { t } = useInterfaceTranslation();
+  const [chosen, setChosen] = useState<string | null>(null);
+  const path = branch.files.some((file) => file.path === chosen) ? chosen : (branch.files[0]?.path ?? null);
+  const workspace = project.workspace_id;
+  useEffect(() => {
+    actions.suggestionBranchFile(workspace, row.id, path);
+    return () => actions.suggestionBranchFile(workspace, row.id, null);
+  }, [actions, workspace, row.id, path]);
+  return (
+    <section className="col-start-2 flex min-w-0 flex-col gap-xxs pt-xs" aria-label={t("suggestions.card.files")} data-suggestion-branch-files={branch.files_total}>
+      <div className="flex items-center gap-xs text-caption">
+        <span className="font-medium text-foreground">{t("suggestions.card.files")}</span>
+        <span className="text-muted-foreground">{branch.files_total}</span>
+        <span className="ml-auto font-mono text-micro text-pr-mergeable">+{branch.added}</span>
+        <span className="font-mono text-micro text-pr-failed">−{branch.removed}</span>
+      </div>
+      <ul className="flex flex-col" role="list">
+        {branch.files.map((file) => (
+          <li key={file.path}>
+            <button type="button" aria-pressed={file.path === path} onClick={() => setChosen(file.path)} className={cn("pointer-events-auto flex w-full min-w-0 items-center gap-sm rounded-xs px-xs py-xxs text-left text-caption outline-none hover:bg-accent focus-visible:ring-1 focus-visible:ring-ring", file.path === path && "bg-accent")} title={file.path} data-suggestion-branch-file={file.path}>
+              <span className="min-w-0 flex-1 truncate font-mono">{file.path}</span>
+              {file.binary ? <span className="shrink-0 text-micro text-muted-foreground">{t("suggestions.card.binary")}</span> : (
+                <>
+                  <span className="shrink-0 font-mono text-micro text-pr-mergeable">+{file.added}</span>
+                  <span className="shrink-0 font-mono text-micro text-pr-failed">−{file.removed}</span>
+                </>
+              )}
+            </button>
+          </li>
+        ))}
+        {branch.files_total > branch.files.length ? <li className="py-xxs text-micro text-muted-foreground">{t("suggestions.card.filesMore", { shown: branch.files.length, total: branch.files_total })}</li> : null}
+      </ul>
+      {path ? <div className="pointer-events-auto min-w-0"><BranchFileDiff workspaceId={workspace} rowId={row.id} path={path} inline /></div> : null}
+    </section>
   );
 }
 
@@ -409,7 +545,7 @@ function Buttons({ row, project, actions }: { row: SuggestionRow; project: Proje
         <span className="text-caption text-muted-foreground" data-suggestion-hold="branches_full">{t("suggestions.branchesFull")}</span>
       ) : offer ? (
         <Button className="pointer-events-auto" size="sm" variant={offer === "issue" ? "secondary" : "default"} onClick={() => actions.suggestionAction(id, row.id, "apply")} data-suggestion-apply={offer}>
-          {t(offer === "issue" ? "suggestions.makeIssue" : "suggestions.makePr")}
+          {offer === "issue" ? t("suggestions.makeIssue") : row.plan ? t("suggestions.makePrFile", { file: fileName(row.plan.path) }) : t("suggestions.makePr")}
         </Button>
       ) : null}
       {retry ? <Button className="pointer-events-auto" size="sm" variant="outline" onClick={() => actions.suggestionAction(id, row.id, "retry")} data-suggestion-retry={row.id}>{t("suggestions.retry")}</Button> : null}

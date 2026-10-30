@@ -2150,6 +2150,11 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
       dispatch({ schema_version: 2, kind: "suggestion_evidence", payload: { workspace_id: workspaceId, id } });
     },
 
+    /** The file of its ready branch the open 제안 row unfolds, whose diff the core reads; null when it unfolds none. */
+    suggestionBranchFile(workspaceId: string, row: string, path: string | null) {
+      dispatch({ schema_version: 2, kind: "suggestion_branch_file", payload: { workspace_id: workspaceId, row, path } });
+    },
+
     /** Hands a file Hide owns, such as the Hide global instruction, to the system's editor; refusals are the host's to log. */
     openOwnedFile(path: string) {
       const bridge = hostBridge();
@@ -2225,14 +2230,16 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
     /**
      * An agent chosen in a list that shows only what the operator has to do
      * (the sidebar, Sessions, a digit): a row its home owns opens the home,
-     * the Hide AI tool's 제안 tab with that attempt's row open, and any other
-     * row its pane (PRD hide-ai-work-home B11, PRD hide-ai-suggestions B11).
-     * Its pane stays one link away from there.
+     * the Hide AI tool's 제안 tab with that attempt's row open, while the
+     * home waits on the operator's decision; a Hide AI agent that asks
+     * something opens its pane, where the question is answered, as any
+     * other row does (PRD hide-ai-work-home B11, PRD hide-ai-suggestions
+     * B11).
      */
     openListedAgent(paneId: string) {
       const state = useShellStore.getState();
       const agent = agentsByPane(allPaneAgents(state.agents, state.rest?.status?.remote)).get(paneId);
-      const home = homeOpening(state.rest, agent);
+      const home = agent?.state.asking ? null : homeOpening(state.rest, agent);
       if (home) return this.openSuggestion(home.deviceId, home.workspaceId, home.row);
       this.openAgent(paneId, agent?.look);
     },

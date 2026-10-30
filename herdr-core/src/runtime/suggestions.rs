@@ -43,6 +43,9 @@ pub(super) struct SuggestionsWork {
     laid: Option<LockFacts>,
     /// The Memory facts its Memory rows were last drawn from (D-02).
     laid_memory: Option<super::suggestion_memory::MemoryFacts>,
+    /// Each live attempt agent's pane as the agent lists name it, by its
+    /// coordination id, when the section was last composed.
+    laid_agents: Vec<(String, String)>,
     pub(super) promoting: super::suggestion_memory::PromotingCache,
     /// The attempts applying lines, started and followed here (B11-B14).
     pub(super) apply: super::suggestion_apply::ApplyWork,
@@ -54,6 +57,8 @@ pub(super) struct SuggestionsWork {
     changes_requested: HashSet<String>,
     /// The open row's excerpts (PRD memory-self-improve B7).
     pub(super) evidence: super::suggestion_evidence::EvidenceWork,
+    /// The ready branch file the open row unfolds, whose diff is read.
+    pub(super) row_file: Option<super::branch_card::BranchFile>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -614,6 +619,7 @@ impl Runtime {
     pub(super) fn refresh_suggestions(&mut self) {
         if self.suggestion_facts() != self.suggestions_work.laid
             || self.opened_memory_facts() != self.suggestions_work.laid_memory
+            || self.attempt_agent_panes() != self.suggestions_work.laid_agents
         {
             self.compose_suggestions();
         }
@@ -637,6 +643,8 @@ impl Runtime {
             .as_ref()
             .is_some_and(|opened| self.memory_shown_on(&opened.workspace_id));
         let branches = self.branch_overlay();
+        let agents = self.attempt_agent_panes();
+        self.suggestions_work.laid_agents = agents.clone();
         let project = self
             .suggestions_work
             .opened
@@ -659,6 +667,7 @@ impl Runtime {
                 }
                 lay_facts(&mut project, facts, memory_on);
                 lay_branches(&mut project, &branches);
+                lay_agents(&mut project, &agents);
                 super::suggestion_evidence::lay_excerpts(
                     &mut project,
                     &self.suggestions_work.evidence,
@@ -883,6 +892,27 @@ fn lay_branches(project: &mut ProjectSuggestionsSnapshot, overlay: &BranchOverla
         if let Some(branch) = attempt.branch.as_mut() {
             branch.checkout = overlay.checkouts.get(&branch.name).cloned();
         }
+    }
+}
+
+/// Names each notebook attempt's live agent by the pane the agent lists
+/// show it in, so `에이전트 ↗` and the agent's question reach it; a Memory
+/// row names its pane from its promotion already.
+fn lay_agents(project: &mut ProjectSuggestionsSnapshot, agents: &[(String, String)]) {
+    for attempt in project
+        .rows
+        .iter_mut()
+        .filter_map(|row| row.attempt.as_mut())
+    {
+        if attempt.agent_pane.is_some() {
+            continue;
+        }
+        attempt.agent_pane = attempt.agent_id.as_deref().and_then(|id| {
+            agents
+                .iter()
+                .find(|(agent, _)| agent == id)
+                .map(|(_, pane)| pane.clone())
+        });
     }
 }
 
