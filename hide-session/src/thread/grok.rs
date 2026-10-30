@@ -14,7 +14,7 @@ use super::Lines;
 use super::build::{Call, FileDiff, Origin, Outcome, Part, Step, Thread};
 
 pub(super) const LINES: Lines = Lines {
-    header: false,
+    header: None,
     record: |record_, _, thread| record(record_, thread),
     may_start_page: |_| true,
 };
@@ -157,7 +157,14 @@ fn part(block: &ContentBlock) -> Option<Part<'_>> {
             data: &image.data,
             mime: &image.mime_type,
         }),
-        ContentBlock::ResourceLink(link) => link.uri.strip_prefix("file://").map(Part::ImagePath),
+        ContentBlock::ResourceLink(link) => {
+            link.uri
+                .strip_prefix("file://")
+                .map(|path| Part::ImagePath {
+                    path: path.to_owned(),
+                    mime: link.mime_type.as_deref(),
+                })
+        }
         _ => None,
     }
 }

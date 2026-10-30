@@ -76,6 +76,36 @@ const SAMPLES: &[Sample] = &[
             (folder.join("updates.jsonl"), scope(id, cwd))
         },
     },
+    Sample {
+        format: SessionFormat::Pi,
+        place: |home, cwd| {
+            let encoded = cwd
+                .to_str()
+                .unwrap()
+                .trim_start_matches(['/', '\\'])
+                .replace(['/', '\\', ':'], "-");
+            let path = home
+                .join(".pi/agent/sessions")
+                .join(format!("--{encoded}--"))
+                .join("2026-10-30T12-06-36-445Z_01a18cb4-6a9d-759a-94ee-7216aba6e3c6.jsonl");
+            install(&fixtures().join("pi-1.0.4/session.jsonl"), &path, cwd);
+            (path, scope("01a18cb4-6a9d-759a-94ee-7216aba6e3c6", cwd))
+        },
+    },
+    Sample {
+        format: SessionFormat::Omp,
+        place: |home, cwd| {
+            let temp = std::env::temp_dir().canonicalize().unwrap();
+            let relative = cwd.strip_prefix(temp).unwrap().to_str().unwrap().to_owned();
+            let bucket = format!("-tmp-{}", relative.replace(['/', '\\', ':'], "-"));
+            let path = home
+                .join(".omp/agent/sessions")
+                .join(bucket)
+                .join("2026-10-30T12-38-33-148Z_01a18cd1-a9bc-75c4-9fc0-613bba53d364.jsonl");
+            install(&fixtures().join("omp-18.7.0/session.jsonl"), &path, cwd);
+            (path, scope("01a18cd1-a9bc-75c4-9fc0-613bba53d364", cwd))
+        },
+    },
 ];
 
 /// A checkout as Grok names its group folder: every byte but
@@ -244,9 +274,9 @@ fn parts_shown(placed: &Placed, updates: &[Value]) -> BTreeSet<ThreadPart> {
     let picture = blocks(updates).into_iter().any(|block| {
         (block["type"] == "image" && block["data"].as_str().is_some_and(|data| !data.is_empty()))
             || (block["type"] == "resource_link"
-                && block["uri"]
+                && block["mimeType"]
                     .as_str()
-                    .is_some_and(|uri| uri.ends_with("mock.png")))
+                    .is_some_and(|mime| mime.starts_with("image/")))
     });
     if picture {
         shown.insert(ThreadPart::Image);

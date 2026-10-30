@@ -26,8 +26,12 @@ pub(crate) enum Part<'a> {
         data: &'a str,
         mime: &'a str,
     },
-    /// An image the record names by its path only (D-09).
-    ImagePath(&'a str),
+    /// An image the record names by its path only (D-09), with its type
+    /// when the record states it.
+    ImagePath {
+        path: String,
+        mime: Option<&'a str>,
+    },
 }
 
 /// What a person's message is, beyond the operator's own words. Converters
@@ -421,12 +425,12 @@ fn media_block(part: Part<'_>) -> Option<ContentBlock> {
             ])),
         )),
         Part::Image { data, mime } => Some(ContentBlock::Image(ImageContent::new(data, mime))),
-        Part::ImagePath(path) => {
-            let path = wire(path);
+        Part::ImagePath { path, mime } => {
+            let path = wire(&path);
             let name = path.rsplit('/').next().unwrap_or(&path).to_owned();
+            let mime = mime.map(str::to_owned).or_else(|| image_mime(&path));
             Some(ContentBlock::ResourceLink(
-                ResourceLink::new(name, format!("file://{}", file_uri_path(&path)))
-                    .mime_type(image_mime(&path)),
+                ResourceLink::new(name, format!("file://{}", file_uri_path(&path))).mime_type(mime),
             ))
         }
     }

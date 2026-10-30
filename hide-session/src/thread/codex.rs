@@ -19,8 +19,8 @@ use super::Lines;
 use super::build::{Call, FileDiff, Origin, Outcome, Part, Step, Thread};
 
 pub(super) const LINES: Lines = Lines {
-    header: true,
-    record,
+    header: Some(|record| record["type"] == "session_meta"),
+    record: |record_, session, thread| record(record_, session.header, thread),
     may_start_page: |_| true,
 };
 
