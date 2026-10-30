@@ -895,8 +895,9 @@ fn a_process_that_has_ended_holds_no_file_it_had_open() {
         let mut child = command.spawn().unwrap();
         let pid = ready_number(child.stdout.take().unwrap());
         let process = FixtureProcess::live(pid);
+        #[cfg(windows)]
         assert!(
-            std::fs::remove_file(&held).is_err() || cfg!(not(windows)),
+            std::fs::remove_file(&held).is_err(),
             "the holder shares the file with no one"
         );
         terminate(pid).unwrap();
