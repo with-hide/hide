@@ -1014,6 +1014,7 @@ A row, a job card, a session chip or `답하기` opens the thread in the tool co
 
 Pressing an output, in a thread, on a card's chip, or in ▣'s list of every thread's outputs under each thread's mark and title, opens it in the 보기 column as a preview tab, its title in italics, which the next output pressed replaces (B31).
 A double click on the preview tab, or ↵ on it, keeps it as an ordinary tab, which stays when another thread opens.
+The tabs share the 보기 column's width by the View tab strip's rule (`tabStripFit`): the tab in front keeps its title longest, and a title too long for its tab ends in an ellipsis.
 The pin and the kept tabs are the core's (`desk.lane`), kept in Desk's store through a restart, 16 kept tabs at most; a seventeenth is refused as `desk_tabs_full` and the kept ones stay. Which tab is in front and the preview tab are the window's.
 An output is drawn read-only with the viewer its kind has (an image, a video, a PDF, a Markdown or text document), read from the session's device and checkout without making a View, so it never joins that project's Files list (D-65).
 Showing it marks its View seen (`desk_output_seen`), which takes it out of the session's To look at in Needs You, as looking at it in its checkout does.
@@ -1025,7 +1026,8 @@ A thread's `미션 k/n` chip opens the mission's map as a tab in the 보기 colu
 Pressing a node turns the tool column to that worker's thread, and its path line goes back to the Conductor's.
 
 The pin is in the head of the column at the lane's edge, just before its `✕`: the tool column's, or the 보기 column's while it shows alone (B32, D-73).
-Unpinned, the lane floats over the chat, whose column keeps its place while its words move out from under the lane, never narrower than a lane column's minimum; Escape inside it closes it and gives the keyboard to the composer.
+The lane is as wide as its columns, each at the lane's ideal width, pinned or not, and never leaves the chat less than its minimum: the 보기 column gives up its width first.
+Unpinned, the lane floats over the chat, whose words move left out from under it by the lane's width, so nothing the chat says is hidden; Escape inside it closes it and gives the keyboard to the composer.
 Pinned, the lane docks beside the chat, which narrows by its width, and a pinned lane closed and opened again comes back docked; Escape leaves it.
 A menu, a popover or a hint open in the lane takes Escape first, and Escape in an expanded lane (⤢) returns it to its width.
 
