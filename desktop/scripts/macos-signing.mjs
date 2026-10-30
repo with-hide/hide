@@ -1,8 +1,14 @@
 // How the macOS package is signed, chosen by HIDE_MACOS_SIGNING.
 //
-// Unset, it means `adhoc`: the bundle carries an ad-hoc signature, as every
-// local and pull-request package does, and a downloaded copy opens only after
-// the Gatekeeper step docs/INSTALL.md gives. `developer-id` is what a
+// `adhoc` gives the bundle an ad-hoc signature, as every pull-request and
+// nightly package does, and a downloaded copy opens only after the Gatekeeper
+// step docs/INSTALL.md gives. Unset, which is a local package, it means
+// `local`: the bundle is signed with the one Developer ID Application identity
+// a keychain holds, under the hardened runtime and without notarization, and
+// with `adhoc` when there is none. An ad-hoc signature changes with every
+// build, and macOS keys a privacy grant such as Screen Recording to the
+// signature, so each install of an ad-hoc build asks for every grant again;
+// a Developer ID signature is keyed to its team and keeps them. `developer-id` is what a
 // release's package.yml run asks for: every executable in the bundle (the
 // Electron helpers, the notification permission helper, the bundled CLIs and
 // Herdr) is signed with the Developer ID certificate under the hardened
@@ -32,19 +38,21 @@ const DEVELOPER_ID_KEYS = {
 };
 
 /**
- * Reads the signing choice from `env`: `{ mode: "adhoc" }`, or the Developer
- * ID identity and notary credentials once the identity is found in a keychain
- * codesign searches and notarytool is installed. Anything else throws.
+ * Reads the signing choice from `env`: `{ mode: "adhoc" }`, a local package's
+ * choice (`localSigning`), or the Developer ID identity and notary
+ * credentials once the identity is found in a keychain codesign searches and
+ * notarytool is installed. Anything else throws.
  */
 export function macosSigning(env) {
-  const mode = env.HIDE_MACOS_SIGNING ?? "adhoc";
+  const mode = env.HIDE_MACOS_SIGNING ?? "local";
   if (mode === "adhoc") return { mode };
-  if (mode !== "developer-id") throw new Error(`HIDE_MACOS_SIGNING must be adhoc or developer-id (got '${mode}')`);
+  if (mode === "local") return localSigning(codesigningIdentities(), env.HIDE_SIGN_IDENTITY);
+  if (mode !== "developer-id") throw new Error(`HIDE_MACOS_SIGNING must be adhoc, local or developer-id (got '${mode}')`);
   const unusable = Object.entries(DEVELOPER_ID_KEYS)
     .filter(([key, usable]) => !env[key] || !usable(env[key]))
     .map(([key]) => key);
   if (unusable.length > 0) throw new Error(`HIDE_MACOS_SIGNING=developer-id needs these set and well formed: ${unusable.join(", ")}`);
-  const identities = execFileSync("/usr/bin/security", ["find-identity", "-v", "-p", "codesigning"], { encoding: "utf8" });
+  const identities = codesigningIdentities();
   if (!identities.includes(env.HIDE_SIGN_IDENTITY)) throw new Error(`no keychain on the search list holds the signing identity '${env.HIDE_SIGN_IDENTITY}'`);
   execFileSync("/usr/bin/xcrun", ["--find", "notarytool"], { stdio: "ignore" });
   return {
@@ -54,9 +62,35 @@ export function macosSigning(env) {
   };
 }
 
+/** What `security find-identity -v -p codesigning` lists: the valid identities of every keychain codesign searches. */
+function codesigningIdentities() {
+  return execFileSync("/usr/bin/security", ["find-identity", "-v", "-p", "codesigning"], { encoding: "utf8" });
+}
+
 /**
- * The packager's `osxSign` options for a Developer ID package; the signed
- * app is notarized afterwards by `notarizeApp`. `executables` names the programs shipped flat in
+ * The signing of a local package, from `identities` as `security find-identity`
+ * lists them: `{ mode: "local", identity }` for the Developer ID Application
+ * identity named by `requested` (HIDE_SIGN_IDENTITY) or, unnamed, the only one
+ * listed, and `{ mode: "adhoc" }` when none is listed. Two or more without a
+ * name, or a name that is not listed, throw.
+ */
+export function localSigning(identities, requested) {
+  const listed = new Map();
+  for (const [, sha, name] of identities.matchAll(/^\s*\d+\) ([0-9A-F]{40}) "(Developer ID Application: [^"]+)"$/gm)) listed.set(sha, name);
+  if (requested) {
+    const found = [...listed].find(([sha, name]) => requested === sha || requested === name);
+    if (!found) throw new Error(`no keychain on the search list holds the Developer ID Application identity '${requested}'`);
+    return { mode: "local", identity: found[0], name: found[1] };
+  }
+  if (listed.size === 0) return { mode: "adhoc" };
+  if (listed.size > 1) throw new Error(`the keychains hold ${listed.size} Developer ID Application identities (${[...listed.values()].join(", ")}); name one with HIDE_SIGN_IDENTITY, or set HIDE_MACOS_SIGNING=adhoc`);
+  const [[sha, name]] = listed;
+  return { mode: "local", identity: sha, name };
+}
+
+/**
+ * The packager's `osxSign` options for a Developer ID package, local or
+ * release; a release's signed app is notarized afterwards by `notarizeApp`. `executables` names the programs shipped flat in
  * Contents/Resources, `entitlements` is the folder holding the two
  * entitlement files, and `helpers` maps each program placed beside the app's
  * executable in Contents/MacOS to the code-signing identifier it is signed

@@ -6,9 +6,9 @@
 // SHA-256 checksum, all in desktop/out/release.
 //
 // macOS builds hide.app, with the notification permission helper compiled
-// into Contents/MacOS, either ad-hoc signed or signed with the Developer ID
-// certificate and notarized when HIDE_MACOS_SIGNING asks for it
-// (macos-signing.mjs), as a dmg and the zip the updater installs. Windows x64
+// into Contents/MacOS, signed with the keychain's Developer ID certificate,
+// ad-hoc when there is none or HIDE_MACOS_SIGNING asks for it, and notarized
+// only for a release (macos-signing.mjs), as a dmg and the zip the updater installs. Windows x64
 // builds an unsigned per-user installer and Linux x64 an unsigned deb and rpm
 // (operator decision 2026-10-03, PRD auto-update D-07: no paid signing outside
 // macOS). Each is built on its own system, because the release binaries come from that
@@ -97,6 +97,7 @@ const version = resolveVersion();
 // Read before the build, so a release missing a signing secret fails in
 // seconds rather than after it.
 const signing = platform === "darwin" ? macosSigning(process.env) : null;
+if (signing) console.log(`macos_signing=${signing.mode}${signing.mode === "adhoc" ? "" : ` identity=${signing.name ?? signing.identity}`}`);
 
 // A failed run leaves no app or installer behind, stale or otherwise (B12).
 const packaged = path.join(out, `hide-${platform}-${arch}`);
@@ -300,7 +301,7 @@ const [outputDir] = await packager({
       ]
     : []),
   ],
-  ...(signing?.mode === "developer-id"
+  ...(signing && signing.mode !== "adhoc"
     ? developerIdOptions(signing, shipped.map(([name]) => name), path.join(resources, "entitlements"),
         { [path.basename(notificationHelper)]: APP_BUNDLE_ID })
     : {}),
@@ -325,13 +326,13 @@ for (const companion of herdr.companions) {
 if (platform === "darwin") {
   const helper = path.join(bundle, "Contents", "MacOS", path.basename(notificationHelper));
   if (!fs.statSync(helper, { throwIfNoEntry: false })?.isFile()) throw new Error(`the notification permission helper did not land at ${helper}`);
-  // A Developer ID bundle was signed inside the packager and is notarized below.
+  // A Developer ID bundle was signed inside the packager; a release's is notarized below.
   if (signing.mode === "adhoc") run("/usr/bin/codesign", ["--force", "--deep", "--sign", "-", "--timestamp=none", bundle], { stdio: "inherit" });
   run("/usr/bin/codesign", ["--verify", "--deep", "--strict", "--verbose=2", bundle], { stdio: "inherit" });
   // Signing the bundle again must not have given the helper another identity.
   const signed = spawnSync("/usr/bin/codesign", ["-dv", helper], { encoding: "utf8" }).stderr;
   if (!signed.includes(`Identifier=${APP_BUNDLE_ID}\n`)) throw new Error(`the notification permission helper is not signed as ${APP_BUNDLE_ID}: ${signed.trim()}`);
-  if (signing.mode === "developer-id" && !/flags=0x[0-9a-f]+\([^)]*runtime/.test(signed)) throw new Error(`the notification permission helper is not signed under the hardened runtime: ${signed.trim()}`);
+  if (signing.mode !== "adhoc" && !/flags=0x[0-9a-f]+\([^)]*runtime/.test(signed)) throw new Error(`the notification permission helper is not signed under the hardened runtime: ${signed.trim()}`);
   // Apple notarizes the checked bundle before any installer wraps it.
   if (signing.mode === "developer-id") notarizeApp(bundle, signing, out);
 }
