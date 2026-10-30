@@ -306,7 +306,10 @@ mod tests {
         assert_eq!(options["settingSources"], json!([]));
         assert_eq!(options["allowDangerouslySkipPermissions"], json!(false));
         assert_eq!(options["settings"]["permissions"]["ask"], json!(["Bash"]));
-        assert_eq!(options["settings"]["permissions"]["deny"], json!(["EnterPlanMode"]));
+        assert_eq!(
+            options["settings"]["permissions"]["deny"],
+            json!(["EnterPlanMode"])
+        );
     }
 
     #[test]

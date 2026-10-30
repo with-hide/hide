@@ -1532,11 +1532,16 @@ mod tests {
         runtime.compose_desk_sections();
         let room = runtime.snapshot.desk.clone().unwrap();
         let cards = runtime.snapshot.desk_jobs.clone().unwrap();
-        assert!(runtime.desk_event(super::super::DeskEvent::JobCancel(super::super::JobPayload {
-            id: "intent-b".into(),
-        })));
+        assert!(runtime.desk_event(super::super::DeskEvent::JobCancel(
+            super::super::JobPayload {
+                id: "intent-b".into(),
+            }
+        )));
         assert!(Arc::ptr_eq(&room, runtime.snapshot.desk.as_ref().unwrap()));
-        assert!(!Arc::ptr_eq(&cards, runtime.snapshot.desk_jobs.as_ref().unwrap()));
+        assert!(!Arc::ptr_eq(
+            &cards,
+            runtime.snapshot.desk_jobs.as_ref().unwrap()
+        ));
     }
 
     #[test]
