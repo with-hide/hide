@@ -222,7 +222,6 @@ pub fn launch(adapter: AdapterId, paths: &Paths<'_>, nonce: &str) -> Launch {
     let mut env: Vec<(OsString, OsString)> = vec![
         ("PATH".into(), search),
         ("HIDE_CAP_REF".into(), paths.capability.into()),
-        ("HIDE_DESK".into(), "1".into()),
     ];
     let mut files = Vec::new();
     let mut pi_marker = None;

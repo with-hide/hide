@@ -114,8 +114,10 @@ pub enum Verdict {
 }
 
 /// The `hide` commands Desk runs without asking: reading what runs, letters,
-/// watches and starting work, which is what Desk is for. Every other `hide`
-/// command (`hide agent archive`, `hide stop`, ...) waits for a card (D-38).
+/// watches and starting work, which is what Desk is for, and the CLI's own
+/// help. Every other `hide` command (`hide agent archive`, `hide stop`, ...)
+/// waits for a card (D-38); the Workspace, View, Memory, mission and plan
+/// commands the core refuses Desk (`desk_has_no_checkout`) are not here.
 const HIDE_WITHOUT_CARD: &[&[&str]] = &[
     &["guide"],
     &["contract"],
@@ -136,17 +138,12 @@ const HIDE_WITHOUT_CARD: &[&[&str]] = &[
     &["watch", "stop"],
     &["watch", "assign"],
     &["ps"],
-    &["workspace", "info"],
-    &["plan", "show"],
-    &["mission", "show"],
-    &["mission", "list"],
-    &["mission", "help"],
-    &["memory", "search"],
-    &["memory", "show"],
-    &["view", "list"],
-    &["view", "status"],
     &["device", "list"],
 ];
+
+/// The command whose words after `--` go to the agent's own CLI, which can
+/// lift the agent's permissions: such a start asks first.
+const SPAWN: &[&str] = &["agent", "spawn"];
 
 /// Decides a request. `hide` is the `hide` program Desk's `PATH` finds
 /// first, the only one a bare `hide` names there.
@@ -212,7 +209,11 @@ fn hide_without_card(line: &str, hide: &Path) -> bool {
             return false;
         };
         let names_hide = program == "hide" || Path::new(program) == hide;
+        let passes_arguments = rest.len() >= SPAWN.len()
+            && rest.iter().zip(SPAWN).all(|(word, want)| word == want)
+            && rest.iter().any(|word| word == "--");
         names_hide
+            && !passes_arguments
             && rest.iter().all(|word| !word.contains('$'))
             && HIDE_WITHOUT_CARD.iter().any(|allowed| {
                 rest.len() >= allowed.len()
@@ -542,6 +543,11 @@ mod tests {
             "hide request send a --intent i --body $SECRET",
             "/tmp/hide agent list",
             "hide request send a --intent i --body-file - <<EOF\nhi\nEOF",
+            "hide agent list\nrm -rf build",
+            "(hide agent list; rm -rf build)",
+            "hide() { rm -rf build; }; hide agent list",
+            "hide agent spawn --name n --intent i --kind claude --repo /r --branch b -- --dangerously-skip-permissions",
+            "hide mission show mission-1",
         ] {
             assert!(matches!(verdict(line), Verdict::Ask(_)), "{line}");
         }
