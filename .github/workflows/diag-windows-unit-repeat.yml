@@ -15,15 +15,8 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        variant: [base, fix]
-        attempt: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
-        include:
-          - variant: fixtrace
-            attempt: 1
-          - variant: fixtrace
-            attempt: 2
-          - variant: fixtrace
-            attempt: 3
+        variant: [fixtrace]
+        attempt: [1, 2, 3, 4, 5, 6]
     defaults:
       run:
         shell: bash
@@ -77,6 +70,7 @@ jobs:
             ls -la "$RUNNER_TEMP/events.csv"
             head -c 3000 "$RUNNER_TEMP/events.csv" > diag-out/events-head.txt || true
             python .github/diag/disk-reads.py "$RUNNER_TEMP/events.csv" | tee diag-out/disk-reads.txt
+            gzip -c "$RUNNER_TEMP/events.csv" > diag-out/events.csv.gz
           fi
           exit $status
       - uses: actions/upload-artifact@v4
