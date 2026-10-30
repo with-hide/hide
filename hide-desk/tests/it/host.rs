@@ -56,7 +56,8 @@ fn stand_in_agent() {
             Some("session/new") => send(json!({"jsonrpc": "2.0", "id": id, "result": {
                 "sessionId": "s1",
                 "configOptions": [{"id": "model", "category": "model", "currentValue": "m1",
-                    "options": [{"value": "m1", "name": "Model one"}]}]}})),
+                    "options": [{"value": "m1", "name": "Model one"}]}],
+                "_meta": {"piAcp": {"startupInfo": "pi v1 started"}}}})),
             Some("session/set_mode") if refuse_mode => send(json!({"jsonrpc": "2.0", "id": id,
                 "error": {"code": -32602, "message": "no such mode"}})),
             Some("session/set_mode") => send(json!({"jsonrpc": "2.0", "id": id, "result": {}})),
@@ -163,6 +164,8 @@ fn a_turn_s_reply_and_its_permission_request_reach_the_owner() {
     assert_eq!(opened.session_id, "s1");
     assert!(!opened.resumed);
     assert_eq!(opened.choices.model.unwrap().current.as_deref(), Some("m1"));
+    // The startup text the agent says it writes on its own is not a reply.
+    assert_eq!(opened.prelude.as_deref(), Some("pi v1 started"));
 
     session::prompt(&connection, "s1", "ping", 7).unwrap();
     assert_eq!(text(next(&received)), "pong");

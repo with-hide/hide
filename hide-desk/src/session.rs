@@ -40,6 +40,9 @@ pub struct Opened {
     /// A resume was asked for and the agent could not load it.
     pub resume_failed: bool,
     pub choices: Choices,
+    /// The text the adapter said it writes on its own after the session
+    /// opens (Pi's startup lines, `_meta.piAcp.startupInfo`): not a reply.
+    pub prelude: Option<String>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -136,6 +139,11 @@ pub fn open(
         resumed,
         resume_failed,
         choices: choices(&answer),
+        prelude: answer
+            .pointer("/_meta/piAcp/startupInfo")
+            .and_then(Value::as_str)
+            .filter(|text| !text.is_empty())
+            .map(str::to_owned),
     })
 }
 

@@ -33,6 +33,11 @@ pub enum AdapterId {
 pub const PI_CONFIRM_TITLE: &str = "hide-desk.permission";
 /// Desk's Pi extension.
 pub const PI_EXTENSION: &str = include_str!("pi_desk.js");
+/// What Pi loads from the operator's own setup and Desk keeps out: skills,
+/// `AGENTS.md`/`CLAUDE.md`, discovered extensions, prompt templates and MCP
+/// servers. Desk's extension, named with `-e`, still loads.
+const PI_ISOLATION: &str =
+    "--no-skills --no-context-files --no-extensions --no-prompt-templates --no-mcp";
 
 /// One adapter's pinned package.
 pub struct Pin {
@@ -220,13 +225,16 @@ pub fn launch(adapter: AdapterId, paths: &Paths<'_>, nonce: &str) -> Launch {
             let (launcher, body) = if cfg!(windows) {
                 (
                     paths.desk.join("pi-desk.cmd"),
-                    "@\"%HIDE_DESK_PI%\" -e \"%HIDE_DESK_PI_EXTENSION%\" %*\r\n".to_owned(),
+                    format!(
+                        "@\"%HIDE_DESK_PI%\" -e \"%HIDE_DESK_PI_EXTENSION%\" {PI_ISOLATION} %*\r\n"
+                    ),
                 )
             } else {
                 (
                     paths.desk.join("pi-desk"),
-                    "#!/bin/sh\nexec \"$HIDE_DESK_PI\" -e \"$HIDE_DESK_PI_EXTENSION\" \"$@\"\n"
-                        .to_owned(),
+                    format!(
+                        "#!/bin/sh\nexec \"$HIDE_DESK_PI\" -e \"$HIDE_DESK_PI_EXTENSION\" {PI_ISOLATION} \"$@\"\n"
+                    ),
                 )
             };
             files.push((extension.clone(), PI_EXTENSION.to_owned(), false));

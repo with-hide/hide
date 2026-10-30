@@ -191,6 +191,9 @@ struct Running {
     /// The work placement this session was last told; none for a session
     /// resumed from an earlier run.
     placement: Option<hide_desk::Placement>,
+    /// The startup text the adapter said it writes on its own, until it
+    /// arrives; it may land inside the first turn and is not its reply.
+    prelude: Option<String>,
 }
 
 impl Worker {
@@ -492,6 +495,7 @@ impl Worker {
                 turn: None,
                 turn_calls: Vec::new(),
                 placement: None,
+                prelude: opened.prelude,
             },
             opened.resume_failed,
             choices,
@@ -556,7 +560,11 @@ impl Worker {
         match incoming {
             Incoming::Notification { method, params } if method == "session/update" => {
                 match session::read_update(&params) {
-                    // Pi's adapter writes startup lines outside any turn.
+                    // Pi's adapter writes startup lines on its own after the
+                    // session opens, announced in its session answer.
+                    Update::Text(text) if running.prelude.as_deref() == Some(text.as_str()) => {
+                        running.prelude = None;
+                    }
                     Update::Text(text) => {
                         if let Some(tag) = running.turn {
                             self.report(Report::Text { tag, text });
