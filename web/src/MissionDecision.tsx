@@ -1,4 +1,5 @@
 import { CheckIcon, ChevronRightIcon, CircleAlertIcon } from "lucide-react";
+import { MissionTakeOver } from "./MissionTakeOver";
 import { useEffect, useRef, useState, type KeyboardEvent } from "react";
 import type { Actions } from "./actions";
 import { useElapsed } from "./components/elapsed";
@@ -126,7 +127,7 @@ export function DecisionBanner({ mission, device, actions, onNode }: { mission: 
         ) : null}
         {waited ? <span className="shrink-0 text-caption text-muted-foreground tabular-nums" data-mission-banner-waited="true">{t("mission.banner.waited", { elapsed: waited })}</span> : null}
         {gone ? (
-          <Button size="sm" onClick={() => actions.takeOverMission(mission.id)} data-mission-takeover="true">{t("mission.takeOver")}</Button>
+          <MissionTakeOver mission={mission} actions={actions} />
         ) : (
           <Button size="sm" variant="ghost" onClick={() => actions.openAgent(mission.conductor.pane_id)} data-mission-conversation="true">
             {t("mission.banner.conversation")}

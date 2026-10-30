@@ -1850,10 +1850,12 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
     },
 
     /**
-     * 이어받기 (D-40, B44): a new agent tab in the mission's checkout, told to
-     * take the mission; the core refuses it while a Conductor is still there.
+     * 이어받기's new agent (D-40, B44; PRD mission-tool D-11, B15): a tab in
+     * the mission's checkout told to take the mission, for a Conductor whose
+     * own conversation cannot be resumed; the core refuses it while a
+     * Conductor is still there. `request` lets the caller follow its answer.
      */
-    takeOverMission(missionId: string) {
+    takeOverMission(missionId: string, request?: { requestId: string; confirmOnly: boolean }) {
       const mission = rest()?.missions?.items.find((row) => row.id === missionId);
       if (!mission) return diagnostic(`mission_take: no mission ${missionId}`);
       const provider = takeOverProvider(mission, rest()?.ui_state?.agent_start);
@@ -1863,6 +1865,7 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
         provider,
         model: rest()?.ui_state?.agent_start?.models?.[provider] ?? null,
         prompt: takeOverPrompt(mission),
+        ...request,
       });
     },
 

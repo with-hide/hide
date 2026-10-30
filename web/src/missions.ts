@@ -9,6 +9,7 @@ import type { MessageKey } from "./i18n/catalogs";
 import { PROVIDER_KINDS, type ProviderKind } from "./agentPicker";
 import { agentsByPane } from "./paneAgents";
 import { orderByDependencies } from "./projectBoard";
+import { resumeProvider } from "./linkPanel";
 import type { AgentRow, AgentStartChoice, Mission, MissionChecker, MissionCriterion, MissionWorker, MissionEvent, MissionEventsSnapshot, MissionNode, MissionVerdict, RowMark, SnapshotRest } from "./snapshot";
 
 export function missionOf(rest: SnapshotRest | null | undefined, id: string): Mission | null {
@@ -687,6 +688,17 @@ export function takeOverProvider(mission: Mission, remembered: AgentStartChoice 
   const first = PROVIDER_KINDS[0];
   if (!first) throw new Error("No agent kind Hide can start");
   return first;
+}
+
+/**
+ * What 이어받기 resumes first (PRD mission-tool D-11, B14): the gone
+ * Conductor's own conversation, when its agent can resume one; null when it
+ * has none to resume, and 이어받기 starts a new agent instead (B15).
+ */
+export function conductorResume(mission: Mission): { provider: ProviderKind; sessionId: string } | null {
+  const session = mission.conductor.session;
+  const provider = session ? resumeProvider(session.agent) : null;
+  return session && provider ? { provider, sessionId: session.session_id } : null;
 }
 
 /**

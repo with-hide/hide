@@ -1,4 +1,5 @@
 import { ChevronRightIcon } from "lucide-react";
+import { MissionTakeOver } from "./MissionTakeOver";
 import { useMemo, type ReactNode } from "react";
 import type { Actions } from "./actions";
 import { MissionNodeMark } from "./components/mission-node-mark";
@@ -50,7 +51,7 @@ function Item({ item, mission, device, actions, onSelect }: { item: TurnItem; mi
         <Row data-mission-turn-item="takeover">
           <span aria-hidden="true" className="size-(--size-agent-mark) shrink-0 rounded-full border border-dashed border-muted-foreground" />
           <span className="min-w-0 flex-1 truncate text-body">{t("mission.noConductor")}</span>
-          <Button size="sm" onClick={() => actions.takeOverMission(mission.id)} data-mission-takeover="true">{t("mission.takeOver")}</Button>
+          <MissionTakeOver mission={mission} actions={actions} />
         </Row>
       );
     case "worker_blocked":
