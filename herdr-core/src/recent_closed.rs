@@ -1,3 +1,5 @@
+pub(crate) mod capture;
+pub(crate) mod reopen;
 use std::collections::{BTreeMap, VecDeque};
 
 use serde::{Deserialize, Serialize};

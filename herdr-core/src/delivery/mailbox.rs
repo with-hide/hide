@@ -26,6 +26,11 @@ pub enum Command {
         /// letters-to-busy-agents D-05).
         #[serde(default)]
         now: bool,
+        /// `hide request send --force`: typed into the recipient's input now,
+        /// even while it works, once its composer was read empty (PRD
+        /// engine-bundle-1 D-14); see `Letter::forced`.
+        #[serde(default)]
+        force: bool,
     },
     Reply {
         id: String,
@@ -214,6 +219,7 @@ pub(crate) fn send(
         bell_line: None,
         bell_turn: None,
         immediate: false,
+        forced: false,
         tool_handovers: 0,
         // A letter to a machine with a clock waits on that clock from now;
         // the store gives one to a machine a letter waits on.
@@ -245,6 +251,7 @@ pub fn apply(
             body,
             kind,
             now: immediate,
+            force,
             ..
         } => {
             let mut letter = send(
@@ -257,13 +264,14 @@ pub fn apply(
                 None,
                 now,
             )?;
-            if *immediate
+            if (*immediate || *force)
                 && let Some(stored) = ledger
                     .letters
                     .iter_mut()
                     .find(|stored| stored.id == letter.id)
             {
                 stored.immediate = true;
+                stored.forced = *force;
                 letter = stored.clone();
             }
             Ok(json!(letter))
@@ -367,7 +375,7 @@ pub fn apply(
             let session = session
                 .as_deref()
                 .filter(|session| super::valid_session(session))
-                .and_then(crate::wire::session_digest)
+                .and_then(crate::engine::tokens::session_digest)
                 .filter(|session| actor.session.as_ref() == Some(session))
                 .ok_or("session_mismatch")?;
             let digest = prompt_digest
@@ -817,6 +825,7 @@ mod tests {
                 body: "private".into(),
                 kind: "request".into(),
                 now: false,
+                force: false,
             },
         ] {
             assert_eq!(
@@ -967,6 +976,7 @@ mod tests {
                 body: "changed".into(),
                 kind: "request".into(),
                 now: false,
+                force: false,
             },
             2,
         )
@@ -1061,7 +1071,7 @@ mod tests {
             let mut ledger = Ledger::default();
             let mut recipient = actor("recipient");
             recipient.kind = "grok".into();
-            recipient.session = crate::wire::session_digest("native-session");
+            recipient.session = crate::engine::tokens::session_digest("native-session");
             let ids = pending_for(&mut ledger, &recipient, 2);
             // A receipt-less legacy acknowledgement follows the new letter,
             // just as it does at a context-carrying prompt hook.
@@ -1152,7 +1162,7 @@ mod tests {
         let mut ledger = Ledger::default();
         let mut recipient = actor("recipient");
         recipient.kind = "grok".into();
-        recipient.session = crate::wire::session_digest("native-session");
+        recipient.session = crate::engine::tokens::session_digest("native-session");
         pending_for(&mut ledger, &recipient, 1);
         ring(&mut ledger, 0, LINE);
         for text in [LINE, "the operator's own prompt"] {

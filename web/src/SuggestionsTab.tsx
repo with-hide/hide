@@ -18,6 +18,7 @@ import { suggestionSteps } from "./hideAiSteps";
 import { useShellStore } from "./store";
 import { applyOffer, appliedSummary, attemptLine, fileName, localLine, offered, suggestionGroups, suggestionMark, suggestionReason, suggestionTitle, type BranchChoice, type SuggestionMark } from "./suggestionList";
 import { useUiStore } from "./ui";
+import { RowOverlayButton, RowButton } from "./components/ui/row-button";
 
 /**
  * The Hide AI tool's 제안 tab (PRD hide-ai-suggestions D-05..D-07, D-37,
@@ -59,11 +60,11 @@ export function SuggestionsTab({ project, actions }: { project: ProjectSuggestio
           <Group name={t("suggestions.group.applying")} rows={groups.applying} project={project} actions={actions} kind="applying" />
           {applied.count > 0 ? (
             <section className="flex min-w-0 flex-col" data-suggestions-group="applied">
-              <button type="button" aria-expanded={!folded} className="flex items-center gap-xs self-start py-sm text-caption text-muted-foreground outline-none hover:text-foreground focus-visible:ring-1 focus-visible:ring-ring" onClick={() => setFolded(!folded)} data-suggestions-fold={applied.count}>
+              <Button variant="text" size="inline" aria-expanded={!folded} className="gap-xs self-start py-sm text-caption" onClick={() => setFolded(!folded)} data-suggestions-fold={applied.count}>
                 <ChevronRightIcon aria-hidden="true" className={cn("size-(--size-icon-sm)", !folded && "rotate-90")} />
                 <span>{t("suggestions.group.applied")} {applied.count}</span>
                 {applied.effective > 0 ? <span>· {t("suggestions.appliedEffective", { count: applied.effective })}</span> : null}
-              </button>
+              </Button>
               {folded ? null : groups.applied.map((row) => <Row key={row.id} row={row} project={project} actions={actions} />)}
             </section>
           ) : null}
@@ -105,9 +106,9 @@ function OpenFile({ path, actions }: { path: string; actions: Actions }) {
   // The path is the core's machine's; a window elsewhere has no such file to open.
   if (!actions.onCoreMachine()) return null;
   return (
-    <button type="button" className="pointer-events-auto shrink-0 text-subtle-foreground underline-offset-4 hover:text-foreground hover:underline" title={path} onClick={() => actions.openOwnedFile(path)} data-suggestion-open-file={path}>
+    <Button variant="text-link" size="inline" className="pointer-events-auto shrink-0" title={path} onClick={() => actions.openOwnedFile(path)} data-suggestion-open-file={path}>
       {t("suggestions.local.openFile")}
-    </button>
+    </Button>
   );
 }
 
@@ -154,7 +155,7 @@ function Row({ row, project, actions }: { row: SuggestionRow; project: ProjectSu
   const toggle = () => useUiStore.getState().showHideAiTab("suggestions", open ? null : row.id);
   return (
     <div ref={self} className={cn("relative min-w-0 border-b border-border", open && "bg-card")} data-suggestion={row.id} data-suggestion-state={row.state} data-suggestion-source={row.source} data-suggestion-open={open ? "true" : undefined}>
-      <button type="button" className="absolute inset-0 rounded-xs outline-none hover:bg-accent focus-visible:ring-1 focus-visible:ring-ring" aria-label={t(open ? "suggestions.closeRow" : "suggestions.openRow", { row: title })} aria-expanded={open} onClick={toggle} data-suggestion-toggle={row.id} />
+      <RowOverlayButton aria-label={t(open ? "suggestions.closeRow" : "suggestions.openRow", { row: title })} aria-expanded={open} onClick={toggle} data-suggestion-toggle={row.id} />
       <div className="pointer-events-none relative grid min-w-0 grid-cols-[auto_1fr] gap-x-sm gap-y-xs px-xs py-sm">
         <SuggestionMarkIcon mark={mark} />
         <div className={cn("flex min-w-0 items-start gap-xs", working && "opacity-(--opacity-dimmed)")}>
@@ -227,7 +228,7 @@ function Lines({ row, open, project, actions }: { row: SuggestionRow; open: bool
         <span className="min-w-0 break-words text-muted-foreground" data-suggestion-moved-to={row.attempt.branch.moved_to}>{t("suggestions.branch.movedTo", { branch: row.attempt.branch.moved_to })}</span>
       ) : null}
       {row.attempt?.phase === "ready" && row.attempt.branch ? <BranchLine row={row} branch={row.attempt.branch} project={project} actions={actions} /> : null}
-      {row.attempt?.phase === "failed" && row.cause ? (
+      {row.attempt?.phase === "failed" && row.cause && !attempt?.worded ? (
         <span className={cn("min-w-0 break-words text-muted-foreground", !open && "truncate")} title={row.cause} data-suggestion-failure-detail="true">{row.cause}</span>
       ) : null}
       {row.group === "applied" && row.state === "watching" && row.watch ? (
@@ -247,9 +248,9 @@ function previousPrLabel(t: ReturnType<typeof useInterfaceTranslation>["t"], url
 function PrLink({ project, actions, url, label, className }: { project: ProjectSuggestions; actions: Actions; url: string; label: string; className?: string }) {
   const number = Number(/\/pull\/(\d+)/.exec(url)?.[1] ?? Number.NaN);
   return (
-    <button type="button" className={cn("pointer-events-auto shrink-0 text-subtle-foreground underline-offset-4 hover:text-foreground hover:underline", className)} title={label} onClick={() => (Number.isFinite(number) ? actions.openSessionPullRequest({ workspace_id: project.workspace_id, number, url }) : actions.openLink(url, false))} data-suggestion-link={url}>
+    <Button variant="text-link" size="inline" className={cn("pointer-events-auto shrink-0", className)} title={label} onClick={() => (Number.isFinite(number) ? actions.openSessionPullRequest({ workspace_id: project.workspace_id, number, url }) : actions.openLink(url, false))} data-suggestion-link={url}>
       {label}
-    </button>
+    </Button>
   );
 }
 
@@ -264,9 +265,9 @@ function AgentLink({ pane, actions }: { pane: string | null; actions: Actions })
   const agent = useAttemptAgent(pane);
   if (!agent) return null;
   return (
-    <button type="button" className="pointer-events-auto ml-auto shrink-0 text-subtle-foreground hover:text-foreground" aria-label={t("suggestions.openAgent")} onClick={() => actions.openAgent(agent.pane_id)} data-suggestion-agent={agent.pane_id}>
+    <Button variant="text" size="inline" className="pointer-events-auto ml-auto shrink-0" aria-label={t("suggestions.openAgent")} onClick={() => actions.openAgent(agent.pane_id)} data-suggestion-agent={agent.pane_id}>
       {t("suggestions.agent")}
-    </button>
+    </Button>
   );
 }
 
@@ -286,7 +287,7 @@ function AgentAsk({ pane, actions }: { pane: string | null; actions: Actions }) 
     <div className="pointer-events-auto col-start-2 flex min-w-0 flex-col gap-xxs rounded-xs bg-secondary px-sm py-xs text-caption" data-suggestion-asking={agent.pane_id}>
       <span className="font-medium text-warning">{t("suggestions.asking")}</span>
       {question ? <span className="min-w-0 break-words text-foreground">{question}</span> : null}
-      <Button className="self-start" size="sm" onClick={() => actions.openAgent(agent.pane_id)} data-suggestion-answer={agent.pane_id}>{t("suggestions.answerInSession")}</Button>
+      <Button variant="secondary" className="self-start" size="sm" onClick={() => actions.openAgent(agent.pane_id)} data-suggestion-answer={agent.pane_id}>{t("suggestions.answerInSession")}</Button>
     </div>
   );
 }
@@ -302,9 +303,9 @@ function BranchLine({ row, branch, project, actions }: { row: SuggestionRow; bra
   const only = branch.files_total === 1 && branch.files.length === 1 ? branch.files[0]!.path : null;
   return (
     <span className="flex min-w-0 items-center gap-sm" data-suggestion-branch={branch.name}>
-      <button type="button" className="pointer-events-auto shrink-0 text-warning underline-offset-4 hover:underline" onClick={() => actions.openBranchCard(project.workspace_id, row.id, only)} data-suggestion-branch-view={row.id}>
+      <Button variant="text-link" size="inline" className="pointer-events-auto shrink-0 text-warning hover:text-warning" onClick={() => actions.openBranchCard(project.workspace_id, row.id, only)} data-suggestion-branch-view={row.id}>
         {t("suggestions.branch.view")}
-      </button>
+      </Button>
       <span className="min-w-0 truncate font-mono text-subtle-foreground" title={branch.name}>{branch.name}</span>
       <span className="shrink-0 text-muted-foreground">{t("suggestions.branch.files", { count: branch.files_total })}</span>
       <span className="shrink-0 font-mono text-pr-mergeable">+{branch.added}</span>
@@ -418,7 +419,7 @@ function EvidenceList({ row, project, actions }: { row: SuggestionRow; project: 
     return (
       <div className="flex min-w-0 items-center gap-sm text-caption" data-suggestion-evidence-folded={row.evidence.length}>
         <span className="text-muted-foreground">{t("suggestions.evidenceFolded", { count: row.evidence.length })}</span>
-        <button type="button" className="pointer-events-auto shrink-0 text-subtle-foreground underline-offset-4 hover:text-foreground hover:underline" onClick={() => setUnfolded(true)} data-suggestion-evidence-unfold={row.id}>{t("suggestions.unfold")}</button>
+        <Button variant="text-link" size="inline" className="pointer-events-auto shrink-0" onClick={() => setUnfolded(true)} data-suggestion-evidence-unfold={row.id}>{t("suggestions.unfold")}</Button>
       </div>
     );
   }
@@ -460,7 +461,7 @@ function BranchFiles({ row, branch, project, actions }: { row: SuggestionRow; br
       <ul className="flex flex-col" role="list">
         {branch.files.map((file) => (
           <li key={file.path} className="flex min-w-0 flex-col gap-xxs">
-            <button type="button" aria-expanded={file.path === path} onClick={() => setChosen(file.path === path ? null : file.path)} className={cn("pointer-events-auto flex w-full min-w-0 items-center gap-xs rounded-xs px-xs py-xxs text-left text-caption outline-none hover:bg-accent focus-visible:ring-1 focus-visible:ring-ring", file.path === path && "bg-accent")} title={file.path} data-suggestion-branch-file={file.path}>
+            <RowButton aria-expanded={file.path === path} onClick={() => setChosen(file.path === path ? null : file.path)} className={cn("pointer-events-auto py-xxs text-caption", file.path === path && "bg-accent")} title={file.path} data-suggestion-branch-file={file.path}>
               <ChevronRightIcon aria-hidden="true" className={cn("size-(--size-icon-sm) shrink-0 text-muted-foreground", file.path === path && "rotate-90")} />
               <span className="min-w-0 flex-1 truncate font-mono">{file.path}</span>
               {file.binary ? <span className="shrink-0 text-micro text-muted-foreground">{t("suggestions.card.binary")}</span> : (
@@ -469,7 +470,7 @@ function BranchFiles({ row, branch, project, actions }: { row: SuggestionRow; br
                   <span className="shrink-0 font-mono text-micro text-pr-failed">−{file.removed}</span>
                 </>
               )}
-            </button>
+            </RowButton>
             {file.path === path ? <div className="pointer-events-auto min-w-0" data-suggestion-branch-diff={file.path}><BranchFileDiff workspaceId={workspace} rowId={row.id} path={file.path} inline /></div> : null}
           </li>
         ))}
@@ -526,8 +527,7 @@ function Evidence({ evidence, project, actions }: { evidence: SuggestionEvidence
 
 /**
  * A choice's `문서 고치기` or `이슈로 남기기` (B10, B14), `GitHub 연결 필요`
- * or `결정을 기다리는 브랜치가 5개예요` in its place (B18; PRD
- * hide-ai-branch-first-apply B28), a ready branch's choices, and a failed
+ * in its place (B18), a ready branch's choices, and a failed
  * attempt's `다시 시도` (B12), each
  * with a quiet `넘어가기` beside it (D-51, B16). A global instruction row
  * offers `Hide 전역 지시에 넣기` with the preview it was shown, held while it
@@ -553,15 +553,13 @@ function Buttons({ row, project, actions }: { row: SuggestionRow; project: Proje
   return (
     <div className="col-start-2 flex flex-wrap items-center gap-xs pt-xxs">
       {offer === "local" || offer === "local_held" ? (
-        <Button className="pointer-events-auto" size="sm" disabled={offer === "local_held"} onClick={() => row.local?.preview != null && actions.suggestionAction(id, row.id, "apply", row.local.preview)} data-suggestion-apply={offer}>
+        <Button variant="secondary" className="pointer-events-auto" size="sm" disabled={offer === "local_held"} onClick={() => row.local?.preview != null && actions.suggestionAction(id, row.id, "apply", row.local.preview)} data-suggestion-apply={offer}>
           {t(row.local?.failure === "write_failed" ? "suggestions.retry" : "suggestions.makeLocal")}
         </Button>
       ) : offer === "github_needed" ? (
         <span className="text-caption text-muted-foreground" data-suggestion-github-needed="true">{t("suggestions.githubNeeded")}</span>
-      ) : offer === "branches_full" ? (
-        <span className="text-caption text-muted-foreground" data-suggestion-hold="branches_full">{t("suggestions.branchesFull")}</span>
       ) : offer ? (
-        <Button className="pointer-events-auto" size="sm" variant={offer === "issue" ? "secondary" : "default"} onClick={() => actions.suggestionAction(id, row.id, "apply")} data-suggestion-apply={offer}>
+        <Button className="pointer-events-auto" size="sm" variant="secondary" onClick={() => actions.suggestionAction(id, row.id, "apply")} data-suggestion-apply={offer}>
           {offer === "issue" ? t("suggestions.makeIssue") : row.plan ? t("suggestions.makePrFile", { file: fileName(row.plan.path) }) : t("suggestions.makePr")}
         </Button>
       ) : null}
@@ -579,8 +577,9 @@ function Buttons({ row, project, actions }: { row: SuggestionRow; project: Proje
  * merges and pushes, only while the core read that GitHub's base takes a
  * direct push; a base that takes pull requests only says so in its place, and
  * an unread one shows nothing. A quiet `버리기` either way. A refused merge
- * puts its answer first: `다시 시도` merges again, `다시 맞추기` makes the
- * branch again on its base, and a push GitHub did not take leaves `PR 올리기`.
+ * puts its answer first: `다시 시도` merges again (where the base conflicts,
+ * Hide remakes the branch on it and merges once that is ready), and a push
+ * GitHub did not take leaves `PR 올리기`.
  * A push that found the local base apart from GitHub's offers `PR 올리기`
  * first, since the pull request goes up from the branch whatever main holds,
  * and `내 커밋을 브랜치로 옮기고 main 맞추기`, which keeps main's own commits
@@ -596,12 +595,10 @@ export function BranchButtons({ row, project, actions, again, className }: { row
   const push = pr && again !== "pr" && again !== "sync" ? branch?.push ?? "unknown" : "unknown";
   return (
     <div className={cn("col-start-2 flex flex-wrap items-center gap-xs pt-xxs", className)} data-suggestion-branch-buttons={row.id}>
-      {again === "rebase" ? (
-        <Button className="pointer-events-auto" size="sm" onClick={() => actions.suggestionAction(id, row.id, "rebase")} data-suggestion-rebase={row.id}>{t("suggestions.branch.rebase")}</Button>
-      ) : github ? null : (
-        <Button className="pointer-events-auto" size="sm" onClick={() => actions.suggestionAction(id, row.id, "merge")} data-suggestion-merge={row.id}>{t(again === "merge" ? "suggestions.retry" : "suggestions.branch.merge", { base })}</Button>
+      {github ? null : (
+        <Button variant="secondary" className="pointer-events-auto" size="sm" onClick={() => actions.suggestionAction(id, row.id, "merge")} data-suggestion-merge={row.id}>{t(again === "merge" ? "suggestions.retry" : "suggestions.branch.merge", { base })}</Button>
       )}
-      {pr ? <Button className="pointer-events-auto" size="sm" variant={again === "rebase" ? "outline" : "default"} onClick={() => actions.suggestionAction(id, row.id, "open_pr")} data-suggestion-open-pr={row.id}>{t("suggestions.branch.openPr")}</Button> : null}
+      {pr ? <Button variant="secondary" className="pointer-events-auto" size="sm" onClick={() => actions.suggestionAction(id, row.id, "open_pr")} data-suggestion-open-pr={row.id}>{t("suggestions.branch.openPr")}</Button> : null}
       {again === "sync" ? <Button className="pointer-events-auto" size="sm" variant="outline" onClick={() => actions.suggestionAction(id, row.id, "sync_base")} data-suggestion-sync-base={row.id}>{t("suggestions.branch.sync", { base })}</Button> : null}
       {push === "allowed" ? (
         <Button className="pointer-events-auto" size="sm" variant="outline" onClick={() => actions.suggestionAction(id, row.id, "merge_push")} data-suggestion-merge-push={row.id}>{t(again === "merge" ? "suggestions.retry" : "suggestions.branch.mergePush", { base })}</Button>

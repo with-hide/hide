@@ -278,9 +278,20 @@ pub fn is_commit(value: &str) -> bool {
             .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
 }
 
+/// The reviewers one pull request's facts name at most, from each of its
+/// latest-review lists; `totalCount` says how many more there are (PRD
+/// pr-review-status B17).
+pub const PR_FACTS_REVIEW_LIMIT: usize = 20;
+
+/// The review requests one pull request's facts read back, newest last: when
+/// each reviewer still asked was asked.
+pub const PR_FACTS_ASK_LIMIT: usize = 10;
+
 /// What one repository's open pull requests add to the 5-minute list: each
-/// pull request's place in the merge queue and when a review was last asked
-/// of someone on it. The newest hundred only, a cap the screen never states
+/// pull request's place in the merge queue, when a review was last asked of
+/// whom, each reviewer's latest review, and the approvals the base branch's
+/// classic protection asks for (null to an account that is not an
+/// administrator). The newest hundred only, a cap the screen never states
 /// because a queued or just-asked pull request is a recently active one.
 pub fn pr_facts_query(repository: &str) -> Option<String> {
     if !is_repository(repository) {
@@ -288,8 +299,50 @@ pub fn pr_facts_query(repository: &str) -> Option<String> {
     }
     let (owner, name) = repository.split_once('/')?;
     Some(format!(
-        "query=query HidePrFacts {{ repository(owner:\"{owner}\",name:\"{name}\") {{ pullRequests(states:OPEN,first:100,orderBy:{{field:UPDATED_AT,direction:DESC}}) {{ nodes {{ number mergeQueueEntry {{ position }} timelineItems(last:1,itemTypes:[REVIEW_REQUESTED_EVENT]) {{ nodes {{ ... on ReviewRequestedEvent {{ createdAt }} }} }} }} }} }} }}"
+        "query=query HidePrFacts {{ repository(owner:\"{owner}\",name:\"{name}\") {{ pullRequests(states:OPEN,first:100,orderBy:{{field:UPDATED_AT,direction:DESC}}) {{ nodes {{ number mergeQueueEntry {{ position }} timelineItems(last:{PR_FACTS_ASK_LIMIT},itemTypes:[REVIEW_REQUESTED_EVENT]) {{ nodes {{ ... on ReviewRequestedEvent {{ createdAt requestedReviewer {{ ... on User {{ login }} ... on Bot {{ login }} ... on Mannequin {{ login }} ... on Team {{ slug }} }} }} }} }} latestOpinionatedReviews(first:{PR_FACTS_REVIEW_LIMIT}) {{ totalCount nodes {{ author {{ login }} state submittedAt }} }} latestReviews(first:{PR_FACTS_REVIEW_LIMIT}) {{ totalCount nodes {{ author {{ login }} state submittedAt }} }} baseRef {{ branchProtectionRule {{ requiredApprovingReviewCount }} }} }} }} }} }}"
     ))
+}
+
+/// The approvals the active ruleset rules of a branch ask for, the largest
+/// of its pull request rules and 0 without one: readable with read access,
+/// where a branch's classic protection is not (PRD pr-review-status D-07).
+pub const REQUIRED_APPROVALS_JQ: &str = "[.[]|select(.type==\"pull_request\")|.parameters.required_approving_review_count // 0]|max // 0";
+
+/// `gh api --jq REQUIRED_APPROVALS_JQ repos/OWNER/NAME/rules/branches/BRANCH`.
+pub fn required_approvals_arguments(repository: &str, branch: &str) -> Option<Vec<String>> {
+    if !is_repository(repository) || !is_path_branch(branch) {
+        return None;
+    }
+    Some(vec![
+        "api".to_owned(),
+        "--jq".to_owned(),
+        REQUIRED_APPROVALS_JQ.to_owned(),
+        format!("repos/{repository}/rules/branches/{branch}"),
+    ])
+}
+
+fn is_required_approvals_read(arguments: &[&str]) -> bool {
+    let ["api", "--jq", REQUIRED_APPROVALS_JQ, endpoint] = arguments else {
+        return false;
+    };
+    let Some(rest) = endpoint.strip_prefix("repos/") else {
+        return false;
+    };
+    let Some((owner, rest)) = rest.split_once('/') else {
+        return false;
+    };
+    let Some((name, branch)) = rest
+        .split_once('/')
+        .and_then(|(name, rest)| Some((name, rest.strip_prefix("rules/branches/")?)))
+    else {
+        return false;
+    };
+    required_approvals_arguments(&format!("{owner}/{name}"), branch).is_some_and(|expected| {
+        expected
+            .iter()
+            .map(String::as_str)
+            .eq(arguments.iter().copied())
+    })
 }
 
 /// What the card reads about one pull request when it opens and when its head
@@ -498,6 +551,7 @@ pub fn allowed(arguments: &[&str]) -> bool {
         || is_merge_commit_read(arguments)
         || is_compare_read(arguments)
         || is_branch_push_read(arguments)
+        || is_required_approvals_read(arguments)
         || matches!(
             arguments,
             ["pr", "list", "--state", "open", "--limit", PULL_REQUEST_LIMIT, "--json", OPEN_CHECK_FIELDS]
@@ -1467,6 +1521,47 @@ mod tests {
             assert!(!allowed(&["api", "graphql", "-f", query]), "{query}");
         }
         assert_eq!(pr_card_query("-acme/app", 1), None);
+    }
+
+    /// The approvals read is one fixed filter over one branch's rules, of a
+    /// branch a URL path carries as it is.
+    #[test]
+    fn the_required_approvals_read_is_its_exact_command_line() {
+        let read = required_approvals_arguments("acme/app", "release/1.0").unwrap();
+        let read = read.iter().map(String::as_str).collect::<Vec<_>>();
+        assert_eq!(read[3], "repos/acme/app/rules/branches/release/1.0");
+        assert!(allowed(&read));
+        for refused in [
+            vec!["api", "--jq", ".", "repos/acme/app/rules/branches/main"],
+            vec![
+                "api",
+                "--jq",
+                REQUIRED_APPROVALS_JQ,
+                "repos/acme/app/rules/branches/-main",
+            ],
+            vec![
+                "api",
+                "--jq",
+                REQUIRED_APPROVALS_JQ,
+                "repos/acme/app/rules/branches/a b",
+            ],
+            vec![
+                "api",
+                "--jq",
+                REQUIRED_APPROVALS_JQ,
+                "repos/acme/app/branches/main",
+            ],
+            vec![
+                "api",
+                "--jq",
+                REQUIRED_APPROVALS_JQ,
+                "repos/acme/app/rules/branches/main?x=1",
+            ],
+        ] {
+            assert!(!allowed(&refused), "{refused:?} must be refused");
+        }
+        assert_eq!(required_approvals_arguments("acme", "main"), None);
+        assert_eq!(required_approvals_arguments("acme/app", "a..b"), None);
     }
 
     #[test]

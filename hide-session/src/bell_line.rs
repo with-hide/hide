@@ -105,27 +105,33 @@ const LANGUAGES: [&BellWords; 4] = [
 /// A person who types that exact shape is read as a letter; an instruction
 /// that only begins with the mark or ends with the inbox tail is not.
 pub fn is_bell_line(text: &str) -> bool {
+    bell_sender(text).is_some()
+}
+
+/// The sender a doorbell's line names, as the line carries it (cut to
+/// [`BELL_NAME_CHARS`] and [`BELL_CUT`]), or `None` when `text` is not one
+/// ([`is_bell_line`]).
+pub fn bell_sender(text: &str) -> Option<&str> {
     let text = text.trim();
     if text.chars().any(char::is_control) {
-        return false;
+        return None;
     }
     let (rest, inbox_required) = match text.strip_prefix(BELL_MARK) {
-        Some(rest) => match rest.strip_prefix(' ') {
-            Some(rest) => (rest, false),
-            None => return false,
-        },
+        Some(rest) => (rest.strip_prefix(' ')?, false),
         None => (text, true),
     };
     let rest = match rest.strip_suffix(BELL_INBOX) {
         Some(rest) => rest,
-        None if inbox_required => return false,
+        None if inbox_required => return None,
         None => rest,
     };
     let rest = strip_more(rest).unwrap_or(rest);
+    // A summary may hold a kind word too; the sender ends at the first one.
     LANGUAGES
         .iter()
         .flat_map(|words| words.kinds)
-        .any(|word| head_is(rest, word))
+        .filter_map(|word| head_sender(rest, word))
+        .min_by_key(|sender| sender.len())
 }
 
 /// `rest` without a trailing ` · <N more>` in any language.
@@ -145,21 +151,20 @@ fn strip_more(rest: &str) -> Option<&str> {
         .then_some(head)
 }
 
-/// Whether `head` is `<sender> <word>` or `<sender> <word>: <summary>`.
-fn head_is(head: &str, word: &str) -> bool {
+/// The sender of `head` when it is `<sender> <word>` or
+/// `<sender> <word>: <summary>`.
+fn head_sender<'a>(head: &'a str, word: &str) -> Option<&'a str> {
     let needle = format!(" {word}");
-    head.match_indices(&needle).any(|(at, _)| {
+    head.match_indices(&needle).find_map(|(at, _)| {
         let sender = &head[..at];
         let after = &head[at + needle.len()..];
         let summary = match after {
             "" => None,
-            after => match after.strip_prefix(": ") {
-                Some(summary) => Some(summary),
-                None => return false,
-            },
+            after => Some(after.strip_prefix(": ")?),
         };
-        fits(sender, BELL_NAME_CHARS)
-            && summary.is_none_or(|summary| fits(summary, BELL_SUMMARY_CHARS))
+        (fits(sender, BELL_NAME_CHARS)
+            && summary.is_none_or(|summary| fits(summary, BELL_SUMMARY_CHARS)))
+        .then_some(sender)
     })
 }
 
@@ -178,6 +183,19 @@ fn fits(part: &str, max: usize) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_doorbells_line_names_its_sender() {
+        assert_eq!(
+            bell_sender("🦉 라벨 제목 보고: 리뷰 끝났습니다 · 외 1통 · hide inbox"),
+            Some("라벨 제목")
+        );
+        assert_eq!(
+            bell_sender("Codex 보고: Readthe letter · hide inbox"),
+            Some("Codex")
+        );
+        assert_eq!(bell_sender("ci-lead 보고: PR #881"), None);
+    }
 
     #[test]
     fn the_inbox_tail_opens_with_the_separator() {

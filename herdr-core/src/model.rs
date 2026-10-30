@@ -167,6 +167,15 @@ pub struct Snapshot {
     #[serde(skip_serializing_if = "Option::is_none")]
     #[serde(serialize_with = "serialize_optional_shared")]
     pub session_work_search: Option<Arc<crate::links::ledger::SessionSearchSnapshot>>,
+    /// The session thread a screen has open, absent until one opens one;
+    /// its state and live page, then its kept pages, each on its own
+    /// revision so a working session re-sends only its live page.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(serialize_with = "serialize_optional_shared")]
+    pub session_thread: Option<Arc<SessionThreadSnapshot>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(serialize_with = "serialize_optional_shared")]
+    pub session_thread_history: Option<Arc<SessionThreadHistorySnapshot>>,
 }
 
 /// A snapshot value that takes a new edit number whenever it may change, so
@@ -1950,7 +1959,7 @@ pub struct WorkspaceSnapshot {
     pub disk: ProjectDiskSnapshot,
     /// The disk cleanup review or run of this project, while there is one.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub cleanup: Option<crate::live::cleanup::CleanupSnapshot>,
+    pub cleanup: Option<crate::worktree_cleanup::CleanupSnapshot>,
 }
 
 /// What a project's agents are doing, decided by the core so the shell only
@@ -3450,9 +3459,6 @@ pub struct ProjectMemorySnapshot {
     pub usable_cards: usize,
     /// At the store's cap with no card it may forget: new cards are refused.
     pub capacity_reached: bool,
-    /// True when the Project already has 5 branches waiting for a decision,
-    /// so `N개 문서에 반영` starts nothing until one is decided.
-    pub branches_full: bool,
     /// Older cards forgotten automatically to make room, still forgotten,
     /// since the Memory tab last said so (`memory_evictions_seen`).
     pub evicted_cards: usize,
@@ -5912,6 +5918,38 @@ pub enum ReviewAsk {
     Team,
 }
 
+/// Where one reviewer of an open pull request stands (PRD pr-review-status
+/// B2, B6): their latest submitted review, or `Requested` while a review is
+/// still asked of them, which wins over an earlier review (D-13).
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PrReviewerState {
+    ChangesRequested,
+    Approved,
+    Requested,
+    /// Reviewed with comments only: not counted as an approval.
+    Commented,
+    /// The review was dismissed: drawn muted, not counted.
+    Dismissed,
+}
+
+/// One person or team a pull request's review involves.
+#[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
+pub struct PrReviewer {
+    /// A login, or a team's slug when `team`.
+    pub login: String,
+    #[serde(default)]
+    pub team: bool,
+    pub state: PrReviewerState,
+    /// When the review was submitted, or for `Requested` when it was asked;
+    /// absent when GitHub's answer did not carry it.
+    pub at_unix_ms: Option<u64>,
+}
+
+/// The most reviewers one pull request carries on the wire; the rest are
+/// counted in [`PullRequestWork::reviewers_more`] (PRD pr-review-status B17).
+pub const PR_REVIEWER_LIMIT: usize = 20;
+
 /// A pull request's place in its base branch's merge queue, as far as GitHub
 /// has said.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Deserialize, Serialize)]
@@ -5938,6 +5976,10 @@ pub enum ExtraQuery {
     ReviewRequests,
     /// The merge queue place and review request time (`gh api graphql`).
     MergeQueue,
+    /// Each reviewer's latest review and the base branch's approval count,
+    /// asked in the same query as the merge queue (PRD pr-review-status
+    /// D-12): when it fails the reviewers are unknown, never "none".
+    Reviews,
 }
 
 /// The GitHub values the PRs tool's list and the card read beyond the
@@ -5969,6 +6011,22 @@ pub struct PullRequestWork {
     /// When the latest review request on it was made, which `리뷰 · N시간째`
     /// counts from.
     pub review_requested_at_unix_ms: Option<u64>,
+    /// Each reviewer and where they stand, approvals and change requests
+    /// first; `None` while the facts query has not answered for an open pull
+    /// request, which the screen draws as nothing rather than as nobody
+    /// (PRD pr-review-status B15). Settled pull requests have none.
+    #[serde(default)]
+    pub reviewers: Option<Vec<PrReviewer>>,
+    /// Reviewers past [`PR_REVIEWER_LIMIT`] or past GitHub's page, counted
+    /// only (`+N`).
+    #[serde(default)]
+    pub reviewers_more: u32,
+    /// The approvals the base branch requires, from its rulesets or its
+    /// classic protection, whichever asks more (D-07). `None` when review is
+    /// not required or the count could not be read: no `n/m` is drawn then
+    /// (D-05).
+    #[serde(default)]
+    pub required_approvals: Option<u32>,
     /// The sessions the link record says made or worked on it, and the
     /// checkouts (paths) they ran in. Core only: the runtime attaches them
     /// from the record (`runtime/links.rs`), the grouping reads them.
@@ -7193,7 +7251,7 @@ pub struct RemoteSessionSnapshot {
     /// issue link from them (`Runtime::project_node_issues`), so they are not
     /// sent to the shell either.
     #[serde(skip)]
-    pub issue_tokens: crate::wire::IssueTokens,
+    pub issue_tokens: crate::engine::tokens::IssueTokens,
     /// The GitHub issues a node project's checkouts link to, by project
     /// root, made with its rows (`Runtime::project_node_issues`) for the
     /// node's GitHub read to bring the ones its open list leaves out; empty
@@ -7393,6 +7451,8 @@ impl Snapshot {
             link_panel: None,
             session_record: None,
             session_work_search: None,
+            session_thread: None,
+            session_thread_history: None,
         }
     }
 }
@@ -7425,12 +7485,14 @@ pub(crate) mod overview_graph_choices;
 /// Owned copy retained by the runtime to stamp revisions by comparison, so
 /// no mutation site needs dirty-tracking discipline.
 mod rest;
+mod session_thread;
 mod suggestions;
 pub use overview_graph::{GraphDirectInput, GraphParty, GraphSession, OverviewGraphSnapshot};
 pub use overview_graph_choices::{
     OVERVIEW_GRAPH_LIST_LIMIT, OverviewGraphChange, OverviewGraphChoices,
 };
 pub use rest::{RestSections, RestWire};
+pub use session_thread::*;
 pub use suggestions::*;
 
 /// One delta response taken from the runtime, holding everything the wire
@@ -7459,6 +7521,8 @@ pub struct SnapshotDeltaPayload {
     pub link_panel: Option<Arc<crate::links::LinkPanelSnapshot>>,
     pub session_record: Option<Arc<crate::links::ledger::SessionRecordSnapshot>>,
     pub session_work_search: Option<Arc<crate::links::ledger::SessionSearchSnapshot>>,
+    pub session_thread: Option<Arc<SessionThreadSnapshot>>,
+    pub session_thread_history: Option<Arc<SessionThreadHistorySnapshot>>,
     pub find: PaneFindSnapshot,
 }
 
@@ -7511,6 +7575,10 @@ pub struct SnapshotDeltaWire<'a> {
     pub session_record: Option<&'a crate::links::ledger::SessionRecordSnapshot>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub session_work_search: Option<&'a crate::links::ledger::SessionSearchSnapshot>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub session_thread: Option<&'a SessionThreadSnapshot>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub session_thread_history: Option<&'a SessionThreadHistorySnapshot>,
     /// Find state rides top-level rather than in `rest`, because it changes on
     /// every keystroke while a search is open. In `rest` each keystroke would
     /// restamp that revision and resend the whole navigator, ui state, and pet
@@ -7559,6 +7627,8 @@ impl<'a> SnapshotDeltaWire<'a> {
             link_panel: payload.link_panel.as_deref(),
             session_record: payload.session_record.as_deref(),
             session_work_search: payload.session_work_search.as_deref(),
+            session_thread: payload.session_thread.as_deref(),
+            session_thread_history: payload.session_thread_history.as_deref(),
             find: &payload.find,
         }
     }
@@ -7813,6 +7883,25 @@ mod wire_enum_tests {
         }
         assert_wire(&contract, "review_decision", &decisions);
         checked.insert("review_decision");
+
+        let reviewer_states = [
+            PrReviewerState::ChangesRequested,
+            PrReviewerState::Approved,
+            PrReviewerState::Requested,
+            PrReviewerState::Commented,
+            PrReviewerState::Dismissed,
+        ];
+        for variant in reviewer_states {
+            match variant {
+                PrReviewerState::ChangesRequested
+                | PrReviewerState::Approved
+                | PrReviewerState::Requested
+                | PrReviewerState::Commented
+                | PrReviewerState::Dismissed => {}
+            }
+        }
+        assert_wire(&contract, "pr_reviewer_state", &reviewer_states);
+        checked.insert("pr_reviewer_state");
 
         let checks = [
             PullRequestChecks::Unknown,
@@ -8783,10 +8872,14 @@ mod wire_enum_tests {
         assert_wire(&contract, "link_issue_source", &sources);
         checked.insert("link_issue_source");
 
-        let roles = [SessionRole::Created, SessionRole::Worked];
+        let roles = [
+            SessionRole::Created,
+            SessionRole::Worked,
+            SessionRole::Reviewed,
+        ];
         for variant in roles {
             match variant {
-                SessionRole::Created | SessionRole::Worked => {}
+                SessionRole::Created | SessionRole::Worked | SessionRole::Reviewed => {}
             }
         }
         assert_wire(&contract, "link_session_role", &roles);
@@ -9500,14 +9593,11 @@ mod wire_enum_tests {
 
         let holds = [
             SuggestionHold::GithubNeeded,
-            SuggestionHold::BranchesFull,
             SuggestionHold::AutoPrUnreviewed,
         ];
         for variant in holds {
             match variant {
-                SuggestionHold::GithubNeeded
-                | SuggestionHold::BranchesFull
-                | SuggestionHold::AutoPrUnreviewed => {}
+                SuggestionHold::GithubNeeded | SuggestionHold::AutoPrUnreviewed => {}
             }
         }
         assert_wire(&contract, "suggestion_hold", &holds);
@@ -9624,6 +9714,116 @@ mod wire_enum_tests {
             &waits.each_ref().map(SignInWait::kind),
         );
         checked.insert("device_sign_in_kind");
+
+        let thread_states = [
+            ThreadState::Closed,
+            ThreadState::Loading,
+            ThreadState::Ready,
+            ThreadState::Failed,
+        ];
+        for variant in thread_states {
+            match variant {
+                ThreadState::Closed
+                | ThreadState::Loading
+                | ThreadState::Ready
+                | ThreadState::Failed => {}
+            }
+        }
+        assert_wire(&contract, "session_thread_state", &thread_states);
+        checked.insert("session_thread_state");
+        let thread_failures = [ThreadFailure::NoRecord, ThreadFailure::Refused];
+        for variant in thread_failures {
+            match variant {
+                ThreadFailure::NoRecord | ThreadFailure::Refused => {}
+            }
+        }
+        assert_wire(&contract, "session_thread_failure", &thread_failures);
+        checked.insert("session_thread_failure");
+        let thread_panes = [ThreadPane::Same, ThreadPane::Changed, ThreadPane::Gone];
+        for variant in thread_panes {
+            match variant {
+                ThreadPane::Same | ThreadPane::Changed | ThreadPane::Gone => {}
+            }
+        }
+        assert_wire(&contract, "session_thread_pane", &thread_panes);
+        checked.insert("session_thread_pane");
+        let thread_older = [
+            ThreadOlder::Idle,
+            ThreadOlder::Loading,
+            ThreadOlder::Capacity,
+            ThreadOlder::Failed,
+        ];
+        for variant in thread_older {
+            match variant {
+                ThreadOlder::Idle
+                | ThreadOlder::Loading
+                | ThreadOlder::Capacity
+                | ThreadOlder::Failed => {}
+            }
+        }
+        assert_wire(&contract, "session_thread_older", &thread_older);
+        checked.insert("session_thread_older");
+        let thread_inputs = [
+            ThreadInputState::Sending,
+            ThreadInputState::Sent,
+            ThreadInputState::Refused,
+        ];
+        for variant in thread_inputs {
+            match variant {
+                ThreadInputState::Sending | ThreadInputState::Sent | ThreadInputState::Refused => {}
+            }
+        }
+        assert_wire(&contract, "session_thread_input_state", &thread_inputs);
+        checked.insert("session_thread_input_state");
+        let hide_parts = [
+            hide_session::thread::HideCall::Plan,
+            hide_session::thread::HideCall::Spawn {
+                name: None,
+                intent: None,
+                agent_id: None,
+            },
+            hide_session::thread::HideCall::Letter {
+                to: String::new(),
+                body: None,
+            },
+            hide_session::thread::HideCall::View {
+                view: hide_session::thread::ViewKind::File,
+                target: String::new(),
+            },
+            hide_session::thread::HideCall::Mission { mission: None },
+        ];
+        for variant in &hide_parts {
+            match variant {
+                hide_session::thread::HideCall::Plan
+                | hide_session::thread::HideCall::Spawn { .. }
+                | hide_session::thread::HideCall::Letter { .. }
+                | hide_session::thread::HideCall::View { .. }
+                | hide_session::thread::HideCall::Mission { .. } => {}
+            }
+        }
+        assert_wire(
+            &contract,
+            "session_thread_part_kind",
+            &hide_parts
+                .iter()
+                .map(|part| serde_json::to_value(part).unwrap()["kind"].clone())
+                .collect::<Vec<_>>(),
+        );
+        checked.insert("session_thread_part_kind");
+        let views = [
+            hide_session::thread::ViewKind::Browser,
+            hide_session::thread::ViewKind::File,
+            hide_session::thread::ViewKind::Diff,
+        ];
+        for variant in views {
+            match variant {
+                hide_session::thread::ViewKind::Browser
+                | hide_session::thread::ViewKind::File
+                | hide_session::thread::ViewKind::Diff => {}
+            }
+        }
+        assert_wire(&contract, "session_thread_view_kind", &views);
+        checked.insert("session_thread_view_kind");
 
         let unchecked = contract
             .keys()

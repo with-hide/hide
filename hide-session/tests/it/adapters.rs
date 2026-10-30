@@ -3982,6 +3982,96 @@ fn a_claude_hook_attachment_receipt_is_reported_and_a_quoted_one_is_not() {
     );
 }
 
+/// Claude Code 2.1.314 writes an Esc as a `user` record whose one text block
+/// says `[Request interrupted by user]` (`… for tool use]` when a tool call
+/// was cut), with no Stop hook and often no `idle_prompt` notification: the
+/// session read is what says the turn ended (PRD engine-bundle-1 D-9).
+#[test]
+fn a_claude_interruption_or_an_unanswered_prompt_ends_the_turn() {
+    let home = home(Agent::Claude);
+    let path = home
+        .path()
+        .join(".claude/projects/-work-app/a1b2c3d4-0000-4000-8000-000000000001.jsonl");
+    // A typed prompt carries its `promptId`; the interruption does not.
+    let record = |at: &str, kind: &str, content: serde_json::Value| {
+        let mut record = serde_json::json!({
+            "type": kind,
+            "version": "2.1.314",
+            "userType": "external",
+            "timestamp": at,
+            "sessionId": "a1b2c3d4-0000-4000-8000-000000000001",
+            "cwd": "/work/app",
+            "message": {"role": kind, "content": content},
+        });
+        if content.is_string() {
+            record["promptId"] = serde_json::json!(format!("prompt-{at}"));
+        }
+        record
+    };
+    let append = |records: &[serde_json::Value]| {
+        use std::io::Write;
+        let mut file = std::fs::OpenOptions::new()
+            .append(true)
+            .open(&path)
+            .unwrap();
+        for record in records {
+            writeln!(file, "{record}").unwrap();
+        }
+    };
+    let ended = || {
+        read_whole(home.path(), Agent::Claude)
+            .turns
+            .as_ref()
+            .unwrap()
+            .ended()
+    };
+    append(&[
+        record(
+            "2026-10-30T13:00:00.000Z",
+            "user",
+            serde_json::json!("search the logs"),
+        ),
+        record(
+            "2026-10-30T13:00:01.000Z",
+            "assistant",
+            serde_json::json!([{"type": "text", "text": "Looking."}]),
+        ),
+    ]);
+    assert_eq!(ended(), None, "the turn runs");
+    append(&[record(
+        "2026-10-30T13:00:02.000Z",
+        "user",
+        serde_json::json!([{"type": "text", "text": "[Request interrupted by user]"}]),
+    )]);
+    assert_eq!(ended(), Some(hide_session::turns::TurnEnded::Interrupted));
+    // A new prompt starts a turn with nothing of the agent's after it: an
+    // Esc before the first output leaves it so, with the hooks' attachments
+    // and no record of the interruption (Claude Code 2.1.314).
+    append(&[
+        record(
+            "2026-10-30T13:00:03.000Z",
+            "user",
+            serde_json::json!("go on"),
+        ),
+        serde_json::json!({"type": "attachment", "timestamp": "2026-10-30T13:00:03.100Z",
+            "sessionId": "a1b2c3d4-0000-4000-8000-000000000001",
+            "attachment": {"type": "hook_additional_context", "content": ["context"]}}),
+    ]);
+    assert_eq!(ended(), Some(hide_session::turns::TurnEnded::Unanswered));
+    append(&[record(
+        "2026-10-30T13:00:03.500Z",
+        "assistant",
+        serde_json::json!([{"type": "text", "text": "Going on."}]),
+    )]);
+    assert_eq!(ended(), None, "the agent answered: the turn runs");
+    append(&[record(
+        "2026-10-30T13:00:04.000Z",
+        "user",
+        serde_json::json!([{"type": "text", "text": "[Request interrupted by user for tool use]"}]),
+    )]);
+    assert_eq!(ended(), Some(hide_session::turns::TurnEnded::Interrupted));
+}
+
 pub(crate) const OPENCODE_ROOT: &str = "ses_0a1b2c3d4e5f60718293a4b5c6";
 
 fn opencode_writer(home: &Path) -> rusqlite::Connection {

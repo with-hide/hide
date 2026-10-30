@@ -1762,12 +1762,15 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
     },
 
     /** An agent started on a pull request's branch with `prompt` (D-12); it reports through `task_operation`. */
-    delegatePullRequest(workspace: { id: string; device_id: string }, prNumber: number, provider: ProviderKind, model: string | null, prompt: string, startKind: "agent_start" | "worktree_create") {
+    delegatePullRequest(workspace: { id: string; device_id: string }, prNumber: number, provider: ProviderKind, model: string | null, prompt: string, startKind: "agent_start" | "worktree_create", intent?: "review") {
       // A start on this machine comes forward through the core's follow, as
       // `createWorktree`'s does; a device's is opened once listed (`followStartedPane`).
-      const requestId = workspace.device_id === localDeviceId(rest()) ? startRequestId() : null;
-      if (requestId) beginOpening({ startRequestId: requestId, startKind });
-      dispatch({ schema_version: 2, kind: "pr_delegate", payload: { workspace_id: workspace.id, pr_number: prNumber, provider, ...(model ? { model } : {}), prompt, ...(requestId ? { request_id: requestId } : {}) } });
+      // A pre-check carries its request on a device too: the core follows
+      // it to the session it records as the pull request's agent review.
+      const local = workspace.device_id === localDeviceId(rest());
+      const requestId = local || intent === "review" ? startRequestId() : null;
+      if (requestId && local) beginOpening({ startRequestId: requestId, startKind });
+      dispatch({ schema_version: 2, kind: "pr_delegate", payload: { workspace_id: workspace.id, pr_number: prNumber, provider, ...(model ? { model } : {}), prompt, ...(requestId ? { request_id: requestId } : {}), ...(intent ? { intent } : {}) } });
     },
 
     /**
@@ -1850,10 +1853,12 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
     },
 
     /**
-     * 이어받기 (D-40, B44): a new agent tab in the mission's checkout, told to
-     * take the mission; the core refuses it while a Conductor is still there.
+     * 이어받기's new agent (D-40, B44; PRD mission-tool D-11, B15): a tab in
+     * the mission's checkout told to take the mission, for a Conductor whose
+     * own conversation cannot be resumed; the core refuses it while a
+     * Conductor is still there. `request` lets the caller follow its answer.
      */
-    takeOverMission(missionId: string) {
+    takeOverMission(missionId: string, request?: { requestId: string; confirmOnly: boolean }) {
       const mission = rest()?.missions?.items.find((row) => row.id === missionId);
       if (!mission) return diagnostic(`mission_take: no mission ${missionId}`);
       const provider = takeOverProvider(mission, rest()?.ui_state?.agent_start);
@@ -1863,6 +1868,7 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
         provider,
         model: rest()?.ui_state?.agent_start?.models?.[provider] ?? null,
         prompt: takeOverPrompt(mission),
+        ...request,
       });
     },
 
@@ -1933,6 +1939,17 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
       if (!workspaceInFront()) return diagnostic("project_memory: no Workspace in front");
       useUiStore.getState().showHideAiTab("memory");
       showTool("memory");
+    },
+
+    /**
+     * The Mission tool on its defaults (PRD mission-tool B9): its head's ⚙,
+     * the empty tool's `바꾸기 ›` and the map head's ⚙ all open it here, never
+     * a settings window.
+     */
+    openMissionSettings() {
+      if (!workspaceInFront()) return diagnostic("mission_settings: no Workspace in front");
+      useUiStore.getState().setMissionToolPage("settings");
+      showTool("mission");
     },
 
     /** ← in the 보기 head (B47): the item opened before, or the slot closes. */
@@ -2981,6 +2998,17 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
     /** The projects the Projects tab shows, in its order, for the disk sweep; none when it is hidden (D-15, B53). */
     watchDisk(workspaceIds: readonly string[]) {
       dispatch({ schema_version: 2, kind: "disk_watch", payload: { workspace_ids: [...workspaceIds] } });
+    },
+    /** A session thread of `paneId` (B25): its record is read, and read on as the session writes, until it closes. */
+    openThread(paneId: string) {
+      dispatch({ schema_version: 2, kind: "session_thread_open", payload: { pane_id: paneId } });
+    },
+    /** The page before the oldest one the thread holds. */
+    readOlderThread(generation: number) {
+      dispatch({ schema_version: 2, kind: "session_thread_older", payload: { generation } });
+    },
+    closeThread() {
+      dispatch({ schema_version: 2, kind: "session_thread_close", payload: {} });
     },
     /** The Overview panel's record: read, without the lane moving. */
     readSessionRecord(session: import("./snapshot").WorkSession) {

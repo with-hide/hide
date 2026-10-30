@@ -8,7 +8,9 @@
 // in the page they would cover and lock every other cell.
 
 import { ArrowRightIcon, CopyIcon, FolderIcon, Loader2Icon, PlusIcon, SettingsIcon, TrashIcon } from "lucide-react";
-import { useEffect, useRef, useState, type ReactNode } from "react";
+import { Fragment, useEffect, useRef, useState, type ReactNode } from "react";
+import { DESK_SCENES } from "./DeskScene";
+import { DESK_THREAD_SCENES } from "./DeskThreadScene";
 import { toast } from "sonner";
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "../components/ui/alert-dialog";
 import { Badge } from "../components/ui/badge";
@@ -19,6 +21,8 @@ import { ContextMenu, ContextMenuContent, ContextMenuItem, ContextMenuSeparator,
 import { Dialog, DialogBody, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "../components/ui/dialog";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuShortcut, DropdownMenuTrigger } from "../components/ui/dropdown-menu";
 import { Input } from "../components/ui/input";
+import { RowButton, RowOverlayButton } from "../components/ui/row-button";
+import { Textarea } from "../components/ui/textarea";
 import { Kbd, KbdGroup } from "../components/ui/kbd";
 import { Popover, PopoverContent, PopoverTrigger } from "../components/ui/popover";
 import { RadioGroup, RadioGroupItem } from "../components/ui/radio-group";
@@ -119,6 +123,10 @@ const renderers: Renderers = {
     "Destructive": () => <Button variant="destructive">Delete worktree</Button>,
     "Destructive Hover": () => <Button variant="destructive" data-gallery-state="hover">Delete worktree</Button>,
     "Link": () => <Button variant="link">Open log</Button>,
+    "Text": () => <Button variant="text" size="inline" className="text-caption">Show 3 more</Button>,
+    "Text Hover": () => <Button variant="text" size="inline" className="text-caption" data-gallery-state="hover">Show 3 more</Button>,
+    "Text Link": () => <Button variant="text-link" size="inline" className="text-caption">Open the session</Button>,
+    "Text Link Hover": () => <Button variant="text-link" size="inline" className="text-caption" data-gallery-state="hover">Open the session</Button>,
     "Small": () => <Button size="sm">Retry</Button>,
     "Large": () => <Button size="lg">Register project</Button>,
     "Icon": () => (
@@ -135,6 +143,35 @@ const renderers: Renderers = {
         </Button>
       </Hint>
     ),
+    "Icon Extra Small": () => (
+      <Hint label="More">
+        <Button variant="ghost" size="icon-xs">
+          <SettingsIcon />
+        </Button>
+      </Hint>
+    ),
+    "Row Action": () => <GalleryRowAction />,
+    "Row Action Hover": () => <GalleryRowAction state="hover" />,
+  },
+  "Textarea": {
+    "Default": () => <Textarea aria-label="First instruction" rows={3} defaultValue="" className="w-(--size-settings-control-w)" />,
+    "Placeholder": () => <Textarea aria-label="First instruction" rows={3} placeholder="What should the agent do first?" className="w-(--size-settings-control-w)" />,
+    "Focus": () => <Textarea aria-label="First instruction" rows={3} defaultValue="결제 모듈의 재시도 로직을 정리해 줘" data-gallery-state="focus" className="w-(--size-settings-control-w)" />,
+    "Invalid": () => <Textarea aria-label="First instruction" rows={3} defaultValue="" aria-invalid className="w-(--size-settings-control-w)" />,
+    "Disabled": () => <Textarea aria-label="First instruction" rows={3} defaultValue="결제 모듈의 재시도 로직을 정리해 줘" disabled className="w-(--size-settings-control-w)" />,
+    "Bare": () => (
+      <div className="w-(--size-settings-control-w) rounded-sm border border-border">
+        <Textarea bare aria-label="First instruction" rows={3} placeholder="What should the agent do first?" className="p-md" />
+      </div>
+    ),
+  },
+  "Row Button": {
+    "Default": () => <GalleryRowButton />,
+    "Hover": () => <GalleryRowButton state="hover" />,
+    "Focus": () => <GalleryRowButton state="focus" />,
+    "Disabled": () => <GalleryRowButton disabled />,
+    "Overlay": () => <GalleryOverlayRow />,
+    "Overlay Hover": () => <GalleryOverlayRow state="hover" />,
   },
   "Input": {
     "Default": () => <Input aria-label="Purpose" defaultValue="" className="w-(--size-settings-control-w)" />,
@@ -176,6 +213,7 @@ const renderers: Renderers = {
     "Hover": () => <GalleryToggle state="hover" />,
     "Focus": () => <GalleryToggle state="focus" />,
     "Disabled": () => <GalleryToggle disabled />,
+    "Extra Small": () => <GalleryToggle size="xs" />,
   },
   "Slider": {
     "Default": () => <Slider aria-label="Interface font" defaultValue={[13]} min={11} max={17} step={1} className="w-(--size-settings-control-w)" />,
@@ -343,15 +381,52 @@ function GalleryRadio({ disabled, state }: { disabled?: boolean; state?: "focus"
   );
 }
 
-function GalleryToggle({ disabled, state }: { disabled?: boolean; state?: "hover" | "focus" }) {
+function GalleryToggle({ disabled, state, size }: { disabled?: boolean; state?: "hover" | "focus"; size?: "xs" }) {
   return (
     <ToggleGroup type="single" defaultValue="agents" aria-label="Layout" disabled={disabled}>
-      <ToggleGroupItem value="agents">Agents</ToggleGroupItem>
-      <ToggleGroupItem value="together" data-gallery-state={state}>
+      <ToggleGroupItem value="agents" size={size}>Agents</ToggleGroupItem>
+      <ToggleGroupItem value="together" size={size} data-gallery-state={state}>
         Together
       </ToggleGroupItem>
-      <ToggleGroupItem value="views">Views</ToggleGroupItem>
+      <ToggleGroupItem value="views" size={size}>Views</ToggleGroupItem>
     </ToggleGroup>
+  );
+}
+
+function GalleryRowAction({ state }: { state?: "hover" }) {
+  return (
+    <div className="flex w-(--size-settings-control-w) items-center gap-xs rounded-xs bg-accent px-xs py-xs">
+      <span className="min-w-0 flex-1 truncate text-body text-foreground">payments-retry</span>
+      <Hint label="More">
+        <Button variant="row-action" size="icon-xs" data-gallery-state={state}>
+          <SettingsIcon />
+        </Button>
+      </Hint>
+    </div>
+  );
+}
+
+function GalleryRowButton({ disabled, state }: { disabled?: boolean; state?: "hover" | "focus" }) {
+  return (
+    <div className="w-(--size-settings-control-w)">
+      <RowButton disabled={disabled} data-gallery-state={state}>
+        <FolderIcon className="size-(--size-icon-sm) text-muted-foreground" />
+        <span className="min-w-0 flex-1 truncate text-body text-foreground">payments-retry</span>
+        <span className="text-caption text-muted-foreground">3분 전</span>
+      </RowButton>
+    </div>
+  );
+}
+
+function GalleryOverlayRow({ state }: { state?: "hover" }) {
+  return (
+    <div className="relative w-(--size-settings-control-w)">
+      <RowOverlayButton aria-label="Expand card 12" data-gallery-state={state} />
+      <div className="pointer-events-none relative flex min-w-0 items-center gap-xs px-xs py-sm">
+        <span className="min-w-0 flex-1 truncate text-body text-foreground">답변은 한국어로</span>
+        <Button variant="text" size="inline" className="pointer-events-auto text-caption">Forget</Button>
+      </div>
+    </div>
   );
 }
 
@@ -676,6 +751,12 @@ export function Gallery() {
           <a href="#scenes" className="block rounded-xs px-sm py-xxs text-subtle-foreground hover:bg-accent hover:text-foreground">
             Scenes
           </a>
+          <a href="#shared-parts" className="block rounded-xs px-sm py-xxs text-subtle-foreground hover:bg-accent hover:text-foreground">
+            Shared parts
+          </a>
+          <a href="#desk" className="block rounded-xs px-sm py-xxs text-subtle-foreground hover:bg-accent hover:text-foreground">
+            Desk
+          </a>
           {sections.map((section) => (
             <a key={section} href={`#${encodeURIComponent(section)}`} className="block rounded-xs px-sm py-xxs text-subtle-foreground hover:bg-accent hover:text-foreground">
               {section}
@@ -684,6 +765,8 @@ export function Gallery() {
         </nav>
         <main className="min-w-0 flex-1 overflow-auto p-xl">
           <Scenes />
+          <SharedParts />
+          <Desk />
           {sections.map((section) => (
             <section key={section} id={encodeURIComponent(section)} data-gallery-section={section} className="mb-xxxl">
               <h2 className="mb-sm text-headline font-semibold">{section}</h2>
@@ -739,6 +822,61 @@ function Scenes() {
         <div className="bg-card px-md py-xs text-caption text-muted-foreground">Dark</div>
         {SCENE_CASES.map(({ label, query }) => (
           <SceneRow key={label} label={label} query={query} />
+        ))}
+      </div>
+    </section>
+  );
+}
+
+/**
+ * The parts the sidebar, the session record and Desk draw alike (PRD
+ * session-docs-and-assistant D-72), in their states, in both themes.
+ */
+function SharedParts() {
+  return (
+    <section id="shared-parts" data-gallery-section="Shared parts" className="mb-xxxl">
+      <h2 className="mb-sm text-headline font-semibold">Shared parts</h2>
+      <div className="grid grid-cols-2 overflow-hidden rounded-md border border-border">
+        {(["light", "dark"] as const).map((theme) => (
+          <iframe key={theme} loading="lazy" title={`Shared parts ${theme}`} src={`/gallery?scene=shared-parts&theme=${theme}`} className="h-(--size-gallery-scene-h) w-full border-0" />
+        ))}
+      </div>
+    </section>
+  );
+}
+
+/**
+ * Desk 1차 for review before it is wired (PRD session-docs-and-assistant):
+ * every scene of the approved mockup and the states it leaves out, from the
+ * real Desk parts over invented values, in both themes.
+ */
+function Desk() {
+  return (
+    <section id="desk" data-gallery-section="Desk" className="mb-xxxl">
+      <h2 className="mb-sm text-headline font-semibold">Desk</h2>
+      <div className="grid grid-cols-[var(--size-sidebar-min)_minmax(0,1fr)_minmax(0,1fr)] overflow-hidden rounded-md border border-border">
+        <div className="bg-card px-md py-xs text-caption text-muted-foreground">Scene</div>
+        <div className="bg-card px-md py-xs text-caption text-muted-foreground">Light</div>
+        <div className="bg-card px-md py-xs text-caption text-muted-foreground">Dark</div>
+        {DESK_SCENES.map(({ state, label }) => (
+          <Fragment key={state}>
+            <div className="border-t border-border px-md py-sm text-caption text-subtle-foreground">{label}</div>
+            {(["light", "dark"] as const).map((theme) => (
+              <div key={theme} className="border-t border-border">
+                <iframe loading="lazy" title={`${label} ${theme}`} src={`/gallery?scene=desk&state=${state}&theme=${theme}`} className="h-(--size-gallery-scene-h) w-full border-0" />
+              </div>
+            ))}
+          </Fragment>
+        ))}
+        {DESK_THREAD_SCENES.map(({ state, label }) => (
+          <Fragment key={`thread-${state}`}>
+            <div className="border-t border-border px-md py-sm text-caption text-subtle-foreground">{label}</div>
+            {(["light", "dark"] as const).map((theme) => (
+              <div key={theme} className="border-t border-border">
+                <iframe loading="lazy" title={`${label} ${theme}`} src={`/gallery?scene=desk-thread&state=${state}&theme=${theme}`} className="h-(--size-gallery-scene-h) w-full border-0" />
+              </div>
+            ))}
+          </Fragment>
         ))}
       </div>
     </section>

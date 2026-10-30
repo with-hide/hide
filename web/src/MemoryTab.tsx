@@ -19,6 +19,7 @@ import {
 import { Button } from "./components/ui/button";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "./components/ui/dropdown-menu";
 import { Checkbox } from "./components/ui/checkbox";
+import { RowOverlayButton } from "./components/ui/row-button";
 import { Input } from "./components/ui/input";
 import { Switch } from "./components/ui/switch";
 import { useInterfaceTranslation } from "./i18n/client";
@@ -183,9 +184,9 @@ function MemoryBody({ project, actions }: { project: ProjectMemory; actions: Act
               {t("memory.turnOn")}
             </Button>
             {count > 0 ? (
-              <button type="button" className="text-caption text-muted-foreground underline-offset-4 hover:underline" onClick={() => setDeleting(true)} data-memory-delete="link">
+              <Button variant="text-link" size="inline" className="text-caption" onClick={() => setDeleting(true)} data-memory-delete="link">
                 {t("memory.deleteData")}
-              </button>
+              </Button>
             ) : null}
           </div>
         )}
@@ -209,10 +210,10 @@ function MemoryBody({ project, actions }: { project: ProjectMemory; actions: Act
           <div role="status" className="pointer-events-auto flex items-center gap-sm rounded-md border border-border bg-popover px-md py-xs text-caption text-foreground shadow-md" data-memory-forgotten={project.forgotten}>
             <span>{t("memory.forgotten", { card: cardName(project.forgotten) })}</span>
             <span aria-hidden="true" className="text-muted-foreground">·</span>
-            <button type="button" disabled={busy} className="flex items-center gap-xxs font-medium hover:underline disabled:opacity-(--opacity-disabled)" onClick={() => actions.memoryAction(id, "undo", project.forgotten)}>
+            <Button variant="text-link" size="inline" disabled={busy} className="gap-xxs font-medium text-foreground" onClick={() => actions.memoryAction(id, "undo", project.forgotten)}>
               <Undo2Icon aria-hidden="true" className="size-(--size-icon-sm)" />
               {t("memory.undo")}
-            </button>
+            </Button>
           </div>
         </div>
       ) : null}
@@ -289,7 +290,6 @@ function Questions({ project, actions, busy }: { project: ProjectMemory; actions
   const [choice, setChoice] = useState<{ project: string; overrides: Record<number, boolean> }>({ project: project.workspace_id, overrides: {} });
   const overrides = choice.project === project.workspace_id ? choice.overrides : {};
   const checked = checkedCorrections(project, overrides);
-  const full = project.branches_full === true;
   const set = (changes: Record<number, boolean>) => setChoice({ project: project.workspace_id, overrides: { ...overrides, ...changes } });
   const rows = [...confirmed, ...asking];
   return (
@@ -300,9 +300,9 @@ function Questions({ project, actions, busy }: { project: ProjectMemory; actions
       ))}
       {confirmed.length ? (
         <div className="flex flex-wrap items-center gap-sm border-t border-border pt-sm text-caption" data-memory-selection={checked.length}>
-          <span className="min-w-0 flex-1 text-muted-foreground" role={full ? "status" : undefined}>{full ? t("memory.batch.full") : t("memory.batch.selected", { count: checked.length })}</span>
+          <span className="min-w-0 flex-1 text-muted-foreground">{t("memory.batch.selected", { count: checked.length })}</span>
           {checked.length ? <Button size="sm" variant="ghost" disabled={busy} onClick={() => set(Object.fromEntries(confirmed.map((question) => [question.number, false])))}>{t("memory.batch.clear")}</Button> : null}
-          <Button size="sm" disabled={busy || full || checked.length === 0} onClick={() => actions.memoryAction(project.workspace_id, "promote", null, checked)} data-memory-open-batch="true">{t("memory.batch.apply", { count: checked.length })}</Button>
+          <Button size="sm" disabled={busy || checked.length === 0} onClick={() => actions.memoryAction(project.workspace_id, "promote", null, checked)} data-memory-open-batch="true">{t("memory.batch.apply", { count: checked.length })}</Button>
         </div>
       ) : null}
     </section>
@@ -314,7 +314,7 @@ function Questions({ project, actions, busy }: { project: ProjectMemory; actions
 function AskRow({ number, expanded, onToggle, children, className }: { number: number; expanded: boolean; onToggle: () => void; children: ReactNode; className?: string }) {
   const { t } = useInterfaceTranslation();
   return <div className="relative min-w-0">
-    <button type="button" className="absolute inset-0 rounded-xs outline-none hover:bg-accent focus-visible:ring-1 focus-visible:ring-ring" aria-label={t(expanded ? "memory.collapse" : "memory.expand", { card: cardName(number) })} aria-expanded={expanded} onClick={onToggle} data-memory-row-toggle={number} />
+    <RowOverlayButton aria-label={t(expanded ? "memory.collapse" : "memory.expand", { card: cardName(number) })} aria-expanded={expanded} onClick={onToggle} data-memory-row-toggle={number} />
     <div className={cn("pointer-events-none relative grid min-w-0 grid-cols-[auto_1fr] gap-x-sm gap-y-xs py-sm", className)}>{children}</div>
   </div>;
 }
@@ -374,7 +374,7 @@ function Question({ question, project, actions, busy, last, selected, selectionD
         <div className="col-start-2 flex min-w-0 items-center gap-sm text-caption text-muted-foreground">
           {ask ? null : <DocumentName path={document.document} />}
           <span className="min-w-0 flex-1" />
-          <button type="button" className="pointer-events-auto shrink-0 text-subtle-foreground hover:text-foreground" aria-expanded={!!expanded} onClick={() => actions.memoryExpand(id, expanded ? null : question.number)} data-memory-compare={question.number}>{t("memory.docs.compare")}</button>
+          <Button variant="text" size="inline" className="pointer-events-auto" aria-expanded={!!expanded} onClick={() => actions.memoryExpand(id, expanded ? null : question.number)} data-memory-compare={question.number}>{t("memory.docs.compare")}</Button>
           <AskChevron expanded={!!expanded} />
         </div>
         {ask ? <div className="col-start-2 flex flex-wrap items-center gap-xs">
@@ -463,10 +463,10 @@ function Cards({ project, actions, busy, onDelete }: { project: ProjectMemory; a
             ))}
           </ol>
           {folded > 0 ? (
-            <button type="button" className="flex items-center gap-xs self-start text-caption text-subtle-foreground hover:text-foreground" onClick={() => setAll(true)} data-memory-more={folded}>
+            <Button variant="text" size="inline" className="gap-xs self-start text-caption" onClick={() => setAll(true)} data-memory-more={folded}>
               <ChevronRightIcon aria-hidden="true" className="size-(--size-icon-sm)" />
               {t("memory.more", { count: folded })}
-            </button>
+            </Button>
           ) : null}
         </>
       )}
@@ -516,15 +516,16 @@ function CardToggle({ number, project, actions }: { number: number; project: Pro
   const open = project.expanded?.number === number;
   const Icon = open ? ChevronDownIcon : ChevronRightIcon;
   return (
-    <button
-      type="button"
+    <Button
+      variant="text"
+      size="inline"
       aria-expanded={open}
       aria-label={t(open ? "memory.collapse" : "memory.expand", { card: cardName(number) })}
-      className="mt-xxs flex size-(--size-icon) items-center justify-center rounded-xs text-muted-foreground outline-none hover:text-foreground focus-visible:ring-1 focus-visible:ring-ring"
+      className="mt-xxs size-(--size-icon)"
       onClick={() => actions.memoryExpand(project.workspace_id, open ? null : number)}
     >
       <Icon aria-hidden="true" className="size-(--size-icon-sm)" />
-    </button>
+    </Button>
   );
 }
 
@@ -583,9 +584,9 @@ function CardRow({ row, project, actions, busy }: { row: MemoryRow; project: Pro
         ) : null}
         {row.promotion?.state === "pr_open" && row.promotion.pr_number !== null ? (
           <span className="flex items-center gap-sm text-caption text-subtle-foreground">
-            <button type="button" disabled={!row.promotion.pr_url} aria-label={t("memory.openPr", { number: String(row.promotion.pr_number) })} className="rounded-xs outline-none hover:bg-accent focus-visible:ring-1 focus-visible:ring-ring" onClick={() => row.promotion?.pr_url && actions.openSessionPullRequest({ workspace_id: project.workspace_id, number: row.promotion.pr_number!, url: row.promotion.pr_url })}>
+            <Button variant="ghost" size="inline" disabled={!row.promotion.pr_url} aria-label={t("memory.openPr", { number: String(row.promotion.pr_number) })} onClick={() => row.promotion?.pr_url && actions.openSessionPullRequest({ workspace_id: project.workspace_id, number: row.promotion.pr_number!, url: row.promotion.pr_url })}>
               <PrMark state="pending" number={row.promotion.pr_number} />
-            </button>
+            </Button>
             {t("memory.prOpen")}
           </span>
         ) : null}
@@ -733,10 +734,10 @@ function History({ card, project, actions, busy }: { card: MemoryCard; project: 
           ) : change.undo_blocked ? (
             <span />
           ) : (
-            <button type="button" disabled={busy} className="flex items-center gap-xxs text-subtle-foreground hover:text-foreground disabled:opacity-(--opacity-disabled)" onClick={() => actions.memoryUndoChange(project.workspace_id, card.number, change.id)} data-memory-undo-change={change.id}>
+            <Button variant="text" size="inline" disabled={busy} className="gap-xxs" onClick={() => actions.memoryUndoChange(project.workspace_id, card.number, change.id)} data-memory-undo-change={change.id}>
               <Undo2Icon aria-hidden="true" className="size-(--size-icon-sm)" />
               {t("memory.undo")}
-            </button>
+            </Button>
           )}
         </span>
       ))}
@@ -766,10 +767,10 @@ function Archived({ project, actions, busy }: { project: ProjectMemory; actions:
   const Icon = open ? ChevronDownIcon : ChevronRightIcon;
   return (
     <section aria-label={t("memory.archived", { count: archived.length })} className="flex flex-col gap-sm" data-memory-archived={archived.length}>
-      <button type="button" aria-expanded={open} className="flex items-center gap-xs self-start text-caption text-subtle-foreground hover:text-foreground" onClick={() => setOpen(!open)}>
+      <Button variant="text" size="inline" aria-expanded={open} className="gap-xs self-start text-caption" onClick={() => setOpen(!open)}>
         <Icon aria-hidden="true" className="size-(--size-icon-sm)" />
         {t("memory.archived", { count: archived.length })}
-      </button>
+      </Button>
       {open ? (
         <>
           <p className="break-keep text-caption text-muted-foreground">{t("memory.archivedHint")}</p>

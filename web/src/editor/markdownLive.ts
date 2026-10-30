@@ -79,8 +79,10 @@ export function markdownLivePlan(tree: Tree, doc: Text, selection: { from: numbe
       }
 
       if (name === "HeaderMark") {
-        // The heading's `#`s, or a Setext underline on its own line.
-        if (!lineTouched(node.from)) ranges.push({ from: node.from, to: node.to, kind: "hide" });
+        // The heading's `#`s and the space after them, so the text starts at
+        // the body's edge; or a Setext underline on its own line.
+        const space = doc.sliceString(node.to, node.to + 1) === " " ? 1 : 0;
+        if (!lineTouched(node.from)) ranges.push({ from: node.from, to: node.to + space, kind: "hide" });
         return;
       }
 

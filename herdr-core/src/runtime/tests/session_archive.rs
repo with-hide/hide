@@ -227,7 +227,7 @@ fn resuming_starts_the_root_with_its_resume_arguments_and_it_leaves_the_archive_
 
     runtime.ingest_task_operation_result(
         operation.id,
-        Ok(live::WorktreeTaskOutcome {
+        Ok(crate::worktree_control::WorktreeTaskOutcome {
             path: A.into(),
             pane_id: "w1:p9".into(),
             created_tab_id: Some("w1:t9".into()),
@@ -237,7 +237,10 @@ fn resuming_starts_the_root_with_its_resume_arguments_and_it_leaves_the_archive_
             shell: crate::agent_start::ShellStart::Plain,
         }),
     );
-    runtime.ingest_task_agent_result(operation.id, live::TaskAgentOutcome::Started);
+    runtime.ingest_task_agent_result(
+        operation.id,
+        crate::worktree_control::TaskAgentOutcome::Started,
+    );
     runtime.advance_session_archive();
     let (_, held) = record(&runtime).unwrap();
     assert!(matches!(held.members[0].resume, Resume::Confirming { .. }));

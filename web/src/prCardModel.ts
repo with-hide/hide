@@ -7,6 +7,7 @@
 // (`reason.kind`) and read the card's parts; nothing here re-derives a group.
 
 import type { PrReason } from "./agentScope";
+import { prReview, reviewWhy } from "./prReview";
 import type { PrCard, PrMergeMethod, PullRequest, PullRequestWork } from "./snapshot";
 
 /** One truthful summary for the card and timeline; unknown totals stay unknown. */
@@ -42,6 +43,7 @@ export function primaryAction(kind: PrReason["kind"]): PrimaryAction {
     case "changes":
       return "assign";
     case "assign_reviewer":
+    case "assign_reviewer_optional":
       return "assign_reviewer";
     default:
       return "github";
@@ -49,7 +51,7 @@ export function primaryAction(kind: PrReason["kind"]): PrimaryAction {
 }
 
 /** Why Merge cannot be pressed now, as the key of the reason word and its values; null when it can (B30). */
-export type MergeWhy = { key: "ci" | "failed" | "changes" | "agent" | "conflict" | "reviewer" | "blocked" | "draft" | "permission" | "unknown" | "unread"; count: number; base: string };
+export type MergeWhy = { key: "ci" | "failed" | "changes" | "agent" | "conflict" | "reviewer" | "approvals" | "github_more" | "blocked" | "draft" | "permission" | "unknown" | "unread"; count: number; base: string };
 
 export function mergeWhy(pr: PullRequest, card: PrCard | null, working: boolean): MergeWhy | null {
   const work = pr.work;
@@ -70,11 +72,31 @@ export function mergeWhy(pr: PullRequest, card: PrCard | null, working: boolean)
       if ((work.pending_checks ?? 0) > 0) return { key: "ci", count: work.pending_checks, base: "" };
       if (pr.checks === "failed") return { key: "failed", count: Math.max(work.failed_checks?.length ?? 0, 1), base: "" };
       if (pr.review === "changes_requested") return { key: "changes", count: 0, base: "" };
-      return { key: "reviewer", count: 0, base: "" };
+      return blockedByReview(pr);
     case "draft":
       return { key: "draft", count: 0, base: "" };
     default:
       return { key: "unknown", count: 0, base: "" };
+  }
+}
+
+/**
+ * A merge GitHub blocks with no check or change request in the way (B7): the
+ * approvals still missing when the count is known, GitHub asking for more
+ * once it is met, review required when it is not known, and otherwise a
+ * block that is not review's.
+ */
+function blockedByReview(pr: PullRequest): MergeWhy {
+  const why = reviewWhy(pr);
+  switch (why?.key) {
+    case "approvals":
+      return { key: "approvals", count: why.count, base: "" };
+    case "github_more":
+      return { key: "github_more", count: 0, base: "" };
+    case "required":
+      return { key: "reviewer", count: 0, base: "" };
+    default:
+      return { key: "blocked", count: 0, base: "" };
   }
 }
 
@@ -145,12 +167,15 @@ export function prFacts(pr: PullRequest): PrFact[] {
   const facts: PrFact[] = [];
   const work = pr.work;
   const base = pr.base_branch ?? "";
+  // The review block says the review when its reviewers are known; without
+  // them the fact line keeps GitHub's word (PRD pr-review-status B15).
+  const reviewed = prReview(pr) !== null;
   if (pr.checks === "pending" || (work?.pending_checks ?? 0) > 0) facts.push({ kind: "checks_running", count: Math.max(work?.pending_checks ?? 0, 1) });
   else if (pr.checks === "failed") facts.push({ kind: "checks_failed", count: Math.max(work?.failed_checks.length ?? 0, 1) });
   else if (pr.checks === "passing") facts.push({ kind: "checks_passing" });
-  if (pr.review === "approved") facts.push({ kind: "approved" });
-  else if (pr.review === "changes_requested") facts.push({ kind: "changes" });
-  else if (pr.review === "review_required") facts.push({ kind: "review_required" });
+  if (!reviewed && pr.review === "approved") facts.push({ kind: "approved" });
+  else if (!reviewed && pr.review === "changes_requested") facts.push({ kind: "changes" });
+  else if (!reviewed && pr.review === "review_required") facts.push({ kind: "review_required" });
   if (pr.state === "merged" || pr.state === "closed" || !work) return facts;
   if (work.merge_state === "dirty") facts.push({ kind: "conflict", base });
   else if (work.merge_state === "behind") facts.push({ kind: "behind", base });

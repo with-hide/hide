@@ -265,6 +265,10 @@ pub const ADAPTERS: &[AgentAdapter] = &[
         resume: Some(LaunchDialect::Claude),
         conversation: Some(SessionFormat::Claude),
         titles: Support::Supported(SessionFormat::Claude),
+        thread: Support::Supported(ThreadReading {
+            format: SessionFormat::Claude,
+            absent: &[],
+        }),
         composer: Support::Supported(Composer {
             region: Region::BetweenRules,
             marker: &["❯"],
@@ -351,6 +355,10 @@ pub const ADAPTERS: &[AgentAdapter] = &[
         resume: Some(LaunchDialect::Codex),
         conversation: Some(SessionFormat::Codex),
         titles: Support::Supported(SessionFormat::Codex),
+        thread: Support::Supported(ThreadReading {
+            format: SessionFormat::Codex,
+            absent: &[],
+        }),
         composer: Support::Supported(Composer {
             region: Region::ToBlank,
             marker: &["›"],
@@ -438,6 +446,10 @@ pub const ADAPTERS: &[AgentAdapter] = &[
         resume: Some(LaunchDialect::Grok),
         conversation: Some(SessionFormat::Grok),
         titles: Support::Supported(SessionFormat::Grok),
+        thread: Support::Supported(ThreadReading {
+            format: SessionFormat::Grok,
+            absent: &[],
+        }),
         composer: Support::Supported(Composer {
             region: Region::Box {
                 open: '╭',
@@ -545,6 +557,10 @@ pub const ADAPTERS: &[AgentAdapter] = &[
         resume: Some(LaunchDialect::OpenCode),
         conversation: Some(SessionFormat::OpenCode),
         titles: Support::Supported(SessionFormat::OpenCode),
+        thread: Support::Supported(ThreadReading {
+            format: SessionFormat::OpenCode,
+            absent: &[],
+        }),
         // The last line inside the bar is the agent and model, never input.
         composer: Support::Supported(Composer {
             region: Region::Bar {
@@ -649,6 +665,10 @@ pub const ADAPTERS: &[AgentAdapter] = &[
         resume: Some(LaunchDialect::Pi),
         conversation: Some(SessionFormat::Pi),
         titles: Support::Supported(SessionFormat::Pi),
+        thread: Support::Supported(ThreadReading {
+            format: SessionFormat::Pi,
+            absent: &[],
+        }),
         composer: Support::Supported(Composer {
             region: Region::BetweenRules,
             marker: &[],
@@ -745,6 +765,10 @@ pub const ADAPTERS: &[AgentAdapter] = &[
         resume: Some(LaunchDialect::Omp),
         conversation: Some(SessionFormat::Omp),
         titles: Support::Supported(SessionFormat::Omp),
+        thread: Support::Supported(ThreadReading {
+            format: SessionFormat::Omp,
+            absent: &[],
+        }),
         composer: Support::Supported(Composer {
             region: Region::Line,
             marker: &["╰─"],
@@ -849,6 +873,10 @@ pub const ADAPTERS: &[AgentAdapter] = &[
         resume: Some(LaunchDialect::Antigravity),
         conversation: Some(SessionFormat::Antigravity),
         titles: Support::Supported(SessionFormat::Antigravity),
+        thread: Support::Supported(ThreadReading {
+            format: SessionFormat::Antigravity,
+            absent: &[],
+        }),
         composer: Support::Supported(Composer {
             region: Region::BetweenRules,
             marker: &[">"],
@@ -937,6 +965,11 @@ pub(super) const RETIRED_CURSOR: AgentAdapter = AgentAdapter {
     resume: None,
     conversation: Some(SessionFormat::Cursor),
     titles: Support::Unsupported(RETIRED_CONTEXT_ABSENCE),
+    thread: Support::Unsupported(CapabilityAbsence {
+        reason: "Cursor is retired from active support; its records are read for search and Memory only.",
+        evidence: "docs/agent-hooks.md",
+        would_change: "Restore active support with a pinned Cursor transcript sample and a thread converter.",
+    }),
     composer: Support::Unsupported(RETIRED_CONTEXT_ABSENCE),
     start: None,
     find: None,

@@ -9,6 +9,7 @@ pub use hide_agent_hooks::observation::{
     DirectObservation, ITEM_LIMIT as OBSERVATION_ITEM_LIMIT,
     RECIPIENT_LIMIT as OBSERVATION_RECIPIENT_LIMIT, SEND_BUDGET as OBSERVATION_SEND_BUDGET,
 };
+pub use hide_agent_hooks::report::{HookCounts, HookStatusReport, HookTurn};
 use serde::{Deserialize, Serialize};
 
 /// Recovery advice shared by local and device pane refusals.
@@ -114,6 +115,12 @@ pub enum HookCommand {
         session: String,
         #[serde(default)]
         prompt: String,
+    },
+    /// What the pane's agent hook observed: its turn and its subagent
+    /// counts, for the core's status judgement (PRD engine-bundle-1 D-7).
+    /// Metadata only; it never dispatches input or letters.
+    Status {
+        report: HookStatusReport,
     },
 }
 

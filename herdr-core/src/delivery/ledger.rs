@@ -95,6 +95,14 @@ pub struct Letter {
     /// next save, and the letter then waits as any other.
     #[serde(default)]
     pub immediate: bool,
+    /// Sent with `hide request send --force` (PRD engine-bundle-1 D-14): its
+    /// composer was read empty when it was sent, and the doorbell types its
+    /// bell even while the recipient works, after reading the composer empty
+    /// once more; a composer that shows text then leaves it an ordinary
+    /// letter sent with `--now`. An older build drops the field and the
+    /// letter waits as a `--now` letter.
+    #[serde(default)]
+    pub forced: bool,
     /// How many tool events handed the letter over while its recipient
     /// worked (PRD letters-to-busy-agents D-11): a handover is confirmed by
     /// the script once the host kept it, and after three unconfirmed ones

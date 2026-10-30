@@ -114,7 +114,7 @@ function SleepBody({ paneId, sleep, actions }: { paneId: string; sleep: AgentSle
           <MoonIcon className="size-(--size-icon-lg) text-muted-foreground" aria-hidden="true" />
           <p className="text-subhead text-foreground">{t("panes.sleep.sleeping")}</p>
           {sleep.progress ? <p className="max-w-full truncate text-caption text-muted-foreground">{sleep.progress}</p> : null}
-          <Button size="sm" className="mt-xs" data-agent-wake={paneId} onClick={() => actions.wakeAgent(paneId)}>
+          <Button variant="secondary" size="sm" className="mt-xs" data-agent-wake={paneId} onClick={() => actions.wakeAgent(paneId)}>
             {t("panes.sleep.wake")}
           </Button>
         </>

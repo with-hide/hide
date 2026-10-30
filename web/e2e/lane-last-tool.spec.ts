@@ -179,7 +179,7 @@ test("⇧⌘L opens the Project's Memory tool, ⇧⌘R the sidebar's PR list, �
     await shows(page, "memory");
     expect(commandLabel("open_sidebar_prs")).toMatch(/R$/);
     await page.keyboard.press(chord("open_sidebar_prs"));
-    await expect(page.locator('[data-sidebar-lens-option="prs"]')).toHaveAttribute("aria-pressed", "true");
+    await expect(page.locator('[data-sidebar-lens-option="prs"]')).toHaveAttribute("aria-checked", "true");
     await expect(page.locator("[data-sidebar-prs]")).toBeVisible();
     await shows(page, "memory");
     expect(commandLabel("toggle_lane_changes")).toMatch(/G$/);

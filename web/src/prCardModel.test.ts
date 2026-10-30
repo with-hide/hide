@@ -22,6 +22,7 @@ describe("primaryAction", () => {
     expect(primaryAction("check")).toBe("view_pane");
     expect(primaryAction("conflict")).toBe("assign");
     expect(primaryAction("assign_reviewer")).toBe("assign_reviewer");
+    expect(primaryAction("assign_reviewer_optional")).toBe("assign_reviewer");
     expect(primaryAction("queued")).toBe("github");
   });
 });
@@ -41,8 +42,26 @@ describe("mergeWhy", () => {
     expect(mergeWhy(pr({ work: { merge_state: "blocked", pending_checks: 2 } }), card({}), false)).toMatchObject({ key: "ci", count: 2 });
     expect(mergeWhy(pr({ checks: "failed", work: { merge_state: "blocked", failed_checks: [{ name: "verify", url: null }] } }), card({}), false)).toMatchObject({ key: "failed", count: 1 });
     expect(mergeWhy(pr({ review: "changes_requested", work: { merge_state: "blocked" } }), card({}), false)?.key).toBe("changes");
-    expect(mergeWhy(pr({ work: { merge_state: "blocked" } }), card({}), false)?.key).toBe("reviewer");
+    expect(mergeWhy(pr({ review: "review_required", work: { merge_state: "blocked" } }), card({}), false)?.key).toBe("reviewer");
+    expect(mergeWhy(pr({ work: { merge_state: "blocked" } }), card({}), false)?.key).toBe("blocked");
     expect(mergeWhy(pr({ work: { merge_state: "unknown" } }), card({}), false)?.key).toBe("unknown");
+  });
+});
+
+describe("mergeWhy for review (PRD pr-review-status B7)", () => {
+  const approved = { login: "kim", team: false, state: "approved", at_unix_ms: 1 };
+  const asked = { login: "lee", team: false, state: "requested", at_unix_ms: 1 };
+  const blocked = (reviewers: unknown[] | null, required: number | null) => pr({ review: "review_required", work: { merge_state: "blocked", reviewers, required_approvals: required } });
+
+  it("counts the approvals still missing when the count is known", () => {
+    expect(mergeWhy(blocked([approved, asked], 2), card({}), false)).toMatchObject({ key: "approvals", count: 1 });
+    expect(mergeWhy(blocked([], 1), card({}), false)).toMatchObject({ key: "approvals", count: 1 });
+  });
+
+  it("says GitHub wants more when the count is met, and review required when it is unknown", () => {
+    expect(mergeWhy(blocked([approved], 1), card({}), false)?.key).toBe("github_more");
+    expect(mergeWhy(blocked([approved], null), card({}), false)?.key).toBe("reviewer");
+    expect(mergeWhy(blocked(null, 2), card({}), false)?.key).toBe("reviewer");
   });
 });
 

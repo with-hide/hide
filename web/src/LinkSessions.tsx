@@ -186,7 +186,9 @@ function SessionLineView({ entry, project, checkoutBranch, opener, actions }: { 
   const remote = useShellStore((s) => s.rest?.status?.remote);
   const node = useShellStore((s) => localDeviceId(s.rest));
   const { line, live } = entry;
-  const title = useSessionTitle(line, live, project.id);
+  const recorded = useSessionTitle(line, live, project.id);
+  // A pre-check's session reads as the agent's review, never as a GitHub approval (PRD pr-review-status B14).
+  const title = line.role === "reviewed" ? t("links.agentReview", { agent: agentProductName(line.agent) }) : recorded;
   const checkout = resumeCheckout(line, catalogOf(workspaces, remote), checkoutBranch, node);
   const viewOff = viewBlock(line, devices, node);
   const resumeOff = resumeBlock(line, checkout, devices, node);
@@ -222,7 +224,7 @@ function SessionLineView({ entry, project, checkoutBranch, opener, actions }: { 
   const resumeButton = <LineButton icon={resuming ? <LoaderCircleIcon aria-hidden="true" className="animate-spin" /> : <PlayIcon aria-hidden="true" />} label={t(resume.uncertain ? "groups.confirm" : resuming ? "links.resuming" : "links.resume")} blocked={resumeOff} busy={resuming} onClick={resumeLine} data="resume" id={line.id} />;
   // An asking row keeps `Answer` under the line (B8); every other row reveals its buttons in the time's place.
   const below = live?.kind === "question" ? (
-    <Button size="sm" onClick={() => actions.openAgent(live.agent.pane_id)} data-link-answer={line.id}>
+    <Button variant="secondary" size="sm" onClick={() => actions.openAgent(live.agent.pane_id)} data-link-answer={line.id}>
       <CircleHelpIcon aria-hidden="true" />
       {t("links.answer")}
     </Button>

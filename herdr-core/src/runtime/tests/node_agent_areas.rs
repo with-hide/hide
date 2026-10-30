@@ -222,9 +222,9 @@ fn device_in_front(
     let requests = Arc::new(Mutex::new(Vec::new()));
     runtime.install_remote_control(RemoteControlContext::new(
         NODE,
-        Arc::new(RecordingHerdr {
+        crate::engine::herdr::HerdrEngine::shared(Arc::new(RecordingHerdr {
             requests: requests.clone(),
-        }),
+        })),
         Weak::new(),
         ChangeNotifier::noop(),
     ));

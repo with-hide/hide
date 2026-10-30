@@ -73,7 +73,7 @@ A row that has both a plan waiting for review and a mission decision carries the
 
 ## agent_status provenance and background waits
 
-Herdr owns the raw `agent_status`; Hide reads it through `agent.list`/`agent.get`, converts it at `herdr-core/src/wire.rs` and derives its axes in `agent_state/axes.rs`.
+Herdr owns the raw `agent_status`; Hide reads it through `agent.list`/`agent.get`, converts it at `herdr-core/src/engine/herdr/wire.rs` and derives its axes in `agent_state/axes.rs`.
 For Claude Code and Codex, Herdr's [official agent reference](https://herdr.dev/docs/agents/) describes terminal-screen inference as the lifecycle source, rather than lifecycle state reported by their session hooks.
 A native session reference or display-only hook token does not prove that a tool is running or that its command completed.
 Other integrations can have full lifecycle reporting, so this screen-inference statement is specific to those two agents, not every agent Herdr supports.
@@ -278,11 +278,21 @@ Regression owners: `a_turn_end_is_not_a_stop_until_its_session_read_lands`, `a_r
 
 ## Where each axis comes from
 
-Activity and completion come only from Herdr's `agent_status` and `completion_seq`: `working` is Working, `idle` and `done` are stopped, `done` or `idle` with a `completion_seq` reports a completion, and any other value reads as unknown rather than idle.
+Activity, completion and approval are judged in one order: the agent's hook first, then its session file, then Herdr (PRD engine-bundle-1 D-9).
+
+1. The turn the hook of the pane's own session last reported (`working`, `done`, `waiting` or `idle`; [agent-hooks.md](agent-hooks.md#the-turn-the-hook-reports)), which the core keeps per pane and session (`agent_hooks::facts`) and lays on the agent as `SessionAgentPayload.hook`, never on the wire.
+   `working` is Working; `done` is stopped with a completion; `waiting` is stopped with an approval demand; `idle` is stopped with no completion, the turn an interrupt ended.
+   It stands until the same session's next hook event, so Herdr's reading of the screen never overrides it: a turn waiting on a background command that Herdr reads as finished (#348) stays Working.
+   No timer ends it (design principle 13); a turn no hook reports the end of is ended by the signal the agent does give, or by the session file: a read under a later Herdr state than the one the turn was first laid under, with Herdr reading the agent at rest, that finds the turn interrupted (Claude Code's Esc, which sends no `Stop`) or completed ends it as resting or done ([agent-hooks.md](agent-hooks.md#the-turn-the-hook-reports)).
+   The facts go when Herdr lists no agent in the pane or the pane closes; an agent started again in its pane is followed by its new session's hook even while Herdr still names the session that ended ([agent-hooks.md](agent-hooks.md#which-session-is-the-panes)).
+2. The session file, for the waits no hook reports: a plan waiting for approval (below), with the hook's `working` standing in for Herdr's `working` when the session has a hook turn.
+3. Herdr's `agent_status` and `completion_seq`, only for a session whose hook has reported no turn: `working` is Working, `idle` and `done` are stopped, `done` or `idle` with a `completion_seq` reports a completion, and any other value reads as unknown rather than idle.
+
 An agent-list transport failure makes the retained telemetry unconfirmed while the topology stream remains connected.
 Until a successful agent list or bootstrap snapshot confirms it again, the agent keeps its identity and task title but has Unknown activity, no completion or current demand, and requires a status check before closing.
 An identical successful list restores the confirmed state; a topology event alone does not confirm the entire agent list.
-No pane token is read for either.
+No pane token is read for any of these.
+Regression owners: `sidebar::tests::a_hook_turn_decides_the_axes_ahead_of_herdrs_state`, `agent_hooks::facts::tests`, `runtime::tests::labels::a_hook_turn_ends_when_the_session_file_reads_an_interruption_after_it`, `runtime::tests::labels::a_hook_turn_whose_prompt_the_session_file_shows_unanswered_ends_at_rest`, `runtime::tests::labels::an_approval_ends_when_the_session_file_reads_the_refused_calls_result`, `runtime::tests::agent_connection::an_open_approval_outlives_the_main_turns_end_and_closes_with_its_call`, `runtime::tests::agent_connection::an_agent_started_again_in_its_pane_follows_its_hook_over_herdrs_earlier_session`.
 Demand has these sources:
 
 - A question is the core's label verdict on the agent's last message (`label.question`, see Task identity below).
@@ -298,7 +308,8 @@ Demand has these sources:
   A reply whose id cannot be placed, or an async call whose arguments cannot be read, leaves the wait unknown rather than nothing.
   Missing content remains absent, and a failed, incomplete or older-state read publishes no structured fact; the independent letter hold stays unknown rather than assuming an answer.
   Native calls are bounded to eight per turn with 256-byte identities; exceeding the bound fails the read instead of dropping a pending question.
-- Approval is Herdr's `blocked` lifecycle, whether or not the operator has read it.
+- Approval is the hook's `waiting` turn: Claude Code's and Codex's `PermissionRequest`, Claude Code's `permission_prompt` and `elicitation_dialog` notifications, and an OpenCode permission ([agent-hooks.md](agent-hooks.md#the-turn-the-hook-reports)), whether or not the operator has read it.
+  For a session whose hook has reported no turn, it is Herdr's `blocked` lifecycle; a hook that has reported the turn has said whether it waits, so Herdr's `blocked` no longer decides that session.
 - Approval is also a plan waiting for the operator's approval that Herdr reads as an ordinary stop, Codex's "Implement this plan?" (PRD codex-plan-approval-hold).
   The core reads it from the session file, not the screen: the label worker's session read folds the agent's turn records into a turn tracker (`hide-session/src/turns.rs`), and a plan-mode turn that proposed a plan and finished, with no later turn or person's message, waits.
   The answer holds only for the Herdr `state_change_seq` the read was asked under and the session it proved, it is laid on the row's facts (`RowFacts.awaiting_operator`, never on the wire) and resolved by `agent_state::agent_blocked`, and it is not shown while Herdr says the agent works, except for an agent kind whose adapter declares `waits_while_working` (`SessionFormat`).
@@ -449,7 +460,7 @@ The operating-system identity is the platform UUID on macOS and the machine-id o
 A delegated `hide agent spawn --machine <device id>` child is a remote child of a local parent: its tokens are written on the device's pane and `parent_machine` names the spawner's machine, the same resolution as any cross-machine relationship above.
 The existing one-second agent refresh writes only panes whose tokens differ, with a complete reconciliation on startup or reconnect and an immediate write after spawn.
 The same writer writes the read axis's server mark ([Across a Herdr restart](#across-a-herdr-restart)), in the pane's lineage report when it has one.
-`wire.rs` and `agent_state/axes.rs` remain the readers of this contract.
+`engine/tokens.rs` names this contract for every engine; `wire.rs` and `agent_state/axes.rs` remain its readers.
 A connected device's immutable machine identity comes from its consented helper's connection greeting, outside the runtime mutex; an unavailable identity leaves the parent unresolved and records a diagnostic.
 A declaration whose machine cannot be matched stays a root and records one diagnostic for that pane instead of guessing.
 
@@ -637,10 +648,10 @@ The pet dashboard's count tiles read the same four groups, plus the rows whose s
 
 The pet's badge row carries one more count after the three groups: the in-process subagents Hide's hook reports as working, in purple.
 The pet is its only reader: the desktop app draws no pet today, and the web shell draws no subagent count on any surface ([UI_BEHAVIOR.md, Subagent count](UI_BEHAVIOR.md#subagent-count)).
-`agent_state/tally.rs::subagents_active` sums the `working` hook token over the agents on an answering server, with saturation, and returns zero while disconnected; a pane whose agent has gone is not counted even if its token lingers, and an instrumented pane whose count is unknown adds nothing rather than a zero.
+`agent_state/tally.rs::subagents_active` sums the `working` count the hook reported to the core (`PaneHookTokens`, laid from `agent_hooks::facts`) over the agents on an answering server, with saturation, and returns zero while disconnected; a pane whose agent has gone is not counted even if its token lingers, and an instrumented pane whose count is unknown adds nothing rather than a zero.
 It is the one count the hook can vouch for; Herdr's own wire carries no ambient counts, and nothing here scans transcripts or output.
 
-Regression owner: `subagent_counts_sum_the_hook_tokens_of_listed_agents_and_go_quiet_while_disconnected`.
+Regression owner: `subagent_counts_sum_the_hook_tokens_of_listed_agents_and_go_quiet_while_disconnected`, which feeds the counts as the core lays them.
 
 ## Uninstrumented is not an unknown activity
 
@@ -676,8 +687,7 @@ Settings counts sessions and never these connections, so a pane that needs a Reo
 | `hooks_not_installed`, `config_unreadable`, `hook_outdated` | `setup_needed` (fix it in the agent's row in Settings; Reopen would change nothing) |
 | `hooks_switched_off`, `unknown`, an agent with no hook, or an agent asleep | no connection, so no chip |
 
-A Herdr live handoff or restart does not move a connected pane to `started_before_hide`: the tokens the instrumented judgement reads go with the old server, and hided puts them back from the pane's record within a few agent reads, without a hook event ([agent-hooks.md](agent-hooks.md#after-herdr-hands-off-or-restarts)).
-Until then, and for a pane on a device, a handed-off pane reads as a session that predates the install.
+A Herdr live handoff or restart does not move a connected pane to `started_before_hide`: the hook reports to the core, which keeps what it reported in its own `hook-facts.json`, so nothing the instrumented judgement reads goes with Herdr's server, for a pane on a device as for this Mac's ([agent-hooks.md](agent-hooks.md#what-the-hook-returns-and-reports-back)).
 `can_reopen` is false for `setup_needed`, `update_agent`, an agent other than Claude Code and Codex, and a pane on another device, because a Reopen restarts a Claude Code or Codex session through this Mac's Herdr and changes no agent's version.
 The `update_agent` reason is read from the machine's last kit report and the pane's agent kind on the projection pass that already judges the pane, so it adds no per-tick work; the sessions that wore it are remembered per machine (`Runtime::update_badges`) until they connect or end, so a session started on the old copy reads "restart to connect" once the update has put the piece in, and a session that never wore it keeps the rows below ([agent-hooks.md](agent-hooks.md#updating-an-agent-that-is-too-old)).
 The shared server is the machine's last kit read (`KitSnapshot::shares_codex_server`): a read that says the setting is on, or that a daemon still answers with the setting off, is what turns a Codex pane's reason into the shared server, and a later read that says neither turns it back into `started_before_hide` at once (PRD codex-daemon-apply D-07, B9).
@@ -755,12 +765,17 @@ The same open-check rollup also supplies optional `PullRequestWork.check_counts`
 Completed success is passed; neutral and skipped remain skipped; failure conclusions are failed; active CheckRuns are running, queued CheckRuns waiting, and an unread or unfamiliar state unknown.
 Legacy StatusContexts keep SUCCESS, FAILURE/ERROR, PENDING and EXPECTED distinct; an absent rollup stays unknown while an explicitly empty rollup has zero checks.
 This adds no GitHub read or polling clock and leaves the existing merge eligibility calculation unchanged.
-The PR list (below) adds three reads to the same generation: the signed-in login (`gh api user --jq .login`, once per read of all projects, right after `auth status`), the open pull requests the account was asked to review (`gh pr list --search review-requested:@me`, numbers only), and one GraphQL query for each open pull request's place in the merge queue and the time of its last review request (`HidePrFacts`).
+The PR list (below) adds three reads to the same generation: the signed-in login (`gh api user --jq .login`, once per read of all projects, right after `auth status`), the open pull requests the account was asked to review (`gh pr list --search review-requested:@me`, numbers only), and one GraphQL query for each open pull request's place in the merge queue, its last ten review requests with whom each named, each reviewer's latest review (`latestOpinionatedReviews` and `latestReviews`, the first 20 of each, `totalCount` for the rest) and the approvals its base branch's classic protection asks for (`HidePrFacts`).
+With that query, for each base branch of the open pull requests GitHub reports a review decision for (at most four, the newest pull requests' bases first; more is one `pull_requests.approval_bases_capped` diagnostic naming the repository and the count), one REST read of the approvals its ruleset rules ask for (`gh api --jq … repos/<repo>/rules/branches/<base>`, readable with read access; `hide_node_link::gh::required_approvals_arguments`); a failed one leaves that base's count unknown and writes one `pull_requests.approvals_unread` diagnostic, with nothing on screen (PRD pr-review-status B11).
+From those the core gives each open pull request the query covers `PullRequestWork.reviewers` (login or team slug, state and time, at most 20, the rest counted in `reviewers_more`) and `required_approvals` (PRD pr-review-status D-07, D-08, D-12, D-13):
+an approval, a change request or a dismissal stands over a later comment, a reviewer with only comments is `commented`, a pending review is not read, and a review still asked of someone (`reviewRequests`, the user's or the team's) makes them `requested` whatever they said before, with the time of their last ask;
+`required_approvals` is the larger of the ruleset count and the classic count, drawn only when the base's rulesets were read (a failed read or a base past the cap leaves it unknown, because the classic count alone may be the smaller), kept only while GitHub's review decision is present and the count is at least one, because a 0 while GitHub still decides by review means the rule that asks is one this account cannot read.
+`reviewers` is `None` (unknown, drawn as nothing) while the query has not answered for the pull request and on settled pull requests; GitHub's review decision alone says whether review still blocks, and `model::PrState::of` does not read the reviewers.
 The pull request list alone decides whether a project's read succeeds (issue #1189, which replaces PRD work-tab-pr-lens D-25's rule that any of the three failing failed the read).
 `gh auth status` failing is still the machine's refusal and fails every project's read.
-Each of the three is asked and judged on its own, and one that fails leaves the judgments derived from it unknown on every pull request, never "no": the login makes `mine` (`Option<bool>`, `None` when unknown), the review search with the login and the request list makes `asked_of_me` (`ReviewAsk::Unknown`), and the GraphQL query makes the queue place (`MergeQueuePlace::Unknown`) and the time of the last review request.
+Each of the three is asked and judged on its own, and one that fails leaves the judgments derived from it unknown on every pull request, never "no": the login makes `mine` (`Option<bool>`, `None` when unknown), the review search with the login and the request list makes `asked_of_me` (`ReviewAsk::Unknown`), and the GraphQL query makes the queue place (`MergeQueuePlace::Unknown`), the time of the last review request and the reviewers (`None`).
 What the list alone settles stays settled: a request naming the login is a direct ask without the search, and a request list with nobody who could be the operator or their team (any request when the login is unknown, a team's request when it is known) was asked of neither.
-The read is a success with the failed questions named in the project's status (`unread_queries`: `account`, `review_requests`, `merge_queue`), so the status is not stale and the list is current; each failure writes one `github` `pull_requests.extra_unread` diagnostic with the question and `gh`'s words, which the operator never sees.
+The read is a success with the failed questions named in the project's status (`unread_queries`: `account`, `review_requests`, `merge_queue`, and `reviews` beside `merge_queue` whenever the facts query fails), so the status is not stale and the list is current; each failure writes one `github` `pull_requests.extra_unread` diagnostic with the question and `gh`'s words, which the operator never sees.
 A project that keeps its last list because a later read failed keeps the names of the unanswered questions that list was read with.
 The re-read clock treats the read as answered: the list is current, and a question that fails every time (a GitHub Enterprise Server without the queue fields, a token too narrow for the search) costs two calls each normal interval rather than slowing the list.
 Asking for the checks of every merged and closed pull request made one read take 11 - 14 seconds, so a settled pull request's checks are not asked for again: the checks read for the same number and head commit while it was open stay in the reader's cache, and without them its checks are `Unknown`, drawn as no mark.
@@ -829,7 +844,7 @@ Each pull request stops at the first slot that fits:
 | 7 | it is owned (mine, a session of mine touched it, a bot's) and checks failed that GitHub's `mergeStateStatus` does not call `UNSTABLE`, or a change request stands, or the state is `DIRTY` | Blocked · no agent | `failed` with the first check's name and how many more, `changes`, or `conflict` with the base |
 | 8 | it is mine and the state is `CLEAN` or `HAS_HOOKS`; `UNSTABLE` too, with the failed required-or-not check named | Needs You | `merge` |
 | 9 | it is mine and the state is `BEHIND` | Needs You | `update` with the base |
-| 10 | it is mine and the state is `BLOCKED` | Waiting with `ci` while checks run, Waiting with `waiting_review` while a review is requested, else Needs You | `assign_reviewer` |
+| 10 | it is mine and the state is `BLOCKED` | Waiting with `ci` while checks run, Waiting with `waiting_review` while a review is requested, else Needs You | `assign_reviewer` (worded `리뷰어 지정 · 요청한 사람 없음`, with `승인 0/m` when the count is known) while GitHub's review decision is `REVIEW_REQUIRED`; `assign_reviewer_optional` (worded `리뷰어 지정 · 필수 리뷰 없음`) otherwise (no decision, or approved and blocked by another rule), because that block is not review's and the row must not say nobody was asked (PRD pr-review-status B4) |
 | 11 | a review was asked of the operator by name | Needs You | `review` with the author and the time since the ask |
 | 12 | a review was asked of a team of the operator's (the search finds it, the request names no user) | Needs You, folded as `팀 리뷰 요청 N` | `team_review` |
 | 13 | anything else open | Waiting | `ci` while checks run, else `waiting_review` |
@@ -846,6 +861,7 @@ The slots that read an unknown judgment instead place the pull request in Waitin
 Slot 5 fires only on a known place.
 A merged pull request is Merging · merged below the queued ones, newest merge first.
 When GitHub has not computed `mergeStateStatus` (`UNKNOWN`) the pull request keeps the group it stood in on the previous board with the reason `checking`, and waits when it is new, so a pull request never jumps while GitHub thinks.
+The reviewers and the required count move no group and no reason (PRD pr-review-status D-02): the web adds the reviewer marks and `승인 n/m` to the row the board already placed.
 A pull request nothing has changed on for 7 days (`OLD_MS`) in any group but Merging · merged is folded as `오래된 PR N` inside its group.
 Folded lines (a team's review asks, old pull requests) are in no count: the PRs icon's number is these unfolded Needs You rows alone (PRD sidebar-task-lens B29), and the sidebar's Needs You is unchanged.
 Within a group the order is the reason's urgency, then the newest update (the newest merge for Merging · merged), then the larger number.

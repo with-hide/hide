@@ -202,10 +202,11 @@ impl Runtime {
                     (DeviceReach::Dialed(transport), None)
                 }
             };
-            let connector = transport.device().herdr_api_connector();
-            Ok::<_, String>((transport, arrived, connector))
+            let engine =
+                crate::engine::herdr::HerdrEngine::shared(transport.device().herdr_api_connector());
+            Ok::<_, String>((transport, arrived, engine))
         })();
-        let (transport, arrived, connector) = match started {
+        let (transport, arrived, engine) = match started {
             Ok(parts) => parts,
             Err(message) => {
                 if registration.origin.core_redials() {
@@ -238,7 +239,7 @@ impl Runtime {
         };
         self.install_remote_control(live::RemoteControlContext::new(
             device_id.clone(),
-            Arc::clone(&connector),
+            Arc::clone(&engine),
             context.runtime.clone(),
             context.notifier.clone(),
         ));
@@ -246,10 +247,11 @@ impl Runtime {
         let mut sync_context = session_sync::SessionSyncContext::remote(
             device_id.clone(),
             registration.label.clone(),
-            connector,
+            engine,
             context.runtime.clone(),
             context.notifier.clone(),
-        );
+        )
+        .with_hook_facts(self.hook_facts());
         // Its machine is read through its node, as this machine is through
         // its own: a node that dials in, and a WSL distribution of this PC.
         if registration.origin.reports_own_facts() {
@@ -538,7 +540,7 @@ impl Runtime {
             .spawn(move || {
                 let report = transport.capability_test(
                     "device-connection-test",
-                    &crate::remote::check_test_snapshot,
+                    &crate::engine::herdr::check_test_snapshot,
                 );
                 let Some(runtime) = context.runtime.upgrade() else {
                     return;

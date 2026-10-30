@@ -3,7 +3,6 @@
 //! a generated payload back into a hand-written deserialization shape.
 
 use serde_json::{Value, json};
-use sha2::{Digest, Sha256};
 
 use self::generated::{
     error_response as err, event as ev, request as req, success_response as res,
@@ -20,6 +19,9 @@ use crate::sidebar::{
     SessionLayoutSplitPayload,
 };
 use hide_herdr_client::HERDR_PROTOCOL_REVISION;
+// The metadata conventions, while callers still reach them through `wire`.
+pub use crate::engine::answers::*;
+pub(crate) use crate::engine::tokens::*;
 
 /// The types generated from the pinned contract (`build.rs`). The module is
 /// private, so this file is the only place in the crate that can name them:
@@ -118,6 +120,32 @@ pub(crate) fn snapshot(value: Value) -> Result<ProjectionState, SessionFetchErro
 
 pub(crate) fn snapshot_response(value: Value) -> Result<ProjectionState, SessionFetchError> {
     decode_snapshot_response(value).map(convert_snapshot)
+}
+
+/// Every pane of a snapshot with its folders as Herdr spelled them. No serde
+/// defaults: missing topology is never proof of absence, so a pane without
+/// its id refuses the whole answer.
+pub(crate) fn pane_places(value: Value) -> Result<Vec<crate::engine::PanePlace>, String> {
+    if value["type"] != "session_snapshot" {
+        return Err("Herdr close confirmation is not a session_snapshot".into());
+    }
+    let panes = value
+        .pointer("/snapshot/panes")
+        .and_then(Value::as_array)
+        .ok_or("Herdr close confirmation is missing snapshot.panes")?;
+    panes
+        .iter()
+        .map(|pane| {
+            let text = |key: &str| pane.get(key).and_then(Value::as_str).map(str::to_owned);
+            Ok(crate::engine::PanePlace {
+                pane_id: text("pane_id")
+                    .filter(|id| !id.is_empty())
+                    .ok_or("Herdr close confirmation has an invalid pane_id")?,
+                cwd: text("cwd"),
+                foreground_cwd: text("foreground_cwd"),
+            })
+        })
+        .collect()
 }
 
 /// Cleanup protects both the launch directory and any current foreground
@@ -380,141 +408,6 @@ macro_rules! record_conversions {
 }
 record_conversions!(res);
 record_conversions!(ev);
-
-/// The pane metadata token by which whoever created a pane declares the pane
-/// it was spawned from. It is the only lineage there is: Herdr records none,
-/// so an agent is a child exactly when its spawner said so.
-///
-/// hcoord is the sole writer, including for a child created by Hide's Fork.
-/// It declares the token after both executions exist with
-/// `pane.report_metadata`, the same display-only channel the hook helper
-/// already uses. The value is the parent's pane id, it dies
-/// with the pane, and Hide reads it here and nowhere else.
-///
-/// The token outlives the agent that earned it, because it dies with the
-/// pane and a pane can host another agent later, so it is only a claim until
-/// `CHILD_SESSION_TOKEN` and `PARENT_SESSION_TOKEN` prove that both panes
-/// still host the sessions it was written for.
-pub(crate) const PARENT_PANE_TOKEN: &str = "parent_pane";
-
-/// The digest of the child's agent session when the relationship was written.
-/// A relationship holds only while the child's pane still reports that session.
-pub(crate) const CHILD_SESSION_TOKEN: &str = "child_session";
-
-/// The digest of the parent's agent session when the relationship was written.
-/// `crate::agent_state::apply_lineage` compares it with the parent pane's current session,
-/// because only there are both rows at hand, on this machine or another.
-pub(crate) const PARENT_SESSION_TOKEN: &str = "parent_session";
-
-/// The pane a fork was forked from, written by `crate::coordination` on the
-/// pane that hosts a fork's registration (`AgentRecord::forked` with its
-/// `origin`), so a wake that continues the registration in another pane writes
-/// it there too. It is provenance, never responsibility: a fork is the
-/// operator's root, which is why it is not `PARENT_PANE_TOKEN`. Like that
-/// token it is a claim that holds only while `FORK_SESSION_TOKEN` and
-/// `FORK_SOURCE_SESSION_TOKEN` still name the sessions the two panes host.
-pub(crate) const FORK_PANE_TOKEN: &str = "fork_pane";
-
-/// The digest of the fork's own session when the provenance was written. A
-/// pane that hosts another session later is not a fork.
-pub(crate) const FORK_SESSION_TOKEN: &str = "fork_session";
-
-/// The digest of the source's session when the provenance was written. The
-/// source is named only while its pane still hosts it
-/// (`crate::agent_state::apply_fork_sources`).
-pub(crate) const FORK_SOURCE_SESSION_TOKEN: &str = "fork_source_session";
-
-/// Hide's mark on a pane whose saved read state it vouches for, written by
-/// the lineage writer (`crate::coordination::lineage`). Herdr keeps a pane
-/// token only for as long as the server that took it, so a pane that still
-/// carries the mark a saved state names is on the server that state was read
-/// from, and its `state_change_seq` can be compared with the saved one
-/// (`crate::agent_state::apply_read_state`).
-pub(crate) const SERVER_MARK_TOKEN: &str = "hide_server";
-
-/// The server mark a pane carries, when it carries one.
-pub(crate) fn server_mark(tokens: &std::collections::BTreeMap<String, Value>) -> Option<String> {
-    tokens
-        .get(SERVER_MARK_TOKEN)
-        .and_then(Value::as_str)
-        .map(str::trim)
-        .filter(|mark| !mark.is_empty())
-        .map(str::to_owned)
-}
-
-/// The tokens a sleeping fork's row stands in for, as its pane carried them.
-pub(crate) fn fork_tokens(
-    source_pane: &str,
-    own_session: Option<&str>,
-    source_session: Option<&str>,
-) -> std::collections::BTreeMap<String, Value> {
-    [
-        (FORK_PANE_TOKEN, Some(source_pane)),
-        (FORK_SESSION_TOKEN, own_session),
-        (FORK_SOURCE_SESSION_TOKEN, source_session),
-    ]
-    .into_iter()
-    .filter_map(|(key, value)| Some((key.to_owned(), Value::String(value?.to_owned()))))
-    .collect()
-}
-
-/// What a fork's pane declares about its source: the source's pane and the
-/// session it hosted, read only while the pane still hosts the fork's own
-/// session (`own_session`, its digest).
-pub(crate) fn fork_declaration(
-    tokens: &std::collections::BTreeMap<String, Value>,
-    own_session: Option<&str>,
-) -> Option<(String, Option<String>)> {
-    let token = |name: &str| lineage_parent(tokens.get(name).and_then(Value::as_str));
-    if !session_holds(token(FORK_SESSION_TOKEN).as_deref(), own_session) {
-        return None;
-    }
-    Some((token(FORK_PANE_TOKEN)?, token(FORK_SOURCE_SESSION_TOKEN)))
-}
-
-/// How a session is written into a token: the lowercase hex SHA-256 of the
-/// value Herdr reports in `agent_session.value`. Herdr cuts a token value at
-/// 80 characters and a session can be a path, so a digest is the one form
-/// that keeps two sessions apart whatever they look like; hcoord writes the
-/// same function. A blank value names no session.
-pub(crate) fn session_digest(value: &str) -> Option<String> {
-    if value.trim().is_empty() {
-        return None;
-    }
-    Some(
-        Sha256::digest(value.as_bytes())
-            .iter()
-            .map(|byte| format!("{byte:02x}"))
-            .collect(),
-    )
-}
-
-/// Whether a pane still hosts the session a relationship was written for.
-/// A missing side proves nothing, so it does not hold: a pane Herdr reports
-/// without a session (Codex before its first turn) cannot confirm a match, and
-/// a token written before sessions were recorded has nothing to compare.
-pub(crate) fn session_holds(declared: Option<&str>, current: Option<&str>) -> bool {
-    matches!((declared, current), (Some(declared), Some(current)) if declared == current)
-}
-
-/// Stable machine identity paired with `parent_pane` for cross-device
-/// lineage. Same-machine children omit it so an ordinary local parent keeps
-/// the existing device-scoped path.
-pub(crate) const PARENT_MACHINE_TOKEN: &str = "parent_machine";
-
-/// The source under which Hide writes its own pane tokens. Herdr keeps one
-/// token set per source, so a token Hide wrote can never overwrite one an
-/// orchestrator or the hook helper wrote under theirs.
-pub(crate) const HIDE_METADATA_SOURCE: &str = "hide";
-
-/// The parent a spawner declared. An empty value is no declaration, because
-/// Herdr clears a token by setting it empty.
-fn lineage_parent(declared: Option<&str>) -> Option<String> {
-    declared
-        .map(str::trim)
-        .filter(|id| !id.is_empty())
-        .map(str::to_owned)
-}
 
 impl From<res::AgentInfo> for ProjectedAgent {
     fn from(v: res::AgentInfo) -> Self {
@@ -835,55 +728,6 @@ pub(crate) fn workspace_target_params(id: &str) -> Result<Value, String> {
     })
 }
 
-#[derive(Clone, Debug, Default, Eq, PartialEq)]
-pub struct IssueTokens {
-    pub panes: std::collections::BTreeMap<String, String>,
-    pub workspaces: std::collections::BTreeMap<String, String>,
-}
-
-pub(crate) fn issue_tokens(payload: &crate::sidebar::SessionSnapshotPayload) -> IssueTokens {
-    fn issue(tokens: &std::collections::BTreeMap<String, Value>) -> Option<String> {
-        tokens
-            .get("issue")
-            .and_then(Value::as_str)
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-            .map(str::to_owned)
-    }
-    let mut panes: std::collections::BTreeMap<_, _> = payload
-        .agents
-        .iter()
-        .filter_map(|agent| {
-            Some((
-                agent.pane_id.as_ref().or(agent.id.as_ref())?.clone(),
-                issue(&agent.tokens)?,
-            ))
-        })
-        .collect();
-    for pane in &payload.panes {
-        if let Some(value) = issue(&pane.tokens) {
-            panes.insert(pane.pane_id.clone(), value);
-        }
-    }
-    IssueTokens {
-        panes,
-        workspaces: payload
-            .workspaces
-            .iter()
-            .filter_map(|workspace| {
-                Some((workspace.workspace_id.clone(), issue(&workspace.tokens)?))
-            })
-            .collect(),
-    }
-}
-
-pub(crate) fn workspace_issue_params(
-    workspace_id: &str,
-    issue: Option<&str>,
-) -> Result<Value, String> {
-    workspace_metadata_params(workspace_id, "issue", issue)
-}
-
 /// `worktree.open` for one checkout path, from its repository's main
 /// worktree: Herdr answers with the workspace it already binds to that
 /// checkout, or binds or opens one (`already_open`). It carries no label,
@@ -902,18 +746,6 @@ pub(crate) fn worktree_open_params(
         trust_repository: None,
         workspace_id: None,
     })
-}
-
-/// What `worktree.open` answered: the bound workspace, its active tab and
-/// pane, and whether Herdr had it open before this request.
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct OpenedWorktree {
-    pub(crate) tab_label: String,
-    pub(crate) workspace_id: String,
-    pub(crate) label: String,
-    pub(crate) tab_id: String,
-    pub(crate) pane_id: String,
-    pub(crate) already_open: bool,
 }
 
 pub(crate) fn opened_worktree(value: Value) -> Result<OpenedWorktree, String> {
@@ -984,19 +816,7 @@ pub(crate) fn workspace_list_params() -> Result<Value, String> {
     params(req::EmptyParams(Default::default()))
 }
 
-/// Hide's owner mark on a plain-folder workspace it opened (`checkout_owner`).
-pub(crate) fn workspace_owner_mark_params(workspace_id: &str, mark: &str) -> Result<Value, String> {
-    workspace_metadata_params(workspace_id, crate::checkout_owner::OWNER_TOKEN, Some(mark))
-}
-
-pub(crate) fn workspace_purpose_params(
-    workspace_id: &str,
-    purpose: Option<&str>,
-) -> Result<Value, String> {
-    workspace_metadata_params(workspace_id, "purpose", purpose)
-}
-
-fn workspace_metadata_params(
+pub(crate) fn workspace_metadata_params(
     workspace_id: &str,
     name: &str,
     purpose: Option<&str>,
@@ -1011,6 +831,73 @@ fn workspace_metadata_params(
         seq: None,
         ttl_ms: None,
     })
+}
+/// Hide's own tokens on a pane; a `None` value clears that token.
+pub(crate) fn pane_metadata_params(
+    pane_id: &str,
+    tokens: &std::collections::BTreeMap<String, Option<String>>,
+) -> Result<Value, String> {
+    // The pinned public pane.report_metadata token patch: null clears one key.
+    Ok(json!({"pane_id": pane_id, "source": HIDE_METADATA_SOURCE, "tokens": tokens}))
+}
+
+/// A notification with the operator's request sound. The pinned request
+/// schema requires the title and accepts the body and sound.
+pub(crate) fn notification_params(title: &str, body: &str) -> Value {
+    json!({"title": title, "body": body, "sound": "request"})
+}
+
+/// Reads `notification.show`'s answer. Herdr names why nothing showed in
+/// `reason` (`NotificationShowReason`); a reason outside that set is
+/// recorded as `not_shown` rather than echoed into the log.
+pub(crate) fn notification_shown(value: &Value) -> Result<(), &'static str> {
+    match value.get("shown").and_then(Value::as_bool) {
+        Some(true) => Ok(()),
+        Some(false) => Err(
+            match value
+                .get("reason")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+            {
+                "disabled" => "disabled",
+                "rate_limited" => "rate_limited",
+                "no_foreground_client" => "no_foreground_client",
+                "busy" => "busy",
+                _ => "not_shown",
+            },
+        ),
+        None => Err("answer_unreadable"),
+    }
+}
+
+/// `pane.current` for an inherited caller reference: the pane it names now.
+pub(crate) fn pane_current_params(caller_pane_id: &str) -> Result<Value, String> {
+    if caller_pane_id.is_empty() || caller_pane_id.len() > 256 {
+        return Err("invalid_request".into());
+    }
+    params(req::PaneCurrentParams {
+        caller_pane_id: Some(caller_pane_id.into()),
+    })
+}
+
+/// The pane a `pane.current` answer names.
+pub(crate) fn current_pane(value: Value) -> Result<String, String> {
+    value
+        .pointer("/pane/pane_id")
+        .and_then(Value::as_str)
+        .filter(|id| !id.is_empty() && id.len() <= 256)
+        .map(str::to_owned)
+        .ok_or_else(|| "pane_unavailable".into())
+}
+
+/// The shell a `pane.process_info` answer names, as a process id.
+pub(crate) fn pane_shell_pid(value: Value) -> Result<i32, String> {
+    value
+        .pointer("/process_info/shell_pid")
+        .and_then(Value::as_u64)
+        .filter(|pid| *pid > 0 && *pid <= i32::MAX as u64)
+        .map(|pid| pid as i32)
+        .ok_or_else(|| "pane_unavailable".into())
 }
 pub(crate) fn tab_target_params(id: &str) -> Result<Value, String> {
     params(req::TabTarget { tab_id: id.into() })
@@ -1033,11 +920,11 @@ pub(crate) fn pane_scroll_params(pane_id: &str, offset_from_bottom: u64) -> Resu
 }
 /// The scroll metrics a `pane.get` or `pane.scroll` answer carries; `None`
 /// when Herdr reports none for the pane.
-pub(crate) fn pane_scroll(value: Value) -> Result<Option<crate::live::PaneScroll>, String> {
+pub(crate) fn pane_scroll(value: Value) -> Result<Option<crate::find::pane::PaneScroll>, String> {
     let missing = "pane response is missing pane";
     match response(value, missing)? {
         res::ResponseResult::PaneInfo { pane } => {
-            Ok(pane.scroll.map(|scroll| crate::live::PaneScroll {
+            Ok(pane.scroll.map(|scroll| crate::find::pane::PaneScroll {
                 offset_from_bottom: scroll.offset_from_bottom,
                 max_offset_from_bottom: scroll.max_offset_from_bottom,
             }))
@@ -1089,14 +976,6 @@ pub(crate) fn pane_move_to_new_tab_params(
 /// Joins an existing tab without changing focus. The caller verifies that
 /// both panes belong to the expected workspace; this destination carries
 /// only the tab and pane identifiers in the pinned protocol.
-pub(crate) fn pane_join_params(
-    pane_id: &str,
-    target_tab_id: &str,
-    target_pane_id: &str,
-) -> Result<Value, String> {
-    pane_insert_params(pane_id, target_tab_id, target_pane_id, false)
-}
-
 pub(crate) fn pane_insert_params(
     pane_id: &str,
     target_tab_id: &str,
@@ -1119,21 +998,6 @@ pub(crate) fn pane_insert_params(
     })
 }
 
-#[derive(Debug, PartialEq, Eq)]
-pub(crate) struct PaneJoinResult {
-    pub(crate) changed: bool,
-    pub(crate) reason: Option<String>,
-    pub(crate) workspace_id: String,
-    pub(crate) tab_id: String,
-    pub(crate) pane_id: String,
-    pub(crate) terminal_id: String,
-    pub(crate) previous_workspace_id: String,
-    pub(crate) previous_tab_id: String,
-    pub(crate) previous_pane_id: String,
-    pub(crate) closed_tab_id: Option<String>,
-    pub(crate) closed_workspace_id: Option<String>,
-}
-
 /// Keeps the actual resulting identity even for an unchanged move. A
 /// `same_tab` answer is not proof of ownership or of an earlier successful
 /// join; the caller compares it with its durable claim and observed binding.
@@ -1152,46 +1016,10 @@ pub(crate) fn joined_pane(value: Value) -> Result<PaneJoinResult, String> {
             previous_pane_id: nonempty_id(move_result.previous_pane_id, missing)?,
             closed_tab_id: move_result.closed_tab_id,
             closed_workspace_id: move_result.closed_workspace_id,
+            created_tab_id: move_result.created_tab.map(|tab| tab.tab_id),
         }),
         _ => Err(missing.into()),
     }
-}
-
-/// The tab `pane.move` created, when it created one.
-///
-/// Herdr answers a move it declined with `changed: false` and a reason
-/// instead of an error, so a refusal has to be read off the result rather
-/// than inferred from a missing field.
-pub(crate) fn moved_pane_tab(value: Value) -> Result<String, String> {
-    let missing = "pane.move response is missing created_tab.tab_id";
-    match response(value, missing)? {
-        res::ResponseResult::PaneMove { move_result } => move_outcome(
-            move_result.changed,
-            move_result.reason.map(|reason| format!("{reason:?}")),
-            move_result.created_tab.map(|tab| tab.tab_id),
-        ),
-        _ => Err(missing.into()),
-    }
-}
-
-/// The decision `pane.move`'s result carries, apart from decoding it.
-///
-/// Herdr answers a move it declined with `changed: false` and a reason rather
-/// than an error, so a refusal has to be read rather than inferred from a
-/// missing field.
-pub(crate) fn move_outcome(
-    changed: bool,
-    reason: Option<String>,
-    created_tab_id: Option<String>,
-) -> Result<String, String> {
-    let missing = "pane.move response is missing created_tab.tab_id";
-    if !changed {
-        return Err(match reason {
-            Some(reason) => format!("Herdr declined the move: {reason}"),
-            None => "Herdr declined the move".to_owned(),
-        });
-    }
-    nonempty_id(created_tab_id.ok_or_else(|| missing.to_owned())?, missing)
 }
 
 pub(crate) fn tab_create_with_env_params(
@@ -1240,10 +1068,14 @@ pub(crate) fn replacement_pane_params(
         workspace_id: None,
     })
 }
+/// `label` and `path` are a spawn's own: Herdr names the workspace and
+/// places the checkout otherwise, and Hide never restates its defaults.
 pub(crate) fn worktree_create_params(
     cwd: &str,
     branch: &str,
     base: Option<&str>,
+    label: Option<&str>,
+    path: Option<&str>,
     focus: bool,
 ) -> Result<Value, String> {
     params(req::WorktreeCreateParams {
@@ -1251,9 +1083,8 @@ pub(crate) fn worktree_create_params(
         branch: Some(branch.to_owned()),
         cwd: Some(herdr_param(cwd)),
         focus,
-        label: None,
-        // Herdr owns the default checkout location. Hide must never restate it.
-        path: None,
+        label: label.map(str::to_owned),
+        path: path.map(str::to_owned),
         // Keep Herdr's repository trust checks in force.
         trust_repository: None,
         workspace_id: None,
@@ -1615,15 +1446,6 @@ pub(crate) fn pane_swap_params(first: &str, second: &str) -> Result<Value, Strin
     })
 }
 
-/// One agent as Herdr reports it right now, for the check agent sleep makes
-/// just before it ends the agent's process.
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct AgentState {
-    pub(crate) agent: Option<String>,
-    pub(crate) status: String,
-    pub(crate) state_change_seq: u64,
-}
-
 pub(crate) fn agent_target_params(target: &str) -> Result<Value, String> {
     params(req::AgentTarget {
         target: target.into(),
@@ -1639,47 +1461,6 @@ pub(crate) fn agent_state(value: Value) -> Result<AgentState, String> {
             state_change_seq: agent.state_change_seq,
         }),
         _ => Err(missing.into()),
-    }
-}
-
-/// Fresh delivery guard, converted here rather than exposing generated types.
-pub(crate) struct DeliveryAgent {
-    pub pane_id: String,
-    pub terminal_id: String,
-    pub name: String,
-    pub kind: Option<String>,
-    pub session: Option<String>,
-    pub status: String,
-    pub state_change_seq: u64,
-    pub readiness: Readiness,
-}
-
-/// What Herdr says about whether an agent takes typed input. Herdr reports
-/// readiness only for an agent it started itself (`agent.start`): it sends
-/// `launch_pending: true` while that start settles or is blocked, and
-/// `interactive_ready: true` once it is active, and omits either flag when it
-/// is false. An agent the operator started by typing its program in a shell
-/// carries neither flag, so its readiness is unreported, not refused.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum Readiness {
-    Ready,
-    Unreported,
-    NotReady,
-    Launching,
-}
-
-impl Readiness {
-    pub(crate) fn accepts_input(self) -> bool {
-        matches!(self, Self::Ready | Self::Unreported)
-    }
-
-    fn of(interactive_ready: Option<bool>, launch_pending: Option<bool>) -> Self {
-        match (interactive_ready, launch_pending) {
-            (_, Some(true)) => Self::Launching,
-            (Some(false), _) => Self::NotReady,
-            (Some(true), _) => Self::Ready,
-            (None, _) => Self::Unreported,
-        }
     }
 }
 
@@ -1747,50 +1528,6 @@ pub(crate) fn delivery_input_params(pane: &str, text: &str) -> Result<Value, Str
         text: Some(text.into()),
         keys: vec!["enter".into()],
     })
-}
-
-/// Which process group holds a pane's terminal, which is its shell's, and
-/// the processes in the foreground group.
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct PaneProcessGroup {
-    pub(crate) shell_pid: Option<u32>,
-    pub(crate) foreground_process_group_id: Option<u32>,
-    pub(crate) foreground_pids: Vec<u32>,
-    /// The foreground processes' names, in the order of `foreground_pids`.
-    pub(crate) foreground_names: Vec<String>,
-}
-
-impl PaneProcessGroup {
-    /// Herdr's condition for `agent.start`: the foreground group is the
-    /// shell's own and holds nothing but the shell.
-    pub(crate) fn shell_holds_terminal(&self) -> bool {
-        match self.shell_pid {
-            Some(shell) if shell > 1 => {
-                self.foreground_process_group_id == Some(shell)
-                    && self.foreground_pids.iter().all(|pid| *pid == shell)
-            }
-            _ => false,
-        }
-    }
-
-    /// The shell's own program name, read while it is in the foreground.
-    pub(crate) fn shell_name(&self) -> Option<&str> {
-        let shell = self.shell_pid?;
-        self.foreground_pids
-            .iter()
-            .zip(&self.foreground_names)
-            .find(|(pid, _)| **pid == shell)
-            .map(|(_, name)| name.trim_start_matches('-'))
-    }
-
-    /// The first foreground process that is not the pane's shell.
-    pub(crate) fn foreground_program(&self) -> Option<&str> {
-        self.foreground_pids
-            .iter()
-            .zip(&self.foreground_names)
-            .find(|(pid, _)| Some(**pid) != self.shell_pid)
-            .map(|(_, name)| name.as_str())
-    }
 }
 
 fn process_name(process: &res::PaneProcessInfoProcess) -> String {
@@ -2088,16 +1825,6 @@ pub(crate) fn created_tab(value: Value) -> Result<(String, String), String> {
     }
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct CreatedWorktree {
-    pub tab_label: String,
-    pub workspace_id: String,
-    pub tab_id: String,
-    pub pane_id: String,
-    pub path: String,
-    pub branch: Option<String>,
-}
-
 pub(crate) fn created_worktree(value: Value) -> Result<CreatedWorktree, String> {
     let missing = "worktree.create response is missing its created worktree identity";
     match response(value, missing)? {
@@ -2208,14 +1935,14 @@ pub(crate) fn pane_layout(value: Value) -> Result<SessionLayoutPayload, String> 
         _ => Err("pane.layout response is missing layout".into()),
     }
 }
-pub(crate) fn pane_text(value: Value) -> Result<crate::live::PaneText, String> {
+pub(crate) fn pane_text(value: Value) -> Result<crate::engine::PaneText, String> {
     if value.get("read").is_none() {
         return Err("pane.read returned no read section".into());
     }
     let result: res::ResponseResult = serde_json::from_value(value)
         .map_err(|error| format!("pane.read response is malformed: {error}"))?;
     match result {
-        res::ResponseResult::PaneRead { read } => Ok(crate::live::PaneText {
+        res::ResponseResult::PaneRead { read } => Ok(crate::engine::PaneText {
             text: read.text,
             truncated: read.truncated,
         }),
@@ -2236,13 +1963,12 @@ pub(crate) fn subscription_params(kinds: &[&str]) -> Result<Value, String> {
     params(req::EventsSubscribeParams { subscriptions })
 }
 
-// What `hided`'s phone routes and `hide connect`'s server handoff need from
-// Herdr: the only items of this module that are public, and the way a crate
-// other than this one reaches the generated types. Each takes and returns
-// plain values.
+// What `hide connect`'s server handoff needs from Herdr: the only items of
+// this module that are public, reached from outside this crate through
+// `engine::herdr::handoff`. Each takes and returns plain values.
 
 /// The recent rows of one pane, with escape sequences kept.
-pub fn pane_rows_params(pane_id: &str, lines: u32) -> Result<Value, String> {
+pub(crate) fn pane_rows_params(pane_id: &str, lines: u32) -> Result<Value, String> {
     params(req::PaneReadParams {
         pane_id: pane_id.into(),
         source: req::ReadSource::Recent,
@@ -2252,18 +1978,8 @@ pub fn pane_rows_params(pane_id: &str, lines: u32) -> Result<Value, String> {
     })
 }
 
-/// A `pane.read` answer, as the rows and whether Herdr cut them.
-pub fn pane_rows(value: Value) -> Result<(String, bool), String> {
-    pane_text(value).map(|read| (read.text, read.truncated))
-}
-
-/// A reply typed into a pane and submitted with Enter.
-pub fn pane_reply_params(pane_id: &str, text: &str) -> Result<Value, String> {
-    delivery_input_params(pane_id, text)
-}
-
 /// One Herdr key-combo string sent to a pane.
-pub fn pane_key_params(pane_id: &str, key: &str) -> Result<Value, String> {
+pub(crate) fn pane_key_params(pane_id: &str, key: &str) -> Result<Value, String> {
     params(req::PaneSendInputParams {
         pane_id: pane_id.into(),
         text: None,
@@ -2271,23 +1987,8 @@ pub fn pane_key_params(pane_id: &str, key: &str) -> Result<Value, String> {
     })
 }
 
-/// How a pane's agent session is named: by id, or by the path of its file.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum PaneSessionKind {
-    Id,
-    Path,
-}
-
-/// The session Herdr reports for a pane's agent.
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct PaneSession {
-    pub agent: String,
-    pub kind: PaneSessionKind,
-    pub value: String,
-}
-
 /// A `pane.get` answer, as the pane's folder and its agent session if any.
-pub fn pane_session(value: Value) -> Result<(Option<String>, Option<PaneSession>), String> {
+pub(crate) fn pane_session(value: Value) -> Result<(Option<String>, Option<PaneSession>), String> {
     let result: res::ResponseResult = serde_json::from_value(value)
         .map_err(|error| format!("pane.get response is malformed: {error}"))?;
     match result {
@@ -2304,16 +2005,6 @@ pub fn pane_session(value: Value) -> Result<(Option<String>, Option<PaneSession>
         )),
         _ => Err("pane.get returned no pane".into()),
     }
-}
-
-/// What a Herdr server says of itself when pinged.
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct ServerPong {
-    pub version: String,
-    pub protocol: u32,
-    /// Whether it can hand its panes to another Herdr program
-    /// (`server.live_handoff`); Herdr does so on Unix only.
-    pub live_handoff: bool,
 }
 
 /// A `ping`, which takes no parameters.
@@ -2360,13 +2051,20 @@ pub fn live_handoff_done(value: Value) -> Result<(), String> {
     }
 }
 
+/// Herdr's `session.snapshot` object as the sidebar's payload.
+pub(crate) fn project_snapshot(
+    snapshot: &Value,
+) -> Result<crate::sidebar::SessionSnapshotPayload, SessionFetchError> {
+    Ok(self::snapshot(snapshot.clone())?.project())
+}
+
 pub(crate) fn live_session_response(
     value: Value,
 ) -> Result<crate::sidebar::SessionSnapshotPayload, SessionFetchError> {
     let snapshot = value
         .get("snapshot")
         .ok_or_else(|| malformed("response is missing snapshot"))?;
-    crate::session_sync::project_snapshot(snapshot)
+    project_snapshot(snapshot)
 }
 
 fn remote_protocol_error(operation: &str, reason: impl Into<String>) -> crate::remote::RemoteError {
@@ -2668,7 +2366,7 @@ mod tests {
     }
 
     use super::*;
-    use crate::herdr_contract::HERDR_API_SCHEMA_JSON;
+    use crate::engine::herdr::contract::HERDR_API_SCHEMA_JSON;
 
     #[test]
     fn pane_interrupt_uses_the_generated_literal_text_contract() {
@@ -2746,7 +2444,7 @@ mod tests {
     #[test]
     fn pane_join_targets_the_existing_tab_and_unzoom_is_explicit() {
         assert_eq!(
-            pane_join_params("w1:p3", "w1:t1", "w1:p1").unwrap(),
+            pane_insert_params("w1:p3", "w1:t1", "w1:p1", false).unwrap(),
             json!({
                 "pane_id":"w1:p3", "focus":false,
                 "destination":{"type":"tab", "tab_id":"w1:t1",
@@ -2801,6 +2499,7 @@ mod tests {
                 previous_pane_id: "w1:p3".into(),
                 closed_tab_id: Some("w1:t2".into()),
                 closed_workspace_id: None,
+                created_tab_id: None,
             }
         );
         let mut missing_identity = joined_pane_answer();
@@ -3028,13 +2727,38 @@ mod tests {
     }
 
     #[test]
+    fn a_notification_answer_names_why_nothing_showed() {
+        for (answer, expected) in [
+            (json!({"shown": true, "reason": "shown"}), Ok(())),
+            (
+                json!({"shown": false, "reason": "disabled"}),
+                Err("disabled"),
+            ),
+            (
+                json!({"shown": false, "reason": "rate_limited"}),
+                Err("rate_limited"),
+            ),
+            (
+                json!({"shown": false, "reason": "no_foreground_client"}),
+                Err("no_foreground_client"),
+            ),
+            (json!({"shown": false, "reason": "busy"}), Err("busy")),
+            (json!({"shown": false}), Err("not_shown")),
+            (json!({"shown": false, "reason": "other"}), Err("not_shown")),
+            (json!({"reason": "disabled"}), Err("answer_unreadable")),
+        ] {
+            assert_eq!(notification_shown(&answer), expected, "{answer}");
+        }
+    }
+
+    #[test]
     fn phone_pane_requests_keep_their_shape() {
         assert_eq!(
             pane_rows_params("w1:p1", 40).unwrap(),
             json!({"pane_id": "w1:p1", "source": "recent", "lines": 40, "format": "ansi", "strip_ansi": false})
         );
         assert_eq!(
-            pane_reply_params("w1:p1", "ok").unwrap(),
+            delivery_input_params("w1:p1", "ok").unwrap(),
             json!({"pane_id": "w1:p1", "text": "ok", "keys": ["enter"]})
         );
         assert_eq!(

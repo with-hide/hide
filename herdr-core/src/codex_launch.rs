@@ -4,8 +4,8 @@
 //! daemon's environment, so Herdr never learns that pane's session and Hide
 //! cannot read it (openai/codex#48500). Every start Hide makes, a new agent,
 //! a start from an issue or PR, a reopen, a fork and a wake, goes through
-//! [`crate::wire::agent_start_params`], which takes the machine's answer here
-//! and puts the flag first. Whether the machine's shared server is on does
+//! the engine's start ([`crate::engine::Engine::prepare_start`]), which takes
+//! the machine's answer here and puts the flag first. Whether the machine's shared server is on does
 //! not matter to the flag: the kit no longer turns the server off by itself
 //! (PRD settings-cleanup D-14), only the operator's own request does, and a
 //! machine where it was turned off earlier keeps it off.
@@ -150,7 +150,7 @@ mod tests {
         unavailable.unavailable = Some(crate::model::KitUnavailable::Standalone);
         for kit in [kit(None), unavailable, KitSnapshot::default()] {
             for args in [vec![], strings(&["resume", "a"]), strings(&["--no-daemon"])] {
-                let error = crate::wire::agent_start_params(
+                let error = crate::engine::herdr::wire::agent_start_params(
                     "pane",
                     "agent",
                     "codex",

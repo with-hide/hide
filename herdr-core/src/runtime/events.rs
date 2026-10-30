@@ -1161,6 +1161,17 @@ pub(super) struct PrDelegatePayload {
     /// The id the page follows this start's answer by, as for any start.
     #[serde(default)]
     pub(super) request_id: Option<String>,
+    /// What the agent is asked to do. `review` is the card's pre-check: the
+    /// session it starts is recorded as the pull request's agent review
+    /// (PRD pr-review-status D-11); absent is any other work.
+    #[serde(default)]
+    pub(super) intent: Option<PrDelegateIntent>,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "snake_case")]
+pub(super) enum PrDelegateIntent {
+    Review,
 }
 
 /// `issue_set_open`: close or reopen a Local issue.
@@ -1655,6 +1666,10 @@ pub(super) enum Event {
     LinksClose,
     SessionRecordOpen(super::links::RecordOpenPayload),
     SessionRecordClose,
+    SessionThreadOpen(super::session_thread::ThreadOpenPayload),
+    SessionThreadOlder(super::session_thread::ThreadOlderPayload),
+    SessionThreadClose,
+    SessionThreadInput(super::session_thread::ThreadInputPayload),
     SessionWorkSearch(super::links::RecordSearchPayload),
     SessionMissedStatus(super::links::MissedStatusPayload),
     BacklogAdd(super::backlog::BacklogAddPayload),
@@ -1946,6 +1961,24 @@ pub(super) fn validate_event(event: EventEnvelope) -> Result<Event, EventValidat
         "links_open" => decode!(super::links::LinksOpenPayload, LinksOpen),
         "session_record_open" => decode!(super::links::RecordOpenPayload, SessionRecordOpen),
         "session_record_close" => Ok(Event::SessionRecordClose),
+        "session_thread_open" => {
+            decode!(super::session_thread::ThreadOpenPayload, SessionThreadOpen)
+        }
+        "session_thread_older" => {
+            decode!(
+                super::session_thread::ThreadOlderPayload,
+                SessionThreadOlder
+            )
+        }
+        "session_thread_close" => Ok(Event::SessionThreadClose),
+        // Made by hided from a screen's `thread_input`; hided refuses a
+        // client that sends it.
+        "session_thread_input" => {
+            decode!(
+                super::session_thread::ThreadInputPayload,
+                SessionThreadInput
+            )
+        }
         "session_work_search" => {
             let search: super::links::RecordSearchPayload =
                 serde_json::from_value(payload).map_err(|_| invalid_payload(&kind))?;
@@ -2231,6 +2264,10 @@ impl Runtime {
             Event::LinksOpen(payload) => self.open_links(payload),
             Event::SessionRecordOpen(payload) => self.open_session_record(payload),
             Event::SessionRecordClose => self.close_session_record(),
+            Event::SessionThreadOpen(payload) => self.open_session_thread(payload),
+            Event::SessionThreadOlder(payload) => self.read_older_session_thread(payload),
+            Event::SessionThreadClose => self.close_session_thread(),
+            Event::SessionThreadInput(payload) => self.send_session_thread_input(payload),
             Event::SessionWorkSearch(payload) => self.search_work_sessions(payload),
             Event::SessionMissedStatus(payload) => self.set_missed_status(payload),
             Event::BacklogAdd(payload) => self.add_backlog(payload),
@@ -2280,7 +2317,7 @@ impl Runtime {
             Event::ArchiveCheck(payload) => self.check_archive_status(payload),
             // The phone's reply reached the pane; nothing on screen moves.
             Event::PaneInputSubmitted(payload) => {
-                self.note_delivery_reply(&payload.pane_id);
+                self.note_delivery_reply(&payload.pane_id, "phone_reply");
                 self.record_operator_submit(&payload.pane_id);
                 false
             }
@@ -2514,7 +2551,7 @@ impl Runtime {
                         return false;
                     }
                     let path = payload.path.clone();
-                    let result = live::spawn_workspace_creation(
+                    let result = crate::checkout_owner::open::spawn_workspace_creation(
                         context,
                         self.node.clone(),
                         payload.path,
@@ -3393,7 +3430,7 @@ impl Runtime {
                 }
                 self.sync_input_requests();
                 self.push_diagnostic("pane.fork.requested", format!("Forking pane {pane_id}"));
-                if let Err(message) = live::spawn_agent_fork(context, request) {
+                if let Err(message) = crate::fork::worker::spawn_agent_fork(context, request) {
                     // A worker that never started is a fork that failed, and
                     // the operator is owed the same notice and the same
                     // stderr diagnostic either way.
@@ -3845,7 +3882,7 @@ impl Runtime {
                 } else {
                     0
                 };
-                let request = live::PaneFindRequest {
+                let request = crate::find::pane::PaneFindRequest {
                     term: payload.term.clone(),
                     options: crate::find::PaneFindOptions {
                         case_sensitive: payload.case_sensitive,
@@ -3855,7 +3892,7 @@ impl Runtime {
                     step: payload.step,
                     current_index,
                 };
-                if let Err(message) = live::spawn_pane_find(route, request) {
+                if let Err(message) = crate::find::pane::spawn_pane_find(route, request) {
                     self.set_error("pane.find_worker_failed", message, true);
                 }
                 false

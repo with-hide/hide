@@ -244,6 +244,35 @@ pub enum SessionRole {
     /// It worked on the branch while the pull request lived, or printed the
     /// address later.
     Worked,
+    /// A pre-check of the pull request started it (`pr_delegate` with the
+    /// review intent): a review by an agent, never a GitHub approval (PRD
+    /// pr-review-status D-11).
+    Reviewed,
+}
+
+impl SessionRole {
+    /// Which of two roles a line of several sessions, or a session on several
+    /// pull requests, shows: making the pull request, then reviewing it,
+    /// then working on it.
+    pub fn rank(self) -> u8 {
+        match self {
+            Self::Created => 2,
+            Self::Reviewed => 1,
+            Self::Worked => 0,
+        }
+    }
+}
+
+/// A session a pre-check of pull request `number` of `repo_name` started, as
+/// the reader names the session (PRD pr-review-status D-11).
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub struct ReviewFact {
+    pub device_id: String,
+    pub agent: String,
+    pub session_id: String,
+    /// `owner/name`, lowercase, as the record keys repositories by name.
+    pub repo_name: String,
+    pub number: u64,
 }
 
 /// Whether a session's own file is still where the record saw it.

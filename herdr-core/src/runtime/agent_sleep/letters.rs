@@ -147,7 +147,7 @@ impl Runtime {
             && record
                 .session_id
                 .as_deref()
-                .and_then(crate::wire::session_digest)
+                .and_then(crate::engine::tokens::session_digest)
                 == actor.session
         {
             return Some((Route::Pane(actor.pane_id.clone()), Stage::of_pane(record)));
@@ -180,7 +180,7 @@ impl Runtime {
                         session: record
                             .session_id
                             .as_deref()
-                            .and_then(crate::wire::session_digest),
+                            .and_then(crate::engine::tokens::session_digest),
                         since: record.since_unix_ms,
                     },
                 )
@@ -581,6 +581,7 @@ impl Runtime {
                             // Hide reads no answer, and the note wakes no one.
                             kind: "progress".into(),
                             now: false,
+                            force: false,
                         },
                     );
                     if let Err(code) = prepared.run(NOTE_CALL) {
@@ -622,6 +623,7 @@ pub(in crate::runtime) fn asleep_observation(actor: Actor) -> Observation {
         released_input_at_unix_ms: 0,
         hook_submit_at_unix_ms: 0,
         session: None,
+        thread: None,
         host_scope: None,
         turn: Turn::NotReported,
     }

@@ -109,7 +109,7 @@ fn another_folder_is_added_by_create_workspace_and_its_receipt_follows_the_creat
     let registration = workspace::registration(path, "hide-open-new", &node).unwrap();
     assert!(runtime.ingest_workspace_creation(
         path,
-        Ok(live::WorkspaceCreationOutcome {
+        Ok(crate::checkout_owner::open::WorkspaceCreationOutcome {
             registration: registration.clone(),
             base_registrations: Vec::new(),
             registrations: vec![registration],
@@ -138,9 +138,11 @@ fn a_registration_that_fails_is_the_receipt_s_refusal() {
 
     runtime.ingest_workspace_creation(
         path,
-        Err(live::WorkspaceCreationFailure::failed(
-            "Workspace path does not exist",
-        )),
+        Err(
+            crate::checkout_owner::open::WorkspaceCreationFailure::failed(
+                "Workspace path does not exist",
+            ),
+        ),
         2,
     );
     assert_eq!(

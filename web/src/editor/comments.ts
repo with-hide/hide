@@ -261,13 +261,17 @@ export function viewComments(host: { current: CommentHost }): Extension {
 
   // A block is as wide as the visible text, not the longest line, and stays
   // beside the gutters while the lines scroll sideways, so an unwrapped View
-  // keeps its note's buttons in sight. Measured only when the geometry moves.
+  // keeps its note's buttons in sight; Markdown Live's centred column insets
+  // the scroller, and the block keeps inside it. Measured only when the
+  // geometry moves.
   const fit = ViewPlugin.define((view) => {
     const measure = () =>
       view.requestMeasure({
         read: () => {
           const gutters = view.dom.querySelector<HTMLElement>(".cm-gutters")?.offsetWidth ?? 0;
-          return { left: gutters, width: Math.max(0, view.scrollDOM.clientWidth - gutters) };
+          const style = getComputedStyle(view.scrollDOM);
+          const inset = Number.parseFloat(style.paddingLeft) + Number.parseFloat(style.paddingRight);
+          return { left: gutters, width: Math.max(0, view.scrollDOM.clientWidth - gutters - inset) };
         },
         write: ({ left, width }) => {
           view.dom.style.setProperty("--cm-view-comment-left", `${left}px`);

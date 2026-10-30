@@ -98,6 +98,8 @@ export const baseTheme = () => [appearance.of(EditorView.darkTheme.of(pageIsDark
 /** The text scale the core holds for the editor (`ui_state.editor_text_scale`). */
 export function scaleTheme(scale: number) {
   return EditorView.theme({
+    // Markdown Live's headings and frontmatter properties size from their own tokens times this.
+    "&": { "--cm-editor-scale": `${scale}` },
     ".cm-content": {
       fontSize: `calc(var(--text-editor-document) * ${scale})`,
       lineHeight: "1.5",
@@ -106,27 +108,77 @@ export function scaleTheme(scale: number) {
   });
 }
 
+const COLUMN_INSET = "max(var(--spacing-none), calc((100% - var(--size-editor-measure) - var(--size-control-sm)) / 2))";
+
+/**
+ * A Markdown document in Live reads as a page, not as source: the interface's
+ * sans-serif font, a looser line, one centred column (`--size-editor-measure`,
+ * the comment gutter beside it) and no current-line band. Source mode keeps
+ * the monospaced editor; an issue body (`MarkdownText.tsx`) takes only the
+ * drawn styles below.
+ */
+export const liveDocumentTheme = EditorView.theme({
+  "& .cm-scroller": { paddingLeft: COLUMN_INSET, paddingRight: COLUMN_INSET },
+  "&.cm-editor .cm-content": {
+    fontFamily: "var(--font-sans)",
+    lineHeight: "1.75",
+    paddingTop: "var(--spacing-lg)",
+    paddingBottom: "var(--spacing-xxxl)",
+  },
+  "&.cm-editor .cm-activeLine": { backgroundColor: "transparent" },
+});
+
+/**
+ * The frontmatter pane's column (`frontmatterLive.ts`): the body's, moved past
+ * the comment gutter the pane does not have, so a key starts where the text does.
+ */
+export const liveFrontColumn = EditorView.theme({
+  "& .cm-scroller": { paddingLeft: `calc(${COLUMN_INSET} + var(--size-control-sm))`, paddingRight: COLUMN_INSET },
+});
+
+const heading = (level: number, lineHeight: string, spaceAbove: string) => ({
+  fontSize: `calc(var(--text-editor-heading-${level}) * var(--cm-editor-scale, 1))`,
+  fontWeight: level === 1 ? "700" : "600",
+  lineHeight,
+  paddingTop: spaceAbove,
+  color: "var(--foreground)",
+});
+
 /**
  * Markdown Live's drawn styles (PRD B6): the block and inline classes the plan
- * emits. Heading sizes are the editor heading tokens, so Live reads at the same
- * sizes as the preview; a hidden fence line collapses to no height.
+ * emits. Headings take the text colour and are told apart by size and weight;
+ * their sizes are the editor heading tokens times the editor's text scale. A
+ * hidden fence line collapses to no height.
  */
 export const liveTheme = EditorView.theme({
-  ".cm-md-heading-1": { fontSize: "var(--text-editor-heading-1)", fontWeight: "600", lineHeight: "1.3" },
-  ".cm-md-heading-2": { fontSize: "var(--text-editor-heading-2)", fontWeight: "600", lineHeight: "1.3" },
-  ".cm-md-heading-3": { fontSize: "var(--text-editor-heading-3)", fontWeight: "600", lineHeight: "1.3" },
-  ".cm-md-heading-4": { fontSize: "var(--text-editor-heading-4)", fontWeight: "600", lineHeight: "1.4" },
-  ".cm-md-heading-5": { fontSize: "var(--text-editor-heading-5)", fontWeight: "600", lineHeight: "1.4" },
-  ".cm-md-heading-6": { fontSize: "var(--text-editor-heading-6)", fontWeight: "600", lineHeight: "1.4" },
-  ".cm-md-code": { fontFamily: "var(--font-mono)", backgroundColor: "var(--secondary)" },
+  ".cm-md-heading-1": { ...heading(1, "1.35", "var(--spacing-sm)"), letterSpacing: "-0.01em" },
+  ".cm-md-heading-2": {
+    ...heading(2, "1.4", "var(--spacing-xl)"),
+    paddingBottom: "var(--spacing-xs)",
+    borderBottom: "var(--size-hairline) solid var(--border)",
+  },
+  ".cm-md-heading-3": heading(3, "1.4", "var(--spacing-lg)"),
+  ".cm-md-heading-4": heading(4, "1.5", "var(--spacing-md)"),
+  ".cm-md-heading-5": heading(5, "1.5", "var(--spacing-md)"),
+  ".cm-md-heading-6": { ...heading(6, "1.5", "var(--spacing-md)"), color: "var(--subtle-foreground)" },
+  // The syntax colours stay with Source; a drawn heading reads in its line's colour.
+  "& [class*='cm-md-heading-'] span": { color: "inherit" },
+  "& .cm-line .cm-md-link": { color: "var(--file-blue)" },
+  "& .cm-line .cm-md-code-inline": {
+    fontFamily: "var(--font-mono)",
+    fontSize: "0.86em",
+    padding: "var(--spacing-xxs) var(--spacing-xs)",
+    borderRadius: "var(--radius-xs)",
+    backgroundColor: "var(--secondary)",
+  },
+  ".cm-md-code": { fontFamily: "var(--font-mono)", fontSize: "0.9em", lineHeight: "1.6", backgroundColor: "var(--secondary)" },
+  ".cm-md-link": { textDecoration: "underline" },
   ".cm-md-hidden-line": { display: "none" },
   ".cm-md-quote": {
     borderLeft: "var(--size-editor-quote-rule) solid var(--border)",
     paddingLeft: "var(--spacing-sm)",
     color: "var(--subtle-foreground)",
   },
-  ".cm-md-link": { color: "var(--file-blue)", textDecoration: "underline" },
-  ".cm-md-code-inline": { fontFamily: "var(--font-mono)", backgroundColor: "var(--secondary)" },
   ".cm-md-bullet": { color: "var(--subtle-foreground)" },
   ".cm-md-checkbox": { verticalAlign: "middle" },
   // Drawn HTML and images. The page's reset makes an image a block and strips

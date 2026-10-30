@@ -1120,9 +1120,11 @@ fn workspace_creation_failures_retire_inflight_and_keep_partial_registration_vis
 
     assert!(runtime.ingest_workspace_creation(
         missing_path,
-        Err(live::WorkspaceCreationFailure::failed(
-            "Workspace path does not exist"
-        )),
+        Err(
+            crate::checkout_owner::open::WorkspaceCreationFailure::failed(
+                "Workspace path does not exist"
+            )
+        ),
         4,
     ));
     assert!(!runtime.workspace_creations_in_flight.contains(missing_path));
@@ -1153,7 +1155,7 @@ fn workspace_creation_failures_retire_inflight_and_keep_partial_registration_vis
     assert!(
         runtime.ingest_workspace_creation(
             partial_path,
-            Ok(live::WorkspaceCreationOutcome {
+            Ok(crate::checkout_owner::open::WorkspaceCreationOutcome {
                 registration: registration.clone(),
                 base_registrations: Vec::new(),
                 registrations: vec![registration.clone()],
@@ -1364,7 +1366,7 @@ fn adding_a_folder_while_its_removal_closes_panes_is_refused_and_a_landed_add_ca
         .insert("/tmp/./hide-context-alpha".to_owned());
     assert!(runtime.ingest_workspace_creation(
         "/tmp/./hide-context-alpha",
-        Ok(live::WorkspaceCreationOutcome {
+        Ok(crate::checkout_owner::open::WorkspaceCreationOutcome {
             registration: registration.clone(),
             base_registrations: vec![registration.clone()],
             registrations: vec![registration.clone()],
@@ -1963,7 +1965,7 @@ fn cleanup_review_without_live_state_is_visible_and_never_deletes() {
 /// second one to repeat it.
 #[test]
 fn a_cleanup_confirmation_only_selects_what_the_review_allows_and_runs_once() {
-    use crate::live::cleanup::{CleanupRow, CleanupSnapshot, InUse};
+    use crate::worktree_cleanup::{CleanupRow, CleanupSnapshot, InUse};
     let mut runtime = runtime();
     runtime.ingest_session(Ok(context_payload()));
     runtime.snapshot.navigator.workspaces[0].is_git = true;
@@ -2021,7 +2023,7 @@ fn a_cleanup_confirmation_only_selects_what_the_review_allows_and_runs_once() {
 /// it ended, both work again.
 #[test]
 fn a_cleanup_in_flight_takes_no_dismissal_and_no_second_review() {
-    use crate::live::cleanup::CleanupSnapshot;
+    use crate::worktree_cleanup::CleanupSnapshot;
     let mut runtime = runtime();
     runtime.ingest_session(Ok(context_payload()));
     runtime.snapshot.navigator.workspaces[0].is_git = true;
@@ -2056,7 +2058,7 @@ fn a_cleanup_in_flight_takes_no_dismissal_and_no_second_review() {
         workspace_id: workspace_id.clone(),
         phase: "review".into(),
         usage_ready: true,
-        rows: vec![crate::live::cleanup::CleanupRow {
+        rows: vec![crate::worktree_cleanup::CleanupRow {
             path: "/w/free".into(),
             ..Default::default()
         }],
@@ -2288,7 +2290,7 @@ fn branch_migration_receipt_preserves_core_focus() {
 
     assert!(runtime.ingest_task_operation_result(
         id,
-        Ok(live::WorktreeTaskOutcome {
+        Ok(crate::worktree_control::WorktreeTaskOutcome {
             path: "/fixture/worktree".into(),
             pane_id: "new:pane".into(),
             created_tab_id: None,
@@ -2365,7 +2367,7 @@ fn agent_start_in_checkout_records_whether_it_stays_behind() {
 /// operator left them; the same start from the desktop takes them.
 #[test]
 fn a_task_that_stays_behind_leaves_the_desktop_focus_where_it_was() {
-    let outcome = || live::WorktreeTaskOutcome {
+    let outcome = || crate::worktree_control::WorktreeTaskOutcome {
         path: "/fixture/repo".into(),
         pane_id: "new:pane".into(),
         created_tab_id: None,
@@ -2467,7 +2469,7 @@ fn created_worktree_starts_collapsed_and_keeps_purpose_failure_non_blocking() {
     );
     assert!(runtime.ingest_task_operation_result(
         id,
-        Ok(live::WorktreeTaskOutcome {
+        Ok(crate::worktree_control::WorktreeTaskOutcome {
             path: path.to_owned(),
             pane_id: "w-created:p1".to_owned(),
             created_tab_id: None,
@@ -3631,7 +3633,7 @@ fn a_starting_agent_asks_before_closing_only_when_its_start_carried_a_first_prom
         );
         assert!(runtime.ingest_task_operation_result(
             id,
-            Ok(live::WorktreeTaskOutcome {
+            Ok(crate::worktree_control::WorktreeTaskOutcome {
                 path: "/tmp/hide-agent-task".into(),
                 pane_id: "w1:p9".into(),
                 created_tab_id: None,
@@ -3664,7 +3666,10 @@ fn a_starting_agent_asks_before_closing_only_when_its_start_carried_a_first_prom
             "{prompt:?} before the start's answer"
         );
         // The start's answer lands before Herdr reports the agent.
-        assert!(runtime.ingest_task_agent_result(id, live::TaskAgentOutcome::Started));
+        assert!(
+            runtime
+                .ingest_task_agent_result(id, crate::worktree_control::TaskAgentOutcome::Started)
+        );
         assert!(runtime.ingest_session(Ok(starting_task_agent(
             Some("claude"),
             "unknown",
@@ -3715,7 +3720,7 @@ fn a_task_agent_start_reports_apart_from_the_creation_it_follows() {
         .unwrap();
     assert!(runtime.ingest_task_operation_result(
         id,
-        Ok(live::WorktreeTaskOutcome {
+        Ok(crate::worktree_control::WorktreeTaskOutcome {
             path: "/tmp/hide-agent-task".into(),
             pane_id: "w1:p9".into(),
             created_tab_id: None,
@@ -3734,7 +3739,7 @@ fn a_task_agent_start_reports_apart_from_the_creation_it_follows() {
     // the first prompt's mark.
     assert_eq!(
         runtime.pending_task_agent_start(id),
-        Some(live::PendingAgentStart {
+        Some(crate::worktree_control::PendingAgentStart {
             resume_reference: None,
             resume_scope: None,
             codex_daemon: Default::default(),
@@ -3761,10 +3766,12 @@ fn a_task_agent_start_reports_apart_from_the_creation_it_follows() {
 
     assert!(runtime.ingest_task_agent_result(
         id,
-        live::TaskAgentOutcome::Failed(live::AgentFailure::with_detail(
-            "agent_start.not_installed",
-            "claude is not installed on the daemon's PATH",
-        )),
+        crate::worktree_control::TaskAgentOutcome::Failed(
+            crate::worktree_control::AgentFailure::with_detail(
+                "agent_start.not_installed",
+                "claude is not installed on the daemon's PATH",
+            )
+        ),
     ));
     let operation = runtime.snapshot().task_operation.clone().unwrap();
     assert_eq!(operation.phase, "ready");
@@ -4195,7 +4202,7 @@ fn a_failed_removal_keeps_its_row_and_rereads() {
     let before = runtime.worktrees_request();
     assert!(runtime.ingest_worktree_removal_result(
         2,
-        Err(crate::live::RemovalFailure::new(
+        Err(crate::worktree_control::RemovalFailure::new(
             crate::model::WorktreeRemovalNotice::Stopped {
                 stop: hide_node_link::worktrees::RemovalStop::Changed { files: 1 },
                 panes_closed: true
@@ -4664,7 +4671,7 @@ fn a_merge_the_cleanup_review_proved_by_branch_marks_the_sidebar_too() {
     let merged = |runtime: &Runtime| runtime.worktree_catalog.projects[0].worktrees[0].merged;
     assert_ne!(merged(&runtime), Some(true));
 
-    runtime.cleanup = Some(crate::live::cleanup::CleanupSnapshot {
+    runtime.cleanup = Some(crate::worktree_cleanup::CleanupSnapshot {
         id: 7,
         workspace_id: "w".into(),
         repository_root: "/repo".into(),
@@ -4672,7 +4679,7 @@ fn a_merge_the_cleanup_review_proved_by_branch_marks_the_sidebar_too() {
         ..Default::default()
     });
     assert!(
-        runtime.ingest_cleanup(crate::live::cleanup::CleanupSnapshot {
+        runtime.ingest_cleanup(crate::worktree_cleanup::CleanupSnapshot {
             id: 7,
             workspace_id: "w".into(),
             repository_root: "/repo".into(),
@@ -4684,7 +4691,7 @@ fn a_merge_the_cleanup_review_proved_by_branch_marks_the_sidebar_too() {
     );
     assert_eq!(merged(&runtime), Some(true));
     // A later step of the same review carries no proofs and forgets none.
-    runtime.ingest_cleanup(crate::live::cleanup::CleanupSnapshot {
+    runtime.ingest_cleanup(crate::worktree_cleanup::CleanupSnapshot {
         id: 7,
         workspace_id: "w".into(),
         repository_root: "/repo".into(),
@@ -4695,7 +4702,7 @@ fn a_merge_the_cleanup_review_proved_by_branch_marks_the_sidebar_too() {
     assert_eq!(merged(&runtime), Some(true));
     // A proof judged against another default branch marks nothing.
     runtime.review_merge_proofs.clear();
-    runtime.ingest_cleanup(crate::live::cleanup::CleanupSnapshot {
+    runtime.ingest_cleanup(crate::worktree_cleanup::CleanupSnapshot {
         id: 7,
         workspace_id: "w".into(),
         repository_root: "/repo".into(),

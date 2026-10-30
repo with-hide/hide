@@ -30,6 +30,7 @@ import { PaneTurnCard, requestWords, type TurnCardTrigger } from "./PaneTurnCard
 import { planOfPane, planWorkLine } from "./plans";
 import { missionOfPane, missionWorkLine } from "./missions";
 import type { PaneTurnRowMode } from "./generated/hided-ws";
+import { Button } from "./components/ui/button";
 
 /** The View menu's turn row mode; absent reads as one line. */
 export function usePaneTurnRowMode(): PaneTurnRowMode {
@@ -291,7 +292,7 @@ function AskBand({ paneId, band, navigation, unreachable, failed, actions, hasTr
     onTask={() => actions.revealTask(paneId)}
     returnFocus={() => document.querySelector<HTMLButtonElement>(`[data-pane-band-more="${paneId}"]`)?.focus()}
     triggerLabel={t("agentSessions.moreAsks", { count: band.more })}
-    trigger={<button type="button" data-pane-band-more={paneId} className="shrink-0 rounded-xs px-xs py-xxs text-micro text-muted-foreground underline-offset-2 outline-none hover:text-foreground hover:underline focus-visible:ring-1 focus-visible:ring-ring">{t("agentSessions.moreAsks", { count: band.more })}</button>}
+    trigger={<Button variant="text-link" size="inline" data-pane-band-more={paneId} className="shrink-0 px-xs py-xxs text-micro text-muted-foreground underline-offset-2">{t("agentSessions.moreAsks", { count: band.more })}</Button>}
   /> : null;
   const read = !raised && band.read;
   return <>

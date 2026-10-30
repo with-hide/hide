@@ -28,6 +28,7 @@ use std::path::{Path, PathBuf};
 
 pub mod antigravity;
 pub mod bell_line;
+pub mod calls;
 mod catalog;
 mod claude_attachment;
 mod conversation_cursor;
@@ -47,11 +48,12 @@ pub mod session_activity;
 mod sightings;
 mod sqlite;
 pub mod stamp;
+pub mod thread;
 pub mod tools;
 pub mod turns;
 pub mod usage;
 
-pub use bell_line::is_bell_line;
+pub use bell_line::{bell_sender, is_bell_line};
 pub use envelope::{
     envelope_from_operator, envelope_header, envelope_names, envelope_sender, is_letter,
 };
@@ -1453,6 +1455,7 @@ pub(crate) fn parse_events_followed(
                     .then_some(turns::wake::claude as turns::wake::Parser),
                 tools: Some(tools::claude as tools::Parser),
                 human_starts_turn: true,
+                replies: true,
                 large: None,
             },
             found,
@@ -1468,6 +1471,7 @@ pub(crate) fn parse_events_followed(
                 wake: None,
                 tools: Some(tools::codex as tools::Parser),
                 human_starts_turn: false,
+                replies: false,
                 large: None,
             },
             found,
@@ -1483,6 +1487,7 @@ pub(crate) fn parse_events_followed(
                 wake: None,
                 tools: Some(tools::grok as tools::Parser),
                 human_starts_turn: true,
+                replies: false,
                 large: Some(grok::reduced_line),
             },
             found,
@@ -1498,6 +1503,7 @@ pub(crate) fn parse_events_followed(
                 wake: None,
                 tools: Some(tools::pi as tools::Parser),
                 human_starts_turn: false,
+                replies: false,
                 large: None,
             },
             found,
@@ -1513,6 +1519,7 @@ pub(crate) fn parse_events_followed(
                 wake: None,
                 tools: Some(tools::pi as tools::Parser),
                 human_starts_turn: true,
+                replies: false,
                 large: None,
             },
             found,
@@ -1528,6 +1535,7 @@ pub(crate) fn parse_events_followed(
                 wake: None,
                 tools: None,
                 human_starts_turn: false,
+                replies: false,
                 large: None,
             },
             found,
@@ -1548,6 +1556,9 @@ struct Turns {
     /// Reads tool calls and whether each failed (`tools`).
     tools: Option<tools::Parser>,
     human_starts_turn: bool,
+    /// The parser marks each of the agent's records ([`turns::TurnMark::Reply`]),
+    /// so a person's message starts a turn that knows it was not answered.
+    replies: bool,
     large: Option<fn(&str) -> Option<String>>,
 }
 
@@ -1568,6 +1579,7 @@ fn parse_lines_at(
         wake,
         tools,
         human_starts_turn,
+        replies,
         large,
     } = turns;
     let mut parsed = ParsedSession::default();
@@ -1638,6 +1650,9 @@ fn parse_lines_at(
             LineResult::Event(event) => {
                 if turn.is_some() {
                     let mark = match event.kind {
+                        EventKind::Human if human_starts_turn && replies => {
+                            Some(turns::TurnMark::Prompt)
+                        }
                         EventKind::Human if human_starts_turn => Some(turns::TurnMark::HumanTurn),
                         EventKind::Human => Some(turns::TurnMark::Human),
                         EventKind::Interrupted => Some(turns::TurnMark::Interrupted),

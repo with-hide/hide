@@ -1,4 +1,4 @@
-import { ArrowLeftIcon, CheckIcon, ChevronRightIcon, CircleHelpIcon, Clock3Icon, SquareIcon, ImageIcon, InfoIcon, LightbulbIcon, MailIcon, TriangleAlertIcon, HouseIcon, LoaderCircleIcon, SquareTerminalIcon, RotateCcwIcon } from "lucide-react";
+import { ArrowLeftIcon, CheckIcon, ChevronRightIcon, CircleHelpIcon, Clock3Icon, SquareIcon, ImageIcon, InfoIcon, LightbulbIcon, TriangleAlertIcon, HouseIcon, LoaderCircleIcon, SquareTerminalIcon, RotateCcwIcon } from "lucide-react";
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import type { Actions } from "./actions";
 import { AgentMark } from "./AgentMark";
@@ -28,7 +28,7 @@ import { recordDate } from "./sessionRecordTime";
 import { machineName } from "./screenMachine";
 import { localDeviceId } from "./snapshot";
 import type { AgentRow, Checkout, FlowResult, MissedWork, PlanView, PrSettlement, SessionPull, SessionRecord as RecordValue, WorkEnd, WorkRequest, WorkSession } from "./snapshot";
-import { PlanChecklist } from "./PlanChecklist";
+import { PlanChecklist } from "./components/plan-checklist";
 import { planCount, planOfSession, planWorkLine } from "./plans";
 import { statusText } from "./agentStatus";
 import { askSubjectText } from "./askSubject";
@@ -39,6 +39,9 @@ import { archivedChildrenOf, archivedMemberOf } from "./archive";
 import type { ArchivedMember, ArchivedSession } from "./snapshot";
 import { HighlightedRequest } from "./RequestHighlight";
 import { startReasonText } from "./startReason";
+import { RowButton } from "./components/ui/row-button";
+import { SessionRowBody } from "./components/session-row";
+import { LetterTag } from "./components/letter-mark";
 
 type RequestLocator = { request_offset: number; query?: string };
 
@@ -198,7 +201,7 @@ function RestoreSession({ record, checkout: original, actions }: { record: Recor
     start((requestId, confirmOnly) => actions.startAgent({ target: { checkoutPath: checkout.path }, deviceId: record.session.device_id === node ? undefined : record.session.device_id, provider, resumeSessionId: record.session.session_id, resumeSessionPath: record.path ?? undefined, requestId, confirmOnly }));
   };
   return <div className="flex min-w-0 flex-col items-end gap-xs" data-record-restore="true">
-    <Button size="sm" disabled={off || busy} aria-busy={busy || undefined} onClick={restore} data-record-restore-button="true">
+    <Button variant="secondary" size="sm" disabled={off || busy} aria-busy={busy || undefined} onClick={restore} data-record-restore-button="true">
       {busy ? <LoaderCircleIcon aria-hidden="true" className="animate-spin" /> : <RotateCcwIcon aria-hidden="true" />}{t(resume.uncertain ? "groups.confirm" : busy ? "recordCard.restoring" : "recordCard.restore")}
     </Button>
     {resume.uncertain ? <p role="status" className="text-micro text-muted-foreground [overflow-wrap:anywhere]">{t("links.resumeUnknown")}</p> : null}
@@ -237,7 +240,7 @@ function NowBox({ record, summaries, checkout, agent, line, question, actions }:
   const said = settled ? settledPrs(t, settled) : recorded ? recorded.line || null : kind === "question" ? question ?? (agent?.state.ask?.subject ? askSubjectText(t, agent.state.ask.subject) : agent?.state.ask?.what) ?? null : kind === "blocked" ? (line?.kind === "blocked" ? line.what : null) ?? lastWords(agent) : lastWords(agent);
   const pane = agent?.pane_id ?? null;
   const button = pane === null ? <RestoreSession record={record} checkout={checkout} actions={actions} /> : kind === "question" ? (
-    <Button size="sm" onClick={() => actions.openAgent(pane)} data-record-now-button="answer"><CircleHelpIcon aria-hidden="true" />{t("links.answer")}</Button>
+    <Button variant="secondary" size="sm" onClick={() => actions.openAgent(pane)} data-record-now-button="answer"><CircleHelpIcon aria-hidden="true" />{t("links.answer")}</Button>
   ) : (
     <Button size="sm" variant="secondary" onClick={() => actions.openAgent(pane)} data-record-now-button="pane"><SquareTerminalIcon aria-hidden="true" />{t(kind === "blocked" ? "work.card.viewPane" : "record.toPane")}</Button>
   );
@@ -318,7 +321,7 @@ function ArchivedNow({ row, member, own, connected, actions }: { row: ArchivedSe
   const button = unknown ? (
     <Button size="sm" variant="secondary" disabled={!connected} onClick={() => actions.checkArchived(row.id)} data-record-now-button="check">{t("workspace.checkStatus")}</Button>
   ) : (
-    <Button size="sm" disabled={!connected || resuming || busy} onClick={() => actions.resumeArchived(row.id, own ? member.session.session_id : undefined)} data-record-now-button="resume">
+    <Button variant="secondary" size="sm" disabled={!connected || resuming || busy} onClick={() => actions.resumeArchived(row.id, own ? member.session.session_id : undefined)} data-record-now-button="resume">
       {resuming ? <LoaderCircleIcon aria-hidden="true" className="animate-spin" /> : null}{resuming ? t("archive.resuming") : t("archive.resume")}
     </Button>
   );
@@ -515,7 +518,7 @@ function Flows({ record, locator }: { record: RecordValue; locator?: RequestLoca
         const expanded = isOpen(flow.id);
         const isCurrent = flow.id === current;
         return <li key={flow.id} className="min-w-0 border-b border-border last:border-b-0" data-record-flow={flow.id} data-current={isCurrent ? "true" : undefined}>
-          <button type="button" className={cn(ROW, "flex w-full items-start gap-xs py-sm hover:bg-accent")} aria-expanded={expanded} onClick={() => toggle(flow.id)} data-record-flow-toggle={flow.id}>
+          <RowButton className="items-start px-0 py-sm" aria-expanded={expanded} onClick={() => toggle(flow.id)} data-record-flow-toggle={flow.id}>
             <ChevronRightIcon aria-hidden="true" className={cn("mt-xxs size-(--size-icon-sm) shrink-0 text-muted-foreground", expanded && "rotate-90")} />
             <span className="min-w-0 flex-1">
               <span className="block truncate text-caption font-semibold text-foreground" title={flow.name} data-record-flow-name="true">{flow.name}</span>
@@ -524,7 +527,7 @@ function Flows({ record, locator }: { record: RecordValue; locator?: RequestLoca
               </span>
               {!isCurrent && flow.result ? <FlowResultLine result={flow.result} /> : null}
             </span>
-          </button>
+          </RowButton>
           {expanded ? <ol className={cn("min-w-0 pb-sm", LANE)} data-record-flow-requests={flow.requests.length}>
             {requestRuns(flow.requests).map((run) => run.kind === "request"
               ? <RequestRow key={run.request.offset} request={run.request} locator={locator} />
@@ -563,14 +566,13 @@ function LetterRun({ letters, locator }: { letters: readonly WorkRequest[]; loca
   const senders = [...new Set(letters.map((letter) => letter.letter_from!))];
   const count = letters.reduce((total, letter) => total + letter.count, 0);
   return <li className="min-w-0 py-xxs" data-record-letter-run={letters.length}>
-    <button type="button" className={cn(ROW, "flex w-full min-w-0 items-baseline gap-sm py-xxs text-muted-foreground hover:bg-accent")} aria-expanded={open} onClick={() => setOpen(!open)}>
+    <RowButton className="items-baseline gap-sm px-0 py-xxs text-muted-foreground" aria-expanded={open} onClick={() => setOpen(!open)}>
       <RequestTime at={letters[0]!.at_unix_ms} />
       <span className="flex min-w-0 flex-1 items-baseline gap-xs">
-        <MailIcon aria-hidden="true" className="size-(--size-icon-sm) shrink-0 self-center" />
-        <span className="shrink-0 text-micro">{t("record.letterRun", { count })}</span>
+        <LetterTag className="gap-xs" who={t("record.letterRun", { count })} label={t("record.letterRun", { count })} />
         <span className="min-w-0 flex-1 truncate text-micro" title={senders.join(", ")}>{senders.join(", ")}</span>
       </span>
-    </button>
+    </RowButton>
     {open ? <ol className="min-w-0 pl-(--size-control)">{letters.map((letter) => <RequestRow key={letter.offset} request={letter} locator={locator} />)}</ol> : null}
   </li>;
 }
@@ -607,17 +609,17 @@ function RequestRow({ request, locator }: { request: WorkRequest; locator?: Requ
   // A History hit always shows the words it matched, marked.
   const opens = request.text.trim() !== preview.text || preview.cut || matched;
   return <li ref={target} tabIndex={matched ? -1 : undefined} className={cn("min-w-0 py-xxs", matched && "rounded-xs bg-accent/40 px-xs outline-none focus:ring-1 focus:ring-ring")} data-record-request={request.offset} data-record-request-match={matched ? "true" : undefined} data-record-letter={letter ?? undefined}>
-    <button type="button" className={cn(ROW, "flex w-full min-w-0 items-baseline gap-sm py-xxs", opens && "hover:bg-accent")} aria-expanded={opens ? raw : undefined} disabled={!opens} onClick={() => setRaw(!raw)}>
+    <RowButton className={cn("items-baseline gap-sm px-0 py-xxs disabled:opacity-100", !opens && "hover:bg-transparent")} aria-expanded={opens ? raw : undefined} disabled={!opens} onClick={() => setRaw(!raw)}>
       <RequestTime at={request.at_unix_ms} />
       <span className={cn("flex min-w-0 flex-1 items-baseline gap-xs", letter ? "text-muted-foreground" : "text-foreground")}>
-        {letter ? <span className="inline-flex shrink-0 items-center gap-xxs text-micro" aria-label={t("record.letterFrom", { name: letter })}><MailIcon aria-hidden="true" className="size-(--size-icon-sm) self-center" />{letter}</span> : null}
+        {letter ? <LetterTag who={letter} label={t("record.letterFrom", { name: letter })} /> : null}
         {request.goal_command ? <span className="shrink-0 rounded-xs border border-border px-xxs font-mono text-micro text-muted-foreground" aria-label={t("record.goalCommand")} data-record-goal="true">{GOAL_MARK}</span> : null}
         {request.answers ? <span className="min-w-0 shrink truncate text-micro text-muted-foreground" aria-label={t("record.answers", { question: request.answers })} data-record-answers="true">↩ {request.answers}:</span> : null}
         <span className={cn("min-w-0 flex-1 truncate", !preview.summarized && !letter && "text-subtle-foreground")} title={preview.text}>{preview.text}</span>
         {request.images ? <span className="inline-flex shrink-0 items-center gap-xxs text-micro text-muted-foreground" data-record-images={request.images}><ImageIcon aria-hidden="true" className="size-(--size-icon-sm) self-center" />{t("record.images", { count: request.images })}</span> : null}
         {request.count > 1 ? <span className="shrink-0 font-mono text-micro text-muted-foreground" aria-label={t("record.repeated", { count: request.count })} data-record-repeat={request.count}>×{request.count}</span> : null}
       </span>
-    </button>
+    </RowButton>
     {raw && opens ? <p className="whitespace-pre-wrap pb-xs pl-(--size-control) text-caption text-subtle-foreground [overflow-wrap:anywhere]" data-record-request-raw="true">{matched ? <HighlightedRequest text={request.text} query={locator?.query ?? ""} /> : request.text}</p> : null}
   </li>;
 }
@@ -659,7 +661,7 @@ function Prs({ record, actions }: { record: RecordValue; actions: Actions }) {
         {rows(shown)}
       </div>;
     })}
-    {settled.length && !unfolded ? <button type="button" className={cn(ROW, "flex items-center gap-xxs py-xs text-micro text-muted-foreground hover:text-foreground")} aria-expanded="false" onClick={() => setUnfolded(true)} data-record-settled={settled.length}>{t("record.settledPrs", { count: settled.length })}<ChevronRightIcon aria-hidden="true" className="size-(--size-icon-sm)" /></button> : null}
+    {settled.length && !unfolded ? <Button variant="text" size="inline" className="gap-xxs py-xs text-micro" aria-expanded="false" onClick={() => setUnfolded(true)} data-record-settled={settled.length}>{t("record.settledPrs", { count: settled.length })}<ChevronRightIcon aria-hidden="true" className="size-(--size-icon-sm)" /></Button> : null}
   </section>;
 }
 
@@ -692,11 +694,16 @@ function ChildRows({ parent, summaries, onOpen, actions }: { parent: RecordValue
       const branch = live ? branchChip(live) : child.cwd && child.cwd !== parent.cwd ? folderName(child.cwd) : null;
       const device = child.session.device_id !== parent.session.device_id ? machineName(rest?.navigator?.devices, child.session.device_id, t) : null;
       return <li key={key} className="min-w-0 border-b border-border last:border-b-0" data-record-child={child.session.session_id}>
-        <button type="button" className={cn(ROW, "flex w-full items-start gap-sm py-sm hover:bg-accent")} aria-expanded={expanded === key} title={[branch, device].filter(Boolean).join(" · ")} onClick={() => setExpanded(expanded === key ? null : key)}>
-          {done ? <CheckIcon aria-hidden="true" className="mt-xs size-(--size-agent-mark) shrink-0 text-success" /> : live ? <StatusMark mark={live.mark} className={cn("mt-xs shrink-0", markTone(live))} /> : end === "waiting" && !settled ? <Clock3Icon aria-hidden="true" className="mt-xs size-(--size-agent-mark) shrink-0 text-muted-foreground" /> : <SquareIcon aria-hidden="true" className="mt-xs size-(--size-agent-mark) shrink-0 text-muted-foreground" />}
-          <span className="min-w-0 flex-1"><span className={cn("block truncate text-caption font-medium", done && "text-subtle-foreground")} title={title}>{title}</span><span className="mt-xs flex min-w-0 flex-wrap items-center gap-x-xs gap-y-xxs text-micro text-muted-foreground"><AgentMark kind={child.session.agent} />{agentProductName(child.session.agent)} · <span data-record-child-state="true">{state}</span>{prs ? <span>· {t("recordCard.prs")} {prs}</span> : null}</span></span>
+        <RowButton className="items-start gap-sm px-0 py-sm" aria-expanded={expanded === key} title={[branch, device].filter(Boolean).join(" · ")} onClick={() => setExpanded(expanded === key ? null : key)}>
+          <SessionRowBody
+            size="record"
+            mark={done ? <CheckIcon aria-hidden="true" className="size-(--size-agent-mark) shrink-0 text-success" /> : live ? <StatusMark mark={live.mark} className={cn("shrink-0", markTone(live))} /> : end === "waiting" && !settled ? <Clock3Icon aria-hidden="true" className="size-(--size-agent-mark) shrink-0 text-muted-foreground" /> : <SquareIcon aria-hidden="true" className="size-(--size-agent-mark) shrink-0 text-muted-foreground" />}
+            head={<span className={cn("block truncate text-caption font-medium", done && "text-subtle-foreground")} title={title}>{title}</span>}
+          >
+            <span className="mt-xs flex min-w-0 flex-wrap items-center gap-x-xs gap-y-xxs text-micro text-muted-foreground"><AgentMark kind={child.session.agent} />{agentProductName(child.session.agent)} · <span data-record-child-state="true">{state}</span>{prs ? <span>· {t("recordCard.prs")} {prs}</span> : null}</span>
+          </SessionRowBody>
           <ChevronRightIcon aria-hidden="true" className={cn("mt-xs size-(--size-icon-sm) shrink-0 text-muted-foreground", expanded === key && "rotate-90")} />
-        </button>
+        </RowButton>
         {expanded === key ? <div className="mb-sm ml-md min-w-0 border-l-2 border-border bg-card px-sm pb-sm" data-record-child-detail={child.session.session_id}>
           <div className="flex min-w-0 flex-wrap gap-xs pt-sm"><Button size="sm" variant="ghost" onClick={() => onOpen(child)}>{t("sessionWork.openRecord")}<ChevronRightIcon aria-hidden="true" /></Button>{live ? <Button size="sm" variant="ghost" onClick={() => actions.openAgent(live.pane_id)}><SquareTerminalIcon aria-hidden="true" />{t("record.toPane")}</Button> : null}</div>
           {summaries ? <Flows record={child} /> : <RawRequests record={child} />}

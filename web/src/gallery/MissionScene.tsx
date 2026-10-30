@@ -10,7 +10,12 @@
 // done, cancelled, no-pr (a finished mission with no pull request), exempt
 // (a finished mission from before finish lines, its old sentence on each
 // card beside the worker), settings.
-// `pick=<node>` opens that node's panel and `width` narrows the slot. The
+// Every map state draws its Conductor row (asleep once the mission closed,
+// none for no-conductor, which offers 이어받기 there), the summary beside the
+// map while no node is picked, and the checkers as satellites beside their
+// cards; done leads with its result tiles and pull requests (PRD mission-tool
+// B12-B21). `pick=<node>` opens that node's panel, `width` narrows the slot
+// and `scale` sets the text size. The
 // Conductor pane's head with its mission chip and pinned popover (PRD
 // mission-pane-chip, mission-plan-visibility) is `pane-running`,
 // `pane-decision`, `pane-first-plan`, `pane-done` and `pane-cancelled`.
@@ -94,15 +99,17 @@ function plan(state: string, now: number): MissionNode[] {
   }
   if (state === "done" || state === "cancelled") {
     const cancelled = state === "cancelled";
+    // Each worker and checker the core bound, so the result tiles count them.
+    const reviewed = (who: MissionWorker, id: string, state: MissionCriterion["state"] = "pass") => line("review", "review", state, { checkers: [checker(who, state, id)] });
     return [
-      node("cause", `${no(1487)} 원인 조사`, { kind: "research", delivery: null, worker: opus("xhigh"), ...done(300, 40), line: "reopen 때 셀 초기화가 먼저 돎" }),
-      node("api", "API 추가", { worker: astra("high"), ...done(300, 120), pr: 1503, pr_state: "merged", stage: 4 }),
-      node("fix-1481", `이슈 ${no(1481)} 수정`, { delivery: "direct", worker: astra("high"), ...done(290, 60), branch: "fix-1481", stage: 4, in_main: "4f1c9a27be03" }),
-      node("fix-1487", `${no(1487)} 수정`, { depends_on: ["cause"], worker: astra("medium"), ...done(250, 90), pr: 1506, pr_state: "merged", stage: 4, attempts: 2 }),
+      node("cause", `${no(1487)} 원인 조사`, { kind: "research", delivery: null, worker: opus("xhigh"), agent_id: "agent-cause", ...done(300, 40), line: "reopen 때 셀 초기화가 먼저 돎", ...finish(own(1, "원인을 재현 단계와 함께 적는다")) }),
+      node("api", "API 추가", { worker: astra("high"), agent_id: "agent-api", ...done(300, 120), pr: 1503, pr_state: "merged", stage: 4, ...finish(own(1, "목록 API가 페이지를 나눠 준다"), reviewed(opus("high"), "reviewer-api"), ci("pass")) }),
+      node("fix-1481", `이슈 ${no(1481)} 수정`, { delivery: "direct", worker: astra("high"), agent_id: "agent-1481", ...done(290, 60), branch: "fix-1481", stage: 4, in_main: "4f1c9a27be03", ...finish(own(1, "빈 목록에서도 필터가 남는다"), line("check", "check", "pass")) }),
+      node("fix-1487", `${no(1487)} 수정`, { depends_on: ["cause"], worker: astra("medium"), agent_id: "agent-1487", ...done(250, 90), pr: 1506, pr_state: "merged", stage: 4, attempts: 2, ...finish(own(1, "reopen 뒤에도 셀이 남는다"), own(2, "실제 세션 50개 replay", "skipped", { skip: { reason: "기록된 세션이 31개뿐" } }), ci("pass")) }),
       cancelled
-        ? node("screen", "API 쓰는 화면", { depends_on: ["api"], worker: astra("high"), status: "working", started_at_unix_ms: ago(170), pr: 1504, base_pr: 1503, pr_state: "pending", stage: 2 })
-        : node("screen", "API 쓰는 화면", { depends_on: ["api"], worker: astra("high"), ...done(170, 110), pr: 1504, base_pr: 1503, pr_state: "merged", stage: 4 }),
-      node("together", "함께 확인", { kind: "verify", delivery: null, depends_on: ["screen", "fix-1487"], worker: sonnet, ...(cancelled ? {} : done(55, 25)), line: cancelled ? null : "6개 항목 통과" }),
+        ? node("screen", "API 쓰는 화면: 목록·검색·필터를 새 페이지 API로 옮기기", { depends_on: ["api"], worker: astra("high"), agent_id: "agent-screen", status: "working", started_at_unix_ms: ago(170), pr: 1504, base_pr: 1503, pr_state: "pending", stage: 2, ...finish(own(1, "새 API로 목록을 그린다", "open"), reviewed(opus("high"), "reviewer-screen", "open")) })
+        : node("screen", "API 쓰는 화면: 목록·검색·필터를 새 페이지 API로 옮기기", { depends_on: ["api"], worker: astra("high"), agent_id: "agent-screen", ...done(170, 110), pr: 1504, base_pr: 1503, pr_state: "merged", stage: 4, ...finish(own(1, "새 API로 목록을 그린다"), reviewed(opus("high"), "reviewer-screen"), ci("pass")) }),
+      node("together", "함께 확인", { kind: "verify", delivery: null, depends_on: ["screen", "fix-1487"], worker: sonnet, ...(cancelled ? {} : { ...done(55, 25), agent_id: "agent-together" }), line: cancelled ? null : "6개 항목 통과", ...finish(line("verify", "verify", cancelled ? "open" : "pass", { rule: "all", checkers: [checker(sonnet, cancelled ? "open" : "pass", cancelled ? undefined : "checker-1"), checker(astra("medium"), cancelled ? "open" : "pass", cancelled ? undefined : "checker-2")] })) }),
     ];
   }
   if (planned) {
@@ -184,7 +191,7 @@ function history(mission: Mission, now: number): MissionEvent[] {
 
 const OLD_CRITERION = "목록 화면이 새 API로 페이지를 넘기고, 필터를 바꿔도 처음 쪽으로 돌아가며, 빈 목록에서도 안내가 남는다";
 
-function scene(shown: string, now: number): { mission: Mission; rest: SnapshotRest } {
+export function missionFixture(shown: string, now: number): { mission: Mission; rest: SnapshotRest } {
   // An answer sent from the banner draws the decision with that answer on it.
   const state = shown === "decision-sent" || shown === "decision-unconfirmed" ? "decision" : shown === "exempt" ? "done" : shown;
   // A mission from before finish lines keeps each node's one old sentence (B23).
@@ -218,7 +225,7 @@ function scene(shown: string, now: number): { mission: Mission; rest: SnapshotRe
       { id: "pi", label: "Pi", availability: "available", enabled: true },
       { id: "grok", label: "Grok", availability: "not_installed", enabled: false },
     ] } }], workspaces: [] },
-    overview_graph: { available: true, limit: 2000, retained_count: 0, truncated: false, retention_ms: 86400000, letters: [], sessions: [{ device_id: "local", pane_id: SCREEN_PANE, session_digest: "scene-screen", launch_model: "Sol", launch_effort: null }, { device_id: "local", pane_id: REVIEW_PANE, session_digest: "scene-review", launch_model: "Sonnet 5.5", launch_effort: "medium" }] },
+    overview_graph: { available: true, limit: 2000, retained_count: 0, truncated: false, retention_ms: 86400000, letters: [], sessions: [{ device_id: "local", pane_id: CONDUCTOR_PANE, session_digest: "scene-conductor", launch_model: "Opus 5.5", launch_effort: "high" }, { device_id: "local", pane_id: SCREEN_PANE, session_digest: "scene-screen", launch_model: "Sol", launch_effort: null }, { device_id: "local", pane_id: REVIEW_PANE, session_digest: "scene-review", launch_model: "Sonnet 5.5", launch_effort: "medium" }] },
     status: { remote: [], background_ai: { enabled: true, providers: [
       { agent: "claude-code", state: "ready", models: ["Opus 5.5", "Sonnet 5.5", "Haiku 5.5"] },
       { agent: "codex", state: "ready", models: ["GPT-6-Astra", "GPT-5.6-Sol"] },
@@ -239,13 +246,16 @@ export function MissionScene({ params }: { params: URLSearchParams }) {
   const theme = params.get("theme") === "light" ? "light" : "dark";
   const state = params.get("state") ?? "running";
   const pane = PANE_STATES[state];
-  const fixture = useMemo(() => scene(pane ?? state, Date.now()), [pane, state]);
+  const fixture = useMemo(() => missionFixture(pane ?? state, Date.now()), [pane, state]);
   const actions = useMemo(() => createActions(() => true), []);
   const pick = params.get("pick");
   useLayoutEffect(() => {
     // The decision state's fix worker is one the core raised: its own line says why it stopped.
     const raised = { pane_id: FIX_PANE, device_id: "local", escalation: { cause: "child_blocked", letter_id: null, since_unix_ms: Date.now() - 3 * MINUTE, human_notice: true }, request: { verb: "blocked", verb_since_unix_ms: Date.now() - 3 * MINUTE, line: "로그인이 만료되어 테스트를 못 돌림", end: "blocked", request: null, later_by: null, pull_requests: [] } };
-    const agents = (pane ? [{ pane_id: CONDUCTOR_PANE, device_id: "local" }] : state === "decision" ? [raised] : []) as unknown as AgentRow[];
+    // The Conductor's own row: at work while its mission runs, asleep once it closed, none when no Conductor holds it.
+    const closed = ["done", "cancelled", "no-pr", "exempt"].includes(state);
+    const conductor = { pane_id: CONDUCTOR_PANE, device_id: "local", mark: closed ? "asleep" : state === "decision" ? "quiet" : "going" };
+    const agents = (pane ? [{ pane_id: CONDUCTOR_PANE, device_id: "local" }] : state === "no-conductor" || state === "failed" ? [] : state === "decision" ? [conductor, raised] : [conductor]) as unknown as AgentRow[];
     useShellStore.setState({ rest: fixture.rest, agents, connection: "live" });
     // The popover pinned, as a press, the Show plan chord or a first plan watched leaves it.
     useUiStore.setState({ planPane: pane ? CONDUCTOR_PANE : null });

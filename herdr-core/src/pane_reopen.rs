@@ -14,7 +14,7 @@
 
 use std::thread;
 
-use hide_herdr_client::ApiConnector;
+use crate::engine::Engine;
 
 use crate::agent_sleep::WakeMode;
 use crate::agent_sleep_herdr::{self, EndError, WakeOutcome, WakeRequest};
@@ -62,7 +62,7 @@ fn failure(code: PaneReopenFailure, detail: impl Into<String>) -> ReopenFailure 
 /// answered before the agent is touched; the agent is ended only then, and the
 /// start follows only once the shell holds the terminal again.
 pub(crate) fn reopen(
-    connector: &dyn ApiConnector,
+    engine: &dyn Engine,
     node: &dyn crate::node_access::NodeLink,
     request: &ReopenRequest,
 ) -> Result<(), ReopenFailure> {
@@ -96,7 +96,7 @@ pub(crate) fn reopen(
             format!("{cwd} is not a directory"),
         ));
     }
-    agent_sleep_herdr::end_agent(connector, node, &request.pane_id, &request.kind).map_err(
+    agent_sleep_herdr::end_agent(engine, node, &request.pane_id, &request.kind).map_err(
         |error| {
             match error {
                 // The decision was made on a list up to a second old, so an agent
@@ -108,7 +108,7 @@ pub(crate) fn reopen(
         },
     )?;
     match agent_sleep_herdr::start_agent(
-        connector,
+        engine,
         node,
         &WakeRequest {
             pane_id: request.pane_id.clone(),
@@ -133,11 +133,7 @@ pub(crate) fn spawn_reopen(context: LiveContext, request: ReopenRequest) -> Resu
     thread::Builder::new()
         .name("herdr-core-pane-reopen".into())
         .spawn(move || {
-            let result = reopen(
-                context.api_connector.as_ref(),
-                context.node.as_ref(),
-                &request,
-            );
+            let result = reopen(context.engine.as_ref(), context.node.as_ref(), &request);
             let Some(runtime) = context.runtime.upgrade() else {
                 return;
             };
@@ -223,7 +219,7 @@ mod tests {
                 panic!("unexpected {method}")
             });
             let error = reopen(
-                &herdr.connector(),
+                herdr.engine().as_ref(),
                 &hide_node::Local::of_process(),
                 &request(kind, daemon),
             )
@@ -235,8 +231,12 @@ mod tests {
         let herdr = FakeHerdr::start("pane-reopen-cwd", |method, _| panic!("unexpected {method}"));
         let mut gone = request("claude", CodexDaemon::Unknown);
         gone.cwd = Some("/nonexistent/pane-reopen-test".into());
-        let error = reopen(&herdr.connector(), &hide_node::Local::of_process(), &gone)
-            .expect_err("folder gone");
+        let error = reopen(
+            herdr.engine().as_ref(),
+            &hide_node::Local::of_process(),
+            &gone,
+        )
+        .expect_err("folder gone");
         assert_eq!(error.code, PaneReopenFailure::StartRefused);
         assert!(herdr.methods().is_empty());
     }
@@ -249,7 +249,7 @@ mod tests {
             other => panic!("unexpected {other}"),
         });
         let error = reopen(
-            &herdr.connector(),
+            herdr.engine().as_ref(),
             &hide_node::Local::of_process(),
             &request("claude", CodexDaemon::Unknown),
         )
@@ -301,7 +301,7 @@ mod tests {
                 exited.store(true, Ordering::SeqCst);
             });
             reopen(
-                &herdr.connector(),
+                herdr.engine().as_ref(),
                 &hide_node::Local::of_process(),
                 &request(kind, daemon),
             )
@@ -377,7 +377,7 @@ mod tests {
             exited.store(true, Ordering::SeqCst);
         });
         let error = reopen(
-            &herdr.connector(),
+            herdr.engine().as_ref(),
             &hide_node::Local::of_process(),
             &request("claude", CodexDaemon::Unknown),
         )
@@ -446,7 +446,7 @@ mod tests {
             exited.store(true, Ordering::SeqCst);
         });
         reopen(
-            &herdr.connector(),
+            herdr.engine().as_ref(),
             &hide_node::Local::of_process(),
             &request("claude", CodexDaemon::Unknown),
         )

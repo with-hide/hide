@@ -118,6 +118,7 @@ impl ProjectionState {
                     .map(str::to_owned);
                 SessionAgentPayload {
                     record: None,
+                    hook: None,
                     telemetry_stale: false,
                     id: agent.name.clone().or_else(|| Some(agent.pane_id.clone())),
                     name: agent.name.clone(),
@@ -213,12 +214,6 @@ impl ProjectionState {
             herdr_version: self.herdr_version.clone(),
         }
     }
-}
-
-pub(crate) fn project_snapshot(
-    snapshot: &Value,
-) -> Result<SessionSnapshotPayload, SessionFetchError> {
-    Ok(wire::snapshot(snapshot.clone())?.project())
 }
 
 /// A Herdr label or terminal title that is present but blank carries no more

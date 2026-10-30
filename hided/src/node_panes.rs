@@ -426,7 +426,7 @@ fn answer_hook(
     let result = (|| {
         let cap = state.pane_capabilities.validate(
             &token.1,
-            state.herdr_socket.as_deref(),
+            state.core.engine(),
             &state.core,
             attested.as_ref(),
         )?;
@@ -438,7 +438,7 @@ fn answer_hook(
         {
             let prior = state.pane_capabilities.validate(
                 named,
-                state.herdr_socket.as_deref(),
+                state.core.engine(),
                 &state.core,
                 attested.as_ref(),
             )?;

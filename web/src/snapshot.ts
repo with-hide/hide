@@ -403,7 +403,19 @@ export type PullRequestWork = {
   /** Its place in the base branch's merge queue; `unknown` while the queue could not be read. */
   queue: { state: "unknown" | "not_queued" } | { state: "at"; position: number };
   review_requested_at_unix_ms: number | null;
+  /** Each reviewer and where they stand, approvals and change requests first; null while unknown (never "nobody"). Settled pull requests have none (PRD pr-review-status). */
+  reviewers?: PrReviewer[] | null;
+  /** Reviewers past the list's cap, counted only (`+N`). */
+  reviewers_more?: number;
+  /** The approvals the base requires; null when review is not required or the count could not be read (no `n/m` then). */
+  required_approvals?: number | null;
 };
+
+/** Where one reviewer stands (`PrReviewerState`): a pending request wins over an earlier review. */
+export type PrReviewerState = "changes_requested" | "approved" | "requested" | "commented" | "dismissed";
+
+/** One person or team a pull request's review involves (`PrReviewer`). */
+export type PrReviewer = { login: string; team: boolean; state: PrReviewerState; at_unix_ms: number | null };
 
 /** What a pull request's card reads beyond the list, per head commit (`PrCardSnapshot`). */
 export type PrCard = {
@@ -450,8 +462,8 @@ export type GithubStatus = {
   unread_queries?: ExtraQuery[];
 };
 
-/** A question the pull request read asks beside the list: the signed-in account, the review requests, the merge queue. */
-export type ExtraQuery = "account" | "review_requests" | "merge_queue";
+/** A question the pull request read asks beside the list: the signed-in account, the review requests, the merge queue, each reviewer's latest review. */
+export type ExtraQuery = "account" | "review_requests" | "merge_queue" | "reviews";
 
 export type IssueReference = { repository: string; number: number };
 
@@ -2413,8 +2425,6 @@ export type ProjectMemory = {
   loading: boolean;
   enabled: boolean;
   capacity_reached: boolean;
-  /** True when the Project already has 5 branches waiting for a decision: `N개 문서에 반영` starts nothing until one is decided. Absent on older daemons. */
-  branches_full?: boolean;
   /** Cards forgotten automatically to make room for new ones since the tab last said so. */
   evicted_cards: number;
   /** When the newest of those was forgotten; the tab names it back once it said so. */
@@ -2550,7 +2560,7 @@ export type SuggestionRow = {
   /** Hide applied it by itself (`자동`, D-29). */
   auto: boolean;
   /** `suggestion_hold`: why a new suggestion waits instead of being applied. */
-  hold: "github_needed" | "branches_full" | "auto_pr_unreviewed" | null;
+  hold: "github_needed" | "auto_pr_unreviewed" | null;
   /** The problem came back after its fix merged (`문서로는 안 됐어요`); level 1 is a script or a check, 2 a hook. */
   escalated: { level: number; previous_pr_url: string | null } | null;
   /** It rose again after a skip because new evidence piled up as much as before (`넘어갔지만 다시 생겼어요`, D-43). */
@@ -2626,8 +2636,8 @@ export type SuggestionSettingsPatch = { suggestions_enabled?: boolean; quantity?
 
 /** Where a pull request's issue link comes from: GitHub's closing reference or Hide's branch link. */
 export type LinkIssueSource = "closes" | "hide";
-/** `created`: the session printed the pull request's address when GitHub made it. */
-export type LinkSessionRole = "created" | "worked";
+/** `created`: the session printed the pull request's address when GitHub made it; `reviewed`: a pre-check of the pull request started it. */
+export type LinkSessionRole = "created" | "worked" | "reviewed";
 /** Whether the session's own file is still there; `unknown` for a device's file. */
 export type LinkFileState = "present" | "missing" | "unknown";
 export type LinkTarget = { kind: "pr"; number: number } | { kind: "issue"; key: string };
@@ -2759,6 +2769,57 @@ export type SessionRecordSection = {
   /** The Views past the core's cap, counted. */
   views_omitted?: number;
 };
+/**
+ * A session thread (PRD session-docs-and-assistant B25-B29): the record of one
+ * agent pane's session read as ACP session updates, `sessionUpdate` naming the
+ * variant and fields in camelCase, and the input box's words to that pane.
+ * The core sends its state and the live page in `session_thread`, the kept
+ * pages before it in `session_thread_history`, each on its own revision.
+ */
+export type ThreadUpdate = { sessionUpdate: string } & Record<string, unknown>;
+/** A `hide` command the session ran, by what it made (`contracts/snapshot-wire-enums.json`: `session_thread_part_kind`, `session_thread_view_kind`); the screen looks its part up by these names (B26). */
+export type ThreadPart =
+  | { kind: "plan" }
+  | { kind: "spawn"; name: string | null; intent: string | null; agent_id: string | null }
+  | { kind: "letter"; to: string; body: string | null }
+  | { kind: "view"; view: "browser" | "file" | "diff"; target: string }
+  | { kind: "mission"; mission: string | null };
+/** Where a session a thread names runs: its pane as the agent rows key it, on its machine. */
+export type ThreadSession = { pane_id: string; machine: string };
+/**
+ * One page: its updates in record order, the parts of its tool calls by tool
+ * call id, and where each session a letter, a spawn or a letter's sender
+ * names runs, by the name as written; a name no live session answers to is absent.
+ */
+export type ThreadPage = { updates: ThreadUpdate[]; parts: Record<string, ThreadPart>; sessions: Record<string, ThreadSession> };
+/** `contracts/snapshot-wire-enums.json`: `session_thread_state`. */
+export type SessionThreadState = "closed" | "loading" | "ready" | "failed";
+/** Why the record could not be read (B27; `session_thread_failure`). */
+export type SessionThreadFailure = "no_record" | "refused";
+/** Whether the pane still runs the thread's session (`session_thread_pane`); input goes only to `same`. */
+export type SessionThreadPane = "same" | "changed" | "gone";
+/** The read of the page before the oldest (`session_thread_older`). */
+export type SessionThreadOlder = "idle" | "loading" | "capacity" | "failed";
+/** What became of the input box's words (`session_thread_input_state`); `reason` is a refusal's code. */
+export type SessionThreadInput = { request_id: string; state: "sending" | "sent" | "refused"; reason?: string };
+export type SessionThreadSection = {
+  /** Advances with every open; an older page or an input answers only this one. */
+  generation: number;
+  state: SessionThreadState;
+  pane_id: string | null;
+  machine: string | null;
+  failure: SessionThreadFailure | null;
+  pane: SessionThreadPane;
+  /** Whether the machine's node answers now; a thread whose node does not keeps what it read. */
+  connected: boolean;
+  has_older: boolean;
+  older: SessionThreadOlder;
+  /** The page the session is still writing. */
+  tail: ThreadPage | null;
+  input: SessionThreadInput | null;
+};
+/** The whole pages before the live one, oldest first. */
+export type SessionThreadHistorySection = { generation: number; pages: ThreadPage[] };
 export type SessionSearchStatus = "current" | "working" | "done" | "needs_you" | "archived" | "retained";
 export type SessionSearchCursor = { at_unix_ms: number; device_id: string; agent: string; session_id: string };
 export type SessionSearchOptions = { request_id?: string | null; device_id?: string | null; project_root?: string | null; agent?: string | null; since_unix_ms?: number | null; until_unix_ms?: number | null; status?: SessionSearchStatus | null; include_titles?: boolean; include_flows?: boolean; cursor?: SessionSearchCursor | null };
