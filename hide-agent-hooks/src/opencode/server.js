@@ -74,6 +74,14 @@ const STATE_DIRS = [
   path.join(homedir(), ".hide", "state"),
 ].filter(Boolean);
 
+/** Whether a shell command can hand a result to the system opener: a word of an opener and a target Hide's View
+ * shows, the helper's own byte test (`opener_guard::may_hold_opening`), whose reading of the call decides. */
+const OPENER_WORD = /open|start|saps|invoke-item|explorer|browser|wslview|(?:^|[^a-z0-9])ii(?![a-z0-9])/i;
+const VIEWABLE = /https?:|file:|\.(?:html?|png|jpe?g|gif|webp|bmp|avif|svg|ico|pdf|md|markdown|mdx|txt|log|csv|json|ya?ml|mp4|webm|mov)(?![a-z0-9])/i;
+function mayOpen(command) {
+  return OPENER_WORD.test(command) && VIEWABLE.test(command);
+}
+
 /** Whether `text` can name the Hide global instruction, or the file a link at it points to, which is the one every
  * session is given; names are matched as the helper's guard matches them. */
 function namesGlobal(text) {
@@ -465,8 +473,9 @@ async function onTool(state, ctx, registration, event) {
   // A call naming the Hide global instruction is judged as a guarded one: the helper refuses its write whatever the
   // guardrails say (PRD memory-self-improve D-07).
   const guarded = namesGlobal(tool === "shell" ? request.command : JSON.stringify(input ?? {})) || policyOn();
-  // A shell call that can start an agent through Herdr is the spawn guard's.
-  const launch = tool === "shell" && (request.command.includes("herdr") || request.command.includes("HERDR_BIN_PATH"));
+  // A shell call that can start an agent through Herdr is the spawn guard's, and one that can hand a result to the
+  // system opener the opener guard's.
+  const launch = tool === "shell" && (request.command.includes("herdr") || request.command.includes("HERDR_BIN_PATH") || mayOpen(request.command));
   // The terminal is asked for what only a pane can judge, and then judges the guardrails too; a missing or
   // unreadable policy is judged there, where the helper records why.
   if ((known === undefined || terminalOf(state, root)) && (launch || guarded !== false)) {

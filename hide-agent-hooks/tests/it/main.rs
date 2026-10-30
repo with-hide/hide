@@ -21,6 +21,7 @@ mod letter_origin;
 mod lossless_install;
 mod opencode_helper;
 mod opencode_plugin;
+mod opener_guard;
 mod pi_extension;
 mod plan_record;
 mod programs;

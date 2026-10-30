@@ -1,4 +1,4 @@
-// hide-extension@11 sha256=cc15aa8f7a3ee4aa1eebd072c7c245b5ebe18c59e7bd40e2317ddd0fca396528
+// hide-extension@11 sha256=2918b6c4f1cac63369d6115011f69bb85e4a5fd6e1e8cb437c19cbb3cb802f6e
 // Hide's extension for Pi and omp, written by Hide's install kit (hide-agent-hooks).
 // An edit is kept and shown as edited in Settings; Reinstall puts Hide's back.
 // Outside a Herdr pane, in an agent started from another Pi's or omp's shell, or when its helper is gone, it does
@@ -57,6 +57,14 @@ const STATE_DIRS = [
   process.env.XDG_STATE_HOME ? path.join(process.env.XDG_STATE_HOME, "hide") : "",
   path.join(homedir(), ".hide", "state"),
 ].filter(Boolean);
+
+/** Whether a shell command can hand a result to the system opener: a word of an opener and a target Hide's View
+ * shows, the helper's own byte test (`opener_guard::may_hold_opening`), whose reading of the call decides. */
+const OPENER_WORD = /open|start|saps|invoke-item|explorer|browser|wslview|(?:^|[^a-z0-9])ii(?![a-z0-9])/i;
+const VIEWABLE = /https?:|file:|\.(?:html?|png|jpe?g|gif|webp|bmp|avif|svg|ico|pdf|md|markdown|mdx|txt|log|csv|json|ya?ml|mp4|webm|mov)(?![a-z0-9])/i;
+function mayOpen(command) {
+  return OPENER_WORD.test(command) && VIEWABLE.test(command);
+}
 
 /** Whether `text` can name the Hide global instruction, or the file a link at it points to, which is the one every
  * session is given; names are matched as the helper's guard matches them. */
@@ -536,9 +544,9 @@ async function onTool(state, event, ctx) {
   if (tool === "bash") {
     const command = event?.input?.command;
     // Every shell call comes here: one asks the helper while a guardrail is on, or, in the pane's own agent, when
-    // it can start an agent through Herdr.
+    // it can start an agent through Herdr or hand a result to the system opener.
     if (typeof command !== "string") return null;
-    const launch = !state.guardOnly && (command.includes("herdr") || command.includes("HERDR_BIN_PATH"));
+    const launch = !state.guardOnly && (command.includes("herdr") || command.includes("HERDR_BIN_PATH") || mayOpen(command));
     if (!launch && !namesGlobal(command) && !guardrailsOn(state)) return null;
     const cwd = typeof event.input.cwd === "string" && event.input.cwd ? event.input.cwd : ctx?.cwd;
     request = { tool, command, cwd };

@@ -57,6 +57,14 @@ const STATE_DIRS = [
   path.join(homedir(), ".hide", "state"),
 ].filter(Boolean);
 
+/** Whether a shell command can hand a result to the system opener: a word of an opener and a target Hide's View
+ * shows, the helper's own byte test (`opener_guard::may_hold_opening`), whose reading of the call decides. */
+const OPENER_WORD = /open|start|saps|invoke-item|explorer|browser|wslview|(?:^|[^a-z0-9])ii(?![a-z0-9])/i;
+const VIEWABLE = /https?:|file:|\.(?:html?|png|jpe?g|gif|webp|bmp|avif|svg|ico|pdf|md|markdown|mdx|txt|log|csv|json|ya?ml|mp4|webm|mov)(?![a-z0-9])/i;
+function mayOpen(command) {
+  return OPENER_WORD.test(command) && VIEWABLE.test(command);
+}
+
 /** Whether `text` can name the Hide global instruction, or the file a link at it points to, which is the one every
  * session is given; names are matched as the helper's guard matches them. */
 function namesGlobal(text) {
@@ -535,9 +543,9 @@ async function onTool(state, event, ctx) {
   if (tool === "bash") {
     const command = event?.input?.command;
     // Every shell call comes here: one asks the helper while a guardrail is on, or, in the pane's own agent, when
-    // it can start an agent through Herdr.
+    // it can start an agent through Herdr or hand a result to the system opener.
     if (typeof command !== "string") return null;
-    const launch = !state.guardOnly && (command.includes("herdr") || command.includes("HERDR_BIN_PATH"));
+    const launch = !state.guardOnly && (command.includes("herdr") || command.includes("HERDR_BIN_PATH") || mayOpen(command));
     if (!launch && !namesGlobal(command) && !guardrailsOn(state)) return null;
     const cwd = typeof event.input.cwd === "string" && event.input.cwd ? event.input.cwd : ctx?.cwd;
     request = { tool, command, cwd };

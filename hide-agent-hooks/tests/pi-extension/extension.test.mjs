@@ -565,9 +565,15 @@ test("a shell call that starts an agent through Herdr is refused with the helper
   const { lost: _lost, ...input } = call.input;
   assert.deepEqual(input, { tool: "bash", command: "herdr agent start helper --kind claude", cwd: "/checkouts/fixture", version: 11 });
 
+  // A call that can hand a result to the system opener asks the helper too.
+  const opener = { ...sample("tool_call.bash").event, input: { command: "Start-Process report.pdf" } };
+  assert.deepEqual(await host.emit("tool_call", opener, context("tool_call.bash")), { block: true, reason: "Use hide agent spawn --parent here" });
+  const [, opened] = await until("tool", 2);
+  assert.equal(opened.input.command, "Start-Process report.pdf");
+
   assert.equal(await host.emit("tool_call", sample("tool_call.bash").event, context("tool_call.bash")), undefined);
   await settled(host);
-  assert.equal(made("tool").length, 1, "an ordinary shell call starts no helper");
+  assert.equal(made("tool").length, 2, "an ordinary shell call starts no helper");
 });
 
 

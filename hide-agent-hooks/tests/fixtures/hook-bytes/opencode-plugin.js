@@ -1,4 +1,4 @@
-// hide-opencode-plugin@10 sha256=48e9cd6dce0711b6cf7ce999c26f4dfcab32dddd72fb4d92d47966930a5d3b13
+// hide-opencode-plugin@10 sha256=0b44372760155c7a9fa3a471c537591c38e9b4e136d6b6deed575d1454b6b080
 // Hide's OpenCode 1.x plugin, written by Hide's install kit (hide-agent-hooks).
 // An edit is kept and shown as edited in Settings; Reinstall puts Hide's back.
 // Outside a Herdr pane Hide manages, or when its helper is gone, it does nothing.
@@ -57,6 +57,14 @@ const STATE_DIRS = [
   process.env.XDG_STATE_HOME ? path.join(process.env.XDG_STATE_HOME, "hide") : "",
   path.join(homedir(), ".hide", "state"),
 ].filter(Boolean);
+
+/** Whether a shell command can hand a result to the system opener: a word of an opener and a target Hide's View
+ * shows, the helper's own byte test (`opener_guard::may_hold_opening`), whose reading of the call decides. */
+const OPENER_WORD = /open|start|saps|invoke-item|explorer|browser|wslview|(?:^|[^a-z0-9])ii(?![a-z0-9])/i;
+const VIEWABLE = /https?:|file:|\.(?:html?|png|jpe?g|gif|webp|bmp|avif|svg|ico|pdf|md|markdown|mdx|txt|log|csv|json|ya?ml|mp4|webm|mov)(?![a-z0-9])/i;
+function mayOpen(command) {
+  return OPENER_WORD.test(command) && VIEWABLE.test(command);
+}
 
 /** Whether `text` can name the Hide global instruction, or the file a link at it points to, which is the one every
  * session is given; names are matched as the helper's guard matches them. */
@@ -512,9 +520,9 @@ async function onTool(state, sessionID, directory, input, output) {
   if (tool === "bash") {
     const command = output?.args?.command;
     // Every shell call comes here: one asks the helper while a guardrail is on, or, in a Herdr pane, when it can
-    // start an agent through Herdr.
+    // start an agent through Herdr or hand a result to the system opener.
     if (typeof command !== "string") return null;
-    const launch = !state.guardOnly && (command.includes("herdr") || command.includes("HERDR_BIN_PATH"));
+    const launch = !state.guardOnly && (command.includes("herdr") || command.includes("HERDR_BIN_PATH") || mayOpen(command));
     if (!launch && !namesGlobal(command) && !guardrailsOn(state)) return null;
     // OpenCode runs a relative `workdir` in the session's folder, not where this process started.
     const workdir = output.args.workdir;
