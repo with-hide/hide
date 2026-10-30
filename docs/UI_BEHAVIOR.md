@@ -1141,12 +1141,18 @@ Reintroducing a shared attachment shelf requires a supported provider contract f
 ## Session thread
 
 Core owner: `herdr-core/src/runtime/session_thread.rs`; reader `hide-session/src/thread/`; web store `web/src/store.ts` (`sessionThread`, `sessionThreadHistory`), actions `openThread`, `readOlderThread`, `closeThread` in `web/src/actions.ts`, input `submitThreadInput` in `web/src/attachments.ts`.
-The screen that draws a thread comes with Desk (PRD session-docs-and-assistant); this section is what the thread under it does.
+Screen: `web/src/components/desk/thread-panel.tsx` connects a Desk job's thread to the store and draws it with `thread-view.tsx`; `web/src/threadView.ts` turns the sections into its lines and Hide parts, and `web/src/desk.ts` owns the line and turn rules.
 
 A thread shows one agent pane's session as a conversation: what the operator and Hide said to the agent, what the agent said and thought, its tool calls with their input, diffs and output, and its plans, newest last (B25).
 It follows the session while it works: what the agent writes reaches the thread within about a second of Herdr seeing the agent work, and the earlier part stays as it was drawn.
 Older pages load on request, up to four kept pages besides the live one; past that the request is refused as `capacity` and the terminal has the rest.
 A shell call that ran a `hide` command which made something is drawn as that thing (B26): a plan's steps, a new session's row, a letter's line, an opened View, a mission's chip, looked up in Hide's own state by the names the command gave.
+A session it names (a letter's addressee or sender, a new session) is a chip with that session's status, agent and title, which goes to it when pressed; a session that ended or that Hide cannot place is its name alone, and a part Hide cannot draw truly (a mission it does not hold, a diff View) stays the command it was.
+A plan is drawn once, at its last change, as it is now.
+The operator's words are the only bubble (D-75); a letter the session got is a line, `✉ [sender]에게서 받음 · first line`, the whole letter on hover, and a letter it sent reads `✉ [addressee]에게 보냄 · first line`.
+A shell command still running reads `실행 중 0:12`, counted from when the session made the call, with no ring: a ring is a session's state.
+While the job asks a question, the question is said once, in the wait at the conversation's foot, and the agent's last words leave it out.
+The conversation stays at its end while the operator is there, so new lines come into view; scrolled up, it stays put, a page read in above keeps the lines in view where they were, and reaching the top reads the page before.
 When the record cannot be read, the thread says why in one line, `no_record` (no session reported, no file, or an agent Hide cannot read a thread of) or `refused` (the record is there and could not be read), beside `터미널로` (B27); a session the agent reports later is read then.
 A device whose link is down keeps the thread it drew, dimmed by `connected` false, and reads again when the link returns.
 
@@ -1156,6 +1162,8 @@ The words reach the agent as a phone's reply does, through Herdr's `pane.send_in
 When the pane's program has asked for bracketed paste, as Claude Code, Codex and most agent composers do, Herdr wraps the words in a paste, so a long text can show in the agent's composer as a pasted block (Claude Code's `[Pasted text]`) rather than as typed lines, and a new line in it stays inside the message instead of submitting it.
 Control characters other than a new line and a tab are refused before anything is sent, and the text is capped at 16 KiB.
 The input's state, `sending`, `sent` or `refused` with its reason, is the thread section's `input`; a refusal hided makes before the core (a file it never staged, a full staging area) reaches the thread as `threadInputRefusal` under the input's request id.
+Enter sends and Shift+Enter starts a line; an Enter that ends an IME composition only commits it, and the `@` menu keeps its own Enter.
+The words stay in the box until the pane took them, so a refused send loses nothing, and the refusal is one line under the box; while the pane runs another session, or is gone, that line says so and send waits.
 
 ## Overview
 

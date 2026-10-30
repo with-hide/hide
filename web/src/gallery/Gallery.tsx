@@ -10,6 +10,7 @@
 import { ArrowRightIcon, CopyIcon, FolderIcon, Loader2Icon, PlusIcon, SettingsIcon, TrashIcon } from "lucide-react";
 import { Fragment, useEffect, useRef, useState, type ReactNode } from "react";
 import { DESK_SCENES } from "./DeskScene";
+import { DESK_THREAD_SCENES } from "./DeskThreadScene";
 import { toast } from "sonner";
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "../components/ui/alert-dialog";
 import { Badge } from "../components/ui/badge";
@@ -863,6 +864,16 @@ function Desk() {
             {(["light", "dark"] as const).map((theme) => (
               <div key={theme} className="border-t border-border">
                 <iframe loading="lazy" title={`${label} ${theme}`} src={`/gallery?scene=desk&state=${state}&theme=${theme}`} className="h-(--size-gallery-scene-h) w-full border-0" />
+              </div>
+            ))}
+          </Fragment>
+        ))}
+        {DESK_THREAD_SCENES.map(({ state, label }) => (
+          <Fragment key={`thread-${state}`}>
+            <div className="border-t border-border px-md py-sm text-caption text-subtle-foreground">{label}</div>
+            {(["light", "dark"] as const).map((theme) => (
+              <div key={theme} className="border-t border-border">
+                <iframe loading="lazy" title={`${label} ${theme}`} src={`/gallery?scene=desk-thread&state=${state}&theme=${theme}`} className="h-(--size-gallery-scene-h) w-full border-0" />
               </div>
             ))}
           </Fragment>

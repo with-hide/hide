@@ -108,7 +108,7 @@ it("keeps the words and says why when the pane refused them, and holds send whil
   expect(container.querySelector('[data-desk-composer-notice="true"]')?.textContent).toBe("The session is asleep: wake it to send");
 
   await act(async () => useShellStore.setState({ sessionThread: section({ pane: "changed" }) }));
-  expect(container.querySelector('[data-desk-composer-notice="true"]')?.textContent).toBe("This pane runs another session now: nothing was sent");
+  expect(container.querySelector('[data-desk-composer-notice="true"]')?.textContent).toBe("This pane runs another session now: this thread sends nothing there");
   expect(container.querySelector<HTMLButtonElement>('[data-desk-composer-send="true"]')?.disabled).toBe(true);
   await enter();
   expect(events).toHaveLength(1);
