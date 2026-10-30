@@ -524,8 +524,7 @@ fn antigravity_event(event: HookEvent, started: Instant) {
             event,
             change,
             who,
-            turn,
-            None,
+            Said::turn(turn),
             counted,
             Instant::now() + report::REPORT_TIMEOUT,
         )
@@ -797,8 +796,7 @@ fn report_basic(
         event,
         change,
         who,
-        turn,
-        None,
+        Said::turn(turn),
         counted,
         started + report::REPORT_TIMEOUT,
     );
@@ -829,9 +827,7 @@ fn print_line(json: &str) -> bool {
 fn run_spawn_guard(arguments: &[String], started: Instant) -> Option<(Vec<u8>, bool)> {
     let runtime =
         argument_value("--runtime", arguments).and_then(|value| AgentRuntime::parse(&value))?;
-    if runtime.dialect().adapter().spawn_guard.is_none() {
-        return None;
-    }
+    runtime.dialect().adapter().spawn_guard?;
     // Another agent that runs Claude Code's hooks (Grok, OpenCode, Cursor)
     // speaks through its own hook, or Hide has not verified its contract.
     if hide_agent_hooks::runtime::ForeignOrigin::detect(|name| std::env::var_os(name)).is_some() {
@@ -1183,7 +1179,7 @@ fn run_hook(arguments: &[String], started: Instant) {
     // moves the turn back to working; Codex's waits end at any call of the
     // session, since its tool hooks select only some tools.
     let call = (runtime == Some(AgentRuntime::ClaudeCode) && event == HookEvent::PermissionRequest)
-        .then(|| payload.as_ref())
+        .then_some(payload.as_ref())
         .flatten()
         .and_then(|(bytes, truncated)| counters::ToolCall::read(bytes, *truncated).key());
     report_pane(
@@ -1191,11 +1187,27 @@ fn run_hook(arguments: &[String], started: Instant) {
         event,
         change,
         who,
-        turn,
-        call.as_deref(),
+        Said {
+            turn,
+            call: call.as_deref(),
+        },
         counted,
         Instant::now() + report::REPORT_TIMEOUT,
     );
+}
+
+/// What an event says of its session's turn: the turn, and the call a
+/// waiting turn waits on when the event names one.
+#[derive(Clone, Copy)]
+struct Said<'a> {
+    turn: Option<HookTurn>,
+    call: Option<&'a str>,
+}
+
+impl Said<'_> {
+    fn turn(turn: Option<HookTurn>) -> Self {
+        Self { turn, call: None }
+    }
 }
 
 /// Applies `change` to the event's session in the pane's record and reports
@@ -1214,8 +1226,7 @@ fn report_pane(
     event: HookEvent,
     change: Change<'_>,
     who: Reporter<'_>,
-    turn: Option<HookTurn>,
-    call: Option<&str>,
+    Said { turn, call }: Said<'_>,
     counted: bool,
     deadline: Instant,
 ) {
@@ -1314,8 +1325,7 @@ fn report_recorded_turn(
             agent: Some(runtime.id()),
             session: session.as_deref(),
         },
-        Some(HookTurn::Working),
-        None,
+        Said::turn(Some(HookTurn::Working)),
         runtime.dialect().adapter().subagent_counts.is_some(),
         deadline,
     );
