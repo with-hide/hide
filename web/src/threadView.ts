@@ -3,7 +3,7 @@
 // `session_thread_history` and the page the session is still writing in
 // `session_thread`, each on its own revision; the screen draws them as one.
 
-import type { SessionThreadHistorySection, SessionThreadSection, ThreadPart, ThreadUpdate } from "./snapshot";
+import type { SessionThreadHistorySection, SessionThreadSection, SnapshotRest, ThreadPart, ThreadUpdate } from "./snapshot";
 
 export type ThreadConversation = {
   /** Every update the thread holds, oldest first. */
@@ -40,4 +40,17 @@ export function threadInputHeld(thread: SessionThreadSection | null): "pane_chan
   if (thread.pane === "gone") return "pane_gone";
   if (thread.input?.state === "sending") return "in_flight";
   return null;
+}
+
+/**
+ * The model Hide launched the thread's session with, for its head's second
+ * line: the launch choice the Overview map reads (`overview_graph.sessions`),
+ * never a claim about a later switch inside the agent; null when the launch
+ * chose none, so the line names no model the system cannot produce.
+ */
+export function threadLaunchModel(rest: SnapshotRest | null | undefined, thread: SessionThreadSection | null): string | null {
+  if (!thread?.pane_id || !thread.machine) return null;
+  const raw = thread.pane_id.startsWith(`remote:${thread.machine}:pane:`) ? thread.pane_id.slice(`remote:${thread.machine}:pane:`.length) : thread.pane_id;
+  const launch = rest?.overview_graph?.sessions.find((one) => one.device_id === thread.machine && (one.pane_id === thread.pane_id || one.pane_id === raw));
+  return launch?.launch_model ?? null;
 }
