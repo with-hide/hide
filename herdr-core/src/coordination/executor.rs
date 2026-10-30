@@ -919,7 +919,15 @@ fn spawn(
                 // now; a spawn beside never makes one.
                 return Err("beside_other_checkout".into());
             } else {
-                let mut params = crate::wire::worktree_create_params(repo, branch, None, false)?;
+                // A device whose helper is not connected leaves the start to
+                // Herdr, the folder's own HEAD.
+                let start = node
+                    .as_deref()
+                    .map(|node| crate::live::new_branch_start(node, repo, None))
+                    .transpose()?
+                    .flatten();
+                let mut params =
+                    crate::wire::worktree_create_params(repo, branch, start.as_deref(), false)?;
                 params["label"] = json!(format!("hide:{}", reserved.id));
                 if let Some(path) = path {
                     params["path"] = json!(path);
