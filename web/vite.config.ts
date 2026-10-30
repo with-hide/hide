@@ -24,6 +24,7 @@ export default defineConfig({
   test: {
     environment: "node",
     reporters: ["default", "./e2e/unit-failure-reporter.ts"],
+    setupFiles: ["./test/intl.setup.ts"],
     include: ["src/**/*.test.{ts,tsx}", "e2e/windows-sockets.unit.ts", "e2e/platform-program.unit.ts", "e2e/bounded-child.unit.ts"],
   },
 });
