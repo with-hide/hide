@@ -1243,11 +1243,7 @@ mod tests {
             outcome: TurnOutcome::Done,
         });
 
-        assert!(event(
-            &mut runtime,
-            "desk_select",
-            json!({"agent": "pi"})
-        ));
+        assert!(event(&mut runtime, "desk_select", json!({"agent": "pi"})));
         assert!(matches!(
             items(&runtime).last(),
             Some(DeskItem::Switch {
