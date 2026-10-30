@@ -14,6 +14,7 @@ build; docs/BUILD.md, "The terminal parser and Zig", cites what it measured.
 from __future__ import annotations
 
 import json
+import shutil
 import subprocess
 import sys
 import time
@@ -79,6 +80,13 @@ def main() -> int:
         print(__doc__.strip().splitlines()[2], file=sys.stderr)
         return 2
     label, command = sys.argv[1], sys.argv[3:]
+    # Windows starts a bare name from System32 before PATH, where `bash` is
+    # the WSL launcher, not the Git Bash the caller runs in.
+    program = shutil.which(command[0])
+    if program is None:
+        print(f"measure-build: {command[0]} is not on PATH", file=sys.stderr)
+        return 127
+    command = [program, *command[1:]]
     start = time.monotonic()
     status, peak = (run_windows if sys.platform == "win32" else run_unix)(command)
     seconds = time.monotonic() - start
