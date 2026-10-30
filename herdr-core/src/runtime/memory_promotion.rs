@@ -169,6 +169,10 @@ pub(super) struct PromotionTracking {
     /// Ready batches Hide is merging or discarding now, by Project and
     /// branch (PRD hide-ai-branch-first-apply D-05, D-07).
     pub(super) deciding: HashMap<(String, String), super::memory_branch::BatchDecision>,
+    /// Merges a remake carries out, by Project and branch (operator
+    /// decision 2026-10-31); kept in memory, so after a restart the remade
+    /// batch waits for the operator.
+    pub(super) finish: HashMap<(String, String), super::memory_branch::BatchFinish>,
     /// What the tracker last read of each batch branch and what its agent
     /// was asked, by Project and branch.
     pub(super) branches: HashMap<(String, String), super::memory_branch::BatchBranchFacts>,

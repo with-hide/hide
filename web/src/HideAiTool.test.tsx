@@ -262,13 +262,13 @@ describe("the Hide AI tool", () => {
   });
 
   it("words a start Memory refused by its code, and shows the core's sentence only under a code it has no words for", async () => {
-    const refused = (failure: string) => ({ source: "memory" as const, group: "choose" as const, state: "my_turn" as const, cause: "Merge or discard a waiting branch before starting another",
+    const refused = (failure: string) => ({ source: "memory" as const, group: "choose" as const, state: "my_turn" as const, cause: "Wait for the pending Memory change to finish",
       attempt: { phase: "failed" as const, started_at_unix_ms: 1, pr_number: null, url: null, agent_pane: null, failure, purpose: "branch" as const } });
-    await render(suggestionsProject({ rows: [suggestionRow("m1", refused("branches_full")), suggestionRow("m2", refused("not_started"))] }));
-    expect(q('[data-suggestion="m1"] [data-suggestion-attempt]')?.textContent).toContain("Didn't start · five branches are waiting for a decision");
+    await render(suggestionsProject({ rows: [suggestionRow("m1", refused("action_busy")), suggestionRow("m2", refused("not_started"))] }));
+    expect(q('[data-suggestion="m1"] [data-suggestion-attempt]')?.textContent).toContain("Didn't start · press again when the other Memory change ends");
     expect(q('[data-suggestion="m1"] [data-suggestion-failure-detail]')).toBeNull();
     expect(q('[data-suggestion="m2"] [data-suggestion-attempt]')?.textContent).toContain("Didn't start");
-    expect(q('[data-suggestion="m2"] [data-suggestion-failure-detail]')?.textContent).toBe("Merge or discard a waiting branch before starting another");
+    expect(q('[data-suggestion="m2"] [data-suggestion-failure-detail]')?.textContent).toBe("Wait for the pending Memory change to finish");
     expect(q('[data-suggestion-retry="m1"]')).not.toBeNull();
   });
 
@@ -320,7 +320,7 @@ describe("the Hide AI tool", () => {
     expect(q('[data-suggestion-merge-push="s3"]')?.textContent).toBe("Try again");
     expect(q('[data-suggestion="s4"] [data-suggestion-attempt]')?.textContent).toContain("main changed, so it has to be made again");
     expect(q('[data-suggestion-merge="s4"]')).toBeNull();
-    expect(q('[data-suggestion-rebase="s4"]')?.textContent).toBe("Make it again");
+    expect(q('[data-suggestion-merge-push="s4"]')?.textContent).toBe("Try again");
     expect(q('[data-suggestion="s5"] [data-suggestion-attempt]')?.textContent).toContain("Fixing");
     expect(q('[data-suggestion="s6"] [data-suggestion-attempt]')?.textContent).toContain("Ended without changing anything");
     expect(q('[data-suggestion-retry="s6"]')).not.toBeNull();
@@ -328,7 +328,7 @@ describe("the Hide AI tool", () => {
     await click('[data-suggestion-branch-view="s2"]');
     await click('[data-suggestion-open-pr="s1"]');
     await click('[data-suggestion-merge-push="s1"]');
-    await click('[data-suggestion-rebase="s4"]');
+    await click('[data-suggestion-merge-push="s4"]');
     await click('[data-suggestion-discard="s1"]');
     expect(sent("detail_open")).toEqual([
       { item: { kind: "branch", workspace_id: "p", row: "s1" } },
@@ -337,16 +337,15 @@ describe("the Hide AI tool", () => {
     expect(sent("suggestion_action")).toEqual([
       { workspace_id: "p", id: "s1", action: "open_pr" },
       { workspace_id: "p", id: "s1", action: "merge_push" },
-      { workspace_id: "p", id: "s4", action: "rebase" },
+      { workspace_id: "p", id: "s4", action: "merge_push" },
       { workspace_id: "p", id: "s1", action: "discard" },
     ]);
   });
 
-  it("offers a local merge and no PR without GitHub, fixes the docs without it, and holds a new fix while five branches wait (hide-ai-branch-first-apply B1, B7, B9, B28)", async () => {
+  it("offers a local merge and no PR without GitHub, fixes the docs without it (hide-ai-branch-first-apply B1, B7, B9)", async () => {
     await render(suggestionsProject({ github: "missing", rows: [
       suggestionRow("s1", ready(null)),
       suggestionRow("s2"),
-      suggestionRow("s3", { hold: "branches_full" }),
       suggestionRow("m7", { source: "memory", memory_cards: [7, 9, 12], ...ready(null) }),
       suggestionRow("s4", ready("merge_dirty")),
     ] }));
@@ -361,8 +360,6 @@ describe("the Hide AI tool", () => {
     expect(sent("suggestion_action")).toEqual([{ workspace_id: "p", id: "s1", action: "merge" }]);
     expect(q('[data-suggestion="s2"] [data-suggestion-apply]')?.textContent).toBe("Fix the docs");
     expect(q('[data-suggestion="s2"] [data-suggestion-github-needed]')).toBeNull();
-    expect(q('[data-suggestion="s3"] [data-suggestion-apply]')).toBeNull();
-    expect(q('[data-suggestion="s3"] [data-suggestion-hold="branches_full"]')?.textContent).toBe("5 branches are waiting for a decision");
     expect(q('[data-suggestion="m7"]')?.textContent).toContain("Apply 3 corrections to the docs");
   });
 

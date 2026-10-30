@@ -83,7 +83,7 @@ export type AttemptLine = { text: string; tone: "muted" | "warning" | "destructi
  * (B7, B8): `pr` after a push GitHub did not take, `sync` after a push that
  * found the local base apart from GitHub's.
  */
-export type BranchChoice = { again: "merge" | "rebase" | "discard" | "pr" | "sync" | null };
+export type BranchChoice = { again: "merge" | "discard" | "pr" | "sync" | null };
 
 /** The line of a row being applied (B2-B12, B14): what the attempt is doing, in words; null before one started. */
 export function attemptLine(t: TFunction<"translation">, row: Pick<SuggestionRow, "outcome" | "attempt">): AttemptLine | null {
@@ -139,7 +139,6 @@ const FAILURE_KEYS: Record<string, MessageKey> = {
 
 /** Why Memory refused to start a press, by the code the core put on the row (`herdr-core/src/runtime/suggestion_memory.rs`, `Refusal`). */
 const START_REFUSAL_KEYS: Record<string, MessageKey> = {
-  branches_full: "suggestions.refusal.branches_full",
   not_git: "suggestions.refusal.not_git",
   promotion_unavailable: "suggestions.refusal.promotion_unavailable",
   action_busy: "suggestions.refusal.action_busy",
@@ -169,7 +168,7 @@ const sync = (reason: MessageKey): Refusal => ({ lead: "suggestions.failure.lead
 const REFUSALS: Record<string, Refusal> = {
   merge_dirty: merge("suggestions.failure.merge_dirty"),
   merge_in_progress: merge("suggestions.failure.in_progress"),
-  merge_conflict: merge("suggestions.failure.merge_conflict", "rebase"),
+  merge_conflict: merge("suggestions.failure.merge_conflict"),
   merge_moved: merge("suggestions.failure.merge_moved"),
   merge_branch_moved: merge("suggestions.failure.merge_branch_moved"),
   merge_sign_failed: merge("suggestions.failure.sign_failed"),
@@ -220,21 +219,20 @@ export function memoryTabCount(project: Pick<ProjectSuggestions, "counts">): num
 
 /**
  * Whether a row offers its apply button: a new suggestion, `문서 고치기`
- * with or without GitHub (PRD hide-ai-branch-first-apply B1), an issue only
- * with it, where `GitHub 연결 필요` stands instead (B10, B18), and neither
- * while five branches wait for a decision (B28). A global instruction
+ * with or without GitHub (PRD hide-ai-branch-first-apply B1), however many
+ * branches already wait for a decision, and an issue only with it, where
+ * `GitHub 연결 필요` stands instead (B10, B18). A global instruction
  * row needs no GitHub (PRD memory-self-improve B8): it offers its press
  * while the core gave a preview to send back, and shows it held while none
  * of its evidence could be read (B7) or the line has no room (B10).
  */
-export function applyOffer(row: Pick<SuggestionRow, "state" | "hold" | "outcome" | "local" | "evidence_unconfirmed">): "pr" | "issue" | "local" | "local_held" | "github_needed" | "branches_full" | null {
+export function applyOffer(row: Pick<SuggestionRow, "state" | "hold" | "outcome" | "local" | "evidence_unconfirmed">): "pr" | "issue" | "local" | "local_held" | "github_needed" | null {
   if (!offered(row)) return null;
   if (row.outcome === "local") {
     if (!row.local || row.local.present) return null;
     return row.local.preview !== null && !row.evidence_unconfirmed ? "local" : "local_held";
   }
   if (row.hold === "github_needed") return "github_needed";
-  if (row.hold === "branches_full") return "branches_full";
   return row.outcome;
 }
 
