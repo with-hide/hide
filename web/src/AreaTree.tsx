@@ -5,13 +5,14 @@ import { EntryContextMenu, EntryDropdown, type MenuEntry } from "./components/en
 import { Button } from "./components/ui/button";
 import { Hint } from "./components/ui/tooltip";
 import { holdShellDrag } from "./shellDrag";
+import { readTabStripSizes } from "./tabStripSizes";
 import { useUiStore } from "./ui";
 import { useInterfaceTranslation } from "./i18n/client";
 import { IDLE, movePointer, pressTab, relayout, releasePointer, type DragSession } from "./areaDrag";
 import { focusFromKeyboard, installFocusModality } from "./areaFocus";
 import { RATIO_MAX, RATIO_MIN, RESIZE_STEP, areasOf, topRightArea, dropTarget, findArea, locateDisplay, ratioAtOffset, revealedScroll, sameTarget, singleAreaGeometry, steppedRatio, tabStripFit, areaGeometry,
   type Area, type AreaItem, type AreaLayout, type AreaNode, type AreaSplit, type AreaWords,
-  type DividerBox, type DropTarget, type Geometry, type LayoutSizes, type Point, type Rect, type TabFit, type TabSlot, type TabStripSizes } from "./areaLayout";
+  type DividerBox, type DropTarget, type Geometry, type LayoutSizes, type Point, type Rect, type TabFit, type TabSlot } from "./areaLayout";
 
 /**
  * `fit` says how the tab draws its contents in its slot (`tabStripFit`): a
@@ -49,21 +50,6 @@ const TAB_SLOT = {
   selected: "flex shrink-0 w-(--tab-selected-width) has-data-renaming:w-(--size-tab-preferred)",
   others: "flex shrink-0 w-(--tab-other-width) has-data-renaming:w-(--size-tab-preferred)",
 };
-
-/** The strip's sizes; a token that does not resolve is a broken build, not a strip of empty tabs. */
-function readTabStripSizes(): TabStripSizes {
-  const read = (name: string) => {
-    const value = tokenPx(name);
-    if (!(value > 0)) throw new Error(`design token ${name} did not resolve to a pixel size`);
-    return value;
-  };
-  return {
-    preferred: read("--size-tab-preferred"),
-    titleMin: read("--size-tab-title-min"),
-    icon: read("--size-tab-icon-identity"),
-    control: read("--size-control-sm"),
-  };
-}
 
 export type DrawnArea<I extends AreaItem> = { layout: AreaLayout<I>; geometry: Geometry; sizes: LayoutSizes };
 export type AreaAdapter<I extends AreaItem> = {
