@@ -1897,3 +1897,95 @@ fn a_session_a_pane_carries_is_counted_once_across_a_restart() {
     drop(worker);
     assert_eq!(statistics.take(), [AgentStarted(Agent::Claude)]);
 }
+
+fn pre_check_operation(
+    request: &str,
+    pane: Option<&str>,
+    agent_phase: &str,
+) -> crate::model::TaskOperationSnapshot {
+    crate::model::TaskOperationSnapshot {
+        id: 1,
+        device_id: None,
+        kind: "agent_start".into(),
+        phase: "done".into(),
+        repository_root: None,
+        branch: None,
+        base_branch: None,
+        path: None,
+        pane_id: pane.map(str::to_owned),
+        agent_kind: Some("claude".into()),
+        failure: None,
+        agent_phase: Some(agent_phase.into()),
+        agent_reason: None,
+        agent_line: None,
+        request_id: Some(request.into()),
+        stays_behind: false,
+    }
+}
+
+/// A pre-check is followed from its start to its pane and from the pane to
+/// the session its agent opened, which the worker records as the pull
+/// request's review; a start that failed and a pane that closed first end
+/// the following (PRD pr-review-status D-11, B14).
+#[test]
+fn a_pre_check_reaches_the_record_as_its_session_and_a_failed_or_closed_start_is_dropped() {
+    let mut runtime = runtime();
+    runtime.snapshot.navigator.workspaces = vec![record_workspace(
+        crate::node::TEST_NODE,
+        "app",
+        &["p-check"],
+    )];
+    let client = crate::links::worker::LinkClient::full_mailbox_for_test();
+    runtime.links_work.client = Some(client.clone());
+
+    runtime.follow_pre_check("r-1".into(), "acme/app".into(), 7);
+    runtime.feed_link_reviews();
+    assert_eq!(runtime.links_work.pre_checks.len(), 1, "no answer yet");
+
+    runtime.snapshot.task_operation = Some(pre_check_operation("r-1", Some("p-check"), "starting"));
+    runtime.feed_link_reviews();
+    assert_eq!(
+        runtime.links_work.pre_checks[0].pane_id.as_deref(),
+        Some("p-check"),
+        "the pane is known, its session not yet"
+    );
+    assert!(client.review_facts_for_test().is_none());
+
+    runtime.snapshot.navigator.agents = vec![record_agent("p-check", "s-check", None)];
+    runtime.feed_link_reviews();
+    assert!(runtime.links_work.pre_checks.is_empty());
+    let facts = client.review_facts_for_test().unwrap();
+    assert_eq!(
+        *facts,
+        vec![crate::links::ReviewFact {
+            device_id: crate::node::TEST_NODE.into(),
+            agent: "claude".into(),
+            session_id: "s-check".into(),
+            repo_name: "acme/app".into(),
+            number: 7,
+        }]
+    );
+
+    // A start that failed has no session to wait for.
+    runtime.follow_pre_check("r-2".into(), "acme/app".into(), 8);
+    runtime.snapshot.task_operation = Some(pre_check_operation("r-2", Some("p-gone"), "failed"));
+    runtime.feed_link_reviews();
+    assert!(runtime.links_work.pre_checks.is_empty());
+
+    // A pane that closed before its agent named a session.
+    runtime.follow_pre_check("r-3".into(), "acme/app".into(), 9);
+    runtime.snapshot.task_operation = Some(pre_check_operation("r-3", Some("p-closed"), "started"));
+    runtime.feed_link_reviews();
+    assert!(runtime.links_work.pre_checks.is_empty());
+    assert_eq!(client.review_facts_for_test().unwrap().len(), 1);
+
+    // The followed starts are capped.
+    for index in 0..crate::runtime::links::PRE_CHECK_LIMIT + 2 {
+        runtime.follow_pre_check(format!("r-cap-{index}"), "acme/app".into(), 10);
+    }
+    assert_eq!(
+        runtime.links_work.pre_checks.len(),
+        crate::runtime::links::PRE_CHECK_LIMIT
+    );
+    assert_eq!(runtime.links_work.pre_checks[0].request_id, "r-cap-2");
+}

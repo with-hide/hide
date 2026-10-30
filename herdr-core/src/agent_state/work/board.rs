@@ -367,6 +367,7 @@ fn unjudged(query: ExtraQuery) -> Placed {
         ExtraQuery::Account => "account",
         ExtraQuery::ReviewRequests => "review_requests",
         ExtraQuery::MergeQueue => "merge_queue",
+        ExtraQuery::Reviews => "reviews",
     };
     place("waiting", Reason::of("unjudged").text(slug))
 }

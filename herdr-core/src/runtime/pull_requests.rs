@@ -769,6 +769,22 @@ impl Runtime {
                     return true;
                 }
             };
+        if payload.intent == Some(super::events::PrDelegateIntent::Review) {
+            match (&payload.request_id, repository_of_url(&pull_request.url)) {
+                (Some(request_id), Some(repo_name)) => self.follow_pre_check(
+                    request_id.clone(),
+                    repo_name,
+                    u64::from(pull_request.number),
+                ),
+                // Without either the session cannot be told apart: it is
+                // still started, and its line reads as worked.
+                (request_id, repo_name) => crate::diagnostic!(serde_json::json!({
+                    "component": "pull_requests", "kind": "pr_delegate.review_unfollowed",
+                    "pr": pull_request.number, "request": request_id,
+                    "repository_known": repo_name.is_some(),
+                })),
+            }
+        }
         let prompt = Some(payload.prompt.trim().to_owned()).filter(|prompt| !prompt.is_empty());
         let checkout = workspace
             .checkouts
@@ -1166,4 +1182,14 @@ impl Runtime {
             look_again: false,
         });
     }
+}
+
+/// `owner/name`, lowercase, of a pull request's GitHub address
+/// (`https://<host>/<owner>/<name>/pull/<n>`), as the link record keys it.
+fn repository_of_url(url: &str) -> Option<String> {
+    let path = url.split_once("://")?.1.split_once('/')?.1;
+    let mut parts = path.split('/');
+    let (owner, name) = (parts.next()?, parts.next()?);
+    (parts.next() == Some("pull") && !owner.is_empty() && !name.is_empty())
+        .then(|| format!("{owner}/{name}").to_ascii_lowercase())
 }

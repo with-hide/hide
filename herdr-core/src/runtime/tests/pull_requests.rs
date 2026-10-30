@@ -378,6 +378,39 @@ fn handing_a_pull_request_to_an_agent_starts_in_its_checkout_or_a_worktree_of_it
     );
 }
 
+/// PRD pr-review-status D-11: a pre-check is a start like any other, and its
+/// start is followed so its session is recorded as the pull request's review.
+#[test]
+fn a_pre_check_starts_like_any_delegation_and_is_followed_to_its_session() {
+    let mut runtime = pr_runtime(vec![pull_request(
+        7,
+        "4-task",
+        PullRequestBadge::Open,
+        None,
+    )]);
+    assert!(runtime.dispatch_json(&event(
+        "pr_delegate",
+        serde_json::json!({"workspace_id": "w", "pr_number": 7, "provider": "claude", "prompt": "리뷰만 해줘", "request_id": "r-check", "intent": "review"}),
+    )));
+    let operation = runtime.snapshot().task_operation.clone().unwrap();
+    assert_eq!(operation.kind, "agent_start");
+    let followed = &runtime.links_work.pre_checks;
+    assert_eq!(followed.len(), 1);
+    assert_eq!(
+        (followed[0].request_id.as_str(), followed[0].number),
+        ("r-check", 7)
+    );
+    runtime.dispatch_json(&event(
+        "pr_delegate",
+        serde_json::json!({"workspace_id": "w", "pr_number": 7, "provider": "claude", "request_id": "r-other", "intent": "approve"}),
+    ));
+    assert_eq!(
+        runtime.links_work.pre_checks.len(),
+        1,
+        "no intent but the review is taken"
+    );
+}
+
 /// D-46, B18: a feedback read with no worker fails its own slot with why.
 #[test]
 fn a_feedback_read_that_cannot_run_says_why_in_its_slot() {

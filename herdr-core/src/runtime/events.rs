@@ -1161,6 +1161,17 @@ pub(super) struct PrDelegatePayload {
     /// The id the page follows this start's answer by, as for any start.
     #[serde(default)]
     pub(super) request_id: Option<String>,
+    /// What the agent is asked to do. `review` is the card's pre-check: the
+    /// session it starts is recorded as the pull request's agent review
+    /// (PRD pr-review-status D-11); absent is any other work.
+    #[serde(default)]
+    pub(super) intent: Option<PrDelegateIntent>,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "snake_case")]
+pub(super) enum PrDelegateIntent {
+    Review,
 }
 
 /// `issue_set_open`: close or reopen a Local issue.
