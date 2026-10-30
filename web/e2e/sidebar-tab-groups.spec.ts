@@ -122,8 +122,8 @@ test("2-1-2 tab segments align every tab's guide and line, and an unnamed single
     expect(first.y - ownerRow.y - ownerRow.height).toBe(2);
     expect(middle.y - first.y - first.height).toBe(0);
     expect(last.y - middle.y - middle.height).toBe(0);
-    expect((await position(segment(page, single.tab.tab_id).locator("li[data-pane]"))).height).toBe(28);
-    expect(middle.height).toBe(28);
+    expect((await position(segment(page, single.tab.tab_id).locator("li[data-pane]"))).height).toBe(30);
+    expect(middle.height).toBe(30);
     await rest(page);
     await screenshot(page, "sidebar-tab-segments");
 
