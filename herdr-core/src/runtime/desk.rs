@@ -218,6 +218,11 @@ impl Runtime {
         if self.desk.worker.is_none() {
             return refused("desk_unavailable");
         }
+        // A card's change moves only the cards: the conversation is not sent again.
+        let room = !matches!(
+            event,
+            DeskEvent::JobCancel(_) | DeskEvent::JobRequeue(_) | DeskEvent::JobRead(_)
+        );
         let changed = match event {
             DeskEvent::Send(payload) => self.desk_send(payload),
             DeskEvent::Stop => self.desk_stop(),
@@ -239,7 +244,9 @@ impl Runtime {
         };
         if changed {
             self.save_desk();
-            self.compose_desk();
+            if room {
+                self.compose_desk();
+            }
             self.compose_desk_jobs();
         }
         changed

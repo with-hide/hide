@@ -1004,8 +1004,10 @@ impl Runtime {
         }
         let actor_pane = actor.pane_id.as_str();
         actor.require_native_identity()?;
-        if crate::delivery::reserved_name(&actor.name) {
-            // A pane named like a Factory would read as one (D-14).
+        if !actor.code_owned() && crate::delivery::reserved_name(&actor.name) {
+            // A pane named like a Factory would read as one (D-14); Hide's
+            // own actors, such as Desk's `hide:desk`, carry their reserved
+            // names.
             return Err("reserved_name".into());
         }
         // A Conductor's spawn is one of its mission's workers: refused before

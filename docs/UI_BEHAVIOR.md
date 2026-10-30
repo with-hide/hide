@@ -927,6 +927,14 @@ The core derives the counts and the 할 일 only on a publish whose inputs moved
 Desk (`◆ Desk` in the sidebar, PRD Desk 1차) is a room where the operator talks to an agent they choose, and that agent starts and follows real sessions through the `hide` CLI.
 The core decides every state below and sends it as the `desk`, `desk_live`, `desk_jobs` and `desk_mentions` sections; the screen words them and sends one `desk_*` event per action.
 Core owner: `herdr-core/src/runtime/desk.rs`, `herdr-core/src/model/desk.rs`; the process and its rules are in [ARCHITECTURE.md: Desk](ARCHITECTURE.md#desk).
+Web owners: `web/src/DeskScreen.tsx` (the room, the sidebar row, Settings › Desk), `web/src/deskComposer.ts` (the `@` word and what a send carries), `web/src/components/desk/` (the parts).
+
+The sidebar's `◆ Desk` row, under its head, opens the room in the center with the chat and the composer; Settings › Desk holds the default agent, where tasks run and the cap.
+The composer keeps what the operator is writing while they go elsewhere, and clears it once the conversation shows the message, so a refused send keeps the words.
+`@` opens the menu on the word the caret ends; a picked session or project is written `@name` and sent as its `@session(...)` or `@project(...)` token, and one the operator deleted is not sent.
+`다시 시도` on a notice sends the operator's last message again.
+Until the lane draws a thread, pressing a card, a session chip or a letter's line opens that session's own tab.
+A card's change sends only the `desk_jobs` section; the conversation is sent again only when it, the agents or the room's settings change.
 
 The selector lists Claude, Codex and Pi with each one's state:
 

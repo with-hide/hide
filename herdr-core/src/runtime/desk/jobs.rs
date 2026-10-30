@@ -1525,6 +1525,41 @@ mod tests {
     }
 
     #[test]
+    fn a_card_s_change_resends_the_cards_and_not_the_conversation() {
+        let root = tempfile::tempdir().unwrap();
+        let mut runtime = desk(root.path(), 1, &["a"]);
+        admit(&mut runtime, "b").expect("queued");
+        runtime.compose_desk_sections();
+        let room = runtime.snapshot.desk.clone().unwrap();
+        let cards = runtime.snapshot.desk_jobs.clone().unwrap();
+        assert!(runtime.desk_event(super::super::DeskEvent::JobCancel(super::super::JobPayload {
+            id: "intent-b".into(),
+        })));
+        assert!(Arc::ptr_eq(&room, runtime.snapshot.desk.as_ref().unwrap()));
+        assert!(!Arc::ptr_eq(&cards, runtime.snapshot.desk_jobs.as_ref().unwrap()));
+    }
+
+    #[test]
+    fn a_spawn_the_desk_process_asks_for_reaches_desk_s_queue() {
+        let root = tempfile::tempdir().unwrap();
+        let mut runtime = desk(root.path(), 2, &["a", "b"]);
+        runtime.desk.host.open = true;
+        let prepared = runtime.prepare_delivery(
+            NODE,
+            crate::workspace_control::DESK_CALLER,
+            &crate::desk::desk_context(NODE),
+            None,
+            Command::Agents {
+                command: spawn_command("c", None),
+            },
+        );
+        // This runtime holds no delivery client, so preparing ends there;
+        // the refusal of Desk's own name came before Desk's admission.
+        assert_eq!(prepared.err().as_deref(), Some("delivery_unavailable"));
+        assert_eq!(card(&runtime, "c").queue_position, Some(1));
+    }
+
+    #[test]
     fn a_spawn_of_desk_s_under_a_parent_is_refused_and_queues_nothing() {
         let root = tempfile::tempdir().unwrap();
         let mut runtime = desk(root.path(), 2, &["a", "b"]);
