@@ -195,6 +195,13 @@ pub fn github_snapshot(state_dir: &Path) -> PathBuf {
     state_dir.join("github-snapshot.json")
 }
 
+/// What each pane's agent hook last reported about its session (runtime,
+/// hook version, subagent counts), restored when the daemon starts; its
+/// owner is the core's hook facts (`herdr_core::agent_hooks`).
+pub fn hook_facts(state_dir: &Path) -> PathBuf {
+    state_dir.join("hook-facts.json")
+}
+
 /// The link record: which sessions made or worked on which pull request,
 /// kept after a pane closes; its owner is the core's link worker.
 pub fn links_store(state_dir: &Path) -> PathBuf {

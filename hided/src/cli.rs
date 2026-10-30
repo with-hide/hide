@@ -99,6 +99,9 @@ pub enum CommandKind {
     ObservationHook {
         start: bool,
     },
+    /// Private hook transport: one agent hook's report on its pane's agent
+    /// (`HookStatusReport` as JSON on stdin), proven like every hook request.
+    StatusHook,
     /// `hide view list [--session <id|here>]`: the checkout's Views, or
     /// the ones one session opened (PRD session-files D-31).
     ViewList {
@@ -390,6 +393,10 @@ pub fn parse_args(args: &[String]) -> Result<CommandKind, String> {
                 parse_workspace_memory(&words)
             }
             Some("bootstrap") if iter.next().is_none() => Ok(CommandKind::WorkspaceBootstrap),
+            Some("status") => match (iter.next().map(String::as_str), iter.next()) {
+                (Some("--hook"), None) => Ok(CommandKind::StatusHook),
+                _ => Err("usage: hide workspace status --hook < report".to_owned()),
+            },
             Some("info") => match (iter.next().map(String::as_str), iter.next()) {
                 (None, None) => Ok(CommandKind::WorkspaceInfo),
                 (Some("--hook"), None) => Ok(CommandKind::WorkspaceHookInfo),
@@ -767,6 +774,7 @@ pub fn run(kind: CommandKind) -> Result<(), String> {
                     | CommandKind::WorkspaceInfo
                     | CommandKind::WorkspaceHookInfo
                     | CommandKind::ObservationHook { .. }
+                    | CommandKind::StatusHook
                     | CommandKind::ViewList { .. }
                     | CommandKind::ViewStatus { .. }
                     | CommandKind::BrowserOpen { .. }
@@ -849,6 +857,38 @@ pub fn run(kind: CommandKind) -> Result<(), String> {
             )?;
             println!("{answer}");
             Ok(())
+        }
+        CommandKind::StatusHook => {
+            use std::io::Read;
+            // The hook reads stdout as JSON, so every refusal answers as one
+            // and the hook records its reason rather than a format error.
+            const NEXT: &str = "Continue without the status report";
+            let limit = hide_node_link::panes::HOOK_REQUEST_LIMIT;
+            let mut bytes = Vec::new();
+            std::io::stdin()
+                .lock()
+                .take((limit + 1) as u64)
+                .read_to_end(&mut bytes)
+                .or_else(|_| workspace_refusal("status_input_unavailable", NEXT))?;
+            if bytes.len() > limit {
+                return workspace_refusal("status_input_too_large", NEXT);
+            }
+            let report: hide_node_link::panes::HookStatusReport = serde_json::from_slice(&bytes)
+                .or_else(|_| workspace_refusal("status_input_invalid", NEXT))?;
+            let answer = crate::workspace_cli::request_hook(
+                &env,
+                hide_node_link::panes::HookCommand::Status { report },
+            )
+            .or_else(|reason| workspace_refusal(&reason, NEXT))?;
+            println!("{answer}");
+            if answer["ok"] == true {
+                Ok(())
+            } else {
+                Err(answer["reason"]
+                    .as_str()
+                    .unwrap_or("status_unavailable")
+                    .to_owned())
+            }
         }
         CommandKind::ObservationHook { start } => {
             use hide_node_link::panes::{

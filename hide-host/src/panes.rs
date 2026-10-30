@@ -373,8 +373,10 @@ impl Panes {
                 Ok(Ok(mut stream)) => {
                     if self.clients.fetch_add(1, Ordering::AcqRel) >= MAX_CLIENTS {
                         self.clients.fetch_sub(1, Ordering::AcqRel);
-                        let _ = answer_client(&mut stream, Err("bridge_busy".to_owned()));
+                        // Recorded before the caller hears it, so what the
+                        // caller does next is recorded after it.
                         report_refusal(output, None, "bridge_busy");
+                        let _ = answer_client(&mut stream, Err("bridge_busy".to_owned()));
                         continue;
                     }
                     scope.spawn(move || {
@@ -423,8 +425,8 @@ impl Panes {
             }
             Ok(request) => self.serve_bootstrap(stream, request, output),
             Err(reason) => {
-                let _ = answer_client(&mut stream, Err(reason.to_owned()));
                 report_refusal(output, None, reason);
+                let _ = answer_client(&mut stream, Err(reason.to_owned()));
             }
         }
     }
@@ -437,8 +439,8 @@ impl Panes {
             .filter(|pane_id| pane_id.len() <= 256)
             .map(str::to_owned);
         let Some(started) = self.started.get() else {
-            let _ = answer_client(&mut stream, Err("bridge_unavailable".to_owned()));
             report_refusal(output, named, "bridge_unavailable");
+            let _ = answer_client(&mut stream, Err("bridge_unavailable".to_owned()));
             return;
         };
         let mut core_refused = false;
@@ -623,13 +625,14 @@ impl Panes {
             }
             Ok(BootstrapAnswer::Reference { path, info })
         })();
-        let delivered = answer_client(&mut stream, result.clone()).is_ok();
-        // The core records the refusals it answered itself.
+        // The core records the refusals it answered itself; the node's own
+        // are recorded before the caller hears them.
         if let Err(reason) = &result
             && !core_refused
         {
             report_refusal(output, named, reason);
         }
+        let delivered = answer_client(&mut stream, result.clone()).is_ok();
         if !delivered || result.is_err() {
             if let Some(path) = created_reference {
                 let _ = fs::remove_file(&path);

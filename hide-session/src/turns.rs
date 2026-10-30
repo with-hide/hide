@@ -16,6 +16,23 @@ pub use content::{UserTurnContent, UserTurnFact, UserTurnKind};
 
 use serde::{Deserialize, Serialize};
 
+/// How the session's last turn ended, as its records say.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TurnEnded {
+    /// The agent finished the turn.
+    Completed,
+    /// The operator interrupted it (Claude Code's `[Request interrupted`
+    /// record, Codex's aborted turn).
+    Interrupted,
+    /// The person's message has no agent record after it, in a format that
+    /// records the agent's every reply (Claude Code): read under an agent at
+    /// rest, the turn never ran. Claude Code 2.1.314 puts a prompt
+    /// interrupted before its first output back in the composer and records
+    /// nothing of the interruption.
+    Unanswered,
+}
+
 /// What the last turn leaves the operator to do.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -63,8 +80,13 @@ pub enum TurnMark {
     /// A person's message.
     Human,
     /// A person's message in a format whose native question calls are
-    /// known but which supplies no separate task-start record (Claude).
+    /// known but which supplies no separate task-start record (Grok, omp).
     HumanTurn,
+    /// A person's message that starts a turn in a format that records each
+    /// of the agent's replies ([`TurnMark::Reply`]; Claude Code).
+    Prompt,
+    /// The agent wrote a record of the turn.
+    Reply,
     /// A native interruption, without a turn identifier.
     Interrupted,
     /// A record too large to keep whose structure no bounded scan certifies
@@ -190,6 +212,24 @@ pub enum ToolTurnMark {
         call: String,
         question: u32,
     },
+    /// A tool call `call`, known across the hook and the session file as
+    /// `key` ([`crate::calls::key`]); its [`ToolTurnMark::Answered`] says it
+    /// has a result, a refusal in the permission dialog included.
+    Called {
+        call: String,
+        key: String,
+    },
+}
+
+/// The tool calls a tracker remembers for [`TurnTracker::answered_calls`]:
+/// the last ones made, since a wait is on a call made just before it.
+pub const CALL_LIMIT: usize = 64;
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+struct SeenCall {
+    call: String,
+    key: String,
+    answered: bool,
 }
 
 /// A provider can ask any number of questions in a turn, one after another,
@@ -235,6 +275,9 @@ struct Turn {
     /// A person wrote after the turn ended.
     #[serde(default)]
     answered: bool,
+    /// The turn's prompt has no agent record after it yet.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    unreplied: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -306,6 +349,9 @@ pub struct TurnTracker {
     wake_calls: Vec<WakeCall>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     wake_loss: Option<WakeLoss>,
+    /// The last [`CALL_LIMIT`] tool calls the records made, oldest first.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    calls: Vec<SeenCall>,
     /// A new process started while devices were proven alive, so the work the
     /// agent was waiting for is gone. It holds until a turn or a device
     /// begins.
@@ -454,6 +500,43 @@ impl TurnTracker {
             .iter()
             .map(|device| device.expires_at_unix_ms)
             .collect()
+    }
+
+    /// How the last turn the records read ended, while no one has written
+    /// since; `None` for a turn still running, one a person answered, or
+    /// records that do not settle it.
+    pub fn ended(&self) -> Option<TurnEnded> {
+        if self.unreadable {
+            return None;
+        }
+        let turn = self.last.as_ref().filter(|turn| !turn.answered)?;
+        match turn.end {
+            Some(End::Completed) => Some(TurnEnded::Completed),
+            Some(End::Aborted) => Some(TurnEnded::Interrupted),
+            None => turn.unreplied.then_some(TurnEnded::Unanswered),
+        }
+    }
+
+    /// The call keys ([`ToolTurnMark::Called`]) whose last remembered call
+    /// has a result, and `name:` ([`crate::calls::key_by_name`]) for each
+    /// tool whose last call has one, the rule
+    /// [`crate::calls::answered_in_claude_file`] keeps: a second call with
+    /// the same input waits on its own result, not the first one's.
+    pub fn answered_calls(&self) -> Vec<String> {
+        let mut seen = std::collections::HashSet::new();
+        let mut answered = Vec::new();
+        for call in self.calls.iter().rev() {
+            let name = call
+                .key
+                .split_once(':')
+                .map_or(call.key.as_str(), |(name, _)| name);
+            for key in [call.key.clone(), format!("{name}:")] {
+                if seen.insert(key.clone()) && call.answered {
+                    answered.push(key);
+                }
+            }
+        }
+        answered
     }
 
     /// The devices the agent waited for died with the process that ran them,
@@ -610,6 +693,7 @@ impl TurnTracker {
                     plan_content: None,
                     end: None,
                     answered: false,
+                    unreplied: false,
                 });
             }
             TurnMark::Plan { turn } => self.current(turn).plan = true,
@@ -619,6 +703,9 @@ impl TurnTracker {
                 current.plan_content = Some(content.clone());
             }
             TurnMark::Tools(marks) => {
+                if let Some(turn) = &mut self.last {
+                    turn.unreplied = false;
+                }
                 for mark in marks {
                     match mark {
                         ToolTurnMark::Asked { call, content } => {
@@ -635,7 +722,24 @@ impl TurnTracker {
                                 break;
                             }
                         }
+                        ToolTurnMark::Called { call, key } => {
+                            if !self.calls.iter().any(|seen| seen.call == *call) {
+                                if self.calls.len() == CALL_LIMIT {
+                                    self.calls.remove(0);
+                                }
+                                self.calls.push(SeenCall {
+                                    call: call.clone(),
+                                    key: key.clone(),
+                                    answered: false,
+                                });
+                            }
+                        }
                         ToolTurnMark::Answered { call } => {
+                            if let Some(seen) =
+                                self.calls.iter_mut().find(|seen| seen.call == *call)
+                            {
+                                seen.answered = true;
+                            }
                             if let Some(question) = self
                                 .questions
                                 .iter_mut()
@@ -690,7 +794,7 @@ impl TurnTracker {
                     None => self.unstructured = true,
                 }
             }
-            TurnMark::HumanTurn => {
+            TurnMark::HumanTurn | TurnMark::Prompt => {
                 self.wake_vanished = false;
                 self.questions.clear();
                 self.question_capacity = false;
@@ -703,7 +807,13 @@ impl TurnTracker {
                     plan_content: None,
                     end: None,
                     answered: false,
+                    unreplied: *mark == TurnMark::Prompt,
                 });
+            }
+            TurnMark::Reply => {
+                if let Some(turn) = &mut self.last {
+                    turn.unreplied = false;
+                }
             }
             TurnMark::Interrupted => {
                 self.clear_questions();
@@ -811,6 +921,7 @@ impl TurnTracker {
                 plan_content: None,
                 end: None,
                 answered: false,
+                unreplied: false,
             });
         }
         self.last.as_mut().expect("a turn was just made")
@@ -831,6 +942,31 @@ mod tests {
             tracker.fold(offset as u64 * 10, mark);
         }
         tracker
+    }
+
+    /// A command run twice is two calls with one key: the second one's
+    /// dialog stays open while only the first has a result.
+    #[test]
+    fn a_key_is_answered_only_when_its_last_call_has_a_result() {
+        let called = |call: &str| {
+            TurnMark::Tools(vec![ToolTurnMark::Called {
+                call: call.to_owned(),
+                key: "Bash:00aa".to_owned(),
+            }])
+        };
+        let answered = |call: &str| {
+            TurnMark::Tools(vec![ToolTurnMark::Answered {
+                call: call.to_owned(),
+            }])
+        };
+        let first = [called("toolu_1"), answered("toolu_1"), called("toolu_2")];
+        assert!(folded(&first).answered_calls().is_empty());
+
+        let mut both = first.to_vec();
+        both.push(answered("toolu_2"));
+        let mut keys = folded(&both).answered_calls();
+        keys.sort();
+        assert_eq!(keys, ["Bash:", "Bash:00aa"]);
     }
 
     #[test]

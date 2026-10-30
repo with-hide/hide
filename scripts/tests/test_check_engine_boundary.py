@@ -112,7 +112,7 @@ class EngineBoundary(unittest.TestCase):
             'check_engine_boundary_entries', ROOT / 'scripts/check-engine-boundary.py'))
         check.__spec__.loader.exec_module(check)
         for path, (_, reason) in check.ALLOWED.items():
-            self.assertRegex(reason, r'bundle [234]|hooks-status deletes', path)
+            self.assertRegex(reason, r'bundle [234]', path)
 
     def test_the_repository_passes(self):
         spec = importlib.util.spec_from_file_location(

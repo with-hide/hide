@@ -128,13 +128,6 @@ ALLOWED = {
         2, "names a device's Herdr connection in the link contract; bundle 3 moves panes to the node"),
     "hide-host/src/pane_peer.rs": (
         3, "proves a pane's process on a device against its Herdr; bundle 3 proves it with `HIDE_PANE_ID`"),
-    # Temporary: the hooks-status node deletes these.
-    "hide-agent-hooks/src/bin/hide-agent-hooks.rs": (
-        3, "carries a hook report's Herdr failure; hooks-status deletes it"),
-    "hide-agent-hooks/src/report.rs": (
-        1, "reports a hook to Herdr; hooks-status deletes it"),
-    "herdr-core/src/coordination/hook_tokens.rs": (
-        5, "restores a hook's tokens on Herdr; hooks-status deletes it"),
 }
 
 # Built for tests and never shipped.

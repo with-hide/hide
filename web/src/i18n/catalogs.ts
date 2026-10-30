@@ -13,6 +13,7 @@ import { taskLensCatalogs, taskLensEnglish } from "./resources/taskLens";
 import { missionsCatalogs, missionsEnglish } from "./resources/missions";
 import { missionToolCatalogs, missionToolEnglish } from "./resources/missionTool";
 import { plansCatalogs, plansEnglish } from "./resources/plans";
+import { deskCatalogs, deskEnglish } from "./resources/desk";
 import { archiveCatalogs, archiveEnglish } from "./resources/archive";
 import { boardCatalogs, boardEnglish } from "./resources/board";
 import { cleanupCatalogs, cleanupEnglish } from "./resources/cleanup";
@@ -81,6 +82,7 @@ export const english = {
   ...missionsEnglish,
   ...missionToolEnglish,
   ...plansEnglish,
+  ...deskEnglish,
   ...archiveEnglish,
   ...shellEnglish,
   ...editorSearchEnglish,
@@ -154,6 +156,7 @@ export const catalogs = {
     ...missionsCatalogs.ko,
     ...missionToolCatalogs.ko,
     ...plansCatalogs.ko,
+    ...deskCatalogs.ko,
     ...archiveCatalogs.ko,
     ...shellCatalogs.ko,
     ...editorSearchCatalogs.ko,
@@ -222,6 +225,7 @@ export const catalogs = {
     ...missionsCatalogs["zh-CN"],
     ...missionToolCatalogs["zh-CN"],
     ...plansCatalogs["zh-CN"],
+    ...deskCatalogs["zh-CN"],
     ...archiveCatalogs["zh-CN"],
     ...shellCatalogs["zh-CN"],
     ...editorSearchCatalogs["zh-CN"],
@@ -290,6 +294,7 @@ export const catalogs = {
     ...missionsCatalogs.ja,
     ...missionToolCatalogs.ja,
     ...plansCatalogs.ja,
+    ...deskCatalogs.ja,
     ...archiveCatalogs.ja,
     ...shellCatalogs.ja,
     ...editorSearchCatalogs.ja,

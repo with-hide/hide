@@ -49,7 +49,7 @@ export function MissionTakeOver({ mission, actions }: { mission: Mission; action
     startFresh();
   };
   const failed = fresh.resume.failure !== null;
-  return <Button size="sm" variant={failed ? "destructive" : "default"} disabled={busy} onClick={press} data-mission-takeover={failed ? "failed" : "true"}>
+  return <Button size="sm" variant={failed ? "destructive" : "secondary"} disabled={busy} onClick={press} data-mission-takeover={failed ? "failed" : "true"}>
     {t(failed ? "mission.takeOverFailed" : "mission.takeOver")}
   </Button>;
 }

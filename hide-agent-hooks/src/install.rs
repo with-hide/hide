@@ -129,12 +129,16 @@ pub fn status(runtime: AgentRuntime, home: &Path) -> HookStatus {
     for event in runtime.events() {
         let groups = hooks.get(event.name()).and_then(Value::as_array);
         // An entry of Hide's that selects other tools than the ones Hide
-        // writes today is outdated whatever its version says: the file does
-        // not hold what an install would write.
+        // writes today, or gives the helper another time, is outdated
+        // whatever its version says: the file does not hold what an install
+        // would write.
         missing_event |= groups.is_some_and(|groups| {
             groups.iter().any(|group| {
                 group_marker_version(group).is_some()
-                    && group.get("matcher").and_then(Value::as_str) != hook_matcher(runtime, event)
+                    && (group.get("matcher").and_then(Value::as_str)
+                        != hook_matcher(runtime, event)
+                        || group["hooks"][0]["timeout"].as_u64()
+                            != Some(hook_timeout(runtime, event)))
             })
         });
         let version = groups
@@ -356,19 +360,26 @@ fn hook_group<'a>(
 /// trust step read it here, so an event that has a matcher is written and
 /// recognised as Hide's by the same line.
 ///
-/// Select the shell, native questions and the file tools the guardrails read
-/// (PRD agent-guardrails D-12): Claude Code 2.1.300's `Edit`, `Write`,
-/// `MultiEdit`, `NotebookEdit` and `Read`, and Codex 0.162.1's `apply_patch`,
-/// which its `Edit` and `Write` aliases also select. Pinned Codex 0.160.1
+/// Claude Code's `PreToolUse` has none: every tool call reaches the helper, so
+/// a turn waiting on an approval reads working again at the next call of any
+/// tool, an MCP tool, a search or a subagent included. Codex's selects the
+/// shell, native questions and the file tools the guardrails read (PRD
+/// agent-guardrails D-12): Codex 0.162.1's `apply_patch`, which its `Edit`
+/// and `Write` aliases also select. Pinned Codex 0.160.1
 /// sends real plan-mode request_user_input through PreToolUse as well, and
 /// 0.162.1 asks with `request_user_input_async`. Codex matches a tool by its
 /// whole name (a hook on `request_user_input` stayed silent for the async
 /// tool, measured 2026-10-15), so each question tool is named.
 pub(crate) fn hook_matcher(runtime: AgentRuntime, event: HookEvent) -> Option<&'static str> {
     match (runtime, event) {
+        // Claude Code's end of every call reaches the helper: the end of the
+        // call a permission waited on is what says the turn runs again.
+        (AgentRuntime::ClaudeCode, HookEvent::PostToolUse | HookEvent::PostToolUseFailure) => None,
         (_, HookEvent::PostToolUse | HookEvent::PostToolUseFailure) => Some("Bash|PowerShell"),
-        (AgentRuntime::ClaudeCode, HookEvent::PreToolUse) => {
-            Some("Bash|AskUserQuestion|ExitPlanMode|Edit|Write|MultiEdit|NotebookEdit|Read")
+        // Claude Code's notifications that a turn waits on the operator, or
+        // rests at the prompt after an interrupt.
+        (AgentRuntime::ClaudeCode, HookEvent::Notification) => {
+            Some("permission_prompt|elicitation_dialog|idle_prompt")
         }
         (AgentRuntime::Codex, HookEvent::PreToolUse) => {
             Some("Bash|request_user_input|request_user_input_async|apply_patch|Edit|Write")
@@ -382,7 +393,12 @@ pub(crate) fn hook_matcher(runtime: AgentRuntime, event: HookEvent) -> Option<&'
 fn helper_arguments(helper: HookTarget<'_>, runtime: AgentRuntime, event: HookEvent) -> String {
     let memory = if matches!(
         event,
-        HookEvent::PreToolUse | HookEvent::PostToolUse | HookEvent::PostToolUseFailure
+        HookEvent::PreToolUse
+            | HookEvent::PostToolUse
+            | HookEvent::PostToolUseFailure
+            | HookEvent::PermissionRequest
+            | HookEvent::Notification
+            | HookEvent::Interrupt
     ) {
         ""
     } else {
@@ -408,7 +424,7 @@ fn posix_hook<'a>(
     serde_json::json!({
         "type": "command",
         "command": posix_command(helper, runtime, event),
-        "timeout": 8,
+        "timeout": hook_timeout(runtime, event),
     })
 }
 
@@ -443,13 +459,23 @@ fn windows_hook<'a>(
             "type": "command",
             "command": "powershell.exe",
             "args": ["-NoProfile", "-NonInteractive", "-Command", guard],
-            "timeout": 8,
+            "timeout": hook_timeout(runtime, event),
         }),
         AgentRuntime::Codex => serde_json::json!({
             "type": "command",
             "command": guard,
-            "timeout": 8,
+            "timeout": hook_timeout(runtime, event),
         }),
+    }
+}
+
+/// The seconds an entry gives the helper. Codex runs an `Interrupt` hook for
+/// at most three seconds and warns at its start when an entry asks for more
+/// (Codex 0.166.0); the helper's report there ends well inside it.
+pub(crate) fn hook_timeout(runtime: AgentRuntime, event: HookEvent) -> u64 {
+    match (runtime, event) {
+        (AgentRuntime::Codex, HookEvent::Interrupt) => 3,
+        _ => 8,
     }
 }
 
@@ -1013,7 +1039,7 @@ mod tests {
             .unwrap();
         assert!(session_start_command.contains("--runtime codex"));
         assert!(session_start_command.contains("--memory-injection"));
-        assert!(session_start_command.contains("--source hide-subagents@10"));
+        assert!(session_start_command.contains("--source hide-subagents@11"));
         let guard = if cfg!(windows) {
             "if (Test-Path -LiteralPath '"
         } else {
@@ -1036,12 +1062,12 @@ mod tests {
             (
                 AgentRuntime::ClaudeCode,
                 HookEvent::SessionStart,
-                r#"{"type":"command","command":"if [ -x '/Users/example/o'\\''brien/hide.app/Contents/Resources/hide-agent-hooks' ]; then exec '/Users/example/o'\\''brien/hide.app/Contents/Resources/hide-agent-hooks' hook --runtime claude-code --event SessionStart --memory-injection --source hide-subagents@10; fi","timeout":8}"#,
+                r#"{"type":"command","command":"if [ -x '/Users/example/o'\\''brien/hide.app/Contents/Resources/hide-agent-hooks' ]; then exec '/Users/example/o'\\''brien/hide.app/Contents/Resources/hide-agent-hooks' hook --runtime claude-code --event SessionStart --memory-injection --source hide-subagents@11; fi","timeout":8}"#,
             ),
             (
                 AgentRuntime::Codex,
                 HookEvent::Stop,
-                r#"{"type":"command","command":"if [ -x '/Users/example/o'\\''brien/hide.app/Contents/Resources/hide-agent-hooks' ]; then exec '/Users/example/o'\\''brien/hide.app/Contents/Resources/hide-agent-hooks' hook --runtime codex --event Stop --memory-injection --source hide-subagents@10; fi","timeout":8}"#,
+                r#"{"type":"command","command":"if [ -x '/Users/example/o'\\''brien/hide.app/Contents/Resources/hide-agent-hooks' ]; then exec '/Users/example/o'\\''brien/hide.app/Contents/Resources/hide-agent-hooks' hook --runtime codex --event Stop --memory-injection --source hide-subagents@11; fi","timeout":8}"#,
             ),
         ];
         for (runtime, event, bytes) in pinned {
@@ -1072,7 +1098,7 @@ mod tests {
         let quoted = "'C:\\Users\\example\\a b''c\\it\u{2019}\u{2019}s\\hide-agent-hooks.exe'";
         let guard = |runtime: &str| {
             format!(
-                "if (Test-Path -LiteralPath {quoted} -PathType Leaf) {{ & {quoted} hook --runtime {runtime} --event Stop --memory-injection --source hide-subagents@10 }}"
+                "if (Test-Path -LiteralPath {quoted} -PathType Leaf) {{ & {quoted} hook --runtime {runtime} --event Stop --memory-injection --source hide-subagents@11 }}"
             )
         };
         let codex = windows_hook(helper, AgentRuntime::Codex, HookEvent::Stop);
@@ -1174,21 +1200,20 @@ mod tests {
     }"#;
 
     #[test]
-    fn the_guard_entry_selects_shell_and_native_questions_and_asks_for_no_memory() {
+    fn the_guard_entry_reaches_every_claude_tool_and_codex_shell_and_questions_and_asks_for_no_memory()
+     {
         for runtime in AgentRuntime::ALL {
             let fixture = Fixture::new("guard-entry");
             install(runtime, fixture.home(), &helper(&fixture)).unwrap();
             let written = fixture.read(runtime);
             let group = &written["hooks"]["PreToolUse"][0];
-            let expected = match runtime {
-                AgentRuntime::ClaudeCode => {
-                    "Bash|AskUserQuestion|ExitPlanMode|Edit|Write|MultiEdit|NotebookEdit|Read"
-                }
-                AgentRuntime::Codex => {
+            match runtime {
+                AgentRuntime::ClaudeCode => assert!(group.get("matcher").is_none(), "{group}"),
+                AgentRuntime::Codex => assert_eq!(
+                    group["matcher"],
                     "Bash|request_user_input|request_user_input_async|apply_patch|Edit|Write"
-                }
-            };
-            assert_eq!(group["matcher"], expected, "{runtime:?}");
+                ),
+            }
             let hook = &group["hooks"][0];
             let text = hook_texts(hook).collect::<Vec<_>>().join(" ");
             assert!(text.contains("--event PreToolUse"), "{text}");
@@ -1267,20 +1292,22 @@ mod tests {
             let path = helper(&fixture);
             install(runtime, fixture.home(), &path).unwrap();
             let mut document = fixture.read(runtime);
-            let current = hook_matcher(runtime, HookEvent::PreToolUse).unwrap();
+            // Claude Code's entry selected eight tools before it took every
+            // tool, so an approval of any other tool cleared.
+            let current = hook_matcher(runtime, HookEvent::PreToolUse);
             let earlier = match runtime {
-                AgentRuntime::ClaudeCode => current.to_owned(),
-                AgentRuntime::Codex => "Bash|request_user_input".to_owned(),
+                AgentRuntime::ClaudeCode => {
+                    "Bash|AskUserQuestion|ExitPlanMode|Edit|Write|MultiEdit|NotebookEdit|Read"
+                }
+                AgentRuntime::Codex => "Bash|request_user_input",
             };
-            document["hooks"]["PreToolUse"][0]["matcher"] = Value::from(earlier.clone());
+            document["hooks"]["PreToolUse"][0]["matcher"] = Value::from(earlier);
             fixture.write(runtime, &serde_json::to_string_pretty(&document).unwrap());
-            let stale = earlier != current;
-            assert_eq!(
+            assert!(
                 matches!(
                     status(runtime, fixture.home()),
                     HookStatus::Outdated { version } if version == crate::runtime::HOOK_ENTRY_VERSION
                 ),
-                stale,
                 "{runtime:?}"
             );
             install(runtime, fixture.home(), &path).unwrap();
@@ -1292,7 +1319,9 @@ mod tests {
                 "{runtime:?}"
             );
             assert_eq!(
-                fixture.read(runtime)["hooks"]["PreToolUse"][0]["matcher"],
+                fixture.read(runtime)["hooks"]["PreToolUse"][0]
+                    .get("matcher")
+                    .and_then(Value::as_str),
                 current
             );
         }

@@ -308,6 +308,7 @@ impl SleepRecord {
             .flatten();
         SessionAgentPayload {
             record: None,
+            hook: None,
             telemetry_stale: false,
             launch_pending: false,
             id: Some(

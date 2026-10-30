@@ -58,10 +58,12 @@ impl Kit {
         self.root.path().join("asked.log")
     }
 
+    /// What the hook asked of `hide`, without its status reports.
     fn asked(&self) -> Vec<String> {
         std::fs::read_to_string(self.log())
             .unwrap_or_default()
             .lines()
+            .filter(|line| *line != "workspace status --hook")
             .map(str::to_owned)
             .collect()
     }

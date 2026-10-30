@@ -542,11 +542,7 @@ fn a_first_apply_writes_the_spawn_guard_entry_and_the_next_pass_adds_it_to_an_ea
     apply(&fixture.target, &Scope::automatic());
     let document: Value = serde_json::from_str(&fixture.settings()).unwrap();
     let guard = &document["hooks"]["PreToolUse"][0];
-    assert_eq!(
-        guard["matcher"],
-        "Bash|AskUserQuestion|ExitPlanMode|Edit|Write|MultiEdit|NotebookEdit|Read",
-        "{document}"
-    );
+    assert!(guard.get("matcher").is_none(), "{document}");
     assert!(
         guard["hooks"][0]["command"]
             .as_str()
