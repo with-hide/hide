@@ -255,27 +255,27 @@ test("an agent's hide file open and hide browser open of outside files open as i
   await page.locator(`[data-pane-view="${other}"] .xterm-screen`).click();
   await expect(page.locator(`[data-pane-view="${other}"]`)).toHaveAttribute("data-focused", "true");
 
-  // An image opens in its viewer as an External tab, and the agent's row waits in Needs You as To look at.
+  // An image opened behind the operator waits on the agent's row in Needs You as To look at.
   expect(await hide(["file", "open", shot])).toMatchObject({ ok: true });
-  await expect(outsideTab(page, "agent-shot.png")).toHaveAttribute("data-external", "held", { timeout: 20_000 });
   await expect(row.locator("[data-agent-status-mark]")).toHaveAttribute("data-agent-status-mark", "look");
   await expect(row).toContainText("agent-shot.png");
+  // `hide view list` names who opened it and nothing of the file.
+  const listed = (await hide(["view", "list"])).result as { views: { kind: string; target: string; unseen: boolean; openers: { here: boolean }[] }[] };
+  expect(listed.views.filter((view) => view.kind === "external")).toEqual([
+    expect.objectContaining({ target: "", unseen: true, openers: [expect.objectContaining({ here: true })] }),
+  ]);
 
-  // An HTML page opens as a page of its own folder.
+  // Pressing the row brings the image forward in its viewer as an External tab, which sees it.
+  await row.locator(`[data-agent-open="${pane}"]`).click();
+  await expect(outsideTab(page, "agent-shot.png")).toHaveAttribute("data-external", "held", { timeout: 20_000 });
+  await expect(page.locator('[data-viewer="image"]')).toBeVisible();
+  await expect(row.locator("[data-agent-status-mark]")).not.toHaveAttribute("data-agent-status-mark", "look");
+
+  // With the operator in the agent's pane, an HTML page opens in front as a page of its own folder.
   expect(await hide(["browser", "open", report])).toMatchObject({ ok: true });
   await expect(outsideTab(page, "report.html")).toHaveAttribute("data-external", "held", { timeout: 20_000 });
   await expect.poll(() => pageEval<string>("Agent report", "document.querySelector('h1').textContent"), { timeout: 20_000 }).toBe("Report");
   await screenshot(page, "agent-outside-external");
-
-  // `hide view list` names who opened each and nothing of the file.
-  const listed = (await hide(["view", "list"])).result as { views: { kind: string; target: string; unseen: boolean; openers: { here: boolean }[] }[] };
-  const outside = listed.views.filter((view) => view.kind === "external");
-  expect(outside).toHaveLength(2);
-  for (const view of outside) {
-    expect(view.target).toBe("");
-    expect(view.unseen).toBe(true);
-    expect(view.openers.map((opener) => opener.here)).toEqual([true]);
-  }
 
   // What Hide cannot show is refused with a reason, and nothing went to the system.
   expect(await hide(["file", "open", path.join(scratch!, "missing.png")])).toMatchObject({ ok: false, reason: "file_missing" });
