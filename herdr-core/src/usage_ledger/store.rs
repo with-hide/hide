@@ -198,17 +198,24 @@ pub struct Ingested {
 
 pub struct Store {
     connection: Connection,
+    /// The clock every step's budget is measured on.
+    clock: fn() -> Instant,
 }
 
 impl Store {
     pub fn open(path: &Path) -> Result<Self, &'static str> {
+        Self::open_with_clock(path, Instant::now)
+    }
+
+    /// A test that is not about the budgets holds this clock still.
+    fn open_with_clock(path: &Path, clock: fn() -> Instant) -> Result<Self, &'static str> {
         hide_platform::fs::private::open_own_file(path, true)
             .map_err(|_| "usage_store_unavailable")?;
         let connection = Connection::open(path).map_err(failed)?;
         connection
             .busy_timeout(Duration::from_millis(100))
             .map_err(failed)?;
-        let store = Self { connection };
+        let store = Self { connection, clock };
         store.budget();
         let version: i64 = store
             .connection
@@ -257,9 +264,10 @@ impl Store {
     }
 
     fn budget_of(&self, limit: Duration) {
-        let start = Instant::now();
+        let clock = self.clock;
+        let start = clock();
         self.connection
-            .progress_handler(1000, Some(move || start.elapsed() >= limit));
+            .progress_handler(1000, Some(move || clock().duration_since(start) >= limit));
     }
 
     pub fn prices(&self) -> Result<super::prices::Cache, &'static str> {

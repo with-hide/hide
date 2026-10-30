@@ -1,5 +1,12 @@
 use super::*;
 
+/// The store's step budgets are the worker's; these tests read what a step
+/// leaves, so every store here is measured on a clock that does not move.
+fn open(path: &Path) -> Result<Store, &'static str> {
+    static START: std::sync::LazyLock<Instant> = std::sync::LazyLock::new(Instant::now);
+    Store::open_with_clock(path, || *START)
+}
+
 fn instant(day: &str) -> u64 {
     format!("{day}T12:00:00Z")
         .parse::<jiff::Timestamp>()
@@ -51,7 +58,7 @@ fn claude_streaming_maxima_replace_one_call_and_its_context_band() {
     // A fork may carry the same native billed call in another session.
     next.session = "forked-container".into();
     next.cwd = Some("/work/fork".into());
-    let mut store = Store::open(&path).unwrap();
+    let mut store = open(&path).unwrap();
     store
         .ingest(
             "node-a",
@@ -63,7 +70,7 @@ fn claude_streaming_maxima_replace_one_call_and_its_context_band() {
         )
         .unwrap();
     drop(store);
-    let mut store = Store::open(&path).unwrap();
+    let mut store = open(&path).unwrap();
     store
         .ingest(
             "node-a",
@@ -97,7 +104,7 @@ fn claude_streaming_maxima_replace_one_call_and_its_context_band() {
 #[test]
 fn a_future_record_is_counted_as_skipped_without_poisoning_the_batch() {
     let dir = tempfile::tempdir().unwrap();
-    let mut store = Store::open(&hide_kit::layout::usage_store(dir.path())).unwrap();
+    let mut store = open(&hide_kit::layout::usage_store(dir.path())).unwrap();
     let zone = jiff::tz::TimeZone::UTC;
     let now = instant("2026-10-01");
     let result = store
@@ -140,7 +147,7 @@ fn price_bands_reprice_expired_calls_and_daily_fetch_attempt_survives_restart() 
     use crate::usage_ledger::prices::{Cache, Table, cost};
     let dir = tempfile::tempdir().unwrap();
     let path = hide_kit::layout::usage_store(dir.path());
-    let mut store = Store::open(&path).unwrap();
+    let mut store = open(&path).unwrap();
     let now = instant("2026-10-01");
     let zone = jiff::tz::TimeZone::UTC;
     let mut low = call(1, "2026-08-01");
@@ -188,7 +195,7 @@ fn price_bands_reprice_expired_calls_and_daily_fetch_attempt_survives_restart() 
         })
         .unwrap();
     drop(store);
-    let store = Store::open(&path).unwrap();
+    let store = open(&path).unwrap();
     let cached = store.prices().unwrap();
     assert!(!cached.due(now + DAY_MS - 1));
     assert!(cached.due(now + DAY_MS));
@@ -212,7 +219,7 @@ fn price_bands_reprice_expired_calls_and_daily_fetch_attempt_survives_restart() 
 fn price_cache_upgrade_preserves_existing_ledger_and_does_not_fetch() {
     let dir = tempfile::tempdir().unwrap();
     let path = hide_kit::layout::usage_store(dir.path());
-    let mut store = Store::open(&path).unwrap();
+    let mut store = open(&path).unwrap();
     let now = instant("2026-10-01");
     store
         .ingest(
@@ -230,7 +237,7 @@ fn price_cache_upgrade_preserves_existing_ledger_and_does_not_fetch() {
         .execute_batch("DROP TABLE price_cache; ALTER TABLE backfills DROP COLUMN limited; PRAGMA user_version=1;")
         .unwrap();
     drop(store);
-    let store = Store::open(&path).unwrap();
+    let store = open(&path).unwrap();
     assert_eq!(store.daily().unwrap(), before);
     assert_eq!(
         store.prices().unwrap(),
@@ -246,7 +253,7 @@ fn replay_copies_restart_and_changed_completed_values_never_add_twice() {
     let now = instant("2026-10-01");
     let first = step(vec![call(1, "2026-10-01"), call(1, "2026-10-01")]);
     {
-        let mut store = Store::open(&path).unwrap();
+        let mut store = open(&path).unwrap();
         assert_eq!(
             store
                 .ingest("node-a", Agent::Claude, &source(), &first, now, &zone)
@@ -259,7 +266,7 @@ fn replay_copies_restart_and_changed_completed_values_never_add_twice() {
             }
         );
     }
-    let mut store = Store::open(&path).unwrap();
+    let mut store = open(&path).unwrap();
     let mut copied = source();
     copied.path = "/native/archive/copied.jsonl".into();
     assert_eq!(
@@ -308,7 +315,7 @@ fn lost_checkpoints_after_sixty_days_cannot_change_frozen_or_recent_totals() {
     let dir = tempfile::tempdir().unwrap();
     let path = hide_kit::layout::usage_store(dir.path());
     let zone = jiff::tz::TimeZone::UTC;
-    let mut store = Store::open(&path).unwrap();
+    let mut store = open(&path).unwrap();
     // First backfill may discover records older than 45 days.
     let original = step(vec![call(1, "2026-07-01"), call(2, "2026-09-01")]);
     store
@@ -339,7 +346,7 @@ fn lost_checkpoints_after_sixty_days_cannot_change_frozen_or_recent_totals() {
     let expected = store.daily().unwrap();
     store.connection.execute("DELETE FROM cursors", []).unwrap();
     drop(store);
-    let mut store = Store::open(&path).unwrap();
+    let mut store = open(&path).unwrap();
     let replay = step(vec![
         call(1, "2026-07-01"),
         call(2, "2026-09-01"),
@@ -375,13 +382,13 @@ fn interrupted_backfill_keeps_old_call_identity_until_completion() {
     let zone = jiff::tz::TimeZone::UTC;
     let first = step(vec![call(1, "2026-07-01")]);
     let now = instant("2026-10-01");
-    let mut store = Store::open(&path).unwrap();
+    let mut store = open(&path).unwrap();
     store
         .ingest("node-a", Agent::Claude, &source(), &first, now, &zone)
         .unwrap();
     store.prune(now, &zone).unwrap();
     drop(store);
-    let mut store = Store::open(&path).unwrap();
+    let mut store = open(&path).unwrap();
     assert_eq!(
         store
             .ingest("node-a", Agent::Claude, &source(), &first, now, &zone)
@@ -408,7 +415,7 @@ fn interrupted_backfill_keeps_old_call_identity_until_completion() {
 #[test]
 fn batch_failure_rolls_back_totals_and_checkpoint_and_capacity_reports_a_limit() {
     let dir = tempfile::tempdir().unwrap();
-    let mut store = Store::open(&hide_kit::layout::usage_store(dir.path())).unwrap();
+    let mut store = open(&hide_kit::layout::usage_store(dir.path())).unwrap();
     let zone = jiff::tz::TimeZone::UTC;
     let now = instant("2026-10-01");
     let mut invalid = call(2, "2026-10-01");
@@ -449,7 +456,7 @@ fn batch_failure_rolls_back_totals_and_checkpoint_and_capacity_reports_a_limit()
     assert!(store.daily().unwrap().is_empty());
     assert!(store.limited("node-a", Agent::Claude).unwrap());
     drop(store);
-    let mut reopened = Store::open(&hide_kit::layout::usage_store(dir.path())).unwrap();
+    let mut reopened = open(&hide_kit::layout::usage_store(dir.path())).unwrap();
     reopened
         .ingest(
             "node-a",
@@ -470,7 +477,7 @@ fn native_node_identity_and_original_local_day_survive_zone_changes_and_core_mov
     let state = dir.path().join("state");
     std::fs::create_dir(&state).unwrap();
     let path = hide_kit::layout::usage_store(&state);
-    let mut store = Store::open(&path).unwrap();
+    let mut store = open(&path).unwrap();
     let mut event = call(1, "2026-10-01");
     event.at_ms = "2026-10-01T23:30:00Z"
         .parse::<jiff::Timestamp>()
@@ -505,7 +512,7 @@ fn native_node_identity_and_original_local_day_survive_zone_changes_and_core_mov
     // Live WAL write must reach the moved copy through VACUUM INTO.
     let manifest = crate::node_migration::copy::stage(&state, &destination, &ai).unwrap();
     assert!(manifest.files.contains_key(hide_kit::layout::USAGE_STORE));
-    let copy = Store::open(&hide_kit::layout::usage_store(&destination)).unwrap();
+    let copy = open(&hide_kit::layout::usage_store(&destination)).unwrap();
     assert_eq!(copy.daily().unwrap(), store.daily().unwrap());
 }
 
@@ -514,19 +521,19 @@ fn corrupt_or_newer_stores_are_refused_without_replacing_their_bytes() {
     let dir = tempfile::tempdir().unwrap();
     let path = hide_kit::layout::usage_store(dir.path());
     std::fs::write(&path, b"damaged original").unwrap();
-    assert!(matches!(Store::open(&path), Err("usage_store_corrupt")));
+    assert!(matches!(open(&path), Err("usage_store_corrupt")));
     assert_eq!(std::fs::read(&path).unwrap(), b"damaged original");
     std::fs::remove_file(&path).unwrap();
     let db = Connection::open(&path).unwrap();
     db.execute_batch("PRAGMA user_version=99").unwrap();
     drop(db);
-    assert!(matches!(Store::open(&path), Err("usage_store_newer")));
+    assert!(matches!(open(&path), Err("usage_store_newer")));
 }
 
 #[test]
 fn expired_key_cannot_reenter_after_timezone_moves_its_day_across_the_horizon() {
     let dir = tempfile::tempdir().unwrap();
-    let mut store = Store::open(&hide_kit::layout::usage_store(dir.path())).unwrap();
+    let mut store = open(&hide_kit::layout::usage_store(dir.path())).unwrap();
     let west = jiff::tz::TimeZone::get("America/Los_Angeles").unwrap();
     let east = jiff::tz::TimeZone::get("Asia/Seoul").unwrap();
     let mut event = call(1, "2026-08-17");
@@ -580,7 +587,7 @@ fn user_version(path: &std::path::Path) -> i64 {
 fn hide_ai_rows_survive_a_restart_and_leave_the_schema_version_alone() {
     let dir = tempfile::tempdir().unwrap();
     let path = hide_kit::layout::usage_store(dir.path());
-    let mut store = Store::open(&path).unwrap();
+    let mut store = open(&path).unwrap();
     store
         .ai_record(
             &[
@@ -597,7 +604,7 @@ fn hide_ai_rows_survive_a_restart_and_leave_the_schema_version_alone() {
         )
         .unwrap();
     drop(store);
-    let rows = Store::open(&path).unwrap().ai_rows().unwrap();
+    let rows = open(&path).unwrap().ai_rows().unwrap();
     assert_eq!(rows.len(), 3);
     let labels = rows
         .iter()
@@ -623,7 +630,7 @@ fn a_store_from_before_hide_ai_gains_its_tables_without_a_version_change() {
         connection.execute_batch(SCHEMA).unwrap();
     }
     assert_eq!(user_version(&path), VERSION);
-    let store = Store::open(&path).unwrap();
+    let store = open(&path).unwrap();
     assert!(store.ai_rows().unwrap().is_empty());
     assert!(!store.ai_limited().unwrap());
     drop(store);
@@ -634,7 +641,7 @@ fn a_store_from_before_hide_ai_gains_its_tables_without_a_version_change() {
 fn hide_ai_stops_making_rows_at_the_cap_and_says_so_until_that_day_expires() {
     let dir = tempfile::tempdir().unwrap();
     let path = hide_kit::layout::usage_store(dir.path());
-    let mut store = Store::open(&path).unwrap();
+    let mut store = open(&path).unwrap();
     let day = "2026-10-01";
     let fill: Vec<_> = (0..AI_ROW_LIMIT)
         .map(|n| ai_part(day, &format!("model-{n}"), "labels", 1))
@@ -682,10 +689,10 @@ fn hide_ai_stops_making_rows_at_the_cap_and_says_so_until_that_day_expires() {
         AI_ROW_LIMIT as u64 + 2
     );
     drop(store);
-    assert!(Store::open(&path).unwrap().ai_limited().unwrap());
+    assert!(open(&path).unwrap().ai_limited().unwrap());
 
     // The mark outlives a restart and goes with the last day it affected.
-    let mut store = Store::open(&path).unwrap();
+    let mut store = open(&path).unwrap();
     let zone = jiff::tz::TimeZone::UTC;
     while store.prune(instant("2028-01-01"), &zone).unwrap() {}
     assert!(store.ai_rows().unwrap().is_empty());
@@ -695,7 +702,7 @@ fn hide_ai_stops_making_rows_at_the_cap_and_says_so_until_that_day_expires() {
 #[test]
 fn a_hide_ai_name_with_a_control_character_is_refused_not_stored() {
     let dir = tempfile::tempdir().unwrap();
-    let mut store = Store::open(&hide_kit::layout::usage_store(dir.path())).unwrap();
+    let mut store = open(&hide_kit::layout::usage_store(dir.path())).unwrap();
     assert_eq!(
         store.ai_record(&[ai_part("2026-10-14", "bad\nmodel", "labels", 1)], &[]),
         Err("usage_field_invalid")
@@ -707,7 +714,7 @@ fn a_hide_ai_name_with_a_control_character_is_refused_not_stored() {
 fn experimental_rows_keep_their_old_count_and_new_attempts_add_only_once() {
     let dir = tempfile::tempdir().unwrap();
     let path = hide_kit::layout::usage_store(dir.path());
-    let mut store = Store::open(&path).unwrap();
+    let mut store = open(&path).unwrap();
     let mut old = Totals::default();
     old.add_call(
         &ai_part("2026-10-14", "m-1", "labels", 10).tokens,
@@ -731,7 +738,7 @@ fn experimental_rows_keep_their_old_count_and_new_attempts_add_only_once() {
         .ai_record(&[ai_part("2026-10-14", "m-1", "labels", 20), second], &[])
         .unwrap();
     drop(store);
-    let rows = Store::open(&path).unwrap().ai_rows().unwrap();
+    let rows = open(&path).unwrap().ai_rows().unwrap();
     assert_eq!(rows.iter().map(|row| row.attempts).sum::<u64>(), 2);
     assert_eq!(rows.iter().map(|row| row.totals.calls).sum::<u64>(), 3);
     assert_eq!(
@@ -770,7 +777,7 @@ fn project_costs(
 #[test]
 fn a_project_cost_read_from_the_store_sums_its_recorded_calls() {
     let dir = tempfile::tempdir().unwrap();
-    let mut store = Store::open(&hide_kit::layout::usage_store(dir.path())).unwrap();
+    let mut store = open(&hide_kit::layout::usage_store(dir.path())).unwrap();
     let zone = jiff::tz::TimeZone::UTC;
     let now = instant("2026-10-23");
     let priced = |key: u8, day: &str, cwd: &str, micro_usd: u64| {
@@ -838,7 +845,7 @@ fn a_project_cost_read_from_the_store_sums_its_recorded_calls() {
 #[test]
 fn calls_of_one_time_across_the_read_limit_are_kept_by_agent_and_key() {
     let dir = tempfile::tempdir().unwrap();
-    let mut store = Store::open(&hide_kit::layout::usage_store(dir.path())).unwrap();
+    let mut store = open(&hide_kit::layout::usage_store(dir.path())).unwrap();
     let zone = jiff::tz::TimeZone::UTC;
     let now = instant("2026-10-23");
     let tied = now - 60_000;
@@ -882,10 +889,10 @@ fn calls_of_one_time_across_the_read_limit_are_kept_by_agent_and_key() {
 fn a_store_from_before_the_cost_index_gains_it_without_a_version_change() {
     let dir = tempfile::tempdir().unwrap();
     let path = hide_kit::layout::usage_store(dir.path());
-    Store::open(&path)
+    open(&path)
         .unwrap()
         .execute_for_test("DROP INDEX events_device_at");
-    let store = Store::open(&path).unwrap();
+    let store = open(&path).unwrap();
     assert_eq!(user_version(&path), 3);
     let mut query = store
         .connection
