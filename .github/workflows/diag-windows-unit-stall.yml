@@ -1,0 +1,49 @@
+# Throwaway: measures where the first-wave Windows web unit tests spend their time
+# (with-hide/hide-private issue 354) under three variants. Never merged.
+name: diag windows unit stall
+on:
+  push:
+    branches: [diag/windows-unit-stall]
+permissions:
+  contents: read
+jobs:
+  web-unit:
+    name: ${{ matrix.variant }} ${{ matrix.attempt }}
+    runs-on: windows-latest
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        variant: [base, perfile, global]
+        attempt: [1, 2, 3, 4, 5]
+    defaults:
+      run:
+        shell: bash
+    env:
+      DIAG_VARIANT: ${{ matrix.variant }}
+      DIAG_DIR: ${{ github.workspace }}/diag-out
+    steps:
+      - run: git config --global core.autocrlf false
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 1
+      - uses: pnpm/action-setup@v6
+        with:
+          version: 10
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
+      - run: bash scripts/verify-web.sh install --ignore-scripts
+      - name: Web shell unit suite, as windows check runs it
+        run: bash scripts/verify-web.sh web test
+      - name: Diagnosis lines
+        if: ${{ !cancelled() }}
+        run: cat diag-out/*.log | sort
+      - uses: actions/upload-artifact@v4
+        if: ${{ !cancelled() }}
+        with:
+          name: diag-${{ matrix.variant }}-${{ matrix.attempt }}
+          path: diag-out
+          retention-days: 3
