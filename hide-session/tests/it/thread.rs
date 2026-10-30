@@ -61,7 +61,38 @@ const SAMPLES: &[Sample] = &[
             (path, scope("01a18cb5-3c3a-7060-b86b-164ca517dc11", cwd))
         },
     },
+    Sample {
+        format: SessionFormat::Grok,
+        place: |home, cwd| {
+            let id = "01a18cbf-c706-7260-9188-d8a0c2fd7c59";
+            let folder = home.join(".grok/sessions").join(url_group(cwd)).join(id);
+            for name in ["updates.jsonl", "summary.json"] {
+                install(
+                    &fixtures().join("grok-1.0.70").join(name),
+                    &folder.join(name),
+                    cwd,
+                );
+            }
+            (folder.join("updates.jsonl"), scope(id, cwd))
+        },
+    },
 ];
+
+/// A checkout as Grok names its group folder: every byte but
+/// `A-Za-z0-9-_.~` as `%XX`.
+fn url_group(cwd: &Path) -> String {
+    cwd.to_str()
+        .unwrap()
+        .bytes()
+        .map(|byte| {
+            if byte.is_ascii_alphanumeric() || b"-_.~".contains(&byte) {
+                (byte as char).to_string()
+            } else {
+                format!("%{byte:02X}")
+            }
+        })
+        .collect()
+}
 
 /// Copies a fixture file, naming the real checkout wherever the fixture
 /// names its placeholder, in the JSON spelling of this system's path.
@@ -180,6 +211,33 @@ fn diffs<'a>(updates: &'a [Value], path: &str) -> Vec<&'a Value> {
         .collect()
 }
 
+/// Each call as a client shows it: its `tool_call` with every later
+/// update's fields laid over it, an update's content replacing the call's.
+fn calls(updates: &[Value]) -> std::collections::BTreeMap<String, Value> {
+    let mut calls = std::collections::BTreeMap::new();
+    for update in updates {
+        let Some(id) = update["toolCallId"].as_str() else {
+            continue;
+        };
+        match update["sessionUpdate"].as_str() {
+            Some("tool_call") => {
+                calls.insert(id.to_owned(), update.clone());
+            }
+            Some("tool_call_update") => {
+                if let Some(call) = calls.get_mut(id) {
+                    for (key, value) in update.as_object().unwrap() {
+                        if key != "sessionUpdate" {
+                            call[key] = value.clone();
+                        }
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    calls
+}
+
 /// Which of the checked parts the sample's thread shows.
 fn parts_shown(placed: &Placed, updates: &[Value]) -> BTreeSet<ThreadPart> {
     let mut shown = BTreeSet::new();
@@ -214,20 +272,16 @@ fn parts_shown(placed: &Placed, updates: &[Value]) -> BTreeSet<ThreadPart> {
     if created && changed {
         shown.insert(ThreadPart::FileChange);
     }
-    let ran = of_kind(updates, "tool_call")
-        .filter(|call| call["kind"] == "execute")
-        .any(|call| {
-            of_kind(updates, "tool_call_update").any(|update| {
-                update["toolCallId"] == call["toolCallId"]
-                    && matches!(update["status"].as_str(), Some("completed" | "failed"))
-                    && blocks(std::slice::from_ref(update)).iter().any(|block| {
-                        block["type"] == "text"
-                            && block["text"]
-                                .as_str()
-                                .is_some_and(|text| !text.trim().is_empty())
-                    })
+    let ran = calls(updates).values().any(|call| {
+        call["kind"] == "execute"
+            && matches!(call["status"].as_str(), Some("completed" | "failed"))
+            && blocks(std::slice::from_ref(call)).iter().any(|block| {
+                block["type"] == "text"
+                    && block["text"]
+                        .as_str()
+                        .is_some_and(|text| !text.trim().is_empty())
             })
-        });
+    });
     if ran {
         shown.insert(ThreadPart::CommandOutput);
     }
@@ -387,14 +441,24 @@ fn a_session_longer_than_a_page_reads_back_whole_from_its_cursors() {
     let one = placed.read_all();
     let sample = std::fs::read_to_string(&placed.path).unwrap();
     let copies = (THREAD_PAGE_BYTES as usize / sample.len()) * 2 + 1;
-    std::fs::write(&placed.path, sample.repeat(copies)).unwrap();
+    // Each copy is a session of its own calls, as a long session would be.
+    let long = (0..copies)
+        .map(|copy| sample.replace("toolu_", &format!("toolu_{copy}_")))
+        .collect::<String>();
+    std::fs::write(&placed.path, long).unwrap();
 
     let first = placed.read(None).unwrap();
     assert!(first.before.is_some(), "more than one page");
     let all = placed.read_all();
     assert_eq!(all.len(), one.len() * copies);
     for (index, chunk) in all.chunks(one.len()).enumerate() {
-        assert_eq!(chunk, one.as_slice(), "copy {index}");
+        let chunk = serde_json::to_string(chunk)
+            .unwrap()
+            .replace(&format!("toolu_{index}_"), "toolu_");
+        assert!(
+            chunk == serde_json::to_string(&one).unwrap(),
+            "copy {index} reads as the sample"
+        );
     }
 }
 

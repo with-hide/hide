@@ -31,6 +31,7 @@ pub use agent_client_protocol_schema::v1 as acp;
 mod build;
 mod claude;
 mod codex;
+mod grok;
 
 use build::Thread;
 
@@ -96,8 +97,8 @@ const fn reader(format: SessionFormat) -> Reader {
     match format {
         SessionFormat::Claude => Reader::Lines(claude::LINES),
         SessionFormat::Codex => Reader::Lines(codex::LINES),
-        SessionFormat::Grok
-        | SessionFormat::Pi
+        SessionFormat::Grok => Reader::Lines(grok::LINES),
+        SessionFormat::Pi
         | SessionFormat::Omp
         | SessionFormat::OpenCode
         | SessionFormat::Antigravity

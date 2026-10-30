@@ -5,7 +5,7 @@
 //! words. A converter never builds an ACP value itself, so every format draws
 //! the same thread for the same kind of record.
 
-use std::collections::{BTreeMap, VecDeque};
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
 use agent_client_protocol_schema::v1::{
     Content, ContentBlock, ContentChunk, Diff, ImageContent, Meta, Plan, PlanEntry,
@@ -121,6 +121,8 @@ pub(crate) struct FileDiff {
 #[derive(Debug, Default)]
 pub(crate) struct Outcome<'a> {
     pub failed: bool,
+    /// The call is still running: an interim report, not its end.
+    pub running: bool,
     pub output: Option<String>,
     pub images: Vec<Part<'a>>,
     pub diffs: Vec<FileDiff>,
@@ -141,6 +143,9 @@ pub(crate) struct Thread {
     /// Calls waiting for a result that names no call, oldest first: a format
     /// whose results follow their calls in order pairs them here (D-10).
     awaiting: VecDeque<String>,
+    /// The calls this page has drawn, so a call a record states again
+    /// refines the one drawn rather than drawing a second.
+    called: BTreeSet<String>,
     /// Whether a record that should hold conversation could not be read.
     unreadable: bool,
 }
@@ -231,6 +236,23 @@ impl Thread {
             .map(|path| ToolCallLocation::new(wire(path)))
             .collect::<Vec<_>>();
         let content = call.diffs.into_iter().map(diff_content).collect::<Vec<_>>();
+        if !self.called.insert(call.id.clone()) {
+            let fields = ToolCallUpdateFields::new()
+                .title(call.title)
+                .kind(call.kind)
+                .locations(locations)
+                .raw_input(call.input);
+            let fields = if content.is_empty() {
+                fields
+            } else {
+                fields.content(content)
+            };
+            self.updates
+                .push(SessionUpdate::ToolCallUpdate(ToolCallUpdate::new(
+                    call.id, fields,
+                )));
+            return;
+        }
         self.updates.push(SessionUpdate::ToolCall(
             ToolCall::new(call.id, call.title)
                 .name(call.name)
@@ -282,6 +304,8 @@ impl Thread {
         );
         let status = if outcome.failed {
             ToolCallStatus::Failed
+        } else if outcome.running {
+            ToolCallStatus::InProgress
         } else {
             ToolCallStatus::Completed
         };
