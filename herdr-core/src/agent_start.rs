@@ -1117,6 +1117,10 @@ mod tests {
                 "agent_name_taken".into(),
                 "agent name one is already used".into(),
             )),
+            "agent.get" => Ok(json!({"type": "agent_info", "agent": {
+                "pane_id": "w1:p2", "terminal_id": "term_2", "workspace_id": "w1",
+                "tab_id": "w1:t2", "name": "agent", "focused": false,
+                "agent_status": "unknown", "revision": 0, "launch_pending": false}})),
             other => panic!("unexpected {other}"),
         });
         let Err(StartError::Herdr(EngineError::Refused { code, .. })) =
@@ -1125,7 +1129,10 @@ mod tests {
             panic!("a refusal other than a busy pane is not retried");
         };
         assert_eq!(code, "agent_name_taken");
-        assert_eq!(herdr.methods(), ["pane.process_info", "agent.start"]);
+        assert_eq!(
+            herdr.methods(),
+            ["pane.process_info", "agent.start", "agent.get"]
+        );
     }
 
     /// Herdr forgets an ended agent a moment after its process is gone, so a
@@ -1230,6 +1237,10 @@ mod tests {
             FakeHerdr::start_with_errors("agent-start-name-held", |method, _| match method {
                 "pane.process_info" => Ok(process_info(SHELL, &[SHELL])),
                 "agent.start" => Err((NAME_TAKEN.into(), "agent name two is already used".into())),
+                "agent.get" => Ok(json!({"type": "agent_info", "agent": {
+                    "pane_id": "w1:p2", "terminal_id": "term_2", "workspace_id": "w1",
+                    "tab_id": "w1:t2", "name": "agent", "focused": false,
+                    "agent_status": "unknown", "revision": 0, "launch_pending": false}})),
                 other => panic!("unexpected {other}"),
             });
         let Err(StartError::Herdr(EngineError::Refused { code, .. })) =
@@ -1247,8 +1258,8 @@ mod tests {
         assert_eq!(code, NAME_TAKEN);
         assert_eq!(
             herdr.methods().len() - before,
-            2,
-            "one process read and one start, nothing sent again"
+            3,
+            "one process read, one start and one read of the held name, nothing sent again"
         );
     }
 
