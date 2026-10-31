@@ -66,6 +66,11 @@ pub struct DeskJobsSnapshot {
     /// node opens a worker's thread (B28, B34); none is Desk's job, and none
     /// is drawn in the chat.
     pub workers: Vec<DeskJobSnapshot>,
+    /// The other sessions the newest lines of the conversation name (a
+    /// reply's chips, a letter's line), as cards of their own read from
+    /// their sidebar rows, so a chip's hover card and its thread show what
+    /// the row shows (D-86); none is drawn in the chat or listed in Threads.
+    pub named: Vec<DeskJobSnapshot>,
 }
 
 /// One session Desk started, or one waiting to start.

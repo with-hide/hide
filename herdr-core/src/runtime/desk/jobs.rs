@@ -788,7 +788,7 @@ impl Runtime {
         registration: Option<&crate::coordination::AgentRecord>,
         index: &CardIndex<'_>,
     ) -> crate::model::DeskJobSnapshot {
-        use crate::model::{AgentStatusCode, DeskAskKind, DeskJobPlan, DeskJobReason};
+        use crate::model::DeskJobReason;
         let mut card = self.desk_blank_card(
             &spawn.intent,
             &spawn.name,
@@ -833,15 +833,7 @@ impl Runtime {
         } else if card.disconnected {
             DeskJobState::Working
         } else if let Some(row) = row {
-            match row.status_code {
-                AgentStatusCode::Question | AgentStatusCode::Approval | AgentStatusCode::Error => {
-                    DeskJobState::Asking
-                }
-                AgentStatusCode::Done | AgentStatusCode::Idle | AgentStatusCode::Stopped => {
-                    DeskJobState::Done
-                }
-                _ => DeskJobState::Working,
-            }
+            row_state(row)
         } else if registration.is_none_or(|registration| registration.ended) {
             card.reason = Some(if card.disconnected {
                 DeskJobReason::DeviceDisconnected
@@ -853,108 +845,263 @@ impl Runtime {
             DeskJobState::Working
         };
         if let Some(row) = row {
-            card.mark = Some(row.mark);
-            card.mark_read = row.state.mark_tone.read;
-            card.read = !row.unread;
-            let ask = match (&row.ask_subject, row.status_code) {
-                (Some(crate::model::AskSubject::PlanReview { .. }), _) => DeskAskKind::PlanReview,
-                (Some(crate::model::AskSubject::MissionDecision { .. }), _) => {
-                    DeskAskKind::Decision
-                }
-                (None, AgentStatusCode::Approval) => DeskAskKind::Approval,
-                (None, AgentStatusCode::Error) => DeskAskKind::Blocked,
-                (None, _) => DeskAskKind::Question,
-            };
-            card.ask = (card.state == DeskJobState::Asking).then_some(ask);
-            card.now = row.detail.clone();
-            card.question = (card.state == DeskJobState::Asking)
-                .then(|| {
-                    row.state
-                        .ask
-                        .as_ref()
-                        .and_then(|ask| ask.what.clone())
-                        .or_else(|| row.expected_reply.clone())
-                })
-                .flatten();
-            card.summary = (card.state == DeskJobState::Done)
-                .then(|| {
-                    row.request
-                        .as_ref()
-                        .and_then(|request| request.line.clone())
-                })
-                .flatten();
-            let pulls = row
-                .pulls
-                .as_ref()
-                .map(|pulls| pulls.pulls.as_slice())
-                .unwrap_or_default();
-            card.pull_requests = pulls
-                .iter()
-                .map(|pull| crate::model::DeskPullRequest {
-                    number: pull.number,
-                    state: pull.state,
-                })
-                .collect();
-            let scope = self.session_scope_of_pane(&row.pane_id);
-            card.outputs = index
-                .displays
-                .iter()
-                .filter(|(_, display)| {
-                    scope.as_ref().is_some_and(|scope| {
-                        display
-                            .openers
-                            .iter()
-                            .any(|opener| opener.of_session(scope))
-                    })
-                })
-                .take(MAX_OUTPUTS)
-                .map(|((device, checkout), display)| {
-                    let page = display.kind == crate::view_layout::DisplayKind::Browser;
-                    crate::model::DeskJobOutput {
-                        id: display.id.clone(),
-                        kind: output_kind(display),
-                        label: super::super::view_areas::display_label(display),
-                        thumb: None,
-                        seen: display.unseen.is_none(),
-                        pr_state: None,
-                        device_id: Some(device.clone()),
-                        checkout: Some(checkout.clone()),
-                        path: (!page && !display.path.is_empty()).then(|| display.path.clone()),
-                        url: display.url.clone().filter(|_| page),
-                    }
-                })
-                .chain(pulls.iter().map(|pull| crate::model::DeskJobOutput {
-                    id: pull.url.clone(),
-                    kind: crate::model::DeskOutputKind::Pr,
-                    label: format!("#{} {}", pull.number, pull.title),
-                    thumb: None,
-                    seen: true,
-                    pr_state: Some(pull.state),
-                    device_id: None,
-                    checkout: None,
-                    path: None,
-                    url: Some(pull.url.clone()),
-                }))
-                .collect();
+            self.desk_card_from_row(&mut card, row, index);
         }
         if let Some(pane) = &pane {
-            card.plan = index.plans.get(pane.as_str()).map(|plan| DeskJobPlan {
-                done: plan.progress.done as usize,
-                total: plan.progress.total as usize,
-            });
-            let missions = index.missions.get(pane.as_str());
-            card.mission = missions
-                .and_then(|missions| missions.first())
-                .map(|mission| desk_job_mission(mission));
-            card.workers = missions
-                .into_iter()
-                .flatten()
-                .flat_map(|mission| &mission.nodes)
-                .filter_map(|node| node.pane_id.clone())
-                .collect();
+            desk_card_from_pane(&mut card, pane, index);
         }
         card
     }
+
+    /// What a card reads from its session's sidebar row: its mark, its ask,
+    /// its line, its pull requests and its 결과물 (B24), the facts the row
+    /// itself shows.
+    fn desk_card_from_row(
+        &self,
+        card: &mut crate::model::DeskJobSnapshot,
+        row: &SidebarAgentSnapshot,
+        index: &CardIndex<'_>,
+    ) {
+        use crate::model::{AgentStatusCode, DeskAskKind};
+        card.mark = Some(row.mark);
+        card.mark_read = row.state.mark_tone.read;
+        card.read = !row.unread;
+        let ask = match (&row.ask_subject, row.status_code) {
+            (Some(crate::model::AskSubject::PlanReview { .. }), _) => DeskAskKind::PlanReview,
+            (Some(crate::model::AskSubject::MissionDecision { .. }), _) => DeskAskKind::Decision,
+            (None, AgentStatusCode::Approval) => DeskAskKind::Approval,
+            (None, AgentStatusCode::Error) => DeskAskKind::Blocked,
+            (None, _) => DeskAskKind::Question,
+        };
+        card.ask = (card.state == DeskJobState::Asking).then_some(ask);
+        card.now = row.detail.clone();
+        card.question = (card.state == DeskJobState::Asking)
+            .then(|| {
+                row.state
+                    .ask
+                    .as_ref()
+                    .and_then(|ask| ask.what.clone())
+                    .or_else(|| row.expected_reply.clone())
+            })
+            .flatten();
+        card.summary = (card.state == DeskJobState::Done)
+            .then(|| {
+                row.request
+                    .as_ref()
+                    .and_then(|request| request.line.clone())
+            })
+            .flatten();
+        let pulls = row
+            .pulls
+            .as_ref()
+            .map(|pulls| pulls.pulls.as_slice())
+            .unwrap_or_default();
+        card.pull_requests = pulls
+            .iter()
+            .map(|pull| crate::model::DeskPullRequest {
+                number: pull.number,
+                state: pull.state,
+            })
+            .collect();
+        let scope = self.session_scope_of_pane(&row.pane_id);
+        card.outputs = index
+            .displays
+            .iter()
+            .filter(|(_, display)| {
+                scope.as_ref().is_some_and(|scope| {
+                    display
+                        .openers
+                        .iter()
+                        .any(|opener| opener.of_session(scope))
+                })
+            })
+            .take(MAX_OUTPUTS)
+            .map(|((device, checkout), display)| {
+                let page = display.kind == crate::view_layout::DisplayKind::Browser;
+                crate::model::DeskJobOutput {
+                    id: display.id.clone(),
+                    kind: output_kind(display),
+                    label: super::super::view_areas::display_label(display),
+                    thumb: None,
+                    seen: display.unseen.is_none(),
+                    pr_state: None,
+                    device_id: Some(device.clone()),
+                    checkout: Some(checkout.clone()),
+                    path: (!page && !display.path.is_empty()).then(|| display.path.clone()),
+                    url: display.url.clone().filter(|_| page),
+                }
+            })
+            .chain(pulls.iter().map(|pull| crate::model::DeskJobOutput {
+                id: pull.url.clone(),
+                kind: crate::model::DeskOutputKind::Pr,
+                label: format!("#{} {}", pull.number, pull.title),
+                thumb: None,
+                seen: true,
+                pr_state: Some(pull.state),
+                device_id: None,
+                checkout: None,
+                path: None,
+                url: Some(pull.url.clone()),
+            }))
+            .collect();
+    }
+
+    /// The sessions the followed conversation names (a reply's chips, a
+    /// letter's line) that no card of `shown` is, each a card of its own read
+    /// from its sidebar row (D-86), so a chip's hover card and its thread
+    /// read the same facts as Desk's own. A session the sidebar no longer
+    /// lists has none: its chip is dimmed. The sidebar's rows bound them.
+    fn desk_named(
+        &self,
+        shown: &[&crate::model::DeskJobSnapshot],
+        index: &CardIndex<'_>,
+    ) -> Vec<crate::model::DeskJobSnapshot> {
+        use crate::model::DeskItem;
+        let carded: HashSet<&str> = shown
+            .iter()
+            .filter_map(|card| card.pane_id.as_deref())
+            .collect();
+        let mut seen: HashSet<&str> = HashSet::new();
+        let mut named = Vec::new();
+        for item in self
+            .desk
+            .stored
+            .conversation
+            .items
+            .iter()
+            .rev()
+            .take(FOLLOWED_CHIPS)
+        {
+            let panes: Vec<&str> = match item {
+                DeskItem::Handed { pane_id, .. } => vec![pane_id.as_str()],
+                DeskItem::Reply { mentions, .. } => {
+                    mentions.iter().map(|chip| chip.pane_id.as_str()).collect()
+                }
+                _ => continue,
+            };
+            for pane in panes {
+                if carded.contains(pane) || !seen.insert(pane) {
+                    continue;
+                }
+                if let Some(row) = index.rows.get(pane) {
+                    named.push(self.desk_row_card(row, index));
+                }
+            }
+        }
+        named
+    }
+
+    /// A card of a session Desk did not start, from its sidebar row: its
+    /// project and checkout are where its pane is, its id its pane's.
+    fn desk_row_card(
+        &self,
+        row: &SidebarAgentSnapshot,
+        index: &CardIndex<'_>,
+    ) -> crate::model::DeskJobSnapshot {
+        use crate::model::{DeskJobLocation, DeskJobLocationKind, DeskJobProject};
+        let machine = super::super::agent_sleep::pane_device(&row.pane_id);
+        let device = machine.unwrap_or(self.node.as_str());
+        let raw = row
+            .pane_id
+            .rsplit_once(":pane:")
+            .map_or(row.pane_id.as_str(), |(_, raw)| raw);
+        let place = self
+            .catalog_workspaces()
+            .filter(|workspace| workspace.device_id == device)
+            .find_map(|workspace| {
+                workspace
+                    .checkouts
+                    .iter()
+                    .find(|checkout| {
+                        checkout.tabs.iter().any(|tab| {
+                            tab.panes
+                                .iter()
+                                .any(|pane| pane.id == raw || pane.id == row.pane_id)
+                        })
+                    })
+                    .map(|checkout| (workspace, checkout))
+            });
+        let mut card = self.desk_blank_card(
+            &format!("pane:{}", row.pane_id),
+            &row.identity_label,
+            &row.agent_kind,
+            place.map_or("", |(_, checkout)| checkout.path.as_str()),
+            "",
+            None,
+            machine,
+            row.changed_at_unix_ms.unwrap_or_default(),
+        );
+        card.project = place.map_or_else(
+            || DeskJobProject {
+                workspace_id: None,
+                label: row.workspace_label.clone(),
+            },
+            |(workspace, _)| DeskJobProject {
+                workspace_id: Some(workspace.id.clone()),
+                label: workspace.label.clone(),
+            },
+        );
+        card.location = DeskJobLocation {
+            kind: if place.is_some_and(|(_, checkout)| checkout.is_worktree) {
+                DeskJobLocationKind::Worktree
+            } else {
+                DeskJobLocationKind::Checkout
+            },
+            label: place
+                .and_then(|(_, checkout)| checkout.branch.clone())
+                .or_else(|| row.checkout_label.clone())
+                .unwrap_or_default(),
+        };
+        card.pane_id = Some(row.pane_id.clone());
+        card.disconnected = machine.is_some_and(|machine| !index.connected.contains(machine));
+        card.state = if row.sleep.is_some() {
+            DeskJobState::Sleeping
+        } else if card.disconnected {
+            DeskJobState::Working
+        } else {
+            row_state(row)
+        };
+        self.desk_card_from_row(&mut card, row, index);
+        desk_card_from_pane(&mut card, &row.pane_id, index);
+        card
+    }
+}
+
+/// A card's state from its session's row as the sidebar reads it.
+fn row_state(row: &SidebarAgentSnapshot) -> DeskJobState {
+    use crate::model::AgentStatusCode;
+    match row.status_code {
+        AgentStatusCode::Question | AgentStatusCode::Approval | AgentStatusCode::Error => {
+            DeskJobState::Asking
+        }
+        AgentStatusCode::Done | AgentStatusCode::Idle | AgentStatusCode::Stopped => {
+            DeskJobState::Done
+        }
+        _ => DeskJobState::Working,
+    }
+}
+
+/// What a card reads by its pane: its plan and the missions it conducts.
+fn desk_card_from_pane(
+    card: &mut crate::model::DeskJobSnapshot,
+    pane: &str,
+    index: &CardIndex<'_>,
+) {
+    use crate::model::DeskJobPlan;
+    card.plan = index.plans.get(pane).map(|plan| DeskJobPlan {
+        done: plan.progress.done as usize,
+        total: plan.progress.total as usize,
+    });
+    let missions = index.missions.get(pane);
+    card.mission = missions
+        .and_then(|missions| missions.first())
+        .map(|mission| desk_job_mission(mission));
+    card.workers = missions
+        .into_iter()
+        .flatten()
+        .flat_map(|mission| &mission.nodes)
+        .filter_map(|node| node.pane_id.clone())
+        .collect();
 }
 
 /// The mission a job conducts, as its card's `미션 k/n` chip (B34).
@@ -1214,7 +1361,8 @@ impl Runtime {
         let mut cards = self.desk_cards(&index);
         cards.truncate(MAX_CARDS);
         let workers = self.desk_workers(&cards, &index);
-        self.publish_desk_jobs(cards, workers);
+        let named = self.desk_named(&cards.iter().chain(&workers).collect::<Vec<_>>(), &index);
+        self.publish_desk_jobs(cards, workers, named);
         self.compose_desk_mentions();
         if letters_read || self.desk_chips_moved() {
             self.compose_desk();
@@ -1230,7 +1378,8 @@ impl Runtime {
         let mut jobs = self.desk_cards(&index);
         jobs.truncate(MAX_CARDS);
         let workers = self.desk_workers(&jobs, &index);
-        self.publish_desk_jobs(jobs, workers);
+        let named = self.desk_named(&jobs.iter().chain(&workers).collect::<Vec<_>>(), &index);
+        self.publish_desk_jobs(jobs, workers, named);
     }
 
     /// The cards of the workers `jobs` conduct: each worker pane's spawn,
@@ -1279,18 +1428,17 @@ impl Runtime {
         &mut self,
         jobs: Vec<crate::model::DeskJobSnapshot>,
         workers: Vec<crate::model::DeskJobSnapshot>,
+        named: Vec<crate::model::DeskJobSnapshot>,
     ) {
-        if self
-            .snapshot
-            .desk_jobs
-            .as_ref()
-            .is_some_and(|section| section.jobs == jobs && section.workers == workers)
-        {
+        if self.snapshot.desk_jobs.as_ref().is_some_and(|section| {
+            section.jobs == jobs && section.workers == workers && section.named == named
+        }) {
             return;
         }
         self.snapshot.desk_jobs = Some(std::sync::Arc::new(crate::model::DeskJobsSnapshot {
             jobs,
             workers,
+            named,
         }));
     }
 
@@ -1987,6 +2135,56 @@ mod tests {
             chips(&runtime),
             (Some(done), (Some(done), Some("claude".into())))
         );
+    }
+
+    #[test]
+    fn every_session_a_reply_names_has_a_card_of_its_own_while_the_sidebar_lists_it() {
+        let root = tempfile::tempdir().unwrap();
+        let mut runtime = desk(root.path(), 2, &[]);
+        runtime.start_test_desk();
+        runtime.snapshot.navigator.agents = (1..=20)
+            .map(|n| row(&format!("p{n}"), if n == 7 { "blocked" } else { "working" }))
+            .collect();
+        // Twenty listed sessions and one the sidebar no longer lists.
+        let text: String = (1..=21).map(|n| format!("@session(p{n} job-{n}) ")).collect();
+        let mentions = hide_desk::session_mentions(&text)
+            .into_iter()
+            .map(|(pane_id, name)| crate::model::DeskSessionChip {
+                pane_id,
+                name,
+                agent_kind: None,
+                mark: None,
+            })
+            .collect();
+        let id = runtime.desk.stored.conversation.next_id();
+        runtime.desk.stored.conversation.push(DeskItem::Reply {
+            id,
+            agent: hide_desk::AdapterId::Claude,
+            text,
+            at_ms: 0,
+            state: crate::model::DeskReplyState::Done,
+            thought_ms: None,
+            steps: Default::default(),
+            mentions,
+        });
+        runtime.compose_desk_jobs();
+
+        let section = runtime.snapshot.desk_jobs.as_ref().unwrap();
+        let panes: Vec<&str> = section
+            .named
+            .iter()
+            .map(|card| card.pane_id.as_deref().unwrap())
+            .collect();
+        let listed: Vec<String> = (1..=20).map(|n| format!("p{n}")).collect();
+        assert_eq!(panes, listed);
+        let asking = section
+            .named
+            .iter()
+            .find(|card| card.pane_id.as_deref() == Some("p7"))
+            .unwrap();
+        assert_eq!(asking.state, DeskJobState::Asking);
+        assert_eq!(asking.mark, Some(row("p7", "blocked").mark));
+        assert!(section.jobs.is_empty() && section.workers.is_empty());
     }
 
     #[test]
