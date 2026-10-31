@@ -113,21 +113,14 @@ pub struct Letter {
     /// When the doorbell last typed this letter's bell into its recipient's
     /// pane (`agent.prompt` answered); the recipient's own record of the
     /// prompt confirms it (`delivery::typed`). Null until a bell was typed.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(default)]
     pub bell_typed_at_unix_ms: Option<u64>,
-    /// The bell whose unconfirmed notice the sender was sent, and when.
-    #[serde(default, skip_serializing_if = "is_zero_u8")]
+    /// The bell whose unconfirmed notice the sender was sent, 0 for none.
+    #[serde(default)]
     pub input_noticed: u8,
-    #[serde(default, skip_serializing_if = "is_zero_u64")]
+    /// When that notice was sent, 0 for none.
+    #[serde(default)]
     pub input_noticed_at_unix_ms: u64,
-}
-
-fn is_zero_u8(value: &u8) -> bool {
-    *value == 0
-}
-
-fn is_zero_u64(value: &u64) -> bool {
-    *value == 0
 }
 
 /// How long one machine other than this core's own has been reachable, which
