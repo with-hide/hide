@@ -7,6 +7,7 @@ mod connections;
 mod conpty;
 mod fixture_v1;
 mod folders;
+mod idle;
 mod lifecycle;
 mod meaning;
 mod node;
