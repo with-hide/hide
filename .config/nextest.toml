@@ -60,3 +60,10 @@ slow-timeout = { period = "60s", terminate-after = 4 }
 [[profile.ci.overrides]]
 filter = 'binary_id(hide-platform::it) & test(=resident::a_resident_child_keeps_nothing_of_its_starter)'
 success-output = "final"
+
+# The pane holder's memory and idle tests print what each system charged a
+# holder and how often it ran; the pull request's evidence reads those lines
+# from passing runs too (docs/TESTING.md, The pane holder).
+[[profile.ci.overrides]]
+filter = 'binary_id(hide-holder::it) & (test(/^memory::/) | test(/^idle::/))'
+success-output = "final"
