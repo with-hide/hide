@@ -242,15 +242,26 @@ pub(crate) enum Step {
 pub struct Prepared {
     pub(crate) engine: SharedEngine,
     pub(crate) step: Step,
+    /// The observed pane a send types into, noted as input routed to it only
+    /// once the write completed: a failed or unknown write must not count as
+    /// the answer that allows typed input again (`delivery::typed`).
+    pub(crate) noted: Option<String>,
+    pub(crate) runtime: std::sync::Weak<std::sync::Mutex<crate::runtime::Runtime>>,
 }
 
 impl Prepared {
     /// Makes the command's engine calls on the caller's task: the answer,
     /// or the refusal's code.
     pub fn run(self) -> Result<Value, String> {
-        let engine = self.engine.as_ref();
+        let Prepared {
+            engine,
+            step,
+            noted,
+            runtime,
+        } = self;
+        let engine = engine.as_ref();
         let wait = Wait::Each(CALL_WAIT);
-        let value = match self.step {
+        let value = match step {
             Step::Read { pane, raw, lines } => {
                 let read = engine
                     .read_pane(wait, &raw, "recent_unwrapped", lines)
@@ -270,6 +281,14 @@ impl Prepared {
                 engine
                     .send_text(wait, &raw, &text)
                     .map_err(|error| failed("send", &raw, &error, "pane_unavailable"))?;
+                // The text reached the pane: that is the input, whatever
+                // the Enter after it does.
+                if let (Some(pane), Some(runtime)) = (noted.as_deref(), runtime.upgrade()) {
+                    runtime
+                        .lock()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner)
+                        .note_delivery_key(pane, "pane_send");
+                }
                 if enter {
                     engine
                         .send_keys(wait, &raw, &["Enter"])

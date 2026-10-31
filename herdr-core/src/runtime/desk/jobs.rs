@@ -880,6 +880,9 @@ impl Runtime {
         let ask = match (&row.ask_subject, row.status_code) {
             (Some(crate::model::AskSubject::PlanReview { .. }), _) => DeskAskKind::PlanReview,
             (Some(crate::model::AskSubject::MissionDecision { .. }), _) => DeskAskKind::Decision,
+            // Something on the agent's screen took Hide's input: a stop the
+            // operator clears, as a block is.
+            (Some(crate::model::AskSubject::InputUnconfirmed { .. }), _) => DeskAskKind::Blocked,
             (None, AgentStatusCode::Approval) => DeskAskKind::Approval,
             (None, AgentStatusCode::Error) => DeskAskKind::Blocked,
             (None, _) => DeskAskKind::Question,

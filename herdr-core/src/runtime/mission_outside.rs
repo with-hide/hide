@@ -166,19 +166,14 @@ fn found_of(badge: PullRequestBadge) -> Found {
     }
 }
 
-/// The direct changes a mission follows to main: each done one, while the
-/// mission runs or waits for its merges, read again on every read since its
-/// branch can move on after it was seen in main (B17, B18).
+/// The direct changes a mission follows to main (`mission_landing::reads_branch`).
 fn landing(
     mission: &crate::missions::Mission,
 ) -> impl Iterator<Item = &crate::missions::MissionNode> {
-    mission.nodes.iter().filter(move |node| {
-        matches!(
-            mission.status,
-            MissionStatus::Running | MissionStatus::MergeWait
-        ) && super::missions::lands_by_branch(node)
-            && node.status == NodeStatus::Done
-    })
+    mission
+        .nodes
+        .iter()
+        .filter(move |node| super::mission_landing::reads_branch(mission.status, node))
 }
 
 /// Whether `mission` has a node this module follows.

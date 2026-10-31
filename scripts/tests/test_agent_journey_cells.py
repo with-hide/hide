@@ -350,5 +350,17 @@ class LocalRoute(unittest.TestCase):
             self.assertIn(json.dumps(str(repository.resolve())), text)
 
 
+
+class BriefRecord(unittest.TestCase):
+    def test_a_brief_passes_only_when_the_agent_recorded_its_one_typing(self):
+        typed = {"attempts": 1, "typed_at_unix_ms": 10_000}
+        self.assertEqual(cells.brief_verdict({"brief_input": {**typed, "confirmed_at_unix_ms": 12_500}}),
+                         (cells.PASS, "brief recorded by the agent 2.5 s after its one typing"))
+        self.assertEqual(cells.brief_verdict({"brief_input": typed})[0], cells.FAIL)
+        self.assertEqual(cells.brief_verdict({"brief_input": {**typed, "attempts": 2, "confirmed_at_unix_ms": 50_000}})[0],
+                         cells.FAIL)
+        self.assertEqual(cells.brief_verdict(None)[0], cells.FAIL)
+
+
 if __name__ == "__main__":
     unittest.main()

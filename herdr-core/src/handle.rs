@@ -811,7 +811,10 @@ impl Core {
         if !check_owner_thread(self, "pane.prepare") {
             return Err("pane_unavailable".into());
         }
-        lock_recover(&self.runtime).prepare_pane_command(device, caller, expected, command)
+        let mut prepared =
+            lock_recover(&self.runtime).prepare_pane_command(device, caller, expected, command)?;
+        prepared.runtime = std::sync::Arc::downgrade(&self.runtime);
+        Ok(prepared)
     }
 
     /// Checks a `hide memory` caller and takes what its command needs; the

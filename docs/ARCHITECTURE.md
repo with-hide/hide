@@ -793,7 +793,7 @@ If normal placement is full, the unresolved child waits and the core moves its k
 
 Ownership is the fifth derived status axis and it is read off the lineage, never stored.
 Ordinary delegated rows can only be Working or Seen; their changes turn ancestors unread without changing the ancestors' own groups.
-The six core-owned escalation causes in `docs/status-model.md` are the explicit exception: the child's lineage root enters Needs You and Sessions carrying the child's ask, and the root's pane band opens the child.
+The seven core-owned escalation causes in `docs/status-model.md` are the explicit exception: the child's lineage root enters Needs You and Sessions carrying the child's ask, and the root's pane band opens the child.
 The lineage is therefore built before the read axis is applied on every ingest, and there is no clock, timer or second store for it.
 Before the lineage, each pane's saved completion is laid back on a pane a restored Herdr server no longer reports finished (`agent_state::apply_completions`), so an ancestor sees the descendant completion it saw before the restart; [status-model.md](status-model.md#across-a-herdr-restart) owns the rule.
 The single state owner is `herdr-core/src/agent_state/`: `axes.rs` derives lifecycle, completion, ownership and read state, `turn.rs` derives groups, request verbs and runtime action gates, `sessions.rs` derives the Sessions tool's groups and task tags, `escalation.rs` derives the six raise causes from delivery facts, `header.rs` derives each pane's notice and band, `work.rs` associates PRs and issues and assigns each duty, and `tally.rs` owns marks, representative ranks and scope counts.
@@ -2508,6 +2508,8 @@ The web shell holds no UI authority: it draws the snapshot, writes the hub's ter
 Each terminal instance owns its one WebGL addon and context-loss subscription through `web/src/terminalRenderer.ts`, including while parked.
 The pinned addon's own transient-restoration window runs first; persistent loss or failed activation disposes the addon and leaves the same Terminal, buffer, selection and grid on xterm's normal renderer.
 Disposal removes the subscription before the addon and precedes terminal destruction; fallback starts no retry, attach, resize or additional work per key or output chunk.
+The addon is bundled with one fix of its own code (`web/src/webglAtlasSlots.ts`, applied by `web/vite.config.ts`): each GPU texture slot uploads again when a different atlas page sits at its index, not only when the version number moves, because after the atlas merges pages a page that moved into a slot can carry the version of the one the slot last uploaded, and every glyph on it was then drawn from the wrong picture.
+The build refuses an addon in which the two rewritten statements are not found exactly once, so an update of the addon is read against the fix rather than shipping without it; the check is one more pointer comparison per atlas page per drawn frame.
 With `probe=1` in the page URL it also installs `window.__hideProbe`, the only way to read the WebGL-drawn terminal from Playwright or a CDP driver; without the query the writer path is the plain `term.write`.
 
 ### The daemon lives with its Herdr

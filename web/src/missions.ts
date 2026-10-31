@@ -10,7 +10,7 @@ import { PROVIDER_KINDS, type ProviderKind } from "./agentPicker";
 import { agentsByPane } from "./paneAgents";
 import { orderByDependencies } from "./projectBoard";
 import { resumeProvider } from "./linkPanel";
-import type { AgentRow, AgentStartChoice, Mission, MissionChecker, MissionCriterion, MissionWorker, MissionEvent, MissionEventsSnapshot, MissionNode, MissionVerdict, RowMark, SnapshotRest } from "./snapshot";
+import type { AgentRow, AgentStartChoice, Mission, MissionChecker, MissionCriterion, MissionWorker, MissionEvent, MissionEventsSnapshot, MissionLandingAction, MissionNode, MissionVerdict, RowMark, SnapshotRest } from "./snapshot";
 
 export function missionOf(rest: SnapshotRest | null | undefined, id: string): Mission | null {
   return rest?.missions?.items.find((mission) => mission.id === id) ?? null;
@@ -55,9 +55,9 @@ export function missionCounts(mission: Mission): { done: number; total: number; 
   return { done: mission.nodes.filter((node) => node.status === "done").length, total: mission.nodes.length - dropped, dropped };
 }
 
-/** The pull requests of a stack still waiting on a lower one: open, with a base the mission holds. */
+/** The pull requests of a stack still waiting on a lower one, as the core counts them. */
 export function stackWaiting(mission: Mission): number {
-  return mission.nodes.filter((node) => node.base_pr != null && node.pr_state !== "merged" && node.pr_state !== "closed" && node.status !== "dropped").length;
+  return mission.stack_waiting;
 }
 
 const KIND_WORD: Record<MissionNode["kind"], MessageKey> = {
@@ -342,7 +342,8 @@ export function nodeResult(node: MissionNode): NodeResult | null {
  * node's branch, else one the Conductor recorded for a direct change by hand.
  */
 export function mainCommit(node: MissionNode): string | null {
-  return node.in_main ?? node.commit;
+  const proof = node.landing?.state === "landed" ? node.landing.proof : null;
+  return proof?.by === "in_main" ? proof.commit : node.commit;
 }
 
 /** A commit as the results show it: its first seven digits. */
@@ -380,26 +381,19 @@ export function nodeLook(mission: Mission, node: MissionNode): NodeLook {
   return nodeTone(mission, node);
 }
 
-/** A finished change is in main: its pull request merged or its commit found or recorded there; an outside node is done only once it reached main (B17, B19). */
+/** Whether the core found a node's work in main (B17, B19). */
 export function nodeLanded(node: MissionNode): boolean {
-  if (node.status !== "done") return false;
-  return node.kind === "external" || node.pr_state === "merged" || mainCommit(node) != null;
+  return node.landing?.state === "landed";
 }
 
 /**
- * What a finished change still waits on before main (B27), only from what
- * the core read: a pull request it read open, or a done direct change's
- * branch, which it reads while the mission runs or waits on its merges, not
- * found in main.
- * None for a pull request whose state was never read (a mission recorded
- * before the core kept one), a branch it cannot read, work that reached main,
- * research, a verify node or a cancelled mission.
+ * What a finished change still waits on before main (B27), as the core
+ * decides it: `merge` for a pull request it read open, `join` for a done
+ * direct change's branch it reads and has not found in main. Nothing for
+ * work it could not read, which carries no tag.
  */
-export function landingLeft(mission: Mission, node: MissionNode): "merge" | "join" | null {
-  if (node.kind !== "change" || node.status !== "done" || nodeLanded(node) || mission.status === "cancelled") return null;
-  if (node.pr != null) return node.pr_state != null && node.pr_state !== "closed" ? "merge" : null;
-  const read = mission.status === "running" || mission.status === "merge_wait";
-  return read && node.delivery === "direct" && node.branch != null && !node.unread ? "join" : null;
+export function landingLeft(node: MissionNode): MissionLandingAction | null {
+  return node.landing?.state === "left" ? node.landing.action : null;
 }
 
 /** A card's `기준 n/m` and `⤳k` (B28): none for a mission from before criteria (B23) or a node with no lines, as an outside one. */
@@ -556,18 +550,13 @@ export function cardLine(mission: Mission, node: MissionNode, planLine: string |
   return node.line ? { text: node.line, attention: false } : null;
 }
 
-/**
- * The changes left to merge or join, in the order the Conductor gave (B18,
- * B25): the plan's merge order first, then any other finished change not in
- * main yet, top down.
- */
+/** The changes left to merge or join, in the order the core gives them (B18, B25). */
 export function landingOrder(mission: Mission): MissionNode[] {
-  const left = orderedNodes(mission).filter((node) => landingLeft(mission, node) !== null);
-  const at = (node: MissionNode) => {
-    const index = mission.merge_order.indexOf(node.key);
-    return index === -1 ? mission.merge_order.length : index;
-  };
-  return left.map((node, index) => ({ node, index })).sort((a, b) => at(a.node) - at(b.node) || a.index - b.index).map(({ node }) => node);
+  const byKey = new Map(mission.nodes.map((node) => [node.key, node]));
+  return mission.landing_order.flatMap((key) => {
+    const node = byKey.get(key);
+    return node ? [node] : [];
+  });
 }
 
 /** Why a worker's row was raised to the operator (`AgentRow.escalation`, docs/status-model.md, Delegated escalation). */
@@ -576,7 +565,7 @@ export type EscalationCause = NonNullable<AgentRow["escalation"]>["cause"];
 /**
  * What only the operator can do now (B25): answer the decision, take over a
  * mission no Conductor holds, clear a worker the core raised past its parent
- * (one of the six escalation causes), see an outside pull request closed
+ * (one of the seven escalation causes), see an outside pull request closed
  * without its merge, and merge or join what waits for main. A worker's own
  * block its parent can handle stays on its card, and a finished or cancelled
  * mission has nothing here.

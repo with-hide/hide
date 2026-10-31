@@ -31,7 +31,7 @@ import { requireInterfaceLanguage } from "../i18n/locale";
 import { MissionMap } from "../MissionMap";
 import { PaneWorkChip } from "../PaneMissionChip";
 import { ConductorTab } from "../settings/ConductorTab";
-import type { AgentRow, Mission, MissionChecker, MissionCriterion, MissionEvent, MissionNode, MissionWorker, SnapshotRest } from "../snapshot";
+import type { AgentRow, Mission, MissionChecker, MissionCriterion, MissionEvent, MissionLanding, MissionNode, MissionWorker, SnapshotRest } from "../snapshot";
 import { useShellStore } from "../store";
 import { useUiStore } from "../ui";
 
@@ -48,8 +48,14 @@ const MINUTE = 60_000;
 const no = (n: number) => `#${n}`;
 
 function node(key: string, title: string, extra: Partial<MissionNode>): MissionNode {
-  return { key, title, kind: "change", depends_on: [], status: "planned", blocked: null, delivery: "pr", worker: null, agent_id: null, pane_id: null, machine: null, pr: null, base_pr: null, branch: null, pr_state: null, pr_url: null, stage: null, attempts: 0, line: null, change: null, review: null, criteria: [], criteria_met: 0, criteria_skipped: 0, external: null, unread: false, reopened: 0, started_at_unix_ms: null, finished_at_unix_ms: null, commit: null, verdict: null, checks: null, ...extra };
+  return { key, title, kind: "change", depends_on: [], status: "planned", blocked: null, delivery: "pr", worker: null, agent_id: null, pane_id: null, machine: null, pr: null, base_pr: null, branch: null, pr_state: null, pr_url: null, stage: null, attempts: 0, line: null, change: null, review: null, criteria: [], criteria_met: 0, criteria_skipped: 0, external: null, unread: false, reopened: 0, started_at_unix_ms: null, finished_at_unix_ms: null, commit: null, landing: null, verdict: null, checks: null, ...extra };
 }
+
+/** Where a node is on its way to main, as the core would publish it (`herdr-core/src/runtime/mission_landing.rs`). */
+const MERGE_LEFT: MissionLanding = { state: "left", action: "merge" };
+const MERGED: MissionLanding = { state: "landed", proof: { by: "merged" } };
+const OUTSIDE_LANDED: MissionLanding = { state: "landed", proof: { by: "outside" } };
+const inMain = (commit: string): MissionLanding => ({ state: "landed", proof: { by: "in_main", commit } });
 
 const opus = (effort: string | null) => ({ agent: "claude", model: "Opus", effort, effort_auto: true });
 const astra = (effort: string | null) => ({ agent: "codex", model: "Astra", effort, effort_auto: true });
@@ -81,7 +87,7 @@ function plan(state: string, now: number): MissionNode[] {
     // One base, then six parts side by side, each with its own review: a row wider than the slot.
     const parts = ["목록", "검색", "설정", "알림", "단축키", "도움말"];
     return [
-      node("base", "공용 바탕", { worker: opus("high"), ...done(40, 20), pr: 1601, pr_state: "mergeable", stage: 3 }),
+      node("base", "공용 바탕", { worker: opus("high"), ...done(40, 20), pr: 1601, pr_state: "mergeable", landing: MERGE_LEFT, stage: 3 }),
       node("base-check", "공용 바탕 리뷰", { kind: "verify", delivery: null, depends_on: ["base"], worker: astra("medium"), ...done(20, 6), line: "필수 수정 없음" }),
       ...parts.flatMap((title, index) => [
         node(`part-${index}`, `${title} 화면`, { depends_on: ["base-check"], worker: opus("high"), ...(index < 3 ? working(12 - index * 3) : {}), branch: index < 3 ? `part-${index + 1}` : null, stage: index < 3 ? 1 : null }),
@@ -94,7 +100,7 @@ function plan(state: string, now: number): MissionNode[] {
     return [
       node("rules", "열린 PR 정리 기준 정하기", { kind: "research", delivery: null, worker: opus("high"), ...done(180, 30), line: "19개 중 12개 닫기" }),
       node("bump", "1.0.0 버전 커밋", { delivery: "direct", depends_on: ["rules"], worker: astra("medium"), ...done(150, 20), branch: "release/1.0.0", stage: 4, commit: "c216793eb4a1" }),
-      node("notes", "릴리스 노트", { delivery: "direct", depends_on: ["rules"], worker: sonnet, ...done(150, 40), branch: "release/notes", stage: 4, in_main: "8d1b0c4e92f7" }),
+      node("notes", "릴리스 노트", { delivery: "direct", depends_on: ["rules"], worker: sonnet, ...done(150, 40), branch: "release/notes", stage: 4, landing: inMain("8d1b0c4e92f7") }),
       node("agents", "Mac 에이전트 확인", { kind: "verify", delivery: null, depends_on: ["bump"], worker: astra("medium"), ...done(110, 50), line: "7개 항목 통과", verdict: "pass", checks: { passed: 7, total: 7 } }),
       node("order", "배포 순서 확인", { kind: "research", delivery: null, depends_on: ["notes"], worker: opus("medium"), ...done(100, 20), line: "private 먼저, site 뒤" }),
     ];
@@ -105,12 +111,12 @@ function plan(state: string, now: number): MissionNode[] {
     const reviewed = (who: MissionWorker, id: string, state: MissionCriterion["state"] = "pass") => line("review", "review", state, { checkers: [checker(who, state, id)] });
     return [
       node("cause", `${no(1487)} 원인 조사`, { kind: "research", delivery: null, worker: opus("xhigh"), agent_id: "agent-cause", ...done(300, 40), line: "reopen 때 셀 초기화가 먼저 돎", ...finish(own(1, "원인을 재현 단계와 함께 적는다")) }),
-      node("api", "API 추가", { worker: astra("high"), agent_id: "agent-api", ...done(300, 120), pr: 1503, pr_state: "merged", stage: 4, ...finish(own(1, "목록 API가 페이지를 나눠 준다"), reviewed(opus("high"), "reviewer-api"), ci("pass")) }),
-      node("fix-1481", `이슈 ${no(1481)} 수정`, { delivery: "direct", worker: astra("high"), agent_id: "agent-1481", ...done(290, 60), branch: "fix-1481", stage: 4, in_main: "4f1c9a27be03", ...finish(own(1, "빈 목록에서도 필터가 남는다"), line("check", "check", "pass")) }),
-      node("fix-1487", `${no(1487)} 수정`, { depends_on: ["cause"], worker: astra("medium"), agent_id: "agent-1487", ...done(250, 90), pr: 1506, pr_state: "merged", stage: 4, attempts: 2, ...finish(own(1, "reopen 뒤에도 셀이 남는다"), own(2, "실제 세션 50개 replay", "skipped", { skip: { reason: "기록된 세션이 31개뿐" } }), ci("pass")) }),
+      node("api", "API 추가", { worker: astra("high"), agent_id: "agent-api", ...done(300, 120), pr: 1503, pr_state: "merged", landing: MERGED, stage: 4, ...finish(own(1, "목록 API가 페이지를 나눠 준다"), reviewed(opus("high"), "reviewer-api"), ci("pass")) }),
+      node("fix-1481", `이슈 ${no(1481)} 수정`, { delivery: "direct", worker: astra("high"), agent_id: "agent-1481", ...done(290, 60), branch: "fix-1481", stage: 4, landing: inMain("4f1c9a27be03"), ...finish(own(1, "빈 목록에서도 필터가 남는다"), line("check", "check", "pass")) }),
+      node("fix-1487", `${no(1487)} 수정`, { depends_on: ["cause"], worker: astra("medium"), agent_id: "agent-1487", ...done(250, 90), pr: 1506, pr_state: "merged", landing: MERGED, stage: 4, attempts: 2, ...finish(own(1, "reopen 뒤에도 셀이 남는다"), own(2, "실제 세션 50개 replay", "skipped", { skip: { reason: "기록된 세션이 31개뿐" } }), ci("pass")) }),
       cancelled
         ? node("screen", "API 쓰는 화면: 목록·검색·필터를 새 페이지 API로 옮기기", { depends_on: ["api"], worker: astra("high"), agent_id: "agent-screen", status: "working", started_at_unix_ms: ago(170), pr: 1504, base_pr: 1503, pr_state: "pending", stage: 2, ...finish(own(1, "새 API로 목록을 그린다", "open"), reviewed(opus("high"), "reviewer-screen", "open")) })
-        : node("screen", "API 쓰는 화면: 목록·검색·필터를 새 페이지 API로 옮기기", { depends_on: ["api"], worker: astra("high"), agent_id: "agent-screen", ...done(170, 110), pr: 1504, base_pr: 1503, pr_state: "merged", stage: 4, ...finish(own(1, "새 API로 목록을 그린다"), reviewed(opus("high"), "reviewer-screen"), ci("pass")) }),
+        : node("screen", "API 쓰는 화면: 목록·검색·필터를 새 페이지 API로 옮기기", { depends_on: ["api"], worker: astra("high"), agent_id: "agent-screen", ...done(170, 110), pr: 1504, base_pr: 1503, pr_state: "merged", landing: MERGED, stage: 4, ...finish(own(1, "새 API로 목록을 그린다"), reviewed(opus("high"), "reviewer-screen"), ci("pass")) }),
       node("together", "함께 확인", { kind: "verify", delivery: null, depends_on: ["screen", "fix-1487"], worker: sonnet, ...(cancelled ? {} : { ...done(55, 25), agent_id: "agent-together" }), line: cancelled ? null : "6개 항목 통과", ...finish(line("verify", "verify", cancelled ? "open" : "pass", { rule: "all", checkers: [checker(sonnet, cancelled ? "open" : "pass", cancelled ? undefined : "checker-1"), checker(astra("medium"), cancelled ? "open" : "pass", cancelled ? undefined : "checker-2")] })) }),
     ];
   }
@@ -130,23 +136,23 @@ function plan(state: string, now: number): MissionNode[] {
   const review = (minutes: number) => ({ status: "review" as const, started_at_unix_ms: ago(minutes) });
   return [
     node("cause", `${no(1487)} 원인 조사`, { kind: "research", delivery: null, worker: opus("xhigh"), ...done(44, 24), line: "reopen 때 셀 초기화가 먼저 돎", ...finish(own(1, "원인을 재현 단계와 함께 적는다")) }),
-    node("fix-1481", `이슈 ${no(1481)} 수정`, { worker: astra("high"), ...done(40, 14), pr: 1501, pr_state: "mergeable", stage: 3, ...finish(own(1, "빈 목록에서도 필터가 남는다"), line("check", "check", "pass"), ci("pass")) }),
+    node("fix-1481", `이슈 ${no(1481)} 수정`, { worker: astra("high"), ...done(40, 14), pr: 1501, pr_state: "mergeable", landing: MERGE_LEFT, stage: 3, ...finish(own(1, "빈 목록에서도 필터가 남는다"), line("check", "check", "pass"), ci("pass")) }),
     node("fix-1490", `이슈 ${no(1490)} 수정`, {
       worker: astra("medium"), pr: 1505, stage: 3, change: `${no(1483)}은 ${no(1490)}과 같은 원인이라 합침`,
-      ...(stack ? { ...done(40, 9), pr_state: "mergeable" as const } : decision ? { status: "failed" as const, started_at_unix_ms: ago(30), pr_state: "failed" as const, attempts: 2, line: "CI 실패 · 시도 2/2" } : { ...review(30), pr_state: "pending" as const }),
+      ...(stack ? { ...done(40, 9), pr_state: "mergeable" as const, landing: MERGE_LEFT } : decision ? { status: "failed" as const, started_at_unix_ms: ago(30), pr_state: "failed" as const, attempts: 2, line: "CI 실패 · 시도 2/2" } : { ...review(30), pr_state: "pending" as const }),
       ...finish(own(1, "검색어를 지우면 처음 목록으로 돌아간다"), line("check", "check", "pass"), line("review", "review", stack ? "pass" : "open", { rule: "all", checkers: [checker(opus("high"), "pass", "agent-21"), { ...checker(sonnet, stack ? "pass" : "open", stack || decision ? undefined : "agent-22"), ...(stack || decision ? {} : { pane_id: REVIEW_PANE }) }] }), ci(decision ? "fail" : "pass")),
     }),
-    node("api", "API 추가", { worker: astra("high"), ...done(40, 17), pr: 1503, pr_state: state === "no-conductor" ? "merged" : stack ? "mergeable" : "merged", stage: 4, ...finish(own(1, "목록 API가 페이지를 나눠 준다"), ci("pass")) }),
+    node("api", "API 추가", { worker: astra("high"), ...done(40, 17), pr: 1503, pr_state: state === "no-conductor" ? "merged" : stack ? "mergeable" : "merged", landing: stack && state !== "no-conductor" ? MERGE_LEFT : MERGED, stage: 4, ...finish(own(1, "목록 API가 페이지를 나눠 준다"), ci("pass")) }),
     node("fix-1487", `${no(1487)} 수정`, {
       depends_on: ["cause"], worker: astra("medium"), pane_id: FIX_PANE, pr: 1506, stage: 3, reopened: stack ? 0 : 1,
-      ...(stack ? { ...done(30, 12), pr_state: "mergeable" as const } : { ...working(5), pr_state: "pending" as const, line: "replay 19/31" }),
+      ...(stack ? { ...done(30, 12), pr_state: "mergeable" as const, landing: MERGE_LEFT } : { ...working(5), pr_state: "pending" as const, line: "replay 19/31" }),
       ...finish(own(1, "reopen 뒤에도 셀이 남는다"), own(2, "실제 세션 50개 replay", "skipped", { skip: { reason: "기록된 세션이 31개뿐" } }), ...(stack ? [] : [line("d1", "defect", "open", { text: "다시 열면 첫 셀만 비어 있다", found_by: "check-1487" })]), ci(stack ? "pass" : "open")),
     }),
     node("check-1487", `${no(1487)} 실제 앱 확인`, { kind: "verify", delivery: null, depends_on: ["fix-1487"], worker: sonnet, ...(stack ? done(16, 6) : {}), line: stack ? "5개 항목 통과" : null, ...finish(line("verify", "verify", stack ? "pass" : "open", { rule: "all", checkers: [checker(sonnet, stack ? "pass" : "open")] })) }),
-    node("outside", "바깥: isolated 앱 실행기 정리", { kind: "external", delivery: null, external: { pr: 1232 }, status: decision ? "failed" : stack ? "done" : "waiting", pr: 1232 }),
+    node("outside", "바깥: isolated 앱 실행기 정리", { kind: "external", delivery: null, external: { pr: 1232 }, status: decision ? "failed" : stack ? "done" : "waiting", pr: 1232, landing: stack ? OUTSIDE_LANDED : null }),
     decision
       ? node("screen", "API 쓰는 화면", { depends_on: ["api", "outside"], worker: astra("high"), status: "held", started_at_unix_ms: ago(21), pr: 1504, base_pr: 1503, pr_state: "pending", stage: 3, review: "리뷰 전 · CI 통과 뒤 시작", ...finish(own(1, "새 API로 목록을 그린다", "open"), ci("open")) })
-      : node("screen", "API 쓰는 화면", { depends_on: ["api", "outside"], worker: astra("high"), pane_id: stack ? null : SCREEN_PANE, ...(stack ? done(33, 33) : working(12)), status: stack ? "done" : "working", pr: 1504, base_pr: 1503, pr_state: state === "no-conductor" ? "pending" : stack ? "mergeable" : "pending", stage: state === "no-conductor" ? 2 : 3, line: state === "no-conductor" ? "옮기기 필요" : null, ...finish(own(1, "새 API로 목록을 그린다", stack ? "pass" : "open"), ci(stack ? "pass" : "open")) }),
+      : node("screen", "API 쓰는 화면", { depends_on: ["api", "outside"], worker: astra("high"), pane_id: stack ? null : SCREEN_PANE, ...(stack ? done(33, 33) : working(12)), status: stack ? "done" : "working", pr: 1504, base_pr: 1503, pr_state: state === "no-conductor" ? "pending" : stack ? "mergeable" : "pending", stage: state === "no-conductor" ? 2 : 3, landing: stack ? MERGE_LEFT : null, line: state === "no-conductor" ? "옮기기 필요" : null, ...finish(own(1, "새 API로 목록을 그린다", stack ? "pass" : "open"), ci(stack ? "pass" : "open")) }),
     node("together", "함께 확인", { kind: "verify", delivery: null, depends_on: ["screen", "fix-1487"], worker: sonnet, ...(stack ? done(8, 4) : {}), line: stack ? "합친 변경 ✓" : null, ...finish(line("verify", "verify", stack ? "pass" : "open", { rule: "majority", checkers: [checker(sonnet, stack ? "pass" : "open"), checker(astra("medium"), stack ? "pass" : "open"), checker(opus("high"), stack ? "pass" : "open")] })) }),
   ];
 }
@@ -223,7 +229,12 @@ export function missionFixture(shown: string, now: number): { mission: Mission; 
     status: state === "plan" ? "planning" : state === "stack" ? "merge_wait" : state === "done" || state === "no-pr" ? "done" : state === "cancelled" ? "cancelled" : "running",
     scope: "pr", cap: 4, exempt: shown === "exempt", strength: "normal", other_vendor: true,
     conductor: { pane_id: CONDUCTOR_PANE, name: "이슈 정리 · Conductor", agent_kind: "claude", session: { device_id: "local", agent: "claude", session_id: "scene-conductor" }, present: state !== "no-conductor", takes_answers: true },
-    nodes, merge_order: ["api", "fix-1481", "fix-1490", "fix-1487", "screen"], check: "cargo test && pnpm test", github: "octocat",
+    nodes, merge_order: ["api", "fix-1481", "fix-1490", "fix-1487", "screen"],
+    // The order the core gives what is left: the merge order first, then the plan's (`mission_landing::landing_order`).
+    landing_order: state === "wide" ? ["base"] : state === "stack" ? ["api", "fix-1481", "fix-1490", "fix-1487", "screen"] : state === "no-conductor" ? ["fix-1481", "fix-1490", "fix-1487", "screen"] : ["no-pr", "done", "cancelled", "plan"].includes(state) ? [] : ["fix-1481"],
+    // The screen's pull request stacks on the API's until that one merges.
+    stack_waiting: ["plan", "wide", "no-pr", "done"].includes(state) ? 0 : 1,
+    check: "cargo test && pnpm test", github: "octocat",
     decision: state === "decision" ? "화면 PR을 어디에 올릴까요?" : state === "no-conductor" ? `${no(1503)}이 머지되어 ${no(1504)}를 옮겨야 해요` : null,
     question: state === "decision"
       ? { key: 2, why: `API PR ${no(1503)}이 아직 리뷰 중이라 그 위에 쌓으면 리베이스가 생길 수 있어요`, options: [`${no(1503)} 위에 쌓기`, `${no(1503)} 머지 뒤 main에서`, "화면 PR을 둘로 나누기"], recommend: 1, node: "screen", asked_at_unix_ms: now - 8 * MINUTE }
