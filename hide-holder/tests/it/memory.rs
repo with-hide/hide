@@ -5,8 +5,10 @@
 //! charged no more than its budget, 6 MiB: 4 MiB idle and the parser's 2 MiB
 //! scrollback, the bound decided for the bundle
 //! (docs/PERFORMANCE_TESTING.md, The pane holder's path), in every build on
-//! Linux and Windows; on macOS a debug holder sits around the bound, and the
-//! release measurement judges it there.
+//! Linux and Windows. On macOS, where the return is what brings a flooded
+//! holder down, the holder is charged less after it than when the flood
+//! ended; a debug holder there sits around the bound, so in a debug build
+//! that is all this holds, and the release measurement judges the bound.
 
 use std::ffi::OsString;
 
@@ -103,18 +105,31 @@ fn a_flooded_holder_keeps_within_its_budget_once_it_gave_freed_pages_back() {
     holder.wait_logged("holder.memory_returned", 1, &mut connection);
     std::fs::write(&go, b"").unwrap();
     connection.wait_for_text("FLOOD DONE");
-    holder.wait_logged("holder.memory_returned", 2, &mut connection);
+    // The flood's own return comes a second after its last fragment, so
+    // the count read now is from before it, and the next line is its.
+    let before = holder.logged("holder.memory_returned");
+    let flooded = charged(holder.process.pid);
+    holder.wait_logged("holder.memory_returned", before + 1, &mut connection);
     let charged = charged(holder.process.pid);
     let mib = |bytes: u64| bytes as f64 / 1048576.0;
     eprintln!(
-        "after a {FLOOD}-byte flood and a return, the holder is charged {:.2} MiB",
+        "after a {FLOOD}-byte flood the holder is charged {:.2} MiB, and {:.2} MiB after its return",
+        mib(flooded),
         mib(charged)
     );
+    if cfg!(target_os = "macos") {
+        assert!(
+            charged < flooded,
+            "the return gave nothing back: {:.2} MiB before it, {:.2} MiB after",
+            mib(flooded),
+            mib(charged)
+        );
+    }
     // A debug holder on macOS reads 5.5 to 6.6 MiB here, from 2.4 MiB
     // before the flood, around the bound a release holder keeps (5.91 MiB
-    // at most over 40 measured rounds): there the measurement judges it and
-    // this prints it. Linux's (2.95 MiB) and Windows' (4.20 MiB) are held to
-    // it in every build.
+    // at most over 40 measured rounds): there the measurement judges the
+    // bound. Linux's (2.95 MiB) and Windows' (4.20 MiB) are held to it in
+    // every build.
     if !(cfg!(target_os = "macos") && cfg!(debug_assertions)) {
         assert!(
             charged <= BUDGET,
