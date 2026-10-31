@@ -181,6 +181,50 @@ impl Composer {
     /// Judges a screen as [`Composer::judge`] does, and says which step kept
     /// it from reading empty.
     pub fn explain(&self, screen: &str) -> Result<(), Miss> {
+        let region = self.content(screen)?;
+        for line in region.iter().filter(|line| !blank(line)) {
+            if !self.empty.iter().any(|shown| shown.matches(line)) {
+                return Err(if self.empty.iter().any(|shown| shown.shows_text(line)) {
+                    Miss::PlaceholderStyle
+                } else {
+                    Miss::NotPlaceholder
+                });
+            }
+        }
+        Ok(())
+    }
+
+    /// Whether the composer shows `text` and nothing else: input typed into
+    /// it that was never submitted. Whitespace is ignored, since a terminal
+    /// wraps and indents pasted lines; a composer declared as one line
+    /// (`Region::Line`) shows only the text's first line, which has to be
+    /// that line whole.
+    pub fn holds(&self, screen: &str, text: &str) -> bool {
+        let Ok(region) = self.content(screen) else {
+            return false;
+        };
+        let shown: String = region
+            .iter()
+            .flat_map(|line| line.iter().map(|(c, _)| *c))
+            .filter(|c| !c.is_whitespace())
+            .collect();
+        let squeeze =
+            |value: &str| -> String { value.chars().filter(|c| !c.is_whitespace()).collect() };
+        if shown.is_empty() {
+            return false;
+        }
+        match self.region {
+            Region::Line => text
+                .lines()
+                .find(|line| !line.trim().is_empty())
+                .is_some_and(|first| squeeze(first) == shown),
+            _ => squeeze(text) == shown,
+        }
+    }
+
+    /// The composer's lines on `screen`, its marker and the agent's own
+    /// chrome under it taken off.
+    fn content(&self, screen: &str) -> Result<Vec<Cells>, Miss> {
         let lines: Vec<Cells> = screen.split('\n').map(cells).collect();
         let mut region = self.region(&lines)?;
         if !self.marker.is_empty() {
@@ -201,16 +245,7 @@ impl Composer {
                 .ok_or(Miss::NoTrailer)?;
             region.truncate(last);
         }
-        for line in region.iter().filter(|line| !blank(line)) {
-            if !self.empty.iter().any(|shown| shown.matches(line)) {
-                return Err(if self.empty.iter().any(|shown| shown.shows_text(line)) {
-                    Miss::PlaceholderStyle
-                } else {
-                    Miss::NotPlaceholder
-                });
-            }
-        }
-        Ok(())
+        Ok(region)
     }
 
     fn region(&self, lines: &[Cells]) -> Result<Vec<Cells>, Miss> {

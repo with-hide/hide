@@ -850,7 +850,8 @@ pub(crate) fn derive_from_axes(agent: &mut SidebarAgentSnapshot) {
         // that does not know the subject draws instead (D-12).
         let line = match subject {
             crate::model::AskSubject::MissionDecision { line } => first_line_cut(line),
-            crate::model::AskSubject::PlanReview { .. } => None,
+            crate::model::AskSubject::PlanReview { .. }
+            | crate::model::AskSubject::InputUnconfirmed { .. } => None,
         };
         (true, line)
     } else {

@@ -339,6 +339,15 @@ pub(crate) struct Doorbell {
     /// change. Bounded by the open missions.
     answer_tried: HashMap<String, Tried>,
     answer_held: HashMap<String, Hold>,
+    /// Typed input awaiting its record (`typed.rs`): when each notice or
+    /// typing that did not go through may be tried again, keyed by the work
+    /// it is for. Bounded by the current work.
+    input_retry: HashMap<String, u64>,
+    /// Why each brief waits to be typed again, logged once per change.
+    input_held: HashMap<String, &'static str>,
+    /// Each unconfirmed brief's last composer read: the typing and the
+    /// pane's last input it was read at, and when it may be read again.
+    input_read: HashMap<String, ((u8, u64), u64)>,
 }
 
 /// How one attempt ended without failing.
@@ -561,6 +570,7 @@ impl Doorbell {
             }
         }
         self.answers(owner, stop, now, &mut count);
+        self.inputs(owner, stop, now, &mut count);
         if count < WORK_PER_PASS && !stop.load(Ordering::Acquire) {
             self.composer.check(owner, now);
         }
@@ -653,6 +663,102 @@ impl Doorbell {
         }
     }
 
+    /// Typed input whose agent never recorded it (`typed.rs`): tells the
+    /// agent that typed it, or wrote the letter, with the child's pane and
+    /// how to read and answer its screen, and types a brief again once
+    /// someone answered that screen, the agent is ready and its composer
+    /// reads empty. Each typing is reserved in the ledger first and the
+    /// record is checked again right before, so a late record never brings
+    /// a second copy.
+    fn inputs(&mut self, owner: &Mutex<Runtime>, stop: &AtomicBool, now: u64, count: &mut usize) {
+        use crate::runtime::typed_input::InputKey;
+        let work = owner
+            .lock()
+            .map(|mut guard| guard.typed_input_work(now))
+            .unwrap_or_default();
+        let keys: HashSet<String> = work
+            .iter()
+            .map(|item| match &item.key {
+                InputKey::Spawn(id) | InputKey::Letter(id) => id.clone(),
+            })
+            .collect();
+        self.input_retry
+            .retain(|key, _| key.split_once(':').is_some_and(|(_, id)| keys.contains(id)));
+        self.input_held.retain(|key, _| keys.contains(key));
+        self.input_read.retain(|key, _| keys.contains(key));
+        for item in work {
+            if stop.load(Ordering::Acquire) || *count >= WORK_PER_PASS {
+                break;
+            }
+            let id = match &item.key {
+                InputKey::Spawn(id) | InputKey::Letter(id) => id.clone(),
+            };
+            if let Some(by) = item.recorded {
+                record_brief(owner, &id, by);
+                continue;
+            }
+            // The composer first: a brief it still shows gets its Enter, and
+            // its parent hears only if that is not taken either.
+            if let Some(resubmit) = &item.resubmit {
+                // Read once per typing and per input that reached the pane,
+                // and again after a while, so a resting pane is not read on
+                // every pass.
+                let seen = (resubmit.attempts, item.observation.last_input_at_unix_ms);
+                let due = self
+                    .input_read
+                    .get(&id)
+                    .is_none_or(|(pair, retry_at)| *pair != seen || now >= *retry_at);
+                if due {
+                    *count += 1;
+                    match resubmit_brief(owner, &id, &item.observation, resubmit) {
+                        Ok(_) => {
+                            self.input_read.remove(&id);
+                            self.input_held.remove(&id);
+                            continue;
+                        }
+                        Err(reason) => {
+                            if self.input_held.insert(id.clone(), reason) != Some(reason) {
+                                crate::diagnostic!(json!({"component":"delivery",
+                                    "kind":"input.retype_held","spawn":id,
+                                    "pane_id":item.observation.actor.pane_id,"reason":reason}));
+                            }
+                            // A screen that could not be read is read again
+                            // soon; one read for what it is, after a while.
+                            let wait = if matches!(
+                                reason,
+                                super::composer::UNCONFIRMED | "agent_unread" | "not_ready"
+                            ) {
+                                RETRY_FIRST_MS
+                            } else {
+                                RETRY_LIMIT_MS
+                            };
+                            self.input_read
+                                .insert(id.clone(), (seen, now.saturating_add(wait)));
+                        }
+                    }
+                }
+            }
+            if let Some(notice) = &item.notice {
+                let key = format!("notice:{id}");
+                if self.input_retry.get(&key).is_none_or(|at| now >= *at) {
+                    *count += 1;
+                    match send_input_notice(owner, &item.key, notice) {
+                        Ok(()) => {
+                            self.input_retry.remove(&key);
+                        }
+                        Err(code) => {
+                            crate::diagnostic!(json!({"component":"delivery",
+                                "kind":"input.notice_unsent","input":id,
+                                "attempt":notice.attempt,"code":code}));
+                            self.input_retry
+                                .insert(key, now.saturating_add(RETRY_LIMIT_MS));
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     /// Logs why an answer waits once per change and shows it waiting for
     /// the Conductor's turn.
     fn answer_hold(
@@ -710,6 +816,182 @@ impl Doorbell {
                 "letter_id":id,"pane_id":pane_id,"reason":reason.code()}));
         }
     }
+}
+
+/// Sends the notice of an unconfirmed input to the agent that typed it, as
+/// Hide's own `hide:input`, and records that it went. The intent names the
+/// input and its typing, so a notice sent again is the same letter.
+fn send_input_notice(
+    owner: &Mutex<Runtime>,
+    key: &crate::runtime::typed_input::InputKey,
+    notice: &crate::runtime::typed_input::Notice,
+) -> Result<(), String> {
+    use crate::runtime::typed_input::InputKey;
+    let (client, authority, actor) = owner
+        .lock()
+        .map_err(|_| "delivery_unavailable".to_owned())?
+        .hide_delivery(super::typed::INPUT_ROLE)?;
+    super::worker::Prepared::new(
+        client.clone(),
+        super::worker::Authority {
+            caller: authority.caller.clone(),
+            context: authority.context.clone(),
+        },
+        actor.clone(),
+        Some(notice.target.clone()),
+        super::Command::Send {
+            target: notice.target.actor.pane_id.clone(),
+            intent: notice.intent.clone(),
+            body: notice.body.clone(),
+            // Hide reads no answer; the agent acts on its child's screen.
+            kind: "progress".into(),
+            now: true,
+            force: false,
+        },
+    )
+    .run(PROMPT_TIMEOUT)?;
+    let effect = match key {
+        InputKey::Spawn(id) => Effect::Agents {
+            authority,
+            actor,
+            mutation: Box::new(crate::coordination::Mutation::BriefNoticed {
+                id: id.clone(),
+                attempt: notice.attempt,
+            }),
+        },
+        InputKey::Letter(id) => Effect::InputNoticed {
+            id: id.clone(),
+            attempt: notice.attempt,
+        },
+    };
+    client.submit(effect, PROMPT_TIMEOUT).map(|_| ())?;
+    crate::diagnostic!(json!({"component":"delivery","kind":"input.noticed",
+        "intent":notice.intent,"pane_id":notice.target.actor.pane_id}));
+    Ok(())
+}
+
+/// Tells the store that spawn `id`'s brief is in its agent's session file.
+fn record_brief(owner: &Mutex<Runtime>, id: &str, by: &str) {
+    let result = owner
+        .lock()
+        .map_err(|_| "delivery_unavailable".to_owned())
+        .and_then(|guard| guard.hide_delivery(super::typed::INPUT_ROLE))
+        .and_then(|(client, authority, actor)| {
+            client.submit(
+                Effect::Agents {
+                    authority,
+                    actor,
+                    mutation: Box::new(crate::coordination::Mutation::BriefConfirmed {
+                        id: id.to_owned(),
+                    }),
+                },
+                PROMPT_TIMEOUT,
+            )
+        });
+    crate::diagnostic!(
+        json!({"component":"delivery","kind":"input.confirmed","spawn":id,
+        "by":by,"code":result.err()})
+    );
+}
+
+/// What a composer read for an unconfirmed brief did.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Resubmitted {
+    /// The composer still showed the brief: Enter submitted it.
+    Entered,
+    /// The composer was empty after someone answered the screen: the brief
+    /// was typed again.
+    Retyped,
+}
+
+/// Reads the composer of spawn `id`'s pane once Herdr reports the same agent
+/// ready for input: still showing the brief, it gets the Enter it lost; empty
+/// after someone answered the screen, the brief is typed again; anything else
+/// holds. Either spends one of the brief's typings, reserved in the ledger
+/// first; a refusal before the reservation sends nothing and says why. Text
+/// and Enter on a choice screen can pick an option, which a composer read
+/// showing exactly the brief rules out.
+fn resubmit_brief(
+    owner: &Mutex<Runtime>,
+    id: &str,
+    observed: &Observation,
+    resubmit: &crate::runtime::typed_input::Resubmit,
+) -> Result<Resubmitted, &'static str> {
+    let (engine, delivery) = owner
+        .lock()
+        .ok()
+        .and_then(|guard| {
+            Some((
+                guard.delivery_engine(&observed.actor.device_id)?,
+                guard.hide_delivery(super::typed::INPUT_ROLE).ok()?,
+            ))
+        })
+        .ok_or("pane_unavailable")?;
+    let agent = engine
+        .delivery_agent(Wait::Small(RPC_TIMEOUT), &observed.raw_pane_id)
+        .map_err(|_| "agent_unread")?;
+    if agent.name != observed.actor.name {
+        return Err("identity_changed");
+    }
+    if !agent.readiness.accepts_input() {
+        return Err("not_ready");
+    }
+    let shows = super::composer::shows(
+        engine.as_ref(),
+        &observed.raw_pane_id,
+        &observed.actor.kind,
+        &resubmit.brief,
+    )?;
+    if let Ok(mut guard) = owner.lock() {
+        guard.note_input_held(
+            id,
+            resubmit.attempts,
+            shows == super::composer::Shows::Typed,
+        );
+    }
+    let action = match shows {
+        super::composer::Shows::Typed => Resubmitted::Entered,
+        super::composer::Shows::Empty if resubmit.answered => Resubmitted::Retyped,
+        super::composer::Shows::Empty => return Err("unanswered"),
+        super::composer::Shows::Other => return Err(super::composer::NOT_EMPTY),
+    };
+    if !resubmit.left {
+        return Err("attempts_spent");
+    }
+    let (client, authority, actor) = delivery;
+    client
+        .submit(
+            Effect::Agents {
+                authority,
+                actor,
+                mutation: Box::new(crate::coordination::Mutation::BriefTyping {
+                    id: id.to_owned(),
+                }),
+            },
+            PROMPT_TIMEOUT,
+        )
+        .map_err(|code| match code.as_str() {
+            // The record arrived meanwhile: nothing is sent again.
+            "brief_confirmed" => "confirmed",
+            "brief_attempts_spent" => "attempts_spent",
+            _ => "reservation_failed",
+        })?;
+    match action {
+        Resubmitted::Entered => engine
+            .send_keys(Wait::Small(RPC_TIMEOUT), &observed.raw_pane_id, &["Enter"])
+            .map_err(|_| "prompt_failed")?,
+        Resubmitted::Retyped => crate::coordination::executor::type_brief(
+            engine.as_ref(),
+            id,
+            &observed.raw_pane_id,
+            &resubmit.brief,
+        )
+        .map_err(|_| "prompt_failed")?,
+    }
+    crate::diagnostic!(json!({"component":"delivery",
+        "kind": if action == Resubmitted::Entered { "input.entered" } else { "input.retyped" },
+        "spawn":id,"pane_id":observed.actor.pane_id}));
+    Ok(action)
 }
 
 /// The line the bell types for `letter`, naming its writer as the operator
@@ -1589,6 +1871,85 @@ mod tests {
                 .unwrap()
                 .attempts()
         }
+    }
+
+    /// A bell typed into an agent that rests without its prompt hook ever
+    /// recording it (a screen of its own took the line) is unconfirmed once
+    /// the record wait passed: its sender is told once, by Hide's own
+    /// `hide:input`, with the recipient's pane and how to read and answer it,
+    /// and the recipient's row shows it to the operator only after the
+    /// sender's grace (`docs/delivery.md`, Input an agent did not take).
+    #[test]
+    fn a_bell_the_agent_never_recorded_tells_its_sender_then_the_operator() {
+        use crate::delivery::typed::{PARENT_GRACE_MS, RECORD_WAIT_MS, REREAD_WAIT_MS};
+        let bell = Bell::start(json!({}));
+        // The daemon's store, which Hide's own notices go through.
+        bell.runtime
+            .lock()
+            .unwrap()
+            .install_delivery_client(bell.client.clone());
+        let mut doorbell = Doorbell::default();
+        let start = now();
+        bell.pass(&mut doorbell, start);
+        assert_eq!(bell.typed().len(), 1);
+        let notices = |bell: &Bell| -> Vec<Letter> {
+            let guard = bell.runtime.lock().unwrap();
+            let ledger = guard.delivery_state().unwrap();
+            ledger
+                .letters
+                .iter()
+                .filter(|letter| letter.sender.name == "hide:input")
+                .cloned()
+                .collect()
+        };
+        // Within the record wait nothing is owed yet.
+        bell.pass(&mut doorbell, start + RECORD_WAIT_MS / 2);
+        assert!(notices(&bell).is_empty());
+        // Past it, the recipient's session is read once more first.
+        bell.pass(&mut doorbell, start + RECORD_WAIT_MS + 1_000);
+        assert!(
+            notices(&bell).is_empty(),
+            "nothing is told before the fresh read"
+        );
+        let late = start + RECORD_WAIT_MS + 1_000 + REREAD_WAIT_MS;
+        bell.pass(&mut doorbell, late);
+        let sent = notices(&bell);
+        assert_eq!(sent.len(), 1, "the sender is told once");
+        let notice = &sent[0];
+        assert_eq!(notice.recipient.pane_id, "sender");
+        assert_eq!(
+            notice.intent,
+            format!("input-unconfirmed:{}:1", bell.letter)
+        );
+        assert_eq!(notice.kind, "progress");
+        assert!(
+            notice.immediate,
+            "it reaches a working sender at its next gap"
+        );
+        let first_line = notice.body.lines().next().unwrap();
+        assert!(
+            first_line.contains(&format!("your letter {}", bell.letter))
+                && first_line.contains("hide pane read recipient"),
+            "{first_line}"
+        );
+        assert!(notice.body.contains("operator's to answer"));
+        bell.pass(&mut doorbell, late + 1_000);
+        assert_eq!(notices(&bell).len(), 1, "a later pass tells nothing more");
+        assert_eq!(bell.typed().len(), 1, "nothing is typed again unasked");
+        // The recipient's row shows it once the sender's grace passed.
+        let asks = |at: u64| bell.runtime.lock().unwrap().input_asks(at);
+        assert!(asks(late + PARENT_GRACE_MS / 2).is_empty());
+        let shown = asks(late + PARENT_GRACE_MS);
+        assert_eq!(shown.len(), 1);
+        assert_eq!(shown[0].0, "recipient");
+        assert_eq!(
+            shown[0].2,
+            crate::model::AskSubject::InputUnconfirmed {
+                input: crate::delivery::typed::InputKind::Letter,
+                spent: false,
+                held: false,
+            }
+        );
     }
 
     /// PRD letters-to-busy-agents D-01, D-04, D-05, D-10: a working pane is

@@ -221,6 +221,9 @@ pub(crate) fn send(
         immediate: false,
         forced: false,
         tool_handovers: 0,
+        bell_typed_at_unix_ms: None,
+        input_noticed: 0,
+        input_noticed_at_unix_ms: 0,
         // A letter to a machine with a clock waits on that clock from now;
         // the store gives one to a machine a letter waits on.
         intake_from: ledger

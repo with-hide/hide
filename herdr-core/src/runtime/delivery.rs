@@ -1024,6 +1024,19 @@ impl Runtime {
             return Err("caller_context_changed".into());
         }
         let actor_pane = actor.pane_id.as_str();
+        // A prompt hook's digest is the agent's own record of the prompt it
+        // took, and confirms a brief a spawn typed into this pane. Judged
+        // before the native identity: Codex reports its session on the very
+        // turn the brief starts, and Herdr may not show it yet.
+        if let Command::Pull {
+            prompt_digest: Some(digest),
+            point: hide_node_link::panes::PullPoint::Prompt,
+            ..
+        } = &command
+            && hide_agent_hooks::delivery::valid_prompt_digest(digest)
+        {
+            self.confirm_brief_by_hook(actor_pane, digest);
+        }
         actor.require_native_identity()?;
         if !actor.code_owned() && crate::delivery::reserved_name(&actor.name) {
             // A pane named like a Factory would read as one (D-14); Hide's
@@ -1526,6 +1539,7 @@ impl Runtime {
                 || *actor == Actor::hide(super::missions::CONDUCTOR_ROLE, self.node.as_str())
                 || *actor
                     == Actor::hide(super::agent_sleep::letters::WAKE_ROLE, self.node.as_str())
+                || *actor == Actor::hide(crate::delivery::typed::INPUT_ROLE, self.node.as_str())
                 || *actor
                     == Actor::hide(super::unreadable_letters::DELIVERY_ROLE, self.node.as_str())
                 || (*actor == Actor::hide(crate::delivery::HIDE_DESK_ROLE, self.node.as_str())

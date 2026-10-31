@@ -300,3 +300,53 @@ fn a_screen_not_read_empty_names_the_step_that_stopped_it() {
     }
     assert_eq!(Miss::from_code("hello"), None);
 }
+
+/// A composer still showing what was typed into it, and only that, is told
+/// from one showing anything else (`docs/delivery.md`, Input an agent did not
+/// take): typed input that was never submitted gets its Enter.
+#[test]
+fn a_composer_holds_typed_text_only_when_it_shows_that_text_and_nothing_else() {
+    for (agent, name) in [
+        (AgentId::ClaudeCode, "claude"),
+        (AgentId::Codex, "codex"),
+        (AgentId::Grok, "grok"),
+        (AgentId::OpenCode, "opencode"),
+        (AgentId::Pi, "pi"),
+        (AgentId::Omp, "omp"),
+        (AgentId::Antigravity, "agy"),
+    ] {
+        let composer = agent.adapter().composer.supported().expect(name);
+        let typed = screen(&format!("{name}-1-typed"));
+        assert!(composer.holds(&typed, "hello 안녕하세요"), "{name}");
+        // omp's composer is one marked line, which shows only a text's
+        // first line; the others show the text however it wraps.
+        if agent != AgentId::Omp {
+            assert!(
+                composer.holds(&typed, "hello\n안녕하세요\n"),
+                "{name}: wrapped the same"
+            );
+        }
+        assert!(!composer.holds(&typed, "hello"), "{name}: more than that");
+        assert!(
+            !composer.holds(&typed, "hello 안녕하세요 again"),
+            "{name}: less than that"
+        );
+        assert!(
+            !composer.holds(&screen(&format!("{name}-0-empty")), "hello 안녕하세요"),
+            "{name}: empty"
+        );
+    }
+}
+
+/// omp 18.7.0 left a three-line brief in its composer, its Enter lost while
+/// its session start ran (captured 2026-10-31 under Herdr 0.9.5): the one
+/// line omp's composer is read from is the brief's first line.
+#[test]
+fn omp_holds_a_brief_left_unsubmitted_by_its_first_line() {
+    let composer = AgentId::Omp.adapter().composer.supported().unwrap();
+    let held = screen("omp-18.7.0-brief-held");
+    let brief =
+        "Line one of the brief.\nReply with exactly the token on the next line.\nJOURNEY-31FD51C1";
+    assert!(composer.holds(&held, brief));
+    assert!(!composer.holds(&held, "Another brief.\nJOURNEY-31FD51C1"));
+}

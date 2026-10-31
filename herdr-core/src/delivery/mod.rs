@@ -5,6 +5,7 @@ pub(crate) mod doorbell;
 mod human;
 pub mod ledger;
 pub mod mailbox;
+pub mod typed;
 pub mod watch;
 pub mod worker;
 
