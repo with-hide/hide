@@ -376,12 +376,12 @@ impl Runtime {
             // A device's panes in the local payload carry no hook facts of
             // their own; the device's coordinator lays them.
             let key = if local {
-                if super::is_remote_scoped_pane_id(&pane) {
+                if crate::address::is_device_pane(&pane) {
                     continue;
                 }
                 pane
             } else {
-                crate::session_sync::remote_pane_id(device, &pane)
+                crate::address::scoped_pane_id(device, &pane)
             };
             let Some(observation) = self.delivery_observations.get_mut(&key) else {
                 continue;
