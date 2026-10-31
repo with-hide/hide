@@ -825,6 +825,7 @@ impl Runtime {
                 line,
                 pass,
                 evidence,
+                summary,
                 commit,
                 rerun,
             } => self.record_criterion(
@@ -832,7 +833,7 @@ impl Runtime {
                 mission.as_deref(),
                 &node,
                 &line,
-                (pass, evidence, commit, rerun),
+                (pass, evidence, summary, commit, rerun),
                 now,
             ),
             MissionCommand::Skip {
@@ -1129,7 +1130,8 @@ impl Runtime {
     /// handed over and its waiting wakes sent (PRD mission-tool D-11, B14).
     /// The conversation comes back through 이어받기, Reopen closed, a wake
     /// or the operator's own resume alike, so the move follows the session
-    /// rather than the button that resumed it.
+    /// rather than the button that resumed it. A resumed conversation gets
+    /// no prompt of its own, so a `resumed` wake tells it to go on.
     pub(super) fn follow_resumed_conductors(&mut self, device: &str) {
         let moves: Vec<(String, String, Actor)> = self
             .missions
@@ -1185,6 +1187,9 @@ impl Runtime {
                     "mission": id, "pane": pane, "code": code,
                 }));
                 continue;
+            }
+            if let Some(mission) = self.missions.book.get_mut(&id) {
+                record_wake(mission, String::new(), None, WakeEvent::Resumed, None);
             }
             crate::diagnostic!(json!({
                 "component": "missions", "kind": "mission.conductor_resumed",
@@ -1522,19 +1527,29 @@ impl Runtime {
                     Some(External::Branch(branch)) => format!("Branch {branch}"),
                     _ => pr.clone(),
                 };
-                let (what, act) = match wake.event {
-                    WakeEvent::Merged => (format!("{pr} was merged"), PR_ACT),
+                let news = |what: String, act: &str| {
+                    format!(
+                        "{what} (mission {} \"{}\", node {}).\nRead the mission with `hide mission show {}` and act on it: {act}.",
+                        mission.id, mission.title, wake.node, mission.id
+                    )
+                };
+                let body = match wake.event {
+                    WakeEvent::Merged => news(format!("{pr} was merged"), PR_ACT),
                     WakeEvent::ChangesRequested => {
-                        (format!("{pr} received a review asking for changes"), PR_ACT)
+                        news(format!("{pr} received a review asking for changes"), PR_ACT)
                     }
-                    WakeEvent::NewHead => (format!("{pr} has a new commit"), PR_ACT),
-                    WakeEvent::OutsideDone => (
+                    WakeEvent::NewHead => news(format!("{pr} has a new commit"), PR_ACT),
+                    WakeEvent::OutsideDone => news(
                         format!("{} is in main", outside()),
                         "start the nodes that waited on it",
                     ),
-                    WakeEvent::OutsideFailed => (
+                    WakeEvent::OutsideFailed => news(
                         format!("{} was closed without a merge", outside()),
                         "replan the nodes it blocks, or ask the operator",
+                    ),
+                    WakeEvent::Resumed => format!(
+                        "You conduct mission {} \"{}\" again: your pane had closed, and the operator brought your conversation back.\nRead `hide mission show {}` and `hide inbox`, check each worker's state, and go on from there.",
+                        mission.id, mission.title, mission.id
                     ),
                 };
                 out.push(Wake {
@@ -1542,10 +1557,7 @@ impl Runtime {
                     seq: wake.seq,
                     target: target.clone(),
                     intent,
-                    body: format!(
-                        "{what} (mission {} \"{}\", node {}).\nRead the mission with `hide mission show {}` and act on it: {act}.",
-                        mission.id, mission.title, wake.node, mission.id
-                    ),
+                    body,
                 });
             }
         }

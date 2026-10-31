@@ -121,6 +121,10 @@ pub struct Checker {
     pub state: CriterionState,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub evidence: Option<String>,
+    /// The checker's answer in one short line of the operator's words,
+    /// which the map shows before the evidence.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub summary: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub at_unix_ms: Option<u64>,
     /// The bound checker's pane and its machine, as the ledger names them
@@ -158,6 +162,10 @@ pub struct Criterion {
     pub by: Option<Recorded>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub evidence: Option<String>,
+    /// The result in one short line of the operator's words, which the map
+    /// shows before the evidence.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub summary: Option<String>,
     /// The commit the check command ran on, or the head the CI was read on.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub commit: Option<String>,
@@ -210,6 +218,7 @@ impl Criterion {
             state: CriterionState::Open,
             by: None,
             evidence: None,
+            summary: None,
             commit: None,
             reruns: 0,
             rerunning: false,
@@ -285,6 +294,7 @@ impl Criterion {
         &mut self,
         pass: bool,
         evidence: Option<String>,
+        summary: Option<String>,
         commit: Option<String>,
         rerun: bool,
         by: Recorded,
@@ -330,6 +340,7 @@ impl Criterion {
                 self.state = state;
                 self.skip = None;
                 self.evidence = evidence;
+                self.summary = summary;
                 self.by = Some(by);
                 Ok(Effect {
                     changed: true,
@@ -337,12 +348,17 @@ impl Criterion {
                 })
             }
             CriterionKind::Own | CriterionKind::Defect => {
-                if self.state == state && self.evidence == evidence && commit == self.commit {
+                if self.state == state
+                    && self.evidence == evidence
+                    && self.summary == summary
+                    && commit == self.commit
+                {
                     return Ok(Effect::default());
                 }
                 self.state = state;
                 self.skip = None;
                 self.evidence = evidence;
+                self.summary = summary;
                 self.commit = commit;
                 self.by = Some(by);
                 Ok(Effect {
@@ -363,6 +379,7 @@ impl Criterion {
         slot: usize,
         pass: bool,
         evidence: Option<String>,
+        summary: Option<String>,
         now: u64,
     ) -> Result<bool, String> {
         let checker = self
@@ -374,11 +391,12 @@ impl Criterion {
         } else {
             CriterionState::Fail
         };
-        if checker.state == state && checker.evidence == evidence {
+        if checker.state == state && checker.evidence == evidence && checker.summary == summary {
             return Ok(false);
         }
         checker.state = state;
         checker.evidence = evidence;
+        checker.summary = summary;
         checker.at_unix_ms = Some(now);
         self.settle();
         Ok(true)
@@ -529,6 +547,7 @@ pub(crate) fn plan_lines(
                         agent_id: None,
                         state: CriterionState::Open,
                         evidence: None,
+                        summary: None,
                         at_unix_ms: None,
                         pane_id: None,
                         machine: None,
@@ -617,10 +636,10 @@ mod tests {
     fn a_check_passed_on_an_older_commit_is_open_again() {
         let mut line = Criterion::new("check", CriterionKind::Check);
         assert_eq!(
-            line.record(true, None, None, false, by(Role::Worker)),
+            line.record(true, None, None, None, false, by(Role::Worker)),
             Err("mission_commit_required".into())
         );
-        line.record(true, None, Some(A[..7].into()), false, by(Role::Worker))
+        line.record(true, None, None, Some(A[..7].into()), false, by(Role::Worker))
             .unwrap();
         assert!(line.met(Some(A)));
         assert_eq!(line.shown(Some(B)), CriterionState::Open);
@@ -633,7 +652,7 @@ mod tests {
     fn a_failed_check_gets_one_rerun_per_commit_and_a_repeat_changes_nothing() {
         let mut line = Criterion::new("check", CriterionKind::Check);
         let fail = |line: &mut Criterion, commit: &str, rerun: bool| {
-            line.record(false, None, Some(commit.into()), rerun, by(Role::Worker))
+            line.record(false, None, None, Some(commit.into()), rerun, by(Role::Worker))
         };
         assert!(fail(&mut line, A, false).unwrap().changed);
         // The same failure sent again is the same record.
@@ -648,13 +667,13 @@ mod tests {
         );
         assert_eq!(fail(&mut line, A, true).unwrap(), Effect::default());
         assert_eq!(
-            line.record(true, None, Some(A.into()), true, by(Role::Worker)),
+            line.record(true, None, None, Some(A.into()), true, by(Role::Worker)),
             Err("mission_rerun_spent".into())
         );
         // A new commit gets its own rerun.
         fail(&mut line, B, false).unwrap();
         let passed = line
-            .record(true, None, Some(B.into()), true, by(Role::Worker))
+            .record(true, None, None, Some(B.into()), true, by(Role::Worker))
             .unwrap();
         assert!(passed.changed && !passed.spent);
         assert_eq!((line.state, line.reruns), (CriterionState::Pass, 1));
@@ -678,14 +697,14 @@ mod tests {
         assert_eq!(keys, ["c1", "check", "review"]);
         let mut review = lines[2].clone();
         assert_eq!(
-            review.record(true, None, None, false, by(Role::Worker)),
+            review.record(true, None, None, None, false, by(Role::Worker)),
             Err("mission_criterion_not_yours".into())
         );
-        review.record_checker(0, true, None, 2).unwrap();
+        review.record_checker(0, true, None, None, 2).unwrap();
         assert_eq!(review.state, CriterionState::Open);
-        review.record_checker(1, false, None, 2).unwrap();
+        review.record_checker(1, false, None, None, 2).unwrap();
         assert_eq!(review.state, CriterionState::Open);
-        review.record_checker(2, true, None, 2).unwrap();
+        review.record_checker(2, true, None, None, 2).unwrap();
         assert_eq!(review.state, CriterionState::Pass);
         let mut all = review.clone();
         all.rule = Some(Rule::All);
@@ -744,7 +763,7 @@ mod tests {
     fn a_changed_check_command_opens_its_line_again() {
         let mut lines = plan_lines(&[], &["works".into()], &[], true, true);
         lines[1]
-            .record(true, None, Some(A.into()), false, by(Role::Worker))
+            .record(true, None, None, Some(A.into()), false, by(Role::Worker))
             .unwrap();
         assert!(plan_lines(&lines, &["works".into()], &[], true, true)[1].met(Some(A)));
         let changed = plan_lines(&lines, &["works".into()], &[], true, false);

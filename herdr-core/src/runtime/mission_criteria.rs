@@ -328,15 +328,16 @@ impl Runtime {
         named: Option<&str>,
         node: &str,
         key: &str,
-        result: (bool, String, Option<String>, bool),
+        result: (bool, String, Option<String>, Option<String>, bool),
         now: u64,
     ) -> Result<(Value, bool), String> {
-        let (pass, evidence, commit, rerun) = result;
+        let (pass, evidence, summary, commit, rerun) = result;
         let evidence = evidence.trim().to_owned();
         if evidence.is_empty() {
             return Err("mission_evidence_missing".into());
         }
         let evidence = Some(evidence);
+        let summary = crate::missions::summary_line(summary)?;
         let id = self.line_mission(actor, named, node)?;
         let mission = self.missions.book.get(&id).ok_or("mission_unknown")?;
         let index = mission
@@ -376,7 +377,7 @@ impl Runtime {
                     .ok_or("mission_criterion_not_yours")?;
                 let agent_id = line.checkers[slot].agent_id.clone();
                 let target = &mut next.criteria[at];
-                let changed = target.record_checker(slot, pass, evidence, now)?;
+                let changed = target.record_checker(slot, pass, evidence, summary, now)?;
                 if changed {
                     target.by = Some(by(Role::Checker, agent_id));
                 }
@@ -405,11 +406,11 @@ impl Runtime {
                     let moved = next.folder.as_deref() != Some(folder.as_str());
                     next.folder = Some(folder);
                     let mut effect =
-                        next.criteria[at].record(pass, evidence, commit, rerun, recorder)?;
+                        next.criteria[at].record(pass, evidence, summary, commit, rerun, recorder)?;
                     effect.changed |= moved;
                     effect
                 } else {
-                    next.criteria[at].record(pass, evidence, commit, rerun, recorder)?
+                    next.criteria[at].record(pass, evidence, summary, commit, rerun, recorder)?
                 }
             }
         };
