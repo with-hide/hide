@@ -20,7 +20,7 @@ pub const DIRTY_FILES_MAX: usize = 20;
 /// The longest merge commit message a request may carry.
 pub const MESSAGE_MAX_BYTES: usize = 16 * 1024;
 
-/// One file the branch changes against the merge base.
+/// One file the branch changes against where its own work starts.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct BranchFile {
     /// Repository-relative, `/` between names on every system.
@@ -39,14 +39,16 @@ pub struct BranchFacts {
     /// The full object name `refs/heads/<branch>` points at; `None` when the
     /// branch is gone.
     pub tip: Option<String>,
-    /// Commits on the branch that the base does not have; 0 when the branch
-    /// or the base is gone.
+    /// Commits on the branch that neither the base nor the base's upstream
+    /// has; 0 when the branch or the base is gone.
     pub ahead: u32,
     /// The branch's tip, or the request's `tip` when the branch is gone, is
     /// an ancestor of the base. `None` when the base is gone or the tip is
     /// not an object of this repository.
     pub merged: Option<bool>,
-    /// The committed diff from the merge base to the tip, at most
+    /// The committed diff from where the branch's own work starts (its merge
+    /// base with the base, or with the base's upstream when that is newer)
+    /// to the tip, at most
     /// [`FILES_MAX`] files in path order; empty when the branch is gone.
     pub files: Vec<BranchFile>,
     /// How many files that diff changes, listed or not.

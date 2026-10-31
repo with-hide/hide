@@ -167,6 +167,40 @@ fn invalid(reason: String) -> HostError {
     HostError::new(ErrorCode::InvalidRequest, reason)
 }
 
+/// The commit the base's upstream points at, as this repository last
+/// fetched it; `None` when the base follows no remote branch or its
+/// remote-tracking ref is not there.
+fn upstream_tip(root: &Path, base: &str) -> HostResult<Option<String>> {
+    match upstream_of(root, base)? {
+        Some(upstream) => resolve_ref(root, &upstream.tracking),
+        None => Ok(None),
+    }
+}
+
+/// Where the branch's own work starts: its merge base with the base, or
+/// with the base's upstream when that one is newer. Hide starts a worktree
+/// from the upstream (`origin/<base>`), so while the local base lags behind
+/// it the upstream's commits are not the branch's, and are neither counted
+/// nor shown as its changes.
+fn fork_point(
+    root: &Path,
+    base_tip: &str,
+    upstream: Option<&str>,
+    tip: &str,
+) -> HostResult<Option<String>> {
+    let local = merge_base(root, base_tip, tip)?;
+    let Some(upstream) = upstream else {
+        return Ok(local);
+    };
+    let Some(remote) = merge_base(root, upstream, tip)? else {
+        return Ok(local);
+    };
+    Ok(match local {
+        Some(local) if is_ancestor(root, &local, &remote)? != Some(true) => Some(local),
+        _ => Some(remote),
+    })
+}
+
 /// `branch` measured against `base`. `tip` is what the branch last pointed
 /// at, measured in its place when the branch is gone (the caller's memory of
 /// a branch the operator has since deleted); when the branch is there its own
@@ -193,12 +227,17 @@ pub fn facts(root: &Path, branch: &str, tip: Option<&str>, base: &str) -> HostRe
     let (Some(branch_tip), Some(base_tip)) = (branch_tip, base_tip) else {
         return Ok(facts);
     };
-    let range = format!("{base_tip}..{branch_tip}");
-    let counted = read_text(root, &["rev-list", "--count", &range, "--"])?;
+    let upstream = upstream_tip(root, base)?;
+    let mut count = vec!["rev-list", "--count", &branch_tip, "--not", &base_tip];
+    if let Some(upstream) = upstream.as_deref() {
+        count.push(upstream);
+    }
+    count.push("--");
+    let counted = read_text(root, &count)?;
     facts.ahead = counted
         .parse()
         .map_err(|_| failed(format!("git rev-list counted {counted:?}")))?;
-    let Some(fork) = merge_base(root, &base_tip, &branch_tip)? else {
+    let Some(fork) = fork_point(root, &base_tip, upstream.as_deref(), &branch_tip)? else {
         return Ok(facts);
     };
     let numstat = read(
@@ -243,10 +282,11 @@ pub fn facts(root: &Path, branch: &str, tip: Option<&str>, base: &str) -> HostRe
     Ok(facts)
 }
 
-/// The committed diff of `path` from the merge base of `base` and `branch`
-/// to the branch's tip, bounded like a Changes diff (`git::bounded`). A path
-/// the branch did not change answers empty text with the notice saying so; a
-/// branch or base that is gone is an error.
+/// The committed diff of `path` from where the branch's own work starts
+/// against `base` ([`fork_point`]) to the branch's tip, bounded like a
+/// Changes diff (`git::bounded`). A path the branch did not change answers
+/// empty text with the notice saying so; a branch or base that is gone is an
+/// error.
 pub fn diff(root: &Path, branch: &str, base: &str, path: &str) -> HostResult<Diff> {
     check_diff(branch, base, path).map_err(invalid)?;
     let gone = |name: &str| {
@@ -257,7 +297,8 @@ pub fn diff(root: &Path, branch: &str, base: &str, path: &str) -> HostResult<Dif
     };
     let tip = resolve(root, branch)?.ok_or_else(|| gone(branch))?;
     let base_tip = resolve(root, base)?.ok_or_else(|| gone(base))?;
-    let fork = merge_base(root, &base_tip, &tip)?
+    let upstream = upstream_tip(root, base)?;
+    let fork = fork_point(root, &base_tip, upstream.as_deref(), &tip)?
         .ok_or_else(|| failed(format!("{branch} and {base} share no history")))?;
     let mut command = crate::git_run::at(root);
     // A path is a path, never a pathspec pattern.

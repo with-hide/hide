@@ -894,6 +894,48 @@ fn with_remote() -> (Fixture, PathBuf) {
     (fixture, remote)
 }
 
+#[test]
+fn a_branch_started_from_the_upstream_holds_only_its_own_work_while_the_base_lags() {
+    let (fixture, _remote) = with_remote();
+    // Other work reaches origin/main and is fetched; the local main lags.
+    commit(&fixture.feat, "upstream.txt", "theirs\n");
+    git(&fixture.feat, &["push", "-q", "origin", "feat:main"]);
+    git(&fixture.main, &["fetch", "-q", "origin"]);
+    let promo = fixture._folder.path().join("promo");
+    git(
+        &fixture.main,
+        &[
+            "worktree",
+            "add",
+            "-q",
+            "-b",
+            "promo",
+            promo.to_str().unwrap(),
+            "origin/main",
+        ],
+    );
+    // Started from the upstream with nothing of its own: it holds nothing.
+    let empty = facts(&fixture.main, "promo", None, "main").unwrap();
+    assert_eq!(empty.ahead, 0);
+    assert_eq!(empty.files_total, 0);
+    assert!(empty.files.is_empty());
+
+    commit(&promo, "docs/card.md", "placed\n");
+    let found = facts(&fixture.main, "promo", None, "main").unwrap();
+    assert_eq!(found.ahead, 1);
+    let paths: Vec<_> = found.files.iter().map(|file| file.path.as_str()).collect();
+    assert_eq!(paths, ["docs/card.md"]);
+    assert_eq!((found.added, found.removed), (1, 0));
+    assert!(
+        diff(&fixture.main, "promo", "main", "docs/card.md")
+            .unwrap()
+            .text
+            .contains("+placed")
+    );
+    let theirs = diff(&fixture.main, "promo", "main", "upstream.txt").unwrap();
+    assert_eq!(theirs.kind, Some(DiffNotice::NoBranchChanges));
+}
+
 /// A `pre-receive` hook in `remote` that turns every push away, as a
 /// protected branch does.
 fn refuse_pushes(remote: &Path) {
