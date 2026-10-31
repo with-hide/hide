@@ -56,9 +56,7 @@ pub fn web_contract() -> impl Iterator<Item = WebAdapter> {
             .start
             .is_some_and(|start| !start.options().model.is_empty()),
         program: row.executables[0],
-        full_access: row
-            .start
-            .map(|start| start.options().full_access.options()),
+        full_access: row.start.map(|start| start.options().full_access.options()),
         hook_kind: match row.hook {
             super::HookInstall::Runtime(_) | super::HookInstall::Guidance(_) => {
                 Some(HookKind::Hook)
