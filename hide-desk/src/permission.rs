@@ -503,149 +503,314 @@ const SAFE_TARGETS: &[&str] = &["/dev/null", "/dev/stdout", "/dev/stderr"];
 
 /// Words that open or close a shell body before a command's program.
 const KEYWORDS: &[&str] = &[
-    "if", "then", "else", "elif", "do", "while", "until", "!", "time", "{", "}", "fi", "done",
-    "esac",
+    "if", "then", "else", "elif", "do", "while", "until", "!", "{", "}", "fi", "done", "esac",
 ];
 
 /// Words that start a line naming no program to run.
-const CONTROL: &[&str] = &["for", "select", "case", "function"];
+const CONTROL: &[&str] = &["for", "select", "case"];
 
-/// Programs that only read, each with the flags that would make it write
-/// a file or run another program, and how many words it may name besides
-/// its flags when more would name a file it writes.
-struct ReadOnly {
+/// Words before a command that run it in a way Hide does not follow: in
+/// the background with its own pipes, timed by the shell, in place of the
+/// shell, or as a function's body.
+const OPAQUE: &[&str] = &["coproc", "time", "exec", "function"];
+
+/// What a program Hide knows does besides reading.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum Effect {
+    /// It only reads, unless one of its `writes` flags is given.
+    Reads,
+    /// It changes files or the shell's own state and makes no link.
+    Changes,
+    /// It may make or move a link.
+    Links,
+}
+
+/// A program Hide knows (D-89): what it does, the flags that make it write
+/// a file, the flags that make it run another program, and how many words
+/// it may name besides its flags when more would name a file it writes.
+/// Any other program is one Hide cannot read.
+struct Known {
     name: &'static str,
-    refused: &'static [&'static str],
+    effect: Effect,
+    writes: &'static [&'static str],
+    runs: &'static [&'static str],
     names: Option<usize>,
 }
 
-const fn read_only(name: &'static str) -> ReadOnly {
-    ReadOnly {
+const fn known(name: &'static str, effect: Effect) -> Known {
+    Known {
         name,
-        refused: &[],
+        effect,
+        writes: &[],
+        runs: &[],
         names: None,
     }
 }
 
-const READ_ONLY: &[ReadOnly] = &[
-    read_only("cat"),
-    read_only("head"),
-    read_only("tail"),
-    read_only("less"),
-    read_only("more"),
-    read_only("ls"),
-    read_only("pwd"),
-    read_only("echo"),
-    read_only("printf"),
-    read_only("true"),
-    read_only("false"),
-    read_only("test"),
-    read_only("["),
-    read_only("[["),
-    read_only("wc"),
-    read_only("cut"),
-    read_only("tr"),
-    read_only("nl"),
-    read_only("jq"),
-    read_only("grep"),
-    read_only("egrep"),
-    read_only("fgrep"),
-    read_only("ag"),
-    read_only("stat"),
-    read_only("file"),
-    read_only("du"),
-    read_only("df"),
-    read_only("which"),
-    read_only("type"),
-    read_only("whoami"),
-    read_only("id"),
-    read_only("basename"),
-    read_only("dirname"),
-    read_only("realpath"),
-    read_only("readlink"),
-    read_only("column"),
-    read_only("diff"),
-    read_only("cmp"),
-    read_only("comm"),
-    read_only("paste"),
-    read_only("fold"),
-    read_only("sha256sum"),
-    read_only("sha1sum"),
-    read_only("shasum"),
-    read_only("md5"),
-    read_only("md5sum"),
-    read_only("cksum"),
-    read_only("od"),
-    read_only("hexdump"),
-    read_only("strings"),
-    read_only("sleep"),
-    read_only("seq"),
-    read_only("tac"),
-    read_only("rev"),
-    read_only("printenv"),
-    read_only("uname"),
-    read_only("ps"),
-    ReadOnly {
-        name: "sort",
-        refused: &["-o", "--output"],
-        names: None,
+const fn reads(name: &'static str) -> Known {
+    known(name, Effect::Reads)
+}
+
+const KNOWN: &[Known] = &[
+    reads("cat"),
+    reads("head"),
+    reads("tail"),
+    reads("ls"),
+    reads("pwd"),
+    reads("echo"),
+    reads("printf"),
+    reads("true"),
+    reads("false"),
+    reads("test"),
+    reads("["),
+    reads("[["),
+    reads("wc"),
+    reads("cut"),
+    reads("tr"),
+    reads("nl"),
+    reads("jq"),
+    reads("grep"),
+    reads("egrep"),
+    reads("fgrep"),
+    reads("stat"),
+    reads("file"),
+    reads("du"),
+    reads("df"),
+    reads("which"),
+    reads("type"),
+    reads("whoami"),
+    reads("id"),
+    reads("basename"),
+    reads("dirname"),
+    reads("realpath"),
+    reads("readlink"),
+    reads("column"),
+    reads("diff"),
+    reads("cmp"),
+    reads("comm"),
+    reads("paste"),
+    reads("fold"),
+    reads("sha256sum"),
+    reads("sha1sum"),
+    reads("shasum"),
+    reads("md5"),
+    reads("md5sum"),
+    reads("cksum"),
+    reads("od"),
+    reads("hexdump"),
+    reads("strings"),
+    reads("sleep"),
+    reads("seq"),
+    reads("tac"),
+    reads("rev"),
+    reads("printenv"),
+    reads("uname"),
+    reads("ps"),
+    // The shell's own words that reach nothing outside it.
+    reads(":"),
+    reads("set"),
+    reads("shopt"),
+    reads("exit"),
+    reads("return"),
+    reads("break"),
+    reads("continue"),
+    reads("shift"),
+    reads("wait"),
+    reads("jobs"),
+    Known {
+        writes: &["-o", "--output"],
+        runs: &["--compress-program"],
+        ..reads("sort")
     },
-    ReadOnly {
-        name: "uniq",
-        refused: &[],
+    Known {
         names: Some(1),
+        ..reads("uniq")
     },
-    ReadOnly {
-        name: "rg",
-        refused: &["--pre"],
-        names: None,
+    Known {
+        runs: &["--pre"],
+        ..reads("rg")
     },
-    ReadOnly {
-        name: "fd",
-        refused: &["-x", "-X", "--exec", "--exec-batch"],
-        names: None,
+    Known {
+        runs: &["--pager"],
+        ..reads("ag")
     },
-    ReadOnly {
-        name: "base64",
-        refused: &["-o", "--output"],
-        names: None,
+    Known {
+        runs: &["-x", "-X", "--exec", "--exec-batch"],
+        ..reads("fd")
     },
-    ReadOnly {
-        name: "tree",
-        refused: &["-o"],
-        names: None,
+    Known {
+        writes: &["-o", "--output"],
+        ..reads("base64")
     },
-    ReadOnly {
-        name: "date",
-        refused: &["-s", "--set"],
-        names: None,
+    Known {
+        writes: &["-o"],
+        ..reads("tree")
     },
-    ReadOnly {
-        name: "hostname",
-        refused: &[],
+    Known {
+        writes: &["-s", "--set"],
+        ..reads("date")
+    },
+    Known {
         names: Some(0),
+        ..reads("hostname")
+    },
+    known("mkdir", Effect::Changes),
+    known("touch", Effect::Changes),
+    known("chmod", Effect::Changes),
+    known("tee", Effect::Changes),
+    known("kill", Effect::Changes),
+    known("export", Effect::Changes),
+    known("declare", Effect::Changes),
+    known("typeset", Effect::Changes),
+    known("readonly", Effect::Changes),
+    known("local", Effect::Changes),
+    known("read", Effect::Changes),
+    known("getopts", Effect::Changes),
+    known("let", Effect::Changes),
+    known("unset", Effect::Changes),
+    known("unalias", Effect::Changes),
+    known("umask", Effect::Changes),
+    known("ulimit", Effect::Changes),
+    Known {
+        runs: &["-C"],
+        ..known("mapfile", Effect::Changes)
+    },
+    Known {
+        runs: &["-C"],
+        ..known("readarray", Effect::Changes)
+    },
+    known("cp", Effect::Links),
+    known("mv", Effect::Links),
+    known("ln", Effect::Links),
+];
+
+/// What `git` runs before its subcommand: the options that take a value,
+/// and the ones that change nothing it runs. `-c`, `--config-env` and
+/// `--exec-path` may name any program; any other option is not read.
+const GIT_VALUED: &[&str] = &["-C", "--git-dir", "--work-tree", "--namespace"];
+const GIT_FLAGS: &[&str] = &[
+    "--no-pager",
+    "-P",
+    "-p",
+    "--paginate",
+    "--bare",
+    "--no-replace-objects",
+    "--literal-pathspecs",
+    "--glob-pathspecs",
+    "--noglob-pathspecs",
+    "--icase-pathspecs",
+    "--no-optional-locks",
+    "--no-advice",
+    "--version",
+];
+
+/// A `git` subcommand Hide knows, with the flags that make it write a file
+/// and the ones that make it run another program (a pager, an external
+/// diff or filter, a remote program, a command per commit).
+struct GitSub {
+    name: &'static str,
+    effect: Effect,
+    writes: &'static [&'static str],
+    runs: &'static [&'static str],
+}
+
+const fn git_sub(name: &'static str, effect: Effect) -> GitSub {
+    GitSub {
+        name,
+        effect,
+        writes: &[],
+        runs: &[],
+    }
+}
+
+/// What a diff of git's own runs: the external diff and the filters its
+/// settings name.
+const GIT_DIFF_RUNS: &[&str] = &["--ext-diff", "--textconv"];
+const GIT_REMOTE_RUNS: &[&str] = &["--upload-pack", "-u"];
+/// The merge strategies git carries; another names a program it finds.
+const GIT_STRATEGIES: &[&str] = &["ort", "recursive", "resolve", "octopus", "ours", "subtree"];
+
+const GIT_SUBS: &[GitSub] = &[
+    git_sub("status", Effect::Reads),
+    GitSub {
+        writes: &["--output"],
+        runs: GIT_DIFF_RUNS,
+        ..git_sub("log", Effect::Reads)
+    },
+    GitSub {
+        writes: &["--output"],
+        runs: GIT_DIFF_RUNS,
+        ..git_sub("diff", Effect::Reads)
+    },
+    GitSub {
+        writes: &["--output"],
+        runs: GIT_DIFF_RUNS,
+        ..git_sub("show", Effect::Reads)
+    },
+    GitSub {
+        runs: &["--textconv"],
+        ..git_sub("blame", Effect::Reads)
+    },
+    GitSub {
+        runs: &["--textconv", "--filters"],
+        ..git_sub("cat-file", Effect::Reads)
+    },
+    GitSub {
+        runs: &["-O", "--open-files-in-pager"],
+        ..git_sub("grep", Effect::Reads)
+    },
+    GitSub {
+        runs: &["--upload-pack"],
+        ..git_sub("ls-remote", Effect::Reads)
+    },
+    git_sub("rev-parse", Effect::Reads),
+    git_sub("rev-list", Effect::Reads),
+    git_sub("ls-files", Effect::Reads),
+    git_sub("ls-tree", Effect::Reads),
+    git_sub("describe", Effect::Reads),
+    git_sub("shortlog", Effect::Reads),
+    git_sub("merge-base", Effect::Reads),
+    git_sub("show-ref", Effect::Reads),
+    git_sub("for-each-ref", Effect::Reads),
+    git_sub("name-rev", Effect::Reads),
+    git_sub("check-ignore", Effect::Reads),
+    git_sub("count-objects", Effect::Reads),
+    git_sub("version", Effect::Reads),
+    git_sub("add", Effect::Changes),
+    git_sub("commit", Effect::Changes),
+    git_sub("tag", Effect::Changes),
+    git_sub("mv", Effect::Changes),
+    GitSub {
+        runs: GIT_REMOTE_RUNS,
+        ..git_sub("fetch", Effect::Changes)
+    },
+    GitSub {
+        runs: &["--template"],
+        ..git_sub("init", Effect::Changes)
+    },
+    git_sub("checkout", Effect::Links),
+    git_sub("switch", Effect::Links),
+    git_sub("restore", Effect::Links),
+    git_sub("reset", Effect::Links),
+    git_sub("merge", Effect::Links),
+    git_sub("cherry-pick", Effect::Links),
+    git_sub("revert", Effect::Links),
+    git_sub("am", Effect::Links),
+    git_sub("apply", Effect::Links),
+    GitSub {
+        runs: GIT_REMOTE_RUNS,
+        ..git_sub("pull", Effect::Links)
+    },
+    GitSub {
+        runs: &["-x", "--exec", "-i", "--interactive"],
+        ..git_sub("rebase", Effect::Links)
+    },
+    GitSub {
+        runs: &["--upload-pack", "-u", "--template", "-c", "--config"],
+        ..git_sub("clone", Effect::Links)
     },
 ];
 
-/// `git` subcommands that only read, and the flag that would make them
-/// write a file.
-const GIT_READS: &[&str] = &[
-    "status",
-    "log",
-    "diff",
-    "show",
-    "rev-parse",
-    "ls-files",
-    "blame",
-    "describe",
-    "shortlog",
-    "cat-file",
-    "ls-tree",
-    "merge-base",
-    "grep",
-    "reflog",
-];
-const GIT_WRITES_OUTPUT: &str = "--output";
 /// `git branch` flags that only list.
 const GIT_BRANCH_LISTS: &[&str] = &[
     "-a",
@@ -689,114 +854,102 @@ const HERDR_CLOSES: &[&[&str]] = &[
     &["server", "stop"],
 ];
 
-/// Programs that run the command after their own options, the options of
-/// theirs that take a value, and whether they themselves are more than a
-/// read.
+/// Programs that run the command after their own options, which Hide reads
+/// as a command of its own: their flags, the options that take a value,
+/// and those that take the string `xargs` puts each input in.
 struct Wrapper {
     name: &'static str,
+    flags: &'static [&'static str],
     valued: &'static [&'static str],
-    acts: bool,
+    replace: &'static [&'static str],
 }
 
 const WRAPPERS: &[Wrapper] = &[
     Wrapper {
-        name: "sudo",
-        valued: &["-u", "-g", "-h", "-p", "-C", "-D", "-r", "-t", "-U", "-T"],
-        acts: true,
-    },
-    Wrapper {
-        name: "doas",
-        valued: &["-u", "-C"],
-        acts: true,
-    },
-    Wrapper {
         name: "env",
-        valued: &["-u", "-C", "-P"],
-        acts: false,
+        flags: &[
+            "-i",
+            "-0",
+            "-v",
+            "--ignore-environment",
+            "--null",
+            "--debug",
+        ],
+        valued: &["-u", "--unset", "-C", "--chdir"],
+        replace: &[],
     },
     Wrapper {
         name: "command",
+        flags: &["-p"],
         valued: &[],
-        acts: false,
+        replace: &[],
     },
     Wrapper {
         name: "builtin",
+        flags: &[],
         valued: &[],
-        acts: false,
-    },
-    Wrapper {
-        name: "exec",
-        valued: &["-a"],
-        acts: false,
-    },
-    Wrapper {
-        name: "nohup",
-        valued: &[],
-        acts: true,
-    },
-    Wrapper {
-        name: "time",
-        valued: &["-f"],
-        acts: false,
+        replace: &[],
     },
     Wrapper {
         name: "nice",
-        valued: &["-n"],
-        acts: false,
+        flags: &[],
+        valued: &["-n", "--adjustment"],
+        replace: &[],
     },
     Wrapper {
         name: "timeout",
+        flags: &["--foreground", "--preserve-status", "-v", "--verbose"],
         valued: &["-s", "-k", "--signal", "--kill-after"],
-        acts: false,
+        replace: &[],
     },
     Wrapper {
         name: "stdbuf",
-        valued: &["-i", "-o", "-e"],
-        acts: false,
+        flags: &[],
+        valued: &["-i", "-o", "-e", "--input", "--output", "--error"],
+        replace: &[],
     },
     Wrapper {
         name: "xargs",
-        valued: &[
-            "-I", "-L", "-n", "-P", "-s", "-d", "-E", "-a", "-J", "-R", "-S",
+        flags: &[
+            "-0",
+            "-r",
+            "-t",
+            "-x",
+            "-o",
+            "--null",
+            "--no-run-if-empty",
+            "--verbose",
+            "--exit",
+            "--open-tty",
         ],
-        acts: false,
+        valued: &[
+            "-L",
+            "-n",
+            "-P",
+            "-s",
+            "-d",
+            "-E",
+            "-a",
+            "-R",
+            "-S",
+            "--max-lines",
+            "--max-args",
+            "--max-procs",
+            "--max-chars",
+            "--delimiter",
+            "--eof",
+            "--arg-file",
+        ],
+        replace: &["-I", "-J", "-i", "--replace"],
     },
 ];
+
+/// What a word stands for that `xargs` fills from its input.
+const FROM_INPUT: &str = "$input";
 
 /// Shells whose `-c` runs the script after it, which Hide reads as a line
 /// of its own; a script from a file or from the shell's input is not read.
 const SHELLS: &[&str] = &["bash", "sh", "zsh", "dash", "ksh", "mksh"];
-
-/// Programs that run code in a language Hide does not read, from their
-/// words, a file or their input; a version in the name (`python3.12`)
-/// counts.
-const CODE_RUNNERS: &[&str] = &[
-    "python",
-    "pypy",
-    "node",
-    "nodejs",
-    "deno",
-    "bun",
-    "perl",
-    "ruby",
-    "php",
-    "lua",
-    "luajit",
-    "Rscript",
-    "osascript",
-    "pwsh",
-    "powershell",
-    "cmd",
-    "fish",
-    "tclsh",
-    "wish",
-    "expect",
-    "awk",
-    "gawk",
-    "mawk",
-    "nawk",
-    "busybox",
-];
 
 /// Commands that set the variables their words name.
 const ASSIGNING: &[&str] = &[
@@ -811,9 +964,6 @@ const ASSIGNING: &[&str] = &[
     "getopts",
     "printf",
 ];
-
-/// Programs that change files without making or moving a link.
-const NO_LINKS: &[&str] = &["mkdir", "touch", "chmod"];
 
 fn read_line(text: &str, folders: &Folders, place: &Place<'_>, depth: usize, line: &mut Line) {
     if depth > MAX_DEPTH {
@@ -841,12 +991,12 @@ fn read_line(text: &str, folders: &Folders, place: &Place<'_>, depth: usize, lin
         line.other = true;
     }
     let first_delete = line.deletes.len();
-    let mut start = folders.clone();
     if parsed.functions {
-        // A later word may call a function the line defines, which may
-        // change folder.
-        add(&mut start, None);
+        // A function's body runs wherever a later word names it, and that
+        // word may be any program's name.
+        line.unreadable();
     }
+    let start = folders.clone();
     let mut after = After {
         ok: start.clone(),
         failed: start.clone(),
@@ -931,6 +1081,10 @@ fn read_command(
     let Some(first) = words.first() else {
         return Move::Stay;
     };
+    if OPAQUE.contains(&first.as_str()) && !(first == "exec" && words.len() == 1) {
+        line.unreadable();
+        return Move::Unknown;
+    }
     if CONTROL.contains(&first.as_str()) {
         // `for NAME in` and `select NAME in` set NAME.
         if matches!(first.as_str(), "for" | "select")
@@ -978,16 +1132,9 @@ fn expands(program: &str) -> bool {
         || (program.contains('[') && !matches!(program, "[" | "[["))
 }
 
-fn runs_code(name: &str) -> bool {
-    CODE_RUNNERS.iter().any(|runner| {
-        name.strip_prefix(runner)
-            .is_some_and(|version| version.chars().all(|c| c.is_ascii_digit() || c == '.'))
-    })
-}
-
 /// One program and its words. `assigned` when variables were set for it,
 /// which could change what a bare name runs; `stdin_names` when more words
-/// come from its input (`xargs`).
+/// come from its input (`xargs`), as a word holding [`FROM_INPUT`] does.
 fn run_program(
     words: &[String],
     assigned: bool,
@@ -1004,27 +1151,9 @@ fn run_program(
         line.unreadable();
         return Move::Stay;
     }
+    let from_input = stdin_names || args.iter().any(|word| word.contains(FROM_INPUT));
     if names_hide(program, place.hide) {
-        if assigned {
-            line.other = true;
-        } else {
-            line.hide = true;
-        }
-        for ends in HIDE_ENDS {
-            if args.len() > ends.len()
-                && args
-                    .iter()
-                    .zip(ends.iter())
-                    .all(|(word, want)| word == want)
-            {
-                line.ends.push(
-                    args[ends.len()..]
-                        .iter()
-                        .find(|word| !word.starts_with('-'))
-                        .cloned(),
-                );
-            }
-        }
+        hide_command(args, assigned, from_input, line);
         return Move::Stay;
     }
     if program.contains('/') || (cfg!(windows) && program.contains('\\')) {
@@ -1034,56 +1163,19 @@ fn run_program(
         return Move::Stay;
     }
     let name = program_name(program);
+    if from_input
+        && !DELETERS.contains(&name)
+        && !KNOWN
+            .iter()
+            .any(|known| known.name == name && known.runs.is_empty())
+    {
+        // Words from the input may be any of the program's options, one
+        // that runs a command included.
+        line.unreadable();
+        return Move::Stay;
+    }
     if let Some(wrapper) = WRAPPERS.iter().find(|wrapper| wrapper.name == name) {
-        line.other |= wrapper.acts;
-        let mut at = 0;
-        let mut assigned = assigned;
-        while let Some(word) = args.get(at) {
-            if word == "--" {
-                at += 1;
-                break;
-            }
-            if name == "env" && hide_shell::is_assignment(word) {
-                assigned = true;
-                line.environment |= sets_environment(word);
-            } else if !word.starts_with('-') {
-                break;
-            } else if name == "command" && matches!(word.as_str(), "-v" | "-V") {
-                // `command -v` names what would run and runs nothing.
-                return Move::Stay;
-            } else if name == "env" && word.starts_with("-S") {
-                // `env -S` splits its value into the command line.
-                line.unreadable();
-                return Move::Stay;
-            } else if wrapper.valued.contains(&word.as_str()) {
-                at += 1;
-            }
-            at += 1;
-        }
-        if name == "timeout" {
-            // The duration before the command.
-            at += 1;
-        }
-        let inner = args.get(at..).unwrap_or_default();
-        if inner.is_empty() {
-            return Move::Stay;
-        }
-        let moved = run_program(
-            inner,
-            assigned,
-            stdin_names || name == "xargs",
-            folders,
-            place,
-            depth,
-            line,
-        );
-        // Only the shell's own `command` and `builtin` run its `cd`; the
-        // others run a program, whose folder is its own.
-        return if matches!(name, "command" | "builtin") {
-            moved
-        } else {
-            Move::Stay
-        };
+        return wrapped(wrapper, args, assigned, folders, place, depth, line);
     }
     if SHELLS.contains(&name) {
         let mut runs_script = false;
@@ -1103,10 +1195,6 @@ fn run_program(
         }
         return Move::Stay;
     }
-    if runs_code(name) {
-        line.unreadable();
-        return Move::Stay;
-    }
     if ASSIGNING.contains(&name) && args.iter().any(|word| sets_environment(word)) {
         line.environment = true;
     }
@@ -1117,41 +1205,20 @@ fn run_program(
             read_line(&args.join(" "), folders, place, depth + 1, line);
             Move::Unknown
         }
-        "source" | "." => {
-            line.unreadable();
-            Move::Unknown
-        }
         "cd" | "pushd" => cd(args, folders, place.home),
         "popd" => Move::Unknown,
-        // A name a later word may run as its value.
-        "alias" => {
-            line.other = true;
-            for value in args.iter().filter_map(|word| word.split_once('=')) {
-                read_line(value.1, folders, place, depth + 1, line);
-            }
-            Move::Unknown
-        }
-        // What the shell runs on a signal or as it exits.
-        "trap" => {
-            line.other = true;
-            if let Some(action) = args.iter().find(|word| !word.starts_with('-')) {
-                read_line(action, folders, place, depth + 1, line);
-            }
-            Move::Stay
-        }
         // They change which program a name runs.
         "hash" | "enable" if !args.is_empty() => {
             line.other = true;
             line.environment = true;
             Move::Stay
         }
+        "hash" | "enable" => Move::Stay,
         "git" => {
             git(args, folders, place, line);
             Move::Stay
         }
         "herdr" => {
-            line.other = true;
-            line.writes = true;
             if HERDR_CLOSES.iter().any(|close| {
                 args.windows(close.len()).any(|window| {
                     window
@@ -1160,7 +1227,11 @@ fn run_program(
                         .all(|(word, want)| word == want)
                 })
             }) {
+                line.other = true;
                 line.ends.push(None);
+            } else {
+                // Its other commands start programs in panes.
+                line.unreadable();
             }
             Move::Stay
         }
@@ -1168,31 +1239,243 @@ fn run_program(
             find(args, folders, place, depth, line);
             Move::Stay
         }
+        "sed" => {
+            if !sed_only_prints(args) {
+                // A script may write files (`w`, `-i`) or run commands
+                // (`e`, `s///e`).
+                line.unreadable();
+            }
+            Move::Stay
+        }
         _ if DELETERS.contains(&name) => {
             line.other = true;
             delete_names(args, folders, place, line);
-            if stdin_names {
+            if from_input {
                 line.delete(None);
             }
             Move::Stay
         }
         _ => {
-            let reads = READ_ONLY
-                .iter()
-                .find(|entry| entry.name == name)
-                .is_some_and(|entry| {
-                    !args.iter().any(|word| refused(word, entry.refused))
-                        && entry.names.is_none_or(|most| {
-                            args.iter().filter(|word| !word.starts_with('-')).count() <= most
-                        })
-                });
-            if !reads {
-                line.other = true;
-                line.writes |= !NO_LINKS.contains(&name);
+            match KNOWN.iter().find(|known| known.name == name) {
+                Some(known) => known_program(known, args, from_input, line),
+                // `source`, `alias`, `trap`, an interpreter, a build tool or
+                // any program Hide does not know may run anything.
+                None => line.unreadable(),
             }
             Move::Stay
         }
     }
+}
+
+/// A `hide` command; `from_input` when some of its words come from
+/// `xargs`, which may make it an archive Hide cannot name.
+fn hide_command(args: &[String], assigned: bool, from_input: bool, line: &mut Line) {
+    if assigned {
+        line.other = true;
+    } else {
+        line.hide = true;
+    }
+    // An archive whose words come from the input names a session Hide
+    // cannot name.
+    let seen: Vec<&String> = args
+        .iter()
+        .take_while(|word| !word.contains(FROM_INPUT))
+        .collect();
+    for ends in HIDE_ENDS {
+        let starts = seen
+            .iter()
+            .zip(ends.iter())
+            .all(|(word, want)| word == want);
+        if starts && seen.len() > ends.len() {
+            line.ends.push(
+                seen[ends.len()..]
+                    .iter()
+                    .find(|word| !word.starts_with('-'))
+                    .map(|word| (*word).clone()),
+            );
+        } else if starts && from_input {
+            line.ends.push(None);
+        }
+    }
+}
+
+/// A program that runs the command after its options, read as a command of
+/// its own; an option Hide does not know is not read past.
+fn wrapped(
+    wrapper: &Wrapper,
+    args: &[String],
+    assigned: bool,
+    folders: &Folders,
+    place: &Place<'_>,
+    depth: usize,
+    line: &mut Line,
+) -> Move {
+    let name = wrapper.name;
+    let mut assigned = assigned;
+    let mut folders = folders.clone();
+    let mut replace: Option<String> = None;
+    let mut at = 0;
+    while let Some(word) = args.get(at) {
+        at += 1;
+        if word == "--" {
+            break;
+        }
+        if name == "env" && hide_shell::is_assignment(word) {
+            assigned = true;
+            line.environment |= sets_environment(word);
+            continue;
+        }
+        if !word.starts_with('-') || word == "-" {
+            at -= 1;
+            break;
+        }
+        if name == "command" && matches!(word.as_str(), "-v" | "-V") {
+            // `command -v` names what would run and runs nothing.
+            return Move::Stay;
+        }
+        if name == "nice" && word[1..].chars().all(|c| c.is_ascii_digit()) {
+            continue;
+        }
+        let (option, attached) = match word.split_once('=') {
+            Some((option, value)) if word.starts_with("--") => (option, Some(value.to_owned())),
+            _ if !word.starts_with("--") && word.len() > 2 => {
+                (&word[..2], Some(word[2..].to_owned()))
+            }
+            _ => (word.as_str(), None),
+        };
+        if wrapper.flags.contains(&word.as_str()) {
+            continue;
+        }
+        let value = if wrapper.replace.contains(&option) {
+            // `-i` and `--replace` alone take `{}`.
+            Some(attached.unwrap_or_else(|| {
+                if matches!(option, "-i" | "--replace") {
+                    "{}".to_owned()
+                } else {
+                    at += 1;
+                    args.get(at - 1).cloned().unwrap_or_default()
+                }
+            }))
+            .inspect(|string| replace = Some(string.clone()))
+        } else if wrapper.valued.contains(&option) {
+            attached.or_else(|| {
+                at += 1;
+                args.get(at - 1).cloned()
+            })
+        } else {
+            // `env -S` splits its value into the command line, `env -P`
+            // looks the program up in a folder it names; any other option
+            // may take a value Hide would read as the program.
+            line.unreadable();
+            return Move::Stay;
+        };
+        if name == "env" && matches!(option, "-C" | "--chdir") {
+            folders = value.map_or_else(|| vec![None], |dir| paths(&dir, &folders, place.home));
+        }
+    }
+    if name == "timeout" {
+        // The duration before the command.
+        at += 1;
+    }
+    let inner = args.get(at..).unwrap_or_default();
+    if inner.is_empty() {
+        return Move::Stay;
+    }
+    let mut stdin_names = false;
+    let inner: Vec<String> = match &replace {
+        Some(string) if !string.is_empty() => inner
+            .iter()
+            .map(|word| word.replace(string.as_str(), FROM_INPUT))
+            .collect(),
+        _ => {
+            stdin_names = name == "xargs";
+            inner.to_vec()
+        }
+    };
+    let moved = run_program(&inner, assigned, stdin_names, &folders, place, depth, line);
+    // Only the shell's own `command` and `builtin` run its `cd`; the others
+    // run a program, whose folder is its own.
+    if matches!(name, "command" | "builtin") {
+        moved
+    } else {
+        Move::Stay
+    }
+}
+
+/// A program of [`KNOWN`] with its words.
+fn known_program(known: &Known, args: &[String], from_input: bool, line: &mut Line) {
+    if args.iter().any(|word| refused(word, known.runs)) {
+        line.unreadable();
+        return;
+    }
+    let writes = args.iter().any(|word| refused(word, known.writes))
+        || known.names.is_some_and(|most| {
+            args.iter().filter(|word| !word.starts_with('-')).count() > most
+        })
+        // Words from the input may be a flag that writes or one more name.
+        || (from_input && (!known.writes.is_empty() || known.names.is_some()));
+    match known.effect {
+        Effect::Reads => line.other |= writes,
+        Effect::Changes => line.other = true,
+        Effect::Links => {
+            line.other = true;
+            line.writes = true;
+        }
+    }
+}
+
+/// Whether `sed` only prints: no `-i`, no script file, and scripts of line
+/// numbers with `p`, `d`, `q`, `n` and `=` only, such as `sed -n '1,80p'`.
+fn sed_only_prints(args: &[String]) -> bool {
+    let prints = |script: &str| {
+        !script.is_empty()
+            && script
+                .chars()
+                .all(|c| c.is_ascii_digit() || " \t\n,;$!pdqn=".contains(c))
+    };
+    let mut script = false;
+    let mut at = 0;
+    while let Some(word) = args.get(at) {
+        at += 1;
+        match word.as_str() {
+            "-n" | "--quiet" | "--silent" | "-E" | "-r" | "--regexp-extended" | "-u" | "-s"
+            | "-z" | "--" => {}
+            "-e" | "--expression" => {
+                if !args.get(at).is_some_and(|next| prints(next)) {
+                    return false;
+                }
+                at += 1;
+                script = true;
+            }
+            flags if flags.starts_with('-') && !flags.starts_with("--") && flags.len() > 1 => {
+                // A group of short flags, which may end in `e` and take the
+                // script after it.
+                let letters = &flags[1..];
+                let (group, takes) = letters
+                    .strip_suffix('e')
+                    .map_or((letters, false), |group| (group, true));
+                if !group.chars().all(|c| "nErusz".contains(c)) {
+                    return false;
+                }
+                if takes {
+                    if !args.get(at).is_some_and(|next| prints(next)) {
+                        return false;
+                    }
+                    at += 1;
+                    script = true;
+                }
+            }
+            other if other.starts_with('-') && other != "-" => return false,
+            name if !script => {
+                if !prints(name) {
+                    return false;
+                }
+                script = true;
+            }
+            _ => {}
+        }
+    }
+    script
 }
 
 /// Where `cd` (or `pushd`) goes: lexically, as the shell's `cd` without
@@ -1263,37 +1546,62 @@ fn refused(word: &str, flags: &[&str]) -> bool {
 
 fn git(args: &[String], folders: &Folders, place: &Place<'_>, line: &mut Line) {
     let mut folders = folders.clone();
+    // Another repository or work tree: a path it deletes relative to it is
+    // one Hide cannot name.
+    let mut elsewhere = false;
     let mut at = 0;
     while let Some(word) = args.get(at) {
-        match word.as_str() {
-            "-C" => {
-                folders = args
-                    .get(at + 1)
-                    .map_or_else(|| vec![None], |dir| paths(dir, &folders, place.home));
-                at += 2;
-            }
-            // A setting given here, or the folder git's commands come from,
-            // may run any program (an alias, a pager, a hook).
-            "-c" | "--config-env" => {
-                line.unreadable();
-                return;
-            }
-            word if word.starts_with("--exec-path") || word.starts_with("--config-env=") => {
-                line.unreadable();
-                return;
-            }
-            "--git-dir" | "--work-tree" | "--namespace" => at += 2,
-            word if word.starts_with('-') => at += 1,
-            _ => break,
+        at += 1;
+        if !word.starts_with('-') {
+            at -= 1;
+            break;
         }
+        let (option, attached) = match word.split_once('=') {
+            Some((option, value)) if word.starts_with("--") => (option, Some(value.to_owned())),
+            _ => (word.as_str(), None),
+        };
+        if GIT_FLAGS.contains(&word.as_str()) {
+            continue;
+        }
+        if !GIT_VALUED.contains(&option) {
+            // `-c`, `--config-env` and `--exec-path` may name any program
+            // (an alias, a pager, a hook).
+            line.unreadable();
+            return;
+        }
+        let value = attached.or_else(|| {
+            at += 1;
+            args.get(at - 1).cloned()
+        });
+        match option {
+            "-C" => {
+                folders = value.map_or_else(|| vec![None], |dir| paths(&dir, &folders, place.home));
+            }
+            "--git-dir" | "--work-tree" => elsewhere = true,
+            _ => {}
+        }
+    }
+    if elsewhere {
+        folders = vec![None];
     }
     let Some(sub) = args.get(at) else {
         return;
     };
     let rest = &args[at + 1..];
+    let action = rest
+        .iter()
+        .find(|word| !word.starts_with('-'))
+        .map(String::as_str);
     match sub.as_str() {
         "push" => {
             line.other = true;
+            if rest
+                .iter()
+                .any(|word| refused(word, &["--receive-pack", "--exec"]))
+            {
+                line.unreadable();
+                return;
+            }
             line.force_push |= rest.iter().any(|word| {
                 FORCE_PUSH_FLAGS.iter().any(|flag| {
                     word == flag
@@ -1324,20 +1632,154 @@ fn git(args: &[String], folders: &Folders, place: &Place<'_>, line: &mut Line) {
                 }
             }
         }
+        "rm" => {
+            line.other = true;
+            if rest
+                .iter()
+                .any(|word| matches!(word.as_str(), "--cached" | "-n" | "--dry-run"))
+            {
+                return;
+            }
+            if rest
+                .iter()
+                .any(|word| word.starts_with("--pathspec-from-file"))
+            {
+                line.delete(None);
+            }
+            delete_names(rest, &folders, place, line);
+        }
         "branch" => {
+            if rest.iter().any(|word| word == "--edit-description") {
+                // It opens an editor.
+                line.unreadable();
+                return;
+            }
             line.other |= !rest
                 .iter()
                 .all(|word| GIT_BRANCH_LISTS.contains(&word.as_str()));
         }
-        sub if GIT_READS.contains(&sub) => {
-            line.other |= rest.iter().any(|word| refused(word, &[GIT_WRITES_OUTPUT]));
+        // A setting may name a program git runs later.
+        "config" => {
+            let reads = rest.iter().any(|word| {
+                matches!(
+                    word.as_str(),
+                    "--get" | "--get-all" | "--get-regexp" | "--get-urlmatch" | "-l" | "--list"
+                )
+            }) || matches!(action, Some("get" | "list"));
+            let writes = rest.iter().any(|word| {
+                matches!(
+                    word.as_str(),
+                    "--add"
+                        | "--unset"
+                        | "--unset-all"
+                        | "--replace-all"
+                        | "--rename-section"
+                        | "--remove-section"
+                        | "-e"
+                        | "--edit"
+                )
+            });
+            if !reads || writes {
+                line.unreadable();
+            }
         }
-        // A checkout, a merge or a pull may make links.
-        _ => {
-            line.other = true;
-            line.writes = true;
+        "remote" => match action {
+            None | Some("show" | "get-url") => {}
+            Some(
+                "add" | "remove" | "rm" | "rename" | "set-url" | "set-head" | "set-branches"
+                | "prune" | "update",
+            ) => {
+                line.other = true;
+            }
+            Some(_) => line.unreadable(),
+        },
+        "stash" => match action {
+            Some("list" | "show") => {}
+            None
+            | Some(
+                "push" | "pop" | "apply" | "drop" | "clear" | "save" | "branch" | "create"
+                | "store",
+            ) => {
+                line.other = true;
+                line.writes = true;
+            }
+            Some(_) => line.unreadable(),
+        },
+        "reflog" => line.other |= matches!(action, Some("expire" | "delete" | "drop")),
+        "submodule" => match action {
+            None | Some("status" | "summary") => {}
+            Some(
+                "init" | "update" | "add" | "sync" | "deinit" | "absorbgitdirs" | "set-branch"
+                | "set-url",
+            ) => {
+                line.other = true;
+                line.writes = true;
+            }
+            // `foreach` runs a command in each.
+            Some(_) => line.unreadable(),
+        },
+        "worktree" => match action {
+            Some("list") => {}
+            Some("remove") => {
+                line.other = true;
+                let target = rest.iter().filter(|word| !word.starts_with('-')).nth(1);
+                match target {
+                    Some(target) => {
+                        for path in paths(target, &folders, place.home) {
+                            line.delete(path);
+                        }
+                    }
+                    None => line.delete(None),
+                }
+            }
+            Some("add" | "move" | "prune" | "lock" | "unlock" | "repair") => {
+                line.other = true;
+                line.writes = true;
+            }
+            _ => line.unreadable(),
+        },
+        sub => {
+            let Some(known) = GIT_SUBS.iter().find(|known| known.name == sub) else {
+                // An alias, `bisect run`, a tool, a filter or any subcommand
+                // Hide does not know may run anything.
+                line.unreadable();
+                return;
+            };
+            if rest.iter().any(|word| refused(word, known.runs)) || !git_strategy_known(rest) {
+                line.unreadable();
+                return;
+            }
+            match known.effect {
+                Effect::Reads => {
+                    line.other |= rest.iter().any(|word| refused(word, known.writes));
+                }
+                Effect::Changes => line.other = true,
+                Effect::Links => {
+                    line.other = true;
+                    line.writes = true;
+                }
+            }
         }
     }
+}
+
+/// Whether a merge strategy named (`-s`, `--strategy`) is one git carries.
+fn git_strategy_known(rest: &[String]) -> bool {
+    let mut words = rest.iter();
+    while let Some(word) = words.next() {
+        let named = match word.as_str() {
+            "-s" | "--strategy" => words.next().map(String::as_str),
+            word if word.starts_with("--strategy=") => Some(&word["--strategy=".len()..]),
+            word if word.starts_with("-s") && word.len() > 2 && !word.starts_with("--") => {
+                Some(&word[2..])
+            }
+            _ => continue,
+        };
+        if !named.is_some_and(|name| GIT_STRATEGIES.contains(&name)) {
+            return false;
+        }
+    }
+    true
 }
 
 fn find(args: &[String], folders: &Folders, place: &Place<'_>, depth: usize, line: &mut Line) {

@@ -154,7 +154,7 @@ fn each_row_set_to_ask_asks_for_its_own_actions() {
         (command("cat README.md | wc -l"), Row::Read),
         (command("git -C /r/herdr-ide log --oneline -5"), Row::Read),
         (read, Row::Read),
-        (command("cargo test"), Row::Shell),
+        (command("touch notes.md"), Row::Shell),
         (command("git commit -m x"), Row::Shell),
         (other, Row::Shell),
         (edit, Row::Edit),
@@ -219,7 +219,7 @@ fn a_push_that_overwrites_the_remote_always_asks() {
         "git push origin +main",
         "git -C /r/herdr-ide push -uf origin x",
         "bash -lc 'cd /r/herdr-ide && git push --mirror'",
-        "sudo git push --force-if-includes",
+        "command git push --force-if-includes",
         "echo $(git push -f)",
     ] {
         assert_eq!(
@@ -338,7 +338,7 @@ fn what_the_operator_allowed_in_this_conversation_stops_asking_that_kind_only() 
     let mut allowed = BTreeSet::new();
     allowed.insert(Ask::Row(Row::Shell));
     assert_eq!(
-        asks_with("cargo test", &ALL_ASK, &NONE_WORKING, &allowed),
+        asks_with("touch notes.md", &ALL_ASK, &NONE_WORKING, &allowed),
         []
     );
     assert_eq!(
@@ -652,8 +652,7 @@ fn a_relative_delete_is_judged_in_every_folder_the_shell_may_be_in_then() {
         "cd /r/herdr-ide/missing; rm -f victim",
         "cd /r/herdr-ide || rm -f victim",
         "cd /fixture/outside || cd /r/herdr-ide && rm -f victim",
-        // A function, a loop or `eval` may move the shell anywhere.
-        "f() { cd /fixture/outside; }; cd /r/herdr-ide && f && rm -f victim",
+        // A loop or `eval` may move the shell anywhere.
         "cd /r/herdr-ide && for d in a b; do cd $d; done; rm -f victim",
         "cd /r/herdr-ide && eval cd /fixture/outside && rm -f victim",
         // `env` runs a program named `cd`, which leaves the shell's folder.
@@ -747,4 +746,135 @@ fn a_delete_through_a_link_is_judged_where_the_link_leads() {
     ] {
         assert_eq!(asks(&line), [], "{line}");
     }
+}
+
+#[test]
+fn a_program_hide_does_not_know_always_asks_whatever_it_runs() {
+    // The second review's inputs (D-89): a program that runs its words as a
+    // command, a shell keyword that hides the command after it, a function
+    // and a read-only command's option that runs a command.
+    for line in [
+        "caffeinate -i rm -f /fixture/outside/victim",
+        "arch -arm64 rm -f /fixture/outside/victim",
+        "script -q /dev/null rm -f /fixture/outside/victim",
+        "flock /tmp/l rm -f /fixture/outside/victim",
+        "setsid rm -f /fixture/outside/victim",
+        "watch rm -f /fixture/outside/victim",
+        "ionice -c3 rm -f /fixture/outside/victim",
+        "parallel rm -f ::: /fixture/outside/victim",
+        "fd . /r/herdr-ide -x rm -f /fixture/outside/victim",
+        "git rebase --exec 'rm -f /fixture/outside/victim' HEAD~1",
+        "git submodule foreach 'rm -f /fixture/outside/victim'",
+        "tar -xf a.tar --to-command='rm -f /fixture/outside/victim'",
+        "rsync -e 'sh -c \"rm -f /fixture/outside/victim\"' a b:c",
+        "vim -c ':!rm -f /fixture/outside/victim'",
+        "time -p rm -f /fixture/outside/victim",
+        "coproc rm -f /fixture/outside/victim",
+        "git grep -O'rm -f /fixture/outside/victim #' hello",
+        "git grep --open-files-in-pager='rm -f /fixture/outside/victim #' hello",
+        "git diff --ext-diff",
+        "git log -p --textconv",
+        // Any other program, alias or setting that may name one.
+        "cargo test",
+        "make",
+        "npm run build",
+        "sudo ls",
+        "nohup ls",
+        "exec ls",
+        "trap 'rm -f /fixture/outside/victim' EXIT",
+        "alias ls='rm -f /fixture/outside/victim'",
+        "git st",
+        "git config alias.st '!rm -f /fixture/outside/victim'",
+        "git -C /r/herdr-ide merge -s mine main",
+        "git fetch --upload-pack='rm -f /fixture/outside/victim' origin",
+        "git push --receive-pack='rm -f /fixture/outside/victim' origin main",
+        "herdr pane run w1:p1 ls",
+        "sort --compress-program=gzip notes.md",
+        "mapfile -C 'rm -f /fixture/outside/victim' lines",
+        "sed -i 's/a/b/' notes.md",
+        "sed 's/x/rm -f \\/fixture\\/outside\\/victim/e' notes.md",
+        "sed -n 'w /fixture/outside/victim' notes.md",
+        "env -P /tmp ls",
+        "env -S 'rm -f /fixture/outside/victim'",
+        "nice --unknown rm -f victim",
+        // Words from the input may be any option.
+        "ls | xargs git",
+        "ls | xargs -I{} fd {} .",
+        "ls | xargs bash",
+    ] {
+        assert_eq!(asks(line), [UNREADABLE], "{line}");
+    }
+    // A function's body runs wherever a later word names it.
+    for line in [
+        "function cat { rm -f /fixture/outside/victim; }; cat x",
+        "cat() (rm -f /fixture/outside/victim); cat x",
+        "f() { cd /fixture/outside; }; cd /r/herdr-ide && f && rm -f victim",
+    ] {
+        assert!(asks(line).contains(&UNREADABLE), "{line}");
+    }
+}
+
+#[test]
+fn a_program_hide_knows_is_read_with_its_words() {
+    // Reads, printed with a script of line numbers only.
+    for line in [
+        "sed -n '1,80p' README.md",
+        "sed -n -e '10q' README.md",
+        "git config --get user.name",
+        "git remote -v",
+        "git stash list",
+        "git log --oneline -5 | head",
+        "git diff -Oorder.txt",
+        "fd -e rs desk /r/herdr-ide",
+        "ls | xargs wc -l",
+        "hide agent list | jq -r '.[]' | xargs -I{} hide agent read {}",
+    ] {
+        assert_eq!(
+            asks_with(line, &Table::default(), &NONE_WORKING, &BTreeSet::new()),
+            [],
+            "{line}"
+        );
+        assert_ne!(reading(line).row, Row::Shell, "{line}");
+    }
+    // Changes Hide knows: the `그 밖의 셸 명령` row, no irreversible kind.
+    for line in [
+        "mkdir -p notes && touch notes/a.md",
+        "cp a.md b.md",
+        "mv a.md b.md",
+        "git commit -m x",
+        "git checkout -b desk/x",
+        "git -C /r/herdr-ide merge -s ours main",
+        "export lower=1",
+    ] {
+        assert_eq!(asks(line), [], "{line}");
+        assert_eq!(reading(line).row, Row::Shell, "{line}");
+    }
+    // What a wrapper runs is read as a command of its own.
+    for line in [
+        "nice -n 5 rm -f /fixture/outside/victim",
+        "timeout --signal KILL 5 rm -f /fixture/outside/victim",
+        "env -C /fixture/outside rm -f victim",
+        "env --chdir=/fixture/outside rm -f victim",
+        "ls | xargs rm -f",
+        "git --work-tree=/fixture/outside clean -fdx",
+        "git -C /fixture/outside rm -r .",
+        "git worktree remove --force /fixture/outside/wt",
+    ] {
+        assert_eq!(asks(line), [OUTSIDE], "{line}");
+    }
+    // An archive whose session comes from the input names none.
+    assert!(
+        reading("hide agent list | jq -r '.[]' | xargs -I{} hide agent archive {}")
+            .ends
+            .contains(&None)
+    );
+    assert!(
+        reading("echo agent-1 | xargs hide agent archive")
+            .ends
+            .contains(&None)
+    );
+    assert_eq!(
+        reading("hide agent archive agent-1").ends,
+        [Some("agent-1".to_owned())]
+    );
 }
