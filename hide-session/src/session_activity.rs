@@ -9,7 +9,8 @@ use std::time::SystemTime;
 
 use serde::{Deserialize, Serialize};
 
-use crate::{Agent, FileIdentity, ReadRefusal, label_transcript};
+use crate::source::FileIdentity;
+use crate::{Agent, ReadRefusal, label_transcript};
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SessionActivityRequest {
@@ -81,13 +82,12 @@ pub fn read(home: &Path, request: &SessionActivityRequest) -> Result<SessionActi
         }
         return Ok(activity);
     }
-    let file =
-        crate::open_session_file(&path).map_err(|_| "session_activity_open_failed".to_owned())?;
+    let file = crate::source::open(&path).map_err(|_| "session_activity_open_failed".to_owned())?;
     let metadata = file
         .metadata()
         .map_err(|_| "session_activity_stat_failed".to_owned())?;
-    let identity = FileIdentity::from_file(&file)
-        .map_err(|_| "session_activity_identity_unavailable".to_owned())?;
+    let identity =
+        FileIdentity::of(&file).map_err(|_| "session_activity_identity_unavailable".to_owned())?;
     let sampled_incarnation = identity.incarnation();
     let modified_at_unix_ms = metadata
         .modified()

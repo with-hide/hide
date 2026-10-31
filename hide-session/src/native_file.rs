@@ -4,7 +4,6 @@
 //! nor a filename suffix identifies a checkout or session.
 
 use std::fs;
-use std::io::{BufRead, BufReader, Read};
 use std::path::{Component, Path, PathBuf};
 
 use anyhow::{Result, anyhow};
@@ -12,18 +11,9 @@ use serde_json::Value;
 use sha2::{Digest, Sha256};
 
 use crate::{
-    Agent, ConversationEvent, DiscoveryBudget, EventKind, LineResult, RootRefusal,
-    SESSION_LINE_LIMIT_BYTES, SessionError, SessionIdentity,
+    Agent, ConversationEvent, DiscoveryBudget, EventKind, LineResult, RootRefusal, SessionError,
+    SessionIdentity,
 };
-
-pub(crate) struct Header {
-    pub id: String,
-    pub cwd: PathBuf,
-    /// When the session itself was made, which a fork's copied records do
-    /// not tell: Pi's and omp's header `timestamp`, Grok's summary
-    /// `created_at`.
-    pub opened_at_unix_ms: Option<u64>,
-}
 
 /// Routing constraint of Pi's native --session <id>: its default cwd folder
 /// is searched first. Global matches prompt to fork, so they cannot wake an
@@ -308,88 +298,6 @@ pub(crate) fn directory_of(agent: Agent, path: &Path) -> Option<&Path> {
     }
 }
 
-pub(crate) fn header(agent: Agent, path: &Path) -> Result<Header> {
-    let mut remaining = u64::MAX;
-    header_budgeted(agent, path, &mut remaining)
-}
-
-fn header_budgeted(agent: Agent, path: &Path, remaining: &mut u64) -> Result<Header> {
-    if agent == Agent::Antigravity {
-        // The index row, not the transcript, names the conversation's checkout.
-        return crate::antigravity::header(path);
-    }
-    if agent == Agent::Grok {
-        let mut read = 0;
-        let summary = crate::grok::summary(path, &mut read);
-        if read > *remaining {
-            return Err(anyhow!("session_discovery_read_capacity"));
-        }
-        *remaining -= read;
-        let summary = summary?;
-        return Ok(Header {
-            id: summary.id,
-            cwd: summary.cwd,
-            opened_at_unix_ms: summary.created_at_unix_ms,
-        });
-    }
-    let file =
-        crate::open_session_file(path).map_err(|_| anyhow!("label_session_file_unavailable"))?;
-    let mut reader = BufReader::new(file);
-    header_from_reader(agent, &mut reader, remaining)
-}
-
-fn header_line(reader: &mut impl BufRead, remaining: &mut u64) -> Result<Value> {
-    let limit = ((SESSION_LINE_LIMIT_BYTES + 1) as u64).min(remaining.saturating_add(1));
-    let mut bytes = Vec::new();
-    reader
-        .take(limit)
-        .read_until(b'\n', &mut bytes)
-        .map_err(|_| anyhow!("label_session_metadata_read_failed"))?;
-    if bytes.len() as u64 > *remaining {
-        return Err(anyhow!("session_discovery_read_capacity"));
-    }
-    *remaining -= bytes.len() as u64;
-    if bytes.len() > SESSION_LINE_LIMIT_BYTES {
-        return Err(anyhow!("label_session_metadata_line_capacity"));
-    }
-    if bytes.last() != Some(&b'\n') {
-        return Err(anyhow!("label_session_metadata_unconfirmed"));
-    }
-    serde_json::from_slice(&bytes).map_err(|_| anyhow!("label_session_metadata_unconfirmed"))
-}
-
-pub(crate) fn header_from_reader(
-    agent: Agent,
-    reader: &mut impl BufRead,
-    remaining: &mut u64,
-) -> Result<Header> {
-    let first = header_line(reader, remaining)?;
-    let value = if agent == Agent::Omp && first["type"] == "title" {
-        title_snapshot(&first).ok_or_else(|| anyhow!("label_session_metadata_unconfirmed"))?;
-        header_line(reader, remaining)?
-    } else {
-        first
-    };
-    if value["type"] != "session" || value["version"] != 3 {
-        return Err(anyhow!("label_session_metadata_unconfirmed"));
-    }
-    let id = value["id"]
-        .as_str()
-        .filter(|id| crate::label_owner::valid_native_id(id))
-        .ok_or_else(|| anyhow!("label_session_id_invalid"))?;
-    let cwd = value["cwd"]
-        .as_str()
-        .filter(|cwd| !cwd.chars().any(char::is_control))
-        .map(PathBuf::from)
-        .filter(|cwd| cwd.is_absolute())
-        .ok_or_else(|| anyhow!("label_session_cwd_unconfirmed"))?;
-    Ok(Header {
-        id: id.to_owned(),
-        cwd,
-        opened_at_unix_ms: crate::timestamp_ms(value.get("timestamp")).ok(),
-    })
-}
-
 /// Prove the exact ID's native CLI route before an effect. Pi picks the first
 /// matching header, skips malformed prefixes and falls back to prefix/global
 /// matches. Refuse uncertainty instead of depending on directory enumeration.
@@ -451,8 +359,8 @@ pub(crate) fn confirm_route(
         }
         let checked = inside_root(home, agent, &candidate)
             .map_err(|_| anyhow!("session_route_unconfirmed"))?;
-        let file = crate::open_session_file(&candidate)
-            .map_err(|_| anyhow!("session_route_unconfirmed"))?;
+        let file =
+            crate::source::open(&candidate).map_err(|_| anyhow!("session_route_unconfirmed"))?;
         if !file.metadata().is_ok_and(|metadata| metadata.is_file())
             || hide_platform::fs::identity::link_count(&file).ok() != Some(1)
         {
@@ -460,13 +368,14 @@ pub(crate) fn confirm_route(
         }
         // A strict first header is a safe subset of native discovery. Any
         // prefixed, malformed, incomplete or unreadable sibling is uncertain.
-        let header = header_budgeted(agent, &candidate, &mut remaining).map_err(|error| {
-            if error.to_string() == "session_discovery_read_capacity" {
-                anyhow!("session_route_capacity")
-            } else {
-                anyhow!("session_route_unconfirmed")
-            }
-        })?;
+        let header = crate::source::facts::header_budgeted(agent, &candidate, &mut remaining)
+            .map_err(|error| {
+                if error.to_string() == "session_discovery_read_capacity" {
+                    anyhow!("session_route_capacity")
+                } else {
+                    anyhow!("session_route_unconfirmed")
+                }
+            })?;
         let native_match = if agent == Agent::Omp {
             let needle = id.to_ascii_lowercase();
             let stem = candidate
@@ -580,7 +489,7 @@ pub(crate) fn locate(
         if inside_root(home, agent, &path).is_err() {
             continue;
         }
-        let header = match header_budgeted(agent, &path, &mut remaining) {
+        let header = match crate::source::facts::header_budgeted(agent, &path, &mut remaining) {
             Ok(header) => header,
             Err(error) if error.to_string() == "session_discovery_read_capacity" => {
                 return Err(SessionError::Capacity {
@@ -591,7 +500,7 @@ pub(crate) fn locate(
             Err(error) if error.to_string() == "label_session_metadata_line_capacity" => {
                 oversized = Some(SessionError::Capacity {
                     resource: "line_bytes",
-                    limit: SESSION_LINE_LIMIT_BYTES as u64,
+                    limit: crate::source::facts::NAMING_RECORD_LIMIT_BYTES as u64,
                 });
                 continue;
             }

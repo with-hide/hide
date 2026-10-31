@@ -1022,3 +1022,73 @@ fn a_pane_thread_refuses_an_unsafe_id_and_an_agent_without_a_converter() {
         "session_file_missing"
     );
 }
+
+/// A forward page leaves a last record still being written, whole JSON
+/// without its newline or cut inside it, for the next read: the page ends
+/// where that record starts, and the read after its newline takes it.
+#[test]
+fn a_forward_page_leaves_an_unfinished_last_record_to_the_next_read() {
+    let position =
+        |cursor: &ThreadCursor| serde_json::to_value(cursor).unwrap()["position"].clone();
+    for sample in SAMPLES {
+        if sample.format == SessionFormat::OpenCode {
+            continue;
+        }
+        let placed = Placed::new(sample);
+        let mut start = placed.read(None).unwrap();
+        while let Some(before) = start.before.clone() {
+            start = placed.read(Some(&before)).unwrap();
+        }
+        let start = start.start;
+        let finished = std::fs::read(&placed.path).unwrap();
+        assert_eq!(finished.last(), Some(&b'\n'));
+        let whole = &finished[..finished.len() - 1];
+        let unfinished = whole
+            .iter()
+            .rposition(|byte| *byte == b'\n')
+            .map_or(0, |newline| newline + 1);
+        let half = unfinished + (whole.len() - unfinished) / 2;
+        for written in [whole, &finished[..half]] {
+            std::fs::write(&placed.path, written).unwrap();
+            let page = placed.read_from(&start).unwrap();
+            assert_eq!(
+                position(&page.end),
+                json!(unfinished),
+                "{:?} ends before the unfinished record",
+                sample.format
+            );
+            std::fs::write(&placed.path, &finished).unwrap();
+            let next = placed.read_from(&page.end).unwrap();
+            assert_eq!(position(&next.end), json!(finished.len()));
+        }
+    }
+}
+
+/// A large record before the one that names a Codex thread, past the
+/// naming cap and a read block, is passed over and the `session_meta` after
+/// it still found. Pi requires its header to be the first line, as Pi's own
+/// reader does, so there the same record is refused for its size: only a
+/// record a format requires at a fixed place is refused that way.
+#[test]
+fn a_large_first_record_hides_only_a_header_its_format_fixes_in_place() {
+    for sample in SAMPLES {
+        if !matches!(sample.format, SessionFormat::Codex | SessionFormat::Pi) {
+            continue;
+        }
+        let placed = Placed::new(sample);
+        let plain = json_of(&placed.read(None).unwrap());
+        let large = json!({"type": "note", "pad": "x".repeat(hide_session::NAMING_RECORD_LIMIT_BYTES + 64 * 1024)});
+        let session = std::fs::read_to_string(&placed.path).unwrap();
+        std::fs::write(&placed.path, format!("{large}\n{session}")).unwrap();
+        let read = placed.read(None);
+        if sample.format == SessionFormat::Codex {
+            let page = read.unwrap_or_else(|refusal| panic!("Codex refused: {refusal:?}"));
+            assert_eq!(json_of(&page), plain);
+        } else {
+            assert_eq!(
+                read.unwrap_err(),
+                hide_session::ReadRefusal::from("label_session_metadata_line_capacity")
+            );
+        }
+    }
+}

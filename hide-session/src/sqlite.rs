@@ -309,15 +309,14 @@ impl Source {
                     if index == 3 {
                         return Err(Fence::Held);
                     }
-                    let file = crate::open_session_file_nofollow(&name).map_err(Fence::of)?;
+                    let file = crate::source::open_nofollow(&name).map_err(Fence::of)?;
                     if hide_platform::fs::identity::link_count(&file).map_err(Fence::of)? != 1 {
                         return Err(Fence::Refused);
                     }
                     let stamp = mark(&file).map_err(Fence::of)?;
                     if index == 0 {
-                        use std::io::Read;
-                        let mut header = [0; 20];
-                        (&file).read_exact(&mut header).map_err(Fence::of)?;
+                        let header =
+                            crate::source::window::read_at(&file, 0, 20).map_err(Fence::of)?;
                         wal_mode = header[18] == 2 && header[19] == 2;
                     }
                     if index == 1 {
@@ -366,7 +365,7 @@ impl Source {
         for (path, held) in &self.files {
             match held {
                 Some((handle, before)) => {
-                    let current = crate::open_session_file_nofollow(path).map_err(Fence::of)?;
+                    let current = crate::source::open_nofollow(path).map_err(Fence::of)?;
                     if mark(handle).map_err(Fence::of)? != *before
                         || mark(&current).map_err(Fence::of)? != *before
                     {

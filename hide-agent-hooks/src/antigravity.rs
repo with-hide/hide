@@ -34,7 +34,6 @@
 //! conversation id> ...`), which is how a start or a stop is told from the
 //! pane's own conversation ([`root_of`]).
 
-use std::io::{Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
@@ -120,12 +119,7 @@ pub fn app_data(home: &Path) -> PathBuf {
 /// id rather than read from the payload's `transcriptPath`, so a hook never
 /// opens a file outside agy's own folder.
 pub fn transcript(home: &Path, conversation: &str) -> PathBuf {
-    app_data(home)
-        .join("brain")
-        .join(conversation)
-        .join(".system_generated")
-        .join("logs")
-        .join("transcript_full.jsonl")
+    hide_session::antigravity::transcript(home, conversation)
 }
 
 /// How much of a transcript's first line is read; the parent's message
@@ -176,13 +170,9 @@ fn parent_of(home: &Path, conversation: &str, deadline: Instant) -> Option<Strin
 
 /// The transcript's first complete line, when there is one.
 fn first_line(path: &Path) -> Option<String> {
-    let file = std::fs::File::open(path).ok()?;
-    let mut bytes = Vec::new();
-    file.take(FIRST_LINE_LIMIT as u64)
-        .read_to_end(&mut bytes)
-        .ok()?;
-    let end = bytes.iter().position(|byte| *byte == b'\n')?;
-    String::from_utf8(bytes[..end].to_vec()).ok()
+    hide_session::read_first_record(path, FIRST_LINE_LIMIT as u64)
+        .ok()
+        .flatten()
 }
 
 /// The `sender=<id>` of the `[Message]` a parent conversation sends its
@@ -210,17 +200,9 @@ const TAIL_LIMIT: u64 = 256 * 1024;
 /// agy's `<USER_REQUEST>` wrapper taken off. It is only the search input of
 /// Memory; the prompt itself is never changed.
 pub fn last_prompt(home: &Path, conversation: &str) -> Option<String> {
-    let mut file = std::fs::File::open(transcript(home, conversation)).ok()?;
-    let length = file.metadata().ok()?.len();
-    let start = length.saturating_sub(TAIL_LIMIT);
-    file.seek(SeekFrom::Start(start)).ok()?;
-    let mut bytes = Vec::new();
-    file.read_to_end(&mut bytes).ok()?;
-    let text = String::from_utf8_lossy(&bytes);
-    // A tail that starts inside a line drops that partial line.
-    let lines = text.lines().skip(usize::from(start > 0));
-    lines
-        .filter_map(|line| serde_json::from_str::<Value>(line).ok())
+    let tail = hide_session::read_tail(&transcript(home, conversation), TAIL_LIMIT).ok()?;
+    tail.records()
+        .filter_map(|(_, line)| serde_json::from_str::<Value>(line).ok())
         .filter(|step| step.get("type").and_then(Value::as_str) == Some("USER_INPUT"))
         .filter_map(|step| {
             step.get("content")

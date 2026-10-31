@@ -1008,7 +1008,7 @@ fn read_one(home: &std::path::Path, request: &ReadRequest) -> ReadAnswer {
         crate::ConversationCursor::restore,
     );
     let pi_before = if request.agent.requires_native_file_proof() {
-        match crate::native_file::header(request.agent, &path).and_then(|header| {
+        match crate::source::facts::header(request.agent, &path).and_then(|header| {
             crate::confirm_session_file(
                 home,
                 request.agent,

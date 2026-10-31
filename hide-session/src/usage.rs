@@ -10,6 +10,7 @@ use std::time::{Duration, Instant};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
+use crate::source::frame::{Forward, Frame, Framer};
 use crate::{Agent, SESSION_INCREMENT_READ_LIMIT_BYTES, SESSION_LINE_LIMIT_BYTES};
 
 mod grok;
@@ -27,6 +28,19 @@ pub const UNNAMED_MODEL: &str = "unnamed";
 const STEP_TIME: Duration = Duration::from_millis(10);
 const STEP_EVENTS: usize = 8192;
 const WITNESS_BYTES: u64 = 256;
+/// What a step's two witness checks read at most: two windows each.
+const WITNESSES_BYTES: u64 = 4 * WITNESS_BYTES;
+/// The fewest record bytes a step reads: one record at the line cap and the
+/// byte past it, so every step either reads a whole record or starts
+/// passing one over, and never ends where it began.
+const RECORDS_FLOOR_BYTES: u64 = SESSION_LINE_LIMIT_BYTES as u64 + 1;
+/// The largest Grok `summary.json` a step reads: what the step's one MiB
+/// leaves after both witnesses and the records it must reach. A larger one
+/// is refused as `usage_read_Capacity`, never read past this.
+const SUMMARY_LIMIT_BYTES: u64 =
+    SESSION_INCREMENT_READ_LIMIT_BYTES - WITNESSES_BYTES - RECORDS_FLOOR_BYTES;
+/// The block a step reads its records in.
+const RECORD_BLOCK_BYTES: usize = 64 * 1024;
 
 /// Disjoint components: output already includes reasoning. One-hour writes
 /// are a subset of cache_write, retained only for their different price.
@@ -67,6 +81,8 @@ pub enum Refusal {
     Schema,
     /// An environment value of the node that the read depends on is unusable.
     Environment,
+    /// A file the step must read whole is larger than the step may read.
+    Capacity,
 }
 
 impl std::fmt::Display for Refusal {
@@ -122,7 +138,7 @@ impl Checkpoint {
     }
 }
 
-fn witness(file: &mut fs::File, offset: u64) -> Result<(Witness, u64), Refusal> {
+fn witness(file: &fs::File, offset: u64) -> Result<(Witness, u64), Refusal> {
     let metadata = file.metadata().map_err(|_| Refusal::Unreadable)?;
     let modified_ns = metadata
         .modified()
@@ -133,10 +149,7 @@ fn witness(file: &mut fs::File, offset: u64) -> Result<(Witness, u64), Refusal> 
     let count = offset.min(WITNESS_BYTES);
     let mut digest = Sha256::new();
     for start in [0, offset.saturating_sub(count)] {
-        file.seek(SeekFrom::Start(start))
-            .map_err(|_| Refusal::Unreadable)?;
-        let mut bytes = vec![0; count as usize];
-        file.read_exact(&mut bytes)
+        let bytes = crate::source::window::read_at(file, start, count as usize)
             .map_err(|_| Refusal::Unreadable)?;
         digest.update(bytes);
     }
@@ -285,7 +298,7 @@ fn checked_path(home: &Path, agent: Agent, path: &Path) -> Result<PathBuf, Refus
 
 fn checked_file(home: &Path, agent: Agent, path: &Path) -> Result<fs::File, Refusal> {
     let canonical = checked_path(home, agent, path)?;
-    let file = crate::open_session_file_nofollow(path).map_err(|_| Refusal::Unreadable)?;
+    let file = crate::source::open_nofollow(path).map_err(|_| Refusal::Unreadable)?;
     // Check the opened descriptor too, so a parent link swapped after the
     // canonical check cannot redirect this read outside the allowed root.
     if hide_platform::fs::identity::file_id_of(&file).map_err(|_| Refusal::Unreadable)?
@@ -314,10 +327,8 @@ pub fn read(
     if agent == Agent::Cursor {
         return Err(Refusal::Unsupported);
     }
-    let mut file = checked_file(home, agent, path)?;
-    let identity =
-        hide_platform::fs::identity::file_id_of(&file).map_err(|_| Refusal::Unreadable)?;
-    let identity = format!("{}:{}", identity.volume(), identity.index());
+    let file = checked_file(home, agent, path)?;
+    let identity = crate::source::file::incarnation(&file).map_err(|_| Refusal::Unreadable)?;
     let size = file.metadata().map_err(|_| Refusal::Unreadable)?.len();
     let summary = if agent == Agent::Grok {
         Some(grok::summary(home, path)?)
@@ -338,7 +349,7 @@ pub fn read(
             || checkpoint.parser_version != PARSER_VERSION);
     let mut witness_bytes = 0;
     if !rescanned && let Some(saved) = &checkpoint.witness {
-        let (current, read) = witness(&mut file, checkpoint.offset)?;
+        let (current, read) = witness(&file, checkpoint.offset)?;
         witness_bytes += read;
         rescanned = saved.digest != current.digest
             || (saved.size == current.size && saved.modified_ns != current.modified_ns);
@@ -371,59 +382,79 @@ pub fn read(
             skipped: BTreeMap::new(),
         });
     }
-    file.seek(SeekFrom::Start(checkpoint.offset))
-        .map_err(|_| Refusal::Unreadable)?;
-    let mut bytes = Vec::new();
     let metadata_bytes = summary.as_ref().map_or(0, |s| s.read_bytes);
-    // Reserve both boundary checks inside the same one-MiB read budget.
-    let payload_budget = SESSION_INCREMENT_READ_LIMIT_BYTES - metadata_bytes - 4 * WITNESS_BYTES;
-    (&mut file)
-        .take(payload_budget)
-        .read_to_end(&mut bytes)
+    // Both witness checks and the summary share the step's one MiB with the
+    // records, which always keep room for one whole record.
+    let payload_budget = SESSION_INCREMENT_READ_LIMIT_BYTES
+        .checked_sub(metadata_bytes)
+        .and_then(|left| left.checked_sub(WITNESSES_BYTES))
+        .filter(|left| *left >= RECORDS_FLOOR_BYTES)
+        .ok_or(Refusal::Capacity)?;
+    let mut reader = file.try_clone().map_err(|_| Refusal::Unreadable)?;
+    reader
+        .seek(SeekFrom::Start(checkpoint.offset))
         .map_err(|_| Refusal::Unreadable)?;
+    let start = checkpoint.offset;
+    let framer = if checkpoint.discarding {
+        Framer::passing(SESSION_LINE_LIMIT_BYTES, start, start)
+    } else {
+        Framer::new(SESSION_LINE_LIMIT_BYTES, start)
+    };
+    let mut reading =
+        Forward::from_framer(reader.take(payload_budget), framer).with_block(RECORD_BLOCK_BYTES);
     let mut step = Step {
         events: Vec::new(),
         checkpoint,
-        read_bytes: bytes.len() as u64 + metadata_bytes + witness_bytes,
+        read_bytes: metadata_bytes + witness_bytes,
         has_more: false,
         rescanned,
         skipped: BTreeMap::new(),
     };
     let mut yielded = false;
-    for (index, fragment) in bytes.split_inclusive(|b| *b == b'\n').enumerate() {
-        // Grok's one native prompt may carry at most 128 model events.
-        if index > 0 && (started.elapsed() >= STEP_TIME || step.events.len() > STEP_EVENTS - 128) {
+    let mut count = 0;
+    loop {
+        // Grok's one native prompt may carry at most 128 model events; a
+        // step yields between records.
+        if count > 0
+            && reading.framer().passing_from().is_none()
+            && (started.elapsed() >= STEP_TIME || step.events.len() > STEP_EVENTS - 128)
+        {
             yielded = true;
             break;
         }
-        let complete = fragment.last() == Some(&b'\n');
-        if step.checkpoint.discarding || fragment.len() > SESSION_LINE_LIMIT_BYTES {
-            if !step.checkpoint.discarding {
-                *step.skipped.entry("record_capacity".into()).or_default() += 1;
+        match reading.next_frame().map_err(|_| Refusal::Unreadable)? {
+            None => break,
+            Some(Frame::Over { first, .. }) => {
+                if first {
+                    *step.skipped.entry("record_capacity".into()).or_default() += 1;
+                }
             }
-            step.checkpoint.offset += fragment.len() as u64;
-            step.checkpoint.discarding = !complete;
-        } else if complete {
-            let parsed = if let Some(summary) = &summary {
-                grok::parse(fragment, summary)
-            } else {
-                records::parse(agent, fragment, &mut step.checkpoint.context)
-                    .map(|event| event.into_iter().collect())
-            };
-            match parsed {
-                Ok(events) => step.events.extend(events),
-                Err(reason) => *step.skipped.entry(reason.into()).or_default() += 1,
+            Some(Frame::Record { bytes: record, .. }) => {
+                let parsed = if let Some(summary) = &summary {
+                    grok::parse(record, summary)
+                } else {
+                    records::parse(agent, record, &mut step.checkpoint.context)
+                        .map(|event| event.into_iter().collect())
+                };
+                match parsed {
+                    Ok(events) => step.events.extend(events),
+                    Err(reason) => *step.skipped.entry(reason.into()).or_default() += 1,
+                }
             }
-            step.checkpoint.offset += fragment.len() as u64;
-        } else {
-            break;
         }
+        count += 1;
     }
-    let (current, read) = witness(&mut file, step.checkpoint.offset)?;
+    step.read_bytes += reading.read_bytes();
+    // A record the read cut without its newline is read again whole by the
+    // next step; one being passed over goes on being passed over.
+    let framer = reading.framer();
+    step.checkpoint.offset = framer.settled();
+    step.checkpoint.discarding = framer.passing_from().is_some();
+    let spent = reading.read_bytes() == payload_budget;
+    let (current, read) = witness(&file, step.checkpoint.offset)?;
     step.read_bytes += read;
     step.checkpoint.witness = Some(current);
-    step.has_more =
-        step.checkpoint.offset < size && (yielded || bytes.len() as u64 == payload_budget);
+    step.has_more = step.checkpoint.offset < size && (yielded || spent);
     step.checkpoint.finished = !step.has_more;
     Ok(step)
 }

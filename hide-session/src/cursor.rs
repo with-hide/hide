@@ -2,7 +2,6 @@
 //! The native sidecar supplies cwd; neither a display name, derived transcript
 //! nor a previous-workspace URI is ownership evidence.
 
-use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::sync::{
     Arc,
@@ -152,8 +151,8 @@ struct FileMark {
 }
 
 fn mark(path: &Path) -> Result<FileMark> {
-    let file = crate::open_session_file_nofollow(path)
-        .map_err(|_| invalid("cursor_source_unavailable"))?;
+    let file =
+        crate::source::open_nofollow(path).map_err(|_| invalid("cursor_source_unavailable"))?;
     if hide_platform::fs::identity::link_count(&file).ok() != Some(1) {
         return Err(invalid("cursor_source_linked"));
     }
@@ -161,10 +160,9 @@ fn mark(path: &Path) -> Result<FileMark> {
 }
 
 fn mark_handle(file: &std::fs::File) -> Result<FileMark> {
-    let id = hide_platform::fs::identity::file_id_of(file)
-        .map_err(|_| invalid("cursor_source_unavailable"))?;
     Ok(FileMark {
-        id: format!("{}:{}", id.volume(), id.index()),
+        id: crate::source::file::incarnation(file)
+            .map_err(|_| invalid("cursor_source_unavailable"))?,
         stamp: format!(
             "{:?}",
             hide_platform::fs::identity::stamp_of(file)
@@ -234,7 +232,7 @@ struct Database {
     home: PathBuf,
     path: PathBuf,
     before: Vec<Option<FileMark>>,
-    header: crate::native_file::Header,
+    header: crate::source::facts::Header,
     root: Vec<u8>,
     created_at: u64,
     updated_at: Option<u64>,
@@ -247,7 +245,7 @@ impl Database {
     fn open(home: &Path, path: &Path, scope: Option<(&str, &str)>, budget: usize) -> Result<Self> {
         let path = checked_path(home, path)?;
         let before = marks(home, &path)?;
-        let source = crate::open_session_file_nofollow(&path)
+        let source = crate::source::open_nofollow(&path)
             .map_err(|_| invalid("cursor_source_unavailable"))?;
         if Some(mark_handle(&source)?) != before[0] {
             return Err(invalid("cursor_source_changed"));
@@ -265,12 +263,9 @@ impl Database {
                 Err(_) => return Err(invalid("cursor_source_unavailable")),
             }
         }
-        let sidecar_file = crate::open_session_file_nofollow(&path.with_file_name("meta.json"))
+        let sidecar_file = crate::source::open_nofollow(&path.with_file_name("meta.json"))
             .map_err(|_| invalid("cursor_sidecar_unavailable"))?;
-        let mut raw = Vec::new();
-        sidecar_file
-            .take(META_BYTES as u64 + 1)
-            .read_to_end(&mut raw)
+        let raw = crate::source::window::read_up_to(&sidecar_file, META_BYTES as u64)
             .map_err(|_| invalid("cursor_sidecar_unavailable"))?;
         if raw.len() > META_BYTES {
             return Err(capacity("cursor_sidecar_bytes", META_BYTES));
@@ -398,7 +393,7 @@ impl Database {
             home: home.to_path_buf(),
             path,
             before,
-            header: crate::native_file::Header {
+            header: crate::source::facts::Header {
                 id,
                 cwd: sidecar.cwd,
                 opened_at_unix_ms: None,

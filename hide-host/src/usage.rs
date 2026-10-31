@@ -200,10 +200,18 @@ fn codex_session_usage(home: &Path) -> Option<SessionLimits> {
     newest_codex_session_files(&home.join("sessions"))
         .ok()?
         .into_iter()
-        .find_map(|path| parse_latest_session_limits(&read_tail(&path, CODEX_TAIL_BYTES).ok()?))
+        .find_map(|path| {
+            parse_latest_session_limits(
+                read_tail(&path, CODEX_TAIL_BYTES)
+                    .ok()?
+                    .records_newest_first(),
+            )
+        })
 }
-fn parse_latest_session_limits(contents: &str) -> Option<SessionLimits> {
-    contents.lines().rev().find_map(|line| {
+fn parse_latest_session_limits<'a>(
+    mut records: impl Iterator<Item = &'a str>,
+) -> Option<SessionLimits> {
+    records.find_map(|line| {
         let value: Value = serde_json::from_str(line).ok()?;
         if value.get("type")?.as_str()? != "event_msg"
             || value.pointer("/payload/type")?.as_str()? != "token_count"
@@ -279,7 +287,8 @@ mod tests {
         let frame = json!({"timestamp":"2026-09-14T12:01:00Z", "type":"event_msg", "payload": {
             "type":"token_count", "rate_limits": {"primary":{"used_percent":90,"window_minutes":300,"resets_at":4102444800_u64},
                 "secondary":{"used_percent":58,"window_minutes":10080,"resets_at":4102444801_u64}}, "message":"private"}});
-        let read = parse_latest_session_limits(&frame.to_string()).unwrap();
+        let read =
+            parse_latest_session_limits(std::iter::once(frame.to_string().as_str())).unwrap();
         let body: Value = serde_json::from_str(&read.body).unwrap();
         assert_eq!(
             body.pointer("/rate_limit/primary_window/limit_window_seconds"),
@@ -293,7 +302,10 @@ mod tests {
         assert!(!read.body.contains("private"));
         let mut missing_time = frame;
         missing_time.as_object_mut().unwrap().remove("timestamp");
-        assert!(parse_latest_session_limits(&missing_time.to_string()).is_none());
+        assert!(
+            parse_latest_session_limits(std::iter::once(missing_time.to_string().as_str()))
+                .is_none()
+        );
     }
     #[test]
     fn only_numeric_usage_fields_leave_the_node() {
