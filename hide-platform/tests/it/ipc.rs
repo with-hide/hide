@@ -1191,7 +1191,7 @@ fn after_a_write_runs_out_of_time_the_stream_takes_no_more_writes() {
 }
 
 /// One exchange's deadline bounds the wait of each read and write, longer
-/// timeouts included, and past it nothing waits.
+/// timeouts included, and past it nothing waits until it is cleared.
 #[test]
 fn an_exchange_deadline_ends_its_reads_and_writes_once_it_has_passed() {
     let (_folder, path) = endpoint();
@@ -1217,6 +1217,12 @@ fn an_exchange_deadline_ends_its_reads_and_writes_once_it_has_passed() {
     assert_eq!(
         client.write(b"x").unwrap_err().kind(),
         std::io::ErrorKind::TimedOut
+    );
+    client.clear_deadline();
+    assert_eq!(
+        client.write(b"x").unwrap(),
+        1,
+        "a cleared deadline still bounded a write"
     );
     drop(release);
     held.join().unwrap();

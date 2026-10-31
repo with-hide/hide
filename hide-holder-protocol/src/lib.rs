@@ -1377,8 +1377,10 @@ pub fn open(
 ) -> Result<(hide_platform::ipc::LocalStream, Welcome), OpenError> {
     let stream =
         hide_platform::ipc::LocalStream::connect_until(path, deadline).map_err(OpenError::Io)?;
+    // The opening is bounded on a handle of its own; the connection goes on
+    // past the deadline.
     let mut bounded = stream.duplicate();
-    bounded.set_deadline(deadline);
+    stream.clear_deadline();
     write_opening(&mut bounded, &Opening::Hello(Hello::current(accepts))).map_err(OpenError::Io)?;
     match read_holder(&mut bounded)? {
         HolderMessage::Welcome(welcome) if welcome.version < OLDEST_HOLDER_VERSION => {

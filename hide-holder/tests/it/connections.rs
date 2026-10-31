@@ -14,12 +14,34 @@ use hide_holder_protocol::{
 use hide_platform::ipc::LocalStream;
 
 use crate::support::{
-    HANG_LIMIT, Holder, Home, current_version, print_ok, shell, source, start_ready, wait_until,
+    Connection, HANG_LIMIT, Holder, Home, current_version, print_ok, shell, source, start_ready,
+    wait_until,
 };
 
 fn shell_holder(home: &Home) -> Holder {
     let folder = home.prepare(current_version(), &source());
     start_ready(&folder.program, &home.socket("p"), &shell(), &[])
+}
+
+/// The deadline a node opens a connection by bounds the opening only: the
+/// connection takes input and sends screens after it has passed.
+#[test]
+fn a_connection_outlives_the_deadline_it_was_opened_by() {
+    let home = Home::new();
+    let holder = shell_holder(&home);
+    // The holder's own bound on an opening, which an opening meets anyway.
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+    let (stream, welcome) =
+        hide_holder_protocol::open(&holder.socket, vec![Capability::Screen], deadline).unwrap();
+    let mut connection = Connection::new(stream, welcome, &holder.socket);
+    wait_until("the opening's deadline to pass", || {
+        std::time::Instant::now() > deadline
+    });
+    connection
+        .send(ClientMessage::Input(print_ok().to_vec()))
+        .unwrap();
+    connection.wait_for_text("hide-ok");
+    connection.redraw();
 }
 
 fn stale_line() -> &'static [u8] {
