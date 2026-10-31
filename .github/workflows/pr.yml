@@ -680,6 +680,20 @@ jobs:
     permissions:
       contents: read
 
+  # Every pinned agent CLI in a pane holder across a node restart, on all
+  # three systems, for a change to the holder, the node's holder code, the
+  # pins or the lane's scripts (see holder-restart.yml); the nightly runs it
+  # every night.
+  holder-restart:
+    name: holder restart
+    needs: plan
+    if: contains(fromJSON(needs.plan.outputs.lanes), 'holder-restart')
+    uses: ./.github/workflows/holder-restart.yml
+    with:
+      systems: '["linux","macos","windows"]'
+    permissions:
+      contents: read
+
   # agy against stand-ins and its installed binary on Windows, for a change
   # to a crate that writes agy's files, reads its conversations or drives it
   # for Hide AI. `rust` runs the same agy tests on Linux; the nightly runs the
@@ -817,7 +831,7 @@ jobs:
     permissions:
       contents: read
       actions: read
-    needs: [plan, policy, rust, checks, os-contract, os-contract-macos, vt, agy-contract, omp-contract, agent-journey, agent-clis, windows-check, windows-e2e, windows-desktop, windows-wsl, web-e2e, remote-mailbox, desktop-e2e, package]
+    needs: [plan, policy, rust, checks, os-contract, os-contract-macos, vt, holder-restart, agy-contract, omp-contract, agent-journey, agent-clis, windows-check, windows-e2e, windows-desktop, windows-wsl, web-e2e, remote-mailbox, desktop-e2e, package]
     if: always()
     runs-on: ubuntu-latest
     timeout-minutes: 5

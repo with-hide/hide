@@ -1,0 +1,150 @@
+# The holder restart lane (PRD engine-bundle-2-pane-holder D-21, B8;
+# docs/TESTING.md, The holder restart lane): every pinned agent CLI, answered
+# by the agent journey's fake model with no key, runs in a pane holder a real
+# node started (`hide-node/examples/holder_node`, the node hided builds); the
+# node alone is killed and a new one attaches again, and each agent passes
+# only when its CLI kept its processes, the new node's first full frame is the
+# holder's screen and its second turn answers. One cell per agent and system;
+# a cell that cannot run fails, and the lane fails unless all seven passed.
+#
+# It shares the journey's pinned installs and fake model and nothing else:
+# no Herdr runs (on Windows only the ConPTY runtime beside the pinned Herdr is
+# fetched, which a holder runs its pane on), no hided, no kit. `pr.yml` runs
+# it for a change to the holder, the node's holder code, the pins or this
+# lane's scripts (scripts/ci-plan.py), and `nightly.yml` every night.
+name: holder restart
+
+on:
+  workflow_dispatch:
+    inputs:
+      systems:
+        description: The systems to run, as a JSON array of `linux`, `macos` and `windows`.
+        type: string
+        default: '["linux","macos","windows"]'
+      agents:
+        description: Comma-separated adapter IDs; every agent when empty.
+        type: string
+        default: ''
+  workflow_call:
+    inputs:
+      systems:
+        description: The systems to run, as a JSON array of `linux`, `macos` and `windows`.
+        type: string
+        required: true
+      agents:
+        description: Comma-separated adapter IDs; every agent when empty.
+        type: string
+        default: ''
+
+permissions:
+  contents: read
+
+env:
+  PYTHONUTF8: "1"
+
+jobs:
+  restart:
+    name: holder restart (${{ matrix.system }})
+    runs-on: ${{ fromJSON('{"linux":"ubuntu-latest","macos":"macos-15","windows":"windows-latest"}')[matrix.system] }}
+    # The steps' caps summed: seven agents at up to about 9 minutes each on
+    # Windows behind the installs and the build.
+    timeout-minutes: 125
+    strategy:
+      fail-fast: false
+      matrix:
+        system: ${{ fromJSON(inputs.systems) }}
+    defaults:
+      run:
+        shell: bash
+    env:
+      RUN_DIR: agents/runs/holder-restart-${{ matrix.system }}
+      AGENTS: ${{ inputs.agents }}
+      PYTHON: ${{ matrix.system == 'windows' && 'python' || 'python3' }}
+    steps:
+      - name: Keep line endings as committed
+        timeout-minutes: 1
+        if: runner.os == 'Windows'
+        run: git config --global core.autocrlf false
+      - uses: actions/checkout@v7
+        timeout-minutes: 5
+        with:
+          persist-credentials: false
+      # The holder links hide-vt; this lane reads the vt lane's entries.
+      - uses: ./.github/actions/vt-cache
+        timeout-minutes: 5
+        with:
+          save: false
+      - uses: ./.github/actions/rust-cache
+        timeout-minutes: 10
+        with:
+          set: workspace
+          save: false
+      - uses: actions/setup-node@v4
+        timeout-minutes: 5
+        with:
+          node-version: 22
+      - uses: pnpm/action-setup@v6
+        timeout-minutes: 3
+        with:
+          version: 10
+      - uses: actions/setup-python@v7
+        timeout-minutes: 5
+        if: runner.os == 'Windows'
+        with:
+          python-version: "3.12"
+      - name: Install the pinned agent CLIs
+        timeout-minutes: 10
+        run: '"$PYTHON" scripts/install-agent-clis.py --all'
+      - name: Build the holder and the node the lane drives
+        # The node is an example of hide-node that `cargo test` does not
+        # build; the lane copies it beside the holder, where a node finds its
+        # holder, as hided does in the app.
+        timeout-minutes: 30
+        run: |
+          start=$(date +%s)
+          bash scripts/verify-cargo.sh build -p hide-holder --bin hide-holder
+          held=$(date +%s)
+          bash scripts/verify-cargo.sh build -p hide-node --example holder_node
+          echo "build seconds: holder $((held - start)), node example $(($(date +%s) - held))"
+          suffix=""
+          if [[ "$RUNNER_OS" == Windows ]]; then suffix=.exe; fi
+          mkdir -p "$RUNNER_TEMP/holder-bin"
+          cp "target/debug/hide-holder$suffix" "target/debug/examples/holder_node$suffix" "$RUNNER_TEMP/holder-bin/"
+      - name: Install the xterm the lane draws frames on
+        timeout-minutes: 3
+        run: bash scripts/verify-web.sh install holder
+      - name: Fetch the pinned ConPTY runtime
+        # A Windows holder runs a pane only on the pinned ConPTY runtime, the
+        # `conpty` folder beside the pinned Herdr's herdr.exe; Herdr itself
+        # never runs here.
+        id: herdr
+        if: runner.os == 'Windows'
+        timeout-minutes: 5
+        shell: pwsh
+        run: |
+          $bin = (pwsh -NoProfile -File scripts/fetch-herdr-runtime.ps1 | Select-Object -Last 1).Trim()
+          "bin=$bin" >> $env:GITHUB_OUTPUT
+      - name: Restart each agent's node
+        timeout-minutes: 60
+        env:
+          HERDR_BIN: ${{ steps.herdr.outputs.bin }}
+        run: |
+          options=()
+          if [[ -n "$AGENTS" ]]; then options+=(--agents "$AGENTS"); fi
+          if [[ -n "$HERDR_BIN" ]]; then options+=(--herdr-bin "$HERDR_BIN"); fi
+          "$PYTHON" scripts/holder-restart-check.py --bin "$RUNNER_TEMP/holder-bin" --run-dir "$RUN_DIR" "${options[@]}"
+      - name: The cells
+        timeout-minutes: 1
+        if: ${{ !cancelled() }}
+        run: cat "$RUN_DIR/report.md" >> "$GITHUB_STEP_SUMMARY" || true
+      - name: Keep the report
+        timeout-minutes: 5
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: holder-restart-${{ matrix.system }}
+          path: |
+            ${{ env.RUN_DIR }}/report.*
+            ${{ env.RUN_DIR }}/*.jsonl
+            ${{ env.RUN_DIR }}/*.log
+          if-no-files-found: warn

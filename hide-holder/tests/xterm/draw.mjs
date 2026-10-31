@@ -6,7 +6,7 @@
 //                      "defaults": { "fg": "#rrggbb", "bg": "#rrggbb" } }, ... ] }
 // where a step is { "write": "<hex>" } or { "resize": [cols, rows] }, and
 // writes one JSON document on standard output:
-//   { "screens": [ { "lines": [...], "styles": [...], "x": n, "y": n,
+//   { "screens": [ { "lines": [...], "wrapped": [...], "styles": [...], "x": n, "y": n,
 //                    "cursorVisible": bool,
 //                    "cursorStyle": "default"|"block"|"underline"|"bar",
 //                    "cursorBlink": bool|null, "buffer": "normal"|"alternate",
@@ -107,11 +107,17 @@ for (const spec of terminals) {
   }
   const buffer = terminal.buffer.active;
   const lines = [];
+  const wrapped = [];
   for (let row = 0; row < terminal.rows; row += 1) {
-    lines.push(buffer.getLine(buffer.viewportY + row)?.translateToString(true) ?? "");
+    const line = buffer.getLine(buffer.viewportY + row);
+    lines.push(line?.translateToString(true) ?? "");
+    wrapped.push(line?.isWrapped ?? false);
   }
   screens.push({
     lines,
+    // Whether each row continues the one above it, a soft wrap: a holder's
+    // read joins those rows into one line.
+    wrapped,
     styles: styles(terminal, spec.defaults ?? { fg: "dfg", bg: "dbg" }),
     x: buffer.cursorX,
     y: buffer.cursorY,

@@ -140,6 +140,18 @@ jobs:
       systems: ${{ inputs.lane == 'linux' && '["linux"]' || inputs.lane == 'macos' && '["macos"]' || inputs.lane == 'windows' && '["windows"]' || '["linux","macos","windows"]' }}
       fake: true
 
+  # Every pinned agent CLI in a pane holder across a node restart
+  # (holder-restart.yml), on all three systems (one system's on that
+  # system's hand run).
+  holder-restart:
+    name: holder restart
+    if: ${{ inputs.lane != 'agy' }}
+    uses: ./.github/workflows/holder-restart.yml
+    permissions:
+      contents: read
+    with:
+      systems: ${{ inputs.lane == 'linux' && '["linux"]' || inputs.lane == 'macos' && '["macos"]' || inputs.lane == 'windows' && '["windows"]' || '["linux","macos","windows"]' }}
+
   # The real Claude Code and Codex read the folder trust Hide records for a
   # worktree it made, on all three systems (one system's on that system's
   # hand run, all three on `agy`'s, the other agent contract); a pull request
@@ -222,7 +234,7 @@ jobs:
 
   report:
     name: nightly report
-    needs: [web-e2e-macos, web-e2e-windows, remote-mailbox-macos, agy-contract-all, agent-trust-contract-all, agent-journey, desktop-e2e, perf, verify, package]
+    needs: [web-e2e-macos, web-e2e-windows, remote-mailbox-macos, agy-contract-all, agent-trust-contract-all, agent-journey, holder-restart, desktop-e2e, perf, verify, package]
     if: ${{ always() }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
