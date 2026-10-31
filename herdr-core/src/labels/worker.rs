@@ -910,6 +910,22 @@ impl LabelWorker {
 
     /// Runs what came due: the generator role, provider waits, follow-up
     /// reads. Returns whether anything shown changed.
+    /// Reads the sessions of `panes` again on the next schedule, for typed
+    /// input waiting on the agent's own record (`delivery::typed`): an agent
+    /// can write the prompt to its session file after the read its stop
+    /// asked for. A pane this worker does not follow is skipped. Whether
+    /// any read was asked.
+    pub(crate) fn read_again(&mut self, panes: &[String]) -> bool {
+        let mut asked = false;
+        for pane_id in panes {
+            if let Some(pane) = self.panes.get_mut(pane_id) {
+                pane.needs_read |= pane.reference_token.is_some();
+                asked |= pane.needs_read;
+            }
+        }
+        asked
+    }
+
     pub(crate) fn tick(&mut self, now: Instant) -> bool {
         let mut changed = self.ensure_generator(now);
         if !self.generator.held() {

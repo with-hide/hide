@@ -345,6 +345,9 @@ pub(crate) struct Doorbell {
     input_retry: HashMap<String, u64>,
     /// Why each brief waits to be typed again, logged once per change.
     input_held: HashMap<String, &'static str>,
+    /// Each unconfirmed brief's last composer read: the typing and the
+    /// pane's last input it was read at, and when it may be read again.
+    input_read: HashMap<String, ((u8, u64), u64)>,
 }
 
 /// How one attempt ended without failing.
@@ -671,20 +674,18 @@ impl Doorbell {
         use crate::runtime::typed_input::InputKey;
         let work = owner
             .lock()
-            .map(|guard| guard.typed_input_work(now))
+            .map(|mut guard| guard.typed_input_work(now))
             .unwrap_or_default();
         let keys: HashSet<String> = work
             .iter()
-            .flat_map(|item| {
-                let id = match &item.key {
-                    InputKey::Spawn(id) | InputKey::Letter(id) => id,
-                };
-                [format!("notice:{id}"), format!("retype:{id}")]
+            .map(|item| match &item.key {
+                InputKey::Spawn(id) | InputKey::Letter(id) => id.clone(),
             })
             .collect();
-        self.input_retry.retain(|key, _| keys.contains(key));
-        self.input_held
-            .retain(|key, _| keys.contains(&format!("retype:{key}")));
+        self.input_retry
+            .retain(|key, _| key.split_once(':').is_some_and(|(_, id)| keys.contains(id)));
+        self.input_held.retain(|key, _| keys.contains(key));
+        self.input_read.retain(|key, _| keys.contains(key));
         for item in work {
             if stop.load(Ordering::Acquire) || *count >= WORK_PER_PASS {
                 break;
@@ -695,6 +696,47 @@ impl Doorbell {
             if item.recorded {
                 record_brief(owner, &id);
                 continue;
+            }
+            // The composer first: a brief it still shows gets its Enter, and
+            // its parent hears only if that is not taken either.
+            if let Some(resubmit) = &item.resubmit {
+                // Read once per typing and per input that reached the pane,
+                // and again after a while, so a resting pane is not read on
+                // every pass.
+                let seen = (resubmit.attempts, item.observation.last_input_at_unix_ms);
+                let due = self
+                    .input_read
+                    .get(&id)
+                    .is_none_or(|(pair, retry_at)| *pair != seen || now >= *retry_at);
+                if due {
+                    *count += 1;
+                    match resubmit_brief(owner, &id, &item.observation, resubmit) {
+                        Ok(_) => {
+                            self.input_read.remove(&id);
+                            self.input_held.remove(&id);
+                            continue;
+                        }
+                        Err(reason) => {
+                            if self.input_held.insert(id.clone(), reason) != Some(reason) {
+                                crate::diagnostic!(json!({"component":"delivery",
+                                    "kind":"input.retype_held","spawn":id,
+                                    "pane_id":item.observation.actor.pane_id,"reason":reason}));
+                            }
+                            // A screen that could not be read is read again
+                            // soon; one read for what it is, after a while.
+                            let wait = if matches!(
+                                reason,
+                                super::composer::UNCONFIRMED | "agent_unread" | "not_ready"
+                            ) {
+                                RETRY_FIRST_MS
+                            } else {
+                                RETRY_LIMIT_MS
+                            };
+                            self.input_read
+                                .insert(id.clone(), (seen, now.saturating_add(wait)));
+                        }
+                    }
+                }
             }
             if let Some(notice) = &item.notice {
                 let key = format!("notice:{id}");
@@ -712,29 +754,6 @@ impl Doorbell {
                                 .insert(key, now.saturating_add(RETRY_LIMIT_MS));
                         }
                     }
-                }
-            }
-            let Some(brief) = item.retype.as_deref() else {
-                continue;
-            };
-            let key = format!("retype:{id}");
-            if self.input_retry.get(&key).is_some_and(|at| now < *at) {
-                continue;
-            }
-            *count += 1;
-            match retype_brief(owner, &id, &item.observation, brief) {
-                Ok(()) => {
-                    self.input_retry.remove(&key);
-                    self.input_held.remove(&id);
-                }
-                Err(reason) => {
-                    if self.input_held.insert(id.clone(), reason) != Some(reason) {
-                        crate::diagnostic!(json!({"component":"delivery",
-                            "kind":"input.retype_held","spawn":id,
-                            "pane_id":item.observation.actor.pane_id,"reason":reason}));
-                    }
-                    self.input_retry
-                        .insert(key, now.saturating_add(RETRY_FIRST_MS));
                 }
             }
         }
@@ -875,16 +894,29 @@ fn record_brief(owner: &Mutex<Runtime>, id: &str) {
     );
 }
 
-/// Types spawn `id`'s brief again into the pane `observed`: once Herdr
-/// reports the same agent ready for input and its composer reads empty by
-/// its declaration, the typing is reserved in the ledger and the brief typed.
-/// A refusal before the reservation types nothing and says why.
-fn retype_brief(
+/// What a composer read for an unconfirmed brief did.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Resubmitted {
+    /// The composer still showed the brief: Enter submitted it.
+    Entered,
+    /// The composer was empty after someone answered the screen: the brief
+    /// was typed again.
+    Retyped,
+}
+
+/// Reads the composer of spawn `id`'s pane once Herdr reports the same agent
+/// ready for input: still showing the brief, it gets the Enter it lost; empty
+/// after someone answered the screen, the brief is typed again; anything else
+/// holds. Either spends one of the brief's typings, reserved in the ledger
+/// first; a refusal before the reservation sends nothing and says why. Text
+/// and Enter on a choice screen can pick an option, which a composer read
+/// showing exactly the brief rules out.
+fn resubmit_brief(
     owner: &Mutex<Runtime>,
     id: &str,
     observed: &Observation,
-    brief: &str,
-) -> Result<(), &'static str> {
+    resubmit: &crate::runtime::typed_input::Resubmit,
+) -> Result<Resubmitted, &'static str> {
     let (engine, delivery) = owner
         .lock()
         .ok()
@@ -904,7 +936,28 @@ fn retype_brief(
     if !agent.readiness.accepts_input() {
         return Err("not_ready");
     }
-    super::composer::forced_clear(engine.as_ref(), &observed.raw_pane_id, &observed.actor.kind)?;
+    let shows = super::composer::shows(
+        engine.as_ref(),
+        &observed.raw_pane_id,
+        &observed.actor.kind,
+        &resubmit.brief,
+    )?;
+    if let Ok(mut guard) = owner.lock() {
+        guard.note_input_held(
+            id,
+            resubmit.attempts,
+            shows == super::composer::Shows::Typed,
+        );
+    }
+    let action = match shows {
+        super::composer::Shows::Typed => Resubmitted::Entered,
+        super::composer::Shows::Empty if resubmit.answered => Resubmitted::Retyped,
+        super::composer::Shows::Empty => return Err("unanswered"),
+        super::composer::Shows::Other => return Err(super::composer::NOT_EMPTY),
+    };
+    if !resubmit.left {
+        return Err("attempts_spent");
+    }
     let (client, authority, actor) = delivery;
     client
         .submit(
@@ -918,18 +971,27 @@ fn retype_brief(
             PROMPT_TIMEOUT,
         )
         .map_err(|code| match code.as_str() {
-            // The record arrived meanwhile: nothing is typed again.
+            // The record arrived meanwhile: nothing is sent again.
             "brief_confirmed" => "confirmed",
             "brief_attempts_spent" => "attempts_spent",
             _ => "reservation_failed",
         })?;
-    crate::coordination::executor::type_brief(engine.as_ref(), id, &observed.raw_pane_id, brief)
-        .map_err(|_| "prompt_failed")?;
-    crate::diagnostic!(
-        json!({"component":"delivery","kind":"input.retyped","spawn":id,
-        "pane_id":observed.actor.pane_id})
-    );
-    Ok(())
+    match action {
+        Resubmitted::Entered => engine
+            .send_keys(Wait::Small(RPC_TIMEOUT), &observed.raw_pane_id, &["Enter"])
+            .map_err(|_| "prompt_failed")?,
+        Resubmitted::Retyped => crate::coordination::executor::type_brief(
+            engine.as_ref(),
+            id,
+            &observed.raw_pane_id,
+            &resubmit.brief,
+        )
+        .map_err(|_| "prompt_failed")?,
+    }
+    crate::diagnostic!(json!({"component":"delivery",
+        "kind": if action == Resubmitted::Entered { "input.entered" } else { "input.retyped" },
+        "spawn":id,"pane_id":observed.actor.pane_id}));
+    Ok(action)
 }
 
 /// The line the bell types for `letter`, naming its writer as the operator
@@ -1818,7 +1880,7 @@ mod tests {
     /// sender's grace (`docs/delivery.md`, Input an agent did not take).
     #[test]
     fn a_bell_the_agent_never_recorded_tells_its_sender_then_the_operator() {
-        use crate::delivery::typed::{PARENT_GRACE_MS, RECORD_WAIT_MS};
+        use crate::delivery::typed::{PARENT_GRACE_MS, RECORD_WAIT_MS, REREAD_WAIT_MS};
         let bell = Bell::start(json!({}));
         // The daemon's store, which Hide's own notices go through.
         bell.runtime
@@ -1842,7 +1904,13 @@ mod tests {
         // Within the record wait nothing is owed yet.
         bell.pass(&mut doorbell, start + RECORD_WAIT_MS / 2);
         assert!(notices(&bell).is_empty());
-        let late = start + RECORD_WAIT_MS + 1_000;
+        // Past it, the recipient's session is read once more first.
+        bell.pass(&mut doorbell, start + RECORD_WAIT_MS + 1_000);
+        assert!(
+            notices(&bell).is_empty(),
+            "nothing is told before the fresh read"
+        );
+        let late = start + RECORD_WAIT_MS + 1_000 + REREAD_WAIT_MS;
         bell.pass(&mut doorbell, late);
         let sent = notices(&bell);
         assert_eq!(sent.len(), 1, "the sender is told once");
@@ -1878,6 +1946,7 @@ mod tests {
             crate::model::AskSubject::InputUnconfirmed {
                 input: crate::delivery::typed::InputKind::Letter,
                 spent: false,
+                held: false,
             }
         );
     }

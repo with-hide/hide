@@ -38,11 +38,38 @@ pub(crate) struct InputWork {
     /// The pane the input was typed into, as Hide observes it now.
     pub observation: Observation,
     pub notice: Option<Notice>,
-    /// The brief to type again, once someone answered the agent's screen.
-    pub retype: Option<String>,
+    /// A brief whose agent's composer is to be read: still showing the
+    /// brief, it gets its Enter; empty, the brief is typed again once
+    /// someone answered the screen.
+    pub resubmit: Option<Resubmit>,
     /// The agent's session file records the brief among its user messages:
     /// the store is told, and nothing else is done for it.
     pub recorded: bool,
+}
+
+/// A brief the doorbell reads the composer for (`InputWork::resubmit`).
+#[derive(Clone)]
+pub(crate) struct Resubmit {
+    pub brief: String,
+    /// The typing the brief is at.
+    pub attempts: u8,
+    /// Typings are left, so an Enter or a typing may be spent.
+    pub left: bool,
+    /// Someone answered the agent's screen since the last typing and the
+    /// agent's record has a source, so an empty composer is typed into.
+    pub answered: bool,
+}
+
+/// Where an unconfirmed input stands with the fresh session read asked
+/// before its verdict.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Reread {
+    /// Asked and given its time, or not needed: judge the input.
+    Settled,
+    /// Not asked for this typing yet.
+    Ask,
+    /// Asked, still within its time.
+    Wait,
 }
 
 /// An input shown to the operator: the pane whose row shows it, since when,
@@ -121,11 +148,14 @@ impl Runtime {
     /// The unconfirmed inputs the doorbell has work for now: a notice owed,
     /// or a brief to type again. Bounded by the spawns and open letters the
     /// ledger keeps.
-    pub(crate) fn typed_input_work(&self, now: u64) -> Vec<InputWork> {
-        let Ok(ledger) = self.delivery_ledger.as_ref() else {
+    pub(crate) fn typed_input_work(&mut self, now: u64) -> Vec<InputWork> {
+        let Ok(ledger) = self.delivery_ledger.clone() else {
             return Vec::new();
         };
+        let ledger = ledger.as_ref();
         let mut work = Vec::new();
+        let mut rereads = Vec::new();
+        let mut open = std::collections::BTreeSet::new();
         for spawn in &ledger.spawns {
             let (Some(input), Some(brief)) = (
                 spawn
@@ -154,7 +184,7 @@ impl Runtime {
                     key: InputKey::Spawn(spawn.id.clone()),
                     observation: observation.clone(),
                     notice: None,
-                    retype: None,
+                    resubmit: None,
                     recorded: true,
                 });
                 continue;
@@ -165,6 +195,20 @@ impl Runtime {
             ) {
                 continue;
             }
+            open.insert(spawn.id.clone());
+            match self.reread(&spawn.id, input.attempts, &observation.actor.pane_id, now) {
+                Reread::Settled => {}
+                Reread::Ask => {
+                    rereads.push((
+                        spawn.id.clone(),
+                        input.attempts,
+                        observation.actor.pane_id.clone(),
+                    ));
+                    continue;
+                }
+                Reread::Wait => continue,
+            }
+            let source = self.input_source(&spawn.kind, &observation.actor.pane_id);
             let notice = typed::notice_due(input)
                 .then(|| self.notice_to(&spawn.parent, ledger))
                 .flatten()
@@ -175,18 +219,26 @@ impl Runtime {
                         &spawn.name,
                         &observation.actor.pane_id,
                         None,
+                        source,
                     ),
                     attempt: input.attempts,
                     target,
                 });
-            let retype = (spawn.briefed && typed::retype_due(input, observation, now))
-                .then(|| brief.clone());
-            if notice.is_some() || retype.is_some() {
+            // The composer is read at rest only: what a working agent draws
+            // there is its own.
+            let resubmit =
+                (spawn.briefed && typed::composer_readable(observation, now)).then(|| Resubmit {
+                    brief: brief.clone(),
+                    attempts: input.attempts,
+                    left: input.attempts < typed::INPUT_ATTEMPTS,
+                    answered: source.is_ok() && typed::retype_due(input, observation, now),
+                });
+            if notice.is_some() || resubmit.is_some() {
                 work.push(InputWork {
                     key: InputKey::Spawn(spawn.id.clone()),
                     observation: observation.clone(),
                     notice,
-                    retype,
+                    resubmit,
                     recorded: false,
                 });
             }
@@ -202,12 +254,27 @@ impl Runtime {
             else {
                 continue;
             };
-            if !typed::notice_due(&input)
-                || !matches!(
-                    typed::standing(&input, Some(observation), now),
-                    Standing::Unconfirmed { .. }
-                )
-            {
+            if !matches!(
+                typed::standing(&input, Some(observation), now),
+                Standing::Unconfirmed { .. }
+            ) {
+                continue;
+            }
+            // Open past its notice too: the row reads the settled fresh read.
+            open.insert(letter.id.clone());
+            match self.reread(&letter.id, input.attempts, &observation.actor.pane_id, now) {
+                Reread::Settled => {}
+                Reread::Ask => {
+                    rereads.push((
+                        letter.id.clone(),
+                        input.attempts,
+                        observation.actor.pane_id.clone(),
+                    ));
+                    continue;
+                }
+                Reread::Wait => continue,
+            }
+            if !typed::notice_due(&input) {
                 continue;
             }
             let Some(target) = self.observed_sender(&letter.sender) else {
@@ -223,15 +290,110 @@ impl Runtime {
                         &letter.recipient.name,
                         &observation.actor.pane_id,
                         Some(&letter.id),
+                        self.input_source(&letter.recipient.kind, &observation.actor.pane_id),
                     ),
                     attempt: input.attempts,
                     target,
                 }),
-                retype: None,
+                resubmit: None,
                 recorded: false,
             });
         }
+        self.plans.input_reread.retain(|id, _| open.contains(id));
+        self.plans.input_held.retain(|id, _| open.contains(id));
+        for (id, attempts, pane) in rereads {
+            self.plans.input_reread.insert(id, (attempts, now));
+            if !self.plans.session_rereads.contains(&pane) {
+                self.plans.session_rereads.push(pane);
+            }
+        }
         work
+    }
+
+    /// Where unconfirmed input `id`, at typing `attempts`, stands with the
+    /// fresh read of its agent's session that comes before the verdict
+    /// (`typed::REREAD_WAIT_MS`). A device's pane is read on its own machine
+    /// on its state changes alone, so it is judged at once.
+    fn reread(&self, id: &str, attempts: u8, pane_id: &str, now: u64) -> Reread {
+        if crate::agent_hooks::is_remote_pane(pane_id) {
+            return Reread::Settled;
+        }
+        match self.plans.input_reread.get(id) {
+            Some((asked, at)) if *asked == attempts => {
+                if now.saturating_sub(*at) >= typed::REREAD_WAIT_MS {
+                    Reread::Settled
+                } else {
+                    Reread::Wait
+                }
+            }
+            _ => Reread::Ask,
+        }
+    }
+
+    /// The panes whose sessions are to be read again, for this machine's
+    /// session-sync thread.
+    pub(crate) fn take_session_rereads(&mut self) -> Vec<String> {
+        std::mem::take(&mut self.plans.session_rereads)
+    }
+
+    /// Whether the agent in `pane_id` has a source for its own record of
+    /// typed input: a prompt hook Hide hears, for an agent that records
+    /// there, else a read of its session file. Without one an unconfirmed
+    /// input is not judged lost (`typed::HOOKS_NOT_CONNECTED`,
+    /// `typed::SESSION_UNREAD`).
+    fn input_source(&self, kind: &str, pane_id: &str) -> Result<(), &'static str> {
+        let hooked =
+            hide_agent_adapter::adapter(kind).is_some_and(|row| row.key.prompt_hook_records());
+        if hooked {
+            let not_connected = self
+                .pane_children_of(pane_id)
+                .and_then(|children| children.connection.as_ref())
+                .is_some_and(|connection| !connection.connected);
+            return if not_connected {
+                Err(typed::HOOKS_NOT_CONNECTED)
+            } else {
+                Ok(())
+            };
+        }
+        self.row_facts_of(pane_id)
+            .map(drop)
+            .ok_or(typed::SESSION_UNREAD)
+    }
+
+    /// The pane's children projection, which carries its Not connected
+    /// judgement, on this machine or a device.
+    fn pane_children_of(&self, pane_id: &str) -> Option<&crate::model::PaneChildrenSnapshot> {
+        self.snapshot
+            .navigator
+            .workspaces
+            .iter()
+            .chain(
+                self.snapshot
+                    .status
+                    .remote
+                    .iter()
+                    .filter_map(|remote| remote.session.as_ref())
+                    .flat_map(|session| session.workspaces.iter()),
+            )
+            .flat_map(|workspace| workspace.checkouts.iter())
+            .flat_map(|checkout| checkout.tabs.iter())
+            .flat_map(|tab| tab.panes.iter())
+            .find(|pane| pane.id == pane_id)
+            .and_then(|pane| pane.children.as_ref())
+    }
+
+    /// The doorbell read the composer of input `id` after its typing
+    /// `attempts`: `held` when it still showed the input.
+    pub(crate) fn note_input_held(&mut self, id: &str, attempts: u8, held: bool) {
+        if held {
+            self.plans.input_held.insert(id.to_owned(), attempts);
+        } else {
+            self.plans.input_held.remove(id);
+        }
+    }
+
+    fn input_held(&self, id: &str, attempts: u8) -> bool {
+        self.plans.input_held.get(id) == Some(&attempts)
     }
 
     /// The label worker's facts on the row of `pane_id`, on this machine or
@@ -299,11 +461,17 @@ impl Runtime {
             else {
                 continue;
             };
+            if self.reread(&spawn.id, input.attempts, &observation.actor.pane_id, now)
+                != Reread::Settled
+            {
+                continue;
+            }
             let has_parent = spawn.mode == SpawnMode::Delegation
                 && self.notice_to(&spawn.parent, ledger).is_some();
             if typed::shown_to_operator(input, has_parent, now) {
+                let held = self.input_held(&spawn.id, input.attempts);
                 asks.entry(observation.actor.pane_id.clone())
-                    .or_insert((since, subject(InputKind::Brief, input)));
+                    .or_insert((since, subject(InputKind::Brief, input, held)));
             }
         }
         for letter in &ledger.letters {
@@ -321,10 +489,15 @@ impl Runtime {
             else {
                 continue;
             };
+            if self.reread(&letter.id, input.attempts, &observation.actor.pane_id, now)
+                != Reread::Settled
+            {
+                continue;
+            }
             let has_sender = self.observed_sender(&letter.sender).is_some();
             if typed::shown_to_operator(&input, has_sender, now) {
                 asks.entry(observation.actor.pane_id.clone())
-                    .or_insert((since, subject(InputKind::Letter, &input)));
+                    .or_insert((since, subject(InputKind::Letter, &input, false)));
             }
         }
         asks.into_iter()
@@ -359,10 +532,11 @@ impl Runtime {
     }
 }
 
-fn subject(input: InputKind, typed_input: &TypedInput) -> AskSubject {
+fn subject(input: InputKind, typed_input: &TypedInput, held: bool) -> AskSubject {
     AskSubject::InputUnconfirmed {
         input,
         spent: typed_input.attempts >= typed::INPUT_ATTEMPTS,
+        held,
     }
 }
 
@@ -376,7 +550,7 @@ mod tests {
     use crate::coordination::{AgentRecord, Command};
     use crate::delivery::Actor;
     use crate::delivery::ledger::Ledger;
-    use crate::delivery::typed::{PARENT_GRACE_MS, RECORD_WAIT_MS};
+    use crate::delivery::typed::{PARENT_GRACE_MS, RECORD_WAIT_MS, REREAD_WAIT_MS};
     use crate::node::TEST_NODE;
 
     const BRIEF: &str = "Node api: add the call.\nReport by letter.";
@@ -385,6 +559,15 @@ mod tests {
     /// brief, typed once at `typed_at`; the Codex has no session yet, as
     /// before its first turn. Returns the runtime and the spawn's id.
     fn spawned(handoff: bool, typed_at: u64) -> (tempfile::TempDir, Runtime, String) {
+        spawned_as("codex", handoff, typed_at)
+    }
+
+    /// [`spawned`] with a child of `kind`.
+    fn spawned_as(
+        kind: &str,
+        handoff: bool,
+        typed_at: u64,
+    ) -> (tempfile::TempDir, Runtime, String) {
         let root = tempfile::tempdir().unwrap();
         let (runtime, _, _, _) = crate::runtime::delivery::tests::fixture(root.path());
         let mut runtime = Arc::try_unwrap(runtime).ok().unwrap().into_inner().unwrap();
@@ -397,7 +580,7 @@ mod tests {
         "agents": [
             {"id": "sender", "pane_id": "sender", "agent": "codex", "agent_status": "working",
              "state_change_seq": 1, "lineage_session": parent_session},
-            {"id": "child", "pane_id": "child", "agent": "codex", "agent_status": "idle",
+            {"id": "child", "pane_id": "child", "agent": kind, "agent_status": "idle",
              "state_change_seq": 2},
         ]}))
         .unwrap();
@@ -452,7 +635,7 @@ mod tests {
                     machine: None,
                     name: "worker".into(),
                     intent: "task-1".into(),
-                    kind: "codex".into(),
+                    kind: kind.into(),
                     repo: "/fixture".into(),
                     branch: "topic".into(),
                     path: None,
@@ -517,13 +700,22 @@ mod tests {
     /// operator's row shows it only after the parent's grace.
     #[test]
     fn an_unrecorded_brief_tells_the_parent_then_waits_for_its_screen_to_be_answered() {
-        let (_root, mut runtime, spawn) = spawned(false, 1_000);
+        // Typed well after the pane's last input, so its composer is readable
+        // at rest.
+        const T: u64 = 100_000;
+        let (_root, mut runtime, spawn) = spawned(false, T);
+        assert!(runtime.typed_input_work(T + RECORD_WAIT_MS - 1).is_empty());
+        // Past the record wait, a fresh read of the child's session is asked
+        // and given its time before the brief is judged.
+        let asked = T + RECORD_WAIT_MS;
+        assert!(runtime.typed_input_work(asked).is_empty());
+        assert_eq!(runtime.take_session_rereads(), vec!["child".to_owned()]);
         assert!(
             runtime
-                .typed_input_work(1_000 + RECORD_WAIT_MS - 1)
+                .typed_input_work(asked + REREAD_WAIT_MS - 1)
                 .is_empty()
         );
-        let at = 1_000 + RECORD_WAIT_MS;
+        let at = asked + REREAD_WAIT_MS;
         let work = runtime.typed_input_work(at);
         assert_eq!(work.len(), 1);
         assert_eq!(work[0].key, InputKey::Spawn(spawn.clone()));
@@ -531,9 +723,11 @@ mod tests {
         assert_eq!(notice.target.actor.pane_id, "sender");
         assert_eq!(notice.intent, format!("input-unconfirmed:{spawn}:1"));
         assert!(notice.body.starts_with(
-            "worker did not take its brief: read its screen with `hide pane read child`."
+            "worker has not confirmed its brief: read its screen with `hide pane read child`."
         ));
-        assert_eq!(work[0].retype, None, "nobody answered the screen");
+        let resubmit = work[0].resubmit.as_ref().expect("its composer is read");
+        assert!(!resubmit.answered, "nobody answered the screen");
+        assert!(resubmit.left);
         assert!(
             runtime.input_asks(at).is_empty(),
             "the parent clears it first"
@@ -542,11 +736,13 @@ mod tests {
         // Someone answered the screen through Hide.
         runtime.note_delivery_key_at("child", at + 1_000);
         let quiet = at + 1_000 + crate::delivery::INPUT_QUIET_MS;
-        assert_eq!(runtime.typed_input_work(quiet - 1)[0].retype, None);
-        assert_eq!(
-            runtime.typed_input_work(quiet)[0].retype.as_deref(),
-            Some(BRIEF)
+        assert!(
+            runtime.typed_input_work(quiet - 1)[0].resubmit.is_none(),
+            "nothing is read while someone types there"
         );
+        let resubmit = runtime.typed_input_work(quiet)[0].resubmit.clone().unwrap();
+        assert!(resubmit.answered);
+        assert_eq!(resubmit.brief, BRIEF);
 
         // Told, the parent has its grace before the operator sees the row.
         let mut ledger = (**runtime.delivery_ledger.as_ref().unwrap()).clone();
@@ -567,28 +763,54 @@ mod tests {
             "one notice per typing"
         );
         assert!(runtime.typed_input_work(quiet)[0].notice.is_none());
+        // A composer read showing the brief is the proof it was not taken.
+        runtime.note_input_held(&spawn, 1, true);
         assert!(runtime.input_asks(at + PARENT_GRACE_MS - 1).is_empty());
         let shown = runtime.input_asks(at + PARENT_GRACE_MS);
         assert_eq!(
             shown,
             vec![(
                 "child".to_owned(),
-                1_000,
+                T,
                 AskSubject::InputUnconfirmed {
                     input: InputKind::Brief,
-                    spent: false
+                    spent: false,
+                    held: true,
                 },
             )]
         );
         assert_eq!(input_of(&runtime, &spawn).attempts, 1);
     }
 
+    /// An agent Hide has no source for its record of the brief, here a Pi
+    /// whose session Hide has not read, is not judged to have lost it: its
+    /// parent hears that it cannot be confirmed, and an answered screen does
+    /// not have the brief typed again.
+    #[test]
+    fn a_brief_with_no_source_for_its_record_is_never_typed_again() {
+        let (_root, mut runtime, _) = spawned_as("pi", false, 1_000);
+        runtime.typed_input_work(1_000 + RECORD_WAIT_MS);
+        let at = 1_000 + RECORD_WAIT_MS + REREAD_WAIT_MS;
+        let work = runtime.typed_input_work(at);
+        assert!(work[0].notice.as_ref().unwrap().body.starts_with(
+            "worker cannot confirm its brief (Hide cannot read its session): read its screen"
+        ));
+        runtime.note_delivery_key_at("child", at + 1_000);
+        let quiet = at + 1_000 + crate::delivery::INPUT_QUIET_MS;
+        let resubmit = runtime.typed_input_work(quiet)[0].resubmit.clone().unwrap();
+        assert!(
+            !resubmit.answered,
+            "only a composer still showing it gets its Enter"
+        );
+    }
+
     /// A handed-off child has no parent to clear its screen: its row shows
     /// the unrecorded brief as soon as it is unconfirmed.
     #[test]
     fn a_handed_off_childs_unrecorded_brief_reaches_the_operator_at_once() {
-        let (_root, runtime, _) = spawned(true, 1_000);
-        let at = 1_000 + RECORD_WAIT_MS;
+        let (_root, mut runtime, _) = spawned(true, 1_000);
+        runtime.typed_input_work(1_000 + RECORD_WAIT_MS);
+        let at = 1_000 + RECORD_WAIT_MS + REREAD_WAIT_MS;
         assert_eq!(runtime.input_asks(at).len(), 1);
     }
 

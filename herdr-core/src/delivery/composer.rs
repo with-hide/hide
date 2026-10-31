@@ -210,6 +210,44 @@ pub(crate) fn forced_clear(
     }
 }
 
+/// What an agent's composer shows against text Hide typed into it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Shows {
+    Empty,
+    /// The typed text and nothing else: it was never submitted.
+    Typed,
+    /// Anything else, which a typing or an Enter would mix with or submit.
+    Other,
+}
+
+/// Reads `pane`'s composer by its agent's declaration, as `forced_clear`
+/// does, and says whether it shows `text` Hide typed there. A screen that
+/// cannot be read is [`UNCONFIRMED`].
+pub(crate) fn shows(
+    engine: &dyn Engine,
+    pane: &str,
+    kind: &str,
+    text: &str,
+) -> Result<Shows, &'static str> {
+    let composer = hide_agent_adapter::adapter(kind)
+        .and_then(|row| row.composer.supported())
+        .ok_or(UNCONFIRMED)?;
+    let screen = engine
+        .read_screen(Wait::Small(READ_TIMEOUT), pane)
+        .map_err(|_| UNCONFIRMED)?;
+    if screen.truncated {
+        return Err(UNCONFIRMED);
+    }
+    if composer.holds(&screen.text, text) {
+        return Ok(Shows::Typed);
+    }
+    match composer.explain(&screen.text) {
+        Ok(()) => Ok(Shows::Empty),
+        Err(miss) if miss.verdict() == Verdict::Holds => Ok(Shows::Other),
+        Err(_) => Err(UNCONFIRMED),
+    }
+}
+
 fn judge(engine: &dyn Engine, read: &Read) -> Reading {
     let screen = engine
         .read_screen(Wait::Small(READ_TIMEOUT), &read.raw_pane_id)

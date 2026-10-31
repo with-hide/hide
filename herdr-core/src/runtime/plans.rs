@@ -66,6 +66,18 @@ pub(crate) struct PlanRuntime {
     /// and an edit that moves whenever it changes.
     pub(crate) input_asks: Vec<super::typed_input::InputAsk>,
     pub(crate) input_edit: u64,
+    /// Typed input whose agent's composer was last read still showing it,
+    /// by input id, with the typing it was read after: the proof that it
+    /// was not taken (`AskSubject::InputUnconfirmed::held`). Bounded by the
+    /// unconfirmed inputs; a later typing or a record makes it stale.
+    pub(crate) input_held: BTreeMap<String, u8>,
+    /// Each unconfirmed input's fresh session read, asked once per typing
+    /// before the input is judged unconfirmed: the typing and when it was
+    /// asked. Bounded by the unconfirmed inputs.
+    pub(crate) input_reread: BTreeMap<String, (u8, u64)>,
+    /// The panes whose sessions are to be read again, taken by this
+    /// machine's session-sync thread on its next tick.
+    pub(crate) session_rereads: Vec<String>,
 }
 
 /// Whom the core asks a question of: a session, or the pane of an agent

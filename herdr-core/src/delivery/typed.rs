@@ -26,6 +26,14 @@ pub(crate) const INPUT_ROLE: &str = "input";
 /// after its answer has worked meanwhile, and the wait counts from its rest.
 pub(crate) const RECORD_WAIT_MS: u64 = 15_000;
 
+/// How long a fresh read of the agent's session, asked once the record wait
+/// ran out, has to land before the input is judged unconfirmed. An agent can
+/// write the prompt to its session file after the read its stop asked for
+/// (agy 1.4.8 on Windows, measured 2026-10-31: the brief it took and
+/// answered was not in the read at its stop); the worker reads within a
+/// tick of the ask. It caps a wait for a record, like `RECORD_WAIT_MS`.
+pub(crate) const REREAD_WAIT_MS: u64 = 5_000;
+
 /// Typings of one input at most: the first and two more, each only after
 /// someone answered the agent's screen. Past them the input waits for the
 /// operator with the reason.
@@ -114,9 +122,16 @@ pub(crate) fn retype_due(input: &TypedInput, observation: &Observation, now: u64
         Standing::Unconfirmed { .. }
     ) && input.attempts < INPUT_ATTEMPTS
         && observation.last_input_at_unix_ms > input.typed_at_unix_ms
-        && now.saturating_sub(observation.last_input_at_unix_ms) >= super::INPUT_QUIET_MS
-        && matches!(observation.status.as_str(), "idle" | "done")
+        && composer_readable(observation, now)
+}
+
+/// Whether the composer of an agent whose input is unconfirmed may be read
+/// now: it rests as `idle` or `done` with a known state and nobody typed
+/// there for the quiet period, so what it shows is what was left there.
+pub(crate) fn composer_readable(observation: &Observation, now: u64) -> bool {
+    matches!(observation.status.as_str(), "idle" | "done")
         && observation.state_change_seq.is_some()
+        && now.saturating_sub(observation.last_input_at_unix_ms) >= super::INPUT_QUIET_MS
 }
 
 /// Whether the parent (or sender) of unconfirmed `input` is still owed its
@@ -141,27 +156,49 @@ pub enum InputKind {
     Letter,
 }
 
+/// Why an agent's own record of typed input cannot be had: its prompt hook
+/// is not connected (Hide's hook missing, outdated or switched off for it,
+/// the pane's Not connected), or Hide has no read of its session file.
+pub(crate) const HOOKS_NOT_CONNECTED: &str = "hooks_not_connected";
+pub(crate) const SESSION_UNREAD: &str = "session_unread";
+
 /// The notice's body: its first line says what happened and the one command
-/// to start with, since the operator reads it in the wake summary.
+/// to start with, since the operator reads it in the wake summary. With no
+/// source for the agent's record (`source` names why), the input is not
+/// called lost and is not typed again.
 pub(crate) fn notice_body(
     kind: InputKind,
     agent: &str,
     pane: &str,
     letter: Option<&str>,
+    source: Result<(), &str>,
 ) -> String {
     let what = match (kind, letter) {
         (InputKind::Brief, _) => "its brief".to_owned(),
         (InputKind::Letter, Some(id)) => format!("your letter {id}"),
         (InputKind::Letter, None) => "your letter".to_owned(),
     };
-    format!(
-        "{agent} did not take {what}: read its screen with `hide pane read {pane}`.\n\
-         Something on its screen took the typed text. Clear a harmless screen (an update notice, \
-         \"press Enter to continue\") with `hide pane send {pane} <keys> [--enter]`; Hide types \
-         it again once the agent is ready.\n\
-         A trust, permission or login question is the operator's to answer: never accept it for \
-         them, tell them instead."
-    )
+    let trust = "A trust, permission or login question is the operator's to answer: never accept it \
+                 for them, tell them instead.";
+    match source {
+        Ok(()) => format!(
+            "{agent} has not confirmed {what}: read its screen with `hide pane read {pane}`.\n\
+             Something on its screen may have taken the typed text. Clear a harmless screen (an \
+             update notice, \"press Enter to continue\") with `hide pane send {pane} <keys> \
+             [--enter]`; Hide types it again once the agent is ready.\n{trust}"
+        ),
+        Err(reason) => {
+            let why = if reason == HOOKS_NOT_CONNECTED {
+                "its hooks are not connected"
+            } else {
+                "Hide cannot read its session"
+            };
+            format!(
+                "{agent} cannot confirm {what} ({why}): read its screen with `hide pane read {pane}`.\n\
+                 Hide does not type it again, since the agent may have taken it.\n{trust}"
+            )
+        }
+    }
 }
 
 #[cfg(test)]

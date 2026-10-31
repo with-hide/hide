@@ -1087,6 +1087,17 @@ fn spawn(
         // reports it on this very turn. A spawn asked again after the brief
         // went in never submits it twice.
         if let Some(brief) = reserved.brief.clone().filter(|_| !reserved.briefed) {
+            if hide_agent_adapter::adapter(kind).is_some_and(|row| row.key.brief_after_session()) {
+                // Its session start drops an Enter typed during it
+                // (`AgentId::brief_after_session`). Unseen within the wait,
+                // the brief goes in anyway and its record still judges it.
+                if let Err(reason) = wait_native_identity(engine.as_ref(), pane, Some(name), kind) {
+                    crate::diagnostic!(json!({
+                        "component": "spawn", "kind": "brief.session_unseen",
+                        "spawn": reserved.id, "pane_id": pane, "reason": reason,
+                    }));
+                }
+            }
             brief_ready(engine.as_ref(), &reserved.id, pane, name)?;
             // Saved before it is typed, so a typing a crash interrupts is
             // counted and never repeated blindly (engineering #11).

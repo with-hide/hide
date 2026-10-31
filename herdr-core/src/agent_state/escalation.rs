@@ -453,6 +453,7 @@ mod tests {
         row.ask_subject = Some(crate::model::AskSubject::InputUnconfirmed {
             input: crate::delivery::typed::InputKind::Brief,
             spent: false,
+            held: false,
         });
         row.laid_since_unix_ms = Some(42);
         let raised = of(&row, None, &BTreeMap::new()).expect("it rises");
