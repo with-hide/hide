@@ -1,0 +1,31 @@
+[package]
+name = "hide-holder"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+# A pane's holder: one small program per pane that keeps the pane's PTY and
+# program, feeds what the program writes to the terminal parser, and serves
+# one node connection at a time over the protocol in `hide-holder-protocol`.
+# It outlives the node that started it (PRD engine-bundle-2-pane-holder
+# D-3, D-4, D-12). Only this binary links the parser; a node depends on the
+# protocol crate alone.
+
+[[bin]]
+name = "hide-holder"
+path = "src/main.rs"
+
+[dependencies]
+hide-holder-protocol = { path = "../hide-holder-protocol" }
+hide-platform = { path = "../hide-platform" }
+hide-vt = { path = "../hide-vt" }
+# vendor/portable-pty through the workspace's `[patch.crates-io]`.
+portable-pty = "0.9.0"
+serde_json = "=1.0.151"
+
+[dev-dependencies]
+hide-kit = { path = "../hide-kit" }
+tempfile = "=3.27.0"
+
+[target.'cfg(unix)'.dev-dependencies]
+libc = "=0.2.190"

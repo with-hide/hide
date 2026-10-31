@@ -27,6 +27,7 @@ http = { version = "1" }
 httparse = { version = "1" }
 hyper = { version = "1", features = ["client", "http1", "server"] }
 hyper-util = { version = "0.1", features = ["client-legacy", "http1", "server", "service"] }
+libc = { version = "0.2", features = ["extra_traits"] }
 memchr = { version = "2" }
 once_cell = { version = "1" }
 rusqlite = { version = "0.32", default-features = false, features = ["bundled", "hooks", "limits"] }
@@ -57,7 +58,6 @@ typenum = { version = "1", default-features = false, features = ["const-generics
 [target.aarch64-apple-darwin.dependencies]
 errno = { version = "0.3" }
 getrandom-9fbad63c4bcf4a8f = { package = "getrandom", version = "0.4", default-features = false, features = ["std", "sys_rng"] }
-libc = { version = "0.2", features = ["extra_traits"] }
 rustix = { version = "1", features = ["fs", "process", "termios", "time"] }
 
 [target.aarch64-apple-darwin.build-dependencies]
@@ -66,7 +66,6 @@ libc = { version = "0.2", features = ["extra_traits"] }
 [target.x86_64-unknown-linux-gnu.dependencies]
 bitflags = { version = "2", default-features = false, features = ["std"] }
 getrandom-9fbad63c4bcf4a8f = { package = "getrandom", version = "0.4", default-features = false, features = ["std", "sys_rng"] }
-libc = { version = "0.2", features = ["extra_traits"] }
 linux-raw-sys = { version = "0.12", default-features = false, features = ["auxvec", "elf", "errno", "general", "ioctl", "no_std", "prctl"] }
 mio = { version = "1", features = ["net", "os-ext"] }
 rustix = { version = "1", features = ["fs", "process", "termios", "time"] }
@@ -74,7 +73,6 @@ rustix = { version = "1", features = ["fs", "process", "termios", "time"] }
 [target.aarch64-unknown-linux-gnu.dependencies]
 bitflags = { version = "2", default-features = false, features = ["std"] }
 getrandom-9fbad63c4bcf4a8f = { package = "getrandom", version = "0.4", default-features = false, features = ["std", "sys_rng"] }
-libc = { version = "0.2", features = ["extra_traits"] }
 linux-raw-sys = { version = "0.12", default-features = false, features = ["auxvec", "elf", "errno", "general", "ioctl", "no_std", "prctl"] }
 mio = { version = "1", features = ["net", "os-ext"] }
 rustix = { version = "1", features = ["fs", "process", "termios", "time"] }
@@ -84,7 +82,7 @@ libc = { version = "0.2", features = ["extra_traits"] }
 
 [target.x86_64-pc-windows-msvc.dependencies]
 getrandom-9fbad63c4bcf4a8f = { package = "getrandom", version = "0.4", default-features = false, features = ["std", "sys_rng"] }
-windows-sys = { version = "0.61", features = ["Wdk_Foundation", "Wdk_Storage_FileSystem", "Wdk_System_IO", "Wdk_System_SystemInformation", "Win32_NetworkManagement_IpHelper", "Win32_Networking_WinSock", "Win32_Security_Authorization", "Win32_Storage_FileSystem", "Win32_System_Console", "Win32_System_Diagnostics_Debug", "Win32_System_Diagnostics_ToolHelp", "Win32_System_IO", "Win32_System_Ioctl", "Win32_System_JobObjects", "Win32_System_Kernel", "Win32_System_LibraryLoader", "Win32_System_Memory", "Win32_System_Pipes", "Win32_System_ProcessStatus", "Win32_System_Registry", "Win32_System_SystemInformation", "Win32_System_SystemServices", "Win32_System_Threading", "Win32_System_Time", "Win32_System_WindowsProgramming"] }
+windows-sys = { version = "0.61", features = ["Wdk_Foundation", "Wdk_Storage_FileSystem", "Wdk_System_IO", "Wdk_System_SystemInformation", "Win32_Devices_Communication", "Win32_NetworkManagement_IpHelper", "Win32_Networking_WinSock", "Win32_Security_Authorization", "Win32_Storage_FileSystem", "Win32_System_Console", "Win32_System_Diagnostics_Debug", "Win32_System_Diagnostics_ToolHelp", "Win32_System_IO", "Win32_System_Ioctl", "Win32_System_JobObjects", "Win32_System_Kernel", "Win32_System_LibraryLoader", "Win32_System_Memory", "Win32_System_Pipes", "Win32_System_ProcessStatus", "Win32_System_Registry", "Win32_System_SystemInformation", "Win32_System_SystemServices", "Win32_System_Threading", "Win32_System_Time", "Win32_System_WindowsProgramming"] }
 
 [target.x86_64-pc-windows-msvc.build-dependencies]
 syn-f595c2ba2a3f28df = { package = "syn", version = "2", default-features = false, features = ["full"] }

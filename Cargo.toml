@@ -3,6 +3,8 @@ members = [
     "hide-agent-adapter",
     "herdr-core",
     "hide-herdr-client",
+    "hide-holder",
+    "hide-holder-protocol",
     "hide-host",
     "hide-kit",
     "hide-agent-hooks",
@@ -20,6 +22,10 @@ members = [
     "workspace-hack",
 ]
 resolver = "3"
+
+# portable-pty with Herdr's patches and Hide's changes (vendor/portable-pty/PATCHES.md).
+[patch.crates-io]
+portable-pty = { path = "vendor/portable-pty" }
 
 [profile.release]
 lto = "thin"
