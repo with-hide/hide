@@ -67,7 +67,8 @@ const PI_ISOLATION: &str =
 
 /// OpenCode's permissions in Desk: every tool asks but reading, listing and
 /// searching files, whatever the operator's own configuration allows.
-const OPENCODE_PERMISSIONS: &str = r#"{"permission":{"*":"ask","read":"allow","list":"allow","glob":"allow","grep":"allow"}}"#;
+const OPENCODE_PERMISSIONS: &str =
+    r#"{"permission":{"*":"ask","read":"allow","list":"allow","glob":"allow","grep":"allow"}}"#;
 
 /// One adapter's pinned package.
 pub struct Pin {
@@ -391,7 +392,10 @@ pub fn launch(adapter: AdapterId, paths: &Paths<'_>, nonce: &str) -> Result<Laun
             pi_marker = Some(marker);
         }
         AgentId::OpenCode => {
-            env.push(("OPENCODE_CONFIG_CONTENT".into(), OPENCODE_PERMISSIONS.into()));
+            env.push((
+                "OPENCODE_CONFIG_CONTENT".into(),
+                OPENCODE_PERMISSIONS.into(),
+            ));
         }
         _ => {}
     }
@@ -446,7 +450,8 @@ mod tests {
 
     #[test]
     fn each_pin_names_its_package_at_the_locked_version_and_integrity() {
-        for (adapter, pin) in AdapterId::all().filter_map(|adapter| Some((adapter, adapter.pin()?))) {
+        for (adapter, pin) in AdapterId::all().filter_map(|adapter| Some((adapter, adapter.pin()?)))
+        {
             let manifest: Value = serde_json::from_str(pin.manifest).unwrap();
             assert_eq!(
                 manifest["dependencies"][pin.package], pin.version,
@@ -612,7 +617,10 @@ mod tests {
         )
         .unwrap();
         let args: Vec<&str> = omp.args.iter().map(|arg| arg.to_str().unwrap()).collect();
-        assert!(args.windows(2).any(|pair| pair == ["--approval-mode", "always-ask"]));
+        assert!(
+            args.windows(2)
+                .any(|pair| pair == ["--approval-mode", "always-ask"])
+        );
         assert!(args.windows(2).any(|pair| pair == ["--mode", "acp"]));
 
         // Without its CLI the agent does not start.

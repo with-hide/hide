@@ -667,15 +667,24 @@ mod tests {
             }
         };
         for (adapter, raw) in [
-            (AdapterId::OPENCODE, json!({"command": "touch x", "cwd": "/r"})),
+            (
+                AdapterId::OPENCODE,
+                json!({"command": "touch x", "cwd": "/r"}),
+            ),
             (AdapterId::OMP, json!({"command": "touch x"})),
-            (AdapterId::ANTIGRAVITY, json!({"CommandLine": "touch x", "IsDaemon": false})),
+            (
+                AdapterId::ANTIGRAVITY,
+                json!({"CommandLine": "touch x", "IsDaemon": false}),
+            ),
         ] {
             let card = ask(
                 adapter,
                 json!({"toolCallId": "c1", "kind": "execute", "title": "touch x", "rawInput": raw}),
             );
-            assert_eq!((card.kind, card.command.as_str()), (CardKind::Command, "touch x"));
+            assert_eq!(
+                (card.kind, card.command.as_str()),
+                (CardKind::Command, "touch x")
+            );
         }
         for adapter in [AdapterId::OPENCODE, AdapterId::ANTIGRAVITY] {
             let card = ask(
@@ -683,7 +692,10 @@ mod tests {
                 json!({"toolCallId": "e1", "kind": "edit", "title": "notes.txt",
                     "locations": [{"path": "/r/notes.txt"}], "rawInput": {"Path": "/r/notes.txt"}}),
             );
-            assert_eq!((card.kind, card.command.as_str()), (CardKind::Edit, "/r/notes.txt"));
+            assert_eq!(
+                (card.kind, card.command.as_str()),
+                (CardKind::Edit, "/r/notes.txt")
+            );
         }
     }
 }

@@ -283,7 +283,10 @@ fn a_command_desk_s_codex_runs_finds_desk_s_own_hide_before_the_account_s() {
     let mut launch = adapter::launch(
         AdapterId::CODEX,
         &Paths {
-            package: Some((&root.path().join("adapter"), &std::env::current_exe().unwrap())),
+            package: Some((
+                &root.path().join("adapter"),
+                &std::env::current_exe().unwrap(),
+            )),
             own_cli: None,
             hide_dir: desk_hide.parent().unwrap(),
             search: Some(&account.clone().into_os_string()),
@@ -307,9 +310,7 @@ fn a_command_desk_s_codex_runs_finds_desk_s_own_hide_before_the_account_s() {
     // Desk's Codex configuration and rules are in its own home before it runs.
     assert!(codex_home.join("config.toml").is_file());
     assert!(codex_home.join("rules").join("hide-desk.rules").is_file());
-    assert!(
-        !links || hide_platform::fs::link::is_link_to(&codex_home.join("auth.json"), &sign_in)
-    );
+    assert!(!links || hide_platform::fs::link::is_link_to(&codex_home.join("auth.json"), &sign_in));
     let connection = host.connection().clone();
     session::open(&connection, AdapterId::CODEX, &desk, None, &|| Ok(())).unwrap();
 

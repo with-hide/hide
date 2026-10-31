@@ -854,7 +854,10 @@ impl Runtime {
                     self.desk.stored.conversation.remove(turn.message);
                 }
                 let kept = if notice == DeskNotice::LoginNeeded {
-                    self.desk.agents.get(&adapter).and_then(|(_, kept)| kept.clone())
+                    self.desk
+                        .agents
+                        .get(&adapter)
+                        .and_then(|(_, kept)| kept.clone())
                 } else {
                     detail.clone()
                 };
@@ -1482,7 +1485,14 @@ mod tests {
         // Switched off in Settings › Agents: Grok is left out.
         kit_on(
             &mut runtime,
-            &["claude-code", "codex", "opencode", "pi", "omp", "antigravity"],
+            &[
+                "claude-code",
+                "codex",
+                "opencode",
+                "pi",
+                "omp",
+                "antigravity",
+            ],
         );
         runtime.ingest_background_ai(read(&[
             ("claude-code", "ready", true),
@@ -1511,9 +1521,17 @@ mod tests {
         );
         // An adapter in place is not a sign-in: Pi is ready and its sign-in
         // still unknown.
-        let pi = desk.agents.iter().find(|agent| agent.id == AdapterId::PI).unwrap();
+        let pi = desk
+            .agents
+            .iter()
+            .find(|agent| agent.id == AdapterId::PI)
+            .unwrap();
         assert_eq!((pi.state, pi.signed_in), (DeskAgentState::Ready, None));
-        assert!(!event(&mut runtime, "desk_select", json!({"agent": "grok"})));
+        assert!(!event(
+            &mut runtime,
+            "desk_select",
+            json!({"agent": "grok"})
+        ));
     }
 
     #[test]
@@ -1530,10 +1548,17 @@ mod tests {
             .collect();
         assert_eq!(
             shown,
-            [("claude", DeskAgentState::Ready), ("pi", DeskAgentState::Off)]
+            [
+                ("claude", DeskAgentState::Ready),
+                ("pi", DeskAgentState::Off)
+            ]
         );
         assert!(!event(&mut runtime, "desk_send", json!({"text": "hi"})));
-        assert!(received.try_iter().all(|order| !matches!(order, Order::Send(_))));
+        assert!(
+            received
+                .try_iter()
+                .all(|order| !matches!(order, Order::Send(_)))
+        );
     }
 
     #[test]
@@ -1559,12 +1584,19 @@ mod tests {
         );
         event(&mut runtime, "desk_settings_set", json!({"enabled": false}));
         event(&mut runtime, "desk_settings_set", json!({"enabled": true}));
-        assert!(received.try_iter().any(|order| matches!(order, Order::Check)));
+        assert!(
+            received
+                .try_iter()
+                .any(|order| matches!(order, Order::Check))
+        );
         // `다시 받기` installs the one agent, as the operator's own ask.
         event(&mut runtime, "desk_install", json!({"agent": "codex"}));
         assert!(received.try_iter().any(|order| matches!(
             order,
-            Order::Install { adapter: AdapterId::CODEX, asked: true }
+            Order::Install {
+                adapter: AdapterId::CODEX,
+                asked: true
+            }
         )));
     }
 
@@ -1588,13 +1620,15 @@ mod tests {
         });
         assert!(matches!(
             runtime.desk.stored.conversation.items.last(),
-            Some(DeskItem::Notice { notice: DeskNotice::Preparing, .. })
+            Some(DeskItem::Notice {
+                notice: DeskNotice::Preparing,
+                ..
+            })
         ));
     }
 
     #[test]
-    fn a_message_codex_could_not_take_for_its_sign_in_points_at_the_operator_s_own_codex_login()
-    {
+    fn a_message_codex_could_not_take_for_its_sign_in_points_at_the_operator_s_own_codex_login() {
         let root = tempfile::tempdir().unwrap();
         let (mut runtime, received) = runtime(root.path());
         event(&mut runtime, "desk_select", json!({"agent": "codex"}));
@@ -1737,7 +1771,10 @@ mod tests {
         event(&mut runtime, "desk_send", json!({"text": "continue"}));
         let send = sent(&received);
         assert_eq!(send.adapter, AdapterId::PI);
-        assert_eq!(send.carried.as_deref(), Some("Operator: hello\nClaude Code: hi"));
+        assert_eq!(
+            send.carried.as_deref(),
+            Some("Operator: hello\nClaude Code: hi")
+        );
     }
 
     #[test]
