@@ -5,6 +5,7 @@
 //! conversation, the choices and the one [`host::Host`] it runs.
 
 pub mod adapter;
+pub mod codex;
 pub mod host;
 pub mod install;
 pub mod permission;

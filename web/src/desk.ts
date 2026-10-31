@@ -353,7 +353,7 @@ export const namedMention = (mention: DeskMention) => `@${mention.name}`;
 
 /** An agent Desk cannot be given (D-53, B4): one that cannot ask before acting. One not installed or signed in can be picked and says so (B6). */
 export function agentPickable(agent: DeskAgent): boolean {
-  return agent.state !== "no_ask_mode" && agent.state !== "not_offered";
+  return agent.state !== "no_ask_mode";
 }
 
 /** One turn of a thread (B25): the words that started it, the work, the answer, and the parts the work made. */

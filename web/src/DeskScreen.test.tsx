@@ -124,6 +124,18 @@ describe("Desk's room", () => {
     expect(useUiStore.getState().deskDraft).toEqual({ text: "", mentions: [] });
   });
 
+  it("puts a sent message back in the box when the agent turned out not to be signed in (B6)", async () => {
+    useUiStore.setState({ deskDraft: { text: "ask @fixer", mentions: [fixer] } });
+    await render(desk([], "login_needed"));
+    await press("[data-desk-composer-send]");
+    await show(desk([{ kind: "user", id: 1, text: "ask @session(w1:p2 fixer)", at_ms: 0, mentions: [fixer] }], "login_needed"));
+    expect(useUiStore.getState().deskDraft).toEqual({ text: "", mentions: [] });
+
+    // The core takes the message out again and says how to sign in.
+    await show(desk([{ kind: "notice", id: 2, notice: "login_needed", agent: "claude", detail: "claude /login" }], "login_needed"));
+    expect(useUiStore.getState().deskDraft).toEqual({ text: "ask @fixer", mentions: [fixer] });
+  });
+
   it("sends the operator's last message again as they wrote it on 다시 시도", async () => {
     await render(desk([
       { kind: "user", id: 1, text: "@project(/work/repo-home repo) fix the build", at_ms: 0, mentions: [repo] },

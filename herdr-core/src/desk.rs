@@ -57,6 +57,8 @@ pub struct DeskPlaces {
     pub adapters: PathBuf,
     /// Desk's own folder (`hide_kit::layout::desk_dir`).
     pub desk: PathBuf,
+    /// Desk's own `CODEX_HOME` (`hide_kit::layout::desk_codex_home`).
+    pub codex_home: PathBuf,
     /// The folder of the `hide` program the Desk agent runs.
     pub hide_dir: PathBuf,
 }
@@ -109,6 +111,11 @@ impl Conversation {
             self.items.drain(..cut);
             self.dropped += cut as u64;
         }
+    }
+
+    /// Takes an item out again, such as a message no agent received.
+    pub(crate) fn remove(&mut self, id: u64) {
+        self.items.retain(|item| item.id() != id);
     }
 
     /// Starts a new conversation: everything above is gone from the screen.

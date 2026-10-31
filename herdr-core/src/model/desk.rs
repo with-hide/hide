@@ -375,8 +375,6 @@ pub enum DeskAgentState {
     LoginNeeded,
     /// Its ask mode could not be confirmed, so it is not used (D-53).
     NoAskMode,
-    /// Desk does not offer it yet (`AdapterId::offered`).
-    NotOffered,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]

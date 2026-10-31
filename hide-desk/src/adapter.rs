@@ -9,7 +9,10 @@
 //!   keychain, not in settings), bypass refused, every Bash call held by an
 //!   ask rule, and the session put in `default` mode before any prompt.
 //! - Codex starts its session in `read-only`, where its sandbox lets reads
-//!   run and asks before every write, network use or command outside it.
+//!   run and asks before every write, network use or command outside it,
+//!   with Desk's own `CODEX_HOME` ([`crate::codex`]): none of the operator's
+//!   Codex setup or sign-in, and the `hide` commands Desk frees allowed out
+//!   of the sandbox.
 //! - Pi asks for nothing on its own, so Desk loads its own extension
 //!   (`pi_desk.js`) into the Pi process the adapter starts: every tool call
 //!   that is not a read waits for Hide. The extension writes a marker naming
@@ -116,16 +119,6 @@ impl AdapterId {
         }
     }
 
-    /// Whether Desk offers the agent. Codex is not offered yet: it reads the
-    /// operator's global `AGENTS.md`, skills and MCP servers whatever its
-    /// session config says, and its read-only sandbox keeps `hide` from
-    /// reaching hided. A Hide-owned `CODEX_HOME` with its own sign-in closes
-    /// both (with-hide/hide-private#388); its launch and permission reading
-    /// stay for that.
-    pub fn offered(self) -> bool {
-        !matches!(self, Self::Codex)
-    }
-
     /// The agent's own CLI the adapter starts, which the operator installs;
     /// Claude's and Codex's adapters carry theirs.
     pub fn own_cli(self) -> Option<&'static str> {
@@ -135,11 +128,12 @@ impl AdapterId {
         }
     }
 
-    /// What the operator runs in a terminal to sign in (B6).
+    /// What the operator runs in a terminal to sign in (B6). Desk's Codex
+    /// has a sign-in of its own, in Desk's `CODEX_HOME`.
     pub fn login_command(self) -> &'static str {
         match self {
             Self::Claude => "claude /login",
-            Self::Codex => "codex login",
+            Self::Codex => crate::codex::LOGIN_COMMAND,
             Self::Pi => "pi /login",
         }
     }
@@ -175,6 +169,8 @@ pub struct Paths<'a> {
     pub desk: &'a Path,
     /// The Workspace capability reference the `hide` CLI presents.
     pub capability: &'a Path,
+    /// Desk's own `CODEX_HOME` (`hide_kit::layout::desk_codex_home`).
+    pub codex_home: &'a Path,
     /// The agent's own CLI when the adapter needs one ([`AdapterId::own_cli`]).
     pub own_cli: Option<&'a Path>,
 }
@@ -187,7 +183,8 @@ pub struct Launch {
     /// Variables set on top of the login variables.
     pub env: Vec<(OsString, OsString)>,
     pub cwd: PathBuf,
-    /// Files to write before the start (Pi's launcher and extension).
+    /// Files to write before the start (Pi's launcher and extension,
+    /// Codex's configuration and rules).
     pub files: Vec<(PathBuf, String, bool)>,
     /// The marker Pi's extension writes when it loads.
     pub pi_marker: Option<PathBuf>,
@@ -230,7 +227,11 @@ pub fn launch(adapter: AdapterId, paths: &Paths<'_>, nonce: &str) -> Launch {
     let mut pi_marker = None;
     match adapter {
         AdapterId::Claude => {}
-        AdapterId::Codex => env.push(("INITIAL_AGENT_MODE".into(), "read-only".into())),
+        AdapterId::Codex => {
+            env.push(("INITIAL_AGENT_MODE".into(), "read-only".into()));
+            env.push(crate::codex::home_variable(paths.codex_home));
+            files.extend(crate::codex::files(paths.codex_home));
+        }
         AdapterId::Pi => {
             let extension = paths.desk.join("pi-desk.js");
             let marker = paths.desk.join(format!("pi-ready-{nonce}"));
@@ -325,6 +326,7 @@ mod tests {
                 search: Some(&account),
                 desk,
                 capability: Path::new("/state/pane-capabilities/desk.json"),
+                codex_home: &desk.join("codex"),
                 own_cli: Some(Path::new("/usr/local/bin/pi")),
             },
             "n1",
@@ -351,6 +353,42 @@ mod tests {
             vec![OsString::from(
                 Path::new("/a/node_modules/pi-acp").join("dist/index.js")
             )]
+        );
+    }
+    #[test]
+    fn codex_runs_with_desk_s_own_codex_home_and_its_rules() {
+        let desk = Path::new("/state/desk");
+        let home = desk.join("codex");
+        let launch = launch(
+            AdapterId::Codex,
+            &Paths {
+                package: Path::new("/a/node_modules/@agentclientprotocol/codex-acp"),
+                node: Path::new("/usr/local/bin/node"),
+                hide_dir: Path::new("/Applications/hide.app/Contents/Resources"),
+                search: None,
+                desk,
+                capability: Path::new("/state/pane-capabilities/desk.json"),
+                codex_home: &home,
+                own_cli: None,
+            },
+            "n1",
+        );
+        assert!(
+            launch
+                .env
+                .contains(&(OsString::from("CODEX_HOME"), home.clone().into_os_string()))
+        );
+        let written: Vec<&Path> = launch
+            .files
+            .iter()
+            .map(|(path, ..)| path.as_path())
+            .collect();
+        assert_eq!(
+            written,
+            [
+                home.join("config.toml").as_path(),
+                home.join("rules").join("hide-desk.rules").as_path()
+            ]
         );
     }
 }

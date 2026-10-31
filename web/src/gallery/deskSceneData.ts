@@ -25,7 +25,7 @@ const EFFORTS = [{ id: "low", label: "low" }, { id: "medium", label: "medium" },
 
 export const AGENTS: DeskAgent[] = [
   { id: "claude", label: "Claude", state: "ready", detail: null, login_command: "claude /login", models: [{ id: "opus", label: "Opus 5.5" }, { id: "sonnet", label: "Sonnet 5.5" }], efforts: EFFORTS },
-  { id: "codex", label: "Codex", state: "ready", detail: null, login_command: "codex login", models: [{ id: "gpt", label: "GPT-6" }, { id: "gpt-mini", label: "GPT-6 mini" }], efforts: EFFORTS },
+  { id: "codex", label: "Codex", state: "ready", detail: null, login_command: "hide desk login codex", models: [{ id: "gpt", label: "GPT-6" }, { id: "gpt-mini", label: "GPT-6 mini" }], efforts: EFFORTS },
   { id: "pi", label: "Pi", state: "no_ask_mode", detail: null, login_command: "pi login", models: [], efforts: [] },
 ];
 
@@ -229,7 +229,7 @@ export function stateItems(now: number): DeskItem[] {
     { kind: "switch", id: 67, from: "codex", to: "claude", carried: "none" },
     { kind: "notice", id: 68, notice: "preparing", agent: "codex", detail: null },
     { kind: "notice", id: 69, notice: "install_failed", agent: "codex", detail: "네트워크에 연결할 수 없어요" },
-    { kind: "notice", id: 70, notice: "login_needed", agent: "codex", detail: "codex login" },
+    { kind: "notice", id: 70, notice: "login_needed", agent: "codex", detail: "hide desk login codex" },
     { kind: "notice", id: 71, notice: "host_stopped", agent: "claude", detail: null },
     { kind: "notice", id: 72, notice: "resume_failed", agent: "claude", detail: null },
     { kind: "notice", id: 73, notice: "no_ask_mode", agent: "pi", detail: null },

@@ -124,6 +124,8 @@ export function DeskScreen({ actions }: { actions: Actions }) {
   const [menu, setMenu] = useState<MenuPlace>({ dismissed: null, entered: null, active: "" });
   // The words a send carried, held until the conversation shows them, so a refused send keeps them in the box.
   const pending = useRef<{ text: string; after: number } | null>(null);
+  // The last send as written, put back in the box when the agent turned out not to be signed in (B6).
+  const lastSent = useRef<{ words: typeof draft; after: number } | null>(null);
 
   const byId = useMemo(() => Object.fromEntries(jobs.map((job) => [job.id, job])), [jobs]);
   const items = desk?.conversation.items;
@@ -143,6 +145,12 @@ export function DeskScreen({ actions }: { actions: Actions }) {
       pending.current = null;
       if (outgoing(useUiStore.getState().deskDraft).text === sent.text) setDraft({ text: "", mentions: [] });
     }
+  }, [items, setDraft]);
+  useEffect(() => {
+    const sent = lastSent.current;
+    if (!sent || !items?.some((item) => item.kind === "notice" && item.notice === "login_needed" && item.id > sent.after)) return;
+    lastSent.current = null;
+    if (!useUiStore.getState().deskDraft.text) setDraft(sent.words);
   }, [items, setDraft]);
 
   useLayoutEffect(() => {
@@ -166,6 +174,7 @@ export function DeskScreen({ actions }: { actions: Actions }) {
     const out = outgoing(words);
     if (!out.text) return;
     pending.current = { text: out.text, after: lastUserId(items) };
+    lastSent.current = { words, after: items.reduce((last, item) => Math.max(last, item.id), -1) };
     stick.current = true;
     actions.deskSend(out.text, out.mentions);
   };

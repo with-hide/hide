@@ -80,8 +80,6 @@ export const deskEnglish = {
   "desk.agentState.not_installed": "Not installed",
   "desk.agentState.no_ask_mode": "No ask mode",
   "desk.agentState.noAskModeHint": "Desk asks before code changes and shell commands, and this agent cannot ask",
-  "desk.agentState.not_offered": "Not offered yet",
-  "desk.agentState.notOfferedHint": "Codex would bring its own instructions and skills into Desk, and its sandbox stops the hide commands",
   "desk.jobFailure.device_unavailable": "The device couldn't be reached",
   "desk.jobFailure.agent_not_installed": "The agent isn't installed there",
   "desk.jobFailure.branch_in_use": "Another worktree holds the branch",
@@ -207,7 +205,7 @@ export const deskEnglish = {
   "desk.settings.location.checkout": "Always this checkout",
   "desk.settings.cap": "Tasks at once",
   "desk.settings.capDetail": "More wait in line and start on their own",
-  "desk.settings.accounts": "Desk uses the account each agent CLI is signed in with. Hide keeps no keys.",
+  "desk.settings.accounts": "Desk uses the account each agent CLI is signed in with; Codex signs in once more for Desk with hide desk login codex. Hide keeps no keys.",
   "desk.pane.toDesk": "Back to Desk",
 };
 
@@ -287,8 +285,6 @@ const ko: Catalog<typeof deskEnglish> = {
   "desk.agentState.not_installed": "설치 안 됨",
   "desk.agentState.no_ask_mode": "묻기 모드 없음",
   "desk.agentState.noAskModeHint": "Desk는 코드 수정과 셸 명령 전에 묻는데, 이 에이전트는 묻지 못해요",
-  "desk.agentState.not_offered": "아직 고를 수 없음",
-  "desk.agentState.notOfferedHint": "Codex는 자기 지시문과 스킬을 Desk에 가져오고, 샌드박스가 hide 명령을 막아요",
   "desk.jobFailure.device_unavailable": "기기에 닿지 못했어요",
   "desk.jobFailure.agent_not_installed": "그 기기에 에이전트가 없어요",
   "desk.jobFailure.branch_in_use": "다른 워크트리가 그 브랜치를 쓰고 있어요",
@@ -414,7 +410,7 @@ const ko: Catalog<typeof deskEnglish> = {
   "desk.settings.location.checkout": "항상 지금 체크아웃",
   "desk.settings.cap": "동시 실행 상한",
   "desk.settings.capDetail": "넘치면 대기 중으로 줄 서고 앞의 일이 끝나면 저절로 시작해요",
-  "desk.settings.accounts": "Desk는 각 에이전트 CLI에 로그인된 계정을 써요. Hide는 키를 저장하지 않아요.",
+  "desk.settings.accounts": "Desk는 각 에이전트 CLI에 로그인된 계정을 써요. Codex는 hide desk login codex로 Desk용 로그인을 한 번 더 해요. Hide는 키를 저장하지 않아요.",
   "desk.pane.toDesk": "Desk로",
 };
 
@@ -494,8 +490,6 @@ const zh: Catalog<typeof deskEnglish> = {
   "desk.agentState.not_installed": "未安装",
   "desk.agentState.no_ask_mode": "无询问模式",
   "desk.agentState.noAskModeHint": "Desk 在修改代码和执行 shell 命令前会询问，而这个智能体无法询问",
-  "desk.agentState.not_offered": "暂不可选",
-  "desk.agentState.notOfferedHint": "Codex 会把自己的指令和技能带进 Desk，而且它的沙箱会挡住 hide 命令",
   "desk.jobFailure.device_unavailable": "无法连接设备",
   "desk.jobFailure.agent_not_installed": "那台设备上没有该智能体",
   "desk.jobFailure.branch_in_use": "另一个工作树正在使用该分支",
@@ -621,7 +615,7 @@ const zh: Catalog<typeof deskEnglish> = {
   "desk.settings.location.checkout": "总是当前检出目录",
   "desk.settings.cap": "同时运行上限",
   "desk.settings.capDetail": "超出的任务排队，前面的完成后自动开始",
-  "desk.settings.accounts": "Desk 使用各智能体 CLI 登录的账号。Hide 不保存密钥。",
+  "desk.settings.accounts": "Desk 使用各智能体 CLI 登录的账号；Codex 需要用 hide desk login codex 为 Desk 再登录一次。Hide 不保存密钥。",
   "desk.pane.toDesk": "回到 Desk",
 };
 
@@ -701,8 +695,6 @@ const ja: Catalog<typeof deskEnglish> = {
   "desk.agentState.not_installed": "未インストール",
   "desk.agentState.no_ask_mode": "確認モードなし",
   "desk.agentState.noAskModeHint": "Deskはコードの変更とシェルコマンドの前に確認しますが、このエージェントは確認できません",
-  "desk.agentState.not_offered": "まだ選べません",
-  "desk.agentState.notOfferedHint": "Codex は自身の指示とスキルを Desk に持ち込み、サンドボックスが hide コマンドを止めます",
   "desk.jobFailure.device_unavailable": "デバイスに接続できませんでした",
   "desk.jobFailure.agent_not_installed": "そのデバイスにエージェントがありません",
   "desk.jobFailure.branch_in_use": "別のワークツリーがそのブランチを使っています",
@@ -828,7 +820,7 @@ const ja: Catalog<typeof deskEnglish> = {
   "desk.settings.location.checkout": "常にいまのチェックアウト",
   "desk.settings.cap": "同時に動かす上限",
   "desk.settings.capDetail": "超えた分は待機し、前の仕事が終わると自動で始まります",
-  "desk.settings.accounts": "Deskは各エージェント CLI にログインしたアカウントを使います。Hide はキーを保存しません。",
+  "desk.settings.accounts": "Deskは各エージェント CLI にログインしたアカウントを使います。Codex は hide desk login codex で Desk 用にもう一度ログインします。Hide はキーを保存しません。",
   "desk.pane.toDesk": "Deskへ",
 };
 

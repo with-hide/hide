@@ -108,7 +108,7 @@
   "device_problem": ["sign_in_needed", "sign_in_refused", "host_key_changed", "cannot_connect", "ssh_missing", "openssh_old", "unsupported", "hide_updated"],
   "device_sign_in_kind": ["secret", "host_key", "confirm", "touch", "browser"],
   "desk_agent": ["claude", "codex", "pi"],
-  "desk_agent_state": ["checking", "ready", "preparing", "not_installed", "install_failed", "node_missing", "cli_missing", "login_needed", "no_ask_mode", "not_offered"],
+  "desk_agent_state": ["checking", "ready", "preparing", "not_installed", "install_failed", "node_missing", "cli_missing", "login_needed", "no_ask_mode"],
   "desk_host_state": ["idle", "starting", "ready", "thinking", "stopped"],
   "desk_reply_state": ["done", "stopped"],
   "desk_card_kind": ["command", "edit", "other"],

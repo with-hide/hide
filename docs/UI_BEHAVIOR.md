@@ -938,6 +938,7 @@ Turning it off ends Desk's agent and its turn, a waiting card closing as a refus
 A spawn waiting in Desk's queue stays there while Desk is off, started by nothing and removed by nothing, and the queue starts it in order once Desk is on again.
 Turned off while the room is in front, the room goes and the panel used before it comes back, or All projects when none is left (`leaveDesk` in `web/src/keyboard.ts`).
 The composer keeps what the operator is writing while they go elsewhere, and clears it once the conversation shows the message, so a refused send keeps the words.
+A message the agent could not take because it is not signed in leaves the conversation again, and its words go back in the box under the line with the sign-in command (B6).
 `@` opens the menu on the word the caret ends; a picked session or project is written `@name` and sent as its `@session(<pane> <name>)` or `@project(<path> <name>)` token, a project named by its primary checkout's path (the folder's own for a project with none), which Desk's agent hands to `--repo` and pressing its chip opens; one the operator deleted is not sent.
 `다시 시도` on a notice sends the operator's last message again.
 Pressing a card, a session chip or `답하기` opens that session's thread in Desk's lane (see Desk's lane); a letter's line opens the session's own tab.
@@ -949,9 +950,8 @@ The selector lists Claude, Codex and Pi with each one's state:
 - `not_installed` and `install_failed`: choosing it installs it, and a failed install says its last line with `다시 받기`.
 - `node_missing`: the line `이 에이전트는 Node 22 이상이 필요해요` with how to install Node, in the same place as the not-installed line; Hide does not install Node ([INSTALL.md: Desk's agents](INSTALL.md#desks-agents)).
 - `cli_missing`: Pi's adapter runs the operator's own `pi`, which is not on the login shell's `PATH`.
-- `login_needed`: the agent's own sign-in command (`claude /login`, `codex login`, `pi /login`).
+- `login_needed`: the agent's own sign-in command (`claude /login`, `pi /login`); for Codex it is `hide desk login codex`, since Desk's Codex has a sign-in of its own, apart from the operator's `codex` ([INSTALL.md: Desk's agents](INSTALL.md#desks-agents)).
 - `no_ask_mode`: Hide could not hold the agent in its ask mode, so it is not used.
-- `not_offered`: Codex, dim with one line saying why it cannot be chosen yet: its own instructions and skills would come along, and its sandbox keeps the `hide` commands from working ([INSTALL.md: What each system supports](INSTALL.md#what-each-system-supports)).
 
 A message goes to the chosen agent, model and effort; while a reply is being written, the next message waits and `중지` ends the turn.
 While it thinks, the conversation shows the time since the message (`생각 중 · 3초`), and each reply carries its turn folded into one line: the time to its first words and what the agent did, counted from its tool calls (sessions read, letters, sessions started, files read, other commands), such as `생각 8초 · 세션 4개 읽음`.
@@ -962,9 +962,9 @@ Switching agents shows a line saying whether the conversation went with it, and 
 What the agent runs is decided by Hide, never by the agent's own settings:
 
 - A file read, and a `hide` command from the list Desk uses (`hide agent list`, `show`, `spawn`, `hide request`, `hide inbox`, `hide watch`, `hide ps` among them), run without asking; the Workspace, View, Memory, mission and plan commands are not on it, because the core refuses them to Desk.
-- A `hide agent spawn` that passes words after `--` to the agent's own CLI asks first, since those words can lift the new session's permissions; its card shows the whole command.
+- A `hide agent spawn` that passes words after `--` to the agent's own CLI is refused (`desk_spawn_args`), since those words can lift the new session's permissions; the operator starts such a session themselves.
 - A spawn under a parent (`--parent`) is refused: Desk's sessions are the operator's own, and one under Desk would skip its places.
-- Claude's and Pi's shell commands, reading ones included, always ask. Codex, once Desk offers it, runs in its read-only sandbox, which refuses writes and the network, so a reading shell command inside it (`ls`, `git log`) counts as a file read and runs without asking.
+- Claude's and Pi's shell commands, reading ones included, always ask. Codex runs in its read-only sandbox, which refuses writes and the network, so a reading shell command inside it (`ls`, `git log`) counts as a file read and runs without asking; the `hide` commands from the list above run outside that sandbox, so they reach Hide, and any other command that needs more than the sandbox asks.
 - Any other command, a file edit, and `hide agent archive` wait on an approval card that shows the command or files, the folder and the agent's reason, with `한 번 허용` and `거절`; nothing is ever allowed for good.
 - A request Hide cannot read does not run, and the conversation says `막힘` with what the agent asked.
 - `새 대화`, `다시 시작`, `중지` and the process's end close a waiting card as refused.

@@ -227,6 +227,14 @@ pub fn desk_store(state_dir: &Path) -> PathBuf {
     desk_dir(state_dir).join("desk.json")
 }
 
+/// Desk's own `CODEX_HOME`: the configuration and rules Desk writes for its
+/// Codex, Codex's own records of Desk's sessions, and the Desk-only sign-in
+/// (`auth.json`) the operator makes with `hide desk login codex`. Desk's Codex
+/// reads nothing of the operator's `~/.codex`.
+pub fn desk_codex_home(state_dir: &Path) -> PathBuf {
+    desk_dir(state_dir).join("codex")
+}
+
 /// The ACP adapters Desk installs from their pinned locks, one folder per
 /// adapter version (`<id>-<version>`). Account-wide like the helper root: an
 /// installed version is the same for every state folder.

@@ -1157,6 +1157,7 @@ dependencies = [
  "hex",
  "hide-agent-adapter",
  "hide-agent-hooks",
+ "hide-desk",
  "hide-herdr-client",
  "hide-host",
  "hide-kit",

@@ -65,6 +65,8 @@ struct Host {
 struct Turn {
     tag: u64,
     agent: AdapterId,
+    /// The operator's message the turn answers.
+    message: u64,
     text: String,
     cut: bool,
     started_at_ms: u64,
@@ -267,7 +269,6 @@ impl Runtime {
             DeskEvent::NewConversation => self.desk_new_conversation(),
             DeskEvent::Restart => self.desk_restart(),
             DeskEvent::Select(payload) => self.desk_select(payload),
-            DeskEvent::Install(payload) if !payload.agent.offered() => refused("agent_not_offered"),
             DeskEvent::Install(payload) => {
                 self.order(Order::Install(payload.agent));
                 false
@@ -399,6 +400,7 @@ impl Runtime {
         self.desk.turn = Some(Turn {
             tag,
             agent,
+            message: id,
             text: String::new(),
             cut: false,
             started_at_ms: crate::links::now_ms(),
@@ -524,9 +526,6 @@ impl Runtime {
     }
 
     fn desk_select(&mut self, payload: SelectPayload) -> bool {
-        if payload.agent.is_some_and(|agent| !agent.offered()) {
-            return refused("agent_not_offered");
-        }
         let selection = self.desk.stored.selection.clone();
         if let Some(agent) = payload.agent
             && Some(agent) != selection.agent
@@ -600,13 +599,6 @@ impl Runtime {
     }
 
     fn desk_settings(&mut self, payload: SettingsPayload) -> bool {
-        if payload
-            .default_agent
-            .flatten()
-            .is_some_and(|agent| !agent.offered())
-        {
-            return refused("agent_not_offered");
-        }
         let settings = &mut self.desk.stored.settings;
         let before = *settings;
         if let Some(enabled) = payload.enabled {
@@ -815,6 +807,13 @@ impl Runtime {
                         return true;
                     }
                 };
+                // No agent received the message: it goes back to the
+                // operator's input, and the screen keeps its words (B6).
+                if notice == DeskNotice::LoginNeeded
+                    && let Some(turn) = &self.desk.turn
+                {
+                    self.desk.stored.conversation.remove(turn.message);
+                }
                 self.desk.agents.insert(adapter, (state, detail.clone()));
                 self.desk.host = Host {
                     state: Some(DeskHostState::Idle),
@@ -1331,19 +1330,65 @@ mod tests {
     }
 
     #[test]
-    fn codex_cannot_be_chosen_while_desk_does_not_offer_it() {
+    fn codex_is_chosen_installed_and_made_the_default_like_any_agent() {
         let root = tempfile::tempdir().unwrap();
         let (mut runtime, received) = runtime(root.path());
-        for (kind, payload) in [
-            ("desk_select", json!({"agent": "codex"})),
-            ("desk_install", json!({"agent": "codex"})),
-            ("desk_settings_set", json!({"default_agent": "codex"})),
-        ] {
-            assert!(!event(&mut runtime, kind, payload), "{kind}");
-        }
-        assert_eq!(runtime.desk.stored.selection.agent, None);
-        assert_eq!(runtime.desk.stored.settings.default_agent, None);
-        assert!(received.try_iter().next().is_none());
+        event(&mut runtime, "desk_select", json!({"agent": "codex"}));
+        event(&mut runtime, "desk_install", json!({"agent": "codex"}));
+        event(
+            &mut runtime,
+            "desk_settings_set",
+            json!({"default_agent": "codex"}),
+        );
+        assert_eq!(runtime.desk.stored.selection.agent, Some(AdapterId::Codex));
+        assert_eq!(
+            runtime.desk.stored.settings.default_agent,
+            Some(AdapterId::Codex)
+        );
+        assert!(
+            received
+                .try_iter()
+                .any(|order| matches!(order, Order::Install(AdapterId::Codex)))
+        );
+    }
+
+    #[test]
+    fn a_message_codex_could_not_take_for_its_sign_in_leaves_the_conversation_with_the_login_line()
+    {
+        let root = tempfile::tempdir().unwrap();
+        let (mut runtime, received) = runtime(root.path());
+        runtime.desk_report(Report::Availability(vec![(
+            AdapterId::Codex,
+            DeskAgentState::Ready,
+            None,
+        )]));
+        event(&mut runtime, "desk_select", json!({"agent": "codex"}));
+        assert!(event(
+            &mut runtime,
+            "desk_send",
+            json!({"text": "what runs now"})
+        ));
+        sent(&received);
+        runtime.desk_report(Report::OpenFailed {
+            adapter: AdapterId::Codex,
+            error: OpenError::Login,
+        });
+        let conversation = &runtime.desk.stored.conversation.items;
+        assert!(
+            !conversation
+                .iter()
+                .any(|item| matches!(item, DeskItem::User { .. })),
+            "{conversation:?}"
+        );
+        assert!(conversation.iter().any(|item| matches!(
+            item,
+            DeskItem::Notice { notice: DeskNotice::LoginNeeded, detail: Some(command), .. }
+                if command == "hide desk login codex"
+        )));
+        assert_eq!(
+            runtime.desk.agents[&AdapterId::Codex].0,
+            DeskAgentState::LoginNeeded
+        );
     }
 
     #[test]
