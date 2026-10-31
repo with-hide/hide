@@ -203,6 +203,16 @@ class HerdrPath:
         self.server = subprocess.Popen([str(herdr), "server"], env=self.env, stdin=subprocess.DEVNULL,
                                        stdout=open(root / "herdr-server.out", "w"), stderr=subprocess.STDOUT,
                                        start_new_session=True)
+        self.node = None
+        try:
+            self._populate(root, panes)
+        except BaseException:
+            # A server left running keeps its panes' terminals, and enough of
+            # them exhaust the machine's (macOS allows 511).
+            self.close()
+            raise
+
+    def _populate(self, root, panes):
         deadline = time.monotonic() + 30
         while not self.socket.exists():
             if time.monotonic() > deadline:
@@ -216,7 +226,6 @@ class HerdrPath:
         found = self.cli("pane", "list")["result"]["panes"]
         self.panes = [pane["pane_id"] for pane in found]
         assert len(self.panes) == panes, f"{len(self.panes)} panes for {panes}"
-        self.node = None
 
     def cli(self, *args):
         done = subprocess.run([str(self.herdr), *args], env=self.env, capture_output=True, text=True, timeout=60)
@@ -242,7 +251,8 @@ class HerdrPath:
                  "--timeout", str(int(seconds * 1000)))
 
     def close(self):
-        self.server.kill()
+        if self.server.poll() is None:
+            self.server.kill()
         self.server.wait(30)
         self.socket.unlink(missing_ok=True)
 
@@ -289,6 +299,19 @@ class HolderPath:
                     self.node.ask("terminate", pane=pane, wait=60)
                 except SystemExit:
                     pass
+        # Whatever no node ended: the holders this round started, by pid while
+        # each still runs this round's holder, and then the shell each held.
+        for pid in self.holders:
+            found = subprocess.run(["ps", "-o", "command=", "-p", str(pid)], capture_output=True, text=True).stdout
+            if str(self.root) not in found:
+                continue
+            shells = subprocess.run(["pgrep", "-P", str(pid)], capture_output=True, text=True).stdout.split()
+            os.kill(pid, 9)
+            for shell in shells:
+                try:
+                    os.kill(int(shell), 9)
+                except ProcessLookupError:
+                    pass
 
 
 # --- one round --------------------------------------------------------------
@@ -326,14 +349,24 @@ class Round:
         self.state = self.home / "s"
         self.sent = []
         self.path = (HerdrPath if args.path == "herdr" else HolderPath)(args.herdr, self.root, args.panes)
-        self.node = self.new_node()
+        try:
+            self.node = self.new_node()
+        except BaseException:
+            self.path.close()
+            shutil.rmtree(self.root, ignore_errors=True)
+            raise
         self.result = {"path": args.path, "panes": args.panes, "rows": ROWS, "cols": COLS,
                        "conditions_start": conditions(), "phases": {}}
 
     def new_node(self):
         node = Node(self.args.bin / "holder_node", self.home, self.state, self.path.switch, self.args.herdr,
                     self.path.socket, self.root / "node.log")
-        self.path.start(node)
+        try:
+            self.path.start(node)
+        except BaseException:
+            self.path.close()
+            node.kill()
+            raise
         return node
 
     def latency(self, name, count):
@@ -392,6 +425,9 @@ class Round:
         path.attach(attached)
         drawn = self.node.ask("wait_drawn", panes=attached, timeout_ms=120_000)
         assert drawn["drawn"], f"only {drawn['panes_drawn']} of {len(attached)} panes drew"
+        # A holder wakes once, a second after its last frame, to give freed
+        # pages back; this window shows that wake apart from the idle one.
+        phases["settle_after_attach"] = window(path, STILL_SECONDS)
         phases["idle_attached"] = window(path, args.idle_seconds)
         phases["idle_attached"]["attached"] = len(attached)
         phases["idle_attached"]["conditions"] = conditions()
