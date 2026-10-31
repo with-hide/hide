@@ -114,6 +114,8 @@ test("the Conductor's first plan shows on its pane, the map follows the record, 
     await node.click();
     const panel = map.locator('[data-mission-panel="api"] [data-mission-detail="api"]');
     await expect(panel).toBeVisible();
+    // Its finish lines are counted in the panel, not on the card (mission-node-simple B4): the one the plan gave and the mission's check command, none passed yet.
+    await expect(panel.locator('[data-panel-part="criteria"] h4')).toHaveText(/ · 0\/2$/);
     await expect(panel.locator("[data-panel-meta] [data-run]")).toHaveAttribute("title", "opus (planned)");
     await panel.locator("[data-panel-events-toggle]").click();
     await expect(panel.locator('[data-panel-event="node"]').first()).toBeVisible();
