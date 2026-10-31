@@ -365,6 +365,7 @@ jobs:
       # times and compiling took about 6 of the job's 11 minutes (2026-10-05).
       TEST_TARGETS: >-
         -p hided -p hide-host -p hide-node -p hide-kit -p hide-agent-hooks -p herdr-core -p hide-ai
+        -p hide-agent-adapter -p hide-desk
         --lib --bin hide-agent-hooks --test it
     steps:
       - name: Keep line endings as committed
@@ -462,6 +463,15 @@ jobs:
         run: |
           bash scripts/verify-cargo.sh nextest --profile ci $TEST_TARGETS -E 'binary_id(hide-host::it) & test(/^branch_merge::.*(catch|upstream)/)'
           bash scripts/verify-cargo.sh nextest --profile ci $TEST_TARGETS -E 'package(herdr-core) & kind(lib) & test(/worktree_control::tests::a_(new_branch_starts|local_base_with_unpushed)/)'
+      - name: Agent folders from the one resolver and the callers that judge an override
+        # hide_agent_adapter::AgentAdapter::home on Windows path forms (drive,
+        # UNC and verbatim paths moving the folder; drive-relative and
+        # root-relative ones refused), the core's environment report built
+        # on it, and Desk's sign-in path. It stands on its own, so it runs
+        # whatever the step above answered.
+        if: ${{ !cancelled() && steps.tests.outcome == 'success' }}
+        timeout-minutes: 10
+        run: bash scripts/verify-cargo.sh nextest --profile ci $TEST_TARGETS -E '(package(hide-agent-adapter) & kind(lib) & test(/^home::/)) | (package(herdr-core) & kind(lib) & test(/^environment::/)) | (package(hide-desk) & kind(lib) & test(/^codex::/))'
       - name: Install kit and its Windows command shim
         if: ${{ !cancelled() && steps.tests.outcome == 'success' }}
         timeout-minutes: 10

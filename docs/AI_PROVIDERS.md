@@ -147,7 +147,9 @@ It sets two environment variables: that `CODEX_HOME`, pointing the app-server at
 Which agents are providers is each agent's declaration (`hide_agent_adapter::AgentAdapter::ai`): a provider id, or the reason the agent is not one, as retired Cursor's is.
 The registry (`hide-ai/src/registry.rs`) lists the declared providers in the declarations' order: `claude`, `codex`, `grok`, `opencode`, `pi`, `omp`, `antigravity`.
 `ProviderId` is a copyable name for one entry, written in `ai.json` as its id; `PROVIDERS` lists them, and each one's label, its `agent` (the id of the same agent in the install kit: `claude-code`, `codex`, `grok`, `opencode`, `pi`, `omp`, `antigravity`) and the reasoning efforts a request may pick are its declaration's (`label`, `id`, `efforts()`, the one effort menu every start of the agent offers too).
-What only Hide AI decides is bound in the registry: the default model of each declared provider (`BINDINGS`), and `build_backend` makes the backend of one entry; a provider declared without its binding fails `every_declared_provider_is_bound_and_nothing_else_is`.
+Whether Hide AI may send the agent a request is the declaration's too (`AiProvider::requests`): supported once a call is proven read-only, otherwise an absence with its reason.
+What only Hide AI decides is bound in the registry (`BINDINGS`): each declared provider's default model and its backend, which it has exactly when its declaration lets Hide AI send it requests; `build_backend` makes the backend of one entry from that binding and has no arm by provider id, so a provider without a backend is refused by its declaration, never by a fallback.
+A provider declared without its binding, or bound to a backend its declaration does not allow, fails `every_declared_provider_is_bound_and_nothing_else_is`.
 An empty model means the CLI's own default: no `--model` flag is sent.
 There is one place that finds a CLI and says what it is run with (`hide-ai/src/program.rs`): a program is looked for on the account's search (`hide_platform::programs`: the login shell's folders, the daemon's own `PATH`, the usual install folders), and the child is started with that same value as its `PATH`.
 That covers every child, the availability and model-list probes and the Weekly Usage read as much as a request, and the Codex app-server, because a CLI installed as a script (pnpm's `codex`, a Node CLI under nvm) starts its interpreter by name from its environment, and a CLI found on the shell's folders and run with the daemon's would be reported ready and then fail.
@@ -255,7 +257,7 @@ The transcript never reaches an argument vector.
 Grok's answer is `structured_output` when present and its `text` otherwise.
 Each CLI's own flags are the contract; a flag one of them stops accepting is a failed request that names the exit status, not a silent change of behaviour.
 
-`opencode` uses `UnprovenReadOnlyBackend`.
+OpenCode's declaration refuses requests, so its binding has no backend and it gets `UnprovenReadOnlyBackend` (`a_provider_whose_declaration_refuses_requests_is_listed_and_refuses_them`).
 The CLI documents no mode that guarantees a one-shot, tool-free, read-only run from a script, and a background feature must never be the reason an agent edits a file, so it is listed and never asked: availability is `NotInstalled` when no program is found and otherwise `Unsupported { reason: "cannot_guarantee_read_only" }`, `models()` is `Unknown` with the same reason, and `execute` returns `Unsupported`.
 Settings shows it as installed and not selectable, with that reason.
 Making it selectable is a change to its backend and to this table, with a documented read-only mode cited, not a setting.

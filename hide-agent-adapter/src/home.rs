@@ -90,6 +90,14 @@ impl AgentAdapter {
     }
 }
 
+/// agy's own app folder, `~/.gemini/antigravity-cli`: its settings and
+/// trust list, logs and conversations. A vendor location apart from agy's
+/// declared folder (`~/.gemini/config`, where Hide and Herdr install), kept
+/// here so every reader names it once.
+pub fn antigravity_app_data(account_home: &Path) -> PathBuf {
+    account_home.join(".gemini").join("antigravity-cli")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -125,6 +133,51 @@ mod tests {
                 codex.home(Some(&home), value.map(OsStr::new), HomeScope::Install),
                 Ok(home.join(".codex"))
             );
+        }
+    }
+
+    /// Only a path absolute on the system Hide runs on moves the folder:
+    /// Windows' drive-relative (`C:codex`) and root-relative (`\codex`) forms
+    /// depend on a current drive or folder Hide does not share with the agent.
+    #[test]
+    fn only_a_path_absolute_on_this_system_moves_the_folder() {
+        let codex = AgentId::Codex.adapter();
+        let home = absolute("/home/me");
+        let read = |value: &str| codex.home(Some(&home), Some(OsStr::new(value)), HomeScope::Read);
+        let invalid = Err(HomeUnresolved::InvalidOverride {
+            variable: "CODEX_HOME",
+        });
+        let (absolute_forms, relative_forms): (&[&str], &[&str]) = if cfg!(windows) {
+            (
+                &[
+                    r"C:\elsewhere\codex",
+                    "C:/elsewhere/codex",
+                    r"C:\elsewhere/codex",
+                    r"\\server\share\codex",
+                    r"\\?\C:\elsewhere\codex",
+                ],
+                &[
+                    r"C:codex", r"\codex", "/codex", "codex", r".\codex", "../codex",
+                ],
+            )
+        } else {
+            (
+                &["/elsewhere/codex", "//elsewhere/codex"],
+                &[
+                    "codex",
+                    "./codex",
+                    "../codex",
+                    r"C:\elsewhere\codex",
+                    "C:/elsewhere/codex",
+                    r"\\server\share\codex",
+                ],
+            )
+        };
+        for value in absolute_forms {
+            assert_eq!(read(value), Ok(PathBuf::from(value)), "{value}");
+        }
+        for value in relative_forms {
+            assert_eq!(read(value), invalid, "{value}");
         }
     }
 

@@ -7,7 +7,7 @@
 pub mod composer;
 mod declarations;
 mod home;
-pub use home::{HomeScope, HomeUnresolved};
+pub use home::{HomeScope, HomeUnresolved, antigravity_app_data};
 mod journey;
 pub mod usage;
 pub use declarations::ADAPTERS;
@@ -588,6 +588,10 @@ pub struct AiProvider {
     /// The provider id Hide AI's settings persist, kept apart from the
     /// adapter id because files an earlier Hide wrote carry it (`claude`).
     pub id: &'static str,
+    /// Whether Hide AI may send the agent a request: only once a call to it
+    /// is proven read-only (`docs/AI_PROVIDERS.md`, D-15). An agent without
+    /// that proof is still listed, and refuses every request with why.
+    pub requests: Capability<()>,
 }
 
 /// A submission hook may observe a prompt even when its output is discarded.

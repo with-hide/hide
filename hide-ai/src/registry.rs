@@ -89,11 +89,7 @@ impl ProviderId {
     /// the backend's own constant, or [`CLI_DEFAULT_MODEL`] for an agent whose
     /// default is its own CLI's (D-18).
     pub fn default_model(self) -> &'static str {
-        BINDINGS
-            .iter()
-            .find(|(provider, _)| *provider == self)
-            .map(|(_, model)| *model)
-            .expect("every declared provider has a binding")
+        self.binding().default_model
     }
 
     /// The reasoning efforts a request may pick for this agent: the menu its
@@ -163,46 +159,106 @@ const DECLARED: [ProviderId; provider_count()] = providers();
 /// fallback list, never this one.
 pub const PROVIDERS: &[ProviderId] = &DECLARED;
 
-/// What only Hide AI decides for each declared provider: the model it is
-/// asked for when nobody chose one. A provider declared without its row here
-/// fails `every_declared_provider_is_bound_and_nothing_else_is`.
-const BINDINGS: &[(ProviderId, &str)] = &[
-    (ProviderId::CLAUDE, crate::claude::DEFAULT_MODEL),
-    (ProviderId::CODEX, crate::codex::DEFAULT_MODEL),
-    (ProviderId::GROK, CLI_DEFAULT_MODEL),
-    (ProviderId::OPENCODE, CLI_DEFAULT_MODEL),
-    (ProviderId::PI, CLI_DEFAULT_MODEL),
-    (ProviderId::OMP, crate::omp::DEFAULT_MODEL),
-    (ProviderId::ANTIGRAVITY, CLI_DEFAULT_MODEL),
+/// The backend that runs a declared provider whose declaration lets Hide AI
+/// send it requests.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum Backend {
+    Claude,
+    Codex,
+    Grok,
+    Pi,
+    Omp,
+    Antigravity,
+}
+
+/// What only Hide AI decides for one declared provider: the model it is
+/// asked for when nobody chose one, and its backend, `None` exactly when its
+/// declaration refuses requests (`AiProvider::requests`). A provider declared
+/// without its row, or with a backend its declaration does not allow, fails
+/// `every_declared_provider_is_bound_and_nothing_else_is`.
+struct Binding {
+    provider: ProviderId,
+    default_model: &'static str,
+    backend: Option<Backend>,
+}
+
+const BINDINGS: &[Binding] = &[
+    Binding {
+        provider: ProviderId::CLAUDE,
+        default_model: crate::claude::DEFAULT_MODEL,
+        backend: Some(Backend::Claude),
+    },
+    Binding {
+        provider: ProviderId::CODEX,
+        default_model: crate::codex::DEFAULT_MODEL,
+        backend: Some(Backend::Codex),
+    },
+    Binding {
+        provider: ProviderId::GROK,
+        default_model: CLI_DEFAULT_MODEL,
+        backend: Some(Backend::Grok),
+    },
+    Binding {
+        provider: ProviderId::OPENCODE,
+        default_model: CLI_DEFAULT_MODEL,
+        backend: None,
+    },
+    Binding {
+        provider: ProviderId::PI,
+        default_model: CLI_DEFAULT_MODEL,
+        backend: Some(Backend::Pi),
+    },
+    Binding {
+        provider: ProviderId::OMP,
+        default_model: crate::omp::DEFAULT_MODEL,
+        backend: Some(Backend::Omp),
+    },
+    Binding {
+        provider: ProviderId::ANTIGRAVITY,
+        default_model: CLI_DEFAULT_MODEL,
+        backend: Some(Backend::Antigravity),
+    },
 ];
 
+impl ProviderId {
+    fn binding(self) -> &'static Binding {
+        BINDINGS
+            .iter()
+            .find(|binding| binding.provider == self)
+            .expect("every declared provider has a binding")
+    }
+}
+
 /// Builds the backend for one registered provider, configured with the model
-/// the operator chose for it. This is the only place a backend is chosen by
-/// provider, so a new agent is a row above and an arm here.
+/// the operator chose for it. This is the only place a backend is chosen, by
+/// the provider's binding: a provider whose declaration refuses requests gets
+/// the backend that refuses them with its reason.
 pub fn build_backend(
     provider: ProviderId,
     model: &str,
     sink: Arc<dyn AiLogSink>,
 ) -> Arc<dyn AiBackend> {
-    match provider {
-        ProviderId::CLAUDE => Arc::new(crate::ClaudeCliBackend::new(crate::ClaudeConfig {
+    let Some(backend) = provider.binding().backend else {
+        return Arc::new(crate::UnprovenReadOnlyBackend::new(provider));
+    };
+    match backend {
+        Backend::Claude => Arc::new(crate::ClaudeCliBackend::new(crate::ClaudeConfig {
             model: model.to_owned(),
             ..crate::ClaudeConfig::default()
         })),
-        ProviderId::CODEX => Arc::new(crate::CodexAppServerBackend::new(
+        Backend::Codex => Arc::new(crate::CodexAppServerBackend::new(
             crate::CodexConfig {
                 model: model.to_owned(),
                 ..crate::CodexConfig::default()
             },
             sink,
         )),
-        ProviderId::GROK => Arc::new(crate::GrokCliBackend::new(crate::TextCliConfig::new(model))),
-        ProviderId::PI => Arc::new(crate::PiCliBackend::new(crate::TextCliConfig::new(model))),
-        ProviderId::OMP => Arc::new(crate::OmpSdkBackend::new(crate::OmpConfig::new(model))),
-        ProviderId::ANTIGRAVITY => Arc::new(crate::AntigravityCliBackend::new(
+        Backend::Grok => Arc::new(crate::GrokCliBackend::new(crate::TextCliConfig::new(model))),
+        Backend::Pi => Arc::new(crate::PiCliBackend::new(crate::TextCliConfig::new(model))),
+        Backend::Omp => Arc::new(crate::OmpSdkBackend::new(crate::OmpConfig::new(model))),
+        Backend::Antigravity => Arc::new(crate::AntigravityCliBackend::new(
             crate::TextCliConfig::new(model),
         )),
-        other => Arc::new(crate::UnprovenReadOnlyBackend::new(other)),
     }
 }
 
@@ -252,24 +308,48 @@ mod tests {
 
     #[test]
     fn every_declared_provider_is_bound_and_nothing_else_is() {
-        let bound: Vec<_> = BINDINGS.iter().map(|(provider, _)| *provider).collect();
+        let mut bound: Vec<_> = BINDINGS.iter().map(|binding| binding.provider).collect();
         let mut declared = PROVIDERS.to_vec();
-        let mut sorted = bound.clone();
+        bound.sort();
         declared.sort();
-        sorted.sort();
         assert_eq!(
-            sorted, declared,
-            "each agent declaring a Hide AI provider needs its row in BINDINGS and, unless it runs \
-             read-only, its arm in build_backend"
+            bound, declared,
+            "each agent declaring a Hide AI provider needs its row in BINDINGS"
         );
         for provider in PROVIDERS {
-            assert_eq!(
-                provider.adapter().ai,
-                Support::Supported(hide_agent_adapter::AiProvider {
-                    id: provider.as_str()
-                })
-            );
+            let Support::Supported(ai) = provider.adapter().ai else {
+                panic!("{provider} is listed without a declared provider");
+            };
+            assert_eq!(ai.id, provider.as_str());
             assert_eq!(ProviderId::for_agent(provider.agent()), Some(*provider));
+            assert_eq!(
+                provider.binding().backend.is_some(),
+                matches!(ai.requests, Support::Supported(())),
+                "{provider}: a backend exactly when its declaration lets Hide AI send it requests"
+            );
+        }
+    }
+
+    /// What a caller sees of a provider whose declaration refuses requests,
+    /// without starting anything: listed, unsupported with the reason the
+    /// shell has a sentence for, and refusing a request.
+    #[test]
+    fn a_provider_whose_declaration_refuses_requests_is_listed_and_refuses_them() {
+        let refused: Vec<_> = PROVIDERS
+            .iter()
+            .copied()
+            .filter(|provider| provider.binding().backend.is_none())
+            .collect();
+        assert_eq!(refused, [ProviderId::OPENCODE]);
+        for provider in refused {
+            let backend = build_backend(provider, CLI_DEFAULT_MODEL, Arc::new(crate::NoopLogSink));
+            assert_eq!(backend.id(), provider);
+            assert_eq!(
+                backend.availability(),
+                crate::Availability::Unsupported {
+                    reason: crate::unproven::CANNOT_GUARANTEE_READ_ONLY.to_owned()
+                }
+            );
         }
     }
 
