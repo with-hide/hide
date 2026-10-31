@@ -1067,7 +1067,9 @@ impl Runtime {
             );
             return;
         };
-        match crate::runtime::agent_choice::launch_arguments(&record.kind, &record.launch) {
+        let permission = self.agent_permission(&record.node_id, &record.kind);
+        match crate::runtime::agent_choice::launch_arguments(&record.kind, &record.launch, &permission)
+        {
             Ok(launch) => args.extend(launch),
             Err(detail) => {
                 crate::diagnostic!(serde_json::json!({

@@ -1694,11 +1694,16 @@ impl Runtime {
 
     /// [`Self::codex_daemon`] for the machine a pane id belongs to.
     pub(super) fn codex_daemon_for_pane(&self, pane_id: &str) -> crate::codex_launch::CodexDaemon {
-        let device = pane_id
+        self.codex_daemon(self.device_of_pane(pane_id))
+    }
+
+    /// The machine a core pane id belongs to: the device a `remote:` id
+    /// names, else this one.
+    pub(super) fn device_of_pane<'a>(&'a self, pane_id: &'a str) -> &'a str {
+        pane_id
             .strip_prefix("remote:")
             .and_then(|rest| rest.split_once(":pane:"))
-            .map_or(self.node.as_str(), |(device, _)| device);
-        self.codex_daemon(device)
+            .map_or(self.node.as_str(), |(device, _)| device)
     }
 
     pub(super) fn kit_state(&self, device_id: &str) -> KitSnapshot {

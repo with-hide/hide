@@ -233,6 +233,14 @@ struct StoredUiState {
     /// store unreadable.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     conductor_settings: Option<serde_json::Value>,
+    /// Settings › Agents › 권한, this machine's and each device's, kept as
+    /// values: an entry this build cannot read loads as 매번 물어보기 rather
+    /// than as the default full access, and the rest loads
+    /// (`stored_permissions`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    agent_permissions: Option<serde_json::Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    device_agent_permissions: Option<serde_json::Value>,
     /// The agent kind and per-kind model last started with. Absent in a
     /// store written before it existed, which seeds it once from the removed
     /// `issue_settings.default_agent` (PRD home-device-rail D-18).
@@ -310,6 +318,34 @@ pub enum UnrecognizedField {
     OverviewGraph,
     /// Settings › Conductor; the defaults were used.
     ConductorSettings,
+    /// An agent's 권한 in Settings › Agents; 매번 물어보기 was used for it.
+    AgentPermissions,
+}
+
+/// One machine's stored 권한 by agent. An entry this build cannot read is
+/// 매번 물어보기, never the default full access: a choice the operator made
+/// to be asked is not widened by a file it cannot read; `unread` says so.
+fn stored_permissions(
+    value: Option<serde_json::Value>,
+    unread: &mut bool,
+) -> crate::agent_permission::AgentPermissions {
+    match value {
+        None => BTreeMap::new(),
+        Some(serde_json::Value::Object(agents)) => agents
+            .into_iter()
+            .map(|(agent, value)| {
+                let permission = serde_json::from_value(value).unwrap_or_else(|_| {
+                    *unread = true;
+                    crate::agent_permission::AgentPermission::Ask
+                });
+                (agent, permission)
+            })
+            .collect(),
+        Some(_) => {
+            *unread = true;
+            BTreeMap::new()
+        }
+    }
 }
 
 /// What the removed native app's state file holds for `shortcut_bindings`.
@@ -541,6 +577,25 @@ fn decode(bytes: &[u8]) -> (UiStateSnapshot, PaneTerminalSizes, LoadDisposition)
             }
         },
     };
+    let mut permissions_unread = false;
+    let agent_permissions = stored_permissions(stored.agent_permissions, &mut permissions_unread);
+    let device_agent_permissions: BTreeMap<String, crate::agent_permission::AgentPermissions> =
+        match stored.device_agent_permissions {
+            None => BTreeMap::new(),
+            Some(serde_json::Value::Object(devices)) => devices
+                .into_iter()
+                .map(|(device, value)| {
+                    (device, stored_permissions(Some(value), &mut permissions_unread))
+                })
+                .collect(),
+            Some(_) => {
+                permissions_unread = true;
+                BTreeMap::new()
+            }
+        };
+    if permissions_unread {
+        unrecognized.push(UnrecognizedField::AgentPermissions);
+    }
     let conductor_settings = match stored.conductor_settings {
         None => crate::missions::ConductorSettings::default(),
         Some(value) => crate::missions::ConductorSettings::from_stored(value)
@@ -647,6 +702,8 @@ fn decode(bytes: &[u8]) -> (UiStateSnapshot, PaneTerminalSizes, LoadDisposition)
             }),
             issue_settings: stored.issue_settings.settings,
             conductor_settings,
+            agent_permissions,
+            device_agent_permissions,
             agent_sleep: {
                 let mut store = stored.agent_sleep;
                 store.after_load();
@@ -827,6 +884,13 @@ pub fn save(
                 .expect("Settings › Conductor serializes"),
         ),
         agent_start: Some(state.agent_start.clone()),
+        agent_permissions: (!state.agent_permissions.is_empty()).then(|| {
+            serde_json::to_value(&state.agent_permissions).expect("agent permissions serialize")
+        }),
+        device_agent_permissions: (!state.device_agent_permissions.is_empty()).then(|| {
+            serde_json::to_value(&state.device_agent_permissions)
+                .expect("agent permissions serialize")
+        }),
         agent_sleep: state.agent_sleep.clone(),
         session_archive: state.session_archive.clone(),
         recent_checkouts: state.recent_checkouts.clone(),

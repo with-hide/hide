@@ -598,9 +598,10 @@ fn spawn(
         return Err("invalid_agent_name".into());
     }
     // The choice goes before the native arguments, which may end with the
-    // first prompt after `--`.
-    let mut start_args =
-        crate::runtime::agent_choice::launch_arguments(kind, launch).map_err(|detail| {
+    // first prompt after `--`; the machine's permission choice goes before
+    // both once the child's machine is known.
+    let mut start_args = crate::runtime::agent_choice::choice_arguments(kind, launch)
+        .map_err(|detail| {
             crate::diagnostic!(json!({
                 "component": "spawn", "kind": "spawn.invalid_launch_choice", "intent": intent,
                 "agent_kind": kind, "detail": detail,
@@ -785,6 +786,7 @@ fn spawn(
         host_scope,
         machine: native_machine,
         codex: codex_daemon,
+        permissions,
         on_node,
         node,
     } = context(client, &child_device).map_err(|reason| {
@@ -1068,7 +1070,7 @@ fn spawn(
                 shell,
                 name,
                 kind,
-                start_args,
+                with_permission(kind, &permissions, start_args),
                 codex_daemon,
             )?;
             reserved = serde_json::from_value(mutate(
@@ -1672,6 +1674,32 @@ fn made_by_spawn<'a>(
     label: &str,
 ) -> bool {
     existing != repo && workspaces.any(|workspace| workspace == label)
+}
+
+/// A spawn's arguments behind the permission choice of the machine it
+/// starts on (`agent_permission`). A full-access flag the spawn's own native
+/// arguments already name is not given twice: a CLI may refuse an option
+/// given twice (clap does for Codex's), and the operator who wrote it meant
+/// it once. Typed options go as typed.
+fn with_permission(
+    kind: &str,
+    permissions: &crate::agent_permission::AgentPermissions,
+    args: Vec<String>,
+) -> Vec<String> {
+    let permission = crate::agent_permission::of(permissions, kind);
+    let named = |flag: &String| {
+        permission == crate::agent_permission::AgentPermission::Full
+            && args
+                .iter()
+                .take_while(|arg| arg.as_str() != "--")
+                .any(|arg| arg == flag)
+    };
+    let mut start: Vec<String> = crate::agent_permission::arguments(kind, &permission)
+        .into_iter()
+        .filter(|flag| !named(flag))
+        .collect();
+    start.extend(args);
+    start
 }
 
 #[cfg(test)]

@@ -2898,6 +2898,7 @@ impl Runtime {
             fallback_pane_id,
             owner,
             codex_daemon: self.codex_daemon(self.node.as_str()),
+            permissions: self.agent_permissions_of(self.node.as_str()),
         };
         let spawned = if let ClosedItem::File {
             workspace_id,

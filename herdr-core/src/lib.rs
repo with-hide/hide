@@ -1,6 +1,7 @@
 #[cfg(test)]
 mod agent_adapter_contract_tests;
 mod agent_find;
+mod agent_permission;
 pub mod agent_hooks;
 mod agent_sleep;
 mod agent_sleep_herdr;

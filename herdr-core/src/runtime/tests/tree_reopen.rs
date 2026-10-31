@@ -219,6 +219,7 @@ fn reopen_answering(runtime: &mut Runtime, fail: &[&str]) -> Vec<String> {
         order.push(old.clone());
         let request = crate::recent_closed::reopen::ReopenRequest {
             codex_daemon: Default::default(),
+            permissions: Default::default(),
             item: member.item.clone(),
             workspace_exists: true,
             tab_exists: false,

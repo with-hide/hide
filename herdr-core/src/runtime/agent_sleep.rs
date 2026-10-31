@@ -653,6 +653,10 @@ impl Runtime {
             return false;
         };
         let codex_daemon = self.codex_daemon_for_pane(pane_id);
+        let permission = match self.snapshot.ui_state.agent_sleep.records.get(pane_id) {
+            Some(record) => self.agent_permission_for_pane(pane_id, &record.kind),
+            None => return false,
+        };
         // A wake is the operator's attention, as a look is: the conversation
         // it resumes is as old as the sleep, so without this an agent woken
         // from the menu or the phone off screen would be due again at once.
@@ -674,7 +678,11 @@ impl Runtime {
             mode
         };
         let launch =
-            match crate::runtime::agent_choice::launch_arguments(&record.kind, &record.launch) {
+            match crate::runtime::agent_choice::launch_arguments(
+                &record.kind,
+                &record.launch,
+                &permission,
+            ) {
                 Ok(launch) => launch,
                 Err(detail) => {
                     return self.ingest_agent_wake(

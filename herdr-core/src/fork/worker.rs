@@ -173,7 +173,11 @@ fn run_agent_fork_with_registration(
     // the fork is made, so a refused one never leaves a session an OpenCode 2
     // server made either.
     let choice =
-        crate::runtime::agent_choice::launch_arguments(request.agent.kind(), &request.launch)?;
+        crate::runtime::agent_choice::launch_arguments(
+            request.agent.kind(),
+            &request.launch,
+            &request.permission,
+        )?;
     let (mut args, made) = fork_arguments(node, request)?;
     args.extend(choice);
     // Everything after an OpenCode 2 fork can still fail (the parent's tab,
@@ -724,6 +728,7 @@ mod tests {
                 tab_label: Some("Tab 2".into()),
                 placement: ForkPlacement::Tab,
                 launch: Default::default(),
+                permission: Default::default(),
             };
             let created = std::cell::RefCell::new(Vec::new());
             let result = run_agent_fork_with_registration(
@@ -917,6 +922,7 @@ mod tests {
                 tab_label: Some("Tab 2".into()),
                 placement: ForkPlacement::Tab,
                 launch: Default::default(),
+                permission: Default::default(),
             };
             let result = run_agent_fork_with_registration(
                 herdr.engine().as_ref(),
@@ -1087,6 +1093,7 @@ mod tests {
                 tab_label: Some("Tab 2".into()),
                 placement: ForkPlacement::Tab,
                 launch: Default::default(),
+                permission: Default::default(),
             };
             let result = run_agent_fork_with_registration(
                 herdr.engine().as_ref(),
@@ -1219,6 +1226,7 @@ mod tests {
                 tab_label: Some("Tab 2".into()),
                 placement: ForkPlacement::Tab,
                 launch: Default::default(),
+                permission: Default::default(),
             };
             let result = run_agent_fork_with_registration(
                 herdr.engine().as_ref(),
@@ -1421,6 +1429,7 @@ mod tests {
                 tab_label: Some("Tab 2".into()),
                 placement: ForkPlacement::Tab,
                 launch: Default::default(),
+                permission: Default::default(),
             };
             let result = fork_antigravity(herdr.engine().as_ref(), &node, &request, "child-pane");
             // Eight erases of eight reach the limit of 64.
@@ -1592,6 +1601,7 @@ mod tests {
                 tab_label: None,
                 placement: ForkPlacement::Tab,
                 launch: Default::default(),
+                permission: Default::default(),
             };
             let result = fork_arguments(&node, &request);
             assert_eq!(result.is_ok(), forked, "{code:?}: {result:?}");
@@ -1675,6 +1685,7 @@ mod tests {
             tab_label: None,
             placement: ForkPlacement::Side,
             launch: Default::default(),
+            permission: Default::default(),
         };
 
         let pane_id = run_agent_fork_with_registration(

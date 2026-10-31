@@ -415,6 +415,7 @@ fn a_closed_agent_takes_its_choice_to_the_pane_its_reopen_makes() {
     runtime.reopen_in_flight = Some("closed".to_owned());
     let request = crate::recent_closed::reopen::ReopenRequest {
         codex_daemon: Default::default(),
+        permissions: Default::default(),
         item,
         workspace_exists: true,
         tab_exists: true,
