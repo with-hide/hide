@@ -55,7 +55,7 @@ test("a mouse click at the center of Wake agent over a WebGL terminal wakes the 
     // Once in a while on Linux the wake's start was answered but no resumed
     // agent ever held the pane (with-hide/hide-private#322); what the shell's
     // line showed then says whether the line was typed, mangled or ran.
-    await dumpOnFailure("woken pane", () => wokenPane(herdr, sleeper), () => expect.poll(resumed, { timeout: 30_000 }).toContain(`claude --resume ${SESSION}`));
+    await dumpOnFailure("woken pane", () => wokenPane(herdr, sleeper), () => expect.poll(resumed, { timeout: 30_000 }).toContain(`claude --resume ${SESSION} --dangerously-skip-permissions`));
     await expect(pane.locator("[data-pane-sleep]")).toHaveCount(0, { timeout: 30_000 });
   } finally {
     daemon?.stop();

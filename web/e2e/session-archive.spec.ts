@@ -20,14 +20,14 @@ function git(cwd: string, args: string[]): void {
 
 const panes = (herdr: HerdrFixture) => (herdr.run(["pane", "list"]) as { result: { panes: { pane_id: string }[] } }).result.panes.map((pane) => pane.pane_id);
 
-/** The pane whose agent Herdr started with `claude --resume <session>`, or null. */
+/** The pane whose agent Herdr started with `claude --resume <session>` and the default 전부 허용 option, or null. */
 function resumedIn(herdr: HerdrFixture, session: string): string | null {
   for (const pane of panes(herdr)) {
     // A pane listed a moment ago can be gone now: opening a checkout replaces its first shell.
     const read = spawnSync(herdr.bin, ["pane", "process-info", "--pane", pane], { env: herdr.env, encoding: "utf8", timeout: 10_000 });
     if (read.status !== 0) continue;
     const info = JSON.parse(read.stdout) as ProcessInfo;
-    if (info.result.process_info.foreground_processes.some((process) => process.argv?.join(" ") === `claude --resume ${session}`)) return pane;
+    if (info.result.process_info.foreground_processes.some((process) => process.argv?.join(" ") === `claude --resume ${session} --dangerously-skip-permissions`)) return pane;
   }
   return null;
 }

@@ -92,7 +92,7 @@ test("an agent slept from the pane menu keeps its row and wakes in the same pane
     // Herdr's schema makes argv optional and nullable; a process reported without
     // it must not end the poll before the resumed agent is reported.
     await expect.poll(() => processInfo().foreground_processes.map((process) => process.argv?.join(" ")), { timeout: 30_000 }).toContain(
-      `claude --resume ${SESSION}`,
+      `claude --resume ${SESSION} --dangerously-skip-permissions`,
     );
     await expect(pane.locator("[data-pane-sleep]")).toHaveCount(0, { timeout: 30_000 });
     await expect(row.locator('[data-agent-status="sleeping"]')).toHaveCount(0);

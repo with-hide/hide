@@ -84,7 +84,8 @@ test("⌘K Start an agent… starts an agent in the checkout in front with the c
     expect(last.get("agent_start_in_checkout")).toMatchObject({ provider: "claude", model: "opus", prompt: "첫 지시 확인용 문장" });
     expect(String(last.get("agent_start_in_checkout")?.request_id)).toMatch(/^start-[A-Za-z0-9_-]+$/);
 
-    // B24: the center went to the new pane, which runs the agent with the model and got the prompt.
+    // B24: the center went to the new pane, which runs the agent with the model, the default 전부 허용 option and
+    // the prompt. Its arguments are read rather than the screen, where a narrow pane wraps the prompt mid-word.
     let pane = "";
     await expect.poll(async () => {
       pane = await page.locator('[data-pane-view][data-focused="true"]').getAttribute("data-pane-view") ?? "";
@@ -96,14 +97,11 @@ test("⌘K Start an agent… starts an agent in the checkout in front with the c
       .poll(
         () => {
           const info = spawnSync(herdr.bin, ["pane", "process-info", "--pane", pane], { env: herdr.env, encoding: "utf8", timeout: 10_000 }).stdout;
-          return info.includes("--model") && info.includes("opus");
+          return info.includes("--dangerously-skip-permissions") && info.includes("--model") && info.includes("opus") && info.includes("첫 지시 확인용 문장");
         },
         { timeout: 30_000 },
       )
       .toBe(true);
-    await expect
-      .poll(() => spawnSync(herdr.bin, ["pane", "read", pane, "--source", "visible", "--format", "text"], { env: herdr.env, encoding: "utf8", timeout: 10_000 }).stdout, { timeout: 30_000 })
-      .toContain("첫 지시 확인용 문장");
 
     // B29: the next open preselects the kind and its model, with no 최근 mark, and the text is empty.
     await openFromPalette(page);

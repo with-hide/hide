@@ -226,7 +226,8 @@ test("a pull request's panel shows the sessions that made it and worked on it af
 });
 
 // B5/B8: the selected native file reaches the actual queued resume worker.
-for (const [kind, id, resumeFlag] of [["pi", PI_ID, "--session"], ["omp", OMP_ID, "--resume"]] as const) {
+// The last column is the option the default 전부 허용 adds to every restart; Pi never asks and has none.
+for (const [kind, id, resumeFlag, fullAccess] of [["pi", PI_ID, "--session", []], ["omp", OMP_ID, "--resume", ["--auto-approve"]]] as const) {
 test(`a ${kind} archive resume keeps its selected source and uses the current control`, async ({ page }) => {
   const herdr = await startHerdr({ agents: false });
   let daemon: Daemon | null = null;
@@ -280,7 +281,7 @@ test(`a ${kind} archive resume keeps its selected source and uses the current co
     await expect.poll(() => agentsIn(herdr, tree), { timeout: 60_000 }).toContain(kind);
     await expect.poll(() => fs.existsSync(path.join(herdr.root, `${kind}-launches.jsonl`))).toBe(true);
     const launches = fs.readFileSync(path.join(herdr.root, `${kind}-launches.jsonl`), "utf8").trim().split("\n").map(line => JSON.parse(line) as string[]);
-    expect(launches).toEqual([[resumeFlag, id]]);
+    expect(launches).toEqual([[resumeFlag, id, ...fullAccess]]);
     expect(fs.readFileSync(session, "utf8")).toBe(source);
     await screenshot(page, `${kind}-archive-resume`);
   } finally {

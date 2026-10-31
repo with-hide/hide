@@ -47,8 +47,10 @@ function installHook(home: string): void {
 
 /** Runs the real helper for one of the agent's hook events, the way the agent would run it in `pane`: its input names the session. */
 /** Whether the pane's foreground now runs the same conversation again; the agent runner execs as `.../claude`. */
+/** The reopen continues the conversation with the default 전부 허용 option, which every restart Hide makes carries. */
+const RESUME = `--resume ${SESSION} --dangerously-skip-permissions`;
 const resumed = (herdr: HerdrFixture, pane: string): boolean =>
-  processArgv(herdr, pane).some((argv) => argv === `claude --resume ${SESSION}` || argv.endsWith(`/claude --resume ${SESSION}`) || argv.endsWith(`\\claude.exe --resume ${SESSION}`));
+  processArgv(herdr, pane).some((argv) => argv === `claude ${RESUME}` || argv.endsWith(`/claude ${RESUME}`) || argv.endsWith(`\\claude.exe ${RESUME}`));
 
 /** Runs Hide's hook for `event` as the agent in the pane does: from inside its process, which hided proves is the pane's. */
 async function runHook(asAgent: (args: string[], run?: AgentRun) => Promise<HideAnswer>, event: "SessionStart" | "SubagentStart"): Promise<void> {
