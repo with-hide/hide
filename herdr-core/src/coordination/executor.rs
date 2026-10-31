@@ -1090,7 +1090,7 @@ fn spawn(
             let pane_id = if on_node {
                 pane.to_owned()
             } else {
-                crate::session_sync::remote_pane_id(&child_device, pane)
+                crate::address::scoped_pane_id(&child_device, pane)
             };
             runtime
                 .lock()

@@ -1697,8 +1697,8 @@ fn remote_projection_tab_list_and_order_are_herdr_only() {
             .map(|tab| tab.id.clone().expect("a remote tab id"))
             .collect::<Vec<_>>(),
         vec![
-            remote_tab_id("mini", "w1:t1"),
-            remote_tab_id("mini", "w1:t2")
+            crate::address::scoped_tab_id("mini", "w1:t1"),
+            crate::address::scoped_tab_id("mini", "w1:t2")
         ]
     );
     assert_eq!(
@@ -1710,15 +1710,15 @@ fn remote_projection_tab_list_and_order_are_herdr_only() {
         vec![
             (
                 crate::model::StripTabKind::Herdr,
-                remote_tab_id("mini", "w1:t1")
+                crate::address::scoped_tab_id("mini", "w1:t1")
             ),
             (
                 crate::model::StripTabKind::Herdr,
-                remote_tab_id("mini", "w1:t2")
+                crate::address::scoped_tab_id("mini", "w1:t2")
             )
         ]
     );
-    assert_eq!(checkout.active_tab_id, Some(remote_tab_id("mini", "w1:t1")));
+    assert_eq!(checkout.active_tab_id, Some(crate::address::scoped_tab_id("mini", "w1:t1")));
 }
 
 #[test]

@@ -172,7 +172,7 @@ impl Runtime {
             // A registration from before ids were checked, or one a shell
             // wrote into the UI state, is refused here too: its panes' ids
             // would overlap another device's.
-            if !hide_node_link::terminal::device_id_is_unambiguous(&device_id) {
+            if !hide_node_link::address::device_id_is_unambiguous(&device_id) {
                 return Err("This device's id contains \":\", so its panes cannot be told apart from another device's; remove it and register it under another id".to_owned());
             }
             let (transport, arrived) = match source {
@@ -807,7 +807,7 @@ impl Runtime {
                 "The SSH alias must be one Host name from ~/.ssh/config",
             ));
         }
-        if !hide_node_link::terminal::device_id_is_unambiguous(&id) {
+        if !hide_node_link::address::device_id_is_unambiguous(&id) {
             return Err(DeviceRefusal::new(
                 "device.invalid",
                 "A device id cannot contain \":\"",

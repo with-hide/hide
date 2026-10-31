@@ -1422,13 +1422,13 @@ fn publish_replica(
         // The device's hooks report to the core, never to its Herdr, so their
         // facts are laid here the way the labels are (`agent_hooks::facts`).
         let hook_tokens = context.hook_facts.as_ref().map(|facts| {
-            let prefix = super::remote_pane_id(target_id, "");
+            let prefix = crate::address::scoped_pane_id(target_id, "");
             facts
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner)
                 .lay(
                     &mut payload,
-                    |pane| super::remote_pane_id(target_id, pane),
+                    |pane| crate::address::scoped_pane_id(target_id, pane),
                     |pane| pane.starts_with(&prefix),
                 )
         });
@@ -1441,7 +1441,7 @@ fn publish_replica(
                 session.pane_hook_tokens = hook_tokens
                     .unwrap_or_default()
                     .into_iter()
-                    .map(|(pane, tokens)| (super::remote_pane_id(target_id, &pane), tokens))
+                    .map(|(pane, tokens)| (crate::address::scoped_pane_id(target_id, &pane), tokens))
                     .collect();
                 (Ok(session), excluded)
             }

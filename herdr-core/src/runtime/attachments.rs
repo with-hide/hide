@@ -306,7 +306,7 @@ impl Runtime {
         let remote = self
             .remote_file_transports
             .keys()
-            .find(|target| remote_pane_source_id(target, &payload.pane_id).is_some())
+            .find(|target| crate::address::pane_of(&payload.pane_id, target).is_some())
             .and_then(|target| {
                 self.remote_connection_generations
                     .get(target)

@@ -1079,7 +1079,7 @@ impl Runtime {
         // the device scope the strip carries.
         let herdr_id = |tab_id: &str| match device.as_deref() {
             None => Some(tab_id.to_owned()),
-            Some(target) => remote_tab_source_id(target, tab_id).map(str::to_owned),
+            Some(target) => crate::address::tab_of(tab_id, target).map(str::to_owned),
         };
         let (Some(tab_id), Some(expected_order)) = (
             herdr_id(&moved.source_id),
@@ -2505,7 +2505,7 @@ impl Runtime {
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner)
                 .lay(payload, str::to_owned, |pane| {
-                    !is_remote_scoped_pane_id(pane)
+                    !crate::address::is_device_pane(pane)
                 });
             self.settle_agent_sleep(payload);
             // A session without a catalog reads its paths here, before the
@@ -4107,11 +4107,11 @@ impl Runtime {
                     );
                 }
                 let pane_id = match device.as_deref() {
-                    Some(device) => super::operations::remote_pane_id(device, &pane_id),
+                    Some(device) => crate::address::scoped_pane_id(device, &pane_id),
                     None => pane_id,
                 };
                 let tab_id = created_tab_id.map(|tab| match device.as_deref() {
-                    Some(device) => crate::session_sync::remote_tab_id(device, &tab),
+                    Some(device) => crate::address::scoped_tab_id(device, &tab),
                     None => tab,
                 });
                 let operation = self
@@ -4982,7 +4982,7 @@ impl Runtime {
         // Herdr knows a device's pane by its own id, not the scoped one.
         let pane_id = operation.pane_id.as_deref()?;
         let pane_id = match operation.device_id.as_deref() {
-            Some(device) => super::remote_pane_source_id(device, pane_id)?,
+            Some(device) => crate::address::pane_of(pane_id, device)?,
             None => pane_id,
         };
         let launch = self
@@ -5074,7 +5074,7 @@ impl Runtime {
                     let pane_id = operation.pane_id.clone()?;
                     let kind = operation.agent_kind.clone()?;
                     let herdr_pane_id = match operation.device_id.as_deref() {
-                        Some(device) => super::remote_pane_source_id(device, &pane_id)?,
+                        Some(device) => crate::address::pane_of(&pane_id, device)?,
                         None => pane_id.as_str(),
                     };
                     let name = crate::fork::task_agent_name(&kind, herdr_pane_id);
@@ -6624,7 +6624,7 @@ impl Runtime {
                         checkout.tabs.iter().any(|tab| {
                             tab.id
                                 .as_deref()
-                                .and_then(|id| remote_tab_source_id(target_id, id))
+                                .and_then(|id| crate::address::tab_of(id, target_id))
                                 == Some(tab_id.as_str())
                         })
                     })
@@ -6654,7 +6654,7 @@ impl Runtime {
                     let Some(native) = tab
                         .id
                         .as_deref()
-                        .and_then(|id| remote_tab_source_id(target_id, id))
+                        .and_then(|id| crate::address::tab_of(id, target_id))
                     else {
                         continue;
                     };

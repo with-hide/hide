@@ -605,7 +605,7 @@ impl Runtime {
 /// A sleeping recipient as a letter's target: its registered identity, with
 /// no terminal and no turn, so no bell is ever judged from it.
 pub(in crate::runtime) fn asleep_observation(actor: Actor) -> Observation {
-    let raw_pane_id = super::super::remote_pane_source_id(&actor.device_id, &actor.pane_id)
+    let raw_pane_id = crate::address::pane_of(&actor.pane_id, &actor.device_id)
         .unwrap_or(&actor.pane_id)
         .to_owned();
     Observation {

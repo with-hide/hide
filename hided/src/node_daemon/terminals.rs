@@ -4,6 +4,7 @@
 
 use super::*;
 use crate::owned_task::AbortOnDrop;
+use hide_node_link::address::{scoped_pane_id, is_pane_of, pane_of};
 
 /// Terminal lines for the core's panes waiting to go up the terminals
 /// relay, in bytes; past it a key is refused to its screen.
@@ -18,17 +19,18 @@ const RELAY_RETRY: Duration = Duration::from_secs(1);
 /// This machine's panes, as its hub names them: the core's names for them.
 pub(super) struct OwnPanes {
     pub(super) hub: Arc<TerminalHub>,
-    pub(super) prefix: String,
+    /// This machine's node id, which the core scopes its panes under.
+    pub(super) node: String,
 }
 
 impl OutputSink for OwnPanes {
     fn output(&self, pane: &str, bytes: &[u8], full: bool) {
         self.hub
-            .output(&format!("{}{pane}", self.prefix), bytes, full);
+            .output(&scoped_pane_id(&self.node, pane), bytes, full);
     }
 
     fn forget(&self, pane: &str) {
-        self.hub.forget(&format!("{}{pane}", self.prefix));
+        self.hub.forget(&scoped_pane_id(&self.node, pane));
     }
 }
 
@@ -36,7 +38,7 @@ impl OutputSink for OwnPanes {
 /// its own terminals for the link's life, every other pane up the
 /// terminals relay.
 pub struct ScreenTerminals {
-    pub(super) own_prefix: String,
+    pub(super) own_node: String,
     live: watch::Receiver<Option<Arc<LiveLink>>>,
     held: Mutex<HeldLines>,
     /// Wakes the terminals relay's writer when a line is held.
@@ -268,9 +270,9 @@ fn not_sent(connection: u64, cause: Unsent, unsent: &UnsentNotices) {
 }
 
 impl ScreenTerminals {
-    pub(super) fn new(own_prefix: String, live: watch::Receiver<Option<Arc<LiveLink>>>) -> Self {
+    pub(super) fn new(own_node: String, live: watch::Receiver<Option<Arc<LiveLink>>>) -> Self {
         Self {
-            own_prefix,
+            own_node,
             live,
             held: Mutex::new(HeldLines::default()),
             ready: Notify::new(),
@@ -324,7 +326,7 @@ impl ScreenTerminals {
         typed_at_unix_ms: u64,
     ) -> Result<(), String> {
         if let KeyTarget::Pane(pane) = &target
-            && let Some(own) = pane.strip_prefix(&self.own_prefix)
+            && let Some(own) = pane_of(pane, &self.own_node)
         {
             let Some(link) = self.own() else {
                 return Err(
@@ -347,7 +349,7 @@ impl ScreenTerminals {
 
     /// A screen's view of `pane` needs it drawn whole.
     pub(super) fn redraw(&self, connection: u64, pane: &str) {
-        if let Some(own) = pane.strip_prefix(&self.own_prefix) {
+        if let Some(own) = pane_of(pane, &self.own_node) {
             if let Some(link) = self.own() {
                 link.terminals.redraw(own);
             }
@@ -491,7 +493,7 @@ async fn terminals_relay(
             _ = &mut writer => return "core_closed".to_owned(),
             from_core = from_core.next() => match from_core {
                 Some(Ok(tungstenite::Message::Text(text))) => {
-                    ingest(hub, &terminals.own_prefix, &text);
+                    ingest(hub, &terminals.own_node, &text);
                 }
                 Some(Ok(tungstenite::Message::Close(_))) | None | Some(Err(_)) => {
                     return "core_closed".to_owned();
@@ -530,7 +532,7 @@ where
 }
 
 /// The core's panes' output, one terminal line each, into the hub.
-fn ingest(hub: &TerminalHub, own_prefix: &str, text: &str) {
+fn ingest(hub: &TerminalHub, own_node: &str, text: &str) {
     for line in text.lines() {
         let output = match serde_json::from_str::<TerminalLine<TerminalUp>>(line) {
             Ok(TerminalLine {
@@ -540,7 +542,7 @@ fn ingest(hub: &TerminalHub, own_prefix: &str, text: &str) {
             Ok(TerminalLine {
                 terminal: TerminalUp::Forget { pane },
             }) => {
-                if !pane.starts_with(own_prefix) {
+                if !is_pane_of(&pane, own_node) {
                     hub.forget(&pane);
                 }
                 continue;
@@ -549,7 +551,7 @@ fn ingest(hub: &TerminalHub, own_prefix: &str, text: &str) {
         };
         // The core sends no pane of this machine; one it did is not drawn
         // over this machine's own.
-        if output.pane.starts_with(own_prefix) || output.pane.len() > MAX_PANE_ID_BYTES {
+        if is_pane_of(&output.pane, own_node) || output.pane.len() > MAX_PANE_ID_BYTES {
             continue;
         }
         if let Ok(bytes) = decode_base64(&output.data) {

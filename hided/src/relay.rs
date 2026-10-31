@@ -29,8 +29,9 @@ use hide_node::ssh::RemoteHost;
 use hide_node::terminal::OutputSink;
 use hide_node_link::terminal::{
     TerminalDown, TerminalLine, TerminalNode, TerminalOutput, TerminalUp, decode_base64,
-    device_pane_prefix, encode_base64,
+    encode_base64,
 };
+use hide_node_link::address::is_pane_of;
 use serde_json::json;
 
 use crate::owned_task::AbortOnDrop;
@@ -182,7 +183,6 @@ struct TapState {
 /// the node's own.
 pub struct RelayTap {
     node: String,
-    own_prefix: String,
     state: Mutex<TapState>,
     wake: tokio::sync::Notify,
 }
@@ -191,7 +191,6 @@ impl RelayTap {
     fn new(node: &str) -> Arc<Self> {
         Arc::new(Self {
             node: node.to_owned(),
-            own_prefix: device_pane_prefix(node),
             state: Mutex::default(),
             wake: tokio::sync::Notify::new(),
         })
@@ -223,7 +222,7 @@ impl RelayTap {
     }
 
     fn output(&self, pane: &str, bytes: &[u8], full: bool) {
-        if pane.starts_with(&self.own_prefix) || !self.takes(pane, full) {
+        if is_pane_of(pane, &self.node) || !self.takes(pane, full) {
             return;
         }
         // Encoded between the tap's locks, which every pane's output takes;
@@ -371,7 +370,7 @@ impl RelayTap {
     }
 
     fn forget(&self, pane: &str) {
-        if pane.starts_with(&self.own_prefix) {
+        if is_pane_of(pane, &self.node) {
             return;
         }
         let mut state = lock(&self.state);
@@ -560,7 +559,7 @@ pub async fn serve_terminals(
     }));
     // Every pane this machine draws starts whole on the node.
     for pane in outputs.hub.panes() {
-        if !pane.starts_with(&tap.own_prefix) {
+        if !is_pane_of(&pane, &tap.node) {
             terminals.redraw(&pane);
         }
     }
@@ -596,7 +595,7 @@ where
     S: futures_util::Sink<Message> + Unpin + Send + 'static,
     R: futures_util::Stream<Item = Result<Message, axum::Error>> + Unpin,
 {
-    let own_prefix = tap.own_prefix.clone();
+    let own_node = tap.node.clone();
     let mut writer = {
         let tap = Arc::clone(tap);
         let terminals = Arc::clone(&terminals);
@@ -638,7 +637,7 @@ where
             },
             incoming = stream.next() => match incoming {
                 Some(Ok(Message::Text(text))) => {
-                    if let Err(reason) = take_down(&text, terminals.as_ref(), &own_prefix) {
+                    if let Err(reason) = take_down(&text, terminals.as_ref(), &own_node) {
                         herdr_core::diagnostic!(json!({
                             "component": "node_relay",
                             "kind": "relay.terminals_line_refused",
@@ -682,7 +681,7 @@ where
 /// One line a node's screens sent for a pane of this machine: a key, a view
 /// or a redraw. A control, and anything for the node's own panes, is not the
 /// node's to send.
-fn take_down(text: &str, terminals: &dyn TerminalNode, own_prefix: &str) -> Result<(), String> {
+fn take_down(text: &str, terminals: &dyn TerminalNode, own_node: &str) -> Result<(), String> {
     if text.len() > MAX_DOWN_LINE {
         return Err("line_too_long".to_owned());
     }
@@ -691,7 +690,7 @@ fn take_down(text: &str, terminals: &dyn TerminalNode, own_prefix: &str) -> Resu
     match line.terminal {
         TerminalDown::Key { target, data, .. } => {
             if let hide_node_link::terminal::KeyTarget::Pane(pane) = &target
-                && pane.starts_with(own_prefix)
+                && is_pane_of(pane, own_node)
             {
                 return Err("own_pane".to_owned());
             }
@@ -704,7 +703,7 @@ fn take_down(text: &str, terminals: &dyn TerminalNode, own_prefix: &str) -> Resu
         // core decides the grid each is drawn at (`pane_sizes`).
         TerminalDown::View { .. } => return Err("view".to_owned()),
         TerminalDown::Redraw { pane } => {
-            if pane.starts_with(own_prefix) {
+            if is_pane_of(&pane, own_node) {
                 return Err("own_pane".to_owned());
             }
             terminals.redraw(&pane);

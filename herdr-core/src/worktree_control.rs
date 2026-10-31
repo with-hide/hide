@@ -173,7 +173,7 @@ impl TabTarget {
                 .and_then(|task| task.device_id.as_deref());
             let pane = device.map_or_else(
                 || layout.focused_pane_id.clone(),
-                |device| crate::session_sync::remote_pane_id(device, &layout.focused_pane_id),
+                |device| crate::address::scoped_pane_id(device, &layout.focused_pane_id),
             );
             runtime.queue_checkout_start_geometry(request.id, &pane)?
         };

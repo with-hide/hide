@@ -39,8 +39,6 @@ pub const DECISION_INTERVAL_MS: u64 = 60_000;
 /// unless its state changes first (B8).
 pub const SLEEP_RETRY_BACKOFF_MS: u64 = 60 * 60 * 1000;
 
-const REMOTE_PANE_ID_PREFIX: &str = "remote:";
-
 /// The machine an agent runs on, as sleep sees it. The core's own machine
 /// and a node that dials the core sleep alike (PRD core-host-node-remote-core
 /// B13); a device the core dials does not.
@@ -53,8 +51,8 @@ pub enum SleepMachine {
 }
 
 /// The panes of one machine's session: the core's own, or a device's under
-/// its `remote:<device>:pane:` prefix. A device session carries Herdr's own
-/// pane ids, which the store keeps under the prefix.
+/// its device-scoped ids (`crate::address`). A device session carries Herdr's
+/// own pane ids, which the store keeps scoped to the device.
 #[derive(Clone, Copy, Debug)]
 pub enum SleepScope<'a> {
     Core,
@@ -64,8 +62,8 @@ pub enum SleepScope<'a> {
 impl SleepScope<'_> {
     fn holds(self, pane_id: &str) -> bool {
         match self {
-            Self::Core => !pane_id.starts_with(REMOTE_PANE_ID_PREFIX),
-            Self::Device(prefix) => pane_id.starts_with(prefix),
+            Self::Core => !crate::address::is_device_scoped(pane_id),
+            Self::Device(device) => crate::address::is_pane_of(pane_id, device),
         }
     }
 
@@ -73,7 +71,7 @@ impl SleepScope<'_> {
     fn session_id(self, pane_id: &str) -> &str {
         match self {
             Self::Core => pane_id,
-            Self::Device(prefix) => pane_id.strip_prefix(prefix).unwrap_or(pane_id),
+            Self::Device(device) => crate::address::pane_of(pane_id, device).unwrap_or(pane_id),
         }
     }
 }
@@ -245,7 +243,7 @@ impl SleepRecord {
             // A device row's id is the core's own scoped one, never a name;
             // its Herdr name, when someone gave one, is `herdr_name`.
             agent_name: agent.herdr_name.clone().or_else(|| {
-                (!agent.pane_id.starts_with(REMOTE_PANE_ID_PREFIX)
+                (!crate::address::is_device_scoped(&agent.pane_id)
                     && agent.id != agent.pane_id
                     && !agent.id.trim().is_empty())
                 .then(|| agent.id.clone())
@@ -1084,7 +1082,7 @@ mod tests {
 
     #[test]
     fn a_nodes_sleeping_pane_is_settled_by_its_own_session_and_no_other() {
-        const NODE: &str = "remote:screen:pane:";
+        const NODE: &str = "screen";
         let mut store = AgentSleepStore::default();
         let mut sleeper = agent("remote:screen:pane:w1:p1");
         sleeper.spawned_from_pane_id = Some("remote:screen:pane:w1:p9".into());

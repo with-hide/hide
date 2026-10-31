@@ -210,8 +210,7 @@ impl Runtime {
         payload: &mut SessionSnapshotPayload,
     ) {
         if self.sleep_machine(device) == SleepMachine::Node {
-            let prefix = remote_pane_id_prefix(device);
-            self.settle_agent_sleep_in(payload, SleepScope::Device(&prefix));
+            self.settle_agent_sleep_in(payload, SleepScope::Device(device));
         }
     }
 
@@ -262,8 +261,7 @@ impl Runtime {
         agents: &mut [SidebarAgentSnapshot],
     ) {
         if self.sleep_machine(device) == SleepMachine::Node {
-            let prefix = remote_pane_id_prefix(device);
-            self.stamp_agent_sleep_in(agents, SleepScope::Device(&prefix));
+            self.stamp_agent_sleep_in(agents, SleepScope::Device(device));
         }
     }
 
@@ -935,7 +933,7 @@ impl Runtime {
             node: super::inbound::InboundLink::for_device(device, worker.runtime.clone()),
             runtime: worker.runtime.clone(),
             notifier: worker.notifier.clone(),
-            herdr_pane_id: remote_pane_source_id(device, pane_id)?.to_owned(),
+            herdr_pane_id: crate::address::pane_of(pane_id, device)?.to_owned(),
             input_gate: Arc::clone(&self.input_gate),
         })
     }
@@ -943,18 +941,17 @@ impl Runtime {
     /// Forgets what sleep kept of a device's panes once the device is
     /// removed; its panes are not touched.
     pub(super) fn forget_device_sleep(&mut self, device: &str) {
-        let prefix = remote_pane_id_prefix(device);
         let store = &mut self.snapshot.ui_state.agent_sleep;
         store
             .records
-            .retain(|pane_id, _| !pane_id.starts_with(&prefix));
+            .retain(|pane_id, _| !crate::address::is_pane_of(pane_id, device));
         self.sync_input_gate();
         let store = &mut self.snapshot.ui_state.agent_sleep;
         store
             .stamps
-            .retain(|pane_id, _| !pane_id.starts_with(&prefix));
+            .retain(|pane_id, _| !crate::address::is_pane_of(pane_id, device));
         self.agent_sleep_backoff
-            .retain(|pane_id, _| !pane_id.starts_with(&prefix));
+            .retain(|pane_id, _| !crate::address::is_pane_of(pane_id, device));
         self.node_sleep_next_decision_unix_ms.remove(device);
         self.node_sleep_shown_tabs.remove(device);
     }

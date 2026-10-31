@@ -51,18 +51,16 @@ pub struct ScreenUploads {
     store: Arc<Attachments>,
     connection: u64,
     node: String,
-    own_prefix: String,
     stages: HashMap<String, Stage>,
     order: VecDeque<String>,
 }
 
 impl ScreenUploads {
-    pub fn new(store: Arc<Attachments>, connection: u64, node: &str, own_prefix: &str) -> Self {
+    pub fn new(store: Arc<Attachments>, connection: u64, node: &str) -> Self {
         Self {
             store,
             connection,
             node: node.to_owned(),
-            own_prefix: own_prefix.to_owned(),
             stages: HashMap::new(),
             order: VecDeque::new(),
         }
@@ -163,7 +161,7 @@ impl ScreenUploads {
         if pane.is_empty() {
             return Handled::Answer(vec![refused(&request_id, "no_pane")]);
         }
-        if pane.starts_with(&self.own_prefix) {
+        if hide_node_link::address::is_pane_of(&pane, &self.node) {
             return self.commit_here(event, &request_id, pane, &stages, clipboard);
         }
         self.send_on(&request_id, text, &stages).await
@@ -355,7 +353,6 @@ mod tests {
             Arc::new(Attachments::new(folder)),
             1,
             "screen-node",
-            "remote:screen-node:pane:",
         )
     }
 

@@ -176,14 +176,15 @@ impl Runtime {
             verbs,
             unix_milliseconds(),
         );
-        let prefix = remote_pane_id_prefix(target_id);
         if fetched {
             self.prune_resolved_sessions(|pane| {
-                pane.starts_with(&prefix) && !agents.iter().any(|row| row.pane_id == pane)
+                crate::address::is_pane_of(pane, target_id)
+                    && !agents.iter().any(|row| row.pane_id == pane)
             });
             let verbs = &mut self.snapshot.ui_state.request_verbs;
             changed |= request_view::prune_verbs(verbs, |pane| {
-                pane.starts_with(&prefix) && !agents.iter().any(|row| row.pane_id == pane)
+                crate::address::is_pane_of(pane, target_id)
+                    && !agents.iter().any(|row| row.pane_id == pane)
             });
         }
         if changed {

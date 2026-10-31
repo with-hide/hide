@@ -39,7 +39,7 @@ impl Runtime {
         let pane = if local || caller.starts_with("remote:") {
             caller.to_owned()
         } else {
-            crate::session_sync::remote_pane_id(device, caller)
+            crate::address::scoped_pane_id(device, caller)
         };
         let recorded = self
             .hook_facts

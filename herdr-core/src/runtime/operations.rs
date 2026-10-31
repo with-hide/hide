@@ -190,10 +190,6 @@ pub(super) fn close_target_id(target: &crate::recent_closed::capture::CloseCaptu
     }
 }
 
-pub(super) fn remote_pane_id(target_id: &str, pane_id: &str) -> String {
-    format!("remote:{target_id}:pane:{pane_id}")
-}
-
 /// Copies each pane's status word and close-confirmation answer from the agent
 /// rows that carry the read axis.
 ///
@@ -492,7 +488,7 @@ impl Runtime {
             current.retryable = false;
             current.created_pane_id = created_pane_id
                 .as_deref()
-                .map(|pane_id| remote_pane_id(target_id, pane_id));
+                .map(|pane_id| crate::address::scoped_pane_id(target_id, pane_id));
             current.deadline_at_unix_ms =
                 Some(unix_milliseconds().saturating_add(CLOSE_STAGE_TIMEOUT_MS));
         }
