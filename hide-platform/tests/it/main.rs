@@ -10,6 +10,7 @@ mod listeners;
 mod path;
 mod process;
 mod programs;
+mod resident;
 #[cfg(unix)]
 mod stand_ins;
 mod stdio;
