@@ -38,6 +38,9 @@ pub enum InstallError {
     Busy,
     /// The install ran and failed; the last line npm wrote.
     Failed(String),
+    /// The install was stopped (Desk turned off, or its worker ended) and
+    /// left nothing behind.
+    Stopped,
 }
 
 /// The folder one adapter version is installed in.
@@ -127,8 +130,18 @@ pub fn install(
             "--no-update-notifier",
         ])
         .current_dir(&staging);
-    let finished = process::run_to_end(&mut command, INSTALL_DEADLINE, stop)
-        .map_err(|error| InstallError::Failed(format!("npm ci did not finish: {error:?}")))?;
+    // Tied to this process, so npm ends with hided however hided ends and
+    // never writes into a folder nobody owns any more.
+    let finished = match process::run_to_end_tied(&mut command, INSTALL_DEADLINE, stop) {
+        Ok(finished) => finished,
+        Err(failure) => {
+            let _ = std::fs::remove_dir_all(&staging);
+            return Err(match failure {
+                process::RunFailure::Stopped => InstallError::Stopped,
+                failure => InstallError::Failed(format!("npm ci did not finish: {failure:?}")),
+            });
+        }
+    };
     if !finished.succeeded() {
         let _ = std::fs::remove_dir_all(&staging);
         return Err(InstallError::Failed(finished.last_error_line()));
@@ -159,6 +172,77 @@ pub fn install(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::atomic::Ordering;
+    use std::time::Instant;
+
+    /// An `npm` that marks its start in the folder it runs in and then runs
+    /// until it is ended.
+    fn stuck_npm(folder: &Path) -> Program {
+        let search = std::env::var_os("PATH").unwrap_or_default();
+        if cfg!(windows) {
+            let path = folder.join("npm.cmd");
+            std::fs::write(
+                &path,
+                "@echo off\r\necho started> started\r\nping -n 120 127.0.0.1 > nul\r\n",
+            )
+            .unwrap();
+            Program::named(path, search)
+        } else {
+            let path = folder.join("npm");
+            std::fs::write(&path, "#!/bin/sh\necho $$ > started\nexec sleep 120\n").unwrap();
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
+            }
+            Program::named(path, search)
+        }
+    }
+
+    /// Desk turned off stops an install under way: npm has ended and its
+    /// staging folder is gone when the call returns, so nothing writes into
+    /// the adapters' folder afterwards.
+    #[test]
+    #[allow(clippy::disallowed_methods)] // polls for the stand-in's start file, bounded by a deadline
+    fn a_stopped_install_ends_npm_and_leaves_no_staging_folder() {
+        let root = tempfile::tempdir().unwrap();
+        let bin = tempfile::tempdir().unwrap();
+        let npm = stuck_npm(bin.path());
+        let adapter = AdapterId::PI;
+        let staging = root.path().join(format!(
+            ".{}-{}.staging",
+            adapter.as_str(),
+            adapter.pin().unwrap().version
+        ));
+        let started = staging.join("started");
+        let stop = AtomicBool::new(false);
+        let (result, pid) = std::thread::scope(|scope| {
+            let raiser = scope.spawn(|| {
+                let waited = Instant::now();
+                let pid = loop {
+                    if let Ok(text) = std::fs::read_to_string(&started)
+                        && text.ends_with('\n')
+                    {
+                        break text.trim().parse::<u32>().ok();
+                    }
+                    if waited.elapsed() > Duration::from_secs(30) {
+                        break None;
+                    }
+                    std::thread::sleep(Duration::from_millis(20));
+                };
+                stop.store(true, Ordering::SeqCst);
+                pid
+            });
+            let result = install(root.path(), adapter, &npm, &stop);
+            (result, raiser.join().unwrap())
+        });
+        assert_eq!(result, Err(InstallError::Stopped));
+        assert!(!staging.exists(), "the staging folder outlived the stop");
+        if cfg!(unix) {
+            let pid = pid.expect("the stand-in npm never started");
+            assert!(!process::is_alive(pid), "npm outlived the stop");
+        }
+    }
 
     #[test]
     fn a_folder_without_the_done_marker_is_not_installed() {

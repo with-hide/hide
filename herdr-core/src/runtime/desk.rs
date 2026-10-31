@@ -660,6 +660,9 @@ impl Runtime {
                     self.order(Order::Cancel);
                 }
                 self.end_desk_process();
+                // Every adapter download under way ends with Desk, not later
+                // in a folder nobody watches (engineering principle 14).
+                self.order(Order::Off);
             }
         }
         before != self.desk.stored.settings
@@ -1397,7 +1400,7 @@ mod tests {
         ));
         let orders: Vec<Order> = received.try_iter().collect();
         assert!(orders.iter().any(|order| matches!(order, Order::Cancel)));
-        assert!(orders.iter().any(|order| matches!(order, Order::End)));
+        assert!(orders.iter().any(|order| matches!(order, Order::Off)));
         assert_eq!(
             runtime.desk_authority("test-node"),
             Err("desk_not_running".into())

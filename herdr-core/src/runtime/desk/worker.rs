@@ -57,6 +57,9 @@ pub(super) enum Order {
     },
     /// Ends the Desk process; the next message starts a new one.
     End,
+    /// Desk was turned off: ends the process and every install under way,
+    /// whose staging folders go with them (engineering principle 14).
+    Off,
     Incoming(Incoming),
     Installed(AdapterId, Result<(), InstallError>),
     /// The runtime is gone: end the process and the worker.
@@ -161,6 +164,7 @@ pub(super) fn start(
         queued: Arc::new(AtomicUsize::new(0)),
         dropped_reported: Arc::new(AtomicBool::new(false)),
         stop: Arc::new(AtomicBool::new(false)),
+        on: false,
         running: None,
         installing: Vec::new(),
     };
@@ -179,8 +183,12 @@ struct Worker {
     queued: Arc<AtomicUsize>,
     /// Reply text was dropped past [`MAX_QUEUED_INCOMING`] and logged once.
     dropped_reported: Arc<AtomicBool>,
-    /// Set when the worker ends, so an install under way stops.
+    /// Raised when Desk is turned off or the worker ends, so every install
+    /// under way stops; turning Desk on again starts a new one.
     stop: Arc<AtomicBool>,
+    /// Whether Desk is on, as the last `Check` or `Off` said: an install a
+    /// quick off and on stopped is started again only while it is.
+    on: bool,
     running: Option<Running>,
     installing: Vec<AdapterId>,
 }
@@ -236,6 +244,12 @@ impl Worker {
             }
             Order::SetChoice { config_id, value } => self.set_choice(&config_id, &value),
             Order::End => self.end_process(false),
+            Order::Off => {
+                self.on = false;
+                self.stop.store(true, Ordering::SeqCst);
+                self.stop = Arc::new(AtomicBool::new(false));
+                self.end_process(false);
+            }
             Order::Shutdown => {}
             Order::Incoming(incoming) => {
                 self.queued.fetch_sub(1, Ordering::SeqCst);
@@ -243,6 +257,14 @@ impl Worker {
             }
             Order::Installed(adapter, result) => {
                 self.installing.retain(|installing| *installing != adapter);
+                if let Err(InstallError::Stopped) = result {
+                    // Desk was turned off and maybe on again before this
+                    // install ended: the agent is looked at again while on.
+                    if self.on {
+                        self.install(adapter, false);
+                    }
+                    return;
+                }
                 if let Err(error) = result {
                     crate::diagnostic!(json!({
                         "component": "desk",
@@ -280,6 +302,7 @@ impl Worker {
     /// place, all at once (D-80): an agent is never left waiting for its
     /// adapter until it is chosen.
     fn check(&mut self) {
+        self.on = true;
         let places = self.platform.places();
         let node = programs::find_cli("node");
         let node_state = match &node {
@@ -868,6 +891,8 @@ fn install_state(
         InstallError::Failed(detail) => {
             (adapter, DeskAgentState::InstallFailed, Some(detail.clone()))
         }
+        // Reported only while Desk is on, whose next look starts it again.
+        InstallError::Stopped => (adapter, DeskAgentState::Preparing, None),
     }
 }
 
