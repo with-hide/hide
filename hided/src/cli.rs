@@ -64,12 +64,6 @@ pub enum CommandKind {
         json: bool,
     },
     Stop,
-    /// `hide desk login codex [options]`: Desk's own Codex sign-in, made by
-    /// the adapter's Codex in Desk's `CODEX_HOME` (`hide_desk::codex`), with
-    /// the options the operator gives `codex login`.
-    DeskLogin {
-        options: Vec<String>,
-    },
     /// `hide runtime prepare`: the folder this package's runtime runs from,
     /// made first on Windows (`hide_kit::runtime`), as one JSON line for the
     /// desktop host.
@@ -193,7 +187,6 @@ fn topic_usage(topic: &str) -> Option<String> {
         "version" => "usage: hide version [--json]".to_owned(),
         "guide" => "usage: hide guide".to_owned(),
         "contract" => "usage: hide contract --json".to_owned(),
-        "desk" => DESK_USAGE.to_owned(),
         _ => return None,
     })
 }
@@ -206,7 +199,7 @@ fn help_text() -> String {
     let indent =
         |lines: &str| -> String { lines.lines().map(|line| format!("  {line}\n")).collect() };
     let mut text = String::from(
-        "usage: hide [command]\n\nFor you\n  hide                      open Hide\n  hide <path>, hide .       open a folder as a project in Hide, adding it if it is not one yet\n  hide status [--json]      show whether Hide is running\n  hide stop                 stop Hide's background service\n  hide version [--json]     show this build's version\n  hide desk login codex     sign Desk's own Codex in\n\nFor agents in a Hide pane\n  hide guide                the agent guide to everything below\n  hide contract --json      the commands tools call, as JSON\n",
+        "usage: hide [command]\n\nFor you\n  hide                      open Hide\n  hide <path>, hide .       open a folder as a project in Hide, adding it if it is not one yet\n  hide status [--json]      show whether Hide is running\n  hide stop                 stop Hide's background service\n  hide version [--json]     show this build's version\n\nFor agents in a Hide pane\n  hide guide                the agent guide to everything below\n  hide contract --json      the commands tools call, as JSON\n",
     );
     for lines in [
         crate::delivery_cli::USAGE,
@@ -302,15 +295,6 @@ pub fn parse_args(args: &[String]) -> Result<CommandKind, String> {
             Ok(CommandKind::Status { json })
         }
         Some("stop") => Ok(CommandKind::Stop),
-        Some("desk") => match (
-            iter.next().map(String::as_str),
-            iter.next().map(String::as_str),
-        ) {
-            (Some("login"), Some("codex")) => Ok(CommandKind::DeskLogin {
-                options: iter.cloned().collect(),
-            }),
-            _ => Err(DESK_USAGE.to_owned()),
-        },
         Some("runtime") => match (iter.next().map(String::as_str), iter.next()) {
             (Some("prepare"), None) => Ok(CommandKind::RuntimePrepare),
             _ => Err("usage: hide runtime prepare".to_owned()),
@@ -874,7 +858,6 @@ pub fn run(kind: CommandKind) -> Result<(), String> {
         CommandKind::Status { json: false } => status(&env.state_dir, env.idle_secs),
         CommandKind::Stop => stop(&env.state_dir),
         CommandKind::RuntimePrepare => runtime_prepare(&env.home),
-        CommandKind::DeskLogin { options } => desk_login(&env.home, &env.state_dir, &options),
         CommandKind::Serve { keep_alive } => serve(env, keep_alive),
         CommandKind::Dev => dev(env),
         CommandKind::BrowserOpen {
@@ -2409,7 +2392,6 @@ fn needed_keys(kind: &CommandKind) -> Option<&'static [&'static str]> {
     match kind {
         CommandKind::Stop | CommandKind::Status { json: true } => Some(env::STATE_FOLDER_KEYS),
         CommandKind::RuntimePrepare => Some(&[env::HOME]),
-        CommandKind::DeskLogin { .. } => Some(env::STATE_FOLDER_KEYS),
         CommandKind::Status { json: false } => Some(env::STATUS_KEYS),
         _ => None,
     }
@@ -2494,36 +2476,6 @@ fn status(state_dir: &Path, idle_secs: u64) -> Result<(), String> {
             println!("Hide is not running");
             Ok(())
         }
-    }
-}
-
-const DESK_USAGE: &str = "usage: hide desk login codex [codex login options]";
-
-/// Signs Desk's own Codex in: `codex login`, run by the Codex in Desk's
-/// installed adapter, writes its sign-in into Desk's `CODEX_HOME`, which the
-/// operator's own `~/.codex` never shares.
-fn desk_login(home: &Path, state_dir: &Path, options: &[String]) -> Result<(), String> {
-    let adapter = hide_desk::AdapterId::Codex;
-    let package = hide_desk::install::installed(&hide_kit::layout::desk_adapters(home), adapter)
-        .ok_or_else(|| {
-            "Desk's Codex is not installed yet: choose Codex in Desk's agent bar once, then run hide desk login codex again".to_owned()
-        })?;
-    let node = hide_platform::programs::find_cli("node").ok_or_else(|| {
-        format!(
-            "Desk needs Node {} or later on your login shell's PATH",
-            hide_desk::install::MIN_NODE_MAJOR
-        )
-    })?;
-    let codex_home = hide_kit::layout::desk_codex_home(state_dir);
-    hide_platform::fs::private::create_dir_all(&codex_home)
-        .map_err(|error| format!("{}: {error}", codex_home.display()))?;
-    let status = hide_desk::codex::login(node.path(), &package, &codex_home, options)
-        .status()
-        .map_err(|error| format!("codex login did not start: {error}"))?;
-    if status.success() {
-        Ok(())
-    } else {
-        Err(format!("codex login ended with {status}"))
     }
 }
 
@@ -3518,16 +3470,6 @@ mod tests {
         assert_eq!(
             parse(&["hide", "status"]),
             CommandKind::Status { json: false }
-        );
-        assert_eq!(
-            parse(&["hide", "desk", "login", "codex", "--device-auth"]),
-            CommandKind::DeskLogin {
-                options: vec!["--device-auth".to_owned()]
-            }
-        );
-        assert_eq!(
-            parse_args(&["hide".to_owned(), "desk".to_owned()]).unwrap_err(),
-            DESK_USAGE
         );
     }
 

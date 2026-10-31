@@ -9818,30 +9818,32 @@ mod wire_enum_tests {
         );
         checked.insert("device_sign_in_kind");
 
-        assert_wire(&contract, "desk_agent", &hide_desk::AdapterId::ALL);
+        assert_wire(
+            &contract,
+            "desk_agent",
+            &hide_desk::AdapterId::all().collect::<Vec<_>>(),
+        );
         checked.insert("desk_agent");
         let states = [
             DeskAgentState::Checking,
             DeskAgentState::Ready,
             DeskAgentState::Preparing,
-            DeskAgentState::NotInstalled,
             DeskAgentState::InstallFailed,
             DeskAgentState::NodeMissing,
             DeskAgentState::CliMissing,
-            DeskAgentState::LoginNeeded,
             DeskAgentState::NoAskMode,
+            DeskAgentState::Off,
         ];
         for state in states {
             match state {
                 DeskAgentState::Checking
                 | DeskAgentState::Ready
                 | DeskAgentState::Preparing
-                | DeskAgentState::NotInstalled
                 | DeskAgentState::InstallFailed
                 | DeskAgentState::NodeMissing
                 | DeskAgentState::CliMissing
-                | DeskAgentState::LoginNeeded
-                | DeskAgentState::NoAskMode => {}
+                | DeskAgentState::NoAskMode
+                | DeskAgentState::Off => {}
             }
         }
         assert_wire(&contract, "desk_agent_state", &states);

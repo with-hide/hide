@@ -1,11 +1,12 @@
-//! Putting an adapter's pinned package in place the first time it is chosen
-//! (PRD Desk D-17, D-58).
+//! Putting an adapter's pinned package in place when Desk is turned on
+//! (PRD Desk D-58, D-80), for each agent Desk speaks to through its vendor's
+//! adapter.
 //!
 //! `npm ci` installs exactly the lock in `contracts/desk-adapters/<id>/`,
 //! every package checked against its integrity, into a staging folder that
 //! is renamed into place only once the program is there, so a failed or
 //! interrupted install leaves nothing that looks installed and the next
-//! choice tries again. An installed version needs no network afterwards.
+//! try (`다시 받기`, or Desk turned on again) starts over. An installed version needs no network afterwards.
 //! Node 22 or later and npm come from the account's `PATH`: Hide does not
 //! fetch Node.
 
@@ -16,7 +17,7 @@ use std::time::Duration;
 use hide_platform::process;
 use hide_platform::programs::Program;
 
-use crate::adapter::AdapterId;
+use crate::adapter::{AdapterId, Pin};
 
 /// The oldest Node the adapters run on.
 pub const MIN_NODE_MAJOR: u32 = 22;
@@ -37,19 +38,23 @@ pub enum InstallError {
     Busy,
     /// The install ran and failed; the last line npm wrote.
     Failed(String),
+    /// The install was stopped (Desk turned off, or its worker ended) and
+    /// left nothing behind.
+    Stopped,
 }
 
 /// The folder one adapter version is installed in.
-pub fn version_dir(root: &Path, adapter: AdapterId) -> PathBuf {
-    let pin = adapter.pin();
+fn version_dir(root: &Path, adapter: AdapterId, pin: &Pin) -> PathBuf {
     root.join(format!("{}-{}", adapter.as_str(), pin.version))
 }
 
-/// The installed package folder, when this version is in place.
+/// The installed package folder, when `adapter` has a pinned package and
+/// this version is in place.
 pub fn installed(root: &Path, adapter: AdapterId) -> Option<PathBuf> {
-    let dir = version_dir(root, adapter);
-    let package = dir.join("node_modules").join(adapter.pin().package);
-    (dir.join(DONE).is_file() && package.join(adapter.pin().entry).is_file()).then_some(package)
+    let pin = adapter.pin()?;
+    let dir = version_dir(root, adapter, &pin);
+    let package = dir.join("node_modules").join(pin.package);
+    (dir.join(DONE).is_file() && package.join(pin.entry).is_file()).then_some(package)
 }
 
 /// Checks the account's Node, which every adapter runs on.
@@ -78,6 +83,12 @@ pub fn install(
     npm: &Program,
     stop: &AtomicBool,
 ) -> Result<PathBuf, InstallError> {
+    let Some(pin) = adapter.pin() else {
+        return Err(InstallError::Failed(format!(
+            "{} has no adapter to install",
+            adapter.label()
+        )));
+    };
     if let Some(package) = installed(root, adapter) {
         return Ok(package);
     }
@@ -102,7 +113,6 @@ pub fn install(
     if let Some(package) = installed(root, adapter) {
         return Ok(package);
     }
-    let pin = adapter.pin();
     let staging = root.join(format!(".{}-{}.staging", adapter.as_str(), pin.version));
     if staging.exists() {
         std::fs::remove_dir_all(&staging).map_err(failed)?;
@@ -120,8 +130,18 @@ pub fn install(
             "--no-update-notifier",
         ])
         .current_dir(&staging);
-    let finished = process::run_to_end(&mut command, INSTALL_DEADLINE, stop)
-        .map_err(|error| InstallError::Failed(format!("npm ci did not finish: {error:?}")))?;
+    // Tied to this process, so npm ends with hided however hided ends and
+    // never writes into a folder nobody owns any more.
+    let finished = match process::run_to_end_tied(&mut command, INSTALL_DEADLINE, stop) {
+        Ok(finished) => finished,
+        Err(failure) => {
+            let _ = std::fs::remove_dir_all(&staging);
+            return Err(match failure {
+                process::RunFailure::Stopped => InstallError::Stopped,
+                failure => InstallError::Failed(format!("npm ci did not finish: {failure:?}")),
+            });
+        }
+    };
     if !finished.succeeded() {
         let _ = std::fs::remove_dir_all(&staging);
         return Err(InstallError::Failed(finished.last_error_line()));
@@ -138,7 +158,7 @@ pub fn install(
         ));
     }
     std::fs::write(staging.join(DONE), pin.version).map_err(failed)?;
-    let target = version_dir(root, adapter);
+    let target = version_dir(root, adapter, &pin);
     if target.exists() {
         // A folder without the done marker is an install that never
         // finished.
@@ -152,16 +172,87 @@ pub fn install(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::atomic::Ordering;
+    use std::time::Instant;
+
+    /// An `npm` that marks its start in the folder it runs in and then runs
+    /// until it is ended.
+    fn stuck_npm(folder: &Path) -> Program {
+        let search = std::env::var_os("PATH").unwrap_or_default();
+        if cfg!(windows) {
+            let path = folder.join("npm.cmd");
+            std::fs::write(
+                &path,
+                "@echo off\r\necho started> started\r\nping -n 120 127.0.0.1 > nul\r\n",
+            )
+            .unwrap();
+            Program::named(path, search)
+        } else {
+            let path = folder.join("npm");
+            std::fs::write(&path, "#!/bin/sh\necho $$ > started\nexec sleep 120\n").unwrap();
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
+            }
+            Program::named(path, search)
+        }
+    }
+
+    /// Desk turned off stops an install under way: npm has ended and its
+    /// staging folder is gone when the call returns, so nothing writes into
+    /// the adapters' folder afterwards.
+    #[test]
+    #[allow(clippy::disallowed_methods)] // polls for the stand-in's start file, bounded by a deadline
+    fn a_stopped_install_ends_npm_and_leaves_no_staging_folder() {
+        let root = tempfile::tempdir().unwrap();
+        let bin = tempfile::tempdir().unwrap();
+        let npm = stuck_npm(bin.path());
+        let adapter = AdapterId::PI;
+        let staging = root.path().join(format!(
+            ".{}-{}.staging",
+            adapter.as_str(),
+            adapter.pin().unwrap().version
+        ));
+        let started = staging.join("started");
+        let stop = AtomicBool::new(false);
+        let (result, pid) = std::thread::scope(|scope| {
+            let raiser = scope.spawn(|| {
+                let waited = Instant::now();
+                let pid = loop {
+                    if let Ok(text) = std::fs::read_to_string(&started)
+                        && text.ends_with('\n')
+                    {
+                        break text.trim().parse::<u32>().ok();
+                    }
+                    if waited.elapsed() > Duration::from_secs(30) {
+                        break None;
+                    }
+                    std::thread::sleep(Duration::from_millis(20));
+                };
+                stop.store(true, Ordering::SeqCst);
+                pid
+            });
+            let result = install(root.path(), adapter, &npm, &stop);
+            (result, raiser.join().unwrap())
+        });
+        assert_eq!(result, Err(InstallError::Stopped));
+        assert!(!staging.exists(), "the staging folder outlived the stop");
+        if cfg!(unix) {
+            let pid = pid.expect("the stand-in npm never started");
+            assert!(!process::is_alive(pid), "npm outlived the stop");
+        }
+    }
 
     #[test]
     fn a_folder_without_the_done_marker_is_not_installed() {
         let root = tempfile::tempdir().unwrap();
-        let dir = version_dir(root.path(), AdapterId::Pi);
+        let dir = version_dir(root.path(), AdapterId::PI, &AdapterId::PI.pin().unwrap());
         let package = dir.join("node_modules").join("pi-acp");
         std::fs::create_dir_all(package.join("dist")).unwrap();
         std::fs::write(package.join("dist/index.js"), "").unwrap();
-        assert_eq!(installed(root.path(), AdapterId::Pi), None);
+        assert_eq!(installed(root.path(), AdapterId::PI), None);
         std::fs::write(dir.join(DONE), "0.0.34").unwrap();
-        assert_eq!(installed(root.path(), AdapterId::Pi), Some(package));
+        assert_eq!(installed(root.path(), AdapterId::PI), Some(package));
     }
 }

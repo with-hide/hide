@@ -2613,6 +2613,9 @@ impl Runtime {
         self.refresh_usage_limit();
         let refusal = self.ai_refusal(&settings);
         self.snapshot.status.background_ai.refusal = refusal;
+        // Desk's bar says each agent's sign-in as these rows do (PRD Desk
+        // D-81).
+        self.desk_catalog_moved();
     }
 
     /// What the label analyzer last found about Runs on (B41, B42): shown

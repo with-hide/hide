@@ -976,14 +976,20 @@ The box holds each chip as its `@session(<pane> <name>)` or `@project(<path> <na
 Pressing a card, any session chip (a reply's, the operator's `@`, a letter's line, one inside a thread) or `답하기` opens that session's thread in Desk's lane, whether Desk started it or not, and Desk stays in front; only the thread's `터미널로` and ⌘J go to its tab (see Desk's lane, D-87, B51).
 A card's change sends only the `desk_jobs` section; the conversation is sent again only when it, the agents or the room's settings change.
 
-The selector lists Claude, Codex and Pi with each one's state:
+The selector lists the agents switched on in Settings › Agents (D-79), under `에이전트 · Hide에 등록된 n개`, each with its mark, its name and one word (`deskAgentWord` in `web/src/desk.ts`):
 
-- `ready`: a message starts it; `preparing`: its adapter is installing, which choosing it starts.
-- `not_installed` and `install_failed`: choosing it installs it, and a failed install says its last line with `다시 받기`.
-- `node_missing`: the line `이 에이전트는 Node 22 이상이 필요해요` with how to install Node, in the same place as the not-installed line; Hide does not install Node ([INSTALL.md: Desk's agents](INSTALL.md#desks-agents)).
-- `cli_missing`: Pi's adapter runs the operator's own `pi`, which is not on the login shell's `PATH`.
-- `login_needed`: the agent's own sign-in command (`claude /login`, `pi /login`); for Codex it is `hide desk login codex`, since Desk's Codex has a sign-in of its own, apart from the operator's `codex` ([INSTALL.md: Desk's agents](INSTALL.md#desks-agents)).
-- `no_ask_mode`: Hide could not hold the agent in its ask mode, so it is not used.
+- `ready`: the sign-in Settings › Agents reads for it (D-81), `로그인됨` or `로그인 필요`, and no word while that has not been read; a downloaded adapter never reads as signed in.
+  A message starts it, and one that is not signed in gets the line with its own sign-in command (`claude /login`, `codex login`, `opencode auth login`, `pi /login`, `omp login`, `agy`).
+- `preparing`: `준비 중` with a turning mark, only while turning Desk on downloads every adapter not yet in place (D-80); choosing an agent never downloads one.
+- `install_failed`: the download's last line with `다시 받기`.
+- `node_missing`: the line `이 에이전트는 Node 22 이상이 필요해요` with how to install Node; Hide does not install Node ([INSTALL.md: Desk's agents](INSTALL.md#desks-agents)).
+- `cli_missing`: the agent's own CLI (`pi`, `opencode`, `omp`, `agy`) is not on the login shell's `PATH`.
+- `no_ask_mode`: `묻기 모드 없음`, dimmed and not choosable, with the reason on hover: Hide cannot hold the agent in a mode that asks (Grok today; [INSTALL.md](INSTALL.md#what-each-system-supports)).
+- `off`: a chosen agent since switched off in Settings › Agents stays named as `꺼짐`, dimmed and not choosable, and no message goes to it.
+
+Every agent uses the operator's own sign-in, Codex too; Desk has no sign-in of its own.
+The selector's foot says `바꿔도 대화는 이어져요` and `에이전트 설정 ›` opens Settings › Agents.
+The chosen agent's word also stands left of the bar, unless it is signed in or unread.
 
 A message goes to the chosen agent, model and effort; while a reply is being written, the next message waits and `중지` ends the turn.
 While it thinks, the conversation shows the time since the message (`생각 중 · 3초`), and each reply carries its turn folded into one line: the time to its first words and what the agent did, counted from its tool calls (sessions read, letters, sessions started, files read, other commands), such as `생각 8초 · 세션 4개 읽음`.

@@ -20,8 +20,8 @@ use hide_platform::process::{
     CaptureFailureKind, GroupEnd, MAX_CAPTURE_BYTES, OWNER_LAUNCH_KEYS, OwnedChild, OwnerWatch,
     RUN_OUTPUT_CAP, RunFailure, arguments, boot_id, cwd_of, descendants, descends_from, detach,
     group_members, image_of, is_alive, kill_tree, measure_tree, name_of, parent_of,
-    restrict_to_login_environment, run_to_end, running, set_output_aside, start_time, terminate,
-    terminate_group,
+    restrict_to_login_environment, run_to_end, run_to_end_tied, running, set_output_aside,
+    start_time, terminate, terminate_group,
 };
 
 const ROLE: &str = "HIDE_PLATFORM_PROC_ROLE";
@@ -2710,6 +2710,39 @@ fn a_raised_stop_ends_the_child_before_its_deadline() {
     });
     assert!(matches!(failure, RunFailure::Stopped), "{failure:?}");
     assert!(raised.elapsed() < Duration::from_secs(10));
+    assert!(!is_alive(child), "the stopped child outlived the call");
+}
+
+/// A tied run is the same run through the supervisor: the child's code and
+/// both outputs come back, and a raised stop ends the child.
+#[test]
+fn a_tied_run_answers_its_child_s_code_and_outputs_and_ends_on_a_stop() {
+    let _serial = serial();
+    let finished = run_to_end_tied(
+        &mut role_command("speak"),
+        Duration::from_secs(30),
+        &std::sync::atomic::AtomicBool::new(false),
+    )
+    .unwrap();
+    assert_eq!(finished.code, Some(3));
+    assert!(finished.stdout.contains("SPOKE out"));
+    assert!(finished.stderr.contains("SPOKE err"));
+
+    let folder = tempfile::tempdir().unwrap();
+    let ready = folder.path().join("ready");
+    let stop = std::sync::atomic::AtomicBool::new(false);
+    let mut command = role_command("sleep");
+    command.env(READY_FILE, &ready);
+    let (failure, child) = thread::scope(|scope| {
+        let raiser = scope.spawn(|| {
+            let child = announced_pid(&ready);
+            stop.store(true, std::sync::atomic::Ordering::Relaxed);
+            child
+        });
+        let failure = run_to_end_tied(&mut command, Duration::from_secs(60), &stop).unwrap_err();
+        (failure, raiser.join().unwrap())
+    });
+    assert!(matches!(failure, RunFailure::Stopped), "{failure:?}");
     assert!(!is_alive(child), "the stopped child outlived the call");
 }
 

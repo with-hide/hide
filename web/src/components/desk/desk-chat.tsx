@@ -15,7 +15,7 @@ import { Button } from "../ui/button";
 import { Input } from "../ui/input";
 import { RowButton } from "../ui/row-button";
 import { Hint } from "../ui/tooltip";
-import { deskAgentName } from "./desk-agent-name";
+import { agentProductName } from "../../agentAdapters";
 import { DeskJobCard, type DeskJobCardActions } from "./desk-job-card";
 import { SessionChip, useSessionChipBridge } from "./session-chip";
 
@@ -163,7 +163,7 @@ export function DeskNotice({ item, onAction, onCopy }: { item: Extract<DeskItem,
   const { t } = useInterfaceTranslation();
   const failed = item.notice === "blocked" || item.notice === "host_stopped" || item.notice === "install_failed" || item.notice === "turn_failed";
   const action = NOTICE_ACTION[item.notice];
-  const words = t(NOTICE[item.notice], { agent: item.agent ? deskAgentName(t, item.agent) : t("desk.name"), detail: item.detail ?? "" });
+  const words = t(NOTICE[item.notice], { agent: item.agent ? agentProductName(item.agent) : t("desk.name"), detail: item.detail ?? "" });
   return (
     <p className="flex min-w-0 flex-wrap items-center gap-x-sm gap-y-xxs text-caption" role={failed ? "alert" : "status"} data-desk-item="notice" data-desk-notice={item.notice}>
       <span className={cn("min-w-0", failed ? "text-warning" : item.notice === "preparing" ? "animate-pulse text-muted-foreground" : "text-subtle-foreground")}>{words}</span>
@@ -370,7 +370,7 @@ export function DeskChat({ items, jobs, agents, live = null, thinking = false, s
         <li key={item.id} className="flex min-w-0 flex-col">
           {item.kind === "user" ? <DeskUserMessage text={item.text} mentions={item.mentions} onMention={actions.onMention} />
             : item.kind === "reply" ? <div className="flex min-w-0 flex-col gap-xs"><DeskReplySteps thoughtMs={item.thought_ms} steps={item.steps} /><DeskReply text={item.text} stopped={item.state === "stopped"} mentions={replyMentions(item)} onMention={actions.onMention} /></div>
-            : item.kind === "switch" ? <MarkerLine icon={<ArrowLeftRightIcon aria-hidden="true" className="size-(--size-icon-sm) shrink-0" />} data-desk-item="switch">{item.from === null ? t("desk.switch.start", { to: deskAgentName(t, item.to) }) : t(SWITCH_WORDS[item.carried], { from: deskAgentName(t, item.from), to: deskAgentName(t, item.to) })}</MarkerLine>
+            : item.kind === "switch" ? <MarkerLine icon={<ArrowLeftRightIcon aria-hidden="true" className="size-(--size-icon-sm) shrink-0" />} data-desk-item="switch">{item.from === null ? t("desk.switch.start", { to: agentProductName(item.to) }) : t(SWITCH_WORDS[item.carried], { from: agentProductName(item.from), to: agentProductName(item.to) })}</MarkerLine>
             : item.kind === "model" ? <MarkerLine icon={<SlidersHorizontalIcon aria-hidden="true" className="size-(--size-icon-sm) shrink-0" />} data-desk-item="model">{t("desk.model", { model: choice(item.model, "models"), effort: choice(item.effort, "efforts") })}</MarkerLine>
             : item.kind === "approval" ? <DeskApprovalCard item={item} onAnswer={(answer, text) => actions.onApproval(item.id, answer, text)} />
             : item.kind === "notice" ? <DeskNotice item={item} onAction={(action) => actions.onNoticeAction(action, item)} onCopy={actions.onCopy} />

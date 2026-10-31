@@ -17,7 +17,7 @@ hide-agent-adapter = { path = "../hide-agent-adapter" }
 # The session-start rules `hide guide` prints (`guide.rs`).
 hide-agent-hooks = { path = "../hide-agent-hooks" }
 herdr-core = { path = "../herdr-core" }
-# Desk's own Codex sign-in (`hide desk login codex`).
+# Where Desk's Codex finds the operator's own sign-in (`hide_desk::codex`).
 hide-desk = { path = "../hide-desk" }
 hide-host = { path = "../hide-host" }
 hide-node = { path = "../hide-node" }

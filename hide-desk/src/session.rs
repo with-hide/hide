@@ -65,7 +65,7 @@ impl OpenError {
 
 /// Opens a session in `cwd`: loads `resume` when the agent can, else starts
 /// a new one, then puts it in the adapter's ask mode. Pi's mode is proven by
-/// its extension's marker, which `adapter::pi_extension_loaded` checks once the session exists.
+/// its extension's marker, which `adapter::pi_extension_loaded` checks once the session exists; an agent that starts in it needs nothing more.
 pub fn open(
     connection: &Connection,
     adapter: AdapterId,
@@ -121,7 +121,7 @@ pub fn open(
         }
     };
     match adapter.ask_mode() {
-        AskMode::SetMode(mode) => {
+        Some(AskMode::SetMode(mode)) => {
             connection
                 .call(
                     "session/set_mode",
@@ -132,7 +132,15 @@ pub fn open(
                     OpenError::AskModeUnconfirmed(format!("set_mode {mode}: {error}"))
                 })?;
         }
-        AskMode::PiExtension => pi_ready().map_err(OpenError::AskModeUnconfirmed)?,
+        Some(AskMode::PiExtension) => pi_ready().map_err(OpenError::AskModeUnconfirmed)?,
+        // Held by how the process started (`adapter::launch`).
+        Some(AskMode::AtStart) => {}
+        None => {
+            return Err(OpenError::AskModeUnconfirmed(format!(
+                "{} has no ask mode Desk can hold",
+                adapter.label()
+            )));
+        }
     }
     Ok(Opened {
         session_id,

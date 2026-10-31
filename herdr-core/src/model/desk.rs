@@ -348,15 +348,25 @@ pub struct DeskSelection {
     pub effort: Option<String>,
 }
 
+/// One agent of Desk's bar: an agent switched on in Hide's catalog that Desk
+/// speaks ACP with (D-79), or the selected one after it was switched off.
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct DeskAgentSnapshot {
     pub id: AdapterId,
+    /// The catalog's name for it (`Claude Code`, `omp`).
     pub label: &'static str,
+    /// Whether Desk can start it: its adapter, its own CLI, its ask mode.
     pub state: DeskAgentState,
     /// What the state names: the Node version found, the install's last
     /// line, the CLI that is missing.
     pub detail: Option<String>,
-    /// The command that signs the agent in, shown with `login_needed`.
+    /// Whether the operator is signed in to the agent's own CLI, as Settings
+    /// reads it (Hide AI's read of that agent on this machine, D-81): `None`
+    /// until the read answered, or where it cannot tell. It never follows
+    /// the adapter.
+    pub signed_in: Option<bool>,
+    /// The command that signs the agent in, shown with a `login_needed`
+    /// notice.
     pub login_command: &'static str,
     /// The models and efforts the agent's last session offered; empty until
     /// one has opened.
@@ -375,21 +385,21 @@ pub struct DeskChoiceSnapshot {
 pub enum DeskAgentState {
     /// Not looked at yet.
     Checking,
-    /// Installed; a message starts it.
+    /// Its adapter or its own CLI is in place; a message starts it.
     Ready,
-    /// Its pinned package is being installed.
+    /// Its pinned adapter is being installed, which Desk turned on starts
+    /// for every agent at once (D-80).
     Preparing,
-    /// Not installed; choosing it installs it.
-    NotInstalled,
     InstallFailed,
     /// No Node 22 or later on the account's `PATH` (B6).
     NodeMissing,
-    /// The agent's own CLI is not on the account's `PATH` (Pi).
+    /// The agent's own CLI is not on the account's `PATH`.
     CliMissing,
-    /// The agent needs the operator signed in.
-    LoginNeeded,
-    /// Its ask mode could not be confirmed, so it is not used (D-53).
+    /// Desk cannot hold it in an ask mode, so it is not used (D-53).
     NoAskMode,
+    /// Switched off in Settings › Agents while it is still the one chosen:
+    /// listed so the bar can name it, and not sent to.
+    Off,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]

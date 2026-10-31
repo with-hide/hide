@@ -411,7 +411,7 @@ fn options() -> Value {
 #[test]
 fn claude_s_requests_are_read_with_their_reason_files_and_reads() {
     let bash = read_request(
-        AdapterId::Claude,
+        AdapterId::CLAUDE,
         &json!({"toolCall": {"toolCallId": "t1", "kind": "execute", "title": "ls -la",
             "rawInput": {"command": "ls -la", "description": "Why it runs"}},
             "options": options()}),
@@ -422,7 +422,7 @@ fn claude_s_requests_are_read_with_their_reason_files_and_reads() {
     assert_eq!(reading.card.command, "ls -la");
     assert_eq!(reading.card.reason.as_deref(), Some("Why it runs"));
     let read = read_request(
-        AdapterId::Claude,
+        AdapterId::CLAUDE,
         &json!({"toolCall": {"toolCallId": "t2", "kind": "read", "title": "Read",
             "locations": [{"path": "/r/herdr-ide/README.md"}]}, "options": options()}),
         None,
@@ -434,7 +434,7 @@ fn claude_s_requests_are_read_with_their_reason_files_and_reads() {
         })
     );
     let edit = read_request(
-        AdapterId::Claude,
+        AdapterId::CLAUDE,
         &json!({"toolCall": {"toolCallId": "t3", "kind": "edit", "title": "Edit",
             "rawInput": {"file_path": "/r/web/src/PaneHeader.tsx"}},
             "options": options()}),
@@ -453,7 +453,7 @@ fn codex_s_request_is_read_with_the_call_it_announced() {
         "kind": "execute", "title": "touch x",
         "rawInput": {"command": ["/bin/zsh", "-lc", "touch x"], "cwd": "/r"}});
     let request = read_request(
-        AdapterId::Codex,
+        AdapterId::CODEX,
         &json!({"toolCall": {"toolCallId": "exec-1", "kind": "execute", "status": "pending"},
             "options": [{"optionId": "allow_once", "kind": "allow_once"},
                         {"optionId": "cancel", "kind": "reject_once"}]}),
@@ -469,14 +469,14 @@ fn codex_s_request_is_read_with_the_call_it_announced() {
 #[test]
 fn a_request_hide_cannot_read_does_not_run() {
     let bare = read_request(
-        AdapterId::Codex,
+        AdapterId::CODEX,
         &json!({"toolCall": {"toolCallId": "exec-2", "kind": "execute"}, "options": options()}),
         None,
     );
     assert_eq!(bare.action, None);
     assert_eq!(readable(&bare), None);
     let no_once = read_request(
-        AdapterId::Claude,
+        AdapterId::CLAUDE,
         &json!({"toolCall": {"toolCallId": "t", "kind": "read"},
             "options": [{"optionId": "always", "kind": "allow_always"}]}),
         None,
@@ -488,7 +488,7 @@ fn a_request_hide_cannot_read_does_not_run() {
 fn pi_s_confirm_from_desk_s_extension_is_read_and_another_is_not() {
     let confirm = |title: &str, message: &str| {
         read_request(
-            AdapterId::Pi,
+            AdapterId::PI,
             &json!({"toolCall": {"toolCallId": "pi-ui-1", "kind": "other", "title": title,
                 "rawInput": {"method": "confirm", "title": title, "message": message}},
                 "options": [{"optionId": "yes", "kind": "allow_once"},
@@ -513,6 +513,54 @@ fn pi_s_confirm_from_desk_s_extension_is_read_and_another_is_not() {
     assert_eq!(classify(readable(&write).unwrap(), &place()).row, Row::Edit);
     let other = confirm("Delete branch?", "yes or no");
     assert_eq!(readable(&other), None);
+}
+
+#[test]
+fn each_agent_s_own_request_for_a_command_or_an_edit_becomes_a_card() {
+    // The requests OpenCode 2.0.29, omp 18.7.0 and agy 1.4.12 sent for
+    // `touch x` and for writing notes.txt, measured on 2026-10-31.
+    let options = json!([{"optionId": "once", "kind": "allow_once"},
+                         {"optionId": "reject", "kind": "reject_once"}]);
+    let card = |adapter: AdapterId, call: Value| {
+        let request = read_request(
+            adapter,
+            &json!({"toolCall": call, "options": options.clone()}),
+            None,
+        );
+        let action = readable(&request).unwrap_or_else(|| panic!("{adapter:?}"));
+        classify(action, &place()).card
+    };
+    for (adapter, raw) in [
+        (
+            AdapterId::OPENCODE,
+            json!({"command": "touch x", "cwd": "/r"}),
+        ),
+        (AdapterId::OMP, json!({"command": "touch x"})),
+        (
+            AdapterId::ANTIGRAVITY,
+            json!({"CommandLine": "touch x", "IsDaemon": false}),
+        ),
+    ] {
+        let card = card(
+            adapter,
+            json!({"toolCallId": "c1", "kind": "execute", "title": "touch x", "rawInput": raw}),
+        );
+        assert_eq!(
+            (card.kind, card.command.as_str()),
+            (CardKind::Command, "touch x")
+        );
+    }
+    for adapter in [AdapterId::OPENCODE, AdapterId::ANTIGRAVITY] {
+        let card = card(
+            adapter,
+            json!({"toolCallId": "e1", "kind": "edit", "title": "notes.txt",
+                "locations": [{"path": "/r/notes.txt"}], "rawInput": {"Path": "/r/notes.txt"}}),
+        );
+        assert_eq!(
+            (card.kind, card.command.as_str()),
+            (CardKind::Edit, "/r/notes.txt")
+        );
+    }
 }
 
 const UNREADABLE: Ask = Ask::Irreversible(Irreversible::Unreadable);

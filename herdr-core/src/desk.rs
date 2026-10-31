@@ -59,6 +59,9 @@ pub struct DeskPlaces {
     pub desk: PathBuf,
     /// Desk's own `CODEX_HOME` (`hide_kit::layout::desk_codex_home`).
     pub codex_home: PathBuf,
+    /// The operator's own Codex sign-in, which Desk's Codex reads through a
+    /// link (`hide_desk::codex::operator_sign_in`).
+    pub codex_sign_in: PathBuf,
     /// The folder of the `hide` program the Desk agent runs.
     pub hide_dir: PathBuf,
 }
@@ -275,7 +278,7 @@ fn decode(bytes: &[u8]) -> Result<Stored, String> {
     let mut stored = file.stored;
     stored.conversation.trim();
     stored.settings.cap = stored.settings.cap.clamp(1, DESK_CAP_MAX);
-    stored.sessions.truncate(AdapterId::ALL.len());
+    stored.sessions.truncate(AdapterId::all().count());
     stored.queue.truncate(MAX_QUEUE);
     let excess = stored.marks.len().saturating_sub(MAX_MARKS);
     stored.marks.drain(..excess);
@@ -285,7 +288,7 @@ fn decode(bytes: &[u8]) -> Result<Stored, String> {
         .len()
         .saturating_sub(crate::model::DESK_KEPT_TABS_MAX);
     stored.lane.kept.drain(..excess);
-    stored.choices.truncate(AdapterId::ALL.len());
+    stored.choices.truncate(AdapterId::all().count());
     for (_, choices) in &mut stored.choices {
         choices.models.truncate(hide_desk::session::MAX_CHOICES);
         choices.efforts.truncate(hide_desk::session::MAX_CHOICES);
@@ -375,7 +378,7 @@ mod tests {
         conversation.push(user(2, "what runs now?"));
         conversation.push(DeskItem::Reply {
             id: 3,
-            agent: AdapterId::Codex,
+            agent: AdapterId::CODEX,
             text: "two sessions".into(),
             at_ms: 0,
             state: DeskReplyState::Done,

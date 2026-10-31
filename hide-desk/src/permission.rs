@@ -1644,9 +1644,9 @@ pub fn read_request(adapter: AdapterId, params: &Value, announced: Option<&Value
         .get("toolCallId")
         .and_then(Value::as_str)
         .map(str::to_owned);
-    let action = match adapter {
-        AdapterId::Pi => pi_action(&call),
-        AdapterId::Claude | AdapterId::Codex => tool_action(&call, announced),
+    let action = match adapter.ask_mode() {
+        Some(crate::adapter::AskMode::PiExtension) => pi_action(&call),
+        _ => tool_action(&call, announced),
     };
     Request {
         tool_call_id,
@@ -1732,8 +1732,11 @@ fn tool_action(call: &Value, announced: Option<&Value>) -> Option<Action> {
             Some(Action::Read { what })
         }
         "execute" => {
-            let command = command_text(raw.and_then(|raw| raw.get("command")))?;
-            let folder = text(raw.and_then(|raw| raw.get("cwd")));
+            // Antigravity names them `CommandLine` and `Cwd`.
+            let command = command_text(
+                raw.and_then(|raw| raw.get("command").or_else(|| raw.get("CommandLine"))),
+            )?;
+            let folder = text(raw.and_then(|raw| raw.get("cwd").or_else(|| raw.get("Cwd"))));
             Some(Action::Command {
                 command,
                 folder,

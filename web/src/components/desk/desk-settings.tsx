@@ -1,7 +1,6 @@
 import type { DeskAgent, DeskAgentId, DeskLocation, DeskPermissionAnswer, DeskPermissionRow, DeskSettings } from "../../desk";
 import { agentPickable } from "../../desk";
 import { AgentMark } from "../../AgentMark";
-import { deskAgentName } from "./desk-agent-name";
 import { useInterfaceTranslation } from "../../i18n/client";
 import { Group, Row } from "../settings-rows";
 import { RadioGroup, RadioGroupItem } from "../ui/radio-group";
@@ -55,7 +54,7 @@ export function DeskSettingsTab({ settings, agents, onChange }: { settings: Desk
               <SelectTrigger size="sm" aria-label={t("desk.settings.defaultAgent")}><SelectValue placeholder={t("desk.settings.defaultAgentNone")} /></SelectTrigger>
               <SelectContent>
                 {agents.filter(agentPickable).map((agent) => (
-                  <SelectItem key={agent.id} value={agent.id}><AgentMark kind={agent.id} />{deskAgentName(t, agent.id)}</SelectItem>
+                  <SelectItem key={agent.id} value={agent.id}><AgentMark kind={agent.id} />{agent.label}</SelectItem>
                 ))}
               </SelectContent>
             </Select>

@@ -23,13 +23,19 @@ export const PICTURES = {
 
 const EFFORTS = [{ id: "low", label: "low" }, { id: "medium", label: "medium" }, { id: "high", label: "high" }];
 
+/** The agents switched on in Settings › Agents, as Desk lists them (D-79, D-81): Grok cannot be held in its ask mode. */
 export const AGENTS: DeskAgent[] = [
-  { id: "claude", label: "Claude", state: "ready", detail: null, login_command: "claude /login", models: [{ id: "opus", label: "Opus 5.5" }, { id: "sonnet", label: "Sonnet 5.5" }], efforts: EFFORTS },
-  { id: "codex", label: "Codex", state: "ready", detail: null, login_command: "hide desk login codex", models: [{ id: "gpt", label: "GPT-6" }, { id: "gpt-mini", label: "GPT-6 mini" }], efforts: EFFORTS },
-  { id: "pi", label: "Pi", state: "no_ask_mode", detail: null, login_command: "pi login", models: [], efforts: [] },
+  { id: "claude", label: "Claude Code", state: "ready", detail: null, signed_in: true, login_command: "claude /login", models: [{ id: "opus", label: "Opus 5.5" }, { id: "sonnet", label: "Sonnet 5.5" }], efforts: EFFORTS },
+  { id: "codex", label: "Codex", state: "ready", detail: null, signed_in: true, login_command: "codex login", models: [{ id: "gpt", label: "GPT-6" }, { id: "gpt-mini", label: "GPT-6 mini" }], efforts: EFFORTS },
+  { id: "opencode", label: "OpenCode", state: "ready", detail: null, signed_in: true, login_command: "opencode auth login", models: [], efforts: [] },
+  { id: "pi", label: "Pi", state: "ready", detail: null, signed_in: true, login_command: "pi /login", models: [], efforts: [] },
+  { id: "omp", label: "omp", state: "ready", detail: null, signed_in: null, login_command: "omp login", models: [], efforts: [] },
+  { id: "grok", label: "Grok", state: "no_ask_mode", detail: null, signed_in: true, login_command: "grok login", models: [], efforts: [] },
+  { id: "agy", label: "Antigravity", state: "ready", detail: null, signed_in: false, login_command: "agy", models: [], efforts: [] },
 ];
 
-export const AGENTS_PREPARING: DeskAgent[] = AGENTS.map((agent) => (agent.id === "codex" ? { ...agent, state: "preparing" } : agent));
+/** Right after Desk is turned on: every adapter not in place downloads at once (D-80). */
+export const AGENTS_PREPARING: DeskAgent[] = AGENTS.map((agent) => (agent.id === "codex" || agent.id === "pi" ? { ...agent, state: "preparing" } : agent));
 
 const output = (id: string, kind: DeskOutput["kind"], label: string, seen: boolean, thumb: string | null = null): DeskOutput => ({ id, kind, label, seen, thumb, pr_state: null, device_id: "local", checkout: "/repo/herdr-ide", path: kind === "page" || kind === "pr" ? null : `/repo/herdr-ide/${label}`, url: kind === "page" ? `http://localhost:5173/${label}` : null });
 
@@ -239,10 +245,10 @@ export function stateItems(now: number): DeskItem[] {
     { kind: "switch", id: 67, from: "codex", to: "claude", carried: "none" },
     { kind: "notice", id: 68, notice: "preparing", agent: "codex", detail: null },
     { kind: "notice", id: 69, notice: "install_failed", agent: "codex", detail: "네트워크에 연결할 수 없어요" },
-    { kind: "notice", id: 70, notice: "login_needed", agent: "codex", detail: "hide desk login codex" },
+    { kind: "notice", id: 70, notice: "login_needed", agent: "codex", detail: "codex login" },
     { kind: "notice", id: 71, notice: "host_stopped", agent: "claude", detail: null },
     { kind: "notice", id: 72, notice: "resume_failed", agent: "claude", detail: null },
-    { kind: "notice", id: 73, notice: "no_ask_mode", agent: "pi", detail: null },
+    { kind: "notice", id: 73, notice: "no_ask_mode", agent: "grok", detail: null },
     { kind: "notice", id: 74, notice: "turn_failed", agent: "claude", detail: null },
     { kind: "reply", mentions: [], agent: "claude", id: 75, text: "정리하고 테스트를 다시 돌렸어요. 실패 하나는", at_ms: at(now, 1), state: "stopped", thought_ms: null, steps: NO_STEPS },
     { kind: "user", id: 76, text: "지금 돌고 있는 일들 어디까지 왔어요?", at_ms: at(now, 0), mentions: [] },
