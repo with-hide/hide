@@ -1005,6 +1005,7 @@ dependencies = [
  "portable-pty",
  "serde_json",
  "tempfile",
+ "unicode-width",
 ]
 
 [[package]]

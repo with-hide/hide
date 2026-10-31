@@ -11,8 +11,8 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use hide_holder_protocol::{
-    Capability, ClientMessage, Closed, HolderMessage, OpenError, PROTOCOL_VERSION, Welcome,
-    read_holder, write_client,
+    Answer, Ask, Capability, ClientMessage, Closed, Fragment, HolderMessage, MAX_READ_LINES,
+    OpenError, PROTOCOL_VERSION, Welcome, read_holder, write_client,
 };
 use hide_kit::holders::{Reservation, Source};
 use hide_platform::ipc::LocalStream;
@@ -252,18 +252,23 @@ pub fn start_ready(
 }
 
 impl Holder {
-    /// Opens a connection that accepts the program's raw output.
+    /// Opens a connection that takes the screen.
     pub fn open(&self) -> Connection {
         let (stream, welcome) = self.try_open().unwrap();
-        Connection::new(stream, welcome)
+        Connection::new(stream, welcome, &self.socket)
     }
 
     pub fn try_open(&self) -> Result<(LocalStream, Welcome), OpenError> {
         hide_holder_protocol::open(
             &self.socket,
-            vec![Capability::RawOutput],
+            vec![Capability::Screen],
             Instant::now() + HANG_LIMIT,
         )
+    }
+
+    /// The pane's recent text, read on a connection of its own.
+    pub fn read(&self, lines: u16) -> (String, bool) {
+        read_text(&self.socket, lines)
     }
 
     /// Waits until the holder process has ended.
@@ -309,18 +314,27 @@ fn first_line(reader: impl std::io::Read + Send + 'static) -> String {
         .expect("the holder said nothing on its report pipe")
 }
 
+/// The recent text of the pane whose holder listens at `socket`.
+pub fn read_text(socket: &Path, lines: u16) -> (String, bool) {
+    match hide_holder_protocol::ask(socket, Ask::Read { lines }, Instant::now() + HANG_LIMIT) {
+        Ok(Answer::Text { text, truncated }) => (text, truncated),
+        other => panic!("a read was answered {other:?}"),
+    }
+}
+
 /// A node's side of a connection: a reader thread collects what the holder
-/// sends, so a test reads output and the close without blocking on either.
+/// sends, so a test reads fragments and the close without blocking on either.
 pub struct Connection {
     pub welcome: Welcome,
     stream: LocalStream,
+    socket: PathBuf,
     heard: mpsc::Receiver<HolderMessage>,
-    pub output: Vec<u8>,
+    pub fragments: Vec<Fragment>,
     pub closed: Option<Closed>,
 }
 
 impl Connection {
-    pub fn new(stream: LocalStream, welcome: Welcome) -> Self {
+    pub fn new(stream: LocalStream, welcome: Welcome, socket: &Path) -> Self {
         let mut reading = stream.duplicate();
         let (sender, heard) = mpsc::channel();
         thread::spawn(move || {
@@ -334,8 +348,9 @@ impl Connection {
         Self {
             welcome,
             stream,
+            socket: socket.to_owned(),
             heard,
-            output: Vec::new(),
+            fragments: Vec::new(),
             closed: None,
         }
     }
@@ -346,35 +361,44 @@ impl Connection {
 
     fn take(&mut self, wait: Duration) -> bool {
         match self.heard.recv_timeout(wait) {
-            Ok(HolderMessage::Output(bytes)) => {
-                self.output.extend_from_slice(&bytes);
+            Ok(HolderMessage::Fragment(fragment)) => {
+                self.fragments.push(fragment);
                 true
             }
             Ok(HolderMessage::Closed(closed)) => {
                 self.closed = Some(closed);
                 true
             }
-            Ok(HolderMessage::Welcome(_)) => panic!("a second welcome"),
+            Ok(other) => panic!("{other:?} on a screen connection"),
             Err(_) => false,
         }
     }
 
-    /// Reads output until it holds `text`.
-    pub fn wait_for_output(&mut self, text: &str) {
+    /// Takes what the holder sent until now.
+    pub fn drain(&mut self) {
+        while self.take(Duration::ZERO) {}
+    }
+
+    /// Waits until the pane's text holds `text`, while this connection stays
+    /// open, and answers the text.
+    pub fn wait_for_text(&mut self, text: &str) -> String {
         let started = Instant::now();
-        while !String::from_utf8_lossy(&self.output).contains(text) {
+        loop {
+            self.drain();
             assert!(
                 self.closed.is_none(),
-                "closed ({:?}) before {text:?} came; output: {}",
+                "closed ({:?}) before {text:?} came",
                 self.closed,
-                String::from_utf8_lossy(&self.output)
             );
+            let (seen, _) = read_text(&self.socket, MAX_READ_LINES);
+            if seen.contains(text) {
+                return seen;
+            }
             assert!(
                 started.elapsed() < HANG_LIMIT,
-                "{text:?} never came; output: {}",
-                String::from_utf8_lossy(&self.output)
+                "{text:?} never came; the pane shows: {seen}"
             );
-            self.take(Duration::from_millis(100));
+            self.take(Duration::from_millis(50));
         }
     }
 

@@ -8,8 +8,8 @@
 use std::io::Write;
 
 use hide_holder_protocol::{
-    Capability, ClientMessage, CloseReason, Hello, HolderMessage, PROTOCOL_VERSION, read_holder,
-    write_client,
+    Capability, ClientMessage, CloseReason, Hello, HolderMessage, Opening, PROTOCOL_VERSION,
+    read_holder, write_opening,
 };
 use hide_platform::ipc::LocalStream;
 
@@ -36,7 +36,7 @@ fn a_new_connection_takes_the_pane_over_and_the_old_ones_input_no_longer_applies
     let holder = shell_holder(&home);
     let mut old = holder.open();
     old.send(ClientMessage::Input(print_ok().to_vec())).unwrap();
-    old.wait_for_output("hide-ok");
+    old.wait_for_text("hide-ok");
 
     let mut new = holder.open();
     assert_eq!(new.welcome.generation, 2);
@@ -48,9 +48,25 @@ fn a_new_connection_takes_the_pane_over_and_the_old_ones_input_no_longer_applies
     // the old line's output shows the old line never reached it.
     let _ = old.send(ClientMessage::Input(stale_line().to_vec()));
     new.send(ClientMessage::Input(print_ok().to_vec())).unwrap();
-    new.wait_for_output("hide-ok");
-    let seen = String::from_utf8_lossy(&new.output).into_owned();
+    // The first line printed hide-ok once; the new one's makes it twice.
+    let seen = wait_for_count(&mut new, "hide-ok", 2);
     assert!(!seen.contains("stale-input"), "{seen}");
+}
+
+/// Waits until the pane's text holds `text` `count` times, and answers it.
+fn wait_for_count(connection: &mut crate::support::Connection, text: &str, count: usize) -> String {
+    let started = std::time::Instant::now();
+    loop {
+        let seen = connection.wait_for_text(text);
+        if seen.matches(text).count() >= count {
+            return seen;
+        }
+        assert!(
+            started.elapsed() < HANG_LIMIT,
+            "{text:?} never came {count} times: {seen}"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
 }
 
 /// Opens a raw stream to the holder and answers the holder's reply to what
@@ -91,11 +107,11 @@ fn a_wrong_or_slow_opening_leaves_the_connection_that_holds_the_pane() {
     // A node that speaks only versions this holder does not.
     let mut stream =
         LocalStream::connect_until(&holder.socket, std::time::Instant::now() + HANG_LIMIT).unwrap();
-    write_client(
+    write_opening(
         &mut stream,
-        &ClientMessage::Hello(Hello {
+        &Opening::Hello(Hello {
             versions: (PROTOCOL_VERSION + 1, PROTOCOL_VERSION + 5),
-            accepts: vec![Capability::RawOutput],
+            accepts: vec![Capability::Screen],
         }),
     )
     .unwrap();
@@ -112,7 +128,7 @@ fn a_wrong_or_slow_opening_leaves_the_connection_that_holds_the_pane() {
     holding
         .send(ClientMessage::Input(print_ok().to_vec()))
         .unwrap();
-    holding.wait_for_output("hide-ok");
+    holding.wait_for_text("hide-ok");
     assert!(holding.closed.is_none());
     let next = holder.open();
     assert_eq!(
@@ -136,7 +152,7 @@ fn a_size_outside_the_bounds_closes_the_connection_and_the_pane_runs_on() {
     let mut next = holder.open();
     next.send(ClientMessage::Input(print_ok().to_vec()))
         .unwrap();
-    next.wait_for_output("hide-ok");
+    next.wait_for_text("hide-ok");
 }
 
 /// A stream that has connected and said nothing yet.
@@ -144,10 +160,10 @@ fn silent_stream(holder: &Holder) -> LocalStream {
     LocalStream::connect_until(&holder.socket, std::time::Instant::now() + HANG_LIMIT).unwrap()
 }
 
-fn hello() -> ClientMessage {
-    ClientMessage::Hello(Hello {
+fn hello() -> Opening {
+    Opening::Hello(Hello {
         versions: (PROTOCOL_VERSION, PROTOCOL_VERSION),
-        accepts: vec![Capability::RawOutput],
+        accepts: vec![Capability::Screen],
     })
 }
 
@@ -177,7 +193,7 @@ fn a_connection_past_the_opening_bound_is_told_so_and_the_pane_runs_on() {
     holding
         .send(ClientMessage::Input(print_ok().to_vec()))
         .unwrap();
-    holding.wait_for_output("hide-ok");
+    holding.wait_for_text("hide-ok");
     assert!(holding.closed.is_none());
 }
 
@@ -193,7 +209,7 @@ fn a_connection_that_opens_while_the_pane_ends_is_told_it_ended() {
     wait_until("the pane's end", || {
         holder.log_text().contains("\"holder.ending\"")
     });
-    write_client(&mut late, &hello()).unwrap();
+    write_opening(&mut late, &hello()).unwrap();
     late.set_deadline(std::time::Instant::now() + HANG_LIMIT);
     match read_holder(&mut late).unwrap() {
         HolderMessage::Closed(closed) => {

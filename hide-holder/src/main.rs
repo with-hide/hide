@@ -20,8 +20,13 @@
 //! as when the holder is killed, rather than running on with part of the
 //! holder gone.
 
+mod answers;
+mod ask;
+mod encode;
 mod holder;
 mod log;
+mod pane;
+mod screen;
 
 use std::io::Write;
 use std::path::PathBuf;
