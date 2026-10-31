@@ -578,16 +578,24 @@ impl Runtime {
                         External::Pr(number) => Some(*number),
                         External::Branch(_) => None,
                     };
-                    let raised = super::mission_health::raise(
+                    let mut events = Vec::new();
+                    if mission.nodes[at].status == NodeStatus::Planned {
+                        let node = &mission.nodes[at];
+                        let mut next = node.clone();
+                        next.status = NodeStatus::Working;
+                        events = super::mission_events::node_events(node, &next, now);
+                        mission.nodes[at] = next;
+                    }
+                    events.extend(super::mission_health::raise(
                         mission,
                         &ask.node,
                         crate::missions::AttentionReason::PrClosed,
                         pr,
                         now,
-                    );
-                    if !raised.is_empty() {
+                    ));
+                    if !events.is_empty() {
                         mission.updated_at_unix_ms = now;
-                        self.record_mission_events(&ask.mission, raised);
+                        self.record_mission_events(&ask.mission, events);
                         changed = true;
                     }
                     continue;
