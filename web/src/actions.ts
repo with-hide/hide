@@ -2206,7 +2206,8 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
       const state = ui();
       if (state.screen?.kind === "desk") {
         const tool = state.deskLane.up ? state.deskLane.tool : null;
-        const job = tool?.kind === "thread" ? jobs.find((one) => one.id === tool.job) : undefined;
+        // A session the conversation names opens in the lane as a thread too (D-86).
+        const job = tool?.kind === "thread" ? [...jobs, ...(section?.named ?? [])].find((one) => one.id === tool.job) : undefined;
         if (!job?.pane_id) return diagnostic("desk terminal: no thread in Desk's lane");
         return this.openAgent(job.pane_id);
       }

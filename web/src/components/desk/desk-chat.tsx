@@ -16,7 +16,8 @@ import { Button } from "../ui/button";
 import { RowButton } from "../ui/row-button";
 import { Hint } from "../ui/tooltip";
 import { deskAgentName } from "./desk-agent-name";
-import { DeskJobCard, SessionChip, type DeskJobCardActions } from "./desk-job-card";
+import { DeskJobCard, type DeskJobCardActions } from "./desk-job-card";
+import { SessionChip, useSessionChipBridge } from "./session-chip";
 
 /**
  * Words with their mentions drawn as chips (B18, B26): a session and a
@@ -52,10 +53,12 @@ export function DeskUserMessage({ text, mentions, onMention }: { text: string; m
  */
 export function DeskReply({ text, stopped = false, live = false, mentions = [], onMention }: { text: string; stopped?: boolean; live?: boolean; mentions?: readonly DeskMention[]; onMention?: (mention: DeskMention) => void }) {
   const { t } = useInterfaceTranslation();
+  // Each chip is drawn in a root of its own inside the Markdown, so the screen's chip source is bridged to it.
+  const bridge = useSessionChipBridge();
   const chips = useMemo<MarkdownChip[]>(() => mentions.map((mention) => ({
     token: markedMention(mention),
-    node: <SessionChip session={{ name: mention.name, mark: mention.mark ?? null, agent_kind: mention.agent_kind ?? null }} onPress={onMention ? () => onMention(mention) : undefined} />,
-  })), [mentions, onMention]);
+    node: bridge(<SessionChip session={{ name: mention.name, mark: mention.mark ?? null, agent_kind: mention.agent_kind ?? null, pane_id: mention.id }} onPress={onMention ? () => onMention(mention) : undefined} />),
+  })), [mentions, onMention, bridge]);
   return (
     <div className="flex min-w-0 flex-col gap-xxs" data-desk-item="reply" data-desk-reply={live ? "live" : stopped ? "stopped" : "done"}>
       <MarkdownText text={text} size="chat" chips={chips} />

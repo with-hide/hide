@@ -8,7 +8,7 @@
 import { MapIcon } from "lucide-react";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent, type ReactNode, type RefObject } from "react";
 import type { Actions } from "./actions";
-import { askingCount, deskOn, unseenOutputs, type DeskItem, type DeskJob, type DeskMention, type DeskOutput, type DeskSessionRef } from "./desk";
+import { askingCount, deskOn, laneCards, sessionFacts, unseenOutputs, type DeskItem, type DeskJob, type DeskMention, type DeskOutput, type DeskSessionRef } from "./desk";
 import { activeTab, backFromThread, namesView, closeLane, closeTab, closeTool, closeView, openMission, openThread, outputTab, showTab, showThreads, tabKey, toggleOutputs, toggleThreads, viewTabs } from "./deskLane";
 import { DeskOutputView } from "./DeskOutputView";
 import { MissionMap } from "./MissionMap";
@@ -16,6 +16,8 @@ import { OutputMark } from "./components/desk/desk-job-card";
 import { EveryOutput } from "./components/desk/desk-outputs";
 import { ThreadList } from "./components/desk/thread-list";
 import { ThreadPanel } from "./components/desk/thread-panel";
+import { SessionChipProvider, type SessionChipSource } from "./components/desk/session-chip";
+import { allAgents } from "./paneAgents";
 import type { DeskKeptTab } from "./snapshot";
 import { commandLabel } from "./shortcutLabels";
 import { leaveDesk } from "./keyboard";
@@ -261,6 +263,7 @@ export function DeskScreen({ actions }: { actions: Actions }) {
     }
   }, [actions]);
   const lane = useLaneActions(actions);
+  const chipSource = useSessionChipSource(lane);
   const chatActions = useMemo<DeskChatActions>(() => ({
     onOpen: (job) => lane.thread(job),
     onAnswer: (job) => lane.thread(job, true),
@@ -324,6 +327,7 @@ export function DeskScreen({ actions }: { actions: Actions }) {
     </DeskComposer>
   );
   return (
+    <SessionChipProvider source={chipSource}>
     <div ref={root} className="flex min-h-0 min-w-0 flex-1" data-desk-screen="true" onKeyUp={track} onMouseUp={track}>
       <DeskLaneColumns
         actions={actions}
@@ -339,7 +343,24 @@ export function DeskScreen({ actions }: { actions: Actions }) {
         )}
       />
     </div>
+    </SessionChipProvider>
   );
+}
+
+/**
+ * Where Desk's chips read their sessions (D-86): the sidebar's rows and
+ * every card the lane can open, so a chip in the chat or a thread shows its
+ * row's mark, dims once the row is gone, and opens its card under the
+ * pointer; a press opens its thread.
+ */
+function useSessionChipSource(lane: LaneActions): SessionChipSource {
+  const rows = useShellStore((s) => allAgents(s.agents, s.rest?.status?.remote));
+  const section = useShellStore((s) => s.deskJobs);
+  return useMemo(() => {
+    const byPane = new Map(rows.map((row) => [row.pane_id, row]));
+    const cards = laneCards(section);
+    return { facts: (session) => sessionFacts(byPane, cards, session), onOpen: lane.session };
+  }, [rows, section, lane]);
 }
 
 const NO_WORKERS: DeskJob[] = [];
@@ -351,9 +372,9 @@ function useThreads(): readonly DeskJob[] {
   return useMemo(() => (workers.length ? [...jobs, ...workers] : jobs), [jobs, workers]);
 }
 
+/** Every card the lane opens as a thread: the Threads list's, and the other sessions the conversation names (D-86). */
 function everyThread(): DeskJob[] {
-  const section = useShellStore.getState().deskJobs;
-  return [...(section?.jobs ?? []), ...(section?.workers ?? [])];
+  return laneCards(useShellStore.getState().deskJobs);
 }
 
 /** The output a thread's own line names, as its card lists it when it does: the View's id, or its address or file. */
@@ -428,7 +449,8 @@ function DeskLaneColumns({ actions, lane, chat }: { actions: Actions; lane: Lane
   const expand = () => set((now) => ({ ...now, expanded: !now.expanded }));
   const tabs = viewTabs(kept, place);
   const active = activeTab(kept, place);
-  const byId = new Map(threads.map((job) => [job.id, job]));
+  const named = useShellStore((s) => s.deskJobs?.named ?? NO_WORKERS);
+  const byId = new Map([...threads, ...named].map((job) => [job.id, job]));
   // Opening a thread reads it, as reading its card does; a worker is not Desk's job and has no card to read.
   const openJob = place.up && place.tool?.kind === "thread" ? place.tool.job : null;
   const unread = openJob !== null && own.some((job) => job.id === openJob && !job.read) ? openJob : null;

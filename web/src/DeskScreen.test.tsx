@@ -76,7 +76,7 @@ describe("Desk's room", () => {
   async function render(section: DeskSection) {
     const actions = createActions((event) => { events.push(event); return true; });
     await act(async () => {
-      useShellStore.setState({ connection: "live", rest, desk: section, deskLive: null, deskJobs: { jobs: [], workers: [] }, deskMentions: { sessions: [], projects: [] } });
+      useShellStore.setState({ connection: "live", rest, desk: section, deskLive: null, deskJobs: { jobs: [], workers: [], named: [] }, deskMentions: { sessions: [], projects: [] } });
       root.render(<TooltipProvider><DeskScreen actions={actions} /></TooltipProvider>);
     });
   }
@@ -92,7 +92,7 @@ describe("Desk's room", () => {
     const off = (section: DeskSection): DeskSection => ({ ...section, settings: { ...section.settings, enabled: false } });
     const actions = createActions((event) => { events.push(event); return true; });
     await act(async () => {
-      useShellStore.setState({ connection: "live", rest, desk: off(desk([])), deskLive: null, deskJobs: { jobs: [], workers: [] }, deskMentions: { sessions: [], projects: [] } });
+      useShellStore.setState({ connection: "live", rest, desk: off(desk([])), deskLive: null, deskJobs: { jobs: [], workers: [], named: [] }, deskMentions: { sessions: [], projects: [] } });
       root.render(<TooltipProvider><DeskSidebarEntry actions={actions} /></TooltipProvider>);
     });
     expect(document.body.querySelector("[data-desk-sidebar-row]")).toBeNull();
