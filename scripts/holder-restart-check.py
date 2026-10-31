@@ -77,13 +77,16 @@ SCREEN_TRIES = 5
 QUIET_MS = 500
 FOLLOW_MS = 1000
 PASS, FAIL = "pass", "fail"
-# Cells whose failure is open as an issue: each still runs and shows its
-# result, and its failure does not fail the lane. An entry is removed in the
-# pull request that closes its issue.
+# Cells whose failure is open as an issue, keyed by the agent's id in
+# contracts/agent-journey.json and `platform.system()`: each still runs and
+# shows its result, and its failure, whatever its cause, does not fail the
+# lane unless it left a process running. A key that names no agent of the
+# contract stops the run before any cell. An entry is removed in the pull
+# request that closes its issue.
 KNOWN_FAILURES = {
     # Antigravity on Windows failed one run in ten: it read the holder's
     # answer to its color question as typed keys and opened its editor.
-    ("agy", "Windows"): "with-hide/hide-private#405",
+    ("antigravity", "Windows"): "with-hide/hide-private#405",
 }
 
 
@@ -486,6 +489,19 @@ def run_cells(selected, binaries, herdr_bin, run, report):
         (run / "report.json").write_text(json.dumps(report, indent=2))
 
 
+def failed_cells(report):
+    """The cells that fail the lane: a known failure still shows its cell,
+    and only the others decide."""
+    return [cell["agent"] for cell in report["cells"] if cell["result"] != PASS and not cell.get("known_failure")]
+
+
+def unknown_known_failures(rows):
+    """KNOWN_FAILURES keys that name no agent of the contract, which would
+    never mark a cell."""
+    ids = {row["id"] for row in rows}
+    return sorted(f"{agent} on {os_name}" for agent, os_name in KNOWN_FAILURES if agent not in ids)
+
+
 def exe(name):
     return name + (".exe" if WINDOWS else "")
 
@@ -512,6 +528,9 @@ def main(argv=None):
         raise SystemExit(f"{run} exists: the run directory must be new")
     private_directory(run)
     rows = json.loads((CHECKOUT / "contracts/agent-journey.json").read_text())
+    unknown = unknown_known_failures(rows)
+    if unknown:
+        raise SystemExit("KNOWN_FAILURES names no agent of contracts/agent-journey.json: " + ", ".join(unknown))
     selected = [row for row in rows if not args.agents or row["id"] in args.agents.split(",")]
     holder_owned.abort_on_signals()
     report = {"format": 1, "lane": "holder-restart", "system": system(),
@@ -524,8 +543,7 @@ def main(argv=None):
         (run / "report.json").write_text(json.dumps(report, indent=2))
         print(f"aborted: {stop}", flush=True)
         return 128 + stop.signum
-    # A known failure still shows its cell; only the others decide the lane.
-    failed = [cell["agent"] for cell in report["cells"] if cell["result"] != PASS and not cell.get("known_failure")]
+    failed = failed_cells(report)
     report["passed"] = not failed and len(report["cells"]) == len(selected)
     (run / "report.json").write_text(json.dumps(report, indent=2))
     lines = [f"| {cell['agent']} | {report['system']['os']} | {cell.get('version', '-')} | {cell['result']}"
