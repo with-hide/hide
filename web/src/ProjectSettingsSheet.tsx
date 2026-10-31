@@ -147,7 +147,7 @@ function ProjectSettingsBody({ target, actions, initialPage }: { target: Project
               {page === "connections" ? <>
                 <Group title={t("projectSettings.name")} note={t("projectSettings.nameNote")}>
                   <Row label={t("projectSettings.name")} detail={<>{nameInvalid ? <Note tone="error">{t("projectSettings.nameInvalid")}</Note> : null}{stateFor("name")}</>}>
-                    <div className="flex min-w-0 max-w-full flex-wrap gap-xs"><Input ref={nameInput} aria-label={t("projectSettings.name")} placeholder={folderName(target.root)} value={nameDraft} disabled={blocked} data-project-settings-name-input="true" onChange={(event) => { setNameDraft(event.target.value); setNameInvalid(false); }} onKeyDown={(event) => { if (event.key === "Enter" && !composingKey(event)) applyName(); }} /><Button variant="secondary" size="sm" disabled={blocked || nameDraft === confirmedName} onClick={applyName}>{t("projectSettings.apply")}</Button></div>
+                    <div className="flex min-w-0 max-w-full flex-wrap gap-xs"><Input ref={nameInput} aria-label={t("projectSettings.name")} placeholder={folderName(target.root)} value={nameDraft} disabled={blocked} data-project-settings-name-input="true" onChange={(event) => { setNameDraft(event.target.value); setNameInvalid(false); }} onKeyDown={(event) => { if (event.key === "Enter" && !composingKey(event)) applyName(); }} /><Button variant="secondary" size="sm" aria-label={t("projectSettings.applyName")} disabled={blocked || nameDraft === confirmedName} onClick={applyName}>{t("projectSettings.apply")}</Button></div>
                   </Row>
                 </Group>
                 <Group title={t("projectSettings.repository")} note={t("projectSettings.repositoryNote")}>
