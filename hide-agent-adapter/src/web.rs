@@ -19,10 +19,12 @@ pub struct WebAdapter {
     pub can_pick_model: bool,
     /// The program a start runs, as Settings › Agents shows its command.
     pub program: &'static str,
-    /// The arguments a start adds for full access (Settings › Agents, 권한):
-    /// empty for an agent that asks no permission question, absent for one
-    /// Hide does not start.
-    pub full_access: Option<Vec<&'static str>>,
+    /// The options a start adds for full access (Settings › Agents, 권한),
+    /// each as its words with the option's name first, the one that turns
+    /// questions off before any that keeps the CLI from stopping to confirm
+    /// it: empty for an agent that asks no permission question, absent for
+    /// one Hide does not start.
+    pub full_access: Option<&'static [&'static [&'static str]]>,
     /// What Settings calls the agent's hook piece: a hook entry, a plugin
     /// file or an extension file; absent for an agent Hide writes no hook for.
     pub hook_kind: Option<HookKind>,
@@ -56,7 +58,7 @@ pub fn web_contract() -> impl Iterator<Item = WebAdapter> {
         program: row.executables[0],
         full_access: row
             .start
-            .map(|start| start.options().full_access.arguments()),
+            .map(|start| start.options().full_access.options()),
         hook_kind: match row.hook {
             super::HookInstall::Runtime(_) | super::HookInstall::Guidance(_) => {
                 Some(HookKind::Hook)

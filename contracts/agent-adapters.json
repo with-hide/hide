@@ -71,9 +71,13 @@
     "can_pick_model": true,
     "program": "claude",
     "full_access": [
-      "--dangerously-skip-permissions",
-      "--settings",
-      "{\"skipDangerousModePermissionPrompt\":true}"
+      [
+        "--dangerously-skip-permissions"
+      ],
+      [
+        "--settings",
+        "{\"skipDangerousModePermissionPrompt\":true}"
+      ]
     ],
     "hook_kind": "hook"
   },
@@ -153,7 +157,9 @@
     "can_pick_model": true,
     "program": "codex",
     "full_access": [
-      "--dangerously-bypass-approvals-and-sandbox"
+      [
+        "--dangerously-bypass-approvals-and-sandbox"
+      ]
     ],
     "hook_kind": "hook"
   },
@@ -239,7 +245,9 @@
     "can_pick_model": true,
     "program": "grok",
     "full_access": [
-      "--always-approve"
+      [
+        "--always-approve"
+      ]
     ],
     "hook_kind": "hook"
   },
@@ -324,7 +332,9 @@
     "can_pick_model": false,
     "program": "opencode",
     "full_access": [
-      "--auto"
+      [
+        "--auto"
+      ]
     ],
     "hook_kind": "plugin"
   },
@@ -492,7 +502,9 @@
     "can_pick_model": true,
     "program": "omp",
     "full_access": [
-      "--auto-approve"
+      [
+        "--auto-approve"
+      ]
     ],
     "hook_kind": "extension"
   },
@@ -581,7 +593,9 @@
     "can_pick_model": true,
     "program": "agy",
     "full_access": [
-      "--dangerously-skip-permissions"
+      [
+        "--dangerously-skip-permissions"
+      ]
     ],
     "hook_kind": "hook"
   }
