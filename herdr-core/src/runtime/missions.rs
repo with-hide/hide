@@ -79,6 +79,9 @@ pub struct MissionView {
     pub answer: Option<AnswerView>,
     /// Why the last answer did not reach the Conductor (B28).
     pub answer_failed: Option<crate::missions::AnswerFailure>,
+    /// The operator asked the Conductor to end the mission and it has not
+    /// closed it yet (`미션 종료`).
+    pub end_asked: bool,
     pub delay: Option<String>,
     pub report: Option<String>,
     pub created_at_unix_ms: u64,
@@ -413,6 +416,70 @@ impl Runtime {
         self.follow_outside_stored(&device, &project)
     }
 
+    /// Closes a mission as its Conductor's `hide mission close` asks, or, as
+    /// `cancelled`, as the operator's `미션 종료` does for a mission no
+    /// Conductor holds; `by` names which for the log.
+    pub(super) fn close_mission(
+        &mut self,
+        id: &str,
+        end: MissionEnd,
+        report: Option<String>,
+        by: &str,
+        now: u64,
+    ) -> Result<bool, String> {
+        let current = self.missions.book.get(id).ok_or("mission_unknown")?;
+        if current.status != MissionStatus::Cancelled {
+            self.gate_close(current, end)?;
+        }
+        let target = self.missions.book.get_mut(id).ok_or("mission_unknown")?;
+        let status = match (target.status, end) {
+            (MissionStatus::Cancelled, _) => return Err("mission_cancelled".into()),
+            (MissionStatus::Planning, MissionEnd::Done | MissionEnd::MergeWait) => {
+                return Err("mission_not_started".into());
+            }
+            (_, MissionEnd::Done) => MissionStatus::Done,
+            // A stack already merged has nothing to wait on (B41).
+            (_, MissionEnd::MergeWait) if stack_settled(target) => MissionStatus::Done,
+            (_, MissionEnd::MergeWait) => MissionStatus::MergeWait,
+            (_, MissionEnd::Cancelled) => MissionStatus::Cancelled,
+        };
+        let before = target.clone();
+        target.status = status;
+        target.end_asked_at_unix_ms = None;
+        if report.is_some() {
+            target.report = report;
+        }
+        let ended = if status == MissionStatus::MergeWait {
+            Vec::new()
+        } else {
+            super::mission_events::end_decision(target, now)
+        };
+        target.closed_at_unix_ms = Some(now);
+        target.updated_at_unix_ms = now;
+        if status == MissionStatus::Cancelled {
+            // A cancelled mission wakes no one (D-51).
+            target.wakes.clear();
+        }
+        let changed = *target != before;
+        let mut events = super::mission_events::close_events(&before, target, now);
+        events.extend(ended);
+        if !target.status.open() {
+            self.missions.answers_held.remove(id);
+        }
+        crate::diagnostic!(json!({
+            "component": "missions", "kind": "mission.closed",
+            "mission": id, "end": status, "by": by,
+        }));
+        let place = (target.device_id.clone(), target.project.clone());
+        self.save_missions();
+        self.record_mission_events(id, events);
+        // A mission now waiting for its branches reads them at once.
+        if status == MissionStatus::MergeWait {
+            self.follow_outside_stored(&place.0, &place.1);
+        }
+        Ok(changed)
+    }
+
     /// Closes mission `id`, waiting for its merges, as done once its stack
     /// is in main and every done node's lines still hold (B10, B18, B41);
     /// whether it closed.
@@ -611,6 +678,7 @@ impl Runtime {
                     closed_at_unix_ms: None,
                     wakes: Vec::new(),
                     wake_seq: 0,
+                    end_asked_at_unix_ms: None,
                 };
                 crate::diagnostic!(json!({
                     "component": "missions", "kind": "mission.created",
@@ -759,55 +827,7 @@ impl Runtime {
                 report,
             } => {
                 let id = self.conducted_mission(&actor, mission.as_deref(), false)?;
-                let current = self.missions.book.get(&id).ok_or("mission_unknown")?;
-                if current.status != MissionStatus::Cancelled {
-                    self.gate_close(current, end)?;
-                }
-                let target = self.missions.book.get_mut(&id).ok_or("mission_unknown")?;
-                let status = match (target.status, end) {
-                    (MissionStatus::Cancelled, _) => return Err("mission_cancelled".into()),
-                    (MissionStatus::Planning, MissionEnd::Done | MissionEnd::MergeWait) => {
-                        return Err("mission_not_started".into());
-                    }
-                    (_, MissionEnd::Done) => MissionStatus::Done,
-                    // A stack already merged has nothing to wait on (B41).
-                    (_, MissionEnd::MergeWait) if stack_settled(target) => MissionStatus::Done,
-                    (_, MissionEnd::MergeWait) => MissionStatus::MergeWait,
-                    (_, MissionEnd::Cancelled) => MissionStatus::Cancelled,
-                };
-                let before = target.clone();
-                target.status = status;
-                if report.is_some() {
-                    target.report = report;
-                }
-                let ended = if status == MissionStatus::MergeWait {
-                    Vec::new()
-                } else {
-                    super::mission_events::end_decision(target, now)
-                };
-                target.closed_at_unix_ms = Some(now);
-                target.updated_at_unix_ms = now;
-                if status == MissionStatus::Cancelled {
-                    // A cancelled mission wakes no one (D-51).
-                    target.wakes.clear();
-                }
-                let changed = *target != before;
-                let mut events = super::mission_events::close_events(&before, target, now);
-                events.extend(ended);
-                if !target.status.open() {
-                    self.missions.answers_held.remove(&id);
-                }
-                crate::diagnostic!(json!({
-                    "component": "missions", "kind": "mission.closed",
-                    "mission": id, "end": status,
-                }));
-                let place = (target.device_id.clone(), target.project.clone());
-                self.save_missions();
-                self.record_mission_events(&id, events);
-                // A mission now waiting for its branches reads them at once.
-                if status == MissionStatus::MergeWait {
-                    self.follow_outside_stored(&place.0, &place.1);
-                }
+                let changed = self.close_mission(&id, end, report, "conductor", now)?;
                 Ok((json!({"mission": self.mission_view_of(&id)}), changed))
             }
             MissionCommand::Reopen { mission } => {
@@ -825,6 +845,7 @@ impl Runtime {
                 line,
                 pass,
                 evidence,
+                summary,
                 commit,
                 rerun,
             } => self.record_criterion(
@@ -832,7 +853,7 @@ impl Runtime {
                 mission.as_deref(),
                 &node,
                 &line,
-                (pass, evidence, commit, rerun),
+                (pass, evidence, summary, commit, rerun),
                 now,
             ),
             MissionCommand::Skip {
@@ -1129,7 +1150,8 @@ impl Runtime {
     /// handed over and its waiting wakes sent (PRD mission-tool D-11, B14).
     /// The conversation comes back through 이어받기, Reopen closed, a wake
     /// or the operator's own resume alike, so the move follows the session
-    /// rather than the button that resumed it.
+    /// rather than the button that resumed it. A resumed conversation gets
+    /// no prompt of its own, so a `resumed` wake tells it to go on.
     pub(super) fn follow_resumed_conductors(&mut self, device: &str) {
         let moves: Vec<(String, String, Actor)> = self
             .missions
@@ -1185,6 +1207,9 @@ impl Runtime {
                     "mission": id, "pane": pane, "code": code,
                 }));
                 continue;
+            }
+            if let Some(mission) = self.missions.book.get_mut(&id) {
+                record_wake(mission, String::new(), None, WakeEvent::Resumed, None);
             }
             crate::diagnostic!(json!({
                 "component": "missions", "kind": "mission.conductor_resumed",
@@ -1522,19 +1547,33 @@ impl Runtime {
                     Some(External::Branch(branch)) => format!("Branch {branch}"),
                     _ => pr.clone(),
                 };
-                let (what, act) = match wake.event {
-                    WakeEvent::Merged => (format!("{pr} was merged"), PR_ACT),
+                let news = |what: String, act: &str| {
+                    format!(
+                        "{what} (mission {} \"{}\", node {}).\nRead the mission with `hide mission show {}` and act on it: {act}.",
+                        mission.id, mission.title, wake.node, mission.id
+                    )
+                };
+                let body = match wake.event {
+                    WakeEvent::Merged => news(format!("{pr} was merged"), PR_ACT),
                     WakeEvent::ChangesRequested => {
-                        (format!("{pr} received a review asking for changes"), PR_ACT)
+                        news(format!("{pr} received a review asking for changes"), PR_ACT)
                     }
-                    WakeEvent::NewHead => (format!("{pr} has a new commit"), PR_ACT),
-                    WakeEvent::OutsideDone => (
+                    WakeEvent::NewHead => news(format!("{pr} has a new commit"), PR_ACT),
+                    WakeEvent::OutsideDone => news(
                         format!("{} is in main", outside()),
                         "start the nodes that waited on it",
                     ),
-                    WakeEvent::OutsideFailed => (
+                    WakeEvent::OutsideFailed => news(
                         format!("{} was closed without a merge", outside()),
                         "replan the nodes it blocks, or ask the operator",
+                    ),
+                    WakeEvent::Resumed => format!(
+                        "You conduct mission {} \"{}\" again: your pane had closed, and the operator brought your conversation back.\nRead `hide mission show {}` and `hide inbox`, check each worker's state, and go on from there.",
+                        mission.id, mission.title, mission.id
+                    ),
+                    WakeEvent::EndAsked => format!(
+                        "The operator asked from the map to end mission {} \"{}\".\nTreat it as the operator saying \"cancel\" and follow that item of `hide mission help`: ask about the open pull requests with `hide mission decide`, end the workers, then `hide mission close --as cancelled`.",
+                        mission.id, mission.title
                     ),
                 };
                 out.push(Wake {
@@ -1542,10 +1581,7 @@ impl Runtime {
                     seq: wake.seq,
                     target: target.clone(),
                     intent,
-                    body: format!(
-                        "{what} (mission {} \"{}\", node {}).\nRead the mission with `hide mission show {}` and act on it: {act}.",
-                        mission.id, mission.title, wake.node, mission.id
-                    ),
+                    body,
                 });
             }
         }
@@ -1852,6 +1888,7 @@ impl Runtime {
                 AnswerFailure::DeviceDisconnected => self.mission_stale(mission),
                 AnswerFailure::SendFailed => true,
             }),
+            end_asked: mission.end_asked_at_unix_ms.is_some(),
             delay: mission.delay.clone(),
             report: mission.report.clone(),
             created_at_unix_ms: mission.created_at_unix_ms,

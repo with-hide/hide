@@ -2,7 +2,7 @@
 // session-docs-and-assistant, Desk 1차): agents, conversations, jobs in every
 // state, threads as ACP updates and outputs. Names, counts and paths are
 // made up; nothing here is read from a machine.
-import type { AcpSessionUpdate, DeskAgent, DeskItem, DeskJob, DeskMention, DeskMission, DeskOutput, DeskSessionRef, DeskSteps, SessionViewKind, ThreadHidePart } from "../desk";
+import type { AcpSessionUpdate, DeskAgent, DeskItem, DeskJob, DeskMention, DeskMission, DeskOutput, DeskSessionRef, DeskSteps, SessionFacts, SessionViewKind, ThreadHidePart } from "../desk";
 import type { DeskSessionChip, RowMark } from "../snapshot";
 import type { MentionProject, MentionSession } from "../components/desk/desk-mention-menu";
 import { planFixture } from "./PlanScene";
@@ -350,24 +350,53 @@ export const WORKER_THREAD: AcpSessionUpdate[] = [
   call("w-edit", "web/src/desk/ThreadView.tsx", "edit", "in_progress"),
 ];
 
-export const MENU_SESSIONS: MentionSession[] = [
-  { id: "agent-record-now", name: "record-now", agent_kind: "codex", mark: "going", detail: "herdr-ide · 작업 중" },
-  { id: "agent-release", name: "release 노트 초안", agent_kind: "claude", mark: "done", detail: "herdr-ide · 끝남" },
-  { id: "agent-reel-review", name: "reel 자막 리뷰", agent_kind: "codex", mark: "turn", detail: "creator · 질문" },
-];
+/** A session of the `@` menu, under `parent` when it has one, its last request `minutes` ago. */
+const menuSession = (now: number, id: string, name: string, agent_kind: string, mark: MentionSession["mark"], line: [project: string, branch: string | null, detail: string], minutes: number, parent: string | null = null): MentionSession => ({
+  id, name, agent_kind, mark, detail: line[2], parent, project: line[0], branch: line[1], last_prompt_at_unix_ms: at(now, minutes),
+});
+
+/** The `@` menu's sessions (D-84): parents with their children, one asking under 프로젝트 패널 인터뷰 so that parent opens from the start. */
+export function menuSessions(now: number): MentionSession[] {
+  return [
+    menuSession(now, "agent-interview", "프로젝트 패널 인터뷰", "claude", "turn", ["herdr-ide", "main", "빈 화면 시작 방식과 PR 머지 여부를 정해 주세요"], 3),
+    menuSession(now, "agent-interview-draft", "인터뷰 초안", "claude", "turn", ["herdr-ide", "main", "질문 두 개 남았어요"], 4, "agent-interview"),
+    menuSession(now, "agent-holder", "m21 holder-life", "claude", "going", ["herdr-ide", "main", "Conductor · 미션 2/4"], 1),
+    menuSession(now, "agent-holder-life", "pane 보관 프로그램 수명", "claude", "going", ["herdr-ide", "m21-holder-life", "테스트 고치는 중"], 1, "agent-holder"),
+    menuSession(now, "agent-holder-review", "리뷰", "claude", "quiet", ["herdr-ide", "m21-holder-life", "리뷰 끝, 지적 2개"], 12, "agent-holder"),
+    menuSession(now, "agent-holder-verify", "verify", "codex", "quiet", ["herdr-ide", "m21-holder-life", "CI 21개 진행, 실패 없음"], 20, "agent-holder"),
+    menuSession(now, "agent-planner", "desk-planner", "claude", "going", ["herdr-ide", "desk-lane", "계획 3/5"], 2),
+    menuSession(now, "agent-planner-design", "디자인 리뷰", "claude", "quiet", ["herdr-ide", "desk-lane", "proposal-v2 지적 정리"], 40, "agent-planner"),
+    menuSession(now, "agent-planner-copy", "문구 정리", "codex", "going", ["herdr-ide", "desk-lane", "한국어 문구 고치는 중"], 5, "agent-planner"),
+    menuSession(now, "agent-pr-review", "PR 리뷰 상태 표시", "claude", "waiting", ["herdr-ide", "pr-review-status", "CI 결과 기다리는 중"], 8),
+    menuSession(now, "agent-pr-review-ci", "CI 다시 돌리기", "codex", "going", ["herdr-ide", "pr-review-status", "macOS 줄 기다리는 중"], 6, "agent-pr-review"),
+    menuSession(now, "agent-carousel", "캐러셀 비교", "claude", "asleep", ["creator", "main", "세 안 렌더 끝, 고르기 기다림"], 90),
+    menuSession(now, "agent-docs-review", "문서 리뷰", "codex", "quiet", ["creator", "main", "용어집 갱신 끝"], 60),
+  ];
+}
 
 export const MENU_PROJECTS: MentionProject[] = [
-  { id: "herdr-ide", name: "herdr-ide", sessions: ["w1:mention", "w1:gallery", "w1:release", "w1:record", "w1:1b"] },
-  { id: "creator", name: "creator", sessions: ["w1:reel", "w1:cover"] },
+  { id: "~/projects/herdr-ide", name: "herdr-ide", sessions: ["w1:mention", "w1:gallery", "w1:release", "w1:record", "w1:1b"] },
+  { id: "~/projects/creator", name: "creator", sessions: ["w1:reel", "w1:cover"] },
 ];
 
-export const ENTERED_SESSIONS: MentionSession[] = [
-  { id: "agent-record-now", name: "record-now", agent_kind: "codex", mark: "going", detail: "작업 중" },
-  { id: "agent-mention", name: "mention 버튼 정리", agent_kind: "claude", mark: "going", detail: "계획 6/14" },
-  { id: "agent-gallery", name: "갤러리 캡처 비교", agent_kind: "claude", mark: "turn", detail: "질문" },
-  { id: "agent-plan", name: "hide-plan 위임", agent_kind: "codex", mark: "waiting", detail: "대기 · 미션 1/3" },
-  { id: "agent-release", name: "release 노트 초안", agent_kind: "claude", mark: "done", detail: "끝남" },
-];
+export function enteredSessions(now: number): MentionSession[] {
+  return [
+    menuSession(now, "agent-record-now", "record-now", "codex", "going", ["herdr-ide", "record-now", "작업 중"], 2),
+    menuSession(now, "agent-mention", "mention 버튼 정리", "claude", "going", ["herdr-ide", "mention-button", "계획 6/14"], 4),
+    menuSession(now, "agent-gallery", "갤러리 캡처 비교", "claude", "turn", ["herdr-ide", "gallery-capture", "질문"], 7),
+    menuSession(now, "agent-plan", "hide-plan 위임", "codex", "waiting", ["herdr-ide", "main", "대기 · 미션 1/3"], 15),
+    menuSession(now, "agent-release", "release 노트 초안", "claude", "done", ["herdr-ide", "main", "끝남"], 30),
+  ];
+}
+
+/** The composer-with-chips scene (D-85, B49): a session chip and a project chip in the words, and the same words sent. */
+export const CHIP_SESSION = { kind: "session" as const, id: "w138:p2", name: "프로젝트 패널 결과 구현", mark: "going" as const, agent_kind: "claude" };
+export const CHIP_PROJECT = { kind: "project" as const, id: "~/projects/herdr-ide", name: "herdr-ide" };
+export const CHIP_TEXT = "@session(w138:p2 프로젝트 패널 결과 구현) 마무리하고, 끝나면 @project(~/projects/herdr-ide herdr-ide)에 PR 올려줘";
+
+export function chipItems(now: number): DeskItem[] {
+  return [{ kind: "user", id: 51, text: "@session(w138:p2 프로젝트 패널 결과 구현) 테스트 다시 돌려줘, @project(~/projects/herdr-ide herdr-ide) 기준으로", at_ms: at(now, 2), mentions: [CHIP_SESSION, CHIP_PROJECT] }];
+}
 
 /** The 결과물 기준 scene: a session's View list, and what Desk keeps of it. */
 export const SESSION_VIEWS: { label: string; kind: SessionViewKind }[] = [
@@ -379,3 +408,82 @@ export const SESSION_VIEWS: { label: string; kind: SessionViewKind }[] = [
   { label: "PaneHeader.tsx diff", kind: "diff" },
   { label: "verify-web.log", kind: "log" },
 ];
+
+/**
+ * The chips scene (D-86, B50, mockup 5): a status answer naming more sessions
+ * than the old cap of 16, grouped by project, one of them no longer listed,
+ * with every listed one's card as its hover card reads it.
+ */
+export function chipsScene(now: number): { items: DeskItem[]; facts: ReadonlyMap<string, SessionFacts>; open: string } {
+  const job = base(now);
+  type Named = { name: string; kind: string; mark: RowMark | null; project?: string; branch?: string; extra?: Partial<DeskJob>; parent?: string; minutes?: number };
+  const groups: { title: string; project: string; lines: { label: string; sessions: Named[] }[] }[] = [
+    { title: "herdr-ide", project: "herdr-ide", lines: [
+      { label: "Desk 설계", sessions: [
+        { name: "desk-planner", kind: "claude", mark: "going", branch: "desk/planner", extra: { now: "D-86 카드 문구 다듬는 중", plan: { done: 2, total: 4 } }, minutes: 21 },
+        { name: "desk-conductor", kind: "claude", mark: "quiet", extra: { state: "done", summary: "미션 노드 넷 시작함", mission: MISSION }, parent: "desk-planner", minutes: 40 },
+        { name: "desk-design-critic", kind: "claude", mark: "quiet", extra: { state: "done", summary: "목업 5번 승인 의견" }, parent: "desk-planner", minutes: 33 },
+      ] },
+      { label: "startup 적용", sessions: [
+        { name: "cf-startup-apply", kind: "claude", mark: "quiet", extra: { state: "done", summary: "Cloudflare 신청서 냈어요", pull_requests: [{ number: 1918, state: "merged" }] }, minutes: 95 },
+        { name: "gcp-startup-apply", kind: "claude", mark: "asleep", extra: { state: "sleeping" }, minutes: 180 },
+      ] },
+      { label: "agent journey", sessions: [
+        { name: "agent-journey", kind: "codex", mark: "going", branch: "journey-agy", extra: { now: "Linux e2e 결과 기다리는 중", plan: { done: 3, total: 5 }, pull_requests: [{ number: 1921, state: "pending" }], outputs: [OUTPUTS.compareLight, OUTPUTS.notes] }, parent: "agent-14586", minutes: 14 },
+        { name: "journey-impl", kind: "claude", mark: "going", branch: "journey-agy", extra: { now: "agy 핀 고정 확인" }, parent: "agent-journey", minutes: 9 },
+        { name: "agent-14586", kind: "claude", mark: "turn", extra: { state: "asking", ask: "question", question: "Windows 칸은 다음 PR로 미룰까요?" }, minutes: 3 },
+      ] },
+      { label: "메모리 승격 3건", sessions: [
+        { name: "memory-promote-m400", kind: "claude", mark: "quiet", extra: { state: "done", summary: "AGENTS.md로 옮김" }, minutes: 50 },
+        { name: "m252", kind: "claude", mark: "quiet", extra: { state: "done", summary: "카드 합침" }, minutes: 52 },
+        { name: "m349", kind: "claude", mark: null },
+      ] },
+      { label: "CI 정리", sessions: [
+        { name: "flaky-web-top", kind: "codex", mark: "going", branch: "fix/flaky-web", extra: { now: "tab-wait 도우미로 8개 옮기는 중" }, minutes: 27 },
+        { name: "macos-queue", kind: "codex", mark: "quiet", extra: { state: "done", summary: "패키지 빌드 7분으로" }, minutes: 70 },
+        { name: "premerge-lock", kind: "claude", mark: "waiting", extra: { now: "앞 PR 머지 기다림" }, minutes: 18 },
+        { name: "nightly-triage", kind: "claude", mark: "going", extra: { now: "어젯밤 실패 둘 읽는 중" }, minutes: 6 },
+      ] },
+    ] },
+    { title: "creator", project: "creator", lines: [
+      { label: "캐러셀 비교", sessions: [
+        { name: "carousel-astra", kind: "codex", mark: "asleep", extra: { state: "sleeping" }, minutes: 120 },
+        { name: "carousel-fable", kind: "claude", mark: "asleep", extra: { state: "sleeping" }, minutes: 121 },
+        { name: "carousel-opus", kind: "claude", mark: "asleep", extra: { state: "sleeping" }, minutes: 122 },
+      ] },
+      { label: "릴스", sessions: [
+        { name: "reel-captions", kind: "codex", mark: "going", extra: { now: "자막 타이밍 맞추는 중", outputs: [OUTPUTS.light1] }, minutes: 11 },
+        { name: "reel-thumbnail", kind: "claude", mark: "turn", extra: { state: "asking", ask: "question", question: "3안 중 어느 것?" }, minutes: 4 },
+        { name: "reel-caption-post", kind: "claude", mark: "quiet", extra: { state: "done", summary: "캡션 초안 둘" }, minutes: 44 },
+      ] },
+    ] },
+  ];
+  const pane = (name: string) => `g:${name}`;
+  const every = groups.flatMap((group) => group.lines.flatMap((line) => line.sessions.map((session) => ({ ...session, project: group.project }))));
+  const ref = (named: Named): DeskSessionRef => ({ name: named.name, mark: named.mark, agent_kind: named.kind, pane_id: pane(named.name) });
+  const facts = new Map<string, SessionFacts>();
+  for (const named of every) {
+    if (named.mark === null) {
+      facts.set(pane(named.name), { listed: false, mark: null, agent_kind: null, card: null, since: null, parent: null });
+      continue;
+    }
+    const card = job(named.name, named.name, {
+      pane_id: pane(named.name), agent_kind: named.kind, mark: named.mark,
+      project: { workspace_id: named.project, label: named.project ?? "" },
+      location: named.branch ? { kind: "worktree", label: named.branch } : { kind: "checkout", label: named.project ?? "" },
+      ...named.extra,
+    });
+    const parent = every.find((one) => one.name === named.parent);
+    facts.set(pane(named.name), { listed: true, mark: named.mark, agent_kind: named.kind, card: { ...card, mark: named.mark }, since: at(now, named.minutes ?? 1), parent: parent ? ref(parent) : null });
+  }
+  const token = (named: Named) => `@session(${pane(named.name)} ${named.name})`;
+  const text = [
+    `지금 ${every.length}개 세션이 돌고 있어요. 프로젝트별로 묶으면:`,
+    ...groups.flatMap((group) => [`\n**${group.title}**\n`, ...group.lines.map((line) => `- **${line.label}:** ${line.sessions.map(token).join(" ")}`)]),
+  ].join("\n");
+  const items: DeskItem[] = [
+    { kind: "user", id: 1, text: "지금 돌고 있는 세션 프로젝트별로 정리해줘", at_ms: at(now, 1), mentions: [] },
+    { kind: "reply", agent: "claude", id: 2, text, at_ms: at(now, 1), state: "done", thought_ms: 6_000, steps: { ...NO_STEPS, sessions: every.length }, mentions: every.map((named) => ({ pane_id: pane(named.name), name: named.name, agent_kind: named.mark === null ? null : named.kind, mark: named.mark })) },
+  ];
+  return { items, facts, open: pane("agent-journey") };
+}

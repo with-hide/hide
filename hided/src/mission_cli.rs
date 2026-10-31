@@ -85,7 +85,7 @@ pub const FLAGS: &[(&str, &[&str], &[&str])] = &[
     ),
     (
         "record",
-        &["--mission", "--evidence", "--commit"],
+        &["--mission", "--evidence", "--summary", "--commit"],
         &["--pass", "--fail", "--rerun"],
     ),
     ("skip", &["--mission", "--reason", "--decision"], &[]),
@@ -377,6 +377,7 @@ pub fn parse<'a>(mut args: impl Iterator<Item = &'a String>) -> Result<MissionCl
                     .ok_or_else(|| {
                         "give --evidence with the one line the result rests on".to_owned()
                     })?,
+                summary: values.get("--summary").cloned(),
                 commit: values
                     .get("--commit")
                     .map(|value| commit("--commit", value))
@@ -807,6 +808,7 @@ mod tests {
             node,
             line,
             pass,
+            summary,
             commit,
             rerun,
             ..
@@ -818,6 +820,8 @@ mod tests {
                 "--pass",
                 "--evidence",
                 "cargo test: 12 passed",
+                "--summary",
+                "테스트 12개 통과",
                 "--commit",
                 "abc1234",
                 "--rerun",
@@ -831,6 +835,7 @@ mod tests {
             (node.as_str(), line.as_str(), pass, commit.as_deref(), rerun),
             ("core", "check", true, Some("abc1234"), true)
         );
+        assert_eq!(summary.as_deref(), Some("테스트 12개 통과"));
         assert!(parse(words(&["record", "core", "c1"]).iter()).is_err());
         // A worker's line and a checker's alike carry the line they rest on.
         for line in ["c1", "review"] {

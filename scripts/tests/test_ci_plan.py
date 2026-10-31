@@ -251,7 +251,7 @@ class Selection(unittest.TestCase):
     def test_an_adapter_change_tests_its_real_consumers_and_compiles_on_windows(self):
         # These consumers follow the workspace manifests, independently of the planner.
         consumers = [
-            "herdr-core", "hide-agent-adapter", "hide-agent-hooks", "hide-host", "hide-kit",
+            "herdr-core", "hide-agent-adapter", "hide-agent-hooks", "hide-holder", "hide-host", "hide-kit",
             "hide-node", "hide-node-link", "hide-session", "hided",
         ]
         for path in ("hide-agent-adapter/src/lib.rs", "hide-agent-adapter/Cargo.toml"):
@@ -271,6 +271,22 @@ class Selection(unittest.TestCase):
         self.assertNotIn("windows-e2e", result["lanes"])
         self.assertNotIn("os-contract", result["lanes"])
         self.assertEqual(plan("hided/tests/it/handshake.rs")["rust_packages"], ["hided"])
+
+    def test_the_vt_lane_follows_the_parser_and_the_pane_holder(self):
+        # vt.yml builds hide-vt and runs the holder's tests, which start the
+        # holder from a version folder hide-kit makes.
+        for path in ("hide-vt/build.rs", "hide-holder/src/holder.rs", "hide-holder-protocol/src/lib.rs",
+                     "hide-kit/src/holders.rs", "vendor/portable-pty/src/win/psuedocon.rs"):
+            with self.subTest(path=path):
+                result = plan(path)
+                self.assertIn("vt", result["lanes"])
+                self.assertFalse(result["full"])
+        self.assertIn("hide-holder", plan("vendor/portable-pty/Cargo.toml")["rust_packages"])
+        # The platform layer's own contract covers the resident start and the
+        # session end; its every change does not wait for the Zig build.
+        for path in ("hide-platform/src/process/resident.rs", "hide-kit/src/layout.rs"):
+            with self.subTest(path=path):
+                self.assertNotIn("vt", plan(path)["lanes"])
 
     def test_the_macos_os_contract_runs_for_the_two_crates_it_tests(self):
         for path in ("hide-herdr-client/src/lib.rs", "hide-platform/src/process.rs"):

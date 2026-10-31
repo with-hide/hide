@@ -9,6 +9,9 @@ import { useShellStore } from "../../store";
 import { Input } from "../ui/input";
 import { threadInputHeld, threadLaunchModel, threadScreen } from "../../threadView";
 import type { ComposerAttachment } from "./desk-composer";
+import { ChevronLeftIcon } from "lucide-react";
+import { Button } from "../ui/button";
+import { LaneColumnHead } from "./desk-lane";
 import { ThreadHead, ThreadView, type ThreadConductor, type ThreadPartActions } from "./thread-view";
 
 type Attached = ComposerAttachment & { bytes: Uint8Array };
@@ -24,8 +27,11 @@ const INPUT_WORDS = new Set(["pane_changed", "pane_gone", "closed", "asleep", "u
  * files into that pane. Where the lane puts it, and where a chip or `터미널로`
  * goes, are the lane's.
  */
-export function ThreadPanel({ job, actions, conductor = null, pinned, mentions = [], startedByDesk = false, selectedOutput = null, focused = false, answer = 0, terminalChord, onBack, onPin, onClose, onTerminal, ...parts }: {
-  job: DeskJob;
+export function ThreadPanel({ job, paneId = job?.pane_id ?? null, actions, conductor = null, pinned, mentions = [], startedByDesk = false, selectedOutput = null, focused = false, answer = 0, terminalChord, onBack, onPin, onClose, onTerminal, ...parts }: {
+  /** The session's card; a session that is no job of Desk's opens before its card arrives, by its pane (D-87). */
+  job: DeskJob | null;
+  /** The pane whose thread this is; its card's when not given. */
+  paneId?: string | null;
   actions: Pick<Actions, "openThread" | "closeThread" | "readOlderThread">;
   conductor?: ThreadConductor | null;
   pinned: boolean;
@@ -42,7 +48,6 @@ export function ThreadPanel({ job, actions, conductor = null, pinned, mentions =
   onTerminal: () => void;
 } & ThreadPartActions) {
   const { t } = useInterfaceTranslation();
-  const paneId = job.pane_id;
   const latest = useRef(actions);
   latest.current = actions;
   useEffect(() => {
@@ -122,6 +127,17 @@ export function ThreadPanel({ job, actions, conductor = null, pinned, mentions =
     if (answer > 0) root.current?.querySelector<HTMLTextAreaElement>("[data-desk-composer-input]")?.focus();
   }, [answer]);
 
+  if (!job) {
+    // The thread opened from the first frame; its head waits for the card the core sends with it.
+    return (
+      <div ref={root} className="flex min-h-0 min-w-0 flex-1 flex-col" data-desk-thread-panel={paneId ?? ""} data-desk-thread-pending="true">
+        <LaneColumnHead pinned={pinned} onPin={onPin} onClose={onClose}>
+          <Button variant="ghost" size="icon-sm" className="text-muted-foreground" aria-label={t("desk.thread.back")} onClick={onBack}><ChevronLeftIcon /></Button>
+        </LaneColumnHead>
+        <p role="status" className="p-md text-caption text-muted-foreground">{t("desk.thread.reading")}</p>
+      </div>
+    );
+  }
   return (
     <div ref={root} className="flex min-h-0 min-w-0 flex-1 flex-col" data-desk-thread-panel={paneId ?? ""}>
       <ThreadHead job={job} model={model} conductor={conductor} pinned={pinned} terminalChord={terminalChord} onBack={onBack} onTerminal={onTerminal} onPin={onPin} onClose={onClose} />

@@ -27,6 +27,7 @@ mod coordination_retirement;
 mod device;
 pub mod device_herdr;
 mod herdr_integration;
+pub mod holders;
 mod hooks;
 mod labels;
 pub mod layout;

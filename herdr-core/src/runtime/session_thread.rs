@@ -251,6 +251,8 @@ impl Runtime {
             pages: Vec::new(),
         }));
         self.read_session_thread();
+        // A session that is no job of Desk's gets its card for the thread's head (D-87).
+        self.compose_desk_jobs();
         true
     }
 
@@ -273,6 +275,7 @@ impl Runtime {
             generation,
             pages: Vec::new(),
         }));
+        self.compose_desk_jobs();
         true
     }
 

@@ -104,6 +104,12 @@ MAILBOX_CRATES = {"herdr-core", "hided", "hide-agent-hooks", "hide-host"}
 # consumes these does not plan it.
 WSL_CRATES = {"hide-host", "hide-node", "hide-node-link", "hide-platform"}
 WSL_CRATE_FILES = ("hided/src/node_cli.rs", "hided/tests/it/wsl_device.rs")
+# The vt lane builds the terminal parser, whose Zig build differs by system,
+# and runs the pane holder's tests, since the holder links the parser and its
+# tests start it on all three systems (docs/TESTING.md, The pane holder); the
+# holder's version folders are hide-kit code those tests check.
+VT_CRATES = {"hide-vt", "hide-holder", "hide-holder-protocol"}
+VT_CRATE_FILES = ("hide-kit/src/holders.rs",)
 
 # The desktop suite drives the web shell and the daemon inside the app, so
 # every web shell file plans `desktop-e2e` beside `web-e2e`: a desktop spec
@@ -466,6 +472,9 @@ def classify(path, status, crates, root):
     if is_unit_test(path.as_posix()):
         return {"checks", "windows-check"}, f"registered desktop unit test: {path}", set()
     crate = crates.get(parts[0])
+    if parts[:2] == ("vendor", "portable-pty"):
+        # The root manifest patches it in for the holder, its one user.
+        crate = crates.get("hide-holder")
     if crate is not None:
         packages = reverse_closure(crates, crate["name"])
         # Every crate compiles into the Windows workspace `windows check` builds.
@@ -482,8 +491,7 @@ def classify(path, status, crates, root):
             lanes.update(OS_LANES)
         if crate["name"] in AGY_CRATES:
             lanes.add("agy-contract")
-        if crate["name"] == "hide-vt":
-            # Its Zig build differs by system; the vt lane builds it on all three.
+        if crate["name"] in VT_CRATES or path.as_posix() in VT_CRATE_FILES:
             lanes.add("vt")
         if path.as_posix() in JOURNEY_CRATE_FILES or is_journey_product(path):
             lanes.update(JOURNEY_LANES)

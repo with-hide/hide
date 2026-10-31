@@ -8,7 +8,7 @@
 // The fields no section carries (marked `wire gap` below) are a thread's
 // own, which the threads node reads from the session record.
 
-import type { DeskAgent, DeskAskKind, DeskIrreversible, DeskItem, DeskJob, DeskMention as WireMention, DeskMission, DeskNotice, DeskOutput, DeskOutputKind, DeskSection, DeskSessionChip, PlanView, PrState, RowMark } from "./snapshot";
+import type { AgentRow, DeskAgent, DeskAskKind, DeskIrreversible, DeskItem, DeskJob, DeskJobsSection, DeskMention as WireMention, DeskMission, DeskNotice, DeskOutput, DeskOutputKind, DeskSection, DeskSessionChip, PlanView, PrState, RowMark } from "./snapshot";
 
 export type { DeskAgent, DeskAgentId, DeskAgentState, DeskApprovalAnswer, DeskApprovalState, DeskChoice, DeskIrreversible, DeskItem, DeskJob, DeskJobFailure, DeskJobState, DeskLive, DeskLocation, DeskMission, DeskOutput, DeskOutputKind, DeskPermissionAnswer, DeskPermissionRow, DeskPermissions, DeskSteps } from "./snapshot";
 
@@ -40,7 +40,69 @@ export type DeskSessionRef = { name: string; mark: RowMark | null; agent_kind: s
 
 /** The session a handed line names, from the line's own mark and agent. */
 export function handedSession(item: Extract<DeskItem, { kind: "handed" }>): DeskSessionRef {
-  return { name: item.name, mark: item.mark, agent_kind: item.agent_kind };
+  return { name: item.name, mark: item.mark, agent_kind: item.agent_kind, pane_id: item.pane_id };
+}
+
+/** Every card Desk's lane can open as a thread (B25, D-86): its jobs, their missions' workers, and the other sessions its conversation names. */
+export function laneCards(section: DeskJobsSection | null | undefined): DeskJob[] {
+  if (!section) return [];
+  return [...section.jobs, ...section.workers, ...section.named];
+}
+
+/** The lane's key for the thread of a session that is no job of Desk's (D-87): the id its card carries once the core sends it. */
+export function sessionThreadId(paneId: string): string {
+  return `pane:${paneId}`;
+}
+
+/** The pane a lane thread key names when it is no job's id. */
+export function threadKeyPane(id: string): string | null {
+  return id.startsWith("pane:") ? id.slice("pane:".length) : null;
+}
+
+/** The card of the session a chip names: by its pane when the chip knows it, else by its name. */
+export function cardOfSession(cards: readonly DeskJob[], session: DeskSessionRef): DeskJob | null {
+  return cards.find((card) => (session.pane_id ? card.pane_id === session.pane_id : card.title === session.name)) ?? null;
+}
+
+/**
+ * What Hide knows of a session a chip names, from its sidebar row and its
+ * card (D-86): whether the sidebar still lists it, its row's mark and agent,
+ * its card (the facts its hover card shows and the thread a press opens),
+ * the time its row shows and its parent.
+ */
+export type SessionFacts = {
+  listed: boolean;
+  mark: RowMark | null;
+  agent_kind: string | null;
+  card: DeskJob | null;
+  /** When its row's time counts from (`last_prompt_at_unix_ms`). */
+  since: number | null;
+  parent: DeskSessionRef | null;
+};
+
+/** A row as a chip names it. */
+function rowSession(row: AgentRow): DeskSessionRef {
+  return { name: row.identity_label, mark: row.mark, agent_kind: row.agent_kind, pane_id: row.pane_id };
+}
+
+/**
+ * A chip's session as the sidebar and Desk's cards know it now (D-86): a
+ * session named by its pane that no row has any more is not listed, so its
+ * chip is dimmed; one named only by a name no row carries is not known, and
+ * its chip keeps the values it came with.
+ */
+export function sessionFacts(rows: ReadonlyMap<string, AgentRow>, cards: readonly DeskJob[], session: DeskSessionRef): SessionFacts | null {
+  const row = session.pane_id ? rows.get(session.pane_id) : [...rows.values()].find((one) => one.identity_label === session.name);
+  if (!row) return session.pane_id ? { listed: false, mark: null, agent_kind: null, card: null, since: null, parent: null } : null;
+  const parent = row.lineage_parent_pane_id ? rows.get(row.lineage_parent_pane_id) : undefined;
+  return {
+    listed: true,
+    mark: row.mark,
+    agent_kind: row.agent_kind,
+    card: cardOfSession(cards, { ...session, pane_id: row.pane_id }),
+    since: row.last_prompt_at_unix_ms ?? null,
+    parent: parent ? rowSession(parent) : null,
+  };
 }
 
 export type DeskApproval = Extract<DeskItem, { kind: "approval" }>;
