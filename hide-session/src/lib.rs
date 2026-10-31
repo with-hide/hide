@@ -1147,139 +1147,172 @@ pub fn parse_events_at(agent: Agent, contents: &str, base_offset: u64) -> Parsed
     parsed
 }
 
-/// [`parse_events_at`] with the link reader's state carried by the caller,
-/// so a reader that parses one line at a time keeps what earlier lines said
-/// (the branch the session is on, its last request). `links` of the result
-/// is left empty; the caller finishes the accumulator.
+/// [`parse_events_at`] with the link reader's state carried by the caller.
+/// `links` of the result is left empty; the caller finishes the
+/// accumulator.
+///
+/// The text is cut into records by the same [`source::frame::Framer`] the
+/// cursor reads a file with: a record over the line cap is scanned and
+/// settled as the cursor settles it, and a last record without its newline
+/// is left for the read that sees it whole, never parsed early or counted
+/// malformed.
 pub(crate) fn parse_events_into(
     agent: Agent,
     contents: &str,
     base_offset: u64,
     found: &mut links::LinkAccumulator,
 ) -> ParsedSession {
-    parse_events_followed(agent, contents, base_offset, found, None)
+    let mut parsed = ParsedSession::default();
+    let Some(format) = Format::of(agent) else {
+        return parsed;
+    };
+    let bytes = contents.as_bytes();
+    let mut framer = source::frame::Framer::new(SESSION_LINE_LIMIT_BYTES, base_offset);
+    let mut over = None;
+    let mut at = 0;
+    while let Some(frame) = framer.next(bytes, &mut at) {
+        let (start, record) = match frame {
+            source::frame::Frame::Record { start, bytes } => {
+                (start, String::from_utf8_lossy(bytes))
+            }
+            source::frame::Frame::Over {
+                start,
+                first,
+                kept,
+                bytes,
+                ended,
+            } => match conversation_cursor::pass_over(
+                agent,
+                &mut over,
+                (first, kept, bytes, ended),
+                start,
+                &mut parsed,
+            ) {
+                Some(line) => (start, std::borrow::Cow::Owned(line)),
+                None => continue,
+            },
+        };
+        if parse_record(
+            &format,
+            &record,
+            start,
+            &bytes[at..],
+            None,
+            found,
+            &mut parsed,
+        ) {
+            break;
+        }
+    }
+    parsed
 }
 
-/// [`parse_events_into`] for a reader that reads a file in polls. `following`
-/// is the rest of the poll after `contents`, and a Claude command record that
-/// nothing in `contents` or `following` answers is not classified: the result
-/// says `held_command` and the caller reads the record again with the poll
-/// that holds its reply, so a command and its reply may fall in different polls.
-pub(crate) fn parse_events_followed(
+/// One record a reader has already cut (the cursor), parsed as
+/// [`parse_events_into`] parses each record it cuts. `following` is the rest
+/// of the poll after the record, and a Claude command record that nothing in
+/// `following` answers is not classified: the result says `held_command` and
+/// the caller reads the record again with the poll that holds its reply, so a
+/// command and its reply may fall in different polls.
+pub(crate) fn parse_record_followed(
     agent: Agent,
-    contents: &str,
-    base_offset: u64,
+    record: &str,
+    offset: u64,
     found: &mut links::LinkAccumulator,
     following: Option<&[u8]>,
 ) -> ParsedSession {
-    match agent {
-        Agent::Claude => parse_lines_at(
-            contents,
-            base_offset,
-            parse_claude_line,
-            links::claude_line,
-            Turns {
-                agent,
-                parser: Some(turns::native::claude),
-                wake: agent
-                    .reports_wake_devices()
-                    .then_some(turns::wake::claude as turns::wake::Parser),
-                tools: Some(tools::claude as tools::Parser),
-                human_starts_turn: true,
-                replies: true,
+    let mut parsed = ParsedSession::default();
+    if let Some(format) = Format::of(agent) {
+        parse_record(&format, record, offset, &[], following, found, &mut parsed);
+    }
+    parsed
+}
+
+/// How one format's records read.
+struct Format {
+    extract: fn(&Value, &dyn Fn() -> CommandReply) -> LineResult,
+    link: links::LinkLine,
+    turns: Turns,
+}
+
+impl Format {
+    /// OpenCode and Cursor keep no session file of records.
+    fn of(agent: Agent) -> Option<Self> {
+        Some(match agent {
+            Agent::Claude => Format {
+                extract: parse_claude_line,
+                link: links::claude_line,
+                turns: Turns {
+                    parser: Some(turns::native::claude),
+                    wake: agent
+                        .reports_wake_devices()
+                        .then_some(turns::wake::claude as turns::wake::Parser),
+                    tools: Some(tools::claude as tools::Parser),
+                    human_starts_turn: true,
+                    replies: true,
+                },
             },
-            found,
-            following,
-        ),
-        Agent::Codex => parse_lines_at(
-            contents,
-            base_offset,
-            |item, _| parse_codex_line(item),
-            links::codex_line,
-            Turns {
-                agent,
-                parser: Some(turns::native::codex),
-                wake: None,
-                tools: Some(tools::codex as tools::Parser),
-                human_starts_turn: false,
-                replies: false,
+            Agent::Codex => Format {
+                extract: |item, _| parse_codex_line(item),
+                link: links::codex_line,
+                turns: Turns {
+                    parser: Some(turns::native::codex),
+                    wake: None,
+                    tools: Some(tools::codex as tools::Parser),
+                    human_starts_turn: false,
+                    replies: false,
+                },
             },
-            found,
-            following,
-        ),
-        Agent::Grok => parse_lines_at(
-            contents,
-            base_offset,
-            |item, _| grok::parse_line(item),
-            links::grok_line,
-            Turns {
-                agent,
-                parser: Some(grok::turn),
-                wake: None,
-                tools: Some(tools::grok as tools::Parser),
-                human_starts_turn: true,
-                replies: false,
+            Agent::Grok => Format {
+                extract: |item, _| grok::parse_line(item),
+                link: links::grok_line,
+                turns: Turns {
+                    parser: Some(grok::turn),
+                    wake: None,
+                    tools: Some(tools::grok as tools::Parser),
+                    human_starts_turn: true,
+                    replies: false,
+                },
             },
-            found,
-            following,
-        ),
-        Agent::Pi => parse_lines_at(
-            contents,
-            base_offset,
-            |item, _| native_file::parse_line(Agent::Pi, item),
-            links::pi_line,
-            Turns {
-                agent,
-                parser: None,
-                wake: None,
-                tools: Some(tools::pi as tools::Parser),
-                human_starts_turn: false,
-                replies: false,
+            Agent::Pi => Format {
+                extract: |item, _| native_file::parse_line(Agent::Pi, item),
+                link: links::pi_line,
+                turns: Turns {
+                    parser: None,
+                    wake: None,
+                    tools: Some(tools::pi as tools::Parser),
+                    human_starts_turn: false,
+                    replies: false,
+                },
             },
-            found,
-            following,
-        ),
-        Agent::Omp => parse_lines_at(
-            contents,
-            base_offset,
-            |item, _| native_file::parse_line(Agent::Omp, item),
-            links::pi_line,
-            Turns {
-                agent,
-                parser: Some(turns::native::omp),
-                wake: None,
-                tools: Some(tools::pi as tools::Parser),
-                human_starts_turn: true,
-                replies: false,
+            Agent::Omp => Format {
+                extract: |item, _| native_file::parse_line(Agent::Omp, item),
+                link: links::pi_line,
+                turns: Turns {
+                    parser: Some(turns::native::omp),
+                    wake: None,
+                    tools: Some(tools::pi as tools::Parser),
+                    human_starts_turn: true,
+                    replies: false,
+                },
             },
-            found,
-            following,
-        ),
-        Agent::Antigravity => parse_lines_at(
-            contents,
-            base_offset,
-            |item, _| antigravity::parse_line(item),
-            links::antigravity_line,
-            Turns {
-                agent,
-                parser: None,
-                wake: None,
-                tools: None,
-                human_starts_turn: false,
-                replies: false,
+            Agent::Antigravity => Format {
+                extract: |item, _| antigravity::parse_line(item),
+                link: links::antigravity_line,
+                turns: Turns {
+                    parser: None,
+                    wake: None,
+                    tools: None,
+                    human_starts_turn: false,
+                    replies: false,
+                },
             },
-            found,
-            following,
-        ),
-        Agent::OpenCode | Agent::Cursor => ParsedSession::default(),
+            Agent::OpenCode | Agent::Cursor => return None,
+        })
     }
 }
 
-/// How a format's records mark turns, and how it reads a record longer
-/// than the line cap.
+/// How a format's records mark turns.
 struct Turns {
-    /// The format, which reads a record longer than the line cap.
-    agent: Agent,
     parser: Option<turns::native::Parser>,
     /// Reads the records that start or end background work the agent waits
     /// on; only a format that declares it can prove one
@@ -1294,129 +1327,109 @@ struct Turns {
 }
 
 /// Each record is parsed once and read by both the conversation parser and
-/// the link reader (`links`), so a chunk yields its events and its link facts
-/// from the same pass.
-fn parse_lines_at(
-    contents: &str,
-    base_offset: u64,
-    mut extract: impl FnMut(&Value, &dyn Fn() -> CommandReply) -> LineResult,
-    link: links::LinkLine,
-    turns: Turns,
-    found: &mut links::LinkAccumulator,
+/// the link reader (`links`), so a record yields its events and its link
+/// facts from the same pass. `after` is the text that follows the record in
+/// the caller's chunk and `following` what follows that chunk. Returns
+/// whether the record is a command held for its reply, which ends the chunk.
+fn parse_record(
+    format: &Format,
+    record: &str,
+    line_offset: u64,
+    after: &[u8],
     following: Option<&[u8]>,
-) -> ParsedSession {
-    let Turns {
-        agent,
-        parser: turn,
-        wake,
-        tools,
-        human_starts_turn,
-        replies,
-    } = turns;
-    let mut parsed = ParsedSession::default();
-    let mut relative_offset = 0_u64;
-    for raw_line in contents.split_inclusive('\n') {
-        let line_offset = base_offset.saturating_add(relative_offset);
-        relative_offset = relative_offset.saturating_add(raw_line.len() as u64);
-        let reduced;
-        let raw_line = if raw_line.len() > SESSION_LINE_LIMIT_BYTES {
-            match conversation_cursor::held_over_record(
-                agent,
-                raw_line.as_bytes(),
-                line_offset,
-                &mut parsed,
-            ) {
-                Some(line) => {
-                    reduced = line;
-                    reduced.as_str()
-                }
-                None => continue,
-            }
-        } else {
-            raw_line
-        };
-        let line = raw_line.trim_end_matches(['\n', '\r']);
-        if line.trim().is_empty() {
-            continue;
+    found: &mut links::LinkAccumulator,
+    parsed: &mut ParsedSession,
+) -> bool {
+    let Format {
+        extract,
+        link,
+        turns:
+            Turns {
+                parser: turn,
+                wake,
+                tools,
+                human_starts_turn,
+                replies,
+            },
+    } = *format;
+    let line = record.trim_end_matches(['\n', '\r']);
+    if line.trim().is_empty() {
+        return false;
+    }
+    let value = match serde_json::from_str::<Value>(line) {
+        Ok(value) => value,
+        Err(_) => {
+            parsed.skipped(SkipReason::MalformedJson);
+            return false;
         }
-        let value = match serde_json::from_str::<Value>(line) {
-            Ok(value) => value,
-            Err(_) => {
-                parsed.skipped(SkipReason::MalformedJson);
-                continue;
-            }
-        };
-        found.begin_record();
-        link(&value, line_offset, found);
-        if let Some(turn) = turn {
-            match turn(&value) {
-                Ok(Some(mark)) => parsed.turn_marks.push((line_offset, mark)),
-                Err(reason) => parsed.skipped(reason),
-                Ok(None) => {}
-            }
-        }
-        if let Some(wake) = wake {
-            match wake(&value) {
-                Ok(Some(mark)) => parsed.turn_marks.push((line_offset, mark)),
-                Err(reason) => parsed.skipped(reason),
-                Ok(None) => {}
-            }
-        }
-        if let Some(tools) = tools {
-            let steps = tools(&value);
-            if !steps.is_empty() {
-                let at = timestamp_ms(value.get("timestamp")).unwrap_or(0);
-                parsed.tool_steps.push((line_offset, at, steps));
-            }
-        }
-        let after = &contents.as_bytes()[usize::try_from(relative_offset)
-            .unwrap_or(usize::MAX)
-            .min(contents.len())..];
-        match extract(&value, &|| CommandReply::after(after, following)) {
-            LineResult::Ignore => {}
-            LineResult::Held => {
-                parsed.held_command = true;
-                break;
-            }
-            LineResult::Skip(reason) => parsed.skipped(reason),
-            LineResult::Event(event) => {
-                if turn.is_some() {
-                    let mark = match event.kind {
-                        EventKind::Human if human_starts_turn && replies => {
-                            Some(turns::TurnMark::Prompt)
-                        }
-                        EventKind::Human if human_starts_turn => Some(turns::TurnMark::HumanTurn),
-                        EventKind::Human => Some(turns::TurnMark::Human),
-                        EventKind::Interrupted => Some(turns::TurnMark::Interrupted),
-                        _ => None,
-                    };
-                    if let Some(mark) = mark {
-                        parsed.turn_marks.push((line_offset, mark));
-                    }
-                }
-                found.event(event.kind, event.at_unix_ms, &event.text, line_offset);
-                parsed.events.push(event);
-                parsed.event_offsets.push(line_offset);
-            }
-            LineResult::Title(title) => parsed.title = Some(title),
-            LineResult::CustomTitle(title) => parsed.custom_title = Some(title),
-            LineResult::TitleSnapshot {
-                title,
-                custom_title,
-            } if line_offset == 0 => {
-                parsed.title = Some(title);
-                parsed.custom_title = Some(custom_title);
-            }
-            LineResult::TitleSnapshot { .. } => {}
-            LineResult::Sightings(mut sightings) => {
-                found.sightings(&mut sightings.prs);
-                found.issue_sightings(&sightings.issues);
-                parsed.pr_sightings.extend(sightings.prs);
-                parsed.issue_sightings.extend(sightings.issues);
-            }
+    };
+    found.begin_record();
+    link(&value, line_offset, found);
+    if let Some(turn) = turn {
+        match turn(&value) {
+            Ok(Some(mark)) => parsed.turn_marks.push((line_offset, mark)),
+            Err(reason) => parsed.skipped(reason),
+            Ok(None) => {}
         }
     }
-    parsed
+    if let Some(wake) = wake {
+        match wake(&value) {
+            Ok(Some(mark)) => parsed.turn_marks.push((line_offset, mark)),
+            Err(reason) => parsed.skipped(reason),
+            Ok(None) => {}
+        }
+    }
+    if let Some(tools) = tools {
+        let steps = tools(&value);
+        if !steps.is_empty() {
+            let at = timestamp_ms(value.get("timestamp")).unwrap_or(0);
+            parsed.tool_steps.push((line_offset, at, steps));
+        }
+    }
+    match extract(&value, &|| CommandReply::after(after, following)) {
+        LineResult::Ignore => {}
+        LineResult::Held => {
+            parsed.held_command = true;
+            return true;
+        }
+        LineResult::Skip(reason) => parsed.skipped(reason),
+        LineResult::Event(event) => {
+            if turn.is_some() {
+                let mark = match event.kind {
+                    EventKind::Human if human_starts_turn && replies => {
+                        Some(turns::TurnMark::Prompt)
+                    }
+                    EventKind::Human if human_starts_turn => Some(turns::TurnMark::HumanTurn),
+                    EventKind::Human => Some(turns::TurnMark::Human),
+                    EventKind::Interrupted => Some(turns::TurnMark::Interrupted),
+                    _ => None,
+                };
+                if let Some(mark) = mark {
+                    parsed.turn_marks.push((line_offset, mark));
+                }
+            }
+            found.event(event.kind, event.at_unix_ms, &event.text, line_offset);
+            parsed.events.push(event);
+            parsed.event_offsets.push(line_offset);
+        }
+        LineResult::Title(title) => parsed.title = Some(title),
+        LineResult::CustomTitle(title) => parsed.custom_title = Some(title),
+        LineResult::TitleSnapshot {
+            title,
+            custom_title,
+        } if line_offset == 0 => {
+            parsed.title = Some(title);
+            parsed.custom_title = Some(custom_title);
+        }
+        LineResult::TitleSnapshot { .. } => {}
+        LineResult::Sightings(mut sightings) => {
+            found.sightings(&mut sightings.prs);
+            found.issue_sightings(&sightings.issues);
+            parsed.pr_sightings.extend(sightings.prs);
+            parsed.issue_sightings.extend(sightings.issues);
+        }
+    }
+    false
 }
 
 fn parse_claude_line(item: &Value, reply: &dyn Fn() -> CommandReply) -> LineResult {
@@ -2219,7 +2232,8 @@ mod tests {
                 "content": [{"type": "input_text", "text": "<hide-memory-context />"}],
             },
         })
-        .to_string();
+        .to_string()
+            + "\n";
         let parsed = parse_codex_events(&line);
         assert_eq!(parsed.events.len(), 1);
         assert_eq!(parsed.events[0].role, "system");
@@ -2276,7 +2290,8 @@ mod tests {
             "payload": {"type": "message", "role": "user",
                 "content": [{"type": "input_text", "text": omitted}]},
         })
-        .to_string();
+        .to_string()
+            + "\n";
         let parsed = parse_codex_events(&line);
         assert_eq!(parsed.events.len(), 1);
         assert_eq!(parsed.events[0].kind, EventKind::Human);
@@ -2306,7 +2321,8 @@ mod tests {
                 "content": "<hide-memory-receipt event=\"UserPromptSubmit\" />",
             },
         })
-        .to_string();
+        .to_string()
+            + "\n";
         let parsed = parse_claude_events(&line);
         assert_eq!(parsed.events.len(), 1);
         assert_eq!(parsed.events[0].kind, EventKind::Human);
@@ -2368,7 +2384,8 @@ mod tests {
             "type": "attachment",
             "attachment": {"type": "hook_additional_context", "content": ["context"]},
         })
-        .to_string();
+        .to_string()
+            + "\n";
 
         let parsed = parse_claude_events(&line);
 
@@ -2404,14 +2421,16 @@ mod tests {
                 "content": [{"type": "input_text", "text": context}],
             },
         })
-        .to_string();
+        .to_string()
+            + "\n";
         let claude = serde_json::json!({
             "type": "user",
             "timestamp": "2026-09-18T00:00:00Z",
             "origin": {"kind": "human"},
             "message": {"role": "user", "content": context},
         })
-        .to_string();
+        .to_string()
+            + "\n";
 
         assert_eq!(
             parse_codex_events(&codex).events[0].kind,
@@ -2426,7 +2445,8 @@ mod tests {
             "timestamp": "2026-09-18T00:00:00Z",
             "attachment": {"type": "hook_additional_context", "content": [context]},
         })
-        .to_string();
+        .to_string()
+            + "\n";
         assert_eq!(
             parse_claude_events(&claude_attachment).events[0].kind,
             EventKind::Injected
@@ -2441,7 +2461,8 @@ mod tests {
                 "content": [{"type": "input_text", "text": "<hide-memory-context-malformed>"}],
             },
         })
-        .to_string();
+        .to_string()
+            + "\n";
         assert_eq!(
             parse_codex_events(&malformed).events[0].kind,
             EventKind::Human

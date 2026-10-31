@@ -7,11 +7,10 @@ use crate::turns::{
 };
 use crate::{
     Agent, ParsedSession, Result, SESSION_LINE_LIMIT_BYTES, SessionError, SkipReason,
-    parse_events_followed,
+    parse_record_followed,
 };
 use std::borrow::Cow;
 use std::fs::File;
-use std::io::{Read, Seek, SeekFrom};
 use std::path::Path;
 
 /// Search-only durable progress, including a skipped oversized tool record.
@@ -38,7 +37,7 @@ impl ConversationCheckpoint {
     /// A node-proven JSONL turn boundary. Keep the current file identity so
     /// replacement cannot turn the saved byte offset into another turn.
     pub(crate) fn for_turn(path: &Path, offset: u64) -> Result<Self> {
-        let mut file =
+        let file =
             crate::source::open(path).map_err(|error| SessionError::io("open", path, error))?;
         let metadata = file
             .metadata()
@@ -46,15 +45,10 @@ impl ConversationCheckpoint {
         if offset >= metadata.len() {
             return Err(SessionError::Checkpoint("turn_offset_invalid".into()));
         }
-        if offset > 0 {
-            file.seek(SeekFrom::Start(offset - 1))
-                .map_err(|error| SessionError::io("seek", path, error))?;
-            let mut before = [0];
-            file.read_exact(&mut before)
-                .map_err(|error| SessionError::io("read", path, error))?;
-            if before[0] != b'\n' {
-                return Err(SessionError::Checkpoint("turn_offset_invalid".into()));
-            }
+        if !crate::source::window::record_starts_at(&file, offset)
+            .map_err(|error| SessionError::io("read", path, error))?
+        {
+            return Err(SessionError::Checkpoint("turn_offset_invalid".into()));
         }
         Ok(crate::CursorCheckpoint {
             offset,
@@ -363,7 +357,7 @@ impl ConversationCursor {
         self.read_bytes = 0;
         let mut plan_hold = None;
         let title = match agent {
-            Agent::Omp => Some(read_current_title(
+            Agent::Omp => Some(crate::source::facts::omp_title(
                 path,
                 file,
                 budget,
@@ -424,34 +418,24 @@ impl ConversationCursor {
                     kept,
                     bytes,
                     ended,
-                } => {
-                    if first {
-                        // A bounded structural scan continues across
-                        // chunks. Only JSON discriminators survive a
-                        // checkpoint, never bodies.
-                        let mut scan = LargeRecord::of(agent);
-                        scan.feed(kept);
-                        scan.feed(bytes);
-                        classifier = Some(Box::new(scan));
-                    } else if let Some(classifier) = classifier.as_mut() {
-                        classifier.feed(bytes);
-                    }
-                    if !ended {
-                        continue;
-                    }
-                    match over_record(agent, classifier.take(), start, &mut parsed) {
-                        Some(line) => (start, Cow::Owned(line)),
-                        None => continue,
-                    }
-                }
+                } => match pass_over(
+                    agent,
+                    &mut classifier,
+                    (first, kept, bytes, ended),
+                    start,
+                    &mut parsed,
+                ) {
+                    Some(line) => (start, Cow::Owned(line)),
+                    None => continue,
+                },
             };
             let mut line =
-                parse_events_followed(agent, &text, line_start, &mut found, Some(&appended[at..]));
+                parse_record_followed(agent, &text, line_start, &mut found, Some(&appended[at..]));
             if line.held_command && has_more && line_start <= window_start {
                 // A command that opens a full window cannot wait for a reply
                 // beyond it: holding would stall the reader, so it is decided
                 // on what the window shows, as a whole-file reader does.
-                line = parse_events_followed(agent, &text, line_start, &mut found, None);
+                line = parse_record_followed(agent, &text, line_start, &mut found, None);
             }
             if line.held_command {
                 // A command whose reply is not written yet: read it again
@@ -492,18 +476,31 @@ impl ConversationCursor {
     }
 }
 
-/// A record over the line cap that a reader of whole text holds (a page, a
-/// whole file): scanned and settled exactly as the cursor settles one it
-/// streams, so the same record reads the same whichever reader meets it.
-pub(crate) fn held_over_record(
+/// One piece of a record over the line cap ([`Frame::Over`]): a bounded
+/// structural scan continues across pieces and chunks, keeping only JSON
+/// discriminators, never bodies; once the piece holds the record's newline
+/// the record settles into `parsed`, and a Grok record that still reads
+/// without its bodies comes back to be parsed as a record. Every reader
+/// that cuts records (the cursor, a whole text) settles one this way.
+pub(crate) fn pass_over(
     agent: Agent,
-    record: &[u8],
+    scan: &mut Option<Box<LargeRecord>>,
+    (first, kept, bytes, ended): (bool, &[u8], &[u8], bool),
     line_start: u64,
     parsed: &mut ParsedSession,
 ) -> Option<String> {
-    let mut scan = LargeRecord::of(agent);
-    scan.feed(record);
-    over_record(agent, Some(Box::new(scan)), line_start, parsed)
+    if first {
+        let mut started = LargeRecord::of(agent);
+        started.feed(kept);
+        started.feed(bytes);
+        *scan = Some(Box::new(started));
+    } else if let Some(scan) = scan.as_mut() {
+        scan.feed(bytes);
+    }
+    if !ended {
+        return None;
+    }
+    over_record(agent, scan.take(), line_start, parsed)
 }
 
 /// What a record over the line cap leaves once its scan has seen all of it:
@@ -569,23 +566,6 @@ fn read_grok_state(
     Ok((summary.title, hold))
 }
 
-/// Refresh the physical first line through the same descriptor without
-/// changing event offsets. Every byte read is charged against this poll's
-/// existing allowance.
-fn read_current_title(
-    path: &Path,
-    file: &File,
-    budget: u64,
-    read_bytes: &mut u64,
-) -> Result<(String, String)> {
-    let mut file = file
-        .try_clone()
-        .map_err(|e| SessionError::io("clone", path, e))?;
-    file.seek(SeekFrom::Start(0))
-        .map_err(|e| SessionError::io("seek", path, e))?;
-    crate::source::facts::omp_title(path, file, budget, read_bytes)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -624,7 +604,7 @@ mod tests {
 // Only discriminators and the bounded native ids a turn mark needs are kept,
 // so a discarded record still answers or asks its call.
 #[derive(Clone, Debug, Default, PartialEq, serde::Serialize, serde::Deserialize)]
-struct LargeRecord {
+pub(crate) struct LargeRecord {
     frames: Vec<JsonFrame>,
     token: Option<JsonString>,
     root_kind: String,

@@ -2,7 +2,6 @@
 //! The native sidecar supplies cwd; neither a display name, derived transcript
 //! nor a previous-workspace URI is ownership evidence.
 
-use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::sync::{
     Arc,
@@ -266,10 +265,7 @@ impl Database {
         }
         let sidecar_file = crate::source::open_nofollow(&path.with_file_name("meta.json"))
             .map_err(|_| invalid("cursor_sidecar_unavailable"))?;
-        let mut raw = Vec::new();
-        sidecar_file
-            .take(META_BYTES as u64 + 1)
-            .read_to_end(&mut raw)
+        let raw = crate::source::window::read_up_to(&sidecar_file, META_BYTES as u64)
             .map_err(|_| invalid("cursor_sidecar_unavailable"))?;
         if raw.len() > META_BYTES {
             return Err(capacity("cursor_sidecar_bytes", META_BYTES));

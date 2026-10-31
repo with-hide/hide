@@ -68,6 +68,7 @@ fn claude(session: &str, entrypoint: &str, branch: &str, text: &str, at: &str) -
         "entrypoint": entrypoint, "cwd": "/work/app", "sessionId": session, "gitBranch": branch,
     })
     .to_string()
+        + "\n"
 }
 
 #[test]
@@ -76,7 +77,7 @@ fn a_print_run_is_not_interactive_and_a_detached_head_is_no_branch() {
         claude("s1", "sdk-cli", "HEAD", "판정해 줘", "2026-10-03T01:00:00Z"),
         claude("s1", "sdk-cli", "feat/x", "다음", "2026-10-03T01:00:05Z"),
     ]
-    .join("\n");
+    .concat();
     let facts = parse_events(Agent::Claude, &contents).links;
 
     assert_eq!(facts.interactive, Some(false));
@@ -92,7 +93,7 @@ fn a_branch_change_starts_a_new_span_with_its_own_last_request() {
         claude("s1", "cli", "a", "둘째 요청", "2026-10-03T01:00:10Z"),
         claude("s1", "cli", "b", "다른 브랜치", "2026-10-03T01:00:20Z"),
     ]
-    .join("\n");
+    .concat();
     let facts = parse_events(Agent::Claude, &contents).links;
 
     assert_eq!(facts.spans.len(), 2);
@@ -122,18 +123,21 @@ fn codex_meta(id: &str, extra: serde_json::Value) -> String {
     }
     serde_json::json!({"timestamp": "2026-10-03T01:00:00Z", "type": "session_meta", "payload": payload})
         .to_string()
+        + "\n"
 }
 
 fn codex_user(text: &str, at: &str) -> String {
     serde_json::json!({"timestamp": at, "type": "response_item", "payload": {
         "type": "message", "role": "user", "content": [{"type": "input_text", "text": text}]}})
     .to_string()
+        + "\n"
 }
 
 fn codex_output(text: &str, at: &str) -> String {
     serde_json::json!({"timestamp": at, "type": "response_item", "payload": {
         "type": "function_call_output", "call_id": "c", "output": text}})
     .to_string()
+        + "\n"
 }
 
 #[test]
@@ -143,7 +147,7 @@ fn a_codex_session_takes_its_branch_from_session_meta() {
         codex_user("PR 올려 줘", "2026-10-03T01:00:10Z"),
         codex_output("https://github.com/acme/app/pull/7", "2026-10-03T01:00:20Z"),
     ]
-    .join("\n");
+    .concat();
     let facts = parse_events(Agent::Codex, &contents).links;
 
     assert_eq!(facts.session_id.as_deref(), Some("cx-1"));
@@ -169,7 +173,7 @@ fn codex_exec_is_not_interactive_and_a_fork_keeps_its_own_meta() {
         codex_meta("cx-3", serde_json::json!({"forked_from_id": "cx-1"})),
         codex_meta("cx-1", serde_json::json!({"git": {"branch": "other"}})),
     ]
-    .join("\n");
+    .concat();
     let facts = parse_events(Agent::Codex, &fork).links;
     assert_eq!(facts.session_id.as_deref(), Some("cx-3"));
     assert_eq!(facts.forked_from.as_deref(), Some("cx-1"));
@@ -186,7 +190,7 @@ fn a_codex_subagent_thread_folds_into_its_parent() {
         ),
         codex_user("subagent prompt", "2026-10-03T01:00:10Z"),
     ]
-    .join("\n");
+    .concat();
     let facts = parse_events(Agent::Codex, &contents).links;
 
     assert_eq!(facts.session_id.as_deref(), Some("cx-parent"));

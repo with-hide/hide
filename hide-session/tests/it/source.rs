@@ -10,6 +10,9 @@
 //! - A last record without its newline is not read until it has one, and is
 //!   then read once.
 //! - A record that is not JSON is counted and reading goes on.
+//! - The last two hold in every reader that cuts records, not only the
+//!   label read: the whole-text parse, usage, a forward thread page and the
+//!   hooks' tail read.
 //! - A file replaced at its path, or truncated, is read again from its start
 //!   and says why.
 //! - A record that names the session (Codex `session_meta`, a Pi or omp
@@ -519,4 +522,117 @@ fn a_naming_record_over_its_cap_is_refused_for_its_size() {
         read(grok.home.path(), &grok.request).unwrap_err(),
         ReadRefusal::Refused("label_session_metadata_line_capacity".into()),
     );
+}
+
+/// A file whose last record is cut: once whole JSON without its newline,
+/// once cut inside the JSON. Answers each written form and where the
+/// unfinished record starts.
+fn cut_last_record(bytes: &[u8]) -> (Vec<Vec<u8>>, usize) {
+    assert_eq!(bytes.last(), Some(&b'\n'));
+    let whole = &bytes[..bytes.len() - 1];
+    let unfinished = whole
+        .iter()
+        .rposition(|byte| *byte == b'\n')
+        .map_or(0, |newline| newline + 1);
+    let half = unfinished + (whole.len() - unfinished) / 2;
+    (vec![whole.to_vec(), bytes[..half].to_vec()], unfinished)
+}
+
+/// The whole-text parse (catalog, archive, the phone's pages) and the label
+/// cursor read the same file alike: an unfinished last record waits, never
+/// counted malformed, whether or not it is whole JSON yet; a broken line
+/// before it is counted once and reading goes on.
+#[test]
+fn the_whole_text_parse_and_the_cursor_hold_an_unfinished_record_and_count_a_broken_one() {
+    for agent in FILE_AGENTS {
+        let session = Session::of(agent);
+        let at = session.fixed_records() + 1;
+        session.rewrite(|lines| lines.insert(at, "{\"type\": \"user\", \"cut".to_owned()));
+        let (written, unfinished) = cut_last_record(&fs::read(session.path()).unwrap());
+        for bytes in written {
+            fs::write(session.path(), &bytes).unwrap();
+            let text = String::from_utf8_lossy(&bytes);
+            let parsed = hide_session::parse_events(agent, &text);
+            let settled = hide_session::parse_events(agent, &text[..unfinished]);
+            assert_eq!(
+                parsed.events.len(),
+                settled.events.len(),
+                "{agent:?} parses nothing of the unfinished record"
+            );
+            assert_eq!(parsed.skipped_reasons, settled.skipped_reasons);
+            assert_eq!(
+                parsed
+                    .skipped_reasons
+                    .get(&hide_session::SkipReason::MalformedJson),
+                Some(&1),
+                "{agent:?} counts the broken line once"
+            );
+            let reads = session.read_all();
+            assert_eq!(
+                reads.last.as_ref().unwrap().checkpoint.offset(),
+                unfinished as u64,
+                "{agent:?} cursor stops at the unfinished record"
+            );
+            assert_eq!(reads.skipped.get("malformed_json"), Some(&1));
+        }
+    }
+}
+
+/// Usage reads its records through the same cut: the broken line is
+/// skipped, the unfinished record is left for the next step, which reads
+/// it once.
+#[test]
+fn usage_holds_an_unfinished_record_and_counts_a_broken_one() {
+    use hide_session::usage;
+    let first = crate::usage::CLAUDE;
+    let second = first
+        .replace("request-a", "request-b")
+        .replace("message-a", "message-b");
+    let broken = "{\"type\": \"assistant\", \"cut\n";
+    let (written, unfinished) = cut_last_record(format!("{first}{broken}{second}").as_bytes());
+    for bytes in written {
+        let home = tempfile::tempdir().unwrap();
+        let path = home
+            .path()
+            .join(hide_session::CLAUDE_SESSIONS)
+            .join("-work-app/session-a.jsonl");
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(&path, &bytes).unwrap();
+        let step = usage::read(home.path(), Agent::Claude, &path, None).unwrap();
+        assert_eq!(step.events.len(), 1);
+        assert_eq!(step.checkpoint.offset, unfinished as u64);
+        assert_eq!(step.skipped.values().sum::<u64>(), 1, "{:?}", step.skipped);
+        assert_eq!(unfinished, first.len() + broken.len());
+        fs::write(&path, format!("{first}{broken}{second}")).unwrap();
+        let next = usage::read(home.path(), Agent::Claude, &path, Some(step.checkpoint)).unwrap();
+        assert_eq!(next.events.len(), 1, "the finished record is read once");
+        assert_eq!(
+            next.checkpoint.offset,
+            (first.len() + broken.len() + second.len()) as u64
+        );
+    }
+}
+
+/// The hooks read the tail of Claude's file for a call's answer: an answer
+/// whose record is not finished is not taken yet, and a broken line before
+/// it does not stop the read.
+#[test]
+fn the_hooks_tail_holds_an_unfinished_answer_and_reads_past_a_broken_line() {
+    use hide_session::calls::{answered_in_claude_file, key};
+    let input = json!({"command": "ls"});
+    let waited = key("Bash", &input).unwrap();
+    let call = json!({"type": "assistant", "message": {"content": [
+        {"type": "tool_use", "id": "toolu_1", "name": "Bash", "input": input}]}});
+    let answer = json!({"type": "user", "message": {"content": [
+        {"type": "tool_result", "tool_use_id": "toolu_1", "content": "ok"}]}});
+    let folder = tempfile::tempdir().unwrap();
+    let transcript = folder.path().join("session.jsonl");
+    let finished = format!("{call}\n{{\"type\": \"user\", \"cut\n{answer}\n");
+    let (written, _) = cut_last_record(finished.as_bytes());
+    for bytes in written {
+        fs::write(&transcript, &bytes).unwrap();
+        assert!(!answered_in_claude_file(&transcript, &waited));
+    }
+    fs::write(&transcript, &finished).unwrap();
+    assert!(answered_in_claude_file(&transcript, &waited));
 }

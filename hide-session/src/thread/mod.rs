@@ -23,7 +23,7 @@
 
 use std::collections::BTreeMap;
 use std::fs::File;
-use std::io::{Read, Seek, SeekFrom};
+use std::io::{Seek, SeekFrom};
 use std::path::Path;
 
 use hide_agent_adapter::SessionFormat;
@@ -44,7 +44,7 @@ mod pi;
 
 pub use hide_call::{HideCall, ViewKind, hide_call, spawned_agent};
 
-use crate::source::frame::{Frame, Framer};
+use crate::source::frame::{Forward, Frame};
 use build::Thread;
 
 /// The most record bytes one page reads; a record longer than this is
@@ -54,6 +54,8 @@ pub const THREAD_PAGE_BYTES: u64 = 4 * 1024 * 1024;
 /// page may begin at: the page a session is still writing stays this small,
 /// so reading it again costs this much and not a whole page.
 pub const THREAD_TAIL_BYTES: u64 = 512 * 1024;
+/// The block a forward page reads at a time.
+const THREAD_BLOCK_BYTES: usize = 64 * 1024;
 /// How many of the session's first records the header is looked for in.
 const HEADER_RECORDS: usize = 8;
 /// The most characters one message, output or file side keeps; past it the
@@ -402,49 +404,46 @@ fn read_lines_from(path: &Path, lines: Lines, from: &ThreadCursor) -> Result<Thr
         .map_err(unreadable)?;
     let mut thread = Thread::default();
     let mut records = Vec::new();
-    let mut framer = Framer::new(THREAD_PAGE_BYTES as usize, from.position);
-    let mut block = vec![0; 64 * 1024];
+    let mut forward = Forward::new(&file, THREAD_PAGE_BYTES as usize, from.position)
+        .with_block(THREAD_BLOCK_BYTES);
     let mut after = None;
-    'read: loop {
-        let read = (&file).read(&mut block).map_err(unreadable)?;
-        if read == 0 {
+    loop {
+        // Whether this page is full is decided where each record starts.
+        let framer = forward.framer();
+        let start = framer.settled();
+        let full = start - from.position >= THREAD_TAIL_BYTES;
+        if start - from.position >= THREAD_PAGE_BYTES
+            && framer.pending().is_empty()
+            && framer.passing_from().is_none()
+        {
+            after = Some(start);
             break;
         }
-        let mut at = 0;
-        loop {
-            // Whether this page is full is decided where each record starts.
-            let start = framer.settled();
-            let full = start - from.position >= THREAD_TAIL_BYTES;
-            if start - from.position >= THREAD_PAGE_BYTES
-                && framer.pending().is_empty()
-                && framer.passing_from().is_none()
-            {
-                after = Some(start);
-                break 'read;
-            }
-            match framer.next(&block[..read], &mut at) {
-                None => break,
-                Some(Frame::Over { ended, .. }) => {
-                    if ended {
-                        thread.skip("line_capacity");
-                    }
+        match forward.next_frame().map_err(unreadable)? {
+            None => break,
+            Some(Frame::Over { ended, .. }) => {
+                if ended {
+                    thread.skip("line_capacity");
                 }
-                Some(Frame::Record { start, bytes }) => {
-                    if bytes.trim_ascii().is_empty() {
-                        continue;
+            }
+            Some(Frame::Record { start, bytes }) => {
+                if bytes.trim_ascii().is_empty() {
+                    continue;
+                }
+                match serde_json::from_slice::<Value>(bytes) {
+                    Ok(record) if full && (lines.may_start_page)(&record) => {
+                        after = Some(start);
+                        break;
                     }
-                    match serde_json::from_slice::<Value>(bytes) {
-                        Ok(record) if full && (lines.may_start_page)(&record) => {
-                            after = Some(start);
-                            break 'read;
-                        }
-                        Ok(record) => records.push(record),
-                        Err(_) => thread.unreadable("record_unparsable"),
-                    }
+                    Ok(record) => records.push(record),
+                    Err(_) => thread.unreadable("record_unparsable"),
                 }
             }
         }
     }
+    let framer = forward.framer();
+    // A record not written to its newline yet is read with the next page.
+    let end = after.unwrap_or(framer.passing_from().unwrap_or(framer.settled()));
     let header = header(&file, lines)?;
     let session = Session {
         header: &header,
@@ -459,8 +458,7 @@ fn read_lines_from(path: &Path, lines: Lines, from: &ThreadCursor) -> Result<Thr
         return Err("thread_records_unreadable".to_owned());
     }
     let end = ThreadCursor {
-        // A record not written to its newline yet is read with the next page.
-        position: after.unwrap_or(framer.passing_from().unwrap_or(framer.settled())),
+        position: end,
         incarnation,
     };
     Ok(page_of(thread, from.clone(), end, after.is_some()))

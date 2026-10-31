@@ -1022,3 +1022,44 @@ fn a_pane_thread_refuses_an_unsafe_id_and_an_agent_without_a_converter() {
         "session_file_missing"
     );
 }
+
+/// A forward page leaves a last record still being written, whole JSON
+/// without its newline or cut inside it, for the next read: the page ends
+/// where that record starts, and the read after its newline takes it.
+#[test]
+fn a_forward_page_leaves_an_unfinished_last_record_to_the_next_read() {
+    let position =
+        |cursor: &ThreadCursor| serde_json::to_value(cursor).unwrap()["position"].clone();
+    for sample in SAMPLES {
+        if sample.format == SessionFormat::OpenCode {
+            continue;
+        }
+        let placed = Placed::new(sample);
+        let mut start = placed.read(None).unwrap();
+        while let Some(before) = start.before.clone() {
+            start = placed.read(Some(&before)).unwrap();
+        }
+        let start = start.start;
+        let finished = std::fs::read(&placed.path).unwrap();
+        assert_eq!(finished.last(), Some(&b'\n'));
+        let whole = &finished[..finished.len() - 1];
+        let unfinished = whole
+            .iter()
+            .rposition(|byte| *byte == b'\n')
+            .map_or(0, |newline| newline + 1);
+        let half = unfinished + (whole.len() - unfinished) / 2;
+        for written in [whole, &finished[..half]] {
+            std::fs::write(&placed.path, written).unwrap();
+            let page = placed.read_from(&start).unwrap();
+            assert_eq!(
+                position(&page.end),
+                json!(unfinished),
+                "{:?} ends before the unfinished record",
+                sample.format
+            );
+            std::fs::write(&placed.path, &finished).unwrap();
+            let next = placed.read_from(&page.end).unwrap();
+            assert_eq!(position(&next.end), json!(finished.len()));
+        }
+    }
+}

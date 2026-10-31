@@ -37,12 +37,9 @@ pub(super) fn summary(home: &Path, path: &Path) -> Result<Summary, Refusal> {
         .ok_or(Refusal::OutsideRoot)?
         .join("summary.json");
     let file = checked_file(home, Agent::Grok, &path)?;
-    let bytes = crate::source::window::read_whole(
-        &file,
-        crate::source::facts::NAMING_RECORD_LIMIT_BYTES as u64,
-    )
-    .map_err(|_| Refusal::Unreadable)?
-    .ok_or(Refusal::Unreadable)?;
+    let bytes = crate::source::window::read_whole(&file, super::SUMMARY_LIMIT_BYTES)
+        .map_err(|_| Refusal::Unreadable)?
+        .ok_or(Refusal::Capacity)?;
     let mut summary: Summary = serde_json::from_slice(&bytes).map_err(|_| Refusal::Unreadable)?;
     required(Some(summary.info.id.clone()), 128).map_err(|_| Refusal::Unreadable)?;
     bounded(summary.info.cwd.clone(), 4096).map_err(|_| Refusal::Unreadable)?;

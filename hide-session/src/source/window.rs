@@ -90,7 +90,7 @@ pub fn read_page_before(path: &Path, end: Option<u64>, maximum_bytes: u64) -> Re
 
 /// [`read_page_before`] through a file the caller opened.
 pub(crate) fn page_before(
-    mut file: &File,
+    file: &File,
     path: &Path,
     end: Option<u64>,
     maximum_bytes: u64,
@@ -107,10 +107,7 @@ pub(crate) fn page_before(
     // One byte before the window, so a line that starts exactly at `start` is
     // known to be whole.
     let read_start = start.saturating_sub(1);
-    let mut bytes = vec![0; (end - read_start) as usize];
-    file.seek(SeekFrom::Start(read_start))
-        .map_err(|error| SessionError::io("seek", path, error))?;
-    file.read_exact(&mut bytes)
+    let bytes = read_at(file, read_start, (end - read_start) as usize)
         .map_err(|error| SessionError::io("read", path, error))?;
     let (start_offset, bytes) = if start == 0 {
         (0, bytes.as_slice())
@@ -131,15 +128,11 @@ pub(crate) fn page_before(
 }
 
 /// The offset just after the last newline before `end`, or 0.
-fn line_start_before(mut file: &File, path: &Path, end: u64) -> Result<u64> {
+fn line_start_before(file: &File, path: &Path, end: u64) -> Result<u64> {
     let mut block_end = end;
-    let mut block = Vec::new();
     while block_end > 0 {
         let block_start = block_end.saturating_sub(SCAN_BLOCK_BYTES);
-        block.resize((block_end - block_start) as usize, 0);
-        file.seek(SeekFrom::Start(block_start))
-            .map_err(|error| SessionError::io("seek", path, error))?;
-        file.read_exact(&mut block)
+        let block = read_at(file, block_start, (block_end - block_start) as usize)
             .map_err(|error| SessionError::io("read", path, error))?;
         if let Some(newline) = block.iter().rposition(|byte| *byte == b'\n') {
             return Ok(block_start + newline as u64 + 1);
@@ -147,6 +140,21 @@ fn line_start_before(mut file: &File, path: &Path, end: u64) -> Result<u64> {
         block_end = block_start;
     }
     Ok(0)
+}
+
+/// `count` bytes of an open file from `offset`, such as a witness of what a
+/// reader read before; a file shorter than that is an error.
+pub(crate) fn read_at(mut file: &File, offset: u64, count: usize) -> std::io::Result<Vec<u8>> {
+    file.seek(SeekFrom::Start(offset))?;
+    let mut bytes = vec![0; count];
+    file.read_exact(&mut bytes)?;
+    Ok(bytes)
+}
+
+/// Whether a record starts at `offset`: the file's start, or just after a
+/// newline.
+pub(crate) fn record_starts_at(file: &File, offset: u64) -> std::io::Result<bool> {
+    Ok(offset == 0 || read_at(file, offset - 1, 1)? == b"\n")
 }
 
 /// Read a whole file while enforcing a hard byte cap before and during I/O.
@@ -164,19 +172,35 @@ pub fn read_bounded(path: &Path, maximum_bytes: u64) -> Result<String> {
 /// All of an open file, `None` when it holds more than `maximum_bytes`:
 /// its size is checked before reading and the read stops one byte past the
 /// cap, so a file that grows meanwhile is refused too.
-pub(crate) fn read_whole(mut file: &File, maximum_bytes: u64) -> std::io::Result<Option<Vec<u8>>> {
-    let length = file.metadata()?.len();
-    if length > maximum_bytes {
+pub(crate) fn read_whole(file: &File, maximum_bytes: u64) -> std::io::Result<Option<Vec<u8>>> {
+    if file.metadata()?.len() > maximum_bytes {
         return Ok(None);
     }
-    let mut bytes = Vec::with_capacity(length as usize);
-    (&mut file)
-        .take(maximum_bytes.saturating_add(1))
-        .read_to_end(&mut bytes)?;
+    let bytes = read_up_to(file, maximum_bytes)?;
     Ok((bytes.len() as u64 <= maximum_bytes).then_some(bytes))
 }
 
+/// An open file's bytes from where it stands, at most one past
+/// `maximum_bytes`, so a caller tells a file over its cap from one at it
+/// without reading more of it.
+pub(crate) fn read_up_to(mut file: &File, maximum_bytes: u64) -> std::io::Result<Vec<u8>> {
+    let mut bytes = Vec::new();
+    (&mut file)
+        .take(maximum_bytes.saturating_add(1))
+        .read_to_end(&mut bytes)?;
+    Ok(bytes)
+}
+
 impl PageBefore {
+    /// The page's records newest first, each without its newline: a tail
+    /// read for the latest record of a kind.
+    pub fn records_newest_first(&self) -> impl Iterator<Item = &str> {
+        self.contents
+            .split_inclusive('\n')
+            .rev()
+            .map(|record| record.trim_end_matches(['\n', '\r']))
+    }
+
     /// The page's records, each with the offset it starts at.
     pub fn records(&self) -> impl Iterator<Item = (u64, &str)> {
         let mut offset = self.start_offset;

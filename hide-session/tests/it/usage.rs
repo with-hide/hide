@@ -5,7 +5,7 @@ use std::io::Write;
 
 use hide_session::{Agent, usage};
 
-const CLAUDE: &str = concat!(
+pub(crate) const CLAUDE: &str = concat!(
     r#"{"type":"assistant","sessionId":"session-a","requestId":"request-a","cwd":"/work/app","timestamp":"2026-10-01T23:00:00Z","message":{"id":"message-a","model":"claude-fixture","content":[{"text":"PRIVATE_BODY_SENTINEL"}],"usage":{"input_tokens":10,"output_tokens":5,"cache_read_input_tokens":100,"cache_creation_input_tokens":20,"cache_creation":{"ephemeral_1h_input_tokens":4,"ephemeral_5m_input_tokens":16}}}}"#,
     "\n"
 );
@@ -1350,4 +1350,49 @@ fn usage_opencode_database_of_neither_schema_is_refused_with_its_own_reason() {
         usage::read(home.path(), Agent::OpenCode, &path, None),
         Err(usage::Refusal::Schema)
     ));
+}
+
+/// A Grok step reads `summary.json` beside its records within the same one
+/// MiB, which also holds both witness checks; what is left must reach one
+/// whole record at the line cap, or the step would end where it began.
+#[test]
+fn a_grok_summary_leaves_every_step_room_for_a_whole_record_or_is_refused() {
+    const MIB: u64 = hide_session::SESSION_INCREMENT_READ_LIMIT_BYTES;
+    let line = hide_session::SESSION_LINE_LIMIT_BYTES as u64;
+    // Two 256-byte witness windows, checked before and after the records.
+    let largest = MIB - 4 * 256 - (line + 1);
+    let home = tempfile::tempdir().unwrap();
+    let dir = home
+        .path()
+        .join(hide_session::GROK_SESSIONS)
+        .join("session");
+    fs::create_dir_all(&dir).unwrap();
+    let updates = dir.join("updates.jsonl");
+    // A 200 KiB record: under the line cap, so it must be read whole.
+    let record = format!("{}\n", serde_json::json!({"pad": "x".repeat(200 * 1024)}));
+    fs::write(&updates, &record).unwrap();
+    let summary = |bytes: u64| {
+        let empty = serde_json::json!({"info": {"id": "session", "cwd": "/work"}, "pad": ""});
+        let pad = bytes - empty.to_string().len() as u64;
+        let value = serde_json::json!({"info": {"id": "session", "cwd": "/work"}, "pad": "x".repeat(pad as usize)});
+        assert_eq!(value.to_string().len() as u64, bytes);
+        fs::write(dir.join("summary.json"), value.to_string()).unwrap();
+    };
+
+    summary(largest);
+    let step = usage::read(home.path(), Agent::Grok, &updates, None).unwrap();
+    assert_eq!(step.checkpoint.offset, record.len() as u64);
+    assert!(!step.has_more);
+    assert!(step.read_bytes <= MIB, "{} bytes read", step.read_bytes);
+
+    // Past it (900 KiB, a whole MiB less one KiB, a whole MiB) the step
+    // refuses before reading a record, rather than spinning in place.
+    for bytes in [largest + 1, 900 * 1024, MIB - 1024, MIB] {
+        summary(bytes);
+        assert_eq!(
+            usage::read(home.path(), Agent::Grok, &updates, None).unwrap_err(),
+            usage::Refusal::Capacity,
+            "a {bytes}-byte summary"
+        );
+    }
 }

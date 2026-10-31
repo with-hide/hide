@@ -106,6 +106,15 @@ impl Framer {
         self.over = None;
     }
 
+    /// Whether [`Self::next`] hands over a frame from `rest`, rather than
+    /// holding all of it as the start of a record.
+    fn yields(&self, rest: &[u8]) -> bool {
+        !rest.is_empty()
+            && (self.over.is_some()
+                || memchr::memchr(b'\n', rest).is_some()
+                || self.pending.len() + rest.len() > self.limit)
+    }
+
     /// The next frame of `chunk` from `*at`, which it moves past the bytes
     /// it took; `None` once the chunk is spent, its last bytes held when they
     /// end no record.
@@ -175,71 +184,68 @@ pub(crate) fn trim_newline(record: &[u8]) -> &[u8] {
     &record[..end]
 }
 
-/// One record of a forward scan from a session's start ([`Head`]), for the
-/// facts a record names (its id, its cwd, its header).
-#[derive(Debug, PartialEq, Eq)]
-pub(crate) enum HeadRecord {
-    /// A whole record, without its newline.
-    Complete(Vec<u8>),
-    /// The last bytes read, with no newline yet: a record still being
-    /// written, or one the scan's budget cut.
-    Unfinished(Vec<u8>),
-    /// A record longer than the scan keeps, such as a first message that
-    /// carries a pasted image: read to its newline and dropped.
-    Passed,
-}
-
-/// The records of `reader` from where it stands, each at most `limit`
-/// bytes kept. The caller bounds the whole scan by what `reader` yields
-/// (`Read::take`).
-pub(crate) struct Head<R> {
+/// The records of a reader read forward in blocks: the one loop that reads
+/// a session file a block at a time and hands its records over.
+pub(crate) struct Forward<R> {
     reader: R,
     framer: Framer,
     block: Vec<u8>,
     block_bytes: usize,
     at: usize,
     ended: bool,
+    read: u64,
 }
 
-/// The block a head scan reads at a time: a buffered reader's, so a fact
+/// The block a forward read takes at a time: a buffered reader's, so a fact
 /// on the first records costs one small read.
-const HEAD_BLOCK_BYTES: usize = 8 * 1024;
+pub(crate) const BLOCK_BYTES: usize = 8 * 1024;
 
-impl<R: Read> Head<R> {
-    pub(crate) fn new(reader: R, limit: usize) -> Self {
+impl<R: Read> Forward<R> {
+    /// The records of `reader`, whose next byte is at `offset`, each at most
+    /// `limit` bytes kept.
+    pub(crate) fn new(reader: R, limit: usize, offset: u64) -> Self {
+        Self::from_framer(reader, Framer::new(limit, offset))
+    }
+
+    /// Records read on from where `framer` stands.
+    pub(crate) fn from_framer(reader: R, framer: Framer) -> Self {
         Self {
             reader,
-            framer: Framer::new(limit, 0),
+            framer,
             block: Vec::new(),
-            block_bytes: HEAD_BLOCK_BYTES,
+            block_bytes: BLOCK_BYTES,
             at: 0,
             ended: false,
+            read: 0,
         }
     }
 
-    /// Read `bytes` at a time rather than [`HEAD_BLOCK_BYTES`], for a scan
-    /// whose reads are charged to a budget.
+    /// Read `bytes` at a time rather than [`BLOCK_BYTES`].
     pub(crate) fn with_block(mut self, bytes: usize) -> Self {
         self.block_bytes = bytes.max(1);
         self
     }
 
-    /// The bytes of every record handed out so far, through its newline.
-    pub(crate) fn consumed(&self) -> u64 {
-        self.framer.settled()
+    /// The framer's position: where the next record starts once the held
+    /// bytes are handed over.
+    pub(crate) fn framer(&self) -> &Framer {
+        &self.framer
     }
 
-    /// The next record, `None` at the end of the reader.
-    pub(crate) fn next_record(&mut self) -> io::Result<Option<HeadRecord>> {
+    /// Every byte the reader gave, handed over or not.
+    pub(crate) fn read_bytes(&self) -> u64 {
+        self.read
+    }
+
+    /// The next frame, `None` once the reader is spent; a last record
+    /// without its newline is then held by the framer, not handed over.
+    pub(crate) fn next_frame(&mut self) -> io::Result<Option<Frame<'_>>> {
         loop {
-            match self.framer.next(&self.block, &mut self.at) {
-                Some(Frame::Record { bytes, .. }) => {
-                    return Ok(Some(HeadRecord::Complete(trim_newline(bytes).to_vec())));
-                }
-                Some(Frame::Over { ended: true, .. }) => return Ok(Some(HeadRecord::Passed)),
-                Some(Frame::Over { .. }) => continue,
-                None => {}
+            if self.framer.yields(&self.block[self.at..]) {
+                return Ok(self.framer.next(&self.block, &mut self.at));
             }
+            // Bytes that end no record: the framer holds them.
+            let _ = self.framer.next(&self.block, &mut self.at);
             if self.ended {
                 return Ok(None);
             }
@@ -252,19 +258,95 @@ impl<R: Read> Head<R> {
             };
             self.block.truncate(read);
             self.at = 0;
+            self.read += read as u64;
             if read == 0 {
                 self.ended = true;
-                let last = if self.framer.passing_from().is_some() {
-                    Some(HeadRecord::Passed)
-                } else if self.framer.pending().is_empty() {
-                    None
-                } else {
-                    Some(HeadRecord::Unfinished(self.framer.pending().to_vec()))
-                };
-                let offset = self.framer.offset();
-                self.framer.rewind(offset);
-                return Ok(last);
+                return Ok(None);
             }
+        }
+    }
+}
+
+/// One record of a forward scan from a session's start ([`Head`]), for the
+/// facts a record names (its id, its cwd, its header).
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) enum HeadRecord {
+    /// A whole record, without its newline.
+    Complete(Vec<u8>),
+    /// The last bytes read, with no newline yet: a record still being
+    /// written, or one the scan's budget cut.
+    Unfinished(Vec<u8>),
+    /// A record longer than the scan keeps, such as a first message that
+    /// carries a pasted image: read to its newline and dropped, or, in a
+    /// strict scan, left as soon as it crosses the cap.
+    Passed,
+}
+
+/// The records of `reader` from where it stands, each at most `limit`
+/// bytes kept. The caller bounds the whole scan by what `reader` yields
+/// (`Read::take`).
+pub(crate) struct Head<R> {
+    forward: Forward<R>,
+    strict: bool,
+    stopped: bool,
+}
+
+impl<R: Read> Head<R> {
+    pub(crate) fn new(reader: R, limit: usize) -> Self {
+        Self {
+            forward: Forward::new(reader, limit, 0),
+            strict: false,
+            stopped: false,
+        }
+    }
+
+    /// Read `bytes` at a time rather than [`BLOCK_BYTES`], for a scan whose
+    /// reads are charged to a budget.
+    pub(crate) fn with_block(mut self, bytes: usize) -> Self {
+        self.forward = self.forward.with_block(bytes);
+        self
+    }
+
+    /// Whether a record over the cap ends the scan as it crosses the cap,
+    /// rather than being read to its newline: a record that must name the
+    /// session is refused, never drained.
+    pub(crate) fn set_strict(&mut self, strict: bool) {
+        self.strict = strict;
+    }
+
+    /// Every byte the scan took into its records, kept or passed over,
+    /// including a record it holds without its newline.
+    pub(crate) fn fed(&self) -> u64 {
+        self.forward.framer().offset()
+    }
+
+    /// The next record, `None` at the end of the reader.
+    pub(crate) fn next_record(&mut self) -> io::Result<Option<HeadRecord>> {
+        if self.stopped {
+            return Ok(None);
+        }
+        let strict = self.strict;
+        loop {
+            match self.forward.next_frame()? {
+                Some(Frame::Record { bytes, .. }) => {
+                    return Ok(Some(HeadRecord::Complete(trim_newline(bytes).to_vec())));
+                }
+                Some(Frame::Over { ended, .. }) if ended || strict => {
+                    self.stopped = !ended;
+                    return Ok(Some(HeadRecord::Passed));
+                }
+                Some(Frame::Over { .. }) => continue,
+                None => {}
+            }
+            self.stopped = true;
+            let framer = self.forward.framer();
+            return Ok(if framer.passing_from().is_some() {
+                Some(HeadRecord::Passed)
+            } else if framer.pending().is_empty() {
+                None
+            } else {
+                Some(HeadRecord::Unfinished(framer.pending().to_vec()))
+            });
         }
     }
 }

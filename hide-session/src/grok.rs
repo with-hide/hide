@@ -10,7 +10,6 @@
 //! bundled user guide, `17-sessions.md` and `19-plan-mode.md`.
 
 use std::fs::File;
-use std::io::Read;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Result, anyhow};
@@ -88,9 +87,7 @@ fn sibling(path: &Path, name: &str, limit: u64, read_bytes: &mut u64) -> Result<
     if hide_platform::fs::identity::link_count(&file).ok() != Some(1) {
         return Err(anyhow!("label_session_linked"));
     }
-    let mut bytes = Vec::new();
-    file.take(limit + 1)
-        .read_to_end(&mut bytes)
+    let bytes = crate::source::window::read_up_to(&file, limit)
         .map_err(|_| anyhow!("label_session_metadata_read_failed"))?;
     *read_bytes += bytes.len() as u64;
     Ok(Some(bytes))
