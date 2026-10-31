@@ -45,7 +45,8 @@
 //!   Grok's sign-in apart from the operator's (D-81).
 //!
 //! Hide answers each request from Settings › Desk › 권한
-//! ([`crate::permission`]).
+//! ([`crate::permission`]); what an agent runs without asking whatever a
+//! row says is declared by [`AdapterId::always_runs`] and shown on that row.
 
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
@@ -53,6 +54,8 @@ use std::path::{Path, PathBuf};
 use hide_agent_adapter::{ADAPTERS, AgentAdapter, AgentId};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use serde_json::{Value, json};
+
+use crate::permission::Row;
 
 /// One of the catalog's agents Desk speaks ACP with, named on the wire and in
 /// Desk's store by its Herdr name (`claude`, `codex`, `pi`, `opencode`,
@@ -172,6 +175,21 @@ impl AdapterId {
             AgentId::Pi => Some(AskMode::PiExtension),
             AgentId::OpenCode | AgentId::Omp | AgentId::Antigravity => Some(AskMode::AtStart),
             AgentId::Grok | AgentId::Cursor => None,
+        }
+    }
+
+    /// The rows of Settings › Desk › 권한 this agent runs without asking,
+    /// whatever the row says (D-82): what it runs there never reaches Hide,
+    /// so the row shows it. Codex reads inside its read-only sandbox, which
+    /// asks only to leave it; OpenCode's configuration, omp's mode and
+    /// Antigravity's server let reads and searches run alone. An agent with
+    /// no ask mode never starts, so it has none.
+    pub fn always_runs(self) -> &'static [Row] {
+        match self.0 {
+            AgentId::Codex | AgentId::OpenCode | AgentId::Omp | AgentId::Antigravity => {
+                &[Row::Read]
+            }
+            AgentId::ClaudeCode | AgentId::Pi | AgentId::Grok | AgentId::Cursor => &[],
         }
     }
 
@@ -482,6 +500,37 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn the_read_row_names_each_agent_whose_own_setup_lets_reads_run_unasked() {
+        // OpenCode: what Desk's configuration allows unasked is what the row
+        // says it runs.
+        let config: Value = serde_json::from_str(OPENCODE_PERMISSIONS).unwrap();
+        let unasked: Vec<&str> = config["permission"]
+            .as_object()
+            .unwrap()
+            .iter()
+            .filter(|(_, answer)| *answer == "allow")
+            .map(|(tool, _)| tool.as_str())
+            .collect();
+        assert_eq!(unasked, ["read", "list", "glob", "grep"]);
+        assert_eq!(AdapterId::OPENCODE.always_runs(), [Row::Read]);
+        // Codex reads in its read-only sandbox without asking.
+        assert_eq!(
+            AdapterId::CODEX.ask_mode(),
+            Some(AskMode::SetMode("read-only"))
+        );
+        assert_eq!(AdapterId::CODEX.always_runs(), [Row::Read]);
+        // Claude's reads and searches ask, and Pi's extension holds every
+        // tool call, so the table holds for both.
+        assert!(
+            ["Read", "Glob", "Grep"]
+                .iter()
+                .all(|tool| CLAUDE_ASKS.contains(tool))
+        );
+        assert_eq!(AdapterId::CLAUDE.always_runs(), []);
+        assert_eq!(AdapterId::PI.always_runs(), []);
     }
 
     #[test]

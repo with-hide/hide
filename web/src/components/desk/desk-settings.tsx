@@ -1,5 +1,5 @@
 import type { DeskAgent, DeskAgentId, DeskLocation, DeskPermissionAnswer, DeskPermissionRow, DeskSettings } from "../../desk";
-import { agentPickable } from "../../desk";
+import { agentPickable, agentsRunningUnasked } from "../../desk";
 import { AgentMark } from "../../AgentMark";
 import { useInterfaceTranslation } from "../../i18n/client";
 import { Group, Row } from "../settings-rows";
@@ -28,7 +28,8 @@ const ANSWERS: DeskPermissionAnswer[] = ["run", "ask"];
  * tasks run (Desk decides, by default) and how many run at once. An agent
  * that cannot ask before acting is not offered. 권한 (D-82) is one table for
  * every agent: each row 바로 or 묻기, 바로 by default, and the irreversible
- * row locked to 늘 묻기.
+ * row locked to 늘 묻기. A row names, dimmed, the agents whose own setup
+ * runs it without asking (`Codex에선 늘 바로`).
  */
 export function DeskSettingsTab({ settings, agents, onChange }: { settings: DeskSettings; agents: readonly DeskAgent[]; onChange: (settings: DeskSettings) => void }) {
   const { t } = useInterfaceTranslation();
@@ -82,8 +83,10 @@ export function DeskSettingsTab({ settings, agents, onChange }: { settings: Desk
           </Row>
         </Group>
         <Group title={t("desk.settings.permissions.title")} caption={t("desk.settings.permissions.caption")} note={t("desk.settings.permissions.note")} data-settings-group="desk-permissions">
-          {PERMISSION_ROWS.map(({ row, label, detail }) => (
-            <Row key={row} label={<PermissionLabel label={t(label)} detail={detail ? t(detail) : undefined} />} data-desk-permission={row}>
+          {PERMISSION_ROWS.map(({ row, label, detail }) => {
+            const unasked = agentsRunningUnasked(agents, row);
+            return (
+            <Row key={row} label={<PermissionLabel label={t(label)} detail={detail ? t(detail) : undefined} unasked={unasked.length > 0 ? t("desk.settings.permissions.alwaysRuns", { agents: unasked.join("·") }) : undefined} />} data-desk-permission={row}>
               <ToggleGroup
                 type="single"
                 value={settings.permissions[row]}
@@ -95,7 +98,8 @@ export function DeskSettingsTab({ settings, agents, onChange }: { settings: Desk
                 ))}
               </ToggleGroup>
             </Row>
-          ))}
+            );
+          })}
           <Row label={<PermissionLabel label={t("desk.settings.permissions.irreversible")} detail={t("desk.settings.permissions.irreversibleDetail")} />} data-desk-permission="irreversible">
             {/* Locked: drawn as a segment with its one answer chosen, nothing to press. */}
             <span className="flex w-fit items-center rounded-sm bg-card p-xxs" data-desk-permission-locked="true">
@@ -108,11 +112,13 @@ export function DeskSettingsTab({ settings, agents, onChange }: { settings: Desk
   );
 }
 
-function PermissionLabel({ label, detail }: { label: string; detail?: string }) {
+/** A row's name, what it covers, and the agents it cannot hold, dimmed: their own setup runs that row without asking Hide. */
+function PermissionLabel({ label, detail, unasked }: { label: string; detail?: string; unasked?: string }) {
   return (
     <span className="flex min-w-0 flex-wrap items-baseline gap-x-sm">
       <span>{label}</span>
       {detail ? <span className="break-keep text-caption text-muted-foreground">{detail}</span> : null}
+      {unasked ? <span className="break-keep text-caption text-muted-foreground" data-desk-permission-unasked="true">{unasked}</span> : null}
     </span>
   );
 }

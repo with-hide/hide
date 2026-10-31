@@ -2246,6 +2246,7 @@ Each adapter is held in its ask mode, which ignores the operator's global auto-a
 - Grok has no ask mode Hide can hold (`AskMode` is none): over ACP it starts in an automatic mode taken from the operator's own settings, which nothing on its command line or over ACP changes, and only a Grok home of Desk's own would, whose sign-in could not stay the operator's since Grok replaces `auth.json` by rename.
   Desk lists it as `no_ask_mode` and never starts it ([INSTALL.md](INSTALL.md#what-each-system-supports)).
 
+What an agent runs without asking, whatever a row says, is declared with it (`AdapterId::always_runs` in `hide-desk/src/adapter.rs`, sent as each agent's `always_runs` in the `desk` section), and Settings › Desk › 권한 shows it dimmed on that row: reads and searches for Codex, OpenCode, omp and Antigravity.
 
 A session whose mode cannot be set, or that leaves its mode, is ended and the agent shown as `no_ask_mode`.
 What the agent asks to run is decided in two steps (D-82, D-83).

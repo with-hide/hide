@@ -368,6 +368,9 @@ pub struct DeskAgentSnapshot {
     /// The command that signs the agent in, shown with a `login_needed`
     /// notice.
     pub login_command: &'static str,
+    /// The rows of Settings › Desk › 권한 the agent runs without asking
+    /// (`AdapterId::always_runs`), shown on those rows.
+    pub always_runs: &'static [hide_desk::permission::Row],
     /// The models and efforts the agent's last session offered; empty until
     /// one has opened.
     pub models: Vec<DeskChoiceSnapshot>,

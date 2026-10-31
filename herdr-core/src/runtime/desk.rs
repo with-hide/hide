@@ -1278,6 +1278,7 @@ impl Runtime {
                     detail,
                     signed_in: agent.signed_in,
                     login_command: id.login_command(),
+                    always_runs: id.always_runs(),
                     models: known.models,
                     efforts: known.efforts,
                 }

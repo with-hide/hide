@@ -25,13 +25,13 @@ const EFFORTS = [{ id: "low", label: "low" }, { id: "medium", label: "medium" },
 
 /** The agents switched on in Settings › Agents, as Desk lists them (D-79, D-81): Grok cannot be held in its ask mode. */
 export const AGENTS: DeskAgent[] = [
-  { id: "claude", label: "Claude Code", state: "ready", detail: null, signed_in: true, login_command: "claude /login", models: [{ id: "opus", label: "Opus 5.5" }, { id: "sonnet", label: "Sonnet 5.5" }], efforts: EFFORTS },
-  { id: "codex", label: "Codex", state: "ready", detail: null, signed_in: true, login_command: "codex login", models: [{ id: "gpt", label: "GPT-6" }, { id: "gpt-mini", label: "GPT-6 mini" }], efforts: EFFORTS },
-  { id: "opencode", label: "OpenCode", state: "ready", detail: null, signed_in: true, login_command: "opencode auth login", models: [], efforts: [] },
-  { id: "pi", label: "Pi", state: "ready", detail: null, signed_in: true, login_command: "pi /login", models: [], efforts: [] },
-  { id: "omp", label: "omp", state: "ready", detail: null, signed_in: null, login_command: "omp login", models: [], efforts: [] },
-  { id: "grok", label: "Grok", state: "no_ask_mode", detail: null, signed_in: true, login_command: "grok login", models: [], efforts: [] },
-  { id: "agy", label: "Antigravity", state: "ready", detail: null, signed_in: false, login_command: "agy", models: [], efforts: [] },
+  { id: "claude", label: "Claude Code", state: "ready", detail: null, signed_in: true, always_runs: [], login_command: "claude /login", models: [{ id: "opus", label: "Opus 5.5" }, { id: "sonnet", label: "Sonnet 5.5" }], efforts: EFFORTS },
+  { id: "codex", label: "Codex", state: "ready", detail: null, signed_in: true, always_runs: ["read"], login_command: "codex login", models: [{ id: "gpt", label: "GPT-6" }, { id: "gpt-mini", label: "GPT-6 mini" }], efforts: EFFORTS },
+  { id: "opencode", label: "OpenCode", state: "ready", detail: null, signed_in: true, always_runs: ["read"], login_command: "opencode auth login", models: [], efforts: [] },
+  { id: "pi", label: "Pi", state: "ready", detail: null, signed_in: true, always_runs: [], login_command: "pi /login", models: [], efforts: [] },
+  { id: "omp", label: "omp", state: "ready", detail: null, signed_in: null, always_runs: ["read"], login_command: "omp login", models: [], efforts: [] },
+  { id: "grok", label: "Grok", state: "no_ask_mode", detail: null, signed_in: true, always_runs: [], login_command: "grok login", models: [], efforts: [] },
+  { id: "agy", label: "Antigravity", state: "ready", detail: null, signed_in: false, always_runs: ["read"], login_command: "agy", models: [], efforts: [] },
 ];
 
 /** Right after Desk is turned on: every adapter not in place downloads at once (D-80). */

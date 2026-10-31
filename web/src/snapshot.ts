@@ -2670,6 +2670,8 @@ export type DeskAgent = {
   signed_in: boolean | null;
   /** The agent's own sign-in command, for the `login_needed` notice. */
   login_command: string;
+  /** The rows of Settings › Desk › 권한 the agent runs without asking, whatever they say (D-82): its own setup lets those run before Hide hears of them. */
+  always_runs: DeskPermissionRow[];
   /** What the agent's last session offered; empty until one opened. */
   models: DeskChoice[];
   efforts: DeskChoice[];

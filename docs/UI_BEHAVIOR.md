@@ -1010,7 +1010,9 @@ What the agent runs is decided by Hide, never by the agent's own settings (D-82,
   What a program Hide knows by name does on its own (a `make` target, a package script, a Git hook) is that program's, judged by its row.
   The set is data in `hide-desk/src/permission.rs`, held by its tests; archiving a session that is not working follows the `hide 명령` row.
 - The core still refuses Desk every Workspace, View, Memory, mission and plan command (`desk_has_no_checkout`), a `hide agent spawn` that passes words after `--` to the agent's own CLI (`desk_spawn_args`, since those words can lift the new session's permissions) and a spawn under a parent (`--parent`), since Desk's sessions are the operator's own.
-- Codex runs in its read-only sandbox, which refuses writes and the network, and a command that stays inside it runs without reaching Hide, so `파일 읽기·검색` and `그 밖의 셸 명령` set to `묻기` do not ask for those; every `hide` command and anything that needs more than the sandbox asks to leave it and reaches the table.
+- An agent whose own setup runs reads and searches without asking Hide is named, dimmed, on the `파일 읽기·검색` row: `Codex·OpenCode·omp·Antigravity에선 늘 바로`, from each agent's declaration (`always_runs`); an agent that cannot be chosen (`no_ask_mode`) is left out.
+  Codex runs in its read-only sandbox, which refuses writes and the network, and a command that stays inside it runs without reaching Hide, so a command that writes nothing does not ask under `그 밖의 셸 명령` either; every `hide` command and anything that needs more than the sandbox asks to leave it and reaches the table.
+  OpenCode's configuration, omp's `always-ask` mode and Antigravity's server let reads and searches run alone, and ask for every command and edit.
 - A card shows the command or files, the folder and the agent's reason; one for `되돌릴 수 없는 일` says `되돌릴 수 없는 일이라 물어요` and what it is about, such as `작업 중인 세션을 보관해요 · <session>`.
   Its three answers are grey and none is the default:
   - `한 번 허용` runs this call; for an archive of a working session it is the operator's confirmation, so the archive goes through.

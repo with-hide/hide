@@ -33,7 +33,7 @@ const rest = {
   },
 } as unknown as SnapshotRest;
 
-const claude = (state: DeskAgent["state"], signedIn: boolean | null): DeskAgent => ({ id: "claude", label: "Claude Code", state, detail: null, signed_in: signedIn, login_command: "claude /login", models: [], efforts: [] });
+const claude = (state: DeskAgent["state"], signedIn: boolean | null): DeskAgent => ({ id: "claude", label: "Claude Code", state, detail: null, signed_in: signedIn, always_runs: [], login_command: "claude /login", models: [], efforts: [] });
 
 const desk = (items: DeskItem[], state: DeskAgent["state"] = "ready", signedIn: boolean | null = true): DeskSection => ({
   selection: { agent: "claude", model: null, effort: null },
@@ -288,6 +288,17 @@ describe("Desk's room", () => {
       await press("[data-desk-permission='hide'] [data-desk-permission-answer='run']");
       expect(sent("desk_settings_set")).toHaveLength(1);
     });
+  });
+
+  it("names, dimmed on a row, the agents whose own setup runs it without asking (D-82)", async () => {
+    const codex: DeskAgent = { ...claude("ready", true), id: "codex", label: "Codex", always_runs: ["read"], login_command: "codex login" };
+    const actions = createActions(() => true);
+    await act(async () => {
+      useShellStore.setState({ connection: "live", rest, desk: { ...desk([]), agents: [claude("ready", true), codex] } });
+      root.render(<TooltipProvider><DeskSettingsPage actions={actions} /></TooltipProvider>);
+    });
+    const unasked = [...document.body.querySelectorAll<HTMLElement>("[data-desk-permission-unasked]")].map((note) => [note.closest<HTMLElement>("[data-desk-permission]")?.dataset.deskPermission, note.textContent]);
+    expect(unasked).toEqual([["read", "Always runs in Codex"]]);
   });
 
   it("opens a session that is no job of Desk's as a thread in the lane and stays in Desk (D-87, B51)", async () => {
