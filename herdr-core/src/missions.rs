@@ -692,9 +692,9 @@ impl MissionNode {
             .iter()
             .map(|line| {
                 format!(
-                    "{}={:?}@{}",
+                    "{}={}@{}",
                     line.key,
-                    line.state,
+                    line.state.as_str(),
                     line.by.as_ref().map_or(0, |by| by.at_unix_ms)
                 )
             })
@@ -851,6 +851,11 @@ pub struct Mission {
     /// The count of raises, which keys each `Attention`.
     #[serde(default, skip_serializing_if = "is_zero_u64")]
     pub attention_seq: u64,
+    /// The nodes as a reopen found them (`Mission::node_marks`): Hide does
+    /// not close the mission again on them, only once a node moved (PRD
+    /// mission-node-simple B18).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reopened_on: Option<String>,
 }
 
 fn is_zero_u64(value: &u64) -> bool {
@@ -858,6 +863,19 @@ fn is_zero_u64(value: &u64) -> bool {
 }
 
 impl Mission {
+    /// Each node's key, status and pull requests, which a reopen keeps so
+    /// the mission is not closed again until one of them moves.
+    pub(crate) fn node_marks(&self) -> String {
+        self.nodes
+            .iter()
+            .map(|node| {
+                let prs: Vec<String> = node.prs.iter().map(u32::to_string).collect();
+                format!("{}={}:{}", node.key, node.status.as_str(), prs.join(","))
+            })
+            .collect::<Vec<_>>()
+            .join(";")
+    }
+
     pub(crate) fn node(&self, key: &str) -> Option<&MissionNode> {
         self.nodes.iter().find(|node| node.key == key)
     }
@@ -2538,6 +2556,7 @@ pub(crate) mod tests {
             event_seq: 0,
             end_asked_at_unix_ms: None,
             attention_seq: 0,
+            reopened_on: None,
         }
     }
 

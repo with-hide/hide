@@ -554,11 +554,18 @@ pub(super) fn record_wake(
 }
 
 /// Records `wake` for its recipient and returns its letter's intent. With
-/// `PENDING_WAKE_LIMIT` letters waiting the new one is refused and logged,
-/// and every one waiting keeps its place (engineering #15): what it was
-/// about stays on the map, and a raise reaches the operator on its own.
+/// `PENDING_WAKE_LIMIT` letters waiting for the Conductor a new one for it
+/// is refused and logged, and every one waiting keeps its place
+/// (engineering #15): what it was about stays on the map, and a raise
+/// reaches the operator on its own. A worker's wake is capped apart
+/// (`WORKER_WAKE_LIMIT`), so a Conductor that is gone never starves it.
 pub(super) fn push_wake(mission: &mut Mission, wake: PendingWake) -> Option<String> {
-    if mission.wakes.len() >= PENDING_WAKE_LIMIT {
+    let waiting = mission
+        .wakes
+        .iter()
+        .filter(|waiting| waiting.to.is_some() == wake.to.is_some())
+        .count();
+    if wake.to.is_none() && waiting >= PENDING_WAKE_LIMIT {
         crate::diagnostic!(json!({
             "component": "missions", "kind": "mission.wake_refused_full",
             "mission": mission.id, "node": wake.node, "event": wake.event.as_str(),
@@ -671,6 +678,7 @@ impl Runtime {
             super::mission_events::end_decision(target, now)
         };
         target.closed_at_unix_ms = Some(now);
+        target.reopened_on = None;
         target.updated_at_unix_ms = now;
         if status == MissionStatus::Cancelled {
             // A cancelled mission wakes no one (D-51).
@@ -716,6 +724,7 @@ impl Runtime {
         };
         mission.status = MissionStatus::Done;
         mission.closed_at_unix_ms = Some(now);
+        mission.reopened_on = None;
         mission.updated_at_unix_ms = now;
         let events = super::mission_events::end_decision(mission, now);
         crate::diagnostic!(json!({
@@ -893,6 +902,7 @@ impl Runtime {
                     event_seq: 0,
                     end_asked_at_unix_ms: None,
                     attention_seq: 0,
+                    reopened_on: None,
                 };
                 crate::diagnostic!(json!({
                     "component": "missions", "kind": "mission.created",
@@ -1282,6 +1292,7 @@ impl Runtime {
         let target = self.missions.book.get_mut(id).ok_or("mission_unknown")?;
         target.status = MissionStatus::Running;
         target.closed_at_unix_ms = None;
+        target.reopened_on = Some(target.node_marks());
         for node in &mut target.nodes {
             node.in_main = None;
         }
@@ -1739,6 +1750,7 @@ impl Runtime {
             if closes {
                 mission.status = MissionStatus::Done;
                 mission.closed_at_unix_ms = Some(now);
+                mission.reopened_on = None;
                 mission.updated_at_unix_ms = now;
                 ended.push((
                     mission.id.clone(),

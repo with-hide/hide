@@ -206,13 +206,17 @@ impl Runtime {
         }
         let log = self.missions.events.entry(mission.to_owned()).or_default();
         // An act numbered before a restart that lost the book is done again
-        // under the same number; the history already holds it.
+        // under the same number; the history already holds it. A different
+        // act under that number is written.
+        let same = |logged: &MissionEvent, event: &MissionEvent| {
+            let mut logged = logged.clone();
+            logged.at_unix_ms = event.at_unix_ms;
+            logged == *event
+        };
         let events: Vec<Arc<MissionEvent>> = events
             .into_iter()
             .filter(|event| {
-                event.id.is_none_or(|id| {
-                    !log.events.iter().any(|logged| logged.id == Some(id))
-                })
+                event.id.is_none() || !log.events.iter().any(|logged| same(logged, event))
             })
             .map(Arc::new)
             .collect();

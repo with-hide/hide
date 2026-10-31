@@ -438,8 +438,13 @@ fn closes(mission: &Mission, acts: &[Act]) -> bool {
     // The close waits for the pass after every other act landed: a done
     // that the gate refuses or a follow-up pull request that opens a node
     // again would make it refused.
-    // A refused close is tried again; it is what settles that raise.
+    // A refused close is tried again; it is what settles that raise. A
+    // mission a person reopened stays open until a node moves (B18).
     !mission.nodes.is_empty()
+        && mission
+            .reopened_on
+            .as_ref()
+            .is_none_or(|marks| *marks != mission.node_marks())
         && acts.iter().all(|act| matches!(act, Act::Cleanup { .. }))
         && mission.nodes.iter().all(|node| {
             node.status.finished()

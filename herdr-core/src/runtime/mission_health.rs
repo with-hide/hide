@@ -231,13 +231,17 @@ fn number_events(mission: &mut Mission, events: &mut [MissionEvent]) {
 struct CleanupTicket {
     finished_at_unix_ms: Option<u64>,
     prs: Vec<u32>,
+    /// The operator chose it (`정리`); otherwise the setting `auto` did, and
+    /// a setting moved to `ask` stops it.
+    by_operator: bool,
 }
 
 impl CleanupTicket {
-    fn of(node: &MissionNode) -> Self {
+    fn of(node: &MissionNode, by_operator: bool) -> Self {
         Self {
             finished_at_unix_ms: node.finished_at_unix_ms,
             prs: node.prs.clone(),
+            by_operator,
         }
     }
 }
@@ -439,13 +443,26 @@ impl Runtime {
             return false;
         };
         let node = &mission.nodes[at];
-        if CleanupTicket::of(node) != *ticket {
+        if CleanupTicket::of(node, ticket.by_operator) != *ticket {
             return false;
         }
         let ledger = self.delivery_state().ok();
         let sleeping = self.mission_sleeping(mission, ledger.as_deref());
         let facts = self.health_facts(mission, ledger.as_deref(), &sleeping);
-        crate::mission_health::cleanup_due(mission, node, &facts.nodes[at], &facts)
+        (ticket.by_operator || facts.cleanup == crate::missions::WorktreeCleanup::Auto)
+            && crate::mission_health::cleanup_due(mission, node, &facts.nodes[at], &facts)
+    }
+
+    /// Whether node `at` of `mission` could be cleaned now once its
+    /// `cleanup_ask` is settled (B20): the operator's `정리` is refused,
+    /// and the ask stays, while it could not.
+    fn cleanup_due_once_asked(&self, mission: &Mission, at: usize) -> bool {
+        let mut settled = mission.clone();
+        settled.nodes[at].attention = None;
+        let ledger = self.delivery_state().ok();
+        let sleeping = self.mission_sleeping(&settled, ledger.as_deref());
+        let facts = self.health_facts(&settled, ledger.as_deref(), &sleeping);
+        crate::mission_health::cleanup_due(&settled, &settled.nodes[at], &facts.nodes[at], &facts)
     }
 
     fn health_facts<'a>(
@@ -570,7 +587,7 @@ impl Runtime {
                     changed |= self.hide_wake(id, node, pr, why, head, now, &mut events);
                 }
                 Act::Cleanup { node } => {
-                    self.start_node_cleanup(id, node);
+                    self.start_node_cleanup(id, node, false);
                 }
                 Act::Close => close = true,
             }
@@ -746,6 +763,9 @@ impl Runtime {
         // newest head: a wake about an older head cannot come again once
         // the head moved. Past the cap nothing older is forgotten; the
         // wake is refused and logged (engineering #15).
+        // A pull request the node no longer holds wakes no one again.
+        let held = mission.nodes[at].prs.clone();
+        mission.nodes[at].woken.retain(|woken| held.contains(&woken.pr));
         let node = &mission.nodes[at];
         let known = node
             .woken
@@ -1048,6 +1068,11 @@ impl Runtime {
                 {
                     return Err("mission_attention_moved".into());
                 }
+                // A worker back at work, a follow-up pull request or a
+                // device that does not answer keeps the ask standing.
+                if !self.cleanup_due_once_asked(mission, at) {
+                    return Err("mission_cleanup_not_due".into());
+                }
             }
         }
         if payload.action != OperatorAction::Done {
@@ -1096,7 +1121,7 @@ impl Runtime {
         self.save_missions();
         self.record_mission_events(&payload.mission, events);
         if payload.action == OperatorAction::Cleanup {
-            self.start_node_cleanup(&payload.mission, at);
+            self.start_node_cleanup(&payload.mission, at, true);
         }
         self.flush_mission_wakes();
         Ok(true)
@@ -1105,7 +1130,7 @@ impl Runtime {
     /// Starts removing node `at`'s worktree off the lock (B20, B21), at
     /// most `CLEANUP_LIMIT` at once; one already being removed is not
     /// started again.
-    fn start_node_cleanup(&mut self, id: &str, at: usize) {
+    fn start_node_cleanup(&mut self, id: &str, at: usize, by_operator: bool) {
         let Some(mission) = self.missions.book.get(id) else {
             return;
         };
@@ -1117,7 +1142,7 @@ impl Runtime {
         // The cleanup is bound to the node's finish it was decided on: a
         // follow-up pull request, a person's resume or a stale device in
         // between withdraws it (B16, B29).
-        let ticket = CleanupTicket::of(node);
+        let ticket = CleanupTicket::of(node, by_operator);
         if !self.cleanup_still_due(id, &key.1, &ticket) {
             return;
         }

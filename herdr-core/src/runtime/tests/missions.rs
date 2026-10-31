@@ -4880,9 +4880,20 @@ fn the_operator_opens_a_closed_mission_again_from_the_map() {
     )
     .unwrap();
     command(&mut runtime, "sender", criteria_plan()).unwrap();
-    runtime.missions.book.get_mut("mission-1").unwrap().status = MissionStatus::Done;
+    let closed = runtime.missions.book.get_mut("mission-1").unwrap();
+    closed.status = MissionStatus::Done;
+    for node in &mut closed.nodes {
+        node.status = NodeStatus::Dropped;
+    }
     assert!(runtime.mission_reopen_event("mission-1"));
     assert_eq!(mission_status(&runtime), MissionStatus::Running);
+    // Every node is still finished, and the reopen holds: Hide does not
+    // close it again until a node moves.
+    runtime.drive_mission_health(crate::runtime::unix_milliseconds());
+    assert_eq!(mission_status(&runtime), MissionStatus::Running);
+    assert!(
+        runtime.missions.book.get("mission-1").unwrap().nodes.iter().all(|node| node.attention.is_none())
+    );
     let wakes = &runtime.missions.book.get("mission-1").unwrap().wakes;
     assert!(
         wakes.iter().any(|wake| wake.event == WakeEvent::Reopened),
@@ -4919,18 +4930,31 @@ fn a_full_wake_queue_keeps_what_waits_and_a_numbered_act_is_written_once() {
     );
     assert_eq!(mission.wakes.len(), PENDING_WAKE_LIMIT);
     assert_eq!(mission.wakes[0].seq, 1);
+    // A worker's wake is capped apart, so the Conductor's letters never
+    // starve it.
+    let worker = crate::missions::PendingWake {
+        seq: 99,
+        node: "a".into(),
+        pr: Some(7),
+        event: WakeEvent::Fix,
+        head: None,
+        to: Some("agent-2".into()),
+        reason: None,
+        why: None,
+        action: None,
+    };
+    assert!(crate::runtime::missions::push_wake(mission, worker).is_some());
 
     let mut event = MissionEvent::new(5, EventKind::HideClosed);
     event.id = Some(1);
     runtime.record_mission_events("mission-1", vec![event.clone()]);
     event.at_unix_ms = 9;
     runtime.record_mission_events("mission-1", vec![event]);
+    // Another act under the same number is written.
+    let mut other = MissionEvent::new(9, EventKind::Raised).node("a");
+    other.id = Some(1);
+    runtime.record_mission_events("mission-1", vec![other]);
     let logged = &runtime.missions.events["mission-1"].events;
-    assert_eq!(
-        logged
-            .iter()
-            .filter(|event| event.kind == EventKind::HideClosed)
-            .count(),
-        1
-    );
+    let count = |kind| logged.iter().filter(|event| event.kind == kind).count();
+    assert_eq!((count(EventKind::HideClosed), count(EventKind::Raised)), (1, 1));
 }
