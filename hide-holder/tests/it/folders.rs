@@ -22,7 +22,7 @@ fn answers(holder: &Holder) {
     connection
         .send(ClientMessage::Input(print_ok().to_vec()))
         .unwrap();
-    connection.wait_for_output("hide-ok");
+    connection.wait_for_text("hide-ok");
 }
 
 #[test]

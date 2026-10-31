@@ -59,6 +59,20 @@ impl Session {
         self.inner.adopt(leader)
     }
 
+    /// The session `leader` led, named by its pid and the start time it had
+    /// when it was recorded, for what is left of it once the process that
+    /// held it ended without ending it (a pane's holder killed outright: the
+    /// kernel hangs the session up, and a member that ignores the hangup runs
+    /// on). A pid stays reserved as a session id while a member lives, so the
+    /// members found are the recorded session's; once a process with another
+    /// start time holds the pid, that session is over and nothing is found.
+    #[cfg(unix)]
+    pub fn left_by(leader: u32, started: u64) -> io::Result<Self> {
+        Ok(Self {
+            inner: sys::Session::left_by(leader, started)?,
+        })
+    }
+
     /// The processes of the session that run now, the leader first when it
     /// runs. Empty before [`Session::adopt`].
     pub fn members(&self) -> io::Result<Vec<u32>> {
@@ -87,6 +101,16 @@ mod sys {
     /// How often a look is taken while waiting.
     const LOOK_EVERY: Duration = Duration::from_millis(10);
 
+    fn check_leader(leader: u32) -> io::Result<()> {
+        if leader <= 1 || leader > i32::MAX as u32 {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                format!("{leader} leads no session that may be ended"),
+            ));
+        }
+        Ok(())
+    }
+
     pub(super) struct Session {
         /// The session's id, which is its leader's pid.
         leader: Option<u32>,
@@ -105,13 +129,21 @@ mod sys {
             })
         }
 
-        pub(super) fn adopt(&mut self, leader: u32) -> io::Result<()> {
-            if leader <= 1 || leader > i32::MAX as u32 {
-                return Err(io::Error::new(
-                    io::ErrorKind::InvalidInput,
-                    format!("{leader} leads no session that may be ended"),
-                ));
+        pub(super) fn left_by(leader: u32, started: u64) -> io::Result<Self> {
+            check_leader(leader)?;
+            let mut found = BTreeMap::new();
+            if Self::still_runs(leader, started) {
+                found.insert(leader, started);
             }
+            Ok(Self {
+                leader: Some(leader),
+                leader_started: Some(started),
+                found,
+            })
+        }
+
+        pub(super) fn adopt(&mut self, leader: u32) -> io::Result<()> {
+            check_leader(leader)?;
             self.leader = Some(leader);
             // A leader that already exited has no start time and nothing of
             // it to end; its session's members are found by its id.
