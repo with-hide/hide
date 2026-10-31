@@ -200,7 +200,9 @@ fn codex_session_usage(home: &Path) -> Option<SessionLimits> {
     newest_codex_session_files(&home.join("sessions"))
         .ok()?
         .into_iter()
-        .find_map(|path| parse_latest_session_limits(&read_tail(&path, CODEX_TAIL_BYTES).ok()?))
+        .find_map(|path| {
+            parse_latest_session_limits(&read_tail(&path, CODEX_TAIL_BYTES).ok()?.contents)
+        })
 }
 fn parse_latest_session_limits(contents: &str) -> Option<SessionLimits> {
     contents.lines().rev().find_map(|line| {

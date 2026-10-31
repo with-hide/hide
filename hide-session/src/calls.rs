@@ -4,7 +4,6 @@
 //! in the hook, in the core and in the session read alike.
 
 use std::collections::HashSet;
-use std::io::{Read, Seek, SeekFrom};
 use std::path::Path;
 
 use serde_json::Value;
@@ -94,30 +93,13 @@ pub fn answered_in_claude_file(transcript: &Path, waited: &str) -> bool {
     let Some((name, input)) = waited.split_once(':') else {
         return false;
     };
-    let Ok(mut file) = std::fs::File::open(transcript) else {
+    let Ok(tail) = crate::read_tail(transcript, TRANSCRIPT_TAIL_BYTES) else {
         return false;
-    };
-    let Ok(length) = file.seek(SeekFrom::End(0)) else {
-        return false;
-    };
-    let start = length.saturating_sub(TRANSCRIPT_TAIL_BYTES);
-    let mut tail = Vec::new();
-    if file.seek(SeekFrom::Start(start)).is_err() || file.read_to_end(&mut tail).is_err() {
-        return false;
-    }
-    // A read that starts inside a record skips to the next one.
-    let whole = if start == 0 {
-        &tail[..]
-    } else {
-        match tail.iter().position(|&byte| byte == b'\n') {
-            Some(at) => &tail[at + 1..],
-            None => return false,
-        }
     };
     let (mut same, mut last) = (None, None);
     let mut results = HashSet::new();
-    for line in whole.split(|&byte| byte == b'\n') {
-        let Ok(record) = serde_json::from_slice::<Value>(line) else {
+    for (_, line) in tail.records() {
+        let Ok(record) = serde_json::from_str::<Value>(line) else {
             continue;
         };
         let Some(blocks) = record.pointer("/message/content").and_then(Value::as_array) else {

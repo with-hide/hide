@@ -64,7 +64,9 @@ pub use sightings::{
     MAX_SIGHTINGS_PER_OUTPUT, PrSighting, issue_addresses, pull_request_addresses,
 };
 pub use source::facts::NAMING_RECORD_LIMIT_BYTES;
-pub use source::window::{PageBefore, read_bounded, read_page_before, read_tail};
+pub use source::window::{
+    PageBefore, read_bounded, read_first_record, read_page_before, read_tail,
+};
 
 pub use label_owner::{
     ConfirmedLabelSession, SessionReadScope, confirm_label_session, confirm_session_file,

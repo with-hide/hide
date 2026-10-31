@@ -9,8 +9,10 @@ use std::path::Path;
 use super::file::FileIdentity;
 use crate::{RescanReason, Result, SessionError};
 
-/// Read a bounded tail while dropping a line cut by the byte boundary.
-pub fn read_tail(path: &Path, maximum_bytes: u64) -> Result<String> {
+/// The whole records among a file's last `maximum_bytes`, in one read: the
+/// record the window's start cuts and a last record without its newline yet
+/// are left out. A record longer than the window leaves the tail empty.
+pub fn read_tail(path: &Path, maximum_bytes: u64) -> Result<PageBefore> {
     let mut file =
         super::file::open(path).map_err(|error| SessionError::io("open", path, error))?;
     let length = file
@@ -25,13 +27,39 @@ pub fn read_tail(path: &Path, maximum_bytes: u64) -> Result<String> {
         .take(length - start)
         .read_to_end(&mut bytes)
         .map_err(|error| SessionError::io("read", path, error))?;
-    let contents = String::from_utf8_lossy(&bytes).into_owned();
-    if start == 0 {
-        return Ok(contents);
+    let first = if start == 0 {
+        0
+    } else {
+        bytes
+            .iter()
+            .position(|byte| *byte == b'\n')
+            .map_or(bytes.len(), |newline| newline + 1)
+    };
+    let last = bytes
+        .iter()
+        .rposition(|byte| *byte == b'\n')
+        .map_or(first, |newline| (newline + 1).max(first));
+    Ok(PageBefore {
+        contents: String::from_utf8_lossy(&bytes[first..last]).into_owned(),
+        start_offset: start + first as u64,
+        end_offset: start + last as u64,
+    })
+}
+
+/// The file's first record, when it is whole within its first
+/// `maximum_bytes`, without its newline.
+pub fn read_first_record(path: &Path, maximum_bytes: u64) -> Result<Option<String>> {
+    let file = super::file::open(path).map_err(|error| SessionError::io("open", path, error))?;
+    let mut head = super::frame::Head::new(file.take(maximum_bytes), maximum_bytes as usize);
+    match head
+        .next_record()
+        .map_err(|error| SessionError::io("read", path, error))?
+    {
+        Some(super::frame::HeadRecord::Complete(record)) => {
+            Ok(Some(String::from_utf8_lossy(&record).into_owned()))
+        }
+        _ => Ok(None),
     }
-    Ok(contents
-        .split_once('\n')
-        .map_or_else(String::new, |(_, rest)| rest.to_owned()))
 }
 
 /// One page of complete lines read backwards from a line boundary.
