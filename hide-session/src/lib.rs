@@ -1,8 +1,10 @@
 //! Locate and read local Claude Code and Codex session JSONL files, and
 //! OpenCode's session database.
 //!
-//! The crate has three deliberately separate responsibilities:
+//! The crate has deliberately separate responsibilities:
 //!
+//! - `source` is the one layer that opens a session file and cuts it into
+//!   records; every reader below takes its records from it.
 //! - [`SessionLocator`] resolves a reported session identity or a working
 //!   directory to a local file.
 //! - [`ConversationCursor`] reads only bytes appended since its previous read,
