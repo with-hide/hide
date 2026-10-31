@@ -22,7 +22,6 @@ import ctypes
 import json
 import os
 from pathlib import Path
-import shutil
 import signal
 import subprocess
 import sys
@@ -31,7 +30,7 @@ import time
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from agent_live_check.system import STOP_SIGNALS, WINDOWS  # noqa: E402
+from agent_live_check.system import STOP_SIGNALS, WINDOWS, remove_tree  # noqa: E402
 
 if not WINDOWS:
     from agent_live_check.process_table import BsdInfo, descendants, snapshot  # noqa: E402
@@ -125,7 +124,11 @@ if WINDOWS:
         handle, now = opened
         try:
             if now == birth and not _kernel32.TerminateProcess(handle, 1):
-                raise OSError(ctypes.get_last_error(), f"TerminateProcess({pid})")
+                error = ctypes.get_last_error()
+                # A process already ending refuses to be ended again with
+                # access denied; it has ended once its object is signalled.
+                if error != 5 or _kernel32.WaitForSingleObject(handle, 2000) != 0:
+                    raise OSError(error, f"TerminateProcess({pid})")
         finally:
             _kernel32.CloseHandle(handle)
 
@@ -313,7 +316,8 @@ class Owned:
             return left
         for folder in self.folders:
             try:
-                shutil.rmtree(folder)
+                # Git's objects are read-only, which Windows refuses to delete.
+                remove_tree(folder)
             except FileNotFoundError:
                 pass
             except OSError as error:
