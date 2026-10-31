@@ -486,6 +486,18 @@ pub enum DeskItem {
         folder: Option<String>,
         reason: Option<String>,
         state: DeskApprovalState,
+        /// Why it asks, irreversible kinds first (D-82): what
+        /// `이 대화에서 계속 허용` keeps allowed. Empty on a card kept from
+        /// before the table.
+        #[serde(default)]
+        asks: Vec<DeskAsk>,
+        /// What the first irreversible kind is about: the working session's
+        /// title, or the path outside every project.
+        #[serde(default)]
+        subject: Option<String>,
+        /// The line the operator sent Desk with `거절…` (D-83).
+        #[serde(default)]
+        refusal: Option<String>,
     },
     Notice {
         id: u64,
@@ -534,11 +546,15 @@ impl DeskItem {
                 command,
                 folder,
                 reason,
+                subject,
+                refusal,
                 ..
             } => {
                 command.len()
-                    + folder.as_ref().map_or(0, String::len)
-                    + reason.as_ref().map_or(0, String::len)
+                    + [folder, reason, subject, refusal]
+                        .into_iter()
+                        .map(|text| text.as_ref().map_or(0, String::len))
+                        .sum::<usize>()
             }
             Self::Notice { detail, .. } => detail.as_ref().map_or(0, String::len),
             Self::Model { model, effort, .. } => {
@@ -609,14 +625,23 @@ pub enum DeskReplyState {
 pub enum DeskCardKind {
     Command,
     Edit,
+    /// A file read or search, asked when the operator set reads to ask.
+    Read,
     Other,
 }
+
+/// Why a card asks (`hide_desk::permission::Ask`).
+pub type DeskAsk = hide_desk::permission::Ask;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum DeskApprovalState {
     Waiting,
+    /// `한 번 허용`.
     Allowed,
+    /// `이 대화에서 계속 허용`: the same kinds run without a card until the
+    /// Desk process ends (D-83).
+    AllowedConversation,
     Rejected,
     /// A new conversation, a restart or the process's end closed it
     /// unanswered, which the agent read as a refusal (D-52).
@@ -666,6 +691,10 @@ pub struct DeskSettings {
     pub location: DeskLocation,
     /// Sessions Desk runs at once; more wait in its queue.
     pub cap: u8,
+    /// Settings › Desk › 권한 (D-82): every row 바로 in a store written
+    /// before it existed.
+    #[serde(default)]
+    pub permissions: hide_desk::permission::Table,
 }
 
 impl Default for DeskSettings {
@@ -675,6 +704,7 @@ impl Default for DeskSettings {
             default_agent: None,
             location: DeskLocation::Desk,
             cap: DESK_CAP_DEFAULT,
+            permissions: hide_desk::permission::Table::default(),
         }
     }
 }

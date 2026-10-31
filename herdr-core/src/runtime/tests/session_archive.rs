@@ -180,14 +180,14 @@ fn the_archive_command_saves_an_idle_session_as_the_screen_does() {
     let mut other = registered("w1:p1");
     other.session = crate::engine::tokens::session_digest("another-conversation");
     assert_eq!(
-        command.archive_registered("agent-1", &other),
+        command.archive_registered("agent-1", &other, false),
         Err("agent_unavailable".to_owned()),
         "the pane hosts another conversation than the registration's"
     );
     assert!(record(&command).is_none());
 
     assert_eq!(
-        command.archive_registered("agent-1", &registered("w1:p1")),
+        command.archive_registered("agent-1", &registered("w1:p1"), false),
         Ok(serde_json::json!({"archived": "agent-1", "pane_id": "w1:p1"}))
     );
     let (_, saved) = record(&command).expect("the saved archive");
@@ -209,7 +209,7 @@ fn the_archive_command_saves_an_idle_session_as_the_screen_does() {
 fn the_archive_command_leaves_a_working_session_for_the_operator_to_confirm_on_the_screen() {
     let mut runtime = archive_runtime(&[("w1:p3", "working")]);
     assert_eq!(
-        runtime.archive_registered("agent-1", &registered("w1:p1")),
+        runtime.archive_registered("agent-1", &registered("w1:p1"), false),
         Err("archive_confirmation_required".to_owned())
     );
     assert!(record(&runtime).is_none());
@@ -226,9 +226,104 @@ fn the_archive_command_leaves_a_working_session_for_the_operator_to_confirm_on_t
     // A delegated child is archived with its root, however it is asked.
     let mut runtime = archive_runtime(&[]);
     assert_eq!(
-        runtime.archive_registered("agent-2", &registered("w1:p2")),
+        runtime.archive_registered("agent-2", &registered("w1:p2"), false),
         Err("archive_delegated".to_owned())
     );
+}
+
+/// The ledger names the tree's root as registration `agent-1`.
+fn register_root(runtime: &mut Runtime) {
+    let actor = registered("w1:p1");
+    let mut ledger = crate::delivery::ledger::Ledger::default();
+    ledger.agents.push(crate::coordination::AgentRecord {
+        id: "agent-1".into(),
+        name: Some(actor.name.clone()),
+        machine: crate::node::TEST_NODE.into(),
+        host_scope: "scope".into(),
+        native_machine: "fixture-machine".into(),
+        session: session_of("w1:p1"),
+        instance: "w1:p1".into(),
+        pane: "w1:p1".into(),
+        parent: None,
+        origin: None,
+        project: None,
+        actor,
+        ended: false,
+        terminal_id: None,
+        forked: false,
+    });
+    ledger.next_id = 2;
+    runtime.delivery_ledger = Ok(Arc::new(ledger));
+}
+
+fn desk_archive(runtime: &mut Runtime) -> Result<serde_json::Value, String> {
+    let context = crate::desk::desk_context(crate::node::TEST_NODE);
+    runtime
+        .agent_archive_command(
+            crate::node::TEST_NODE,
+            crate::workspace_control::DESK_CALLER,
+            &context,
+            "agent-1",
+            None,
+        )
+        .map(|(answer, _)| answer)
+}
+
+/// The card Desk's last request made.
+fn desk_card(runtime: &Runtime) -> crate::model::DeskItem {
+    runtime
+        .snapshot
+        .desk
+        .as_ref()
+        .unwrap()
+        .conversation
+        .items
+        .last()
+        .cloned()
+        .expect("a card")
+}
+
+#[test]
+fn desk_archives_a_working_session_only_once_the_operator_allows_its_card() {
+    use hide_desk::permission::{Ask, Irreversible};
+    let mut runtime = archive_runtime(&[("w1:p3", "working")]);
+    register_root(&mut runtime);
+    runtime.open_test_desk(8);
+    assert!(runtime.desk_session_working("agent-1"));
+
+    // Run without asking, as an agent whose request skipped the card would.
+    assert_eq!(
+        desk_archive(&mut runtime),
+        Err("archive_confirmation_required".to_owned())
+    );
+    assert!(record(&runtime).is_none());
+
+    assert!(runtime.desk_test_permission("hide agent archive agent-1"));
+    let crate::model::DeskItem::Approval { id, asks, subject, .. } = desk_card(&runtime) else {
+        panic!("a card")
+    };
+    assert_eq!(asks, [Ask::Irreversible(Irreversible::EndWorkingSession)]);
+    assert_eq!(subject, runtime.desk_session_title("agent-1"));
+    send(
+        &mut runtime,
+        "desk_approval",
+        serde_json::json!({"id": id, "answer": "once"}),
+    );
+    assert_eq!(
+        desk_archive(&mut runtime),
+        Ok(serde_json::json!({"archived": "agent-1", "pane_id": "w1:p1"}))
+    );
+    assert_eq!(record(&runtime).unwrap().1.phase, ArchivePhase::Closing);
+}
+
+#[test]
+fn desk_archives_an_idle_session_without_a_card() {
+    let mut runtime = archive_runtime(&[]);
+    register_root(&mut runtime);
+    runtime.open_test_desk(8);
+    assert!(!runtime.desk_session_working("agent-1"));
+    assert!(!runtime.desk_test_permission("hide agent archive agent-1"));
+    assert!(desk_archive(&mut runtime).is_ok());
 }
 
 #[test]

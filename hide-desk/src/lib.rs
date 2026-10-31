@@ -75,6 +75,14 @@ pub fn first_message(placement: Placement, carried: Option<&str>, message: &str)
     text
 }
 
+/// The message that carries the line the operator refused `command` with
+/// (`거절…`, PRD Desk D-83), sent once the turn it stopped ends.
+pub fn refusal_message(command: &str, line: &str) -> String {
+    format!(
+        "The operator refused this and did not let it run:\n<refused>\n{command}\n</refused>\nThe operator's message:\n{line}"
+    )
+}
+
 /// The most sessions one reply's chips name.
 pub const MAX_REPLY_MENTIONS: usize = 16;
 
