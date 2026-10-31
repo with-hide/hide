@@ -209,7 +209,7 @@ The `vt` lane (`.github/workflows/vt.yml`) builds hide-vt on Linux, macOS and Wi
 `scripts/tests/test_prepare_vt_inputs.py` covers the preparation's refusals without a network.
 
 The holder restart lane (`.github/workflows/holder-restart.yml`, [TESTING.md](TESTING.md#the-holder-restart-lane)) builds `hide-holder` and hide-node's `holder_node` example and restores the vt caches without saving them.
-The example is declared `test = false` in `hide-node/Cargo.toml`, so `cargo test`, the workspace tests and Clippy's test targets never build it, and only the lane and the measurements pay for it: on the GitHub runners of 2026-10-31 the example took 17 to 44 s on top of the holder's own 6 to 109 s, which depend on how warm the rust-cache entry was.
+The example is declared `test = false` in `hide-node/Cargo.toml`, so `cargo test` and the workspace tests never build it and only the lane and the measurements link it; Clippy, which `verify-cargo.sh lint` runs over every target, checks it without linking it: on the GitHub runners of 2026-10-31 the example took 17 to 44 s on top of the holder's own 6 to 109 s, which depend on how warm the rust-cache entry was.
 
 ## The vendored PTY crate
 
