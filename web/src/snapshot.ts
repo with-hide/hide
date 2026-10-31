@@ -2759,6 +2759,8 @@ export type DeskJobsSection = {
   jobs: DeskJob[];
   /** The workers of the missions Desk's jobs conduct, as cards of their own: listed under their Conductor and opened from a mission map's node, never drawn in the chat (B28, B34). */
   workers: DeskJob[];
+  /** The other sessions the newest lines of the conversation name, as cards read from their sidebar rows: a chip's hover card and the thread it opens (D-86); never drawn in the chat or listed in Threads. */
+  named: DeskJob[];
 };
 
 /** The `desk_live` section: the reply being written, `null` between turns. */

@@ -2,7 +2,7 @@
 // session-docs-and-assistant, Desk 1차): agents, conversations, jobs in every
 // state, threads as ACP updates and outputs. Names, counts and paths are
 // made up; nothing here is read from a machine.
-import type { AcpSessionUpdate, DeskAgent, DeskItem, DeskJob, DeskMention, DeskMission, DeskOutput, DeskSessionRef, DeskSteps, SessionViewKind, ThreadHidePart } from "../desk";
+import type { AcpSessionUpdate, DeskAgent, DeskItem, DeskJob, DeskMention, DeskMission, DeskOutput, DeskSessionRef, DeskSteps, SessionFacts, SessionViewKind, ThreadHidePart } from "../desk";
 import type { DeskSessionChip, RowMark } from "../snapshot";
 import type { MentionProject, MentionSession } from "../components/desk/desk-mention-menu";
 import { planFixture } from "./PlanScene";
@@ -398,3 +398,82 @@ export const SESSION_VIEWS: { label: string; kind: SessionViewKind }[] = [
   { label: "PaneHeader.tsx diff", kind: "diff" },
   { label: "verify-web.log", kind: "log" },
 ];
+
+/**
+ * The chips scene (D-86, B50, mockup 5): a status answer naming more sessions
+ * than the old cap of 16, grouped by project, one of them no longer listed,
+ * with every listed one's card as its hover card reads it.
+ */
+export function chipsScene(now: number): { items: DeskItem[]; facts: ReadonlyMap<string, SessionFacts>; open: string } {
+  const job = base(now);
+  type Named = { name: string; kind: string; mark: RowMark | null; project?: string; branch?: string; extra?: Partial<DeskJob>; parent?: string; minutes?: number };
+  const groups: { title: string; project: string; lines: { label: string; sessions: Named[] }[] }[] = [
+    { title: "herdr-ide", project: "herdr-ide", lines: [
+      { label: "Desk 설계", sessions: [
+        { name: "desk-planner", kind: "claude", mark: "going", branch: "desk/planner", extra: { now: "D-86 카드 문구 다듬는 중", plan: { done: 2, total: 4 } }, minutes: 21 },
+        { name: "desk-conductor", kind: "claude", mark: "quiet", extra: { state: "done", summary: "미션 노드 넷 시작함", mission: MISSION }, parent: "desk-planner", minutes: 40 },
+        { name: "desk-design-critic", kind: "claude", mark: "quiet", extra: { state: "done", summary: "목업 5번 승인 의견" }, parent: "desk-planner", minutes: 33 },
+      ] },
+      { label: "startup 적용", sessions: [
+        { name: "cf-startup-apply", kind: "claude", mark: "quiet", extra: { state: "done", summary: "Cloudflare 신청서 냈어요", pull_requests: [{ number: 1918, state: "merged" }] }, minutes: 95 },
+        { name: "gcp-startup-apply", kind: "claude", mark: "asleep", extra: { state: "sleeping" }, minutes: 180 },
+      ] },
+      { label: "agent journey", sessions: [
+        { name: "agent-journey", kind: "codex", mark: "going", branch: "journey-agy", extra: { now: "Linux e2e 결과 기다리는 중", plan: { done: 3, total: 5 }, pull_requests: [{ number: 1921, state: "pending" }], outputs: [OUTPUTS.compareLight, OUTPUTS.notes] }, parent: "agent-14586", minutes: 14 },
+        { name: "journey-impl", kind: "claude", mark: "going", branch: "journey-agy", extra: { now: "agy 핀 고정 확인" }, parent: "agent-journey", minutes: 9 },
+        { name: "agent-14586", kind: "claude", mark: "turn", extra: { state: "asking", ask: "question", question: "Windows 칸은 다음 PR로 미룰까요?" }, minutes: 3 },
+      ] },
+      { label: "메모리 승격 3건", sessions: [
+        { name: "memory-promote-m400", kind: "claude", mark: "quiet", extra: { state: "done", summary: "AGENTS.md로 옮김" }, minutes: 50 },
+        { name: "m252", kind: "claude", mark: "quiet", extra: { state: "done", summary: "카드 합침" }, minutes: 52 },
+        { name: "m349", kind: "claude", mark: null },
+      ] },
+      { label: "CI 정리", sessions: [
+        { name: "flaky-web-top", kind: "codex", mark: "going", branch: "fix/flaky-web", extra: { now: "tab-wait 도우미로 8개 옮기는 중" }, minutes: 27 },
+        { name: "macos-queue", kind: "codex", mark: "quiet", extra: { state: "done", summary: "패키지 빌드 7분으로" }, minutes: 70 },
+        { name: "premerge-lock", kind: "claude", mark: "waiting", extra: { now: "앞 PR 머지 기다림" }, minutes: 18 },
+        { name: "nightly-triage", kind: "claude", mark: "going", extra: { now: "어젯밤 실패 둘 읽는 중" }, minutes: 6 },
+      ] },
+    ] },
+    { title: "creator", project: "creator", lines: [
+      { label: "캐러셀 비교", sessions: [
+        { name: "carousel-astra", kind: "codex", mark: "asleep", extra: { state: "sleeping" }, minutes: 120 },
+        { name: "carousel-fable", kind: "claude", mark: "asleep", extra: { state: "sleeping" }, minutes: 121 },
+        { name: "carousel-opus", kind: "claude", mark: "asleep", extra: { state: "sleeping" }, minutes: 122 },
+      ] },
+      { label: "릴스", sessions: [
+        { name: "reel-captions", kind: "codex", mark: "going", extra: { now: "자막 타이밍 맞추는 중", outputs: [OUTPUTS.light1] }, minutes: 11 },
+        { name: "reel-thumbnail", kind: "claude", mark: "turn", extra: { state: "asking", ask: "question", question: "3안 중 어느 것?" }, minutes: 4 },
+        { name: "reel-caption-post", kind: "claude", mark: "quiet", extra: { state: "done", summary: "캡션 초안 둘" }, minutes: 44 },
+      ] },
+    ] },
+  ];
+  const pane = (name: string) => `g:${name}`;
+  const every = groups.flatMap((group) => group.lines.flatMap((line) => line.sessions.map((session) => ({ ...session, project: group.project }))));
+  const ref = (named: Named): DeskSessionRef => ({ name: named.name, mark: named.mark, agent_kind: named.kind, pane_id: pane(named.name) });
+  const facts = new Map<string, SessionFacts>();
+  for (const named of every) {
+    if (named.mark === null) {
+      facts.set(pane(named.name), { listed: false, mark: null, agent_kind: null, card: null, since: null, parent: null });
+      continue;
+    }
+    const card = job(named.name, named.name, {
+      pane_id: pane(named.name), agent_kind: named.kind, mark: named.mark,
+      project: { workspace_id: named.project, label: named.project ?? "" },
+      location: named.branch ? { kind: "worktree", label: named.branch } : { kind: "checkout", label: named.project ?? "" },
+      ...named.extra,
+    });
+    const parent = every.find((one) => one.name === named.parent);
+    facts.set(pane(named.name), { listed: true, mark: named.mark, agent_kind: named.kind, card: { ...card, mark: named.mark }, since: at(now, named.minutes ?? 1), parent: parent ? ref(parent) : null });
+  }
+  const token = (named: Named) => `@session(${pane(named.name)} ${named.name})`;
+  const text = [
+    `지금 ${every.length}개 세션이 돌고 있어요. 프로젝트별로 묶으면:`,
+    ...groups.flatMap((group) => [`\n**${group.title}**\n`, ...group.lines.map((line) => `- **${line.label}:** ${line.sessions.map(token).join(" ")}`)]),
+  ].join("\n");
+  const items: DeskItem[] = [
+    { kind: "user", id: 1, text: "지금 돌고 있는 세션 프로젝트별로 정리해줘", at_ms: at(now, 1), mentions: [] },
+    { kind: "reply", agent: "claude", id: 2, text, at_ms: at(now, 1), state: "done", thought_ms: 6_000, steps: { ...NO_STEPS, sessions: every.length }, mentions: every.map((named) => ({ pane_id: pane(named.name), name: named.name, agent_kind: named.mark === null ? null : named.kind, mark: named.mark })) },
+  ];
+  return { items, facts, open: pane("agent-journey") };
+}

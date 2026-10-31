@@ -14,7 +14,8 @@ import { Kbd } from "../ui/kbd";
 import { Hint } from "../ui/tooltip";
 import { MentionText } from "./desk-chat";
 import { DeskComposer, type ComposerAttachment } from "./desk-composer";
-import { DeskMissionChip, DeskPlanChip, JobLead, JobLine, jobStateWords, SessionChip } from "./desk-job-card";
+import { DeskMissionChip, DeskPlanChip, JobLead, JobLine, jobStateWords } from "./desk-job-card";
+import { SessionChip } from "./session-chip";
 import { DeskOutputs } from "./desk-outputs";
 import { LaneHeadControls } from "./desk-lane";
 

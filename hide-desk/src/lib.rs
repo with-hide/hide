@@ -75,11 +75,10 @@ pub fn first_message(placement: Placement, carried: Option<&str>, message: &str)
     text
 }
 
-/// The most sessions one reply's chips name.
-pub const MAX_REPLY_MENTIONS: usize = 16;
-
 /// The sessions a reply names as `@session(<pane> <name>)`, in order, each
-/// once, at most [`MAX_REPLY_MENTIONS`].
+/// once. Every one is a chip (PRD session-docs-and-assistant D-86): the
+/// reply's own byte cap bounds how many it can name, so no count cap leaves a
+/// later one as raw text.
 pub fn session_mentions(text: &str) -> Vec<(String, String)> {
     const OPEN: &str = "@session(";
     let mut found: Vec<(String, String)> = Vec::new();
@@ -99,9 +98,6 @@ pub fn session_mentions(text: &str) -> Vec<(String, String)> {
             continue;
         }
         found.push((pane.to_owned(), name.to_owned()));
-        if found.len() == MAX_REPLY_MENTIONS {
-            break;
-        }
     }
     found
 }
@@ -121,5 +117,16 @@ mod tests {
                 ("w3:p1".to_owned(), "docs".to_owned()),
             ]
         );
+    }
+
+    #[test]
+    fn every_session_a_long_reply_names_is_read_past_the_sixteenth() {
+        let text: String = (1..=40)
+            .map(|n| format!("- @session(w{n}:p1 job-{n}) runs\n"))
+            .collect();
+        let found = session_mentions(&text);
+        assert_eq!(found.len(), 40);
+        assert_eq!(found[16], ("w17:p1".to_owned(), "job-17".to_owned()));
+        assert_eq!(found[39], ("w40:p1".to_owned(), "job-40".to_owned()));
     }
 }

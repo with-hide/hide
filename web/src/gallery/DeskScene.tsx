@@ -18,6 +18,7 @@ import { DeskChatColumn, DeskChatHead, DeskRail, DeskRoom, DeskViewColumn, LaneC
 import { DeskMentionMenu } from "../components/desk/desk-mention-menu";
 import { DeskOutputs, EveryOutput } from "../components/desk/desk-outputs";
 import { DeskSettingsTab } from "../components/desk/desk-settings";
+import { SessionCard, SessionChip, SessionChipProvider } from "../components/desk/session-chip";
 import { ThreadList } from "../components/desk/thread-list";
 import { ThreadHead, ThreadView, type ThreadConductor } from "../components/desk/thread-view";
 import { SessionRow } from "../components/session-row";
@@ -34,7 +35,7 @@ import { useShellStore } from "../store";
 import type { SnapshotRest } from "../snapshot";
 import { missionFixture } from "./MissionScene";
 import {
-  AGENTS, AGENTS_PREPARING, cardSceneItems, CHIP_PROJECT, CHIP_SESSION, CHIP_TEXT, chipItems, conductorThread, deskJob, enteredSessions, everyStateJobs, GALLERY_DONE_THREAD, galleryThread, handoffItems, MENTIONS, MENU_PROJECTS, menuSessions,
+  AGENTS, AGENTS_PREPARING, cardSceneItems, CHIP_PROJECT, CHIP_SESSION, CHIP_TEXT, chipItems, chipsScene, conductorThread, deskJob, enteredSessions, everyStateJobs, GALLERY_DONE_THREAD, galleryThread, handoffItems, MENTIONS, MENU_PROJECTS, menuSessions,
   mentionItems, missionItems, OUTPUTS, PICTURES, RECORD_THREAD, SESSION_VIEWS, SESSIONS, stateItems, statusItems, storyJobs, switchedItems, WORKER_THREAD,
 } from "./deskSceneData";
 
@@ -61,6 +62,7 @@ export const DESK_SCENES = [
   { state: "outputs", label: "결과물 기준 (B30)" },
   { state: "chat-states", label: "채팅 상태: 승인 답, 알림 줄, 생각 중 · 중단 (B5-B8, B11, B13-B15)" },
   { state: "thread-states", label: "스레드 읽기 실패 · 읽는 중 · 빈 · 연결 안 됨 (B23, B27)" },
+  { state: "chips", label: "답 속 칩 전부 · 흐린 칩 · 칩 상세 카드 (B50, D-86)" },
   { state: "settings", label: "Settings › Desk (B4, B19, B21)" },
   { state: "settings-off", label: "Settings › Desk 꺼짐, 기본값 (D-76, B41)" },
 ] as const;
@@ -322,6 +324,25 @@ export function DeskScene({ params }: { params: URLSearchParams }) {
           {column("empty", <ThreadColumn job={fresh} updates={[]} />)}
           {column("disconnected", <ThreadColumn job={off} updates={RECORD_THREAD} outputs={[]} />)}
         </div>
+      );
+      break;
+    }
+    case "chips": {
+      // Every session the answer names is a chip, the 17th on too; m349 is no longer listed, so it is dimmed with no status.
+      const scene = chipsScene(now);
+      const open = scene.facts.get(scene.open)!;
+      const source = { facts: (session: DeskSessionRef) => (session.pane_id ? scene.facts.get(session.pane_id) ?? null : null), onOpen: noop };
+      body = (
+        <SessionChipProvider source={source}>
+          <DeskRoom pinned={false} rail={rail(false, false)} chat={chat(scene.items, <ChatComposer selection={CLAUDE} />)} />
+          <aside className="flex shrink-0 flex-col gap-xs border-l border-border p-lg" data-desk-scene-chip-card="open">
+            <h3 className="text-micro text-muted-foreground">칩에 마우스를 올리면</h3>
+            <span><SessionChip session={{ name: open.card!.title, mark: open.mark, agent_kind: open.agent_kind, pane_id: scene.open }} onPress={noop} className="ring-1 ring-mention-session" /></span>
+            <div className="w-(--size-pr-popover) max-w-full rounded-sm border border-border bg-popover text-popover-foreground shadow-lg">
+              <SessionCard job={open.card!} since={open.since} parent={open.parent} onOpen={noop} onParent={noop} />
+            </div>
+          </aside>
+        </SessionChipProvider>
       );
       break;
     }

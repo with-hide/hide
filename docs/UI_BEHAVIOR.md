@@ -973,7 +973,7 @@ A picked session or project stands in the box as one chip (D-85, B49): a session
 One ⌫ right after a chip takes it out whole, ← and → step over it, Shift+↵ starts a line, a paste comes in as plain text, and a Hangul syllable being composed is left to the input method.
 The box holds each chip as its `@session(<pane> <name>)` or `@project(<path> <name>)` token, and the send carries the words exactly so, a project named by its primary checkout's path (the folder's own for a project with none), which Desk's agent hands to `--repo` and pressing its chip opens; a chip the operator took out is not sent, and the sent message shows the same chips.
 `다시 시도` on a notice sends the operator's last message again.
-Pressing a card, a session chip or `답하기` opens that session's thread in Desk's lane (see Desk's lane); a letter's line opens the session's own tab.
+Pressing a card, any session chip (a reply's, the operator's `@`, a letter's line, one inside a thread) or `답하기` opens that session's thread in Desk's lane, whether Desk started it or not, and Desk stays in front; only the thread's `터미널로` and ⌘J go to its tab (see Desk's lane, D-87, B51).
 A card's change sends only the `desk_jobs` section; the conversation is sent again only when it, the agents or the room's settings change.
 
 The selector lists Claude, Codex and Pi with each one's state:
@@ -1011,7 +1011,13 @@ A session Desk starts is the operator's own: a real Agent tab in its checkout, w
 A job on another device keeps its tab where that device made it, outside the group: the core finds the tab holding a pane only among this machine's checkouts (`checkout_tab_holding_pane`), and a device's tabs reach it through the link's projection under qualified pane ids. Mapping a device job's pane to its checkout tab through that projection, then placing it with the same group move, closes the gap.
 Work Desk hands to a session that already runs is a letter, and every letter Desk sends leaves a line with the session, its project, the letter's kind and first line, and `읽음` once the session's runtime took it in: a `request` is work handed (`편지로 맡김`), any other kind word passed on (`보냄`). It changes no state and takes no place.
 The session is a chip: its agent and the mark its sidebar row shows now, drawn with `StatusMark`.
-A reply that names a session writes it as `@session(<pane> <name>)`, as Desk's instructions ask, and draws it as the same chip; a reply carries 16 at most, and the newest 64 lines' chips follow their rows, while an older line's chip and one whose session has no row show no mark.
+A reply that names a session writes it as `@session(<pane> <name>)`, as Desk's instructions ask, and draws it as the same chip, every one it names: no count caps them, since the reply's own 256 KiB cap already bounds how many a reply can hold, and the screen's cost grows with the reply's length (D-86, B50).
+The newest 64 lines' chips follow their rows; an older line's chip shows no mark.
+A chip whose session the sidebar no longer lists is dimmed with no status mark and cannot be pressed: there is nothing left to open.
+A chip in the chat or a thread is one shared part (`SessionChip` in `web/src/components/desk/session-chip.tsx`), read from the sidebar's rows and Desk's cards; a reply's chips are drawn inside its Markdown, each in a React root of its own, so the part's source is carried to them (`useSessionChipBridge`) and a row's change redraws only the chips, never the reply.
+Under the pointer or focus a listed session's chip shows its card: its status, agent, name, its state's words and its row's time; `⌂` its project and branch; what it does now; its plan `n/m`, its pull request and how many outputs it has; its parent as a chip; and `스레드 열기 ›`.
+Every fact on it is one its sidebar row already carries, through the session's card; nothing asks an AI or runs git for it, and a fact the session lacks is left out.
+Pressing the chip or `스레드 열기 ›` opens that session's thread in Desk's lane; pressing the parent opens the parent's.
 Where a task works follows Settings › Desk: per task (the default, a new `desk/<task name>` branch for work that touches code another session is changing or ends in a pull request), always a new branch, or always the checkout's current branch; Desk is told the setting with its first message and again when it changes, and a place the operator names for a task wins for that task.
 
 Each job is a card in the `desk_jobs` section, newest first and at most 64, keyed by its spawn's intent; `pane_id` is its thread's key.
@@ -1034,6 +1040,8 @@ Its state comes from the ledger and the row the sidebar draws for it, never from
 Starting, working and asking jobs take Desk's places; the rest do not.
 
 A mission's workers are no jobs of Desk's, but their threads open in Desk's lane too: the `desk_jobs` section sends them as cards of their own in `workers`, each a spawn whose pane is a worker of a job's mission, whoever started it (64 at most).
+The other sessions the newest 64 lines name (a reply's chips, a letter's line, the operator's `@` chips), and the one whose thread the lane holds, are no jobs either: the section sends each one the sidebar lists as a card of its own in `named`, built from its row as a job's card reads its row (its project and branch from the checkout its pane is in), so a chip's card and the thread it opens show the same facts; the sidebar's rows bound them, and none is drawn in the chat or listed in Threads.
+The lane keys such a thread by its session (`pane:<pane>`, the id its card carries), not by a job: it opens the thread by that pane from the first frame and draws its head once the card arrives with it, so no session becomes a job, takes a place under the cap or joins the Threads list.
 
 ### Desk's lane
 

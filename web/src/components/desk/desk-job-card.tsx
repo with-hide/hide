@@ -1,6 +1,6 @@
 import { ChevronRightIcon, GitBranchIcon, GlobeIcon, ImageIcon } from "lucide-react";
 import type { ReactNode } from "react";
-import type { DeskAsk, DeskJob, DeskJobFailure, DeskMission, DeskOutput, DeskSessionRef } from "../../desk";
+import type { DeskAsk, DeskJob, DeskJobFailure, DeskMission, DeskOutput } from "../../desk";
 import { AgentMark } from "../../AgentMark";
 import { fileIcon } from "../../fileIcons";
 import { useInterfaceTranslation } from "../../i18n/client";
@@ -157,20 +157,6 @@ export function JobLead({ job }: { job: DeskJob }) {
       <JobMark job={job} />
       {hasSession(job) ? <AgentMark kind={job.agent_kind} /> : <span aria-hidden="true" className="size-(--size-agent-mark) shrink-0" />}
     </>
-  );
-}
-
-/** A session named inside a line (a letter's other side, a task handed on): its status, its agent and its name, on the chip ground (B26, D-75); a session whose state Hide does not know shows its name alone. */
-export function SessionChip({ session, onPress, className }: { session: DeskSessionRef; onPress?: () => void; className?: string }) {
-  const { t } = useInterfaceTranslation();
-  const lead = session.agent_kind === null ? null : <><StatusMark mark={session.mark} /><AgentMark kind={session.agent_kind} /></>;
-  const look = cn("inline-flex max-w-full min-w-0 items-center gap-xxs rounded-xs bg-secondary px-xxs align-middle text-foreground", className);
-  if (!onPress) return <span className={look} data-desk-session-chip={session.name}>{lead}<span className="truncate">{session.name}</span></span>;
-  return (
-    <Button variant="text" size="inline" className={cn(look, "hover:bg-accent hover:text-foreground")} aria-label={t("desk.mention.open", { name: session.name })} data-desk-session-chip={session.name} onClick={onPress}>
-      {lead}
-      <span className="truncate">{session.name}</span>
-    </Button>
   );
 }
 

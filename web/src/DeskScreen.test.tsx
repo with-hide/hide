@@ -4,7 +4,7 @@ import { createRoot, type Root } from "react-dom/client";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createActions } from "./actions";
 import { TooltipProvider } from "./components/ui/tooltip";
-import type { DeskAgent, DeskItem } from "./desk";
+import type { DeskAgent, DeskItem, DeskJob } from "./desk";
 import { DeskScreen, DeskSidebarEntry } from "./DeskScreen";
 import { clientI18n } from "./i18n/translator";
 import type { DeskMentions, DeskSection, SnapshotRest } from "./snapshot";
@@ -78,7 +78,7 @@ describe("Desk's room", () => {
   async function render(section: DeskSection, mentions: DeskMentions = { sessions: [], projects: [] }) {
     const actions = createActions((event) => { events.push(event); return true; });
     await act(async () => {
-      useShellStore.setState({ connection: "live", rest, desk: section, deskLive: null, deskJobs: { jobs: [], workers: [] }, deskMentions: mentions });
+      useShellStore.setState({ connection: "live", rest, desk: section, deskLive: null, deskJobs: { jobs: [], workers: [], named: [] }, deskMentions: mentions });
       root.render(<TooltipProvider><DeskScreen actions={actions} /></TooltipProvider>);
     });
   }
@@ -94,7 +94,7 @@ describe("Desk's room", () => {
     const off = (section: DeskSection): DeskSection => ({ ...section, settings: { ...section.settings, enabled: false } });
     const actions = createActions((event) => { events.push(event); return true; });
     await act(async () => {
-      useShellStore.setState({ connection: "live", rest, desk: off(desk([])), deskLive: null, deskJobs: { jobs: [], workers: [] }, deskMentions: { sessions: [], projects: [] } });
+      useShellStore.setState({ connection: "live", rest, desk: off(desk([])), deskLive: null, deskJobs: { jobs: [], workers: [], named: [] }, deskMentions: { sessions: [], projects: [] } });
       root.render(<TooltipProvider><DeskSidebarEntry actions={actions} /></TooltipProvider>);
     });
     expect(document.body.querySelector("[data-desk-sidebar-row]")).toBeNull();
@@ -210,5 +210,29 @@ describe("Desk's room", () => {
     await render(desk([{ kind: "user", id: 1, text: "@project(/work/repo-home repo) fix the build", at_ms: 0, mentions: [repo] }]));
     await press("[data-mention-chip='project']");
     expect(sent("focus_checkout")).toEqual([expect.objectContaining({ workspace_id: "w-repo", checkout_id: "c-home" })]);
+  });
+
+  it("opens a session that is no job of Desk's as a thread in the lane and stays in Desk (D-87, B51)", async () => {
+    // `fixer` runs in the sidebar but Desk did not start it: it has no card until its thread opens.
+    const row = { pane_id: "w1:p2", identity_label: "fixer", agent_kind: "claude", mark: "going" } as never;
+    const card: DeskJob = { id: "pane:w1:p2", pane_id: "w1:p2", title: "fixer", agent_kind: "claude", project: { workspace_id: "w-repo", label: "repo" }, location: { kind: "checkout", label: "main" },
+      state: "working", queue_position: null, now: "고치는 중", plan: null, question: null, summary: null, pull_requests: [], outputs: [], joined: false, reason: null, failure: null, ask: null,
+      mark: "going", mark_read: false, machine: null, disconnected: false, changed_at_unix_ms: 0, read: false, mission: null, workers: [], agent_id: null };
+    await act(async () => useUiStore.getState().setScreen({ kind: "desk" }));
+    await render(desk([{ kind: "user", id: 1, text: "@session(w1:p2 fixer) 어디까지 왔어?", at_ms: 0, mentions: [fixer] }]));
+    await act(async () => useShellStore.setState({ agents: [row] }));
+
+    await press("[data-mention-chip='session']");
+    expect(useUiStore.getState().deskLane.tool).toEqual({ kind: "thread", job: "pane:w1:p2", conductor: null });
+    expect(sent("session_thread_open")).toEqual([{ pane_id: "w1:p2" }]);
+    expect(useUiStore.getState().screen).toEqual({ kind: "desk" });
+    expect(document.body.querySelector("[data-desk-thread-pending]")).not.toBeNull();
+
+    // The core sends the session's card with the open thread; the thread's head reads it and the Threads list does not list it.
+    await act(async () => useShellStore.setState({ deskJobs: { jobs: [], workers: [], named: [card] } }));
+    expect(document.body.querySelector("[data-desk-thread-pending]")).toBeNull();
+    expect(document.body.querySelector("[data-desk-thread-head]")?.textContent).toContain("fixer");
+    expect(sent("session_thread_open")).toHaveLength(1);
+    expect(sent("session_thread_close")).toHaveLength(0);
   });
 });
