@@ -1,4 +1,4 @@
-import { ArrowUpIcon, CircleXIcon, FileDiffIcon, LoaderCircleIcon, SettingsIcon, TriangleAlertIcon, XIcon } from "lucide-react";
+import { ArrowUpIcon, ChevronRightIcon, CircleXIcon, FileDiffIcon, LoaderCircleIcon, SettingsIcon, TriangleAlertIcon, XIcon } from "lucide-react";
 import { useEffect, useMemo, useState, type ReactNode } from "react";
 import type { Actions } from "./actions";
 import type { ProjectStatus, ProjectStray } from "./agentScope";
@@ -333,6 +333,7 @@ function Week({ project, actions }: { project: Workspace; actions: Actions }) {
   const read = useMemo(() => projectCost(node, project.id), [node, project.id]);
   const agents = useShellStore((s) => allAgents(s.agents, s.rest?.status?.remote));
   const links = useShellStore((s) => s.linkSummaries);
+  const summaries = useShellStore((s) => summariesEnabled(s.rest?.status?.background_ai));
   const openTable = (filter: TaskFilter, task?: string) => {
     useUiStore.getState().showTaskTable(filter, task ?? null);
     actions.openDetail({ kind: "cost", workspace_id: project.id });
@@ -355,43 +356,42 @@ function Week({ project, actions }: { project: Workspace; actions: Actions }) {
     );
   }
   const cost = read.cost;
-  const week = cost?.week;
-  const total = cost ? (cost.micro_usd > 0 ? `${costPrefix(cost)} ${usd(cost.micro_usd, language)}` : usd(0, language)) : usd(0, language);
-  const heights = cost ? dayHeights(cost.days) : [];
-  const costly = (cost?.tasks ?? []).slice(0, COSTLY_SHOWN);
+  // A week with no task and no mission draws its shape faint under what fills it, never a 0 or a $0.00 (B21).
+  if (!cost || (cost.tasks_total === 0 && cost.micro_usd === 0 && cost.week.missions === 0)) return <WeekPreview project={project} actions={actions} />;
+  const week = cost.week;
+  const total = cost.micro_usd > 0 ? `${costPrefix(cost)} ${usd(cost.micro_usd, language)}` : usd(0, language);
+  const heights = dayHeights(cost.days);
+  const costly = cost.tasks.slice(0, COSTLY_SHOWN);
+  const perPr = week.per_pr;
   return (
     <>
       <section className="flex min-w-0 flex-col gap-xs" aria-label={t("projectTool.week")} data-project-week={project.id}>
         <SectionHead title={t("projectTool.week")} />
         <div className="grid grid-cols-2 gap-xs px-xs">
-          <Figure label={t("projectTool.week.merged")} value={String(week?.merged_prs ?? 0)} note={t("projectTool.week.open", { count: week?.open_prs ?? 0 })} kind="merged" />
-          <Figure label={t("projectTool.week.perPrCost")} value={week?.per_pr ? `${week.per_pr.unpriced ? "≥ " : ""}${usd(week.per_pr.micro_usd, language)}` : "–"} note={week?.per_pr ? t("projectTool.week.tokens", { tokens: tokenWords(language, week.per_pr.tokens) }) : null} kind="per-pr-cost" />
-          <Figure label={t("projectTool.week.perPrTime")} value={week?.per_pr ? durationWords(language, week.per_pr.elapsed_ms) : "–"} note={week?.per_pr ? t("projectTool.week.worked", { time: durationWords(language, week.per_pr.worked_ms) }) : null} kind="per-pr-time" />
-          <Figure label={t("projectTool.week.missions")} value={String(week?.missions ?? 0)} note={week && week.mission_reopened > 0 ? t("projectTool.week.reopened", { count: week.mission_reopened }) : null} kind="missions" />
+          <Figure label={t("projectTool.week.merged")} value={String(week.merged_prs)} note={t("projectTool.week.open", { count: week.open_prs })} kind="merged" />
+          {perPr ? <Figure label={t("projectTool.week.perPrCost")} value={`${perPr.unpriced ? "≥ " : ""}${usd(perPr.micro_usd, language)}`} note={t("projectTool.week.tokens", { tokens: tokenWords(language, perPr.tokens) })} kind="per-pr-cost" /> : <Figure label={t("projectTool.week.perPrCost")} empty={t("projectTool.week.whenMerged")} kind="per-pr-cost" />}
+          {perPr ? <Figure label={t("projectTool.week.perPrTime")} value={durationWords(language, perPr.elapsed_ms)} note={t("projectTool.week.worked", { time: durationWords(language, perPr.worked_ms) })} kind="per-pr-time" /> : <Figure label={t("projectTool.week.perPrTime")} empty={t("projectTool.week.whenMerged")} kind="per-pr-time" />}
+          {week.missions > 0 ? <Figure label={t("projectTool.week.missions")} value={String(week.missions)} note={week.mission_reopened > 0 ? t("projectTool.week.reopened", { count: week.mission_reopened }) : null} kind="missions" /> : <Figure label={t("projectTool.week.missions")} empty={t("projectTool.week.noMission")} kind="missions" />}
         </div>
         <div className="flex min-w-0 flex-col gap-xxs px-xs">
-          <span className="flex items-baseline gap-xs text-caption text-muted-foreground">
-            {t("projectTool.week.cost")} <span className="font-semibold tabular-nums text-foreground" data-week-cost={cost?.micro_usd ?? 0}>{total}</span>
+          <span className="flex min-w-0 items-baseline gap-xs text-caption text-muted-foreground">
+            {t("projectTool.week.cost")} <span className="font-semibold tabular-nums text-foreground" data-week-cost={cost.micro_usd}>{total}</span>
             {read.failed ? <span className="text-micro">{t("projectTool.cost.failedKept")}</span> : null}
-          </span>
-          {cost ? (
-            <span aria-hidden="true" className="flex h-(--size-control-sm) items-end gap-px">
-              {heights.map((height, index) => {
-                const merged = week?.merged_by_day[index] ?? 0;
-                return (
-                  <span key={cost.days[index]!.date} className="relative flex h-full flex-1 items-end" data-cost-day={cost.days[index]!.date} data-day-merged={merged}>
-                    <span className="w-full rounded-t-xs bg-primary" style={{ height: `${Math.max(height * 100, height > 0 ? 8 : 2)}%`, opacity: height > 0 ? 1 : 0.3 }} />
-                    {merged > 0 ? <span className="absolute inset-x-0 bottom-0 h-(--lens-bar-height) rounded-t-xs bg-pr-merged" /> : null}
-                  </span>
-                );
-              })}
+            <span className="min-w-0 flex-1" />
+            <span className="flex shrink-0 items-center gap-sm text-micro text-subtle-foreground" data-week-legend="true">
+              <span className="inline-flex items-center gap-xxs"><span aria-hidden="true" className="size-(--size-legend-mark) rounded-xs bg-primary" />{t("projectTool.week.cost")}</span>
+              <span className="inline-flex items-center gap-xxs"><span aria-hidden="true" className="size-(--size-legend-mark) rounded-full bg-pr-merged" />{t("projectTool.week.legendMerged")}</span>
             </span>
-          ) : null}
-          {cost && cost.unpriced_agents.length > 0 ? <span className="truncate text-micro text-muted-foreground" data-week-unpriced={cost.unpriced_agents.length}>{t("projectTool.cost.unpriced", { agents: cost.unpriced_agents.map((agent) => agentProductName(agent)).join(", ") })}</span> : null}
+          </span>
+          <DayBars days={cost.days} heights={heights} merged={week.merged_by_day} />
+          {cost.unpriced_agents.length > 0 ? <span className="truncate text-micro text-muted-foreground" data-week-unpriced={cost.unpriced_agents.length}>{t("projectTool.cost.unpriced", { agents: cost.unpriced_agents.map((agent) => agentProductName(agent)).join(", ") })}</span> : null}
         </div>
-        {week && week.no_result_tasks > 0 ? (
-          <Button variant="text" size="inline" className="mx-xs self-start text-caption text-warning hover:text-warning" onClick={() => openTable("none")} data-week-no-result={week.no_result_tasks}>
-            {t("projectTool.week.noResult", { count: week.no_result_tasks, cost: `${week.no_result_unpriced ? "≥ " : ""}${usd(week.no_result_micro_usd, language)}` })}
+        {week.no_result_tasks > 0 ? (
+          <Button variant="text" size="inline" className="mx-xs flex min-w-0 items-center gap-xs text-caption text-muted-foreground" onClick={() => openTable("none")} data-week-no-result={week.no_result_tasks}>
+            <span className="truncate">{t("projectTool.week.noResult")}</span>
+            <span className="shrink-0 tabular-nums text-warning">{t("projectTool.week.noResultValue", { count: week.no_result_tasks, cost: `${week.no_result_unpriced ? "≥ " : ""}${usd(week.no_result_micro_usd, language)}` })}</span>
+            <span className="min-w-0 flex-1" />
+            <ChevronRightIcon aria-hidden="true" className="size-(--size-icon-sm) shrink-0 text-subtle-foreground" />
           </Button>
         ) : null}
       </section>
@@ -401,7 +401,7 @@ function Week({ project, actions }: { project: Workspace; actions: Actions }) {
             <Button variant="text" size="inline" className="text-caption" onClick={() => openTable("all")} data-costly-all="true">{t("projectTool.costly.all")}</Button>
           </SectionHead>
           <ul className="flex min-w-0 flex-col">
-            {costly.map((task) => <CostlyRow key={task.id} task={task} name={taskName(task, agents, links, project.id) ?? t("projectTool.cost.session", { agent: agentProductName(task.root.agent) })} projectId={project.id} onPress={() => openTable("all", task.id)} />)}
+            {costly.map((task) => <CostlyRow key={task.id} task={task} name={taskName(task, agents, links, project.id, summaries) ?? t("projectTool.cost.session", { agent: agentProductName(task.root.agent) })} projectId={project.id} onPress={() => openTable("all", task.id)} />)}
           </ul>
         </section>
       ) : null}
@@ -409,17 +409,108 @@ function Week({ project, actions }: { project: Workspace; actions: Actions }) {
   );
 }
 
-function Figure({ label, value, note, kind }: { label: string; value: string; note: string | null; kind: string }) {
+/**
+ * The week's bars, oldest first with today last (B21): a bar's height is its
+ * day's cost against the week's largest, a dot over it says something merged
+ * that day, and hovered or focused it names the day, its cost and merges.
+ */
+function DayBars({ days, heights, merged }: { days: readonly { date: string; micro_usd: number }[]; heights: readonly number[]; merged: readonly number[] }) {
+  const { t, i18n } = useInterfaceTranslation();
+  const language = requireInterfaceLanguage(i18n.language);
+  const names = days.map((day, index) => (index === days.length - 1 ? t("projectTool.week.today") : weekdayWords(language, day.date)));
+  return (
+    <div className="flex min-w-0 flex-col gap-xxs" data-week-days={days.length}>
+      <span className="flex h-(--size-control-sm) items-end gap-px">
+        {days.map((day, index) => {
+          const height = heights[index] ?? 0;
+          const count = merged[index] ?? 0;
+          const label = t("projectTool.week.dayHint", { day: names[index]!, cost: usd(day.micro_usd, language), count });
+          return (
+            <Hint key={day.date} label={label}>
+              <span role="img" tabIndex={0} className="flex h-full min-w-0 flex-1 flex-col items-center justify-end gap-px rounded-xs outline-none focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-ring" data-cost-day={day.date} data-day-merged={count}>
+                {count > 0 ? <span className="size-(--lens-bar-height) shrink-0 rounded-full bg-pr-merged" data-day-merge-dot="true" /> : null}
+                <span className="w-full shrink-0 rounded-t-xs bg-primary" style={{ height: `${Math.max(height * 80, height > 0 ? 8 : 2)}%`, opacity: height > 0 ? 1 : 0.3 }} />
+              </span>
+            </Hint>
+          );
+        })}
+      </span>
+      <span aria-hidden="true" className="flex gap-px text-micro text-subtle-foreground">
+        {names.map((name, index) => <span key={days[index]!.date} className="min-w-0 flex-1 truncate text-center">{name}</span>)}
+      </span>
+    </div>
+  );
+}
+
+/** A day's short weekday name, read as the calendar date it is (`금`). */
+function weekdayWords(language: string, date: string): string {
+  return new Intl.DateTimeFormat(language, { weekday: "short", timeZone: "UTC" }).format(new Date(`${date}T00:00:00Z`));
+}
+
+/** The decorative heights of the empty week's faint bars; never a reading. */
+const PREVIEW_DAYS = [30, 55, 20, 75, 45, 95, 40] as const;
+
+/**
+ * 최근 7일 with nothing in it (B21): the week and the costly tasks drawn
+ * faint and colourless, with no number in them, under what fills them and a
+ * start. Only the words and the button are read or pressed.
+ */
+function WeekPreview({ project, actions }: { project: Workspace; actions: Actions }) {
+  const { t } = useInterfaceTranslation();
+  const labels = [t("projectTool.week.merged"), t("projectTool.week.perPrCost"), t("projectTool.week.perPrTime"), t("projectTool.week.missions")];
+  return (
+    <section className="relative min-w-0" aria-label={t("projectTool.week")} data-project-week="empty">
+      <div aria-hidden="true" className="pointer-events-none flex min-w-0 flex-col gap-xs opacity-(--opacity-preview) saturate-25 select-none" data-week-preview="true">
+        <SectionHead title={t("projectTool.week")} />
+        <div className="grid grid-cols-2 gap-xs px-xs">
+          {labels.map((label) => (
+            <span key={label} className="flex min-w-0 flex-col gap-xxs rounded-sm bg-muted px-sm py-xs">
+              <span className="truncate text-micro text-muted-foreground">{label}</span>
+              <span className="h-(--size-icon-sm) w-2/5 rounded-xs bg-muted-foreground" />
+            </span>
+          ))}
+        </div>
+        <span className="flex h-(--size-control-sm) items-end gap-px px-xs">
+          {PREVIEW_DAYS.map((height, index) => <span key={index} className="min-w-0 flex-1 rounded-t-xs bg-primary" style={{ height: `${height}%` }} />)}
+        </span>
+        <SectionHead title={t("projectTool.costly")} />
+        {[100, 70, 55].map((width) => (
+          <span key={width} className="flex items-center gap-xs px-xs py-xs">
+            <span className="h-(--size-legend-mark) w-(--size-control) shrink-0 rounded-xs bg-muted-foreground" />
+            <span className="min-w-0 flex-1"><span className="block h-(--size-legend-mark) rounded-xs bg-muted-foreground" style={{ width: `${width}%` }} /></span>
+            <span className="h-(--size-legend-mark) w-(--size-control) shrink-0 rounded-xs bg-muted-foreground" />
+          </span>
+        ))}
+      </div>
+      <div className="absolute inset-0 flex flex-col items-center justify-center gap-xs bg-radial from-card from-30% via-card/70 to-transparent px-md text-center">
+        <p className="text-body font-semibold text-foreground">{t("projectTool.week.emptyTitle")}</p>
+        <p className="text-caption text-muted-foreground">{t("projectTool.week.emptyBody")}</p>
+        <Button size="sm" variant="secondary" className="mt-xxs" onClick={() => actions.openStartPanel(project.id)} data-week-start={project.id}>{t("projectTool.week.start")}</Button>
+      </div>
+    </section>
+  );
+}
+
+/** A 최근 7일 figure: its value and note, or, with nothing yet, what fills it, dimmed (B21). */
+function Figure({ label, kind, ...shown }: { label: string; kind: string } & ({ value: string; note: string | null } | { empty: string })) {
+  if ("empty" in shown) {
+    return (
+      <span className="flex min-w-0 flex-col rounded-sm bg-card px-sm py-xs opacity-(--opacity-secondary)" data-week-figure={kind} data-week-figure-empty="true">
+        <span className="truncate text-micro text-muted-foreground">{label}</span>
+        <span className="truncate py-xxs text-caption text-subtle-foreground">{shown.empty}</span>
+      </span>
+    );
+  }
   return (
     <span className="flex min-w-0 flex-col rounded-sm bg-card px-sm py-xs" data-week-figure={kind}>
       <span className="truncate text-micro text-muted-foreground">{label}</span>
-      <span className="truncate text-subhead font-semibold tabular-nums text-foreground">{value}</span>
-      {note ? <span className="truncate text-micro text-muted-foreground">{note}</span> : null}
+      <span className="truncate text-subhead font-semibold tabular-nums text-foreground">{shown.value}</span>
+      {shown.note ? <span className="truncate text-micro text-muted-foreground">{shown.note}</span> : null}
     </span>
   );
 }
 
-/** A costly task's row (B25): its result, name, children, cost and how long it took; the press opens the table on it. */
+/** A costly task's row (B25): its result in a fixed column, name, children, cost and how long it took; the press opens the table on it. */
 function CostlyRow({ task, name, projectId, onPress }: { task: TaskCost; name: string; projectId: string; onPress: () => void }) {
   const { t, i18n } = useInterfaceTranslation();
   const language = requireInterfaceLanguage(i18n.language);
@@ -428,18 +519,18 @@ function CostlyRow({ task, name, projectId, onPress }: { task: TaskCost; name: s
     <li className="relative min-w-0 rounded-xs" data-costly-task={task.id}>
       <RowOverlayButton aria-label={name} onClick={onPress} />
       <span className="pointer-events-none relative flex min-w-0 items-center gap-xs px-xs py-xs">
-        <TaskResultMark task={task} projectId={projectId} />
+        <span className="flex w-(--size-task-column) shrink-0 items-center overflow-hidden" data-costly-result="true"><TaskResultMark task={task} projectId={projectId} numbered /></span>
         <span className="min-w-0 flex-1 truncate text-caption text-foreground" title={name}>{name}</span>
-        {children > 0 ? <span className="shrink-0 text-micro text-muted-foreground">{t("projectTool.task.children", { count: children })}</span> : null}
+        {children > 0 ? <span className="shrink-0 text-micro tabular-nums text-muted-foreground" title={t("projectTool.task.childrenHint", { count: children })}>{t("projectTool.task.children", { count: children })}</span> : null}
         <span className="shrink-0 text-right font-mono text-micro tabular-nums text-foreground">{task.unpriced ? "≥ " : ""}{usd(task.micro_usd, language)}</span>
-        <span className="w-(--size-control) shrink-0 text-right text-micro tabular-nums text-muted-foreground">{durationWords(language, task.elapsed_ms)}</span>
+        <span className="min-w-(--size-control) shrink-0 whitespace-nowrap text-right text-micro tabular-nums text-muted-foreground">{durationWords(language, task.elapsed_ms)}</span>
       </span>
     </li>
   );
 }
 
-/** A task's result as its mark (B30): its pull request's mark, or the kind's word. */
-export function TaskResultMark({ task, projectId }: { task: TaskCost; projectId: string }) {
+/** A task's result as its mark (B30): its pull request's mark, with its number where `numbered`, or the kind's word. */
+export function TaskResultMark({ task, projectId, numbered = false }: { task: TaskCost; projectId: string; numbered?: boolean }) {
   const { t } = useInterfaceTranslation();
   const result = task.result;
   // An open pull request draws the state the PR list gives it.
@@ -447,11 +538,11 @@ export function TaskResultMark({ task, projectId }: { task: TaskCost; projectId:
     ? catalogWorkspaces(s.rest).find((row) => row.id === projectId)?.pull_requests?.find((row) => row.number === result.number)?.state ?? null
     : null);
   if (task.kind === "mission" && task.mission) return <span className="shrink-0 text-micro text-muted-foreground" data-task-result="mission">{t("projectTool.task.missionPrs", { count: task.mission.prs, merged: task.mission.merged })}</span>;
-  if (result.kind === "pr" && result.number != null) return <PrMark state={result.state === "merged" ? "merged" : result.state === "closed" ? "closed" : (openState ?? "pending")} number={result.number} compact />;
+  if (result.kind === "pr" && result.number != null) return <PrMark state={result.state === "merged" ? "merged" : result.state === "closed" ? "closed" : (openState ?? "pending")} number={result.number} compact={!numbered} className={numbered ? "text-micro" : undefined} />;
   return <span className={cn("shrink-0 text-micro", result.kind === "working" ? "text-agent-working" : result.kind === "none" ? "text-warning" : "text-muted-foreground")} data-task-result={result.kind}>{t(`projectTool.task.result.${result.kind}`)}</span>;
 }
 
-/** Hide AI 제안 N (B26): the Hide AI tool's 제안 tab; none while Hide AI is off or has nothing. */
+/** Hide AI 제안 N (B26): one row under a rule at the column's end, opening the Hide AI tool's 제안 tab; none while Hide AI is off or has nothing. */
 function Suggestions({ project, actions }: { project: Workspace; actions: Actions }) {
   const { t } = useInterfaceTranslation();
   const count = useShellStore((s) => {
@@ -460,8 +551,13 @@ function Suggestions({ project, actions }: { project: Workspace; actions: Action
   });
   if (count === 0) return null;
   return (
-    <Button variant="text" size="inline" className="mx-xs self-start text-caption" onClick={() => actions.openSuggestions(project.device_id, project.id)} data-project-suggestions={count}>
-      {t("projectTool.suggestions", { count })}
-    </Button>
+    <div className="border-t border-border pt-sm">
+      <Button variant="text" size="inline" className="flex w-full min-w-0 items-center gap-xs px-xs text-caption text-muted-foreground" onClick={() => actions.openSuggestions(project.device_id, project.id)} data-project-suggestions={count}>
+        <span className="truncate">{t("projectTool.suggestions")}</span>
+        <span className="font-medium tabular-nums text-foreground">{count}</span>
+        <span className="min-w-0 flex-1" />
+        <ChevronRightIcon aria-hidden="true" className="size-(--size-icon-sm) shrink-0 text-subtle-foreground" />
+      </Button>
+    </div>
   );
 }

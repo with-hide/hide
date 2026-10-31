@@ -4,7 +4,9 @@
 // stacks its two columns; the rail's pin is drawn off and on, with the lane
 // up and closed. The Mission tool (PRD mission-tool) has its list with one
 // mission's map open, its empty start guide, the guide unfolded over the
-// list, its defaults and an unreadable record. No daemon is used.
+// list, its defaults and an unreadable record. The Project tool draws its
+// week empty, partly filled and filled (PRD project-panel-results B21). No
+// daemon is used.
 import { useLayoutEffect, useMemo } from "react";
 import { createActions } from "../actions";
 import { TooltipProvider } from "../components/ui/tooltip";
@@ -16,12 +18,13 @@ import { useUiStore } from "../ui";
 import type { Tool } from "../workspace";
 import { WorkspaceScreen } from "../WorkspaceScreen";
 import { hideAiSceneProject } from "./HideAiScene";
+import { landingTaskTitles, landingUsage, partialWeek } from "./landingSceneData";
 import { memorySceneProject } from "./MemoryScene";
 import { MISSION_TOOL_DEFAULTS, missionToolMissions } from "./missionToolSceneData";
 import { REFERENCE_FOLDS, sidebarScene } from "./sceneData";
 import { sceneParams, type SceneParams } from "./SidebarScene";
 
-const STATES = ["closed", "closed-pinned", "overlay", "pinned", "explorer-overlay", "explorer-only", "expanded", "project", "memory", "mission", "mission-empty", "mission-guide", "mission-settings", "mission-unreadable", "changes", "narrow"] as const;
+const STATES = ["closed", "closed-pinned", "overlay", "pinned", "explorer-overlay", "explorer-only", "expanded", "project", "project-partial", "project-empty", "memory", "mission", "mission-empty", "mission-guide", "mission-settings", "mission-unreadable", "changes", "narrow"] as const;
 type LaneState = (typeof STATES)[number];
 /** `documents`: the checkout has views and the viewing column shows them; `tool`: the tool column. */
 type Lane = { tool: Tool | null; pinned: boolean; documents: boolean; expanded: boolean };
@@ -35,6 +38,8 @@ const LANES: Record<LaneState, Lane> = {
   "explorer-only": { tool: "explorer", pinned: true, documents: false, expanded: false },
   expanded: { tool: "explorer", pinned: false, documents: true, expanded: true },
   project: { tool: "project", pinned: true, documents: true, expanded: false },
+  "project-partial": { tool: "project", pinned: true, documents: true, expanded: false },
+  "project-empty": { tool: "project", pinned: true, documents: true, expanded: false },
   memory: { tool: "memory", pinned: true, documents: true, expanded: false },
   mission: { tool: "mission", pinned: true, documents: true, expanded: false },
   "mission-empty": { tool: "mission", pinned: true, documents: false, expanded: false },
@@ -98,12 +103,20 @@ export function RightLaneScene({ theme, scale, content, state }: SceneParams & {
       device_id: "local", path: root, open, documents: lane.documents, tool: lane.tool, pinned: lane.pinned, document_width: null, detail_width: null, explorer_width: null, panel_width: null, lane_called: 0, lane_calls: 0, lane_called_side: "view",
       layout: { root: { area: { id: "a1", active: displays[0]?.id ?? null, displays } }, active_area: "a1", limits: { areas: 4, depth: 3, displays: 32 }, display_count: displays.length },
     };
-    // The project's counts as the core derives them, and one worktree left with changes nobody works on.
+    // The Project tool's three weeks (PRD project-panel-results B21): filled, with two worktrees left behind and the
+    // billing-app's week; partly filled, three tasks and no merge yet; and empty, nothing worked here this week.
+    const left = [checkout, workspace.checkouts[1] ?? checkout];
+    const strays = state === "project" ? [
+      { checkout_id: left[0]!.id, branch: left[0]!.branch, name: "Retry failed invoice emails", changed_files: 4, unpushed: 0, since_unix_ms: Date.now() - 2 * 3_600_000 },
+      { checkout_id: `${left[1]!.id}-2`, branch: left[1]!.branch, name: "Currency rounding in totals", changed_files: 0, unpushed: 3, since_unix_ms: Date.now() - 26 * 3_600_000 },
+    ] : [];
     workspace.agent_scope = { ...workspace.agent_scope, status: {
-      strays: [{ checkout_id: checkout.id, branch: checkout.branch, name: "Retry failed invoice emails", changed_files: 4, unpushed: 0, since_unix_ms: Date.now() - 2 * 3_600_000 }], strays_total: 1,
-      prs: { open: 3, mergeable: 1, failed: 1, review: 1, checking: 0 },
-      git: { worktrees: 1, changed: 0, unpushed: 0, removable: 0, dots: [{ checkout_id: checkout.id, state: "clean" }] },
+      strays, strays_total: strays.length,
+      prs: { open: state === "project" ? 4 : state === "project-partial" ? 2 : 0, mergeable: 1, failed: 0, review: 0, checking: 0 },
+      git: { worktrees: state === "project-empty" ? 3 : 7, changed: 0, unpushed: 0, removable: 0, dots: [{ checkout_id: checkout.id, state: "clean" }] },
     } };
+    workspace.disk = { total_bytes: 18_400_000_000, unavailable_reason: null, measuring: false, free_bytes: 180_000_000_000, confirmed_bytes: 18_400_000_000, layers: { build_cache: 9_200_000_000, dependencies: 5_500_000_000, source: 2_900_000_000, other: 600_000_000, shared_git: 200_000_000 } };
+    const usage = lane.tool !== "project" ? null : state === "project" ? landingUsage(Date.now()) : state === "project-partial" ? partialWeek(Date.now(), workspace.id) : { node: "local", agents: [], history: null, projects: [] };
     // The project's Hide AI, so the tool draws its 제안 and Memory tabs and the rail counts both.
     const memory = { ...memorySceneProject("workspace"), workspace_id: workspace.id };
     const suggestions = hideAiSceneProject("new", workspace.id);
@@ -113,11 +126,11 @@ export function RightLaneScene({ theme, scale, content, state }: SceneParams & {
       scene.rest.missions = state === "mission-empty" ? { items: [] } : state === "mission-unreadable" ? { items: [], failed: "mission book: unreadable" } : { items: missions };
       scene.rest.ui_state = { ...scene.rest.ui_state!, conductor_settings: MISSION_TOOL_DEFAULTS, ...(state === "mission" ? { detail: { items: [{ kind: "mission" as const, mission: "m-tabs" }], shown: true } } : {}) };
     }
-    return { scene, editor: { tabs: lane.documents ? tabs : [], active_tab_id: lane.documents ? "t1" : null }, documents, listings, memory, suggestions };
+    return { scene, editor: { tabs: lane.documents ? tabs : [], active_tab_id: lane.documents ? "t1" : null }, documents, listings, memory, suggestions, usage };
   }, [content, lane, open, state]);
   const actions = useMemo(() => createActions(() => true), []);
   useLayoutEffect(() => {
-    useShellStore.setState({ rest: fixture.scene.rest, agents: fixture.scene.agents, connection: "live", editor: fixture.editor, documents: fixture.documents, listings: fixture.listings, memory: { project: fixture.memory }, suggestions: { project: fixture.suggestions } });
+    useShellStore.setState({ rest: fixture.scene.rest, agents: fixture.scene.agents, connection: "live", editor: fixture.editor, documents: fixture.documents, listings: fixture.listings, memory: { project: fixture.memory }, suggestions: { project: fixture.suggestions }, usage: fixture.usage ? { nodes: [fixture.usage] } : null, linkSummaries: fixture.usage ? landingTaskTitles() : null });
     useUiStore.setState({ screen: { kind: "workspace" }, laneExpanded: lane.expanded, stackFront: "view", missionToolPage: state === "mission-settings" ? "settings" : "list", missionGuideOpen: state === "mission-guide", missionClosedAll: false });
     document.documentElement.classList.toggle("dark", theme === "dark");
     document.documentElement.classList.toggle("light", theme === "light");

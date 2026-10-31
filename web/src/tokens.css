@@ -194,6 +194,7 @@
   --opacity-dimmed: 0.5;
   --opacity-secondary: 0.72;
   --opacity-read-status: 0.55;
+  --opacity-preview: 0.32;
   --ratio-agent-mark-corner: 0.26;
   --ratio-agent-mark-inset: 0.16;
   --ratio-agent-mark-font: 0.53;
@@ -303,6 +304,7 @@
   --size-mission-side: 320px;
   --size-mission-wide: 900px;
   --size-task-column: 56px;
+  --size-legend-mark: 8px;
   --size-task-table-wide: 520px;
   --size-mission-run-min: 32px;
   --size-mission-popover: 320px;

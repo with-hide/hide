@@ -8,7 +8,7 @@
 
 import type { PrBoard, TaskCardScope } from "../agentScope";
 import type { NodeUsage, TaskCost } from "../generated/hided-ws";
-import type { AgentRow, Checkout, Device, EditorDocumentSnapshot, EditorTabSnapshot, MemoryRow, PrState, ProjectMemory, PullRequest, SidebarLens, SnapshotRest, ViewDisplaySnapshot, Workspace } from "../snapshot";
+import type { AgentRow, Checkout, LinkSummaries, Device, EditorDocumentSnapshot, EditorTabSnapshot, MemoryRow, PrState, ProjectMemory, PullRequest, SidebarLens, SnapshotRest, ViewDisplaySnapshot, Workspace } from "../snapshot";
 import type { MobileState } from "../mobileSettings";
 import { EMPTY_GALLERY_SCOPE } from "./agentScopes";
 import { overviewWorld, type OverviewWorld } from "./overviewSceneData";
@@ -502,12 +502,21 @@ export function landingTasks(agents: AgentRow[], workspaces: Workspace[], nowMs:
 }
 
 /** The story's costliest tasks: a share of the week, how long each took and what it left. */
-const LANDING_TASKS: { id: string; session: string; agent: string; share: number; hours: number; children: number; result: TaskCost["result"] }[] = [
-  { id: "a1", session: "session-a1", agent: "claude", share: 0.24, hours: 5.2, children: 4, result: { kind: "working" } },
-  { id: "a3", session: "session-a3", agent: "codex", share: 0.16, hours: 3.4, children: 1, result: { kind: "pr", number: 431, state: "open" } },
-  { id: "q2", session: "session-q2", agent: "claude", share: 0.11, hours: 2.1, children: 0, result: { kind: "pr", number: 428, state: "merged" } },
-  { id: "e1", session: "session-e1", agent: "opencode", share: 0.04, hours: 0.8, children: 0, result: { kind: "none" } },
+const LANDING_TASKS: { id: string; session: string; title: string; agent: string; share: number; hours: number; children: number; result: TaskCost["result"] }[] = [
+  { id: "a1", session: "session-a1", title: "Move the payment retry queue", agent: "claude", share: 0.24, hours: 5.2, children: 4, result: { kind: "working" } },
+  { id: "a3", session: "session-a3", title: "Fix the invoice PDF render", agent: "codex", share: 0.16, hours: 3.4, children: 1, result: { kind: "pr", number: 431, state: "open" } },
+  { id: "q2", session: "session-q2", title: "Tidy the currency labels", agent: "claude", share: 0.11, hours: 2.1, children: 0, result: { kind: "pr", number: 428, state: "merged" } },
+  { id: "e1", session: "session-e1", title: "Try a faster export", agent: "opencode", share: 0.04, hours: 0.8, children: 0, result: { kind: "none" } },
 ];
+
+/** The record's titles of those tasks' sessions, as the core's link summaries carry them, so their rows read by name. */
+export function landingTaskTitles(): LinkSummaries {
+  const work = LANDING_TASKS.map((task) => ({
+    session: { device_id: "local", agent: task.agent, session_id: task.session }, title: task.title, fallback_title: task.agent, native_title: task.title, manual_title: null,
+    cwd: "/work/billing-app", ended_at_unix_ms: null, open_missed: 0, subtree_open_missed: 0, missed: [],
+  }));
+  return { filling: false, projects: { hide: { work } } };
+}
 
 function landingTask(task: (typeof LANDING_TASKS)[number], total: number, nowMs: number): TaskCost {
   const micro = Math.round(total * task.share);
@@ -535,6 +544,25 @@ export function landingUsage(nowMs: number): NodeUsage {
       unpriced_agents: [], partial: false, waiting: false, stale: false, limited: false,
       tasks: LANDING_TASKS.map((task) => landingTask(task, total, nowMs)), tasks_total: LANDING_TASKS.length,
       week: { merged_prs: 9, open_prs: 4, missions: 1, mission_reopened: 1, merged_by_day: [1, 2, 0, 2, 1, 2, 1], per_pr: { micro_usd: share(0.06), tokens: 3_100_000, elapsed_ms: 172 * MINUTE, worked_ms: 248 * MINUTE, unpriced: false }, no_result_tasks: 2, no_result_micro_usd: share(0.07), no_result_unpriced: false },
+    }],
+  };
+}
+
+/** A week with work and no merge yet (PRD project-panel-results B21): two tasks, one still working and one whose pull request is open. */
+export function partialWeek(nowMs: number, workspaceId: string): NodeUsage {
+  const amounts = [0, 0, 1.2, 0, 2.0, 0, 1.0];
+  const days = amounts.map((usd, index) => ({ date: new Date(nowMs - (6 - index) * DAY).toISOString().slice(0, 10), micro_usd: Math.round(usd * 1_000_000) }));
+  const total = days.reduce((sum, day) => sum + day.micro_usd, 0);
+  const tasks = [
+    landingTask({ ...LANDING_TASKS[0]!, children: 0, hours: 1.8 }, total, nowMs),
+    landingTask({ ...LANDING_TASKS[1]!, children: 0, hours: 0.6, share: 0.31, result: { kind: "pr", number: 212, state: "open" } }, total, nowMs),
+  ].map((task, index) => (index === 0 ? { ...task, micro_usd: total - Math.round(total * 0.31) } : task));
+  return {
+    node: "local", agents: [], history: null,
+    projects: [{
+      workspace_id: workspaceId, micro_usd: total, days, models: [{ agent: "claude", model: "model-a", micro_usd: total }], tokens: 1_900_000, agents: [{ agent: "claude", micro_usd: total }],
+      unpriced_agents: [], partial: false, waiting: false, stale: false, limited: false, tasks, tasks_total: tasks.length,
+      week: { merged_prs: 0, open_prs: 2, missions: 0, mission_reopened: 0, merged_by_day: [0, 0, 0, 0, 0, 0, 0], per_pr: null, no_result_tasks: 0, no_result_micro_usd: 0, no_result_unpriced: false },
     }],
   };
 }

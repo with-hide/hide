@@ -12,6 +12,7 @@ import { readFailureText } from "./fileFailure";
 import { useDiskWatch } from "./diskWatch";
 import { LAYER_DOT, openDiskCleanup } from "./DiskCleanupSheet";
 import { formatBytes } from "./i18n/format";
+import { summariesEnabled } from "./hideAi";
 import { useInterfaceTranslation } from "./i18n/client";
 import { requireInterfaceLanguage } from "./i18n/locale";
 import { cn } from "./lib/utils";
@@ -268,7 +269,8 @@ function TaskRow({ task, project, noResult, open: openFirst, actions }: { task: 
   }, [openFirst]);
   const agents = useShellStore((s) => allAgents(s.agents, s.rest?.status?.remote));
   const links = useShellStore((s) => s.linkSummaries);
-  const name = taskName(task, agents, links, project.id) ?? t("projectTool.cost.session", { agent: agentProductName(task.root.agent) });
+  const summaries = useShellStore((s) => summariesEnabled(s.rest?.status?.background_ai));
+  const name = taskName(task, agents, links, project.id, summaries) ?? t("projectTool.cost.session", { agent: agentProductName(task.root.agent) });
   const conversation = () => {
     const live = agents.find((row) => row.session_id === task.root.session_id);
     if (live) return actions.openAgent(live.pane_id);
@@ -308,10 +310,11 @@ function TaskSessions({ task, project }: { task: TaskCost; project: Workspace })
   const language = requireInterfaceLanguage(i18n.language);
   const agents = useShellStore((s) => allAgents(s.agents, s.rest?.status?.remote));
   const links = useShellStore((s) => s.linkSummaries);
+  const summaries = useShellStore((s) => summariesEnabled(s.rest?.status?.background_ai));
   return (
     <ul className="flex min-w-0 flex-col pb-xs" data-task-sessions={task.sessions.length}>
       {task.sessions.map((session) => {
-        const name = sessionName(session.session_id, agents, links, project.id) ?? t("projectTool.cost.session", { agent: agentProductName(session.agent) });
+        const name = sessionName(session.session_id, agents, links, project.id, summaries) ?? t("projectTool.cost.session", { agent: agentProductName(session.agent) });
         return (
           <li key={session.session_id} className="flex min-w-0 items-center gap-sm py-xxs text-micro" style={{ paddingInlineStart: `calc(var(--spacing-md) * ${session.depth + 1})` }} data-task-session={session.session_id} data-task-depth={session.depth}>
             <span className="min-w-0 flex-1 truncate text-foreground" title={name}>{name} <span className="text-muted-foreground">· {agentProductName(session.agent)}</span></span>

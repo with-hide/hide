@@ -9,7 +9,7 @@ import type { ProjectStray } from "./agentScope";
 import type { NodeUsage, ProjectCost, TaskCost } from "./generated/hided-ws";
 import { formatUnit } from "./i18n/format";
 import type { InterfaceLanguage } from "./i18n/locale";
-import { openMissedWork } from "./sessionWork";
+import { openMissedWork, recordTitle } from "./sessionWork";
 import { catalogWorkspaces, frontCheckout, type AgentRow, type LinkSummaries, type SnapshotRest, type Workspace } from "./snapshot";
 
 /** The 흘린 것 rows shown before `+N 더` (B8). */
@@ -127,15 +127,21 @@ export function filterCounts(tasks: readonly TaskCost[]): Record<TaskFilter, num
  * session's name while the agent is listed, else the record's title; null
  * when nothing names it, which the caller words as the agent's session.
  */
-export function taskName(task: Pick<TaskCost, "kind" | "mission" | "root">, agents: readonly Pick<AgentRow, "session_id" | "identity_label">[], links: LinkSummaries | null, projectId: string): string | null {
+export function taskName(task: Pick<TaskCost, "kind" | "mission" | "root">, agents: readonly Pick<AgentRow, "session_id" | "identity_label">[], links: LinkSummaries | null, projectId: string, summaries: boolean): string | null {
   if (task.kind === "mission" && task.mission) return task.mission.title;
-  return sessionName(task.root.session_id, agents, links, projectId);
+  return sessionName(task.root.session_id, agents, links, projectId, summaries);
 }
 
-/** A session's name while its agent is listed, else its record's title. */
-export function sessionName(sessionId: string, agents: readonly Pick<AgentRow, "session_id" | "identity_label">[], links: LinkSummaries | null, projectId: string): string | null {
+/**
+ * A session's name as the sidebar reads it: its agent row's title while it
+ * is listed, else its record's (`recordTitle`). A record whose only title is
+ * its tool's name has none, so the caller says `<agent> 세션` instead.
+ */
+export function sessionName(sessionId: string, agents: readonly Pick<AgentRow, "session_id" | "identity_label">[], links: LinkSummaries | null, projectId: string, summaries: boolean): string | null {
   const listed = agents.find((row) => row.session_id === sessionId)?.identity_label;
   if (listed) return listed;
-  const recorded = links?.projects[projectId]?.work?.find((work) => work.session.session_id === sessionId)?.title;
-  return recorded || null;
+  const work = links?.projects[projectId]?.work?.find((row) => row.session.session_id === sessionId);
+  if (!work) return null;
+  const title = recordTitle(work, summaries);
+  return title && title !== work.fallback_title ? title : null;
 }

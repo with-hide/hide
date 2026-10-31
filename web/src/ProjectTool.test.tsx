@@ -11,6 +11,7 @@ import { durationWords, filterCounts, strayParts, strayView, taskIn } from "./pr
 import { nextSidebarLens, type ProjectMemory, type ProjectSuggestions, type SnapshotRest } from "./snapshot";
 import { useShellStore } from "./store";
 import { ToolRail } from "./Tools";
+import { useStartPanel } from "./startDraft";
 import { useUiStore } from "./ui";
 import { emptyScope } from "../test/legacyAgentScope";
 import { suggestionsProject } from "../test/suggestionsProject";
@@ -214,13 +215,53 @@ describe("the Project tool", () => {
     expect(sent("stray_restore")).toEqual([{ workspace_id: "p", checkout_id: "w" }]);
   });
 
-  it("draws no week before the core's first build, $0.00 after a read with nothing, and a dash when no build succeeded (B23)", async () => {
+  it("draws no week before the core's first build, $0.00 for tasks with no priced call, and a dash when no build succeeded (B23)", async () => {
     await render(snapshot(status()), null, node({}));
     expect(container.querySelector('[data-project-week="pending"]')).not.toBeNull();
-    await render(snapshot(status()), null, node({ projects: [] }));
+    await render(snapshot(status()), null, node({ projects: [cost({ micro_usd: 0, tasks: [task("a", { kind: "none" }, { micro_usd: 0, unpriced: true })], tasks_total: 1 })] }));
     expect(container.querySelector("[data-week-cost]")?.textContent).toBe("$0.00");
     await render(snapshot(status()), null, node({ projects_failed: true }));
     expect(container.querySelector('[data-project-week="failed"]')).not.toBeNull();
+  });
+
+  it("draws a week with nothing in it faint, with no number, under what fills it and a start (B21)", async () => {
+    await render(snapshot(status()), null, node({ projects: [] }));
+    const week = container.querySelector('[data-project-week="empty"]');
+    const preview = week?.querySelector("[data-week-preview]");
+    expect(preview?.getAttribute("aria-hidden")).toBe("true");
+    // Only the heading's own words carry a digit; no figure, bar or row does.
+    expect(preview?.textContent?.replace("Last 7 days", "")).not.toMatch(/\d/);
+    expect(week?.textContent).toContain("No work this week");
+    expect(container.querySelector("[data-week-cost]")).toBeNull();
+    await press('[data-week-start="p"]');
+    expect(useStartPanel.getState()).toMatchObject({ isOpen: true, preset: { projectId: "p" } });
+    await act(async () => useStartPanel.getState().close());
+  });
+
+  it("says what fills a figure the week has no value for, and dims only that one (B21)", async () => {
+    await render(snapshot(status()), null, node({ projects: [cost({ tasks: [task("a", { kind: "working" })], tasks_total: 1, week: { ...cost().week, open_prs: 2 } })] }));
+    const empty = [...container.querySelectorAll("[data-week-figure-empty]")].map((figure) => [figure.getAttribute("data-week-figure"), figure.textContent]);
+    expect(empty).toEqual([["per-pr-cost", "Cost per PRWhen a PR merges"], ["per-pr-time", "Time per PRWhen a PR merges"], ["missions", "MissionsNone yet"]]);
+    expect(container.querySelector('[data-week-figure="merged"]')?.textContent).toBe("Merged PRs02 open");
+  });
+
+  it("names each day under its bar with today last, dots the days something merged, and says the day's figures on its hint (B21)", async () => {
+    const days = ["2026-10-25", "2026-10-26", "2026-10-27", "2026-10-28", "2026-10-29", "2026-10-30", "2026-10-31"].map((date, index) => ({ date, micro_usd: (index + 1) * 1_000_000 }));
+    await render(snapshot(status()), null, node({ projects: [cost({ days, tasks: [task("a", { kind: "working" })], tasks_total: 1, week: { ...cost().week, merged_by_day: [0, 0, 1, 0, 0, 0, 2] } })] }));
+    const bars = [...container.querySelectorAll("[data-cost-day]")];
+    expect(bars.map((bar) => bar.querySelector("[data-day-merge-dot]") !== null)).toEqual([false, false, true, false, false, false, true]);
+    expect(bars.at(-1)?.getAttribute("aria-label")).toBe("Today · $7.00 · 2 merged");
+    expect(bars[0]?.getAttribute("aria-label")).toBe("Sun · $1.00 · 0 merged");
+  });
+
+  it("names a costly task as the sidebar does, and by its agent only when its record has no title of its own (B25)", async () => {
+    const work = (session_id: string, title: string, manual_title: string | null = null) => ({ session: { device_id: "local", agent: "claude", session_id }, title, fallback_title: "Claude Code", native_title: title === "Claude Code" ? null : title, manual_title, cwd: "/p", ended_at_unix_ms: 1, open_missed: 0, subtree_open_missed: 0, missed: [] });
+    useShellStore.setState({ linkSummaries: { filling: false, projects: { p: { work: [work("s-a", "Retry invoice emails"), work("s-b", "Claude Code"), work("s-c", "Old goal", "Renamed by hand")] } } } });
+    const tasks = [task("a", { kind: "working" }, { sessions_total: 5 }), task("b", { kind: "none" }), task("c", { kind: "none" })];
+    await render(snapshot(status()), null, node({ projects: [cost({ tasks, tasks_total: 3 })] }));
+    const names = [...container.querySelectorAll("[data-costly-task] button")].map((row) => row.getAttribute("aria-label"));
+    expect(names).toEqual(["Retry invoice emails", "Claude Code session", "Renamed by hand"]);
+    expect(container.querySelector('[data-costly-task="a"]')?.textContent).toContain("+4");
   });
 
   it("opens the 작업 비용 table on 결과 없음 from the week's line, and on the costly task from its row (B22, B25)", async () => {
