@@ -778,6 +778,9 @@ jobs:
       version: 0.0.0-ci.${{ github.run_number }}
       include-macos: true
       web-typechecked: ${{ contains(fromJSON(needs.plan.outputs.lanes), 'checks') }}
+      # A pull request checks the package, not the optimizer; main's push run
+      # and the nightly build what ships and save the release dependency set.
+      quick-build: ${{ github.event_name == 'pull_request' }}
 
   verify:
     name: verify

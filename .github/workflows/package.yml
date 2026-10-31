@@ -73,6 +73,11 @@ on:
         type: string
         required: false
         default: adhoc
+      quick-build:
+        description: Build the release binaries at opt-level 1 without LTO (a pull request only; docs/BUILD.md).
+        type: boolean
+        required: false
+        default: false
     # The `release` environment's signing secrets. A called workflow sees an
     # environment secret only when its caller passes it by name, even though
     # the job below names the environment; one not passed reaches the job as an
@@ -195,6 +200,8 @@ jobs:
         with:
           set: release
           save: ${{ github.ref == 'refs/heads/main' }}
+      - if: inputs.quick-build
+        uses: ./.github/actions/quick-release-build
       - uses: pnpm/action-setup@v6
         with:
           version: 10
@@ -251,6 +258,8 @@ jobs:
         with:
           set: release
           save: ${{ github.ref == 'refs/heads/main' }}
+      - if: inputs.quick-build
+        uses: ./.github/actions/quick-release-build
       - uses: pnpm/action-setup@v6
         with:
           version: 10
@@ -610,6 +619,8 @@ jobs:
         with:
           set: release
           save: ${{ github.ref == 'refs/heads/main' }}
+      - if: inputs.quick-build
+        uses: ./.github/actions/quick-release-build
       - uses: pnpm/action-setup@v6
         with:
           version: 10
