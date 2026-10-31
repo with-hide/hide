@@ -90,6 +90,8 @@ mod sys {
     pub(super) struct Session {
         /// The session's id, which is its leader's pid.
         leader: Option<u32>,
+        /// The leader's start time, when it still ran as it was adopted.
+        leader_started: Option<u64>,
         /// Every member ever found, by pid, with its start time.
         found: BTreeMap<u32, u64>,
     }
@@ -98,6 +100,7 @@ mod sys {
         pub(super) fn new() -> io::Result<Self> {
             Ok(Self {
                 leader: None,
+                leader_started: None,
                 found: BTreeMap::new(),
             })
         }
@@ -115,6 +118,7 @@ mod sys {
             if let Ok(started) = crate::process::start_time(leader)
                 && crate::process::is_alive(leader)
             {
+                self.leader_started = Some(started);
                 self.found.insert(leader, started);
             }
             Ok(())
@@ -129,11 +133,15 @@ mod sys {
         /// the leader's pid, and every process under one of them. A pid
         /// stays reserved as a session id while any process of that session
         /// lives, so no later process can take the leader's pid while a
-        /// member remains.
+        /// member remains; once one has, the session is over and the pid
+        /// names another, which has no member of this one.
         fn look(&self) -> io::Result<Vec<(u32, u64)>> {
             let Some(sid) = self.leader else {
                 return Ok(Vec::new());
             };
+            if self.sid_taken(sid) {
+                return Ok(Vec::new());
+            }
             let mut members: Vec<u32> = Vec::new();
             for pid in crate::process::sys::all_pids()? {
                 if pid <= 1 || pid == std::process::id() {
@@ -164,8 +172,25 @@ mod sys {
                     running.push((pid, started));
                 }
             }
+            // Read again after the table, so a pid taken while it was read
+            // is caught too.
+            if self.sid_taken(sid) {
+                return Ok(Vec::new());
+            }
             running.sort_by_key(|(pid, _)| (Some(*pid) != self.leader, *pid));
             Ok(running)
+        }
+
+        /// Whether a process other than the adopted leader runs under the
+        /// leader's pid: one started after the leader ended, or any process
+        /// at all when the leader had ended before it was adopted.
+        fn sid_taken(&self, sid: u32) -> bool {
+            match crate::process::start_time(sid) {
+                Ok(started) => {
+                    crate::process::is_alive(sid) && self.leader_started != Some(started)
+                }
+                Err(_) => false,
+            }
         }
 
         /// Whether a member found before still runs as the process it was.
@@ -257,6 +282,64 @@ mod sys {
                 }
                 crate::process::pause(LOOK_EVERY);
             }
+        }
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use std::os::unix::process::CommandExt;
+        use std::process::{Command, Stdio};
+
+        use super::Session;
+
+        const ROLE: &str = "HIDE_PLATFORM_SESSION_TEST_LEADER";
+
+        /// The leader of the test below: it leads a session of its own and
+        /// lives until it is killed, or a minute.
+        #[test]
+        #[allow(clippy::disallowed_methods)] // the leader sleeps to stay alive
+        fn leader_role() {
+            if std::env::var_os(ROLE).is_some() {
+                std::thread::sleep(std::time::Duration::from_secs(60));
+            }
+        }
+
+        /// Once another process holds the leader's pid, the session it now
+        /// names is not this one: a stand-in for a pid reused after the
+        /// session ended, by a process that leads a session of its own.
+        #[test]
+        fn a_leader_pid_another_process_took_names_no_member() {
+            let mut command = Command::new(std::env::current_exe().unwrap());
+            command
+                .args([
+                    "--exact",
+                    "process::session::sys::tests::leader_role",
+                    "--test-threads=1",
+                ])
+                .env(ROLE, "1")
+                .stdin(Stdio::null())
+                .stdout(Stdio::null())
+                .stderr(Stdio::null());
+            // SAFETY: `setsid` is async-signal-safe and touches no memory.
+            unsafe {
+                command.pre_exec(|| {
+                    if libc::setsid() == -1 {
+                        return Err(std::io::Error::last_os_error());
+                    }
+                    Ok(())
+                });
+            }
+            let mut leader = command.spawn().unwrap();
+            let pid = leader.id();
+            let mut session = Session::new().unwrap();
+            session.adopt(pid).unwrap();
+            let members = session.members().unwrap();
+            session.leader_started = session.leader_started.map(|started| started + 1);
+            let taken = session.members().unwrap();
+            let _ = leader.kill();
+            let _ = leader.wait();
+            assert_eq!(members, vec![pid]);
+            assert_eq!(taken, Vec::<u32>::new());
         }
     }
 }

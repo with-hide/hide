@@ -1,8 +1,9 @@
 //! One connection holds a pane at a time (PRD engine-bundle-2-pane-holder
 //! D-10, D-11, B9): a connection takes it over only once its hello is
 //! accepted, the one it replaces is told so and what it sends after no
-//! longer applies, and a wrong, slow or foreign opening never disturbs the
-//! connection that holds the pane.
+//! longer applies, a wrong, slow or foreign opening never disturbs the
+//! connection that holds the pane, and every connection the holder does not
+//! take is told why.
 
 use std::io::Write;
 
@@ -136,4 +137,57 @@ fn a_size_outside_the_bounds_closes_the_connection_and_the_pane_runs_on() {
     next.send(ClientMessage::Input(print_ok().to_vec()))
         .unwrap();
     next.wait_for_output("hide-ok");
+}
+
+/// A stream that has connected and said nothing yet.
+fn silent_stream(holder: &Holder) -> LocalStream {
+    LocalStream::connect_until(&holder.socket, std::time::Instant::now() + HANG_LIMIT).unwrap()
+}
+
+fn hello() -> ClientMessage {
+    ClientMessage::Hello(Hello {
+        versions: (PROTOCOL_VERSION, PROTOCOL_VERSION),
+        accepts: vec![Capability::RawOutput],
+    })
+}
+
+#[test]
+fn a_connection_past_the_opening_bound_is_told_so_and_the_pane_runs_on() {
+    let home = Home::new();
+    let holder = shell_holder(&home);
+    let mut holding = holder.open();
+    // Eight connections read their hello at once, the bound; each waits out
+    // its hello's bound, so the ninth arrives while all eight are opening.
+    let _opening: Vec<LocalStream> = (0..8).map(|_| silent_stream(&holder)).collect();
+    let ninth = raw_reply(&holder, None);
+    assert!(
+        matches!(&ninth, HolderMessage::Closed(closed) if closed.reason == CloseReason::OpeningFull),
+        "{ninth:?}"
+    );
+    holding
+        .send(ClientMessage::Input(print_ok().to_vec()))
+        .unwrap();
+    holding.wait_for_output("hide-ok");
+    assert!(holding.closed.is_none());
+}
+
+#[test]
+fn a_connection_that_opens_while_the_pane_ends_is_told_it_ended() {
+    let home = Home::new();
+    let holder = shell_holder(&home);
+    let mut late = silent_stream(&holder);
+    let mut holding = holder.open();
+    holding.send(ClientMessage::Terminate).unwrap();
+    assert_eq!(holding.wait_closed().reason, CloseReason::Terminated);
+    // The pane has ended; the connection that was still opening says its
+    // hello only now.
+    write_client(&mut late, &hello()).unwrap();
+    late.set_deadline(std::time::Instant::now() + HANG_LIMIT);
+    match read_holder(&mut late).unwrap() {
+        HolderMessage::Closed(closed) => {
+            assert_eq!(closed.reason, CloseReason::Terminated, "{closed:?}");
+        }
+        other => panic!("{other:?}"),
+    }
+    holder.wait_gone();
 }

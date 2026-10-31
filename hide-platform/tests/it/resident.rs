@@ -17,7 +17,10 @@ use std::sync::mpsc;
 use std::thread;
 use std::time::{Duration, Instant};
 
-use hide_platform::process::{Session, SessionEnd, is_alive, kill_tree, start_resident, take_lent};
+use hide_platform::process::{
+    ResidentCommand, Session, SessionEnd, is_alive, kill_tree, start_resident, start_time,
+    take_lent,
+};
 
 const ROLE: &str = "HIDE_PLATFORM_RESIDENT_ROLE";
 /// What a starter does to itself before it starts a resident.
@@ -32,26 +35,69 @@ const ROLE_LIFE: Duration = Duration::from_secs(60);
 /// How long a session's end may take; `Session::end`'s own bound in a holder.
 const END_LIMIT: Duration = Duration::from_secs(5);
 
-/// Ends the process it names when dropped, however the test ends.
-struct Started(u32);
+/// A process named while it runs, by its pid and start time, so asking
+/// later whether it still runs, or ending it, never reaches a process that
+/// took its pid after it ended (docs/TESTING.md, rule 7).
+#[derive(Clone, Copy, Debug)]
+struct Pinned {
+    pid: u32,
+    started: u64,
+}
+
+impl Pinned {
+    /// `pid` as it runs now; `None` when it has already ended.
+    fn of(pid: u32) -> Option<Self> {
+        let started = start_time(pid).ok()?;
+        is_alive(pid).then_some(Self { pid, started })
+    }
+
+    fn is_running(&self) -> bool {
+        is_alive(self.pid) && start_time(self.pid).ok() == Some(self.started)
+    }
+}
+
+/// Ends the process it names when dropped, however the test ends, while it
+/// is still that process.
+struct Started(Option<Pinned>);
+
+impl Started {
+    fn new(pid: u32) -> Self {
+        Self(Pinned::of(pid))
+    }
+
+    fn is_running(&self) -> bool {
+        self.0.is_some_and(|pinned| pinned.is_running())
+    }
+}
 
 impl Drop for Started {
     fn drop(&mut self) {
-        if is_alive(self.0) {
-            let _ = kill_tree(self.0);
+        if let Some(pinned) = self.0
+            && pinned.is_running()
+        {
+            let _ = kill_tree(pinned.pid);
         }
     }
 }
 
-/// A child of the test, killed and reaped when dropped.
+/// A child of the test, ended and reaped when dropped. One the test already
+/// waited for names nothing any more, so it is left alone.
 struct Owned(Child);
 
 impl Drop for Owned {
     fn drop(&mut self) {
-        let _ = kill_tree(self.0.id());
-        let _ = self.0.kill();
-        let _ = self.0.wait();
+        // Until it is reaped its pid is its own, even once it has exited.
+        if matches!(self.0.try_wait(), Ok(None)) {
+            let _ = kill_tree(self.0.id());
+            let _ = self.0.kill();
+            let _ = self.0.wait();
+        }
     }
+}
+
+/// Each of `pids` that still runs, named now.
+fn pinned(pids: &[u32]) -> Vec<Pinned> {
+    pids.iter().filter_map(|pid| Pinned::of(*pid)).collect()
 }
 
 fn role_command(role: &str) -> Command {
@@ -68,6 +114,21 @@ fn role_command(role: &str) -> Command {
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::null());
+    command
+}
+
+/// The `resident` role, as a resident start runs it.
+fn resident_command() -> ResidentCommand {
+    let mut command = ResidentCommand::new(std::env::current_exe().unwrap());
+    command
+        .args([
+            "--exact",
+            "resident::role",
+            "--nocapture",
+            "--test-threads=1",
+        ])
+        .env(ROLE, "resident")
+        .env_remove(SETUP);
     command
 }
 
@@ -113,13 +174,13 @@ fn wait_until(what: &str, done: impl Fn() -> bool) {
 /// its report.
 fn start_reporting_resident() -> (Started, String) {
     let (reader, writer) = std::io::pipe().unwrap();
-    let mut command = role_command("resident");
+    let command = resident_command();
     #[cfg(unix)]
     let lent = [std::os::fd::AsFd::as_fd(&writer)];
     #[cfg(windows)]
     let lent = [std::os::windows::io::AsHandle::as_handle(&writer)];
-    let pid = start_resident(&mut command, &lent).unwrap();
-    let started = Started(pid);
+    let pid = start_resident(&command, &lent).unwrap().pid;
+    let started = Started::new(pid);
     drop(writer);
     let report = line_after(reader, "RESIDENT ");
     (started, report)
@@ -192,16 +253,21 @@ fn starter() {
     #[cfg(windows)]
     let _job = windows_job::enter(&setup);
     let (reader, writer) = std::io::pipe().unwrap();
-    let mut command = role_command("resident");
+    let command = resident_command();
     #[cfg(unix)]
     let lent = [std::os::fd::AsFd::as_fd(&writer)];
     #[cfg(windows)]
     let lent = [std::os::windows::io::AsHandle::as_handle(&writer)];
-    match start_resident(&mut command, &lent) {
-        Ok(pid) => {
+    match start_resident(&command, &lent) {
+        Ok(resident) => {
             drop(writer);
             let report = line_after(reader, "RESIDENT ");
-            println!("STARTED pid={pid} starter={} {report}", std::process::id());
+            println!(
+                "STARTED pid={} outer_job={} starter={} {report}",
+                resident.pid,
+                resident.outer_job,
+                std::process::id()
+            );
         }
         Err(error) => println!("REFUSED kind={:?} {error}", error.kind()),
     }
@@ -296,8 +362,11 @@ fn describe_self() -> String {
         (asked, !GetConsoleWindow().is_null(), streams)
     };
     assert_ne!(asked, 0);
+    let job = hide_platform::process::own_job()
+        .unwrap()
+        .map_or_else(|| "none".to_owned(), |limits| limits.to_string());
     format!(
-        "pid={} in_job={} console={console} streams_null={streams_null}",
+        "pid={} in_job={} job={job} console={console} streams_null={streams_null}",
         std::process::id(),
         in_job != 0
     )
@@ -379,7 +448,7 @@ fn a_resident_child_keeps_nothing_of_its_starter() {
     let (_starter, line) = run_starter(setup);
     assert!(line.starts_with("STARTED "), "{line}");
     let pid: u32 = field(&line, "pid").parse().unwrap();
-    let _resident = Started(pid);
+    let resident = Started::new(pid);
     assert_eq!(field(&line, "streams_null"), "true", "{line}");
     #[cfg(unix)]
     {
@@ -398,10 +467,17 @@ fn a_resident_child_keeps_nothing_of_its_starter() {
     }
     #[cfg(windows)]
     {
-        assert_eq!(field(&line, "in_job"), "false", "{line}");
+        // A job above the starter's (the runner's, or the test harness's)
+        // may keep it; the start says so, and nothing else does.
+        assert_eq!(field(&line, "in_job"), field(&line, "outer_job"), "{line}");
         assert_eq!(field(&line, "console"), "false", "{line}");
+        // The jobs this run had, for the record: CI shows this line.
+        let test_job = hide_platform::process::own_job()
+            .unwrap()
+            .map_or_else(|| "none".to_owned(), |limits| limits.to_string());
+        println!("JOBS test_job={test_job} {line}");
     }
-    assert!(is_alive(pid));
+    assert!(resident.is_running());
 }
 
 /// The starter's group and session (Unix), or its kill-on-close job
@@ -416,7 +492,7 @@ fn a_resident_child_outlives_what_ends_its_starter() {
     let (mut starter, line) = run_starter(setup);
     assert!(line.starts_with("STARTED "), "{line}");
     let pid: u32 = field(&line, "pid").parse().unwrap();
-    let _resident = Started(pid);
+    let resident = Started::new(pid);
     #[cfg(unix)]
     {
         // What a closed terminal and a killed group send the starter's
@@ -428,12 +504,13 @@ fn a_resident_child_outlives_what_ends_its_starter() {
             libc::kill(group, libc::SIGKILL);
         }
     }
-    // On Windows the starter exits, which closes its job.
+    // On Windows the starter exits, which closes its job; a job above it
+    // may keep the resident, and the start said so.
     starter.0.wait().unwrap();
     #[cfg(windows)]
-    assert_eq!(field(&line, "in_job"), "false", "{line}");
+    assert_eq!(field(&line, "in_job"), field(&line, "outer_job"), "{line}");
     // Nothing more ends it: it still runs once its starter is gone.
-    assert!(is_alive(pid), "the resident ended with its starter");
+    assert!(resident.is_running(), "the resident ended with its starter");
 }
 
 #[cfg(windows)]
@@ -442,6 +519,11 @@ fn a_start_inside_a_job_that_keeps_its_processes_is_refused() {
     let (_starter, line) = run_starter("job");
     assert!(line.starts_with("REFUSED "), "{line}");
     assert_eq!(field(&line, "kind"), "PermissionDenied", "{line}");
+    // The refusal names the job that kept it.
+    assert!(
+        line.contains("kill_on_close=true,breakaway_ok=false"),
+        "{line}"
+    );
 }
 
 /// A child another thread starts while a resident starts keeps its own
@@ -617,16 +699,27 @@ fn ending_a_session_ends_every_member_and_what_they_start_meanwhile() {
     let outsider = Owned(role_command("sleep").spawn().unwrap());
     let mut session = Session::new().unwrap();
     let (mut leader, members) = start_session(&mut session, "", &pids);
-    let leader_pid = leader.0.id();
+    let named = pinned(&members);
+    assert_eq!(named.len(), members.len(), "a member ended before the end");
     assert!(session.members().unwrap().contains(&members[0]));
 
     assert_eq!(session.end(END_LIMIT).unwrap(), SessionEnd::Ended);
     let _ = leader.0.wait();
-    // Every member recorded, including those started as the end was sent.
-    for pid in pids_in(&pids, members.len()) {
-        assert!(!is_alive(pid), "member {pid} outlived its session's end");
+    for member in &named {
+        assert!(
+            !member.is_running(),
+            "member {} outlived its session's end",
+            member.pid
+        );
     }
-    assert!(!is_alive(leader_pid));
+    // Those started as the end was sent were recorded after the members
+    // were named; one that runs now is one the end missed.
+    for pid in pids_in(&pids, members.len()) {
+        assert!(
+            Pinned::of(pid).is_none(),
+            "member {pid} outlived its session's end"
+        );
+    }
     assert!(session.members().unwrap().is_empty());
     #[cfg(unix)]
     assert!(
@@ -646,10 +739,24 @@ fn a_session_whose_leader_exited_still_ends_what_it_left() {
     let pids = folder.path().join("pids");
     let mut session = Session::new().unwrap();
     let (mut leader, members) = start_session(&mut session, "exit", &pids);
+    let named = pinned(&members);
     leader.0.wait().unwrap();
-    assert!(is_alive(members[0]), "the leader's child ended with it");
+    assert!(
+        named.iter().any(Pinned::is_running),
+        "the leader's child ended with it"
+    );
     assert_eq!(session.end(END_LIMIT).unwrap(), SessionEnd::Ended);
+    for member in &named {
+        assert!(
+            !member.is_running(),
+            "member {} outlived its session's end",
+            member.pid
+        );
+    }
     for pid in pids_in(&pids, 1) {
-        assert!(!is_alive(pid), "member {pid} outlived its session's end");
+        assert!(
+            Pinned::of(pid).is_none(),
+            "member {pid} outlived its session's end"
+        );
     }
 }

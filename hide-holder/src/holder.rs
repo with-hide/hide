@@ -16,7 +16,7 @@ use std::path::PathBuf;
 use std::process::ExitCode;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
-use std::sync::{Arc, Mutex, PoisonError};
+use std::sync::{Arc, Condvar, Mutex, PoisonError};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -54,8 +54,17 @@ const OUTPUT_QUEUE_CAP: usize = 4 * 1024 * 1024;
 const INPUT_QUEUE_CAP: usize = 1024 * 1024;
 
 /// The most connections reading their hello at once; one past it is closed
-/// unanswered.
+/// with `opening_full`.
 const MAX_OPENING: usize = 8;
+
+/// How long the listener gives one refusal of a connection past
+/// `MAX_OPENING`, so a burst of them never holds up the accept.
+const REFUSE_LIMIT: Duration = Duration::from_millis(250);
+
+/// Debug builds only: a holder started with this variable set panics on its
+/// PTY writer's thread at the first input, so a test sees what a panic does.
+/// A release holder never reads it, and the pane's program never gets it.
+const PANIC_ON_INPUT: &str = "HIDE_HOLDER_TEST_PANIC_ON_INPUT";
 
 /// The parser's scrollback budget, libghostty's approximate bytes (PRD
 /// engine-bundle-2-pane-holder D-17).
@@ -86,6 +95,12 @@ enum Event {
     /// A connection fell past the output bound.
     OutputOverflow {
         generation: u64,
+    },
+    /// The PTY refused input a connection sent; later input from that
+    /// connection is dropped, and another connection's is tried again.
+    InputFailed {
+        generation: u64,
+        error: String,
     },
     ProgramExited {
         code: Option<i32>,
@@ -137,17 +152,22 @@ pub struct Holder {
     events: Receiver<Event>,
     sender: Sender<Event>,
     outbound: Arc<Mutex<Option<Outbound>>>,
-    input: Sender<Vec<u8>>,
+    input: Sender<(u64, Vec<u8>)>,
     input_queued: Arc<AtomicUsize>,
     current: Option<Connection>,
     generation: u64,
     pty_closed: bool,
+    /// Set once the pane ends: what a connection that opens from then on is
+    /// closed with.
+    ending: Arc<Mutex<Option<Closed>>>,
+    opening: Arc<Opening>,
 }
 
 impl Holder {
     /// Starts the program on a new PTY and listens at the socket. An error
     /// leaves nothing running.
-    pub fn start(config: &Config, log: Log) -> Result<Self, String> {
+    /// `job` names the job that holds the holder, for the log.
+    pub fn start(config: &Config, log: Log, job: &str) -> Result<Self, String> {
         #[cfg(windows)]
         portable_pty::win::verify_runtime().map_err(|error| error.to_string())?;
         let mut session = Session::new().map_err(|error| format!("the pane's session: {error}"))?;
@@ -161,10 +181,10 @@ impl Holder {
             })
             .map_err(|error| format!("the PTY could not be opened: {error}"))?;
         let mut command = CommandBuilder::from_argv(config.program.clone());
-        if let Some(cwd) = &config.cwd {
-            command.cwd(cwd);
-        }
+        command.cwd(&config.cwd);
         command.env_remove(hide_platform::process::LENT_KEY);
+        let panic_on_input = cfg!(debug_assertions) && std::env::var_os(PANIC_ON_INPUT).is_some();
+        command.env_remove(PANIC_ON_INPUT);
         #[cfg(unix)]
         let spawned = pair.slave.spawn_command(command);
         #[cfg(windows)]
@@ -202,7 +222,7 @@ impl Holder {
         let (sender, events) = mpsc::channel();
         let terminal = Arc::new(Mutex::new(terminal));
         let outbound: Arc<Mutex<Option<Outbound>>> = Arc::new(Mutex::new(None));
-        let (input, input_rx) = mpsc::channel::<Vec<u8>>();
+        let (input, input_rx) = mpsc::channel::<(u64, Vec<u8>)>();
         let input_queued = Arc::new(AtomicUsize::new(0));
 
         spawn_named("pty-reader", {
@@ -213,8 +233,8 @@ impl Holder {
         });
         spawn_named("pty-writer", {
             let queued = input_queued.clone();
-            let log = log.clone();
-            move || write_pty(writer, &input_rx, &queued, &log)
+            let sender = sender.clone();
+            move || write_pty(writer, &input_rx, &queued, &sender, panic_on_input)
         });
         spawn_named("program-waiter", {
             let sender = sender.clone();
@@ -226,9 +246,12 @@ impl Holder {
                 let _ = sender.send(Event::ProgramExited { code });
             }
         });
+        let ending = Arc::new(Mutex::new(None));
+        let opening = Arc::new(Opening::default());
         let accept = AcceptSide {
             sender: sender.clone(),
-            opening: Arc::new(AtomicUsize::new(0)),
+            opening: opening.clone(),
+            ending: ending.clone(),
             log: log.clone(),
         };
         let (gone, listener_gone) = mpsc::channel();
@@ -244,6 +267,7 @@ impl Holder {
                 ("program", program.into()),
                 ("rows", size.rows.into()),
                 ("cols", size.cols.into()),
+                ("job", job.into()),
             ],
         );
         Ok(Self {
@@ -264,6 +288,8 @@ impl Holder {
             current: None,
             generation: 0,
             pty_closed: false,
+            ending,
+            opening,
         })
     }
 
@@ -330,6 +356,21 @@ impl Holder {
                         self.close_current(Closed::new(
                             CloseReason::OutputQueueFull,
                             format!("more than {OUTPUT_QUEUE_CAP} output bytes waited"),
+                        ));
+                    }
+                }
+                Event::InputFailed { generation, error } => {
+                    self.log.event(
+                        "holder.input_failed",
+                        &[
+                            ("generation", generation.into()),
+                            ("error", error.as_str().into()),
+                        ],
+                    );
+                    if self.current_generation() == Some(generation) {
+                        self.close_current(Closed::new(
+                            CloseReason::InputFailed,
+                            format!("the pane's terminal refused input: {error}"),
                         ));
                     }
                 }
@@ -429,6 +470,9 @@ impl Holder {
     }
 
     fn input(&mut self, bytes: Vec<u8>) {
+        let Some(generation) = self.current_generation() else {
+            return;
+        };
         let length = bytes.len();
         if self.input_queued.load(Ordering::SeqCst) + length > INPUT_QUEUE_CAP {
             self.log.event(
@@ -442,7 +486,9 @@ impl Holder {
             return;
         }
         self.input_queued.fetch_add(length, Ordering::SeqCst);
-        if self.input.send(bytes).is_err() {
+        if self.input.send((generation, bytes)).is_err() {
+            // The writer's thread is gone, which only a panic does, and a
+            // panic ends the holder.
             self.input_queued.fetch_sub(length, Ordering::SeqCst);
         }
     }
@@ -463,29 +509,61 @@ impl Holder {
                 pixel_height: 0,
             })
         {
-            self.log.event(
-                "holder.resize_failed",
-                &[("error", error.to_string().into())],
+            self.resize_failed(
+                "pty",
+                format!(
+                    "the pane's terminal refused {}x{}: {error}",
+                    size.rows, size.cols
+                ),
             );
             return;
         }
+        // The terminal has the size now, whatever the parser answers.
+        self.size = size;
         let resized = self
             .terminal
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
             .resize(size.cols, size.rows, 0, 0);
         if let Err(error) = resized {
-            self.log.event(
-                "holder.parser_resize_failed",
-                &[("error", error.to_string().into())],
+            self.resize_failed(
+                "parser",
+                format!(
+                    "the holder's parser refused {}x{}: {error}",
+                    size.rows, size.cols
+                ),
             );
         }
-        self.size = size;
+    }
+
+    fn resize_failed(&mut self, part: &str, detail: String) {
+        self.log.event(
+            "holder.resize_failed",
+            &[("part", part.into()), ("error", detail.as_str().into())],
+        );
+        self.close_current(Closed::new(CloseReason::ResizeFailed, detail));
+    }
+
+    /// Closes a connection that opened while the pane ends with what ends
+    /// it, so no connection is dropped without a reason.
+    fn turn_away(&self, stream: &LocalStream) {
+        let closed = self
+            .ending
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone()
+            .unwrap_or_else(|| Closed::new(CloseReason::HolderFailed, "the pane is ending"));
+        refuse(stream, closed, FLUSH_LIMIT, &self.log);
     }
 
     /// Ends the pane: its session first, then the PTY while its last output
     /// drains, then the connection with why, then the holder.
     fn finish(mut self, reason: CloseReason, exit_code: Option<i32>, why: &str) -> ExitCode {
+        // From here a connection that opens is closed with why, by its own
+        // thread or, when it was already queued, by this one.
+        let mut ending = Closed::new(reason, format!("the pane is ending: {why}"));
+        ending.exit_code = exit_code;
+        *self.ending.lock().unwrap_or_else(PoisonError::into_inner) = Some(ending);
         self.closer.close();
         let mut status = ExitCode::SUCCESS;
         let mut closed = match self.session.end(TREE_END_LIMIT) {
@@ -526,6 +604,16 @@ impl Holder {
         if self.listener_gone.recv_timeout(DRAIN_LIMIT).is_err() {
             self.log.event("holder.listener_close_unconfirmed", &[]);
         }
+        // Each opening connection reads its hello within its bound, then
+        // closes itself or is queued; the queued ones are closed here.
+        if !self.opening.wait_idle(Instant::now() + DRAIN_LIMIT) {
+            self.log.event("holder.opening_unconfirmed", &[]);
+        }
+        while let Ok(event) = self.events.try_recv() {
+            if let Event::Opened { stream, .. } = event {
+                self.turn_away(&stream);
+            }
+        }
         if hide_platform::ipc::is_endpoint(&self.socket).unwrap_or(false) {
             let _ = std::fs::remove_file(&self.socket);
         }
@@ -559,6 +647,7 @@ impl Holder {
                 .recv_timeout(deadline.saturating_duration_since(Instant::now()))
             {
                 Ok(Event::PtyClosed) => pty_closed = true,
+                Ok(Event::Opened { stream, .. }) => self.turn_away(&stream),
                 Ok(_) => {}
                 Err(RecvTimeoutError::Timeout | RecvTimeoutError::Disconnected) => break,
             }
@@ -654,21 +743,30 @@ fn read_pty(
     let _ = events.send(Event::PtyClosed);
 }
 
-/// The one writer of the program's input.
+/// The one writer of the program's input. Once the PTY refuses a
+/// connection's input, the rest it sent is dropped, since that connection
+/// is closed; another connection's input is tried again.
 fn write_pty(
     mut writer: Box<dyn Write + Send>,
-    input: &Receiver<Vec<u8>>,
+    input: &Receiver<(u64, Vec<u8>)>,
     queued: &AtomicUsize,
-    log: &Log,
+    events: &Sender<Event>,
+    panic_on_input: bool,
 ) {
-    let mut failed = false;
-    for bytes in input {
-        if !failed && let Err(error) = writer.write_all(&bytes).and_then(|()| writer.flush()) {
-            failed = true;
-            log.event(
-                "holder.input_failed",
-                &[("error", error.to_string().into())],
-            );
+    let mut refused = None;
+    for (generation, bytes) in input {
+        assert!(
+            !panic_on_input,
+            "asked to panic on input ({PANIC_ON_INPUT})"
+        );
+        if refused != Some(generation)
+            && let Err(error) = writer.write_all(&bytes).and_then(|()| writer.flush())
+        {
+            refused = Some(generation);
+            let _ = events.send(Event::InputFailed {
+                generation,
+                error: error.to_string(),
+            });
         }
         queued.fetch_sub(bytes.len(), Ordering::SeqCst);
     }
@@ -726,8 +824,54 @@ fn read_connection(mut stream: LocalStream, generation: u64, events: &Sender<Eve
 /// the pane.
 struct AcceptSide {
     sender: Sender<Event>,
-    opening: Arc<AtomicUsize>,
+    opening: Arc<Opening>,
+    ending: Arc<Mutex<Option<Closed>>>,
     log: Log,
+}
+
+/// How many connections are reading their hello, which the pane's end waits
+/// to reach none.
+#[derive(Default)]
+struct Opening {
+    count: Mutex<usize>,
+    idle: Condvar,
+}
+
+impl Opening {
+    /// Counts one more, unless `MAX_OPENING` are already.
+    fn enter(&self) -> bool {
+        let mut count = self.count.lock().unwrap_or_else(PoisonError::into_inner);
+        if *count >= MAX_OPENING {
+            return false;
+        }
+        *count += 1;
+        true
+    }
+
+    fn leave(&self) {
+        let mut count = self.count.lock().unwrap_or_else(PoisonError::into_inner);
+        *count -= 1;
+        if *count == 0 {
+            self.idle.notify_all();
+        }
+    }
+
+    /// Waits until none is opening, or `deadline` passes.
+    fn wait_idle(&self, deadline: Instant) -> bool {
+        let mut count = self.count.lock().unwrap_or_else(PoisonError::into_inner);
+        while *count > 0 {
+            let left = deadline.saturating_duration_since(Instant::now());
+            if left.is_zero() {
+                return false;
+            }
+            count = self
+                .idle
+                .wait_timeout(count, left)
+                .unwrap_or_else(PoisonError::into_inner)
+                .0;
+        }
+        true
+    }
 }
 
 impl AcceptSide {
@@ -747,62 +891,101 @@ impl AcceptSide {
                     return;
                 }
             };
-            if self.opening.fetch_add(1, Ordering::SeqCst) >= MAX_OPENING {
-                self.opening.fetch_sub(1, Ordering::SeqCst);
-                self.log.event("holder.opening_full", &[]);
+            if !self.opening.enter() {
+                refuse(
+                    &stream,
+                    Closed::new(
+                        CloseReason::OpeningFull,
+                        format!("{MAX_OPENING} connections were opening already"),
+                    ),
+                    REFUSE_LIMIT,
+                    &self.log,
+                );
                 continue;
             }
             let sender = self.sender.clone();
             let opening = self.opening.clone();
+            let ending = self.ending.clone();
             let log = self.log.clone();
             spawn_named("connection-opening", move || {
-                open_connection(stream, &sender, &log);
-                opening.fetch_sub(1, Ordering::SeqCst);
+                open_connection(stream, &sender, &ending, &log);
+                opening.leave();
             });
         }
     }
 }
 
-fn open_connection(stream: LocalStream, events: &Sender<Event>, log: &Log) {
+/// Closes a connection that does not hold the pane with why, within
+/// `limit`: a handle of its own, since the one that read the hello may be
+/// past its deadline, and a handle past its deadline writes nothing.
+fn refuse(stream: &LocalStream, closed: Closed, limit: Duration, log: &Log) {
+    log.event(
+        "holder.connection_refused",
+        &[
+            ("reason", closed.reason.name().into()),
+            ("detail", closed.detail.clone().into()),
+        ],
+    );
+    let mut writer = stream.duplicate();
+    writer.set_deadline(Instant::now() + limit);
+    if let Err(error) = write_holder(&mut writer, &HolderMessage::Closed(closed)) {
+        log.event(
+            "holder.refusal_unsent",
+            &[("error", error.to_string().into())],
+        );
+    }
+}
+
+fn open_connection(
+    stream: LocalStream,
+    events: &Sender<Event>,
+    ending: &Mutex<Option<Closed>>,
+    log: &Log,
+) {
     let mut bounded = stream.duplicate();
     bounded.set_deadline(Instant::now() + HELLO_LIMIT);
-    // The refusal gets a deadline of its own: the hello's may have passed,
-    // and a handle past its deadline writes nothing.
-    let refuse = |closed: Closed| {
-        log.event(
-            "holder.connection_refused",
-            &[
-                ("reason", closed.reason.name().into()),
-                ("detail", closed.detail.clone().into()),
-            ],
-        );
-        let mut writer = stream.duplicate();
-        writer.set_deadline(Instant::now() + HELLO_LIMIT);
-        let _ = write_holder(&mut writer, &HolderMessage::Closed(closed));
-    };
     if !stream.peer_is_this_account().unwrap_or(false) {
-        refuse(Closed::new(
-            CloseReason::HelloInvalid,
-            "the peer is not this account",
-        ));
+        let closed = Closed::new(CloseReason::HelloInvalid, "the peer is not this account");
+        refuse(&stream, closed, HELLO_LIMIT, log);
         return;
     }
     let hello = match read_hello(&mut bounded) {
         Ok(hello) => hello,
         Err(error) => {
-            refuse(Closed::new(hello_reason(&error), error.to_string()));
+            let closed = Closed::new(hello_reason(&error), error.to_string());
+            refuse(&stream, closed, HELLO_LIMIT, log);
             return;
         }
     };
-    match agree(&hello, &SENDS) {
-        Ok((version, sends)) => {
-            let _ = events.send(Event::Opened {
-                stream,
-                version,
-                sends,
-            });
+    let (version, sends) = match agree(&hello, &SENDS) {
+        Ok(agreed) => agreed,
+        Err(closed) => {
+            refuse(&stream, closed, HELLO_LIMIT, log);
+            return;
         }
-        Err(closed) => refuse(closed),
+    };
+    let ended = ending
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .clone();
+    if let Some(closed) = ended {
+        refuse(&stream, closed, HELLO_LIMIT, log);
+        return;
+    }
+    // Queued once the pane has begun to end, it is closed by the end; a
+    // queue already gone means the holder is past its end.
+    let opened = Event::Opened {
+        stream,
+        version,
+        sends,
+    };
+    if let Err(mpsc::SendError(Event::Opened { stream, .. })) = events.send(opened) {
+        let closed = ending
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone()
+            .unwrap_or_else(|| Closed::new(CloseReason::HolderFailed, "the holder has ended"));
+        refuse(&stream, closed, HELLO_LIMIT, log);
     }
 }
 

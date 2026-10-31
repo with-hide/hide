@@ -6,7 +6,6 @@
 use std::ffi::OsString;
 use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
-use std::process::Command;
 use std::sync::mpsc;
 use std::thread;
 use std::time::{Duration, Instant};
@@ -17,7 +16,7 @@ use hide_holder_protocol::{
 };
 use hide_kit::holders::{Reservation, Source};
 use hide_platform::ipc::LocalStream;
-use hide_platform::process::{is_alive, kill_tree, start_resident, start_time};
+use hide_platform::process::{ResidentCommand, is_alive, kill_tree, start_resident, start_time};
 
 /// A hang guard for a start, an answer or an end, never a measure of speed.
 pub const HANG_LIMIT: Duration = Duration::from_secs(30);
@@ -142,6 +141,8 @@ pub struct Holder {
     pub program: Running,
     pub socket: PathBuf,
     pub log: PathBuf,
+    /// The job the holder said holds it (`none` outside every job).
+    pub job: String,
     #[cfg(unix)]
     session: hide_platform::process::Session,
 }
@@ -153,20 +154,38 @@ pub enum Start {
 }
 
 /// Starts the holder at `program_path` as a resident child holding
-/// `program`, with `environment` added to what the pane's program gets.
+/// `program`, with `environment` added to what the pane's program gets,
+/// started from and running its program in the folder of `socket`.
 pub fn start(
     program_path: &Path,
     socket: &Path,
     program: &[OsString],
     environment: &[(&str, &OsString)],
 ) -> Start {
+    let folder = socket.parent().unwrap();
+    start_with(program_path, socket, program, environment, folder, folder)
+}
+
+/// As [`start`], started from `start_folder`, with the pane's program in
+/// `cwd`.
+pub fn start_with(
+    program_path: &Path,
+    socket: &Path,
+    program: &[OsString],
+    environment: &[(&str, &OsString)],
+    start_folder: &Path,
+    cwd: &Path,
+) -> Start {
     let log = socket.with_extension("log");
-    let mut command = Command::new(program_path);
+    let mut command = ResidentCommand::new(program_path);
     command
+        .current_dir(start_folder)
         .arg("--socket")
         .arg(socket)
         .args(["--rows", "24", "--cols", "80", "--id", "test-pane", "--log"])
         .arg(&log)
+        .arg("--cwd")
+        .arg(cwd)
         .arg("--")
         .args(program);
     for (key, value) in environment {
@@ -177,7 +196,7 @@ pub fn start(
     let lent = [std::os::fd::AsFd::as_fd(&writer)];
     #[cfg(windows)]
     let lent = [std::os::windows::io::AsHandle::as_handle(&writer)];
-    let pid = start_resident(&mut command, &lent).unwrap();
+    let pid = start_resident(&command, &lent).unwrap().pid;
     drop(writer);
     let process = Running::of(pid);
     let line = first_line(reader);
@@ -204,11 +223,17 @@ pub fn start(
         session
     };
     let program = Running::of(program).expect("the pane's program ended as soon as it started");
+    let job = line
+        .split_whitespace()
+        .find_map(|pair| pair.strip_prefix("job="))
+        .unwrap_or_else(|| panic!("the holder said {line:?}"))
+        .to_owned();
     Start::Ready(Holder {
         process,
         program,
         socket: socket.to_owned(),
         log,
+        job,
         #[cfg(unix)]
         session,
     })

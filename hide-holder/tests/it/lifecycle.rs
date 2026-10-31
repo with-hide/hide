@@ -8,8 +8,8 @@ use std::ffi::OsString;
 
 use crate::role::EXIT_EARLY;
 use crate::support::{
-    Connection, Home, PIDS_FILE, ROLE, Running, current_version, pids_in, print_ok, role_program,
-    shell, source, start_ready,
+    Connection, Home, PIDS_FILE, ROLE, Running, Start, current_version, pids_in, print_ok,
+    role_program, shell, source, start_ready, start_with,
 };
 use hide_holder_protocol::{ClientMessage, CloseReason, Size};
 
@@ -20,6 +20,18 @@ fn a_holder_runs_its_shell_and_carries_input_and_output_across_connections() {
     let socket = home.socket("p");
     let holder = start_ready(&folder.program, &socket, &shell(), &[]);
     drop(folder);
+
+    // The job that holds the holder, said for its starter to record: none
+    // on Unix; on Windows a job above the test's may hold it.
+    if cfg!(unix) {
+        assert_eq!(holder.job, "none");
+    } else {
+        assert!(
+            holder.job == "none" || holder.job.contains("kill_on_close="),
+            "{}",
+            holder.job
+        );
+    }
 
     let mut first = holder.open();
     assert_eq!(first.welcome.generation, 1);
@@ -239,4 +251,71 @@ fn a_killed_holder_hangs_up_its_shell() {
     unsafe { libc::kill(holder.process.pid as libc::pid_t, libc::SIGKILL) };
     holder.wait_gone();
     holder.program.wait_gone();
+}
+
+/// A panic on any of the holder's threads ends the holder at once, after a
+/// log line, and the pane goes with it as with a killed holder: no holder
+/// runs on with part of it gone.
+#[test]
+fn a_holder_that_panics_ends_and_takes_its_pane_with_it() {
+    let home = Home::new();
+    let folder = home.prepare(current_version(), &source());
+    let panic: OsString = "1".into();
+    let holder = start_ready(
+        &folder.program,
+        &home.socket("p"),
+        &shell(),
+        &[("HIDE_HOLDER_TEST_PANIC_ON_INPUT", &panic)],
+    );
+    drop(folder);
+    let mut connection = holder.open();
+    connection
+        .send(ClientMessage::Input(print_ok().to_vec()))
+        .unwrap();
+    holder.wait_gone();
+    holder.program.wait_gone();
+    let log = holder.log_text();
+    assert!(log.contains("\"holder.panicked\""), "{log}");
+    assert!(log.contains("\"pty-writer\""), "{log}");
+    // It aborted: no orderly end ran, which would have logged one (a
+    // holder that only lost its writer ends when its shell reads the EOF
+    // the writer leaves behind).
+    assert!(!log.contains("\"holder.ended\""), "{log}");
+}
+
+/// The holder works in its version folder, so it keeps no hold on the
+/// folder it was started from (on Windows a working folder cannot be
+/// removed), and runs its program in the folder the start names.
+#[test]
+fn a_holder_leaves_the_folder_it_started_from_and_runs_its_program_where_asked() {
+    let home = Home::new();
+    let folder = home.prepare(current_version(), &source());
+    let start_folder = home.path().join("start");
+    let work = home.path().join("pane-work-here");
+    std::fs::create_dir(&start_folder).unwrap();
+    std::fs::create_dir(&work).unwrap();
+    let Start::Ready(holder) = start_with(
+        &folder.program,
+        &home.socket("p"),
+        &shell(),
+        &[],
+        &start_folder,
+        &work,
+    ) else {
+        panic!("the holder did not start");
+    };
+    std::fs::remove_dir(&start_folder).unwrap();
+    #[cfg(unix)]
+    assert_eq!(
+        hide_platform::process::cwd_of(holder.process.pid)
+            .unwrap()
+            .canonicalize()
+            .unwrap(),
+        folder.program.parent().unwrap().canonicalize().unwrap()
+    );
+    drop(folder);
+    let mut connection = holder.open();
+    let ask: &[u8] = if cfg!(windows) { b"cd\r" } else { b"pwd\r" };
+    connection.send(ClientMessage::Input(ask.to_vec())).unwrap();
+    connection.wait_for_output("pane-work-here");
 }

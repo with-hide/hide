@@ -20,7 +20,7 @@ Herdr's `vendor/portable-pty.patches.md`, in the same release, gives each one's 
 | File | Change |
 | --- | --- |
 | `Cargo.toml` | Written by hand instead of crates.io's normalized form: `publish = false`, no examples or their dev-dependencies, no `lazy_static`, and the `winapi` feature the job start needs (`jobapi2`). |
-| `src/win/psuedocon.rs` | The pinned runtime is required: Herdr's fallback to the ConPTY in `kernel32.dll` when the runtime is absent, its `HERDR_WINDOWS_CONPTY=system` switch and its fallback on other architectures are gone, so a pane runs only on the ConPTY Hide tested, and only on x86_64. A missing, changed or unloadable runtime is an error kept once and answered to every caller (`verify_runtime`), not a panic. `spawn_command_in_job` starts the child suspended, puts it in the caller's job and only then resumes it, so nothing it starts escapes the job. |
+| `src/win/psuedocon.rs` | The pinned runtime is required: Herdr's fallback to the ConPTY in `kernel32.dll` when the runtime is absent, its `HERDR_WINDOWS_CONPTY=system` switch and its fallback on other architectures are gone, so a pane runs only on the ConPTY Hide tested, and only on x86_64. A missing, changed or unloadable runtime is an error kept once and answered to every caller (`verify_runtime`), not a panic, and its words name the runtime's file list rather than the file Herdr's bundle keeps it in. `spawn_command_in_job` starts the child suspended, puts it in the caller's job and only then resumes it, so nothing it starts escapes the job. |
 | `src/win/conpty.rs` | `ConPtySlavePty` implements `spawn_command_in_job`. |
 | `src/win/mod.rs` | Exports `verify_runtime`. |
 | `src/lib.rs` | `SlavePty::spawn_command_in_job` (Windows), which refuses by default. |

@@ -49,7 +49,10 @@ use std::time::{Duration, Instant};
 mod resident;
 mod session;
 
-pub use resident::{LENT_KEY, Lent, MAX_LENT, Taken, start_resident, take_lent};
+pub use resident::{
+    JobLimits, LENT_KEY, Lent, MAX_LENT, Resident, ResidentCommand, Taken, own_job, start_resident,
+    take_lent,
+};
 pub use session::{Session, SessionEnd};
 
 /// How deep the walk down a process tree goes. A real tree is a handful deep;

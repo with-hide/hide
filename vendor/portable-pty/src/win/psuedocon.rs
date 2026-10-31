@@ -2,7 +2,7 @@
 // MIT License (vendor/portable-pty/LICENSE.md). Taken from Herdr v0.9.5's
 // vendor/portable-pty (commit 2ecf19a92fc3a7fff75b6ce3655ef04f4625ec01).
 // Herdr's patches in this file: 0001.
-// Hide's changes in this file: the pinned ConPTY runtime is required (no system fallback, no environment switch, x86_64 only) and its failure is returned, not a panic; `verify_runtime`; `spawn_command_in_job` starts the child suspended, puts it in the job and only then resumes it.
+// Hide's changes in this file: the pinned ConPTY runtime is required (no system fallback, no environment switch, x86_64 only) and its failure is returned, not a panic, in words that do not name the package's file list; `verify_runtime`; `spawn_command_in_job` starts the child suspended, puts it in the job and only then resumes it.
 // vendor/portable-pty/PATCHES.md lists both.
 use super::WinChild;
 use crate::cmdbuilder::CommandBuilder;
@@ -141,6 +141,18 @@ fn load_conpty() -> Result<ConPtyFuncs, String> {
 }
 
 const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x400;
+// The runtime's file list, as the package names it.
+const MANIFEST: &str = "herdr-conpty.json";
+
+// Hide: how a file of the runtime is named in an error the operator may
+// read; the list's own file name is the package's, not a word for it.
+fn shown(name: &str) -> &str {
+    if name == MANIFEST {
+        "its file list"
+    } else {
+        name
+    }
+}
 const CONPTY_FILES: &[(&str, &str)] = &[
     (
         "conpty.dll",
@@ -179,18 +191,22 @@ fn app_local_conpty_path() -> Result<PathBuf, String> {
     }
     reject_reparse_point(&bundle)?;
 
-    let mut expected = BTreeSet::from(["herdr-conpty.json".to_string()]);
+    let mut expected = BTreeSet::from([MANIFEST.to_string()]);
     for (relative, expected_hash) in CONPTY_FILES {
         expected.insert((*relative).to_string());
         verify_bundle_file(&bundle, relative, expected_hash)?;
     }
-    let marker = bundle.join("herdr-conpty.json");
-    verify_regular_file(&marker)?;
+    let marker = bundle.join(MANIFEST);
+    verify_regular_file(&marker).map_err(|_| {
+        "the pinned ConPTY runtime's file list is missing or not a regular file".to_string()
+    })?;
 
     let actual = bundle_files(&bundle)?;
     if actual != expected {
+        let missing: Vec<&str> = expected.difference(&actual).map(|name| shown(name)).collect();
+        let unexpected: Vec<&str> = actual.difference(&expected).map(|name| shown(name)).collect();
         return Err(format!(
-            "unexpected bundle layout; expected {expected:?}, found {actual:?}"
+            "the pinned ConPTY runtime holds other files than it should: missing {missing:?}, unexpected {unexpected:?}"
         ));
     }
     Ok(bundle.join("conpty.dll"))

@@ -202,10 +202,19 @@ pub enum CloseReason {
     TreeEndUnconfirmed,
     /// The holder could not keep the pane; the detail says why.
     HolderFailed,
+    /// The pane's terminal refused the input; the pane runs on, and input a
+    /// later connection sends is tried again.
+    InputFailed,
+    /// The pane's terminal, or the holder's parser of it, refused the size;
+    /// the detail says which.
+    ResizeFailed,
+    /// Too many connections were reading their hello at once; this one was
+    /// closed unread. Opening again later is answered.
+    OpeningFull,
 }
 
 impl CloseReason {
-    const ALL: [Self; 14] = [
+    const ALL: [Self; 17] = [
         Self::Released,
         Self::Terminated,
         Self::ProgramExited,
@@ -220,6 +229,9 @@ impl CloseReason {
         Self::SizeInvalid,
         Self::TreeEndUnconfirmed,
         Self::HolderFailed,
+        Self::InputFailed,
+        Self::ResizeFailed,
+        Self::OpeningFull,
     ];
 
     /// The code on the wire, which never changes meaning.
@@ -239,6 +251,9 @@ impl CloseReason {
             Self::SizeInvalid => 12,
             Self::TreeEndUnconfirmed => 13,
             Self::HolderFailed => 14,
+            Self::InputFailed => 15,
+            Self::ResizeFailed => 16,
+            Self::OpeningFull => 17,
         }
     }
 
@@ -264,6 +279,9 @@ impl CloseReason {
             Self::SizeInvalid => "size_invalid",
             Self::TreeEndUnconfirmed => "tree_end_unconfirmed",
             Self::HolderFailed => "holder_failed",
+            Self::InputFailed => "input_failed",
+            Self::ResizeFailed => "resize_failed",
+            Self::OpeningFull => "opening_full",
         }
     }
 }

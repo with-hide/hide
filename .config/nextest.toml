@@ -53,3 +53,10 @@ slow-timeout = { period = "60s", terminate-after = 4 }
 [[profile.ci.overrides]]
 filter = 'binary_id(hided::it) & test(/^core_move::/)'
 slow-timeout = { period = "60s", terminate-after = 4 }
+
+# On Windows this test prints the job objects the run had (the test's own job,
+# and whether a job above the starter's kept the resident child); CI shows the
+# line even when the test passes, as the record of what the runner's jobs are.
+[[profile.ci.overrides]]
+filter = 'binary_id(hide-platform::it) & test(=resident::a_resident_child_keeps_nothing_of_its_starter)'
+success-output = "final"

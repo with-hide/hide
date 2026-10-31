@@ -13,18 +13,24 @@
 //!   terminal; every signal at its default and none blocked; standard
 //!   streams on `/dev/null`; and no descriptor of the starter's but the ones
 //!   it is lent.
-//! - Windows: out of the starter's job object (`CREATE_BREAKAWAY_FROM_JOB`),
-//!   which is refused when a job above the starter does not allow it, rather
-//!   than started into a job that would end it; with no console; and with
+//! - Windows: out of the starter's own job object
+//!   (`CREATE_BREAKAWAY_FROM_JOB`), which is refused when that job does not
+//!   allow it or the child is found in it still, rather than started into
+//!   the job the starter's owner ends it with; with no console; and with
 //!   only the handles it is lent, named on a handle list, so no other handle
-//!   of the starter's reaches it whatever other threads start meanwhile.
+//!   of the starter's reaches it whatever other threads start meanwhile. A
+//!   job above the starter's that keeps the child is allowed, since the
+//!   starter's owner does not end it, and is said in [`Resident::outer_job`]
+//!   for the caller to record; the child reads that job's limits with
+//!   [`own_job`].
 //!
 //! The lent handles reach the child under names it reads back with
 //! [`take_lent`]: descriptors 3, 4, ... on Unix, and on Windows the values of
 //! inheritable copies made for the start, both listed in [`LENT_KEY`].
 
+use std::ffi::{OsStr, OsString};
 use std::io;
-use std::process::Command;
+use std::path::{Path, PathBuf};
 
 /// The environment variable that names the lent handles in the child, as
 /// decimal numbers separated by commas. [`take_lent`] reads it.
@@ -45,21 +51,136 @@ pub type Taken = std::os::fd::OwnedFd;
 #[cfg(windows)]
 pub type Taken = std::os::windows::io::OwnedHandle;
 
-/// Starts `command` as a resident child lent `lent`, and answers its pid
-/// once the child runs its program. The command's standard streams are
-/// replaced by nothing (`/dev/null` on Unix, no handle on Windows), and its
-/// program must be an absolute path. An error means no child runs.
+/// What a resident child runs: its program, its arguments, the changes to
+/// this process's environment it starts with, and its working folder. It
+/// has nothing else a [`std::process::Command`] carries (standard streams, a
+/// cleared environment, hooks), since a resident start decides those itself
+/// and the same way on every system.
+#[derive(Clone, Debug)]
+pub struct ResidentCommand {
+    program: OsString,
+    args: Vec<OsString>,
+    envs: Vec<(OsString, Option<OsString>)>,
+    current_dir: Option<PathBuf>,
+}
+
+impl ResidentCommand {
+    /// Runs `program`, named by an absolute path.
+    pub fn new(program: impl AsRef<OsStr>) -> Self {
+        Self {
+            program: program.as_ref().to_owned(),
+            args: Vec::new(),
+            envs: Vec::new(),
+            current_dir: None,
+        }
+    }
+
+    pub fn arg(&mut self, arg: impl AsRef<OsStr>) -> &mut Self {
+        self.args.push(arg.as_ref().to_owned());
+        self
+    }
+
+    pub fn args(&mut self, args: impl IntoIterator<Item = impl AsRef<OsStr>>) -> &mut Self {
+        for arg in args {
+            self.arg(arg);
+        }
+        self
+    }
+
+    /// Sets `key` to `value` in the child's environment.
+    pub fn env(&mut self, key: impl AsRef<OsStr>, value: impl AsRef<OsStr>) -> &mut Self {
+        self.envs
+            .push((key.as_ref().to_owned(), Some(value.as_ref().to_owned())));
+        self
+    }
+
+    /// Leaves `key` out of the child's environment.
+    pub fn env_remove(&mut self, key: impl AsRef<OsStr>) -> &mut Self {
+        self.envs.push((key.as_ref().to_owned(), None));
+        self
+    }
+
+    pub fn current_dir(&mut self, dir: impl AsRef<Path>) -> &mut Self {
+        self.current_dir = Some(dir.as_ref().to_owned());
+        self
+    }
+}
+
+/// A resident child that runs.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct Resident {
+    pub pid: u32,
+    /// Windows: the child left the starter's own job, but a job above it
+    /// holds the child still and ends it when that job is closed. Always
+    /// false on Unix.
+    pub outer_job: bool,
+}
+
+/// The limits of a Windows job object, as far as they decide whether a
+/// process in it outlives it.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct JobLimits {
+    /// The job's limit flags, as Windows answers them.
+    pub flags: u32,
+}
+
+impl JobLimits {
+    const BREAKAWAY_OK: u32 = 0x0000_0800;
+    const SILENT_BREAKAWAY_OK: u32 = 0x0000_1000;
+    const KILL_ON_JOB_CLOSE: u32 = 0x0000_2000;
+
+    /// Every process in the job ends when its last handle closes.
+    pub fn kill_on_close(self) -> bool {
+        self.flags & Self::KILL_ON_JOB_CLOSE != 0
+    }
+
+    /// A process in the job may start a child outside it.
+    pub fn breakaway_ok(self) -> bool {
+        self.flags & Self::BREAKAWAY_OK != 0
+    }
+
+    /// Every child a process in the job starts is outside it.
+    pub fn silent_breakaway_ok(self) -> bool {
+        self.flags & Self::SILENT_BREAKAWAY_OK != 0
+    }
+}
+
+/// One word with no spaces, so it fits a `key=value` field.
+impl std::fmt::Display for JobLimits {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            formatter,
+            "kill_on_close={},breakaway_ok={},silent_breakaway_ok={},flags={:#010x}",
+            self.kill_on_close(),
+            self.breakaway_ok(),
+            self.silent_breakaway_ok(),
+            self.flags
+        )
+    }
+}
+
+/// The limits of the job this process runs in, the innermost one when jobs
+/// nest; `None` outside every job, and always on Unix, which has none.
+pub fn own_job() -> io::Result<Option<JobLimits>> {
+    sys::own_job()
+}
+
+/// Starts `command` as a resident child lent `lent`, and answers it once the
+/// child runs its program. Its standard streams are nothing (`/dev/null` on
+/// Unix, no handle on Windows), its environment is this process's with the
+/// command's changes, and its program must be an absolute path. An error
+/// means no child runs.
 ///
-/// On Windows a starter inside a job that does not allow a process to leave
-/// it is refused with `PermissionDenied`: the child would end with that job.
-pub fn start_resident(command: &mut Command, lent: &[Lent<'_>]) -> io::Result<u32> {
+/// On Windows a start the starter's own job keeps is refused with
+/// `PermissionDenied` and that job's limits: the child would end with it.
+pub fn start_resident(command: &ResidentCommand, lent: &[Lent<'_>]) -> io::Result<Resident> {
     if lent.len() > MAX_LENT {
         return Err(io::Error::new(
             io::ErrorKind::InvalidInput,
             format!("a resident child is lent at most {MAX_LENT} handles"),
         ));
     }
-    if !std::path::Path::new(command.get_program()).is_absolute() {
+    if !Path::new(&command.program).is_absolute() {
         return Err(io::Error::new(
             io::ErrorKind::InvalidInput,
             "a resident child's program is named by an absolute path",
@@ -117,7 +238,7 @@ mod sys {
     use std::os::unix::process::CommandExt;
     use std::process::{Command, Stdio};
 
-    use super::{LENT_KEY, Lent, MAX_LENT};
+    use super::{LENT_KEY, Lent, MAX_LENT, Resident, ResidentCommand};
 
     /// The first descriptor a lent handle is given in the child.
     const FIRST_LENT: RawFd = 3;
@@ -126,11 +247,26 @@ mod sys {
     /// does not have is refused by `sigaction` and passed over.
     const LAST_SIGNAL: libc::c_int = 64;
 
-    pub(super) fn start(command: &mut Command, lent: &[Lent<'_>]) -> io::Result<u32> {
+    pub(super) fn own_job() -> io::Result<Option<super::JobLimits>> {
+        Ok(None)
+    }
+
+    pub(super) fn start(resident: &ResidentCommand, lent: &[Lent<'_>]) -> io::Result<Resident> {
         let count = lent.len();
         let mut sources = [-1 as RawFd; MAX_LENT];
         for (slot, handle) in sources.iter_mut().zip(lent) {
             *slot = handle.as_raw_fd();
+        }
+        let mut command = Command::new(&resident.program);
+        command.args(&resident.args);
+        for (key, value) in &resident.envs {
+            match value {
+                Some(value) => command.env(key, value),
+                None => command.env_remove(key),
+            };
+        }
+        if let Some(dir) = &resident.current_dir {
+            command.current_dir(dir);
         }
         command
             .stdin(Stdio::null())
@@ -218,7 +354,10 @@ mod sys {
                 format!("the resident's starter ended ({status}) without naming it: {error}"),
             )
         })?;
-        Ok(u32::from_ne_bytes(bytes))
+        Ok(Resident {
+            pid: u32::from_ne_bytes(bytes),
+            outer_job: false,
+        })
     }
 
     pub(super) fn own(value: u64) -> io::Result<OwnedFd> {
@@ -247,13 +386,15 @@ mod sys {
     use std::io;
     use std::os::windows::ffi::OsStrExt;
     use std::os::windows::io::{AsRawHandle, FromRawHandle, OwnedHandle};
-    use std::process::Command;
 
     use windows_sys::Win32::Foundation::{
-        CloseHandle, DUPLICATE_SAME_ACCESS, DuplicateHandle, ERROR_ACCESS_DENIED, HANDLE,
-        HANDLE_FLAG_INHERIT, SetHandleInformation,
+        CloseHandle, DUPLICATE_SAME_ACCESS, DuplicateHandle, ERROR_ACCESS_DENIED, ERROR_MORE_DATA,
+        HANDLE, HANDLE_FLAG_INHERIT, SetHandleInformation,
     };
-    use windows_sys::Win32::System::JobObjects::IsProcessInJob;
+    use windows_sys::Win32::System::JobObjects::{
+        IsProcessInJob, JOBOBJECT_BASIC_PROCESS_ID_LIST, JOBOBJECT_EXTENDED_LIMIT_INFORMATION,
+        JobObjectBasicProcessIdList, JobObjectExtendedLimitInformation, QueryInformationJobObject,
+    };
     use windows_sys::Win32::System::Threading::{
         CREATE_BREAKAWAY_FROM_JOB, CREATE_NEW_PROCESS_GROUP, CREATE_SUSPENDED,
         CREATE_UNICODE_ENVIRONMENT, CreateProcessW, DETACHED_PROCESS,
@@ -263,7 +404,11 @@ mod sys {
         STARTUPINFOEXW, TerminateProcess, UpdateProcThreadAttribute,
     };
 
-    use super::{LENT_KEY, Lent};
+    use super::{JobLimits, LENT_KEY, Lent, Resident, ResidentCommand};
+
+    /// The most processes of the starter's own job read to find the child
+    /// among them; a job with more is refused rather than read in part.
+    const MAX_JOB_PROCESSES: usize = 65_536;
 
     /// A handle that closes when dropped.
     struct Closing(HANDLE);
@@ -275,7 +420,10 @@ mod sys {
         }
     }
 
-    pub(super) fn start(command: &mut Command, lent: &[Lent<'_>]) -> io::Result<u32> {
+    pub(super) fn start(command: &ResidentCommand, lent: &[Lent<'_>]) -> io::Result<Resident> {
+        // The starter's own job, read before the start so a refusal can say
+        // what it is.
+        let own = own_job()?;
         // Inheritable copies, made for this start and closed after it, so
         // the starter's own handles never change.
         let mut copies = Vec::with_capacity(lent.len());
@@ -299,14 +447,18 @@ mod sys {
             }
             copies.push(Closing(copy));
         }
+        let mut command = command.clone();
         command.env(
             LENT_KEY,
             super::names(copies.iter().map(|copy| copy.0 as usize as u64)),
         );
-        let mut line = command_line(command)?;
-        let environment = environment_block(command)?;
-        let directory = command.get_current_dir().map(|dir| wide(dir.as_os_str()));
-        let program = wide(command.get_program());
+        let mut line = command_line(&command)?;
+        let environment = environment_block(&command)?;
+        let directory = command
+            .current_dir
+            .as_ref()
+            .map(|dir| wide(dir.as_os_str()));
+        let program = wide(&command.program);
 
         let list: Vec<HANDLE> = copies.iter().map(|copy| copy.0).collect();
         let mut attributes = Attributes::new(&list)?;
@@ -346,37 +498,33 @@ mod sys {
         };
         if created == 0 {
             let error = io::Error::last_os_error();
-            if error.raw_os_error() == Some(ERROR_ACCESS_DENIED as i32) && in_a_job() {
+            if error.raw_os_error() == Some(ERROR_ACCESS_DENIED as i32)
+                && let Some(own) = own
+            {
                 return Err(io::Error::new(
                     io::ErrorKind::PermissionDenied,
-                    "this process runs in a job that does not let a process leave it, \
-                     so a resident child would end with that job",
+                    format!(
+                        "this process's job does not let a process leave it ({own}), \
+                         so a resident child would end with that job"
+                    ),
                 ));
             }
             return Err(error);
         }
         let process = Closing(info.hProcess);
         let thread = Closing(info.hThread);
-        // A job that lets a process leave it silently, or a job the system
-        // put the child in, would still end it: refuse before it runs.
-        let mut in_job = 0;
-        // SAFETY: the process handle is open; `in_job` is valid for the write.
-        let asked = unsafe { IsProcessInJob(process.0, std::ptr::null_mut(), &mut in_job) };
-        let refusal = if asked == 0 {
-            Some(io::Error::last_os_error())
-        } else if in_job != 0 {
-            Some(io::Error::new(
-                io::ErrorKind::PermissionDenied,
-                "the resident child was started inside a job, which would end it",
-            ))
-        } else {
-            None
+        // Where the child is decides before it runs: in the starter's own
+        // job it ends with the starter's owner, so it is refused; in a job
+        // above that one only, it runs and the caller is told.
+        let placed = placement(process.0, info.dwProcessId, own);
+        let outer_job = match placed {
+            Ok(outer_job) => outer_job,
+            Err(refusal) => {
+                // SAFETY: the process is suspended and its handle open.
+                unsafe { TerminateProcess(process.0, 1) };
+                return Err(refusal);
+            }
         };
-        if let Some(refusal) = refusal {
-            // SAFETY: the process is suspended and its handle open.
-            unsafe { TerminateProcess(process.0, 1) };
-            return Err(refusal);
-        }
         // SAFETY: the thread handle is open; `u32::MAX` is the failure.
         if unsafe { ResumeThread(thread.0) } == u32::MAX {
             let error = io::Error::last_os_error();
@@ -386,7 +534,106 @@ mod sys {
         }
         drop(attributes);
         drop(copies);
-        Ok(info.dwProcessId)
+        Ok(Resident {
+            pid: info.dwProcessId,
+            outer_job,
+        })
+    }
+
+    /// Whether the started child is in a job above the starter's own one;
+    /// an error when it is in the starter's own job, or that cannot be read.
+    fn placement(process: HANDLE, pid: u32, own: Option<JobLimits>) -> io::Result<bool> {
+        let mut in_job = 0;
+        // SAFETY: the process handle is open; `in_job` is valid for the write.
+        if unsafe { IsProcessInJob(process, std::ptr::null_mut(), &mut in_job) } == 0 {
+            return Err(io::Error::last_os_error());
+        }
+        if in_job == 0 {
+            return Ok(false);
+        }
+        if let Some(own) = own
+            && own_job_processes()?.contains(&(pid as usize))
+        {
+            return Err(io::Error::new(
+                io::ErrorKind::PermissionDenied,
+                format!(
+                    "the resident child stayed in this process's job ({own}), \
+                     which would end it"
+                ),
+            ));
+        }
+        Ok(true)
+    }
+
+    pub(super) fn own_job() -> io::Result<Option<JobLimits>> {
+        let mut in_job = 0;
+        // SAFETY: this process's pseudo handle; `in_job` is valid for the write.
+        if unsafe { IsProcessInJob(GetCurrentProcess(), std::ptr::null_mut(), &mut in_job) } == 0 {
+            return Err(io::Error::last_os_error());
+        }
+        if in_job == 0 {
+            return Ok(None);
+        }
+        // SAFETY: an all-zero limit structure is a valid value.
+        let mut limits: JOBOBJECT_EXTENDED_LIMIT_INFORMATION = unsafe { std::mem::zeroed() };
+        // SAFETY: a null job is this process's innermost job; the structure
+        // is valid for its size.
+        let asked = unsafe {
+            QueryInformationJobObject(
+                std::ptr::null_mut(),
+                JobObjectExtendedLimitInformation,
+                (&mut limits as *mut JOBOBJECT_EXTENDED_LIMIT_INFORMATION).cast(),
+                std::mem::size_of::<JOBOBJECT_EXTENDED_LIMIT_INFORMATION>() as u32,
+                std::ptr::null_mut(),
+            )
+        };
+        if asked == 0 {
+            return Err(io::Error::last_os_error());
+        }
+        Ok(Some(JobLimits {
+            flags: limits.BasicLimitInformation.LimitFlags,
+        }))
+    }
+
+    /// The pids in this process's innermost job and the jobs below it.
+    fn own_job_processes() -> io::Result<Vec<usize>> {
+        let head = std::mem::offset_of!(JOBOBJECT_BASIC_PROCESS_ID_LIST, ProcessIdList)
+            / std::mem::size_of::<usize>();
+        let mut capacity = 64;
+        loop {
+            let mut buffer = vec![0usize; head + capacity];
+            let bytes = std::mem::size_of_val(buffer.as_slice()) as u32;
+            // SAFETY: a null job is this process's innermost job; the buffer
+            // is aligned for the list and valid for `bytes`.
+            let asked = unsafe {
+                QueryInformationJobObject(
+                    std::ptr::null_mut(),
+                    JobObjectBasicProcessIdList,
+                    buffer.as_mut_ptr().cast(),
+                    bytes,
+                    std::ptr::null_mut(),
+                )
+            };
+            let short = match (asked == 0).then(io::Error::last_os_error) {
+                None => false,
+                Some(error) if error.raw_os_error() == Some(ERROR_MORE_DATA as i32) => true,
+                Some(error) => return Err(error),
+            };
+            // SAFETY: the buffer starts with the list's header.
+            let list = unsafe { &*buffer.as_ptr().cast::<JOBOBJECT_BASIC_PROCESS_ID_LIST>() };
+            let assigned = list.NumberOfAssignedProcesses as usize;
+            let listed = list.NumberOfProcessIdsInList as usize;
+            if !short && listed >= assigned {
+                return Ok(buffer[head..head + listed].to_vec());
+            }
+            if assigned > MAX_JOB_PROCESSES {
+                return Err(io::Error::other(format!(
+                    "this process's job holds {assigned} processes, more than \
+                     {MAX_JOB_PROCESSES} are read"
+                )));
+            }
+            capacity = assigned + 16;
+        }
     }
 
     pub(super) fn own(value: u64) -> io::Result<OwnedHandle> {
@@ -404,14 +651,6 @@ mod sys {
         // SAFETY: the handle was lent to this process alone; `take_lent`
         // hands it out once.
         Ok(unsafe { OwnedHandle::from_raw_handle(raw) })
-    }
-
-    fn in_a_job() -> bool {
-        let mut in_job = 0;
-        // SAFETY: this process's pseudo handle; `in_job` is valid for the write.
-        let asked =
-            unsafe { IsProcessInJob(GetCurrentProcess(), std::ptr::null_mut(), &mut in_job) };
-        asked != 0 && in_job != 0
     }
 
     /// A process attribute list naming the handles a child inherits.
@@ -477,10 +716,10 @@ mod sys {
 
     /// The program and its arguments as one command line, quoted the way the
     /// C runtime splits it back.
-    fn command_line(command: &Command) -> io::Result<Vec<u16>> {
+    fn command_line(command: &ResidentCommand) -> io::Result<Vec<u16>> {
         let mut line: Vec<u16> = Vec::new();
-        for (index, argument) in std::iter::once(command.get_program())
-            .chain(command.get_args())
+        for (index, argument) in std::iter::once(&command.program)
+            .chain(&command.args)
             .enumerate()
         {
             if index > 0 {
@@ -531,9 +770,9 @@ mod sys {
 
     /// This process's environment with the command's changes, sorted by
     /// name without regard to case as the system keeps it.
-    fn environment_block(command: &Command) -> io::Result<Vec<u16>> {
+    fn environment_block(command: &ResidentCommand) -> io::Result<Vec<u16>> {
         let mut variables: Vec<(OsString, OsString)> = std::env::vars_os().collect();
-        for (name, value) in command.get_envs() {
+        for (name, value) in &command.envs {
             let upper = name.to_string_lossy().to_uppercase();
             variables.retain(|(kept, _)| kept.to_string_lossy().to_uppercase() != upper);
             if let Some(value) = value {
