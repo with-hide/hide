@@ -274,9 +274,11 @@ class Selection(unittest.TestCase):
 
     def test_the_vt_lane_follows_the_parser_and_the_pane_holder(self):
         # vt.yml builds hide-vt and runs the holder's tests, which start the
-        # holder from a version folder hide-kit makes.
+        # holder from a version folder hide-kit makes and through the pane
+        # records hide-kit keeps.
         for path in ("hide-vt/build.rs", "hide-holder/src/holder.rs", "hide-holder-protocol/src/lib.rs",
-                     "hide-kit/src/holders.rs", "vendor/portable-pty/src/win/psuedocon.rs"):
+                     "hide-kit/src/holders.rs", "hide-kit/src/panes.rs",
+                     "vendor/portable-pty/src/win/psuedocon.rs"):
             with self.subTest(path=path):
                 result = plan(path)
                 self.assertIn("vt", result["lanes"])

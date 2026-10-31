@@ -6,5 +6,6 @@ mod connections;
 mod conpty;
 mod folders;
 mod lifecycle;
+mod records;
 mod role;
 mod support;

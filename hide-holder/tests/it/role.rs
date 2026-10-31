@@ -15,6 +15,9 @@ const ROLE_LIFE: Duration = Duration::from_secs(60);
 /// process behind.
 pub const EXIT_EARLY: &str = "HIDE_HOLDER_TEST_EXIT_EARLY";
 
+/// The file whose appearance tells `exit_when_told` to exit.
+pub const GO: &str = "HIDE_HOLDER_TEST_GO";
+
 #[test]
 fn play() {
     let Ok(role) = std::env::var(ROLE) else {
@@ -24,6 +27,7 @@ fn play() {
         "stubborn_tree" => stubborn_tree(),
         "stubborn_child" => stubborn_child(),
         "flood" => flood(),
+        "exit_when_told" => exit_when_told(),
         other => panic!("unknown role {other}"),
     }
 }
@@ -35,7 +39,8 @@ fn record(pid: u32) {
         .create(true)
         .open(path)
         .unwrap();
-    writeln!(file, "{pid}").unwrap();
+    // One write, so lines that panes write at once never interleave.
+    file.write_all(format!("{pid}\n").as_bytes()).unwrap();
 }
 
 fn command(role: &str) -> Command {
@@ -93,7 +98,10 @@ fn stubborn_tree() {
         #[allow(clippy::disallowed_methods)] // the role's own pace
         thread::sleep(Duration::from_millis(5));
     }
-    println!("TREE READY");
+    // A terminal whose holder was killed refuses the write; a program that
+    // ignores the hangup lives on past that, as this one must.
+    let mut out = std::io::stdout();
+    let _ = writeln!(out, "TREE READY").and_then(|()| out.flush());
     if std::env::var_os(EXIT_EARLY).is_some() {
         return;
     }
@@ -143,4 +151,17 @@ fn flood() {
             return;
         }
     }
+}
+
+/// Exits with 3 once the file `GO` names exists: a shell that ends on its own
+/// while no node is connected, at the moment the test chooses.
+fn exit_when_told() {
+    record(std::process::id());
+    let go = std::path::PathBuf::from(std::env::var_os(GO).unwrap());
+    let deadline = Instant::now() + ROLE_LIFE;
+    while !go.exists() && Instant::now() < deadline {
+        #[allow(clippy::disallowed_methods)] // the role's own pace
+        thread::sleep(Duration::from_millis(5));
+    }
+    std::process::exit(3);
 }
