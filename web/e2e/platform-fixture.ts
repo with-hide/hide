@@ -87,6 +87,9 @@ export function fixtureHomeEnv(home: string): Record<string, string> {
     // The background fetch runs `git fetch origin` for every registered repository; a fixture's
     // `https://github.com/example/...` origin is refused as a transport here and never reaches the network.
     GIT_ALLOW_PROTOCOL: "file",
+    // Turning Desk on runs `npm ci` for its agents' adapters; offline, npm answers from the
+    // fixture home's empty cache and fails at once, so a test never downloads an adapter.
+    npm_config_offline: "true",
   };
 }
 
