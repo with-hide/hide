@@ -107,9 +107,10 @@ WSL_CRATE_FILES = ("hided/src/node_cli.rs", "hided/tests/it/wsl_device.rs")
 # The vt lane builds the terminal parser, whose Zig build differs by system,
 # and runs the pane holder's tests, since the holder links the parser and its
 # tests start it on all three systems (docs/TESTING.md, The pane holder); the
-# holder's version folders are hide-kit code those tests check.
+# holder's version folders and a state folder's pane records are hide-kit
+# code those tests check.
 VT_CRATES = {"hide-vt", "hide-holder", "hide-holder-protocol"}
-VT_CRATE_FILES = ("hide-kit/src/holders.rs",)
+VT_CRATE_FILES = ("hide-kit/src/holders.rs", "hide-kit/src/panes.rs")
 
 # The desktop suite drives the web shell and the daemon inside the app, so
 # every web shell file plans `desktop-e2e` beside `web-e2e`: a desktop spec

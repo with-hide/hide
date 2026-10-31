@@ -1050,6 +1050,7 @@ dependencies = [
  "hide-agent-adapter",
  "hide-agent-hooks",
  "hide-herdr-client",
+ "hide-holder-protocol",
  "hide-platform",
  "serde",
  "serde_json",
