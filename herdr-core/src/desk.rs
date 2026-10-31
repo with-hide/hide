@@ -60,8 +60,8 @@ pub struct DeskPlaces {
     /// Desk's own `CODEX_HOME` (`hide_kit::layout::desk_codex_home`).
     pub codex_home: PathBuf,
     /// The operator's own Codex sign-in, which Desk's Codex reads through a
-    /// link (`hide_desk::codex::operator_sign_in`).
-    pub codex_sign_in: PathBuf,
+    /// link (`hide_desk::codex::operator_sign_in`), or why it has none.
+    pub codex_sign_in: Result<PathBuf, String>,
     /// The folder of the `hide` program the Desk agent runs.
     pub hide_dir: PathBuf,
 }

@@ -328,6 +328,13 @@ impl AgentAdapter {
     pub(crate) fn updates(&self) -> &'static [hide_agent_adapter::UpdateRoute] {
         self.declaration.updates
     }
+
+    /// The agent's own folder under `home` where Hide and Herdr install,
+    /// from the one resolver of agent folders
+    /// (`hide_agent_adapter::HomeScope::Install`).
+    pub(crate) fn install_home(&self, home: &std::path::Path) -> std::path::PathBuf {
+        self.declaration.install_home(home)
+    }
 }
 
 /// What one pass found out about the agents on a machine: each adapter's

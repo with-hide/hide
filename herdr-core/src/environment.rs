@@ -1,6 +1,8 @@
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 
+use hide_agent_adapter::{AgentId, HomeScope, HomeUnresolved};
+
 use crate::model::EnvironmentStatusSnapshot;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -15,7 +17,11 @@ pub struct EnvironmentVariableSpec {
 pub const HOME_KEY: &str = hide_platform::host::HOME_VARIABLE;
 pub const SSH_AUTH_SOCK_KEY: &str = "SSH_AUTH_SOCK";
 pub const HERDR_SOCKET_PATH_KEY: &str = "HERDR_SOCKET_PATH";
-pub const CODEX_HOME_KEY: &str = "CODEX_HOME";
+/// Codex's own folder variable, as its declaration names it.
+pub const CODEX_HOME_KEY: &str = match AgentId::Codex.adapter().home_variable {
+    Some(variable) => variable,
+    None => panic!("Codex declares its folder variable"),
+};
 
 pub const REGISTRY: [EnvironmentVariableSpec; 4] = [
     EnvironmentVariableSpec {
@@ -61,14 +67,17 @@ impl EnvironmentReport {
         if self.home_path.as_ref() == Some(&home) {
             return self;
         }
-        self.codex_home = Some(home.join(".codex"));
+        self.codex_home = AgentId::Codex
+            .adapter()
+            .home(Some(&home), None, HomeScope::Read)
+            .ok();
         self.home_path = Some(home);
         self
     }
 }
 
 pub fn read_and_validate() -> EnvironmentReport {
-    validate_with(|key| std::env::var_os(key))
+    validate_with(hide_platform::host::variable)
 }
 
 fn validate_with(mut read: impl FnMut(&str) -> Option<OsString>) -> EnvironmentReport {
@@ -119,23 +128,27 @@ fn validate_with(mut read: impl FnMut(&str) -> Option<OsString>) -> EnvironmentR
                 ),
                 Some(_) => ("available", "Herdr socket override is available"),
             },
-            CODEX_HOME_KEY => match value {
-                None => {
-                    codex_home = home_path.as_ref().map(|home: &PathBuf| home.join(".codex"));
-                    (
+            CODEX_HOME_KEY => {
+                let resolved = AgentId::Codex.adapter().home(
+                    home_path.as_deref(),
+                    value.as_deref(),
+                    HomeScope::Read,
+                );
+                let overridden = value.as_ref().is_some_and(|value| !value.is_empty());
+                let status = match (&resolved, overridden) {
+                    (Err(HomeUnresolved::InvalidOverride { .. }), _) => (
+                        "invalid",
+                        "Codex home override is invalid; Codex usage credentials are unavailable",
+                    ),
+                    (_, true) => ("available", "Codex home override is available"),
+                    (_, false) => (
                         "default",
                         "Codex home override is absent; $HOME/.codex is used",
-                    )
-                }
-                Some(value) if value.is_empty() || !Path::new(&value).is_absolute() => (
-                    "invalid",
-                    "Codex home override is invalid; Codex usage credentials are unavailable",
-                ),
-                Some(value) => {
-                    codex_home = Some(PathBuf::from(value));
-                    ("available", "Codex home override is available")
-                }
-            },
+                    ),
+                };
+                codex_home = resolved.ok();
+                status
+            }
             _ => unreachable!("every environment key is declared in REGISTRY"),
         };
         statuses.push(EnvironmentStatusSnapshot {
@@ -229,6 +242,20 @@ mod tests {
 
         assert_eq!(report.statuses[1].state, "available");
         assert_eq!(report.statuses[2].state, "available");
+    }
+
+    #[test]
+    fn an_empty_codex_home_is_unset_as_codex_reads_it() {
+        let report = validate_with(|key| match key {
+            HOME_KEY => Some(OsString::from("/private/tmp/hide-home")),
+            CODEX_HOME_KEY => Some(OsString::new()),
+            _ => None,
+        });
+        assert_eq!(
+            report.codex_home,
+            Some(PathBuf::from("/private/tmp/hide-home").join(".codex"))
+        );
+        assert_eq!(report.statuses[3].state, "default");
     }
 
     #[test]

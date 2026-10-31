@@ -247,6 +247,8 @@ pub const ADAPTERS: &[AgentAdapter] = &[
             target: "claude",
             folder: &[".claude"],
         },
+        home_variable: None,
+        ai: Support::Supported(AiProvider { id: "claude" }),
         default_on: true,
         prompt_hook: Some(PromptHook {
             dialect: HookDialect::ClaudeCode,
@@ -337,6 +339,8 @@ pub const ADAPTERS: &[AgentAdapter] = &[
             target: "codex",
             folder: &[".codex"],
         },
+        home_variable: Some("CODEX_HOME"),
+        ai: Support::Supported(AiProvider { id: "codex" }),
         default_on: true,
         prompt_hook: Some(PromptHook {
             dialect: HookDialect::Codex,
@@ -426,6 +430,8 @@ pub const ADAPTERS: &[AgentAdapter] = &[
             target: "grok",
             folder: &[".grok"],
         },
+        home_variable: None,
+        ai: Support::Supported(AiProvider { id: "grok" }),
         default_on: false,
         // The prompt hook records submission and recognizes a bell; its
         // output is discarded. Tool and turn-end hooks carry the letters.
@@ -537,6 +543,8 @@ pub const ADAPTERS: &[AgentAdapter] = &[
             target: "opencode",
             folder: &[".config", "opencode"],
         },
+        home_variable: None,
+        ai: Support::Supported(AiProvider { id: "opencode" }),
         default_on: false,
         prompt_hook: Some(PromptHook {
             dialect: HookDialect::OpenCode,
@@ -642,6 +650,8 @@ pub const ADAPTERS: &[AgentAdapter] = &[
             target: "pi",
             folder: &[".pi", "agent"],
         },
+        home_variable: None,
+        ai: Support::Supported(AiProvider { id: "pi" }),
         default_on: false,
         prompt_hook: Some(PromptHook {
             dialect: HookDialect::Pi,
@@ -744,6 +754,8 @@ pub const ADAPTERS: &[AgentAdapter] = &[
             target: "omp",
             folder: &[".omp", "agent"],
         },
+        home_variable: None,
+        ai: Support::Supported(AiProvider { id: "omp" }),
         default_on: false,
         prompt_hook: Some(PromptHook {
             dialect: HookDialect::Omp,
@@ -846,6 +858,8 @@ pub const ADAPTERS: &[AgentAdapter] = &[
             target: "antigravity-cli",
             folder: &[".gemini", "config"],
         },
+        home_variable: None,
+        ai: Support::Supported(AiProvider { id: "antigravity" }),
         // On by default like Claude Code and Codex: the operator's amendment
         // to PRD antigravity-first-class B1/D-14 (2026-10-16).
         default_on: true,
@@ -950,6 +964,8 @@ pub(super) const RETIRED_CURSOR: AgentAdapter = AgentAdapter {
         target: "cursor",
         folder: &[".cursor"],
     },
+    home_variable: None,
+    ai: Support::Unsupported(RETIRED_CONTEXT_ABSENCE),
     default_on: false,
     prompt_hook: None,
     spawn_guard: None,

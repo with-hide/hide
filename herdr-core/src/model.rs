@@ -7070,7 +7070,7 @@ impl BackgroundAiProviderSnapshot {
         Self {
             id: provider.as_str().to_owned(),
             label: provider.label().to_owned(),
-            agent: provider.descriptor().agent.to_owned(),
+            agent: provider.agent().to_owned(),
             state: "unread".to_owned(),
             headline: "Not checked yet".to_owned(),
             installed: true,

@@ -1,17 +1,21 @@
 //! The agents Hide AI can name, and how each one's backend is built.
 //!
-//! A provider is one row here: its stable id, the name a person reads, the
-//! agent id the logos and the kit key it by, and the model it is asked for
-//! when nobody chose one.
+//! Which agents are providers, in which order, under which persisted id, with
+//! which name and reasoning efforts, is each agent's declaration
+//! (`hide_agent_adapter::AgentAdapter::ai`, `label`, `efforts`); an agent
+//! that is not a provider declares why. This file binds a declared provider
+//! to what only Hide AI decides: the model it is asked for when nobody chose
+//! one ([`BINDINGS`]) and its backend ([`build_backend`]).
 //! Where its CLI is found is not kept here: that is `hide_platform::programs`,
-//! the one search the install kit uses too. Nothing else in the
-//! workspace keeps a list of them; settings, the router and the core's
-//! Settings reader all iterate this one, in this order (D-06, D-18): Claude
-//! Code, Codex, Grok, OpenCode, Pi, Oh My Pi, Antigravity.
+//! the one search the install kit uses too. Settings, the router and the
+//! core's Settings reader all iterate [`PROVIDERS`], in the declarations'
+//! order (D-06, D-18): Claude Code, Codex, Grok, OpenCode, Pi, omp,
+//! Antigravity.
 //!
-//! The id is a string the registry owns, not a closed enum, so a file written
-//! by a newer Hide that names an agent this build does not know is read, and
-//! the entry is ignored, instead of making the whole file unreadable.
+//! The id is a string the declaration owns, not a closed enum, so a file
+//! written by a newer Hide that names an agent this build does not know is
+//! read, and the entry is ignored, instead of making the whole file
+//! unreadable.
 
 use std::fmt;
 use std::sync::Arc;
@@ -19,11 +23,13 @@ use std::sync::Arc;
 use serde::de::{self, Deserializer};
 use serde::{Deserialize, Serialize, Serializer};
 
+use hide_agent_adapter::{ADAPTERS, AgentAdapter, usage::Support};
+
 use crate::{AiBackend, AiLogSink};
 
 /// Stable provider name; also the log field value and the settings key.
 ///
-/// Only the registry makes one, so every value is a registered agent.
+/// Only the registry makes one, so every value is a declared provider.
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub struct ProviderId(&'static str);
 
@@ -42,10 +48,10 @@ impl ProviderId {
         self.0
     }
 
-    /// The provider's name as a person reads it. The shell renders this
-    /// rather than capitalising `as_str` itself.
+    /// The provider's name as a person reads it: its agent's declared label.
+    /// The shell renders this rather than capitalising `as_str` itself.
     pub fn label(self) -> &'static str {
-        self.descriptor().label
+        self.adapter().label
     }
 
     /// The registered provider with this id, `None` for an id this build does
@@ -55,33 +61,46 @@ impl ProviderId {
     }
 
     /// The provider that runs the install kit's agent `agent` (its adapter
-    /// id, [`ProviderDescriptor::agent`]), `None` for an agent Hide AI does
-    /// not run. The ids differ where the kit and Herdr name an agent apart,
-    /// as `antigravity` and `agy` do.
+    /// id, [`ProviderId::agent`]), `None` for an agent Hide AI does not run.
+    /// The ids differ where Hide AI's settings name an agent apart, as
+    /// `claude` and `claude-code` do.
     pub fn for_agent(agent: &str) -> Option<Self> {
         PROVIDERS
             .iter()
             .copied()
-            .find(|provider| provider.descriptor().agent == agent)
+            .find(|provider| provider.agent() == agent)
     }
 
-    pub fn descriptor(self) -> &'static ProviderDescriptor {
-        DESCRIPTORS
+    /// The agent's declaration this provider was made from.
+    pub fn adapter(self) -> &'static AgentAdapter {
+        ADAPTERS
             .iter()
-            .find(|descriptor| descriptor.id == self)
-            .expect("every ProviderId constant has a descriptor")
+            .find(|row| matches!(row.ai, Support::Supported(ai) if ai.id == self.0))
+            .expect("every ProviderId is a declared provider")
+    }
+
+    /// The agent's id in the install kit's adapter table, which is how the
+    /// shell joins "this agent is on and installed" to "Hide AI can use it".
+    pub fn agent(self) -> &'static str {
+        self.adapter().id
     }
 
     /// The model this provider is asked for when the operator chose none:
     /// the backend's own constant, or [`CLI_DEFAULT_MODEL`] for an agent whose
     /// default is its own CLI's (D-18).
     pub fn default_model(self) -> &'static str {
-        self.descriptor().default_model
+        BINDINGS
+            .iter()
+            .find(|(provider, _)| *provider == self)
+            .map(|(_, model)| *model)
+            .expect("every declared provider has a binding")
     }
 
-    /// The reasoning efforts a request may pick for this agent.
+    /// The reasoning efforts a request may pick for this agent: the menu its
+    /// declaration offers every start (`hide_agent_adapter::LaunchDialect::options`);
+    /// empty means the agent takes none and only its CLI default runs.
     pub fn efforts(self) -> &'static [&'static str] {
-        self.descriptor().efforts
+        self.adapter().efforts()
     }
 }
 
@@ -108,86 +127,53 @@ impl<'de> Deserialize<'de> for ProviderId {
 /// its own default (D-18, B36).
 pub const CLI_DEFAULT_MODEL: &str = "";
 
-/// Every provider a choice can name, in the fixed order they are offered.
+const fn provider_count() -> usize {
+    let mut count = 0;
+    let mut index = 0;
+    while index < ADAPTERS.len() {
+        if matches!(ADAPTERS[index].ai, Support::Supported(_)) {
+            count += 1;
+        }
+        index += 1;
+    }
+    count
+}
+
+const fn providers() -> [ProviderId; provider_count()] {
+    let mut result = [ProviderId(""); provider_count()];
+    let mut source = 0;
+    let mut destination = 0;
+    while source < ADAPTERS.len() {
+        if let Support::Supported(ai) = ADAPTERS[source].ai {
+            result[destination] = ProviderId(ai.id);
+            destination += 1;
+        }
+        source += 1;
+    }
+    result
+}
+
+const DECLARED: [ProviderId; provider_count()] = providers();
+
+/// Every provider a choice can name, in the fixed order they are offered:
+/// each agent that declares a Hide AI provider, in the declarations' order.
 ///
 /// The Settings picker, the first-run default and the Add menu all use this
 /// order; the router's own order is the operator's choice followed by the
 /// fallback list, never this one.
-pub const PROVIDERS: &[ProviderId] = &[
-    ProviderId::CLAUDE,
-    ProviderId::CODEX,
-    ProviderId::GROK,
-    ProviderId::OPENCODE,
-    ProviderId::PI,
-    ProviderId::OMP,
-    ProviderId::ANTIGRAVITY,
-];
+pub const PROVIDERS: &[ProviderId] = &DECLARED;
 
-/// What the registry knows about one provider besides its backend.
-#[derive(Debug)]
-pub struct ProviderDescriptor {
-    pub id: ProviderId,
-    pub label: &'static str,
-    /// The id of the same agent in the install kit's adapter table, which is
-    /// how the shell joins "this agent is on and installed" to "Hide AI can
-    /// use it".
-    pub agent: &'static str,
-    pub default_model: &'static str,
-    /// The reasoning efforts a request may pick for this agent; empty means
-    /// the agent takes none and only its CLI default runs.
-    pub efforts: &'static [&'static str],
-}
-
-const DESCRIPTORS: &[ProviderDescriptor] = &[
-    ProviderDescriptor {
-        id: ProviderId::CLAUDE,
-        label: "Claude Code",
-        agent: "claude-code",
-        default_model: crate::claude::DEFAULT_MODEL,
-        efforts: crate::claude::EFFORTS,
-    },
-    ProviderDescriptor {
-        id: ProviderId::CODEX,
-        label: "Codex",
-        agent: "codex",
-        default_model: crate::codex::DEFAULT_MODEL,
-        efforts: crate::codex::EFFORTS,
-    },
-    ProviderDescriptor {
-        id: ProviderId::GROK,
-        label: "Grok",
-        agent: "grok",
-        default_model: CLI_DEFAULT_MODEL,
-        efforts: &[],
-    },
-    ProviderDescriptor {
-        id: ProviderId::OPENCODE,
-        label: "OpenCode",
-        agent: "opencode",
-        default_model: CLI_DEFAULT_MODEL,
-        efforts: &[],
-    },
-    ProviderDescriptor {
-        id: ProviderId::PI,
-        label: "Pi",
-        agent: "pi",
-        default_model: CLI_DEFAULT_MODEL,
-        efforts: &[],
-    },
-    ProviderDescriptor {
-        id: ProviderId::OMP,
-        label: "Oh My Pi",
-        agent: "omp",
-        default_model: crate::omp::DEFAULT_MODEL,
-        efforts: &[],
-    },
-    ProviderDescriptor {
-        id: ProviderId::ANTIGRAVITY,
-        label: "Antigravity",
-        agent: "antigravity",
-        default_model: CLI_DEFAULT_MODEL,
-        efforts: &[],
-    },
+/// What only Hide AI decides for each declared provider: the model it is
+/// asked for when nobody chose one. A provider declared without its row here
+/// fails `every_declared_provider_is_bound_and_nothing_else_is`.
+const BINDINGS: &[(ProviderId, &str)] = &[
+    (ProviderId::CLAUDE, crate::claude::DEFAULT_MODEL),
+    (ProviderId::CODEX, crate::codex::DEFAULT_MODEL),
+    (ProviderId::GROK, CLI_DEFAULT_MODEL),
+    (ProviderId::OPENCODE, CLI_DEFAULT_MODEL),
+    (ProviderId::PI, CLI_DEFAULT_MODEL),
+    (ProviderId::OMP, crate::omp::DEFAULT_MODEL),
+    (ProviderId::ANTIGRAVITY, CLI_DEFAULT_MODEL),
 ];
 
 /// Builds the backend for one registered provider, configured with the model
@@ -243,7 +229,7 @@ mod tests {
                 "Grok",
                 "OpenCode",
                 "Pi",
-                "Oh My Pi",
+                "omp",
                 "Antigravity"
             ]
         );
@@ -265,9 +251,46 @@ mod tests {
     }
 
     #[test]
-    fn every_provider_has_a_descriptor_whose_id_matches() {
+    fn every_declared_provider_is_bound_and_nothing_else_is() {
+        let bound: Vec<_> = BINDINGS.iter().map(|(provider, _)| *provider).collect();
+        let mut declared = PROVIDERS.to_vec();
+        let mut sorted = bound.clone();
+        declared.sort();
+        sorted.sort();
+        assert_eq!(
+            sorted, declared,
+            "each agent declaring a Hide AI provider needs its row in BINDINGS and, unless it runs \
+             read-only, its arm in build_backend"
+        );
         for provider in PROVIDERS {
-            assert_eq!(provider.descriptor().id, *provider);
+            assert_eq!(
+                provider.adapter().ai,
+                Support::Supported(hide_agent_adapter::AiProvider {
+                    id: provider.as_str()
+                })
+            );
+            assert_eq!(ProviderId::for_agent(provider.agent()), Some(*provider));
         }
+    }
+
+    #[test]
+    fn a_request_picks_from_the_efforts_every_start_of_the_agent_offers() {
+        for provider in PROVIDERS {
+            let adapter = provider.adapter();
+            assert_eq!(
+                provider.efforts(),
+                adapter
+                    .start
+                    .map_or(&[][..], |start| start.options().efforts)
+            );
+        }
+        assert_eq!(
+            ProviderId::CODEX.efforts(),
+            ["minimal", "low", "medium", "high", "xhigh"]
+        );
+        assert_eq!(
+            ProviderId::CLAUDE.efforts(),
+            ["low", "medium", "high", "xhigh", "max"]
+        );
     }
 }

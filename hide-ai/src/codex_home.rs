@@ -209,15 +209,26 @@ fn home_unavailable(stage: &str, kind: std::io::ErrorKind) -> AiError {
     AiError::ProviderUnavailable(format!("codex_home_unavailable:{stage}:{kind}"))
 }
 
-/// The directory the user's real `auth.json` lives in: an explicit
-/// `CODEX_HOME`, or `~/.codex`.
+/// The directory the user's real `auth.json` lives in: Codex's own folder as
+/// the operator runs it (`CODEX_HOME`, or `~/.codex`), from the one resolver
+/// of agent folders. A relative `CODEX_HOME` leaves the home unavailable
+/// rather than linking a path Codex would read against another folder.
 fn source_codex_dir() -> Result<PathBuf, std::io::ErrorKind> {
-    if let Some(dir) = std::env::var_os("CODEX_HOME") {
-        return Ok(PathBuf::from(dir));
-    }
-    hide_platform::host::home_dir()
-        .map(|home| home.join(".codex"))
-        .map_err(|error| error.kind())
+    let codex = hide_agent_adapter::AgentId::Codex.adapter();
+    let account_home = hide_platform::host::home_dir().ok();
+    let value = codex.home_variable.and_then(hide_platform::host::variable);
+    codex
+        .home(
+            account_home.as_deref(),
+            value.as_deref(),
+            hide_agent_adapter::HomeScope::Read,
+        )
+        .map_err(|unresolved| match unresolved {
+            hide_agent_adapter::HomeUnresolved::NoAccountHome => std::io::ErrorKind::NotFound,
+            hide_agent_adapter::HomeUnresolved::InvalidOverride { .. } => {
+                std::io::ErrorKind::InvalidInput
+            }
+        })
 }
 
 fn unique_suffix() -> u128 {

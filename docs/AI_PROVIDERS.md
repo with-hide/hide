@@ -144,14 +144,16 @@ Hide's integration code reads no token file: the codex backend references the us
 It sets two environment variables: that `CODEX_HOME`, pointing the app-server at the private directory, and `MAX_THINKING_TOKENS=0` on a claude model turn (see the claude bullet).
 `hide-ai` is also the only code that starts a background AI child of any agent: the Weekly Usage reader below asks the same `ClaudeCliBackend` for its `/usage` text rather than running the CLI itself.
 
-The providers are a registry (`hide-ai/src/registry.rs`), in this fixed order: `claude`, `codex`, `grok`, `opencode`, `pi`, `omp`, `antigravity`.
-`ProviderId` is a copyable name for one entry, written in `ai.json` as its id; `PROVIDERS` lists them, `ProviderId::descriptor()` gives the label, the program names looked up on the login `PATH`, the default model and `agent`, the id of the same agent in the install kit (`claude-code`, `codex`, `grok`, `opencode`, `pi`, `antigravity`), and `build_backend` makes the backend of one entry.
+Which agents are providers is each agent's declaration (`hide_agent_adapter::AgentAdapter::ai`): a provider id, or the reason the agent is not one, as retired Cursor's is.
+The registry (`hide-ai/src/registry.rs`) lists the declared providers in the declarations' order: `claude`, `codex`, `grok`, `opencode`, `pi`, `omp`, `antigravity`.
+`ProviderId` is a copyable name for one entry, written in `ai.json` as its id; `PROVIDERS` lists them, and each one's label, its `agent` (the id of the same agent in the install kit: `claude-code`, `codex`, `grok`, `opencode`, `pi`, `omp`, `antigravity`) and the reasoning efforts a request may pick are its declaration's (`label`, `id`, `efforts()`, the one effort menu every start of the agent offers too).
+What only Hide AI decides is bound in the registry: the default model of each declared provider (`BINDINGS`), and `build_backend` makes the backend of one entry; a provider declared without its binding fails `every_declared_provider_is_bound_and_nothing_else_is`.
 An empty model means the CLI's own default: no `--model` flag is sent.
 There is one place that finds a CLI and says what it is run with (`hide-ai/src/program.rs`): a program is looked for on the account's search (`hide_platform::programs`: the login shell's folders, the daemon's own `PATH`, the usual install folders), and the child is started with that same value as its `PATH`.
 That covers every child, the availability and model-list probes and the Weekly Usage read as much as a request, and the Codex app-server, because a CLI installed as a script (pnpm's `codex`, a Node CLI under nvm) starts its interpreter by name from its environment, and a CLI found on the shell's folders and run with the daemon's would be reported ready and then fail.
 A backend's config can carry a `search_path` of its own, which is how a test gives a stand-in script an interpreter only that value reaches without starting the developer's login shell (`hide-ai/tests/it/search_path.rs`); a CLI named by file with no `search_path` is run with the process's `PATH`, since nothing searched for it.
 The tests that need a missing CLI name an absolute path that does not exist, because a bare name is looked up on the account's search, which asks the login shell.
-A new agent is one registry entry and one backend; the router, the settings and the core iterate `PROVIDERS` and name no provider.
+A new agent is its declaration's `ai` row, one binding and one backend; the router, the settings and the core iterate `PROVIDERS` and name no provider.
 The backends run on a node, never inside the core: the core's routers hold a `NodeBackend` per provider (`herdr-core/src/ai.rs`), which carries each probe, model list, request and measurement to the node of the machine the agent runs on as a call and reads the answer back.
 That machine is the core's own unless the operator placed the agent on a connected device (`AiMachines`, PRD wsl-device B11), whose node answers the same calls with the device's own logins, so no credential is copied between machines and usage counts on the device's account.
 A device's link is looked up each time its agent is asked (`Runtime::linked_node`, which never wakes a device): a device that is not connected answers `Unavailable` and is not woken, and once it connects again the same backend asks it through its next link (B13).
@@ -167,7 +169,7 @@ A request reports progress once a second while it runs, and a cancel in the core
   `codex exec` is not used.
 
   `hide-ai` owns this process (see [Process ownership and budgets](#process-ownership-and-budgets)).
-  It runs the app-server under a private, owner-only (`0700`) `CODEX_HOME` in a temporary directory (`$TMPDIR/hide-ai-codex-home-<pid>-<nanos>`) that is created holding nothing but a symlink to the user's `auth.json` (from the environment's `CODEX_HOME`, or `~/.codex/auth.json`), and no `config.toml`.
+  It runs the app-server under a private, owner-only (`0700`) `CODEX_HOME` in a temporary directory (`$TMPDIR/hide-ai-codex-home-<pid>-<nanos>`) that is created holding nothing but a symlink to the user's `auth.json` (in Codex's own folder as the one resolver of agent folders reads it, `hide_agent_adapter::AgentAdapter::home`: a set `CODEX_HOME`, else `~/.codex`; an empty one is unset, as Codex reads it, and a relative one leaves the provider unavailable), and no `config.toml`.
   The app-server then writes its own state beside the symlink (`installation_id`, `models_cache.json`, its sqlite databases, `shell_snapshots/`, `skills/`, `tmp/`; 2 to 5 MB a session, measured 2026-09-20), but no `sessions/` rollout, so the ephemeral thread leaves no transcript.
   With no config the app-server starts none of the MCP servers the user's real config declares, which measurement (2026-09-17) showed `-c mcp_servers={}` and a per-thread `config` override both failed to prevent.
   The directory is removed when the session ends; if it or the symlink cannot be created the request fails with `ProviderUnavailable(codex_home_unavailable:<stage>:<kind>)` rather than falling back to `~/.codex`.
@@ -532,7 +534,7 @@ A sign-in answer is `NotAuthenticated`, and a frame with no groups is `FormatCha
 The child runs on a `BackgroundRead` worker, so the coordinator thread that applies every Herdr pane event never waits on it; one child runs at a time, and dropping the reader cancels a child still running at shutdown.
 The failure event carries the provider and the failure kind only; no terminal text, token, or account identifier is logged or placed in a snapshot.
 
-For Codex, the core's own node reads `auth.json` under `CODEX_HOME` or `~/.codex`; an invalid explicit `CODEX_HOME` disables that read instead of falling back to `HOME`.
+For Codex, the core's own node reads `auth.json` under Codex's folder from the same resolver (`CODEX_HOME`, or `~/.codex` when it is unset or empty); a relative `CODEX_HOME`, which Codex reads against its own working folder, disables that read instead of falling back to `HOME`.
 The access token exists only long enough to build the HTTPS authorization header, and Hide never refreshes, persists, logs, or includes it in a snapshot.
 The Codex usage endpoint is called outside `Mutex<Runtime>`; a 429 honors `Retry-After` in either delay-seconds or HTTP-date form, or falls back to bounded 5, 10, and 15 minute delays.
 An offline response keeps a non-expired success for at most 15 minutes; Codex can then fall back to the latest timestamped five-hour and weekly windows in a local session JSONL file.

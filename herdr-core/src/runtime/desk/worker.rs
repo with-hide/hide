@@ -477,7 +477,7 @@ impl Worker {
                 desk: &places.desk,
                 capability: &credential.reference,
                 codex_home: &places.codex_home,
-                codex_sign_in: &places.codex_sign_in,
+                codex_sign_in: places.codex_sign_in.as_deref().map_err(String::as_str),
             },
             &credential.nonce,
         );
