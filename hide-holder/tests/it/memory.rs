@@ -14,8 +14,10 @@ use std::time::Duration;
 use crate::role::{FLOOD_BYTES, GO};
 use crate::support::{Connection, Home, ROLE, current_version, role_program, source, start_ready};
 
-/// The flood: well past the 2 MiB scrollback, so the parser's pages are full.
-const FLOOD: &str = "30000000";
+/// The flood: well past the 2 MiB scrollback, so the parser's pages are
+/// full; smaller on Windows, whose ConPTY carries about 0.8 MB a second on a
+/// runner, inside the 30 s a wait for text takes.
+const FLOOD: &str = if cfg!(windows) { "8000000" } else { "30000000" };
 
 /// The memory the system charges `pid` with: its footprint on macOS, its
 /// anonymous resident pages on Linux, its private bytes on Windows.
