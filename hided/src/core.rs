@@ -1103,7 +1103,7 @@ impl Drop for CoreHandle {
 }
 
 /// This machine's pane holders, when the development switch
-/// (`hide_node::terminal::holder::SWITCH`) is on: the state folder's records,
+/// (`crate::env::HIDE_DEV_PANE_HOLDER`) is on: the state folder's records,
 /// the holder beside this program, and on Windows the ConPTY runtime beside
 /// the configured Herdr. Off, or unset, there are none and every pane opens
 /// through Herdr.
@@ -1112,7 +1112,7 @@ fn local_holders(
     reports: Arc<dyn ReportSink>,
 ) -> Result<Option<hide_node::terminal::holder::Holders>, String> {
     use hide_node::terminal::holder::{Holders, Switch};
-    let switch = Switch::from_env()?;
+    let switch = crate::env::pane_holder_switch()?;
     if switch == Switch::Off {
         return Ok(None);
     }

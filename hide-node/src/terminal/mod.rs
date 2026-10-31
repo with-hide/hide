@@ -508,15 +508,14 @@ impl TerminalNode for Service {
             }
             entry.need_full = true;
             // The core sends no resize for a grid that did not change, so a
-            // view at the grid the session runs at asks Herdr for the whole
-            // screen here, as a redraw does; any other grid's resize brings
-            // one.
+            // view at the grid the session runs at asks for the whole screen
+            // here, as a redraw does; any other grid's resize brings one.
             if entry.size == Some(size)
                 && let Some(session) = entry
                     .session
                     .as_ref()
                     .filter(|session| session.mode == Mode::Control)
-                && let Err(refused) = session.resize(size.rows, size.cols)
+                && let Err(refused) = session.redraw(size.rows, size.cols)
             {
                 let message = refused.message(pane);
                 inner.error(pane, "terminal.resize_failed", message);
@@ -2302,6 +2301,10 @@ impl Inner {
             "rows": size.rows, "cols": size.cols,
         }));
         let result = match entry.session.as_ref() {
+            // At the size it has, a pane that awaits a full frame asks for one.
+            Some(session) if session.mode == Mode::Control && previous == Some(size) => session
+                .redraw(size.rows, size.cols)
+                .map_err(|refused| refused.message(pane)),
             Some(session) if session.mode == Mode::Control => session
                 .resize(size.rows, size.cols)
                 .map_err(|refused| refused.message(pane)),
@@ -2338,7 +2341,7 @@ impl Inner {
                     .session
                     .as_ref()
                     .expect("mode read from it")
-                    .resize(size.rows, size.cols);
+                    .redraw(size.rows, size.cols);
                 if let Err(refused) = result {
                     self.error(pane, "terminal.resize_failed", refused.message(pane));
                 }

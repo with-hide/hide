@@ -22,7 +22,7 @@
 //! `OwnedChild` start made, which a holder cannot break away from on
 //! Windows, and devices carry no holder yet ([`device_switch`]).
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, PoisonError};
@@ -92,22 +92,22 @@ impl Switch {
     }
 }
 
-/// A device's node never runs holders in this bundle. With the switch on
-/// (or set to a value it does not take) it says so in the diagnostic log
-/// and opens its panes through Herdr: a device's node runs inside the job
-/// object its `OwnedChild` start made, which on Windows allows no breakaway,
-/// so a holder could not outlive it, and a device carries no holder until
-/// its kit does.
-pub fn device_switch() {
-    let switch = Switch::from_env();
-    if switch != Ok(Switch::Off) {
+/// A device's node never runs holders in this bundle. With the switch on it
+/// says so in the diagnostic log and opens its panes through Herdr: a
+/// device's node runs inside the job object its `OwnedChild` start made,
+/// which on Windows allows no breakaway, so a holder could not outlive it,
+/// and a device carries no holder until its kit does. A value the switch
+/// does not take fails the device's terminal start, as it fails the local
+/// daemon's.
+pub fn device_switch() -> Result<(), String> {
+    if Switch::from_env()? == Switch::On {
         crate::diagnostic!(json!({
             "component": "pane_holder",
             "kind": "pane_holder.device_node_unsupported",
-            "switch": switch.as_ref().map_or_else(|why| why.clone(), |_| "on".to_owned()),
             "message": "a device's node does not run pane holders in this bundle; its panes open through Herdr",
         }));
     }
+    Ok(())
 }
 
 /// How long opening a holder's connection may take: its connect and its
@@ -133,6 +133,10 @@ struct Known(Mutex<BTreeMap<String, PathBuf>>);
 impl Known {
     fn socket(&self, pane: &str) -> Option<PathBuf> {
         self.lock().get(pane).cloned()
+    }
+
+    fn contains(&self, pane: &str) -> bool {
+        self.lock().contains_key(pane)
     }
 
     fn insert(&self, pane: &str, socket: PathBuf) {
@@ -179,7 +183,7 @@ impl Attacher for PaneAttacher {
     }
 
     fn keeps_own_size(&self, pane_id: &str) -> bool {
-        self.known.socket(pane_id).is_some() || self.herdr.keeps_own_size(pane_id)
+        self.known.contains(pane_id) || self.herdr.keeps_own_size(pane_id)
     }
 }
 
@@ -232,10 +236,12 @@ fn open_failure(error: OpenError) -> OpenFailure {
             ),
             retried: false,
         },
+        // Only a refusal that says attaching again cannot help is final, as
+        // for a close during the session (`super::final_close`).
         OpenError::Refused(closed) => OpenFailure {
             category: category(closed.reason),
             message: message(&closed),
-            retried: closed.reason == CloseReason::OpeningFull,
+            retried: super::final_close(category(closed.reason)).is_none(),
         },
         error => OpenFailure {
             category: "holder_unreachable",
@@ -350,6 +356,15 @@ impl SessionWriter for HolderWriter {
         Ok(())
     }
 
+    /// A holder draws its whole screen again when asked; a size it does not
+    /// have yet brings a full screen by the resize.
+    fn redraw(&mut self, size: GridSize) -> std::io::Result<()> {
+        if size != self.size {
+            return self.resize(size);
+        }
+        write_client(&mut self.stream, &ClientMessage::Redraw)
+    }
+
     fn scroll(
         &mut self,
         lines: i32,
@@ -384,8 +399,9 @@ impl SessionWriter for HolderWriter {
 pub struct Recovered {
     /// Panes whose holders run, attached to the service, in name order.
     pub attached: Vec<String>,
-    /// Panes whose holders run, left unattached past [`MAX_ATTACHED_PANES`]:
-    /// they run on, and their screens are kept by their holders.
+    /// Panes whose holders run, past [`MAX_ATTACHED_PANES`]: the service
+    /// reports them `attach_limit`; they run on, and their screens are kept
+    /// by their holders.
     pub kept: Vec<String>,
     /// Panes that ended, with the reason their records name.
     pub ended: Vec<(String, Option<EndReason>)>,
@@ -536,63 +552,62 @@ impl Holders {
         self.ask(pane, Ask::Processes)
     }
 
+    /// Asks in the version the pane's record says its holder speaks, so a
+    /// newer node still reads an older holder.
     fn ask(&self, pane: &str, ask: Ask) -> Result<Answer, OpenError> {
+        let record = self
+            .panes
+            .record(pane)
+            .map_err(|why| OpenError::Io(std::io::Error::other(why.to_string())))?
+            .ok_or_else(|| {
+                OpenError::Io(std::io::Error::new(
+                    std::io::ErrorKind::NotFound,
+                    format!("pane {pane} has no record"),
+                ))
+            })?;
         hide_holder_protocol::ask(
             &hide_kit::layout::holder_socket(&self.state_dir, pane),
             ask,
+            record.protocol,
             Instant::now() + ASK_LIMIT,
         )
     }
 
     /// What a node does when it starts: reconciles the records with the
     /// holders that run until everything found is taken up (or
-    /// [`RECONCILE_ROUNDS`] have run), attaches the first
-    /// [`MAX_ATTACHED_PANES`] holders that run, by name, at the size each
-    /// has, and keeps the rest running unattached, and reports each pane
-    /// that ended while no node was there with the reason its record names.
+    /// [`RECONCILE_ROUNDS`] have run), asks the service to attach every holder
+    /// that runs, by name, at the size each has, and reports each pane that
+    /// ended while no node was there with the reason its record names. The
+    /// service attaches the first [`MAX_ATTACHED_PANES`] and reports the rest
+    /// `attach_limit`, as it does a start past its cap; they run on, their
+    /// screens held by their holders. Each pane is reported once, by what the
+    /// last round that took it up found.
     pub fn recover(&self, service: &Service) -> Recovered {
         let mut recovered = Recovered::default();
-        let mut alive = Vec::new();
+        let mut judged: BTreeMap<String, Judgment> = BTreeMap::new();
+        let mut kept_orphans: BTreeSet<(String, String)> = BTreeSet::new();
+        let mut failed = None;
         for round in 1..=RECONCILE_ROUNDS {
             let reconciled = self.panes.reconcile(RECONCILE_BUDGET);
             let pending = reconciled.pending();
             recovered.complete = reconciled.is_complete();
             for (pane, judgment) in reconciled.panes {
-                match judgment {
-                    Judgment::Alive(_) => alive.push(pane),
-                    Judgment::Ended(record) => {
-                        self.report_ended(&record);
-                        recovered
-                            .ended
-                            .push((pane, record.end.as_ref().map(|end| end.reason)));
-                    }
-                    Judgment::Unsupported(record) => {
-                        self.report(
-                            &pane,
-                            "unsupported",
-                            "unsupported_holder_version",
-                            format!(
-                                "The pane's holder speaks version {}, older than the oldest this build speaks to ({OLDEST_HOLDER_VERSION}); it is left running",
-                                record.protocol
-                            ),
-                        );
-                        recovered.unsupported.push(pane);
-                    }
-                    // Taken up again by the next round.
-                    Judgment::Pending(_) | Judgment::Starting(_) => {}
-                    other => recovered.unjudged.push((pane, format!("{other:?}"))),
+                let waits = matches!(judgment, Judgment::Pending(_) | Judgment::Starting(_));
+                // A pane a round took up keeps what it was found; one left
+                // pending takes what a later round finds.
+                let settled = judged.get(&pane).is_some_and(|earlier| {
+                    !matches!(earlier, Judgment::Pending(_) | Judgment::Starting(_))
+                });
+                if !settled && !(waits && judged.contains_key(&pane)) {
+                    judged.insert(pane, judgment);
                 }
             }
             for orphan in reconciled.orphans {
                 if let OrphanOutcome::Kept(why) = orphan.outcome {
-                    recovered
-                        .unjudged
-                        .push((orphan.pane.unwrap_or_default(), why));
+                    kept_orphans.insert((orphan.pane.unwrap_or_default(), why));
                 }
             }
-            if let Some(failed) = reconciled.failed {
-                recovered.unjudged.push((String::new(), failed));
-            }
+            failed = reconciled.failed;
             if recovered.complete {
                 break;
             }
@@ -603,21 +618,58 @@ impl Holders {
                 "pending": pending,
             }));
         }
-        alive.sort();
-        alive.dedup();
+        let mut alive = Vec::new();
+        let mut waiting = Vec::new();
+        for (pane, judgment) in judged {
+            match judgment {
+                Judgment::Alive(_) => alive.push(pane),
+                Judgment::Ended(record) => {
+                    self.report_ended(&record);
+                    recovered
+                        .ended
+                        .push((pane, record.end.as_ref().map(|end| end.reason)));
+                }
+                Judgment::Unsupported(record) => {
+                    self.report(
+                        &pane,
+                        "unsupported",
+                        "unsupported_holder_version",
+                        format!(
+                            "The pane's holder speaks version {}, older than the oldest this build speaks to ({OLDEST_HOLDER_VERSION}); it is left running",
+                            record.protocol
+                        ),
+                    );
+                    recovered.unsupported.push(pane);
+                }
+                Judgment::Pending(_) | Judgment::Starting(_) => waiting.push(pane),
+                other => recovered.unjudged.push((pane, format!("{other:?}"))),
+            }
+        }
+        recovered.unjudged.extend(kept_orphans);
+        if let Some(failed) = failed {
+            recovered.unjudged.push((String::new(), failed));
+        }
+        if !waiting.is_empty() {
+            crate::diagnostic!(json!({
+                "component": "pane_holder",
+                "kind": "pane_holder.reconcile_unfinished",
+                "rounds": RECONCILE_ROUNDS,
+                "panes": waiting,
+            }));
+        }
         for pane in alive {
             self.known.insert(
                 &pane,
                 hide_kit::layout::holder_socket(&self.state_dir, &pane),
             );
+            // No size: a holder keeps its own, and the screen that comes back
+            // is the one it holds at this moment.
+            service.control(TerminalControl::Attach {
+                pane: pane.clone(),
+                size: None,
+                manual: false,
+            });
             if recovered.attached.len() < MAX_ATTACHED_PANES {
-                // No size: a holder keeps its own, and the screen that comes
-                // back is the one it holds at this moment.
-                service.control(TerminalControl::Attach {
-                    pane: pane.clone(),
-                    size: None,
-                    manual: false,
-                });
                 recovered.attached.push(pane);
             } else {
                 recovered.kept.push(pane);

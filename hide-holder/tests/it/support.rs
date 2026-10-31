@@ -362,7 +362,12 @@ fn first_line(reader: impl std::io::Read + Send + 'static) -> String {
 
 /// The recent text of the pane whose holder listens at `socket`.
 pub fn read_text(socket: &Path, lines: u16) -> (String, bool) {
-    match hide_holder_protocol::ask(socket, Ask::Read { lines }, Instant::now() + HANG_LIMIT) {
+    match hide_holder_protocol::ask(
+        socket,
+        Ask::Read { lines },
+        hide_holder_protocol::PROTOCOL_VERSION,
+        Instant::now() + HANG_LIMIT,
+    ) {
         Ok(Answer::Text { text, truncated }) => (text, truncated),
         other => panic!("a read was answered {other:?}"),
     }

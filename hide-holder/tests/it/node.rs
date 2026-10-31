@@ -120,6 +120,41 @@ impl Screens {
     fn drew(&self, pane: &str) -> bool {
         self.lock().contains_key(pane)
     }
+
+    /// How many full frames `pane` drew.
+    fn fulls(&self, pane: &str) -> usize {
+        self.lock()
+            .get(pane)
+            .map_or(0, |frames| frames.iter().filter(|(_, full)| *full).count())
+    }
+
+    /// Waits for `pane` to draw `text` in any frame after its first `after`.
+    fn wait_drawn_after(&self, pane: &str, after: usize, text: &str) {
+        let deadline = Instant::now() + HANG_LIMIT;
+        let mut frames = self.lock();
+        loop {
+            if frames
+                .get(pane)
+                .into_iter()
+                .flatten()
+                .skip(after)
+                .any(|(bytes, _)| text_of(bytes).contains(text))
+            {
+                return;
+            }
+            let left = deadline.saturating_duration_since(Instant::now());
+            assert!(!left.is_zero(), "pane {pane} never drew {text:?}");
+            frames = self
+                .changed
+                .wait_timeout(frames, left)
+                .unwrap_or_else(PoisonError::into_inner)
+                .0;
+        }
+    }
+
+    fn count(&self, pane: &str) -> usize {
+        self.lock().get(pane).map_or(0, Vec::len)
+    }
 }
 
 /// The text a frame draws: its bytes less their escape sequences.
@@ -457,6 +492,38 @@ fn a_started_pane_shows_its_first_full_screen_takes_input_and_converges() {
     assert!(!holder.runs());
 }
 
+/// A redraw, and a view at the grid the pane already runs at, each bring a
+/// full frame from the holder, and what the program prints after either is
+/// drawn: the node waits for a full frame after both, and a holder answers
+/// a same-size resize with nothing, so each asks for the screen with a
+/// redraw instead.
+#[test]
+fn a_redraw_on_a_holder_pane_draws_its_screen_again_and_what_follows() {
+    let folder = Folder::new();
+    let node = Node::start(Switch::On, folder.home.path(), &folder.state);
+    node.start_pane(&folder.shell("r1"));
+    node.screens.first_full("r1");
+    node.type_into("r1", print_ok());
+    wait_until("the shell's answer", || node.text("r1").contains("hide-ok"));
+
+    let asks: [(&str, &dyn Fn()); 2] = [
+        ("redrawn", &|| node.service.redraw("r1")),
+        ("viewed", &|| node.service.view("r1", SIZE, true)),
+    ];
+    for (word, ask) in asks {
+        let fulls = node.screens.fulls("r1");
+        let drawn = node.screens.count("r1");
+        ask();
+        wait_until("a full frame after the ask", || {
+            node.screens.fulls("r1") > fulls
+        });
+        node.type_into("r1", &print_node(word));
+        node.screens
+            .wait_drawn_after("r1", drawn, &format!("{word}-node"));
+    }
+    node.holders().terminate(&node.service, "r1").unwrap();
+}
+
 /// The `node` role: starts every pane of the kill test, eight at once as a
 /// node's starts come, says so once each attached pane drew its first full
 /// screen, and lives until the test kills it.
@@ -574,6 +641,7 @@ fn a_node_killed_outright_finds_its_holders_again_and_attaches_sixty_four() {
     );
     let ended = next.reports.wait_state(ENDS, "ended");
     assert_eq!(ended.exit_category.as_deref(), Some("program_exited"));
+    assert_eq!(next.reports.states(ENDS), ["ended"], "reported once");
 
     for pane in &recovered.attached {
         next.screens.first_full(pane);
@@ -581,6 +649,8 @@ fn a_node_killed_outright_finds_its_holders_again_and_attaches_sixty_four() {
     let recover_took = recovered_at.elapsed();
     next.screens.wait_full(PRINTS, WHILE_AWAY);
     for pane in &kept {
+        let limited = next.reports.wait_state(pane, "unavailable");
+        assert_eq!(limited.exit_category.as_deref(), Some("attach_limit"));
         assert!(!next.screens.drew(pane), "{pane} past the cap was attached");
         let (holder, _) = before[pane];
         assert!(
@@ -737,6 +807,10 @@ fn a_node_works_a_holder_of_the_oldest_version_it_supports() {
         },
     });
     wait_until("the resize", || logged().contains("resize 30 100"));
+    let redraws = || logged().lines().filter(|line| *line == "redraw").count();
+    let before = redraws();
+    node.service.redraw("f1");
+    wait_until("the redraw", || redraws() > before);
     match node.holders().read("f1", 10).unwrap() {
         Answer::Text { text, .. } => assert_eq!(text, fixture_v1::READ_TEXT),
         other => panic!("a read answered {other:?}"),

@@ -89,6 +89,9 @@ pub trait SessionEvents: Send {
 pub trait SessionWriter: Send {
     fn input(&mut self, bytes: &[u8]) -> io::Result<()>;
     fn resize(&mut self, size: GridSize) -> io::Result<()>;
+    /// Asks for the whole screen again at `size`, the size the session
+    /// runs at: the next frame is full.
+    fn redraw(&mut self, size: GridSize) -> io::Result<()>;
     /// A wheel of `lines` rows, positive up, never zero, over the zero-based
     /// cell when the screen said which.
     fn scroll(
@@ -178,6 +181,11 @@ impl SessionWriter for LineWriter {
     fn resize(&mut self, size: GridSize) -> io::Result<()> {
         let line = protocol::resize_line(size.rows, size.cols).map_err(io::Error::other)?;
         self.line(&line)
+    }
+
+    /// Herdr draws the whole screen again on a resize to the size it has.
+    fn redraw(&mut self, size: GridSize) -> io::Result<()> {
+        self.resize(size)
     }
 
     fn scroll(
@@ -401,6 +409,7 @@ pub(super) enum WriterCommand {
         written: Option<Written>,
     },
     Resize(GridSize),
+    Redraw(GridSize),
     /// Writes nothing; tells `written` once what was sent before it was
     /// written.
     Barrier(Written),
@@ -419,7 +428,7 @@ impl WriterCommand {
 
     fn cost(&self) -> usize {
         match self {
-            Self::Scroll { .. } | Self::Resize(_) => CONTROL_LINE_COST,
+            Self::Scroll { .. } | Self::Resize(_) | Self::Redraw(_) => CONTROL_LINE_COST,
             Self::Input { bytes, .. } => bytes.len(),
             Self::Barrier(_) | Self::Release { .. } => 0,
         }
@@ -598,6 +607,17 @@ impl Session {
         self.send(WriterCommand::Resize(GridSize { rows, cols }))
     }
 
+    /// Asks the transport for the whole screen again at the size the
+    /// session runs at.
+    pub(super) fn redraw(&self, rows: u16, cols: u16) -> Result<(), WriteRefused> {
+        if rows == 0 || cols == 0 {
+            return Err(WriteRefused::Failed(
+                "terminal dimensions must be positive".to_owned(),
+            ));
+        }
+        self.send(WriterCommand::Redraw(GridSize { rows, cols }))
+    }
+
     pub(super) fn scroll(
         &self,
         lines: i32,
@@ -697,6 +717,7 @@ fn spawn_session_writer(
                         (writer.input(&bytes), None, written)
                     }
                     WriterCommand::Resize(size) => (writer.resize(size), None, None),
+                    WriterCommand::Redraw(size) => (writer.redraw(size), None, None),
                     WriterCommand::Barrier(written) => (writer.flush(), None, Some(written)),
                     WriterCommand::Release { acknowledged } => {
                         (writer.release(), Some(acknowledged), None)
