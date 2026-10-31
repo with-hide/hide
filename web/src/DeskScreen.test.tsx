@@ -4,7 +4,7 @@ import { createRoot, type Root } from "react-dom/client";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createActions } from "./actions";
 import { TooltipProvider } from "./components/ui/tooltip";
-import type { DeskAgent, DeskItem } from "./desk";
+import type { DeskAgent, DeskItem, DeskJob } from "./desk";
 import { DeskScreen, DeskSidebarEntry } from "./DeskScreen";
 import { clientI18n } from "./i18n/translator";
 import type { DeskSection, SnapshotRest } from "./snapshot";
@@ -167,9 +167,9 @@ describe("Desk's room", () => {
   it("opens a session that is no job of Desk's as a thread in the lane and stays in Desk (D-87, B51)", async () => {
     // `fixer` runs in the sidebar but Desk did not start it: it has no card until its thread opens.
     const row = { pane_id: "w1:p2", identity_label: "fixer", agent_kind: "claude", mark: "going" } as never;
-    const card = { id: "pane:w1:p2", pane_id: "w1:p2", title: "fixer", agent_kind: "claude", project: { workspace_id: "w-repo", label: "repo" }, location: { kind: "checkout", label: "main" },
+    const card: DeskJob = { id: "pane:w1:p2", pane_id: "w1:p2", title: "fixer", agent_kind: "claude", project: { workspace_id: "w-repo", label: "repo" }, location: { kind: "checkout", label: "main" },
       state: "working", queue_position: null, now: "고치는 중", plan: null, question: null, summary: null, pull_requests: [], outputs: [], joined: false, reason: null, failure: null, ask: null,
-      mark: "going", mark_read: false, machine: null, disconnected: false, changed_at_unix_ms: 0, read: false, mission: null, workers: [], agent_id: null } as const;
+      mark: "going", mark_read: false, machine: null, disconnected: false, changed_at_unix_ms: 0, read: false, mission: null, workers: [], agent_id: null };
     await act(async () => useUiStore.getState().setScreen({ kind: "desk" }));
     await render(desk([{ kind: "user", id: 1, text: "@session(w1:p2 fixer) 어디까지 왔어?", at_ms: 0, mentions: [fixer] }]));
     await act(async () => useShellStore.setState({ agents: [row] }));
