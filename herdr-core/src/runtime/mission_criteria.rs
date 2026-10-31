@@ -434,7 +434,6 @@ impl Runtime {
             "component": "missions", "kind": "mission.criterion_recorded",
             "mission": id, "node": node, "line": key, "pass": pass,
         }));
-        self.save_missions();
         self.record_mission_events(&id, events);
         Ok((json!({"mission": self.mission_view_of(&id)}), true))
     }
@@ -505,7 +504,6 @@ impl Runtime {
             .node(node)
             .line(Some(&reason));
         event.criterion = Some(key.to_owned());
-        self.save_missions();
         self.record_mission_events(&id, vec![event]);
         Ok((json!({"mission": self.mission_view_of(&id)}), true))
     }
@@ -584,7 +582,6 @@ impl Runtime {
         let target = self.missions.book.get_mut(id).ok_or("mission_unknown")?;
         target.nodes[index] = next;
         target.updated_at_unix_ms = now;
-        self.save_missions();
         self.record_mission_events(id, events);
         Ok((json!({"mission": self.mission_view_of(id)}), true))
     }

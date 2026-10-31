@@ -8,6 +8,7 @@
 //! skips the rest, and the thread is joined when the file is dropped.
 
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
 use std::thread::JoinHandle;
 
@@ -21,10 +22,15 @@ pub(crate) struct LatestFile<T: Send + 'static> {
     encode: fn(&T) -> Result<Vec<u8>, String>,
     slot: Arc<Mutex<Slot<T>>>,
     worker: Mutex<Option<JoinHandle<()>>>,
+    /// The number of the newest value known on disk (`save` numbers them
+    /// from 1); a failed write leaves it where it was.
+    durable: Arc<AtomicU64>,
 }
 
 struct Slot<T> {
-    latest: Option<T>,
+    latest: Option<(u64, T)>,
+    /// The number the last `save` gave.
+    numbered: u64,
     active: bool,
 }
 
@@ -44,19 +50,24 @@ impl<T: Send + 'static> LatestFile<T> {
             encode,
             slot: Arc::new(Mutex::new(Slot {
                 latest: None,
+                numbered: 0,
                 active: false,
             })),
             worker: Mutex::new(None),
+            durable: Arc::new(AtomicU64::new(0)),
         }
     }
 
-    /// Queues `value` to replace the file. A value still waiting when a newer
-    /// one arrives is dropped.
-    pub(crate) fn save(&self, value: T) {
+    /// Queues `value` to replace the file and returns its number. A value
+    /// still waiting when a newer one arrives is dropped: the newer one
+    /// holds it, so its number is reached with the newer one's.
+    pub(crate) fn save(&self, value: T) -> u64 {
         let mut slot = self.slot.lock().unwrap_or_else(PoisonError::into_inner);
-        slot.latest = Some(value);
+        slot.numbered += 1;
+        let number = slot.numbered;
+        slot.latest = Some((number, value));
         if slot.active {
-            return;
+            return number;
         }
         let mut worker = self.worker.lock().unwrap_or_else(PoisonError::into_inner);
         // The previous worker has cleared `active` and is returning.
@@ -64,11 +75,12 @@ impl<T: Send + 'static> LatestFile<T> {
             let _ = finished.join();
         }
         let shared = Arc::clone(&self.slot);
+        let durable = Arc::clone(&self.durable);
         let path = self.path.clone();
         let (component, subject, encode) = (self.component, self.subject, self.encode);
         match std::thread::Builder::new()
             .name(self.thread.to_owned())
-            .spawn(move || write_latest(&shared, &path, component, subject, encode))
+            .spawn(move || write_latest(&shared, &durable, &path, component, subject, encode))
         {
             Ok(handle) => {
                 slot.active = true;
@@ -80,6 +92,13 @@ impl<T: Send + 'static> LatestFile<T> {
                 "message": format!("worker could not start: {error}"),
             })),
         }
+        number
+    }
+
+    /// The number of the newest value known on disk: every value `save`
+    /// numbered up to it is written, in it or in a newer one.
+    pub(crate) fn durable(&self) -> u64 {
+        self.durable.load(Ordering::Acquire)
     }
 }
 
@@ -104,13 +123,14 @@ impl<T: Send + 'static> Drop for LatestFile<T> {
 
 fn write_latest<T>(
     slot: &Mutex<Slot<T>>,
+    durable: &AtomicU64,
     path: &Path,
     component: &str,
     subject: &str,
     encode: fn(&T) -> Result<Vec<u8>, String>,
 ) {
     loop {
-        let value = {
+        let (number, value) = {
             let mut slot = slot.lock().unwrap_or_else(PoisonError::into_inner);
             match slot.latest.take() {
                 Some(value) => value,
@@ -120,13 +140,14 @@ fn write_latest<T>(
                 }
             }
         };
-        if let Err(reason) = write(path, &value, encode) {
-            crate::diagnostic!(serde_json::json!({
+        match write(path, &value, encode) {
+            Ok(()) => durable.store(number, Ordering::Release),
+            Err(reason) => crate::diagnostic!(serde_json::json!({
                 "component": component,
                 "kind": format!("{subject}.save_failed"),
                 "path": path.to_string_lossy(),
                 "message": reason,
-            }));
+            })),
         }
     }
 }
@@ -180,4 +201,47 @@ pub(crate) fn read_capped(path: &Path, cap: u64) -> Result<Option<Vec<u8>>, Stri
     std::io::Read::read_to_end(&mut std::io::Read::take(file, cap), &mut bytes)
         .map_err(|error| format!("could not be read: {error}"))?;
     Ok(Some(bytes))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn encode(value: &u32) -> Result<Vec<u8>, String> {
+        Ok(value.to_string().into_bytes())
+    }
+
+    /// A value's number is known on disk only once a write holding it
+    /// succeeded, so a caller waiting on it never acts on a value a stop or
+    /// a failed write lost.
+    #[test]
+    fn a_saves_number_is_on_disk_only_after_a_write_that_held_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = LatestFile::new(
+            dir.path().join("value"),
+            "test-save",
+            "test",
+            "value",
+            encode,
+        );
+        let durable = Arc::clone(&file.durable);
+        assert_eq!(file.save(1), 1);
+        let last = file.save(2);
+        assert_eq!(last, 2);
+        drop(file);
+        assert_eq!(durable.load(Ordering::Acquire), last);
+        assert_eq!(
+            std::fs::read_to_string(dir.path().join("value")).unwrap(),
+            "2"
+        );
+
+        // A folder where the file's own folder should be fails every write.
+        let blocked = dir.path().join("blocked");
+        std::fs::write(&blocked, "a file").unwrap();
+        let file = LatestFile::new(blocked.join("value"), "test-save", "test", "value", encode);
+        let durable = Arc::clone(&file.durable);
+        assert_eq!(file.save(3), 1);
+        drop(file);
+        assert_eq!(durable.load(Ordering::Acquire), 0);
+    }
 }

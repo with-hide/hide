@@ -197,49 +197,115 @@ impl Runtime {
         self.missions.events_edit = self.missions.events_edit.wrapping_add(1);
     }
 
-    /// Adds `events` to `mission`'s history and hands it to the store. A
-    /// full history drops its oldest and logs it; recording never refuses
-    /// the change it records (B21).
+    /// Numbers `events`, adds them to `mission`'s history and saves the
+    /// book with them as its unwritten events, in the same save as the
+    /// change they record (B27); the history file is written from there
+    /// once that book is on disk (`drain_mission_outbox`). Every change is
+    /// saved here, events or none. A full history drops its oldest and logs
+    /// it; recording never refuses the change it records (B21).
     pub(crate) fn record_mission_events(&mut self, mission: &str, events: Vec<MissionEvent>) {
-        if events.is_empty() {
+        self.stage_mission_events(mission, events);
+        self.save_missions();
+        self.drain_mission_outbox();
+    }
+
+    /// Numbers `events` and adds them to `mission`'s history and to its
+    /// unwritten events, for the save that follows to keep with the change
+    /// they record; a change across several missions stages each and saves
+    /// once.
+    pub(crate) fn stage_mission_events(&mut self, mission: &str, mut events: Vec<MissionEvent>) {
+        if let Some(record) = self.missions.book.get_mut(mission) {
+            for event in &mut events {
+                if event.id.is_none() {
+                    record.event_seq += 1;
+                    event.id = Some(record.event_seq);
+                }
+            }
+            record.unlogged.extend(events.iter().cloned());
+            let over = record
+                .unlogged
+                .len()
+                .saturating_sub(crate::missions::UNLOGGED_LIMIT);
+            if over > 0 {
+                record.unlogged.drain(..over);
+                crate::diagnostic!(json!({
+                    "component": "missions", "kind": "mission_events.unlogged_dropped",
+                    "mission": mission, "dropped": over,
+                }));
+            }
+        }
+        if !events.is_empty() {
+            let log = self.missions.events.entry(mission.to_owned()).or_default();
+            let before = log.dropped;
+            for event in events {
+                log.push(Arc::new(event));
+            }
+            // The first drop and each hundredth after it, so a full log does
+            // not write a line per event.
+            if log.dropped != before && (before == 0 || log.dropped / 100 != before / 100) {
+                crate::diagnostic!(json!({
+                    "component": "missions", "kind": "mission_events.dropped",
+                    "mission": mission, "dropped": log.dropped,
+                }));
+            }
+            self.missions.events_edit = self.missions.events_edit.wrapping_add(1);
+        }
+    }
+
+    /// Writes what waited for the book to be on disk (B27): each mission's
+    /// unwritten events go to its history file, and the Conductors' letters
+    /// held for it are sent. Run after each save and by the coordinator's
+    /// tick, so a save still being written is followed within a tick. After
+    /// a restart it hands over the book's unwritten events again; the
+    /// history keeps each number once.
+    pub(crate) fn drain_mission_outbox(&mut self) {
+        if !self.missions_on_disk() {
             return;
         }
-        let log = self.missions.events.entry(mission.to_owned()).or_default();
-        // An act numbered before a restart that lost the book is done again
-        // under the same number; the history already holds it. A different
-        // act under that number is written.
-        let same = |logged: &MissionEvent, event: &MissionEvent| {
-            let mut logged = logged.clone();
-            logged.at_unix_ms = event.at_unix_ms;
-            logged == *event
-        };
-        let events: Vec<Arc<MissionEvent>> = events
-            .into_iter()
-            .filter(|event| {
-                event.id.is_none() || !log.events.iter().any(|logged| same(logged, event))
-            })
-            .map(Arc::new)
-            .collect();
-        if events.is_empty() {
-            return;
+        let readable = self.missions.unreadable.is_none();
+        for record in &mut self.missions.book.missions {
+            if record.unlogged.is_empty() {
+                continue;
+            }
+            let Some(store) = self.missions.event_store.as_ref().filter(|_| readable) else {
+                // No history file to wait for.
+                record.unlogged.clear();
+                continue;
+            };
+            let handed = self.missions.handed.get(&record.id).copied().unwrap_or(0);
+            let fresh: Vec<Arc<MissionEvent>> = record
+                .unlogged
+                .iter()
+                .filter(|event| event.id.is_some_and(|id| id > handed))
+                .cloned()
+                .map(Arc::new)
+                .collect();
+            if let Some(last) = fresh.last().and_then(|event| event.id) {
+                // A restart's history lacks what its book had not let go:
+                // the screen's copy gets it too.
+                let log = self.missions.events.entry(record.id.clone()).or_default();
+                let shown = log.last_id();
+                let mut moved = false;
+                for event in fresh.iter().filter(|event| event.id > Some(shown)) {
+                    log.push(Arc::clone(event));
+                    moved = true;
+                }
+                if moved {
+                    self.missions.events_edit = self.missions.events_edit.wrapping_add(1);
+                }
+                store.append(&record.id, &fresh);
+                self.missions.handed.insert(record.id.clone(), last);
+            }
+            // What the history holds on disk leaves the book with its next
+            // save.
+            let written = store.written(&record.id);
+            record
+                .unlogged
+                .retain(|event| event.id.is_none_or(|id| id > written));
         }
-        let before = log.dropped;
-        for event in &events {
-            log.push(Arc::clone(event));
-        }
-        // The first drop and each hundredth after it, so a full log does not
-        // write a line per event.
-        if log.dropped != before && (before == 0 || log.dropped / 100 != before / 100) {
-            crate::diagnostic!(json!({
-                "component": "missions", "kind": "mission_events.dropped",
-                "mission": mission, "dropped": log.dropped,
-            }));
-        }
-        self.missions.events_edit = self.missions.events_edit.wrapping_add(1);
-        if self.missions.unreadable.is_none()
-            && let Some(store) = &self.missions.event_store
-        {
-            store.append(mission, &events);
+        if self.missions.wakes_wait {
+            self.missions.wakes_wait = false;
+            self.flush_mission_wakes();
         }
     }
 
@@ -349,7 +415,6 @@ impl Runtime {
         };
         target.updated_at_unix_ms = now;
         self.missions.answers_held.remove(id);
-        self.save_missions();
         self.record_mission_events(id, events);
         Ok(true)
     }
@@ -607,7 +672,6 @@ impl Runtime {
                 "component": "missions", "kind": "mission.answer_undelivered",
                 "mission": id, "reason": "conductor_gone",
             }));
-            self.save_missions();
             let mut event = MissionEvent::new(now, EventKind::AnswerUndelivered).line(Some(&text));
             event.node = asked;
             self.record_mission_events(&id, vec![event]);
@@ -748,7 +812,6 @@ impl Runtime {
             }
         };
         event.node = asked;
-        self.save_missions();
         self.record_mission_events(id, vec![event]);
         self.announce_missions();
     }

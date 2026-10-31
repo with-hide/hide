@@ -119,10 +119,12 @@ pub struct MissionEvent {
     pub reason: Option<AttentionReason>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub action: Option<OperatorAction>,
-    /// Hide's own act's number in its mission (`Mission::event_seq`),
-    /// given before the book is saved: after a restart on a book that
-    /// missed the act, the act done again carries the same number and is
-    /// not written twice.
+    /// The event's number in its mission (`Mission::event_seq`), given in
+    /// the same book save as the change it records (B27). The history is
+    /// written only once that book is on disk, so a number in the history
+    /// is never given again, and a restart writes the book's unwritten
+    /// events (`Mission::unlogged`) once. None for an event written before
+    /// numbering.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub id: Option<u64>,
 }
@@ -171,7 +173,17 @@ pub struct History {
     pub dropped: u64,
 }
 
+/// The newest event number among `events`, 0 with none: numbers only
+/// grow, so an event at or under it is one the log already holds.
+fn last_id<'a>(events: impl DoubleEndedIterator<Item = &'a MissionEvent>) -> u64 {
+    events.rev().find_map(|event| event.id).unwrap_or(0)
+}
+
 impl History {
+    pub(crate) fn last_id(&self) -> u64 {
+        last_id(self.events.iter().map(AsRef::as_ref))
+    }
+
     /// Adds `event`, dropping the oldest past `EVENT_LIMIT` as `EventLog`
     /// does, so the save thread's copy stays the same.
     pub(crate) fn push(&mut self, event: Arc<MissionEvent>) {
@@ -205,6 +217,10 @@ pub struct EventLog {
 }
 
 impl EventLog {
+    pub(crate) fn last_id(&self) -> u64 {
+        last_id(self.events.iter())
+    }
+
     /// Adds `event`, dropping the oldest past `EVENT_LIMIT`. Returns
     /// whether one was dropped, which the caller logs.
     pub(crate) fn push(&mut self, event: MissionEvent) -> bool {
@@ -311,17 +327,22 @@ pub(crate) struct MissionEventStore {
     dir: PathBuf,
     shared: Arc<(Mutex<Pending>, Condvar)>,
     worker: Option<JoinHandle<()>>,
+    /// The newest event number on disk, by mission, so the book lets go of
+    /// what is written (`Mission::unlogged`).
+    written: Arc<Mutex<HashMap<String, u64>>>,
 }
 
 impl MissionEventStore {
     pub(crate) fn new(dir: PathBuf) -> Self {
         let shared = Arc::new((Mutex::new(Pending::default()), Condvar::new()));
+        let written = Arc::new(Mutex::new(HashMap::new()));
         let worker = {
             let shared = Arc::clone(&shared);
+            let written = Arc::clone(&written);
             let dir = dir.clone();
             std::thread::Builder::new()
                 .name("hide-mission-events".to_owned())
-                .spawn(move || run(&shared, &dir))
+                .spawn(move || run(&shared, &written, &dir))
                 .inspect_err(|error| {
                     crate::diagnostic!(json!({
                         "component": "missions", "kind": "mission_events.worker_failed",
@@ -334,7 +355,18 @@ impl MissionEventStore {
             dir,
             shared,
             worker,
+            written,
         }
+    }
+
+    /// The newest event number of `mission` known on disk.
+    pub(crate) fn written(&self, mission: &str) -> u64 {
+        self.written
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .get(mission)
+            .copied()
+            .unwrap_or(0)
     }
 
     /// Reads the events of `missions` from their files, before the lock is
@@ -364,6 +396,10 @@ impl MissionEventStore {
         let held = out
             .iter()
             .map(|(id, log)| (id.clone(), History::from(log.clone())))
+            .collect();
+        *self.written.lock().unwrap_or_else(PoisonError::into_inner) = out
+            .iter()
+            .map(|(id, log)| (id.clone(), log.last_id()))
             .collect();
         self.shared
             .0
@@ -452,7 +488,7 @@ fn file(dir: &Path, mission: &str) -> PathBuf {
 /// Deletes and writes what is pending until the store stops, finishing the
 /// work already handed over first. The thread keeps each log it writes, so
 /// an event costs the lock only its pointer.
-fn run(shared: &(Mutex<Pending>, Condvar), dir: &Path) {
+fn run(shared: &(Mutex<Pending>, Condvar), written: &Mutex<HashMap<String, u64>>, dir: &Path) {
     let (lock, wake) = shared;
     let mut logs: HashMap<String, EventLog> = HashMap::new();
     loop {
@@ -474,6 +510,10 @@ fn run(shared: &(Mutex<Pending>, Condvar), dir: &Path) {
             let mut result = Ok(());
             if work.removed {
                 logs.remove(&mission);
+                written
+                    .lock()
+                    .unwrap_or_else(PoisonError::into_inner)
+                    .remove(&mission);
                 result = match std::fs::remove_file(&path) {
                     Ok(()) => Ok(()),
                     Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
@@ -482,10 +522,27 @@ fn run(shared: &(Mutex<Pending>, Condvar), dir: &Path) {
             }
             if result.is_ok() && !work.added.is_empty() {
                 let log = logs.entry(mission.clone()).or_default();
+                // A numbered event the log already holds is one a restart
+                // handed over again (`Mission::unlogged`).
+                let mut last = log.last_id();
+                let mut added = false;
                 for event in work.added {
+                    if event.id.is_some_and(|id| id <= last) {
+                        continue;
+                    }
+                    last = last.max(event.id.unwrap_or(0));
                     log.push(Arc::unwrap_or_clone(event));
+                    added = true;
                 }
-                result = write(dir, &path, log);
+                if added {
+                    result = write(dir, &path, log);
+                }
+                if result.is_ok() {
+                    written
+                        .lock()
+                        .unwrap_or_else(PoisonError::into_inner)
+                        .insert(mission.clone(), log.last_id());
+                }
             }
             if let Err(reason) = result {
                 crate::diagnostic!(json!({

@@ -22,7 +22,7 @@ hide mission decide (--line <text> [--why <text>] [--option <text>]... [--recomm
 hide mission delay (--line <text> | --clear)
 hide mission close --as done|merge_wait|cancelled [--report <text> | --report-file <path>]
 hide mission reopen
-hide mission take <id>
+hide mission take <id> [--handover <token>]
 hide mission show [--mission <id>]
 hide mission list
 hide mission settings
@@ -272,7 +272,9 @@ If a mission has no Conductor, the map and the mission list offer Take over (이
 A conversation brought back gets a `resumed` letter from Hide saying it conducts the mission again: read it as the start of this section.
 Run `hide mission take <id>`, then `hide mission show` and `hide inbox`, read each worker's state (`hide agent list`, its record), and go on from there.
 The take makes the mission's workers yours: asking a start again under its intent answers the worker it already has, and their reports and warnings come to you. A worker still addresses the Conductor it was started by, and letters already sent there stay in that inbox, so send each live worker one letter saying you conduct the mission now.
-Hide refuses a second session while the mission's Conductor is still present (`mission_conducted`), unless a raise that Conductor was asked first stood ten minutes and reached the operator; then the operator may hand the mission to a new session, and the old Conductor's commands are refused from then on.
+Hide refuses a second session while the mission's Conductor is still present (`mission_conducted`).
+When a raise that Conductor was asked first stood ten minutes and reached the operator, the operator may hand the mission to a new session from the map: that session's prompt names `--handover <token>`, the take passes once with it, and the old Conductor's commands are refused from then on.
+What reached the operator because the old Conductor did not answer comes to you first, with your own ten minutes.
 
 ## 9. For workers and checkers
 

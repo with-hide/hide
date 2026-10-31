@@ -4821,8 +4821,8 @@ fn a_node_taken_back_to_work_is_finished_again_only_on_its_next_pull_request() {
 /// once a raise it was asked first reached the operator, and not while it
 /// has its ten minutes or for a raise that goes to the operator at once.
 #[test]
-fn a_present_conductor_that_let_a_raise_reach_the_operator_can_be_taken_over() {
-    use crate::missions::{Attention, AttentionReason};
+fn a_present_conductor_is_taken_over_once_with_the_operators_handover() {
+    use crate::missions::{Attention, AttentionReason, WakeEvent};
     let fixture = conducting();
     let mut runtime = fixture.runtime.lock().unwrap();
     command(
@@ -4843,27 +4843,64 @@ fn a_present_conductor_that_let_a_raise_reach_the_operator_can_be_taken_over() {
             notified: false,
         });
     };
-    let take = |runtime: &mut Runtime| {
-        command(
-            runtime,
-            "recipient",
-            json!({"op": "take", "mission": "mission-1"}),
-        )
+    let take = |runtime: &mut Runtime, pane: &str, token: Option<&str>| {
+        let mut asked = json!({"op": "take", "mission": "mission-1"});
+        if let Some(token) = token {
+            asked["handover"] = json!(token);
+        }
+        command(runtime, pane, asked)
     };
+    let refused = |answer: Result<(Value, bool), String>| {
+        crate::coordination::split_refusal(&answer.unwrap_err())
+            .0
+            .to_owned()
+    };
+    let token = "0f8e2b9c-4c1d-4b7a-9e3f-5a6b7c8d9e0f";
+    // No raise reached the operator: no handover is made, and a take is
+    // refused while the Conductor is there.
     raise(&mut runtime, AttentionReason::WorkerEnded, None);
+    assert!(!runtime.mission_handover_event("mission-1", token));
     assert_eq!(
-        crate::coordination::split_refusal(&take(&mut runtime).unwrap_err()).0,
+        refused(take(&mut runtime, "recipient", Some(token))),
         "mission_conducted"
     );
+    // One the operator settles first is no reason either.
     raise(&mut runtime, AttentionReason::CleanupAsk, Some(1));
+    assert!(!runtime.mission_handover_event("mission-1", token));
+    // Ten minutes unanswered reached the operator, but a take without the
+    // operator's handover is still refused (B15).
+    raise(&mut runtime, AttentionReason::WorkerEnded, Some(2));
     assert_eq!(
-        crate::coordination::split_refusal(&take(&mut runtime).unwrap_err()).0,
+        refused(take(&mut runtime, "recipient", None)),
         "mission_conducted"
     );
-    raise(&mut runtime, AttentionReason::WorkerEnded, Some(2));
-    let (taken, changed) = take(&mut runtime).unwrap();
+    assert!(runtime.mission_handover_event("mission-1", token));
+    assert_eq!(
+        refused(take(&mut runtime, "recipient", Some("not-the-token-made"))),
+        "mission_conducted"
+    );
+    let (taken, changed) = take(&mut runtime, "recipient", Some(token)).unwrap();
     assert!(changed);
     assert_eq!(taken["mission"]["conductor"]["name"], "recipient");
+    // The handover is spent, and what reached the operator because the old
+    // Conductor did not answer goes to the new one first, with its own ten
+    // minutes, so the old timeout hands it on to no one else.
+    let mission = runtime.missions.book.get("mission-1").unwrap();
+    assert!(mission.handover.is_none());
+    let attention = mission.nodes[0].attention.clone().unwrap();
+    assert_eq!(attention.operator_at_unix_ms, None);
+    assert!(attention.since_unix_ms > 2);
+    assert!(
+        mission
+            .wakes
+            .iter()
+            .any(|wake| wake.event == WakeEvent::Attention)
+    );
+    assert!(!runtime.mission_handover_event("mission-1", token));
+    assert_eq!(
+        refused(take(&mut runtime, "sender", Some(token))),
+        "mission_conducted"
+    );
 }
 
 /// PRD mission-node-simple B18: the operator opens a closed mission again
@@ -4909,12 +4946,174 @@ fn the_operator_opens_a_closed_mission_again_from_the_map() {
     assert!(!runtime.mission_reopen_event("mission-1"));
 }
 
-/// PRD mission-node-simple B27, B28: with every letter slot taken a new
-/// wake is refused and those waiting keep their place; an act Hide numbered
-/// before a restart that lost its book is written to the history once.
+/// PRD mission-node-simple B18: a reopen holds the mission open until a node
+/// moves, and a node that went back to work and finished again has moved,
+/// though it looks as it did, so Hide closes the mission again.
 #[test]
-fn a_full_wake_queue_keeps_what_waits_and_a_numbered_act_is_written_once() {
-    use crate::mission_events::{EventKind, MissionEvent};
+fn a_reopened_mission_whose_node_worked_and_finished_again_closes_again() {
+    use crate::missions::OperatorAction;
+    use crate::runtime::mission_health::MissionAttentionPayload;
+    let fixture = conducting();
+    let mut runtime = fixture.runtime.lock().unwrap();
+    command(
+        &mut runtime,
+        "sender",
+        json!({"op": "create", "title": "Fix the bug"}),
+    )
+    .unwrap();
+    command(&mut runtime, "sender", criteria_plan()).unwrap();
+    let closed = runtime.missions.book.get_mut("mission-1").unwrap();
+    closed.status = MissionStatus::Done;
+    for node in &mut closed.nodes {
+        node.status = NodeStatus::Dropped;
+    }
+    // The operator sets a dropped node to work again: the mission opens.
+    assert!(runtime.mission_attention_event(MissionAttentionPayload {
+        mission: "mission-1".into(),
+        node: "docs".into(),
+        action: OperatorAction::Resume,
+        since_unix_ms: None,
+    }));
+    assert_eq!(mission_status(&runtime), MissionStatus::Running);
+    assert_eq!(
+        runtime.missions.book.get("mission-1").unwrap().reopened_on,
+        None
+    );
+    // Its Conductor drops it again: every node looks as the reopen found
+    // it, and the mission closes.
+    command(
+        &mut runtime,
+        "sender",
+        json!({"op": "node", "node": "docs", "patch": {"status": "dropped"}}),
+    )
+    .unwrap();
+    runtime.drive_mission_health(crate::runtime::unix_milliseconds());
+    assert_ne!(mission_status(&runtime), MissionStatus::Running);
+}
+
+/// PRD mission-node-simple B20: a cleanup that passed its last check holds
+/// the node's finish until it ends, so a resume waits for it rather than
+/// working in a folder being removed; one that did not pass withdraws and
+/// touches nothing, and its result lands only on the finish it was for.
+#[test]
+fn a_cleanup_past_its_last_check_holds_the_node_until_it_ends() {
+    use crate::missions::{OperatorAction, WorktreeFate};
+    use crate::runtime::mission_health::MissionAttentionPayload;
+    use crate::worktree_control::Retirement;
+    let fixture = conducting();
+    let mut runtime = fixture.runtime.lock().unwrap();
+    command(
+        &mut runtime,
+        "sender",
+        json!({"op": "create", "title": "Fix the bug"}),
+    )
+    .unwrap();
+    command(&mut runtime, "sender", criteria_plan()).unwrap();
+    let mission = runtime.missions.book.get_mut("mission-1").unwrap();
+    mission.status = MissionStatus::Running;
+    mission.nodes[0].status = NodeStatus::Done;
+    mission.nodes[0].finished_at_unix_ms = Some(10);
+    mission.nodes[0].prs = vec![7];
+    let key = ("mission-1".to_owned(), "fix".to_owned());
+    let ticket = crate::runtime::mission_health::CleanupTicket::of(
+        &runtime.missions.book.get("mission-1").unwrap().nodes[0],
+        true,
+    );
+    let resume = |runtime: &mut Runtime| {
+        runtime.mission_attention_act(
+            &MissionAttentionPayload {
+                mission: "mission-1".into(),
+                node: "fix".into(),
+                action: OperatorAction::Resume,
+                since_unix_ms: None,
+            },
+            20,
+        )
+    };
+    // The removal passed its last check and waits for the panes to close.
+    runtime.missions.cleaning.insert(key.clone(), true);
+    assert!(runtime.node_cleanup_committed("mission-1", "fix"));
+    assert_eq!(
+        resume(&mut runtime),
+        Err("mission_cleanup_running".to_owned())
+    );
+    let conductor = command(
+        &mut runtime,
+        "sender",
+        json!({"op": "node", "node": "fix", "patch": {"status": "working"}}),
+    );
+    assert_eq!(conductor.unwrap_err(), "mission_cleanup_running");
+    // The removal ends: its result lands on the finish it was for, and the
+    // node can work again.
+    runtime.node_cleanup_done(&key.0, &key.1, &ticket, Ok(Retirement::Removed));
+    assert!(!runtime.node_cleanup_committed("mission-1", "fix"));
+    let node = &runtime.missions.book.get("mission-1").unwrap().nodes[0];
+    assert_eq!(node.worktree, Some(WorktreeFate::Removed));
+    assert!(resume(&mut runtime).is_ok());
+    // A cleanup of a finish the node has left: its last check refuses it,
+    // and a result for it does not land on the node's new state.
+    runtime.missions.cleaning.insert(key.clone(), false);
+    assert!(!runtime.commit_node_cleanup(&key, &ticket));
+    runtime.node_cleanup_done(&key.0, &key.1, &ticket, Ok(Retirement::Removed));
+    let node = &runtime.missions.book.get("mission-1").unwrap().nodes[0];
+    assert_eq!(node.status, NodeStatus::Working);
+    assert!(runtime.missions.cleaning.is_empty());
+}
+
+/// PRD mission-node-simple B20: the operator's `정리` is kept until the
+/// cleanup ran: one that waits for room starts on a later evaluation, and
+/// a node that went back to work and finished again is asked again.
+#[test]
+fn an_accepted_cleanup_waits_for_room_and_a_new_finish_is_asked_again() {
+    use crate::missions::{AttentionReason, cause_key};
+    let fixture = conducting();
+    let mut runtime = fixture.runtime.lock().unwrap();
+    command(
+        &mut runtime,
+        "sender",
+        json!({"op": "create", "title": "Fix the bug"}),
+    )
+    .unwrap();
+    command(&mut runtime, "sender", criteria_plan()).unwrap();
+    let mission = runtime.missions.book.get_mut("mission-1").unwrap();
+    let node = &mut mission.nodes[0];
+    // Asked and accepted: the ask is settled, the choice kept.
+    assert!(node.note_handled(cause_key(AttentionReason::CleanupAsk, None, None)));
+    node.cleanup_accepted = true;
+    let mission = mission.clone();
+    // Two cleanups already run: the third waits rather than starting.
+    runtime
+        .missions
+        .cleaning
+        .insert(("other".into(), "a".into()), false);
+    runtime
+        .missions
+        .cleaning
+        .insert(("other".into(), "b".into()), false);
+    runtime.start_node_cleanup("mission-1", 0, true);
+    assert!(
+        !runtime
+            .missions
+            .cleaning
+            .contains_key(&("mission-1".into(), "fix".into()))
+    );
+    assert!(runtime.missions.book.get("mission-1").unwrap().nodes[0].cleanup_accepted);
+    // Back to work, the choice goes with the finish it was for, and the
+    // next finish may be asked again.
+    let mut node = mission.nodes[0].clone();
+    node.back_to_work();
+    assert!(!node.cleanup_accepted);
+    assert!(
+        !node
+            .handled
+            .contains(&cause_key(AttentionReason::CleanupAsk, None, None))
+    );
+}
+
+/// PRD mission-node-simple B28: with every letter slot taken a new wake is
+/// refused and those waiting keep their place.
+#[test]
+fn a_full_wake_queue_keeps_what_waits() {
     use crate::missions::{PENDING_WAKE_LIMIT, WakeEvent};
     let fixture = conducting();
     let mut runtime = fixture.runtime.lock().unwrap();
@@ -4957,20 +5156,118 @@ fn a_full_wake_queue_keeps_what_waits_and_a_numbered_act_is_written_once() {
         action: None,
     };
     assert!(crate::runtime::missions::push_wake(mission, worker).is_some());
+}
 
-    let mut event = MissionEvent::new(5, EventKind::HideClosed);
-    event.id = Some(1);
-    runtime.record_mission_events("mission-1", vec![event.clone()]);
-    event.at_unix_ms = 9;
-    runtime.record_mission_events("mission-1", vec![event]);
-    // Another act under the same number is written.
-    let mut other = MissionEvent::new(9, EventKind::Raised).node("a");
-    other.id = Some(1);
-    runtime.record_mission_events("mission-1", vec![other]);
-    let logged = &runtime.missions.events["mission-1"].events;
-    let count = |kind| logged.iter().filter(|event| event.kind == kind).count();
-    assert_eq!(
-        (count(EventKind::HideClosed), count(EventKind::Raised)),
-        (1, 1)
+/// PRD mission-node-simple B27: an event is saved in the book with the
+/// change it records, the history is written from there once that book is
+/// on disk, and a restart writes what the history missed, each number once.
+#[test]
+fn a_restart_writes_the_events_its_history_missed_once_each() {
+    use crate::mission_events::{EventKind, MissionEvent, MissionEventStore};
+    use crate::missions::{MissionBook, MissionStore, Restored};
+    let dir = tempfile::tempdir().unwrap();
+    let book_path = dir.path().join("missions.json");
+    let events_dir = dir.path().join("events");
+    // A book that was saved with two numbered events its history never got:
+    // the stop came between the book's write and the history's.
+    let mut mission = crate::missions::tests::mission();
+    let mut first = MissionEvent::new(5, EventKind::HideClosed);
+    first.id = Some(1);
+    let mut second = MissionEvent::new(6, EventKind::Raised).node("a");
+    second.id = Some(2);
+    mission.event_seq = 2;
+    mission.unlogged = vec![first, second];
+    {
+        let store = MissionStore::new(book_path.clone());
+        let number = store.save(&MissionBook {
+            missions: vec![mission],
+            next: 1,
+        });
+        drop(store);
+        assert!(number > 0);
+    }
+    let restart = || {
+        let fixture = conducting();
+        {
+            let mut runtime = fixture.runtime.lock().unwrap();
+            let store = MissionStore::new(book_path.clone());
+            let restored = store.restore();
+            assert!(matches!(restored, Restored::Read(_)));
+            runtime.install_mission_store(store, restored);
+            let events = MissionEventStore::new(events_dir.clone());
+            let logs = events.restore(["mission-1"].into_iter());
+            runtime.install_mission_events(events, logs);
+            runtime.drain_mission_outbox();
+            runtime.drain_mission_outbox();
+        }
+        fixture
+    };
+    let ids = |fixture: &Fixture| -> Vec<u64> {
+        let runtime = fixture.runtime.lock().unwrap();
+        runtime.missions.events["mission-1"]
+            .events
+            .iter()
+            .filter_map(|event| event.id)
+            .collect()
+    };
+    let fixture = restart();
+    assert_eq!(ids(&fixture), [1, 2]);
+    {
+        // A new act is numbered after them, in the same save as its change.
+        let mut runtime = fixture.runtime.lock().unwrap();
+        runtime.record_mission_events("mission-1", vec![MissionEvent::new(7, EventKind::Raised)]);
+        assert_eq!(runtime.missions.book.get("mission-1").unwrap().event_seq, 3);
+    }
+    let on_disk = |dir: &std::path::Path| -> Vec<u64> {
+        MissionEventStore::new(dir.to_path_buf()).restore(["mission-1"].into_iter())["mission-1"]
+            .events
+            .iter()
+            .filter_map(|event| event.id)
+            .collect()
+    };
+    // A stop before that book is known on disk leaves the new act in the
+    // book only; the history file never holds a number the book lost.
+    drop(fixture);
+    assert_eq!(on_disk(&events_dir), [1, 2]);
+    // The next start writes it, and one after that writes nothing twice.
+    drop(restart());
+    assert_eq!(on_disk(&events_dir), [1, 2, 3]);
+    let fixture = restart();
+    assert_eq!(ids(&fixture), [1, 2, 3]);
+    drop(fixture);
+    assert_eq!(on_disk(&events_dir), [1, 2, 3]);
+}
+
+/// PRD mission-node-simple B27: a node that cannot remember a new cause
+/// does not raise it either, so nothing is raised that would come again
+/// once settled; what it already remembers stays.
+#[test]
+fn a_node_that_cannot_remember_a_cause_does_not_raise_it() {
+    use crate::missions::{AttentionReason, HANDLED_LIMIT};
+    let fixture = conducting();
+    let mut runtime = fixture.runtime.lock().unwrap();
+    command(
+        &mut runtime,
+        "sender",
+        json!({"op": "create", "title": "Fix the bug"}),
+    )
+    .unwrap();
+    command(&mut runtime, "sender", criteria_plan()).unwrap();
+    let mission = runtime.missions.book.get_mut("mission-1").unwrap();
+    for index in 0..HANDLED_LIMIT {
+        assert!(mission.nodes[0].note_handled(format!("cause:{index}")));
+    }
+    let wakes = mission.wakes.len();
+    let raised = crate::runtime::mission_health::raise(
+        mission,
+        "fix",
+        AttentionReason::WorkerEnded,
+        None,
+        5,
     );
+    assert!(raised.is_empty());
+    assert!(mission.nodes[0].attention.is_none());
+    assert_eq!(mission.wakes.len(), wakes);
+    assert_eq!(mission.attention_seq, 0);
+    assert_eq!(mission.nodes[0].handled.len(), HANDLED_LIMIT);
 }

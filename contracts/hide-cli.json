@@ -3885,7 +3885,16 @@
                 }
             ],
             "command": "mission take",
-            "options": [],
+            "options": [
+                {
+                    "name": "--handover",
+                    "required": false,
+                    "requires": [],
+                    "value": {
+                        "type": "text"
+                    }
+                }
+            ],
             "refusals": [
                 "mission_conducted",
                 "mission_cancelled",
@@ -4112,7 +4121,7 @@
             "rest": null
         }
     ],
-    "digest": "sha256:d0f73064e1d0915826eb407a4141f70d22c59e89ab32f23b4f3fbf02807b2a72",
+    "digest": "sha256:78baeb78cbf0daf60066febfce3644c264ed9b0b4931626c0e702ab97bdf2010",
     "envelopes": {
         "agent": {
             "answer": "value",

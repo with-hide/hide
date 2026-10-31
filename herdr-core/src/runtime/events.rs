@@ -1021,6 +1021,16 @@ pub(super) struct MissionEndPayload {
     pub(super) mission: String,
 }
 
+/// `mission_handover`: the operator's 이어받기 of a Conductor that is still
+/// there but let a raise reach them (PRD mission-node-simple B15): the
+/// session the screen starts next takes the mission with `token`.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(super) struct MissionHandoverPayload {
+    pub(super) mission: String,
+    pub(super) token: String,
+}
+
 /// `issue_settings_set`: how starting work from an issue behaves; an absent
 /// field keeps its value.
 #[derive(Debug, Deserialize)]
@@ -1759,6 +1769,7 @@ pub(super) enum Event {
     /// `mission_reopen`: the operator opens a closed mission again (PRD
     /// mission-node-simple B18).
     MissionReopen(MissionEndPayload),
+    MissionHandover(MissionHandoverPayload),
     IssueDetailRequest(IssueDetailRequestPayload),
     GithubSearch(GithubSearchPayload),
     WorktreeNameSuggest(WorktreeNameSuggestPayload),
@@ -2107,6 +2118,7 @@ pub(super) fn validate_event(event: EventEnvelope) -> Result<Event, EventValidat
             MissionAttention
         ),
         "mission_reopen" => decode!(MissionEndPayload, MissionReopen),
+        "mission_handover" => decode!(MissionHandoverPayload, MissionHandover),
         "issue_detail_request" => decode!(IssueDetailRequestPayload, IssueDetailRequest),
         "github_search" => decode!(GithubSearchPayload, GithubSearch),
         "worktree_name_suggest" => decode!(WorktreeNameSuggestPayload, WorktreeNameSuggest),
@@ -4132,6 +4144,9 @@ impl Runtime {
             Event::MissionEnd(payload) => self.mission_end_event(&payload.mission),
             Event::MissionAttention(payload) => self.mission_attention_event(payload),
             Event::MissionReopen(payload) => self.mission_reopen_event(&payload.mission),
+            Event::MissionHandover(payload) => {
+                self.mission_handover_event(&payload.mission, &payload.token)
+            }
             Event::IssueDetailRequest(payload) => self.request_issue_detail(payload),
             Event::GithubSearch(payload) => self.request_github_search(payload),
             Event::WorktreeNameSuggest(payload) => self.suggest_worktree_name(payload),

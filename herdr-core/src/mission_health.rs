@@ -358,6 +358,11 @@ fn cleanup_acts(
     {
         return;
     }
+    // The operator's `정리` for this finish stands until it ran (B20).
+    if node.cleanup_accepted {
+        acts.push(Act::Cleanup { node: at });
+        return;
+    }
     match facts.cleanup {
         WorktreeCleanup::Auto => acts.push(Act::Cleanup { node: at }),
         WorktreeCleanup::Ask => {
@@ -521,7 +526,7 @@ fn still_holds(
 /// Whether a person took the node back to work while it held the pull
 /// requests it holds now (`MissionNode::resumed_cause`).
 fn resumed(node: &MissionNode) -> bool {
-    node.handled.contains(&node.resumed_cause())
+    node.resumed_on_these_facts()
 }
 
 /// Whether the same cause was raised for the node before: once raised, a
@@ -688,8 +693,7 @@ mod tests {
         // A person took it back to work: Hide does not finish it again on
         // the same pull request.
         m.nodes[0].status = NodeStatus::Working;
-        let resumed = m.nodes[0].resumed_cause();
-        m.nodes[0].note_handled(resumed);
+        m.nodes[0].resumed = Some(m.nodes[0].resumed_cause());
         assert!(evaluate(&m, &facts(Some(&pulls), vec![worker(WorkerLife::Running)])).is_empty());
     }
 
@@ -715,7 +719,7 @@ mod tests {
                 agent: None,
             }]
         );
-        m.nodes[0].note_handled(cause_key(AttentionReason::MergedUnproven, Some(7), None));
+        assert!(m.nodes[0].note_handled(cause_key(AttentionReason::MergedUnproven, Some(7), None)));
         assert!(evaluate(&m, &facts(Some(&pulls), vec![unmet])).is_empty());
     }
 
@@ -951,6 +955,11 @@ mod tests {
                 agent: None,
             }]
         );
+        // The operator's `정리` for this finish answers a cleanup rather than
+        // asking again, while the setting stays at ask (B20).
+        m.nodes[0].cleanup_accepted = true;
+        assert_eq!(evaluate(&m, &ask), [Act::Cleanup { node: 0 }]);
+        m.nodes[0].cleanup_accepted = false;
         m.nodes[0].attention = Some(attention(AttentionReason::WorktreeDirty, None));
         assert!(evaluate(&m, &facts(Some(&pulls), ended())).is_empty());
     }
@@ -1026,8 +1035,7 @@ mod tests {
         let mut m = running(&["r"]);
         m.nodes[0].kind = NodeKind::Research;
         m.nodes[0].delivery = None;
-        let resumed = m.nodes[0].resumed_cause();
-        m.nodes[0].note_handled(resumed);
+        m.nodes[0].resumed = Some(m.nodes[0].resumed_cause());
         let running = || facts(None, vec![worker(WorkerLife::Running)]);
         assert!(evaluate(&m, &running()).is_empty());
         assert_ne!(

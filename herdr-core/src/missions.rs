@@ -645,6 +645,16 @@ pub struct MissionNode {
     /// one is not raised again (B14, B27); at most `HANDLED_LIMIT`.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub handled: Vec<String>,
+    /// The mark a person left by taking the node back to work from a
+    /// finish (`resumed_cause`), kept apart from `handled` so a full cause
+    /// list never loses it (B16).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resumed: Option<String>,
+    /// The operator chose `정리` for this finish's worktree (B20): kept
+    /// until the cleanup ran or the node goes back to work, so a cleanup
+    /// that waited for room or was withdrawn is started again.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub cleanup_accepted: bool,
     /// What Hide itself did to the node last (D-07, D-15).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub hide: Option<HideMark>,
@@ -655,14 +665,12 @@ pub struct MissionNode {
     pub worktree: Option<WorktreeFate>,
 }
 
-/// Causes a node remembers as raised; past this a new one is not
-/// remembered, and none is forgotten.
+/// Causes a node remembers as raised; past this a new cause is refused
+/// with what it would have done, and none is forgotten.
 pub const HANDLED_LIMIT: usize = 128;
 /// Worker wakes a node remembers, one per pull request and reason; past
 /// this a new one is refused.
 pub const WOKEN_LIMIT: usize = 32;
-/// The start of a node's resume mark (`MissionNode::resumed_cause`).
-const RESUMED: &str = "resumed:";
 
 impl MissionNode {
     /// The node's current pull request: the last one it holds.
@@ -680,7 +688,6 @@ impl MissionNode {
         self.prs.push(number);
     }
 
-    /// Notes `cause` raised once, forgetting the oldest past the limit.
     /// The mark a person leaves by taking the node back to work from done
     /// or dropped: Hide does not finish it again on the facts it was taken
     /// back on, only once it holds another pull request or a line is
@@ -699,28 +706,44 @@ impl MissionNode {
                 )
             })
             .collect();
-        format!("{RESUMED}{}|{}", prs.join(","), lines.join(","))
+        format!("{}|{}", prs.join(","), lines.join(","))
     }
 
-    /// Remembers `cause` as raised. A newer resume mark replaces the older
-    /// one, which no fact can name again; past `HANDLED_LIMIT` nothing is
-    /// forgotten: the cause is not remembered and that is logged
-    /// (engineering #15), so a raise may come twice but none is lost.
-    pub(crate) fn note_handled(&mut self, cause: String) {
+    /// Whether a person took the node back to work on the facts it holds
+    /// now.
+    pub(crate) fn resumed_on_these_facts(&self) -> bool {
+        self.resumed
+            .as_deref()
+            .is_some_and(|mark| mark == self.resumed_cause())
+    }
+
+    /// Remembers `cause` as raised; whether it is remembered. Past
+    /// `HANDLED_LIMIT` nothing is forgotten and the new cause is not
+    /// admitted, so its caller refuses what it would have done rather than
+    /// do it with no memory of it (engineering #11, #15).
+    #[must_use]
+    pub(crate) fn note_handled(&mut self, cause: String) -> bool {
         if self.handled.contains(&cause) {
-            return;
-        }
-        if cause.starts_with(RESUMED) {
-            self.handled.retain(|held| !held.starts_with(RESUMED));
+            return true;
         }
         if self.handled.len() >= HANDLED_LIMIT {
             crate::diagnostic!(serde_json::json!({
                 "component": "missions", "kind": "mission.handled_full",
                 "node": self.key, "cap": HANDLED_LIMIT,
             }));
-            return;
+            return false;
         }
         self.handled.push(cause);
+        true
+    }
+
+    /// The node goes back to work from a finish: what that finish decided
+    /// of its worktree goes with it, so its next finish is asked again
+    /// (B20).
+    pub(crate) fn back_to_work(&mut self) {
+        self.cleanup_accepted = false;
+        let ask = cause_key(AttentionReason::CleanupAsk, None, None);
+        self.handled.retain(|cause| *cause != ask);
     }
 }
 
@@ -856,6 +879,47 @@ pub struct Mission {
     /// mission-node-simple B18).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reopened_on: Option<String>,
+    /// History events saved with the state they record and not yet known
+    /// written to the mission's history file, oldest first, at most
+    /// `UNLOGGED_LIMIT` (B27): the history is written only once the book
+    /// holding them is on disk, and a restart writes what is left.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub unlogged: Vec<crate::mission_events::MissionEvent>,
+    /// The operator's one handover of a Conductor that is still there
+    /// (B15): good for one `hide mission take --handover` from the session
+    /// it was made for, while the Conductor it was made on holds the
+    /// mission.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub handover: Option<Handover>,
+}
+
+/// Events a mission keeps waiting for its history file; past this the
+/// oldest goes and that is logged, as the history itself drops its oldest
+/// (B21).
+pub const UNLOGGED_LIMIT: usize = 64;
+
+/// How long the operator's handover waits for the session it started.
+pub const HANDOVER_TTL_MS: u64 = 10 * 60_000;
+
+/// Whether `token` can name a handover: 16 to 64 letters, digits and `-`.
+pub(crate) fn valid_handover(token: &str) -> bool {
+    (16..=64).contains(&token.len())
+        && token
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-')
+}
+
+/// The operator's choice to hand a mission whose Conductor is still there
+/// to a new session (PRD mission-node-simple B15).
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct Handover {
+    /// The secret the new session's take names; only that session was
+    /// told it.
+    pub token: String,
+    /// The Conductor it was made on; another one holding the mission by
+    /// then voids it.
+    pub from: Actor,
+    pub at_unix_ms: u64,
 }
 
 fn is_zero_u64(value: &u64) -> bool {
@@ -1266,6 +1330,10 @@ pub enum MissionCommand {
     },
     Take {
         mission: String,
+        /// The operator's handover of a Conductor that is still there
+        /// (`Mission::handover`), named by the session it was made for.
+        #[serde(default)]
+        handover: Option<String>,
     },
     Show {
         #[serde(default)]
@@ -1360,7 +1428,11 @@ impl MissionCommand {
                         .as_deref()
                         .is_none_or(|report| valid_text(report, REPORT_LIMIT))
             }
-            Self::Take { mission } => valid_key(mission),
+            // A token that names no handover is refused by the take itself
+            // (`mission_conducted`).
+            Self::Take { mission, handover } => {
+                valid_key(mission) && handover.as_deref().is_none_or(|token| token.len() <= 64)
+            }
             Self::List | Self::Settings => true,
         }
     }
@@ -1706,6 +1778,8 @@ pub(crate) fn apply_plan(
                 checks: None,
                 attention: None,
                 handled: Vec::new(),
+                resumed: None,
+                cleanup_accepted: false,
                 hide: None,
                 woken: Vec::new(),
                 worktree: None,
@@ -2491,8 +2565,15 @@ impl MissionStore {
             .map_err(|error| format!("could not keep its copy before conversion: {error}"))
     }
 
-    pub(crate) fn save(&self, book: &MissionBook) {
-        self.file.save(Arc::new(book.clone()));
+    /// Queues `book` to be written and returns its save's number
+    /// (`durable`).
+    pub(crate) fn save(&self, book: &MissionBook) -> u64 {
+        self.file.save(Arc::new(book.clone()))
+    }
+
+    /// The number of the newest save known on disk.
+    pub(crate) fn durable(&self) -> u64 {
+        self.file.durable()
     }
 
     pub(crate) fn path(&self) -> &std::path::Path {
@@ -2557,6 +2638,8 @@ pub(crate) mod tests {
             end_asked_at_unix_ms: None,
             attention_seq: 0,
             reopened_on: None,
+            unlogged: Vec::new(),
+            handover: None,
         }
     }
 
@@ -3107,7 +3190,7 @@ pub(crate) mod tests {
     /// B14, B27: a cause raised once is never forgotten; past the cap a new
     /// one is not remembered, and a newer resume mark replaces the older.
     #[test]
-    fn a_node_forgets_no_cause_it_raised() {
+    fn a_node_forgets_no_cause_it_raised_and_refuses_one_it_cannot_remember() {
         let one = |key: &str| {
             apply_plan(&mission(), &plan(vec![node(key, NodeKind::Change, &[])]), 2)
                 .unwrap()
@@ -3115,16 +3198,27 @@ pub(crate) mod tests {
                 .clone()
         };
         let mut node = one("a");
-        for index in 0..HANDLED_LIMIT + 4 {
-            node.note_handled(format!("cause:{index}"));
+        for index in 0..HANDLED_LIMIT {
+            assert!(node.note_handled(format!("cause:{index}")));
         }
+        assert!(!node.note_handled("cause:new".to_owned()));
+        assert!(node.note_handled("cause:0".to_owned()));
         assert_eq!(node.handled.len(), HANDLED_LIMIT);
         assert_eq!(node.handled[0], "cause:0");
-        let mut node = one("b");
-        node.note_handled(node.resumed_cause());
+        // The resume mark does not live among the causes: a full list keeps
+        // it, and a newer one replaces it.
+        node.resumed = Some(node.resumed_cause());
+        assert!(node.resumed_on_these_facts());
         node.prs = vec![7];
-        node.note_handled(node.resumed_cause());
-        assert_eq!(node.handled, vec![node.resumed_cause()]);
+        assert!(!node.resumed_on_these_facts());
+        // Back to work, the finish's cleanup ask can be asked again.
+        let ask = cause_key(AttentionReason::CleanupAsk, None, None);
+        let mut node = one("b");
+        assert!(node.note_handled(ask.clone()));
+        node.cleanup_accepted = true;
+        node.back_to_work();
+        assert!(!node.handled.contains(&ask));
+        assert!(!node.cleanup_accepted);
     }
 
     /// A mission created before verification strength keeps the checkers

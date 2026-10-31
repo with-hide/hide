@@ -311,13 +311,23 @@ pub(crate) struct MissionRuntime {
     /// What the last health evaluation read (PRD mission-node-simple D-08).
     pub(super) health_made: super::mission_health::HealthMadeFrom,
     /// The done nodes whose worktree is being removed now, by mission and
-    /// node. Memory only: a restart tries a node whose fate was not saved
+    /// node, and whether the removal passed its last check and touches the
+    /// worktree now (B20): from then until it ends, the node keeps its
+    /// finish. Memory only: a restart tries a node whose fate was not saved
     /// again.
-    pub(super) cleaning: std::collections::HashSet<(String, String)>,
+    pub(super) cleaning: HashMap<(String, String), bool>,
     /// The projects, by device and path, a worker's letter or a Conductor's
     /// node change asked to read again (D-09, B23), kept until that read is
     /// asked. Memory only: a restart reads every project anew.
     pub(super) reads_due: std::collections::BTreeSet<(String, String)>,
+    /// The number of the book's last save (`MissionStore::save`): letters
+    /// and history wait until it is on disk.
+    pub(super) saved: u64,
+    /// The newest event number handed to the history store this run, by
+    /// mission; a restart hands the book's unwritten events again.
+    pub(super) handed: HashMap<String, u64>,
+    /// A flush of the Conductors' letters waited for the book.
+    pub(super) wakes_wait: bool,
 }
 
 #[derive(Default)]
@@ -650,6 +660,21 @@ impl Runtime {
         by: &str,
         now: u64,
     ) -> Result<bool, String> {
+        self.close_mission_with(id, end, report, by, now, |_| Vec::new())
+    }
+
+    /// `close_mission`, with what the closer adds to the closed mission
+    /// (`also`, which returns its events) kept in the same save, so a
+    /// restart never finds the close without what it said (B27).
+    pub(super) fn close_mission_with(
+        &mut self,
+        id: &str,
+        end: MissionEnd,
+        report: Option<String>,
+        by: &str,
+        now: u64,
+        also: impl FnOnce(&mut Mission) -> Vec<crate::mission_events::MissionEvent>,
+    ) -> Result<bool, String> {
         let current = self.missions.book.get(id).ok_or("mission_unknown")?;
         if current.status != MissionStatus::Cancelled {
             self.gate_close(current, end)?;
@@ -687,6 +712,7 @@ impl Runtime {
         let changed = *target != before;
         let mut events = super::mission_events::close_events(&before, target, now);
         events.extend(ended);
+        events.extend(also(target));
         if !target.status.open() {
             self.missions.answers_held.remove(id);
         }
@@ -695,7 +721,6 @@ impl Runtime {
             "mission": id, "end": status, "by": by,
         }));
         let place = (target.device_id.clone(), target.project.clone());
-        self.save_missions();
         self.record_mission_events(id, events);
         // A mission now waiting for its branches reads them at once.
         if status == MissionStatus::MergeWait {
@@ -731,7 +756,6 @@ impl Runtime {
             "component": "missions", "kind": "mission.closed_by_branches", "mission": id,
         }));
         self.missions.answers_held.remove(id);
-        self.save_missions();
         self.record_mission_events(id, events);
         true
     }
@@ -743,6 +767,19 @@ impl Runtime {
 
     pub(super) fn save_missions(&mut self) {
         self.missions.book_edit = self.missions.book_edit.wrapping_add(1);
+        // A reopened mission is held open until a node moves (B18); the
+        // move is seen here, where every change is saved, so a node that
+        // went back to work and finished again has moved even though it
+        // looks as it did.
+        for mission in &mut self.missions.book.missions {
+            if mission
+                .reopened_on
+                .as_ref()
+                .is_some_and(|marks| *marks != mission.node_marks())
+            {
+                mission.reopened_on = None;
+            }
+        }
         self.note_mission_finishes();
         // A book that could not be read is kept as it is on disk: the empty
         // one in memory is not the operator's missions.
@@ -750,8 +787,17 @@ impl Runtime {
             return;
         }
         if let Some(store) = &self.missions.store {
-            store.save(&self.missions.book);
+            self.missions.saved = store.save(&self.missions.book);
         }
+    }
+
+    /// Whether the book as last saved is on disk; with no store it is never
+    /// written, so nothing waits on it.
+    pub(super) fn missions_on_disk(&self) -> bool {
+        self.missions
+            .store
+            .as_ref()
+            .is_none_or(|store| store.durable() >= self.missions.saved)
     }
 
     /// Runs a `hide mission` command from `caller`'s pane on `device`.
@@ -767,7 +813,7 @@ impl Runtime {
         // it pays for the copy a refusal puts back.
         let before = command.mutates().then(|| self.missions.book.clone());
         let taken = match &command {
-            MissionCommand::Take { mission } => Some(mission.clone()),
+            MissionCommand::Take { mission, .. } => Some(mission.clone()),
             _ => None,
         };
         let answer = self.apply_mission_command(device, caller, expected, command)?;
@@ -903,6 +949,8 @@ impl Runtime {
                     end_asked_at_unix_ms: None,
                     attention_seq: 0,
                     reopened_on: None,
+                    unlogged: Vec::new(),
+                    handover: None,
                 };
                 crate::diagnostic!(json!({
                     "component": "missions", "kind": "mission.created",
@@ -935,7 +983,6 @@ impl Runtime {
                     now,
                 );
                 *self.missions.book.get_mut(&id).ok_or("mission_unknown")? = next;
-                self.save_missions();
                 self.record_mission_events(&id, events);
                 // The plan's outside nodes are read now, not at the next
                 // GitHub read or fetch.
@@ -1015,8 +1062,16 @@ impl Runtime {
                 // by Hide on the pull requests it holds now.
                 // The mark names the pull requests it held when it was taken
                 // back, so one named in the same command finishes it again.
+                // A node whose worktree is being removed now keeps its
+                // finish and its pull requests until the removal ends (B20).
+                if (next.status != bound.status || subject_moved)
+                    && self.node_cleanup_committed(&id, &bound.key)
+                {
+                    return Err("mission_cleanup_running".into());
+                }
                 if current.nodes[index].status.finished() && next.status == NodeStatus::Working {
-                    next.note_handled(current.nodes[index].resumed_cause());
+                    next.resumed = Some(current.nodes[index].resumed_cause());
+                    next.back_to_work();
                 }
                 let reads = reads_branch(current.status, &next);
                 let target = self.missions.book.get_mut(&id).ok_or("mission_unknown")?;
@@ -1030,7 +1085,6 @@ impl Runtime {
                 let follow = target.status == MissionStatus::MergeWait || reads;
                 if changed {
                     target.updated_at_unix_ms = now;
-                    self.save_missions();
                     self.record_mission_events(&id, events);
                     if follow {
                         self.follow_mission_outside(&id);
@@ -1132,7 +1186,7 @@ impl Runtime {
                 let id = self.conducted_mission(&actor, mission.as_deref(), true)?;
                 self.add_mission_defect(&actor, &id, &node, (found_by, line), now)
             }
-            MissionCommand::Take { mission } => {
+            MissionCommand::Take { mission, handover } => {
                 let target = self.missions.book.get(&mission).ok_or("mission_unknown")?;
                 if target.status == MissionStatus::Cancelled {
                     return Err("mission_cancelled".into());
@@ -1143,16 +1197,16 @@ impl Runtime {
                 if target.conductor.actor.same_identity(&actor) {
                     return Ok((json!({"mission": self.mission_view_of(&mission)}), false));
                 }
-                // A Conductor still there that left a raise it was asked
-                // first for ten minutes, so it reached the operator, may be
-                // taken over (PRD mission-node-simple B15).
-                let unanswered = target.nodes.iter().any(|node| {
-                    node.attention.as_ref().is_some_and(|attention| {
-                        attention.operator_at_unix_ms.is_some()
-                            && !attention.reason.operator_first()
-                    })
+                // A Conductor still there is taken over only with the
+                // operator's handover made on it, by the session it was
+                // made for, once (PRD mission-node-simple B15).
+                let handed = target.handover.as_ref().is_some_and(|made| {
+                    handover.as_deref() == Some(made.token.as_str())
+                        && made.from.same_identity(&target.conductor.actor)
+                        && now.saturating_sub(made.at_unix_ms) < crate::missions::HANDOVER_TTL_MS
                 });
-                if !unanswered && self.conductor_present(&target.conductor.actor) {
+                let present = self.conductor_present(&target.conductor.actor);
+                if !handed && present {
                     // The current Conductor is named so the second session
                     // can tell the operator who holds it (B45).
                     return Err(crate::coordination::refusal(
@@ -1170,10 +1224,16 @@ impl Runtime {
                     .get_mut(&mission)
                     .ok_or("mission_unknown")?;
                 target.conductor = conductor;
+                target.handover = None;
+                // What reached the operator because the Conductor taken
+                // over did not answer goes to the new one first (B15).
+                if present {
+                    super::mission_health::ask_new_conductor(target, now);
+                }
                 target.updated_at_unix_ms = now;
                 crate::diagnostic!(json!({
                     "component": "missions", "kind": "mission.taken",
-                    "mission": mission, "pane": pane,
+                    "mission": mission, "pane": pane, "handed": handed,
                 }));
                 self.save_missions();
                 Ok((json!({"mission": self.mission_view_of(&mission)}), true))
@@ -1657,7 +1717,7 @@ impl Runtime {
                 }
                 mission.updated_at_unix_ms = now;
                 let id = mission.id.clone();
-                self.record_mission_events(&id, moved);
+                self.stage_mission_events(&id, moved);
             }
             let mission = &self.missions.book.missions[index];
             let mut events = Vec::new();
@@ -1718,7 +1778,7 @@ impl Runtime {
             }
             changed = true;
             let id = mission.id.clone();
-            self.record_mission_events(&id, merged);
+            self.stage_mission_events(&id, merged);
             let mission = &self.missions.book.missions[index];
             let done = mission.status == MissionStatus::Done;
             // A done mission's merge is the end it was waiting for, not work
@@ -1772,7 +1832,7 @@ impl Runtime {
         }
         for (id, events) in ended {
             self.missions.answers_held.remove(&id);
-            self.record_mission_events(&id, events);
+            self.stage_mission_events(&id, events);
         }
         for id in reopened {
             // Two done missions of one Conductor changed in one read: the
@@ -1783,8 +1843,10 @@ impl Runtime {
                 }));
             }
         }
+        // One save keeps every change of this read with its events (B27).
         if changed {
             self.save_missions();
+            self.drain_mission_outbox();
         }
         // The outside nodes follow the same answer (B19, B20).
         for project in self.outside_projects(device) {
@@ -1869,6 +1931,13 @@ impl Runtime {
     /// Conductor's inbox, so one that fails is tried again on the next
     /// GitHub read or takeover.
     pub(super) fn flush_mission_wakes(&mut self) {
+        // A letter goes once the book that holds its wake and the change it
+        // tells is on disk, so a restart never tells a change it lost
+        // (B27); the tick sends it then (`drain_mission_outbox`).
+        if !self.missions_on_disk() {
+            self.missions.wakes_wait = true;
+            return;
+        }
         if self.missions.waking {
             self.missions.rewake = true;
             return;

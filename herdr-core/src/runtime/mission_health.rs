@@ -134,6 +134,16 @@ pub(super) fn raise_for(
         }));
         return Vec::new();
     }
+    // A cause the node cannot remember is not raised: raised with no
+    // memory of it, it would come again once settled (B27).
+    if !mission.nodes[at].note_handled(cause) {
+        crate::diagnostic!(json!({
+            "component": "missions", "kind": "mission.attention_refused",
+            "mission": mission.id, "node": key, "reason": reason.as_str(),
+            "cap": crate::missions::HANDLED_LIMIT, "memory": true,
+        }));
+        return Vec::new();
+    }
     mission.attention_seq += 1;
     let to_operator = reason.operator_first();
     let attention = Attention {
@@ -146,7 +156,6 @@ pub(super) fn raise_for(
         notified: false,
     };
     let node = &mut mission.nodes[at];
-    node.note_handled(cause);
     node.attention = Some(attention);
     crate::diagnostic!(json!({
         "component": "missions", "kind": "mission.attention_raised",
@@ -184,6 +193,53 @@ pub(super) fn raise_for(
     vec![event]
 }
 
+/// Whether a raise its Conductor was asked first reached the operator
+/// after ten minutes unanswered (B15): what lets the operator hand the
+/// mission to another session while that Conductor is still there.
+pub(super) fn conductor_unanswered(mission: &Mission) -> bool {
+    mission.nodes.iter().any(|node| {
+        node.attention.as_ref().is_some_and(|attention| {
+            attention.operator_at_unix_ms.is_some() && !attention.reason.operator_first()
+        })
+    })
+}
+
+/// A Conductor that took the mission over is asked first again for what
+/// reached the operator because its predecessor did not answer (B15): its
+/// own ten minutes start now, so the old timeout never hands it on.
+pub(super) fn ask_new_conductor(mission: &mut Mission, now: u64) {
+    let mut asked = Vec::new();
+    for node in &mut mission.nodes {
+        let Some(attention) = node.attention.as_mut() else {
+            continue;
+        };
+        if attention.operator_at_unix_ms.is_none() || attention.reason.operator_first() {
+            continue;
+        }
+        attention.since_unix_ms = now;
+        attention.operator_at_unix_ms = None;
+        attention.notified = false;
+        asked.push((node.key.clone(), attention.pr, attention.reason));
+    }
+    for (node, pr, reason) in asked {
+        mission.wake_seq += 1;
+        super::missions::push_wake(
+            mission,
+            PendingWake {
+                seq: mission.wake_seq,
+                node,
+                pr,
+                event: WakeEvent::Attention,
+                head: None,
+                to: None,
+                reason: Some(reason),
+                why: None,
+                action: None,
+            },
+        );
+    }
+}
+
 /// Takes what waited on `node` as settled by `by` (B17): its raise goes
 /// from the Conductor's letters and the operator's turn at once. The cause
 /// stays noted, so it is not raised again.
@@ -215,20 +271,10 @@ pub(super) fn prune_attention_wakes(mission: &mut Mission) {
     });
 }
 
-/// Numbers Hide's own `events` in `mission` before its book is saved
-/// (B27): the same act done again on a book a restart rolled back is the
-/// same number, which the history writes once.
-fn number_events(mission: &mut Mission, events: &mut [MissionEvent]) {
-    for event in events {
-        mission.event_seq += 1;
-        event.id = Some(mission.event_seq);
-    }
-}
-
 /// What a node's cleanup was decided on: its finish and the pull
 /// requests it held then.
 #[derive(Clone, Debug, PartialEq, Eq)]
-struct CleanupTicket {
+pub(super) struct CleanupTicket {
     finished_at_unix_ms: Option<u64>,
     prs: Vec<u32>,
     /// The operator chose it (`정리`); otherwise the setting `auto` did, and
@@ -237,12 +283,19 @@ struct CleanupTicket {
 }
 
 impl CleanupTicket {
-    fn of(node: &MissionNode, by_operator: bool) -> Self {
+    pub(super) fn of(node: &MissionNode, by_operator: bool) -> Self {
         Self {
             finished_at_unix_ms: node.finished_at_unix_ms,
             prs: node.prs.clone(),
             by_operator,
         }
+    }
+
+    /// Whether `node` still has the finish the cleanup was decided on.
+    fn same_finish(&self, node: &MissionNode) -> bool {
+        node.status == NodeStatus::Done
+            && node.finished_at_unix_ms == self.finished_at_unix_ms
+            && node.prs == self.prs
     }
 }
 
@@ -304,6 +357,7 @@ impl Runtime {
     /// run by the coordinator's tick. Whether the book changed.
     pub(crate) fn drive_mission_health(&mut self, now: u64) -> bool {
         self.drain_mission_reads(std::time::Instant::now());
+        self.drain_mission_outbox();
         if self.missions.book.missions.is_empty() || self.missions.unreadable.is_some() {
             return false;
         }
@@ -402,17 +456,17 @@ impl Runtime {
             }
             if !events.is_empty() {
                 mission.updated_at_unix_ms = now;
-                number_events(mission, &mut events);
                 changed.push((mission.id.clone(), events));
             }
         }
         if changed.is_empty() {
             return false;
         }
-        self.save_missions();
         for (id, events) in changed {
-            self.record_mission_events(&id, events);
+            self.stage_mission_events(&id, events);
         }
+        self.save_missions();
+        self.drain_mission_outbox();
         true
     }
 
@@ -587,7 +641,12 @@ impl Runtime {
                     changed |= self.hide_wake(id, node, pr, why, head, now, &mut events);
                 }
                 Act::Cleanup { node } => {
-                    self.start_node_cleanup(id, node, false);
+                    let by_operator = self
+                        .missions
+                        .book
+                        .get(id)
+                        .is_some_and(|mission| mission.nodes[node].cleanup_accepted);
+                    self.start_node_cleanup(id, node, by_operator);
                 }
                 Act::Close => close = true,
             }
@@ -596,9 +655,7 @@ impl Runtime {
             if let Some(mission) = self.missions.book.get_mut(id) {
                 mission.updated_at_unix_ms = now;
                 prune_attention_wakes(mission);
-                number_events(mission, &mut events);
             }
-            self.save_missions();
             self.record_mission_events(id, events);
         }
         if close {
@@ -623,6 +680,11 @@ impl Runtime {
         let Some(mission) = self.missions.book.get(id) else {
             return false;
         };
+        // A worktree being removed now is attached to once its removal
+        // ended; the evaluation after it attaches the follow-up (B20).
+        if self.node_cleanup_committed(id, &mission.nodes[at].key) {
+            return false;
+        }
         // A closed mission opens again with the follow-up (B8, B18).
         if matches!(
             mission.status,
@@ -652,6 +714,7 @@ impl Runtime {
             node.status = NodeStatus::Working;
             node.finished_at_unix_ms = None;
             node.in_main = None;
+            node.back_to_work();
         }
         let mark = HideMark {
             action: HideAction::Attached,
@@ -826,24 +889,20 @@ impl Runtime {
             return false;
         };
         let report = mission.report.is_none().then(|| closing_report(mission));
-        match self.close_mission(id, MissionEnd::MergeWait, report, "hide", now) {
-            Ok(_) => {
-                let Some(mission) = self.missions.book.get_mut(id) else {
-                    return true;
-                };
-                // The close that passes settles the one refused before.
+        // The close, the refused close it settles, its letter and its event
+        // are kept in one save (B27).
+        let closed =
+            self.close_mission_with(id, MissionEnd::MergeWait, report, "hide", now, |mission| {
                 for node in &mut mission.nodes {
                     if node
                         .attention
                         .as_ref()
                         .is_some_and(|attention| attention.reason == AttentionReason::CloseRefused)
                     {
-                        settle(id, node, "hide");
+                        settle(&mission.id, node, "hide");
                     }
                 }
                 prune_attention_wakes(mission);
-                let mut closed = vec![MissionEvent::new(now, EventKind::HideClosed)];
-                number_events(mission, &mut closed);
                 mission.wake_seq += 1;
                 let node = mission
                     .nodes
@@ -864,10 +923,10 @@ impl Runtime {
                         action: None,
                     },
                 );
-                self.save_missions();
-                self.record_mission_events(id, closed);
-                true
-            }
+                vec![MissionEvent::new(now, EventKind::HideClosed)]
+            });
+        match closed {
+            Ok(_) => true,
             Err(code) => {
                 let Some(mission) = self.missions.book.get_mut(id) else {
                     return false;
@@ -897,12 +956,10 @@ impl Runtime {
                 let Some(key) = key else {
                     return false;
                 };
-                let mut raised = raise(mission, &key, AttentionReason::CloseRefused, None, now);
+                let raised = raise(mission, &key, AttentionReason::CloseRefused, None, now);
                 if raised.is_empty() {
                     return false;
                 }
-                number_events(mission, &mut raised);
-                self.save_missions();
                 self.record_mission_events(id, raised);
                 true
             }
@@ -939,6 +996,48 @@ impl Runtime {
         true
     }
 
+    /// The operator hands a mission whose Conductor is still there, but let
+    /// a raise reach them, to the session the screen starts next (B15):
+    /// one take naming `token` passes while that Conductor holds it. A
+    /// mission with no such raise, or no Conductor there, changes nothing
+    /// and is logged; one with no Conductor is taken without it.
+    pub(super) fn mission_handover_event(&mut self, id: &str, token: &str) -> bool {
+        let now = super::memory::now_ms();
+        let refused = |code: &str| {
+            crate::diagnostic!(json!({
+                "component": "missions", "kind": "mission.handover_refused",
+                "mission": id, "code": code,
+            }));
+            false
+        };
+        if !crate::missions::valid_handover(token) {
+            return refused("mission_handover_invalid");
+        }
+        let Some(mission) = self.missions.book.get(id) else {
+            return refused("mission_unknown");
+        };
+        if !mission.status.open() || !self.conductor_present(&mission.conductor.actor) {
+            return refused("mission_not_conducted");
+        }
+        if !conductor_unanswered(mission) {
+            return refused("mission_handover_not_due");
+        }
+        let from = mission.conductor.actor.clone();
+        let Some(mission) = self.missions.book.get_mut(id) else {
+            return false;
+        };
+        mission.handover = Some(crate::missions::Handover {
+            token: token.to_owned(),
+            from,
+            at_unix_ms: now,
+        });
+        crate::diagnostic!(json!({
+            "component": "missions", "kind": "mission.handover_made", "mission": id,
+        }));
+        self.save_missions();
+        true
+    }
+
     /// What GitHub says now of `number` in `mission`'s project.
     fn pull_seen_of(&self, mission: &Mission, number: u32) -> Option<crate::missions::PrSeen> {
         self.mission_project_pulls(mission)?
@@ -966,7 +1065,7 @@ impl Runtime {
         }
     }
 
-    fn mission_attention_act(
+    pub(super) fn mission_attention_act(
         &mut self,
         payload: &MissionAttentionPayload,
         now: u64,
@@ -1038,10 +1137,16 @@ impl Runtime {
                 }
             }
             OperatorAction::Resume => {
+                // A worktree being removed now is worked in again once its
+                // removal ended (B20).
+                if self.node_cleanup_committed(&payload.mission, &payload.node) {
+                    return Err("mission_cleanup_running".into());
+                }
                 next.status = NodeStatus::Working;
                 next.finished_at_unix_ms = None;
                 next.in_main = None;
-                next.note_handled(next.resumed_cause());
+                next.resumed = Some(next.resumed_cause());
+                next.back_to_work();
             }
             OperatorAction::Attach => {
                 let pr = attention
@@ -1076,6 +1181,9 @@ impl Runtime {
                 if !self.cleanup_due_once_asked(mission, at) {
                     return Err("mission_cleanup_not_due".into());
                 }
+                // Kept until the cleanup ran: one that waits for room or is
+                // withdrawn is started again on the next evaluation.
+                next.cleanup_accepted = true;
             }
         }
         if payload.action != OperatorAction::Done {
@@ -1121,7 +1229,6 @@ impl Runtime {
                 },
             );
         }
-        self.save_missions();
         self.record_mission_events(&payload.mission, events);
         if payload.action == OperatorAction::Cleanup {
             self.start_node_cleanup(&payload.mission, at, true);
@@ -1133,13 +1240,22 @@ impl Runtime {
     /// Starts removing node `at`'s worktree off the lock (B20, B21), at
     /// most `CLEANUP_LIMIT` at once; one already being removed is not
     /// started again.
-    fn start_node_cleanup(&mut self, id: &str, at: usize, by_operator: bool) {
+    pub(super) fn start_node_cleanup(&mut self, id: &str, at: usize, by_operator: bool) {
         let Some(mission) = self.missions.book.get(id) else {
             return;
         };
         let node = &mission.nodes[at];
         let key = (id.to_owned(), node.key.clone());
-        if self.missions.cleaning.contains(&key) || self.missions.cleaning.len() >= CLEANUP_LIMIT {
+        if self.missions.cleaning.contains_key(&key) {
+            return;
+        }
+        // Past the cap the node waits; an accepted `정리` is kept on it and
+        // the evaluation after a running cleanup ends starts it (B20).
+        if self.missions.cleaning.len() >= CLEANUP_LIMIT {
+            crate::diagnostic!(json!({
+                "component": "missions", "kind": "mission.cleanup_waits",
+                "mission": id, "node": key.1, "cap": CLEANUP_LIMIT,
+            }));
             return;
         }
         // The cleanup is bound to the node's finish it was decided on: a
@@ -1185,19 +1301,37 @@ impl Runtime {
             }));
             return;
         };
-        self.missions.cleaning.insert(key.clone());
+        self.missions.cleaning.insert(key.clone(), false);
         let done = key.clone();
         let spawned = std::thread::Builder::new()
             .name("hide-mission-cleanup".to_owned())
             .spawn(move || {
-                // Asked again under the lock right before each effect; a
-                // runtime that ended wants nothing removed.
-                let wanted = || {
+                // A cleanup that panics must not leave its node held, or it
+                // could never work again.
+                struct Ending(std::sync::Weak<std::sync::Mutex<Runtime>>, (String, String));
+                impl Drop for Ending {
+                    fn drop(&mut self) {
+                        if std::thread::panicking()
+                            && let Some(runtime) = self.0.upgrade()
+                        {
+                            let mut guard =
+                                runtime.lock().unwrap_or_else(|poison| poison.into_inner());
+                            guard.missions.cleaning.remove(&self.1);
+                        }
+                    }
+                }
+                let _ending = Ending(context.runtime.clone(), done.clone());
+                // Asked once under the lock right before the first effect;
+                // passing it holds the node's finish until the removal ends,
+                // so nothing between it and the folder going can take the
+                // node back to work. A runtime that ended wants nothing
+                // removed.
+                let commit = || {
                     context.runtime.upgrade().is_some_and(|runtime| {
                         runtime
                             .lock()
                             .unwrap_or_else(|poison| poison.into_inner())
-                            .cleanup_still_due(&done.0, &done.1, &ticket)
+                            .commit_node_cleanup(&done, &ticket)
                     })
                 };
                 let outcome = crate::worktree_control::retire_worktree(
@@ -1207,13 +1341,13 @@ impl Runtime {
                     &branch,
                     &own,
                     Some(merged.as_slice()),
-                    &wanted,
+                    &commit,
                 );
                 let Some(runtime) = context.runtime.upgrade() else {
                     return;
                 };
                 let mut guard = runtime.lock().unwrap_or_else(|poison| poison.into_inner());
-                guard.node_cleanup_done(&done.0, &done.1, outcome);
+                guard.node_cleanup_done(&done.0, &done.1, &ticket, outcome);
                 drop(guard);
                 context.notifier.notify();
             });
@@ -1226,13 +1360,43 @@ impl Runtime {
         }
     }
 
+    /// The cleanup of `key` asks to touch the worktree (B20): whether it is
+    /// still due on `ticket`; when it is, the node keeps its finish until
+    /// the cleanup ends (`node_cleanup_committed`).
+    pub(super) fn commit_node_cleanup(
+        &mut self,
+        key: &(String, String),
+        ticket: &CleanupTicket,
+    ) -> bool {
+        if !self.missions.cleaning.contains_key(key)
+            || !self.cleanup_still_due(&key.0, &key.1, ticket)
+        {
+            return false;
+        }
+        self.missions.cleaning.insert(key.clone(), true);
+        true
+    }
+
+    /// Whether node `key` of mission `id` has a cleanup touching its
+    /// worktree now: its finish holds until the cleanup ends, so a resume,
+    /// a follow-up pull request or a Conductor's move waits for it (B20).
+    pub(super) fn node_cleanup_committed(&self, id: &str, key: &str) -> bool {
+        self.missions
+            .cleaning
+            .get(&(id.to_owned(), key.to_owned()))
+            .copied()
+            .unwrap_or(false)
+    }
+
     /// Records what a cleanup came to (B20, B21): removed is Hide's own
     /// line on the node; kept for what it holds is raised to the Conductor;
-    /// a failure goes to the log only and the worktree stays.
-    fn node_cleanup_done(
+    /// a failure goes to the log only and the worktree stays. A result for
+    /// a finish the node no longer has is logged and kept off it.
+    pub(super) fn node_cleanup_done(
         &mut self,
         id: &str,
         key: &str,
+        ticket: &CleanupTicket,
         outcome: Result<crate::worktree_control::Retirement, String>,
     ) {
         use crate::worktree_control::Retirement;
@@ -1246,9 +1410,18 @@ impl Runtime {
         let Some(at) = mission.nodes.iter().position(|node| node.key == key) else {
             return;
         };
+        if !matches!(outcome, Ok(Retirement::Withdrawn)) && !ticket.same_finish(&mission.nodes[at])
+        {
+            crate::diagnostic!(json!({
+                "component": "missions", "kind": "mission.worktree_cleanup_stale",
+                "mission": id, "node": key,
+            }));
+            return;
+        }
         let (fate, raised) = match &outcome {
-            // The node moved before anything was touched: no fate, so its
-            // next finish is cleaned on its own facts.
+            // Its last check found the node moved before anything was
+            // touched: no fate, so its next finish is cleaned on its own
+            // facts, and an accepted `정리` still standing starts it again.
             Ok(Retirement::Withdrawn) => {
                 crate::diagnostic!(json!({
                     "component": "missions", "kind": "mission.worktree_cleanup",
@@ -1275,6 +1448,7 @@ impl Runtime {
         }));
         let node = &mut mission.nodes[at];
         node.worktree = Some(fate);
+        node.cleanup_accepted = false;
         let mut events = raised;
         if fate == WorktreeFate::Removed {
             let mark = HideMark {
@@ -1287,8 +1461,6 @@ impl Runtime {
             node.hide = Some(mark);
         }
         mission.updated_at_unix_ms = now;
-        number_events(mission, &mut events);
-        self.save_missions();
         self.record_mission_events(id, events);
         self.flush_mission_wakes();
     }
@@ -1309,20 +1481,20 @@ impl Runtime {
                 continue;
             };
             let wake = mission.wakes.remove(at);
-            let mut raised = raise(
+            let raised = raise(
                 mission,
                 &wake.node,
                 AttentionReason::WakeRefused,
                 wake.pr,
                 now,
             );
-            number_events(mission, &mut raised);
             events.entry(id.clone()).or_default().extend(raised);
         }
-        self.save_missions();
         for (id, events) in events {
-            self.record_mission_events(&id, events);
+            self.stage_mission_events(&id, events);
         }
+        self.save_missions();
+        self.drain_mission_outbox();
         self.flush_mission_wakes();
     }
 
