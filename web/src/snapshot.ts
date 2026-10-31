@@ -1313,6 +1313,19 @@ export type MissionBlocked = "upstream_failed" | "upstream_dropped";
 /** A verify node's verdict (`mission_verdict`, PRD mission-plan-visibility B33). */
 export type MissionVerdict = "pass" | "fail";
 
+/**
+ * A node's way to main as the core decides it (B17, B27): in main with how
+ * Hide knows (a merged pull request, its branch read in main at a commit, an
+ * outside node done), left for the operator to merge or join, or waited on
+ * without Hide having read where it is. Absent for work that never goes to
+ * main, a node not done and a pull request closed unmerged.
+ */
+export type MissionLandingAction = "merge" | "join";
+export type MissionLanding =
+  | { state: "landed"; proof: { by: "merged" } | { by: "in_main"; commit: string } | { by: "outside" } }
+  | { state: "left"; action: MissionLandingAction }
+  | { state: "unread"; action: MissionLandingAction };
+
 /** A finish line's kind (`mission_criterion_kind`, PRD mission-map-git-criteria D-09-D-11, D-21). */
 export type MissionCriterionKind = "own" | "check" | "ci" | "review" | "verify" | "defect";
 /** A finish line's state as it stands now (`mission_criterion_state`); a check passed on an older commit reads open (B7). */
@@ -1433,11 +1446,10 @@ export type MissionNode = {
   reopened: number;
   started_at_unix_ms: number | null;
   finished_at_unix_ms: number | null;
-  /** A direct change's commit on main, as the Conductor recorded it (B33). */
+  /** A direct change's commit on main, as the Conductor recorded it (B33): its shown result, never proof it is there. */
   commit: string | null;
-  /** The commit of the node's branch Hide read in main for a mission waiting
-   * on its branches, while that read stands (`→ main <sha7>`, B17). */
-  in_main?: string;
+  /** Where its work is on its way to main, as the core decides it (`herdr-core/src/runtime/mission_landing.rs`). */
+  landing: MissionLanding | null;
   verdict: MissionVerdict | null;
   checks: { passed: number; total: number } | null;
   /** The worker's own plan (PRD hide-plan D-17, D-18). */
@@ -1465,6 +1477,10 @@ export type Mission = {
   conductor: { pane_id: string; name: string; agent_kind: string; session: WorkSession | null; present: boolean; takes_answers: boolean };
   nodes: MissionNode[];
   merge_order: string[];
+  /** The nodes left to merge or join, by key, in the order to take them; the core orders them (B18, B25). */
+  landing_order: string[];
+  /** The stacked pull requests still waiting on the one below, as the core counts them from what GitHub last answered. */
+  stack_waiting: number;
   check: string | null;
   github: string | null;
   decision: string | null;
