@@ -233,6 +233,7 @@ mod tests {
             host_scope: None,
             turn: Turn::NotReported,
             projected: None,
+            observed_generation: 0,
             unreadable: None,
         }
     }

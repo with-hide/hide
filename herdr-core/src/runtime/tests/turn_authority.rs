@@ -102,6 +102,35 @@ fn synced(witnesses: &Witnesses) -> (Runtime, crate::delivery::Actor) {
             .ingest_hook_status(crate::node::TEST_NODE, PANE, &report)
             .expect("the report is recorded");
     }
+    let (payload, overlay) = sync_inputs(witnesses);
+    // The order of a sync pass: delivery observes Herdr's list, then the
+    // session ingest lays the facts and the turn.
+    runtime.observe_delivery(crate::node::TEST_NODE, &payload, None, Some(&overlay));
+    runtime.set_label_overlay(overlay);
+    runtime.ingest_session(Ok(payload));
+    // Nobody has typed for an hour and Herdr's state is old news.
+    let long_ago = unix_milliseconds() - 3_600_000;
+    let observation = runtime
+        .delivery_observations
+        .get_mut(PANE)
+        .expect("the pane is observed");
+    observation.status_changed_at_unix_ms = long_ago;
+    observation.last_input_at_unix_ms = long_ago - 2;
+    observation.last_submit_at_unix_ms = long_ago - 1;
+    observation.entered_working_at_unix_ms = long_ago;
+    assert!(
+        observation.projected_turn().is_some(),
+        "the ingest after an observation lays its turn"
+    );
+    let actor = observation.actor.clone();
+    (runtime, actor)
+}
+
+/// Herdr's list and the session read's overlay one sync pass reads for
+/// `witnesses`, at Herdr's state sequence 4.
+fn sync_inputs(
+    witnesses: &Witnesses,
+) -> (SessionSnapshotPayload, crate::labels::overlay::LabelOverlay) {
     let seq = 4;
     let mut turns = hide_session::turns::TurnTracker::default();
     for (offset, mark) in marks(witnesses.session).iter().enumerate() {
@@ -136,28 +165,10 @@ fn synced(witnesses: &Witnesses) -> (Runtime, crate::delivery::Actor) {
             "splits": [],
         }],
     });
-    let payload = crate::sidebar::owned_label_fixture(herdr).expect("session payload");
-    // The order of a sync pass: delivery observes Herdr's list, then the
-    // session ingest lays the facts and the turn.
-    runtime.observe_delivery(crate::node::TEST_NODE, &payload, None, Some(&overlay));
-    runtime.set_label_overlay(overlay);
-    runtime.ingest_session(Ok(payload));
-    // Nobody has typed for an hour and Herdr's state is old news.
-    let long_ago = unix_milliseconds() - 3_600_000;
-    let observation = runtime
-        .delivery_observations
-        .get_mut(PANE)
-        .expect("the pane is observed");
-    observation.status_changed_at_unix_ms = long_ago;
-    observation.last_input_at_unix_ms = long_ago - 2;
-    observation.last_submit_at_unix_ms = long_ago - 1;
-    observation.entered_working_at_unix_ms = long_ago;
-    assert!(
-        observation.projected_turn().is_some(),
-        "the ingest after an observation lays its turn"
-    );
-    let actor = observation.actor.clone();
-    (runtime, actor)
+    (
+        crate::sidebar::owned_label_fixture(herdr).expect("session payload"),
+        overlay,
+    )
 }
 
 /// The doorbell's verdict at `now` for a letter that arrived at `arrived`.
@@ -167,13 +178,24 @@ fn verdict(
     arrived_at_unix_ms: u64,
     now: u64,
 ) -> Result<(), Hold> {
+    verdict_with(runtime, actor, arrived_at_unix_ms, now, (false, false))
+}
+
+/// The verdict for a letter sent with `(now, forced)`.
+fn verdict_with(
+    runtime: &Runtime,
+    actor: &crate::delivery::Actor,
+    arrived_at_unix_ms: u64,
+    now: u64,
+    (due, forced): (bool, bool),
+) -> Result<(), Hold> {
     runtime
         .delivery_bell_verdict(
             actor,
             Patience {
                 arrived_at_unix_ms,
-                now: false,
-                forced: false,
+                now: due,
+                forced,
             },
             now,
         )
@@ -393,4 +415,62 @@ fn a_newer_state_is_unprojected_only_until_the_same_pass_ingests_it() {
         verdict(&runtime, &actor, now, now),
         Err(Hold::SessionUnread)
     );
+}
+
+/// Review of #1954, P1: a sync pass observes Herdr's list under the lock,
+/// releases it, and lays the hook's and the session read's facts after. A
+/// question read in that pass while Herdr's state and sequence stay the same
+/// must not ring on the turn the previous pass laid, which had no question:
+/// between the two steps every letter, a due and a forced one too, holds as
+/// `turn_unprojected`, and once the ingest lays the facts the row shows the
+/// question and the letter waits for the operator.
+#[test]
+fn a_question_read_under_an_unchanged_herdr_state_never_rings_on_the_last_turn() {
+    let settled = Witnesses {
+        kind: "codex",
+        herdr: "idle",
+        hook: None,
+        session: &[Read::Finished],
+    };
+    let (mut runtime, actor) = synced(&settled);
+    let now = unix_milliseconds();
+    let long_ago = now - 3_600_000;
+    assert_eq!(verdict(&runtime, &actor, long_ago, now), Ok(()));
+    let asking = Witnesses {
+        session: &[Read::AsyncQuestion],
+        ..settled
+    };
+    let (payload, overlay) = sync_inputs(&asking);
+    runtime.observe_delivery(crate::node::TEST_NODE, &payload, None, Some(&overlay));
+    // The pause: the lock is free and the facts are not laid yet. Herdr's
+    // state and sequence did not move, so only the pass fences the turn.
+    let observation = &runtime.delivery_observations[PANE];
+    assert_eq!(
+        (observation.status.as_str(), observation.state_change_seq),
+        ("idle", Some(4))
+    );
+    for letter in [(false, false), (true, false), (true, true)] {
+        assert_eq!(
+            verdict_with(&runtime, &actor, long_ago, now, letter),
+            Err(Hold::Unprojected),
+            "{letter:?}"
+        );
+    }
+    runtime.set_label_overlay(overlay);
+    runtime.ingest_session(Ok(payload));
+    let row = runtime
+        .snapshot
+        .navigator
+        .agents
+        .iter()
+        .find(|row| row.pane_id == PANE)
+        .expect("the agent is a row");
+    assert_eq!(row.demand, "question");
+    for letter in [(false, false), (true, false), (true, true)] {
+        assert_eq!(
+            verdict_with(&runtime, &actor, long_ago, now, letter),
+            Err(Hold::AwaitingOperator),
+            "{letter:?}"
+        );
+    }
 }

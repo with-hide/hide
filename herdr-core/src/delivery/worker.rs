@@ -1472,6 +1472,7 @@ mod tests {
             host_scope: Some("fixture".into()),
             turn: crate::delivery::doorbell::Turn::Unread,
             projected: None,
+            observed_generation: 0,
             unreadable: None,
         };
         for expected in [100, 200] {

@@ -65,6 +65,11 @@ pub(crate) struct Observation {
     /// (`lay_delivery_turns`). It stands only for the Herdr state it was laid
     /// under ([`Self::projected_turn`]).
     pub projected: Option<ProjectedTurn>,
+    /// The observe pass that last saw the pane (`observe_delivery`). The
+    /// hook's and the session read's facts of that pass are laid after it,
+    /// outside the lock, so a turn laid by an earlier pass stands for facts
+    /// this pass may already have moved, such as a question just read.
+    pub observed_generation: u64,
     /// Why the session the pane runs cannot be read, while its turn is
     /// [`Turn::Unread`] because the last read refused for a reason reading
     /// again cannot clear (the reader's code). Letters wait on it, so their
@@ -78,6 +83,9 @@ pub(crate) struct ProjectedTurn {
     /// Herdr's `state_change_seq` of the agent the turn was decided from.
     pub seq: Option<u64>,
     pub turn: crate::agent_state::TurnProjection,
+    /// The observe pass whose facts the turn was laid from
+    /// ([`Observation::observed_generation`]).
+    pub generation: u64,
     /// When the core's activity last changed on this pane; `None` while it
     /// is the one first laid, whose start Herdr's own clocks say.
     pub changed_at_unix_ms: Option<u64>,
@@ -120,14 +128,17 @@ pub(crate) fn delivery_turns(
 }
 
 impl Observation {
-    /// The core's turn for the Herdr state the pane is observed in: none
-    /// while the read is stale or while the turn was decided for an older
-    /// state, since the hook's and the session read's facts for the new
-    /// state are laid after it is observed.
+    /// The core's turn for the pass the pane was last observed in: none
+    /// while the read is stale, and none from the observation until that
+    /// pass lays the hook's and the session read's facts, since an earlier
+    /// pass's turn may stand for facts this one moved (a question read
+    /// while Herdr's state stays the same).
     pub(crate) fn projected_turn(&self) -> Option<&ProjectedTurn> {
-        self.projected
-            .as_ref()
-            .filter(|projected| !self.telemetry_stale && projected.seq == self.state_change_seq)
+        self.projected.as_ref().filter(|projected| {
+            !self.telemetry_stale
+                && projected.generation == self.observed_generation
+                && projected.seq == self.state_change_seq
+        })
     }
 
     /// The name the agent answers to, apart from where it sits: an agent
@@ -162,6 +173,8 @@ impl Runtime {
         labels: Option<&LabelOverlay>,
     ) {
         self.continue_moved_registrations(device, payload, host_scope);
+        self.delivery_observe_generation += 1;
+        let generation = self.delivery_observe_generation;
         let now = unix_milliseconds();
         let terminals: std::collections::HashMap<_, _> = payload
             .panes
@@ -314,6 +327,7 @@ impl Runtime {
                     .map(str::to_owned),
                 turn,
                 projected: previous.and_then(|old| old.projected),
+                observed_generation: generation,
                 unreadable,
             };
             self.delivery_observations
@@ -394,6 +408,7 @@ impl Runtime {
             observation.projected = Some(ProjectedTurn {
                 seq,
                 turn,
+                generation: observation.observed_generation,
                 changed_at_unix_ms,
             });
         }
@@ -2447,6 +2462,30 @@ pub(crate) mod tests {
         observation.reads(Waiting::Nothing);
     }
 
+    /// A hook report of `hook` for `pane`'s session, at `at`, laid by the
+    /// next ingest while Herdr's state stays as observed: the turn moves on
+    /// the hook alone.
+    pub(crate) fn lay_hook(runtime: &mut Runtime, pane: &str, hook: HookTurn, at: u64) {
+        let observation = &runtime.delivery_observations[pane];
+        let mut agent: crate::sidebar::SessionAgentPayload = serde_json::from_value(json!({
+            "pane_id": observation.raw_pane_id,
+            "agent": observation.actor.kind,
+            "agent_status": observation.status,
+            "state_change_seq": observation.state_change_seq,
+        }))
+        .unwrap();
+        agent.hook = Some(hook);
+        let turn = (
+            observation.raw_pane_id.clone(),
+            observation.state_change_seq,
+            crate::agent_state::turn_projection(&agent),
+        );
+        let node = runtime.node.clone();
+        runtime.lay_delivery_turns(node.as_str(), [turn]);
+        let observation = runtime.delivery_observations.get_mut(pane).unwrap();
+        observation.projected.as_mut().unwrap().changed_at_unix_ms = Some(at);
+    }
+
     /// What the recipient's session read says, as a doorbell test sets it:
     /// `None` for a state no read settled.
     pub(crate) fn recipient_reads(runtime: &mut Runtime, wait: Option<Waiting>) {
@@ -2486,6 +2525,7 @@ pub(crate) mod tests {
             self.projected = Some(ProjectedTurn {
                 seq: self.state_change_seq,
                 turn,
+                generation: self.observed_generation,
                 changed_at_unix_ms: None,
             });
             self

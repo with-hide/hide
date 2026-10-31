@@ -80,9 +80,14 @@ pub(crate) enum Hold {
     /// false`), or holds it at its blocked prompt while the core's turn,
     /// which a hook that reported the turn decides, shows no prompt.
     NotReady,
-    /// The core's turn for Herdr's current state is not laid yet: the hook's
-    /// and the session read's facts are laid just after a state is observed.
+    /// The core's turn for the pass that last observed the pane is not laid
+    /// yet: the hook's and the session read's facts of that pass are laid
+    /// just after it observes, outside the lock.
     Unprojected,
+    /// A bell already typed in this turn names the letter: at rest it named
+    /// every waiting letter, and mid-turn the next bell waits until the agent
+    /// has taken the letter it was typed for.
+    Announced,
     /// Herdr is still starting the agent it launched (`launch_pending`).
     Launching,
     /// Herdr's agent in the pane has another name, kind or native session
@@ -121,6 +126,7 @@ impl Hold {
             Self::Quiet => "quiet_period",
             Self::NotReady => "not_ready",
             Self::Unprojected => "turn_unprojected",
+            Self::Announced => "announced",
             Self::Launching => "launch_pending",
             Self::Identity => "identity_changed",
             Self::Moved => "sequence_moved",
@@ -316,9 +322,14 @@ pub(crate) fn letters_waiting(
         .collect()
 }
 
+/// One stretch of a pane in which a bell has no reason to be typed again:
+/// the core's turn (`agent_state::turn_projection`) and when it last moved,
+/// so a turn the hook alone starts or ends is a new episode, plus the native
+/// facts a key or a new session moves.
 #[derive(Clone, PartialEq, Eq)]
 struct Episode {
-    status: String,
+    working: bool,
+    turn_changed_at: Option<u64>,
     sequence: Option<u64>,
     input: u64,
     session: Option<String>,
@@ -326,8 +337,12 @@ struct Episode {
 
 impl From<&Observation> for Episode {
     fn from(value: &Observation) -> Self {
+        let turn = value.projected_turn();
         Self {
-            status: value.status.clone(),
+            working: turn.is_some_and(|turn| {
+                turn.turn.activity == crate::agent_state::AgentActivity::Working
+            }),
+            turn_changed_at: turn.and_then(|turn| turn.changed_at_unix_ms),
             sequence: value.state_change_seq,
             input: value.last_input_at_unix_ms,
             session: value.actor.session.clone(),
@@ -492,13 +507,13 @@ impl Doorbell {
                 continue;
             };
             let episode = Episode::from(&observed);
+            // A pane already rung in this turn: at rest the bell it was typed
+            // names every waiting letter, and mid-turn the next is rung once
+            // the agent has taken the last one.
             if self.rung.get(pane).is_some_and(|rung| {
-                rung.episode == episode
-                    && (episode.status != "working" || ids.contains(rung.letter.as_str()))
+                rung.episode == episode && (!episode.working || ids.contains(rung.letter.as_str()))
             }) {
-                // Nothing holds it, so a later hold for the same reason
-                // is a change and is logged again.
-                self.held.remove(&letter.id);
+                self.hold(&letter.id, pane, Hold::Announced);
                 continue;
             }
             let delay = match self.tried.get(&letter.id) {
@@ -1329,6 +1344,7 @@ mod tests {
                 Turn::NotReported
             },
             projected: None,
+            observed_generation: 0,
             unreadable: None,
         }
         .laid(None, None)
@@ -1756,6 +1772,24 @@ mod tests {
                 .into_iter()
                 .filter(|record| record["letter_id"] == self.letter.as_str())
                 .collect()
+        }
+
+        /// The recipient acknowledges letter `id`, its receipt.
+        fn ack(&self, id: &str) {
+            use crate::delivery::Command;
+            use crate::runtime::delivery::tests::{authority, observed};
+            let recipient = observed(&self.runtime.lock().unwrap(), "recipient").actor;
+            self.client
+                .submit(
+                    Effect::Command {
+                        authority: authority(&recipient),
+                        actor: recipient,
+                        target: None,
+                        command: Box::new(Command::Ack { id: id.into() }),
+                    },
+                    Duration::from_secs(5),
+                )
+                .unwrap();
         }
 
         /// Another letter from the same sender to the same pane, pending.
@@ -2237,6 +2271,76 @@ mod tests {
             .filter(|record| record["kind"] == "doorbell.held")
             .filter_map(|record| record["reason"].as_str())
             .collect()
+    }
+
+    /// Review of #1954, P2: whether a pane rung in a turn may be rung again
+    /// is the core's turn, never Herdr's status. Herdr reads the pane idle at
+    /// one sequence throughout. Within one turn at rest the pane names why
+    /// the next letter waits; a turn the hook alone runs and ends rings it;
+    /// and in a turn the hook alone runs, the next letter rings once the
+    /// agent has taken the one the last bell was typed for.
+    #[test]
+    fn a_turn_the_hook_alone_moves_decides_the_next_bell_while_herdr_stays_idle() {
+        use crate::runtime::delivery::tests::lay_hook;
+        use hide_node_link::panes::HookTurn;
+        let bell = Bell::start(json!({}));
+        let mut doorbell = Doorbell::default();
+        let pass = |doorbell: &mut Doorbell| {
+            let stop = AtomicBool::new(false);
+            crate::diagnostics::capture(|| doorbell.pass(&bell.runtime, &bell.client, &stop, now()))
+                .1
+        };
+        let hook = |turn: HookTurn, ago: u64| {
+            lay_hook(
+                &mut bell.runtime.lock().unwrap(),
+                "recipient",
+                turn,
+                now() - ago,
+            );
+        };
+        pass(&mut doorbell);
+        assert_eq!(bell.typed().len(), 1, "the first letter rings at rest");
+        let second = bell.send_another("second", false);
+        let records = pass(&mut doorbell);
+        assert_eq!(bell.typed().len(), 1, "the bell at rest named both");
+        assert!(
+            records
+                .iter()
+                .any(|record| record["kind"] == "doorbell.held"
+                    && record["letter_id"] == bell.letter.as_str()
+                    && record["reason"] == "announced"),
+            "{records:?}"
+        );
+        // A turn the hook alone runs and ends, past the quiet period.
+        hook(HookTurn::Working, 3 * 60_000);
+        hook(HookTurn::Done, 2 * 60_000);
+        pass(&mut doorbell);
+        assert_eq!(
+            bell.typed().len(),
+            2,
+            "a new turn rings the waiting letters"
+        );
+        // A turn the hook alone runs: a due letter rings the working agent.
+        hook(HookTurn::Working, 60_000);
+        bell.ack(&bell.letter);
+        bell.ack(&second);
+        let third = bell.send_another("third", true);
+        pass(&mut doorbell);
+        assert_eq!(bell.typed().len(), 3);
+        bell.ack(&third);
+        bell.send_another("fourth", true);
+        let records = pass(&mut doorbell);
+        assert_eq!(
+            bell.typed().len(),
+            4,
+            "the agent took the third, so the fourth rings in the same turn: {records:?}"
+        );
+        let guard = bell.runtime.lock().unwrap();
+        let observed = crate::runtime::delivery::tests::observed(&guard, "recipient");
+        assert_eq!(
+            (observed.status.as_str(), observed.state_change_seq),
+            ("idle", Some(2))
+        );
     }
 
     #[test]
