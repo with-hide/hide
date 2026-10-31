@@ -156,7 +156,7 @@ export function landingMission(nowMs: number, agents: AgentRow[]): Mission {
     id: "mission-export", title: "Invoice export", workspace_id: PROJECT, project: "/work/billing-app", checkout_path: "/work/billing-app", device_id: "local",
     status: "running", scope: "pr", cap: 4, exempt: false, strength: null, other_vendor: null,
     conductor: { pane_id: LEAD_PANE, name: "Invoice export · Conductor", agent_kind: "claude", session: leadSession(agents), present: true, takes_answers: true },
-    nodes, merge_order: ["csv", "button", "sort", "empty"], landing_order: ["csv", "button"], check: "pnpm test", github: "example",
+    nodes, merge_order: ["csv", "button", "sort", "empty"], landing_order: ["csv", "button"], stack_waiting: 0, check: "pnpm test", github: "example",
     decision: null, question: null, answer: null, answer_failed: null, delay: null, report: null,
     created_at_unix_ms: ago(70), started_at_unix_ms: ago(66), closed_at_unix_ms: null, running: 2,
     stale: false, github_stale: false, github_read_at_unix_ms: nowMs,

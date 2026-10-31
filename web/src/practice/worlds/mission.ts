@@ -181,7 +181,7 @@ function mission(model: MissionModel): Mission | null {
     status: "running", scope: "pr", cap: 2, exempt: false, strength: "normal", other_vendor: true,
     // No session: this practice keeps no record to open.
     conductor: { pane_id: CONDUCTOR, name: TITLE, agent_kind: "claude", session: null, present: true, takes_answers: true },
-    nodes: nodes(model), merge_order: ["config", "backoff"], landing_order: ["config"], check: "pnpm test", github: "practice-bot",
+    nodes: nodes(model), merge_order: ["config", "backoff"], landing_order: ["config"], stack_waiting: 0, check: "pnpm test", github: "practice-bot",
     decision: model.stage === 1 ? DECISION : null,
     question: model.stage === 1 ? { key: 1, why: "Both change docs/retries.md, so two PRs would conflict.", options: OPTIONS, recommend: 1, node: "docs", asked_at_unix_ms: model.startedAt } : null,
     answer: null, answer_failed: null, delay: null, report: null,

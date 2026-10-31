@@ -13,7 +13,7 @@ use serde_json::{Value, json};
 
 use super::Runtime;
 use super::mission_landing::{
-    NodeLanding, landing_order, node_landing, reads_branch, stack_settled,
+    NodeLanding, landing_order, node_landing, reads_branch, stack_settled, stack_waiting,
 };
 use crate::delivery::Actor;
 use crate::mission_criteria::{CheckKind, Criterion, CriterionState};
@@ -74,6 +74,9 @@ pub struct MissionView {
     /// The nodes left for the operator to merge or join, in the order to
     /// take them (`mission_landing::landing_order`, B18, B25).
     pub landing_order: Vec<String>,
+    /// The stacked pull requests still waiting on the one below
+    /// (`mission_landing::stack_waiting`).
+    pub stack_waiting: u32,
     pub check: Option<String>,
     pub github: Option<String>,
     pub decision: Option<String>,
@@ -1870,6 +1873,7 @@ impl Runtime {
                     self.missions.outside.unread(&mission.id, &node.key),
                 )
             }),
+            stack_waiting: stack_waiting(mission),
             merge_order: mission.merge_order.clone(),
             check: mission.check.clone(),
             github: mission.github.clone(),

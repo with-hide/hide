@@ -320,6 +320,7 @@ fn mission(
         }],
         merge_order: Vec::new(),
         landing_order: Vec::new(),
+        stack_waiting: 0,
         check: None,
         github: None,
         decision: None,

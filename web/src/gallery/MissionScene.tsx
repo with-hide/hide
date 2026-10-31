@@ -232,6 +232,8 @@ export function missionFixture(shown: string, now: number): { mission: Mission; 
     nodes, merge_order: ["api", "fix-1481", "fix-1490", "fix-1487", "screen"],
     // The order the core gives what is left: the merge order first, then the plan's (`mission_landing::landing_order`).
     landing_order: state === "wide" ? ["base"] : state === "stack" ? ["api", "fix-1481", "fix-1490", "fix-1487", "screen"] : state === "no-conductor" ? ["fix-1481", "fix-1490", "fix-1487", "screen"] : ["no-pr", "done", "cancelled", "plan"].includes(state) ? [] : ["fix-1481"],
+    // The screen's pull request stacks on the API's until that one merges.
+    stack_waiting: ["plan", "wide", "no-pr", "done"].includes(state) ? 0 : 1,
     check: "cargo test && pnpm test", github: "octocat",
     decision: state === "decision" ? "화면 PR을 어디에 올릴까요?" : state === "no-conductor" ? `${no(1503)}이 머지되어 ${no(1504)}를 옮겨야 해요` : null,
     question: state === "decision"

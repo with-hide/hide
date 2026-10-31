@@ -4,8 +4,8 @@ import { describe, expect, it } from "vitest";
 import { STRENGTHS } from "./conductorSettings";
 import { english } from "./i18n/catalogs";
 import { initializeInterfaceI18n } from "./i18n/instance";
-import { cardLine, checkerState, conductorState, missionResultCounts, nextNodes, reportLine, chipWords, conductedBy, criteriaTally, launchSession, runWords, criterionName, missionHeadCells, criterionNote, defectEdges, firstPlans, kindWord, landingLeft, nodeLanded, missionCells, missionOfPane, missionResults, missionTally, missionTone, missionWorkLine, neighbours, nodeLook, nodeResult, nodeTimes, nodeTone, paneChipWords, missionCounts, nodeLine, nodeMark, stackWaiting, stageWord, takeOverPrompt, takeOverProvider, turnItems } from "./missions";
-import type { AgentRow, Mission, MissionCriterion, MissionEvent, MissionNode, SnapshotRest } from "./snapshot";
+import { cardLine, checkerState, conductorState, missionResultCounts, nextNodes, reportLine, chipWords, conductedBy, criteriaTally, launchSession, runWords, criterionName, missionHeadCells, criterionNote, defectEdges, firstPlans, kindWord, landingLeft, mainCommit, nodeLanded, missionCells, missionOfPane, missionResults, missionTally, missionTone, missionWorkLine, neighbours, nodeLook, nodeResult, nodeTimes, nodeTone, paneChipWords, missionCounts, nodeLine, nodeMark, stackWaiting, stageWord, takeOverPrompt, takeOverProvider, turnItems } from "./missions";
+import type { AgentRow, Mission, MissionCriterion, MissionEvent, MissionLanding, MissionNode, SnapshotRest } from "./snapshot";
 
 // What the map and the Conductor row read from a mission (PRD
 // software-factory-conductor B14-B21, B44, B46): the core decides every value,
@@ -19,7 +19,7 @@ function node(key: string, extra: Partial<MissionNode> = {}): MissionNode {
 }
 
 function mission(id: string, extra: Partial<Mission> = {}): Mission {
-  return { id, title: `Mission ${id}`, workspace_id: "w", project: "/repo", checkout_path: "/repo", device_id: "mac", status: "running", scope: "pr", cap: 4, exempt: false, strength: null, other_vendor: null, conductor: { pane_id: "p1", name: "conductor", agent_kind: "claude", session: { device_id: "mac", agent: "claude", session_id: "s-1" }, present: true, takes_answers: true }, nodes: [], merge_order: [], landing_order: [], check: null, github: null, decision: null, question: null, answer: null, answer_failed: null, delay: null, report: null, created_at_unix_ms: 1, started_at_unix_ms: 1, closed_at_unix_ms: null, running: 0, stale: false, github_stale: false, github_read_at_unix_ms: null, ...extra };
+  return { id, title: `Mission ${id}`, workspace_id: "w", project: "/repo", checkout_path: "/repo", device_id: "mac", status: "running", scope: "pr", cap: 4, exempt: false, strength: null, other_vendor: null, conductor: { pane_id: "p1", name: "conductor", agent_kind: "claude", session: { device_id: "mac", agent: "claude", session_id: "s-1" }, present: true, takes_answers: true }, nodes: [], merge_order: [], landing_order: [], stack_waiting: 0, check: null, github: null, decision: null, question: null, answer: null, answer_failed: null, delay: null, report: null, created_at_unix_ms: 1, started_at_unix_ms: 1, closed_at_unix_ms: null, running: 0, stale: false, github_stale: false, github_read_at_unix_ms: null, ...extra };
 }
 
 const rest = (items: Mission[]) => ({ missions: { items } }) as unknown as SnapshotRest;
@@ -33,7 +33,23 @@ describe("the wire values", () => {
     expect(STRENGTHS).toEqual(contract.mission_strength);
     for (const strength of contract.mission_strength) expect(english).toHaveProperty(`mission.strength.${strength}`);
     for (const status of contract.mission_status) expect(chipWords(mission("m", { status })).key).toMatch(/^mission\.chip/);
-    for (const action of contract.mission_landing_action) expect(english).toHaveProperty(`mission.landing.${action}`);
+    for (const action of contract.mission_landing_action) {
+      expect(english).toHaveProperty(`mission.landing.${action}`);
+      expect(landingLeft(node("n", { status: "done", landing: { state: "left", action } }))).toBe(action);
+    }
+    // Every landing state and proof the core writes reads as what it says: only `left` tags the card, only `landed` is in main.
+    for (const state of contract.mission_landing_state as MissionLanding["state"][]) {
+      const landing: MissionLanding = state === "landed" ? { state, proof: { by: "merged" } } : { state, action: "merge" };
+      const n = node("n", { status: "done", pr: 1, landing });
+      expect([nodeLanded(n), landingLeft(n)]).toEqual([state === "landed", state === "left" ? "merge" : null]);
+    }
+    const proofs: Record<string, { by: "merged" } | { by: "in_main"; commit: string } | { by: "outside" }> = { merged: { by: "merged" }, in_main: { by: "in_main", commit: "abc1234def" }, outside: { by: "outside" } };
+    for (const by of contract.mission_landing_proof as string[]) {
+      const proof = proofs[by];
+      expect(proof).toBeDefined();
+      const n = node("n", { status: "done", kind: by === "outside" ? "external" : "change", commit: "recorded1", landing: { state: "landed", proof: proof! } });
+      expect([nodeLanded(n), landingLeft(n), mainCommit(n)]).toEqual([true, null, by === "in_main" ? "abc1234def" : "recorded1"]);
+    }
   });
 });
 
@@ -51,9 +67,12 @@ describe("the mission a row conducts", () => {
 
 describe("the numbers and words", () => {
   it("counts the record's done nodes of those still planned and the dropped apart, and the stack waiting to merge", () => {
-    const m = mission("m", { nodes: [node("a", { status: "done" }), node("b", { status: "dropped" }), node("c", { pr: 2, base_pr: 1, pr_state: "mergeable" }), node("d", { pr: 1, pr_state: "merged", status: "done" })] });
+    const m = mission("m", { stack_waiting: 1, nodes: [node("a", { status: "done" }), node("b", { status: "dropped" }), node("c", { pr: 2, base_pr: 1, pr_state: "mergeable" }), node("d", { pr: 1, pr_state: "merged", status: "done" })] });
     expect(missionCounts(m)).toEqual({ done: 2, total: 3, dropped: 1 });
     expect(stackWaiting(m)).toBe(1);
+    // The core counts the stack from what GitHub last answered: a merge it remembers for a pull request the list no longer holds is not waiting.
+    const remembered = mission("m", { status: "merge_wait", stack_waiting: 0, nodes: [node("c", { status: "done", pr: 2, base_pr: 1, pr_state: null, landing: { state: "landed", proof: { by: "merged" } } })] });
+    expect(stackWaiting(remembered)).toBe(0);
     expect(chipWords(m)).toEqual({ key: "mission.chip", counts: "2/3" });
   });
 

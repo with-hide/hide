@@ -9192,6 +9192,51 @@ mod wire_enum_tests {
             }
             assert_wire(&contract, "mission_landing_action", &landing_actions);
             checked.insert("mission_landing_action");
+            use crate::runtime::mission_landing::{LandingProof, NodeLanding};
+            let proofs = [
+                LandingProof::Merged,
+                LandingProof::InMain {
+                    commit: "c0ffee".into(),
+                },
+                LandingProof::Outside,
+            ];
+            for variant in &proofs {
+                match variant {
+                    LandingProof::Merged | LandingProof::InMain { .. } | LandingProof::Outside => {}
+                }
+            }
+            // Internally tagged: the wire value is each variant's tag.
+            let tag = |value: serde_json::Value, key: &str| value[key].as_str().unwrap().to_owned();
+            let proof_tags: Vec<String> = proofs
+                .iter()
+                .map(|proof| tag(serde_json::to_value(proof).unwrap(), "by"))
+                .collect();
+            assert_wire(&contract, "mission_landing_proof", &proof_tags);
+            checked.insert("mission_landing_proof");
+            let landings = [
+                NodeLanding::Landed {
+                    proof: LandingProof::Merged,
+                },
+                NodeLanding::Left {
+                    action: LandingAction::Merge,
+                },
+                NodeLanding::Unread {
+                    action: LandingAction::Join,
+                },
+            ];
+            for variant in &landings {
+                match variant {
+                    NodeLanding::Landed { .. }
+                    | NodeLanding::Left { .. }
+                    | NodeLanding::Unread { .. } => {}
+                }
+            }
+            let landing_tags: Vec<String> = landings
+                .iter()
+                .map(|landing| tag(serde_json::to_value(landing).unwrap(), "state"))
+                .collect();
+            assert_wire(&contract, "mission_landing_state", &landing_tags);
+            checked.insert("mission_landing_state");
             use crate::mission_criteria::{CriterionKind, CriterionState, Role, Rule};
             let criterion_kinds = [
                 CriterionKind::Own,

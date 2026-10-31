@@ -1479,6 +1479,8 @@ export type Mission = {
   merge_order: string[];
   /** The nodes left to merge or join, by key, in the order to take them; the core orders them (B18, B25). */
   landing_order: string[];
+  /** The stacked pull requests still waiting on the one below, as the core counts them from what GitHub last answered. */
+  stack_waiting: number;
   check: string | null;
   github: string | null;
   decision: string | null;

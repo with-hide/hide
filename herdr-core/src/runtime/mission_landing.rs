@@ -29,13 +29,6 @@ pub enum NodeLanding {
     Unread { action: LandingAction },
 }
 
-impl NodeLanding {
-    /// Whether a mission waiting on its merges still waits on this node.
-    fn waits(&self) -> bool {
-        matches!(self, Self::Left { .. } | Self::Unread { .. })
-    }
-}
-
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 #[serde(tag = "by", rename_all = "snake_case")]
 pub enum LandingProof {
@@ -68,6 +61,27 @@ pub(super) fn reads_branch(status: MissionStatus, node: &MissionNode) -> bool {
     matches!(status, MissionStatus::Running | MissionStatus::MergeWait)
         && lands_by_branch(node)
         && node.status == NodeStatus::Done
+}
+
+/// Where a node's pull request is, as GitHub last answered for it
+/// (`pr_seen`): the one reading both the close and the view use.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum PullState {
+    Merged,
+    Closed,
+    Open,
+    /// GitHub never answered for it.
+    Unread,
+}
+
+fn pull_state(node: &MissionNode) -> Option<PullState> {
+    node.pr?;
+    Some(match &node.pr_seen {
+        Some(seen) if seen.merged => PullState::Merged,
+        Some(seen) if seen.closed => PullState::Closed,
+        Some(_) => PullState::Open,
+        None => PullState::Unread,
+    })
 }
 
 /// The commit Hide read in main for the branch the node names now, while
@@ -104,19 +118,16 @@ pub(super) fn node_landing(
         NodeKind::Change => {}
         NodeKind::Research | NodeKind::Verify => return None,
     }
-    if node.pr.is_some() {
-        return match &node.pr_seen {
-            Some(seen) if seen.merged => Some(NodeLanding::Landed {
+    if let Some(pull) = pull_state(node) {
+        let action = LandingAction::Merge;
+        return match pull {
+            PullState::Merged => Some(NodeLanding::Landed {
                 proof: LandingProof::Merged,
             }),
-            Some(seen) if seen.closed => None,
+            PullState::Closed => None,
             _ if mission.status == MissionStatus::Cancelled => None,
-            Some(_) => Some(NodeLanding::Left {
-                action: LandingAction::Merge,
-            }),
-            None => Some(NodeLanding::Unread {
-                action: LandingAction::Merge,
-            }),
+            PullState::Open => Some(NodeLanding::Left { action }),
+            PullState::Unread => Some(NodeLanding::Unread { action }),
         };
     }
     if !lands_by_branch(node) {
@@ -140,15 +151,43 @@ pub(super) fn node_landing(
     })
 }
 
+/// Whether a mission waiting on its merges must still wait on `node` (B18,
+/// B41): its pull request until GitHub answers it merged or closed, a
+/// direct change until its branch is read in main. This holds for a node in
+/// any state but failed or dropped, apart from what the map shows for it
+/// (`node_landing`, done nodes only): a mission from before criteria is
+/// closed without the gate that refuses unfinished nodes (`close_held`), so
+/// its unfinished pull request still keeps it waiting here.
+fn holds_close(node: &MissionNode) -> bool {
+    if matches!(node.status, NodeStatus::Failed | NodeStatus::Dropped) {
+        return false;
+    }
+    match pull_state(node) {
+        Some(pull) => !matches!(pull, PullState::Merged | PullState::Closed),
+        None => lands_by_branch(node) && in_main(node).is_none(),
+    }
+}
+
 /// Every pull request the mission still stands behind is merged or closed,
-/// and every direct change's branch is in main (B18, B41). A node not done
-/// waits on nothing here: the close's own gate (`close_held`) refuses a
-/// mission with one.
+/// and every direct change's branch is in main.
 pub(super) fn stack_settled(mission: &Mission) -> bool {
-    mission
+    !mission.nodes.iter().any(holds_close)
+}
+
+/// The pull requests of a stack still waiting on the one below: those based
+/// on another and not merged or closed as GitHub last answered, of nodes
+/// still in the plan (the map's `스택 머지 대기`).
+pub(super) fn stack_waiting(mission: &Mission) -> u32 {
+    let waiting = mission
         .nodes
         .iter()
-        .all(|node| !node_landing(mission, node, false).is_some_and(|landing| landing.waits()))
+        .filter(|node| {
+            node.base_pr.is_some()
+                && node.status != NodeStatus::Dropped
+                && matches!(pull_state(node), Some(PullState::Open | PullState::Unread))
+        })
+        .count();
+    u32::try_from(waiting).unwrap_or(u32::MAX)
 }
 
 /// The nodes left for the operator to merge or join, by key, in the order

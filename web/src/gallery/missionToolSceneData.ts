@@ -12,7 +12,7 @@ function node(key: string, title: string, extra: Partial<MissionNode> = {}): Mis
 }
 
 function mission(id: string, title: string, workspace: string, path: string, extra: Partial<Mission>): Mission {
-  return { id, title, workspace_id: workspace, project: path, checkout_path: path, device_id: "local", status: "running", scope: "pr", cap: 3, exempt: false, strength: "normal", other_vendor: true, conductor: { pane_id: "w1:p1", name: "conductor", agent_kind: "claude", session: null, present: true, takes_answers: true }, nodes: [], merge_order: [], landing_order: [], check: null, github: null, decision: null, question: null, answer: null, answer_failed: null, delay: null, report: null, created_at_unix_ms: 0, started_at_unix_ms: null, closed_at_unix_ms: null, running: 0, stale: false, github_stale: false, github_read_at_unix_ms: null, ...extra };
+  return { id, title, workspace_id: workspace, project: path, checkout_path: path, device_id: "local", status: "running", scope: "pr", cap: 3, exempt: false, strength: "normal", other_vendor: true, conductor: { pane_id: "w1:p1", name: "conductor", agent_kind: "claude", session: null, present: true, takes_answers: true }, nodes: [], merge_order: [], landing_order: [], stack_waiting: 0, check: null, github: null, decision: null, question: null, answer: null, answer_failed: null, delay: null, report: null, created_at_unix_ms: 0, started_at_unix_ms: null, closed_at_unix_ms: null, running: 0, stale: false, github_stale: false, github_read_at_unix_ms: null, ...extra };
 }
 
 const claude = { agent: "claude", model: "Opus", effort: "high" };
@@ -47,7 +47,7 @@ export function missionToolMissions(workspace: string, path: string, now: number
       nodes: [node("collect", "로그 수집기", { status: "working", worker: claude }), node("view", "로그 보기", { depends_on: ["collect"] })],
     }),
     mission("m-stage", "Atorni Stage 1.2", workspace, path, {
-      ...started(180), status: "merge_wait", merge_order: ["api", "ui"], landing_order: ["api", "ui"],
+      ...started(180), status: "merge_wait", merge_order: ["api", "ui"], landing_order: ["api", "ui"], stack_waiting: 1,
       nodes: [
         node("api", "자료 확정 API", { status: "done", worker: codex, pr: 1911, pr_state: "mergeable", landing: { state: "left", action: "merge" } }),
         node("ui", "확정 화면", { status: "done", worker: claude, pr: 1912, pr_state: "pending", landing: { state: "left", action: "merge" }, base_pr: 1911, depends_on: ["api"] }),

@@ -3960,8 +3960,15 @@ struct LandingCase {
     /// (node, landing as the view publishes it), for every node.
     landing: [(&'static str, Value); 4],
     order: &'static [&'static str],
+    /// The stacked pull requests still waiting (`pr` is based on `first`'s).
+    stack: u32,
     /// Whether a mission waiting on its merges closed itself as done.
     closes: bool,
+    /// A mission from before criteria, which no gate holds (D-19).
+    exempt: bool,
+    /// What the Conductor's `close --as merge_wait` of the case, run while
+    /// the mission runs, leaves.
+    explicit: Option<MissionStatus>,
 }
 
 const SHA: &str = "4f1c9a27be03aa00bb11cc22dd33ee44ff556677";
@@ -4001,6 +4008,56 @@ fn all_landed(mission: &mut crate::missions::Mission) {
     direct_in_main(mission);
 }
 
+/// A fresh runtime holding `case`'s mission at `status`: four done nodes,
+/// every line met, `pr` stacked on `first`, then the case's own changes.
+fn landing_case(case: &LandingCase, status: MissionStatus) -> Fixture {
+    let fixture = conducting();
+    {
+        let mut runtime = fixture.runtime.lock().unwrap();
+        command(
+            &mut runtime,
+            "sender",
+            json!({"op": "create", "title": "Landing"}),
+        )
+        .unwrap();
+        command(
+            &mut runtime,
+            "sender",
+            json!({"op": "plan", "plan": {"nodes": [
+                {"key": "research", "title": "Research", "kind": "research", "criteria": ["it works"]},
+                {"key": "pr", "title": "PR", "kind": "change", "delivery": "pr", "criteria": ["it works"], "depends_on": ["research"]},
+                {"key": "direct", "title": "Direct", "kind": "change", "delivery": "direct", "criteria": ["it works"], "depends_on": ["research"]},
+                {"key": "first", "title": "First", "kind": "change", "delivery": "pr", "criteria": ["it works"]},
+            ], "merge_order": ["first"]}}),
+        )
+        .unwrap();
+        command(&mut runtime, "sender", json!({"op": "start"})).unwrap();
+        let mission = runtime.missions.book.get_mut("mission-1").unwrap();
+        // Every line met, so only the landing, a node's state and whether
+        // the mission is gated decide the close.
+        for node in &mut mission.nodes {
+            node.criteria = if node.delivery == Some(crate::missions::Delivery::Pr) {
+                vec![
+                    serde_json::from_value(json!({"key": "ci", "kind": "ci", "state": "pass"}))
+                        .unwrap(),
+                ]
+            } else {
+                Vec::new()
+            };
+            node.status = NodeStatus::Done;
+            node.finished_at_unix_ms = Some(1);
+        }
+        node_mut(mission, "pr").pr = Some(11);
+        node_mut(mission, "pr").base_pr = Some(10);
+        node_mut(mission, "first").pr = Some(10);
+        node_mut(mission, "direct").branch = Some("feat/direct".into());
+        mission.exempt = case.exempt;
+        mission.status = status;
+        (case.set)(mission);
+    }
+    fixture
+}
+
 /// mission-23 c2: one matrix of the cases a mission's landing is decided
 /// in, asserting both the close Hide makes itself and what the view
 /// publishes for the map: each node's landing, and the order of what is
@@ -4027,7 +4084,10 @@ fn a_missions_landing_decides_its_close_and_its_published_actions_from_one_rule(
                 ("research", none.clone()),
             ],
             order: &[],
+            stack: 0,
             closes: true,
+            exempt: false,
+            explicit: None,
         },
         LandingCase {
             name: "merge_wait, pull requests open and the branch not in main, by merge order",
@@ -4044,7 +4104,10 @@ fn a_missions_landing_decides_its_close_and_its_published_actions_from_one_rule(
                 ("research", none.clone()),
             ],
             order: &["first", "pr", "direct"],
+            stack: 1,
             closes: false,
+            exempt: false,
+            explicit: None,
         },
         LandingCase {
             name: "merge_wait, a pull request closed unmerged waits on nothing",
@@ -4061,7 +4124,10 @@ fn a_missions_landing_decides_its_close_and_its_published_actions_from_one_rule(
                 ("research", none.clone()),
             ],
             order: &[],
+            stack: 0,
             closes: true,
+            exempt: false,
+            explicit: None,
         },
         LandingCase {
             name: "merge_wait, a pull request GitHub never answered for waits unread",
@@ -4078,7 +4144,10 @@ fn a_missions_landing_decides_its_close_and_its_published_actions_from_one_rule(
                 ("research", none.clone()),
             ],
             order: &[],
+            stack: 1,
             closes: false,
+            exempt: false,
+            explicit: None,
         },
         LandingCase {
             name: "merge_wait, a branch read could not answer",
@@ -4095,7 +4164,10 @@ fn a_missions_landing_decides_its_close_and_its_published_actions_from_one_rule(
                 ("research", none.clone()),
             ],
             order: &[],
+            stack: 0,
             closes: false,
+            exempt: false,
+            explicit: None,
         },
         LandingCase {
             name: "merge_wait, a stale proof read for the branch the node named before",
@@ -4115,7 +4187,10 @@ fn a_missions_landing_decides_its_close_and_its_published_actions_from_one_rule(
                 ("research", none.clone()),
             ],
             order: &["direct"],
+            stack: 0,
             closes: false,
+            exempt: false,
+            explicit: None,
         },
         LandingCase {
             name: "merge_wait, a commit the Conductor recorded is no proof",
@@ -4134,7 +4209,10 @@ fn a_missions_landing_decides_its_close_and_its_published_actions_from_one_rule(
                 ("research", none.clone()),
             ],
             order: &["direct"],
+            stack: 0,
             closes: false,
+            exempt: false,
+            explicit: None,
         },
         LandingCase {
             name: "merge_wait, a direct change that names no branch waits unread",
@@ -4153,7 +4231,10 @@ fn a_missions_landing_decides_its_close_and_its_published_actions_from_one_rule(
                 ("research", none.clone()),
             ],
             order: &[],
+            stack: 0,
             closes: false,
+            exempt: false,
+            explicit: None,
         },
         LandingCase {
             name: "merge_wait, a failed node keeps it waiting and has no landing",
@@ -4170,7 +4251,10 @@ fn a_missions_landing_decides_its_close_and_its_published_actions_from_one_rule(
                 ("research", none.clone()),
             ],
             order: &[],
+            stack: 0,
             closes: false,
+            exempt: false,
+            explicit: None,
         },
         LandingCase {
             name: "merge_wait, a dropped node's open pull request waits on nothing",
@@ -4189,7 +4273,10 @@ fn a_missions_landing_decides_its_close_and_its_published_actions_from_one_rule(
                 ("research", none.clone()),
             ],
             order: &[],
+            stack: 0,
             closes: true,
+            exempt: false,
+            explicit: None,
         },
         LandingCase {
             name: "running, what is left shows while the mission runs and nothing closes",
@@ -4207,7 +4294,10 @@ fn a_missions_landing_decides_its_close_and_its_published_actions_from_one_rule(
                 ("research", none.clone()),
             ],
             order: &["pr", "direct"],
+            stack: 1,
             closes: false,
+            exempt: false,
+            explicit: None,
         },
         LandingCase {
             name: "cancelled, nothing is left and what landed stays proven",
@@ -4224,7 +4314,10 @@ fn a_missions_landing_decides_its_close_and_its_published_actions_from_one_rule(
                 ("research", none.clone()),
             ],
             order: &[],
+            stack: 1,
             closes: false,
+            exempt: false,
+            explicit: None,
         },
         LandingCase {
             name: "done, an open pull request is still left and a branch no longer read",
@@ -4238,52 +4331,102 @@ fn a_missions_landing_decides_its_close_and_its_published_actions_from_one_rule(
                 ("research", none.clone()),
             ],
             order: &["pr"],
+            stack: 1,
             closes: false,
+            exempt: false,
+            explicit: None,
+        },
+        LandingCase {
+            name: "exempt merge_wait, a pull request still in review keeps it waiting (#1939 review 1)",
+            status: MissionStatus::MergeWait,
+            set: |mission| {
+                all_landed(mission);
+                let pr = node_mut(mission, "pr");
+                pr.status = NodeStatus::Review;
+                pr.pr_seen = seen(false, false);
+            },
+            direct_unread: false,
+            landing: [
+                ("pr", none.clone()),
+                ("direct", landed_main.clone()),
+                ("first", landed_merged.clone()),
+                ("research", none.clone()),
+            ],
+            order: &[],
+            stack: 1,
+            closes: false,
+            exempt: true,
+            explicit: Some(MissionStatus::MergeWait),
+        },
+        LandingCase {
+            name: "exempt merge_wait, an unread pull request at work keeps it waiting",
+            status: MissionStatus::MergeWait,
+            set: |mission| {
+                all_landed(mission);
+                let pr = node_mut(mission, "pr");
+                pr.status = NodeStatus::Working;
+                pr.pr_seen = None;
+            },
+            direct_unread: false,
+            landing: [
+                ("pr", none.clone()),
+                ("direct", landed_main.clone()),
+                ("first", landed_merged.clone()),
+                ("research", none.clone()),
+            ],
+            order: &[],
+            stack: 1,
+            closes: false,
+            exempt: true,
+            explicit: Some(MissionStatus::MergeWait),
+        },
+        LandingCase {
+            name: "exempt merge_wait, a direct change at work whose branch is not in main keeps it waiting",
+            status: MissionStatus::MergeWait,
+            set: |mission| {
+                all_landed(mission);
+                let direct = node_mut(mission, "direct");
+                direct.status = NodeStatus::Working;
+                direct.in_main = None;
+            },
+            direct_unread: false,
+            landing: [
+                ("pr", landed_merged.clone()),
+                ("direct", none.clone()),
+                ("first", landed_merged.clone()),
+                ("research", none.clone()),
+            ],
+            order: &[],
+            stack: 0,
+            closes: false,
+            exempt: true,
+            explicit: Some(MissionStatus::MergeWait),
+        },
+        LandingCase {
+            name: "exempt merge_wait, a pull request at work already merged waits on nothing",
+            status: MissionStatus::MergeWait,
+            set: |mission| {
+                all_landed(mission);
+                node_mut(mission, "pr").status = NodeStatus::Working;
+            },
+            direct_unread: false,
+            landing: [
+                ("pr", none.clone()),
+                ("direct", landed_main.clone()),
+                ("first", landed_merged.clone()),
+                ("research", none.clone()),
+            ],
+            order: &[],
+            stack: 0,
+            closes: true,
+            exempt: true,
+            explicit: Some(MissionStatus::Done),
         },
     ];
+
     for case in cases {
-        let fixture = conducting();
+        let fixture = landing_case(&case, case.status);
         let mut runtime = fixture.runtime.lock().unwrap();
-        command(
-            &mut runtime,
-            "sender",
-            json!({"op": "create", "title": "Landing"}),
-        )
-        .unwrap();
-        command(
-            &mut runtime,
-            "sender",
-            json!({"op": "plan", "plan": {"nodes": [
-                {"key": "research", "title": "Research", "kind": "research", "criteria": ["it works"]},
-                {"key": "pr", "title": "PR", "kind": "change", "delivery": "pr", "criteria": ["it works"], "depends_on": ["research"]},
-                {"key": "direct", "title": "Direct", "kind": "change", "delivery": "direct", "criteria": ["it works"], "depends_on": ["research"]},
-                {"key": "first", "title": "First", "kind": "change", "delivery": "pr", "criteria": ["it works"]},
-            ], "merge_order": ["first"]}}),
-        )
-        .unwrap();
-        command(&mut runtime, "sender", json!({"op": "start"})).unwrap();
-        {
-            let mission = runtime.missions.book.get_mut("mission-1").unwrap();
-            // Gated, with every line met: only the landing and a node's state
-            // decide the close.
-            for node in &mut mission.nodes {
-                node.criteria = if node.delivery == Some(crate::missions::Delivery::Pr) {
-                    vec![
-                        serde_json::from_value(json!({"key": "ci", "kind": "ci", "state": "pass"}))
-                            .unwrap(),
-                    ]
-                } else {
-                    Vec::new()
-                };
-                node.status = NodeStatus::Done;
-                node.finished_at_unix_ms = Some(1);
-            }
-            node_mut(mission, "pr").pr = Some(11);
-            node_mut(mission, "first").pr = Some(10);
-            node_mut(mission, "direct").branch = Some("feat/direct".into());
-            mission.status = case.status;
-            (case.set)(mission);
-        }
         if case.direct_unread {
             land(
                 &mut runtime,
@@ -4317,5 +4460,31 @@ fn a_missions_landing_decides_its_close_and_its_published_actions_from_one_rule(
             "{}: order",
             case.name
         );
+        // No list was ever read here, so a pull request's state is only
+        // what GitHub last answered (`pr_seen`): a merge it remembers counts
+        // as merged though no list holds it (#1939 review 2).
+        assert_eq!(
+            view["stack_waiting"],
+            json!(case.stack),
+            "{}: stack",
+            case.name
+        );
+        drop(runtime);
+        if let Some(expected) = case.explicit {
+            let fixture = landing_case(&case, MissionStatus::Running);
+            let mut runtime = fixture.runtime.lock().unwrap();
+            command(
+                &mut runtime,
+                "sender",
+                json!({"op": "close", "end": "merge_wait"}),
+            )
+            .unwrap();
+            assert_eq!(
+                mission_status(&runtime),
+                expected,
+                "{}: explicit close",
+                case.name
+            );
+        }
     }
 }

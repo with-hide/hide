@@ -55,9 +55,9 @@ export function missionCounts(mission: Mission): { done: number; total: number; 
   return { done: mission.nodes.filter((node) => node.status === "done").length, total: mission.nodes.length - dropped, dropped };
 }
 
-/** The pull requests of a stack still waiting on a lower one: open, with a base the mission holds. */
+/** The pull requests of a stack still waiting on a lower one, as the core counts them. */
 export function stackWaiting(mission: Mission): number {
-  return mission.nodes.filter((node) => node.base_pr != null && node.pr_state !== "merged" && node.pr_state !== "closed" && node.status !== "dropped").length;
+  return mission.stack_waiting;
 }
 
 const KIND_WORD: Record<MissionNode["kind"], MessageKey> = {
