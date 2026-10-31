@@ -7,7 +7,10 @@
 //! call the agent announced under the same id, and decides here:
 //! a read and a `hide` command Desk may run on its own run without asking,
 //! every other command and every change to files waits for the operator's
-//! card, and an action Hide cannot read does not run at all. No answer ever
+//! card, and an action Hide cannot read does not run at all. When the agent's
+//! 권한 in Settings › Agents is 전부 허용, the operator has said Hide may
+//! run what that agent asks, so every action Hide can read runs without a
+//! card, allowed once; one it cannot read still does not run. No answer ever
 //! picks an option that would let the agent stop asking.
 
 use std::path::Path;
@@ -145,14 +148,18 @@ pub(crate) const HIDE_WITHOUT_CARD: &[&[&str]] = &[
 ];
 
 /// Decides a request. `hide` is the `hide` program Desk's `PATH` finds
-/// first, the only one a bare `hide` names there.
-pub fn decide(request: &Request, hide: &Path) -> Verdict {
+/// first, the only one a bare `hide` names there; `full_access` is the
+/// agent's 권한 being 전부 허용 on this machine.
+pub fn decide(request: &Request, hide: &Path, full_access: bool) -> Verdict {
     if request.allow_once().is_none() {
         return Verdict::Refuse;
     }
     let Some(action) = &request.action else {
         return Verdict::Refuse;
     };
+    if full_access {
+        return Verdict::Allow;
+    }
     match action {
         Action::Read => Verdict::Allow,
         Action::Command {
@@ -501,7 +508,7 @@ mod tests {
     }
 
     fn verdict(command: &str) -> Verdict {
-        decide(&claude_bash(command), Path::new(HIDE))
+        decide(&claude_bash(command), Path::new(HIDE), false)
     }
 
     #[test]
@@ -569,7 +576,7 @@ mod tests {
                 "options": options()}),
             None,
         );
-        assert_eq!(decide(&read, Path::new(HIDE)), Verdict::Allow);
+        assert_eq!(decide(&read, Path::new(HIDE), false), Verdict::Allow);
         let edit = read_request(
             AdapterId::CLAUDE,
             &json!({"toolCall": {"toolCallId": "t3", "kind": "edit", "title": "Edit",
@@ -577,7 +584,7 @@ mod tests {
                 "options": options()}),
             None,
         );
-        let Verdict::Ask(card) = decide(&edit, Path::new(HIDE)) else {
+        let Verdict::Ask(card) = decide(&edit, Path::new(HIDE), false) else {
             panic!("an edit asks")
         };
         assert_eq!(card.kind, CardKind::Edit);
@@ -597,7 +604,7 @@ mod tests {
                             {"optionId": "cancel", "kind": "reject_once"}]}),
             Some(&announced),
         );
-        let Verdict::Ask(card) = decide(&request, Path::new(HIDE)) else {
+        let Verdict::Ask(card) = decide(&request, Path::new(HIDE), false) else {
             panic!("asks")
         };
         assert_eq!(card.command, "touch x");
@@ -613,14 +620,50 @@ mod tests {
             None,
         );
         assert_eq!(bare.action, None);
-        assert_eq!(decide(&bare, Path::new(HIDE)), Verdict::Refuse);
+        assert_eq!(decide(&bare, Path::new(HIDE), false), Verdict::Refuse);
         let no_once = read_request(
             AdapterId::CLAUDE,
             &json!({"toolCall": {"toolCallId": "t", "kind": "read"},
                 "options": [{"optionId": "always", "kind": "allow_always"}]}),
             None,
         );
-        assert_eq!(decide(&no_once, Path::new(HIDE)), Verdict::Refuse);
+        assert_eq!(decide(&no_once, Path::new(HIDE), false), Verdict::Refuse);
+    }
+
+    /// 전부 허용 for the agent answers every request Hide can read with the
+    /// one-time allowance and no card; a request it cannot read, or one with
+    /// no one-time allowance, still does not run.
+    #[test]
+    fn full_access_runs_every_readable_request_once_and_still_refuses_an_unreadable_one() {
+        let command = claude_bash("rm -rf build");
+        assert!(matches!(
+            decide(&command, Path::new(HIDE), false),
+            Verdict::Ask(_)
+        ));
+        assert_eq!(decide(&command, Path::new(HIDE), true), Verdict::Allow);
+        let edit = read_request(
+            AdapterId::CLAUDE,
+            &json!({"toolCall": {"toolCallId": "t3", "kind": "edit", "title": "Edit",
+                "rawInput": {"file_path": "/r/notes.md"}},
+                "options": options()}),
+            None,
+        );
+        assert_eq!(decide(&edit, Path::new(HIDE), true), Verdict::Allow);
+        assert_eq!(edit.allow_once(), Some("allow-once"));
+        let bare = read_request(
+            AdapterId::CODEX,
+            &json!({"toolCall": {"toolCallId": "exec-2", "kind": "execute"}, "options": options()}),
+            None,
+        );
+        assert_eq!(decide(&bare, Path::new(HIDE), true), Verdict::Refuse);
+        let no_once = read_request(
+            AdapterId::CLAUDE,
+            &json!({"toolCall": {"toolCallId": "t", "kind": "execute",
+                "rawInput": {"command": "ls"}},
+                "options": [{"optionId": "always", "kind": "allow_always"}]}),
+            None,
+        );
+        assert_eq!(decide(&no_once, Path::new(HIDE), true), Verdict::Refuse);
     }
 
     #[test]
@@ -639,14 +682,14 @@ mod tests {
             crate::adapter::PI_CONFIRM_TITLE,
             r#"{"hide_desk":1,"tool":"bash","input":{"command":"hide agent list"}}"#,
         );
-        assert_eq!(decide(&bash, Path::new(HIDE)), Verdict::Allow);
+        assert_eq!(decide(&bash, Path::new(HIDE), false), Verdict::Allow);
         let write = confirm(
             crate::adapter::PI_CONFIRM_TITLE,
             r#"{"hide_desk":1,"tool":"write","input":{"path":"notes.md","content":"x"}}"#,
         );
-        assert!(matches!(decide(&write, Path::new(HIDE)), Verdict::Ask(_)));
+        assert!(matches!(decide(&write, Path::new(HIDE), false), Verdict::Ask(_)));
         let other = confirm("Delete branch?", "yes or no");
-        assert_eq!(decide(&other, Path::new(HIDE)), Verdict::Refuse);
+        assert_eq!(decide(&other, Path::new(HIDE), false), Verdict::Refuse);
     }
 
     #[test]
@@ -661,7 +704,7 @@ mod tests {
                 &json!({"toolCall": call, "options": options.clone()}),
                 None,
             );
-            match decide(&request, Path::new(HIDE)) {
+            match decide(&request, Path::new(HIDE), false) {
                 Verdict::Ask(card) => card,
                 other => panic!("{adapter:?} {other:?}"),
             }
