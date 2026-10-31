@@ -785,7 +785,7 @@ export interface AgentNotice {
      */
     detail?: string | null;
     /**
-     * A question the core asks on the row for the agent, which the window words in the interface language in place of detail: `plan_review` is a proposed plan of `steps` steps waiting for the operator's review, `mission_decision` is the decision `line` the Conductor's mission waits on (ask_subject_cause in snapshot-wire-enums.json). A window that does not know the cause draws detail.
+     * A question the core asks on the row for the agent, which the window words in the interface language in place of detail: `plan_review` is a proposed plan of `steps` steps waiting for the operator's review, `mission_decision` is the decision `line` the Conductor's mission waits on, `input_unconfirmed` is a spawn's brief or a letter (`input`) Hide typed that the agent never recorded, `spent` once its typings are used up (ask_subject_cause in snapshot-wire-enums.json). A window that does not know the cause draws detail.
      */
     subject?:
       | null
@@ -796,6 +796,11 @@ export interface AgentNotice {
       | {
           cause: "mission_decision";
           line: string;
+        }
+      | {
+          cause: "input_unconfirmed";
+          input: "brief" | "letter";
+          spent: boolean;
         };
   }[];
   clear: string[];

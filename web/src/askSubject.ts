@@ -6,13 +6,17 @@
 import type { TFunction } from "i18next";
 import type { AskSubject } from "./snapshot";
 
-/** What is asked: a plan review's words, or a mission decision's own line. */
+/** What is asked: a plan review's words, a mission decision's own line, or a brief or letter the agent never took (`input_unconfirmed`). */
 export function askSubjectText(t: TFunction<"translation">, subject: AskSubject): string {
   switch (subject.cause) {
     case "plan_review":
       return t("plan.askReview", { count: subject.steps });
     case "mission_decision":
       return subject.line;
+    case "input_unconfirmed": {
+      const what = t(subject.input === "brief" ? "agents.input.brief" : "agents.input.letter");
+      return subject.spent ? t("agents.input.spent", { what }) : what;
+    }
   }
 }
 

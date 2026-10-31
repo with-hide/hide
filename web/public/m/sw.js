@@ -98,7 +98,7 @@ self.addEventListener("message", (event) => {
   if (!data || data.type !== "words" || !data.words || typeof data.words !== "object") return;
   const { needs_you, done, observer_unconfirmed, letter_undelivered } = data.words;
   if (!isWord(needs_you) || !isWord(done)) return;
-  const statusWords = Object.fromEntries([...["question", "approval", "error", "working", "done", "idle", "unknown", "waiting", "stopped", "unfinished"].map((code) => `status_${code}`), "subject_plan_review", "subject_mission_decision"].map((key) => [key, data.words[key]]).filter(([, word]) => isWord(word)));
+  const statusWords = Object.fromEntries([...["question", "approval", "error", "working", "done", "idle", "unknown", "waiting", "stopped", "unfinished"].map((code) => `status_${code}`), "subject_plan_review", "subject_mission_decision", "subject_input_unconfirmed_brief", "subject_input_unconfirmed_letter"].map((key) => [key, data.words[key]]).filter(([, word]) => isWord(word)));
   const words = JSON.stringify({ needs_you, done, observer_unconfirmed, letter_undelivered, ...statusWords });
   event.waitUntil(
     caches
@@ -114,7 +114,9 @@ self.addEventListener("message", (event) => {
 function subjectWords(words, subject) {
   if (!subject || typeof subject !== "object" || typeof subject.cause !== "string") return null;
   if (subject.cause === "mission_decision") return isWord(subject.line) ? subject.line : null;
-  const template = words[`subject_${subject.cause}`];
+  // A brief or a letter the agent never took is worded by which it was.
+  const key = subject.cause === "input_unconfirmed" ? `subject_input_unconfirmed_${subject.input}` : `subject_${subject.cause}`;
+  const template = words[key];
   return isWord(template) ? template.replace("{{count}}", String(subject.steps)) : null;
 }
 

@@ -71,6 +71,14 @@ it("words a mission decision as 판단 and its line, and an unknown cause as the
   expect(phone.shown.map(({ body }) => body)).toEqual(["판단 · Skip the check line? · project", "질문 · Skip the check line? · project", "질문 · Plain sentence · project"]);
 });
 
+it("words a brief the agent never took by which input it was", async () => {
+  const phone = phoneWorker();
+  await phone.words({ needs_you: "내 차례", done: "읽을 것", status_idle: "대기", subject_input_unconfirmed_brief: "브리프 못 받음", subject_input_unconfirmed_letter: "편지 못 받음" });
+  await phone.push({ title: "task", state: "needs_you", status_code: "idle", detail: "Waiting", subject: { cause: "input_unconfirmed", input: "brief", spent: false }, place: "project" });
+  await phone.push({ title: "task", state: "needs_you", status_code: "idle", detail: "Waiting", subject: { cause: "input_unconfirmed", input: "letter", spent: true }, place: "project" });
+  expect(phone.shown.map(({ body }) => body)).toEqual(["대기 · 브리프 못 받음 · project", "대기 · 편지 못 받음 · project"]);
+});
+
 it("leads with the status word with no detail too, and works with older payloads and cached page words", async () => {
   const phone = phoneWorker();
   await phone.words({ needs_you: "내 차례", done: "읽을 것", status_done: "끝남", status_question: "질문", status_stopped: "멈춤" });
