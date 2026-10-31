@@ -93,6 +93,17 @@ pub(crate) fn arguments(kind: &str, permission: &AgentPermission) -> Vec<String>
     }
 }
 
+/// 매번 물어보기 for every agent Hide starts: what a machine's choices are
+/// when they cannot be read, so an unreadable file never widens one to full
+/// access.
+pub(crate) fn every_agent_asks() -> AgentPermissions {
+    hide_agent_adapter::ADAPTERS
+        .iter()
+        .filter(|row| row.start.is_some())
+        .map(|row| (row.id.to_owned(), AgentPermission::Ask))
+        .collect()
+}
+
 /// `kind`'s choice in a machine's `permissions`.
 pub(crate) fn of(permissions: &AgentPermissions, kind: &str) -> AgentPermission {
     hide_agent_adapter::adapter(kind)

@@ -323,8 +323,9 @@ pub enum UnrecognizedField {
 }
 
 /// One machine's stored 권한 by agent. An entry this build cannot read is
-/// 매번 물어보기, never the default full access: a choice the operator made
-/// to be asked is not widened by a file it cannot read; `unread` says so.
+/// 매번 물어보기, never the default full access, and so is every agent when
+/// the whole value cannot be read: a choice the operator made to be asked is
+/// not widened by a file it cannot read; `unread` says so.
 fn stored_permissions(
     value: Option<serde_json::Value>,
     unread: &mut bool,
@@ -343,7 +344,7 @@ fn stored_permissions(
             .collect(),
         Some(_) => {
             *unread = true;
-            BTreeMap::new()
+            crate::agent_permission::every_agent_asks()
         }
     }
 }
@@ -591,9 +592,20 @@ fn decode(bytes: &[u8]) -> (UiStateSnapshot, PaneTerminalSizes, LoadDisposition)
                     )
                 })
                 .collect(),
+            // Which devices it named is lost with it: every device this
+            // state registers asks for every agent.
             Some(_) => {
                 permissions_unread = true;
-                BTreeMap::new()
+                stored
+                    .device_registrations
+                    .iter()
+                    .map(|device| {
+                        (
+                            device.id.clone(),
+                            crate::agent_permission::every_agent_asks(),
+                        )
+                    })
+                    .collect()
             }
         };
     if permissions_unread {
@@ -1833,6 +1845,30 @@ mod tests {
             AgentPermission::Ask
         );
         assert_eq!(state.sidebar_lens, SidebarLens::Tasks);
+    }
+
+    #[test]
+    fn agent_permissions_stored_as_something_else_ask_for_every_agent_on_every_machine() {
+        use crate::agent_permission::AgentPermission;
+        let stored = r#"{"schema_version":1,"expanded_paths":[],"selected_path":null,"selected_pane_id":null,
+            "device_registrations":[{"id":"mini","label":"mini","ssh_alias":"mini-host"}],
+            "agent_permissions":["claude-code"],"device_agent_permissions":"full"}"#;
+        let (state, _sizes, disposition) = decode(stored.as_bytes());
+        assert_eq!(
+            disposition,
+            LoadDisposition::Unrecognized(vec![UnrecognizedField::AgentPermissions])
+        );
+        let asks = |permissions: &crate::agent_permission::AgentPermissions| {
+            ["claude-code", "codex", "grok", "opencode", "omp", "antigravity", "pi"]
+                .into_iter()
+                .all(|agent| permissions.get(agent) == Some(&AgentPermission::Ask))
+        };
+        assert!(asks(&state.agent_permissions), "{:?}", state.agent_permissions);
+        assert_eq!(
+            state.device_agent_permissions.keys().collect::<Vec<_>>(),
+            ["mini"]
+        );
+        assert!(asks(&state.device_agent_permissions["mini"]));
     }
 
     #[test]
