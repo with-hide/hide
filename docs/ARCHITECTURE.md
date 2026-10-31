@@ -791,7 +791,7 @@ If normal placement is full, the unresolved child waits and the core moves its k
 
 Ownership is the fifth derived status axis and it is read off the lineage, never stored.
 Ordinary delegated rows can only be Working or Seen; their changes turn ancestors unread without changing the ancestors' own groups.
-The six core-owned escalation causes in `docs/status-model.md` are the explicit exception: the child's lineage root enters Needs You and Sessions carrying the child's ask, and the root's pane band opens the child.
+The seven core-owned escalation causes in `docs/status-model.md` are the explicit exception: the child's lineage root enters Needs You and Sessions carrying the child's ask, and the root's pane band opens the child.
 The lineage is therefore built before the read axis is applied on every ingest, and there is no clock, timer or second store for it.
 Before the lineage, each pane's saved completion is laid back on a pane a restored Herdr server no longer reports finished (`agent_state::apply_completions`), so an ancestor sees the descendant completion it saw before the restart; [status-model.md](status-model.md#across-a-herdr-restart) owns the rule.
 The single state owner is `herdr-core/src/agent_state/`: `axes.rs` derives lifecycle, completion, ownership and read state, `turn.rs` derives groups, request verbs and runtime action gates, `sessions.rs` derives the Sessions tool's groups and task tags, `escalation.rs` derives the six raise causes from delivery facts, `header.rs` derives each pane's notice and band, `work.rs` associates PRs and issues and assigns each duty, and `tally.rs` owns marks, representative ranks and scope counts.

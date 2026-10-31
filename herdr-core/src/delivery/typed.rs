@@ -5,7 +5,7 @@
 //! own (a hooks review, an update notice, a trust question) takes whatever is
 //! typed, so a successful `agent.prompt` proves only that the text reached
 //! the pane. Input is taken once the agent itself records it: its prompt
-//! hook's digest of the submitted prompt (Claude Code, Codex), or the user
+//! hook's digest of the submitted prompt (Claude Code, Codex, Grok), or the user
 //! message in its session file (the other agents). Nothing here reads a
 //! screen; the judgement is the record, the pane's rest and the input Hide
 //! routed to it.

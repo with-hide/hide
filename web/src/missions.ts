@@ -576,7 +576,7 @@ export type EscalationCause = NonNullable<AgentRow["escalation"]>["cause"];
 /**
  * What only the operator can do now (B25): answer the decision, take over a
  * mission no Conductor holds, clear a worker the core raised past its parent
- * (one of the six escalation causes), see an outside pull request closed
+ * (one of the seven escalation causes), see an outside pull request closed
  * without its merge, and merge or join what waits for main. A worker's own
  * block its parent can handle stays on its card, and a finished or cancelled
  * mission has nothing here.
