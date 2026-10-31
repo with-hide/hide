@@ -1377,7 +1377,7 @@ mod omp {
             native.read().unwrap_err(),
             hide_session::ReadRefusal::Refused(format!(
                 "session_capacity:line_bytes:{}",
-                hide_session::SESSION_LINE_LIMIT_BYTES
+                hide_session::NAMING_RECORD_LIMIT_BYTES
             ))
         );
     }
@@ -1963,7 +1963,7 @@ mod grok {
     fn summary_files_hold_no_paste_so_one_over_its_cap_is_refused() {
         let refused = hide_session::ReadRefusal::Refused(format!(
             "session_capacity:line_bytes:{}",
-            hide_session::SESSION_LINE_LIMIT_BYTES
+            hide_session::NAMING_RECORD_LIMIT_BYTES
         ));
         let native = Native::new();
         native.summary(|summary| summary["generated_title"] = json!(screenshot()));
@@ -2710,7 +2710,7 @@ mod pi {
             native.read().unwrap_err(),
             hide_session::ReadRefusal::Refused(format!(
                 "session_capacity:line_bytes:{}",
-                hide_session::SESSION_LINE_LIMIT_BYTES
+                hide_session::NAMING_RECORD_LIMIT_BYTES
             ))
         );
     }

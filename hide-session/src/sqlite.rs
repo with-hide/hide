@@ -309,7 +309,7 @@ impl Source {
                     if index == 3 {
                         return Err(Fence::Held);
                     }
-                    let file = crate::open_session_file_nofollow(&name).map_err(Fence::of)?;
+                    let file = crate::source::open_nofollow(&name).map_err(Fence::of)?;
                     if hide_platform::fs::identity::link_count(&file).map_err(Fence::of)? != 1 {
                         return Err(Fence::Refused);
                     }
@@ -366,7 +366,7 @@ impl Source {
         for (path, held) in &self.files {
             match held {
                 Some((handle, before)) => {
-                    let current = crate::open_session_file_nofollow(path).map_err(Fence::of)?;
+                    let current = crate::source::open_nofollow(path).map_err(Fence::of)?;
                     if mark(handle).map_err(Fence::of)? != *before
                         || mark(&current).map_err(Fence::of)? != *before
                     {

@@ -285,7 +285,7 @@ fn checked_path(home: &Path, agent: Agent, path: &Path) -> Result<PathBuf, Refus
 
 fn checked_file(home: &Path, agent: Agent, path: &Path) -> Result<fs::File, Refusal> {
     let canonical = checked_path(home, agent, path)?;
-    let file = crate::open_session_file_nofollow(path).map_err(|_| Refusal::Unreadable)?;
+    let file = crate::source::open_nofollow(path).map_err(|_| Refusal::Unreadable)?;
     // Check the opened descriptor too, so a parent link swapped after the
     // canonical check cannot redirect this read outside the allowed root.
     if hide_platform::fs::identity::file_id_of(&file).map_err(|_| Refusal::Unreadable)?

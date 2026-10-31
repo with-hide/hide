@@ -22,7 +22,8 @@
 //! only from where its last whole page ended.
 
 use std::collections::BTreeMap;
-use std::io::{BufRead, BufReader, Seek, SeekFrom};
+use std::fs::File;
+use std::io::{Read, Seek, SeekFrom};
 use std::path::Path;
 
 use hide_agent_adapter::SessionFormat;
@@ -43,6 +44,7 @@ mod pi;
 
 pub use hide_call::{HideCall, ViewKind, hide_call, spawned_agent};
 
+use crate::source::frame::{Frame, Framer};
 use build::Thread;
 
 /// The most record bytes one page reads; a record longer than this is
@@ -52,9 +54,6 @@ pub const THREAD_PAGE_BYTES: u64 = 4 * 1024 * 1024;
 /// page may begin at: the page a session is still writing stays this small,
 /// so reading it again costs this much and not a whole page.
 pub const THREAD_TAIL_BYTES: u64 = 512 * 1024;
-/// The most bytes the session's first record may hold when a format reads
-/// every record beside it.
-const HEADER_BYTES: usize = 1024 * 1024;
 /// How many of the session's first records the header is looked for in.
 const HEADER_RECORDS: usize = 8;
 /// The most characters one message, output or file side keeps; past it the
@@ -290,16 +289,31 @@ fn read_page(
     }
 }
 
+/// The session file a page reads, opened once: the page, the header and
+/// the cursor's identity all come from this one descriptor.
+struct Opened {
+    file: File,
+    incarnation: String,
+}
+
+fn open(path: &Path) -> Result<Opened, String> {
+    let unreadable = |_| "thread_file_unreadable".to_owned();
+    let file = crate::source::open(path).map_err(unreadable)?;
+    let incarnation = crate::source::file::incarnation(&file).map_err(unreadable)?;
+    Ok(Opened { file, incarnation })
+}
+
 fn read_lines(
     path: &Path,
     lines: Lines,
     before: Option<&ThreadCursor>,
 ) -> Result<ThreadPage, String> {
-    let incarnation = incarnation(path)?;
+    let Opened { file, incarnation } = open(path)?;
     if before.is_some_and(|cursor| cursor.incarnation != incarnation) {
         return Err("thread_cursor_stale".to_owned());
     }
-    let page = crate::read_page_before(
+    let page = crate::source::window::page_before(
+        &file,
         path,
         before.map(|cursor| cursor.position),
         THREAD_PAGE_BYTES,
@@ -310,10 +324,7 @@ fn read_lines(
         thread.skip("line_capacity");
     }
     let mut records = Vec::new();
-    let mut offset = page.start_offset;
-    for line in page.contents.split_inclusive('\n') {
-        let at = offset;
-        offset += line.len() as u64;
+    for (at, line) in page.records() {
         if line.trim().is_empty() {
             continue;
         }
@@ -333,10 +344,7 @@ fn read_lines(
         start = records[first].0;
         records.drain(..first);
     }
-    let header = match lines.header {
-        Some(picks) => header(path, picks)?,
-        None => Value::Null,
-    };
+    let header = header(&file, lines)?;
     let session = Session {
         header: &header,
         path,
@@ -382,46 +390,62 @@ fn page_of(thread: Thread, start: ThreadCursor, end: ThreadCursor, more: bool) -
 /// at, or past [`THREAD_PAGE_BYTES`] wherever it is, and never takes a last
 /// line that has no newline yet.
 fn read_lines_from(path: &Path, lines: Lines, from: &ThreadCursor) -> Result<ThreadPage, String> {
-    let incarnation = incarnation(path)?;
+    let Opened {
+        mut file,
+        incarnation,
+    } = open(path)?;
     if from.incarnation != incarnation {
         return Err("thread_cursor_stale".to_owned());
     }
-    let mut file =
-        crate::open_session_file(path).map_err(|_| "thread_file_unreadable".to_owned())?;
+    let unreadable = |_| "thread_file_unreadable".to_owned();
     file.seek(SeekFrom::Start(from.position))
-        .map_err(|_| "thread_file_unreadable".to_owned())?;
-    let mut reader = BufReader::new(file);
+        .map_err(unreadable)?;
     let mut thread = Thread::default();
     let mut records = Vec::new();
-    let mut offset = from.position;
+    let mut framer = Framer::new(THREAD_PAGE_BYTES as usize, from.position);
+    let mut block = vec![0; 64 * 1024];
     let mut after = None;
-    while let Some((line, length)) =
-        next_line(&mut reader, THREAD_PAGE_BYTES as usize).map_err(|_| "thread_file_unreadable")?
-    {
-        let read = offset - from.position;
-        let full = read >= THREAD_TAIL_BYTES;
-        if read >= THREAD_PAGE_BYTES {
-            after = Some(offset);
+    'read: loop {
+        let read = (&file).read(&mut block).map_err(unreadable)?;
+        if read == 0 {
             break;
         }
-        match line {
-            None => thread.skip("line_capacity"),
-            Some(line) if line.trim_ascii().is_empty() => {}
-            Some(line) => match serde_json::from_slice::<Value>(&line) {
-                Ok(record) if full && (lines.may_start_page)(&record) => {
-                    after = Some(offset);
-                    break;
+        let mut at = 0;
+        loop {
+            // Whether this page is full is decided where each record starts.
+            let start = framer.settled();
+            let full = start - from.position >= THREAD_TAIL_BYTES;
+            if start - from.position >= THREAD_PAGE_BYTES
+                && framer.pending().is_empty()
+                && framer.passing_from().is_none()
+            {
+                after = Some(start);
+                break 'read;
+            }
+            match framer.next(&block[..read], &mut at) {
+                None => break,
+                Some(Frame::Over { ended, .. }) => {
+                    if ended {
+                        thread.skip("line_capacity");
+                    }
                 }
-                Ok(record) => records.push(record),
-                Err(_) => thread.unreadable("record_unparsable"),
-            },
+                Some(Frame::Record { start, bytes }) => {
+                    if bytes.trim_ascii().is_empty() {
+                        continue;
+                    }
+                    match serde_json::from_slice::<Value>(bytes) {
+                        Ok(record) if full && (lines.may_start_page)(&record) => {
+                            after = Some(start);
+                            break 'read;
+                        }
+                        Ok(record) => records.push(record),
+                        Err(_) => thread.unreadable("record_unparsable"),
+                    }
+                }
+            }
         }
-        offset += length;
     }
-    let header = match lines.header {
-        Some(picks) => header(path, picks)?,
-        None => Value::Null,
-    };
+    let header = header(&file, lines)?;
     let session = Session {
         header: &header,
         path,
@@ -435,70 +459,24 @@ fn read_lines_from(path: &Path, lines: Lines, from: &ThreadCursor) -> Result<Thr
         return Err("thread_records_unreadable".to_owned());
     }
     let end = ThreadCursor {
-        position: after.unwrap_or(offset),
+        // A record not written to its newline yet is read with the next page.
+        position: after.unwrap_or(framer.passing_from().unwrap_or(framer.settled())),
         incarnation,
     };
     Ok(page_of(thread, from.clone(), end, after.is_some()))
 }
 
-/// The next whole line `reader` holds and how many bytes it took: the line
-/// itself when it is at most `limit` bytes, `None` for a longer one, which
-/// is read past without being kept. `None` overall at the end of the file,
-/// where a line without its newline is still being written.
-fn next_line(
-    reader: &mut impl BufRead,
-    limit: usize,
-) -> std::io::Result<Option<(Option<Vec<u8>>, u64)>> {
-    let mut kept = Some(Vec::new());
-    let mut length = 0u64;
-    loop {
-        let buffer = reader.fill_buf()?;
-        if buffer.is_empty() {
-            return Ok(None);
-        }
-        let (chunk, ended) = match buffer.iter().position(|byte| *byte == b'\n') {
-            Some(newline) => (&buffer[..=newline], true),
-            None => (buffer, false),
-        };
-        let taken = chunk.len();
-        if let Some(line) = kept.as_mut() {
-            if line.len() + taken > limit + 1 {
-                kept = None;
-            } else {
-                line.extend_from_slice(chunk);
-            }
-        }
-        reader.consume(taken);
-        length += taken as u64;
-        if ended {
-            return Ok(Some((kept, length)));
-        }
-    }
-}
-
-/// The first of the session's first [`HEADER_RECORDS`] records that `picks`
-/// chooses, read on its own whatever page is asked for.
-fn header(path: &Path, picks: fn(&Value) -> bool) -> Result<Value, String> {
-    let file = crate::open_session_file(path).map_err(|_| "thread_file_unreadable".to_owned())?;
-    let mut reader = std::io::BufReader::new(file);
-    for _ in 0..HEADER_RECORDS {
-        let Some(line) = crate::read_bounded_line(&mut reader, HEADER_BYTES)
-            .map_err(|_| "thread_header_unreadable".to_owned())?
-        else {
-            break;
-        };
-        if let Ok(record) = serde_json::from_slice::<Value>(&line)
-            && picks(&record)
-        {
-            return Ok(record);
-        }
-    }
-    Err("thread_header_unreadable".to_owned())
-}
-
-fn incarnation(path: &Path) -> Result<String, String> {
-    let file = crate::open_session_file(path).map_err(|_| "thread_file_unreadable".to_owned())?;
-    let id = hide_platform::fs::identity::file_id_of(&file)
+/// The first of the session's first [`HEADER_RECORDS`] records that the
+/// format's header picks chooses, read on its own whatever page is asked
+/// for; `Value::Null` for a format with none.
+fn header(mut file: &File, lines: Lines) -> Result<Value, String> {
+    let Some(picks) = lines.header else {
+        return Ok(Value::Null);
+    };
+    file.seek(SeekFrom::Start(0))
         .map_err(|_| "thread_file_unreadable".to_owned())?;
-    Ok(format!("{}:{}", id.volume(), id.index()))
+    match crate::source::facts::naming_record(file, HEADER_RECORDS, picks) {
+        Ok(Some(record)) => Ok(record),
+        Ok(None) | Err(_) => Err("thread_header_unreadable".to_owned()),
+    }
 }

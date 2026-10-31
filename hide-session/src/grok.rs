@@ -80,7 +80,7 @@ fn sibling(path: &Path, name: &str, limit: u64, read_bytes: &mut u64) -> Result<
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
         Err(_) => return Err(anyhow!("label_session_metadata_read_failed")),
     }
-    let file: File = match crate::open_session_file(&file_path) {
+    let file: File = match crate::source::open(&file_path) {
         Ok(file) => file,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
         Err(_) => return Err(anyhow!("label_session_metadata_read_failed")),
@@ -99,7 +99,7 @@ fn sibling(path: &Path, name: &str, limit: u64, read_bytes: &mut u64) -> Result<
 /// Native identity, cwd and title from `summary.json`. A subagent child,
 /// a headless run or a hidden session is no pane's root conversation.
 pub(crate) fn summary(path: &Path, read_bytes: &mut u64) -> Result<Summary> {
-    let limit = crate::SESSION_LINE_LIMIT_BYTES as u64;
+    let limit = crate::source::facts::NAMING_RECORD_LIMIT_BYTES as u64;
     let bytes = sibling(path, SUMMARY, limit, read_bytes)?
         .ok_or_else(|| anyhow!("label_session_metadata_unconfirmed"))?;
     if bytes.len() as u64 > limit {

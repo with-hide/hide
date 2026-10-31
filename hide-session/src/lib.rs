@@ -22,8 +22,8 @@ use serde_json::Value;
 use std::collections::{BTreeMap, HashMap};
 use std::error::Error;
 use std::fmt::{Display, Formatter};
-use std::fs::{self, File};
-use std::io::{self, BufRead, BufReader, Read, Seek, SeekFrom};
+use std::fs;
+use std::io;
 use std::path::{Path, PathBuf};
 
 pub mod antigravity;
@@ -46,6 +46,7 @@ pub mod opencode;
 mod refusal;
 pub mod session_activity;
 mod sightings;
+mod source;
 mod sqlite;
 pub mod stamp;
 pub mod thread;
@@ -62,6 +63,8 @@ pub use refusal::ReadRefusal;
 pub use sightings::{
     MAX_SIGHTINGS_PER_OUTPUT, PrSighting, issue_addresses, pull_request_addresses,
 };
+pub use source::facts::NAMING_RECORD_LIMIT_BYTES;
+pub use source::window::{PageBefore, read_bounded, read_page_before, read_tail};
 
 pub use label_owner::{
     ConfirmedLabelSession, SessionReadScope, confirm_label_session, confirm_session_file,
@@ -230,44 +233,6 @@ pub fn inside_session_root(
     } else {
         Err(RootRefusal::Outside)
     }
-}
-
-/// Opens a session file for reading without waiting on it: a pipe or a
-/// device named where a session file should be is refused at once instead of
-/// blocking the reader, and so is a folder.
-pub(crate) fn open_session_file(path: &Path) -> io::Result<File> {
-    open_session_file_with_links(path, true)
-}
-
-pub(crate) fn open_session_file_nofollow(path: &Path) -> io::Result<File> {
-    open_session_file_with_links(path, false)
-}
-
-fn open_session_file_with_links(path: &Path, follow: bool) -> io::Result<File> {
-    let mut options = fs::OpenOptions::new();
-    options.read(true);
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::OpenOptionsExt;
-        options.custom_flags(libc::O_NONBLOCK | if follow { 0 } else { libc::O_NOFOLLOW });
-    }
-    let file = options.open(path)?;
-    if !follow
-        && hide_platform::fs::identity::file_id_nofollow(path)?
-            != hide_platform::fs::identity::file_id_of(&file)?
-    {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidInput,
-            "Session source is linked.",
-        ));
-    }
-    if !file.metadata()?.is_file() {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidInput,
-            "Session source is not a regular file.",
-        ));
-    }
-    Ok(file)
 }
 
 /// The local agent session formats supported by Hide. Claude Code and Codex
@@ -745,17 +710,6 @@ impl Error for SessionError {
 
 pub type Result<T> = std::result::Result<T, SessionError>;
 
-/// A file identity used to detect an atomic replacement at the same path.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-#[serde(rename_all = "snake_case")]
-struct FileIdentity {
-    first: u64,
-    second: u64,
-    /// Windows keeps a 128-bit file index. Old Unix checkpoints omit this.
-    #[serde(default)]
-    high: u64,
-}
-
 /// Durable state for resuming one append-only session file after relaunch.
 ///
 /// The file identity is intentionally retained. An offset without the inode
@@ -764,79 +718,12 @@ struct FileIdentity {
 #[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct CursorCheckpoint {
     pub offset: u64,
-    identity: Option<FileIdentity>,
+    identity: Option<source::FileIdentity>,
     /// Accepted only to migrate checkpoints written before Project Memory
     /// stopped persisting torn transcript bytes. New checkpoints always keep
     /// this empty and rewind `offset` to the start of the torn line instead.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub pending: Vec<u8>,
-}
-
-impl FileIdentity {
-    fn from_file(file: &File) -> io::Result<Self> {
-        let id = hide_platform::fs::identity::file_id_of(file)?;
-        Ok(Self {
-            first: id.volume(),
-            second: id.index() as u64,
-            high: (id.index() >> 64) as u64,
-        })
-    }
-
-    fn incarnation(self) -> String {
-        let index = (u128::from(self.high) << 64) | u128::from(self.second);
-        format!("{}:{index}", self.first)
-    }
-}
-
-/// The byte position of one session file that [`ConversationCursor`] reads
-/// from.
-///
-/// The cursor retains an unterminated final line instead of discarding it.
-/// This makes a later append complete the same JSON object without rereading
-/// the preceding file.
-#[derive(Debug, Default)]
-pub struct SessionCursor {
-    offset: u64,
-    identity: Option<FileIdentity>,
-    pending: Vec<u8>,
-}
-
-struct AppendedBytes {
-    contents: Vec<u8>,
-    start_offset: u64,
-    identity: FileIdentity,
-    rescan_reason: Option<RescanReason>,
-    has_more: bool,
-}
-
-impl SessionCursor {
-    pub fn checkpoint(&self) -> CursorCheckpoint {
-        CursorCheckpoint {
-            offset: self.offset.saturating_sub(self.pending.len() as u64),
-            identity: self.identity,
-            pending: Vec::new(),
-        }
-    }
-
-    pub fn restore(checkpoint: CursorCheckpoint) -> Self {
-        Self {
-            // Old checkpoints included raw torn-line bytes after the stored
-            // offset. Rewind once, discard those bytes, and reread them from
-            // the provider-owned session file. New checkpoints have no
-            // `pending` field and therefore restore at their exact offset.
-            offset: checkpoint
-                .offset
-                .saturating_sub(checkpoint.pending.len() as u64),
-            identity: checkpoint.identity,
-            pending: Vec::new(),
-        }
-    }
-
-    pub fn reset(&mut self) {
-        self.offset = 0;
-        self.identity = None;
-        self.pending.clear();
-    }
 }
 
 /// Resolve Herdr's session identity and working directory to local files.
@@ -1022,7 +909,7 @@ impl SessionLocator {
         }
         candidates.sort_by_key(|(modified, _)| std::cmp::Reverse(*modified));
         for (_, path) in candidates {
-            if codex_session_cwd(&path)?.as_deref() == Some(cwd) {
+            if source::facts::codex_cwd(&path)?.as_deref() == Some(cwd) {
                 return Ok(Some(path));
             }
         }
@@ -1130,254 +1017,6 @@ pub fn newest_codex_session_files(root: &Path) -> Result<Vec<PathBuf>> {
     candidates.sort_by_key(|candidate| std::cmp::Reverse(candidate.0));
     candidates.truncate(CODEX_CANDIDATE_LIMIT);
     Ok(candidates.into_iter().map(|(_, path)| path).collect())
-}
-
-/// Read a bounded tail while dropping a line cut by the byte boundary.
-pub fn read_tail(path: &Path, maximum_bytes: u64) -> Result<String> {
-    let mut file =
-        open_session_file(path).map_err(|error| SessionError::io("open", path, error))?;
-    let length = file
-        .metadata()
-        .map_err(|error| SessionError::io("stat", path, error))?
-        .len();
-    let start = length.saturating_sub(maximum_bytes);
-    file.seek(SeekFrom::Start(start))
-        .map_err(|error| SessionError::io("seek", path, error))?;
-    let mut bytes = Vec::new();
-    file.read_to_end(&mut bytes)
-        .map_err(|error| SessionError::io("read", path, error))?;
-    let contents = String::from_utf8_lossy(&bytes).into_owned();
-    if start == 0 {
-        return Ok(contents);
-    }
-    Ok(contents
-        .split_once('\n')
-        .map_or_else(String::new, |(_, rest)| rest.to_owned()))
-}
-
-/// One page of complete lines read backwards from a line boundary.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct PageBefore {
-    pub contents: String,
-    /// Where `contents` begins, and where the next older page ends; 0 is the
-    /// start of the file, with nothing older.
-    pub start_offset: u64,
-    /// Where `contents` ends: the `end` asked for, or after the file's last
-    /// newline, so a line still being written is left to the cursor.
-    pub end_offset: u64,
-}
-
-/// The block a backwards scan for a line start reads at a time.
-const SCAN_BLOCK_BYTES: u64 = 64 * 1024;
-
-/// Read the complete lines that end at or before `end`, at most
-/// `maximum_bytes` of them, dropping the line the window cuts.
-///
-/// `end` must be a line boundary: 0, a previous page's `start_offset`, or
-/// `None` for the file's last newline. A line longer than the window is
-/// passed over by scanning back to its start, without keeping its bytes.
-pub fn read_page_before(path: &Path, end: Option<u64>, maximum_bytes: u64) -> Result<PageBefore> {
-    let mut file =
-        open_session_file(path).map_err(|error| SessionError::io("open", path, error))?;
-    let length = file
-        .metadata()
-        .map_err(|error| SessionError::io("stat", path, error))?
-        .len();
-    let end = match end {
-        Some(end) => end.min(length),
-        None => line_start_before(&mut file, path, length)?,
-    };
-    let start = end.saturating_sub(maximum_bytes);
-    // One byte before the window, so a line that starts exactly at `start` is
-    // known to be whole.
-    let read_start = start.saturating_sub(1);
-    let mut bytes = vec![0; (end - read_start) as usize];
-    file.seek(SeekFrom::Start(read_start))
-        .map_err(|error| SessionError::io("seek", path, error))?;
-    file.read_exact(&mut bytes)
-        .map_err(|error| SessionError::io("read", path, error))?;
-    let (start_offset, bytes) = if start == 0 {
-        (0, bytes.as_slice())
-    } else {
-        // The window's last byte ends the newest line; a line starts after an
-        // earlier newline or not at all.
-        let body = &bytes[..bytes.len().saturating_sub(1)];
-        match body.iter().position(|byte| *byte == b'\n') {
-            Some(newline) => (read_start + newline as u64 + 1, &bytes[newline + 1..]),
-            None => (line_start_before(&mut file, path, start)?, &[][..]),
-        }
-    };
-    Ok(PageBefore {
-        contents: String::from_utf8_lossy(bytes).into_owned(),
-        start_offset,
-        end_offset: end,
-    })
-}
-
-/// The offset just after the last newline before `end`, or 0.
-fn line_start_before(file: &mut File, path: &Path, end: u64) -> Result<u64> {
-    let mut block_end = end;
-    let mut block = Vec::new();
-    while block_end > 0 {
-        let block_start = block_end.saturating_sub(SCAN_BLOCK_BYTES);
-        block.resize((block_end - block_start) as usize, 0);
-        file.seek(SeekFrom::Start(block_start))
-            .map_err(|error| SessionError::io("seek", path, error))?;
-        file.read_exact(&mut block)
-            .map_err(|error| SessionError::io("read", path, error))?;
-        if let Some(newline) = block.iter().rposition(|byte| *byte == b'\n') {
-            return Ok(block_start + newline as u64 + 1);
-        }
-        block_end = block_start;
-    }
-    Ok(0)
-}
-
-/// Read a whole file while enforcing a hard byte cap before and during I/O.
-pub fn read_bounded(path: &Path, maximum_bytes: u64) -> Result<String> {
-    let file = open_session_file(path).map_err(|error| SessionError::io("open", path, error))?;
-    let length = file
-        .metadata()
-        .map_err(|error| SessionError::io("stat", path, error))?
-        .len();
-    if length > maximum_bytes {
-        return Err(SessionError::Capacity {
-            resource: "file_bytes",
-            limit: maximum_bytes,
-        });
-    }
-    let mut bytes = Vec::with_capacity(length as usize);
-    file.take(maximum_bytes.saturating_add(1))
-        .read_to_end(&mut bytes)
-        .map_err(|error| SessionError::io("read", path, error))?;
-    if bytes.len() as u64 > maximum_bytes {
-        return Err(SessionError::Capacity {
-            resource: "file_bytes",
-            limit: maximum_bytes,
-        });
-    }
-    Ok(String::from_utf8_lossy(&bytes).into_owned())
-}
-
-/// One record of a scan that looks through a session's head for a fact a
-/// record carries (its native id, its cwd).
-#[derive(Debug, PartialEq, Eq)]
-pub(crate) enum HeadRecord {
-    /// A whole record, without its newline.
-    Complete(Vec<u8>),
-    /// The last bytes read, with no newline yet: a record still being
-    /// written, or the end of the scan's budget.
-    Unfinished(Vec<u8>),
-    /// A record longer than the scan keeps, such as a first message that
-    /// carries a pasted image: its bytes were read to its newline and
-    /// dropped, so the record cap bounds memory, not what a session may
-    /// hold.
-    Passed,
-}
-
-/// The next record of a head scan, `None` at the end of `reader`. A record
-/// over `maximum_bytes` is passed over rather than refused; the caller
-/// bounds the whole scan by wrapping its file in `Read::take`.
-pub(crate) fn read_head_record(
-    reader: &mut impl BufRead,
-    maximum_bytes: usize,
-) -> io::Result<Option<HeadRecord>> {
-    let mut line = Vec::with_capacity(maximum_bytes.min(8 * 1024));
-    let read = std::io::Read::take(&mut *reader, maximum_bytes.saturating_add(1) as u64)
-        .read_until(b'\n', &mut line)?;
-    if read == 0 {
-        return Ok(None);
-    }
-    if line.len() > maximum_bytes {
-        if line.last() != Some(&b'\n') {
-            discard_through_newline(reader)?;
-        }
-        return Ok(Some(HeadRecord::Passed));
-    }
-    if line.last() != Some(&b'\n') {
-        return Ok(Some(HeadRecord::Unfinished(line)));
-    }
-    line.pop();
-    Ok(Some(HeadRecord::Complete(line)))
-}
-
-/// Read through the next newline, or to the end of `reader`, keeping
-/// nothing.
-fn discard_through_newline(reader: &mut impl BufRead) -> io::Result<()> {
-    loop {
-        let buffer = reader.fill_buf()?;
-        if buffer.is_empty() {
-            return Ok(());
-        }
-        match buffer.iter().position(|byte| *byte == b'\n') {
-            Some(index) => {
-                reader.consume(index + 1);
-                return Ok(());
-            }
-            None => {
-                let length = buffer.len();
-                reader.consume(length);
-            }
-        }
-    }
-}
-
-pub(crate) fn read_bounded_line(
-    reader: &mut impl BufRead,
-    maximum_bytes: usize,
-) -> io::Result<Option<Vec<u8>>> {
-    let mut line = Vec::with_capacity(maximum_bytes.min(8 * 1024));
-    let mut limited = std::io::Read::take(&mut *reader, maximum_bytes.saturating_add(1) as u64);
-    let read = limited.read_until(b'\n', &mut line)?;
-    if read == 0 {
-        return Ok(None);
-    }
-    if line.len() > maximum_bytes {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidData,
-            "session line exceeds its fixed limit",
-        ));
-    }
-    while line
-        .last()
-        .is_some_and(|byte| matches!(byte, b'\n' | b'\r'))
-    {
-        line.pop();
-    }
-    Ok(Some(line))
-}
-
-/// Codex's first record, `session_meta`, the one that names the session's
-/// id and cwd. It cannot be passed over like a record further down: no
-/// other record names them. Codex writes it in tens of KB, so one over the
-/// record cap is refused as [`SessionError::Capacity`] rather than read as
-/// a session without one. `None` is a file that cannot be opened, holds no
-/// record, or starts with one that is not JSON.
-pub(crate) fn codex_session_meta(path: &Path) -> Result<Option<Value>> {
-    let Ok(file) = open_session_file(path) else {
-        return Ok(None);
-    };
-    let first = match read_bounded_line(&mut BufReader::new(file), SESSION_LINE_LIMIT_BYTES) {
-        Ok(first) => first,
-        Err(error) if error.kind() == io::ErrorKind::InvalidData => {
-            return Err(SessionError::Capacity {
-                resource: "line_bytes",
-                limit: SESSION_LINE_LIMIT_BYTES as u64,
-            });
-        }
-        Err(_) => return Ok(None),
-    };
-    Ok(first.and_then(|first| serde_json::from_slice(&first).ok()))
-}
-
-/// The cwd Codex's `session_meta` names ([`codex_session_meta`]).
-pub(crate) fn codex_session_cwd(path: &Path) -> Result<Option<String>> {
-    Ok(codex_session_meta(path)?.and_then(|value| {
-        value
-            .pointer("/payload/cwd")
-            .and_then(Value::as_str)
-            .map(str::to_owned)
-    }))
 }
 
 enum LineResult {
@@ -2378,8 +2017,8 @@ mod tests {
             "offset": 42, "identity": {"first": 1, "second": 2}
         }))
         .unwrap();
-        let cursor = SessionCursor::restore(checkpoint);
-        assert_eq!(cursor.checkpoint().offset, 42);
+        let cursor = ConversationCursor::restore(checkpoint.into());
+        assert_eq!(cursor.checkpoint().offset(), 42);
     }
 
     #[test]
@@ -2446,14 +2085,15 @@ mod tests {
     fn codex_cwd_reader_rejects_an_oversized_first_record() {
         let directory = tempdir().unwrap();
         let path = directory.path().join("session.jsonl");
-        fs::write(&path, vec![b'x'; SESSION_LINE_LIMIT_BYTES + 1]).unwrap();
+        let cap = source::facts::NAMING_RECORD_LIMIT_BYTES;
+        fs::write(&path, vec![b'x'; cap + 1]).unwrap();
 
         assert!(matches!(
-            codex_session_cwd(&path),
+            source::facts::codex_cwd(&path),
             Err(SessionError::Capacity {
                 resource: "line_bytes",
                 limit
-            }) if limit == SESSION_LINE_LIMIT_BYTES as u64
+            }) if limit == cap as u64
         ));
     }
 

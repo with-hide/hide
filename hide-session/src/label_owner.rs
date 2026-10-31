@@ -1,14 +1,12 @@
 //! Proven transcript ownership for labels. Other session discovery callers
 //! retain their existing cwd fallback policy.
 
-use crate::{
-    Agent, FileIdentity, SESSION_INCREMENT_READ_LIMIT_BYTES, SESSION_LINE_LIMIT_BYTES,
-    SESSION_READ_LIMIT_BYTES,
-};
+use crate::source::FileIdentity;
+use crate::source::facts::{self, Wanted};
+use crate::{Agent, SESSION_INCREMENT_READ_LIMIT_BYTES};
 use anyhow::{Result, anyhow};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
-use std::io::{BufReader, Read};
 use std::path::Path;
 
 /// A compact, path-free token that consumers can compare with Herdr's current
@@ -145,8 +143,7 @@ fn confirm_metadata(
     {
         return Err(anyhow!("label_session_not_regular"));
     }
-    let file =
-        crate::open_session_file(path).map_err(|_| anyhow!("label_session_file_unavailable"))?;
+    let file = crate::source::open(path).map_err(|_| anyhow!("label_session_file_unavailable"))?;
     let metadata = file
         .metadata()
         .map_err(|_| anyhow!("label_session_stat_failed"))?;
@@ -160,16 +157,15 @@ fn confirm_metadata(
     {
         return Err(anyhow!("label_session_linked"));
     }
-    let physical = FileIdentity::from_file(&file)
-        .map_err(|_| anyhow!("label_session_identity_unavailable"))?;
-    let mut reader = BufReader::new(file.take(SESSION_INCREMENT_READ_LIMIT_BYTES));
-    let mut native_id = None;
+    let physical =
+        FileIdentity::of(&file).map_err(|_| anyhow!("label_session_identity_unavailable"))?;
+    let native_id;
     if agent.requires_native_file_proof() {
         let mut remaining = SESSION_INCREMENT_READ_LIMIT_BYTES;
         let header = if matches!(agent, Agent::Grok | Agent::Antigravity) {
-            crate::native_file::header(agent, path)?
+            facts::header(agent, path)?
         } else {
-            crate::native_file::header_from_reader(agent, &mut reader, &mut remaining)?
+            facts::native_header(agent, &file, &mut remaining)?
         };
         let expected = cwd.ok_or_else(|| anyhow!("label_session_cwd_unconfirmed"))?;
         let expected = hide_platform::fs::identity::canonical(Path::new(expected))
@@ -195,37 +191,22 @@ fn confirm_metadata(
         }
         native_id = Some(header.id);
     } else {
-        // The id is on the first person's or assistant's record, and the
-        // first person's record can carry pasted images far larger than one
-        // record's cap or one poll's increment: records over the cap are
-        // passed over, and the scan as a whole is bounded like a whole-file
-        // read.
-        reader.get_mut().set_limit(SESSION_READ_LIMIT_BYTES);
-        loop {
-            let line = match crate::read_head_record(&mut reader, SESSION_LINE_LIMIT_BYTES)
-                .map_err(|_| anyhow!("label_session_metadata_read_failed"))?
-            {
-                Some(crate::HeadRecord::Complete(line)) => line,
-                Some(crate::HeadRecord::Passed) => continue,
-                Some(crate::HeadRecord::Unfinished(_)) | None => break,
-            };
-            let Ok(record) = serde_json::from_slice::<serde_json::Value>(&line) else {
-                continue;
-            };
-            let id = match agent {
-                Agent::Codex if record["type"] == "session_meta" => {
-                    record["payload"]["id"].as_str()
-                }
-                Agent::Claude if matches!(record["type"].as_str(), Some("user" | "assistant")) => {
-                    record["sessionId"].as_str()
-                }
-                _ => None,
-            };
-            if let Some(id) = id {
-                native_id = Some(id.to_owned());
-                break;
+        native_id = match agent {
+            Agent::Codex => facts::codex_meta_of(&file)
+                .map_err(|error| match error {
+                    crate::SessionError::Capacity { .. } => {
+                        anyhow!("label_session_metadata_line_capacity")
+                    }
+                    _ => anyhow!("label_session_metadata_read_failed"),
+                })?
+                .and_then(|meta| meta["payload"]["id"].as_str().map(str::to_owned)),
+            Agent::Claude => {
+                facts::claude(&file, Wanted::Id)
+                    .map_err(|_| anyhow!("label_session_metadata_read_failed"))?
+                    .id
             }
-        }
+            _ => None,
+        };
     }
     let id = native_id.ok_or_else(|| anyhow!("label_session_metadata_unconfirmed"))?;
     if !valid_native_id(&id) {
@@ -309,6 +290,7 @@ pub struct SessionReadScope {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::{SESSION_LINE_LIMIT_BYTES, SESSION_READ_LIMIT_BYTES};
     use std::fs;
     use tempfile::tempdir;
 
