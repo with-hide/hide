@@ -6,6 +6,7 @@ import { DependencyGraphView, type EdgeLook, type OverlayEdge } from "./Dependen
 import type { GraphEdge } from "./dependencyLayout";
 import { formatElapsed, useElapsed, useMinuteClock } from "./components/elapsed";
 import { ConductorRow } from "./components/mission-conductor-row";
+import { MissionEnd } from "./components/mission-end";
 import { MissionNodeMark } from "./components/mission-node-mark";
 import { MissionPrMark } from "./components/mission-pr";
 import { PullList, ResultTiles } from "./components/mission-results";
@@ -113,7 +114,7 @@ function MissionBody({ mission, actions, onNode }: { mission: Mission; actions: 
   return (
     <div ref={rootRef} className="@container/mission flex min-h-0 min-w-0 flex-1 flex-col" data-mission={mission.id} data-mission-status={mission.status} data-mission-stale={mission.stale || undefined} onKeyDown={onKeyDown}>
       <div ref={pageRef} className="flex min-h-0 min-w-0 flex-1 flex-col overflow-auto mission-wide:overflow-hidden" data-mission-scroll="true">
-        <Head mission={mission} />
+        <Head mission={mission} actions={actions} />
         {/* A finished mission leads with what it left (B20); its report's line follows, then its Conductor. */}
         {!open ? <ResultTiles mission={mission} /> : null}
         {!open ? <PullList mission={mission} onSelect={select} /> : null}
@@ -205,7 +206,7 @@ export const PILL: Record<MissionStatus, { key: MessageKey; tone: string }> = {
  * device that does not answer stops the running time, so no number moves
  * without the record (B35).
  */
-function Head({ mission }: { mission: Mission }) {
+function Head({ mission, actions }: { mission: Mission; actions: Actions }) {
   const { t, i18n } = useInterfaceTranslation();
   const language = requireInterfaceLanguage(i18n.language);
   const running = useElapsed(mission.status !== "done" && mission.status !== "cancelled" && !mission.stale ? mission.started_at_unix_ms : null);
@@ -233,6 +234,9 @@ function Head({ mission }: { mission: Mission }) {
           {t("mission.head.strength", { strength: t(`mission.strength.${mission.strength}`) })}
         </span>
       ) : null}
+      {/* An end the Conductor was asked for says so until it closes the mission. */}
+      {mission.end_asked && mission.conductor.present && missionOpen(mission) ? <span className="shrink-0 text-caption text-mission-hold" data-mission-end-asked="true">{t("mission.end.askedNote")}</span> : null}
+      <span className="ml-auto shrink-0"><MissionEnd mission={mission} actions={actions} /></span>
     </div>
   );
 }

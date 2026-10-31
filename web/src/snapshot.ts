@@ -1470,6 +1470,8 @@ export type Mission = {
   /** What the Conductor said beside `decision`; null for a decision from before it. */
   question: MissionQuestion | null;
   answer: MissionAnswer | null;
+  /** The operator asked the Conductor to end the mission and it has not closed it yet (`미션 종료`). */
+  end_asked?: boolean;
   answer_failed: MissionAnswerFailure | null;
   delay: string | null;
   report: string | null;

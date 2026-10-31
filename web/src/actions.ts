@@ -1865,6 +1865,10 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
      * own conversation cannot be resumed; the core refuses it while a
      * Conductor is still there. `request` lets the caller follow its answer.
      */
+    /** 미션 종료 (UI_BEHAVIOR, A mission's map): the core asks the Conductor to end it, or cancels a mission no Conductor holds. */
+    endMission(missionId: string) {
+      dispatch({ schema_version: 2, kind: "mission_end", payload: { mission: missionId } });
+    },
     takeOverMission(missionId: string, request?: { requestId: string; confirmOnly: boolean }) {
       const mission = rest()?.missions?.items.find((row) => row.id === missionId);
       if (!mission) return diagnostic(`mission_take: no mission ${missionId}`);

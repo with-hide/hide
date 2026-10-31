@@ -222,6 +222,9 @@ pub enum WakeEvent {
     /// conversation gets no prompt of its own, so this letter tells it to
     /// read the mission and go on.
     Resumed,
+    /// The operator asked from the map to end the mission (`미션 종료`):
+    /// the Conductor asks about its open pull requests and cancels it.
+    EndAsked,
 }
 
 impl WakeEvent {
@@ -233,6 +236,7 @@ impl WakeEvent {
             Self::OutsideDone => "outside_done",
             Self::OutsideFailed => "outside_failed",
             Self::Resumed => "resumed",
+            Self::EndAsked => "end_asked",
         }
     }
 }
@@ -494,6 +498,10 @@ pub struct Mission {
     /// How many wakes this mission has had; the next one's `seq`.
     #[serde(default)]
     pub wake_seq: u64,
+    /// When the operator asked the Conductor to end the mission (`미션
+    /// 종료`), until it closes; a second press asks nothing more.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub end_asked_at_unix_ms: Option<u64>,
 }
 
 impl Mission {
@@ -2051,6 +2059,7 @@ mod tests {
             closed_at_unix_ms: None,
             wakes: Vec::new(),
             wake_seq: 0,
+            end_asked_at_unix_ms: None,
         }
     }
 
