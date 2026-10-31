@@ -871,7 +871,9 @@ fn restored_cwd(
 
 /// Starts `agent` in a restored pane with its conversation, or a new one when
 /// the resume does not take, each with the launch choice it was started
-/// with; answers what started, or none when only the shell was kept.
+/// with and the machine's permission choice; answers what started, or none
+/// when only the shell was kept.
+#[allow(clippy::too_many_arguments)] // the pane's identity plus its machine's two start facts
 fn start_or_degrade_agent(
     engine: &dyn Engine,
     key: &str,
