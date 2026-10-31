@@ -2104,7 +2104,7 @@ Desktop CLI children, attach streams, provider children and bridge helpers have 
 
 A pane's holder (`hide-holder`) is one small program per pane that keeps the pane's terminal: its PTY, the program in it, and the terminal parser (`hide-vt`) that reads everything the program writes whether or not anyone is connected.
 It outlives the node that started it, so a node that ends and starts again finds its panes still running (PRD engine-bundle-2-pane-holder).
-No product path starts one yet: the node that starts and adopts holders, the record it keeps of them and the screen they send are later slices of the same PRD; this part is the holder, its protocol, its start and end, and the folders it runs from.
+No product path starts one yet: the node that starts and adopts holders and the record it keeps of them are later slices of the same PRD; this part is the holder, its protocol, the screen, input and answers it carries, its start and end, and the folders it runs from.
 
 A node starts it with `start_resident` ([The platform layer](#the-platform-layer)) from a version folder, lending it one pipe on which the holder says `ready holder=<pid> program=<pid> job=<limits|none>` once its program runs and its socket listens, or `failed <reason>` before it exits; `job` is the Windows job above the node's that keeps the holder, if any, for the node to log.
 A log file it cannot open, or a pipe it was lent and cannot take, fails the start rather than running a holder that cannot say what happens to it.
@@ -2116,13 +2116,35 @@ The PTY is closed on a thread of its own while its last output is still read, si
 A Windows holder has no console of its own and runs the pane only on the pinned ConPTY runtime in its folder's `conpty/`, checked against its sha256 before it is loaded; a missing or changed runtime refuses the start, and there is no fallback to the system's ConPTY (`vendor/portable-pty/PATCHES.md`).
 
 `hide-holder-protocol` is what a node and a holder say to each other over the local stream, and the only holder crate a node links.
-Every message is a length-prefixed frame of at most 1 MiB; a connection's first message is the node's hello (the versions it speaks and the capabilities it accepts, at most 4 KiB within 2 s), and the holder answers with the one version both speak, a generation number and the pane's program and size, or closes that connection alone with a reason code.
+Every message is a length-prefixed frame of at most 4 MiB and 1 KiB, the largest fragment and its header; a connection's first message, at most 4 KiB within 2 s, is either the node's hello (the versions it speaks and the capabilities it accepts), which the holder answers with the one version both speak, a generation number and the pane's program and size, or an ask (below); a first message the holder cannot take closes that connection alone with a reason code.
 One connection holds a pane at a time: an accepted hello takes it over, the connection it replaces is closed with `taken_over`, and nothing that connection sent afterwards applies; a wrong, slow or oversized opening never disturbs the connection that holds the pane.
-Version 1 carries input bytes, a size, a release (let go and leave the pane running) and a terminate (end the pane, then the holder) from the node, and output and the reason for a close from the holder.
-Output goes out as the raw bytes the PTY gave (`raw_output`), a stand-in the parsed screen's display-only fragments replace; once they do, that capability is removed rather than kept beside them.
-A slow connection's output waits behind a 4 MiB queue and input behind a 1 MiB one; past either the connection is closed (`output_queue_full`, `input_queue_full`) and the pane runs on, and at most eight openings read their hello at once, a ninth being closed with `opening_full`.
+Version 1 carries, from the node, input bytes, a paste, a pointer event, a wheel, a size, the theme, a redraw, a release (let go and leave the pane running) and a terminate (end the pane, then the holder); from the holder, screen fragments and the reason for a close.
+Input waits for the PTY behind a 1 MiB queue; past it the connection is closed (`input_queue_full`) and the pane runs on, and at most eight openings read their first message at once, a ninth being closed with `opening_full`.
 Input or a size the PTY refuses, or a size the parser refuses, closes the connection that sent it (`input_failed`, `resize_failed`, with the error) and the pane runs on; the rest of that connection's input is dropped, and the next connection's is tried again.
 Every connection the holder does not take is closed with a reason, including one that opens while the pane ends, which is told the reason the pane ended.
+
+The screen goes out as display-only fragments (`screen`, the one capability a holder sends), drawn from the parsed terminal, never the program's own bytes (PRD engine-bundle-2-pane-holder D-7).
+A full fragment starts an epoch, numbered across the holder's life, at sequence 0, and the deltas after it count up in the same epoch; each carries the size it was drawn at.
+A full one first puts the receiver back to a known display (the normal screen, a soft reset, autowrap and reverse video off, a clear), so whatever the receiver drew before is gone, and no fragment turns on an input mode or asks the receiver anything, so a terminal that draws one answers nothing; the encoder is Herdr v0.9.5's `render_ansi.rs`, changed for this (`hide-holder/src/encode.rs`).
+The screen is pulled, not pushed: the PTY reader only marks it changed, and the connection's own writer draws it as it is when the connection can take a write, at most once per 16 ms, so a slow node gets fewer, larger fragments and never a queue, and with no connection nothing is drawn.
+A connection is sent a full fragment when it takes the pane over, after a resize and when it asks for a redraw, which is how a receiver that lost fragments, or fell behind, is put right.
+While the program holds its output (synchronized output, mode 2026) the writer waits, up to one second from when the hold began, so a half-drawn screen is not sent.
+A full screen larger than one fragment is split between rows into several, the first full and the rest deltas of its epoch; a row is bounded well below a fragment (64 bytes of text and a 2 KiB link per cell, 1024 columns), so a screen is never refused: closing a connection for its size would recur on every reattach to the same screen.
+
+Input bytes go to the program as they came, already encoded by the node.
+A paste, a pointer event and a wheel are sent as what they mean and encoded at the moment they reach the holder, for the modes the program has on then: a paste in bracketed paste mode or with its line breaks made carriage returns, a pointer event in the program's mouse protocol or dropped when it tracks none, and a wheel as the program's mouse report, as arrow keys on the alternate screen with mode 1007, or as a scroll of the holder's own view; the holder never guesses a paste from bytes.
+Input moves a scrolled view back to the bottom.
+Input and the answers to the program's questions reach the PTY through one writer, in the order they came.
+
+The holder answers the program's questions whether or not a node is connected, each once, in the order asked; who answers what is fixed in a table in `hide-holder/src/answers.rs`, split between libghostty and the holder so nothing is answered twice.
+Color questions are answered from the theme the node sends (the first one it has, then each change); a color the program set itself wins over the theme until it resets it, and a reset returns to the theme.
+Nothing that needs the cell's pixel size is answered while it is unknown, and the device attributes and XTGETTCAP advertise only what this path carries.
+Answers wait for the PTY behind a 64 KiB queue; past it an answer is dropped and logged once (`holder.answers_dropped`), and the program's output goes on being read.
+
+An ask is a connection's first message in place of a hello, answered on that connection and closed, without taking the pane over or moving the screen's scroll position (D-11, D-18).
+A read gives the last 1 to 2000 rows as text, soft wraps joined, as Herdr's recent unwrapped read does, cut from the oldest side to 1 MiB and marked truncated when rows were left out.
+A process list gives the shell's pid and the foreground process group with up to 256 members and their names, the shape of Herdr's `pane_processes`; on Windows the foreground is unknown, since Herdr's answer there is a guess and not what the system says, and on a system that cannot say, unknown with the reason.
+An ask out of its bounds is closed with `ask_invalid`, and one the holder could not answer with `ask_failed`.
 The holder keeps a JSON-lines log beside its socket (`holder.started`, `holder.connected`, `holder.taken_over`, `holder.connection_refused`, `holder.ending`, `holder.ended` and the failures), naming the pane and the holder's pid and never what the program wrote, and sets it aside past 1 MiB; a line it cannot write is counted and the next line it writes is preceded by `holder.log_lines_dropped`.
 
 A holder never runs from the app, which an update replaces while panes run: each build's holder, and on Windows the ConPTY runtime beside it, is copied once into a folder of its own under `~/.hide/holders`, named `v<protocol version>-<content hash>` (`hide_kit::holders`, paths in `hide_kit::layout`), apart from the runtime copies under `~/.hide/runtime`.

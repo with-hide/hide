@@ -1,3 +1,13 @@
+// Partly derived from Herdr v0.9.5 (https://github.com/herdrdev/herdr, commit
+// 2ecf19a), src/pane/terminal.rs (`ghostty_cell_style`,
+// `ghostty_buffer_symbol_into`, `ghostty_default_fg` and `_bg`) and
+// src/protocol/render_ansi.rs (`cell_width`).
+// Copyright 2025 herdr contributors. Licensed under the Apache License,
+// Version 2.0; see NOTICE at the repository root.
+// Changed by Hide: captures into the holder's own rows from a render state's
+// dirty rows, sharing a row that did not change, instead of filling a ratatui
+// buffer, and bounds a cell's text and link.
+
 //! The screen as cells: what the parser shows, captured for a fragment.
 //!
 //! A capture reads the parser's render state, which keeps which rows changed

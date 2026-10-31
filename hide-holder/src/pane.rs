@@ -1,3 +1,11 @@
+// Partly derived from Herdr v0.9.5 (https://github.com/herdrdev/herdr, commit
+// 2ecf19a), src/pane/terminal.rs: the wheel's routing and
+// `ghostty_recent_read_range`.
+// Copyright 2025 herdr contributors. Licensed under the Apache License,
+// Version 2.0; see NOTICE at the repository root.
+// Changed by Hide: a wheel arrives as lines with an optional cell instead of
+// a terminal event, and a read is cut to the protocol's byte bound.
+
 //! The pane's parsed terminal and everything read from it or written for
 //! it: the program's output and the answers to its questions, the screen a
 //! fragment draws, input that means something (PRD
