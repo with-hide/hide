@@ -242,9 +242,10 @@ fn answer(node: &Node, request: &Value) -> Result<Option<Value>, String> {
         }
         "attach" => {
             let pane = text(request, "pane")?;
+            // With its size: an attach without one waits for a resize.
             node.terminals.service.control(TerminalControl::Attach {
                 pane,
-                size: None,
+                size: Some(grid(request)),
                 manual: true,
             });
             json!({})
@@ -281,6 +282,16 @@ fn answer(node: &Node, request: &Value) -> Result<Option<Value>, String> {
                 .wait_full(&pane, since, wait_limit(request))
                 .ok_or_else(|| format!("pane {pane} drew no full frame from frame {since} on"))?;
             json!({"index": index, "hex": hex(&bytes), "count": node.screens.count(&pane)})
+        }
+        "wait_more" => {
+            let pane = text(request, "pane")?;
+            let count = usize::try_from(number(request, "count", 0)).unwrap_or(usize::MAX);
+            json!({"count": node.screens.wait_more(&pane, count, wait_limit(request))})
+        }
+        "wait_quiet" => {
+            let pane = text(request, "pane")?;
+            let quiet = Duration::from_millis(number(request, "quiet_ms", 500));
+            json!({"quiet": node.screens.wait_quiet(&pane, quiet, wait_limit(request))})
         }
         "redraw" => {
             let pane = text(request, "pane")?;

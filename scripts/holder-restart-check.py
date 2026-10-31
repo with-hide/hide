@@ -67,7 +67,12 @@ TURN = 180
 ATTACH = 60
 # Restarts tried when the screen moved between the first full frame and
 # the holder's read, each a new kill and a new node.
-SCREEN_TRIES = 3
+SCREEN_TRIES = 5
+# How long a pane draws nothing before the node is killed, and how long a
+# frame may take to follow a change: a holder sends one at most 16 ms after
+# the last, so a change made before the read has sent its frame well within it.
+QUIET_MS = 500
+FOLLOW_MS = 1000
 PASS, FAIL = "pass", "fail"
 
 
@@ -273,26 +278,32 @@ class Runtime:
 
 def same_processes(before, after):
     """(None when the holder, the pane's program and every process of its
-    tree that had children before the kill still run as the same processes,
-    else what moved; and the leaf processes that ended, which a CLI's helper
-    such as omp's `gh` or a shell's `grep` does on its own). A leaf is not held
-    to the restart because nothing tells a helper's own end from a kill's;
-    the CLI itself is the program, or a process its children hang from, and
-    the second turn shows it still answers."""
+    tree that something still running hangs from run as the same processes
+    as before the kill, else what moved; and the processes that ended with
+    everything under them, a CLI's helpers such as omp's `gh`, OpenCode's
+    `git` or a shell's `grep`, which end on their own). The CLI is the pane's
+    program; the second turn shows it still answers."""
     if before["holder"] != after["holder"]:
         return f"the holder moved: {before['holder']} -> {after['holder']}", []
     if before["program"] != after["program"]:
         return f"the pane's program moved: {before['program']} -> {after['program']}", []
     now = {(process["pid"], process["started"]) for process in after["processes"]}
-    program = before["program"]["pid"]
-    parents = {process["parent"] for process in before["processes"]}
+    if (before["program"]["pid"], before["program"]["started"]) not in now:
+        return f"the pane's program {before['program']['pid']} ended across the restart", []
+    parent = {process["pid"]: process["parent"] for process in before["processes"]}
+    alive = [process["pid"] for process in before["processes"] if (process["pid"], process["started"]) in now]
+    above_alive = set()
+    for pid in alive:
+        while pid in parent and parent[pid] not in above_alive:
+            pid = parent[pid]
+            above_alive.add(pid)
     gone = [process for process in before["processes"] if (process["pid"], process["started"]) not in now]
-    held = [process for process in gone if process["pid"] == program or process["pid"] in parents]
-    leaves = [f"{process['name']} {process['pid']}" for process in gone if process not in held]
+    held = [process for process in gone if process["pid"] in above_alive]
+    helpers = [f"{process['name']} {process['pid']}" for process in gone if process not in held]
     if held:
         return "processes of the CLI ended across the restart: " + ", ".join(
-            f"{process['name']} {process['pid']}" for process in held), leaves
-    return None, leaves
+            f"{process['name']} {process['pid']}" for process in held), helpers
+    return None, helpers
 
 
 def cell(row, binaries, herdr_bin, run):
@@ -347,6 +358,8 @@ def cell(row, binaries, herdr_bin, run):
         node.ask("wait_text", pane=pane, text=first, absent="Reply_", lines=ROWS, timeout_ms=TURN * 1000)
         record["first_turn_seconds"] = round(time.monotonic() - started, 1)
         for attempt in range(1, SCREEN_TRIES + 1):
+            record.setdefault("quiet_before_kill", []).append(
+                node.ask("wait_quiet", pane=pane, quiet_ms=QUIET_MS, timeout_ms=30_000)["quiet"])
             before = node.ask("tree", pane=pane)
             node.kill()
             killed = time.monotonic()
@@ -366,6 +379,12 @@ def cell(row, binaries, herdr_bin, run):
                 continue
             fresh, stale = draw([[full["hex"]], [first_screen, full["hex"]]])
             differs = compare(fresh, held)
+            if differs and node.ask("wait_more", pane=pane, count=full["index"] + 1,
+                                    timeout_ms=FOLLOW_MS)["count"] > full["index"] + 1:
+                # The program drew between the frame and the read (a
+                # spinner): another restart, another first frame.
+                record.setdefault("screen_moved", []).append(attempt)
+                continue
             if differs:
                 record["frame_lines"] = fresh["lines"]
                 record["holder_read"] = held

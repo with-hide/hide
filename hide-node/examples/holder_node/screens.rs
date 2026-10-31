@@ -1,6 +1,6 @@
 //! What the node hands its screen and its core, kept for the requests.
 
-use std::collections::{HashMap, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Condvar, Mutex, MutexGuard, PoisonError};
 use std::time::{Duration, Instant};
@@ -37,9 +37,10 @@ pub struct Screens {
     panes: Mutex<HashMap<String, Pane>>,
     watch: Mutex<Option<Watch>>,
     changed: Condvar,
-    /// The slow consumer: how long each frame of a pane whose name starts
-    /// with `slow` holds the delivery, in microseconds.
+    /// The slow consumer: how long each frame of a pane in `slow_panes`
+    /// holds the delivery, in microseconds.
     slow_micros: AtomicU64,
+    slow_panes: Mutex<HashSet<String>>,
 }
 
 impl OutputSink for Screens {
@@ -73,7 +74,7 @@ impl OutputSink for Screens {
         }
         self.changed.notify_all();
         let slow = self.slow_micros.load(Ordering::Relaxed);
-        if slow > 0 && pane.starts_with("slow") {
+        if slow > 0 && lock(&self.slow_panes).contains(pane) {
             hold(Duration::from_micros(slow));
         }
     }
@@ -93,7 +94,8 @@ fn hold(length: Duration) {
 }
 
 impl Screens {
-    pub fn set_slow(&self, micros: u64) {
+    pub fn set_slow(&self, micros: u64, panes: HashSet<String>) {
+        *lock(&self.slow_panes) = panes;
         self.slow_micros.store(micros, Ordering::Relaxed);
     }
 
@@ -157,6 +159,48 @@ impl Screens {
             panes = self
                 .changed
                 .wait_timeout(panes, left)
+                .unwrap_or_else(PoisonError::into_inner)
+                .0;
+        }
+    }
+
+    /// Waits until `pane` has drawn more than `count` frames.
+    pub fn wait_more(&self, pane: &str, count: usize, limit: Duration) -> usize {
+        let deadline = Instant::now() + limit;
+        let mut panes = lock(&self.panes);
+        loop {
+            let now = panes.get(pane).map_or(0, |entry| entry.count);
+            let Some(left) = deadline.checked_duration_since(Instant::now()) else {
+                return now;
+            };
+            if now > count {
+                return now;
+            }
+            panes = self
+                .changed
+                .wait_timeout(panes, left)
+                .unwrap_or_else(PoisonError::into_inner)
+                .0;
+        }
+    }
+
+    /// Waits until `pane` has drawn nothing for `quiet`, and answers whether
+    /// it did within `limit`.
+    pub fn wait_quiet(&self, pane: &str, quiet: Duration, limit: Duration) -> bool {
+        let deadline = Instant::now() + limit;
+        let mut panes = lock(&self.panes);
+        loop {
+            let last = panes.get(pane).and_then(|entry| entry.last_at);
+            let since = last.map_or(quiet, |last| last.elapsed());
+            if since >= quiet {
+                return true;
+            }
+            let Some(left) = deadline.checked_duration_since(Instant::now()) else {
+                return false;
+            };
+            panes = self
+                .changed
+                .wait_timeout(panes, left.min(quiet - since))
                 .unwrap_or_else(PoisonError::into_inner)
                 .0;
         }
