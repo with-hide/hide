@@ -281,6 +281,7 @@ impl Runtime {
                 "ask": row.ask_subject.as_ref().map_or(row.demand.as_str(), |subject| match subject {
                     crate::model::AskSubject::PlanReview { .. } => "plan_review",
                     crate::model::AskSubject::MissionDecision { .. } => "mission_decision",
+                    crate::model::AskSubject::InputUnconfirmed { .. } => "input_unconfirmed",
                 }),
             }));
         }
@@ -421,7 +422,11 @@ impl Runtime {
             })
             .unwrap_or_default();
         let holds = escalation::retain_raised_holds(&self.delivery_holds, holds);
+        let inputs_moved = self.publish_input_asks(now);
         if self.delivery_holds == holds && self.letters_waiting == waiting {
+            if inputs_moved && let Some(context) = &self.worker_context {
+                context.notifier.notify();
+            }
             return;
         }
         self.delivery_holds = holds;

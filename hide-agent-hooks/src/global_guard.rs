@@ -18,8 +18,10 @@ use std::path::{Path, PathBuf};
 use crate::guardrails::Action;
 use crate::guardrails::payload::ToolCall;
 
-/// The file's name in the core's state folder (`hide_kit::layout`).
-const FILE_NAME: &str = "global-instruction.md";
+/// The file's name in the core's state folder: the one name of it, which
+/// `hide_kit::layout::GLOBAL_INSTRUCTION` reads too, since the guard cannot
+/// depend on the kit.
+pub const FILE_NAME: &str = "global-instruction.md";
 
 const REFUSAL: &str = "Not run: this call writes the Hide global instruction, which every agent session in Hide takes as the operator's own instruction. Only the operator edits it, by hand or with a suggestion's apply in Hide's Hide AI tool; tell the operator what you would add instead.";
 

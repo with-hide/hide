@@ -1,8 +1,8 @@
-import { ArrowLeftRightIcon, ChevronRightIcon, CopyIcon, CornerDownLeftIcon, FilePenIcon, HouseIcon, MailIcon, ShieldIcon, SlidersHorizontalIcon, SquareTerminalIcon, TerminalIcon } from "lucide-react";
-import { useMemo, type ReactNode } from "react";
+import { ArrowLeftRightIcon, ChevronRightIcon, CopyIcon, CornerDownLeftIcon, FilePenIcon, FileSearchIcon, HouseIcon, MailIcon, ShieldIcon, SlidersHorizontalIcon, SquareTerminalIcon, TerminalIcon } from "lucide-react";
+import { useMemo, useState, type ReactNode } from "react";
 import { Trans } from "react-i18next";
-import type { DeskAgent, DeskItem, DeskJob, DeskMention, DeskNoticeKind, DeskSessionRef, DeskSteps } from "../../desk";
-import { chipMention, handedSession, markedMention, mentionParts, namedMention } from "../../desk";
+import type { DeskAgent, DeskApproval, DeskApprovalAnswer, DeskIrreversible, DeskItem, DeskJob, DeskMention, DeskNoticeKind, DeskSessionRef, DeskSteps } from "../../desk";
+import { approvalIrreversible, chipMention, DESK_REFUSAL_MAX, handedSession, markedMention, mentionParts, namedMention } from "../../desk";
 import { useInterfaceTranslation } from "../../i18n/client";
 import { requireInterfaceLanguage } from "../../i18n/locale";
 import type { MessageKey } from "../../i18n/catalogs";
@@ -12,6 +12,7 @@ import { Elapsed, formatElapsed } from "../elapsed";
 import { MentionChip } from "../mention-chip";
 import { StatusMark } from "../status-mark";
 import { Button } from "../ui/button";
+import { Input } from "../ui/input";
 import { RowButton } from "../ui/row-button";
 import { Hint } from "../ui/tooltip";
 import { agentProductName } from "../../agentAdapters";
@@ -181,29 +182,53 @@ export function DeskNotice({ item, onAction, onCopy }: { item: Extract<DeskItem,
 }
 
 /** The answered line's mark: what the card asked to do. */
-const APPROVAL_ICON: Record<Extract<DeskItem, { kind: "approval" }>["card"], typeof SquareTerminalIcon> = {
+const APPROVAL_ICON: Record<DeskApproval["card"], typeof SquareTerminalIcon> = {
   command: SquareTerminalIcon,
   edit: FilePenIcon,
+  read: FileSearchIcon,
   other: ShieldIcon,
 };
 
-const APPROVAL_CARD: Record<Extract<DeskItem, { kind: "approval" }>["card"], MessageKey> = {
+const APPROVAL_CARD: Record<DeskApproval["card"], MessageKey> = {
   command: "desk.approval.card.command",
   edit: "desk.approval.card.edit",
+  read: "desk.approval.card.read",
   other: "desk.approval.card.other",
 };
 
+const IRREVERSIBLE_WHY: Record<DeskIrreversible, MessageKey> = {
+  end_working_session: "desk.approval.why.endWorkingSession",
+  force_push: "desk.approval.why.forcePush",
+  delete_remote: "desk.approval.why.deleteRemote",
+  delete_outside: "desk.approval.why.deleteOutside",
+  overwrite_outside: "desk.approval.why.overwriteOutside",
+  unreadable: "desk.approval.why.unreadable",
+};
+
+const ANSWERED: Record<Exclude<DeskApproval["state"], "waiting">, MessageKey> = {
+  allowed: "desk.approval.allowed",
+  allowed_conversation: "desk.approval.allowedConversation",
+  rejected: "desk.approval.rejected",
+  closed: "desk.approval.closed",
+};
+
 /**
- * Desk asking before it runs a command or changes code (D-52, B14, D-75):
- * the one `!` card without an agent mark, since it is Desk's own. The
- * command whole on one grey block, the folder, Desk's reason and two grey
- * answers, neither the default. Once answered it folds to one dim line: how
- * it was answered and the command's start.
+ * Hide asking before Desk's agent does something (D-52, D-82, D-83, D-75):
+ * the one `!` card without an agent mark, since it is Desk's own. It comes
+ * for a row of Settings › Desk › 권한 set to 묻기, or for an irreversible
+ * kind, which says so in its title and names what it is about. The command
+ * whole on one grey block, the folder, Desk's reason and three grey answers,
+ * none the default: `거절…` opens one line whose words go to Desk, `이 대화에서
+ * 계속 허용` stops asking this kind until the conversation ends, `한 번 허용`
+ * runs this call. Once answered it folds to one dim line: how it was answered
+ * and the command's start.
  */
-export function DeskApprovalCard({ item, onAnswer }: { item: Extract<DeskItem, { kind: "approval" }>; onAnswer: (allow: boolean) => void }) {
+export function DeskApprovalCard({ item, onAnswer, defaultRefusal }: { item: DeskApproval; onAnswer: (answer: DeskApprovalAnswer, text?: string) => void; /** Opens with `거절…`'s line already open and holding these words, for the gallery. */ defaultRefusal?: string }) {
   const { t } = useInterfaceTranslation();
+  const [refusing, setRefusing] = useState(defaultRefusal !== undefined);
+  const [line, setLine] = useState(defaultRefusal ?? "");
   if (item.state !== "waiting") {
-    const answered = item.state === "allowed" ? t("desk.approval.allowed") : item.state === "rejected" ? t("desk.approval.rejected") : t("desk.approval.closed");
+    const answered = item.state === "rejected" && item.refusal ? t("desk.approval.rejectedWithLine") : t(ANSWERED[item.state]);
     const Icon = APPROVAL_ICON[item.card];
     return (
       <p className="flex min-w-0 items-center gap-xs text-micro text-muted-foreground" title={item.command} data-desk-item="approval" data-desk-approval={item.state} data-desk-approval-answered={item.state}>
@@ -214,14 +239,22 @@ export function DeskApprovalCard({ item, onAnswer }: { item: Extract<DeskItem, {
       </p>
     );
   }
+  const irreversible = approvalIrreversible(item);
+  const refuse = () => onAnswer("reject", line.trim() || undefined);
   return (
-    <section className="flex min-w-0 flex-col gap-xs rounded-lg border border-border px-md py-sm" aria-label={t(APPROVAL_CARD[item.card])} data-desk-item="approval" data-desk-approval={item.state}>
+    <section className="flex min-w-0 flex-col gap-xs rounded-lg border border-border px-md py-sm" aria-label={t(APPROVAL_CARD[item.card])} data-desk-item="approval" data-desk-approval={item.state} data-desk-approval-irreversible={irreversible.length > 0 ? "true" : undefined}>
       <p className="flex min-w-0 items-center gap-xs">
         <StatusMark mark="turn" />
-        <span className="font-medium text-foreground">{t("desk.approval.title")}</span>
+        <span className="font-medium text-foreground">{t(irreversible.length > 0 ? "desk.approval.irreversibleTitle" : "desk.approval.title")}</span>
         <span className="min-w-0 truncate text-caption text-muted-foreground">{t(APPROVAL_CARD[item.card])}</span>
       </p>
       <pre className="min-w-0 whitespace-pre-wrap break-all rounded-sm bg-secondary px-sm py-xs font-mono text-caption text-foreground" data-desk-approval-command="true">{item.command}</pre>
+      {irreversible.map(({ kind, subject }) => (
+        <p key={kind} className="flex min-w-0 items-baseline gap-xs text-caption text-subtle-foreground" data-desk-approval-why={kind}>
+          <span className="shrink-0">{t(IRREVERSIBLE_WHY[kind])}</span>
+          {subject ? <><span aria-hidden="true">·</span><span className="min-w-0 truncate" title={subject}>{subject}</span></> : null}
+        </p>
+      ))}
       {item.folder ? (
         <p className="flex min-w-0 items-baseline gap-xs text-micro text-muted-foreground">
           <span className="shrink-0">{t("desk.approval.folder")}</span>
@@ -229,10 +262,34 @@ export function DeskApprovalCard({ item, onAnswer }: { item: Extract<DeskItem, {
         </p>
       ) : null}
       {item.reason ? <p className="min-w-0 whitespace-normal break-keep text-caption text-subtle-foreground [overflow-wrap:anywhere]">{item.reason}</p> : null}
-      <div className="flex items-center justify-end gap-xs pt-xxs">
-        <Button variant="secondary" size="sm" data-desk-approval-answer="reject" onClick={() => onAnswer(false)}>{t("desk.approval.reject")}</Button>
-        <Button variant="secondary" size="sm" data-desk-approval-answer="allow" onClick={() => onAnswer(true)}>{t("desk.approval.allow")}</Button>
-      </div>
+      {refusing ? (
+        <div className="flex min-w-0 flex-col gap-xs pt-xxs">
+          <Input
+            autoFocus
+            value={line}
+            maxLength={DESK_REFUSAL_MAX}
+            placeholder={t("desk.approval.refusalPlaceholder")}
+            aria-label={t("desk.approval.refusalLabel")}
+            data-desk-approval-refusal="true"
+            onChange={(event) => setLine(event.target.value)}
+            onKeyDown={(event) => {
+              if (event.nativeEvent.isComposing) return;
+              if (event.key === "Enter") { event.preventDefault(); refuse(); }
+              else if (event.key === "Escape") { event.preventDefault(); event.stopPropagation(); setRefusing(false); setLine(""); }
+            }}
+          />
+          <div className="flex flex-wrap items-center justify-end gap-xs">
+            <Button variant="secondary" size="sm" data-desk-approval-answer="reject_plain" onClick={() => onAnswer("reject")}>{t("desk.approval.rejectPlain")}</Button>
+            <Button variant="secondary" size="sm" data-desk-approval-answer="reject_send" onClick={refuse}>{t("desk.approval.rejectSend")}<CornerDownLeftIcon aria-hidden="true" /></Button>
+          </div>
+        </div>
+      ) : (
+        <div className="flex flex-wrap items-center justify-end gap-xs pt-xxs">
+          <Button variant="secondary" size="sm" data-desk-approval-answer="reject" onClick={() => setRefusing(true)}>{t("desk.approval.reject")}</Button>
+          <Button variant="secondary" size="sm" data-desk-approval-answer="conversation" onClick={() => onAnswer("conversation")}>{t("desk.approval.allowConversation")}</Button>
+          <Button variant="secondary" size="sm" data-desk-approval-answer="once" onClick={() => onAnswer("once")}>{t("desk.approval.allow")}</Button>
+        </div>
+      )}
     </section>
   );
 }
@@ -260,7 +317,7 @@ export function DeskHandedLine({ session, handed, line, read, onOpen }: { sessio
 }
 
 export type DeskChatActions = DeskJobCardActions & {
-  onApproval: (id: number, allow: boolean) => void;
+  onApproval: (id: number, answer: DeskApprovalAnswer, text?: string) => void;
   onNoticeAction: (action: DeskNoticeAction, notice: Extract<DeskItem, { kind: "notice" }>) => void;
   onCopy: (text: string) => void;
   onMention: (mention: DeskMention) => void;
@@ -317,7 +374,7 @@ export function DeskChat({ items, jobs, agents, live = null, thinking = false, s
             : item.kind === "reply" ? <div className="flex min-w-0 flex-col gap-xs"><DeskReplySteps thoughtMs={item.thought_ms} steps={item.steps} /><DeskReply text={item.text} stopped={item.state === "stopped"} mentions={replyMentions(item)} onMention={actions.onMention} /></div>
             : item.kind === "switch" ? <MarkerLine icon={<ArrowLeftRightIcon aria-hidden="true" className="size-(--size-icon-sm) shrink-0" />} data-desk-item="switch">{item.from === null ? t("desk.switch.start", { to: agentProductName(item.to) }) : t(SWITCH_WORDS[item.carried], { from: agentProductName(item.from), to: agentProductName(item.to) })}</MarkerLine>
             : item.kind === "model" ? <MarkerLine icon={<SlidersHorizontalIcon aria-hidden="true" className="size-(--size-icon-sm) shrink-0" />} data-desk-item="model">{t("desk.model", { model: choice(item.model, "models"), effort: choice(item.effort, "efforts") })}</MarkerLine>
-            : item.kind === "approval" ? <DeskApprovalCard item={item} onAnswer={(allow) => actions.onApproval(item.id, allow)} />
+            : item.kind === "approval" ? <DeskApprovalCard item={item} onAnswer={(answer, text) => actions.onApproval(item.id, answer, text)} />
             : item.kind === "notice" ? <DeskNotice item={item} onAction={(action) => actions.onNoticeAction(action, item)} onCopy={actions.onCopy} />
             : item.kind === "handed" ? <DeskHandedLine session={handedSession(item)} handed={item.letter_kind === "request"} line={item.line} read={item.read} onOpen={() => actions.onHanded(item.pane_id)} />
             : <DeskJobCard job={jobOf(jobs, item.job_id)} selected={selectedJob === item.job_id} selectedOutput={selectedOutput} {...actions} />}

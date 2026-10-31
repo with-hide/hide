@@ -110,6 +110,17 @@ pub struct Letter {
     /// after three bells.
     #[serde(default)]
     pub tool_handovers: u8,
+    /// When the doorbell last typed this letter's bell into its recipient's
+    /// pane (`agent.prompt` answered); the recipient's own record of the
+    /// prompt confirms it (`delivery::typed`). Null until a bell was typed.
+    #[serde(default)]
+    pub bell_typed_at_unix_ms: Option<u64>,
+    /// The bell whose unconfirmed notice the sender was sent, 0 for none.
+    #[serde(default)]
+    pub input_noticed: u8,
+    /// When that notice was sent, 0 for none.
+    #[serde(default)]
+    pub input_noticed_at_unix_ms: u64,
 }
 
 /// How long one machine other than this core's own has been reachable, which
@@ -269,6 +280,18 @@ impl Letter {
         if !self.open() {
             self.finished_at_unix_ms.get_or_insert(now);
         }
+    }
+
+    /// The letter's bells as typed input awaiting its recipient's record:
+    /// a pending letter has none yet, since intake takes it out of pending.
+    pub(crate) fn typed_input(&self) -> Option<super::typed::TypedInput> {
+        Some(super::typed::TypedInput {
+            attempts: self.attempts(),
+            typed_at_unix_ms: self.bell_typed_at_unix_ms?,
+            confirmed_at_unix_ms: (self.state != State::Pending).then_some(0),
+            noticed: self.input_noticed,
+            noticed_at_unix_ms: self.input_noticed_at_unix_ms,
+        })
     }
 
     pub(crate) fn attempts(&self) -> u8 {

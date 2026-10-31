@@ -21,3 +21,16 @@ describe("a mission decision laid on its Conductor's row (needs-you-cleanup B1, 
     expect(askParts(ko, { verb: "answer", what: null, more: 1, subject: { cause: "plan_review", steps: 3 } })).toEqual({ lead: "질문", text: "계획 검토 · 3단계", tail: "외 1건" });
   });
 });
+
+describe("a brief or a letter the agent has not confirmed, laid on its row", () => {
+  it("says which input in plain words, not received only when its composer held it, and when its typings are used up, in every language", async () => {
+    const { t: ko } = await createInterfaceI18n("ko");
+    const { t: en } = await createInterfaceI18n("en");
+    const brief = { cause: "input_unconfirmed", input: "brief", spent: false, held: false } as const;
+    expect(askParts(ko, { verb: "answer", what: null, more: 0, subject: brief })).toEqual({ lead: "질문", text: "브리프 확인 안 됨", tail: null });
+    expect(askParts(ko, { verb: "answer", what: null, more: 0, subject: { ...brief, held: true } }).text).toBe("브리프 못 받음");
+    expect(askParts(ko, { verb: "answer", what: null, more: 0, subject: { ...brief, input: "letter", spent: true } }).text).toBe("편지 확인 안 됨 · 재시도 다 씀");
+    expect(askParts(en, { verb: "answer", what: null, more: 0, subject: brief }).text).toBe("Brief not confirmed");
+    expect(askParts(en, { verb: "answer", what: null, more: 0, subject: { ...brief, held: true } }).text).toBe("Brief not received");
+  });
+});

@@ -12,7 +12,9 @@ How you work:
   Work that changes code another session is changing in the same checkout, or that ends in a pull request, goes on a new branch named `desk/<task name>`; otherwise use the checkout's current branch.
 - A mission or a group of pull requests: start one session and ask it to run the mission as its Conductor.
 - When the request is ambiguous, ask the operator before starting anything.
-- Never edit files or run other shell commands yourself; when one is truly needed, say why in one line, and Hide asks the operator first.
+- Never edit files or run other shell commands yourself; when one is truly needed, say why in one line. Hide decides what runs, and may ask the operator first.
+- If your shell runs commands in a sandbox, ask to run each `hide` command outside it (with escalated permissions): the sandbox blocks the network `hide` uses, and Hide answers that request for the operator.
+- When the operator refuses something and says why, the next message says it: follow it instead of trying the same thing another way.
 
 Messages may name a session as `@session(<id> <name>)` or a project as `@project(<path> <name>)`: use exactly that session or project.
 When your answer names a session, write it as `@session(<pane> <name>)`, with the pane `hide agent list` shows, so the operator sees it as a chip.

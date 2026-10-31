@@ -15,17 +15,19 @@
 //! None reads the operator's automatic approvals:
 //! - Claude starts with no settings sources (the operator's allow rules,
 //!   default mode and hooks are not read; the sign-in lives in the system
-//!   keychain, not in settings), bypass refused, every Bash call held by an
-//!   ask rule, and the session put in `default` mode before any prompt.
-//! - Codex starts its session in `read-only`, where its sandbox lets reads
-//!   run and asks before every write, network use or command outside it,
-//!   with Desk's own `CODEX_HOME` ([`crate::codex`]): none of the operator's
-//!   Codex setup, the operator's own sign-in linked in, and the `hide`
-//!   commands Desk frees allowed out of the sandbox.
+//!   keychain, not in settings), bypass refused, every Bash call, read and
+//!   search held by an ask rule, and the session put in `default` mode
+//!   before any prompt.
+//! - Codex starts its session in `read-only`, where its sandbox lets a
+//!   command that changes nothing run and asks before every write, network
+//!   use or command outside it, with Desk's own `CODEX_HOME`
+//!   ([`crate::codex`]): none of the operator's Codex setup, the operator's
+//!   own sign-in linked in, and no rule that lets a command out of the
+//!   sandbox without asking.
 //! - Pi asks for nothing on its own, so Desk loads its own extension
 //!   (`pi_desk.js`) into the Pi process the adapter starts: every tool call
-//!   that is not a read waits for Hide. The extension writes a marker naming
-//!   its process when it loads, which is Hide's proof the gate is there.
+//!   waits for Hide. The extension writes a marker naming its process when
+//!   it loads, which is Hide's proof the gate is there.
 //! - OpenCode reads an inline configuration above the operator's own
 //!   (`OPENCODE_CONFIG_CONTENT`), which Desk sets to ask before every tool
 //!   but reading and searching files; measured on OpenCode 2.0.29 over an
@@ -41,6 +43,10 @@
 //!   mode variable and an agent profile left it running a command unasked),
 //!   and only a Grok home of Desk's own changes that, which would leave
 //!   Grok's sign-in apart from the operator's (D-81).
+//!
+//! Hide answers each request from Settings › Desk › 권한
+//! ([`crate::permission`]); what an agent runs without asking whatever a
+//! row says is declared by [`AdapterId::always_runs`] and shown on that row.
 
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
@@ -48,6 +54,8 @@ use std::path::{Path, PathBuf};
 use hide_agent_adapter::{ADAPTERS, AgentAdapter, AgentId};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use serde_json::{Value, json};
+
+use crate::permission::Row;
 
 /// One of the catalog's agents Desk speaks ACP with, named on the wire and in
 /// Desk's store by its Herdr name (`claude`, `codex`, `pi`, `opencode`,
@@ -170,6 +178,21 @@ impl AdapterId {
         }
     }
 
+    /// The rows of Settings › Desk › 권한 this agent runs without asking,
+    /// whatever the row says (D-82): what it runs there never reaches Hide,
+    /// so the row shows it. Codex reads inside its read-only sandbox, which
+    /// asks only to leave it; OpenCode's configuration, omp's mode and
+    /// Antigravity's server let reads and searches run alone. An agent with
+    /// no ask mode never starts, so it has none.
+    pub fn always_runs(self) -> &'static [Row] {
+        match self.0 {
+            AgentId::Codex | AgentId::OpenCode | AgentId::Omp | AgentId::Antigravity => {
+                &[Row::Read]
+            }
+            AgentId::ClaudeCode | AgentId::Pi | AgentId::Grok | AgentId::Cursor => &[],
+        }
+    }
+
     /// The agent's own CLI the process starts, which the operator installs:
     /// the program itself for an agent with its own ACP mode, and Pi's,
     /// which its adapter starts. Claude's and Codex's adapters carry theirs.
@@ -197,21 +220,27 @@ impl AdapterId {
         }
     }
 
-    /// `_meta` for `session/new` and `session/load`. Claude's own plan mode
-    /// is denied: entering it needs no permission and leaves the ask mode,
-    /// which ends the session as one that cannot ask (D-53), and leaving it
-    /// offers modes that ask less.
+    /// `_meta` for `session/new` and `session/load`. Bash, reads and
+    /// searches always ask, so each reaches Hide's table (D-82); edits ask
+    /// in `default` mode on their own. Claude's own plan mode is denied:
+    /// entering it needs no permission and leaves the ask mode, which ends
+    /// the session as one that cannot ask (D-53), and leaving it offers
+    /// modes that ask less.
     pub fn session_meta(self) -> Option<Value> {
         match self.0 {
             AgentId::ClaudeCode => Some(json!({"claudeCode": {"options": {
                 "settingSources": [],
                 "allowDangerouslySkipPermissions": false,
-                "settings": {"permissions": {"ask": ["Bash"], "deny": ["EnterPlanMode"]}},
+                "settings": {"permissions": {"ask": CLAUDE_ASKS, "deny": ["EnterPlanMode"]}},
             }}})),
             _ => None,
         }
     }
 }
+
+/// The Claude tools held by an ask rule: what Claude would otherwise run
+/// without asking in `default` mode.
+const CLAUDE_ASKS: [&str; 4] = ["Bash", "Read", "Glob", "Grep"];
 
 /// How the agent `key` speaks ACP, or `None` when Desk does not speak it.
 fn route(key: AgentId) -> Option<Route> {
@@ -475,12 +504,46 @@ mod tests {
     }
 
     #[test]
-    fn claude_starts_without_the_operator_s_settings_and_with_bash_held() {
+    fn the_read_row_names_each_agent_whose_own_setup_lets_reads_run_unasked() {
+        // OpenCode: what Desk's configuration allows unasked is what the row
+        // says it runs.
+        let config: Value = serde_json::from_str(OPENCODE_PERMISSIONS).unwrap();
+        let unasked: Vec<&str> = config["permission"]
+            .as_object()
+            .unwrap()
+            .iter()
+            .filter(|(_, answer)| *answer == "allow")
+            .map(|(tool, _)| tool.as_str())
+            .collect();
+        assert_eq!(unasked, ["read", "list", "glob", "grep"]);
+        assert_eq!(AdapterId::OPENCODE.always_runs(), [Row::Read]);
+        // Codex reads in its read-only sandbox without asking.
+        assert_eq!(
+            AdapterId::CODEX.ask_mode(),
+            Some(AskMode::SetMode("read-only"))
+        );
+        assert_eq!(AdapterId::CODEX.always_runs(), [Row::Read]);
+        // Claude's reads and searches ask, and Pi's extension holds every
+        // tool call, so the table holds for both.
+        assert!(
+            ["Read", "Glob", "Grep"]
+                .iter()
+                .all(|tool| CLAUDE_ASKS.contains(tool))
+        );
+        assert_eq!(AdapterId::CLAUDE.always_runs(), []);
+        assert_eq!(AdapterId::PI.always_runs(), []);
+    }
+
+    #[test]
+    fn claude_starts_without_the_operator_s_settings_and_with_bash_and_reads_held() {
         let meta = AdapterId::CLAUDE.session_meta().unwrap();
         let options = &meta["claudeCode"]["options"];
         assert_eq!(options["settingSources"], json!([]));
         assert_eq!(options["allowDangerouslySkipPermissions"], json!(false));
-        assert_eq!(options["settings"]["permissions"]["ask"], json!(["Bash"]));
+        assert_eq!(
+            options["settings"]["permissions"]["ask"],
+            json!(["Bash", "Read", "Glob", "Grep"])
+        );
         assert_eq!(
             options["settings"]["permissions"]["deny"],
             json!(["EnterPlanMode"])

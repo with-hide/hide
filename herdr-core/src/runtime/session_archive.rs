@@ -66,8 +66,9 @@ impl Runtime {
     /// registration `id` holds, asked by the agent itself, its parent, or
     /// Desk. It admits the archive the screen's event admits, so a working
     /// session is refused `archive_confirmation_required`: only the operator
-    /// confirms stopping work, and only from the screen. Returns the answer
-    /// and whether anything changed.
+    /// confirms stopping work, from the screen or, for Desk, on the approval
+    /// card that asked it (PRD Desk D-82). Returns the answer and whether
+    /// anything changed.
     pub(crate) fn agent_archive_command(
         &mut self,
         device: &str,
@@ -77,17 +78,22 @@ impl Runtime {
         acting: Option<&str>,
     ) -> Result<(serde_json::Value, bool), String> {
         let actor = self.registered_agent_for(device, caller, expected, id, acting, true)?;
-        self.archive_registered(id, &actor)
+        let confirmed = crate::workspace_control::Caller::parse(caller)
+            == crate::workspace_control::Caller::Desk
+            && self.desk_takes_archive(id);
+        self.archive_registered(id, &actor, confirmed)
             .map(|answer| (answer, true))
     }
 
-    /// The archive of the session registration `id` runs in its pane, never
-    /// confirmed: a refusal comes back as the screen's error kind with its
-    /// dot written as an underscore, which `archive_next_action` words.
+    /// The archive of the session registration `id` runs in its pane,
+    /// confirmed only when the operator allowed Desk's card for it: a
+    /// refusal comes back as the screen's error kind with its dot written
+    /// as an underscore, which `archive_next_action` words.
     pub(super) fn archive_registered(
         &mut self,
         id: &str,
         actor: &crate::delivery::Actor,
+        confirmed: bool,
     ) -> Result<serde_json::Value, String> {
         let pane = actor.pane_id.as_str();
         let row = self
@@ -103,7 +109,7 @@ impl Runtime {
         {
             return Err("agent_unavailable".into());
         }
-        self.admit_archive(pane, false).map_err(|(kind, _)| {
+        self.admit_archive(pane, confirmed).map_err(|(kind, _)| {
             log_archive_refusal(pane, kind);
             kind.replace('.', "_")
         })?;
@@ -253,37 +259,7 @@ impl Runtime {
             }
         }
         let rows = self.archive_rows().cloned().collect::<Vec<_>>();
-        let by_pane = rows
-            .iter()
-            .map(|agent| (agent.pane_id.as_str(), agent))
-            .collect::<HashMap<_, _>>();
-        // The root, then every live descendant the subtree close would take.
-        let mut tree = vec![(&root, None::<String>, 0u8)];
-        let mut index = 0;
-        while index < tree.len() {
-            let (agent, _, depth) = tree[index];
-            let parent_session = self.archive_session_of(agent);
-            for child in &agent.lineage_child_pane_ids {
-                let Some(child) = by_pane.get(child.as_str()) else {
-                    continue;
-                };
-                if root.close_descendant_pane_ids.contains(&child.pane_id)
-                    && !tree
-                        .iter()
-                        .any(|(held, _, _)| held.pane_id == child.pane_id)
-                {
-                    tree.push((child, parent_session.clone(), depth.saturating_add(1)));
-                }
-            }
-            index += 1;
-        }
-        for pane in &root.close_descendant_pane_ids {
-            if !tree.iter().any(|(held, _, _)| held.pane_id == *pane)
-                && let Some(agent) = by_pane.get(pane.as_str())
-            {
-                tree.push((agent, Some(session.clone()), 1));
-            }
-        }
+        let tree = self.archive_tree(&root, &session, &rows);
         // One subtree close carries the whole tree; a larger one is refused
         // here, before anything is saved (B12).
         if tree.len() > super::tree_close::TREE_CLOSE_PANE_LIMIT {
@@ -410,6 +386,80 @@ impl Runtime {
         self.persist_ui_state();
         self.refresh_archived_rows();
         Ok(())
+    }
+
+    /// The root, then every live descendant its subtree close would take,
+    /// each with its parent's session and its depth; `rows` are
+    /// [`Self::archive_rows`].
+    fn archive_tree<'a>(
+        &self,
+        root: &'a SidebarAgentSnapshot,
+        session: &str,
+        rows: &'a [SidebarAgentSnapshot],
+    ) -> Vec<(&'a SidebarAgentSnapshot, Option<String>, u8)> {
+        let by_pane = rows
+            .iter()
+            .map(|agent| (agent.pane_id.as_str(), agent))
+            .collect::<HashMap<_, _>>();
+        let mut tree = vec![(root, None::<String>, 0u8)];
+        let mut index = 0;
+        while index < tree.len() {
+            let (agent, _, depth) = tree[index];
+            let parent_session = self.archive_session_of(agent);
+            for child in &agent.lineage_child_pane_ids {
+                let Some(child) = by_pane.get(child.as_str()) else {
+                    continue;
+                };
+                if root.close_descendant_pane_ids.contains(&child.pane_id)
+                    && !tree
+                        .iter()
+                        .any(|(held, _, _)| held.pane_id == child.pane_id)
+                {
+                    tree.push((child, parent_session.clone(), depth.saturating_add(1)));
+                }
+            }
+            index += 1;
+        }
+        for pane in &root.close_descendant_pane_ids {
+            if !tree.iter().any(|(held, _, _)| held.pane_id == *pane)
+                && let Some(agent) = by_pane.get(pane.as_str())
+            {
+                tree.push((agent, Some(session.to_owned()), 1));
+            }
+        }
+        tree
+    }
+
+    /// The row of session registration `id`, as the ledger places it now.
+    fn registered_row(&self, id: &str) -> Option<&SidebarAgentSnapshot> {
+        let ledger = self.delivery_state().ok()?;
+        let record = ledger
+            .agents
+            .iter()
+            .find(|record| record.id == id && !record.ended)?;
+        let pane = record.actor.pane_id.clone();
+        self.archive_rows().find(|agent| agent.pane_id == pane)
+    }
+
+    /// Whether archiving registration `id` would stop work: an agent of the
+    /// tree its archive closes works now, the case the archive refuses
+    /// without confirmation. One the core cannot find stops nothing; the
+    /// archive refuses it on its own.
+    pub(super) fn desk_session_working(&self, id: &str) -> bool {
+        let Some(root) = self.registered_row(id) else {
+            return false;
+        };
+        let session = self.archive_session_of(root).unwrap_or_default();
+        let rows = self.archive_rows().cloned().collect::<Vec<_>>();
+        self.archive_tree(root, &session, &rows)
+            .iter()
+            .any(|(agent, _, _)| agent.state.subtree == "working")
+    }
+
+    /// The title a card names registration `id` by.
+    pub(super) fn desk_session_title(&self, id: &str) -> Option<String> {
+        self.registered_row(id)
+            .map(|agent| agent.identity_label.clone())
     }
 
     /// Every agent row on this machine and each connected device.

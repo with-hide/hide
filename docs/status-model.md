@@ -70,6 +70,7 @@ The agent's own question, any other demand and a working agent come first: the p
 The same rule holds for a device's rows.
 A mission decision follows the same path (`plans.rs::lay_reviews_on`), laid again whenever the plan book or the mission book moves; its `detail` is the decision's line, cut to a row's width, so a phone page or service worker that does not know the cause draws the plain sentence.
 A row that has both a plan waiting for review and a mission decision carries the one asked first and counts the other behind it, as the root's other asks are counted (`외 N건`, needs-you-cleanup D-13).
+Input an agent has not confirmed follows the same path, laid on the pane rather than a session, since a child that never took its brief may have no session yet: `{cause: "input_unconfirmed", input: "brief" | "letter", spent, held}`, worded `브리프 확인 안 됨` or `편지 확인 안 됨`, `브리프 못 받음` or `편지 못 받음` only when a composer read saw the text still there (`held`), and `· 재시도 다 씀` once its typings are spent (`agents.input.*`); the core lays it only once no parent can clear the screen ([delivery.md: Input an agent did not take](delivery.md#input-an-agent-did-not-take)), and a delegated child's ask rises to its root as the seventh escalation cause.
 
 ## agent_status provenance and background waits
 
@@ -209,7 +210,7 @@ A turn the label read as finished (`done`) is not hidden by the background tasks
 The Done notification goes out as for any finished turn, and opening the row reads it; a task that wakes the agent starts a new turn, which decides the mark again.
 A `waiting` or `unfinished` verdict, or none (Hide AI off included), keeps the row in progress on its background tasks, and children, a reply being made or running checks keep it in progress whatever the verdict (B28).
 A merely ready or finished descendant is quiet, and one whose activity Herdr reports as unknown does not make its root wait, because a waiting state the projection cannot vouch for is not drawn.
-A descendant holding a question, approval or error waits on its parent, not the other way round, so it does not make the root wait: it turns the root unread through the descendant signals above, and moves the root to Needs You only once one of the six escalation causes raises it (Delegated escalation).
+A descendant holding a question, approval or error waits on its parent, not the other way round, so it does not make the root wait: it turns the root unread through the descendant signals above, and moves the root to Needs You only once one of the seven escalation causes raises it (Delegated escalation).
 A delegated row that waits on its own (`background` or `reply`) is Working, like a delegated row that is running, and its ancestors' counts take it as working; its root waits on it only while it waits on a background task, because a reply is made by the agent that answers, not by the row that asked; an ordinary delegated row that waits for nothing keeps Seen.
 
 A reply wait ends when nothing is making the answer, even while the letter is still open in the ledger.
@@ -376,7 +377,7 @@ Four say whose move is next, and their shapes alone tell them apart; `unknown` s
 
 The ring does not turn (D-02): its dashes, not motion, tell waiting from work, on every surface, the ones with no second line (tabs, pane headers, the ⌃Tab switcher, ⌘K, the child tree popover) included (D-25, B36).
 When the agent starts working again the dashes close, and when a turn ends with a wait left they open.
-A delegated row draws only `going`, `waiting`, `quiet` or `unknown` (B24): its question is its parent's to answer; one of the six escalation causes still makes it `turn`.
+A delegated row draws only `going`, `waiting`, `quiet` or `unknown` (B24): its question is its parent's to answer; one of the seven escalation causes still makes it `turn`.
 Colour never carries the distinction alone: the mark's name and the word that leads its line are its hover text and part of the row's accessible name (`markWords` in `web/src/agentRow.ts`), as in `내 차례 · 질문` or `읽을 것 · 일 남음`.
 
 How a stop ended is the label's verdict (`axes.rs::stop_verdict`): finished, or unfinished (work left); a label `waiting` that nothing proves is running is work left too, since nothing will wake the agent (status-marks D-17).
@@ -420,7 +421,7 @@ A subtree close is undone by one Reopen closed: the parent and its descendants c
 Regression owners: `each_row_lists_its_live_descendants_deepest_first_and_a_leaf_lists_none`, `a_descendant_on_a_disconnected_device_is_never_listed_for_a_close`, and the tree-close tests in `herdr-core/src/runtime/tests/tree_close.rs`.
 
 Needs You and Done belong to operator-owned roots.
-A delegated row stays Working or Seen; under the six conditions below `agent_state/escalation.rs` raises its lineage root to Needs You, with the child's ask on the root's line (Delegated escalation below).
+A delegated row stays Working or Seen; under the seven conditions below `agent_state/escalation.rs` raises its lineage root to Needs You, with the child's ask on the root's line (Delegated escalation below).
 The raised row keeps its own demand, mark, status word and group; what changes is that it is drawn bright and its root carries the ask.
 Done is therefore scoped to the lineage root: a delegated child that finishes leaves a dimmed Seen row, and the completion the operator acts on is the root's.
 
@@ -1143,10 +1144,10 @@ Regression owners: `links::store::ledger::tests`, `labels::tests`, `labels::cont
 ### Delegated escalation
 
 `agent_state/escalation.rs` reads the existing doorbell and watch decisions rather than adding delivery clocks.
-A child rises when its letter is held by a blocked parent or operator draft, when three bells are exhausted and the parent is again eligible after thirty quiet seconds, when the letter becomes undelivered after sixty minutes, when the child's own pane is Herdr blocked, or when the first watch warning has had no parent response for sixty minutes.
+A child rises when its letter is held by a blocked parent or operator draft, when three bells are exhausted and the parent is again eligible after thirty quiet seconds, when the letter becomes undelivered after sixty minutes, when the child's own pane is Herdr blocked, when the first watch warning has had no parent response for sixty minutes, or when a brief or letter Hide typed into the child was not recorded by it and its parent had its two minutes to clear the child's screen (`input_unconfirmed`, [delivery.md](delivery.md#input-an-agent-did-not-take)).
 An idle or done parent still owns the child; only a closed parent pane or absent parent agent invokes the existing orphan-root rule.
 `escalation::lift` carries every raised descendant to its lineage root (PRD D-10, D-27) as a `RaisedAsk`: the verb, what to do, the originating title, the agent named, the pane Open goes to, since when, the titles from the root and the checkout.
-The verb is Approval for a blocked child (Answer when it is blocked on a native question, with that question as what to do), Answer for an undelivered or unanswered letter, Confirm for an unanswered watch and Draft for a letter held by the parent's input, which names and opens that parent; a blocked parent stands for itself and adds no ask.
+The verb is Approval for a blocked child (Answer when it is blocked on a native question, with that question as what to do), Answer for an undelivered or unanswered letter, Confirm for an unanswered watch, Answer for input the child has not confirmed, whose line is the core's ask (`브리프 확인 안 됨`, `편지 확인 안 됨`, or `못 받음` when its composer still held it) and whose Open goes to the child's screen, and Draft for a letter held by the parent's input, which names and opens that parent; a blocked parent stands for itself and adds no ask.
 An Answer also names the parent that has not received the letter.
 The root's asks are ordered by verb, then by age; the root enters Needs You and its second line is whichever waited longest of the lead ask and its own demand (an AI question or a block the operator has read no longer is one), ending with `외 N건` for every other ask waiting under the root, its own question or a mission decision included (needs-you-cleanup D-13, B9).
 The raised child keeps its own place in the tree, and no ancestor between it and the root changes group.
@@ -1155,10 +1156,11 @@ The first three causes clear on receipt or a successful bell, menu blocking on a
 A letter's cause (the first three and an undelivered letter) also ends for good once the child's session takes up a request written after the letter, from the operator or a letter: the child started a new turn without the answer, so stopping again does not bring the raise back.
 That time is the session's own request record (`RowFacts` `operator_request` and `other_request`), which `labels.json` keeps and a device's helper reads again after a restart, so a restarted daemon gives the same answer; an agent whose session Hide cannot read keeps the cause until receipt, reply, cancellation or expiry.
 Working activity hides a letter or watch cause while it lasts, and a causal reply or child disappearance clears any cause.
+Input the child never took is raised from the ask the core lays on the child's row (`AskSubject::InputUnconfirmed`) and clears when the child's own record of the input arrives, while the child works, or when the input's spawn or letter ends; a child with no parent to clear it, a handed-off child or the recipient of a letter no agent sent, shows the same ask on its own row in Needs You at once.
 Doorbell hold reasons remain diagnostics and never become UI copy; the letters-waiting mark says only that letters wait on a possible draft, never why in words ([delivery.md](delivery.md#delivering-a-held-letter-now)).
-Phone groups follow these same core values: the first three causes and menu blocking send one Needs You push; undelivered letters and unanswered watches retain their existing human notice without another push.
+Phone groups follow these same core values: the first three causes, menu blocking and input the child never took send one Needs You push; undelivered letters and unanswered watches retain their existing human notice without another push.
 An ordinary delegated question produces no root push: the parent hears of it from its watch one tick after the child stopped on it, as it hears of a blocked child one tick after Herdr held it ([delivery.md](delivery.md#watch-activity-and-completion)), and clearing an escalation resets the existing effective push state immediately.
-Regression owners: `agent_state::escalation::tests`, `runtime::tests::lineage`, and `hided/src/mobile/push.rs`.
+Regression owners: `agent_state::escalation::tests`, `runtime::tests::lineage`, `runtime::typed_input::tests`, and `hided/src/mobile/push.rs`.
 
 ### Quiet pane headers
 
@@ -1279,7 +1281,7 @@ A Hide AI row for a home is on the phone's list, and in these transitions, only 
 Here “on” means Agent summaries is enabled and the current session has a proven label.
 Before a proven label exists, an unavailable provider or failed analysis adds no generated title or sentence; an existing proven label can remain while an analysis is unavailable.
 “Off” means Agent summaries is disabled, including Hide AI being off; native session facts, Herdr lifecycle, lineage, read state and notification settings still apply.
-The table describes operator-owned roots; delegated rows and the six escalation causes keep their ownership rules above.
+The table describes operator-owned roots; delegated rows and the seven escalation causes keep their ownership rules above.
 Sentences keep their original language in every mode.
 
 | Surface or condition | Hide AI on | Hide AI off |

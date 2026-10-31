@@ -336,7 +336,9 @@ fn run_coordinator(
                 }
             }
             if labels.as_mut().is_some_and(|worker| {
-                take_label_switch(&context, worker) | worker.tick(Instant::now())
+                take_label_switch(&context, worker)
+                    | take_session_rereads(&context, worker)
+                    | worker.tick(Instant::now())
             }) && subscription.is_some()
                 && let Some(current) = replica.as_mut()
                 && !publish_replica(
@@ -1865,6 +1867,26 @@ fn take_label_switch(context: &SessionSyncContext, worker: &mut LabelWorker) -> 
             .map(|guard| (guard.labels_asked(), guard.output_language()))
     });
     taken.is_some_and(|(on, language)| worker.follow_core(on, language, Instant::now()))
+}
+
+/// Hands this machine's worker the panes whose sessions typed input waits
+/// to see recorded (`Runtime::take_session_rereads`), under one brief lock.
+/// A device's worker reads on its own machine and is handed none.
+fn take_session_rereads(context: &SessionSyncContext, worker: &mut LabelWorker) -> bool {
+    if !context.is_local() {
+        return false;
+    }
+    let panes = context
+        .runtime
+        .upgrade()
+        .and_then(|runtime| {
+            runtime
+                .lock()
+                .ok()
+                .map(|mut guard| guard.take_session_rereads())
+        })
+        .unwrap_or_default();
+    !panes.is_empty() && worker.read_again(&panes)
 }
 
 /// Hands the worker the agents and the complete pane topology the replica

@@ -14,7 +14,7 @@ use hide_desk::AdapterId;
 use hide_desk::adapter::{self, Paths};
 use hide_desk::host::{Host, MAX_DESCENDANTS, MAX_RSS_BYTES};
 use hide_desk::install::{self, InstallError};
-use hide_desk::permission::{self, CardKind, Verdict};
+use hide_desk::permission;
 use hide_desk::rpc::{CallError, Incoming, Sink};
 use hide_desk::session::{self, Choices, OpenError, Update};
 use hide_platform::programs;
@@ -23,7 +23,7 @@ use serde_json::{Value, json};
 use super::super::Runtime;
 use crate::desk::{DeskCredential, DeskPlatform};
 use crate::handle::ChangeNotifier;
-use crate::model::{DeskAgentState, DeskCardKind};
+use crate::model::DeskAgentState;
 
 /// Messages from the agent waiting for the worker; past this, reply text is
 /// dropped (and logged) rather than held, while requests and answers still
@@ -110,14 +110,13 @@ pub(super) enum Report {
         tag: u64,
         outcome: TurnOutcome,
     },
-    Ask {
+    /// A request Hide can read, for the runtime to answer from the table
+    /// or put on a card.
+    Permission {
         rpc_id: Value,
         allow: String,
         reject: Option<String>,
-        card: DeskCardKind,
-        command: String,
-        folder: Option<String>,
-        reason: Option<String>,
+        reading: permission::Reading,
     },
     Blocked(String),
     Choices {
@@ -704,6 +703,9 @@ impl Worker {
         }
     }
 
+    /// Reads a permission request off the lock: one Hide cannot read, or
+    /// answer with a one-time allowance, is refused here (D-60); the
+    /// runtime answers every other one (D-82).
     fn permission(&mut self, rpc_id: Value, params: &Value) {
         let Some(running) = &self.running else {
             return;
@@ -713,49 +715,47 @@ impl Worker {
             .and_then(Value::as_str);
         let announced = call_id.and_then(|id| running.announced.get(id));
         let request = permission::read_request(running.adapter, params, announced);
-        let hide = self.platform.places().hide_dir.join(hide_program());
-        let connection = running.host.connection();
-        let selected =
-            |option: &str| json!({"outcome": {"outcome": "selected", "optionId": option}});
-        match permission::decide(&request, &hide) {
-            Verdict::Allow => {
-                if let Some(allow) = request.allow_once() {
-                    let _ = connection.respond(&rpc_id, selected(allow));
-                }
-            }
-            Verdict::Refuse => {
-                let answer = request
-                    .reject()
-                    .map_or_else(|| json!({"outcome": {"outcome": "cancelled"}}), selected);
-                let _ = connection.respond(&rpc_id, answer);
-                let title = params
-                    .pointer("/toolCall/title")
-                    .and_then(Value::as_str)
-                    .unwrap_or_default()
-                    .chars()
-                    .take(400)
-                    .collect();
-                self.report(Report::Blocked(title));
-            }
-            Verdict::Ask(card) => {
-                let Some(allow) = request.allow_once().map(str::to_owned) else {
-                    return;
-                };
-                self.report(Report::Ask {
-                    rpc_id,
-                    allow,
-                    reject: request.reject().map(str::to_owned),
-                    card: match card.kind {
-                        CardKind::Command => DeskCardKind::Command,
-                        CardKind::Edit => DeskCardKind::Edit,
-                        CardKind::Other => DeskCardKind::Other,
-                    },
-                    command: card.command,
-                    folder: card.folder,
-                    reason: card.reason,
-                });
-            }
-        }
+        let (Some(action), Some(allow)) = (permission::readable(&request), request.allow_once())
+        else {
+            let selected =
+                |option: &str| json!({"outcome": {"outcome": "selected", "optionId": option}});
+            let answer = request
+                .reject()
+                .map_or_else(|| json!({"outcome": {"outcome": "cancelled"}}), selected);
+            let _ = running.host.connection().respond(&rpc_id, answer);
+            let title = params
+                .pointer("/toolCall/title")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .chars()
+                .take(400)
+                .collect();
+            self.report(Report::Blocked(title));
+            return;
+        };
+        let places = self.platform.places();
+        let hide = places.hide_dir.join(hide_program());
+        let cwd = hide_platform::path::to_wire_lossy(&adapter::work_dir(&places.desk));
+        let home = hide_platform::host::home_dir()
+            .ok()
+            .map(|home| hide_platform::path::to_wire_lossy(&home));
+        let mut reading = permission::classify(
+            action,
+            &permission::Place {
+                hide: &hide,
+                cwd: &cwd,
+                home: home.as_deref(),
+            },
+        );
+        // Where a deleted path leads is read from the filesystem here, off
+        // the lock, so the core judges the place the command would reach.
+        permission::follow_links(&mut reading);
+        self.report(Report::Permission {
+            rpc_id,
+            allow: allow.to_owned(),
+            reject: request.reject().map(str::to_owned),
+            reading,
+        });
     }
 
     /// Measures the process tree after a turn; past its cap the process

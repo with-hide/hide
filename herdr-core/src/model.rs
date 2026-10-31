@@ -1468,6 +1468,16 @@ pub enum AskSubject {
     /// The mission this Conductor conducts waits on the operator's decision,
     /// whose one line it carries (needs-you-cleanup D-12).
     MissionDecision { line: String },
+    /// Hide typed a brief or a letter's bell into the agent and the agent
+    /// has not recorded it, and no parent cleared it (`delivery::typed`).
+    /// `held` says the agent's composer was read still showing the text, so
+    /// it was not taken; without it the input is only not confirmed.
+    /// `spent` says Hide stopped typing it again.
+    InputUnconfirmed {
+        input: crate::delivery::typed::InputKind,
+        spent: bool,
+        held: bool,
+    },
 }
 
 /// An agent's state on four independent lifecycle axes, plus the values the shell draws
@@ -8167,10 +8177,17 @@ mod wire_enum_tests {
             AskSubject::MissionDecision {
                 line: "line".into(),
             },
+            AskSubject::InputUnconfirmed {
+                input: crate::delivery::typed::InputKind::Brief,
+                spent: false,
+                held: false,
+            },
         ];
         for variant in &subjects {
             match variant {
-                AskSubject::PlanReview { .. } | AskSubject::MissionDecision { .. } => {}
+                AskSubject::PlanReview { .. }
+                | AskSubject::MissionDecision { .. }
+                | AskSubject::InputUnconfirmed { .. } => {}
             }
         }
         let causes = subjects
@@ -9183,6 +9200,60 @@ mod wire_enum_tests {
             }
             assert_wire(&contract, "mission_verdict", &verdicts);
             checked.insert("mission_verdict");
+            use crate::runtime::mission_landing::LandingAction;
+            let landing_actions = [LandingAction::Merge, LandingAction::Join];
+            for variant in landing_actions {
+                match variant {
+                    LandingAction::Merge | LandingAction::Join => {}
+                }
+            }
+            assert_wire(&contract, "mission_landing_action", &landing_actions);
+            checked.insert("mission_landing_action");
+            use crate::runtime::mission_landing::{LandingProof, NodeLanding};
+            let proofs = [
+                LandingProof::Merged,
+                LandingProof::InMain {
+                    commit: "c0ffee".into(),
+                },
+                LandingProof::Outside,
+            ];
+            for variant in &proofs {
+                match variant {
+                    LandingProof::Merged | LandingProof::InMain { .. } | LandingProof::Outside => {}
+                }
+            }
+            // Internally tagged: the wire value is each variant's tag.
+            let tag = |value: serde_json::Value, key: &str| value[key].as_str().unwrap().to_owned();
+            let proof_tags: Vec<String> = proofs
+                .iter()
+                .map(|proof| tag(serde_json::to_value(proof).unwrap(), "by"))
+                .collect();
+            assert_wire(&contract, "mission_landing_proof", &proof_tags);
+            checked.insert("mission_landing_proof");
+            let landings = [
+                NodeLanding::Landed {
+                    proof: LandingProof::Merged,
+                },
+                NodeLanding::Left {
+                    action: LandingAction::Merge,
+                },
+                NodeLanding::Unread {
+                    action: LandingAction::Join,
+                },
+            ];
+            for variant in &landings {
+                match variant {
+                    NodeLanding::Landed { .. }
+                    | NodeLanding::Left { .. }
+                    | NodeLanding::Unread { .. } => {}
+                }
+            }
+            let landing_tags: Vec<String> = landings
+                .iter()
+                .map(|landing| tag(serde_json::to_value(landing).unwrap(), "state"))
+                .collect();
+            assert_wire(&contract, "mission_landing_state", &landing_tags);
+            checked.insert("mission_landing_state");
             use crate::mission_criteria::{CriterionKind, CriterionState, Role, Rule};
             let criterion_kinds = [
                 CriterionKind::Own,
@@ -9872,16 +9943,44 @@ mod wire_enum_tests {
             &[
                 DeskCardKind::Command,
                 DeskCardKind::Edit,
+                DeskCardKind::Read,
                 DeskCardKind::Other,
             ],
         );
         checked.insert("desk_card_kind");
+        {
+            use hide_desk::permission::{Answer, Ask, Irreversible, Row};
+            assert_wire(
+                &contract,
+                "desk_permission_row",
+                &[Row::Hide, Row::Read, Row::Shell, Row::Edit],
+            );
+            checked.insert("desk_permission_row");
+            assert_wire(
+                &contract,
+                "desk_permission_answer",
+                &[Answer::Run, Answer::Ask],
+            );
+            checked.insert("desk_permission_answer");
+            assert_wire(&contract, "desk_irreversible", &Irreversible::ALL);
+            checked.insert("desk_irreversible");
+            let kinds: Vec<serde_json::Value> = [
+                Ask::Irreversible(Irreversible::ForcePush),
+                Ask::Row(Row::Shell),
+            ]
+            .iter()
+            .map(|ask| serde_json::to_value(ask).unwrap()["kind"].clone())
+            .collect();
+            assert_wire(&contract, "desk_approval_ask", &kinds);
+            checked.insert("desk_approval_ask");
+        }
         assert_wire(
             &contract,
             "desk_approval_state",
             &[
                 DeskApprovalState::Waiting,
                 DeskApprovalState::Allowed,
+                DeskApprovalState::AllowedConversation,
                 DeskApprovalState::Rejected,
                 DeskApprovalState::Closed,
             ],

@@ -27,11 +27,11 @@ afterEach(() => {
 });
 
 function node(key: string, extra: Partial<MissionNode> = {}): MissionNode {
-  return { key, title: `Node ${key}`, kind: "change", depends_on: [], status: "planned", blocked: null, delivery: "pr", worker: null, agent_id: null, pane_id: null, machine: null, pr: null, base_pr: null, branch: null, pr_state: null, pr_url: null, stage: null, attempts: 0, line: null, change: null, review: null, criteria: [], criteria_met: 0, criteria_skipped: 0, external: null, unread: false, reopened: 0, started_at_unix_ms: null, finished_at_unix_ms: null, commit: null, verdict: null, checks: null, ...extra };
+  return { key, title: `Node ${key}`, kind: "change", depends_on: [], status: "planned", blocked: null, delivery: "pr", worker: null, agent_id: null, pane_id: null, machine: null, pr: null, base_pr: null, branch: null, pr_state: null, pr_url: null, stage: null, attempts: 0, line: null, change: null, review: null, criteria: [], criteria_met: 0, criteria_skipped: 0, external: null, unread: false, reopened: 0, started_at_unix_ms: null, finished_at_unix_ms: null, commit: null, landing: null, verdict: null, checks: null, ...extra };
 }
 
 function mission(extra: Partial<Mission> = {}): Mission {
-  return { id: "mission-1", title: "Fix the bug", workspace_id: "w", project: "/repo", checkout_path: "/repo", device_id: "mac", status: "running", scope: "pr", cap: 4, exempt: false, strength: null, other_vendor: null, conductor: { pane_id: "p1", name: "conductor", agent_kind: "claude", session: null, present: true, takes_answers: true }, nodes: [], merge_order: [], check: null, github: null, decision: null, question: null, answer: null, answer_failed: null, delay: null, report: null, created_at_unix_ms: 1, started_at_unix_ms: Date.now() - 180_000, closed_at_unix_ms: null, running: 2, stale: false, github_stale: false, github_read_at_unix_ms: null, ...extra };
+  return { id: "mission-1", title: "Fix the bug", workspace_id: "w", project: "/repo", checkout_path: "/repo", device_id: "mac", status: "running", scope: "pr", cap: 4, exempt: false, strength: null, other_vendor: null, conductor: { pane_id: "p1", name: "conductor", agent_kind: "claude", session: null, present: true, takes_answers: true }, nodes: [], merge_order: [], landing_order: [], stack_waiting: 0, check: null, github: null, decision: null, question: null, answer: null, answer_failed: null, delay: null, report: null, created_at_unix_ms: 1, started_at_unix_ms: Date.now() - 180_000, closed_at_unix_ms: null, running: 2, stale: false, github_stale: false, github_read_at_unix_ms: null, ...extra };
 }
 
 async function mount(missions: { items: Mission[]; failed?: string }, remote: unknown[] = [], sessions: unknown[] = [], more: Partial<SnapshotRest> = {}, agents: AgentRow[] = []) {
@@ -375,15 +375,15 @@ it("draws each card's state as its mark and border, colour only for what wants a
     node("core", { title: "제안 core: 기록·공책·점수·반영", status: "review", pr: 1703, pr_state: "mergeable", criteria: [line("c1", "own", { state: "pass" }), line("check", "check", { state: "pass" }), line("review", "review", { checkers: [checker("codex", "open", "agent-7")] }), line("ci", "ci")], criteria_met: 2, criteria_skipped: 0 }),
     node("engine", { status: "working", depends_on: ["core"], pr: 1704, line: "replay 19/31", reopened: 1, worker: { agent: "claude", model: "opus", effort: "xhigh", effort_auto: false }, pane_id: "w1:p2", criteria: [line("c1", "own", { state: "pass" }), line("c2", "own", { state: "skipped", skip: { reason: "only 31 sessions" } }), line("c3", "own"), line("ci", "ci")], criteria_met: 2, criteria_skipped: 1 }),
     node("tool", { status: "held", depends_on: ["core"] }),
-    node("api", { status: "done", pr: 1650, pr_state: "mergeable", worker: { agent: "codex", model: "gpt-6", effort: "high", effort_auto: false } }),
-    node("old", { status: "done", pr: 1600, pr_state: "merged" }),
-    node("branch", { status: "done", delivery: "direct", branch: "feat/a-very-long-branch-name-for-the-screen-node" }),
+    node("api", { status: "done", pr: 1650, pr_state: "mergeable", landing: { state: "left", action: "merge" }, worker: { agent: "codex", model: "gpt-6", effort: "high", effort_auto: false } }),
+    node("old", { status: "done", pr: 1600, pr_state: "merged", landing: { state: "landed", proof: { by: "merged" } } }),
+    node("branch", { status: "done", delivery: "direct", branch: "feat/a-very-long-branch-name-for-the-screen-node", landing: { state: "left", action: "join" } }),
     node("broken", { status: "failed", line: "CI failed twice" }),
     node("outside", { title: "바깥: isolated 앱 실행기 정리", kind: "external", delivery: null, external: { pr: 1232 }, status: "waiting" }),
     node("unread", { kind: "external", delivery: null, external: { branch: "tools/runner" }, status: "waiting", unread: true }),
-    node("merged-out", { kind: "external", delivery: null, external: { pr: 1702 }, status: "done" }),
+    node("merged-out", { kind: "external", delivery: null, external: { pr: 1702 }, status: "done", landing: { state: "landed", proof: { by: "outside" } } }),
     node("closed-out", { kind: "external", delivery: null, external: { pr: 1605 }, status: "failed" }),
-    node("v1", { status: "done", pr: 1500 }),
+    node("v1", { status: "done", pr: 1500, landing: { state: "unread", action: "merge" } }),
     node("next", { depends_on: ["engine", "outside"] }),
   ];
   // The engine's worker pane was started with another effort than its plan asked.
@@ -674,8 +674,8 @@ it("lists only what the operator can do in 내 차례: the decision whose node c
     await act(async () => map.q('[data-mission-turn-node="outside"]')!.click());
     expect(map.q("[data-mission-panel]")?.getAttribute("data-mission-panel")).toBe("outside");
   } finally { await map.unmount(); }
-  const prs = [node("ui", { title: "UI", status: "done", pr: 1705, pr_state: "mergeable", base_pr: 1703, depends_on: ["core"] }), node("core", { title: "Core", status: "done", pr: 1703, pr_state: "mergeable" })];
-  const waiting = await mount({ items: [mission({ status: "merge_wait", nodes: prs, merge_order: ["core", "ui"] })] });
+  const prs = [node("ui", { title: "UI", status: "done", pr: 1705, pr_state: "mergeable", base_pr: 1703, depends_on: ["core"], landing: { state: "left", action: "merge" } }), node("core", { title: "Core", status: "done", pr: 1703, pr_state: "mergeable", landing: { state: "left", action: "merge" } })];
+  const waiting = await mount({ items: [mission({ status: "merge_wait", nodes: prs, merge_order: ["core", "ui"], landing_order: ["core", "ui"] })] });
   try {
     expect(waiting.q('[data-mission-turn-item="merge"] [data-mission-landing-order]')?.getAttribute("data-mission-landing-order")).toBe("core ui");
     expect(waiting.q('[data-mission-turn-item="merge"]')?.textContent).toContain(`Merge orderCore${"#"}1703→UI${"#"}1705`);
@@ -684,8 +684,8 @@ it("lists only what the operator can do in 내 차례: the decision whose node c
     expect(waiting.q('[data-dependency-edge="core>ui"]')?.hasAttribute("data-edge-dashed")).toBe(true);
   } finally { await waiting.unmount(); }
   // Waiting on its merges, a git mission tags the branch the core reads and has not found in main; a branch it cannot read says nothing.
-  const branches = [node("notes", { title: "Notes", status: "done", delivery: "direct", branch: "release/notes" }), node("bump", { title: "Bump", status: "done", delivery: "direct", branch: "release/bump", unread: true })];
-  const git = await mount({ items: [mission({ status: "merge_wait", nodes: branches })] });
+  const branches = [node("notes", { title: "Notes", status: "done", delivery: "direct", branch: "release/notes", landing: { state: "left", action: "join" } }), node("bump", { title: "Bump", status: "done", delivery: "direct", branch: "release/bump", unread: true, landing: { state: "unread", action: "join" } })];
+  const git = await mount({ items: [mission({ status: "merge_wait", nodes: branches, landing_order: ["notes"] })] });
   try {
     expect(card(git, "notes").querySelector("[data-node-landing]")?.textContent).toBe("Join left");
     expect(card(git, "bump").querySelector("[data-node-landing]")).toBeNull();
@@ -744,8 +744,8 @@ it("folds a finished mission's report into its first words without Markdown mark
 it("leads a finished mission with its result tiles, its pull requests and its report's line, then its Conductor and the map, the summary beside it (PRD mission-tool B18-B21)", async () => {
   const review = (state: MissionCriterion["state"]) => line("review", "review", { state, checkers: [checker("codex", state, "agent-9")] });
   const nodes = [
-    node("api", { title: "API added", status: "done", agent_id: "w1", pr: 1871, pr_state: "merged", criteria: [line("c1", "own", { state: "pass" }), review("pass")], criteria_met: 2 }),
-    node("screen", { title: "Screen on the API", status: "done", agent_id: "w2", depends_on: ["api"], pr: 1872, pr_state: "merged", criteria: [line("c1", "own", { state: "skipped", skip: { reason: "n/a" } }), review("pass")], criteria_met: 2, criteria_skipped: 1 }),
+    node("api", { title: "API added", status: "done", agent_id: "w1", pr: 1871, pr_state: "merged", landing: { state: "landed", proof: { by: "merged" } }, criteria: [line("c1", "own", { state: "pass" }), review("pass")], criteria_met: 2 }),
+    node("screen", { title: "Screen on the API", status: "done", agent_id: "w2", depends_on: ["api"], pr: 1872, pr_state: "merged", landing: { state: "landed", proof: { by: "merged" } }, criteria: [line("c1", "own", { state: "skipped", skip: { reason: "n/a" } }), review("pass")], criteria_met: 2, criteria_skipped: 1 }),
   ];
   const conductor = [{ pane_id: "p1", mark: "asleep" } as AgentRow];
   const done = await mount({ items: [mission({ status: "done", report: "# Fix the bug\n\nBoth PRs merged after one review round.", nodes, started_at_unix_ms: 0, closed_at_unix_ms: 3_600_000 })] }, [], [], {}, conductor);

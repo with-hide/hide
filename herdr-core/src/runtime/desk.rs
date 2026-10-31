@@ -6,14 +6,18 @@
 //! dispatches the `desk_*` events.
 //!
 //! A permission request Hide cannot read, or answer with a one-time
-//! allowance, does not run (D-60); a card waits for `한 번 허용` or `거절`,
-//! and a new conversation, a restart or the process's end closes it as a
-//! refusal (D-52). `allow_always` is never chosen.
+//! allowance, does not run (D-60). Every other one is answered here from
+//! Settings › Desk › 권한, what the operator allowed for the rest of the
+//! conversation and the core's facts (`hide_desk::permission::decide`,
+//! D-82): it runs, or a card waits for `한 번 허용`, `이 대화에서 계속 허용`
+//! or `거절…` (D-83). An allowance lives here until the Desk process ends,
+//! never in the agent: `allow_always` is never chosen. A new conversation, a
+//! restart or the process's end closes a waiting card as a refusal.
 
 mod jobs;
 mod worker;
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::sync::{Arc, Mutex, Weak};
 
 use serde::Deserialize;
@@ -26,15 +30,18 @@ use crate::desk::{
 };
 use crate::handle::ChangeNotifier;
 use crate::model::{
-    DESK_CAP_MAX, DeskAgentSnapshot, DeskAgentState, DeskApprovalState, DeskChoiceSnapshot,
-    DeskConversationSnapshot, DeskHostSnapshot, DeskHostState, DeskItem, DeskLiveSnapshot,
-    DeskLocation, DeskMention, DeskNotice, DeskReplyState, DeskSnapshot,
+    DESK_CAP_MAX, DeskAgentSnapshot, DeskAgentState, DeskApprovalState, DeskCardKind,
+    DeskChoiceSnapshot, DeskConversationSnapshot, DeskHostSnapshot, DeskHostState, DeskItem,
+    DeskLiveSnapshot, DeskLocation, DeskMention, DeskNotice, DeskReplyState, DeskSnapshot,
 };
+use hide_desk::permission::{self, Ask, Irreversible};
 use hide_desk::session::{Choice, Choices, OpenError};
 use worker::{Order, Report, TurnOutcome};
 
 /// A mention's id or name; a longer one is refused with its message.
 const MAX_MENTION_BYTES: usize = 1024;
+/// The line `거절…` sends Desk; a longer one is refused with the answer.
+const MAX_REFUSAL_BYTES: usize = 2048;
 
 #[derive(Default)]
 pub(super) struct Desk {
@@ -51,6 +58,15 @@ pub(super) struct Desk {
     turn: Option<Turn>,
     next_tag: u64,
     approvals: Vec<Approval>,
+    /// What the operator allowed with `이 대화에서 계속 허용`, until the
+    /// Desk process ends (D-83).
+    allowed: BTreeSet<Ask>,
+    /// Working sessions the operator allowed Desk to archive with
+    /// `한 번 허용`, by registration id, until the turn ends.
+    archive_grants: Vec<String>,
+    /// The line the operator refused with, sent once the turn it stopped
+    /// ends.
+    refusal: Option<Refusal>,
     /// Watch asks for Desk's sessions that have no watch yet, by intent;
     /// only sessions the ledger still holds are kept.
     watch_asks: HashMap<String, jobs::WatchAsk>,
@@ -103,6 +119,18 @@ struct Approval {
     rpc_id: Value,
     allow: String,
     reject: Option<String>,
+    /// What it asks, which `이 대화에서 계속 허용` keeps allowed.
+    asks: Vec<Ask>,
+    /// The working sessions it ends, which `한 번 허용` lets Desk archive.
+    sessions: Vec<String>,
+    /// What the agent asked to run, which a refusal's line names.
+    command: String,
+}
+
+/// `거절…`'s line and what it refused.
+struct Refusal {
+    command: String,
+    text: String,
 }
 
 /// What the shell asked (`desk_*`).
@@ -158,7 +186,22 @@ pub(super) struct SendPayload {
 #[derive(Debug, Deserialize)]
 pub(super) struct ApprovalPayload {
     id: u64,
-    allow: bool,
+    answer: ApprovalAnswer,
+    /// `거절…`'s line; absent or blank is a plain refusal.
+    #[serde(default)]
+    text: Option<String>,
+}
+
+/// The card's three answers (D-83).
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "snake_case")]
+pub(super) enum ApprovalAnswer {
+    /// `한 번 허용`.
+    Once,
+    /// `이 대화에서 계속 허용`.
+    Conversation,
+    /// `거절…`.
+    Reject,
 }
 
 #[derive(Debug, Deserialize)]
@@ -181,6 +224,8 @@ pub(super) struct SettingsPayload {
     default_agent: Option<Option<AdapterId>>,
     location: Option<DeskLocation>,
     cap: Option<u8>,
+    /// Settings › Desk › 권한, whole (D-82).
+    permissions: Option<permission::Table>,
 }
 
 fn present<'de, D: serde::Deserializer<'de>>(
@@ -289,7 +334,7 @@ impl Runtime {
         let changed = match event {
             DeskEvent::Send(payload) => self.desk_send(payload),
             DeskEvent::Stop => self.desk_stop(),
-            DeskEvent::Approval(payload) => self.desk_answer(payload.id, payload.allow),
+            DeskEvent::Approval(payload) => self.desk_answer(payload),
             DeskEvent::NewConversation => self.desk_new_conversation(),
             DeskEvent::Restart => self.desk_restart(),
             DeskEvent::Select(payload) => self.desk_select(payload),
@@ -409,15 +454,28 @@ impl Runtime {
         if self.desk.turn.is_some() {
             return refused("turn_under_way");
         }
+        self.desk_start_turn(agent, text.to_owned(), text.to_owned(), payload.mentions);
+        true
+    }
+
+    /// Starts a turn: `shown` joins the conversation as the operator's
+    /// message, and the agent receives `sent`.
+    fn desk_start_turn(
+        &mut self,
+        agent: AdapterId,
+        shown: String,
+        sent: String,
+        mentions: Vec<DeskMention>,
+    ) {
         let carried = (!self.desk.host.open)
             .then(|| self.desk.stored.conversation.carried())
             .flatten();
         let id = self.desk.stored.conversation.next_id();
         self.desk.stored.conversation.push(DeskItem::User {
             id,
-            text: text.to_owned(),
+            text: shown,
             at_ms: crate::links::now_ms(),
-            mentions: payload.mentions,
+            mentions,
         });
         self.desk.next_tag += 1;
         let tag = self.desk.next_tag;
@@ -441,7 +499,7 @@ impl Runtime {
         self.order(Order::Send(worker::Send {
             tag,
             adapter: agent,
-            text: text.to_owned(),
+            text: sent,
             carried,
             resume,
             model: self.desk.stored.selection.model.clone(),
@@ -459,7 +517,6 @@ impl Runtime {
         });
         self.desk.host.detail = None;
         self.compose_desk_live();
-        true
     }
 
     fn desk_stop(&mut self) -> bool {
@@ -473,37 +530,115 @@ impl Runtime {
                 rpc_id: approval.rpc_id,
                 outcome: cancelled.clone(),
             });
-            self.set_approval(approval.item, DeskApprovalState::Closed);
+            self.set_approval(approval.item, DeskApprovalState::Closed, None);
         }
         self.order(Order::Cancel);
         true
     }
 
-    fn desk_answer(&mut self, item: u64, allow: bool) -> bool {
+    /// The operator's answer to a card (D-83): `한 번 허용` runs this one
+    /// call, `이 대화에서 계속 허용` also stops asking what it asked until the
+    /// Desk process ends, and `거절…` refuses it and, with a line, stops the
+    /// turn so the line reaches Desk as the next message.
+    fn desk_answer(&mut self, payload: ApprovalPayload) -> bool {
         let Some(index) = self
             .desk
             .approvals
             .iter()
-            .position(|approval| approval.item == item)
+            .position(|approval| approval.item == payload.id)
         else {
             return refused("approval_unknown");
         };
+        // One line: the box takes no newline, and a pasted one is a space.
+        let text = payload
+            .text
+            .map(|text| text.split_whitespace().collect::<Vec<_>>().join(" "))
+            .filter(|text| !text.is_empty());
+        if text.as_ref().is_some_and(|text| {
+            text.len() > MAX_REFUSAL_BYTES || payload.answer != ApprovalAnswer::Reject
+        }) {
+            return refused("approval_text");
+        }
         let approval = self.desk.approvals.remove(index);
-        let (option, state) = if allow {
-            (Some(approval.allow), DeskApprovalState::Allowed)
-        } else {
-            (approval.reject, DeskApprovalState::Rejected)
-        };
-        let outcome = match option {
-            Some(option) => json!({"outcome": {"outcome": "selected", "optionId": option}}),
-            None => json!({"outcome": {"outcome": "cancelled"}}),
+        let (option, state) = match payload.answer {
+            ApprovalAnswer::Once => {
+                self.desk
+                    .archive_grants
+                    .extend(approval.sessions.iter().cloned());
+                (Some(approval.allow.clone()), DeskApprovalState::Allowed)
+            }
+            ApprovalAnswer::Conversation => {
+                self.desk.allowed.extend(approval.asks.iter().copied());
+                (
+                    Some(approval.allow.clone()),
+                    DeskApprovalState::AllowedConversation,
+                )
+            }
+            ApprovalAnswer::Reject => (approval.reject.clone(), DeskApprovalState::Rejected),
         };
         self.order(Order::Answer {
             rpc_id: approval.rpc_id,
-            outcome,
+            outcome: outcome(option.as_deref()),
         });
-        self.set_approval(item, state);
+        self.set_approval(payload.id, state, text.clone());
+        if payload.answer == ApprovalAnswer::Conversation {
+            // A card the agent asked alongside, now allowed in full, runs.
+            let covered: Vec<usize> = self
+                .desk
+                .approvals
+                .iter()
+                .enumerate()
+                .filter(|(_, waiting)| {
+                    waiting
+                        .asks
+                        .iter()
+                        .all(|ask| self.desk.allowed.contains(ask))
+                })
+                .map(|(index, _)| index)
+                .collect();
+            for index in covered.into_iter().rev() {
+                let waiting = self.desk.approvals.remove(index);
+                self.order(Order::Answer {
+                    rpc_id: waiting.rpc_id,
+                    outcome: outcome(Some(&waiting.allow)),
+                });
+                self.set_approval(waiting.item, DeskApprovalState::AllowedConversation, None);
+            }
+        }
+        if let Some(text) = text {
+            self.desk.refusal = Some(Refusal {
+                command: approval.command,
+                text,
+            });
+            self.order(Order::Cancel);
+        }
         true
+    }
+
+    /// Whether Desk may archive the working session registration `id`
+    /// without the archive's own confirmation: the operator allowed its card
+    /// once, which this uses up, or allowed ending working sessions for the
+    /// conversation.
+    pub(super) fn desk_takes_archive(&mut self, id: &str) -> bool {
+        if self
+            .desk
+            .allowed
+            .contains(&Ask::Irreversible(Irreversible::EndWorkingSession))
+        {
+            return true;
+        }
+        match self
+            .desk
+            .archive_grants
+            .iter()
+            .position(|grant| grant == id)
+        {
+            Some(index) => {
+                self.desk.archive_grants.remove(index);
+                true
+            }
+            None => false,
+        }
     }
 
     fn desk_new_conversation(&mut self) -> bool {
@@ -536,6 +671,7 @@ impl Runtime {
     fn end_desk_process(&mut self) {
         self.order(Order::End);
         self.close_approvals();
+        self.forget_allowances();
         self.finish_turn(DeskReplyState::Stopped);
         self.desk.host = Host {
             state: Some(DeskHostState::Idle),
@@ -545,8 +681,17 @@ impl Runtime {
 
     fn close_approvals(&mut self) {
         for approval in std::mem::take(&mut self.desk.approvals) {
-            self.set_approval(approval.item, DeskApprovalState::Closed);
+            self.set_approval(approval.item, DeskApprovalState::Closed, None);
         }
+    }
+
+    /// The Desk process ended: what the operator allowed for the
+    /// conversation asks again, and a refusal's line no turn will read is
+    /// dropped with the card that keeps it.
+    fn forget_allowances(&mut self) {
+        self.desk.allowed.clear();
+        self.desk.archive_grants.clear();
+        self.desk.refusal = None;
     }
 
     fn desk_select(&mut self, payload: SelectPayload) -> bool {
@@ -642,6 +787,10 @@ impl Runtime {
             }
             settings.cap = cap;
         }
+        // The next request is answered from it; a waiting card stays.
+        if let Some(permissions) = payload.permissions {
+            settings.permissions = permissions;
+        }
         if self.desk.stored.selection.agent.is_none() {
             self.desk.stored.selection.agent = settings.default_agent;
         }
@@ -677,14 +826,20 @@ impl Runtime {
             .map(|(_, known)| known.clone())
     }
 
-    fn set_approval(&mut self, item: u64, state: DeskApprovalState) {
+    fn set_approval(&mut self, item: u64, state: DeskApprovalState, line: Option<String>) {
         for entry in &mut self.desk.stored.conversation.items {
             if let DeskItem::Approval {
-                id, state: current, ..
+                id,
+                state: current,
+                refusal,
+                ..
             } = entry
                 && *id == item
             {
                 *current = state;
+                if line.is_some() {
+                    *refusal = line.clone();
+                }
             }
         }
     }
@@ -914,8 +1069,10 @@ impl Runtime {
                 if self.desk.turn.as_ref().is_none_or(|turn| turn.tag != tag) {
                     return false;
                 }
-                // Requests the agent made in the turn end with it.
+                // Requests the agent made in the turn end with it, and so do
+                // the archives its cards allowed once.
                 self.close_approvals();
+                self.desk.archive_grants.clear();
                 match outcome {
                     TurnOutcome::Done => self.finish_turn(DeskReplyState::Done),
                     TurnOutcome::Cancelled => self.finish_turn(DeskReplyState::Stopped),
@@ -928,31 +1085,71 @@ impl Runtime {
                 if self.desk.host.open {
                     self.desk.host.state = Some(DeskHostState::Ready);
                 }
+                if let Some(refusal) = self.desk.refusal.take()
+                    && let Some(agent) = self.selected_agent()
+                {
+                    let sent = hide_desk::refusal_message(&refusal.command, &refusal.text);
+                    self.desk_start_turn(agent, refusal.text, sent, Vec::new());
+                }
                 self.save_desk();
             }
-            Report::Ask {
+            Report::Permission {
                 rpc_id,
                 allow,
                 reject,
-                card,
-                command,
-                folder,
-                reason,
+                reading,
             } => {
+                let decision = permission::decide(
+                    &reading,
+                    &self.desk.stored.settings.permissions,
+                    &DeskFacts(self),
+                    &self.desk.allowed,
+                );
+                if decision.asks.is_empty() {
+                    self.order(Order::Answer {
+                        rpc_id,
+                        outcome: outcome(Some(&allow)),
+                    });
+                    return false;
+                }
+                // What the first irreversible kind is about.
+                let subject = decision.asks.iter().find_map(|ask| match ask {
+                    Ask::Irreversible(Irreversible::EndWorkingSession) => decision
+                        .sessions
+                        .first()
+                        .and_then(|agent| self.desk_session_title(agent)),
+                    Ask::Irreversible(Irreversible::DeleteOutside) => decision.outside.clone(),
+                    Ask::Irreversible(Irreversible::OverwriteOutside) => {
+                        decision.overwritten.clone()
+                    }
+                    _ => None,
+                });
+                let card = reading.card;
                 let id = self.desk.stored.conversation.next_id();
                 self.desk.stored.conversation.push(DeskItem::Approval {
                     id,
-                    card,
-                    command,
-                    folder,
-                    reason,
+                    card: match card.kind {
+                        permission::CardKind::Command => DeskCardKind::Command,
+                        permission::CardKind::Edit => DeskCardKind::Edit,
+                        permission::CardKind::Read => DeskCardKind::Read,
+                        permission::CardKind::Other => DeskCardKind::Other,
+                    },
+                    command: card.command.clone(),
+                    folder: card.folder,
+                    reason: card.reason,
                     state: DeskApprovalState::Waiting,
+                    asks: decision.asks.clone(),
+                    subject,
+                    refusal: None,
                 });
                 self.desk.approvals.push(Approval {
                     item: id,
                     rpc_id,
                     allow,
                     reject,
+                    asks: decision.asks,
+                    sessions: decision.sessions,
+                    command: card.command,
                 });
                 self.save_desk();
             }
@@ -973,6 +1170,7 @@ impl Runtime {
             }
             Report::Ended { unexpected, detail } => {
                 self.close_approvals();
+                self.forget_allowances();
                 self.finish_turn(DeskReplyState::Stopped);
                 if unexpected {
                     self.desk.host = Host {
@@ -1083,6 +1281,7 @@ impl Runtime {
                     detail,
                     signed_in: agent.signed_in,
                     login_command: id.login_command(),
+                    always_runs: id.always_runs(),
                     models: known.models,
                     efforts: known.efforts,
                 }
@@ -1195,12 +1394,53 @@ impl Runtime {
         self.desk.handle = Some(jobs::DeskHandle { runtime, notifier });
     }
 
+    /// Desk's agent asks to run `line`, as its worker reports the request.
+    pub(in crate::runtime) fn desk_test_permission(&mut self, line: &str) -> bool {
+        self.desk_report(tests::permission_for(line))
+    }
+
     /// Runs Desk with a session open, so its process's commands reach the
     /// core, and `cap` places.
     pub(in crate::runtime) fn open_test_desk(&mut self, cap: u8) {
         self.start_test_desk();
         self.desk.host.open = true;
         self.desk.stored.settings.cap = cap;
+    }
+}
+
+/// The core's facts a permission decision reads (D-82): whether a session
+/// works now, and whether a path lies in a project of this machine.
+struct DeskFacts<'a>(&'a Runtime);
+
+impl permission::Facts for DeskFacts<'_> {
+    fn working(&self, agent: &str) -> bool {
+        self.0.desk_session_working(agent)
+    }
+
+    fn in_project(&self, path: &str) -> bool {
+        let node = self.0.node.as_str();
+        self.0
+            .catalog_workspaces()
+            .filter(|workspace| workspace.device_id == node)
+            .flat_map(|workspace| {
+                std::iter::once(workspace.path.as_str()).chain(
+                    workspace
+                        .checkouts
+                        .iter()
+                        .map(|checkout| checkout.path.as_str()),
+                )
+            })
+            .any(|root| {
+                hide_platform::path::wire_relative(root, path).is_ok_and(|below| !below.is_root())
+            })
+    }
+}
+
+/// The answer that picks `option`, or cancels when the request offered none.
+fn outcome(option: Option<&str>) -> Value {
+    match option {
+        Some(option) => json!({"outcome": {"outcome": "selected", "optionId": option}}),
+        None => json!({"outcome": {"outcome": "cancelled"}}),
     }
 }
 
@@ -1337,17 +1577,265 @@ mod tests {
         });
     }
 
-    fn ask(runtime: &mut Runtime) -> u64 {
-        runtime.desk_report(Report::Ask {
+    /// What Desk's worker reports when the agent asks to run `line`.
+    pub(super) fn permission_for(line: &str) -> Report {
+        let action = hide_desk::permission::Action::Command {
+            command: line.into(),
+            folder: None,
+            reason: None,
+        };
+        let mut reading = hide_desk::permission::classify(
+            &action,
+            &hide_desk::permission::Place {
+                hide: std::path::Path::new("/app/hide"),
+                cwd: "/state/desk/work",
+                home: Some("/home/u"),
+            },
+        );
+        hide_desk::permission::follow_links(&mut reading);
+        Report::Permission {
             rpc_id: json!(7),
             allow: "allow-once".into(),
             reject: Some("reject-once".into()),
-            card: crate::model::DeskCardKind::Command,
-            command: "touch x".into(),
-            folder: None,
-            reason: None,
+            reading,
+        }
+    }
+
+    /// The agent asks to run `line`: the card it makes, or `None` when Hide
+    /// answered it.
+    fn request(runtime: &mut Runtime, line: &str) -> Option<u64> {
+        let before = runtime.desk.stored.conversation.items.len();
+        runtime.desk_report(permission_for(line));
+        runtime
+            .desk
+            .stored
+            .conversation
+            .items
+            .get(before)
+            .map(DeskItem::id)
+    }
+
+    /// A card: deleting outside every project always asks.
+    fn ask(runtime: &mut Runtime) -> u64 {
+        request(runtime, "rm -rf /tmp/x").expect("deleting outside every project asks")
+    }
+
+    /// The answers the worker was told to give, in order.
+    fn answers(received: &Receiver<Order>) -> Vec<Value> {
+        received
+            .try_iter()
+            .filter_map(|order| match order {
+                Order::Answer { outcome, .. } => Some(outcome),
+                _ => None,
+            })
+            .collect()
+    }
+
+    fn selected(option: &str) -> Value {
+        json!({"outcome": {"outcome": "selected", "optionId": option}})
+    }
+
+    fn card(runtime: &Runtime, id: u64) -> DeskItem {
+        items(runtime)
+            .into_iter()
+            .find(|item| item.id() == id)
+            .expect("the card")
+    }
+
+    /// A runtime whose Claude session is open, a turn under way.
+    fn talking(root: &std::path::Path) -> (Runtime, Receiver<Order>, u64) {
+        let (mut runtime, received) = runtime(root);
+        event(&mut runtime, "desk_select", json!({"agent": "claude"}));
+        event(&mut runtime, "desk_send", json!({"text": "what runs now?"}));
+        let tag = sent(&received).tag;
+        opened(&mut runtime, AdapterId::CLAUDE);
+        (runtime, received, tag)
+    }
+
+    #[test]
+    fn a_hide_line_runs_without_a_card_and_a_row_set_to_ask_waits_from_the_next_request() {
+        use hide_desk::permission::{Answer, Ask, Row};
+        let root = tempfile::tempdir().unwrap();
+        let (mut runtime, received, _) = talking(root.path());
+        for line in [
+            "hide agent list | jq -r '.value.items[].id'",
+            "hide agent read agent-1 --lines 80 2>&1 | tail -60",
+            "touch notes.md",
+        ] {
+            assert_eq!(request(&mut runtime, line), None, "{line}");
+        }
+        assert_eq!(answers(&received), vec![selected("allow-once"); 3]);
+
+        assert!(event(
+            &mut runtime,
+            "desk_settings_set",
+            json!({"permissions": {"hide": "run", "read": "run", "shell": "ask", "edit": "run"}})
+        ));
+        let settings = runtime.snapshot.desk.as_ref().unwrap().settings;
+        assert_eq!(settings.permissions.shell, Answer::Ask);
+        assert_eq!(settings.permissions.hide, Answer::Run);
+        let waiting = request(&mut runtime, "touch notes.md").expect("asks from the next request");
+        assert!(matches!(
+            card(&runtime, waiting),
+            DeskItem::Approval { state: DeskApprovalState::Waiting, asks, .. }
+                if asks == [Ask::Row(Row::Shell)]
+        ));
+        assert_eq!(request(&mut runtime, "hide ps | head -c 3000"), None);
+    }
+
+    #[test]
+    fn an_irreversible_card_names_what_it_is_about() {
+        use hide_desk::permission::{Ask, Irreversible};
+        let root = tempfile::tempdir().unwrap();
+        let (mut runtime, _received, _) = talking(root.path());
+        // The card names where the deletion lands, its links followed.
+        let real = hide_platform::path::to_wire_lossy(
+            &hide_platform::fs::identity::canonical(root.path()).unwrap(),
+        );
+        let written = hide_platform::path::to_wire_lossy(root.path());
+        let id = request(&mut runtime, &format!("rm -rf {written}/outside/x")).expect("asks");
+        assert!(matches!(
+            card(&runtime, id),
+            DeskItem::Approval { asks, subject: Some(subject), .. }
+                if asks == [Ask::Irreversible(Irreversible::DeleteOutside)]
+                    && subject == format!("{real}/outside/x")
+        ));
+    }
+
+    #[test]
+    fn allowing_for_the_conversation_stops_asking_that_kind_until_the_desk_process_ends() {
+        let root = tempfile::tempdir().unwrap();
+        let (mut runtime, received, _) = talking(root.path());
+        let first = ask(&mut runtime);
+        let beside = request(&mut runtime, "rm -rf /tmp/y").expect("asked alongside");
+        let force = request(&mut runtime, "git push -f").expect("another kind");
+        answers(&received);
+
+        assert!(event(
+            &mut runtime,
+            "desk_approval",
+            json!({"id": first, "answer": "conversation"})
+        ));
+        // The card asked alongside, now allowed in full, runs too; the push
+        // of another kind still waits.
+        assert_eq!(answers(&received), vec![selected("allow-once"); 2]);
+        for id in [first, beside] {
+            assert!(matches!(
+                card(&runtime, id),
+                DeskItem::Approval {
+                    state: DeskApprovalState::AllowedConversation,
+                    ..
+                }
+            ));
+        }
+        assert!(matches!(
+            card(&runtime, force),
+            DeskItem::Approval {
+                state: DeskApprovalState::Waiting,
+                ..
+            }
+        ));
+        assert_eq!(request(&mut runtime, "rm -rf /tmp/z"), None);
+        assert_eq!(answers(&received), [selected("allow-once")]);
+
+        assert!(event(&mut runtime, "desk_new_conversation", json!({})));
+        event(&mut runtime, "desk_send", json!({"text": "again"}));
+        opened(&mut runtime, AdapterId::CLAUDE);
+        assert!(request(&mut runtime, "rm -rf /tmp/z").is_some());
+    }
+
+    #[test]
+    fn allowing_once_runs_this_call_and_asks_the_next() {
+        let root = tempfile::tempdir().unwrap();
+        let (mut runtime, received, _) = talking(root.path());
+        let id = ask(&mut runtime);
+        assert_eq!(runtime.snapshot.desk.as_ref().unwrap().approvals_waiting, 1);
+        assert!(event(
+            &mut runtime,
+            "desk_approval",
+            json!({"id": id, "answer": "once"})
+        ));
+        assert_eq!(answers(&received), [selected("allow-once")]);
+        assert!(matches!(
+            card(&runtime, id),
+            DeskItem::Approval {
+                state: DeskApprovalState::Allowed,
+                ..
+            }
+        ));
+        assert!(!event(
+            &mut runtime,
+            "desk_approval",
+            json!({"id": id, "answer": "reject"})
+        ));
+        assert!(request(&mut runtime, "rm -rf /tmp/x").is_some());
+    }
+
+    #[test]
+    fn a_refusal_with_a_line_stops_the_turn_and_sends_the_line_to_desk() {
+        let root = tempfile::tempdir().unwrap();
+        let (mut runtime, received, tag) = talking(root.path());
+        let id = ask(&mut runtime);
+        // The line is one line, and only a refusal carries one.
+        assert!(!event(
+            &mut runtime,
+            "desk_approval",
+            json!({"id": id, "answer": "once", "text": "why"})
+        ));
+        assert!(!event(
+            &mut runtime,
+            "desk_approval",
+            json!({"id": id, "answer": "reject", "text": "x".repeat(MAX_REFUSAL_BYTES + 1)})
+        ));
+        assert!(event(
+            &mut runtime,
+            "desk_approval",
+            json!({"id": id, "answer": "reject", "text": "  끝날 때까지\n기다렸다가 지워줘 "})
+        ));
+        let orders: Vec<Order> = received.try_iter().collect();
+        assert!(orders.iter().any(|order| matches!(order,
+            Order::Answer { outcome, .. } if *outcome == selected("reject-once"))));
+        assert!(orders.iter().any(|order| matches!(order, Order::Cancel)));
+        let line = "끝날 때까지 기다렸다가 지워줘";
+        assert!(matches!(
+            card(&runtime, id),
+            DeskItem::Approval { state: DeskApprovalState::Rejected, refusal: Some(refusal), .. }
+                if refusal == line
+        ));
+
+        runtime.desk_report(Report::TurnEnded {
+            tag,
+            outcome: TurnOutcome::Cancelled,
         });
-        items(runtime).last().unwrap().id()
+        let send = sent(&received);
+        assert_eq!(send.text, hide_desk::refusal_message("rm -rf /tmp/x", line));
+        assert!(matches!(
+            items(&runtime).last(),
+            Some(DeskItem::User { text, .. }) if text == line
+        ));
+    }
+
+    #[test]
+    fn a_plain_refusal_lets_the_turn_go_on() {
+        let root = tempfile::tempdir().unwrap();
+        let (mut runtime, received, tag) = talking(root.path());
+        let id = ask(&mut runtime);
+        assert!(event(
+            &mut runtime,
+            "desk_approval",
+            json!({"id": id, "answer": "reject", "text": "   "})
+        ));
+        let orders: Vec<Order> = received.try_iter().collect();
+        assert!(!orders.iter().any(|order| matches!(order, Order::Cancel)));
+        runtime.desk_report(Report::TurnEnded {
+            tag,
+            outcome: TurnOutcome::Done,
+        });
+        assert!(
+            !received
+                .try_iter()
+                .any(|order| matches!(order, Order::Send(_)))
+        );
     }
 
     #[test]
@@ -1667,50 +2155,6 @@ mod tests {
     }
 
     #[test]
-    fn a_card_answers_the_agent_once_with_the_one_time_allowance() {
-        let root = tempfile::tempdir().unwrap();
-        let (mut runtime, received) = runtime(root.path());
-        event(&mut runtime, "desk_select", json!({"agent": "pi"}));
-        event(&mut runtime, "desk_send", json!({"text": "make a file"}));
-        sent(&received);
-        opened(&mut runtime, AdapterId::PI);
-        let card = ask(&mut runtime);
-        assert_eq!(runtime.snapshot.desk.as_ref().unwrap().approvals_waiting, 1);
-
-        assert!(event(
-            &mut runtime,
-            "desk_approval",
-            json!({"id": card, "allow": true})
-        ));
-        let answered = received
-            .try_iter()
-            .find_map(|order| match order {
-                Order::Answer { rpc_id, outcome } => Some((rpc_id, outcome)),
-                _ => None,
-            })
-            .expect("no answer");
-        assert_eq!(
-            answered,
-            (
-                json!(7),
-                json!({"outcome": {"outcome": "selected", "optionId": "allow-once"}})
-            )
-        );
-        assert!(!event(
-            &mut runtime,
-            "desk_approval",
-            json!({"id": card, "allow": false})
-        ));
-        assert!(matches!(
-            items(&runtime).last(),
-            Some(DeskItem::Approval {
-                state: DeskApprovalState::Allowed,
-                ..
-            })
-        ));
-    }
-
-    #[test]
     fn a_restart_closes_a_waiting_card_and_resumes_the_session_after() {
         let root = tempfile::tempdir().unwrap();
         let (mut runtime, received) = runtime(root.path());
@@ -1735,7 +2179,7 @@ mod tests {
         assert!(!event(
             &mut runtime,
             "desk_approval",
-            json!({"id": card, "allow": true})
+            json!({"id": card, "answer": "once"})
         ));
         // The reply under way stopped with the process.
         runtime.desk_report(Report::TurnEnded {

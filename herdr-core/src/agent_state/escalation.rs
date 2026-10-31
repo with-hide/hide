@@ -17,6 +17,10 @@ pub enum Cause {
     Undelivered,
     ChildBlocked,
     ObserverUnconfirmed,
+    /// Hide typed the child's brief, or a letter's bell, and the child never
+    /// recorded it, and its parent did not clear the screen that took it in
+    /// time (`delivery::typed`).
+    InputUnconfirmed,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
@@ -67,6 +71,18 @@ pub(crate) fn of(
     }
     if child.activity == "working" {
         return None;
+    }
+    // The core lays it only once the parent had its grace to clear it.
+    if matches!(
+        child.ask_subject,
+        Some(crate::model::AskSubject::InputUnconfirmed { .. })
+    ) {
+        return Some(Escalation {
+            cause: Cause::InputUnconfirmed,
+            letter_id: None,
+            since_unix_ms: child.laid_since_unix_ms,
+            human_notice: false,
+        });
     }
     let ledger = ledger?;
     for letter in &ledger.letters {
@@ -162,6 +178,7 @@ impl Cause {
     pub(crate) fn verb(self) -> Option<Verb> {
         match self {
             Cause::ChildBlocked => Some(Verb::Approval),
+            Cause::InputUnconfirmed => Some(Verb::Answer),
             Cause::Undelivered | Cause::BellExhausted => Some(Verb::Answer),
             Cause::ObserverUnconfirmed => Some(Verb::Confirm),
             Cause::Draft => Some(Verb::Draft),
@@ -290,7 +307,10 @@ pub(crate) fn lift(
             // A question the core asks for the child is said by its
             // subject, never by the label's line about the work around it.
             Verb::Answer
-                if escalation.cause == Cause::ChildBlocked && row.ask_subject.is_some() =>
+                if matches!(
+                    escalation.cause,
+                    Cause::ChildBlocked | Cause::InputUnconfirmed
+                ) && row.ask_subject.is_some() =>
             {
                 None
             }
@@ -310,10 +330,13 @@ pub(crate) fn lift(
         asks.entry(root).or_default().push(RaisedAsk {
             verb,
             what,
-            subject: row
-                .ask_subject
-                .clone()
-                .filter(|_| verb == Verb::Answer && escalation.cause == Cause::ChildBlocked),
+            subject: row.ask_subject.clone().filter(|_| {
+                verb == Verb::Answer
+                    && matches!(
+                        escalation.cause,
+                        Cause::ChildBlocked | Cause::InputUnconfirmed
+                    )
+            }),
             raised_pane_id: row.pane_id.clone(),
             origin_title: row.identity_label.clone(),
             pane_id: named.pane_id.clone(),
@@ -323,9 +346,13 @@ pub(crate) fn lift(
             since_unix_ms: escalation.since_unix_ms,
             // Only a letter can wait unreceived; a child's own native
             // question was never sent to its parent.
-            unreceived_by: (verb == Verb::Answer && escalation.cause != Cause::ChildBlocked)
-                .then(|| parent.map(|p| p.identity_label.clone()))
-                .flatten(),
+            unreceived_by: (verb == Verb::Answer
+                && !matches!(
+                    escalation.cause,
+                    Cause::ChildBlocked | Cause::InputUnconfirmed
+                ))
+            .then(|| parent.map(|p| p.identity_label.clone()))
+            .flatten(),
             path,
             checkout: named.checkout_label.clone(),
             human_notice: escalation.human_notice,
@@ -413,6 +440,32 @@ mod tests {
         row.delegated = true;
         row.lineage_parent_pane_id = Some("parent".into());
         row
+    }
+
+    /// A delegated child whose brief or letter Hide typed and never saw it
+    /// record, laid on its row once its parent had the grace to clear the
+    /// screen, rises to its root as an answer the operator owes, worded by
+    /// its subject; an ordinary child does not (`delivery::typed`).
+    #[test]
+    fn a_delegated_child_that_never_took_its_input_rises_as_an_answer() {
+        let mut row = child();
+        assert_eq!(of(&row, None, &BTreeMap::new()), None);
+        row.ask_subject = Some(crate::model::AskSubject::InputUnconfirmed {
+            input: crate::delivery::typed::InputKind::Brief,
+            spent: false,
+            held: false,
+        });
+        row.laid_since_unix_ms = Some(42);
+        let raised = of(&row, None, &BTreeMap::new()).expect("it rises");
+        assert_eq!(raised.cause, Cause::InputUnconfirmed);
+        assert_eq!(raised.since_unix_ms, Some(42));
+        assert_eq!(Cause::InputUnconfirmed.verb(), Some(Verb::Answer));
+        row.activity = "working".into();
+        assert_eq!(
+            of(&row, None, &BTreeMap::new()),
+            None,
+            "a working child took it"
+        );
     }
 
     /// Herdr keeps Grok `working` while it waits for a plan approval or an
