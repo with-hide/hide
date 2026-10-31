@@ -4,12 +4,16 @@
 //! ```text
 //! hide-holder --socket <path> --rows <n> --cols <n> --cwd <dir> [--log <file>]
 //!             [--id <pane>] [--record <file> --record-lock <file> --incarnation <n>]
-//!             -- <program> [<argument>...]
+//!             [--theme <theme>] -- <program> [<argument>...]
 //! ```
 //!
 //! With `--record` it keeps its pane's record (`record.rs`): it writes
 //! itself in before it starts the program and fails the start when the
 //! record no longer reserves it.
+//!
+//! `--theme` is the node's theme in `Theme::to_arg`'s form, so the program's
+//! first color question is answered with it; without it the parser's own
+//! defaults answer until a theme message comes.
 //!
 //! It is started as a resident child (`hide_platform::process::start_resident`)
 //! lent one pipe, on which it says `ready holder=<pid> program=<pid>
@@ -25,9 +29,14 @@
 //! as when the holder is killed, rather than running on with part of the
 //! holder gone.
 
+mod answers;
+mod ask;
+mod encode;
 mod holder;
 mod log;
+mod pane;
 mod record;
+mod screen;
 
 use std::io::Write;
 use std::path::PathBuf;
@@ -45,6 +54,7 @@ pub struct Config {
     pub id: String,
     pub record: Option<RecordArgs>,
     pub program: Vec<std::ffi::OsString>,
+    pub theme: Option<hide_holder_protocol::Theme>,
 }
 
 /// The pane's record, its lock and the start this holder is.
@@ -64,6 +74,7 @@ fn parse(mut arguments: impl Iterator<Item = std::ffi::OsString>) -> Result<Conf
     let mut record = None;
     let mut record_lock = None;
     let mut incarnation = None;
+    let mut theme = None;
     let value = |name: &str, arguments: &mut dyn Iterator<Item = std::ffi::OsString>| {
         arguments
             .next()
@@ -100,6 +111,15 @@ fn parse(mut arguments: impl Iterator<Item = std::ffi::OsString>) -> Result<Conf
                         .ok_or("--incarnation is not a number")?,
                 )
             }
+            Some("--theme") => {
+                theme = Some(
+                    value("--theme", &mut arguments)?
+                        .to_str()
+                        .ok_or_else(|| "not text".to_owned())
+                        .and_then(hide_holder_protocol::Theme::from_arg)
+                        .map_err(|error| format!("--theme: {error}"))?,
+                )
+            }
             Some("--") => break,
             _ => return Err(format!("unknown argument {argument:?}")),
         }
@@ -129,6 +149,7 @@ fn parse(mut arguments: impl Iterator<Item = std::ffi::OsString>) -> Result<Conf
         id,
         record,
         program,
+        theme,
     })
 }
 

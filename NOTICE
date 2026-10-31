@@ -10,6 +10,14 @@ Licensed under the Apache License, Version 2.0.
 Hide changed it: each file says what changed, and hide-vt/PATCHES.md lists
 every change.
 
+hide-holder/src/encode.rs, and parts of hide-holder/src/screen.rs and
+hide-holder/src/pane.rs, are derived from Herdr's src/protocol/render_ansi.rs
+and src/pane/terminal.rs (https://github.com/herdrdev/herdr, release v0.9.5,
+commit 2ecf19a).
+Copyright 2025 herdr contributors.
+Licensed under the Apache License, Version 2.0.
+Hide changed them: each file says what it took and what changed.
+
 hide-vt links libghostty-vt, which its build downloads from that Herdr release
 (vendor/libghostty-vt: the libghostty-vt source dist of Ghostty commit
 44f2a44df7e8c4a0c6df3f7d872ef3d7ead88e51 with Herdr's patches 0002, 0004,

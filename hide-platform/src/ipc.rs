@@ -23,7 +23,8 @@
 //!   `TimedOut`.
 //! - A stream opened for one exchange ([`LocalStream::connect_until`]) waits
 //!   for its connect, and for each later read and write, no later than the
-//!   exchange's deadline, and answers `TimedOut` once it has passed.
+//!   exchange's deadline, and answers `TimedOut` once it has passed, until
+//!   [`LocalStream::clear_deadline`] lets it go on as a long-lived stream.
 //! - A [`LocalStream::duplicate`] reads on one thread while the original
 //!   writes on another, and the bytes of each direction arrive whole.
 //! - [`ShutdownHandle::shutdown`] called from another thread ends a read
@@ -224,6 +225,13 @@ impl LocalStream {
     pub fn set_deadline(&self, deadline: Instant) {
         self.deadline
             .store(deadline_nanos(deadline), Ordering::Relaxed);
+    }
+
+    /// Takes away this handle's deadline, so a stream opened for its first
+    /// exchange goes on as a long-lived one; a duplicate made before keeps
+    /// its own.
+    pub fn clear_deadline(&self) {
+        self.deadline.store(0, Ordering::Relaxed);
     }
 
     /// Bounds every later read. `None` blocks until data, end of stream or a

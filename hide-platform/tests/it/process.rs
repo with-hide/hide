@@ -19,8 +19,9 @@ use hide_platform::process::GuardedSpawnError;
 use hide_platform::process::{
     CaptureFailureKind, GroupEnd, MAX_CAPTURE_BYTES, OWNER_LAUNCH_KEYS, OwnedChild, OwnerWatch,
     RUN_OUTPUT_CAP, RunFailure, arguments, boot_id, cwd_of, descendants, descends_from, detach,
-    image_of, is_alive, kill_tree, measure_tree, name_of, parent_of, restrict_to_login_environment,
-    run_to_end, running, set_output_aside, start_time, terminate, terminate_group,
+    group_members, image_of, is_alive, kill_tree, measure_tree, name_of, parent_of,
+    restrict_to_login_environment, run_to_end, running, set_output_aside, start_time, terminate,
+    terminate_group,
 };
 
 const ROLE: &str = "HIDE_PLATFORM_PROC_ROLE";
@@ -2541,6 +2542,26 @@ fn a_process_is_named_by_the_program_it_runs() {
         name_of(u32::MAX - 1).unwrap_err().kind(),
         ErrorKind::NotFound,
         "no process, no name"
+    );
+}
+
+#[test]
+fn a_process_group_lists_its_members_where_the_system_has_them() {
+    #[cfg(unix)]
+    {
+        // SAFETY: getpgrp has no preconditions.
+        let group = unsafe { libc::getpgrp() } as u32;
+        let members = group_members(group).unwrap();
+        assert!(members.contains(&std::process::id()), "{members:?}");
+        assert!(
+            group_members(u32::MAX >> 2).unwrap().is_empty(),
+            "no such group"
+        );
+    }
+    #[cfg(windows)]
+    assert_eq!(
+        group_members(std::process::id()).unwrap_err().kind(),
+        ErrorKind::Unsupported
     );
 }
 

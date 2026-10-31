@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # The web and desktop entrypoint for verification, as plain argv.
 #
-# Usage: verify-web.sh [install [--ignore-scripts] | PACKAGE ACTION [args...]]
+# Usage: verify-web.sh [install [--ignore-scripts | holder] | PACKAGE ACTION [args...]]
 # PACKAGE: web, desktop. ACTION: typecheck, lint, test, build, e2e, e2e-list,
 # playwright-install, package and electron-install (desktop only).
 #
@@ -25,11 +25,17 @@ cd "$(dirname "$0")/.."
 if (( $# > 0 )); then
     if [[ "$1" == install ]]; then
         shift
-        if (( $# > 1 )) || { (( $# == 1 )) && [[ "$1" != --ignore-scripts ]]; }; then
-            printf 'usage: %s install [--ignore-scripts]\n' "$0" >&2
-            exit 2
-        fi
-        exec pnpm install --frozen-lockfile "$@"
+        case "$#:${1:-}" in
+            0:|1:--ignore-scripts) exec pnpm install --frozen-lockfile "$@" ;;
+            # The xterm the pane holder's screen tests draw on, and nothing
+            # else: a Rust lane needs no web shell (docs/TESTING.md, The pane
+            # holder).
+            1:holder) exec pnpm install --frozen-lockfile --filter hide-holder-xterm ;;
+            *)
+                printf 'usage: %s install [--ignore-scripts | holder]\n' "$0" >&2
+                exit 2
+                ;;
+        esac
     fi
     (( $# >= 2 && $# <= 130 )) || { printf 'expected PACKAGE ACTION [args...]\n' >&2; exit 2; }
     package=$1

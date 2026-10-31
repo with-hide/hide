@@ -40,7 +40,7 @@ fn a_holder_runs_its_shell_and_carries_input_and_output_across_connections() {
     first
         .send(ClientMessage::Input(print_ok().to_vec()))
         .unwrap();
-    first.wait_for_output("hide-ok");
+    first.wait_for_text("hide-ok");
 
     #[cfg(unix)]
     {
@@ -53,7 +53,7 @@ fn a_holder_runs_its_shell_and_carries_input_and_output_across_connections() {
         first
             .send(ClientMessage::Input(b"stty size\r".to_vec()))
             .unwrap();
-        first.wait_for_output("40 100");
+        first.wait_for_text("40 100");
     }
 
     // Letting go leaves the pane running for the next connection.
@@ -66,7 +66,7 @@ fn a_holder_runs_its_shell_and_carries_input_and_output_across_connections() {
     second
         .send(ClientMessage::Input(print_ok().to_vec()))
         .unwrap();
-    second.wait_for_output("hide-ok");
+    second.wait_for_text("hide-ok");
 
     second.send(ClientMessage::Terminate).unwrap();
     let closed = second.wait_closed();
@@ -91,7 +91,7 @@ fn a_connection_that_drops_without_a_word_leaves_the_pane_running() {
     second
         .send(ClientMessage::Input(print_ok().to_vec()))
         .unwrap();
-    second.wait_for_output("hide-ok");
+    second.wait_for_text("hide-ok");
     assert!(holder.process.is_running());
 }
 
@@ -137,7 +137,7 @@ fn ending_a_pane_ends_what_ignores_its_signals_and_what_it_starts_meanwhile() {
     let home = Home::new();
     let (holder, pids) = stubborn_pane(&home, &[]);
     let mut connection = holder.open();
-    connection.wait_for_output("TREE READY");
+    connection.wait_for_text("TREE READY");
     let started = running(pids_in(&pids, 2));
 
     connection.send(ClientMessage::Terminate).unwrap();
@@ -174,7 +174,7 @@ fn a_program_that_exits_on_its_own_takes_what_it_left_with_it() {
         .collect();
     match holder.try_open() {
         Ok((stream, welcome)) => {
-            let closed = Connection::new(stream, welcome).wait_closed();
+            let closed = Connection::new(stream, welcome, &holder.socket).wait_closed();
             assert_eq!(closed.reason, CloseReason::ProgramExited, "{closed:?}");
             assert_eq!(closed.exit_code, Some(0), "{closed:?}");
         }
@@ -192,9 +192,9 @@ fn a_program_that_exits_on_its_own_takes_what_it_left_with_it() {
     assert_ended(&left, "its program");
 }
 
-/// A connection that never reads while the program floods it is closed for
-/// it, the program runs on, and an end asked for in the middle of the flood
-/// finishes.
+/// A connection that never reads while the program floods it gets no queue,
+/// only the screen when it reads again, and an end asked for in the middle
+/// of the flood finishes.
 #[test]
 fn a_pane_that_floods_its_output_still_ends() {
     let home = Home::new();
@@ -211,16 +211,10 @@ fn a_pane_that_floods_its_output_still_ends() {
     drop(folder);
     let flooding = running(pids_in(&pids, 1));
     let mut connection = holder.open();
-    connection.wait_for_output("xxxx");
+    connection.wait_for_text("xxxx");
     connection.send(ClientMessage::Terminate).unwrap();
     let closed = connection.wait_closed();
-    assert!(
-        matches!(
-            closed.reason,
-            CloseReason::Terminated | CloseReason::OutputQueueFull
-        ),
-        "{closed:?}"
-    );
+    assert_eq!(closed.reason, CloseReason::Terminated, "{closed:?}");
     holder.wait_gone();
     assert_ended(&flooding, "its pane");
 }
@@ -233,7 +227,7 @@ fn a_killed_holder_takes_its_pane_with_it() {
     let home = Home::new();
     let (holder, pids) = stubborn_pane(&home, &[]);
     let mut connection = holder.open();
-    connection.wait_for_output("TREE READY");
+    connection.wait_for_text("TREE READY");
     let started = running(pids_in(&pids, 3));
     hide_platform::process::terminate(holder.process.pid).unwrap();
     holder.wait_gone();
@@ -322,5 +316,5 @@ fn a_holder_leaves_the_folder_it_started_from_and_runs_its_program_where_asked()
     let mut connection = holder.open();
     let ask: &[u8] = if cfg!(windows) { b"cd\r" } else { b"pwd\r" };
     connection.send(ClientMessage::Input(ask.to_vec())).unwrap();
-    connection.wait_for_output("pane-work-here");
+    connection.wait_for_text("pane-work-here");
 }
