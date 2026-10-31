@@ -67,6 +67,7 @@
                 "Runtime": {
                     "enum": [
                         "running",
+                        "asleep",
                         "ended"
                     ],
                     "type": "string"
@@ -431,6 +432,7 @@
                 "Runtime": {
                     "enum": [
                         "running",
+                        "asleep",
                         "ended"
                     ],
                     "type": "string"
@@ -4115,7 +4117,7 @@
             "rest": null
         }
     ],
-    "digest": "sha256:e282e6f8982043eeac04b52c35b60ea10295e3d3caa153c484b140bdf98d41c2",
+    "digest": "sha256:0edb46d563a8bd136e6eb519f45ee71dece6632ace5bdbfc2c47b13911081aeb",
     "envelopes": {
         "agent": {
             "answer": "value",

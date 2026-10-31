@@ -531,7 +531,13 @@ impl Runtime {
         let (nodes, unreached) = self.memory_nodes();
         let delegated = self.delegated_sessions();
         let language = self.output_language();
-        let home = self.home_path.clone().map(|home| (self.node.clone(), home));
+        let home = self.home_path.clone().map(|home| {
+            let codex = self.codex_home.clone();
+            (
+                self.node.clone(),
+                super::memory_verify::OperatorHome { home, codex },
+            )
+        });
         let work = &mut self.memory_work;
         work.pass_in_flight = true;
         work.pass_cancel = Some(cancel.clone());
@@ -967,7 +973,7 @@ struct PassInput {
     /// operator's own instruction files are; absent when the environment names
     /// none. A node that dials in has its own home, which the core does not
     /// know, so only this machine's Projects read these files.
-    home: Option<(NodeId, PathBuf)>,
+    home: Option<(NodeId, super::memory_verify::OperatorHome)>,
     /// Sessions another agent started: their first human message is that
     /// agent's instruction, not the operator's (D-04).
     delegated: HashSet<String>,
@@ -1681,12 +1687,15 @@ fn walk_project(
 }
 
 /// The operator's own instruction files are this machine's.
-fn own_home<'a>(input: &'a PassInput, node: &NodeId) -> Option<&'a Path> {
+fn own_home<'a>(
+    input: &'a PassInput,
+    node: &NodeId,
+) -> Option<&'a super::memory_verify::OperatorHome> {
     input
         .home
         .as_ref()
         .filter(|(own, _)| own == node)
-        .map(|(_, home)| home.as_path())
+        .map(|(_, home)| home)
 }
 
 /// What a Project's walk decides from besides the store it writes and the
@@ -1731,7 +1740,7 @@ fn walk_key(input: &PassInput, project_id: &str, sessions: &[ProjectSession]) ->
 fn maintain_cards(
     input: &PassInput,
     sessions_node: &dyn NodeLink,
-    home: Option<&Path>,
+    home: Option<&super::memory_verify::OperatorHome>,
     store: &mut MemoryStore,
     facts: &mut CheckoutFacts<'_>,
     project_id: &str,
@@ -3879,7 +3888,13 @@ mod tests {
                 live: live.then(|| key.clone()).into_iter().collect(),
                 closed: closed.then_some(key).into_iter().collect(),
                 held: self.held.borrow().clone(),
-                home: Some((crate::node::test_node(), self.home.clone())),
+                home: Some((
+                    crate::node::test_node(),
+                    super::super::memory_verify::OperatorHome {
+                        home: self.home.clone(),
+                        codex: Some(self.home.join(".codex")),
+                    },
+                )),
                 delegated: delegated.iter().map(|id| (*id).to_owned()).collect(),
                 language: hide_ai::OutputLanguage::English,
                 cancel: CancelToken::new(),

@@ -58,26 +58,25 @@ impl SkillDir {
         }
     }
 
-    /// The agent's own folder the skill folder sits in (none for the shared
-    /// one), and the skill folder's name inside it.
-    fn relative(self) -> (&'static [&'static str], &'static str) {
+    /// The folder the skill folder sits in: the shared `~/.agents`, which no
+    /// one agent owns, or the agent's own folder in the install scope
+    /// (`hide_agent_adapter::HomeScope::Install`), the one its hooks and
+    /// Herdr's integration go into.
+    fn folder(self, home: &Path) -> PathBuf {
         match self {
-            Self::Shared => (&[".agents"], "skills"),
-            Self::Claude => (&[".claude"], "skills"),
-            Self::Antigravity => (&[".gemini", "config"], "skills"),
+            Self::Shared => home.join(".agents"),
+            Self::Claude => hide_agent_adapter::AgentId::ClaudeCode
+                .adapter()
+                .install_home(home),
+            Self::Antigravity => hide_agent_adapter::AgentId::Antigravity
+                .adapter()
+                .install_home(home),
         }
     }
 
-    fn folder(self, home: &Path) -> PathBuf {
-        self.relative()
-            .0
-            .iter()
-            .fold(home.to_owned(), |path, part| path.join(part))
-    }
-
-    /// `~/<folder>/skills`.
+    /// `<folder>/skills`.
     pub fn path(self, home: &Path) -> PathBuf {
-        self.folder(home).join(self.relative().1)
+        self.folder(home).join("skills")
     }
 
     /// Whether the folder can be written without creating the agent's own
@@ -327,6 +326,13 @@ impl AgentAdapter {
     /// with its update command.
     pub(crate) fn updates(&self) -> &'static [hide_agent_adapter::UpdateRoute] {
         self.declaration.updates
+    }
+
+    /// The agent's own folder under `home` where Hide and Herdr install,
+    /// from the one resolver of agent folders
+    /// (`hide_agent_adapter::HomeScope::Install`).
+    pub(crate) fn install_home(&self, home: &std::path::Path) -> std::path::PathBuf {
+        self.declaration.install_home(home)
     }
 }
 

@@ -6,6 +6,8 @@
 
 pub mod composer;
 mod declarations;
+mod home;
+pub use home::{HomeScope, HomeUnresolved, antigravity_app_data};
 mod journey;
 pub mod usage;
 pub use declarations::ADAPTERS;
@@ -348,7 +350,11 @@ impl LaunchDialect {
     /// the `--model` that the help of Grok 1.0.52, Pi 1.0.4, omp 18.7.0 and
     /// Cursor CLI 2026.10.14 lists (read 2026-10-18; their efforts are not
     /// declared yet). OpenCode 2.0.29's lists no model option, so it takes
-    /// neither.
+    /// neither. The effort menus are also the ones Hide AI offers
+    /// (`AgentAdapter::efforts`): Claude Code's print mode takes the same
+    /// `--effort` (claude 2.1.294 `--help`), and Codex app-server's
+    /// `turn/start` the same `ReasoningEffort` (codex-cli 0.160.1,
+    /// `codex app-server generate-json-schema`).
     ///
     /// `full_access` is the option that starts the agent without asking
     /// before each tool call, which Settings › Agents adds to every start and
@@ -694,6 +700,18 @@ impl HerdrIntegration {
     }
 }
 
+/// The agent as a Hide AI provider (`hide-ai`, registry).
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct AiProvider {
+    /// The provider id Hide AI's settings persist, kept apart from the
+    /// adapter id because files an earlier Hide wrote carry it (`claude`).
+    pub id: &'static str,
+    /// Whether Hide AI may send the agent a request: only once a call to it
+    /// is proven read-only (`docs/AI_PROVIDERS.md`, D-15). An agent without
+    /// that proof is still listed, and refuses every request with why.
+    pub requests: Capability<()>,
+}
+
 /// A submission hook may observe a prompt even when its output is discarded.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct PromptHook {
@@ -788,6 +806,14 @@ pub struct AgentAdapter {
     pub observation: ObservationSupport,
     pub guidance: Capability<ContextRoute>,
     pub herdr: HerdrIntegration,
+    /// The variable that moves the agent's own folder away from
+    /// [`HerdrIntegration::folder`] when the operator runs it (Codex's
+    /// `CODEX_HOME`), read only through [`AgentAdapter::home`]; `None` for an
+    /// agent whose folder Hide reads at its default place alone.
+    pub home_variable: Option<&'static str>,
+    /// How Hide AI runs the agent for background features, or why it does
+    /// not: `hide-ai`'s registry lists exactly the agents that declare one.
+    pub ai: Capability<AiProvider>,
     pub default_on: bool,
     pub prompt_hook: Option<PromptHook>,
     pub spawn_guard: Option<HookDialect>,
@@ -912,6 +938,16 @@ impl Feature {
 }
 
 impl AgentAdapter {
+    /// The reasoning efforts the agent takes: the one menu a start, a
+    /// restart and Hide AI offer ([`LaunchDialect::options`]); empty for an
+    /// agent Hide does not start.
+    pub const fn efforts(&self) -> &'static [&'static str] {
+        match self.start {
+            Some(dialect) => dialect.options().efforts,
+            None => &[],
+        }
+    }
+
     pub const fn supports(&self, feature: Feature) -> bool {
         match feature {
             Feature::Skill | Feature::HerdrIntegration => true,

@@ -39,10 +39,6 @@ use crate::{
 /// The user's decision for background features.
 pub const DEFAULT_MODEL: &str = "gpt-5.6-luna";
 
-/// The reasoning efforts `turn/start` takes (`codex app-server
-/// generate-json-schema`, codex-cli 0.160.1, `ReasoningEffort`).
-pub const EFFORTS: &[&str] = &["minimal", "low", "medium", "high", "xhigh"];
-
 /// Features that load tool definitions into every turn. Measured on
 /// codex-cli 0.153.4: disabling them takes a label from 26,703 input tokens
 /// to 11,898 on this model, and no config key disables the remainder.

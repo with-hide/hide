@@ -1314,6 +1314,8 @@ export type MissionStrength = "fast" | "normal" | "thorough";
 export type MissionNodeKind = "change" | "research" | "verify" | "external";
 /** How a change node's work lands (`mission_delivery`). */
 export type MissionDelivery = "pr" | "direct";
+/** A registered agent's life (`hide agent show`'s `runtime`): running, put to sleep by Hide, or ended. */
+export type AgentRuntime = "running" | "asleep" | "ended";
 /** A node's state as its Conductor records it (`mission_node_status`). */
 export type MissionNodeStatus = "planned" | "working" | "waiting" | "review" | "held" | "done" | "failed" | "dropped";
 /** Why a node waits on an earlier one (`mission_blocked`, D-46). */
@@ -1429,6 +1431,8 @@ export type MissionNode = {
   delivery: MissionDelivery | null;
   worker: MissionWorker | null;
   agent_id: string | null;
+  /** The worker's life as `hide agent show` gives it: a worker Hide put to sleep is `asleep` (`NodeView.agent_runtime`); none with no registration or from an older core. */
+  agent_runtime?: AgentRuntime | null;
   /** The worker's pane on `machine`, which its status mark and 터미널로 이동 follow. */
   pane_id: string | null;
   machine: string | null;

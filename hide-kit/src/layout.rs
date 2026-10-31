@@ -250,7 +250,8 @@ pub fn global_instruction(state_dir: &Path) -> PathBuf {
     state_dir.join(GLOBAL_INSTRUCTION)
 }
 
-pub const GLOBAL_INSTRUCTION: &str = "global-instruction.md";
+/// Its name, the global instruction guard's (`hide_agent_hooks::global_guard`).
+pub const GLOBAL_INSTRUCTION: &str = hide_agent_hooks::global_guard::FILE_NAME;
 
 /// Usage events and retained daily totals, owned by the core's usage worker.
 pub const USAGE_STORE: &str = "usage.sqlite3";

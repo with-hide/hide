@@ -4,7 +4,7 @@ import { describe, expect, it } from "vitest";
 import { STRENGTHS } from "./conductorSettings";
 import { english } from "./i18n/catalogs";
 import { initializeInterfaceI18n } from "./i18n/instance";
-import { cardLine, checkerState, conductorState, missionResultCounts, nextNodes, reportLine, chipWords, conductedBy, criteriaTally, launchSession, runWords, criterionName, missionHeadCells, criterionNote, defectEdges, firstPlans, kindWord, landingLeft, mainCommit, nodeLanded, missionCells, missionOfPane, missionResults, missionTally, missionTone, missionWorkLine, neighbours, nodeLook, nodeResult, nodeTimes, nodeTone, paneChipWords, missionCounts, nodeLine, nodeMark, stackWaiting, stageWord, takeOverPrompt, takeOverProvider, turnItems } from "./missions";
+import { cardLine, checkerState, liveNodes, conductorState, missionResultCounts, nextNodes, reportLine, chipWords, conductedBy, criteriaTally, launchSession, runWords, criterionName, missionHeadCells, criterionNote, defectEdges, firstPlans, kindWord, landingLeft, mainCommit, nodeLanded, missionCells, missionOfPane, missionResults, missionTally, missionTone, missionWorkLine, neighbours, nodeLook, nodeResult, nodeTimes, nodeTone, paneChipWords, missionCounts, nodeLine, nodeMark, stackWaiting, stageWord, takeOverPrompt, takeOverProvider, turnItems } from "./missions";
 import type { AgentRow, Mission, MissionCriterion, MissionEvent, MissionLanding, MissionNode, SnapshotRest } from "./snapshot";
 
 // What the map and the Conductor row read from a mission (PRD
@@ -253,6 +253,26 @@ describe("a card's look (PRD mission-map-git-criteria D-02, B26, B27)", () => {
     const outside = (status: MissionNode["status"]) => node("x", { kind: "external", delivery: null, external: { pr: 1232 }, status });
     expect([nodeLook(m, outside("waiting")), nodeLook(m, outside("done")), nodeLook(m, outside("failed"))]).toEqual(["external", "done", "failed"]);
     expect(nodeLook(mission("m", { status: "cancelled" }), node("n", { status: "working" }))).toBe("cancelled");
+  });
+
+  it("draws a working node whose worker Hide put to sleep as asleep, not working, on the card, the head, the chip and the live list", () => {
+    const m = mission("m");
+    const sleeping = node("s", { status: "working", agent_id: "agent-2", agent_runtime: "asleep" });
+    const awake = node("a", { status: "working", agent_id: "agent-3", agent_runtime: "running" });
+    expect(nodeLook(m, sleeping)).toBe("asleep");
+    expect(nodeLook(m, awake)).toBe("working");
+    // Without the core's answer (an older core) the Conductor's record stands.
+    expect(nodeLook(m, node("o", { status: "working" }))).toBe("working");
+    // A node in review is its checkers' work, whoever sleeps.
+    expect(nodeLook(m, node("r", { status: "review", agent_runtime: "asleep" }))).toBe("review");
+    // The pane chip's mark, with or without the worker's row.
+    expect(nodeMark(sleeping, null)).toBe("asleep");
+    expect(nodeMark(sleeping, "going")).toBe("asleep");
+    expect(nodeMark(awake, null)).toBe("going");
+    const both = mission("m", { nodes: [sleeping, awake] });
+    expect(missionHeadCells(both)).toEqual(["asleep", "working"]);
+    expect(liveNodes(both).map((one) => one.key)).toEqual(["a"]);
+    expect(english).toHaveProperty("mission.look.asleep");
   });
 
   it("tags finished work with what the core left before main, and nothing it could not read or that landed", () => {

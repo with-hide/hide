@@ -26,7 +26,6 @@ try {
       const input = file === 'design/tokens.json'
         || file === 'contracts/agent-adapters.json'
         || file === 'hide-kit/src/agents.rs'
-        || file === 'hide-ai/src/registry.rs'
         || file.startsWith('web/src/')
         // Materialize the script module boundary, including new imports.
         || (file.startsWith('scripts/') && ['.mjs', '.json'].includes(path.extname(file)));

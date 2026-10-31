@@ -13,7 +13,7 @@ use std::sync::OnceLock;
 use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 
-const ARGUMENT: &str = "--state-dir-b64";
+pub(crate) const ARGUMENT: &str = "--state-dir-b64";
 const STATE_VARIABLE: &str = "HIDE_STATE_DIR";
 const ENCODED_LIMIT: usize = 32 * 1024;
 

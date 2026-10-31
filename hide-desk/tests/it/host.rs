@@ -293,7 +293,7 @@ fn a_command_desk_s_codex_runs_finds_desk_s_own_hide_before_the_account_s() {
             desk: &desk,
             capability: &root.path().join("desk.json"),
             codex_home: &codex_home,
-            codex_sign_in: &sign_in,
+            codex_sign_in: Ok(&sign_in),
         },
         "n1",
     )

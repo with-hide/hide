@@ -161,6 +161,35 @@ impl Runtime {
         })
     }
 
+    /// The live registrations whose agent Hide holds asleep now: put to
+    /// sleep, waking, or not reopened, in its pane or with its pane closed
+    /// (`asleep_route`). One whose end still runs is not: its agent runs
+    /// until the end lands. The one source `hide agent list`, `hide agent
+    /// show` and `hide ps` read a registration's life from
+    /// (`coordination::life`), and a mission's map for its workers. With no
+    /// sleep record, no registration is looked at.
+    pub(crate) fn sleeping_registrations<'a>(
+        &self,
+        records: impl IntoIterator<Item = &'a crate::coordination::AgentRecord>,
+    ) -> crate::coordination::Sleeping {
+        let store = &self.snapshot.ui_state.agent_sleep;
+        if store.records.is_empty() && store.dormant.is_empty() {
+            return crate::coordination::Sleeping::default();
+        }
+        crate::coordination::Sleeping(
+            records
+                .into_iter()
+                .filter(|record| {
+                    !record.ended
+                        && self
+                            .asleep_route(&record.actor)
+                            .is_some_and(|(_, stage)| stage != Stage::Ending)
+                })
+                .map(|record| record.id.clone())
+                .collect(),
+        )
+    }
+
     /// The recipients asleep now, for the delivery store's pass: their
     /// letters wait for their wake with the deadline paused (D-13). An agent
     /// whose wake failed is not among them: nothing will wake it, so its

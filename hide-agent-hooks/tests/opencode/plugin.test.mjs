@@ -22,6 +22,12 @@ const ANSWERS = process.env.HIDE_OPENCODE_HELPER_ANSWERS;
 
 const HERDR = { HERDR_ENV: "1", HERDR_PANE_ID: "w1:p1", HERDR_SOCKET_PATH: "/tmp/herdr-fixture.sock" };
 const sample = (name) => structuredClone(SAMPLES[name]);
+// The global instruction guard's corpus, which the helper's guard is run on too (`src/global_guard.rs`), with
+// `{state}` as this account's state folder.
+const CORPUS = JSON.parse(readFileSync(new URL("../fixtures/global-guard-corpus.json", import.meta.url), "utf8")).cases.map(
+  (entry) => ({ ...entry, text: entry.text.replaceAll("{state}", path.join(homedir(), ".hide", "state")) }),
+);
+const NAMED = CORPUS.filter((entry) => entry.named).length;
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 test("post observation preserves the tool result and carries its actual native identity", async () => {
@@ -124,19 +130,24 @@ test("outside a Herdr pane the plugin only guards a protected project's tools", 
   }
   await sleep(100);
   assert.deepEqual(calls(), []);
-  // With no protection on, a call naming the Hide global instruction still asks the helper (D-07).
+  // With no protection on, every call of the guard's corpus that names the Hide global instruction still asks the
+  // helper, and no other call does (D-07).
   policy({});
   {
     const hooks = await plugin({});
-    const write = { command: "echo x >> ~/.hide/state/Global-Instruction.md" };
-    await assert.rejects(hooks["tool.execute.before"]({ tool: "bash", sessionID: "ses_a" }, { args: write }), /Not run: guarded/);
-    await assert.rejects(
-      hooks["tool.execute.before"]({ tool: "write", sessionID: "ses_a" }, { args: { filePath: "/h/.hide/state/global-instruction.md", content: "x" } }),
-      /Not run: guarded/,
-    );
-    const [shell, file] = await until("tool", 2);
-    assert.equal(shell.input.command, write.command);
-    assert.deepEqual(file.input.args, { filePath: "/h/.hide/state/global-instruction.md" });
+    for (const entry of CORPUS) {
+      const call =
+        entry.tool === "shell"
+          ? { tool: "bash", args: { command: entry.text } }
+          : { tool: entry.tool, args: { filePath: entry.text, ...(entry.tool === "write" ? { content: "x" } : {}) } };
+      const asked = hooks["tool.execute.before"]({ tool: call.tool, sessionID: "ses_a" }, { args: call.args });
+      if (entry.named) await assert.rejects(asked, /Not run: guarded/, entry.text);
+      else assert.equal(await asked, undefined, entry.text);
+    }
+    const asked = await until("tool", NAMED);
+    assert.equal(asked.length, NAMED);
+    const write = CORPUS.find((entry) => entry.tool === "write");
+    assert.deepEqual(asked.find((call) => call.input.tool === "write")?.input.args, { filePath: write.text });
     rmSync(LOG, { force: true });
   }
   // So does a write to the file a link at the global instruction points to, though it never names the instruction.

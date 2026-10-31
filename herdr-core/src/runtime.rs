@@ -1218,6 +1218,11 @@ pub struct Runtime {
     /// `None` when the process has no usable HOME, which every connect then
     /// reports rather than guessing a path.
     home_path: Option<PathBuf>,
+    /// Codex's folder as Codex reads it, from the environment report
+    /// (`hide_agent_adapter::AgentAdapter::home`, read scope): where the
+    /// operator's own Codex instructions are. `None` without a home or with a
+    /// `CODEX_HOME` Hide cannot place.
+    codex_home: Option<PathBuf>,
     /// The SSH client and coordinator of each registered device that is
     /// connected or connecting, keyed by device id. Removing a device drops
     /// its entry; the coordinator handle moves to `retired_remote_syncs`.
@@ -2303,6 +2308,7 @@ impl Runtime {
             file_roots: None,
             state_path,
             home_path: environment.home_path,
+            codex_home: environment.codex_home,
             remote_connections: HashMap::new(),
             inbound_arrivals: HashMap::new(),
             retired_remote_syncs: Vec::new(),
