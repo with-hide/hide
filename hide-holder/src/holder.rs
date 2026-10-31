@@ -65,6 +65,11 @@ const WRITE_LIMIT: Duration = Duration::from_secs(5);
 /// draws at most once per frame of a 60 Hz screen.
 const MIN_FRAGMENT_INTERVAL: Duration = Duration::from_millis(16);
 
+/// How long a connection's screen stays still after a fragment before the
+/// writer gives the allocator's freed pages back to the system, once, until
+/// the next fragment ([`hide_platform::memory::return_freed`]).
+const RETURN_FREED_AFTER: Duration = Duration::from_secs(1);
+
 /// The most answer bytes waiting for the program to take them; past it an
 /// answer is dropped and logged, and the program's output goes on being read
 /// (PRD engine-bundle-2-pane-holder D-9, D-17).
@@ -86,6 +91,11 @@ const REFUSE_LIMIT: Duration = Duration::from_millis(250);
 /// PTY writer's thread at the first input, so a test sees what a panic does.
 /// A release holder never reads it, and the pane's program never gets it.
 const PANIC_ON_INPUT: &str = "HIDE_HOLDER_TEST_PANIC_ON_INPUT";
+
+/// Debug builds only: a holder started with this variable set never gives
+/// freed pages back, so a test can measure what the return saves. A release
+/// holder never reads it, and the pane's program never gets it.
+const KEEP_FREED: &str = "HIDE_HOLDER_TEST_KEEP_FREED";
 
 /// How much one read of the PTY takes.
 const READ_CHUNK: usize = 64 * 1024;
@@ -240,6 +250,9 @@ pub struct Holder {
     opening: Arc<Opening>,
     /// The pane's record, which the holder writes why the pane ended into.
     record: Option<Claim>,
+    /// Whether a connection's writer gives freed pages back once its screen
+    /// is still (`KEEP_FREED`).
+    return_freed: bool,
 }
 
 impl Holder {
@@ -271,6 +284,8 @@ impl Holder {
         command.env_remove(hide_platform::process::LENT_KEY);
         let panic_on_input = cfg!(debug_assertions) && std::env::var_os(PANIC_ON_INPUT).is_some();
         command.env_remove(PANIC_ON_INPUT);
+        let return_freed = !(cfg!(debug_assertions) && std::env::var_os(KEEP_FREED).is_some());
+        command.env_remove(KEEP_FREED);
         #[cfg(unix)]
         let spawned = pair.slave.spawn_command(command);
         #[cfg(windows)]
@@ -407,6 +422,7 @@ impl Holder {
             ending,
             opening,
             record,
+            return_freed,
         })
     }
 
@@ -568,6 +584,8 @@ impl Holder {
                 pane: screen.then(|| self.pane.clone()),
                 epochs: self.epochs.clone(),
                 events: self.sender.clone(),
+                log: self.log.clone(),
+                return_freed: self.return_freed,
             };
             let shutdown = stream.shutdown_handle();
             move || writer.serve(writer_stream, &shutdown, &written_tx)
@@ -1073,6 +1091,8 @@ struct ScreenWriter {
     pane: Option<Arc<Mutex<Pane>>>,
     epochs: Arc<AtomicU64>,
     events: Sender<Event>,
+    log: Log,
+    return_freed: bool,
 }
 
 enum Job {
@@ -1089,8 +1109,11 @@ impl ScreenWriter {
         // The screen version seen while the program held synchronized
         // output, and until when it may.
         let mut held: Option<(u64, Instant)> = None;
+        // Whether a fragment went out since the freed pages were last given
+        // back: a flood leaves the allocator holding what it freed.
+        let mut drew = false;
         loop {
-            let job = self.next_job(next, held);
+            let job = self.next_job(next, held, &mut drew);
             let message = match job {
                 Job::Send(message) => message,
                 Job::Draw { full } => {
@@ -1120,6 +1143,7 @@ impl ScreenWriter {
                         }
                     };
                     held = None;
+                    drew = true;
                     let size = Size {
                         rows: frame.rows,
                         cols: frame.cols,
@@ -1163,8 +1187,10 @@ impl ScreenWriter {
     }
 
     /// Waits for a message to send, or for the screen to have changed by the
-    /// time it may be drawn again.
-    fn next_job(&self, next: Instant, held: Option<(u64, Instant)>) -> Job {
+    /// time it may be drawn again. Once the screen has stayed still for
+    /// `RETURN_FREED_AFTER` after a fragment (`drew`), it gives the freed
+    /// pages back and waits with no bound; nothing wakes an idle writer.
+    fn next_job(&self, next: Instant, held: Option<(u64, Instant)>, drew: &mut bool) -> Job {
         let mut pending = self.outbox.pending();
         loop {
             if let Some(message) = pending.messages.pop_front() {
@@ -1199,11 +1225,42 @@ impl ScreenWriter {
                 continue;
             }
             pending.waits_for_change = true;
+            if *drew {
+                let (guard, waited) = self
+                    .outbox
+                    .wake
+                    .wait_timeout(pending, RETURN_FREED_AFTER)
+                    .unwrap_or_else(PoisonError::into_inner);
+                pending = guard;
+                if waited.timed_out() && !pending.changed && pending.messages.is_empty() {
+                    *drew = false;
+                    drop(pending);
+                    self.return_freed();
+                    pending = self.outbox.pending();
+                }
+                continue;
+            }
             pending = self
                 .outbox
                 .wake
                 .wait(pending)
                 .unwrap_or_else(PoisonError::into_inner);
+        }
+    }
+
+    fn return_freed(&self) {
+        if !self.return_freed {
+            return;
+        }
+        match hide_platform::memory::return_freed() {
+            Ok(()) => {}
+            // A C library with no such call (musl, which no build of this
+            // repository targets) keeps what it freed.
+            Err(error) if error.kind() == std::io::ErrorKind::Unsupported => {}
+            Err(error) => self.log.event(
+                "holder.memory_return_failed",
+                &[("error", error.to_string().into())],
+            ),
         }
     }
 }

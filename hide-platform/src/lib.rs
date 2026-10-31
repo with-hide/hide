@@ -9,6 +9,7 @@ pub mod fs;
 pub mod host;
 pub mod ipc;
 pub mod listeners;
+pub mod memory;
 pub mod path;
 pub mod process;
 pub mod programs;

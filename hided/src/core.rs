@@ -26,7 +26,7 @@ use herdr_core::{Core, CoreOptions};
 use hide_node::terminal::device::DeviceSink;
 use hide_node::terminal::router::Router;
 use hide_node::terminal::{
-    Attacher, LocalAttacher, Mode, OutputSink, ReportSink, RetryPolicy, Service, SessionParts,
+    Attacher, LocalAttacher, Mode, OutputSink, ReportSink, Service, SessionParts,
 };
 use tokio::sync::broadcast;
 
@@ -725,23 +725,11 @@ impl CoreHandle {
         let reports: Arc<dyn ReportSink> = Arc::new(reports);
         let hub = TerminalHub::new();
         let outputs = crate::relay::ScreenOutputs::new(Arc::clone(&hub));
-        let holders = local_holders(&options, Arc::clone(&reports))?;
-        let attacher = match &holders {
-            Some(holders) => holders.attacher(local_attacher(&options)),
-            None => local_attacher(&options),
-        };
-        let local = Arc::new(
-            Service::start(
-                attacher,
-                Arc::clone(&outputs) as Arc<dyn OutputSink>,
-                Arc::clone(&reports),
-                RetryPolicy::Automatic,
-            )
-            .map_err(|error| format!("terminal service failed to start: {error}"))?,
-        );
-        if let Some(holders) = holders {
-            Arc::new(holders).recover_in_background(Arc::clone(&local));
-        }
+        let local = local_terminals(
+            &options,
+            Arc::clone(&outputs) as Arc<dyn OutputSink>,
+            Arc::clone(&reports),
+        )?;
         let terminals = Arc::new(Router::new(
             Arc::clone(&local) as Arc<dyn hide_node_link::terminal::TerminalNode>,
             Arc::clone(&outputs) as Arc<dyn OutputSink>,
@@ -1102,32 +1090,39 @@ impl Drop for CoreHandle {
     }
 }
 
-/// This machine's pane holders, when the development switch
-/// (`crate::env::HIDE_DEV_PANE_HOLDER`) is on: the state folder's records,
-/// the holder beside this program, and on Windows the ConPTY runtime beside
-/// the configured Herdr. Off, or unset, there are none and every pane opens
-/// through Herdr.
-fn local_holders(
+/// This machine's terminal service: Herdr's sessions, and the pane holders
+/// when the development switch (`crate::env::HIDE_DEV_PANE_HOLDER`) is on,
+/// over the state folder's records, the holder beside this program, and on
+/// Windows the ConPTY runtime beside the configured Herdr
+/// (`Holders::start_local`, which the node's measuring tools start too).
+fn local_terminals(
     options: &CoreOptions,
+    outputs: Arc<dyn OutputSink>,
     reports: Arc<dyn ReportSink>,
-) -> Result<Option<hide_node::terminal::holder::Holders>, String> {
+) -> Result<Arc<Service>, String> {
     use hide_node::terminal::holder::{Holders, Switch};
     let switch = crate::env::pane_holder_switch()?;
-    if switch == Switch::Off {
-        return Ok(None);
-    }
-    let home = match options.home.as_ref() {
-        Some(home) => std::path::PathBuf::from(home),
-        None => hide_platform::host::home_dir()
-            .map_err(|error| format!("pane holders need a home folder: {error}"))?,
-    };
     let state_dir = std::path::Path::new(&options.app_state_path)
         .parent()
         .ok_or("the app state path has no folder")?
         .to_path_buf();
-    let source =
-        Holders::local_source(options.herdr_bin_path.as_deref().map(std::path::Path::new))?;
-    Holders::open(switch, &home, &state_dir, source, reports)
+    // Off, no holder is opened and the home is never read.
+    let home = match (switch, options.home.as_ref()) {
+        (Switch::Off, _) => std::path::PathBuf::new(),
+        (Switch::On, Some(home)) => std::path::PathBuf::from(home),
+        (Switch::On, None) => hide_platform::host::home_dir()
+            .map_err(|error| format!("pane holders need a home folder: {error}"))?,
+    };
+    Holders::start_local(
+        switch,
+        &home,
+        &state_dir,
+        options.herdr_bin_path.as_deref().map(std::path::Path::new),
+        local_attacher(options),
+        outputs,
+        reports,
+    )
+    .map(|terminals| terminals.service)
 }
 
 /// This machine's Herdr, through the official `herdr terminal session`

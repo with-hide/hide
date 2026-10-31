@@ -425,6 +425,13 @@ pub struct Holders {
     reports: Arc<dyn ReportSink>,
 }
 
+/// What [`Holders::start_local`] starts: the node's terminal service, and its
+/// holder panes when the switch is on.
+pub struct LocalTerminals {
+    pub service: Arc<Service>,
+    pub holders: Option<Arc<Holders>>,
+}
+
 impl Holders {
     /// The holder panes of `state_dir`, whose holders are copied from
     /// `source` into version folders under `home`, when `switch` is on;
@@ -474,6 +481,49 @@ impl Holders {
             program: dir.join(hide_kit::holders::program_name()),
             conpty,
         })
+    }
+
+    /// The local node's terminal service as a daemon starts it: with
+    /// `switch` on, the state folder's holder panes beside `herdr`'s
+    /// sessions, the holder from [`Holders::local_source`], and the holders
+    /// that ran on while no node was there found again in the background
+    /// ([`Holders::recover_in_background`]); off, `herdr`'s sessions alone and
+    /// nothing of holders opened. hided and the tools that measure a node
+    /// (`hide-node/examples/holder_node.rs`) start it here, so what they
+    /// measure is how the daemon is built.
+    #[allow(clippy::too_many_arguments)]
+    pub fn start_local(
+        switch: Switch,
+        home: &Path,
+        state_dir: &Path,
+        herdr_bin: Option<&Path>,
+        herdr: Box<dyn Attacher>,
+        outputs: Arc<dyn super::OutputSink>,
+        reports: Arc<dyn ReportSink>,
+    ) -> Result<LocalTerminals, String> {
+        let holders = match switch {
+            Switch::Off => None,
+            Switch::On => Self::open(
+                switch,
+                home,
+                state_dir,
+                Self::local_source(herdr_bin)?,
+                Arc::clone(&reports),
+            )?
+            .map(Arc::new),
+        };
+        let attacher = match &holders {
+            Some(holders) => holders.attacher(herdr),
+            None => herdr,
+        };
+        let service = Arc::new(
+            Service::start(attacher, outputs, reports, super::RetryPolicy::Automatic)
+                .map_err(|error| format!("terminal service failed to start: {error}"))?,
+        );
+        if let Some(holders) = &holders {
+            Arc::clone(holders).recover_in_background(Arc::clone(&service));
+        }
+        Ok(LocalTerminals { service, holders })
     }
 
     /// The attacher the node's terminal service opens panes with: holder

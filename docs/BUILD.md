@@ -208,6 +208,9 @@ The `vt` lane is each system's one saver, on main only; `rust workspace`, `windo
 The `vt` lane (`.github/workflows/vt.yml`) builds hide-vt on Linux, macOS and Windows from empty Zig caches and again from kept ones, measuring each with `scripts/measure-build.py` (wall time, and the largest process's peak memory), runs its tests and Clippy and the pane holder's ([TESTING.md](TESTING.md#the-pane-holder)), builds it again with the network denied on Linux (`unshare --net`) and macOS (`sandbox-exec`) after showing the wrapper denies it, and runs `scripts/check-vt-build-refusals.sh`, which shows a missing Zig, another Zig version and a download of other bytes each stopping with its reason.
 `scripts/tests/test_prepare_vt_inputs.py` covers the preparation's refusals without a network.
 
+The holder restart lane (`.github/workflows/holder-restart.yml`, [TESTING.md](TESTING.md#the-holder-restart-lane)) builds `hide-holder` and hide-node's `holder_node` example and restores the vt caches without saving them.
+The example is declared `test = false` in `hide-node/Cargo.toml`, so `cargo test`, the workspace tests and Clippy's test targets never build it, and only the lane and the measurements pay for it: on the GitHub runners of 2026-10-31 the example took 17 to 44 s on top of the holder's own 6 to 109 s, which depend on how warm the rust-cache entry was.
+
 ## The vendored PTY crate
 
 The pane holder opens its PTY with `portable-pty` 0.9.0 as Herdr v0.9.5 vendors it, with Herdr's four patches and Hide's own changes, in `vendor/portable-pty` ([PATCHES.md](../vendor/portable-pty/PATCHES.md) lists its origin and every change).

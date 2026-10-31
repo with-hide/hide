@@ -202,3 +202,27 @@ fn questions_are_answered_once_each_with_no_node_connected() {
     assert_eq!(heard.matches('R').count(), 2, "{heard:?}");
     assert_eq!(heard.matches('c').count(), 1, "{heard:?}");
 }
+
+/// On Windows a color question passes through ConPTY to the holder, which
+/// answers it from the theme; ConPTY must not answer it too, or the second
+/// answer reaches a program no longer waiting for one and is read as typed
+/// keys (Antigravity took its closing BEL for Ctrl+G and opened its prompt
+/// editor on the holder restart lane).
+#[cfg(windows)]
+#[test]
+fn a_color_question_is_answered_once_through_conpty() {
+    let home = Home::new();
+    let script = Script::new(&home, vec![b"\x1b]11;?\x07asked".to_vec()]);
+    let holder = script.start(&home);
+    wait_until("the question to be parsed", || {
+        holder.read(5).0.contains("asked")
+    });
+    wait_until("the answer", || {
+        String::from_utf8_lossy(&script.heard()).contains("11;rgb:")
+    });
+    // Anything owed after the first answer has had its time.
+    std::thread::park_timeout(std::time::Duration::from_secs(1));
+    let heard = String::from_utf8_lossy(&script.heard()).into_owned();
+    eprintln!("a color question heard back {heard:?}");
+    assert_eq!(heard.matches("11;rgb:").count(), 1, "{heard:?}");
+}

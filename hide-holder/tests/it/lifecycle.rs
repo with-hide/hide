@@ -138,6 +138,13 @@ fn ending_a_pane_ends_what_ignores_its_signals_and_what_it_starts_meanwhile() {
     let (holder, pids) = stubborn_pane(&home, &[]);
     let mut connection = holder.open();
     connection.wait_for_text("TREE READY");
+    // A Windows process is told nothing when its job is ended, so there the
+    // child starts a chain of grandchildren at once, each starting the next;
+    // the end is sent while the chain is a few processes long and still
+    // growing, so processes start while the pane ends, as on Unix the
+    // signals make them.
+    #[cfg(windows)]
+    pids_in(&pids, 8);
     let started = running(pids_in(&pids, 2));
 
     connection.send(ClientMessage::Terminate).unwrap();
@@ -151,6 +158,13 @@ fn ending_a_pane_ends_what_ignores_its_signals_and_what_it_starts_meanwhile() {
         all.len() > started.len(),
         "the child started nothing as it was asked to end; the holder's log:\n{}",
         holder.log_text()
+    );
+    // Counted: every process the tree recorded, the ones named before the
+    // end and every one started after them, ended with the pane.
+    eprintln!(
+        "the tree recorded {} processes, {} of them named before the end",
+        all.len(),
+        started.len()
     );
     for pid in all {
         assert!(
@@ -317,4 +331,71 @@ fn a_holder_leaves_the_folder_it_started_from_and_runs_its_program_where_asked()
     let ask: &[u8] = if cfg!(windows) { b"cd\r" } else { b"pwd\r" };
     connection.send(ClientMessage::Input(ask.to_vec())).unwrap();
     connection.wait_for_text("pane-work-here");
+}
+
+/// Copies `from` into `to`, folders and files, as an app's install lays them.
+fn copy_tree(from: &std::path::Path, to: &std::path::Path) {
+    std::fs::create_dir_all(to).unwrap();
+    for entry in std::fs::read_dir(from).unwrap() {
+        let entry = entry.unwrap();
+        let target = to.join(entry.file_name());
+        if entry.file_type().unwrap().is_dir() {
+            copy_tree(&entry.path(), &target);
+        } else {
+            std::fs::copy(entry.path(), &target).unwrap();
+        }
+    }
+}
+
+/// The app's folder, the one a holder is prepared from, can be replaced by
+/// an update and then removed while the holder it gave runs on: the holder
+/// runs from its version folder (on Windows on that folder's ConPTY
+/// runtime), so neither move touches it and its pane carries input and
+/// output, to the connection it had and to a new one (B19).
+#[test]
+fn replacing_and_removing_the_app_folder_leaves_a_running_holder_alone() {
+    let home = Home::new();
+    let built = source();
+    let app = home.path().join("app");
+    std::fs::create_dir(&app).unwrap();
+    let program = app.join(built.program.file_name().unwrap());
+    std::fs::copy(&built.program, &program).unwrap();
+    let conpty = built.conpty.as_ref().map(|runtime| {
+        let copy = app.join("conpty");
+        copy_tree(runtime, &copy);
+        copy
+    });
+    let installed = hide_kit::holders::Source { program, conpty };
+    let folder = home.prepare(current_version(), &installed);
+    let holder = start_ready(&folder.program, &home.socket("p"), &shell(), &[]);
+    drop(folder);
+    let mut connection = holder.open();
+    connection
+        .send(ClientMessage::Input(print_ok().to_vec()))
+        .unwrap();
+    connection.wait_for_text("hide-ok");
+
+    // An update: the new app is laid beside the old, the old moved aside and
+    // the new put in its place, then the old removed. On Windows a rename
+    // or a removal of a folder any process holds a file of fails.
+    let next = home.path().join("app-next");
+    copy_tree(&app, &next);
+    let previous = home.path().join("app-previous");
+    std::fs::rename(&app, &previous).unwrap();
+    std::fs::rename(&next, &app).unwrap();
+    std::fs::remove_dir_all(&previous).unwrap();
+    std::fs::remove_dir_all(&app).unwrap();
+
+    let ask = if cfg!(windows) {
+        b"set S=still& call echo %S%-here\r".as_slice()
+    } else {
+        b"S=still; echo \"$S-here\"\r".as_slice()
+    };
+    connection.send(ClientMessage::Input(ask.to_vec())).unwrap();
+    connection.wait_for_text("still-here");
+    drop(connection);
+    let mut again = holder.open();
+    again.send(ClientMessage::Redraw).unwrap();
+    again.wait_for_text("still-here");
+    assert!(holder.process.is_running());
 }

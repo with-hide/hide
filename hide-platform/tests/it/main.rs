@@ -7,6 +7,7 @@ mod fs;
 mod host;
 mod ipc;
 mod listeners;
+mod memory;
 mod path;
 mod process;
 mod programs;

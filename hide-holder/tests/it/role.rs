@@ -30,6 +30,7 @@ fn play() {
         "script" => script(),
         "exit_when_told" => exit_when_told(),
         "print_when_told" => print_when_told(),
+        "flood_when_told" => flood_when_told(),
         "node" => crate::node::node_role(),
         "holder_v1" => crate::fixture_v1::holder_v1(),
         other => panic!("unknown role {other}"),
@@ -275,4 +276,36 @@ fn print_when_told() {
     let _ = writeln!(out, "while-away").and_then(|()| out.flush());
     #[allow(clippy::disallowed_methods)] // the role's own life
     thread::sleep(4 * ROLE_LIFE);
+}
+
+/// How many bytes `flood_when_told` writes.
+pub const FLOOD_BYTES: &str = "HIDE_HOLDER_TEST_FLOOD_BYTES";
+
+/// Waits for the `GO` file, writes `FLOOD_BYTES` bytes of numbered lines as
+/// fast as the terminal takes them, says `FLOOD DONE` and lives on.
+fn flood_when_told() {
+    let go = std::path::PathBuf::from(std::env::var_os(GO).unwrap());
+    let total: usize = std::env::var(FLOOD_BYTES).unwrap().parse().unwrap();
+    let deadline = Instant::now() + ROLE_LIFE;
+    while !go.exists() && Instant::now() < deadline {
+        #[allow(clippy::disallowed_methods)] // the role's own pace
+        thread::sleep(Duration::from_millis(5));
+    }
+    let mut out = std::io::stdout().lock();
+    let mut written = 0;
+    let mut line = 0u64;
+    while written < total {
+        let text = format!(
+            "{line:>10} the quick brown fox jumps over the lazy dog {}\r\n",
+            line * 7919
+        );
+        if out.write_all(text.as_bytes()).is_err() {
+            return;
+        }
+        written += text.len();
+        line += 1;
+    }
+    let _ = write!(out, "FLOOD DONE\r\n").and_then(|()| out.flush());
+    drop(out);
+    live_out();
 }

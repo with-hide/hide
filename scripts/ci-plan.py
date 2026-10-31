@@ -45,6 +45,7 @@ LANES = (
     "os-contract",
     "os-contract-macos",
     "vt",
+    "holder-restart",
     "agy-contract",
     "omp-contract",
     "agent-journey",
@@ -65,8 +66,11 @@ LANES = (
 # every pinned agent CLI on Linux and Windows for a change to
 # the pin table or its installer and nothing else, since no other path
 # reaches what it installs; the nightly's and a release's journey install
-# every CLI too.
-FULL_LANES = tuple(lane for lane in LANES if lane not in ("package", "agent-clis"))
+# every CLI too. `holder-restart` installs every pinned CLI too and runs each
+# in a pane holder across a node restart on all three systems, for a change to
+# the holder, the node's holder code, the pins or the lane's own scripts; the
+# nightly runs it on its own.
+FULL_LANES = tuple(lane for lane in LANES if lane not in ("package", "agent-clis", "holder-restart"))
 
 # Crates whose change reaches what differs by operating system: the platform
 # layer, the Herdr client's IPC, the install kit and hooks, and the daemon and
@@ -111,6 +115,10 @@ WSL_CRATE_FILES = ("hided/src/node_cli.rs", "hided/tests/it/wsl_device.rs")
 # code those tests check.
 VT_CRATES = {"hide-vt", "hide-holder", "hide-holder-protocol"}
 VT_CRATE_FILES = ("hide-kit/src/holders.rs", "hide-kit/src/panes.rs")
+# The node's holder code and the node the holder restart lane drives
+# (`holder-restart.yml`); with the holder's crates and VT_CRATE_FILES, the
+# crate paths that plan it.
+HOLDER_NODE_FILES = ("hide-node/src/terminal/holder.rs", "hide-node/examples/holder_node/*")
 
 # The desktop suite drives the web shell and the daemon inside the app, so
 # every web shell file plans `desktop-e2e` beside `web-e2e`: a desktop spec
@@ -271,6 +279,8 @@ POLICY_ONLY = (
     "scripts/check-release-assets.mjs", "scripts/release-draft.mjs", "scripts/premerge-check.py",
     "scripts/merge-order.py", "scripts/pull_requests.py",
     "scripts/pen-*.mjs", "scripts/design-review.mjs", "scripts/web-shell-measure/*",
+    # The pane holder's measurement, run by hand on macOS (docs/PERFORMANCE_TESTING.md).
+    "scripts/holder-perf.py",
     # The design contract's generators, their token map and its checks:
     # `design-contract.yml` runs the checks on every pull request, and what
     # the generators write (`web/src/tokens.css`, the Pen files) is committed
@@ -306,6 +316,9 @@ JOURNEY_LANES = {"agent-journey"}
 # The pinned agent CLIs and their installer: a pin moves in the pull request
 # that installs it on every system (contracts/README.md, Agent CLI pins).
 AGENT_CLI_LANES = {"agent-clis"}
+# The holder restart lane reads the pins, their installer, the fake model and
+# the journey helpers that point each CLI at it, and the xterm it draws on.
+HOLDER_RESTART_LANES = {"holder-restart"}
 # Files inside a crate the journey runs as its own tools: Hide's conversation
 # reader, its Project Memory card writer, the composer judge and Codex's
 # app-server stand-in.
@@ -344,18 +357,27 @@ NAMED_LANES = (
     # runs through `verify-cargo.sh`, plans every lane.
     ("scripts/check-vt-build-refusals.sh", {"vt"}),
     ("scripts/measure-build.py", {"vt"}),
-    ("scripts/agent_live_check/*", LIVE_CHECK_LANES),
+    ("scripts/agent_live_check/*", LIVE_CHECK_LANES | HOLDER_RESTART_LANES),
     ("scripts/agent-live-check.py", LIVE_CHECK_LANES),
     ("web/e2e/shims/claude-shim.c", WEB_E2E_LANES | JOURNEY_LANES),
     ("web/e2e/shims/live-check.h", WEB_E2E_LANES | JOURNEY_LANES),
     # The journey's controller builds the desktop e2e's spawn provider.
     ("web/e2e/shims/spawn-provider.c", WEB_E2E_LANES | JOURNEY_LANES),
     # The pin table's reader, which the installer imports too.
-    ("scripts/agent_journey/clis.py", JOURNEY_LANES | AGENT_CLI_LANES | {"agy-contract"}),
+    ("scripts/agent_journey/clis.py", JOURNEY_LANES | AGENT_CLI_LANES | {"agy-contract"} | HOLDER_RESTART_LANES),
+    ("scripts/agent_journey/fake_lane.py", JOURNEY_LANES | HOLDER_RESTART_LANES),
+    ("scripts/agent_journey/fake_model.py", JOURNEY_LANES | HOLDER_RESTART_LANES),
+    ("scripts/agent_journey/fake_private.py", JOURNEY_LANES | HOLDER_RESTART_LANES),
+    ("scripts/agent_journey/ci.py", JOURNEY_LANES | HOLDER_RESTART_LANES),
+    ("scripts/agent_journey/local.py", JOURNEY_LANES | HOLDER_RESTART_LANES),
+    ("scripts/agent_journey/opencode_service.py", JOURNEY_LANES | HOLDER_RESTART_LANES),
+    ("scripts/holder-restart-check.py", HOLDER_RESTART_LANES),
+    ("scripts/holder-color-probe.*", HOLDER_RESTART_LANES),
+    ("scripts/holder-restart-spawn.mjs", HOLDER_RESTART_LANES),
     ("scripts/agent_journey/*", JOURNEY_LANES),
     ("scripts/agent-journey-check.py", JOURNEY_LANES),
     ("scripts/agent-journey-lane.py", JOURNEY_LANES),
-    ("contracts/agent-journey.json", JOURNEY_LANES),
+    ("contracts/agent-journey.json", JOURNEY_LANES | HOLDER_RESTART_LANES),
     ("web/e2e/*", WEB_E2E_LANES),
     ("desktop/e2e/*", DESKTOP_E2E_LANES),
     ("web/playwright.config.ts", {"checks", "web-e2e", "windows-e2e"}),
@@ -388,8 +410,8 @@ NAMED_LANES = (
     ("desktop/scripts/release-binaries.mjs", {"checks"}),
     ("desktop/scripts/smoke-windows-installer.mjs", {"checks"}),
     # The agy contract installs the pinned agy with the same script.
-    ("contracts/agent-clis.json", {"agy-contract"} | AGENT_CLI_LANES),
-    ("scripts/install-agent-clis.py", {"agy-contract"} | AGENT_CLI_LANES),
+    ("contracts/agent-clis.json", {"agy-contract"} | AGENT_CLI_LANES | HOLDER_RESTART_LANES),
+    ("scripts/install-agent-clis.py", {"agy-contract"} | AGENT_CLI_LANES | HOLDER_RESTART_LANES),
 )
 
 
@@ -493,7 +515,9 @@ def classify(path, status, crates, root):
         if crate["name"] in AGY_CRATES:
             lanes.add("agy-contract")
         if crate["name"] in VT_CRATES or path.as_posix() in VT_CRATE_FILES:
-            lanes.add("vt")
+            lanes.update({"vt", "holder-restart"})
+        if any(fnmatchcase(path.as_posix(), pattern) for pattern in HOLDER_NODE_FILES):
+            lanes.add("holder-restart")
         if path.as_posix() in JOURNEY_CRATE_FILES or is_journey_product(path):
             lanes.update(JOURNEY_LANES)
         return lanes, f"crate {crate['name']}: {path}", packages
@@ -831,7 +855,7 @@ def nightly_aggregate(needs, lane):
     """Require the selected nightly jobs to succeed, and all others to skip."""
     selected = {"agy-contract-all", "agent-trust-contract-all"}
     if lane != "agy":
-        selected.update({"agent-journey", "desktop-e2e"})
+        selected.update({"agent-journey", "holder-restart", "desktop-e2e"})
     if lane in ("", "all", "macos"):
         selected.update({"web-e2e-macos", "remote-mailbox-macos", "perf"})
     if lane == "windows":
@@ -839,7 +863,7 @@ def nightly_aggregate(needs, lane):
     if lane in ("", "all"):
         selected.update({"verify", "package"})
     jobs = {"web-e2e-macos", "web-e2e-windows", "remote-mailbox-macos", "agy-contract-all",
-            "agent-trust-contract-all", "agent-journey", "desktop-e2e", "perf", "verify", "package"}
+            "agent-trust-contract-all", "agent-journey", "holder-restart", "desktop-e2e", "perf", "verify", "package"}
     if lane not in ("", "all", "linux", "macos", "windows", "agy") or set(needs) != jobs:
         raise ValueError("nightly's lane or needs do not match its job contract")
     errors = []
