@@ -107,9 +107,12 @@ pub(crate) fn claude(reader: impl Read, wanted: Wanted) -> std::io::Result<Claud
 /// The first record among the first `records` of `reader`'s head that
 /// `picks` chooses, each kept up to [`NAMING_RECORD_LIMIT_BYTES`] and the
 /// scan bounded by [`SESSION_READ_LIMIT_BYTES`]. A record over the cap is
-/// passed over; the first record, which is the one a session names itself
-/// in, is left as soon as it crosses the cap, and when nothing later is
-/// chosen that is the answer: the naming record is over the cap.
+/// read to its newline and passed over, so a large record before the one
+/// that names the session (a Codex or Pi thread's) does not hide it; when
+/// nothing is chosen and the first record was over the cap, that is the
+/// answer: the naming record is over the cap. A record a format requires to
+/// be its header at a fixed place is read strictly instead
+/// ([`native_header`]).
 pub(crate) fn naming_record(
     reader: impl Read,
     records: usize,
@@ -121,7 +124,6 @@ pub(crate) fn naming_record(
     );
     let mut first_passed = false;
     for index in 0..records {
-        head.set_strict(index == 0);
         let record = match head.next_record() {
             Ok(Some(record)) => record,
             Ok(None) => break,
@@ -218,16 +220,16 @@ pub(crate) fn header_budgeted(
 }
 
 /// The next record of a strict header: whole, within the naming cap and
-/// JSON. Every byte the scan took is charged to `remaining` once, a refused
-/// record's too, so a folder of oversized candidates spends one budget.
+/// JSON. Every byte the scan read for it is charged to `remaining` once,
+/// what it read past the record into its buffer and a refused or failed
+/// record's too, so a folder of rejected candidates spends one budget.
 fn header_record(head: &mut Head<impl Read>, remaining: &mut u64) -> anyhow::Result<Value> {
-    let before = head.fed();
-    let record = head
-        .next_record()
-        .map_err(|_| anyhow!("label_session_metadata_read_failed"))?;
-    let read = head.fed() - before;
+    let before = head.read_bytes();
+    let record = head.next_record();
+    let read = head.read_bytes() - before;
     let over_budget = read > *remaining;
     *remaining = remaining.saturating_sub(read);
+    let record = record.map_err(|_| anyhow!("label_session_metadata_read_failed"))?;
     match record {
         // A header over the naming cap is refused for its size first: that
         // is what is wrong with it, whatever the budget left.
@@ -261,7 +263,8 @@ pub(crate) fn native_header(
     let mut head = Head::new(
         reader.take(remaining.saturating_add(NAMING_RECORD_LIMIT_BYTES as u64 + 1)),
         NAMING_RECORD_LIMIT_BYTES,
-    );
+    )
+    .with_growing_block(HEADER_FIRST_BLOCK_BYTES, super::frame::BLOCK_BYTES);
     head.set_strict(true);
     let first = header_record(&mut head, remaining)?;
     let value = if agent == Agent::Omp && first["type"] == "title" {
@@ -350,6 +353,11 @@ pub(crate) fn omp_title(
     }
 }
 
+/// The first read of a header scan: a Pi or omp header (and omp's title
+/// slot) is a few hundred bytes, so a candidate a discovery rejects spends
+/// little more than its header of the discovery's budget.
+const HEADER_FIRST_BLOCK_BYTES: usize = 1024;
+
 /// The block a title read takes at a time, so a short first line costs the
 /// poll little of its allowance.
 const TITLE_BLOCK_BYTES: usize = 4 * 1024;
@@ -433,5 +441,42 @@ mod tests {
         let error = native_header(Agent::Pi, header.as_slice(), &mut remaining).unwrap_err();
         assert_eq!(error.to_string(), "label_session_metadata_unconfirmed");
         assert_eq!(remaining, budget - header.len() as u64);
+    }
+
+    #[test]
+    fn rejected_candidates_spend_what_was_read_for_them_not_what_was_framed() {
+        // Short headers that are no session header, each followed by a long
+        // tail a scan reads into its buffer but never frames.
+        let mut candidate = b"{}\n".to_vec();
+        candidate.resize(100 * 1024, b'x');
+        let budget = crate::SESSION_INCREMENT_READ_LIMIT_BYTES;
+        let mut remaining = budget;
+        let mut total = 0;
+        let mut refused = false;
+        for _ in 0..10_000 {
+            let before = remaining;
+            let mut reader = counted(candidate.as_slice());
+            let answer = native_header(Agent::Pi, &mut reader, &mut remaining);
+            total += reader.read;
+            match answer.unwrap_err().to_string().as_str() {
+                "label_session_metadata_unconfirmed" => {
+                    assert_eq!(
+                        before - remaining,
+                        reader.read,
+                        "every byte read is charged"
+                    );
+                }
+                "session_discovery_read_capacity" => {
+                    refused = true;
+                    break;
+                }
+                other => panic!("{other}"),
+            }
+        }
+        assert!(refused, "the budget ends the discovery");
+        assert!(
+            total <= budget + NAMING + BLOCK_BYTES as u64,
+            "{total} bytes read"
+        );
     }
 }

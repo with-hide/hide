@@ -191,6 +191,8 @@ pub(crate) struct Forward<R> {
     framer: Framer,
     block: Vec<u8>,
     block_bytes: usize,
+    /// The block a read grows to, doubling from `block_bytes`.
+    block_max: usize,
     at: usize,
     ended: bool,
     read: u64,
@@ -214,6 +216,7 @@ impl<R: Read> Forward<R> {
             framer,
             block: Vec::new(),
             block_bytes: BLOCK_BYTES,
+            block_max: BLOCK_BYTES,
             at: 0,
             ended: false,
             read: 0,
@@ -223,6 +226,16 @@ impl<R: Read> Forward<R> {
     /// Read `bytes` at a time rather than [`BLOCK_BYTES`].
     pub(crate) fn with_block(mut self, bytes: usize) -> Self {
         self.block_bytes = bytes.max(1);
+        self.block_max = self.block_bytes;
+        self
+    }
+
+    /// Read `first` bytes, then twice as many each read up to `max`: a scan
+    /// charged by what it reads, whose record is usually short, reads
+    /// little of a file it rejects, and a long record still takes few reads.
+    pub(crate) fn with_growing_block(mut self, first: usize, max: usize) -> Self {
+        self.block_bytes = first.max(1);
+        self.block_max = max.max(self.block_bytes);
         self
     }
 
@@ -259,6 +272,7 @@ impl<R: Read> Forward<R> {
             self.block.truncate(read);
             self.at = 0;
             self.read += read as u64;
+            self.block_bytes = (self.block_bytes * 2).min(self.block_max);
             if read == 0 {
                 self.ended = true;
                 return Ok(None);
@@ -314,10 +328,16 @@ impl<R: Read> Head<R> {
         self.strict = strict;
     }
 
-    /// Every byte the scan took into its records, kept or passed over,
-    /// including a record it holds without its newline.
-    pub(crate) fn fed(&self) -> u64 {
-        self.forward.framer().offset()
+    /// Read `first` bytes, then more each read ([`Forward::with_growing_block`]).
+    pub(crate) fn with_growing_block(mut self, first: usize, max: usize) -> Self {
+        self.forward = self.forward.with_growing_block(first, max);
+        self
+    }
+
+    /// Every byte the scan read from its reader, framed or still buffered:
+    /// what a scan charged by its reads spends.
+    pub(crate) fn read_bytes(&self) -> u64 {
+        self.forward.read_bytes()
     }
 
     /// The next record, `None` at the end of the reader.

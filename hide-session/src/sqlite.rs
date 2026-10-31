@@ -315,9 +315,8 @@ impl Source {
                     }
                     let stamp = mark(&file).map_err(Fence::of)?;
                     if index == 0 {
-                        use std::io::Read;
-                        let mut header = [0; 20];
-                        (&file).read_exact(&mut header).map_err(Fence::of)?;
+                        let header =
+                            crate::source::window::read_at(&file, 0, 20).map_err(Fence::of)?;
                         wal_mode = header[18] == 2 && header[19] == 2;
                     }
                     if index == 1 {

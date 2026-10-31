@@ -1062,54 +1062,62 @@ enum CommandReply {
 }
 
 impl CommandReply {
-    /// The first conversation record at or after `rest`, then `following`;
-    /// [`Self::Pending`] when a reader that holds a command (`following` is
-    /// `Some`) has seen none, and [`Self::Model`] for one that does not.
+    /// The first whole conversation record at or after `rest`, then
+    /// `following`, cut by the same framing every reader cuts records with,
+    /// so a reply still being written is not read before its newline.
+    /// [`Self::Pending`] when none is found and a record is still being
+    /// written, or a reader that holds a command (`following` is `Some`) has
+    /// seen none; [`Self::Model`] for a reader of whole text that has seen
+    /// none.
     fn after(rest: &[u8], following: Option<&[u8]>) -> Self {
-        for line in rest.split(|byte| *byte == b'\n').chain(
-            following
-                .into_iter()
-                .flat_map(|bytes| bytes.split(|byte| *byte == b'\n')),
-        ) {
-            if line.len() > SESSION_LINE_LIMIT_BYTES {
-                continue;
-            }
-            let Ok(item) = serde_json::from_slice::<Value>(line) else {
-                continue;
-            };
-            let kind = item.get("type").and_then(Value::as_str);
-            if !matches!(kind, Some("user" | "assistant" | "system")) {
-                continue;
-            }
-            let own_reply = match kind {
-                Some("system") => {
-                    item.get("subtype").and_then(Value::as_str) == Some("local_command")
+        let mut framer = source::frame::Framer::new(SESSION_LINE_LIMIT_BYTES, 0);
+        for chunk in std::iter::once(rest).chain(following) {
+            let mut at = 0;
+            while let Some(frame) = framer.next(chunk, &mut at) {
+                if let source::frame::Frame::Record { bytes, .. } = frame
+                    && let Some(reply) = Self::of_record(bytes)
+                {
+                    return reply;
                 }
-                _ => item
-                    .pointer("/message/content")
-                    .and_then(Value::as_str)
-                    .is_some_and(|text| {
-                        LOCAL_COMMAND_REPLIES
-                            .iter()
-                            .any(|tag| text.trim_start().starts_with(tag))
-                    }),
-            };
-            // A command Claude Code answers and then hands to the model, as
-            // `/goal` does, marks its answer as the start of the operator's
-            // turn (2.1.294-2.1.301); a command it only answers (`/model`)
-            // leaves no mark. The mark, not the command's name, decides.
-            let starts_turn = item.get("turnOrigin").and_then(Value::as_str) == Some("human");
-            return if own_reply && !starts_turn {
-                Self::Local
-            } else {
-                Self::Model
-            };
+            }
         }
-        if following.is_some() {
+        let unfinished = !framer.pending().is_empty() || framer.passing_from().is_some();
+        if following.is_some() || unfinished {
             Self::Pending
         } else {
             Self::Model
         }
+    }
+
+    /// What one whole record says of the command before it, `None` for a
+    /// record that is no conversation record.
+    fn of_record(record: &[u8]) -> Option<Self> {
+        let item = serde_json::from_slice::<Value>(record).ok()?;
+        let kind = item.get("type").and_then(Value::as_str);
+        if !matches!(kind, Some("user" | "assistant" | "system")) {
+            return None;
+        }
+        let own_reply = match kind {
+            Some("system") => item.get("subtype").and_then(Value::as_str) == Some("local_command"),
+            _ => item
+                .pointer("/message/content")
+                .and_then(Value::as_str)
+                .is_some_and(|text| {
+                    LOCAL_COMMAND_REPLIES
+                        .iter()
+                        .any(|tag| text.trim_start().starts_with(tag))
+                }),
+        };
+        // A command Claude Code answers and then hands to the model, as
+        // `/goal` does, marks its answer as the start of the operator's
+        // turn (2.1.294-2.1.301); a command it only answers (`/model`)
+        // leaves no mark. The mark, not the command's name, decides.
+        let starts_turn = item.get("turnOrigin").and_then(Value::as_str) == Some("human");
+        Some(if own_reply && !starts_turn {
+            Self::Local
+        } else {
+            Self::Model
+        })
     }
 }
 

@@ -684,3 +684,42 @@ fn a_command_whose_reply_is_past_the_window_edge_is_still_answered_by_it() {
     }
     assert_eq!(humans(&events), ["설치하고 재측정해줘", "마지막 요청"]);
 }
+
+/// A command whose reply is still being written is held, whether the reply
+/// is cut inside its JSON or whole JSON without its newline: the reply is
+/// not read before its newline, so the command is neither classified nor
+/// passed until it is, by the cursor or by a whole-text parse.
+#[test]
+fn a_command_whose_reply_has_no_newline_yet_waits_for_it() {
+    let lines: Vec<&str> = CLAUDE_COMMANDS.split_inclusive('\n').collect();
+    // Line 3 is `/model`, line 4 the reply Claude Code wrote itself.
+    let command_at = lines[..3].concat().len() as u64;
+    let reply = lines[4];
+    for cut in [reply.len() - 1, reply.len() / 2] {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("session.jsonl");
+        let written = format!("{}{}", lines[..4].concat(), &reply[..cut]);
+        fs::write(&path, &written).unwrap();
+        let mut reader = ConversationCursor::new();
+        let first = reader.read(Agent::Claude, &path).unwrap();
+        assert_eq!(humans(&first.events), ["설치하고 재측정해줘"]);
+        assert_eq!(
+            reader.checkpoint().offset(),
+            command_at,
+            "the command waits at its start (reply cut at {cut})"
+        );
+        let whole = hide_session::parse_claude_events(&written);
+        assert_eq!(humans(&whole.events), ["설치하고 재측정해줘"]);
+
+        fs::write(&path, lines[..5].concat()).unwrap();
+        let second = reader.read(Agent::Claude, &path).unwrap();
+        assert!(
+            humans(&second.events).is_empty(),
+            "a command Claude Code answered itself is no request"
+        );
+        assert_eq!(
+            reader.checkpoint().offset(),
+            lines[..5].concat().len() as u64
+        );
+    }
+}
