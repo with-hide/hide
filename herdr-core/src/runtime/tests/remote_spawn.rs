@@ -502,6 +502,97 @@ impl Spawner {
     }
 }
 
+/// Desk's own spawn (PRD Desk 1차 B20, B21), asked as the Desk process asks
+/// it and run as hided runs it, with no record of `hide:desk` made
+/// beforehand: it starts on the device under the record it registers, its
+/// card reads working, and it takes Desk's one place, so the next waits.
+#[test]
+fn a_spawn_desk_asks_for_starts_with_no_record_made_beforehand_and_takes_its_place() {
+    let spawner = spawner();
+    let ask = |intent: &str| {
+        let command = crate::delivery::Command::Agents {
+            command: Command::Spawn {
+                mission: None,
+                plan_node: None,
+                plan: None,
+                parent: None,
+                machine: Some(DEVICE.into()),
+                // The device's Herdr names its one agent `worker`.
+                name: "worker".into(),
+                intent: intent.into(),
+                kind: "codex".into(),
+                repo: "/srv/repo".into(),
+                branch: "topic".into(),
+                path: None,
+                args: Vec::new(),
+                launch: Default::default(),
+                task: None,
+                brief: None,
+                beside: false,
+            },
+        };
+        let prepared = spawner.runtime.lock().unwrap().prepare_delivery(
+            crate::node::TEST_NODE,
+            crate::workspace_control::DESK_CALLER,
+            &crate::desk::desk_context(crate::node::TEST_NODE),
+            None,
+            command,
+        );
+        prepared.and_then(|prepared| prepared.run(Duration::from_secs(30)))
+    };
+    {
+        let mut runtime = spawner.runtime.lock().unwrap();
+        runtime.install_delivery_client(spawner.client.clone());
+        runtime.open_test_desk(1);
+    }
+
+    let started = ask("first").unwrap();
+    assert_eq!(started["machine"], DEVICE);
+    let desk = Actor::hide(crate::delivery::HIDE_DESK_ROLE, crate::node::TEST_NODE);
+    let ledger = spawner.ledger();
+    let origin = ledger
+        .agents
+        .iter()
+        .find(|agent| agent.actor.same_identity(&desk))
+        .expect("Desk's record, registered by its spawn");
+    assert!(
+        ledger
+            .spawns
+            .iter()
+            .any(|spawn| spawn.intent == "first" && spawn.parent == origin.id)
+    );
+    {
+        let mut runtime = spawner.runtime.lock().unwrap();
+        runtime.refresh_desk_jobs();
+        let jobs = &runtime.snapshot.desk_jobs.as_ref().unwrap().jobs;
+        let cards: Vec<_> = jobs
+            .iter()
+            .map(|job| (job.id.as_str(), job.state))
+            .collect();
+        assert_eq!(cards, [("first", crate::model::DeskJobState::Working)]);
+    }
+
+    let waiting = ask("second").unwrap();
+    assert_eq!(
+        (&waiting["queued"], &waiting["position"]),
+        (&json!(true), &json!(1))
+    );
+    // Its card is in the snapshot with that answer, not at the next refresh.
+    let runtime = spawner.runtime.lock().unwrap();
+    let queued = runtime
+        .snapshot
+        .desk_jobs
+        .as_ref()
+        .unwrap()
+        .jobs
+        .iter()
+        .find(|job| job.id == "second")
+        .map(|job| (job.state, job.queue_position));
+    assert_eq!(queued, Some((crate::model::DeskJobState::Queued, Some(1))));
+    drop(runtime);
+    assert_eq!(spawner.count("agent.start"), 1);
+}
+
 /// B1, B2, B3, B7 (the token's `parent_machine`): a delegated child is made on
 /// the device, belongs to the caller and is watched; the lineage tokens are
 /// written on the device's pane and name this machine as the parent's.

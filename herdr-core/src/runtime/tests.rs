@@ -28,6 +28,7 @@ mod birth_cwd;
 mod checkout_git;
 #[path = "tests/control_order.rs"]
 mod control_order;
+mod desk_group;
 #[path = "tests/detail.rs"]
 mod detail;
 #[path = "tests/device_catalog.rs"]
@@ -707,7 +708,7 @@ fn tab(workspace_id: &str, checkout_id: &str, pane: Option<PaneSnapshot>) -> Tab
     }
 }
 
-fn checkout(
+pub(super) fn checkout(
     workspace_id: &str,
     checkout_id: &str,
     path: &str,
@@ -735,7 +736,7 @@ fn checkout(
     }
 }
 
-fn workspace(
+pub(super) fn workspace(
     id: &str,
     label: &str,
     path: &str,

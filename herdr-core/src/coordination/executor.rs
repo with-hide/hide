@@ -404,7 +404,7 @@ pub(super) fn publish_tokens(client: &Client, engine: &dyn Engine, id: &str) -> 
 /// Registers a code-owned identity, a Factory's or Hide's own, as the
 /// parent or origin of the agents it starts (D-14); converges on the
 /// existing record.
-pub(crate) fn register_code_owned(
+fn register_code_owned(
     client: &Client,
     authority: &Authority,
     actor: &Actor,
@@ -678,6 +678,10 @@ fn spawn(
     let parent_id = if parent.as_deref().is_none_or(|parent| parent == super::HERE) {
         if let Some(parent) = super::live_self(&ledger, actor).next() {
             parent.id.clone()
+        } else if actor.hide_owned() {
+            // Hide's own work (Desk, Hide AI) has no pane for Herdr to
+            // report: its record is the origin it registers here, once.
+            register_code_owned(client, authority, actor)?
         } else {
             let CoordinationContext {
                 engine,

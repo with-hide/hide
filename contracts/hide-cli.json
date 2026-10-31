@@ -237,6 +237,21 @@
             "title": "AgentView",
             "type": "object"
         },
+        "agent_archived": {
+            "properties": {
+                "archived": {
+                    "type": "object"
+                },
+                "pane_id": {
+                    "type": "object"
+                }
+            },
+            "required": [
+                "archived",
+                "pane_id"
+            ],
+            "type": "object"
+        },
         "agent_catalog": {
             "properties": {
                 "installed_known": {
@@ -2081,6 +2096,56 @@
                 "agent_sleep_unreachable",
                 "agent_sleep_busy",
                 "agent_sleep_not_started"
+            ],
+            "repeats_at_most": null,
+            "rest": null
+        },
+        {
+            "answers": [
+                "agent_archived"
+            ],
+            "arguments": [
+                {
+                    "name": "id",
+                    "value": {
+                        "type": "text"
+                    }
+                }
+            ],
+            "command": "agent archive",
+            "options": [
+                {
+                    "name": "--actor",
+                    "required": false,
+                    "requires": [],
+                    "value": {
+                        "type": "text"
+                    }
+                },
+                {
+                    "name": "--json",
+                    "required": false,
+                    "requires": [],
+                    "value": null
+                }
+            ],
+            "refusals": [
+                "agent_pane_required",
+                "agent_unavailable",
+                "agent_ended",
+                "parent_authority_required",
+                "actor_identity_conflict",
+                "archive_confirmation_required",
+                "archive_not_offered",
+                "archive_delegated",
+                "archive_device_disconnected",
+                "archive_session_unknown",
+                "archive_status_unknown",
+                "archive_target_unknown",
+                "archive_too_many",
+                "archive_busy",
+                "archive_context_unavailable",
+                "archive_full"
             ],
             "repeats_at_most": null,
             "rest": null
@@ -3987,7 +4052,7 @@
             "rest": null
         }
     ],
-    "digest": "sha256:e18d599bcbc4a86c5d20ad0cb2710a528022c23e67f1a7fe9ef0b450fed346e2",
+    "digest": "sha256:1019ebe976aed86140577551008d5a94cfd2bde2fcbc7723871f2cd01fefde6f",
     "envelopes": {
         "agent": {
             "answer": "value",

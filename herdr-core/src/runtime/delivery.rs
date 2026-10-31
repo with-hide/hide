@@ -964,13 +964,6 @@ impl Runtime {
         hint: Option<&str>,
         mut command: Command,
     ) -> Result<Prepared, String> {
-        let context = self
-            .workspace_control_query(device, caller, Query::Info)
-            .map_err(|refusal| refusal.reason.to_owned())?
-            .context;
-        if context != *expected {
-            return Err("caller_context_changed".into());
-        }
         // Herdr numbers panes per machine and an agent learns the numbers from
         // its own machine's Herdr, so a bare pane id names a pane on the
         // caller's machine; the core's panes are observed under their bare ids
@@ -986,21 +979,40 @@ impl Runtime {
         };
         // Only Hide's pane attestation names the agent a command acts as; a
         // checkout-bound caller has no pane, and a hint cannot lend it one.
-        let Caller::Pane(actor_pane) = Caller::parse(caller) else {
-            return Err("agent_pane_required".into());
+        // The Desk process acts as Hide's own `hide:desk` while it runs.
+        let (context, actor) = if Caller::parse(caller) == Caller::Desk {
+            if hint.is_some() {
+                return Err("caller_identity_conflict".into());
+            }
+            self.desk_authority(device)?
+        } else {
+            let context = self
+                .workspace_control_query(device, caller, Query::Info)
+                .map_err(|refusal| refusal.reason.to_owned())?
+                .context;
+            let Caller::Pane(actor_pane) = Caller::parse(caller) else {
+                return Err("agent_pane_required".into());
+            };
+            if hint.is_some_and(|hint| qualify(hint) != actor_pane) {
+                return Err("caller_identity_conflict".into());
+            }
+            let actor = self
+                .delivery_observations
+                .get(actor_pane)
+                .ok_or("agent_pane_required")?
+                .actor
+                .clone();
+            (context, actor)
         };
-        if hint.is_some_and(|hint| qualify(hint) != actor_pane) {
-            return Err("caller_identity_conflict".into());
+        if context != *expected {
+            return Err("caller_context_changed".into());
         }
-        let actor = self
-            .delivery_observations
-            .get(actor_pane)
-            .ok_or("agent_pane_required")?
-            .actor
-            .clone();
+        let actor_pane = actor.pane_id.as_str();
         actor.require_native_identity()?;
-        if crate::delivery::reserved_name(&actor.name) {
-            // A pane named like a Factory would read as one (D-14).
+        if !actor.code_owned() && crate::delivery::reserved_name(&actor.name) {
+            // A pane named like a Factory would read as one (D-14); Hide's
+            // own actors, such as Desk's `hide:desk`, carry their reserved
+            // names.
             return Err("reserved_name".into());
         }
         // A Conductor's spawn is one of its mission's workers: refused before
@@ -1119,6 +1131,8 @@ impl Runtime {
             }
             _ => {}
         }
+        // A spawn of Desk's past its places waits in Desk's queue (B21).
+        let queued = self.desk_spawn_admission(&actor, &command)?;
         let repeated = match &command {
             Command::Send { intent, .. } => self.delivery_ledger.as_ref().is_ok_and(|ledger| {
                 crate::delivery::mailbox::existing_intent(
@@ -1204,6 +1218,13 @@ impl Runtime {
                 .actor
                 .require_native_identity()?;
         }
+        let after = if queued.is_some() {
+            self.desk_queued_after()
+        } else if !repeated {
+            self.desk_after(&actor, &command, target.as_ref())
+        } else {
+            None
+        };
         // A forced letter is typed into a pane that runs now, so its
         // composer can be read; a sleeping recipient is woken by an ordinary
         // letter instead (PRD engine-bundle-1 D-14).
@@ -1232,9 +1253,14 @@ impl Runtime {
             actor,
             target,
             command,
-        );
-        Ok(match forced {
+        )
+        .then(after);
+        let prepared = match forced {
             Some(engine) => prepared.forced_through(engine),
+            None => prepared,
+        };
+        Ok(match queued {
+            Some(answer) => prepared.answered(answer),
             None => prepared,
         })
     }
@@ -1482,6 +1508,8 @@ impl Runtime {
                 || *actor == Actor::hide(super::missions::CONDUCTOR_ROLE, self.node.as_str())
                 || *actor
                     == Actor::hide(super::agent_sleep::letters::WAKE_ROLE, self.node.as_str())
+                || (*actor == Actor::hide(crate::delivery::HIDE_DESK_ROLE, self.node.as_str())
+                    && self.desk_installed())
                 || *actor == Actor::operator(self.node.as_str()))
     }
 

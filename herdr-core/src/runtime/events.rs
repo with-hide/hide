@@ -1725,6 +1725,7 @@ pub(super) enum Event {
     FirstRunAdvance(FirstRunAdvancePayload),
     FirstRunBack(FirstRunBackPayload),
     HerdrTakeover(HerdrTakeoverPayload),
+    Desk(super::desk::DeskEvent),
     FirstRunDraft(FirstRunDraftPayload),
     DesktopNotificationsSet(DesktopNotificationsSetPayload),
     DesktopNotificationsDoneSet(DesktopNotificationsDoneSetPayload),
@@ -2136,6 +2137,11 @@ pub(super) fn validate_event(event: EventEnvelope) -> Result<Event, EventValidat
         }
         "browser_state" => decode!(BrowserStatePayload, BrowserState),
         "external_open" => decode!(ExternalOpenPayload, ExternalOpen),
+        desk if super::desk::DeskEvent::KINDS.contains(&desk) => {
+            super::desk::DeskEvent::decode(desk, payload)
+                .map(Event::Desk)
+                .ok_or_else(|| invalid_payload(&kind))
+        }
         "external_grants" => decode!(ExternalGrantsPayload, ExternalGrants),
         _ => Err(EventValidationError {
             kind: "event.unknown_kind",
@@ -4127,6 +4133,7 @@ impl Runtime {
             }
             Event::FirstRunBack(payload) => self.back_first_run(payload.from),
             Event::HerdrTakeover(payload) => self.herdr_takeover_action(payload.action),
+            Event::Desk(event) => self.desk_event(event),
             Event::FirstRunDraft(payload) => self.update_first_run_draft(payload),
             Event::DesktopNotificationsSet(payload) => self
                 .set_desktop_notification_preferences(Some(payload.enabled), payload.done_enabled),

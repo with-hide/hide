@@ -125,6 +125,14 @@ enum Command {
         actor: Option<String>,
         reply: Sender<Result<serde_json::Value, String>>,
     },
+    AgentArchive {
+        device_id: String,
+        pane_id: String,
+        expected: Context,
+        id: String,
+        actor: Option<String>,
+        reply: Sender<Result<serde_json::Value, String>>,
+    },
     Device {
         device_id: String,
         command: herdr_core::device_command::DeviceCommand,
@@ -144,6 +152,9 @@ enum Command {
     SetFileRoots {
         roots: Vec<(std::path::PathBuf, std::fs::File)>,
         reply: Sender<Result<(), String>>,
+    },
+    SetDesk {
+        platform: Arc<dyn herdr_core::desk::DeskPlatform>,
     },
     Dispatch {
         event: Vec<u8>,
@@ -565,6 +576,29 @@ impl CoreHandle {
         result.recv().map_err(|_| "agent_unavailable".to_owned())?
     }
 
+    /// `hide agent archive`, run on the owner thread.
+    pub fn agent_archive(
+        &self,
+        device: &str,
+        pane: &str,
+        expected: &Context,
+        id: String,
+        actor: Option<String>,
+    ) -> Result<serde_json::Value, String> {
+        let (reply, result) = mpsc::channel();
+        self.commands
+            .send(Command::AgentArchive {
+                device_id: device.to_owned(),
+                pane_id: pane.to_owned(),
+                expected: expected.clone(),
+                id,
+                actor,
+                reply,
+            })
+            .map_err(|_| "agent_unavailable".to_owned())?;
+        result.recv().map_err(|_| "agent_unavailable".to_owned())?
+    }
+
     /// `hide ps`, read on the owner thread.
     pub fn ps(&self, device: &str, pane: &str, all: bool) -> Result<serde_json::Value, String> {
         let (reply, result) = mpsc::channel();
@@ -660,6 +694,16 @@ impl CoreHandle {
             .map_err(|_| "core owner thread is gone".to_owned())?;
         rx.recv()
             .map_err(|_| "core owner thread dropped file-root reply".to_owned())?
+    }
+
+    /// Starts Desk with the identity and places hided gives its process.
+    pub fn set_desk(
+        &self,
+        platform: Arc<dyn herdr_core::desk::DeskPlatform>,
+    ) -> Result<(), String> {
+        self.commands
+            .send(Command::SetDesk { platform })
+            .map_err(|_| "core owner thread is gone".to_owned())
     }
 
     /// `panes` is where each device's node link sends its panes' proofs and
@@ -1302,6 +1346,23 @@ fn owner_loop(
                 ));
             }
 
+            Command::AgentArchive {
+                device_id,
+                pane_id,
+                expected,
+                id,
+                actor,
+                reply,
+            } => {
+                let _ = reply.send(core.agent_archive(
+                    &device_id,
+                    &pane_id,
+                    &expected,
+                    &id,
+                    actor.as_deref(),
+                ));
+            }
+
             Command::Device {
                 device_id,
                 command,
@@ -1340,6 +1401,7 @@ fn owner_loop(
                     command,
                 ));
             }
+            Command::SetDesk { platform } => core.set_desk(platform),
             Command::SetFileRoots { roots, reply } => {
                 // This node holds the opened roots while the core pins their
                 // identities; the previous set closes once it is replaced.

@@ -2622,6 +2622,119 @@ export type ProjectSuggestions = {
   global?: { path: string; unusable: GlobalInstructionUnusable | null } | null;
 };
 
+/** An agent Desk talks to over ACP (PRD Desk 1차); `contracts/snapshot-wire-enums.json` `desk_agent`. */
+export type DeskAgentId = "claude" | "codex" | "pi";
+export type DeskAgentState = "checking" | "ready" | "preparing" | "not_installed" | "install_failed" | "node_missing" | "cli_missing" | "login_needed" | "no_ask_mode" | "not_offered";
+export type DeskHostState = "idle" | "starting" | "ready" | "thinking" | "stopped";
+export type DeskApprovalState = "waiting" | "allowed" | "rejected" | "closed";
+export type DeskNotice = "blocked" | "preparing" | "host_stopped" | "resume_failed" | "login_needed" | "install_failed" | "no_ask_mode" | "turn_failed";
+export type DeskLocation = "desk" | "worktree" | "checkout";
+export type DeskChoice = { id: string; label: string };
+export type DeskMention = { kind: "session" | "project"; id: string; name: string };
+/** A session a conversation line names, drawn as a chip with its row's mark now (`null` once it has no row or the line is past the newest 64). */
+export type DeskSessionChip = { pane_id: string; name: string; agent_kind: string | null; mark: RowMark | null };
+
+export type DeskAgent = {
+  id: DeskAgentId;
+  label: string;
+  state: DeskAgentState;
+  /** What the state names: the Node version found, the install's last line, the missing CLI. */
+  detail: string | null;
+  /** Shown with `login_needed`. */
+  login_command: string;
+  /** What the agent's last session offered; empty until one opened. */
+  models: DeskChoice[];
+  efforts: DeskChoice[];
+};
+
+/** One line of the Desk conversation. A message's text holds a mention as `@session(<id> <name>)` or `@project(<path> <name>)`. */
+export type DeskItem =
+  | { kind: "user"; id: number; text: string; at_ms: number; mentions: DeskMention[] }
+  /** `thought_ms` and `steps` fold the turn into one line: `생각 8초 · 세션 4개 읽음`; `mentions` are the sessions its text names as `@session(<pane> <name>)`. */
+  | { kind: "reply"; id: number; agent: DeskAgentId; text: string; at_ms: number; state: "done" | "stopped"; thought_ms: number | null; steps: DeskSteps; mentions: DeskSessionChip[] }
+  | { kind: "switch"; id: number; from: DeskAgentId | null; to: DeskAgentId; carried: "all" | "trimmed" | "none" }
+  | { kind: "model"; id: number; model: string | null; effort: string | null }
+  | { kind: "approval"; id: number; card: "command" | "edit" | "other"; command: string; folder: string | null; reason: string | null; state: DeskApprovalState }
+  /** `detail` is the install's last line, the sign-in command for `login_needed`, or the blocked call. */
+  | { kind: "notice"; id: number; notice: DeskNotice; agent: DeskAgentId | null; detail: string | null }
+  /** A letter Desk sent a running session (B16): handed work when `letter_kind` is `request`; no state, no place. `read` once its runtime took it in; `mark` is the recipient row's now, for its chip. */
+  | { kind: "handed"; id: number; agent_id: string; pane_id: string; name: string; project: string | null; letter_kind: string; line: string; letter_id: string | null; read: boolean; agent_kind: string | null; mark: RowMark | null }
+  /** Desk started or queued a job; its card is `jobs`' entry `job_id`. */
+  | { kind: "job"; id: number; job_id: string };
+
+/** `contracts/snapshot-wire-enums.json` `desk_job_state`. */
+export type DeskJobState = "queued" | "starting" | "working" | "asking" | "done" | "failed" | "cancelled" | "closed" | "moved_out" | "sleeping" | "archived";
+/** `desk_ask_kind`: the verb an asking job's line starts with. */
+export type DeskAskKind = "question" | "approval" | "decision" | "plan_review" | "blocked";
+/** What Desk's agent did in a turn, counted from its tool calls. */
+export type DeskSteps = { sessions: number; files: number; letters: number; starts: number; other: number };
+/** `desk_job_reason`. */
+export type DeskJobReason = "spawn_failed" | "exited" | "device_disconnected";
+/** `desk_job_failure`: why a start failed, grouped by what the operator can do (`desk.jobFailure.*`). */
+export type DeskJobFailure = "device_unavailable" | "agent_not_installed" | "branch_in_use" | "project_unavailable" | "already_started" | "busy" | "not_started" | "invalid_request" | "other";
+/** `desk_output_kind`. */
+export type DeskOutputKind = "image" | "page" | "doc" | "pr";
+/** A job's result; `pr_state` is a pull request's one state, its PR mark's. */
+export type DeskOutput = { id: string; kind: DeskOutputKind; label: string; thumb: string | null; seen: boolean; pr_state: PrState | null };
+export type DeskMissionTone = "done" | "review" | "working" | "hold" | "failed" | "waiting" | "cancelled";
+/** The mission a Conductor job runs, as its `미션 k/n` chip (B34). */
+export type DeskMission = { id: string; title: string; status: MissionStatus; done: number; total: number; tone: DeskMissionTone; deciding: boolean };
+/** One session Desk started or queued; `id` is the spawn's intent, `pane_id` its thread's key. */
+export type DeskJob = {
+  id: string;
+  agent_id: string | null;
+  pane_id: string | null;
+  title: string;
+  agent_kind: string;
+  project: { workspace_id: string | null; label: string };
+  location: { kind: "checkout" | "worktree"; label: string };
+  state: DeskJobState;
+  queue_position: number | null;
+  now: string | null;
+  plan: { done: number; total: number } | null;
+  question: string | null;
+  summary: string | null;
+  pull_requests: { number: number; state: PrState }[];
+  outputs: DeskOutput[];
+  joined: boolean;
+  reason: DeskJobReason | null;
+  /** Why a failed start failed. */
+  failure: DeskJobFailure | null;
+  ask: DeskAskKind | null;
+  /** The sidebar row's mark, drawn with `StatusMark`; `mark_read` is its hollow read ask. */
+  mark: RowMark | null;
+  mark_read: boolean;
+  machine: string | null;
+  disconnected: boolean;
+  changed_at_unix_ms: number;
+  read: boolean;
+  mission: DeskMission | null;
+  /** The panes of a Conductor's workers. */
+  workers: string[];
+};
+/** The `desk_mentions` section, the `@` menu: recent sessions, then projects with their running sessions' panes. */
+export type DeskMentions = {
+  sessions: { id: string; name: string; agent_kind: string; mark: RowMark; detail: string | null }[];
+  projects: { id: string; name: string; sessions: string[] }[];
+};
+
+/** The `desk` section: absent until hided starts Desk. */
+export type DeskSection = {
+  selection: { agent: DeskAgentId | null; model: string | null; effort: string | null };
+  agents: DeskAgent[];
+  host: { state: DeskHostState; detail: string | null };
+  /** `generation` moves on 새 대화; `dropped` items left the front past the cap. */
+  conversation: { generation: number; items: DeskItem[]; dropped: number };
+  approvals_waiting: number;
+  settings: { default_agent: DeskAgentId | null; location: DeskLocation; cap: number };
+};
+
+/** The `desk_jobs` section: Desk's sessions as cards, newest first and at most 64, apart so a card's change never resends the conversation. */
+export type DeskJobsSection = { jobs: DeskJob[] };
+
+/** The `desk_live` section: the reply being written, `null` between turns. */
+export type DeskLive = { text: string | null; started_at_ms: number | null };
+
 /** The `suggestions` section: absent until the Hide AI tool opens a Project. */
 export type SuggestionsSection = { project: ProjectSuggestions | null };
 

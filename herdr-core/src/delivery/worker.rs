@@ -33,11 +33,20 @@ pub struct Prepared {
     actor: Actor,
     target: Option<Observation>,
     command: Command,
+    /// The answer the core gave under its lock, with nothing left to run: a
+    /// spawn Desk's queue took (PRD Desk 1차 B21).
+    answered: Option<Value>,
+    /// What the core records once the command answered, off its lock: a
+    /// Desk conversation line for the work Desk handed or started.
+    then: Option<After>,
     /// For a new `--force` letter, the engine of its recipient's machine,
     /// whose composer is read before the letter is recorded (PRD
     /// engine-bundle-1 D-14).
     forced: Option<crate::engine::SharedEngine>,
 }
+
+/// A step that follows a command's answer, given that answer.
+pub(crate) type After = Box<dyn FnOnce(&Result<Value, String>) + Send>;
 
 /// Immutable notification receipt. Reserving it consumes the attempt before
 /// either external channel runs, so a crash or failed channels cannot resend.
@@ -146,8 +155,22 @@ impl Prepared {
             actor,
             target,
             command,
+            answered: None,
+            then: None,
             forced: None,
         }
+    }
+
+    /// Runs `after` with the command's answer.
+    pub(crate) fn then(mut self, after: Option<After>) -> Self {
+        self.then = after;
+        self
+    }
+
+    /// Answers with `value` and runs nothing.
+    pub(crate) fn answered(mut self, value: Value) -> Self {
+        self.answered = Some(value);
+        self
     }
 
     /// Reads the recipient's composer through `engine` before a forced
@@ -160,34 +183,40 @@ impl Prepared {
     /// Called by the request worker after owner-thread preparation. Its wait
     /// never holds Runtime's mutex.
     pub fn run(self, timeout: Duration) -> Result<Value, String> {
-        if let Command::Agents { command } = self.command {
-            return crate::coordination::run(self.client, self.authority, self.actor, command);
-        }
-        // A forced letter is recorded only when its recipient shows nothing
-        // of a person's in its composer now; nothing is recorded or typed
-        // otherwise. The doorbell reads it again before it types.
-        if let (Some(engine), Some(target)) = (&self.forced, &self.target)
+        let result = if let Some(answer) = self.answered {
+            Ok(answer)
+        } else if let Command::Agents { command } = self.command {
+            crate::coordination::run(self.client, self.authority, self.actor, command)
+        } else if let (Some(engine), Some(target)) = (&self.forced, &self.target)
             && let Err(code) = super::composer::forced_clear(
                 engine.as_ref(),
                 &target.raw_pane_id,
                 &target.actor.kind,
             )
         {
+            // A forced letter is recorded only when its recipient shows
+            // nothing of a person's in its composer now; nothing is recorded
+            // or typed otherwise. The doorbell reads it again before it types.
             crate::diagnostic!(
                 json!({"component":"delivery","kind":"delivery.forced_refused",
                 "pane_id":target.actor.pane_id,"reason":code})
             );
-            return Err(code.to_owned());
+            Err(code.to_owned())
+        } else {
+            self.client.submit(
+                Effect::Command {
+                    authority: self.authority,
+                    actor: self.actor,
+                    target: self.target.map(Box::new),
+                    command: Box::new(self.command),
+                },
+                timeout,
+            )
+        };
+        if let Some(after) = self.then {
+            after(&result);
         }
-        self.client.submit(
-            Effect::Command {
-                authority: self.authority,
-                actor: self.actor,
-                target: self.target.map(Box::new),
-                command: Box::new(self.command),
-            },
-            timeout,
-        )
+        result
     }
 }
 

@@ -857,6 +857,7 @@ dependencies = [
  "hide-agent-adapter",
  "hide-agent-hooks",
  "hide-ai",
+ "hide-desk",
  "hide-herdr-client",
  "hide-host",
  "hide-kit",
@@ -930,6 +931,18 @@ dependencies = [
  "hide-platform",
  "jsonschema",
  "libc",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "workspace-hack",
+]
+
+[[package]]
+name = "hide-desk"
+version = "0.1.0"
+dependencies = [
+ "hide-platform",
+ "hide-shell",
  "serde",
  "serde_json",
  "tempfile",

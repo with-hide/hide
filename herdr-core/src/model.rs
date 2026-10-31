@@ -152,6 +152,26 @@ pub struct Snapshot {
     #[serde(skip_serializing_if = "Option::is_none")]
     #[serde(serialize_with = "serialize_optional_shared")]
     pub suggestions: Option<Arc<SuggestionsSnapshot>>,
+    /// The Desk room (PRD Desk 1차): its agents, conversation and settings.
+    /// Its own revisioned section, absent until Desk is installed; a new
+    /// `Arc` whenever it changes.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(serialize_with = "serialize_optional_shared")]
+    pub desk: Option<Arc<DeskSnapshot>>,
+    /// The Desk reply being written, its own section so a streamed chunk
+    /// never resends the conversation.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(serialize_with = "serialize_optional_shared")]
+    pub desk_live: Option<Arc<DeskLiveSnapshot>>,
+    /// The sessions Desk started, its own section so a card's change never
+    /// resends the conversation.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(serialize_with = "serialize_optional_shared")]
+    pub desk_jobs: Option<Arc<DeskJobsSnapshot>>,
+    /// Desk's `@` menu, its own section for the same reason.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(serialize_with = "serialize_optional_shared")]
+    pub desk_mentions: Option<Arc<DeskMentionsSnapshot>>,
     /// Each project's link counts and session chips (PRD link-graph D-45),
     /// absent until the link worker first answers. Its own revisioned
     /// section, off `rest`, so an agent row's change never resends it.
@@ -7447,6 +7467,10 @@ impl Snapshot {
             browser_views_revision: None,
             memory: None,
             suggestions: None,
+            desk: None,
+            desk_live: None,
+            desk_jobs: None,
+            desk_mentions: None,
             link_summaries: None,
             link_panel: None,
             session_record: None,
@@ -7476,6 +7500,7 @@ impl PetSnapshot {
     }
 }
 
+mod desk;
 mod overview_graph;
 pub(crate) mod overview_graph_choices;
 /// The sections of [`Snapshot`] that ride the revisioned `rest` channel of
@@ -7487,6 +7512,7 @@ pub(crate) mod overview_graph_choices;
 mod rest;
 mod session_thread;
 mod suggestions;
+pub use desk::*;
 pub use overview_graph::{GraphDirectInput, GraphParty, GraphSession, OverviewGraphSnapshot};
 pub use overview_graph_choices::{
     OVERVIEW_GRAPH_LIST_LIMIT, OverviewGraphChange, OverviewGraphChoices,
@@ -7517,6 +7543,10 @@ pub struct SnapshotDeltaPayload {
     pub documents: Option<DocumentsDelta>,
     pub memory: Option<Arc<MemorySnapshot>>,
     pub suggestions: Option<Arc<SuggestionsSnapshot>>,
+    pub desk: Option<Arc<DeskSnapshot>>,
+    pub desk_live: Option<Arc<DeskLiveSnapshot>>,
+    pub desk_jobs: Option<Arc<DeskJobsSnapshot>>,
+    pub desk_mentions: Option<Arc<DeskMentionsSnapshot>>,
     pub link_summaries: Option<Arc<crate::links::LinkSummariesSnapshot>>,
     pub link_panel: Option<Arc<crate::links::LinkPanelSnapshot>>,
     pub session_record: Option<Arc<crate::links::ledger::SessionRecordSnapshot>>,
@@ -7567,6 +7597,15 @@ pub struct SnapshotDeltaWire<'a> {
     /// Omitted until the Hide AI tool opens a Project.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub suggestions: Option<&'a SuggestionsSnapshot>,
+    /// Omitted until Desk is installed, and while it has not changed.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub desk: Option<&'a DeskSnapshot>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub desk_live: Option<&'a DeskLiveSnapshot>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub desk_jobs: Option<&'a DeskJobsSnapshot>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub desk_mentions: Option<&'a DeskMentionsSnapshot>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub link_summaries: Option<&'a crate::links::LinkSummariesSnapshot>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -7623,6 +7662,10 @@ impl<'a> SnapshotDeltaWire<'a> {
             }),
             memory: payload.memory.as_deref(),
             suggestions: payload.suggestions.as_deref(),
+            desk: payload.desk.as_deref(),
+            desk_live: payload.desk_live.as_deref(),
+            desk_jobs: payload.desk_jobs.as_deref(),
+            desk_mentions: payload.desk_mentions.as_deref(),
             link_summaries: payload.link_summaries.as_deref(),
             link_panel: payload.link_panel.as_deref(),
             session_record: payload.session_record.as_deref(),
@@ -9715,6 +9758,185 @@ mod wire_enum_tests {
         );
         checked.insert("device_sign_in_kind");
 
+        assert_wire(&contract, "desk_agent", &hide_desk::AdapterId::ALL);
+        checked.insert("desk_agent");
+        let states = [
+            DeskAgentState::Checking,
+            DeskAgentState::Ready,
+            DeskAgentState::Preparing,
+            DeskAgentState::NotInstalled,
+            DeskAgentState::InstallFailed,
+            DeskAgentState::NodeMissing,
+            DeskAgentState::CliMissing,
+            DeskAgentState::LoginNeeded,
+            DeskAgentState::NoAskMode,
+            DeskAgentState::NotOffered,
+        ];
+        for state in states {
+            match state {
+                DeskAgentState::Checking
+                | DeskAgentState::Ready
+                | DeskAgentState::Preparing
+                | DeskAgentState::NotInstalled
+                | DeskAgentState::InstallFailed
+                | DeskAgentState::NodeMissing
+                | DeskAgentState::CliMissing
+                | DeskAgentState::LoginNeeded
+                | DeskAgentState::NoAskMode
+                | DeskAgentState::NotOffered => {}
+            }
+        }
+        assert_wire(&contract, "desk_agent_state", &states);
+        checked.insert("desk_agent_state");
+        assert_wire(
+            &contract,
+            "desk_host_state",
+            &[
+                DeskHostState::Idle,
+                DeskHostState::Starting,
+                DeskHostState::Ready,
+                DeskHostState::Thinking,
+                DeskHostState::Stopped,
+            ],
+        );
+        checked.insert("desk_host_state");
+        assert_wire(
+            &contract,
+            "desk_reply_state",
+            &[DeskReplyState::Done, DeskReplyState::Stopped],
+        );
+        checked.insert("desk_reply_state");
+        assert_wire(
+            &contract,
+            "desk_card_kind",
+            &[
+                DeskCardKind::Command,
+                DeskCardKind::Edit,
+                DeskCardKind::Other,
+            ],
+        );
+        checked.insert("desk_card_kind");
+        assert_wire(
+            &contract,
+            "desk_approval_state",
+            &[
+                DeskApprovalState::Waiting,
+                DeskApprovalState::Allowed,
+                DeskApprovalState::Rejected,
+                DeskApprovalState::Closed,
+            ],
+        );
+        checked.insert("desk_approval_state");
+        assert_wire(
+            &contract,
+            "desk_notice",
+            &[
+                DeskNotice::Blocked,
+                DeskNotice::Preparing,
+                DeskNotice::HostStopped,
+                DeskNotice::ResumeFailed,
+                DeskNotice::LoginNeeded,
+                DeskNotice::InstallFailed,
+                DeskNotice::NoAskMode,
+                DeskNotice::TurnFailed,
+            ],
+        );
+        checked.insert("desk_notice");
+        assert_wire(
+            &contract,
+            "desk_location",
+            &[
+                DeskLocation::Desk,
+                DeskLocation::Worktree,
+                DeskLocation::Checkout,
+            ],
+        );
+        checked.insert("desk_location");
+        assert_wire(
+            &contract,
+            "desk_mention_kind",
+            &[DeskMentionKind::Session, DeskMentionKind::Project],
+        );
+        checked.insert("desk_mention_kind");
+        assert_wire(
+            &contract,
+            "desk_carried",
+            &[DeskCarried::All, DeskCarried::Trimmed, DeskCarried::None],
+        );
+        checked.insert("desk_carried");
+        assert_wire(
+            &contract,
+            "desk_job_state",
+            &[
+                DeskJobState::Queued,
+                DeskJobState::Starting,
+                DeskJobState::Working,
+                DeskJobState::Asking,
+                DeskJobState::Done,
+                DeskJobState::Failed,
+                DeskJobState::Cancelled,
+                DeskJobState::Closed,
+                DeskJobState::MovedOut,
+                DeskJobState::Sleeping,
+                DeskJobState::Archived,
+            ],
+        );
+        checked.insert("desk_job_state");
+        assert_wire(
+            &contract,
+            "desk_ask_kind",
+            &[
+                DeskAskKind::Question,
+                DeskAskKind::Approval,
+                DeskAskKind::Decision,
+                DeskAskKind::PlanReview,
+                DeskAskKind::Blocked,
+            ],
+        );
+        checked.insert("desk_ask_kind");
+        assert_wire(
+            &contract,
+            "desk_job_reason",
+            &[
+                DeskJobReason::SpawnFailed,
+                DeskJobReason::Exited,
+                DeskJobReason::DeviceDisconnected,
+            ],
+        );
+        checked.insert("desk_job_reason");
+        assert_wire(
+            &contract,
+            "desk_job_failure",
+            &[
+                DeskJobFailure::DeviceUnavailable,
+                DeskJobFailure::AgentNotInstalled,
+                DeskJobFailure::BranchInUse,
+                DeskJobFailure::ProjectUnavailable,
+                DeskJobFailure::AlreadyStarted,
+                DeskJobFailure::Busy,
+                DeskJobFailure::NotStarted,
+                DeskJobFailure::InvalidRequest,
+                DeskJobFailure::Other,
+            ],
+        );
+        checked.insert("desk_job_failure");
+        assert_wire(
+            &contract,
+            "desk_output_kind",
+            &[
+                DeskOutputKind::Image,
+                DeskOutputKind::Page,
+                DeskOutputKind::Doc,
+                DeskOutputKind::Pr,
+            ],
+        );
+        checked.insert("desk_output_kind");
+        assert_wire(
+            &contract,
+            "desk_job_location",
+            &[DeskJobLocationKind::Checkout, DeskJobLocationKind::Worktree],
+        );
+        checked.insert("desk_job_location");
         let thread_states = [
             ThreadState::Closed,
             ThreadState::Loading,

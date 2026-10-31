@@ -274,23 +274,48 @@ impl Runtime {
         self.refresh_agent_lineage() | self.refresh_pane_read_state()
     }
 
-    /// Adds to a report's `body` the Views the session of `pane_id` opened
-    /// that are still open, whether the operator has seen each, so the agent
-    /// that answers for it can read or show them (D-21). A list that would
-    /// not fit the letter is cut, and says how many it left out.
-    pub(super) fn list_opened_views(&self, pane_id: &str, body: &mut String) {
-        let Some(scope) = self.session_scope_of_pane(pane_id) else {
-            return;
-        };
-        let lines = self
-            .every_view_layout()
+    /// The Views the session of `pane_id` opened that are still open, its
+    /// results as a report and a Desk card list them.
+    pub(super) fn session_displays(&self, pane_id: &str) -> Vec<&crate::view_layout::Display> {
+        self.session_displays_among(pane_id, &self.open_displays())
+    }
+
+    /// Every open View, for callers that look through them for many sessions.
+    pub(super) fn open_displays(&self) -> Vec<&crate::view_layout::Display> {
+        self.every_view_layout()
             .flat_map(|(_, layout)| layout.displays())
+            .collect()
+    }
+
+    /// The Views among `displays` the session of `pane_id` opened.
+    pub(super) fn session_displays_among<'a>(
+        &self,
+        pane_id: &str,
+        displays: &[&'a crate::view_layout::Display],
+    ) -> Vec<&'a crate::view_layout::Display> {
+        let Some(scope) = self.session_scope_of_pane(pane_id) else {
+            return Vec::new();
+        };
+        displays
+            .iter()
             .filter(|display| {
                 display
                     .openers
                     .iter()
                     .any(|opener| opener.of_session(&scope))
             })
+            .copied()
+            .collect()
+    }
+
+    /// Adds to a report's `body` the Views the session of `pane_id` opened
+    /// that are still open, whether the operator has seen each, so the agent
+    /// that answers for it can read or show them (D-21). A list that would
+    /// not fit the letter is cut, and says how many it left out.
+    pub(super) fn list_opened_views(&self, pane_id: &str, body: &mut String) {
+        let lines = self
+            .session_displays(pane_id)
+            .into_iter()
             .map(|display| {
                 // A name is the file's or the page's, so a control character
                 // in it never starts a line of its own in the letter.

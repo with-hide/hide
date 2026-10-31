@@ -2419,7 +2419,6 @@ pub(super) fn spawn_hide_agent(
         dialect.prompt_flag().to_owned(),
         crate::worktree_control::prompt_argument(&spawn.prompt)?,
     ];
-    crate::coordination::register_code_owned(&start.client, &start.authority, &start.actor)?;
     let view = crate::coordination::run(
         start.client.clone(),
         crate::delivery::worker::Authority {

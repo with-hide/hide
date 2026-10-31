@@ -272,6 +272,36 @@ pub const COMMANDS: &[Spec] = &[
             "agent_sleep_not_started",
         ],
     },
+    // The answer is `{archived, pane_id}`: the archive has begun, its save
+    // first and its closes after. A working session is refused
+    // `archive_confirmation_required`, for the operator to confirm from
+    // Hide's screen.
+    Spec {
+        words: &["agent", "archive"],
+        arguments: AGENT_ID,
+        repeats: None,
+        options: &[optional("--actor", Text), switch("--json")],
+        rest: None,
+        answers: &["agent_archived"],
+        refusals: &[
+            "agent_pane_required",
+            "agent_unavailable",
+            "agent_ended",
+            "parent_authority_required",
+            "actor_identity_conflict",
+            "archive_confirmation_required",
+            "archive_not_offered",
+            "archive_delegated",
+            "archive_device_disconnected",
+            "archive_session_unknown",
+            "archive_status_unknown",
+            "archive_target_unknown",
+            "archive_too_many",
+            "archive_busy",
+            "archive_context_unavailable",
+            "archive_full",
+        ],
+    },
     Spec {
         words: &["agent", "spawn"],
         arguments: &[],
@@ -1138,6 +1168,7 @@ fn answers() -> Value {
         "agent_catalog".into(),
         shape(&["machine", "installed_known", "items"]),
     );
+    map.insert("agent_archived".into(), shape(&["archived", "pane_id"]));
     map.insert("device_list".into(), shape(&["devices"]));
     map.insert("device_added".into(), shape(&["device", "next_action"]));
     map.insert("device_removed".into(), shape(&["device_id"]));
@@ -1280,6 +1311,7 @@ mod tests {
                 | CommandKind::AgentCatalog { .. }
                 | CommandKind::Ps(_)
                 | CommandKind::AgentSleep { .. }
+                | CommandKind::AgentArchive { .. }
                 | CommandKind::Device(_)
                 | CommandKind::Pane(_))
         )

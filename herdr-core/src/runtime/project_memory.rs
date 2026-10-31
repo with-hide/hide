@@ -168,7 +168,8 @@ impl Runtime {
                         .collect()
                 })
                 .unwrap_or_default(),
-            crate::workspace_control::Caller::Checkout { .. } => Vec::new(),
+            crate::workspace_control::Caller::Checkout { .. }
+            | crate::workspace_control::Caller::Desk => Vec::new(),
         };
         // The pane's agent on the caller's own machine: a node's pane is
         // found among that node's agents, never this machine's. A pane is a
@@ -190,7 +191,8 @@ impl Runtime {
                 }
                 None => crate::memory_command::MemoryCaller::Person,
             },
-            crate::workspace_control::Caller::Checkout { .. } => {
+            crate::workspace_control::Caller::Checkout { .. }
+            | crate::workspace_control::Caller::Desk => {
                 crate::memory_command::MemoryCaller::Checkout
             }
         };

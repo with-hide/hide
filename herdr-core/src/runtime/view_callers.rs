@@ -67,7 +67,7 @@ impl Runtime {
     pub(super) fn caller_stays_behind(&self, key: &WorkspaceKey, caller_id: &str) -> bool {
         let on_screen = self.front_workspace_key().as_ref() == Some(key);
         match Caller::parse(caller_id) {
-            Caller::Checkout { gateway: true, .. } => false,
+            Caller::Checkout { gateway: true, .. } | Caller::Desk => false,
             Caller::Checkout { .. } => on_screen,
             Caller::Pane(pane_id) if on_screen => self.operator_pane(&key.0) != Some(pane_id),
             Caller::Pane(_) => self.background_caller_tab(key, caller_id).is_some(),

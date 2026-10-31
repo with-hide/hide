@@ -400,9 +400,12 @@ impl Core {
                 }
                 _ => std::collections::HashMap::new(),
             };
+            let desk = crate::desk::DeskStore::new(hide_kit::layout::desk_store(directory));
+            let desk_restored = desk.restore();
             let mut guard = lock_recover(&runtime);
             guard.install_mission_store(missions, restored);
             guard.install_mission_events(events, logs);
+            guard.install_desk_store(desk, desk_restored);
             drop(guard);
         }
         // Before any coordinator starts, because each builds its label worker
@@ -635,6 +638,27 @@ impl Core {
         }
         let (answer, changed) =
             lock_recover(&self.runtime).agent_sleep_command(device, caller, expected, id, actor)?;
+        if changed {
+            notify_change(self);
+        }
+        Ok(answer)
+    }
+
+    /// Runs `hide agent archive`: the screen's `세션 보관` for one registered
+    /// agent, admitted under the lock like the screen's event.
+    pub fn agent_archive(
+        &self,
+        device: &str,
+        caller: &str,
+        expected: &crate::workspace_control::Context,
+        id: &str,
+        actor: Option<&str>,
+    ) -> Result<serde_json::Value, String> {
+        if !check_owner_thread(self, "agent.archive") {
+            return Err("agent_unavailable".into());
+        }
+        let (answer, changed) = lock_recover(&self.runtime)
+            .agent_archive_command(device, caller, expected, id, actor)?;
         if changed {
             notify_change(self);
         }
@@ -874,6 +898,21 @@ impl Core {
                 Arc::downgrade(&self.runtime),
                 self.notifier.clone(),
             );
+        }
+    }
+
+    /// What gives the Desk process its identity and places (PRD Desk 1차);
+    /// starts Desk's worker, which looks at the agents at once.
+    pub fn set_desk(&self, platform: Arc<dyn crate::desk::DeskPlatform>) {
+        if check_owner_thread(self, "set_desk") {
+            let mut runtime = lock_recover(&self.runtime);
+            runtime.install_desk(
+                platform,
+                Arc::downgrade(&self.runtime),
+                self.notifier.clone(),
+            );
+            drop(runtime);
+            notify_change(self);
         }
     }
 

@@ -1,6 +1,6 @@
 import { ChevronRightIcon, GitBranchIcon, GlobeIcon, ImageIcon } from "lucide-react";
 import type { ReactNode } from "react";
-import type { DeskAsk, DeskJob, DeskMission, DeskOutput, DeskSessionRef } from "../../desk";
+import type { DeskAsk, DeskJob, DeskJobFailure, DeskMission, DeskOutput, DeskSessionRef } from "../../desk";
 import { AgentMark } from "../../AgentMark";
 import { fileIcon } from "../../fileIcons";
 import { useInterfaceTranslation } from "../../i18n/client";
@@ -69,6 +69,24 @@ export function jobReasonWords(t: T, reason: string | null | undefined): string 
   return key ? t(key) : null;
 }
 
+/** Why a start failed, grouped by what the operator can do (B22). */
+const FAILURE: Record<DeskJobFailure, MessageKey> = {
+  device_unavailable: "desk.jobFailure.device_unavailable",
+  agent_not_installed: "desk.jobFailure.agent_not_installed",
+  branch_in_use: "desk.jobFailure.branch_in_use",
+  project_unavailable: "desk.jobFailure.project_unavailable",
+  already_started: "desk.jobFailure.already_started",
+  busy: "desk.jobFailure.busy",
+  not_started: "desk.jobFailure.not_started",
+  invalid_request: "desk.jobFailure.invalid_request",
+  other: "desk.jobFailure.other",
+};
+
+/** A failed job's words: why its start failed when it never started, else how it ended. */
+function failedWords(t: T, job: DeskJob): string | null {
+  return job.failure ? t(FAILURE[job.failure]) : jobReasonWords(t, job.reason);
+}
+
 /** The second line's words after the place (B24): the verb and what follows it. */
 function jobWords(t: T, job: DeskJob): { verb: string | null; words: string | null; tone: "warning" | "destructive" | null; mono: boolean } {
   if (job.disconnected) return { verb: t("desk.job.disconnected"), words: job.now ?? null, tone: null, mono: false };
@@ -80,7 +98,7 @@ function jobWords(t: T, job: DeskJob): { verb: string | null; words: string | nu
     case "done":
       return { verb: t("desk.job.done"), words: job.summary ?? null, tone: null, mono: false };
     case "failed":
-      return { verb: t("desk.job.failed"), words: jobReasonWords(t, job.reason), tone: "destructive", mono: false };
+      return { verb: t("desk.job.failed"), words: failedWords(t, job), tone: "destructive", mono: false };
     default:
       return { verb: jobStateWords(t, job), words: null, tone: null, mono: false };
   }
@@ -289,6 +307,7 @@ export function DeskJobCard({ job, selected = false, selectedOutput = null, ...a
       className={cn("relative min-w-0 rounded-lg border border-border", selected ? "bg-accent" : "hover:bg-accent/50")}
       aria-label={job.title}
       data-desk-job={job.state}
+      data-desk-job-id={job.id}
       data-desk-job-selected={selected ? "true" : undefined}
     >
       {job.state !== "moved_out" ? <RowOverlayButton className="rounded-lg" hover={false} aria-label={t("desk.job.open", { title: job.title })} onClick={() => actions.onOpen(job)} /> : null}
