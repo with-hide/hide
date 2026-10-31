@@ -6207,3 +6207,72 @@ fn an_interruption_is_read_from_the_session_file_with_summaries_off() {
     );
     assert_eq!(harness.backend.calls(), 0, "nothing is analyzed");
 }
+
+/// A session reader that refuses with a given reason while one is set.
+struct Refusing {
+    inner: NodeTranscripts,
+    reason: std::sync::Mutex<Option<String>>,
+}
+
+impl TranscriptSource for Refusing {
+    fn read(&self, request: &LabelTranscriptRequest) -> Result<LabelTranscript, ReadFailure> {
+        if let Some(reason) = self.reason.lock().unwrap().clone() {
+            return Err(ReadFailure::Refused(reason));
+        }
+        self.inner.read(request)
+    }
+}
+
+fn unreadable_shown(worker: &LabelWorker, agent: &ObservedAgent) -> Option<String> {
+    let (kind, value) = agent.reference.clone().unwrap();
+    let payload: SessionSnapshotPayload = serde_json::from_value(json!({"agents": [{
+        "pane_id": agent.pane_id, "agent": agent.agent, "agent_status": agent.status,
+        "state_change_seq": agent.state_change_seq,
+        "agent_session": {"kind": kind, "value": value},
+    }]}))
+    .unwrap();
+    worker
+        .overlay()
+        .refusal(&payload.agents[0])
+        .map(str::to_owned)
+}
+
+/// A read refused for a reason reading again cannot clear says why the
+/// session cannot be read until a read lands; one that says only that the
+/// session is not there yet or was being written says nothing.
+#[test]
+fn a_refusal_reading_again_cannot_clear_is_kept_until_a_read_lands() {
+    let harness = Harness::new();
+    let node: Arc<dyn crate::node_access::NodeLink> = Arc::new(hide_node::Local::new(Some(
+        harness.home.path().to_path_buf(),
+    )));
+    let source = Arc::new(Refusing {
+        inner: NodeTranscripts::new(Box::new(move || Ok(Arc::clone(&node)))),
+        reason: Default::default(),
+    });
+    let (mut worker, woken) =
+        harness.spawn(harness.store(), LOCAL_TARGET, "local.sock", source.clone());
+    worker.set_summaries(false, Instant::now());
+    let path = harness.session(
+        "unreadable",
+        "c0000000-0000-4000-8000-000000000009",
+        &[("user", "고쳐줘")],
+    );
+    let mut seq = 4;
+    let mut next = |worker: &mut LabelWorker, reason: Option<&str>| {
+        *source.reason.lock().unwrap() = reason.map(str::to_owned);
+        seq += 1;
+        let agent = agent(&path, "idle", seq);
+        observe(worker, &agent);
+        settle(worker, &woken);
+        unreadable_shown(worker, &agent)
+    };
+    assert_eq!(next(&mut worker, None), None);
+    let reason = "session_capacity:line_bytes:262144";
+    assert_eq!(next(&mut worker, Some(reason)).as_deref(), Some(reason));
+    for passing in ["session_file_missing", "label_session_read_changed"] {
+        assert_eq!(next(&mut worker, Some(passing)), None, "{passing}");
+    }
+    assert_eq!(next(&mut worker, Some(reason)).as_deref(), Some(reason));
+    assert_eq!(next(&mut worker, None), None, "a read that lands");
+}

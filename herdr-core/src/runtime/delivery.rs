@@ -56,6 +56,11 @@ pub(crate) struct Observation {
     pub thread: Option<super::session_thread::ThreadReference>,
     pub host_scope: Option<String>,
     pub turn: Turn,
+    /// Why the session the pane runs cannot be read, while its turn is
+    /// [`Turn::Unread`] because the last read refused for a reason reading
+    /// again cannot clear (the reader's code). Letters wait on it, so their
+    /// senders are told and the row is marked (`unreadable_letters.rs`).
+    pub unreadable: Option<String>,
 }
 
 impl Observation {
@@ -99,6 +104,7 @@ impl Runtime {
             .collect();
         let mut present = HashSet::new();
         let mut excess = false;
+        let mut unreadable_moved = false;
         for agent in &payload.agents {
             let (Some(pane), Some(name), Some(kind), Some(status)) = (
                 agent.pane_id.as_deref(),
@@ -181,6 +187,12 @@ impl Runtime {
                     .map_or(Turn::Unread, Turn::Read),
                 _ => Turn::NotReported,
             };
+            let unreadable = (turn == Turn::Unread)
+                .then(|| labels.and_then(|labels| labels.refusal(agent)))
+                .flatten()
+                .map(str::to_owned);
+            unreadable_moved |=
+                previous.and_then(|old| old.unreadable.as_deref()) != unreadable.as_deref();
             let session = session_kind
                 .filter(|kind| kind.has_session_file())
                 .zip(agent.agent_session.as_ref())
@@ -239,6 +251,7 @@ impl Runtime {
                     .filter(|scope| scope.len() <= 4096)
                     .map(str::to_owned),
                 turn,
+                unreadable,
             };
             self.delivery_observations
                 .insert(pane_id.clone(), observation);
@@ -256,6 +269,9 @@ impl Runtime {
             self.delivery_overflow.remove(device);
         }
         self.delivery_connected.insert(device.to_owned());
+        if unreadable_moved {
+            self.unreadable_letters.touch();
+        }
         self.observe_registration_panes(device, payload, host_scope);
         // A woken pane is first seen here; the session projection that
         // follows publishes whatever this settles.
@@ -1368,6 +1384,8 @@ impl Runtime {
         // A new letter may wait on a sleeping recipient (PRD
         // mission-worker-sleep B2).
         self.letter_wakes.touch();
+        // Or on a session Hide cannot read.
+        self.unreadable_letters.touch();
         let graph_changed = self.delivery_ledger.as_ref().ok().is_none_or(|previous| {
             !self
                 .snapshot
@@ -1508,6 +1526,8 @@ impl Runtime {
                 || *actor == Actor::hide(super::missions::CONDUCTOR_ROLE, self.node.as_str())
                 || *actor
                     == Actor::hide(super::agent_sleep::letters::WAKE_ROLE, self.node.as_str())
+                || *actor
+                    == Actor::hide(super::unreadable_letters::DELIVERY_ROLE, self.node.as_str())
                 || (*actor == Actor::hide(crate::delivery::HIDE_DESK_ROLE, self.node.as_str())
                     && self.desk_installed())
                 || *actor == Actor::operator(self.node.as_str()))
@@ -3055,6 +3075,100 @@ pub(crate) mod tests {
             )
             .unwrap();
         assert_eq!(written(&mut guard), (false, false, false));
+        drop(guard);
+        drop(worker);
+    }
+
+    /// A letter to an agent whose session read refused for a reason reading
+    /// again cannot clear is held as unread, and its sender is told once;
+    /// the refusal's session being replaced and a read that lands each leave
+    /// nothing to tell.
+    #[test]
+    fn a_letter_held_on_an_unreadable_session_tells_its_sender_once() {
+        use crate::delivery::doorbell::{Hold, Patience, Turn};
+        let root = tempfile::tempdir().unwrap();
+        let (runtime, sender, _, path) = fixture(root.path());
+        let (worker, client) = Worker::store(
+            Arc::downgrade(&runtime),
+            ChangeNotifier::noop(),
+            path.clone(),
+        )
+        .unwrap();
+        let mut guard = runtime.lock().unwrap();
+        guard.install_delivery_client(client);
+        let reason = "session_capacity:line_bytes:262144";
+        let refused = LabelOverlay::default().with_refusals([(
+            "recipient".to_owned(),
+            hide_session::label_reference_token("codex", "id", "recipient-native"),
+            reason.to_owned(),
+        )]);
+        let observe = |guard: &mut Runtime, native: &str, labels: &LabelOverlay| {
+            let payload: SessionSnapshotPayload = serde_json::from_value(json!({"agents":[
+                {"id":"sender","pane_id":"sender","agent":"codex","agent_status":"working",
+                 "state_change_seq":1,"lineage_session":"sender-session"},
+                {"id":"recipient","pane_id":"recipient","agent":"codex","agent_status":"idle",
+                 "state_change_seq":2,"lineage_session":"recipient-session",
+                 "agent_session":{"kind":"id","value":native}},
+            ]}))
+            .unwrap();
+            guard.observe_delivery(crate::node::TEST_NODE, &payload, None, Some(labels));
+        };
+        observe(&mut guard, "recipient-native", &refused);
+        let recipient = guard.delivery_observations["recipient"].actor.clone();
+        assert_eq!(guard.delivery_unreadable(&recipient), Some(reason));
+
+        let context = authority(&sender).context;
+        let mut letters = Vec::new();
+        for intent in ["held", "second"] {
+            let prepared = guard
+                .prepare_delivery(
+                    crate::node::TEST_NODE,
+                    "sender",
+                    &context,
+                    None,
+                    Command::Send {
+                        target: "recipient".into(),
+                        intent: intent.into(),
+                        body: format!("{intent} body"),
+                        kind: "request".into(),
+                        now: false,
+                        force: false,
+                    },
+                )
+                .unwrap();
+            drop(guard);
+            let letter = prepared.run(Duration::from_secs(5)).unwrap();
+            letters.push(letter["id"].as_str().unwrap().to_owned());
+            guard = runtime.lock().unwrap();
+        }
+        let ledger = guard.delivery_state().unwrap();
+        let held = ledger
+            .letters
+            .iter()
+            .find(|letter| letter.id == letters[0])
+            .unwrap();
+        assert_eq!(
+            guard
+                .delivery_bell_verdict(&recipient, Patience::of(held), unix_milliseconds())
+                .err(),
+            Some(Hold::SessionUnread)
+        );
+
+        letters.sort();
+        guard.drive_unreadable_letters();
+        assert_eq!(guard.unreadable_letters_noted(), letters);
+        guard.unreadable_letters.touch();
+        guard.drive_unreadable_letters();
+        assert_eq!(guard.unreadable_letters_noted(), letters, "told once");
+
+        // The refusal was for the session the pane ran; another one is not
+        // known to be unreadable.
+        observe(&mut guard, "another-native", &refused);
+        assert_eq!(guard.delivery_observations["recipient"].turn, Turn::Unread);
+        assert_eq!(guard.delivery_unreadable(&recipient), None);
+        // A read that lands takes the refusal away.
+        observe(&mut guard, "recipient-native", &LabelOverlay::default());
+        assert_eq!(guard.delivery_unreadable(&recipient), None);
         drop(guard);
         drop(worker);
     }

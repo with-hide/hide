@@ -351,6 +351,7 @@ impl Runtime {
     /// idle Herdr session must still turn an expired acknowledgement into an
     /// explicit unknown result at its deadline.
     pub(crate) fn tick_async_operations(&mut self, now_unix_ms: u64) -> bool {
+        self.drive_unreadable_letters();
         self.with_close_geometry(|runtime| runtime.tick_operations(now_unix_ms))
     }
 
