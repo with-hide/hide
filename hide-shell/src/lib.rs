@@ -24,6 +24,9 @@ pub fn simple_commands(text: &str) -> Vec<Vec<String>> {
 pub struct ShellLine {
     pub commands: Vec<Vec<String>>,
     pub targets: Vec<(usize, String)>,
+    /// The targets a redirection writes (`>`, `>>`, `>|`, `&>`, `<>`), a
+    /// part of `targets`, beside the index of the command each belongs to.
+    pub writes: Vec<(usize, String)>,
     /// For each command, whether running the line can skip it: it follows
     /// `&&` or `||` in its list, sits in an `if`, loop or `case` body, or in
     /// a function.
@@ -79,7 +82,10 @@ struct Lexer {
     drop_next: bool,
     /// Whether that word names a file (`<`, `>`), not a here-string's text.
     next_is_file: bool,
+    /// Whether that file is written, not only read.
+    next_is_write: bool,
     targets: Vec<(usize, String)>,
+    writes: Vec<(usize, String)>,
     /// The word after `<<` names the heredoc's end; `true` strips leading tabs.
     heredoc_next: Option<bool>,
     /// Each heredoc the line opened: its end word, whether it strips leading
@@ -134,7 +140,9 @@ impl Lexer {
             in_word: false,
             drop_next: false,
             next_is_file: false,
+            next_is_write: false,
             targets: Vec::new(),
+            writes: Vec::new(),
             heredoc_next: None,
             heredocs: Vec::new(),
             word_quoted: false,
@@ -280,6 +288,7 @@ impl Lexer {
             return ShellLine {
                 commands: Vec::new(),
                 targets: Vec::new(),
+                writes: Vec::new(),
                 conditional: Vec::new(),
                 substitutions: Vec::new(),
                 fallback: false,
@@ -293,6 +302,7 @@ impl Lexer {
         ShellLine {
             commands: self.commands,
             targets: self.targets,
+            writes: self.writes,
             conditional: self.conditional,
             substitutions: self.substitutions,
             fallback: self.fallback,
@@ -315,7 +325,11 @@ impl Lexer {
             self.heredocs.push((word, strip, quoted));
         } else if self.drop_next {
             self.drop_next = false;
+            let writes = std::mem::take(&mut self.next_is_write);
             if std::mem::take(&mut self.next_is_file) {
+                if writes {
+                    self.writes.push((self.commands.len(), word.clone()));
+                }
                 self.targets.push((self.commands.len(), word));
             }
         } else {
@@ -327,6 +341,7 @@ impl Lexer {
         self.end_word();
         self.drop_next = false;
         self.next_is_file = false;
+        self.next_is_write = false;
         self.heredoc_next = None;
         let mut conditional = self.is_conditional();
         if !self.words.is_empty() {
@@ -642,6 +657,7 @@ impl Lexer {
             }
             self.drop_next = true;
             self.next_is_file = true;
+            self.next_is_write = true;
         } else {
             self.end_command();
             self.at += 1;
@@ -684,12 +700,14 @@ impl Lexer {
         }
         // `>&2` duplicates a descriptor and names no file.
         let duplicate = self.peek(0) == Some('&');
+        let writes = c == '>' || self.peek(0) == Some('>');
         if matches!(self.peek(0), Some('>' | '&' | '|')) || (c == '<' && self.peek(0) == Some('>'))
         {
             self.at += 1;
         }
         self.drop_next = true;
         self.next_is_file = !duplicate;
+        self.next_is_write = !duplicate && writes;
     }
 
     /// After a newline, skips the body of each heredoc the line opened,
@@ -824,5 +842,24 @@ mod tests {
             shell_line("cat <<EOF\n$(date) `whoami` \\$(not)\nEOF\ncat <<'EOF'\n$(kept)\nEOF\n");
         assert_eq!(line.substitutions, [(false, "date".to_owned())]);
         assert_eq!(line.backquoted, ["whoami"]);
+    }
+
+    #[test]
+    fn a_redirection_that_writes_keeps_its_target_apart_from_one_that_reads() {
+        let line = shell_line(
+            "cat < in.txt > out.txt 2>> log; echo x &> both; sort <> rw; echo y >| forced 2>&1",
+        );
+        assert_eq!(
+            line.writes,
+            [
+                (0, "out.txt".to_owned()),
+                (0, "log".to_owned()),
+                (1, "both".to_owned()),
+                (2, "rw".to_owned()),
+                (3, "forced".to_owned()),
+            ]
+        );
+        assert_eq!(line.targets.len(), 6);
+        assert!(shell_line("cat <<< text < in").writes.is_empty());
     }
 }

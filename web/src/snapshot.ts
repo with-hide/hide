@@ -2648,7 +2648,7 @@ export type DeskPermissionRow = "hide" | "read" | "shell" | "edit";
 export type DeskPermissionAnswer = "run" | "ask";
 export type DeskPermissions = Record<DeskPermissionRow, DeskPermissionAnswer>;
 /** `desk_irreversible`: what always asks, whatever the rows say. */
-export type DeskIrreversible = "end_working_session" | "force_push" | "delete_outside" | "unreadable";
+export type DeskIrreversible = "end_working_session" | "force_push" | "delete_remote" | "delete_outside" | "overwrite_outside" | "unreadable";
 /** A card's answer as `desk_approval` sends it (D-83): 한 번 허용, 이 대화에서 계속 허용, 거절. */
 export type DeskApprovalAnswer = "once" | "conversation" | "reject";
 /** Why a card asks, irreversible kinds first: `desk_approval_ask`. */

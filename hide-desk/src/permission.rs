@@ -154,19 +154,29 @@ pub enum Irreversible {
     EndWorkingSession,
     /// A `git push` that overwrites what the remote holds.
     ForcePush,
+    /// A `git push` that deletes a branch or tag the remote holds
+    /// (`<remote> :ref`, `--delete`, `-d`, `--prune`, `--mirror`).
+    DeleteRemote,
     /// Deleting a path outside every project Hide knows, the project's own
     /// folder included, or a path Hide cannot name.
     DeleteOutside,
+    /// Overwriting or moving away a file outside every project Hide knows,
+    /// or one Hide cannot name: a redirection that writes, `cp`, `mv`,
+    /// `tee`, `install`, `ln -f`, `truncate`, `dd of=`, an output flag, or
+    /// an edit (D-90).
+    OverwriteOutside,
     /// A command whose program Hide cannot read, so it could be any of the
     /// above.
     Unreadable,
 }
 
 impl Irreversible {
-    pub const ALL: [Irreversible; 4] = [
+    pub const ALL: [Irreversible; 6] = [
         Irreversible::EndWorkingSession,
         Irreversible::ForcePush,
+        Irreversible::DeleteRemote,
         Irreversible::DeleteOutside,
+        Irreversible::OverwriteOutside,
         Irreversible::Unreadable,
     ];
 }
@@ -223,7 +233,10 @@ pub struct Reading {
     /// The paths it deletes, in wire spelling; `None` for one Hide cannot
     /// name.
     pub deletes: Vec<Option<String>>,
+    /// The paths it overwrites or moves away, the same way.
+    pub overwrites: Vec<Option<String>>,
     pub force_push: bool,
+    pub delete_remote: bool,
     pub unreadable: bool,
 }
 
@@ -248,6 +261,8 @@ pub struct Decision {
     pub sessions: Vec<String>,
     /// The first path outside every project it deletes.
     pub outside: Option<String>,
+    /// The first path outside every project it overwrites or moves away.
+    pub overwritten: Option<String>,
 }
 
 /// Answers a reading from the table, the asks the operator allowed for the
@@ -266,23 +281,32 @@ pub fn decide(
         .cloned()
         .collect();
     let unnamed_end = reading.ends.iter().any(Option::is_none);
-    let mut outside_unnamed = false;
-    let mut outside = None;
-    for path in &reading.deletes {
-        match path {
-            None => outside_unnamed = true,
-            Some(path) if !facts.in_project(path) => {
-                outside.get_or_insert_with(|| path.clone());
+    // Whether any path lies outside every project or cannot be named, and
+    // the first one outside.
+    let outside_of = |paths: &[Option<String>]| {
+        let mut unnamed = false;
+        let mut first = None;
+        for path in paths {
+            match path {
+                None => unnamed = true,
+                Some(path) if !facts.in_project(path) => {
+                    first.get_or_insert_with(|| path.clone());
+                }
+                Some(_) => {}
             }
-            Some(_) => {}
         }
-    }
+        (first.is_some() || unnamed, first)
+    };
+    let (deletes_outside, outside) = outside_of(&reading.deletes);
+    let (overwrites_outside, overwritten) = outside_of(&reading.overwrites);
     let mut asks: Vec<Ask> = Irreversible::ALL
         .into_iter()
         .filter(|irreversible| match irreversible {
             Irreversible::EndWorkingSession => !sessions.is_empty() || unnamed_end,
             Irreversible::ForcePush => reading.force_push,
-            Irreversible::DeleteOutside => outside.is_some() || outside_unnamed,
+            Irreversible::DeleteRemote => reading.delete_remote,
+            Irreversible::DeleteOutside => deletes_outside,
+            Irreversible::OverwriteOutside => overwrites_outside,
             Irreversible::Unreadable => reading.unreadable,
         })
         .map(Ask::Irreversible)
@@ -295,6 +319,7 @@ pub fn decide(
         asks,
         sessions,
         outside,
+        overwritten,
     }
 }
 
@@ -330,9 +355,11 @@ pub fn classify(action: &Action, place: &Place<'_>) -> Reading {
                     folder: folder.clone(),
                     reason: reason.clone(),
                 },
+                deletes: line.changed(Change::Delete),
+                overwrites: line.changed(Change::Overwrite),
                 ends: line.ends,
-                deletes: line.deletes,
                 force_push: line.force_push,
+                delete_remote: line.delete_remote,
                 unreadable,
             }
         }
@@ -349,6 +376,7 @@ pub fn classify(action: &Action, place: &Place<'_>) -> Reading {
                 reason: reason.clone(),
             },
             ends: Vec::new(),
+            // An edit that deletes, or one that writes what was there.
             deletes: if *delete {
                 paths
                     .iter()
@@ -357,7 +385,16 @@ pub fn classify(action: &Action, place: &Place<'_>) -> Reading {
             } else {
                 Vec::new()
             },
+            overwrites: if *delete {
+                Vec::new()
+            } else {
+                paths
+                    .iter()
+                    .map(|path| path_of(path, Some(place.cwd), place.home))
+                    .collect()
+            },
             force_push: false,
+            delete_remote: false,
             unreadable: false,
         },
         Action::Read { what } => Reading {
@@ -370,7 +407,9 @@ pub fn classify(action: &Action, place: &Place<'_>) -> Reading {
             },
             ends: Vec::new(),
             deletes: Vec::new(),
+            overwrites: Vec::new(),
             force_push: false,
+            delete_remote: false,
             unreadable: false,
         },
         Action::Other { title, reason } => Reading {
@@ -383,7 +422,9 @@ pub fn classify(action: &Action, place: &Place<'_>) -> Reading {
             },
             ends: Vec::new(),
             deletes: Vec::new(),
+            overwrites: Vec::new(),
             force_push: false,
+            delete_remote: false,
             unreadable: false,
         },
     }
@@ -398,8 +439,11 @@ struct Line {
     /// writes a file.
     other: bool,
     ends: Vec<Option<String>>,
-    deletes: Vec<Option<String>>,
+    /// The paths it deletes or overwrites, in the order the line reaches
+    /// them.
+    paths: Vec<(Change, Option<String>)>,
     force_push: bool,
+    delete_remote: bool,
     unreadable: bool,
     /// The line sets a variable programs read from the environment.
     environment: bool,
@@ -419,8 +463,33 @@ impl Line {
     /// A path the line deletes; after a command that may make links, one
     /// Hide cannot name.
     fn delete(&mut self, path: Option<String>) {
-        self.deletes.push(path.filter(|_| !self.writes));
+        self.change(Change::Delete, path);
     }
+
+    /// A path the line overwrites or moves away, named the same way.
+    fn overwrite(&mut self, path: Option<String>) {
+        self.change(Change::Overwrite, path);
+    }
+
+    fn change(&mut self, change: Change, path: Option<String>) {
+        let path = path.filter(|_| !self.writes);
+        self.paths.push((change, path));
+    }
+
+    fn changed(&self, change: Change) -> Vec<Option<String>> {
+        self.paths
+            .iter()
+            .filter(|(kind, _)| *kind == change)
+            .map(|(_, path)| path.clone())
+            .collect()
+    }
+}
+
+/// What a line does to a path it names.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum Change {
+    Delete,
+    Overwrite,
 }
 
 /// The folders a command may run in. `None` stands for one Hide cannot
@@ -525,16 +594,42 @@ enum Effect {
     Links,
 }
 
-/// A program Hide knows (D-89): what it does, the flags that make it write
-/// a file, the flags that make it run another program, and how many words
-/// it may name besides its flags when more would name a file it writes.
-/// Any other program is one Hide cannot read.
+/// A program Hide knows (D-89): what it does, the flags that make it
+/// change something, the flags whose value names a file it writes, the
+/// flags that make it run another program, how many words it may name
+/// besides its flags when more would name a file it writes, which of its
+/// words name files it writes or moves away (D-90), and its options that
+/// take a value. Any other program is one Hide cannot read.
 struct Known {
     name: &'static str,
     effect: Effect,
     writes: &'static [&'static str],
+    output: &'static [&'static str],
     runs: &'static [&'static str],
     names: Option<usize>,
+    written: Written,
+    valued: &'static [&'static str],
+    /// Flags that make a program of `Changes` make or copy links.
+    links_with: &'static [&'static str],
+}
+
+/// Which words of a program name the files it writes or moves away.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum Written {
+    Nothing,
+    /// Its last word, or the folder `-t` names (`cp`, `install`).
+    Last,
+    /// Every word it names (`tee`, `truncate`).
+    Every,
+    /// Every word, what it moves and where (`mv`).
+    Moved,
+    /// Its last word, or the folder `-t` names, only when it replaces what
+    /// is there (`ln -f`).
+    Replaced,
+    /// Its second word (`uniq`'s output).
+    Second,
+    /// The value of each word starting with this (`dd of=`).
+    Operand(&'static str),
 }
 
 const fn known(name: &'static str, effect: Effect) -> Known {
@@ -542,8 +637,12 @@ const fn known(name: &'static str, effect: Effect) -> Known {
         name,
         effect,
         writes: &[],
+        output: &[],
         runs: &[],
         names: None,
+        written: Written::Nothing,
+        valued: &[],
+        links_with: &[],
     }
 }
 
@@ -618,12 +717,31 @@ const KNOWN: &[Known] = &[
     reads("wait"),
     reads("jobs"),
     Known {
-        writes: &["-o", "--output"],
+        output: &["-o", "--output"],
         runs: &["--compress-program"],
+        valued: &[
+            "-k",
+            "-t",
+            "-S",
+            "-T",
+            "--key",
+            "--field-separator",
+            "--buffer-size",
+            "--temporary-directory",
+        ],
         ..reads("sort")
     },
     Known {
         names: Some(1),
+        written: Written::Second,
+        valued: &[
+            "-f",
+            "-s",
+            "-w",
+            "--skip-fields",
+            "--skip-chars",
+            "--check-chars",
+        ],
         ..reads("uniq")
     },
     Known {
@@ -639,11 +757,12 @@ const KNOWN: &[Known] = &[
         ..reads("fd")
     },
     Known {
-        writes: &["-o", "--output"],
+        output: &["-o", "--output"],
         ..reads("base64")
     },
     Known {
-        writes: &["-o"],
+        output: &["-o"],
+        valued: &["-L", "-P", "-I", "--charset", "--filelimit"],
         ..reads("tree")
     },
     Known {
@@ -657,7 +776,38 @@ const KNOWN: &[Known] = &[
     known("mkdir", Effect::Changes),
     known("touch", Effect::Changes),
     known("chmod", Effect::Changes),
-    known("tee", Effect::Changes),
+    Known {
+        written: Written::Every,
+        ..known("tee", Effect::Changes)
+    },
+    Known {
+        written: Written::Every,
+        valued: &["-s", "-r", "--size", "--reference"],
+        ..known("truncate", Effect::Changes)
+    },
+    Known {
+        written: Written::Operand("of="),
+        ..known("dd", Effect::Changes)
+    },
+    Known {
+        written: Written::Last,
+        runs: &["--strip-program"],
+        valued: &[
+            "-t",
+            "-S",
+            "-m",
+            "-o",
+            "-g",
+            "-B",
+            "-f",
+            "--target-directory",
+            "--suffix",
+            "--mode",
+            "--owner",
+            "--group",
+        ],
+        ..known("install", Effect::Changes)
+    },
     known("kill", Effect::Changes),
     known("export", Effect::Changes),
     known("declare", Effect::Changes),
@@ -679,9 +829,36 @@ const KNOWN: &[Known] = &[
         runs: &["-C"],
         ..known("readarray", Effect::Changes)
     },
-    known("cp", Effect::Links),
-    known("mv", Effect::Links),
-    known("ln", Effect::Links),
+    Known {
+        written: Written::Last,
+        valued: &["-t", "-S", "--target-directory", "--suffix"],
+        // A link, or a tree copied with the links in it.
+        links_with: &[
+            "-s",
+            "-l",
+            "-r",
+            "-R",
+            "-a",
+            "-P",
+            "-d",
+            "--symbolic-link",
+            "--link",
+            "--recursive",
+            "--archive",
+            "--no-dereference",
+        ],
+        ..known("cp", Effect::Changes)
+    },
+    Known {
+        written: Written::Moved,
+        valued: &["-t", "-S", "--target-directory", "--suffix"],
+        ..known("mv", Effect::Links)
+    },
+    Known {
+        written: Written::Replaced,
+        valued: &["-t", "-S", "--target-directory", "--suffix"],
+        ..known("ln", Effect::Links)
+    },
 ];
 
 /// What `git` runs before its subcommand: the options that take a value,
@@ -704,9 +881,9 @@ const GIT_FLAGS: &[&str] = &[
     "--version",
 ];
 
-/// A `git` subcommand Hide knows, with the flags that make it write a file
-/// and the ones that make it run another program (a pager, an external
-/// diff or filter, a remote program, a command per commit).
+/// A `git` subcommand Hide knows, with the flags whose value names a file
+/// it writes and the ones that make it run another program (a pager, an
+/// external diff or filter, a remote program, a command per commit).
 struct GitSub {
     name: &'static str,
     effect: Effect,
@@ -983,14 +1160,13 @@ fn read_line(text: &str, folders: &Folders, place: &Place<'_>, depth: usize, lin
         }
         return;
     }
-    if parsed
-        .targets
+    let written: Vec<&(usize, String)> = parsed
+        .writes
         .iter()
-        .any(|(_, target)| !SAFE_TARGETS.contains(&target.as_str()))
-    {
-        line.other = true;
-    }
-    let first_delete = line.deletes.len();
+        .filter(|(_, target)| !SAFE_TARGETS.contains(&target.as_str()))
+        .collect();
+    line.other |= !written.is_empty();
+    let first_delete = line.paths.len();
     if parsed.functions {
         // A function's body runs wherever a later word names it, and that
         // word may be any program's name.
@@ -1026,20 +1202,38 @@ fn read_line(text: &str, folders: &Folders, place: &Place<'_>, depth: usize, lin
             }
         }
         if join != Join::Pipe {
-            pipeline = line.deletes.len();
+            pipeline = line.paths.len();
         }
+        let own = line.paths.len();
+        let wrote = line.writes;
         let ran = after.runs(join);
         ever = joined(&ever, &ran);
+        // The shell opens a command's redirections before it runs.
+        for (_, target) in written.iter().filter(|(at, _)| *at == index) {
+            for path in paths(target, &ran, place.home) {
+                line.overwrite(path);
+            }
+        }
         let moved = match read_command(words, &ran, place, depth, line) {
             // A body may run more than once, or after what follows it.
             Move::To(_) if parsed.bodies[index] => Move::Unknown,
             moved => moved,
         };
         after = after.then(join, &ran, moved);
-        if line.writes {
+        if line.writes && !wrote {
             // The commands of a pipeline run together: one may make a link
-            // before another deletes through it.
-            unname(&mut line.deletes[pipeline..]);
+            // before another deletes or writes through it. What follows is
+            // unnamed as it is read.
+            unname(&mut line.paths[pipeline..own]);
+        }
+    }
+    // A redirection with no command still opens its file.
+    for (_, target) in written
+        .iter()
+        .filter(|(at, _)| *at >= parsed.commands.len())
+    {
+        for path in paths(target, &ever, place.home) {
+            line.overwrite(path);
         }
     }
     let wrote = line.writes;
@@ -1053,12 +1247,12 @@ fn read_line(text: &str, folders: &Folders, place: &Place<'_>, depth: usize, lin
     }
     if line.writes && !wrote {
         // A substitution runs before the command it belongs to.
-        unname(&mut line.deletes[first_delete..]);
+        unname(&mut line.paths[first_delete..]);
     }
 }
 
-fn unname(deletes: &mut [Option<String>]) {
-    for path in deletes {
+fn unname(paths: &mut [(Change, Option<String>)]) {
+    for (_, path) in paths {
         *path = None;
     }
 }
@@ -1257,7 +1451,7 @@ fn run_program(
         }
         _ => {
             match KNOWN.iter().find(|known| known.name == name) {
-                Some(known) => known_program(known, args, from_input, line),
+                Some(known) => known_program(known, args, from_input, folders, place, line),
                 // `source`, `alias`, `trap`, an interpreter, a build tool or
                 // any program Hide does not know may run anything.
                 None => line.unreadable(),
@@ -1403,25 +1597,128 @@ fn wrapped(
 }
 
 /// A program of [`KNOWN`] with its words.
-fn known_program(known: &Known, args: &[String], from_input: bool, line: &mut Line) {
+fn known_program(
+    known: &Known,
+    args: &[String],
+    from_input: bool,
+    folders: &Folders,
+    place: &Place<'_>,
+    line: &mut Line,
+) {
     if args.iter().any(|word| refused(word, known.runs)) {
         line.unreadable();
         return;
     }
-    let writes = args.iter().any(|word| refused(word, known.writes))
-        || known.names.is_some_and(|most| {
-            args.iter().filter(|word| !word.starts_with('-')).count() > most
-        })
+    let mut files: Vec<String> = flag_values(args, known.output);
+    let (names, target) = operands(args, known.valued);
+    let forced = args
+        .iter()
+        .any(|word| word == "--force" || refused(word, &["-f"]));
+    let last = || {
+        target
+            .clone()
+            .or_else(|| names.get(1..).and_then(<[String]>::last).cloned())
+    };
+    match known.written {
+        Written::Nothing => {}
+        Written::Last => files.extend(last()),
+        Written::Every => files.extend(names.iter().cloned()),
+        Written::Moved => files.extend(names.iter().cloned().chain(target.clone())),
+        Written::Replaced if forced => match (last(), names.as_slice()) {
+            (Some(file), _) => files.push(file),
+            // `ln -sf ../a` makes `a` here.
+            (None, [only]) => files.extend(only.rsplit('/').next().map(str::to_owned)),
+            _ => {}
+        },
+        Written::Replaced => {}
+        Written::Second => files.extend(names.get(1).cloned()),
+        Written::Operand(prefix) => files.extend(
+            args.iter()
+                .filter_map(|word| word.strip_prefix(prefix))
+                .map(str::to_owned),
+        ),
+    }
+    for file in &files {
+        for path in paths(file, folders, place.home) {
+            line.overwrite(path);
+        }
+    }
+    let names_files = known.written != Written::Nothing || !known.output.is_empty();
+    if from_input && names_files {
+        // Words from the input may name a file it writes.
+        line.overwrite(None);
+    }
+    let writes = !files.is_empty()
+        || args.iter().any(|word| refused(word, known.writes))
+        || known.names.is_some_and(|most| names.len() > most)
         // Words from the input may be a flag that writes or one more name.
-        || (from_input && (!known.writes.is_empty() || known.names.is_some()));
+        || (from_input && (!known.writes.is_empty() || known.names.is_some() || names_files));
+    let links = args.iter().any(|word| refused(word, known.links_with));
     match known.effect {
         Effect::Reads => line.other |= writes,
-        Effect::Changes => line.other = true,
-        Effect::Links => {
+        Effect::Changes if !links => line.other = true,
+        Effect::Changes | Effect::Links => {
             line.other = true;
             line.writes = true;
         }
     }
+}
+
+/// The words a program names besides its options and their values, and the
+/// folder `-t` (`--target-directory`) names.
+fn operands(args: &[String], valued: &[&str]) -> (Vec<String>, Option<String>) {
+    let mut names = Vec::new();
+    let mut target = None;
+    let mut options = true;
+    let mut words = args.iter();
+    while let Some(word) = words.next() {
+        if !options || !word.starts_with('-') || word == "-" {
+            names.push(word.clone());
+            continue;
+        }
+        if word == "--" {
+            options = false;
+            continue;
+        }
+        let (option, attached) = match word.split_once('=') {
+            Some((option, value)) if word.starts_with("--") => (option, Some(value.to_owned())),
+            _ if !word.starts_with("--") && word.len() > 2 && valued.contains(&&word[..2]) => {
+                (&word[..2], Some(word[2..].to_owned()))
+            }
+            _ => (word.as_str(), None),
+        };
+        if !valued.contains(&option) {
+            continue;
+        }
+        let value = attached.or_else(|| words.next().cloned());
+        if matches!(option, "-t" | "--target-directory") {
+            target = value;
+        }
+    }
+    (names, target)
+}
+
+/// The values the flags `flags` take in `args`: `-o file`, `-ofile`,
+/// `--output file`, `--output=file`.
+fn flag_values(args: &[String], flags: &[&str]) -> Vec<String> {
+    let mut values = Vec::new();
+    let mut words = args.iter();
+    while let Some(word) = words.next() {
+        for flag in flags {
+            if word == flag {
+                values.extend(words.clone().next().cloned());
+            } else if let Some(value) = word.strip_prefix(&format!("{flag}=")) {
+                values.push(value.to_owned());
+            } else if !flag.starts_with("--")
+                && word.starts_with(flag)
+                && word.len() > flag.len()
+                && !word.starts_with("--")
+            {
+                values.push(word[flag.len()..].to_owned());
+            }
+        }
+    }
+    values
 }
 
 /// Whether `sed` only prints: no `-i`, no script file, and scripts of line
@@ -1611,6 +1908,13 @@ fn git(args: &[String], folders: &Folders, place: &Place<'_>, line: &mut Line) {
                 }) || (word.starts_with('-') && !word.starts_with("--") && word.contains('f'))
                     || (word.starts_with('+') && word.len() > 1)
             });
+            // A refspec with nothing before its `:` deletes the remote's ref.
+            line.delete_remote |= rest.iter().any(|word| {
+                matches!(word.as_str(), "--delete" | "--prune" | "--mirror")
+                    || (word.starts_with('-') && !word.starts_with("--") && word.contains('d'))
+                    || (word.starts_with(':') && word.len() > 1)
+                    || (word.starts_with("+:") && word.len() > 2)
+            });
         }
         "clean" => {
             line.other = true;
@@ -1751,7 +2055,13 @@ fn git(args: &[String], folders: &Folders, place: &Place<'_>, line: &mut Line) {
             }
             match known.effect {
                 Effect::Reads => {
-                    line.other |= rest.iter().any(|word| refused(word, known.writes));
+                    let files = flag_values(rest, known.writes);
+                    line.other |= !files.is_empty();
+                    for file in &files {
+                        for path in paths(file, &folders, place.home) {
+                            line.overwrite(path);
+                        }
+                    }
                 }
                 Effect::Changes => line.other = true,
                 Effect::Links => {
@@ -1831,7 +2141,17 @@ fn find(args: &[String], folders: &Folders, place: &Place<'_>, depth: usize, lin
                 }
                 at = end;
             }
-            "-fprint" | "-fprint0" | "-fprintf" | "-fls" => line.other = true,
+            "-fprint" | "-fprint0" | "-fprintf" | "-fls" => {
+                line.other = true;
+                match args.get(at + 1) {
+                    Some(file) => {
+                        for path in paths(file, folders, place.home) {
+                            line.overwrite(path);
+                        }
+                    }
+                    None => line.overwrite(None),
+                }
+            }
             _ => {}
         }
         at += 1;
@@ -1950,13 +2270,19 @@ fn tidy(path: &str) -> String {
     )
 }
 
-/// The paths a reading deletes where the system finds them: each link on
-/// the way followed and each `..` taken from where it leads. It reads the
+/// The paths a reading deletes or overwrites where the system finds them:
+/// each link on the way followed and each `..` taken from where it leads. It reads the
 /// filesystem, so it runs off the core's lock, in the worker that read the
 /// request, before the core answers it.
 pub fn follow_links(reading: &mut Reading) {
     for path in &mut reading.deletes {
         *path = path.take().and_then(|path| real_path(&path));
+    }
+    // Writing a name that is a link writes where it leads.
+    for path in &mut reading.overwrites {
+        *path = path
+            .take()
+            .and_then(|path| real_folder(path.trim_end_matches('/')));
     }
 }
 

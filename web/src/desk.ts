@@ -117,13 +117,14 @@ export const DESK_REFUSAL_MAX = 600;
 /**
  * The irreversible kinds a card asks about, in the core's order, each with
  * what it is about: the core names one subject, the first kind's that has
- * one (an archived session's title, a deleted path outside every project).
+ * one (an archived session's title, a path outside every project it
+ * deletes or overwrites).
  */
 export function approvalIrreversible(item: DeskApproval): { kind: DeskIrreversible; subject: string | null }[] {
   let subject = item.subject;
   return item.asks.flatMap((ask) => {
     if (ask.kind !== "irreversible") return [];
-    const takes = ask.value === "end_working_session" || ask.value === "delete_outside";
+    const takes = ask.value === "end_working_session" || ask.value === "delete_outside" || ask.value === "overwrite_outside";
     const own = takes ? subject : null;
     if (takes) subject = null;
     return [{ kind: ask.value, subject: own }];

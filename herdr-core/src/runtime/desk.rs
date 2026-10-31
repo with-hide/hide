@@ -1119,6 +1119,9 @@ impl Runtime {
                         .first()
                         .and_then(|agent| self.desk_session_title(agent)),
                     Ask::Irreversible(Irreversible::DeleteOutside) => decision.outside.clone(),
+                    Ask::Irreversible(Irreversible::OverwriteOutside) => {
+                        decision.overwritten.clone()
+                    }
                     _ => None,
                 });
                 let card = reading.card;

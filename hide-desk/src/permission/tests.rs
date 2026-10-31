@@ -116,7 +116,7 @@ fn a_hide_line_that_writes_or_runs_more_than_reads_is_another_shell_command() {
     };
     assert_eq!(
         asks_with(
-            "hide agent list > agents.json",
+            "hide agent list > /r/herdr-ide/agents.json",
             &shell_asks,
             &NONE_WORKING,
             &BTreeSet::new()
@@ -218,7 +218,6 @@ fn a_push_that_overwrites_the_remote_always_asks() {
         "git push --force-with-lease=main origin main",
         "git push origin +main",
         "git -C /r/herdr-ide push -uf origin x",
-        "bash -lc 'cd /r/herdr-ide && git push --mirror'",
         "command git push --force-if-includes",
         "echo $(git push -f)",
     ] {
@@ -738,6 +737,21 @@ fn a_delete_through_a_link_is_judged_where_the_link_leads() {
     ] {
         assert_eq!(asks(&line), [OUTSIDE], "{line}");
     }
+    // Writing a name that is a link writes where it leads.
+    std::fs::write(outside.join("file"), "").unwrap();
+    hide_platform::fs::link::create_link(
+        &outside.join("file"),
+        &Path::new(&project).join("real").join("file-link"),
+    )
+    .unwrap();
+    for line in [
+        format!("echo x > {project}/link/victim"),
+        format!("echo x > {project}/real/file-link"),
+        format!("cd {project}/link && cp /dev/null victim"),
+    ] {
+        assert_eq!(asks(&line), [OVERWRITE], "{line}");
+    }
+    assert_eq!(asks(&format!("echo x > {project}/real/notes.md")), []);
     for line in [
         // Deleting the link removes the link, inside the project.
         format!("rm -f {project}/link"),
@@ -745,6 +759,90 @@ fn a_delete_through_a_link_is_judged_where_the_link_leads() {
         format!("cd {project}/real && rm -f ../victim"),
     ] {
         assert_eq!(asks(&line), [], "{line}");
+    }
+}
+
+const OVERWRITE: Ask = Ask::Irreversible(Irreversible::OverwriteOutside);
+const REMOTE: Ask = Ask::Irreversible(Irreversible::DeleteRemote);
+
+#[test]
+fn overwriting_or_moving_a_file_outside_every_project_always_asks() {
+    // The second review's inputs and D-90's list.
+    for line in [
+        "echo x > /fixture/outside/victim",
+        "echo x >> /fixture/outside/victim",
+        "echo x &> /fixture/outside/victim",
+        "echo x >| /fixture/outside/victim",
+        "cp /dev/null /fixture/outside/victim",
+        "cp -t /fixture/outside /r/herdr-ide/a",
+        "truncate -s0 /fixture/outside/victim",
+        "dd if=/dev/zero of=/fixture/outside/victim",
+        "hide ps | tee /fixture/outside/victim",
+        "mv /fixture/outside/victim /r/herdr-ide/v",
+        "mv /r/herdr-ide/v /fixture/outside/victim",
+        "install -m 644 /r/herdr-ide/a /fixture/outside/victim",
+        "ln -sf /r/herdr-ide/a /fixture/outside/victim",
+        "sort -o /fixture/outside/victim /r/herdr-ide/a",
+        "uniq /r/herdr-ide/a /fixture/outside/victim",
+        "find /r/herdr-ide -fprint /fixture/outside/victim",
+        "git log --output=/fixture/outside/victim",
+        // Judged where it lands, as a deletion is.
+        "cd /fixture/outside && echo x > victim",
+        "echo x > /r/herdr-ide/../../fixture/outside/victim",
+        "echo x > $HOME/victim",
+        // Desk's own folder is no project.
+        "hide agent list > agents.json",
+    ] {
+        assert_eq!(asks(line), [OVERWRITE], "{line}");
+    }
+    for line in [
+        "echo x > /r/herdr-ide/notes.md",
+        "cd /r/herdr-ide && cp a b && echo x >> b",
+        "cat < /fixture/outside/victim",
+        "hide agent list 2>/dev/null",
+        // A new link outside replaces nothing.
+        "ln -s /r/herdr-ide/a /fixture/outside/new",
+    ] {
+        assert_eq!(asks(line), [], "{line}");
+    }
+    assert_eq!(reading("cat < /fixture/outside/victim").row, Row::Read);
+    let edit = |path: &str| {
+        let reading = classify(
+            &Action::Edit {
+                paths: vec![path.into()],
+                delete: false,
+                reason: None,
+            },
+            &place(),
+        );
+        decide(&reading, &Table::default(), &NONE_WORKING, &BTreeSet::new()).asks
+    };
+    assert_eq!(edit("/fixture/outside/victim"), [OVERWRITE]);
+    assert_eq!(edit("/r/herdr-ide/web/src/App.tsx"), []);
+}
+
+#[test]
+fn deleting_a_remote_branch_or_tag_always_asks() {
+    for line in [
+        "git push origin :main",
+        "git push origin :refs/tags/v1",
+        "git push --delete origin main",
+        "git push -d origin v1",
+        "git push --prune origin",
+        "git -C /r/herdr-ide push origin +:main",
+    ] {
+        assert!(asks(line).contains(&REMOTE), "{line}");
+    }
+    assert_eq!(
+        asks("bash -lc 'cd /r/herdr-ide && git push --mirror'"),
+        [Ask::Irreversible(Irreversible::ForcePush), REMOTE]
+    );
+    for line in [
+        "git push origin main",
+        "git push -u origin x",
+        "git push origin main:main",
+    ] {
+        assert_eq!(asks(line), [], "{line}");
     }
 }
 
@@ -839,8 +937,8 @@ fn a_program_hide_knows_is_read_with_its_words() {
     // Changes Hide knows: the `그 밖의 셸 명령` row, no irreversible kind.
     for line in [
         "mkdir -p notes && touch notes/a.md",
-        "cp a.md b.md",
-        "mv a.md b.md",
+        "cp /r/herdr-ide/a.md /r/herdr-ide/b.md",
+        "cd /r/herdr-ide && mv a.md b.md",
         "git commit -m x",
         "git checkout -b desk/x",
         "git -C /r/herdr-ide merge -s ours main",

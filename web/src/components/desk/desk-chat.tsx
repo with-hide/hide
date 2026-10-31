@@ -199,7 +199,9 @@ const APPROVAL_CARD: Record<DeskApproval["card"], MessageKey> = {
 const IRREVERSIBLE_WHY: Record<DeskIrreversible, MessageKey> = {
   end_working_session: "desk.approval.why.endWorkingSession",
   force_push: "desk.approval.why.forcePush",
+  delete_remote: "desk.approval.why.deleteRemote",
   delete_outside: "desk.approval.why.deleteOutside",
+  overwrite_outside: "desk.approval.why.overwriteOutside",
   unreadable: "desk.approval.why.unreadable",
 };
 
