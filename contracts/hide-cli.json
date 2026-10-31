@@ -3223,13 +3223,8 @@
                     "value": {
                         "type": "one_of",
                         "values": [
-                            "planned",
                             "working",
-                            "waiting",
-                            "review",
-                            "held",
                             "done",
-                            "failed",
                             "dropped"
                         ]
                     }
@@ -4117,7 +4112,7 @@
             "rest": null
         }
     ],
-    "digest": "sha256:0edb46d563a8bd136e6eb519f45ee71dece6632ace5bdbfc2c47b13911081aeb",
+    "digest": "sha256:d0f73064e1d0915826eb407a4141f70d22c59e89ab32f23b4f3fbf02807b2a72",
     "envelopes": {
         "agent": {
             "answer": "value",

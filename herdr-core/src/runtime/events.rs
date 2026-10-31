@@ -990,6 +990,9 @@ pub(super) struct ConductorSettingsSetPayload {
     pub(super) default_strength: Option<crate::missions::Strength>,
     #[serde(default)]
     pub(super) other_vendor: Option<bool>,
+    /// `끝난 worktree 정리` (PRD mission-node-simple D-14).
+    #[serde(default)]
+    pub(super) worktree_cleanup: Option<crate::missions::WorktreeCleanup>,
 }
 
 /// `mission_answer`: the operator's answer from a mission's decision banner
@@ -1752,6 +1755,7 @@ pub(super) enum Event {
     ConductorSettingsSet(ConductorSettingsSetPayload),
     MissionAnswer(MissionAnswerPayload),
     MissionEnd(MissionEndPayload),
+    MissionAttention(super::mission_health::MissionAttentionPayload),
     IssueDetailRequest(IssueDetailRequestPayload),
     GithubSearch(GithubSearchPayload),
     WorktreeNameSuggest(WorktreeNameSuggestPayload),
@@ -2095,6 +2099,10 @@ pub(super) fn validate_event(event: EventEnvelope) -> Result<Event, EventValidat
         "conductor_settings_set" => decode!(ConductorSettingsSetPayload, ConductorSettingsSet),
         "mission_answer" => decode!(MissionAnswerPayload, MissionAnswer),
         "mission_end" => decode!(MissionEndPayload, MissionEnd),
+        "mission_attention" => decode!(
+            super::mission_health::MissionAttentionPayload,
+            MissionAttention
+        ),
         "issue_detail_request" => decode!(IssueDetailRequestPayload, IssueDetailRequest),
         "github_search" => decode!(GithubSearchPayload, GithubSearch),
         "worktree_name_suggest" => decode!(WorktreeNameSuggestPayload, WorktreeNameSuggest),
@@ -4105,6 +4113,9 @@ impl Runtime {
                 if let Some(other_vendor) = payload.other_vendor {
                     settings.other_vendor = other_vendor;
                 }
+                if let Some(cleanup) = payload.worktree_cleanup {
+                    settings.worktree_cleanup = cleanup;
+                }
                 self.set_conductor_settings(settings)
             }
             Event::MissionAnswer(payload) => self.mission_answer_event(
@@ -4115,6 +4126,7 @@ impl Runtime {
                 payload.resend,
             ),
             Event::MissionEnd(payload) => self.mission_end_event(&payload.mission),
+            Event::MissionAttention(payload) => self.mission_attention_event(payload),
             Event::IssueDetailRequest(payload) => self.request_issue_detail(payload),
             Event::GithubSearch(payload) => self.request_github_search(payload),
             Event::WorktreeNameSuggest(payload) => self.suggest_worktree_name(payload),

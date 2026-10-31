@@ -2,11 +2,12 @@ import type { Actions } from "../actions";
 import { Group, Row } from "../components/settings-rows";
 import { useInterfaceTranslation } from "../i18n/client";
 import type { MissionStrength } from "../snapshot";
-import { CandidateAdd, CandidateRows, CapControl, ConductorError, OtherVendorControl, ScopeControl, StrengthControl, useConductorEdit } from "./ConductorControls";
+import { CandidateAdd, CandidateRows, CapControl, CleanupControl, ConductorError, OtherVendorControl, ScopeControl, StrengthControl, useConductorEdit } from "./ConductorControls";
 
 // Settings › Conductor (PRD software-factory-conductor D-31, B48, B49): how
 // many agents a mission runs at once, how far a mission goes when it does not
-// say, the candidates a Conductor chooses its workers and checkers from, and
+// say, whether Hide removes a done node's merged, clean worktree or asks
+// first (PRD mission-node-simple D-14), the candidates a Conductor chooses its workers and checkers from, and
 // how strongly a new mission is checked. The controls are the Mission tool's
 // defaults' too (`ConductorControls.tsx`, PRD mission-tool D-03); this page
 // lays them out as settings rows.
@@ -22,6 +23,9 @@ export function ConductorTab({ actions }: { actions: Actions }) {
         </Row>
         <Row label={<RowLabel title={t("conductor.scope")} hint={t("conductor.scopeHint")} />}>
           <ScopeControl settings={settings} send={send} />
+        </Row>
+        <Row label={<RowLabel title={t("conductor.cleanup")} hint={t("conductor.cleanupHint")} />}>
+          <CleanupControl settings={settings} send={send} />
         </Row>
       </Group>
       <ConductorError error={error} />

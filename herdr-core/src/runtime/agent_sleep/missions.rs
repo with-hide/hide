@@ -46,16 +46,17 @@ impl SleepMark {
     }
 }
 
-/// Whether a node is finished for its agents (D-17): its status is done,
-/// failed or dropped, however it got there; its pull request was merged or
+/// Whether a node is finished for its agents (D-17): its status is done or
+/// dropped, however it got there; every pull request it holds was merged or
 /// closed; or its mission was closed.
 fn finished(mission: &Mission, node: &MissionNode) -> bool {
     !mission.status.open()
         || node.status.finished()
-        || node
-            .pr_seen
-            .as_ref()
-            .is_some_and(|seen| seen.merged || seen.closed)
+        || (!node.prs.is_empty()
+            && node.prs.iter().all(|number| {
+                node.seen(*number)
+                    .is_some_and(|seen| seen.merged || seen.closed)
+            }))
 }
 
 /// Every finished node of the book, by mission and node.

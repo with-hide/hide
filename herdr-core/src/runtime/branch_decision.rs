@@ -9,9 +9,10 @@
 //! panes are that machine's Herdr. Only `{base}에 바로 올리기` pushes, and
 //! only the base, to its upstream.
 
-use super::memory_promotion::{Retire, agents_listed, panes_in, retire_attempt, worktree_path};
+use super::memory_promotion::{Retire, retire_attempt};
 use crate::node::NodeId;
 use crate::node_access::{LinkError, NodeLink};
+use crate::worktree_control::{agents_listed, panes_in, worktree_path};
 use hide_node_link::branch::{
     BaseSyncOutcome, BranchFacts, DiscardOutcome, MergeOutcome, MergePushOutcome, MergeStep,
 };

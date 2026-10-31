@@ -141,11 +141,9 @@ pub(crate) fn node_events(
         event.status = Some(after.status);
         out.push(event);
     }
-    if let Some(number) = after.pr
-        && after.pr != before.pr
-    {
+    for number in after.prs.iter().filter(|pr| !before.prs.contains(pr)) {
         let mut event = MissionEvent::new(now, EventKind::PrOpened).node(&after.key);
-        event.pr = Some(number);
+        event.pr = Some(*number);
         out.push(event);
     }
     if after.commit.is_some() && after.commit != before.commit {

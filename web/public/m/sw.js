@@ -98,7 +98,7 @@ self.addEventListener("message", (event) => {
   if (!data || data.type !== "words" || !data.words || typeof data.words !== "object") return;
   const { needs_you, done, observer_unconfirmed, letter_undelivered } = data.words;
   if (!isWord(needs_you) || !isWord(done)) return;
-  const statusWords = Object.fromEntries([...["question", "approval", "error", "working", "done", "idle", "unknown", "waiting", "stopped", "unfinished"].map((code) => `status_${code}`), "subject_plan_review", "subject_mission_decision", "subject_input_unconfirmed_brief", "subject_input_unconfirmed_letter", "subject_input_unconfirmed_brief_held", "subject_input_unconfirmed_letter_held"].map((key) => [key, data.words[key]]).filter(([, word]) => isWord(word)));
+  const statusWords = Object.fromEntries([...["question", "approval", "error", "working", "done", "idle", "unknown", "waiting", "stopped", "unfinished"].map((code) => `status_${code}`), "subject_plan_review", "subject_mission_decision", "subject_mission_attention", ...["merged_unproven", "worker_ended", "pr_closed", "unplanned_pr", "worktree_dirty", "cleanup_ask", "conductor_failed", "wake_refused", "close_refused"].map((reason) => `subject_mission_attention_${reason}`), "subject_input_unconfirmed_brief", "subject_input_unconfirmed_letter", "subject_input_unconfirmed_brief_held", "subject_input_unconfirmed_letter_held"].map((key) => [key, data.words[key]]).filter(([, word]) => isWord(word)));
   const words = JSON.stringify({ needs_you, done, observer_unconfirmed, letter_undelivered, ...statusWords });
   event.waitUntil(
     caches
@@ -109,11 +109,17 @@ self.addEventListener("message", (event) => {
 
 // A question the core asks for the agent comes as its subject; the page
 // posted its words with `{{count}}` left for the steps. A mission decision
-// carries its own line, led by the word the page posted for it. A cause
+// carries its own line, led by the word the page posted for it, and a mission
+// node raised to the operator its title and why. A cause
 // this worker does not know falls back to the payload's plain sentence.
 function subjectWords(words, subject) {
   if (!subject || typeof subject !== "object" || typeof subject.cause !== "string") return null;
   if (subject.cause === "mission_decision") return isWord(subject.line) ? subject.line : null;
+  // A mission node raised to the operator: its title and why, in the words the page posted for each reason.
+  if (subject.cause === "mission_attention") {
+    const why = words[`subject_mission_attention_${subject.reason}`];
+    return isWord(subject.node) && isWord(why) ? `${subject.node} · ${why}` : null;
+  }
   // A brief or a letter the agent has not confirmed is worded by which it
   // was, and as not received when its composer still held it.
   const key = subject.cause === "input_unconfirmed" ? `subject_input_unconfirmed_${subject.input}${subject.held === true ? "_held" : ""}` : `subject_${subject.cause}`;
@@ -122,7 +128,9 @@ function subjectWords(words, subject) {
 }
 
 function subjectLead(words, subject) {
-  return subject && subject.cause === "mission_decision" && isWord(words.subject_mission_decision) ? words.subject_mission_decision : null;
+  if (!subject) return null;
+  const lead = subject.cause === "mission_decision" ? words.subject_mission_decision : subject.cause === "mission_attention" ? words.subject_mission_attention : null;
+  return isWord(lead) ? lead : null;
 }
 
 async function storedWords() {

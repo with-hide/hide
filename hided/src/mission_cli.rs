@@ -21,9 +21,9 @@ pub const USAGE: &str = "hide mission help\nhide mission create --title <title> 
 /// frame past its own limit anyway.
 const FILE_LIMIT: u64 = 96 * 1024;
 
-pub const STATUSES: &[&str] = &[
-    "planned", "working", "waiting", "review", "held", "done", "failed", "dropped",
-];
+/// The statuses a Conductor sets (PRD mission-node-simple D-16); a plan
+/// sets `planned`.
+pub const STATUSES: &[&str] = &["working", "done", "dropped"];
 
 // Parsed once per command line and never stored, so its size is not worth
 // a box.
@@ -288,8 +288,11 @@ pub fn parse<'a>(mut args: impl Iterator<Item = &'a String>) -> Result<MissionCl
             let status = values
                 .get("--status")
                 .map(|status| {
-                    serde_json::from_value::<NodeStatus>(json!(status))
-                        .map_err(|_| format!("--status is one of {}", STATUSES.join(", ")))
+                    STATUSES
+                        .contains(&status.as_str())
+                        .then(|| serde_json::from_value::<NodeStatus>(json!(status)).ok())
+                        .flatten()
+                        .ok_or_else(|| format!("--status is one of {}", STATUSES.join(", ")))
                 })
                 .transpose()?;
             let text = |value: &str, clear: &str| -> Result<Option<Option<String>>, String> {
@@ -705,6 +708,15 @@ mod tests {
         assert!(parse(both.iter()).is_err());
         let zero = words(&["node", "a", "--pr", "0"]);
         assert!(parse(zero.iter()).is_err());
+        // The Conductor sets working, done or dropped; Hide keeps the rest.
+        for status in ["planned", "review", "held", "failed", "waiting"] {
+            let refused = words(&["node", "a", "--status", status]);
+            assert_eq!(
+                parse(refused.iter()).err().as_deref(),
+                Some("--status is one of working, done, dropped"),
+                "{status}"
+            );
+        }
     }
 
     #[test]

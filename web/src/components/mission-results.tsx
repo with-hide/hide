@@ -46,13 +46,13 @@ export function PullList({ mission, onSelect }: { mission: Mission; onSelect: (k
   const pulls = missionPulls(mission);
   if (pulls.length === 0) return null;
   return (
-    <ul aria-label={t("mission.prs")} className="mx-md mb-sm flex min-w-0 flex-col overflow-hidden rounded-md border border-border" data-mission-pulls={pulls.map((node) => node.pr).join(" ")}>
-      {pulls.map((node) => (
-        <li key={node.key} className="min-w-0 border-b border-border last:border-b-0">
-          <RowButton onClick={() => onSelect(node.key)} title={node.title} className="gap-sm rounded-none px-sm text-body" data-mission-pull={node.pr}>
-            <MissionPrMark number={node.pr!} state={node.pr_state} stale={mission.github_stale} />
+    <ul aria-label={t("mission.prs")} className="mx-md mb-sm flex min-w-0 flex-col overflow-hidden rounded-md border border-border" data-mission-pulls={pulls.map(({ pr }) => pr.number).join(" ")}>
+      {pulls.map(({ node, pr }) => (
+        <li key={pr.number} className="min-w-0 border-b border-border last:border-b-0">
+          <RowButton onClick={() => onSelect(node.key)} title={node.title} className="gap-sm rounded-none px-sm text-body" data-mission-pull={pr.number}>
+            <MissionPrMark number={pr.number} state={pr.state} stale={mission.github_stale} />
             <span className="min-w-0 flex-1 truncate">{node.title}</span>
-            {node.pr_state ? <span className={cn("shrink-0 text-caption", PR_LOOK[node.pr_state].tone)} data-mission-pull-state={node.pr_state}>{t(PR_LOOK[node.pr_state].word)}</span> : null}
+            {pr.state ? <span className={cn("shrink-0 text-caption", PR_LOOK[pr.state].tone)} data-mission-pull-state={pr.state}>{t(PR_LOOK[pr.state].word)}</span> : null}
           </RowButton>
         </li>
       ))}

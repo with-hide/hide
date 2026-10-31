@@ -4,13 +4,13 @@ import { cn } from "../lib/utils";
 import { Hint } from "./ui/tooltip";
 
 // A mission card's state as a shape (PRD mission-map-git-criteria D-02,
-// B26): each look has its own form, readable without its colour. Finished
-// work is a green disc with a check; work in main is a green check with no
-// disc, so the two read apart without the card's tag. An
-// outside node still watching is a dotted ring, its `↗` drawn beside its
-// number on the card in every state. The hover and the accessible name say
-// the same state word. A node whose worker Hide put to sleep wears the
-// sleeping row's grey moon, as its worker's row does.
+// B26; PRD mission-node-simple B1): waiting, in progress and done each have
+// their own form, readable without its colour; what someone has to look at
+// is the card's `!` tag, not a shape. Finished work is a green disc with a
+// check. An outside node still watching is a dotted ring, its `↗` drawn
+// beside its number on the card in every state. The hover and the
+// accessible name say the same state word. A node whose worker Hide put to
+// sleep wears the sleeping row's grey moon, as its worker's row does.
 
 export function MissionNodeMark({ look, label, className }: { look: NodeLook; label: string; className?: string }) {
   return (
@@ -35,27 +35,6 @@ function Shape({ look }: { look: Exclude<NodeLook, "asleep"> }) {
     case "working":
       // An open ring that turns while a worker is at the node; a reduced-motion setting holds it still.
       return <path d="M10.6 6A4.6 4.6 0 1 1 6 1.4" fill="none" strokeWidth="1.9" strokeLinecap="round" className="stroke-mission-working" />;
-    case "review":
-      return (
-        <>
-          <circle cx="6" cy="6" r="6" className="fill-mission-review" />
-          <circle cx="6" cy="6" r="2.4" fill="none" strokeWidth="1.3" className="stroke-status-foreground" />
-        </>
-      );
-    case "hold":
-      return (
-        <>
-          <circle cx="6" cy="6" r="6" className="fill-mission-hold" />
-          <path d="M5.25 2.6h1.5l-.25 4.6h-1zM5.25 8.2h1.5v1.4h-1.5z" className="fill-status-foreground" />
-        </>
-      );
-    case "failed":
-      return (
-        <>
-          <circle cx="6" cy="6" r="6" className="fill-mission-failed" />
-          <path d="M4 4l4 4M8 4l-4 4" fill="none" strokeWidth="1.5" strokeLinecap="round" className="stroke-status-foreground" />
-        </>
-      );
     case "done":
       return (
         <>

@@ -744,12 +744,8 @@ impl Runtime {
                     .nodes
                     .iter()
                     .filter(|node| {
-                        !matches!(
-                            node.status,
-                            crate::missions::NodeStatus::Done
-                                | crate::missions::NodeStatus::Dropped
-                                | crate::missions::NodeStatus::Failed
-                        ) && node.kind != crate::missions::NodeKind::External
+                        !node.status.finished()
+                            && node.kind != crate::missions::NodeKind::External
                             && reported(node)
                             && !self.node_unmet(mission, node).is_empty()
                     })
@@ -997,9 +993,79 @@ impl Runtime {
             .input_asks
             .iter()
             .map(|(pane, since, subject)| (Asked::Pane(pane.clone()), *since, subject.clone()));
-        let mut asks: Vec<_> = reviews.chain(decisions).chain(inputs).collect();
+        let attentions = self.mission_attention_asks();
+        let mut asks: Vec<_> = reviews
+            .chain(decisions)
+            .chain(inputs)
+            .chain(attentions)
+            .collect();
         asks.sort_by_key(|(_, since, _)| *since);
         asks
+    }
+
+    /// The mission nodes that wait on the operator (PRD mission-node-simple
+    /// D-05, B14), each laid on the Conductor's row while it holds the
+    /// mission, else on the node worker's row while one runs or sleeps.
+    fn mission_attention_asks(&self) -> Vec<CoreAsk> {
+        let ledger = self.delivery_state().ok();
+        let mut out = Vec::new();
+        for mission in &self.missions.book.missions {
+            if !mission.status.asks() {
+                continue;
+            }
+            for node in &mission.nodes {
+                let Some(attention) = &node.attention else {
+                    continue;
+                };
+                let Some(since) = attention.operator_at_unix_ms else {
+                    continue;
+                };
+                let subject = AskSubject::MissionAttention {
+                    node: node.title.clone(),
+                    reason: attention.reason,
+                };
+                if let Some(asked) = self.mission_attention_row(ledger.as_deref(), mission, node) {
+                    out.push((asked, since, subject));
+                }
+            }
+        }
+        out
+    }
+
+    /// The Needs You row a node's attention is laid on (PRD
+    /// mission-node-simple B5): the Conductor's while it is there, else the
+    /// node's worker's while its registration stands. None when neither
+    /// stands, and the operator is told by notice instead
+    /// (`claim_mission_notices`).
+    fn mission_attention_row(
+        &self,
+        ledger: Option<&crate::delivery::ledger::Ledger>,
+        mission: &crate::missions::Mission,
+        node: &crate::missions::MissionNode,
+    ) -> Option<Asked> {
+        let conductor = self
+            .conductor_present(&mission.conductor.actor)
+            .then(|| mission.conductor.session.clone())
+            .flatten()
+            .map(Asked::Session);
+        conductor.or_else(|| {
+            let agent = node.agent_id.as_deref()?;
+            let record = ledger?
+                .agents
+                .iter()
+                .find(|record| record.id == agent && !record.ended)?;
+            Some(Asked::Pane(record.actor.pane_id.clone()))
+        })
+    }
+
+    /// Whether a Needs You row stands for a node's attention.
+    pub(super) fn mission_attention_has_row(
+        &self,
+        ledger: Option<&crate::delivery::ledger::Ledger>,
+        mission: &crate::missions::Mission,
+        node: &crate::missions::MissionNode,
+    ) -> bool {
+        self.mission_attention_row(ledger, mission, node).is_some()
     }
 
     /// `plan` as the screen draws it from `pane`, each handed step's child

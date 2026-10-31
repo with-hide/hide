@@ -107,8 +107,6 @@ test("the Conductor's first plan shows on its pane, the map follows the record, 
     await expect(node).toHaveAttribute("data-node-status", "working");
     // Where a moving node is now is the summary's, beside the map, not the card's (PRD mission-tool B16, B19).
     await expect(map.locator('[data-mission-summary-line="api"]')).toHaveText("엔드포인트 작성 중");
-    // Its finish lines are counted on the card: the one the plan gave and the mission's check command, none passed yet.
-    await expect(node.locator("[data-node-criteria]")).toHaveAttribute("data-node-criteria", "0/2");
     await mission(conductor, ["mission", "decide", "--line", "화면 PR 방식 선택"]);
     // The decision is the operator's turn, above the map.
     await expect(map.locator('[data-mission-turn] [data-mission-banner="decision"]')).toContainText("화면 PR 방식 선택");
@@ -116,6 +114,8 @@ test("the Conductor's first plan shows on its pane, the map follows the record, 
     await node.click();
     const panel = map.locator('[data-mission-panel="api"] [data-mission-detail="api"]');
     await expect(panel).toBeVisible();
+    // Its finish lines are counted in the panel, not on the card (mission-node-simple B4): the one the plan gave and the mission's check command, none passed yet.
+    await expect(panel.locator('[data-panel-part="criteria"] h4')).toHaveText(/ · 0\/2$/);
     await expect(panel.locator("[data-panel-meta] [data-run]")).toHaveAttribute("title", "opus (planned)");
     await panel.locator("[data-panel-events-toggle]").click();
     await expect(panel.locator('[data-panel-event="node"]').first()).toBeVisible();

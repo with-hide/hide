@@ -8,7 +8,7 @@ const MINUTE = 60_000;
 const DAY = 24 * 60 * MINUTE;
 
 function node(key: string, title: string, extra: Partial<MissionNode> = {}): MissionNode {
-  return { key, title, kind: "change", depends_on: [], status: "planned", blocked: null, delivery: "pr", worker: null, agent_id: null, pane_id: null, machine: null, pr: null, base_pr: null, branch: null, pr_state: null, pr_url: null, stage: null, attempts: 0, line: null, change: null, review: null, criteria: [], criteria_met: 0, criteria_skipped: 0, external: null, unread: false, reopened: 0, started_at_unix_ms: null, finished_at_unix_ms: null, commit: null, landing: null, verdict: null, checks: null, ...extra };
+  return { key, title, kind: "change", depends_on: [], status: "planned", blocked: null, delivery: "pr", worker: null, agent_id: null, pane_id: null, machine: null, pr: null, base_pr: null, branch: null, pr_state: null, pr_url: null, stage: null, attempts: 0, line: null, change: null, review: null, criteria: [], criteria_met: 0, criteria_skipped: 0, external: null, unread: false, reopened: 0, started_at_unix_ms: null, finished_at_unix_ms: null, commit: null, landing: null, verdict: null, checks: null, attention: null, hide: null, worktree: null, ...extra, prs: extra.prs ?? (extra.pr != null ? [{ number: extra.pr, state: extra.pr_state ?? null, url: extra.pr_url ?? null }] : []) };
 }
 
 function mission(id: string, title: string, workspace: string, path: string, extra: Partial<Mission>): Mission {
@@ -29,7 +29,7 @@ export function missionToolMissions(workspace: string, path: string, now: number
         node("shell", "탭 셸 컴포넌트", { status: "done", worker: claude, pr: 1901, pr_state: "merged", landing: { state: "landed", proof: { by: "merged" } } }),
         node("store", "설정 저장 경로", { status: "done", worker: codex, pr: 1902, pr_state: "merged", landing: { state: "landed", proof: { by: "merged" } } }),
         node("move", "탭별 화면 옮기기", { status: "working", worker: claude, depends_on: ["shell", "store"] }),
-        node("order", "탭 순서", { status: "held", depends_on: ["move"] }),
+        node("order", "탭 순서", { status: "planned", depends_on: ["move"] }),
         node("demo", "시연 검증", { kind: "verify", depends_on: ["move"] }),
       ],
     }),
@@ -38,7 +38,7 @@ export function missionToolMissions(workspace: string, path: string, now: number
       nodes: [
         node("cache", "의존성 캐시", { status: "done", worker: codex, pr: 1905, pr_state: "merged", landing: { state: "landed", proof: { by: "merged" } } }),
         node("mini", "mac 잡 mini로 옮기기", { status: "working", worker: claude }),
-        node("split", "테스트 샤드 나누기", { status: "review", worker: codex }),
+        node("split", "테스트 샤드 나누기", { status: "working", worker: codex, pr: 1906, pr_state: "pending" }),
         node("check", "시간 재기", { kind: "verify", depends_on: ["mini", "split"] }),
       ],
     }),
@@ -66,6 +66,7 @@ export const MISSION_TOOL_DEFAULTS: ConductorSettings = {
   default_scope: "pr",
   default_strength: "normal",
   other_vendor: true,
+  worktree_cleanup: "auto",
   candidates: [
     { agent: "claude", model: "opus", effort: "high", purpose: "Conductor" },
     { agent: "codex", model: null, effort: null, purpose: "검증" },

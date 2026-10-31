@@ -1468,6 +1468,12 @@ pub enum AskSubject {
     /// The mission this Conductor conducts waits on the operator's decision,
     /// whose one line it carries (needs-you-cleanup D-12).
     MissionDecision { line: String },
+    /// A node of the mission waits on the operator to look (PRD
+    /// mission-node-simple D-05, B14): its title and why.
+    MissionAttention {
+        node: String,
+        reason: crate::missions::AttentionReason,
+    },
     /// Hide typed a brief or a letter's bell into the agent and the agent
     /// has not recorded it, and no parent cleared it (`delivery::typed`).
     /// `held` says the agent's composer was read still showing the text, so
@@ -8208,6 +8214,10 @@ mod wire_enum_tests {
             AskSubject::MissionDecision {
                 line: "line".into(),
             },
+            AskSubject::MissionAttention {
+                node: "node".into(),
+                reason: crate::missions::AttentionReason::WorkerEnded,
+            },
             AskSubject::InputUnconfirmed {
                 input: crate::delivery::typed::InputKind::Brief,
                 spent: false,
@@ -8218,6 +8228,7 @@ mod wire_enum_tests {
             match variant {
                 AskSubject::PlanReview { .. }
                 | AskSubject::MissionDecision { .. }
+                | AskSubject::MissionAttention { .. }
                 | AskSubject::InputUnconfirmed { .. } => {}
             }
         }
@@ -9191,31 +9202,23 @@ mod wire_enum_tests {
             let node_statuses = [
                 NodeStatus::Planned,
                 NodeStatus::Working,
-                NodeStatus::Waiting,
-                NodeStatus::Review,
-                NodeStatus::Held,
                 NodeStatus::Done,
-                NodeStatus::Failed,
                 NodeStatus::Dropped,
             ];
             for variant in node_statuses {
                 match variant {
                     NodeStatus::Planned
                     | NodeStatus::Working
-                    | NodeStatus::Waiting
-                    | NodeStatus::Review
-                    | NodeStatus::Held
                     | NodeStatus::Done
-                    | NodeStatus::Failed
                     | NodeStatus::Dropped => {}
                 }
             }
             assert_wire(&contract, "mission_node_status", &node_statuses);
             checked.insert("mission_node_status");
-            let blocked = [Blocked::UpstreamFailed, Blocked::UpstreamDropped];
+            let blocked = [Blocked::UpstreamDropped];
             for variant in blocked {
                 match variant {
-                    Blocked::UpstreamFailed | Blocked::UpstreamDropped => {}
+                    Blocked::UpstreamDropped => {}
                 }
             }
             assert_wire(&contract, "mission_blocked", &blocked);
@@ -9330,10 +9333,20 @@ mod wire_enum_tests {
             }
             assert_wire(&contract, "mission_check_rule", &rules);
             checked.insert("mission_check_rule");
-            let roles = [Role::Worker, Role::Checker, Role::Conductor, Role::Hide];
+            let roles = [
+                Role::Worker,
+                Role::Checker,
+                Role::Conductor,
+                Role::Hide,
+                Role::Operator,
+            ];
             for variant in roles {
                 match variant {
-                    Role::Worker | Role::Checker | Role::Conductor | Role::Hide => {}
+                    Role::Worker
+                    | Role::Checker
+                    | Role::Conductor
+                    | Role::Hide
+                    | Role::Operator => {}
                 }
             }
             assert_wire(&contract, "mission_recorded_role", &roles);
@@ -9373,6 +9386,11 @@ mod wire_enum_tests {
                 EventKind::Skipped,
                 EventKind::Reopened,
                 EventKind::Strength,
+                EventKind::Hide,
+                EventKind::HideClosed,
+                EventKind::Raised,
+                EventKind::RaisedToOperator,
+                EventKind::Resolved,
             ];
             for variant in kinds {
                 match variant {
@@ -9391,11 +9409,127 @@ mod wire_enum_tests {
                     | EventKind::Cancelled
                     | EventKind::Skipped
                     | EventKind::Reopened
-                    | EventKind::Strength => {}
+                    | EventKind::Strength
+                    | EventKind::Hide
+                    | EventKind::HideClosed
+                    | EventKind::Raised
+                    | EventKind::RaisedToOperator
+                    | EventKind::Resolved => {}
                 }
             }
             assert_wire(&contract, "mission_event_kind", &kinds);
             checked.insert("mission_event_kind");
+            use crate::missions::{
+                AttentionReason, FixReason, HideAction, OperatorAction, WorktreeCleanup,
+                WorktreeFate,
+            };
+            let reasons = [
+                AttentionReason::MergedUnproven,
+                AttentionReason::WorkerEnded,
+                AttentionReason::PrClosed,
+                AttentionReason::UnplannedPr,
+                AttentionReason::WorktreeDirty,
+                AttentionReason::CleanupAsk,
+                AttentionReason::ConductorFailed,
+                AttentionReason::WakeRefused,
+                AttentionReason::CloseRefused,
+            ];
+            for variant in reasons {
+                match variant {
+                    AttentionReason::MergedUnproven
+                    | AttentionReason::WorkerEnded
+                    | AttentionReason::PrClosed
+                    | AttentionReason::UnplannedPr
+                    | AttentionReason::WorktreeDirty
+                    | AttentionReason::CleanupAsk
+                    | AttentionReason::ConductorFailed
+                    | AttentionReason::WakeRefused
+                    | AttentionReason::CloseRefused => {}
+                }
+            }
+            assert_wire(&contract, "mission_attention_reason", &reasons);
+            checked.insert("mission_attention_reason");
+            use crate::runtime::missions::AttentionTo;
+            let whom = [AttentionTo::Conductor, AttentionTo::Operator];
+            for variant in whom {
+                match variant {
+                    AttentionTo::Conductor | AttentionTo::Operator => {}
+                }
+            }
+            assert_wire(&contract, "mission_attention_to", &whom);
+            checked.insert("mission_attention_to");
+            let actions = [
+                HideAction::Done,
+                HideAction::Attached,
+                HideAction::Woke,
+                HideAction::Cleaned,
+            ];
+            for variant in actions {
+                match variant {
+                    HideAction::Done
+                    | HideAction::Attached
+                    | HideAction::Woke
+                    | HideAction::Cleaned => {}
+                }
+            }
+            assert_wire(&contract, "mission_hide_action", &actions);
+            checked.insert("mission_hide_action");
+            let fixes = [
+                FixReason::CiFailed,
+                FixReason::Conflict,
+                FixReason::ChangesRequested,
+            ];
+            for variant in fixes {
+                match variant {
+                    FixReason::CiFailed | FixReason::Conflict | FixReason::ChangesRequested => {}
+                }
+            }
+            assert_wire(&contract, "mission_fix_reason", &fixes);
+            checked.insert("mission_fix_reason");
+            let fates = [
+                WorktreeFate::Removed,
+                WorktreeFate::Kept,
+                WorktreeFate::Failed,
+                WorktreeFate::Left,
+            ];
+            for variant in fates {
+                match variant {
+                    WorktreeFate::Removed
+                    | WorktreeFate::Kept
+                    | WorktreeFate::Failed
+                    | WorktreeFate::Left => {}
+                }
+            }
+            assert_wire(&contract, "mission_worktree_fate", &fates);
+            checked.insert("mission_worktree_fate");
+            let cleanups = [WorktreeCleanup::Auto, WorktreeCleanup::Ask];
+            for variant in cleanups {
+                match variant {
+                    WorktreeCleanup::Auto | WorktreeCleanup::Ask => {}
+                }
+            }
+            assert_wire(&contract, "mission_worktree_cleanup", &cleanups);
+            checked.insert("mission_worktree_cleanup");
+            let chosen = [
+                OperatorAction::Done,
+                OperatorAction::Drop,
+                OperatorAction::Attach,
+                OperatorAction::Leave,
+                OperatorAction::Cleanup,
+                OperatorAction::Resume,
+            ];
+            for variant in chosen {
+                match variant {
+                    OperatorAction::Done
+                    | OperatorAction::Drop
+                    | OperatorAction::Attach
+                    | OperatorAction::Leave
+                    | OperatorAction::Cleanup
+                    | OperatorAction::Resume => {}
+                }
+            }
+            assert_wire(&contract, "mission_operator_action", &chosen);
+            checked.insert("mission_operator_action");
             let sources = [AnswerSource::Banner, AnswerSource::Conversation];
             for variant in sources {
                 match variant {

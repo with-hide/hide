@@ -181,6 +181,13 @@ pub fn missions_before_criteria(state_dir: &Path) -> PathBuf {
     state_dir.join("missions.v1.json")
 }
 
+/// The schema 2 mission book as it was before nodes took three states and a
+/// pull request list, kept once so a downgrade can be restored by hand; its
+/// owner is the core's mission store.
+pub fn missions_before_simple(state_dir: &Path) -> PathBuf {
+    state_dir.join("missions.v2.json")
+}
+
 /// The folder of each mission's event history, one file per mission, deleted
 /// with its mission; its owner is the core's mission event store.
 pub const MISSION_EVENTS: &str = "mission-events";

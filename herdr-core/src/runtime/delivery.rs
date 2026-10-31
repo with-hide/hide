@@ -1224,6 +1224,13 @@ impl Runtime {
         {
             self.list_opened_views(&actor.pane_id, body);
         }
+        // A mission worker's report or progress often follows a push: its
+        // project's pull requests are read again (PRD mission-node-simple
+        // D-09, B23).
+        if !repeated && let Command::Send { kind, .. } = &command {
+            let kind = kind.clone();
+            self.note_mission_worker_letter(&actor, &kind);
+        }
         if (matches!(&command, Command::Send { .. }) && !repeated)
             || matches!(&command, Command::WatchAssign { .. })
         {
@@ -1284,16 +1291,16 @@ impl Runtime {
         self.delivery_client = Some(client);
     }
 
-    pub(crate) fn prepare_delivery_human(&self) -> Result<PreparedHuman, String> {
+    pub(crate) fn prepare_delivery_human(&mut self) -> Result<PreparedHuman, String> {
         // A notice claimed by a core that may still be rolled back would be
         // lost with its copy; the core that keeps the ledger claims it.
         if self.effects_held() {
             return Err("core_pending".into());
         }
         self.delivery_state()?;
-        Ok(PreparedHuman::new(
-            self.delivery_client.clone().ok_or("delivery_unavailable")?,
-        ))
+        let client = self.delivery_client.clone().ok_or("delivery_unavailable")?;
+        let missions = self.claim_mission_notices();
+        Ok(PreparedHuman::new(client, missions))
     }
 
     /// Restores the panes the last run held as a draft and keeps the store
@@ -1789,6 +1796,9 @@ impl Runtime {
                 let asking = row.is_some_and(|row| {
                     row.demand == "question" && row.activity == "stopped" && !row.blocked
                 });
+                // A mission worker waiting on its pull request's CI, review
+                // or merge is not quiet (PRD mission-node-simple D-06, B22).
+                let waits = observation.is_some() && self.mission_worker_waits(&watch.target);
                 crate::delivery::worker::WatchWork {
                     id: watch.id.clone(),
                     observation,
@@ -1801,6 +1811,7 @@ impl Runtime {
                     inactivity_ms: None,
                     asking,
                     blocked,
+                    waits,
                 }
             })
             .collect()

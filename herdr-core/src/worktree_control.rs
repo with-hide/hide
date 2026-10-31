@@ -5038,3 +5038,217 @@ mod tests {
         );
     }
 }
+
+/// How long one of Herdr's reads for a retirement may take.
+pub(crate) const READ_WAIT: Wait = Wait::Each(Duration::from_secs(5));
+
+/// The worktree of `branch` in the repository at `repo`, `None` when there
+/// is none.
+pub(crate) fn worktree_path(
+    engine: &dyn Engine,
+    repo: &str,
+    branch: &str,
+) -> Result<Option<String>, String> {
+    engine
+        .worktree_path(READ_WAIT, repo, branch)
+        .map_err(String::from)
+}
+
+/// Every agent Herdr runs now.
+pub(crate) fn agents_listed(
+    engine: &dyn Engine,
+) -> Result<Vec<crate::session_sync::ProjectedAgent>, String> {
+    engine.agents(READ_WAIT).map_err(|error| match error {
+        EngineError::Answer(_) | EngineError::Protocol { .. } => {
+            "agent.list is malformed".to_owned()
+        }
+        error => error.to_string(),
+    })
+}
+
+/// Whether `cwd` is `path` or below it, however either spells its end: a
+/// pane missed here would be taken for no one's, and its folder removed.
+pub(crate) fn within(cwd: &str, path: &str) -> bool {
+    let (cwd, path) = (cwd.trim_end_matches('/'), path.trim_end_matches('/'));
+    cwd == path
+        || cwd
+            .strip_prefix(path)
+            .is_some_and(|rest| rest.starts_with('/'))
+}
+
+/// The panes Herdr runs in the folder `path` or below it.
+pub(crate) fn panes_in(engine: &dyn Engine, path: &str) -> Result<Vec<String>, String> {
+    let snapshot = engine.session(READ_WAIT).map_err(|error| match error {
+        EngineError::Answer(_) | EngineError::Protocol { .. } => "snapshot_unavailable".to_owned(),
+        error => error.to_string(),
+    })?;
+    Ok(snapshot
+        .panes
+        .into_iter()
+        .filter(|pane| pane.cwd.as_deref().is_some_and(|cwd| within(cwd, path)))
+        .map(|pane| pane.pane_id)
+        .collect())
+}
+
+/// What retiring a finished branch's worktree came to.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum Retirement {
+    /// Its panes are closed and the worktree is gone; the branch stays.
+    Removed,
+    /// The branch has no worktree.
+    Gone,
+    /// The worktree stays, for what it holds.
+    Kept(Kept),
+}
+
+impl Retirement {
+    pub(crate) fn code(self) -> &'static str {
+        match self {
+            Self::Removed => "removed",
+            Self::Gone => "gone",
+            Self::Kept(_) => "kept",
+        }
+    }
+}
+
+/// Why a worktree stays.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum Kept {
+    /// The branch is checked out in the project's own folder.
+    ProjectFolder,
+    /// Another agent works in it.
+    OtherAgent,
+    /// A program runs in one of its panes.
+    ProgramRunning,
+    /// It holds uncommitted changes.
+    Uncommitted,
+    /// Its head has commits no merged pull request carried.
+    Unmerged,
+}
+
+impl Kept {
+    /// Work in the worktree itself, which the operator would lose.
+    pub(crate) fn holds_work(self) -> bool {
+        matches!(self, Self::Uncommitted | Self::Unmerged)
+    }
+
+    pub(crate) fn words(self) -> &'static str {
+        match self {
+            Self::ProjectFolder => "the Project's own folder",
+            Self::OtherAgent => "another agent works in it",
+            Self::ProgramRunning => "a program is running in it",
+            Self::Uncommitted => "it holds uncommitted changes",
+            Self::Unmerged => "it holds commits no merged pull request has",
+        }
+    }
+}
+
+/// Retires the worktree of a finished `branch` in the repository at `repo`
+/// (PRD hide-ai-work-home D-18, D-24; PRD mission-node-simple D-14; engineering
+/// principle 14): the panes of `own` agents close, then the worktree is
+/// removed when the tree is clean, no other agent or running program is in
+/// it, and, when `merged` names the heads its merged pull requests carried,
+/// its head holds no commit beyond one of them. The branch always stays.
+pub(crate) fn retire_worktree(
+    engine: &dyn Engine,
+    node: &dyn crate::node_access::NodeLink,
+    repo: &str,
+    branch: &str,
+    own: &[String],
+    merged: Option<&[String]>,
+) -> Result<Retirement, String> {
+    const NODE_TIMEOUT: Duration = Duration::from_secs(60);
+    let git = |root: &str, command: GitCommand| -> Result<String, String> {
+        crate::node_access::call_as::<String>(
+            node,
+            Call::Git {
+                root: root.to_owned(),
+                command,
+            },
+            NODE_TIMEOUT,
+        )
+        .map_err(|error| error.to_string())
+    };
+    let Some(path) = worktree_path(engine, repo, branch)? else {
+        return Ok(Retirement::Gone);
+    };
+    // The branch checked out in the Project's own folder is the operator's,
+    // never a finished branch's worktree.
+    if path.trim_end_matches('/') == repo.trim_end_matches('/') {
+        return Ok(Retirement::Kept(Kept::ProjectFolder));
+    }
+    let agents = agents_listed(engine)?;
+    let panes = panes_in(engine, &path)?;
+    let (mine, others): (Vec<_>, Vec<_>) = agents
+        .iter()
+        .filter(|agent| panes.contains(&agent.pane_id))
+        .partition(|agent| own.contains(&agent.pane_id));
+    // The finished agent ends first, whatever else keeps the worktree.
+    let mine = mine
+        .into_iter()
+        .map(|agent| agent.pane_id.clone())
+        .collect::<Vec<_>>();
+    close_checkout_panes(
+        engine,
+        node,
+        &[],
+        &mine,
+        ProcessWait::for_folder_removal(true),
+        CONFIRM_TIMEOUT,
+    )?;
+    if !others.is_empty() {
+        return Ok(Retirement::Kept(Kept::OtherAgent));
+    }
+    // Idle shells close with the worktree; a program running in one keeps
+    // it.
+    let remaining = panes
+        .into_iter()
+        .filter(|pane| !mine.contains(pane))
+        .collect::<Vec<_>>();
+    for pane in &remaining {
+        let held = engine
+            .pane_processes(READ_WAIT, pane)
+            .map_err(String::from)?;
+        if !held.foreground_pids.is_empty() && !held.shell_holds_terminal() {
+            return Ok(Retirement::Kept(Kept::ProgramRunning));
+        }
+    }
+    if !git(&path, GitCommand::Status)?.trim().is_empty() {
+        return Ok(Retirement::Kept(Kept::Uncommitted));
+    }
+    if let Some(merged) = merged {
+        let carried = merged.iter().any(|head| {
+            git(
+                &path,
+                GitCommand::CountCommits {
+                    base: head.clone(),
+                    head: "HEAD".to_owned(),
+                },
+            )
+            .is_ok_and(|count| count.trim() == "0")
+        });
+        if !carried {
+            return Ok(Retirement::Kept(Kept::Unmerged));
+        }
+    }
+    close_checkout_panes(
+        engine,
+        node,
+        std::slice::from_ref(&path),
+        &remaining,
+        ProcessWait::for_folder_removal(true),
+        CONFIRM_TIMEOUT,
+    )?;
+    crate::node_access::call_as::<()>(
+        node,
+        Call::WorktreeRetire {
+            root: repo.to_owned(),
+            checkout: path,
+            branch: branch.to_owned(),
+            discard: false,
+        },
+        NODE_TIMEOUT,
+    )
+    .map_err(|error| error.to_string())?;
+    Ok(Retirement::Removed)
+}

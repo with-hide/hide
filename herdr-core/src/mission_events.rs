@@ -21,7 +21,9 @@ use serde::{Deserialize, Serialize};
 use serde_json::json;
 
 use crate::latest_file::read_capped;
-use crate::missions::{NodeStatus, Strength};
+use crate::missions::{
+    AttentionReason, FixReason, HideAction, NodeStatus, OperatorAction, Strength,
+};
 
 /// Events one mission keeps; past this the oldest goes (B21).
 pub const EVENT_LIMIT: usize = 500;
@@ -65,6 +67,18 @@ pub enum EventKind {
     /// A plan changed the verification strength to `strength`; `line` is
     /// why, when the plan said.
     Strength,
+    /// Hide itself acted on a node (PRD mission-node-simple D-15): `hide`
+    /// says what, with its `pr` and `why`.
+    Hide,
+    /// Hide closed the mission with every node finished (B18).
+    HideClosed,
+    /// A node waits on the Conductor to look; `reason` says why.
+    Raised,
+    /// A node waits on the operator; `reason` says why (B14).
+    RaisedToOperator,
+    /// The operator settled what waited on a node with `action`; `line`
+    /// names the lines it went past (B15, D-15).
+    Resolved,
 }
 
 /// Where an answer came from (B31).
@@ -97,6 +111,14 @@ pub struct MissionEvent {
     pub criterion: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub strength: Option<Strength>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hide: Option<HideAction>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub why: Option<FixReason>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason: Option<AttentionReason>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub action: Option<OperatorAction>,
 }
 
 impl MissionEvent {
@@ -113,6 +135,10 @@ impl MissionEvent {
             source: None,
             criterion: None,
             strength: None,
+            hide: None,
+            why: None,
+            reason: None,
+            action: None,
         }
     }
 
@@ -209,8 +235,10 @@ fn encode(log: &EventLog) -> Result<Vec<u8>, String> {
 }
 
 fn decode(bytes: &[u8]) -> Result<EventLog, String> {
-    let stored: Stored =
-        serde_json::from_slice(bytes).map_err(|error| format!("could not be decoded: {error}"))?;
+    let decoded = |error: serde_json::Error| format!("could not be decoded: {error}");
+    let mut value: serde_json::Value = serde_json::from_slice(bytes).map_err(decoded)?;
+    simple_statuses(&mut value);
+    let stored: Stored = serde_json::from_value(value).map_err(decoded)?;
     if stored.schema_version != SCHEMA_VERSION {
         return Err(format!(
             "has schema version {}, expected {SCHEMA_VERSION}",
@@ -221,6 +249,30 @@ fn decode(bytes: &[u8]) -> Result<EventLog, String> {
         return Err("holds more events than the limit allows".to_owned());
     }
     Ok(stored.log)
+}
+
+/// A node's move written before nodes took three states (PRD
+/// mission-node-simple D-16) reads as the state it is now: in review, held
+/// or failed is in progress, waiting is not started. The history keeps the
+/// line it was written with.
+fn simple_statuses(value: &mut serde_json::Value) {
+    let Some(events) = value
+        .get_mut("events")
+        .and_then(serde_json::Value::as_array_mut)
+    else {
+        return;
+    };
+    for event in events {
+        let Some(status) = event.get_mut("status") else {
+            continue;
+        };
+        let next = match status.as_str() {
+            Some("review" | "held" | "failed") => "working",
+            Some("waiting") => "planned",
+            _ => continue,
+        };
+        *status = next.into();
+    }
 }
 
 /// What the save thread still has to do for one mission: delete its file,

@@ -51,6 +51,7 @@ async function mount(settings: ConductorSettings) {
     get sent() { return events.filter((event) => event.kind === "conductor_settings_set").map((event) => event.payload); },
     verification,
     strengths: () => [...verification().querySelectorAll<HTMLElement>("[data-conductor-strength-option]")],
+    cleanups: () => [...container.querySelectorAll<HTMLElement>("[data-conductor-cleanup-option]")],
     async unmount() {
       await act(async () => root.unmount());
       container.remove();
@@ -89,6 +90,16 @@ it("sends each edit as its own field, so a second edit before the first one's an
     await act(async () => tab.strengths().find((option) => option.textContent === "Thorough")!.click());
     await act(async () => tab.verification().querySelector<HTMLElement>('[role="switch"]')!.click());
     expect(tab.sent).toEqual([{ default_strength: "thorough" }, { other_vendor: false }]);
+  } finally { await tab.unmount(); }
+});
+
+it("offers 끝난 worktree 정리 as auto or ask, auto by default, and sends only that field (PRD mission-node-simple D-14, B20)", async () => {
+  const tab = await mount(DEFAULT_CONDUCTOR);
+  try {
+    expect(tab.cleanups().map((option) => [option.textContent, option.getAttribute("data-state")])).toEqual([["Auto", "on"], ["Ask", "off"]]);
+    await act(async () => tab.cleanups().find((option) => option.textContent === "Auto")!.click());
+    await act(async () => tab.cleanups().find((option) => option.textContent === "Ask")!.click());
+    expect(tab.sent).toEqual([{ worktree_cleanup: "ask" }]);
   } finally { await tab.unmount(); }
 });
 

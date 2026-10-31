@@ -5,7 +5,7 @@
 
 import { agentAdapter } from "./agentAdapters";
 import { PROVIDER_KINDS, type ProviderKind } from "./agentPicker";
-import type { ConductorCandidate, ConductorSettings, MissionStrength } from "./snapshot";
+import type { ConductorCandidate, ConductorSettings, MissionStrength, MissionWorktreeCleanup } from "./snapshot";
 
 /** The cap's range (`CAP_LIMIT`) and the candidate list's (`CANDIDATE_LIMIT`). */
 export const CAP_LIMIT = 16;
@@ -15,8 +15,11 @@ export const CAP_CHOICES: readonly number[] = Array.from({ length: CAP_LIMIT }, 
 /** The verification strengths, lightest first (`mission_strength`). */
 export const STRENGTHS: readonly MissionStrength[] = ["fast", "normal", "thorough"];
 
+/** How a done node's worktree is cleaned (`mission_worktree_cleanup`, PRD mission-node-simple D-14): by Hide, or asked first. */
+export const WORKTREE_CLEANUPS: readonly MissionWorktreeCleanup[] = ["auto", "ask"];
+
 /** What the core keeps before the operator changed anything. */
-export const DEFAULT_CONDUCTOR: ConductorSettings = { concurrency: 4, default_scope: "pr", candidates: [], default_strength: "normal", other_vendor: true };
+export const DEFAULT_CONDUCTOR: ConductorSettings = { concurrency: 4, default_scope: "pr", candidates: [], default_strength: "normal", other_vendor: true, worktree_cleanup: "auto" };
 
 /** The start kind a candidate names, as the start panel lists it; null for an agent Hide cannot start. */
 export function candidateAgent(agent: string): ProviderKind | null {

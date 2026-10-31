@@ -281,6 +281,7 @@ impl Runtime {
                 "ask": row.ask_subject.as_ref().map_or(row.demand.as_str(), |subject| match subject {
                     crate::model::AskSubject::PlanReview { .. } => "plan_review",
                     crate::model::AskSubject::MissionDecision { .. } => "mission_decision",
+                    crate::model::AskSubject::MissionAttention { .. } => "mission_attention",
                     crate::model::AskSubject::InputUnconfirmed { .. } => "input_unconfirmed",
                 }),
             }));

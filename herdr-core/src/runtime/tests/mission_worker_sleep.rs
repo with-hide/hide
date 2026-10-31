@@ -498,7 +498,7 @@ fn a_finished_nodes_worker_sleeps_once() {
 #[test]
 fn a_refused_mission_sleep_is_tried_again_the_next_minute() {
     let mut runtime = mission_runtime();
-    set_node(&mut runtime, crate::missions::NodeStatus::Failed);
+    set_node(&mut runtime, crate::missions::NodeStatus::Dropped);
     runtime.sleep_finished_mission_agents(unix_milliseconds());
     runtime.ingest_agent_sleep_end(WORKER, Err("busy".into()));
     assert_eq!(phase(&runtime, WORKER), None);
@@ -532,10 +532,13 @@ fn a_busy_or_shown_worker_waits_and_a_reopened_node_drops_its_marks() {
 #[test]
 fn a_merged_pull_request_or_a_closed_mission_finishes_the_node() {
     let mut runtime = mission_runtime();
-    runtime.missions.book.missions[0].nodes[0].pr_seen = Some(crate::missions::PrSeen {
+    let node = &mut runtime.missions.book.missions[0].nodes[0];
+    node.prs = vec![7];
+    node.pr_seen = vec![crate::missions::PrSeen {
+        number: 7,
         merged: true,
         ..Default::default()
-    });
+    }];
     runtime.save_missions();
     assert_eq!(marks(&runtime), ["agent-2", "agent-3"]);
     let mut runtime = mission_runtime();

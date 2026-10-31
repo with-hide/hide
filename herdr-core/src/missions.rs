@@ -29,9 +29,12 @@ use crate::delivery::Actor;
 use crate::latest_file::{LatestFile, read_capped};
 use crate::mission_criteria::{CheckInput, Criterion};
 
-const SCHEMA_VERSION: u32 = 2;
+const SCHEMA_VERSION: u32 = 3;
 /// The schema before node criteria, read and converted (D-19).
 const SCHEMA_BEFORE_CRITERIA: u32 = 1;
+/// The schema before a node's three states and its pull request list (PRD
+/// mission-node-simple D-16).
+const SCHEMA_BEFORE_SIMPLE: u32 = 2;
 /// Answered decisions a mission keeps for a skip of a protected line; past
 /// this the oldest goes and is logged.
 pub const DECIDED_LIMIT: usize = 32;
@@ -87,6 +90,13 @@ impl MissionStatus {
     pub fn open(self) -> bool {
         matches!(self, Self::Planning | Self::Running | Self::MergeWait)
     }
+
+    /// Whether a node's attention still reaches someone: an open mission's,
+    /// and a done one's, whose merged worktrees Hide cleans after the close
+    /// (B20); a cancelled mission asks nothing.
+    pub(crate) fn asks(self) -> bool {
+        self.open() || self == Self::Done
+    }
 }
 
 /// How far the mission goes (D-04, D-05): up to ready pull requests or
@@ -127,26 +137,36 @@ pub enum Delivery {
     Direct,
 }
 
+/// A node's state, one of three the map shows (PRD mission-node-simple
+/// D-01, D-16): waiting to start, in progress (writing code, CI, review and
+/// the merge wait alike), done; and left out by a replan. What waits on
+/// someone is the node's `attention`, never a state of its own.
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum NodeStatus {
     Planned,
     Working,
-    /// Waiting on something the Conductor names in the node's line, such as
-    /// a lower pull request's merge or a free slot under the cap.
-    Waiting,
-    Review,
-    /// Stopped while the operator decides (D-10, B27).
-    Held,
     Done,
-    Failed,
-    /// Left out of the mission by a replan (D-30).
+    /// Left out of the mission by a replan (D-30) or by the operator.
     Dropped,
 }
 
 impl NodeStatus {
     pub(crate) fn finished(self) -> bool {
-        matches!(self, Self::Done | Self::Failed | Self::Dropped)
+        matches!(self, Self::Done | Self::Dropped)
+    }
+
+    /// The statuses a Conductor's `hide mission node --status` sets (D-16):
+    /// a plan sets `planned`.
+    pub const SET_BY_CONDUCTOR: [NodeStatus; 3] = [Self::Working, Self::Done, Self::Dropped];
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Planned => "planned",
+            Self::Working => "working",
+            Self::Done => "done",
+            Self::Dropped => "dropped",
+        }
     }
 }
 
@@ -154,8 +174,209 @@ impl NodeStatus {
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Blocked {
-    UpstreamFailed,
     UpstreamDropped,
+}
+
+/// Why a node waits on someone to look (PRD mission-node-simple D-04): the
+/// one `!` its card carries, and the line its hover and the operator's
+/// item say.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AttentionReason {
+    /// Every pull request is merged but a finish line is missing or failed
+    /// (B6, B13).
+    MergedUnproven,
+    /// The worker ended with the node not done (B11).
+    WorkerEnded,
+    /// A pull request closed without its merge and no other is open (B12).
+    PrClosed,
+    /// The worker opened a pull request no node holds (B9).
+    UnplannedPr,
+    /// A done node's worktree holds uncommitted changes or commits no merged
+    /// pull request has (B21).
+    WorktreeDirty,
+    /// A done node's merged, clean worktree waits for the operator's yes,
+    /// with cleanup set to ask (B20).
+    CleanupAsk,
+    /// The Conductor recorded the node failed before this change (B26).
+    ConductorFailed,
+    /// A sleeping worker's wake for its pull request was refused (B10).
+    WakeRefused,
+    /// Hide could not close the mission with every node finished (B19).
+    CloseRefused,
+}
+
+impl AttentionReason {
+    /// A reason only the operator can settle goes to them at once (B20,
+    /// B26); the others ask the Conductor first (D-05).
+    pub fn operator_first(self) -> bool {
+        matches!(self, Self::CleanupAsk | Self::ConductorFailed)
+    }
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::MergedUnproven => "merged_unproven",
+            Self::WorkerEnded => "worker_ended",
+            Self::PrClosed => "pr_closed",
+            Self::UnplannedPr => "unplanned_pr",
+            Self::WorktreeDirty => "worktree_dirty",
+            Self::CleanupAsk => "cleanup_ask",
+            Self::ConductorFailed => "conductor_failed",
+            Self::WakeRefused => "wake_refused",
+            Self::CloseRefused => "close_refused",
+        }
+    }
+}
+
+/// What waits on someone for a node (D-02, D-05): raised to the Conductor
+/// at `since`, and to the operator at `operator_at` once it stood ten
+/// minutes, or at once with no Conductor there.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct Attention {
+    pub reason: AttentionReason,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pr: Option<u32>,
+    /// The worker registration it is about, for a worker that ended.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agent: Option<String>,
+    /// The mission's count of raises, which names this one in its letters.
+    pub key: u64,
+    pub since_unix_ms: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub operator_at_unix_ms: Option<u64>,
+    /// The operator was told outside Needs You, because no row stood to lay
+    /// it on: once per cause, kept across a restart.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub notified: bool,
+}
+
+impl Attention {
+    /// The cause it was raised for: the same cause is raised once (B14,
+    /// B27), whoever settles it.
+    pub fn cause(&self) -> String {
+        cause_key(self.reason, self.pr, self.agent.as_deref())
+    }
+}
+
+pub(crate) fn cause_key(reason: AttentionReason, pr: Option<u32>, agent: Option<&str>) -> String {
+    let mut key = reason.as_str().to_owned();
+    if let Some(pr) = pr {
+        key.push_str(&format!(":{pr}"));
+    }
+    if let Some(agent) = agent {
+        key.push(':');
+        key.push_str(agent);
+    }
+    key
+}
+
+/// Why Hide woke a sleeping worker (D-13).
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum FixReason {
+    CiFailed,
+    Conflict,
+    ChangesRequested,
+}
+
+impl FixReason {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::CiFailed => "ci_failed",
+            Self::Conflict => "conflict",
+            Self::ChangesRequested => "changes_requested",
+        }
+    }
+}
+
+/// One wake Hide sent a worker, kept so the same fact wakes once (B10,
+/// B27): a pull request, its reason and the head it was read on.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct Woken {
+    pub pr: u32,
+    pub why: FixReason,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub head: Option<String>,
+}
+
+/// What Hide itself did to a node last (D-07, D-15): the card's small Hide
+/// mark and the panel's line.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum HideAction {
+    /// Finished the node: its pull requests and lines met.
+    Done,
+    /// Attached a follow-up pull request of the node's branch.
+    Attached,
+    /// Woke the sleeping worker about its pull request.
+    Woke,
+    /// Removed the done node's merged, clean worktree.
+    Cleaned,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct HideMark {
+    pub action: HideAction,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pr: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub why: Option<FixReason>,
+    pub at_unix_ms: u64,
+}
+
+/// What became of a done node's worktree (D-14): tried once.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum WorktreeFate {
+    /// Removed; the branch stays.
+    Removed,
+    /// Kept for what it holds, and raised.
+    Kept,
+    /// The removal failed; the worktree stays and the log says why.
+    Failed,
+    /// The operator chose to keep it.
+    Left,
+}
+
+/// How a done node's worktree is cleaned (D-14): removed by Hide when it is
+/// merged and clean, or raised to the operator first.
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum WorktreeCleanup {
+    #[default]
+    Auto,
+    Ask,
+}
+
+/// What the operator chose for a node that waits on them (B15, B16).
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum OperatorAction {
+    /// 끝으로: past the lines left open, as the operator's decision.
+    Done,
+    /// 노드 제외.
+    Drop,
+    /// 노드에 붙이기: the unplanned pull request joins the node.
+    Attach,
+    /// 그대로 두기.
+    Leave,
+    /// 정리: remove the worktree now.
+    Cleanup,
+    /// 다시 진행: the node works again.
+    Resume,
+}
+
+impl OperatorAction {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Done => "done",
+            Self::Drop => "drop",
+            Self::Attach => "attach",
+            Self::Leave => "leave",
+            Self::Cleanup => "cleanup",
+            Self::Resume => "resume",
+        }
+    }
 }
 
 /// The agent the plan assigns to a node (D-08, D-34).
@@ -178,6 +399,9 @@ pub struct Worker {
 /// (D-39, engineering #11).
 #[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
 pub struct PrSeen {
+    /// The pull request these facts are about.
+    #[serde(default)]
+    pub number: u32,
     #[serde(default)]
     pub head: Option<String>,
     #[serde(default)]
@@ -204,6 +428,16 @@ pub struct PendingWake {
     pub event: WakeEvent,
     #[serde(default)]
     pub head: Option<String>,
+    /// The worker registration the letter goes to; none for the Conductor
+    /// (D-13).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub to: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason: Option<AttentionReason>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub why: Option<FixReason>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub action: Option<OperatorAction>,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -225,6 +459,15 @@ pub enum WakeEvent {
     /// The operator asked from the map to end the mission (`미션 종료`):
     /// the Conductor asks about its open pull requests and cancels it.
     EndAsked,
+    /// A node waits on the Conductor to look (PRD mission-node-simple
+    /// D-05); `reason` says why.
+    Attention,
+    /// The operator settled what waited on a node; `action` says how (B17).
+    Resolved,
+    /// Hide closed the mission with every node finished (B18).
+    Closed,
+    /// A sleeping worker's pull request needs it; `why` says what (B10).
+    Fix,
 }
 
 impl WakeEvent {
@@ -237,6 +480,10 @@ impl WakeEvent {
             Self::OutsideFailed => "outside_failed",
             Self::Resumed => "resumed",
             Self::EndAsked => "end_asked",
+            Self::Attention => "attention",
+            Self::Resolved => "resolved",
+            Self::Closed => "closed",
+            Self::Fix => "fix",
         }
     }
 }
@@ -332,8 +579,11 @@ pub struct MissionNode {
     /// The worker's registration in the delivery ledger, once spawned.
     #[serde(default)]
     pub agent_id: Option<String>,
-    #[serde(default)]
-    pub pr: Option<u32>,
+    /// The node's pull requests, the current one last (D-10): the one the
+    /// Conductor named and the follow-ups of its branch Hide attached. The
+    /// node is done when every one is (D-11).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub prs: Vec<u32>,
     /// The pull request a stacked one is based on (B15).
     #[serde(default)]
     pub base_pr: Option<u32>,
@@ -365,8 +615,9 @@ pub struct MissionNode {
     pub started_at_unix_ms: Option<u64>,
     #[serde(default)]
     pub finished_at_unix_ms: Option<u64>,
-    #[serde(default)]
-    pub pr_seen: Option<PrSeen>,
+    /// What GitHub last said of each of `prs`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub pr_seen: Vec<PrSeen>,
     /// A direct change's commit on main (B22, B33).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub commit: Option<String>,
@@ -384,6 +635,63 @@ pub struct MissionNode {
     pub verdict: Option<Verdict>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub checks: Option<Checks>,
+    /// What waits on someone to look (D-02).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub attention: Option<Attention>,
+    /// The causes already raised once (`Attention::cause`), so a settled
+    /// one is not raised again (B14, B27); at most `HANDLED_LIMIT`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub handled: Vec<String>,
+    /// What Hide itself did to the node last (D-07, D-15).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hide: Option<HideMark>,
+    /// The wakes Hide sent the sleeping worker (B10); at most `WOKEN_LIMIT`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub woken: Vec<Woken>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub worktree: Option<WorktreeFate>,
+}
+
+/// Causes a node remembers as raised; past this the oldest is forgotten.
+pub const HANDLED_LIMIT: usize = 32;
+/// Worker wakes a node remembers; past this the oldest is forgotten.
+pub const WOKEN_LIMIT: usize = 16;
+
+impl MissionNode {
+    /// The node's current pull request: the last one it holds.
+    pub fn current_pr(&self) -> Option<u32> {
+        self.prs.last().copied()
+    }
+
+    pub fn seen(&self, number: u32) -> Option<&PrSeen> {
+        self.pr_seen.iter().find(|seen| seen.number == number)
+    }
+
+    /// Makes `number` the node's current pull request, keeping the others.
+    pub(crate) fn attach_pr(&mut self, number: u32) {
+        self.prs.retain(|pr| *pr != number);
+        self.prs.push(number);
+    }
+
+    /// Notes `cause` raised once, forgetting the oldest past the limit.
+    /// The mark a person leaves by taking the node back to work from done
+    /// or dropped: Hide does not finish it again on the pull requests it
+    /// holds now, only once it holds another.
+    pub(crate) fn resumed_cause(&self) -> String {
+        let prs: Vec<String> = self.prs.iter().map(u32::to_string).collect();
+        format!("resumed:{}", prs.join(","))
+    }
+
+    pub(crate) fn note_handled(&mut self, cause: String) {
+        if self.handled.contains(&cause) {
+            return;
+        }
+        self.handled.push(cause);
+        if self.handled.len() > HANDLED_LIMIT {
+            let over = self.handled.len() - HANDLED_LIMIT;
+            self.handled.drain(..over);
+        }
+    }
 }
 
 /// The session that conducts a mission (D-23). `actor` is the delivery
@@ -506,6 +814,13 @@ pub struct Mission {
     /// 종료`), until it closes; a second press asks nothing more.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub end_asked_at_unix_ms: Option<u64>,
+    /// The count of raises, which keys each `Attention`.
+    #[serde(default, skip_serializing_if = "is_zero_u64")]
+    pub attention_seq: u64,
+}
+
+fn is_zero_u64(value: &u64) -> bool {
+    *value == 0
 }
 
 impl Mission {
@@ -513,8 +828,8 @@ impl Mission {
         self.nodes.iter().find(|node| node.key == key)
     }
 
-    /// Why each node cannot start, from a failed or dropped node anywhere
-    /// upstream of it.
+    /// Why each node cannot start, from a dropped node anywhere upstream of
+    /// it.
     pub(crate) fn blocked(&self) -> BTreeMap<String, Blocked> {
         let mut out = BTreeMap::new();
         for node in &self.nodes {
@@ -523,13 +838,10 @@ impl Mission {
             }
             let mut found = None;
             crate::dag::walk_upstream(&self.nodes, node, |upstream| match upstream.status {
-                NodeStatus::Failed => {
-                    found = Some(Blocked::UpstreamFailed);
-                    crate::dag::Step::Stop
-                }
+                // A dropped node is the one cause; the first ends the walk.
                 NodeStatus::Dropped => {
-                    found = found.or(Some(Blocked::UpstreamDropped));
-                    crate::dag::Step::Skip
+                    found = Some(Blocked::UpstreamDropped);
+                    crate::dag::Step::Stop
                 }
                 _ => crate::dag::Step::Continue,
             });
@@ -576,6 +888,9 @@ pub struct ConductorSettings {
     /// Prefer a checker of another company than the node's worker.
     #[serde(default = "default_other_vendor")]
     pub other_vendor: bool,
+    /// `끝난 worktree 정리` (PRD mission-node-simple D-14).
+    #[serde(default)]
+    pub worktree_cleanup: WorktreeCleanup,
 }
 
 impl Default for ConductorSettings {
@@ -586,6 +901,7 @@ impl Default for ConductorSettings {
             candidates: Vec::new(),
             default_strength: Strength::Normal,
             other_vendor: default_other_vendor(),
+            worktree_cleanup: WorktreeCleanup::Auto,
         }
     }
 }
@@ -1291,7 +1607,7 @@ pub(crate) fn apply_plan(
     for node in &mission.nodes {
         let started = node.status != NodeStatus::Planned
             || node.agent_id.is_some()
-            || node.pr.is_some()
+            || !node.prs.is_empty()
             || node.branch.is_some();
         if started && !keys.contains(node.key.as_str()) {
             return Err("mission_node_in_progress".into());
@@ -1316,7 +1632,7 @@ pub(crate) fn apply_plan(
                 delivery: None,
                 worker: None,
                 agent_id: None,
-                pr: None,
+                prs: Vec::new(),
                 base_pr: None,
                 branch: None,
                 attempts: 0,
@@ -1330,12 +1646,17 @@ pub(crate) fn apply_plan(
                 paths: Vec::new(),
                 started_at_unix_ms: None,
                 finished_at_unix_ms: None,
-                pr_seen: None,
+                pr_seen: Vec::new(),
                 commit: None,
                 folder: None,
                 in_main: None,
                 verdict: None,
                 checks: None,
+                attention: None,
+                handled: Vec::new(),
+                hide: None,
+                woken: Vec::new(),
+                worktree: None,
             });
             node.title.clone_from(&input.title);
             node.kind = input.kind;
@@ -1514,7 +1835,13 @@ pub(crate) fn apply_patch(
         };
     }
     take!(agent_id);
-    take!(pr);
+    // `--pr <n>` makes `n` the node's current pull request beside those it
+    // holds; `--no-pr` lets go of every one.
+    match patch.pr {
+        Some(Some(number)) => next.attach_pr(number),
+        Some(None) => next.prs.clear(),
+        None => {}
+    }
     take!(base_pr);
     take!(branch);
     take!(line);
@@ -1524,10 +1851,10 @@ pub(crate) fn apply_patch(
     take!(commit);
     take!(verdict);
     take!(checks);
-    if patch.pr.is_some() && next.pr != node.pr {
-        // A new pull request starts its own wakes from what GitHub says now.
-        next.pr_seen = None;
-    }
+    // A pull request the node no longer holds keeps no record; a new one
+    // starts its own wakes from what GitHub says now.
+    let held = next.prs.clone();
+    next.pr_seen.retain(|seen| held.contains(&seen.number));
     if let Some(attempts) = patch.attempts {
         next.attempts = attempts;
     }
@@ -1832,7 +2159,11 @@ fn decode(bytes: &[u8]) -> Result<Decoded, String> {
         .ok_or("has no schema version")?;
     match from {
         SCHEMA_VERSION => {}
-        SCHEMA_BEFORE_CRITERIA => convert_before_criteria(&mut value)?,
+        SCHEMA_BEFORE_SIMPLE => convert_before_simple(&mut value)?,
+        SCHEMA_BEFORE_CRITERIA => {
+            convert_before_criteria(&mut value)?;
+            convert_before_simple(&mut value)?;
+        }
         other => {
             return Err(format!(
                 "has schema version {other}, expected {SCHEMA_VERSION}"
@@ -1893,6 +2224,106 @@ fn convert_before_criteria(value: &mut serde_json::Value) -> Result<(), String> 
                 "criteria".into(),
                 serde_json::to_value(lines).map_err(|error| error.to_string())?,
             );
+        }
+    }
+    Ok(())
+}
+
+/// A schema 2 book as schema 3 reads it (PRD mission-node-simple D-16,
+/// B26), once: a node in review or held is in progress, one waiting has not
+/// started, and one the Conductor recorded failed is in progress with the
+/// operator asked to look, since the Conductor already let it go. A node's
+/// one pull request is its list, and what GitHub said of it names it.
+fn convert_before_simple(value: &mut serde_json::Value) -> Result<(), String> {
+    let missions = match value.get_mut("missions") {
+        None | Some(serde_json::Value::Null) => return Ok(()),
+        Some(serde_json::Value::Array(missions)) => missions,
+        Some(_) => return Err("has a mission list that is not a list".to_owned()),
+    };
+    for mission in missions {
+        let mission = mission
+            .as_object_mut()
+            .ok_or("has a mission that is not an object")?;
+        let at = mission
+            .get("updated_at_unix_ms")
+            .and_then(serde_json::Value::as_u64)
+            .unwrap_or(0);
+        let mut seq = mission
+            .get("attention_seq")
+            .and_then(serde_json::Value::as_u64)
+            .unwrap_or(0);
+        // A closed or cancelled mission asks no one: what failed in it
+        // ended there.
+        let open = matches!(
+            mission.get("status").and_then(serde_json::Value::as_str),
+            Some("planning" | "running" | "merge_wait")
+        );
+        let Some(nodes) = mission
+            .get_mut("nodes")
+            .and_then(serde_json::Value::as_array_mut)
+        else {
+            continue;
+        };
+        for node in nodes {
+            let node = node
+                .as_object_mut()
+                .ok_or("has a node that is not an object")?;
+            let status = node
+                .get("status")
+                .and_then(serde_json::Value::as_str)
+                .ok_or("has a node with no status")?
+                .to_owned();
+            let next = match status.as_str() {
+                "planned" | "waiting" => "planned",
+                "failed" if !open => "dropped",
+                "working" | "review" | "held" | "failed" => "working",
+                "done" => "done",
+                "dropped" => "dropped",
+                other => return Err(format!("has a node status {other} it does not know")),
+            };
+            node.insert("status".into(), next.into());
+            if status == "failed" && open {
+                seq += 1;
+                let attention = Attention {
+                    reason: AttentionReason::ConductorFailed,
+                    pr: None,
+                    agent: None,
+                    key: seq,
+                    since_unix_ms: at,
+                    operator_at_unix_ms: Some(at),
+                    notified: false,
+                };
+                node.insert(
+                    "attention".into(),
+                    serde_json::to_value(attention).map_err(|error| error.to_string())?,
+                );
+                node.insert("finished_at_unix_ms".into(), serde_json::Value::Null);
+            }
+            let pr = match node.remove("pr") {
+                None | Some(serde_json::Value::Null) => None,
+                Some(serde_json::Value::Number(number)) => Some(
+                    number
+                        .as_u64()
+                        .and_then(|number| u32::try_from(number).ok())
+                        .ok_or("has a pull request number out of range")?,
+                ),
+                Some(_) => return Err("has a pull request that is not a number".to_owned()),
+            };
+            node.insert(
+                "prs".into(),
+                serde_json::Value::Array(pr.into_iter().map(Into::into).collect()),
+            );
+            let seen = match (node.remove("pr_seen"), pr) {
+                (Some(serde_json::Value::Object(mut seen)), Some(pr)) => {
+                    seen.insert("number".into(), pr.into());
+                    vec![serde_json::Value::Object(seen)]
+                }
+                _ => Vec::new(),
+            };
+            node.insert("pr_seen".into(), serde_json::Value::Array(seen));
+        }
+        if seq > 0 {
+            mission.insert("attention_seq".into(), seq.into());
         }
     }
     Ok(())
@@ -1988,7 +2419,11 @@ impl MissionStore {
         let Some(directory) = self.path.parent() else {
             return;
         };
-        let backup = hide_kit::layout::missions_before_criteria(directory);
+        let backup = if from == SCHEMA_BEFORE_CRITERIA {
+            hide_kit::layout::missions_before_criteria(directory)
+        } else {
+            hide_kit::layout::missions_before_simple(directory)
+        };
         let outcome = crate::latest_file::keep_first_copy(&backup, bytes);
         crate::diagnostic!(serde_json::json!({
             "component": "missions",
@@ -2011,7 +2446,7 @@ impl MissionStore {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
 
     fn actor(pane: &str) -> Actor {
@@ -2024,7 +2459,7 @@ mod tests {
         }
     }
 
-    fn mission() -> Mission {
+    pub(crate) fn mission() -> Mission {
         Mission {
             id: "mission-1".into(),
             title: "issues".into(),
@@ -2064,6 +2499,7 @@ mod tests {
             wakes: Vec::new(),
             wake_seq: 0,
             end_asked_at_unix_ms: None,
+            attention_seq: 0,
         }
     }
 
@@ -2098,7 +2534,7 @@ mod tests {
         assert!((WRITE_BUDGET as u64) < READ_CAP);
     }
 
-    fn node(key: &str, kind: NodeKind, depends: &[&str]) -> NodeInput {
+    pub(crate) fn node(key: &str, kind: NodeKind, depends: &[&str]) -> NodeInput {
         NodeInput {
             key: key.into(),
             title: format!("node {key}"),
@@ -2115,7 +2551,7 @@ mod tests {
         }
     }
 
-    fn plan(nodes: Vec<NodeInput>) -> PlanInput {
+    pub(crate) fn plan(nodes: Vec<NodeInput>) -> PlanInput {
         PlanInput {
             title: None,
             scope: None,
@@ -2199,7 +2635,7 @@ mod tests {
             4,
         )
         .unwrap();
-        assert_eq!(again.nodes[0].pr, Some(7));
+        assert_eq!(again.nodes[0].prs, vec![7]);
         assert_eq!(again.nodes[0].status, NodeStatus::Working);
         assert!(again.node("b").is_none(), "a planned node left out goes");
         let without = apply_plan(&running, &plan(vec![node("c", NodeKind::Research, &[])]), 4);
@@ -2207,13 +2643,13 @@ mod tests {
         // A node whose status still says planned but that names its pull
         // request ran too.
         let mut named = first.clone();
-        named.nodes[1].pr = Some(8);
+        named.nodes[1].prs = vec![8];
         let dropped = apply_plan(&named, &plan(vec![node("a", NodeKind::Change, &[])]), 4);
         assert_eq!(dropped.unwrap_err(), "mission_node_in_progress");
     }
 
     #[test]
-    fn a_failed_or_dropped_node_holds_everything_downstream_of_it() {
+    fn a_dropped_node_holds_everything_downstream_of_it() {
         let mut m = apply_plan(
             &mission(),
             &plan(vec![
@@ -2225,13 +2661,12 @@ mod tests {
             2,
         )
         .unwrap();
-        m.nodes[0].status = NodeStatus::Failed;
-        let blocked = m.blocked();
-        assert_eq!(blocked.get("b"), Some(&Blocked::UpstreamFailed));
-        assert_eq!(blocked.get("c"), Some(&Blocked::UpstreamFailed));
-        assert_eq!(blocked.get("d"), None);
+        assert!(m.blocked().is_empty());
         m.nodes[0].status = NodeStatus::Dropped;
-        assert_eq!(m.blocked().get("c"), Some(&Blocked::UpstreamDropped));
+        let blocked = m.blocked();
+        assert_eq!(blocked.get("b"), Some(&Blocked::UpstreamDropped));
+        assert_eq!(blocked.get("c"), Some(&Blocked::UpstreamDropped));
+        assert_eq!(blocked.get("d"), None);
     }
 
     #[test]
@@ -2259,7 +2694,7 @@ mod tests {
         let clear: NodePatch = serde_json::from_value(serde_json::json!({"line": null})).unwrap();
         let cleared = apply_patch(&after, &clear, 4).unwrap();
         assert_eq!(cleared.line, None);
-        assert_eq!(cleared.pr, Some(3));
+        assert_eq!(cleared.prs, vec![3]);
     }
 
     #[test]
@@ -2283,7 +2718,7 @@ mod tests {
         });
         let after = apply_patch(&m.nodes[0], &set, 3).unwrap();
         let status = wire(NodePatch {
-            status: Some(NodeStatus::Review),
+            status: Some(NodeStatus::Working),
             ..Default::default()
         });
         let reviewed = apply_patch(&after, &status, 4).unwrap();
@@ -2291,7 +2726,7 @@ mod tests {
             reviewed.worker.as_ref().map(|worker| worker.agent.as_str()),
             Some("claude")
         );
-        assert_eq!(reviewed.pr, Some(3));
+        assert_eq!(reviewed.prs, vec![3]);
         assert_eq!(reviewed.agent_id.as_deref(), Some("agent-3"));
         let cleared = apply_patch(
             &reviewed,
@@ -2302,8 +2737,24 @@ mod tests {
             5,
         )
         .unwrap();
-        assert_eq!(cleared.pr, None);
+        assert!(cleared.prs.is_empty());
         assert_eq!(cleared.agent_id.as_deref(), Some("agent-3"));
+    }
+
+    /// D-10: `--pr` adds a pull request as the node's current one and keeps
+    /// the others; naming one it holds makes it current again.
+    #[test]
+    fn a_named_pull_request_joins_the_node_as_its_current_one() {
+        let m = apply_plan(&mission(), &plan(vec![node("a", NodeKind::Change, &[])]), 2).unwrap();
+        let name = |pr: u32| NodePatch {
+            pr: Some(Some(pr)),
+            ..Default::default()
+        };
+        let one = apply_patch(&m.nodes[0], &name(3), 3).unwrap();
+        let two = apply_patch(&one, &name(5), 4).unwrap();
+        assert_eq!((two.prs.clone(), two.current_pr()), (vec![3, 5], Some(5)));
+        let back = apply_patch(&two, &name(3), 5).unwrap();
+        assert_eq!((back.prs.clone(), back.current_pr()), (vec![5, 3], Some(3)));
     }
 
     #[test]
@@ -2473,7 +2924,79 @@ mod tests {
         std::fs::write(&path, b"{\"schema_version\": 1, \"missions\": []}").unwrap();
         assert!(matches!(store.restore(), Restored::Read(_)));
         assert_eq!(std::fs::read(&backup).unwrap(), bytes);
-        // What is saved is schema 2 and reads back the same.
+        // What is saved is the current schema and reads back the same.
+        let saved = encode(&Arc::new(book.clone())).unwrap();
+        let again = decode(&saved).unwrap();
+        assert_eq!((again.from, again.book), (SCHEMA_VERSION, book));
+    }
+
+    /// PRD mission-node-simple D-16, B26: a schema 2 book reads in the
+    /// three states once: review and held are in progress, waiting is not
+    /// started, failed is in progress with the operator asked to look; a
+    /// node's one pull request becomes its list, and the file is copied
+    /// aside once.
+    #[test]
+    fn a_schema_two_book_moves_to_three_states_and_a_pull_request_list() {
+        let mut stored = serde_json::to_value(mission()).unwrap();
+        stored.as_object_mut().unwrap().remove("attention_seq");
+        stored["updated_at_unix_ms"] = serde_json::json!(50);
+        let node = |key: &str, status: &str| {
+            serde_json::json!({"key": key, "title": key, "kind": "change", "status": status,
+                "delivery": "pr", "pr": null, "pr_seen": null})
+        };
+        let mut merged = node("m", "review");
+        merged["pr"] = serde_json::json!(7);
+        merged["pr_seen"] = serde_json::json!({"head": "abc", "merged": true});
+        stored["nodes"] = serde_json::json!([
+            merged,
+            node("h", "held"),
+            node("w", "waiting"),
+            node("f", "failed"),
+            node("d", "done"),
+        ]);
+        let bytes = serde_json::to_vec(
+            &serde_json::json!({"schema_version": 2, "next": 1, "missions": [stored]}),
+        )
+        .unwrap();
+        let folder = tempfile::tempdir().unwrap();
+        let path = folder.path().join("missions.json");
+        std::fs::write(&path, &bytes).unwrap();
+        let store = MissionStore::new(path);
+        let Restored::Read(book) = store.restore() else {
+            panic!("a schema 2 book reads");
+        };
+        let read = &book.missions[0];
+        let statuses: Vec<NodeStatus> = read.nodes.iter().map(|node| node.status).collect();
+        assert_eq!(
+            statuses,
+            [
+                NodeStatus::Working,
+                NodeStatus::Working,
+                NodeStatus::Planned,
+                NodeStatus::Working,
+                NodeStatus::Done,
+            ]
+        );
+        assert_eq!(read.nodes[0].prs, vec![7]);
+        assert_eq!(read.nodes[0].seen(7).map(|seen| seen.merged), Some(true));
+        let failed = read.nodes[3]
+            .attention
+            .as_ref()
+            .expect("a failed node asks the operator");
+        assert_eq!(
+            (failed.reason, failed.operator_at_unix_ms, failed.key),
+            (AttentionReason::ConductorFailed, Some(50), 1)
+        );
+        assert_eq!(read.attention_seq, 1);
+        assert!(
+            read.nodes
+                .iter()
+                .filter(|node| node.key != "f")
+                .all(|node| node.attention.is_none())
+        );
+        let backup = hide_kit::layout::missions_before_simple(folder.path());
+        assert_eq!(std::fs::read(&backup).unwrap(), bytes);
+        // Saved again it is schema 3, and it is not moved a second time.
         let saved = encode(&Arc::new(book.clone())).unwrap();
         let again = decode(&saved).unwrap();
         assert_eq!((again.from, again.book), (SCHEMA_VERSION, book));

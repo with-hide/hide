@@ -71,13 +71,13 @@ export function lookWord(look: NodeLook, t: TFunction<"translation">): string {
   return t(`mission.look.${look}`);
 }
 
-/** How long a node took and how long a decision held it, from its events (B28); nothing moves while its device does not answer (B35). */
+/** How long a node took, from its events (B28); nothing moves while its device does not answer (B35). */
 export function useNodeTimes(mission: Mission, node: MissionNode, events: MissionEvent[] | null, end: number) {
   const { i18n } = useInterfaceTranslation();
   const language = requireInterfaceLanguage(i18n.language);
   const times = events ? nodeTimes(node, events, end) : null;
   if (!times || (times.running && mission.stale)) return null;
-  return { took: times.took != null && times.took > 0 ? formatElapsed(language, times.took) : null, held: times.held > 0 ? formatElapsed(language, times.held) : null };
+  return { took: times.took != null && times.took > 0 ? formatElapsed(language, times.took) : null };
 }
 
 const CHECKER_TONE = { pass: "text-muted-foreground", fail: "text-mission-failed", running: "text-mission-working", waiting: "text-muted-foreground" } as const;

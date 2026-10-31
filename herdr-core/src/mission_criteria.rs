@@ -89,6 +89,9 @@ pub enum Role {
     Checker,
     Conductor,
     Hide,
+    /// The operator, from a raised node's `끝으로` (PRD mission-node-simple
+    /// B15).
+    Operator,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
