@@ -306,6 +306,10 @@ pub enum AnswerFailure {
     DeviceDisconnected,
     /// Typing it into the conversation failed.
     SendFailed,
+    /// The answer waits on the Conductor's session, which Hide cannot read,
+    /// so it cannot tell when the answer would not interrupt. Never stored:
+    /// shown while the answer waits on it.
+    SessionUnreadable,
 }
 
 /// Wakes a mission keeps unsent; past this the oldest is dropped and

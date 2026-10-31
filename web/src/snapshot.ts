@@ -324,9 +324,10 @@ export type PaneChildren = {
 
 /**
  * Why a session is not connected: `codex_shared_server`, `started_before_hide`, `setup_needed` (fix it in Settings, no
- * Reopen), or `update_agent` (the machine's copy of the agent is older than Hide's minimum; `update` says how to update it).
+ * Reopen), `update_agent` (the machine's copy of the agent is older than Hide's minimum; `update` says how to update it),
+ * or `session_unreadable` (Hide cannot read the session, so letters and mission answers to it wait; a new session fixes it).
  */
-export type PaneConnectionReason = "codex_shared_server" | "started_before_hide" | "setup_needed" | "update_agent";
+export type PaneConnectionReason = "codex_shared_server" | "started_before_hide" | "setup_needed" | "update_agent" | "session_unreadable";
 
 /** `PaneConnectionSnapshot`: `reason` is present exactly when `connected` is false; `reopen` is the last Reopen of the pane. */
 export type PaneConnection = {
@@ -1366,8 +1367,8 @@ export type MissionQuestion = {
 export type MissionAnswerState = "sending" | "waiting" | "delivered" | "unconfirmed";
 /** The operator's answer from the banner (`AnswerView`); `option` counts from 1, none for a written answer. */
 export type MissionAnswer = { key: number; text: string; option: number | null; state: MissionAnswerState };
-/** Why the last answer did not reach the Conductor (`mission_answer_failure`, B28, B39). */
-export type MissionAnswerFailure = "conductor_gone" | "device_disconnected" | "send_failed";
+/** Why the last answer did not reach the Conductor, or why one still waits (`session_unreadable`) (`mission_answer_failure`, B28, B39). */
+export type MissionAnswerFailure = "conductor_gone" | "device_disconnected" | "send_failed" | "session_unreadable";
 
 /** What a mission event records (`mission_event_kind`, B31). */
 export type MissionEventKind = "planned" | "replanned" | "node" | "retried" | "pr_opened" | "pr_merged" | "landed" | "asked" | "answered" | "answer_undelivered" | "answer_unconfirmed" | "reported" | "cancelled" | "skipped" | "reopened" | "strength";

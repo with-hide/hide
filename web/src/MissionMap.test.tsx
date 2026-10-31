@@ -275,6 +275,13 @@ it("turns the choices off with a reason when no Conductor or no device can read 
     expect([...failed.container.querySelectorAll<HTMLButtonElement>("[data-mission-option]")].some((button) => button.disabled)).toBe(false);
     expect(failed.q("[data-mission-banner-reason]")?.textContent).toBe("Could not send · answer again");
   } finally { await failed.unmount(); }
+  // An answer waiting on a Conductor session Hide cannot read says so instead of waiting for its turn.
+  const unreadable = await mount({ items: [asked({ answer: { key: 3, text: "Wait for the API PR to merge", option: 2, state: "waiting" }, answer_failed: "session_unreadable" })] });
+  try {
+    expect(unreadable.q("[data-mission-banner-sent]")?.textContent).toContain("Wait for the API PR to merge");
+    expect(unreadable.q("[data-mission-banner-reason]")?.textContent).toBe("· Waiting · Hide can't read the Conductor's session");
+    expect(unreadable.q("[data-mission-option]")).toBeNull();
+  } finally { await unreadable.unmount(); }
 });
 
 it("answers a decision without choices by writing, as one from before choices is (B25)", async () => {

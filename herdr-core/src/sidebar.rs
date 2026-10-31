@@ -494,6 +494,9 @@ pub fn project_pane_children(
 pub struct PaneUpdates<'a> {
     pub update_of: &'a dyn Fn(&str) -> Option<hide_kit::AgentUpdate>,
     pub badged: &'a std::collections::BTreeSet<String>,
+    /// Whether the session a pane runs cannot be read, so letters to it
+    /// wait (`Observation::unreadable`), by the pane's id as judged here.
+    pub unreadable: &'a dyn Fn(&str) -> bool,
 }
 
 /// [`project_pane_children`] with the pane's connection judged on top of it.
@@ -522,6 +525,7 @@ pub fn project_pane_children_connected(
     children.connection = agent.and_then(|agent| {
         let judged = PaneAgent {
             runtime: crate::agent_hooks::runtime_of(&agent.agent_kind),
+            unreadable: (updates.unreadable)(pane_id),
             update: (updates.update_of)(&agent.agent_kind),
             badged: agent
                 .close_session
@@ -536,6 +540,8 @@ pub fn project_pane_children_connected(
 /// The session in a pane whose connection is judged.
 struct PaneAgent {
     runtime: Option<hide_agent_hooks::AgentRuntime>,
+    /// Hide cannot read the session the pane runs.
+    unreadable: bool,
     /// The machine's copy of this agent needs this update first.
     update: Option<hide_kit::AgentUpdate>,
     /// This session wore the update badge.
@@ -617,6 +623,15 @@ fn pane_connection(
         reopen: None,
         update: None,
     };
+    // Letters to a session Hide cannot read wait whatever its hooks say, for
+    // every agent whose read reports turns; a Reopen resumes the same
+    // session, so only a new one can be read.
+    if agent.unreadable {
+        return Some(PaneConnectionSnapshot {
+            can_reopen: false,
+            ..not_connected(PaneConnectionReason::SessionUnreadable)
+        });
+    }
     if children.instrumented {
         return Some(PaneConnectionSnapshot {
             connected: true,

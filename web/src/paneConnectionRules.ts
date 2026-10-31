@@ -41,6 +41,12 @@ const COPY: Record<PaneConnectionReason, ConnectionCopy> = {
     reason: "panes.connection.updateAgent.reason",
     reopen: null,
   },
+  // Reopen resumes the same session, which Hide still cannot read.
+  session_unreadable: {
+    title: "panes.connection.sessionUnreadable.title",
+    reason: "panes.connection.sessionUnreadable.reason",
+    reopen: null,
+  },
 };
 
 // A session Hide cannot reopen (another agent than Claude Code or Codex, a pane on another device) is restarted by
