@@ -170,7 +170,7 @@ test("⌘J goes from a thread to its Agent tab and back to Desk with the thread 
   }
 });
 
-test("Desk is off on a new install, Settings › Desk shows it without a restart, and switching it off in the room goes back to the tab before it with Desk's session kept (PRD session-docs-and-assistant B41) @platform", async ({ page }) => {
+test("Desk is off on a new install, its switch in Settings shows it without a restart, and switching it off in the room goes back to the tab before it with Desk's session kept (PRD session-docs-and-assistant B41) @platform", async ({ page }) => {
   test.setTimeout(120_000);
   const desk = await startDesk(page, "desk-lane-switch", false);
   try {
