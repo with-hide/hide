@@ -14,6 +14,9 @@ use serde::{Deserialize, Serialize};
 pub(crate) const VERSION: u32 = 2;
 const PLAIN_VERSION: u32 = 1;
 pub(crate) const LIMIT: usize = 256;
+/// The longest display name kept, in characters: long enough for any real
+/// project name, short enough that a row and a heading can draw it.
+pub(crate) const NAME_LENGTH: usize = 64;
 
 #[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
 #[serde(tag = "mode", rename_all = "snake_case", deny_unknown_fields)]
@@ -59,6 +62,10 @@ pub struct ProjectSettings {
     pub version: u32,
     pub device_id: String,
     pub root: String,
+    /// The name every screen and agent reads for the project in place of its
+    /// folder's; absent is the folder's. The folder on disk is never renamed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
     #[serde(default)]
     pub repository: Option<RepositoryConnection>,
     #[serde(default)]
@@ -96,6 +103,10 @@ pub struct LinkScope {
 #[derive(Clone, Debug, Default, Eq, PartialEq, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct Patch {
+    /// The display name; an empty one (after trimming) gives the project its
+    /// folder's name back.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub repository: Option<RepositoryConnection>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -117,6 +128,7 @@ impl ProjectSettings {
             version: PLAIN_VERSION,
             device_id: device.to_owned(),
             root: root.to_owned(),
+            name: None,
             repository: None,
             issue_source: None,
             new_work: None,
@@ -149,6 +161,9 @@ impl ProjectSettings {
             return Err("project_settings_newer_version");
         }
         let mut next = self.clone();
+        if let Some(name) = patch.name {
+            next.name = display_name(&name)?;
+        }
         if let Some(repository) = patch.repository {
             if let RepositoryConnection::Repository { repository } = &repository
                 && (repository.len() > 256 || !crate::issues::is_repository(repository))
@@ -189,6 +204,39 @@ impl ProjectSettings {
     /// The protections in force: none for a record without them.
     pub(crate) fn rules(&self) -> Option<&Rules> {
         self.guardrails.as_ref().filter(|rules| rules.any())
+    }
+}
+
+/// The name kept for what the operator typed: trimmed, none when nothing is
+/// left. A line break or another control character is refused rather than
+/// dropped, since a name the screen would draw differently from what was
+/// typed is not the operator's; so is one past [`NAME_LENGTH`]. Another
+/// project may carry the same name: the path tells them apart where it matters.
+fn display_name(typed: &str) -> Result<Option<String>, &'static str> {
+    let name = typed.trim();
+    if name.chars().any(char::is_control) || name.chars().count() > NAME_LENGTH {
+        return Err("project_settings_name_invalid");
+    }
+    Ok((!name.is_empty()).then(|| name.to_owned()))
+}
+
+/// Gives each project the name the operator set for it on its device and
+/// root. A project without one keeps the label the catalog gave it, its
+/// registration's or its folder's; the Home is Hide's own folder and keeps
+/// its name.
+pub(crate) fn apply_names(
+    records: &BTreeMap<String, ProjectSettings>,
+    projects: &mut [crate::model::WorkspaceSnapshot],
+) {
+    if records.values().all(|record| record.name.is_none()) {
+        return;
+    }
+    for project in projects.iter_mut().filter(|project| !project.is_home) {
+        if let Some(name) = get(records, &project.device_id, &project.path)
+            .and_then(|record| record.name.as_deref())
+        {
+            project.label = name.to_owned();
+        }
     }
 }
 

@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { KitAgent, KitPiece, SnapshotRest, Workspace } from "./snapshot";
 import { guardPartOf } from "./ProjectGuardrails";
-import { DEFAULT_GUARD_PATHS, guardedBase, guardPathRefusal, projectBaseBranch, projectGuardrails, projectIssueSource, projectRepository, projectSettings, readableSettings, settingsTarget, unguardedAgents } from "./projectSettings";
+import { DEFAULT_GUARD_PATHS, folderName, guardedBase, projectNameDraft, guardPathRefusal, projectBaseBranch, projectGuardrails, projectIssueSource, projectRepository, projectSettings, readableSettings, settingsTarget, unguardedAgents } from "./projectSettings";
 
 const project = { id: "display-id", device_id: "local", path: "/project", label: "project", branches: ["main", "develop"], default_branch: "main" } as Workspace;
 const snapshot = () => ({ ui_state: {
@@ -119,5 +119,21 @@ describe("project guardrails", () => {
     rest.ui_state!.project_settings!.original!.repository = { mode: "repository", repository: "acme/chosen" };
     expect(projectRepository(rest, detected)).toBe("acme/chosen");
     expect(projectRepository(rest, { ...detected, is_git: false } as Workspace)).toBeNull();
+  });
+});
+
+describe("project name", () => {
+  it("keeps what the core keeps: trimmed, empty for the folder's, refused past 64 characters or with a control character", () => {
+    expect(projectNameDraft("  Client work  ")).toBe("Client work");
+    expect(projectNameDraft("   ")).toBe("");
+    expect(projectNameDraft("가".repeat(64))).toBe("가".repeat(64));
+    expect(projectNameDraft("a".repeat(65))).toBeNull();
+    expect(projectNameDraft("Client\nwork")).toBeNull();
+    expect(projectNameDraft("Client\twork")).toBeNull();
+  });
+
+  it("names an unnamed project by its folder, on every system's wire path", () => {
+    expect(folderName("/Users/example/youtube-contents")).toBe("youtube-contents");
+    expect(folderName("C:/Users/example/hide/")).toBe("hide");
   });
 });

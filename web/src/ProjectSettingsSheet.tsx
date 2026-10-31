@@ -13,7 +13,7 @@ import { deviceConnected } from "./devices";
 import { useInterfaceTranslation } from "./i18n/client";
 import { MemorySettings, useMemoryProject } from "./MemoryTab";
 import { guardPartOf, ProjectGuardrails, pathRefusalKey, type GuardPart } from "./ProjectGuardrails";
-import { guardedBase, projectBaseBranch, projectGuardrails, projectIssueSource, projectRepository, projectSettings, readableSettings, refusedForGood, unguardedAgents, type Guardrails, type ProjectSettingsPatch, type ProjectSettingsTarget } from "./projectSettings";
+import { folderName, guardedBase, projectBaseBranch, projectGuardrails, projectIssueSource, projectNameDraft, projectRepository, projectSettings, readableSettings, refusedForGood, unguardedAgents, type Guardrails, type ProjectSettingsPatch, type ProjectSettingsTarget } from "./projectSettings";
 import { issueSourceChoices, issueSourceName } from "./settings";
 import { catalogWorkspaces } from "./snapshot";
 import { useShellStore } from "./store";
@@ -51,6 +51,9 @@ function ProjectSettingsBody({ target, actions, initialPage }: { target: Project
   }, [write, intent?.id]);
   const blocked = !available || pending || !readableSettings(record);
   const previous = useRef<HTMLElement | null>(useUiStore.getState().projectSettingsReturnFocus);
+  // Rename project… opens the dialog on its name, ready to type.
+  const focusName = useRef(useUiStore.getState().projectSettingsFocus === "name");
+  const nameInput = useRef<HTMLInputElement | null>(null);
   const close = () => useUiStore.getState().closeOverlay("project_settings");
   const save = (field: keyof ProjectSettingsPatch, patch: ProjectSettingsPatch, part?: GuardPart) => {
     if (blocked || waiting.current) return;
@@ -83,6 +86,20 @@ function ProjectSettingsBody({ target, actions, initialPage }: { target: Project
   const [repositoryEditing, setRepositoryEditing] = useState(record?.repository?.mode === "repository");
   const [repositoryInvalid, setRepositoryInvalid] = useState(false);
   const confirmedRepository = record?.repository?.mode === "repository" ? record.repository.repository : null;
+  const confirmedName = record?.name ?? "";
+  const [nameDraft, setNameDraft] = useState(confirmedName);
+  const [nameInvalid, setNameInvalid] = useState(false);
+  useEffect(() => {
+    if (write?.state === "pending") return;
+    setNameDraft(confirmedName);
+  }, [confirmedName, write?.state, intent?.state]);
+  const applyName = () => {
+    const name = projectNameDraft(nameDraft);
+    if (name === null) { setNameInvalid(true); return; }
+    setNameInvalid(false);
+    setNameDraft(name);
+    if (name !== confirmedName) save("name", { name });
+  };
   useEffect(() => {
     if (write?.state === "pending") return;
     setRepositoryDraft(confirmedRepository ?? "");
@@ -104,6 +121,7 @@ function ProjectSettingsBody({ target, actions, initialPage }: { target: Project
   };
   return <Dialog open onOpenChange={(next) => { if (!next) close(); }}>
     <DialogContent data-project-settings="true" aria-describedby={undefined} returnFocusTo={() => previous.current}
+      onOpenAutoFocus={(event) => { if (!focusName.current || !nameInput.current) return; event.preventDefault(); nameInput.current.focus(); nameInput.current.select(); }}
       className="h-(--size-project-settings-sheet-h) max-h-[calc(100%-2*var(--size-settings-sheet-window-inset))] w-(--size-settings-sheet-w) max-w-[calc(100%-2*var(--size-settings-sheet-window-inset))]">
       <Tabs value={page} onValueChange={(value) => setPage(value as Page)} orientation="vertical" className="min-h-0 flex-1 flex-row gap-none">
         <nav className="flex min-h-0 w-(--size-settings-nav-w) shrink-0 flex-col overflow-hidden border-r border-border bg-sidebar px-sm pb-md pt-sm">
@@ -127,6 +145,11 @@ function ProjectSettingsBody({ target, actions, initialPage }: { target: Project
               {!available ? <Note tone="warn">{t("projectSettings.unavailable")} <Button variant="ghost" size="sm" disabled={!live} onClick={() => { const device = rest?.navigator?.devices?.find((row) => row.id === target.deviceId); if (device?.kind === "remote") actions.retryDevice(target.deviceId); else actions.refreshProjectOverview(target.workspaceId); }}>{t("projectSettings.retry")}</Button></Note> : null}
               {!readableSettings(record) ? <Note tone="warn">{t("projectSettings.newerVersion")}</Note> : null}
               {page === "connections" ? <>
+                <Group title={t("projectSettings.name")} note={t("projectSettings.nameNote")}>
+                  <Row label={t("projectSettings.name")} detail={<>{nameInvalid ? <Note tone="error">{t("projectSettings.nameInvalid")}</Note> : null}{stateFor("name")}</>}>
+                    <div className="flex min-w-0 max-w-full flex-wrap gap-xs"><Input ref={nameInput} aria-label={t("projectSettings.name")} placeholder={folderName(target.root)} value={nameDraft} disabled={blocked} data-project-settings-name-input="true" onChange={(event) => { setNameDraft(event.target.value); setNameInvalid(false); }} onKeyDown={(event) => { if (event.key === "Enter" && !composingKey(event)) applyName(); }} /><Button variant="secondary" size="sm" aria-label={t("projectSettings.applyName")} disabled={blocked || nameDraft === confirmedName} onClick={applyName}>{t("projectSettings.apply")}</Button></div>
+                  </Row>
+                </Group>
                 <Group title={t("projectSettings.repository")} note={t("projectSettings.repositoryNote")}>
                   <Row label={t("projectSettings.repository")} detail={<>{workspace?.is_git ? <Value>{(workspace && projectRepository(rest, workspace)) ?? t("projectSettings.repositoryMissing")}</Value> : <Note>{t("projectSettings.folder")}</Note>}{stateFor("repository")}</>}>
                     <Select value={confirmedRepository !== null ? "repository" : "auto"} disabled={blocked || !workspace?.is_git} onValueChange={(value) => { if (value === "repository") setRepositoryEditing(true); if (value === "auto") save("repository", { repository: { mode: "auto" } }); }}>
@@ -194,6 +217,7 @@ function settingsErrorKey(code: string | null | undefined) {
     case "project_settings_device_unavailable": case "project_settings_project_unavailable": case "project_settings_project_missing": return "projectSettings.unavailable" as const;
     case "project_settings_paths_limit": case "project_settings_path_too_long": case "project_settings_path_duplicate": case "project_settings_path_invalid": return pathRefusalKey(code);
     case "project_settings_base_unknown": return "projectSettings.errorBaseUnknown" as const;
+    case "project_settings_name_invalid": return "projectSettings.nameInvalid" as const;
     case "project_settings_policy_failed": return "projectSettings.errorPolicy" as const;
     default: return "projectSettings.errorSave" as const;
   }
