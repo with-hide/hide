@@ -49,11 +49,7 @@ impl Runtime {
             }
             PaneCommand::Send { pane, text, enter } => {
                 let (machine, raw) = target(&pane);
-                sent = Some(if machine == node {
-                    raw.clone()
-                } else {
-                    crate::session_sync::remote_pane_id(&machine, &raw)
-                });
+                sent = Some(crate::address::pane_id_on(node, &machine, &raw));
                 (
                     machine,
                     Step::Send {

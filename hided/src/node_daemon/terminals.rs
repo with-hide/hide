@@ -569,8 +569,7 @@ mod tests {
     /// and a key that waited too long is dropped and its screen told (R5).
     #[test]
     fn keys_for_the_core_s_panes_wait_for_the_relay_in_order_and_none_is_lost_unsaid() {
-        let terminals =
-            ScreenTerminals::new("screen".to_owned(), watch::channel(None).1);
+        let terminals = ScreenTerminals::new("screen".to_owned(), watch::channel(None).1);
         let first_screen = terminals.unsent.watch(1);
         let second_screen = terminals.unsent.watch(2);
         let key = |text: &str| KeyTarget::Pane(format!("core-pane-{text}"));
@@ -685,8 +684,7 @@ mod tests {
     /// screen that already left is only logged.
     #[test]
     fn a_burst_of_unsent_keys_is_one_notice_per_screen_with_its_cause() {
-        let terminals =
-            ScreenTerminals::new("screen".to_owned(), watch::channel(None).1);
+        let terminals = ScreenTerminals::new("screen".to_owned(), watch::channel(None).1);
         let waiting = terminals.unsent.watch(1);
         let linked = terminals.unsent.watch(2);
         let left = terminals.unsent.watch(3);
