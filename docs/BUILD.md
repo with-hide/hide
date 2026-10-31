@@ -108,6 +108,19 @@ Key echo and CPU did not move beyond the spread between trials, idle or with fiv
 Startup to a healthy `/health` took 168 ms against 134 ms, the median of four trials each, about 35 ms more.
 `hided` holds about 4.7 MiB more resident memory (62 MiB against 57 MiB) in every trial, probably the larger binary's code.
 
+## A pull request's release build
+
+A pull request's package lane builds its release binaries at opt-level 1 without LTO, in 256 codegen units (`.github/actions/quick-release-build`).
+That lane checks that the app packages, installs, starts and updates; none of that depends on how well the binaries are optimized, and the optimization was most of the lane's time.
+Each of the three binaries runs thin LTO over the whole program at its link, so after the last hide crate started compiling, a Windows release build still took about 12 more minutes (2026-10-30, pull request #1913).
+Measured on 2026-10-30 (pull request #1916) against the same lane's recent pull-request runs: `compile (windows)` went from 17-24 minutes to 7.6, `compile (macos)` from 15-21 to 8.8, and `package (linux)` from 16-22 to 12.1.
+The Windows cargo build alone went from 14.7 minutes in #1913 to 6.2, both compiling every dependency from source, since this setting rebuilds them anyway.
+
+The settings are cargo's own profile variables, set in the job's environment, so the binaries still land in `target/release`, the path `desktop/scripts/package.mjs` reads, and keep the release profile's name, strip and debug-assertion settings.
+The cost is that a pull request's package never holds what ships.
+Main's push run, the nightly, a candidate and a release build with the release profile itself, and main's runs are the only savers of the `release` dependency set, so that set always holds the release profile's dependencies; a pull request restores it and rebuilds its dependencies at its own settings, because cargo rebuilds a dependency whose profile differs.
+`scripts/tests/test_quick_release_build.py` fails when another caller of `package.yml` turns the setting on, or a job that builds release binaries ignores it.
+
 ## The toolchain is never copied
 
 `scripts/toolchain-env.sh` is sourced by every script that calls cargo, and it resolves `CARGO_HOME` and `RUSTUP_HOME` from the cargo shim's own location so an isolated HOME reuses the machine's installed toolchain.
