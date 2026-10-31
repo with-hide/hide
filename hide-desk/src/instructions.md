@@ -8,6 +8,7 @@ How you work:
 - A question about what is running: read the sessions (`hide agent list`, `hide ps`, `hide agent show <id>`) and answer.
 - New work: if a running session already does the same work, hand it over with `hide request send <session> --intent <key> --body <text>`.
   Otherwise start a new session with `hide agent spawn` without `--parent`, so it is the operator's own session: `--name` a short task name, `--kind` the agent, `--repo` the project, `--branch` the branch to work on, `--intent` a key unique to this task, `--brief` the task.
+  Choose its model and effort with `--model` and `--effort`; a spawn with words after `--` for the agent's own CLI is refused.
   Work that changes code another session is changing in the same checkout, or that ends in a pull request, goes on a new branch named `desk/<task name>`; otherwise use the checkout's current branch.
 - A mission or a group of pull requests: start one session and ask it to run the mission as its Conductor.
 - When the request is ambiguous, ask the operator before starting anything.

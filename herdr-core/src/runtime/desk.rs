@@ -1363,7 +1363,11 @@ mod tests {
             None,
         )]));
         event(&mut runtime, "desk_select", json!({"agent": "codex"}));
-        assert!(event(&mut runtime, "desk_send", json!({"text": "what runs now"})));
+        assert!(event(
+            &mut runtime,
+            "desk_send",
+            json!({"text": "what runs now"})
+        ));
         sent(&received);
         runtime.desk_report(Report::OpenFailed {
             adapter: AdapterId::Codex,

@@ -1335,7 +1335,7 @@ pub(crate) fn delivery_next_action(code: &str) -> &'static str {
             "Use a new intent, or repeat the request this intent was first used for"
         }
         "desk_spawn_args" => {
-            "Desk passes no words to an agent's own CLI; run the same spawn without `--` and the words after it, or ask the operator to start that session themselves"
+            "Desk passes no words to an agent's own CLI after `--`; choose the model and effort with --model and --effort and run the spawn again without `--`, or ask the operator to start that session themselves"
         }
         "invalid_launch_choice" => {
             "Pass a --model that is a model name, and an --effort the agent's CLI takes (Claude Code: low, medium, high, xhigh, max; Codex: minimal, low, medium, high, xhigh), then run the command again"
