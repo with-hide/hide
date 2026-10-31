@@ -22,7 +22,7 @@ impl Runtime {
     /// checkout is `expected`, and resolves what it acts on. A bare pane id
     /// is a pane of the caller's own machine, as Herdr numbered it there.
     pub(crate) fn prepare_pane_command(
-        &self,
+        &mut self,
         device: &str,
         caller: &str,
         expected: &Context,
@@ -38,7 +38,8 @@ impl Runtime {
         if context != *expected {
             return Err("caller_context_changed".into());
         }
-        let node = self.node.as_str();
+        let node = self.node.as_str().to_owned();
+        let node = node.as_str();
         // A pane named in full stays on the machine it names; a bare one is
         // the caller's.
         let target = |pane: &str| -> (String, String) {
@@ -49,7 +50,10 @@ impl Runtime {
                 (device.to_owned(), pane.to_owned())
             }
         };
-        let engine_of = |machine: &str| self.delivery_engine(machine).ok_or("engine_unavailable");
+        // A pane `hide pane send` types into: input, like a key the operator
+        // typed there, for the draft guard and for typed input waiting on
+        // someone to answer the agent's screen (`delivery::typed`).
+        let mut sent = None;
         let (machine, step) = match command {
             PaneCommand::Read { pane, lines } => {
                 let (machine, raw) = target(&pane);
@@ -57,6 +61,11 @@ impl Runtime {
             }
             PaneCommand::Send { pane, text, enter } => {
                 let (machine, raw) = target(&pane);
+                sent = Some(if machine == node {
+                    raw.clone()
+                } else {
+                    crate::session_sync::remote_pane_id(&machine, &raw)
+                });
                 (
                     machine,
                     Step::Send {
@@ -105,10 +114,11 @@ impl Runtime {
                 },
             ),
         };
-        Ok(Prepared {
-            engine: engine_of(&machine)?,
-            step,
-        })
+        let engine = self.delivery_engine(&machine).ok_or("engine_unavailable")?;
+        if let Some(pane) = sent {
+            self.note_delivery_key(&pane, "pane_send");
+        }
+        Ok(Prepared { engine, step })
     }
 
     /// The live agent `key` names for a caller on `device`, as a letter's

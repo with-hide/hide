@@ -307,6 +307,12 @@ pub(crate) enum Effect {
         id: String,
         recipient: Actor,
     },
+    /// Hide told the letter's sender that its bell `attempt` was not taken
+    /// (`delivery::typed`).
+    InputNoticed {
+        id: String,
+        attempt: u8,
+    },
 }
 
 #[derive(Clone)]
@@ -726,11 +732,24 @@ fn apply(ledger: &mut Ledger, request: &Request, now: u64) -> Result<(Value, boo
             }) {
                 if *sent {
                     letter.bell_sent = true;
+                    letter.bell_typed_at_unix_ms = Some(now);
                 } else {
                     letter.bell_errors = letter.bell_errors.saturating_add(1).min(3);
                 }
             }
-            return Ok((Value::Null, false));
+            // A typed bell is published: the core waits for the recipient's
+            // record of it from then on (`delivery::typed`).
+            return Ok((Value::Null, *sent));
+        }
+        Effect::InputNoticed { id, attempt } => {
+            if let Some(letter) = ledger.letters.iter_mut().find(|letter| letter.id == *id)
+                && *attempt > letter.input_noticed
+                && *attempt <= letter.attempts()
+            {
+                letter.input_noticed = *attempt;
+                letter.input_noticed_at_unix_ms = now;
+            }
+            return Ok((Value::Null, true));
         }
         Effect::Deferred { id, recipient } => {
             if let Some(letter) = ledger.letters.iter_mut().find(|letter| {

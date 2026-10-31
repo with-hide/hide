@@ -339,6 +339,12 @@ pub(crate) struct Doorbell {
     /// change. Bounded by the open missions.
     answer_tried: HashMap<String, Tried>,
     answer_held: HashMap<String, Hold>,
+    /// Typed input awaiting its record (`typed.rs`): when each notice or
+    /// typing that did not go through may be tried again, keyed by the work
+    /// it is for. Bounded by the current work.
+    input_retry: HashMap<String, u64>,
+    /// Why each brief waits to be typed again, logged once per change.
+    input_held: HashMap<String, &'static str>,
 }
 
 /// How one attempt ended without failing.
@@ -561,6 +567,7 @@ impl Doorbell {
             }
         }
         self.answers(owner, stop, now, &mut count);
+        self.inputs(owner, stop, now, &mut count);
         if count < WORK_PER_PASS && !stop.load(Ordering::Acquire) {
             self.composer.check(owner, now);
         }
@@ -653,6 +660,82 @@ impl Doorbell {
         }
     }
 
+    /// Typed input whose agent never recorded it (`typed.rs`): tells the
+    /// agent that typed it, or wrote the letter, with the child's pane and
+    /// how to read and answer its screen, and types a brief again once
+    /// someone answered that screen, the agent is ready and its composer
+    /// reads empty. Each typing is reserved in the ledger first and the
+    /// record is checked again right before, so a late record never brings
+    /// a second copy.
+    fn inputs(&mut self, owner: &Mutex<Runtime>, stop: &AtomicBool, now: u64, count: &mut usize) {
+        use crate::runtime::typed_input::InputKey;
+        let work = owner
+            .lock()
+            .map(|guard| guard.typed_input_work(now))
+            .unwrap_or_default();
+        let keys: HashSet<String> = work
+            .iter()
+            .flat_map(|item| {
+                let id = match &item.key {
+                    InputKey::Spawn(id) | InputKey::Letter(id) => id,
+                };
+                [format!("notice:{id}"), format!("retype:{id}")]
+            })
+            .collect();
+        self.input_retry.retain(|key, _| keys.contains(key));
+        self.input_held
+            .retain(|key, _| keys.contains(&format!("retype:{key}")));
+        for item in work {
+            if stop.load(Ordering::Acquire) || *count >= WORK_PER_PASS {
+                break;
+            }
+            let id = match &item.key {
+                InputKey::Spawn(id) | InputKey::Letter(id) => id.clone(),
+            };
+            if let Some(notice) = &item.notice {
+                let key = format!("notice:{id}");
+                if self.input_retry.get(&key).is_none_or(|at| now >= *at) {
+                    *count += 1;
+                    match send_input_notice(owner, &item.key, notice) {
+                        Ok(()) => {
+                            self.input_retry.remove(&key);
+                        }
+                        Err(code) => {
+                            crate::diagnostic!(json!({"component":"delivery",
+                                "kind":"input.notice_unsent","input":id,
+                                "attempt":notice.attempt,"code":code}));
+                            self.input_retry
+                                .insert(key, now.saturating_add(RETRY_LIMIT_MS));
+                        }
+                    }
+                }
+            }
+            let Some(brief) = item.retype.as_deref() else {
+                continue;
+            };
+            let key = format!("retype:{id}");
+            if self.input_retry.get(&key).is_some_and(|at| now < *at) {
+                continue;
+            }
+            *count += 1;
+            match retype_brief(owner, &id, &item.observation, brief) {
+                Ok(()) => {
+                    self.input_retry.remove(&key);
+                    self.input_held.remove(&id);
+                }
+                Err(reason) => {
+                    if self.input_held.insert(id.clone(), reason) != Some(reason) {
+                        crate::diagnostic!(json!({"component":"delivery",
+                            "kind":"input.retype_held","spawn":id,
+                            "pane_id":item.observation.actor.pane_id,"reason":reason}));
+                    }
+                    self.input_retry
+                        .insert(key, now.saturating_add(RETRY_FIRST_MS));
+                }
+            }
+        }
+    }
+
     /// Logs why an answer waits once per change and shows it waiting for
     /// the Conductor's turn.
     fn answer_hold(
@@ -710,6 +793,115 @@ impl Doorbell {
                 "letter_id":id,"pane_id":pane_id,"reason":reason.code()}));
         }
     }
+}
+
+/// Sends the notice of an unconfirmed input to the agent that typed it, as
+/// Hide's own `hide:input`, and records that it went. The intent names the
+/// input and its typing, so a notice sent again is the same letter.
+fn send_input_notice(
+    owner: &Mutex<Runtime>,
+    key: &crate::runtime::typed_input::InputKey,
+    notice: &crate::runtime::typed_input::Notice,
+) -> Result<(), String> {
+    use crate::runtime::typed_input::InputKey;
+    let (client, authority, actor) = owner
+        .lock()
+        .map_err(|_| "delivery_unavailable".to_owned())?
+        .hide_delivery(super::typed::INPUT_ROLE)?;
+    super::worker::Prepared::new(
+        client.clone(),
+        super::worker::Authority {
+            caller: authority.caller.clone(),
+            context: authority.context.clone(),
+        },
+        actor.clone(),
+        Some(notice.target.clone()),
+        super::Command::Send {
+            target: notice.target.actor.pane_id.clone(),
+            intent: notice.intent.clone(),
+            body: notice.body.clone(),
+            // Hide reads no answer; the agent acts on its child's screen.
+            kind: "progress".into(),
+            now: true,
+            force: false,
+        },
+    )
+    .run(PROMPT_TIMEOUT)?;
+    let effect = match key {
+        InputKey::Spawn(id) => Effect::Agents {
+            authority,
+            actor,
+            mutation: Box::new(crate::coordination::Mutation::BriefNoticed {
+                id: id.clone(),
+                attempt: notice.attempt,
+            }),
+        },
+        InputKey::Letter(id) => Effect::InputNoticed {
+            id: id.clone(),
+            attempt: notice.attempt,
+        },
+    };
+    client.submit(effect, PROMPT_TIMEOUT).map(|_| ())?;
+    crate::diagnostic!(json!({"component":"delivery","kind":"input.noticed",
+        "intent":notice.intent,"pane_id":notice.target.actor.pane_id}));
+    Ok(())
+}
+
+/// Types spawn `id`'s brief again into the pane `observed`: once Herdr
+/// reports the same agent ready for input and its composer reads empty by
+/// its declaration, the typing is reserved in the ledger and the brief typed.
+/// A refusal before the reservation types nothing and says why.
+fn retype_brief(
+    owner: &Mutex<Runtime>,
+    id: &str,
+    observed: &Observation,
+    brief: &str,
+) -> Result<(), &'static str> {
+    let (engine, delivery) = owner
+        .lock()
+        .ok()
+        .and_then(|guard| {
+            Some((
+                guard.delivery_engine(&observed.actor.device_id)?,
+                guard.hide_delivery(super::typed::INPUT_ROLE).ok()?,
+            ))
+        })
+        .ok_or("pane_unavailable")?;
+    let agent = engine
+        .delivery_agent(Wait::Small(RPC_TIMEOUT), &observed.raw_pane_id)
+        .map_err(|_| "agent_unread")?;
+    if agent.name != observed.actor.name {
+        return Err("identity_changed");
+    }
+    if !agent.readiness.accepts_input() {
+        return Err("not_ready");
+    }
+    super::composer::forced_clear(engine.as_ref(), &observed.raw_pane_id, &observed.actor.kind)?;
+    let (client, authority, actor) = delivery;
+    client
+        .submit(
+            Effect::Agents {
+                authority,
+                actor,
+                mutation: Box::new(crate::coordination::Mutation::BriefTyping {
+                    id: id.to_owned(),
+                }),
+            },
+            PROMPT_TIMEOUT,
+        )
+        .map_err(|code| match code.as_str() {
+            // The record arrived meanwhile: nothing is typed again.
+            "brief_confirmed" => "confirmed",
+            "brief_attempts_spent" => "attempts_spent",
+            _ => "reservation_failed",
+        })?;
+    crate::coordination::executor::type_brief(engine.as_ref(), id, &observed.raw_pane_id, brief)
+        .map_err(|_| "prompt_failed")?;
+    crate::diagnostic!(
+        json!({"component":"delivery","kind":"input.retyped","spawn":id,
+        "pane_id":observed.actor.pane_id})
+    );
+    Ok(())
 }
 
 /// The line the bell types for `letter`, naming its writer as the operator

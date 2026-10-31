@@ -58,12 +58,27 @@ pub(crate) struct PlanRuntime {
     /// None once a sync laid rows from other questions, so the next
     /// refresh relays every row set whatever it reads.
     asked: Option<Vec<CoreAsk>>,
-    /// The plan book's and the mission book's edit `asked` was read at.
-    made_asks_at: (u64, u64),
+    /// The plan book's, the mission book's and the typed inputs' edit
+    /// `asked` was read at.
+    made_asks_at: (u64, u64, u64),
+    /// Typed input shown to the operator on its pane's row
+    /// (`typed_input::input_asks`), as the doorbell's last pass found it,
+    /// and an edit that moves whenever it changes.
+    pub(crate) input_asks: Vec<super::typed_input::InputAsk>,
+    pub(crate) input_edit: u64,
 }
 
-/// A question the core asks for a session, and when it was asked.
-type CoreAsk = (SessionIdentity, u64, AskSubject);
+/// Whom the core asks a question of: a session, or the pane of an agent
+/// that may have none yet (Codex before its first turn), for typed input
+/// it never took.
+#[derive(Clone, Debug, Eq, PartialEq)]
+enum Asked {
+    Session(SessionIdentity),
+    Pane(String),
+}
+
+/// A question the core asks, and when it was asked.
+type CoreAsk = (Asked, u64, AskSubject);
 
 /// What laying a core question changed on a row: the question it put
 /// there, what it asks, and the demand the row had before.
@@ -801,10 +816,15 @@ impl Runtime {
     pub(super) fn refresh_plan_reviews(&mut self) -> bool {
         if self.plans.edit == self.plans.made_asks_at.0
             && self.missions.book_edit == self.plans.made_asks_at.1
+            && self.plans.input_edit == self.plans.made_asks_at.2
         {
             return false;
         }
-        self.plans.made_asks_at = (self.plans.edit, self.missions.book_edit);
+        self.plans.made_asks_at = (
+            self.plans.edit,
+            self.missions.book_edit,
+            self.plans.input_edit,
+        );
         let asks = self.core_asks();
         if self.plans.asked.as_ref() == Some(&asks) {
             return false;
@@ -900,11 +920,12 @@ impl Runtime {
             {
                 continue;
             }
-            let Some(session) = row_session(device, agent) else {
-                continue;
-            };
+            let session = row_session(device, agent);
             // Oldest first, as `core_asks` sorts them.
-            let mut mine = asks.iter().filter(|(asked, ..)| *asked == session);
+            let mut mine = asks.iter().filter(|(asked, ..)| match asked {
+                Asked::Session(asked) => session.as_ref() == Some(asked),
+                Asked::Pane(pane) => *pane == agent.pane_id,
+            });
             let Some((_, since, subject)) = mine.next() else {
                 continue;
             };
@@ -942,7 +963,7 @@ impl Runtime {
             .filter(|(_, plan)| plan.review == Review::Proposed && !plans::finished(plan))
             .map(|(session, plan)| {
                 (
-                    session.clone(),
+                    Asked::Session(session.clone()),
                     plan.updated_at_unix_ms,
                     review_subject(plan),
                 )
@@ -972,12 +993,17 @@ impl Runtime {
                     question.asked_at_unix_ms
                 });
             Some((
-                session.clone(),
+                Asked::Session(session.clone()),
                 since,
                 AskSubject::MissionDecision { line: line.clone() },
             ))
         });
-        let mut asks: Vec<_> = reviews.chain(decisions).collect();
+        let inputs = self
+            .plans
+            .input_asks
+            .iter()
+            .map(|(pane, since, subject)| (Asked::Pane(pane.clone()), *since, subject.clone()));
+        let mut asks: Vec<_> = reviews.chain(decisions).chain(inputs).collect();
         asks.sort_by_key(|(_, since, _)| *since);
         asks
     }

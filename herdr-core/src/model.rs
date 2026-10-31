@@ -1468,6 +1468,14 @@ pub enum AskSubject {
     /// The mission this Conductor conducts waits on the operator's decision,
     /// whose one line it carries (needs-you-cleanup D-12).
     MissionDecision { line: String },
+    /// Hide typed a brief or a letter's bell into the agent and the agent
+    /// never recorded it: something on its screen took the input, and no
+    /// parent cleared it (`delivery::typed`). `spent` says Hide stopped
+    /// typing it again.
+    InputUnconfirmed {
+        input: crate::delivery::typed::InputKind,
+        spent: bool,
+    },
 }
 
 /// An agent's state on four independent lifecycle axes, plus the values the shell draws
