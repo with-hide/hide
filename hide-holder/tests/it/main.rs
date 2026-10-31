@@ -10,6 +10,7 @@ mod folders;
 mod idle;
 mod lifecycle;
 mod meaning;
+mod memory;
 mod node;
 mod records;
 mod role;

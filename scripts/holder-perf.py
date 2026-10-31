@@ -22,6 +22,8 @@ terminal service (`Holders::start_local`); both paths' panes run `/bin/sh` at
    through the node's `key` until its frame reaches the node's screen sink,
    one after another, alone, beside one pane flooding, beside eight panes
    flooding, and beside one flooding pane whose screen delivery is slowed;
+   after each flood, once the screen has been still for 2.5 s, the memory
+   again;
 3. the node killed outright and a new one attached again: the time until
    every attached pane drew, and latency after;
 4. what the echo program received, against every token typed: loss,
@@ -55,6 +57,8 @@ import time
 
 ROWS, COLS = 40, 120
 ATTACH_MAX = 64
+# How long a flood's memory is left to settle before it is read again.
+STILL_SECONDS = 2.5
 FLOOD = "od -An -tx1 -v /dev/urandom | head -c {bytes}; printf 'flood-%s\\n' done{index}"
 
 
@@ -359,6 +363,10 @@ class Round:
             self.path.wait_done(pane, f"flood-done{index}", 600)
         wall = time.monotonic() - started
         after = sample(pids)
+        # Then still: a holder gives the flood's freed pages back a second
+        # after its screen stops moving.
+        time.sleep(STILL_SECONDS)
+        settled = delta(before, sample(pids))
         totals_after = node.ask("totals")
         if slow:
             node.ask("slow", micros=0, panes=[])
@@ -370,7 +378,10 @@ class Round:
         usage_window.pop("each")
         return {"latency": latency, "flood_panes": len(panes), "flood_bytes_each": size, "wall_seconds": wall,
                 "frames": sum(item["frames"] for item in flooded), "frame_bytes": sum(item["bytes"] for item in flooded),
-                "usage": usage_window, "conditions": conditions()}
+                "usage": usage_window,
+                "still": {"seconds": STILL_SECONDS, "footprint_bytes": settled["footprint_bytes"],
+                          "footprint_max_bytes": settled["footprint_max_bytes"]},
+                "conditions": conditions()}
 
     def run(self):
         args, path, phases = self.args, self.path, self.result["phases"]

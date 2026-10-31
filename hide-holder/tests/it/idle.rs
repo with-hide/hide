@@ -1,6 +1,7 @@
 //! An idle holder does not wake (PRD engine-bundle-2-pane-holder B21): with
 //! its program waiting for input, attached or not, the holder runs nothing,
-//! by what the kernel counts for it. The local measurement watches 60 s
+//! by what the kernel counts for it, once the one return of freed pages a
+//! second after its last fragment is behind it. The local measurement watches 60 s
 //! (docs/PERFORMANCE_TESTING.md, The pane holder's path); this is the short
 //! form every system's CI runs.
 
@@ -69,16 +70,21 @@ fn runs(pid: u32) -> u64 {
     }
 }
 
-/// What the holder ran while `WATCHED` passed.
-fn watched(pid: u32) -> u64 {
-    let before = runs(pid);
-    let until = Instant::now() + WATCHED;
+/// Lets `length` pass.
+fn settle(length: Duration) {
+    let until = Instant::now() + length;
     while let Some(left) = until.checked_duration_since(Instant::now()) {
         if left.is_zero() {
             break;
         }
         std::thread::park_timeout(left);
     }
+}
+
+/// What the holder ran while `WATCHED` passed.
+fn watched(pid: u32) -> u64 {
+    let before = runs(pid);
+    settle(WATCHED);
     runs(pid) - before
 }
 
@@ -93,13 +99,14 @@ fn an_idle_holder_does_not_wake_attached_or_not() {
         .send(ClientMessage::Input(print_ok().to_vec()))
         .unwrap();
     connection.wait_for_text("hide-ok");
-    // What the line drew has gone out; the holder waits on its program and
-    // its connection now.
-    std::thread::park_timeout(Duration::from_millis(500));
+    // What the line drew has gone out, and a second later the writer gave
+    // back what drawing it freed, once (`RETURN_FREED_AFTER`); the holder
+    // waits on its program and its connection now, with no bound.
+    settle(Duration::from_millis(2500));
     let attached = watched(holder.process.pid);
     connection.send(ClientMessage::Release).unwrap();
     drop(connection);
-    std::thread::park_timeout(Duration::from_millis(500));
+    settle(Duration::from_millis(500));
     let alone = watched(holder.process.pid);
     eprintln!("the idle holder ran {attached} attached and {alone} alone over {WATCHED:?} each");
     assert_eq!(attached, 0, "the holder woke while attached and idle");

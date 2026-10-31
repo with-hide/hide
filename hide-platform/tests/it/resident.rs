@@ -386,8 +386,8 @@ mod windows_job {
     use windows_sys::Win32::System::JobObjects::{
         AssignProcessToJobObject, CreateJobObjectW, JOB_OBJECT_LIMIT_BREAKAWAY_OK,
         JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE, JOB_OBJECT_LIMIT_SILENT_BREAKAWAY_OK,
-        JOBOBJECT_EXTENDED_LIMIT_INFORMATION,
-        JobObjectExtendedLimitInformation, SetInformationJobObject,
+        JOBOBJECT_EXTENDED_LIMIT_INFORMATION, JobObjectExtendedLimitInformation,
+        SetInformationJobObject,
     };
     use windows_sys::Win32::System::Threading::GetCurrentProcess;
 
@@ -542,7 +542,10 @@ fn a_resident_child_outlives_the_job_electron_starts_its_daemon_in() {
     let resident = Started::new(field(&line, "pid").parse().unwrap());
     starter.0.wait().unwrap();
     assert_eq!(field(&line, "in_job"), field(&line, "outer_job"), "{line}");
-    assert!(resident.is_running(), "the resident ended with the app's job");
+    assert!(
+        resident.is_running(),
+        "the resident ended with the app's job"
+    );
 }
 
 #[cfg(windows)]

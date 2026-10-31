@@ -387,9 +387,9 @@ fn replacing_and_removing_the_app_folder_leaves_a_running_holder_alone() {
     std::fs::remove_dir_all(&app).unwrap();
 
     let ask = if cfg!(windows) {
-        b"set H=still& call echo %H%-here\r".as_slice()
+        b"set S=still& call echo %S%-here\r".as_slice()
     } else {
-        b"H=still; echo \"$H-here\"\r".as_slice()
+        b"S=still; echo \"$S-here\"\r".as_slice()
     };
     connection.send(ClientMessage::Input(ask.to_vec())).unwrap();
     connection.wait_for_text("still-here");
