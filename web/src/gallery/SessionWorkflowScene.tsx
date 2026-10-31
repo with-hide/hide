@@ -14,7 +14,7 @@ import type { SceneParams } from "./SidebarScene";
 
 type Example = { title: string; group: SessionGroup; line: string | null; ask?: NonNullable<AgentState["ask"]>; pr?: PrState; unfinished?: boolean; mark?: AgentRow["descendant_mark"]; read?: boolean; wait?: AgentWait; pull?: number };
 /** Each example's task: its row's index and the state the core gave it. */
-const TASKS: [number, TaskState][] = [[0, "needs_you"], [1, "needs_you"], [2, "needs_you"], [4, "working"], [5, "waiting"], [3, "done"], [6, "revisit"], [7, "resting"], [8, "resting"], [9, "needs_you"], [10, "needs_you"], [11, "waiting"], [12, "waiting"]];
+const TASKS: [number, TaskState][] = [[0, "needs_you"], [1, "needs_you"], [2, "needs_you"], [4, "working"], [5, "waiting"], [3, "done"], [6, "revisit"], [7, "resting"], [8, "resting"], [9, "needs_you"], [10, "needs_you"], [11, "waiting"], [12, "waiting"], [13, "needs_you"]];
 const EXAMPLES: Example[] = [
   { title: "입력과 세션 복귀 흐름 검토", group: "needs_you", line: null, ask: { verb: "approval", what: "검증 명령 실행 권한이 필요합니다", more: 0 } },
   { title: "한국어 입력 경계 검토", group: "needs_you", line: null, ask: { verb: "answer", what: "기존 stdin 종료 경로도 남길까요?", more: 0 } },
@@ -30,6 +30,8 @@ const EXAMPLES: Example[] = [
   { title: "배포 환경 선택", group: "needs_you", line: null, ask: { verb: "answer", what: "staging부터 올릴까요?", more: 0 }, read: true },
   { title: "검토 나눠 맡기기", group: "working", line: null, wait: "children" },
   { title: "PR 체크 기다리기", group: "working", line: null, wait: "checks", pull: 1846 },
+  // A delegated reviewer whose start screen took its brief, raised to the operator once its parent could not clear it.
+  { title: "리뷰어 시작", group: "needs_you", line: null, ask: { verb: "answer", what: null, more: 0, subject: { cause: "input_unconfirmed", input: "brief", spent: false } } },
 ];
 const RAISED: RaisedAsk = { verb: "approval", what: "검증 명령 실행 권한이 필요합니다", raised_pane_id: "a1c1", origin_title: "한국어 입력 경계 검토", pane_id: "a1c1", title: "한국어 입력 경계 검토", agent_kind: "codex", open_pane_id: "a1c1", since_unix_ms: null, path: ["입력과 세션 복귀 흐름 검토", "한국어 입력 경계 검토"], checkout: "prd/session-ui", human_notice: true };
 const PANE_RAISED: RaisedAsk = { ...RAISED, raised_pane_id: "pane-raised-child", origin_title: "UI 검증", pane_id: "pane-raised-child", open_pane_id: "pane-raised-child", title: "UI 검증", what: "권한 승인을 기다리고 있어요", path: ["Group tab 기능 설계", "UI 검증"] };
@@ -93,7 +95,7 @@ const MARKS: [RowMark, StatusTone["kind"], RequestVerb][] = [
   ["turn", "warning", "answer"], ["turn", "warning", "answer"], ["turn", "warning", "answer"],
   ["done", "success", "review"], ["done", "success", "review"], ["going", "working", "working"],
   ["going", "working", "waiting"], ["quiet", "subtle", "idle"], ["quiet", "subtle", "result"],
-  ["turn", "warning", "answer"], ["turn", "warning", "answer"], ["waiting", "working", "waiting"], ["waiting", "working", "waiting"],
+  ["turn", "warning", "answer"], ["turn", "warning", "answer"], ["waiting", "working", "waiting"], ["waiting", "working", "waiting"], ["turn", "warning", "answer"],
 ];
 
 export function SessionWorkflowScene({ scene: kind, theme, content, scale, width, state }: SceneParams & { scene: "session-panel" | "pane-header" }) {
