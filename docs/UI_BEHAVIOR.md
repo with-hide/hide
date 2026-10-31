@@ -964,7 +964,14 @@ A spawn waiting in Desk's queue stays there while Desk is off, started by nothin
 Turned off while the room is in front, the room goes and the panel used before it comes back, or All projects when none is left (`leaveDesk` in `web/src/keyboard.ts`).
 The composer keeps what the operator is writing while they go elsewhere, and clears it once the conversation shows the message, so a refused send keeps the words.
 A message the agent could not take because it is not signed in leaves the conversation again, and its words go back in the box under the line with the sign-in command (B6).
-`@` opens the menu on the word the caret ends; a picked session or project is written `@name` and sent as its `@session(<pane> <name>)` or `@project(<path> <name>)` token, a project named by its primary checkout's path (the folder's own for a project with none), which Desk's agent hands to `--repo` and pressing its chip opens; one the operator deleted is not sent.
+`@` opens the menu on the word the caret ends (D-84, B48).
+Its sessions are a tree in the sidebar's order: parents only at first, each child folded under its parent's `▸ 하위 n`, which a press, →, or ← (on the open parent, or on a child to reach its parent) opens and folds as the sidebar's tree does; a parent with an asking session under it starts open.
+Each row is two lines: the status mark, the agent's logo, the title and the time since its last request or its child count, then the project, branch and what it does now.
+The core lists the first 50 parents with their descendants, 200 rows at most (`desk_mentions`).
+Words after `@` filter by name: the parents that hold them first, then a `하위 세션` group of the children that hold them, each after its parent's name (`부모 ›`), and only that group when no parent holds them; the projects follow, and ↵, ⇥ and ⇧⇥ keep their meaning on any row.
+A picked session or project stands in the box as one chip (D-85, B49): a session's blue with its status and agent marks, a project's green with ⌂ (`components/desk/mention-input.tsx`, drawn with the shared `MentionChip`).
+One ⌫ right after a chip takes it out whole, ← and → step over it, Shift+↵ starts a line, a paste comes in as plain text, and a Hangul syllable being composed is left to the input method.
+The box holds each chip as its `@session(<pane> <name>)` or `@project(<path> <name>)` token, and the send carries the words exactly so, a project named by its primary checkout's path (the folder's own for a project with none), which Desk's agent hands to `--repo` and pressing its chip opens; a chip the operator took out is not sent, and the sent message shows the same chips.
 `다시 시도` on a notice sends the operator's last message again.
 Pressing a card, a session chip or `답하기` opens that session's thread in Desk's lane (see Desk's lane); a letter's line opens the session's own tab.
 A card's change sends only the `desk_jobs` section; the conversation is sent again only when it, the agents or the room's settings change.
