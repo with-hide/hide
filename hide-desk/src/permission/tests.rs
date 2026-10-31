@@ -29,7 +29,7 @@ fn place() -> Place<'static> {
     Place {
         hide: Path::new(HIDE),
         cwd: WORK,
-        home: Some("/home/op"),
+        home: Some("/home/u"),
     }
 }
 

@@ -1432,7 +1432,7 @@ mod tests {
             &hide_desk::permission::Place {
                 hide: std::path::Path::new("/app/hide"),
                 cwd: "/state/desk/work",
-                home: Some("/home/op"),
+                home: Some("/home/u"),
             },
         );
         Report::Permission {
