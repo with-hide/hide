@@ -47,6 +47,24 @@ fn hook(binary: &std::path::Path, session: &str, prompt: &str) -> String {
     )
 }
 
+/// The Stop hook that ends a Claude Code turn. The core's turn for the pane
+/// follows the hook (`docs/status-model.md`), so a turn a prompt hook opened
+/// works until this runs, whatever Herdr reads on the screen.
+fn stop(binary: &std::path::Path, session: &str) -> String {
+    format!(
+        "printf '%s' {} | {} hook --runtime claude-code --event Stop",
+        quote(
+            serde_json::json!({
+                "session_id": session,
+                "hook_event_name": "Stop",
+                "stop_hook_active": false,
+            })
+            .to_string()
+        ),
+        quote(binary)
+    )
+}
+
 /// A prompt the operator typed.
 const OPERATOR_PROMPT: &str = "please run the tests";
 
@@ -139,6 +157,15 @@ fn connected_remote_panes_receive_once_and_disconnect_keeps_the_same_letter_pend
         ensure!(
             again.status == 0 && context(&again.stdout)?.is_empty(),
             "remote hook repeated a delivered letter"
+        );
+        // The turn the bell opened ends.
+        ensure!(
+            fixture
+                .remote
+                .run_in_pane(&stop(&remote_hooks, "fixture-remote-session"))?
+                .status
+                == 0,
+            "remote stop hook failed"
         );
 
         let watch = fixture
@@ -240,6 +267,15 @@ fn connected_remote_panes_receive_once_and_disconnect_keeps_the_same_letter_pend
         fixture.ssh.online(true)?;
         fixture.reconnect_device()?;
         fixture.wait_bridge(2)?;
+        // The turn the operator's prompt opened ends; the letter rings at rest.
+        ensure!(
+            fixture
+                .remote
+                .run_in_pane(&stop(&remote_hooks, "fixture-remote-session"))?
+                .status
+                == 0,
+            "remote stop hook failed"
+        );
         let bell = fixture.rung(&pending_id)?;
         let resumed =
             fixture
