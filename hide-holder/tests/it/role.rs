@@ -97,7 +97,10 @@ fn stubborn_tree() {
         #[allow(clippy::disallowed_methods)] // the role's own pace
         thread::sleep(Duration::from_millis(5));
     }
-    println!("TREE READY");
+    // A terminal whose holder was killed refuses the write; a program that
+    // ignores the hangup lives on past that, as this one must.
+    let mut out = std::io::stdout();
+    let _ = writeln!(out, "TREE READY").and_then(|()| out.flush());
     if std::env::var_os(EXIT_EARLY).is_some() {
         return;
     }
