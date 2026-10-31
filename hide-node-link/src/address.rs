@@ -72,17 +72,6 @@ pub fn is_device_scoped(id: &str) -> bool {
     id.starts_with(PREFIX)
 }
 
-/// What every id the core scoped to `device` starts with, whatever its kind:
-/// the scope a device's records are kept and dropped under.
-pub fn device_scope(device: &str) -> String {
-    format!("{PREFIX}{device}:")
-}
-
-/// What every id of `kind` the core scoped to `device` starts with.
-pub fn kind_scope(device: &str, kind: Kind) -> String {
-    format!("{PREFIX}{device}:{}:", kind.word())
-}
-
 /// The device an id was scoped to, of any kind; `None` for the core's own
 /// node's ids.
 pub fn device_of(id: &str) -> Option<&str> {
@@ -260,6 +249,22 @@ pub fn scoped_id(device: &str, kind: Kind, id: &str) -> String {
     Scoped::new(device, kind, id).to_string()
 }
 
+/// The id the core gives a project of `device`, from the id its machine
+/// derives for it (`hide_project::project_id`, `project:<hash>`): the same
+/// kind and hash, scoped to the device.
+///
+/// # Panics
+///
+/// When `project` is not spelled `project:<hash>`, which no project id is.
+pub fn scoped_project_id(device: &str, project: &str) -> String {
+    let hash = project
+        .strip_prefix(Kind::Project.word())
+        .and_then(|rest| rest.strip_prefix(':'))
+        .filter(|hash| !hash.is_empty())
+        .unwrap_or_else(|| panic!("{project} is not a project id"));
+    scoped_id(device, Kind::Project, hash)
+}
+
 /// Pane `pane` of `device` as the core names it, where `node` is the core's
 /// own node.
 pub fn pane_id_on(node: &str, device: &str, pane: &str) -> String {
@@ -430,10 +435,12 @@ mod tests {
             assert_eq!(Scoped::strip(&id, "mini", kind), Some("w1:x1"));
             assert_eq!(Scoped::strip(&id, "studio", kind), None);
             assert_eq!(device_of(&id), Some("mini"));
-            assert!(id.starts_with(&device_scope("mini")));
-            assert!(id.starts_with(&kind_scope("mini", kind)));
         }
         assert_eq!(device_of("w1:p1"), None);
+        assert_eq!(
+            scoped_project_id("mini", "project:ab12"),
+            "remote:mini:project:ab12"
+        );
         assert!(is_pane_of("remote:mini:pane:w1:p1", "mini"));
         assert!(!is_pane_of("remote:mini:pane:w1:p1", "min"));
         assert!(!is_pane_of("remote:mini:tab:w1:t1", "mini"));
