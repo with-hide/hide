@@ -77,6 +77,15 @@ pub(crate) struct Observation {
     pub unreadable: Option<String>,
 }
 
+/// One `observe_delivery` pass, as the token its own ingest carries. Only
+/// the ingest of the pass that observed a pane lays the pane's turn, from
+/// the payload and the label overlay that pass read: an ingest of another
+/// payload, such as an editor's close status with the overlay the runtime
+/// held before, certifies nothing (`lay_delivery_turns`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[must_use = "only the pass's own ingest lays its turns"]
+pub(crate) struct ObservedPass(u64);
+
 /// The core's turn for an agent, as laid on its observation.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct ProjectedTurn {
@@ -171,7 +180,7 @@ impl Runtime {
         payload: &SessionSnapshotPayload,
         host_scope: Option<&str>,
         labels: Option<&LabelOverlay>,
-    ) {
+    ) -> ObservedPass {
         self.continue_moved_registrations(device, payload, host_scope);
         self.delivery_observe_generation += 1;
         let generation = self.delivery_observe_generation;
@@ -355,6 +364,7 @@ impl Runtime {
         self.settle_dormant_registrations();
         self.follow_resumed_conductors(device);
         self.follow_session_thread(device, payload);
+        ObservedPass(generation)
     }
 
     /// Observes `payload` and lays the turn the session ingest lays from it,
@@ -367,21 +377,24 @@ impl Runtime {
         host_scope: Option<&str>,
         labels: Option<&LabelOverlay>,
     ) {
-        self.observe_delivery(device, payload, host_scope, labels);
+        let pass = self.observe_delivery(device, payload, host_scope, labels);
         let mut laid = payload.clone();
         if let Some(labels) = labels {
             labels.apply(&mut laid);
         }
-        self.lay_delivery_turns(device, delivery_turns(&laid));
+        self.lay_delivery_turns(device, pass, delivery_turns(&laid));
     }
 
-    /// Lays the core's turn on each observed pane of `device`, from agents
-    /// that carry the hook's and the session read's facts (`delivery_turns`).
-    /// Runs where those facts are laid: the local session's ingest and a
-    /// device's coordinator, so a hook event's republish moves it too.
+    /// Lays the core's turn on each pane of `device` that `pass` observed,
+    /// from agents that carry the hook's and the session read's facts
+    /// (`delivery_turns`) of that same pass. Runs where those facts are laid:
+    /// the ingest of the local sync pass and a device's coordinator, so a
+    /// hook event's republish moves it too. A pane a later pass observed
+    /// again waits for that pass's own lay.
     pub(crate) fn lay_delivery_turns(
         &mut self,
         device: &str,
+        pass: ObservedPass,
         turns: impl IntoIterator<Item = (String, Option<u64>, crate::agent_state::TurnProjection)>,
     ) {
         let now = unix_milliseconds();
@@ -397,7 +410,11 @@ impl Runtime {
             } else {
                 crate::address::scoped_pane_id(device, &pane)
             };
-            let Some(observation) = self.delivery_observations.get_mut(&key) else {
+            let Some(observation) = self
+                .delivery_observations
+                .get_mut(&key)
+                .filter(|observation| observation.observed_generation == pass.0)
+            else {
                 continue;
             };
             let changed_at_unix_ms = match observation.projected {
@@ -408,7 +425,7 @@ impl Runtime {
             observation.projected = Some(ProjectedTurn {
                 seq,
                 turn,
-                generation: observation.observed_generation,
+                generation: pass.0,
                 changed_at_unix_ms,
             });
         }
@@ -2467,6 +2484,7 @@ pub(crate) mod tests {
     /// the hook alone.
     pub(crate) fn lay_hook(runtime: &mut Runtime, pane: &str, hook: HookTurn, at: u64) {
         let observation = &runtime.delivery_observations[pane];
+        let observation_generation = observation.observed_generation;
         let mut agent: crate::sidebar::SessionAgentPayload = serde_json::from_value(json!({
             "pane_id": observation.raw_pane_id,
             "agent": observation.actor.kind,
@@ -2481,7 +2499,8 @@ pub(crate) mod tests {
             crate::agent_state::turn_projection(&agent),
         );
         let node = runtime.node.clone();
-        runtime.lay_delivery_turns(node.as_str(), [turn]);
+        let pass = ObservedPass(observation_generation);
+        runtime.lay_delivery_turns(node.as_str(), pass, [turn]);
         let observation = runtime.delivery_observations.get_mut(pane).unwrap();
         observation.projected.as_mut().unwrap().changed_at_unix_ms = Some(at);
     }

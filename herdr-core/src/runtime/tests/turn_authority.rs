@@ -105,9 +105,8 @@ fn synced(witnesses: &Witnesses) -> (Runtime, crate::delivery::Actor) {
     let (payload, overlay) = sync_inputs(witnesses);
     // The order of a sync pass: delivery observes Herdr's list, then the
     // session ingest lays the facts and the turn.
-    runtime.observe_delivery(crate::node::TEST_NODE, &payload, None, Some(&overlay));
-    runtime.set_label_overlay(overlay);
-    runtime.ingest_session(Ok(payload));
+    let pass = runtime.observe_delivery(crate::node::TEST_NODE, &payload, None, Some(&overlay));
+    let _ = runtime.ingest_observed_session(Ok(payload), None, Some(pass), Some(overlay));
     // Nobody has typed for an hour and Herdr's state is old news.
     let long_ago = unix_milliseconds() - 3_600_000;
     let observation = runtime
@@ -406,9 +405,9 @@ fn a_newer_state_is_unprojected_only_until_the_same_pass_ingests_it() {
         }],
     }))
     .unwrap();
-    runtime.observe_delivery(crate::node::TEST_NODE, &herdr, None, None);
+    let pass = runtime.observe_delivery(crate::node::TEST_NODE, &herdr, None, None);
     assert_eq!(verdict(&runtime, &actor, now, now), Err(Hold::Unprojected));
-    runtime.ingest_session(Ok(herdr));
+    let _ = runtime.ingest_observed_session(Ok(herdr), None, Some(pass), None);
     // The turn is laid; what holds now is the session read, which has not
     // read the new state.
     assert_eq!(
@@ -421,9 +420,11 @@ fn a_newer_state_is_unprojected_only_until_the_same_pass_ingests_it() {
 /// releases it, and lays the hook's and the session read's facts after. A
 /// question read in that pass while Herdr's state and sequence stay the same
 /// must not ring on the turn the previous pass laid, which had no question:
-/// between the two steps every letter, a due and a forced one too, holds as
-/// `turn_unprojected`, and once the ingest lays the facts the row shows the
-/// question and the letter waits for the operator.
+/// until that pass's own ingest commits, every letter, a due and a forced
+/// one too, holds as `turn_unprojected`, even past another ingest of the
+/// same payload with the overlay the runtime held before (an editor's close
+/// status), and once the pass commits the row shows the question and the
+/// letter waits for the operator.
 #[test]
 fn a_question_read_under_an_unchanged_herdr_state_never_rings_on_the_last_turn() {
     let settled = Witnesses {
@@ -441,7 +442,7 @@ fn a_question_read_under_an_unchanged_herdr_state_never_rings_on_the_last_turn()
         ..settled
     };
     let (payload, overlay) = sync_inputs(&asking);
-    runtime.observe_delivery(crate::node::TEST_NODE, &payload, None, Some(&overlay));
+    let pass = runtime.observe_delivery(crate::node::TEST_NODE, &payload, None, Some(&overlay));
     // The pause: the lock is free and the facts are not laid yet. Herdr's
     // state and sequence did not move, so only the pass fences the turn.
     let observation = &runtime.delivery_observations[PANE];
@@ -449,15 +450,21 @@ fn a_question_read_under_an_unchanged_herdr_state_never_rings_on_the_last_turn()
         (observation.status.as_str(), observation.state_change_seq),
         ("idle", Some(4))
     );
-    for letter in [(false, false), (true, false), (true, true)] {
-        assert_eq!(
-            verdict_with(&runtime, &actor, long_ago, now, letter),
-            Err(Hold::Unprojected),
-            "{letter:?}"
-        );
-    }
-    runtime.set_label_overlay(overlay);
-    runtime.ingest_session(Ok(payload));
+    let unprojected = |runtime: &Runtime| {
+        for letter in [(false, false), (true, false), (true, true)] {
+            assert_eq!(
+                verdict_with(runtime, &actor, long_ago, now, letter),
+                Err(Hold::Unprojected),
+                "{letter:?}"
+            );
+        }
+    };
+    unprojected(&runtime);
+    // Another ingest in the pause, with the overlay of the pass before,
+    // which reads no question: it certifies nothing.
+    runtime.ingest_session(Ok(payload.clone()));
+    unprojected(&runtime);
+    let _ = runtime.ingest_observed_session(Ok(payload), None, Some(pass), Some(overlay));
     let row = runtime
         .snapshot
         .navigator

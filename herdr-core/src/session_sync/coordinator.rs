@@ -1317,6 +1317,9 @@ fn publish_replica(
     let awaiting = replica.panes_awaiting_cwd();
     let mut payload = replica.project();
     let mut held_state = None;
+    // The delivery observation this pass makes, which only its own ingest
+    // below may lay turns for.
+    let mut observed = None;
     let overlay = labels.as_mut().map(|worker| {
         exchange_pull_requests(context, worker);
         hand_memory_receipts(context, worker);
@@ -1382,7 +1385,7 @@ fn publish_replica(
         if held_state.is_none() && !arrivals.is_empty() {
             guard.observe_herdr_arrivals(&std::mem::take(arrivals));
         }
-        match &context.target {
+        observed = Some(match &context.target {
             SessionSyncTarget::Local { socket_path } => {
                 let node = guard.node().clone();
                 guard.observe_delivery(
@@ -1393,12 +1396,13 @@ fn publish_replica(
                 )
             }
             SessionSyncTarget::Remote { target_id, .. } => {
-                guard.observe_delivery(target_id, &payload, None, overlay.as_ref());
+                let pass = guard.observe_delivery(target_id, &payload, None, overlay.as_ref());
                 // Sleeping agents Herdr no longer lists are drawn from their
                 // records before the session is scoped to the device.
                 guard.settle_node_agent_sleep(target_id, &mut payload);
+                pass
             }
-        }
+        });
     }
     if held_state.is_none() {
         let mut accepted = replica.published_state.clone();
@@ -1472,7 +1476,9 @@ fn publish_replica(
                 if !guard.remote_coordinator_is_current(target_id, &context.engine) {
                     return false;
                 }
-                guard.lay_delivery_turns(target_id, turns);
+                if let Some(pass) = observed {
+                    guard.lay_delivery_turns(target_id, pass, turns);
+                }
                 guard.ingest_remote_session(target_id, fetched)
             }
             Err(_) => return false,
@@ -1658,10 +1664,9 @@ fn publish_replica(
     // outside the lock.
     let (changed, readback) = match runtime.lock() {
         Ok(mut guard) => {
-            if let Some(overlay) = overlay {
-                guard.set_label_overlay(overlay);
-            }
-            guard.ingest_session_awaiting_focus_readback(Ok(payload), Some(precomputed))
+            // The overlay and the payload are the ones this pass observed,
+            // so its ingest lays the turns its observations wait on.
+            guard.ingest_observed_session(Ok(payload), Some(precomputed), observed, overlay)
         }
         Err(_) => return false,
     };
