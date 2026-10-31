@@ -329,6 +329,7 @@ impl Runtime {
         self.document_places.insert(tab_id.clone(), place);
         let tab = EditorTabSnapshot {
             id: tab_id.clone(),
+            device_id: String::new(),
             workspace_id: workspace_id.to_owned(),
             checkout_id: checkout_id.to_owned(),
             path: path.to_owned(),
@@ -600,6 +601,7 @@ impl Runtime {
         }
         self.place_editor_tab(EditorTabSnapshot {
             id: tab_id.clone(),
+            device_id: String::new(),
             workspace_id: workspace_id.to_owned(),
             checkout_id: checkout_id.to_owned(),
             path: path.to_owned(),
@@ -636,6 +638,7 @@ impl Runtime {
         } else {
             self.place_editor_tab(EditorTabSnapshot {
                 id: tab_id.clone(),
+                device_id: String::new(),
                 workspace_id: workspace_id.to_owned(),
                 checkout_id: checkout_id.to_owned(),
                 path: detail.id,

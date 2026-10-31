@@ -94,7 +94,8 @@ impl Runtime {
     /// released. Serializing here would put the whole navigator, ui state and
     /// terminal output through `serde_json` while every attach thread and the
     /// shell's next read wait on the mutex.
-    /// Lays each published agent and pane row's machine and own pane id,
+    /// Lays each published agent and pane row's machine and own pane id, and
+    /// each editor tab's machine,
     /// read from its pane id by the one address owner, so the shell reads
     /// them from the row and never splits an id. A row already carrying
     /// them is left as it is, so an unchanged section keeps its allocation.
@@ -135,6 +136,12 @@ impl Runtime {
         {
             stamp_agents(&node, &mut session.agents);
             stamp_workspaces(&node, &mut session.workspaces);
+        }
+        for tab in &mut self.snapshot.editor.tabs {
+            let machine = crate::address::device_of(&tab.checkout_id).unwrap_or(&node);
+            if tab.device_id != machine {
+                tab.device_id = machine.to_owned();
+            }
         }
     }
 

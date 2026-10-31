@@ -904,6 +904,7 @@ fn hide_device_refuses_a_device_caller_an_option_alias_and_open_files() {
     runtime.device_command(core, add("studio")).expect("added");
     runtime.snapshot.editor.tabs.push(EditorTabSnapshot {
         id: "file:device".to_owned(),
+        device_id: String::new(),
         workspace_id: "remote:studio:workspace:w1".to_owned(),
         checkout_id: "remote:studio:checkout:/srv/p".to_owned(),
         path: "/srv/p/README.md".to_owned(),

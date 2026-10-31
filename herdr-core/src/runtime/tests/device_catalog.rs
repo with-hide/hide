@@ -1727,6 +1727,7 @@ fn a_device_tab_moves_on_its_own_herdr_and_a_file_tab_keeps_the_slot_it_was_drop
     let checkout_id = device_catalog::checkout_id(TARGET, &t.main);
     runtime.snapshot.editor.tabs.push(EditorTabSnapshot {
         id: "file:device".to_owned(),
+        device_id: String::new(),
         workspace_id: workspace_id.clone(),
         checkout_id: checkout_id.clone(),
         path: format!("{}/README.md", t.main),
@@ -1845,6 +1846,7 @@ fn removing_a_device_forgets_its_projects_tabs_and_folders_and_keeps_this_machin
         .insert(TARGET.to_owned(), vec!["/repo/p1/src".to_owned()]);
     let tab = |id: &str, checkout: &str| EditorTabSnapshot {
         id: id.to_owned(),
+        device_id: String::new(),
         workspace_id: "workspace".to_owned(),
         checkout_id: checkout.to_owned(),
         path: format!("/repo/{id}"),

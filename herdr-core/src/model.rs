@@ -3139,6 +3139,9 @@ pub struct EditorOpeningSnapshot {
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct EditorTabSnapshot {
     pub id: String,
+    /// The machine the tab's checkout is on, read from `checkout_id` by the
+    /// one address owner before every snapshot (`stamp_row_addresses`).
+    pub device_id: String,
     pub workspace_id: String,
     pub checkout_id: String,
     pub path: String,
