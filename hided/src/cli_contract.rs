@@ -1,5 +1,6 @@
 //! The contract of the commands other tools call (`hide agent`, `ps`,
-//! `request`, `inbox`, `watch`, `mission`, `device`): each command's words, arguments and options, where its
+//! `request`, `inbox`, `watch`, `mission`, `device`, `pane`, `workspace
+//! purpose`): each command's words, arguments and options, where its
 //! answer sits in the line it prints, and the JSON Schema of that answer.
 //!
 //! The table below is what the CLI admits: a verb or a flag of these topics
@@ -19,7 +20,7 @@ pub const FORMAT: u32 = 1;
 
 /// The topics whose every command is in the table.
 const TOPICS: &[&str] = &[
-    "agent", "ps", "request", "inbox", "watch", "mission", "plan", "device",
+    "agent", "ps", "request", "inbox", "watch", "mission", "plan", "device", "pane",
 ];
 
 /// What a value must be for the command's parser to take it.
@@ -271,6 +272,36 @@ pub const COMMANDS: &[Spec] = &[
             "agent_sleep_not_started",
         ],
     },
+    // The answer is `{archived, pane_id}`: the archive has begun, its save
+    // first and its closes after. A working session is refused
+    // `archive_confirmation_required`, for the operator to confirm from
+    // Hide's screen.
+    Spec {
+        words: &["agent", "archive"],
+        arguments: AGENT_ID,
+        repeats: None,
+        options: &[optional("--actor", Text), switch("--json")],
+        rest: None,
+        answers: &["agent_archived"],
+        refusals: &[
+            "agent_pane_required",
+            "agent_unavailable",
+            "agent_ended",
+            "parent_authority_required",
+            "actor_identity_conflict",
+            "archive_confirmation_required",
+            "archive_not_offered",
+            "archive_delegated",
+            "archive_device_disconnected",
+            "archive_session_unknown",
+            "archive_status_unknown",
+            "archive_target_unknown",
+            "archive_too_many",
+            "archive_busy",
+            "archive_context_unavailable",
+            "archive_full",
+        ],
+    },
     Spec {
         words: &["agent", "spawn"],
         arguments: &[],
@@ -280,7 +311,9 @@ pub const COMMANDS: &[Spec] = &[
             optional("--machine", Text),
             switch("--beside"),
             required("--name", Text),
-            required("--intent", Text),
+            // One of the two: a plan step's intent is the core's to make.
+            cleared("--intent", Text, &["--plan-node"]),
+            cleared("--plan-node", Key, &["--intent"]),
             required("--kind", Text),
             required("--repo", Text),
             required("--branch", Text),
@@ -318,6 +351,17 @@ pub const COMMANDS: &[Spec] = &[
             "beside_other_machine",
             "beside_needs_agent_pane",
             "beside_pane_unavailable",
+            "plan_missing",
+            "plan_node_unknown",
+            "plan_node_finished",
+            "plan_delegate_needs_parent",
+            "plan_order_refused",
+            "plan_review_pending",
+            "plan_candidate_refused",
+            "plan_delegate_full",
+            "plan_delegate_not_permitted",
+            "plan_unavailable",
+            "plan_session_unknown",
         ],
     },
     // Without --json it prints the same answer as a tree for a person.
@@ -400,17 +444,123 @@ pub const COMMANDS: &[Spec] = &[
             "device_wait_timeout",
         ],
     },
-    spec(
-        &["request", "send"],
-        TARGET,
-        &[
+    // An agent's reads of and input to the panes of its machine, and its
+    // checkout's purpose, instead of Herdr's own commands (PRD
+    // engine-bundle-1 D-5, D-13). A read prints the pane's text unless
+    // --json asks for the answer line.
+    Spec {
+        words: &["pane", "read"],
+        arguments: &[Arg {
+            name: "pane",
+            value: Key,
+        }],
+        repeats: None,
+        options: &[optional("--lines", Unsigned), switch("--json")],
+        rest: None,
+        answers: &["pane_read"],
+        refusals: &["pane_required", "lines_out_of_range", "pane_unavailable"],
+    },
+    Spec {
+        words: &["pane", "send"],
+        arguments: &[
+            Arg {
+                name: "pane",
+                value: Key,
+            },
+            Arg {
+                name: "text",
+                value: Body,
+            },
+        ],
+        repeats: None,
+        options: &[switch("--enter")],
+        rest: None,
+        answers: &["pane_sent"],
+        refusals: &["pane_required", "text_too_long", "pane_unavailable"],
+    },
+    Spec {
+        words: &["pane", "open"],
+        arguments: &[],
+        repeats: None,
+        options: &[
+            Opt {
+                name: "--beside",
+                value: None,
+                required: true,
+                requires: &[],
+                conflicts: &[],
+            },
+            switch("--focus"),
+        ],
+        rest: Some(
+            "the command the new pane's shell runs, its words joined by spaces into one line",
+        ),
+        answers: &["pane_opened"],
+        refusals: &[
+            "pane_required",
+            "command_invalid",
+            "command_too_long",
+            "pane_unavailable",
+            "pane_open_unconfirmed",
+            "shell_not_ready",
+        ],
+    },
+    Spec {
+        words: &["agent", "read"],
+        arguments: &[Arg {
+            name: "agent",
+            value: Key,
+        }],
+        repeats: None,
+        options: &[optional("--lines", Unsigned), switch("--json")],
+        rest: None,
+        answers: &["pane_read"],
+        refusals: &[
+            "pane_required",
+            "lines_out_of_range",
+            "agent_unavailable",
+            "target_ambiguous",
+        ],
+    },
+    Spec {
+        words: &["workspace", "purpose"],
+        arguments: &[Arg {
+            name: "text",
+            value: Text,
+        }],
+        repeats: None,
+        options: &[],
+        rest: None,
+        answers: &["purpose_set"],
+        refusals: &[
+            "pane_required",
+            "purpose_invalid",
+            "purpose_too_long",
+            "purpose_no_workspace",
+        ],
+    },
+    // --force types the letter into the recipient's input now, even while
+    // it works, and is refused, with nothing recorded or typed, while
+    // someone's text shows there (PRD engine-bundle-1 D-14).
+    Spec {
+        words: &["request", "send"],
+        arguments: TARGET,
+        repeats: None,
+        options: &[
             required("--intent", Key),
             required("--body", Body),
             optional("--kind", OneOf(&["request", "block", "report", "progress"])),
-            switch("--now"),
+            clearing("--now", &["--force"]),
+            clearing("--force", &["--now"]),
         ],
-        &["letter"],
-    ),
+        rest: None,
+        answers: &["letter"],
+        refusals: &[
+            "composer_not_empty",
+            "composer_unconfirmed",
+            "force_target_asleep",
+        ],
+    },
     spec(
         &["request", "reply"],
         ID,
@@ -791,6 +941,13 @@ pub const COMMANDS: &[Spec] = &[
             "plan_full",
             "plan_unavailable",
             "plan_session_unknown",
+            "plan_evidence_missing",
+            "plan_pr_not_yours",
+            "plan_pr_unconfirmed",
+            "plan_file_outside",
+            "plan_file_missing",
+            "plan_file_unconfirmed",
+            "plan_report_missing",
         ],
     },
     Spec {
@@ -801,15 +958,30 @@ pub const COMMANDS: &[Spec] = &[
         }],
         repeats: None,
         options: &[
+            // `done` first: the sample takes the first value, and --pr and
+            // --file go with --status done only.
             optional(
                 "--status",
-                OneOf(&["planned", "working", "done", "dropped"]),
+                OneOf(&["done", "planned", "working", "dropped"]),
             ),
             optional("--line", Text),
+            cleared("--pr", Unsigned, &["--file"]),
+            cleared("--file", Text, &["--pr"]),
         ],
         rest: None,
         answers: &["plan"],
-        refusals: &["plan_missing", "plan_node_unknown", "plan_order_refused"],
+        refusals: &[
+            "plan_missing",
+            "plan_node_unknown",
+            "plan_order_refused",
+            "plan_evidence_missing",
+            "plan_pr_not_yours",
+            "plan_pr_unconfirmed",
+            "plan_file_outside",
+            "plan_file_missing",
+            "plan_file_unconfirmed",
+            "plan_report_missing",
+        ],
     },
     Spec {
         words: &["plan", "approve"],
@@ -841,6 +1013,16 @@ pub const COMMANDS: &[Spec] = &[
 ];
 
 /// The command `args` (the words after `hide`) name, by its longest words.
+/// Whether `topic` is one whose every command the table names.
+pub fn topic(topic: &str) -> bool {
+    TOPICS.contains(&topic)
+}
+
+/// Whether the table names the command `args` start with.
+pub fn names(args: &[String]) -> bool {
+    find(args).is_some()
+}
+
 fn find(args: &[String]) -> Option<&'static Spec> {
     COMMANDS
         .iter()
@@ -953,6 +1135,8 @@ fn body() -> Value {
             "mission": {"ok": "ok", "answer": "result", "code": "reason"},
             "plan": {"ok": "ok", "answer": "result", "code": "reason"},
             "device": {"ok": "ok", "answer": "value", "code": "error.code"},
+            "pane": {"ok": "ok", "answer": "value", "code": "error.code"},
+            "workspace": {"ok": "ok", "answer": "value", "code": "error.code"},
         },
         "answers": answers(),
     })
@@ -984,6 +1168,7 @@ fn answers() -> Value {
         "agent_catalog".into(),
         shape(&["machine", "installed_known", "items"]),
     );
+    map.insert("agent_archived".into(), shape(&["archived", "pane_id"]));
     map.insert("device_list".into(), shape(&["devices"]));
     map.insert("device_added".into(), shape(&["device", "next_action"]));
     map.insert("device_removed".into(), shape(&["device_id"]));
@@ -991,6 +1176,9 @@ fn answers() -> Value {
         "device_retried".into(),
         herdr_core::device_command::retried_schema(),
     );
+    for (name, schema) in herdr_core::pane_command::answer_schemas() {
+        map.insert(name.into(), schema);
+    }
     answers
 }
 
@@ -1123,7 +1311,9 @@ mod tests {
                 | CommandKind::AgentCatalog { .. }
                 | CommandKind::Ps(_)
                 | CommandKind::AgentSleep { .. }
-                | CommandKind::Device(_))
+                | CommandKind::AgentArchive { .. }
+                | CommandKind::Device(_)
+                | CommandKind::Pane(_))
         )
     }
 

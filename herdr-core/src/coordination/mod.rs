@@ -2,7 +2,6 @@
 //! store is the sole writer; native I/O is performed by request workers.
 
 mod executor;
-pub(crate) mod hook_tokens;
 pub(crate) mod identity_wait;
 pub(crate) mod lineage;
 pub(crate) mod naming;
@@ -47,7 +46,16 @@ pub fn split_refusal(refusal: &str) -> (&str, Option<&str>) {
             | "plan_invalid"
             | "plan_order_refused"
             | "plan_too_large"
-            | "plan_node_unknown"),
+            | "plan_node_unknown"
+            | "plan_node_finished"
+            | "plan_evidence_missing"
+            | "plan_pr_not_yours"
+            | "plan_pr_unconfirmed"
+            | "plan_file_outside"
+            | "plan_file_missing"
+            | "plan_file_unconfirmed"
+            | "plan_report_missing"
+            | "plan_delegate_full"),
             detail,
         )) => (code, Some(detail)),
         _ => (refusal, None),
@@ -120,8 +128,79 @@ pub enum Command {
         /// software-factory-conductor D-45). Only the core sets it, from the
         /// caller's mission; no command names it.
         #[serde(default, skip_deserializing, skip_serializing_if = "Option::is_none")]
-        mission: Option<crate::runtime::missions::MissionAdmission>,
+        mission: Option<Box<crate::runtime::missions::MissionAdmission>>,
+        /// The step of the caller's own plan the child is handed (`hide
+        /// agent spawn --plan-node <key>`, PRD hide-plan-delegate B1): the
+        /// core makes the intent from it.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        plan_node: Option<String>,
+        /// The plan step this spawn's child works on, and the main's plan
+        /// children asleep now. Only the core sets it, from `plan_node`.
+        #[serde(default, skip_deserializing, skip_serializing_if = "Option::is_none")]
+        plan: Option<Box<PlanAdmission>>,
     },
+}
+
+/// The step of a main's plan a spawn's child works on (PRD
+/// hide-plan-delegate D-24), saved with the spawn from its reservation on.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PlanLink {
+    /// The plan's instance (`Plan::id`).
+    pub plan: String,
+    pub step: String,
+    pub attempt: u32,
+    /// The main's session, whose plans' children share one cap (D-15).
+    pub parent_session: crate::links::ledger::SessionIdentity,
+}
+
+/// A spawn admitted as a plan step's child: its link, and the main's plan
+/// children asleep now, which hold no place under the cap.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PlanAdmission {
+    pub link: PlanLink,
+    pub asleep: Vec<String>,
+}
+
+/// The intent a plan step's spawn is made under: one per plan, step and
+/// attempt, so the same command again finds the same child and another
+/// attempt starts a new one (B8, engineering #11).
+pub fn plan_intent(link: &PlanLink) -> String {
+    format!("plan:{}:{}:{}", link.plan, link.step, link.attempt)
+}
+
+/// The children `session`'s plans have now (D-15): spawns made for one of
+/// its steps whose child has neither ended nor is among `asleep`, and those
+/// still being made, which will be one. A start still childless past the
+/// mission's hold stopped partway and holds no place.
+pub(crate) fn plan_children(
+    ledger: &Ledger,
+    session: &crate::links::ledger::SessionIdentity,
+    asleep: &[String],
+    now: u64,
+) -> usize {
+    ledger
+        .spawns
+        .iter()
+        .filter(|spawn| {
+            spawn
+                .plan
+                .as_ref()
+                .is_some_and(|link| link.parent_session == *session)
+        })
+        .filter(|spawn| match &spawn.child {
+            None => {
+                !spawn.completed
+                    && now.saturating_sub(spawn.reserved_at_unix_ms) < MISSION_RESERVATION_HOLD_MS
+            }
+            Some(child) => {
+                !asleep.contains(child)
+                    && ledger
+                        .agents
+                        .iter()
+                        .any(|agent| &agent.id == child && !agent.ended)
+            }
+        })
+        .count()
 }
 
 /// How long a spawn waits for its agent to take input before the brief is
@@ -448,6 +527,9 @@ pub struct SpawnRecord {
     /// The mission the child is a worker of, counted against its cap.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub mission: Option<String>,
+    /// The plan step the child works on, counted against its main's cap.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub plan: Option<PlanLink>,
     /// The child's first prompt (`Command::Spawn::brief`), part of the
     /// intent; the letter made of it when the child binds carries the same
     /// text.
@@ -600,18 +682,27 @@ pub fn resolve_actor<'a>(ledger: &'a Ledger, key: &str) -> Option<&'a Actor> {
 /// that only sits in a pane called `key`: a pane id is per machine, so a
 /// caller that names a pane resolves it against its own machine's panes.
 pub(crate) fn resolve_registered<'a>(ledger: &'a Ledger, key: &str) -> Option<&'a Actor> {
-    resolve_by(ledger, |record| {
+    registered_record(ledger, key).map(|record| &record.actor)
+}
+
+/// The live registration [`resolve_registered`] finds, whole.
+pub(crate) fn registered_record<'a>(ledger: &'a Ledger, key: &str) -> Option<&'a AgentRecord> {
+    record_by(ledger, |record| {
         record.id == key || record.name.as_deref() == Some(key)
     })
 }
 
 fn resolve_by(ledger: &Ledger, is: impl Fn(&AgentRecord) -> bool) -> Option<&Actor> {
+    record_by(ledger, is).map(|record| &record.actor)
+}
+
+fn record_by(ledger: &Ledger, is: impl Fn(&AgentRecord) -> bool) -> Option<&AgentRecord> {
     let mut found = ledger
         .agents
         .iter()
         .filter(|record| !record.ended && is(record));
     let first = found.next()?;
-    found.next().is_none().then_some(&first.actor)
+    found.next().is_none().then_some(first)
 }
 
 /// What a caller does about each refusal `hide agent sleep` gives.
@@ -655,6 +746,55 @@ pub fn sleep_next_action(code: &str) -> &'static str {
         }
         "actor_identity_conflict" => "--actor must name your own registration; leave it out",
         "agent_pane_required" => "Run hide agent sleep from an agent's own Hide pane",
+        _ => "Retry; the reason is in Hide's diagnostic log",
+    }
+}
+
+/// What a caller does about each refusal `hide agent archive` gives: the
+/// screen's `archive.*` error kinds written with an underscore for the dot,
+/// then the codes for who may ask and for which registration.
+pub fn archive_next_action(code: &str) -> &'static str {
+    match code {
+        "archive_confirmation_required" => {
+            "The session is working; ask the operator to archive it from Hide's screen, where they confirm stopping the work"
+        }
+        "archive_not_offered" => {
+            "This agent's work is kept by its own home; there is nothing to archive"
+        }
+        "archive_delegated" => {
+            "A delegated session is archived with its root session; archive the root instead"
+        }
+        "archive_device_disconnected" => {
+            "The agent's device is not connected; ask again once it reconnects"
+        }
+        "archive_session_unknown" => {
+            "Hide has not seen the agent's conversation yet; ask again after its first turn"
+        }
+        "archive_status_unknown" => {
+            "Hide cannot tell whether an agent in the session is working; ask again once its row shows its state"
+        }
+        "archive_target_unknown" => {
+            "The agent's pane is no longer open; check the id with hide agent list"
+        }
+        "archive_too_many" => {
+            "The session has too many agents to archive at once; nothing was closed"
+        }
+        "archive_busy" => "Closes are already running; ask again once they finish",
+        "archive_context_unavailable" => {
+            "The session's checkout is not listed in Hide; ask again once it is"
+        }
+        "archive_full" => {
+            "Hide's archive is full; the operator deletes archived sessions on its screen"
+        }
+        "agent_ended" => "The registration has ended; there is no session to archive",
+        "agent_unavailable" => {
+            "Check the id with hide agent list; the agent must still run in its registered pane"
+        }
+        "parent_authority_required" => {
+            "Only the agent itself or its parent can archive it; ask its parent or the operator"
+        }
+        "actor_identity_conflict" => "--actor must name your own registration; leave it out",
+        "agent_pane_required" => "Run hide agent archive from an agent's own Hide pane",
         _ => "Retry; the reason is in Hide's diagnostic log",
     }
 }
@@ -972,11 +1112,20 @@ pub(crate) fn apply(
                 brief,
                 beside,
                 mission,
+                plan,
                 ..
             } = command
             else {
                 return Err("invalid_spawn".into());
             };
+            // The core makes a plan step's intent; one asked under another
+            // was not admitted by it.
+            if plan
+                .as_ref()
+                .is_some_and(|plan| *intent != plan_intent(&plan.link))
+            {
+                return Err("invalid_spawn".into());
+            }
             if brief.as_ref().is_some_and(|brief| {
                 brief.trim().is_empty() || brief.len() > crate::delivery::BODY_LIMIT
             }) {
@@ -1033,6 +1182,27 @@ pub(crate) fn apply(
             {
                 return Err(refusal("mission_cap_reached", &admission.cap.to_string()));
             }
+            // So does a plan step's start under its main's cap.
+            if let Some(admission) = plan
+                && let Some(record) = ledger
+                    .spawns
+                    .iter()
+                    .find(|record| &record.parent == parent && &record.intent == intent)
+                && record.child.is_none()
+                && !record.completed
+                && now.saturating_sub(record.reserved_at_unix_ms) >= MISSION_RESERVATION_HOLD_MS
+                && plan_children(
+                    ledger,
+                    &admission.link.parent_session,
+                    &admission.asleep,
+                    now,
+                ) >= crate::plans::PLAN_DELEGATE_LIMIT
+            {
+                return Err(refusal(
+                    "plan_delegate_full",
+                    &crate::plans::PLAN_DELEGATE_LIMIT.to_string(),
+                ));
+            }
             if let Some(record) = ledger
                 .spawns
                 .iter_mut()
@@ -1062,7 +1232,10 @@ pub(crate) fn apply(
                 if record.task.is_none() {
                     record.task.clone_from(task);
                 }
-                if record.mission.is_some() && record.child.is_none() && !record.completed {
+                if (record.mission.is_some() || record.plan.is_some())
+                    && record.child.is_none()
+                    && !record.completed
+                {
                     record.reserved_at_unix_ms = now;
                 }
                 return Ok(json!(record));
@@ -1073,6 +1246,22 @@ pub(crate) fn apply(
                 && mission_workers(ledger, &admission.mission, now) >= usize::from(admission.cap)
             {
                 return Err(refusal("mission_cap_reached", &admission.cap.to_string()));
+            }
+            // A plan's new child past its main's cap waits for one to end or
+            // sleep, counted with the reservations under this one write, so
+            // two starts at once never share the last place (B5).
+            if let Some(admission) = plan
+                && plan_children(
+                    ledger,
+                    &admission.link.parent_session,
+                    &admission.asleep,
+                    now,
+                ) >= crate::plans::PLAN_DELEGATE_LIMIT
+            {
+                return Err(refusal(
+                    "plan_delegate_full",
+                    &crate::plans::PLAN_DELEGATE_LIMIT.to_string(),
+                ));
             }
             if ledger.spawns.len() >= SPAWN_LIMIT {
                 return Err("capacity".into());
@@ -1102,6 +1291,7 @@ pub(crate) fn apply(
                 auto_watch_id: None,
                 task: task.clone(),
                 mission: mission.as_ref().map(|admission| admission.mission.clone()),
+                plan: plan.as_ref().map(|admission| admission.link.clone()),
                 brief: brief.clone(),
                 briefed: false,
                 beside: *beside,
@@ -1746,7 +1936,7 @@ fn allocate(ledger: &mut Ledger, prefix: &str) -> Result<String, String> {
 
 #[cfg(test)]
 pub(crate) use executor::{SPAWN, SPAWN_TURN};
-pub(crate) use executor::{link_fork, link_started, register_code_owned, run};
+pub(crate) use executor::{link_fork, link_started, run};
 
 #[cfg(test)]
 mod tests {
@@ -1884,6 +2074,8 @@ mod tests {
     fn command(intent: &str) -> Command {
         Command::Spawn {
             mission: None,
+            plan_node: None,
+            plan: None,
             parent: Some("here".into()),
             machine: None,
             name: "worker".into(),
@@ -2226,10 +2418,10 @@ mod tests {
         let worker = |intent: &str| {
             let mut spawn = command(intent);
             if let Command::Spawn { mission: slot, .. } = &mut spawn {
-                *slot = Some(crate::runtime::missions::MissionAdmission {
+                *slot = Some(Box::new(crate::runtime::missions::MissionAdmission {
                     mission: "mission-1".into(),
                     cap: 1,
-                });
+                }));
             }
             Mutation::Reserve {
                 parent: id.clone(),
@@ -2297,6 +2489,107 @@ mod tests {
         apply(&mut ledger, &caller, &worker("mission-1:b"), gone).unwrap();
         assert_eq!(mission_workers(&ledger, "mission-1", gone), 1);
     }
+    /// A main's plans hand steps to at most three children at once, counted
+    /// at the reserve with the starts still being made, so a fourth start is
+    /// refused whatever the order; the same start asked again still answers
+    /// its spawn, and a child that ended or sleeps frees its place (PRD
+    /// hide-plan-delegate B5).
+    #[test]
+    fn a_mains_fourth_plan_child_is_refused_until_one_ends_or_sleeps() {
+        let mut ledger = Ledger::default();
+        let main = record("main", "native-main", None);
+        let caller = main.actor.clone();
+        let id = register(&mut ledger, main, &caller);
+        let session = crate::links::ledger::SessionIdentity {
+            device_id: "mac".into(),
+            agent: "codex".into(),
+            session_id: "native-main".into(),
+        };
+        let step = |key: &str, asleep: &[&str]| {
+            let link = PlanLink {
+                plan: "1000".into(),
+                step: key.into(),
+                attempt: 1,
+                parent_session: session.clone(),
+            };
+            let mut spawn = command(&plan_intent(&link));
+            if let Command::Spawn { plan: slot, .. } = &mut spawn {
+                *slot = Some(Box::new(PlanAdmission {
+                    link,
+                    asleep: asleep.iter().map(|id| (*id).to_owned()).collect(),
+                }));
+            }
+            Mutation::Reserve {
+                parent: id.clone(),
+                command: spawn,
+            }
+        };
+        let first = apply(&mut ledger, &caller, &step("a", &[]), 2).unwrap();
+        assert_eq!(first["plan"]["step"], "a");
+        assert_eq!(first["intent"], "plan:1000:a:1");
+        apply(&mut ledger, &caller, &step("b", &[]), 3).unwrap();
+        apply(&mut ledger, &caller, &step("c", &[]), 4).unwrap();
+        assert_eq!(
+            split_refusal(&apply(&mut ledger, &caller, &step("d", &[]), 5).unwrap_err()),
+            ("plan_delegate_full", Some("3"))
+        );
+        // The same start again is the spawn it made, not a fourth.
+        assert_eq!(
+            apply(&mut ledger, &caller, &step("a", &[]), 6).unwrap()["id"],
+            first["id"]
+        );
+        // An intent the core did not make for the step is refused.
+        let mut forged = step("d", &[]);
+        if let Mutation::Reserve {
+            command: Command::Spawn { intent, .. },
+            ..
+        } = &mut forged
+        {
+            *intent = "plan:1000:d:9".into();
+        }
+        assert_eq!(
+            apply(&mut ledger, &caller, &forged, 7).unwrap_err(),
+            "invalid_spawn"
+        );
+        // `a`'s child came up: it counts while it runs, not once it sleeps
+        // or ends.
+        let child = register(
+            &mut ledger,
+            record("child", "native-child", Some(id.clone())),
+            &caller,
+        );
+        let spawn = ledger
+            .spawns
+            .iter_mut()
+            .find(|spawn| spawn.intent == "plan:1000:a:1")
+            .unwrap();
+        spawn.child = Some(child.clone());
+        spawn.completed = true;
+        assert_eq!(plan_children(&ledger, &session, &[], 8), 3);
+        assert_eq!(
+            plan_children(&ledger, &session, std::slice::from_ref(&child), 8),
+            2
+        );
+        apply(&mut ledger, &caller, &step("d", &[&child]), 9).unwrap();
+        assert_eq!(
+            split_refusal(&apply(&mut ledger, &caller, &step("e", &[&child]), 10).unwrap_err()),
+            ("plan_delegate_full", Some("3"))
+        );
+        ledger
+            .agents
+            .iter_mut()
+            .find(|agent| agent.id == child)
+            .unwrap()
+            .ended = true;
+        assert_eq!(plan_children(&ledger, &session, &[], 11), 3);
+        // Another main's plans have their own places.
+        let other = crate::links::ledger::SessionIdentity {
+            session_id: "native-other".into(),
+            ..session.clone()
+        };
+        assert_eq!(plan_children(&ledger, &other, &[], 11), 0);
+    }
+
     /// A session that takes a mission over gets its workers: asking a start
     /// again under the same intent answers the worker it already has, the
     /// worker is its child, and the watch on the worker, which a report
@@ -2310,10 +2603,10 @@ mod tests {
         let worker_spawn = || {
             let mut spawn = command("mission-1:api");
             if let Command::Spawn { mission: slot, .. } = &mut spawn {
-                *slot = Some(crate::runtime::missions::MissionAdmission {
+                *slot = Some(Box::new(crate::runtime::missions::MissionAdmission {
                     mission: "mission-1".into(),
                     cap: 2,
-                });
+                }));
             }
             spawn
         };
@@ -2415,10 +2708,10 @@ mod tests {
             } = &mut spawn
             {
                 *parent = None;
-                *slot = Some(crate::runtime::missions::MissionAdmission {
+                *slot = Some(Box::new(crate::runtime::missions::MissionAdmission {
                     mission: mission.into(),
                     cap: 2,
-                });
+                }));
             }
             spawn
         };

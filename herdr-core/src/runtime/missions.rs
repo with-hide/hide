@@ -1621,6 +1621,7 @@ impl Runtime {
                                 // for none.
                                 kind: "progress".into(),
                                 now: false,
+                                force: false,
                             },
                         );
                         match prepared.run(WAKE_CALL) {

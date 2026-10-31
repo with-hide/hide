@@ -404,7 +404,7 @@ pub(super) fn publish_tokens(client: &Client, engine: &dyn Engine, id: &str) -> 
 /// Registers a code-owned identity, a Factory's or Hide's own, as the
 /// parent or origin of the agents it starts (D-14); converges on the
 /// existing record.
-pub(crate) fn register_code_owned(
+fn register_code_owned(
     client: &Client,
     authority: &Authority,
     actor: &Actor,
@@ -546,11 +546,17 @@ fn spawn(
         task,
         brief,
         mission: _,
+        plan_node,
+        plan,
         beside,
     } = &command
     else {
         return Err("invalid_spawn".into());
     };
+    // A plan step's spawn runs only as the core admitted it.
+    if plan_node.is_some() != plan.is_some() {
+        return Err("invalid_spawn".into());
+    }
     if brief
         .as_ref()
         .is_some_and(|brief| brief.trim().is_empty() || brief.len() > crate::delivery::BODY_LIMIT)
@@ -672,6 +678,10 @@ fn spawn(
     let parent_id = if parent.as_deref().is_none_or(|parent| parent == super::HERE) {
         if let Some(parent) = super::live_self(&ledger, actor).next() {
             parent.id.clone()
+        } else if actor.hide_owned() {
+            // Hide's own work (Desk, Hide AI) has no pane for Herdr to
+            // report: its record is the origin it registers here, once.
+            register_code_owned(client, authority, actor)?
         } else {
             let CoordinationContext {
                 engine,
@@ -1892,6 +1902,8 @@ mod tests {
                     parent: self.parent.clone(),
                     command: Command::Spawn {
                         mission: None,
+                        plan_node: None,
+                        plan: None,
                         parent: Some(self.parent.clone()),
                         machine: None,
                         name: name.into(),
@@ -2146,6 +2158,8 @@ mod tests {
                 .to_owned();
             let command = Command::Spawn {
                 mission: None,
+                plan_node: None,
+                plan: None,
                 parent: Some("here".into()),
                 machine: None,
                 name: "recipient".into(),

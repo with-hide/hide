@@ -104,7 +104,8 @@ The Project icon is a briefcase and the Explorer icon an open folder, so neither
 The Project icon carries a warning-coloured number counting its project's 흘린 것, no number at 0, its hint ending in it, such as `흘린 것 2` (PRD project-panel-results, the operator's choice of 2026-10-31).
 The Hide AI icon carries the same warning-coloured number, the sum of its 제안 and Memory tabs' numbers (see Hide AI: the Hide AI tool), none at 0 or while Hide AI is off, its hint ending in `제안 3 · Memory 1`.
 The Mission icon carries the same warning-coloured number, the front project's open missions with anything in their 내 차례 (a decision, a worker the core raised, a merge or join order, an outside pull request closed unmerged, no Conductor), none at 0, its hint ending in `내 차례 2` (PRD mission-tool B2).
-At the rail's bottom, just above its `…`, the pin is an icon of its own, in the same place whether the lane is up or closed and whichever column it shows: an empty pin while unpinned, a filled pin drawn pressed while pinned, and its hint says what a press does (B15).
+The pin sits in the head of the column at the lane's edge, just before its `✕`: the tool column's head while the tool column shows, the viewing column's (its View area's `✕`, or the 보기 slot's head) while it shows alone, and the front column's while the two stack; a closed lane draws no pin (PRD session-docs-and-assistant B33, D-73, replacing the rail's pin of B15).
+It is an empty pin while unpinned and a filled pin drawn pressed while pinned, and its hint says what a press does.
 The rail's `…` menu holds Expand, which moves both columns together, and with the lane closed the `…` is off (B15).
 A Workspace seen for the first time shows Agent Views alone, its lane closed.
 The Explorer's and Changes' header names its tool, then its scope behind one small icon, a branch for the checkout, in the scope text's colour, and ends with `✕`, which closes the tool column (B14); the icon is decoration.
@@ -117,7 +118,7 @@ An unpinned lane stays up until the operator takes it down: a click on a termina
 ⌘E closes the lane whole, and Escape inside an unpinned lane or on its rail closes it the same way and hands the keyboard to the focused pane, so a tool, an open or a reveal afterwards opens its own column alone and only ⌘E brings both back (operator decision 2026-10-23); Escape first closes a menu, popover or search open in the lane, and Escape in a terminal is the program's.
 Pinned (`Pin · keep it beside the agents`), the lane docks beside Agent Views, which narrow by its width once; unpinned (`Unpin · back over the agents`), Agent Views take their width back and the lane is over them again.
 The pin is the lane's, whatever its columns show, and a pinned lane closed and opened again comes back docked.
-A pinned lane docks in any window where its columns' minimums fit beside 480px of Agent Views, the viewing column giving up its width first and the tool column after, each taking its stored width back as the window widens; in a window too narrow for even that the two columns stack, the one brought to the front last drawn and the other behind it, and a body too narrow for even one column draws the lane over the agents as if unpinned, the rail's pin still filled and saying `Pin · too narrow, drawn over` (B19).
+A pinned lane docks in any window where its columns' minimums fit beside 480px of Agent Views, the viewing column giving up its width first and the tool column after, each taking its stored width back as the window widens; in a window too narrow for even that the two columns stack, the one brought to the front last drawn and the other behind it, and a body too narrow for even one column draws the lane over the agents as if unpinned, the pin still filled and saying `Pin · too narrow, drawn over` (B19).
 Expand gives the lane the whole body between the sidebar and the rail, the tool column keeping its width and the viewing column taking the rest; Expand again or Escape returns to the pin, widths and terminal layout as they were, no terminal resizes meanwhile, and Agent Views under an expanded lane take no pointer or keyboard (B15).
 While the keyboard is in the lane, a document, a page, the 보기 slot or the tool, the Zoom pane chord (⇧⌘↩, Alt+Shift+Enter on Windows and Linux) is Expand and Expand again, so one key fills the window with whatever the operator works in; anywhere else it zooms the focused pane.
 The tool column's `✕`, the pressed tool icon and the tool's chord close the tool column alone, closing no view; the documents' `✕`, drawn once at the right end of the tab bar of the area at the viewing column's top-right corner as a tool's head draws its own, closes the viewing column the same way, every view kept on the documents button (operator decision 2026-10-24); the viewing column also closes with its last document or the slot's `✕` when no documents stood under the slot; and a lane whose last column closes is closed, the keyboard going to the focused pane (B12, B13, B14).
@@ -798,7 +799,7 @@ A subagent has no pane of its own, so it is not a delegated child: it has no row
 The child marks on screen mean only the agents Hide started, which have their own panes and tree rows: the descendant mark `! N` in the tree popover, the tree button with its `자식 에이전트 N` tooltip, and the child popover.
 A subagent count beside them would give "child" two meanings on one row.
 The count reaches the core and is used off the screen.
-Hide's hook keeps a `working` and a `done` count per pane and reports them as the Herdr pane tokens `hide_sub_working` and `hide_sub_done`; the core reads them in `PaneHookTokens`, projects them as `PaneChildren.subagents` beside `instrumented`, which no web code reads, and sums `working` for the pet's badge (docs/status-model.md, The subagent badge; the desktop app draws no pet today).
+Hide's hook keeps a `working` and a `done` count per pane and session and reports them to the core through hided; the core keeps them in `agent_hooks::facts`, lays them as `PaneHookTokens`, projects them as `PaneChildren.subagents` beside `instrumented`, which no web code reads, and sums `working` for the pet's badge (docs/status-model.md, The subagent badge; the desktop app draws no pet today).
 docs/agent-hooks.md owns the hook.
 `working` is how many subagents run now, and `done` is how many this session has finished; a new session in the pane starts both again from zero, so `done` is a running tally of the session.
 Each count is separately knowable, and a count the core cannot read is `None`, never zero, because a zero would claim the agent works alone; an agent whose adapter declares no count has none to read.
@@ -946,6 +947,126 @@ A filter with nothing reads `이 필터에 맞는 작업이 없어요` with `전
 Hide AI's own use is in no task and stands under the table as `Hide AI 사용 $X` (B24).
 
 The core derives the counts and 흘린 것 only on a publish whose inputs moved, and builds the tasks only when the ledger worker reports, the record's summaries change or those counts are derived again; nothing on those paths reads a file or runs a process (B37; [ARCHITECTURE.md](ARCHITECTURE.md#project-status-and-cost)).
+
+## Desk
+
+Desk (`◆ Desk` in the sidebar, PRD Desk 1차) is a room where the operator talks to an agent they choose, and that agent starts and follows real sessions through the `hide` CLI.
+The core decides every state below and sends it as the `desk`, `desk_live`, `desk_jobs` and `desk_mentions` sections; the screen words them and sends one `desk_*` event per action.
+Core owner: `herdr-core/src/runtime/desk.rs`, `herdr-core/src/model/desk.rs`; the process and its rules are in [ARCHITECTURE.md: Desk](ARCHITECTURE.md#desk).
+Web owners: `web/src/DeskScreen.tsx` (the room, the sidebar row, Settings › Desk), `web/src/deskComposer.ts` (the `@` word and what a send carries), `web/src/components/desk/` (the parts).
+
+The sidebar's `◆ Desk` row, under its head, opens the room in the center with the chat and the composer; Settings › Desk holds the default agent, where tasks run and the cap.
+Desk is off until the operator turns on `Desk 사용` at the top of Settings › Desk (D-76, B41); the switch is the core's, kept with Desk's other settings, and moves every window at once without a restart.
+While it is off there is no `◆ Desk` row, no `Desk로` on a thread's Agent tab, ⌘J (Ctrl+Shift+J, ⌥⇧J or Alt+Shift+J in a browser) is not Hide's and the desktop app's View menu has no `Desk thread ⇄ terminal`, and Desk's agent does not run; the rest of Settings › Desk is dimmed and out of reach, its values kept, as Hide AI's are when it is off.
+The shortcut sheet leaves Desk's row out while Desk is off, and Settings › Shortcuts still lists it, so its binding can be changed and is kept.
+Turning it off ends Desk's agent and its turn, a waiting card closing as a refusal, and leaves the sessions Desk started and its conversation as they are: the sessions stay ordinary sessions in the sidebar.
+A spawn waiting in Desk's queue stays there while Desk is off, started by nothing and removed by nothing, and the queue starts it in order once Desk is on again.
+Turned off while the room is in front, the room goes and the panel used before it comes back, or All projects when none is left (`leaveDesk` in `web/src/keyboard.ts`).
+The composer keeps what the operator is writing while they go elsewhere, and clears it once the conversation shows the message, so a refused send keeps the words.
+`@` opens the menu on the word the caret ends; a picked session or project is written `@name` and sent as its `@session(<pane> <name>)` or `@project(<path> <name>)` token, a project named by its primary checkout's path (the folder's own for a project with none), which Desk's agent hands to `--repo` and pressing its chip opens; one the operator deleted is not sent.
+`다시 시도` on a notice sends the operator's last message again.
+Pressing a card, a session chip or `답하기` opens that session's thread in Desk's lane (see Desk's lane); a letter's line opens the session's own tab.
+A card's change sends only the `desk_jobs` section; the conversation is sent again only when it, the agents or the room's settings change.
+
+The selector lists Claude, Codex and Pi with each one's state:
+
+- `ready`: a message starts it; `preparing`: its adapter is installing, which choosing it starts.
+- `not_installed` and `install_failed`: choosing it installs it, and a failed install says its last line with `다시 받기`.
+- `node_missing`: the line `이 에이전트는 Node 22 이상이 필요해요` with how to install Node, in the same place as the not-installed line; Hide does not install Node ([INSTALL.md: Desk's agents](INSTALL.md#desks-agents)).
+- `cli_missing`: Pi's adapter runs the operator's own `pi`, which is not on the login shell's `PATH`.
+- `login_needed`: the agent's own sign-in command (`claude /login`, `codex login`, `pi /login`).
+- `no_ask_mode`: Hide could not hold the agent in its ask mode, so it is not used.
+- `not_offered`: Codex, dim with one line saying why it cannot be chosen yet: its own instructions and skills would come along, and its sandbox keeps the `hide` commands from working ([INSTALL.md: What each system supports](INSTALL.md#what-each-system-supports)).
+
+A message goes to the chosen agent, model and effort; while a reply is being written, the next message waits and `중지` ends the turn.
+While it thinks, the conversation shows the time since the message (`생각 중 · 3초`), and each reply carries its turn folded into one line: the time to its first words and what the agent did, counted from its tool calls (sessions read, letters, sessions started, files read, other commands), such as `생각 8초 · 세션 4개 읽음`.
+The models and efforts are the ones the agent's last session offered, and a change shows as a line in the conversation.
+Switching agents shows a line saying whether the conversation went with it, and the new agent's first session receives it.
+`새 대화` clears the conversation and starts the next session new; `다시 시작` ends the process and the next message loads the last session, or says it could not and started a new one.
+
+What the agent runs is decided by Hide, never by the agent's own settings:
+
+- A file read, and a `hide` command from the list Desk uses (`hide agent list`, `show`, `spawn`, `hide request`, `hide inbox`, `hide watch`, `hide ps` among them), run without asking; the Workspace, View, Memory, mission and plan commands are not on it, because the core refuses them to Desk.
+- A `hide agent spawn` that passes words after `--` to the agent's own CLI asks first, since those words can lift the new session's permissions; its card shows the whole command.
+- A spawn under a parent (`--parent`) is refused: Desk's sessions are the operator's own, and one under Desk would skip its places.
+- Claude's and Pi's shell commands, reading ones included, always ask. Codex, once Desk offers it, runs in its read-only sandbox, which refuses writes and the network, so a reading shell command inside it (`ls`, `git log`) counts as a file read and runs without asking.
+- Any other command, a file edit, and `hide agent archive` wait on an approval card that shows the command or files, the folder and the agent's reason, with `한 번 허용` and `거절`; nothing is ever allowed for good.
+- A request Hide cannot read does not run, and the conversation says `막힘` with what the agent asked.
+- `새 대화`, `다시 시작`, `중지` and the process's end close a waiting card as refused.
+
+Desk does not read the operator's `CLAUDE.md`, `AGENTS.md`, skills, extensions, prompt templates, MCP servers, agent settings or hooks, and the operator's global auto-allow does not apply to it; Pi's own startup lines are not a reply.
+Its instructions are Hide's own: its role, the `hide` commands it uses, and to answer in the operator's language.
+The Desk agent is no session in a pane: it is not in the sidebar, Sessions, Needs You or Memory, and it opens nothing on the operator's screen.
+
+### Desk's jobs
+
+A session Desk starts is the operator's own: a real Agent tab in its checkout, which the core puts in the checkout's `◆ Desk` group (made when missing) once, without changing the screen in front or the keyboard.
+A job on another device keeps its tab where that device made it, outside the group: the core finds the tab holding a pane only among this machine's checkouts (`checkout_tab_holding_pane`), and a device's tabs reach it through the link's projection under qualified pane ids. Mapping a device job's pane to its checkout tab through that projection, then placing it with the same group move, closes the gap.
+Work Desk hands to a session that already runs is a letter, and every letter Desk sends leaves a line with the session, its project, the letter's kind and first line, and `읽음` once the session's runtime took it in: a `request` is work handed (`편지로 맡김`), any other kind word passed on (`보냄`). It changes no state and takes no place.
+The session is a chip: its agent and the mark its sidebar row shows now, drawn with `StatusMark`.
+A reply that names a session writes it as `@session(<pane> <name>)`, as Desk's instructions ask, and draws it as the same chip; a reply carries 16 at most, and the newest 64 lines' chips follow their rows, while an older line's chip and one whose session has no row show no mark.
+Where a task works follows Settings › Desk: per task (the default, a new `desk/<task name>` branch for work that touches code another session is changing or ends in a pull request), always a new branch, or always the checkout's current branch; Desk is told the setting with its first message and again when it changes, and a place the operator names for a task wins for that task.
+
+Each job is a card in the `desk_jobs` section, newest first and at most 64, keyed by its spawn's intent; `pane_id` is its thread's key.
+A card with a row carries the row's own mark, drawn with the sidebar's `StatusMark`, and whether its ask was read; reading the card or its thread in Desk reads the row as the sidebar does, so the two never disagree.
+Its outputs are the Views its session opened that are still open and are made to be looked at (32 at most): a page, an image, a video, and a document to read such as Markdown, PDF or HTML, never a diff, source code, a log or a configuration file (B30, `is_output` in `herdr-core/src/runtime/view_sessions.rs`), each marked seen or not, then its pull requests, each with its PR mark's state.
+A job whose session conducts a mission carries it as a `미션 k/n` chip: the mission's status (`planning`, `running`, `merge_wait`, `done` or `cancelled`), its nodes done out of those not dropped, and whether a decision waits on the operator while it is open; the chip takes its colour from those by the rule the sidebar's mission chip follows (`missionToneOf` in `web/src/missions.ts`), so the same mission reads the same everywhere, and the card draws no node rows.
+Its state comes from the ledger and the row the sidebar draws for it, never from a model call:
+
+- `queued` with its place (`대기 중 · n번째`), drawn with the spawn's answer: Desk's places (Settings, 8 at most) are taken; it starts by itself when one frees, and the queue survives a restart. `취소` leaves it `cancelled` and moves the ones behind it up; `다시 맡기기` puts it at the back.
+- `starting`, `working` (now line, plan n/m, outputs), `asking` (the question and `답하기`, with what it asks: `question`, `approval`, `decision` for a Conductor's mission, `plan_review`, or `blocked`), `done` (the last turn's summary line, its pull requests with their PR mark state, outputs).
+- `sleeping` while Hide holds it asleep (`hide agent sleep`); it takes no place.
+- `failed` with its reason: `spawn_failed`, `exited`, or `device_disconnected` for a job asked of a device whose link was down; `다시 시도` queues it again. A failed job takes no place, and nothing times out.
+  A start that failed after its tab opened (its brief not taken in time) leaves its agent in that tab, which joins the `◆ Desk` group like any other: its card follows that pane while the agent works or asks, and reads `failed` with the pane to open while the agent rests, where `다시 시도` hands the brief over in the same pane.
+  A failed start says why, grouped by what the operator can do: `device_unavailable`, `agent_not_installed`, `branch_in_use` (another worktree holds the branch or folder), `project_unavailable`, `already_started`, `busy` (Hide was starting another session), `not_started`, `invalid_request` (Desk asked for a start Hide does not take) or `other`; the start's own code goes to the diagnostic log.
+- A job on a device whose link drops dims and says `연결 안 됨` while it keeps working.
+- `joined` once the operator types into its terminal (`나도 참여 중`); Desk keeps following it.
+- `moved_out` once the operator drags its tab out of the `◆ Desk` group (`내 탭으로 옮김`), and `closed` once they close it (`내가 닫음`); neither takes a place, and Desk never starts it again. A closed tab reopened with `세션 복구하기` or ⇧⌘T comes back to its place in the group and is followed again.
+- `archived` once `세션 보관` or `hide agent archive` archived it.
+
+Starting, working and asking jobs take Desk's places; the rest do not.
+
+A mission's workers are no jobs of Desk's, but their threads open in Desk's lane too: the `desk_jobs` section sends them as cards of their own in `workers`, each a spawn whose pane is a worker of a job's mission, whoever started it (64 at most).
+
+### Desk's lane
+
+Web owners: `web/src/deskLane.ts` (the window's columns and tabs), `web/src/DeskScreen.tsx` (`DeskLaneColumns`), `web/src/DeskOutputView.tsx` (an output in the 보기 column), `web/src/components/desk/desk-lane.tsx` (the room, the columns' heads, the rail), `web/src/components/lane-pin.tsx` (the pin both lanes draw); core owner: `herdr-core/src/runtime/desk.rs` (`desk_lane`, `desk_output_seen`).
+
+Desk's lane follows the project lane's rules (see The right lane) with its own two columns: the tool column holds the Threads list or one thread, and the 보기 column holds the outputs and mission maps as tabs (D-64).
+The rail at the room's right edge has ☰ Threads, carrying the number of threads asking, none at 0, and ▣ 결과물, with a dot while any thread has an output not seen (B28, B31).
+Each is drawn pressed while its column shows; from a closed lane it opens its column alone, with the lane up it opens it beside the other, and pressed while it shows it closes that column, the last one taking the lane down.
+⌘E closes the lane whole and opens it again with the columns it closed, or the Threads list when it had none.
+
+The Threads list draws each thread as the sidebar's 태스크 row (its mark, agent, title, PR mark, mission chip, time, and the project and state words on a second line) under 내 차례, 작업 중 and 끝남 (B28, D-75).
+A Conductor's row unfolds its workers, indented under it.
+A sleeping or archived thread is in no group: the foot line counts them, `쉬는 중 n · 보관됨 m`, and each count unfolds its rows under it.
+A row, a job card, a session chip or `답하기` opens the thread in the tool column, and `답하기` puts the keyboard in its input box (B29); opening a thread reads it, as reading its card does.
+‹ goes back to the Threads list, or from a worker's thread to its Conductor's.
+
+Pressing an output, in a thread, on a card's chip, or in ▣'s list of every thread's outputs under each thread's mark and title, opens it in the 보기 column as a preview tab, its title in italics, which the next output pressed replaces (B31).
+A double click on the preview tab, or ↵ on it, keeps it as an ordinary tab, which stays when another thread opens.
+The tabs share the 보기 column's width by the View tab strip's rule (`tabStripFit`): the tab in front keeps its title longest, and a title too long for its tab ends in an ellipsis.
+The pin and the kept tabs are the core's (`desk.lane`), kept in Desk's store through a restart, 16 kept tabs at most; a seventeenth is refused as `desk_tabs_full` and the kept ones stay. Which tab is in front and the preview tab are the window's.
+An output is drawn read-only with the viewer its kind has (an image, a video, a PDF, a Markdown or text document), read from the session's device and checkout without making a View, so it never joins that project's Files list (D-65).
+Showing it marks its View seen (`desk_output_seen`), which takes it out of the session's To look at in Needs You, as looking at it in its checkout does.
+`그 자리에서 열기` opens the View itself in its checkout.
+A page is drawn as its last still with its address, not as a live browser: the page's browser belongs to the checkout that opened it, Desk's lane draws no second one, and `그 자리에서 열기` goes to the live page (a follow-up to D-40's live browser in the 보기 column).
+A pull request is drawn as its PR mark and number with `GitHub에서 열기`.
+
+A thread's `미션 k/n` chip opens the mission's map as a tab in the 보기 column and the Conductor's thread beside it in the tool column (B34, D-74).
+Pressing a node turns the tool column to that worker's thread, and its path line goes back to the Conductor's.
+
+The pin is in the head of the column at the lane's edge, just before its `✕`: the tool column's, or the 보기 column's while it shows alone (B32, D-73).
+The lane is as wide as its columns, each at the lane's ideal width, pinned or not, and never leaves the chat less than its minimum: the 보기 column gives up its width first.
+Unpinned, the lane floats over the chat, whose words move left out from under it by the lane's width, so nothing the chat says is hidden; Escape inside it closes it and gives the keyboard to the composer.
+Pinned, the lane docks beside the chat, which narrows by its width, and a pinned lane closed and opened again comes back docked; Escape leaves it.
+A menu, a popover or a hint open in the lane takes Escape first, and Escape in an expanded lane (⤢) returns it to its width.
+
+A thread's head has `터미널로` with ⌘J beside it (B35, D-42).
+Either one opens the thread's Agent tab and gives its pane the keyboard; that pane's head carries `Desk로` with ⌘J while it is a Desk thread, a job or a mission's worker.
+⌘J there, or `Desk로`, comes back to Desk as it was left, with that thread open in the tool column.
+⌘J does nothing elsewhere; the press goes to the diagnostic log.
+In a browser tab the chord is ⌥⇧J, and Alt+Shift+J on Windows and Linux, where Chrome keeps Ctrl+Shift+J for its DevTools console; the desktop app keeps ⌘J and Ctrl+Shift+J, its own developer tools being Ctrl+Shift+I.
 
 ## Hide AI: the Hide AI tool
 
@@ -1162,6 +1283,33 @@ Failed or cancelled transfers clean up only their own created files where the de
 It inserts paths even when a provider cannot decode the referenced file; provider validation remains visible in its own composer.
 Hide provides no thumbnail shelf, attachment membership, or synchronized removal; subsequent editing and submission remain native provider operations, and pasting a path is not proof of image acceptance.
 Reintroducing a shared attachment shelf requires a supported provider contract for stable attachment identity, idempotent add/remove, native draft changes, and accepted submission events; both surfaces would have to reflect the same attachment membership, and the shelf would have to clear only after confirmed submission, preserving items on failure.
+
+## Session thread
+
+Core owner: `herdr-core/src/runtime/session_thread.rs`; reader `hide-session/src/thread/`; web store `web/src/store.ts` (`sessionThread`, `sessionThreadHistory`), actions `openThread`, `readOlderThread`, `closeThread` in `web/src/actions.ts`, input `submitThreadInput` in `web/src/attachments.ts`.
+Screen: `web/src/components/desk/thread-panel.tsx` connects a Desk job's thread to the store and draws it with `thread-view.tsx`; `web/src/threadView.ts` turns the sections into its lines and Hide parts, and `web/src/desk.ts` owns the line and turn rules.
+
+A thread shows one agent pane's session as a conversation: what the operator and Hide said to the agent, what the agent said and thought, its tool calls with their input, diffs and output, and its plans, newest last (B25).
+It follows the session while it works: what the agent writes reaches the thread within about a second of Herdr seeing the agent work, and the earlier part stays as it was drawn.
+Older pages load on request, up to four kept pages besides the live one; past that the request is refused as `capacity` and the terminal has the rest.
+A shell call that ran a `hide` command which made something is drawn as that thing (B26): a plan's steps, a new session's row, a letter's line, an opened View, a mission's chip, looked up in Hide's own state by the names the command gave.
+A session it names (a letter's addressee or sender, a new session) is a chip with that session's status, agent and title, which goes to it when pressed; a session that ended or that Hide cannot place is its name alone, and a part Hide cannot draw truly (a mission it does not hold, a diff View) stays the command it was.
+A plan is drawn once, at its last change, as it is now.
+The operator's words are the only bubble (D-75); a letter the session got is a line, `✉ [sender]에게서 받음 · first line`, the whole letter on hover, and a letter it sent reads `✉ [addressee]에게 보냄 · first line`.
+A shell command still running reads `실행 중 0:12`, counted from when the session made the call, with no ring: a ring is a session's state.
+While the job asks a question, the question is said once, in the wait at the conversation's foot, and the agent's last words leave it out.
+The conversation stays at its end while the operator is there, so new lines come into view; scrolled up, it stays put, a page read in above keeps the lines in view where they were, and reaching the top reads the page before, asked once for each state the core shows, so a read that failed is asked again only after the core answered the last ask.
+When the record cannot be read, the thread says why in one line, `no_record` (no session reported, no file, or an agent Hide cannot read a thread of) or `refused` (the record is there and could not be read), beside `터미널로` (B27); a session the agent reports later is read then.
+A device whose link is down keeps the thread it drew, dimmed by `connected` false, and reads again when the link returns.
+
+The input box sends its words to the thread's pane only (B29, D-62): the same pane, terminal and session the thread was opened for, else it refuses as `pane_changed` or `pane_gone` and nothing is typed anywhere, checked again just before the words go, after their files are staged and the pane let them in.
+Files picked or pasted into the box are staged as a terminal attachment's are and their quoted paths go before the words, a device's files staged on that device first; one input is in flight at a time.
+The words reach the agent as a phone's reply does, through Herdr's `pane.send_input` with Enter, not as keys typed into the terminal, and this differs from typing them in the terminal in a way the operator can see.
+When the pane's program has asked for bracketed paste, as Claude Code, Codex and most agent composers do, Herdr wraps the words in a paste, so a long text can show in the agent's composer as a pasted block (Claude Code's `[Pasted text]`) rather than as typed lines, and a new line in it stays inside the message instead of submitting it.
+Control characters other than a new line and a tab are refused before anything is sent, and the text is capped at 16 KiB.
+The input's state, `sending`, `sent` or `refused` with its reason, is the thread section's `input`; a refusal hided makes before the core (a file it never staged, a full staging area) reaches the thread as `threadInputRefusal` under the input's request id.
+Enter sends and Shift+Enter starts a line; an Enter that ends an IME composition only commits it, and the `@` menu keeps its own Enter.
+The words stay in the box until the pane took them, so a refused send loses nothing, and the refusal is one line under the box; while the pane runs another session, or is gone, that line says so and send waits.
 
 ## Overview
 
@@ -1494,6 +1642,7 @@ The `프로젝트 | 태스크` switch decides which list ⌥n counts, so on 태�
 Under the pointer or focus the small ★ after the title is not drawn and a ☆/★ button, the record button and `⋯` take the time's place in the first line, and the title gives way for them, so they never cover the PR mark or mission chip; at rest the row keeps no room for them beyond its time (an input with no hover always draws them); `⋯` offers `기록 보기` (Space), `터미널로 이동` (↩), on a task `다시 볼 것으로 표시` or, on a starred one, `다시 볼 것에서 빼기`, on a read ask in 내 차례 also `치우기`, which puts that ask away until the agent asks something new (needs-you-cleanup B15), then Resolve (not while the agent works or waits, or an approval prompt holds it) and, on a task, `세션 보관`, offered and disabled as the pane menu's Archive session is, and last `세션 닫기`, which closes the row's pane on whichever host holds it through the same confirmation as the pane menu's close; a right-click on the row opens the same menu (B15, B18; PRD session-archive B1, D-27; PRD revisit-group B8, B9).
 ☆ stars the task and ★ is `다시 볼 것에서 빼기`, which takes the ★ and puts the read ask away so the task rests until something new; on an ask in 내 차례, ☆ reads it and moves it to 다시 볼 것, and a new question from that agent brings it back to 내 차례 unread and announced (needs-you-cleanup B13, B14); the button is ★ only on a task the operator starred; a root agent's pane menu offers the same item before Archive session, the 프로젝트 tree, Overview's list and its detail head draw a starred task's small ★, an archived row keeps its ★, the phone lists the same group between 읽을 것 and 작업 중 and a read ask in 내 차례 with the hollow `!`, and a ★ or 다시 볼 것에서 빼기 that could not be saved, or a ★ past 256, leaves the row as it was and says so once (PRD revisit-group B10, B11, B15, B19, B20, B22, B23).
 `세션 보관` closes the task's root and every descendant pane with it and keeps their conversations: a session that is not working, or only waits on the operator, goes at once, and one with work running first asks `작업을 멈추고 보관할까요?`, listing the agents working now, with `작업 멈추고 보관` and `취소`, neither holding the keyboard (B5-B7).
+`hide agent archive <id>` does the same for one session and refuses a working one with `archive_confirmation_required`, which the operator confirms only from this screen ([delivery.md](delivery.md#agent-registration-and-spawning); PRD Desk B40).
 The row leaves the open groups for 보관됨 once every pane closed; a save that fails closes nothing, and a close some agents refuse keeps the session as it was, with one notice, the members that did close listed in its record, and `세션 보관` again finishing the same archive; the notice says whether a close was refused, timed out or lost its device, and once that root closes some other way its archived members stand in 보관됨 as their own row (B8-B12, B24).
 An archived row reads its title, its project in 상태별, its PR marks and how long ago it was archived, with no status mark, since nothing runs; `보관하는 중…`, `이어가는 중…`, `이어가지 못함`, `지우는 중…` or `상태 모름` stand on its second line while they hold, and a device that is not connected dims it (B14-B18, B13).
 Pressing it opens its record; `⋯` and a right-click offer `기록 보기`, `이어가기`, `상태 확인` while Hide cannot say whether its close finished, and `보관함에서 지우기…`, which asks `<name> 세션을 보관함에서 지울까요?` with `보관함에서 지우기` and `남겨 두기`, neither holding the keyboard (B19-B21, B28, B34).
@@ -1616,18 +1765,26 @@ While a decision waits and the Conductor neither works nor asks anything of its 
 
 ### A plan's map
 
-A session's own plan (PRD hide-plan; PRD mission-plan-visibility D-07) is read as a checklist in the pane head chip's popover, in the session record and folded in a mission node's row, and drawn as a map (`PlanGraph`, the mission map's `DependencyGraphView` with a one-line card per step) only in the 보기 slot.
+A session's own plan (PRD hide-plan; PRD mission-plan-visibility D-07) is read as a checklist in the pane head chip's popover, in the session record and folded in a mission node's row, and drawn as a map (`PlanGraph`, the mission map's `DependencyGraphView` with a two-line card per step) only in the 보기 slot.
 The plan chip sits where the task chip was, between the title and the PR chip, only while the pane's session has a plan and conducts no mission ([A mission on its Conductor's pane](#a-mission-on-its-conductors-pane)): the list-checks mark, the word `계획`, a cell per step and `n/m`; `검토` in the warning colour with the current step's cell in it while the plan waits for the operator's review; and a green check with `계획` and `m/m` once every step is done or dropped (B1).
 A cell is a step in the checklist's order, done green, the current one blue, the rest empty, and a dropped step has none; past 20 steps each run of one state is one stretch, so the chip keeps its width while `n/m` stays exact, and its accessible name says `계획 n/m, 지금 <단계>` (B1, B36).
 The pointer or the keyboard's focus on it opens the checklist, a press or ⇧⌘U (Alt+Shift+U on Windows and Linux) pins it, and a second press, ⇧⌘U or Esc closes it; it never takes the keyboard from the terminal.
-The popover's head is `계획 n/m · <N분 전 갱신> · 크게 ›`, then the checklist and `맡긴 일 N · 끝남 k` for a pane with children; it has no map and no record footer, the pane ⋯ menu and the sidebar row opening the record (B3, B7).
+The popover's head is `계획 n/m · <N분 전 갱신> · 크게 ›`, then the checklist and `맡긴 일 N · 끝남 k`, counting only the direct children no step of the plan is handed to, absent when there are none and without `끝남 k` while a child's device does not answer; it has no map and no record footer, the pane ⋯ menu and the sidebar row opening the record (B3, B7; PRD hide-plan-delegate B29).
 The checklist runs in the order the steps wait on each other, a step beside an earlier one at the same depth indented once: a done step has a check and dim words, the current one a blue mark, a raised background and `지금`, a step still ahead an empty circle, and a dropped one is struck through and dimmed; every title is whole, wrapping when long, an `output` of `pr` or `file` is a small tail, and a step the last `set` changed carries the history mark with its reason on hover or keyboard focus (B3, B4).
+A done step's tail is what it left, the file's name or `#n`, in place of `파일` or `PR`; a step done before evidence was recorded keeps the kind, and a handed step done with nothing to leave says `보고` (PRD hide-plan-delegate B26).
+A step handed to another agent reads `<단계> · <the child's current step>` with the child's agent mark and name, and pressing the name goes to the child's pane; a child asleep, closed or still starting has a name and no way there (B28).
+`보고 옴`, `막힘`, `닫힘` and `맡길 예정` are one short word at the row's right end; a child at work has no word, and the chip's cells stay by step state, so `보고 옴` never reaches the chip.
 A list taller than the popover scrolls inside it, and opening it shows the current step (B5).
-A finished plan's head is `계획 끝남 m/m · <걸린 시간>`, from the plan's making to its last update, and the popover's checklist folds into one line `✓ m단계 끝` and the outputs its done steps left (B6); the session record and a mission node's row, where a finished plan is read afterwards, list every step.
+A finished plan's head is `계획 끝남 m/m · <N분 걸림>`, from the plan's making to its last update, and the popover still lists every step with its check, what it left and the agent a handed step went to (PRD hide-plan-delegate B30), as the session record and a mission node's row do.
 `크게 ›` and the pane ⋯ menu's `계획` open the map in the 보기 slot; the lane opens if closed and the keyboard stays in the terminal, and putting a plan up never opens it by itself.
 On the map the steps run top down by what they wait on, parallel ones side by side: a done step is filled, the current one carries the working colour and `지금`, one that waits on a step not finished yet is dashed, a dropped one is struck through and dimmed, an `output` of `pr` or `file` is a small tail, and a step the last `set` changed carries the history mark with its reason.
+Every card has two lines and one height at the card width (PRD hide-plan-delegate B25, D-33): the first is the mark, the title and `지금`, the output kind or a handed step's `보고 옴`, `막힘` or `닫힘`; the second is `누가 · 지금 뭐`.
+`누가` is `나` or the child's agent mark and name; `지금 뭐` is the main's `line` for its working step, `예정` for its later one, the child's current step and its `n/m` for a handed step, what a done step left, and `맡길 예정 · <steps> 기다림` for a step still to be handed.
+A step done before evidence was recorded keeps only its kind in the first line's tail, and its second line is `나` alone (B26).
+A child whose plan is not read yet, or whose device does not answer, shows its row's state instead of its step and count, and a child Hide knows nothing of yet shows its name alone (B32); the child's steps never branch on the map.
 An edge from a finished step is faint and one still ahead is bright.
-In the 보기 slot the head says `계획 n/m · <N분 전 갱신>` (`계획 N단계` while it waits for review), and pressing a card opens its detail: its state, its line, what it waits on and why it changed.
+In the 보기 slot the head says `계획 n/m · <N분 전 갱신>` (`계획 N단계` while it waits for review), and pressing a card opens its detail: its state, its line, what it waits on with each one's state and why it changed.
+A handed card's detail adds the agent (`<이름> · <제품>`), its state (`작업 중`, `보고 옴`, `막힘`, `닫힘`), the condition that ends it (`<이름>의 보고`, with `+ 그 PR 번호` for a `pr` step), the child's own plan as `<이름>의 계획 n/m` over the same checklist or `계획 없이 일하고 있어요`, and `터미널로 이동 ›` to the child's pane while it has one (B27).
 While the plan waits for review a band says `검토 기다림 · 대화에서 답하세요` with one button, `대화로`, which goes to the pane; there is no button that approves, and the band goes once the agent runs `hide plan approve`.
 A finished plan's band says `끝남`; a plan whose session is gone draws one line saying so.
 While a plan runs, the pane's second row shows the current step and its line, `<단계> · <line>`, in the progress place; while it waits for review the row is the ask band, `Plan review · N steps` (`계획 검토 · N단계` in Korean) worded by the shell from the subject the core sends, and the sidebar's second line says the same ([status-model.md](status-model.md#a-plan-waiting-for-review-is-a-question)).
@@ -3383,6 +3540,7 @@ The sheet carries no row or explanation for a command the removed native app alo
 | Toggle Mission tool | none | none | none | none |
 | Open Project Memory | `⇧⌘L` | `Alt+Shift+L` | `⇧⌘L` | `Alt+Shift+L` |
 | Open PR list | `⇧⌘R` | `Alt+Shift+R` | `⌥⇧R` | `Alt+Shift+R` |
+| Desk thread ⇄ terminal | `⌘J` | `Ctrl+Shift+J` | `⌥⇧J` | `Alt+Shift+J` |
 | Toggle documents | none | none | none | none |
 | Toggle Changes tool | `⇧⌘G` | `Alt+Shift+G` | `⇧⌘G` | `Alt+Shift+G` |
 | Toggle Explorer tool | `⇧⌘E` | `Alt+Shift+E` | `⇧⌘E` | `Alt+Shift+E` |

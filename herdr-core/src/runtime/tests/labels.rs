@@ -1166,3 +1166,496 @@ fn a_turn_ending_with_a_background_task_is_never_announced_done() {
         [NoticeState::Done]
     );
 }
+
+/// D-9: Claude Code's Esc sends no Stop and, often, no `idle_prompt`. The
+/// hook's working turn stands until the session read, made under the later
+/// Herdr state Herdr moved to at rest, finds the interruption; the row then
+/// stops with nothing asked of the operator, and the next prompt's hook
+/// starts the turn again.
+#[test]
+fn a_hook_turn_ends_when_the_session_file_reads_an_interruption_after_it() {
+    use hide_node_link::panes::{HookStatusReport, HookTurn};
+    use hide_session::turns::{TurnMark, TurnTracker};
+    let mut runtime = runtime();
+    let claude = |status: &str, seq: u64| {
+        let mut payload = projection(SESSION);
+        for agent in &mut payload.agents {
+            agent.agent_status = Some(status.to_owned());
+            agent.state_change_seq = Some(seq);
+        }
+        payload
+    };
+    let hook = |runtime: &mut Runtime, turn| {
+        let report = HookStatusReport {
+            runtime: "claude-code".to_owned(),
+            version: hide_agent_hooks::HOOK_VERSION,
+            session: Some(SESSION.to_owned()),
+            turn: Some(turn),
+            counts: None,
+            session_start: false,
+            waiting: None,
+        };
+        runtime
+            .ingest_hook_status(crate::node::TEST_NODE, PANE, &report)
+            .unwrap();
+    };
+    let read = |seq: u64, interrupted: bool| {
+        let mut turns = TurnTracker::default();
+        turns.fold(0, &TurnMark::HumanTurn);
+        if interrupted {
+            turns.fold(10, &TurnMark::Interrupted);
+        }
+        let record = PaneRecord {
+            owner: hide_session::label_reference_token("claude", "id", SESSION),
+            turns: Some(turns),
+            turns_seq: Some(seq),
+            ..PaneRecord::default()
+        };
+        LabelOverlay::of_records([(&PANE.to_owned(), &record)], true, false)
+    };
+    let axes = |runtime: &Runtime| {
+        let row = row(runtime);
+        (
+            row["activity"].as_str().unwrap().to_owned(),
+            row["demand"].as_str().unwrap().to_owned(),
+        )
+    };
+
+    hook(&mut runtime, HookTurn::Working);
+    runtime.ingest_session(Ok(claude("working", 4)));
+    assert_eq!(axes(&runtime).0, "working");
+
+    // Esc: Herdr reads the agent done at once, and the session read under
+    // that state has not landed yet; the hook's turn still stands.
+    runtime.ingest_session(Ok(claude("done", 5)));
+    assert_eq!(axes(&runtime).0, "working");
+
+    // The read under that state finds the interruption.
+    runtime.set_label_overlay(read(5, true));
+    runtime.ingest_session(Ok(claude("done", 5)));
+    assert_eq!(axes(&runtime), ("stopped".to_owned(), "none".to_owned()));
+
+    // A new prompt: the hook's turn is laid under the state the read was
+    // made under, which says nothing of it.
+    hook(&mut runtime, HookTurn::Working);
+    runtime.ingest_session(Ok(claude("done", 5)));
+    assert_eq!(axes(&runtime).0, "working");
+}
+
+/// D-10: Esc closes every dialog of the turn, a background subagent's too,
+/// and sends no hook event; the session read's interruption ends the open
+/// approvals with the turn.
+#[test]
+fn an_interruption_the_session_file_reads_closes_the_open_approvals() {
+    use hide_node_link::panes::{HookStatusReport, HookTurn};
+    use hide_session::turns::{TurnMark, TurnTracker};
+    let mut runtime = runtime();
+    let claude = |status: &str, seq: u64| {
+        let mut payload = projection(SESSION);
+        for agent in &mut payload.agents {
+            agent.agent_status = Some(status.to_owned());
+            agent.state_change_seq = Some(seq);
+        }
+        payload
+    };
+    let row_axes = |runtime: &Runtime| {
+        let row = row(runtime);
+        (
+            row["activity"].as_str().unwrap().to_owned(),
+            row["demand"].as_str().unwrap().to_owned(),
+        )
+    };
+    runtime
+        .ingest_hook_status(
+            crate::node::TEST_NODE,
+            PANE,
+            &HookStatusReport {
+                runtime: "claude-code".to_owned(),
+                version: hide_agent_hooks::HOOK_VERSION,
+                session: Some(SESSION.to_owned()),
+                turn: Some(HookTurn::Working),
+                counts: None,
+                session_start: false,
+                waiting: Some(vec!["Bash:00aa".to_owned()]),
+            },
+        )
+        .unwrap();
+    runtime.ingest_session(Ok(claude("blocked", 4)));
+    assert_eq!(row_axes(&runtime).1, "approval");
+
+    let mut turns = TurnTracker::default();
+    turns.fold(0, &TurnMark::HumanTurn);
+    turns.fold(10, &TurnMark::Interrupted);
+    let record = PaneRecord {
+        owner: hide_session::label_reference_token("claude", "id", SESSION),
+        turns: Some(turns),
+        turns_seq: Some(5),
+        ..PaneRecord::default()
+    };
+    runtime.set_label_overlay(LabelOverlay::of_records(
+        [(&PANE.to_owned(), &record)],
+        true,
+        false,
+    ));
+    runtime.ingest_session(Ok(claude("done", 5)));
+    assert_eq!(
+        row_axes(&runtime),
+        ("stopped".to_owned(), "none".to_owned())
+    );
+}
+
+/// D-9 with agent summaries off: a Claude Code session file whose turn was
+/// interrupted, read as the label worker reads it, ends the hook's working
+/// turn; the switch takes the AI fields away, not the session read the
+/// status stands on.
+#[test]
+fn a_hook_turn_ends_on_the_session_files_interruption_with_summaries_off() {
+    use hide_node_link::panes::{HookStatusReport, HookTurn};
+    use hide_session::label_transcript::{LabelTranscriptRequest, read};
+    let home = tempfile::tempdir().unwrap();
+    let folder = home
+        .path()
+        .join(".claude/projects/-private-tmp-hide-labels-overlay");
+    std::fs::create_dir_all(&folder).unwrap();
+    let record = |at: &str, kind: &str, content: serde_json::Value| {
+        let mut record = serde_json::json!({
+            "type": kind, "version": "2.1.314", "userType": "external",
+            "timestamp": at, "sessionId": SESSION, "cwd": CHECKOUT,
+            "message": {"role": kind, "content": content},
+        });
+        if content.is_string() {
+            record["promptId"] = serde_json::json!(format!("prompt-{at}"));
+        }
+        record
+    };
+    let records = [
+        record(
+            "2026-10-30T13:00:00.000Z",
+            "user",
+            serde_json::json!("로그를 찾아줘"),
+        ),
+        record(
+            "2026-10-30T13:00:01.000Z",
+            "assistant",
+            serde_json::json!([{"type": "text", "text": "찾는 중"}]),
+        ),
+        record(
+            "2026-10-30T13:00:02.000Z",
+            "user",
+            serde_json::json!([{"type": "text", "text": "[Request interrupted by user]"}]),
+        ),
+    ];
+    std::fs::write(
+        folder.join(format!("{SESSION}.jsonl")),
+        records
+            .iter()
+            .map(|record| format!("{record}\n"))
+            .collect::<String>(),
+    )
+    .unwrap();
+    let transcript = read(
+        home.path(),
+        &LabelTranscriptRequest {
+            agent: hide_session::Agent::Claude,
+            reference_kind: "id".to_owned(),
+            reference_value: SESSION.to_owned(),
+            cwd: None,
+            checkpoint: None,
+            subagents: Default::default(),
+            turns: None,
+            tools: None,
+        },
+    )
+    .unwrap();
+    let claude = |status: &str, seq: u64| {
+        let mut payload = projection(SESSION);
+        for agent in &mut payload.agents {
+            agent.agent_status = Some(status.to_owned());
+            agent.state_change_seq = Some(seq);
+        }
+        payload
+    };
+    let axes = |runtime: &Runtime| {
+        let row = row(runtime);
+        (
+            row["activity"].as_str().unwrap().to_owned(),
+            row["demand"].as_str().unwrap().to_owned(),
+        )
+    };
+
+    let mut runtime = runtime();
+    runtime
+        .ingest_hook_status(
+            crate::node::TEST_NODE,
+            PANE,
+            &HookStatusReport {
+                runtime: "claude-code".to_owned(),
+                version: hide_agent_hooks::HOOK_VERSION,
+                session: Some(SESSION.to_owned()),
+                turn: Some(HookTurn::Working),
+                counts: None,
+                session_start: false,
+                waiting: None,
+            },
+        )
+        .unwrap();
+    runtime.ingest_session(Ok(claude("working", 4)));
+    assert_eq!(axes(&runtime).0, "working");
+
+    // Agent summaries off: the overlay carries no summary, only the facts.
+    let record = PaneRecord {
+        owner: hide_session::label_reference_token("claude", "id", SESSION),
+        turns: transcript.turns,
+        turns_seq: Some(5),
+        ..PaneRecord::default()
+    };
+    runtime.set_label_overlay(LabelOverlay::of_records(
+        [(&PANE.to_owned(), &record)],
+        true,
+        false,
+    ));
+    runtime.ingest_session(Ok(claude("done", 5)));
+    assert_eq!(axes(&runtime), ("stopped".to_owned(), "none".to_owned()));
+}
+
+/// D-9: Claude Code 2.1.314 puts a prompt interrupted before its first
+/// output back in the composer and records no interruption, no `Stop` and
+/// no notification; its session file keeps the prompt with nothing of the
+/// agent's after it. Read under a later Herdr state with the agent at rest,
+/// the hook's turn ends; a turn the agent answered stays the hook's until
+/// an interruption record or its next event, whatever Herdr reads.
+#[test]
+fn a_hook_turn_whose_prompt_the_session_file_shows_unanswered_ends_at_rest() {
+    use hide_node_link::panes::{HookStatusReport, HookTurn};
+    use hide_session::label_transcript::{LabelTranscriptRequest, read};
+    let record = |at: &str, kind: &str, content: serde_json::Value| {
+        let mut record = serde_json::json!({
+            "type": kind, "version": "2.1.314", "userType": "external",
+            "timestamp": at, "sessionId": SESSION, "cwd": CHECKOUT,
+            "message": {"role": kind, "content": content},
+        });
+        if content.is_string() {
+            record["promptId"] = serde_json::json!(format!("prompt-{at}"));
+        }
+        record
+    };
+    let prompt = record(
+        "2026-10-30T13:00:00.000Z",
+        "user",
+        serde_json::json!("로그를 찾아줘"),
+    );
+    let attachment = serde_json::json!({"type": "attachment",
+        "timestamp": "2026-10-30T13:00:00.100Z", "sessionId": SESSION,
+        "attachment": {"type": "hook_additional_context", "content": ["context"]}});
+    let reply = record(
+        "2026-10-30T13:00:01.000Z",
+        "assistant",
+        serde_json::json!([{"type": "text", "text": "찾는 중"}]),
+    );
+    let turns = |records: &[&serde_json::Value]| {
+        let home = tempfile::tempdir().unwrap();
+        let folder = home
+            .path()
+            .join(".claude/projects/-private-tmp-hide-labels-overlay");
+        std::fs::create_dir_all(&folder).unwrap();
+        std::fs::write(
+            folder.join(format!("{SESSION}.jsonl")),
+            records
+                .iter()
+                .map(|record| format!("{record}\n"))
+                .collect::<String>(),
+        )
+        .unwrap();
+        read(
+            home.path(),
+            &LabelTranscriptRequest {
+                agent: hide_session::Agent::Claude,
+                reference_kind: "id".to_owned(),
+                reference_value: SESSION.to_owned(),
+                cwd: None,
+                checkpoint: None,
+                subagents: Default::default(),
+                turns: None,
+                tools: None,
+            },
+        )
+        .unwrap()
+        .turns
+    };
+    let claude = |status: &str, seq: u64| {
+        let mut payload = projection(SESSION);
+        for agent in &mut payload.agents {
+            agent.agent_status = Some(status.to_owned());
+            agent.state_change_seq = Some(seq);
+        }
+        payload
+    };
+    let activity = |records: &[&serde_json::Value]| {
+        let mut runtime = runtime();
+        runtime
+            .ingest_hook_status(
+                crate::node::TEST_NODE,
+                PANE,
+                &HookStatusReport {
+                    runtime: "claude-code".to_owned(),
+                    version: hide_agent_hooks::HOOK_VERSION,
+                    session: Some(SESSION.to_owned()),
+                    turn: Some(HookTurn::Working),
+                    counts: None,
+                    session_start: false,
+                    waiting: None,
+                },
+            )
+            .unwrap();
+        runtime.ingest_session(Ok(claude("working", 4)));
+        let record = PaneRecord {
+            owner: hide_session::label_reference_token("claude", "id", SESSION),
+            turns: turns(records),
+            turns_seq: Some(5),
+            ..PaneRecord::default()
+        };
+        runtime.set_label_overlay(LabelOverlay::of_records(
+            [(&PANE.to_owned(), &record)],
+            true,
+            false,
+        ));
+        runtime.ingest_session(Ok(claude("idle", 5)));
+        let row = row(&runtime);
+        (
+            row["activity"].as_str().unwrap().to_owned(),
+            row["demand"].as_str().unwrap().to_owned(),
+        )
+    };
+
+    assert_eq!(
+        activity(&[&prompt, &attachment]),
+        ("stopped".to_owned(), "none".to_owned())
+    );
+    assert_eq!(activity(&[&prompt, &attachment, &reply]).0, "working");
+}
+
+/// D-10: a refusal with the operator's feedback in Claude Code's dialog
+/// sends no hook event and the turn may go on writing text alone. The
+/// session read under the later Herdr state finds the refused call's
+/// result, so the approval ends and the row is working again before the
+/// turn's `Stop`.
+#[test]
+fn an_approval_ends_when_the_session_file_reads_the_refused_calls_result() {
+    use hide_node_link::panes::{HookStatusReport, HookTurn};
+    use hide_session::label_transcript::{LabelTranscriptRequest, read};
+    let bash = serde_json::json!({"command": "rm -rf build", "description": "Clean"});
+    let call = hide_session::calls::key("Bash", &bash).unwrap();
+    let home = tempfile::tempdir().unwrap();
+    let folder = home
+        .path()
+        .join(".claude/projects/-private-tmp-hide-labels-overlay");
+    std::fs::create_dir_all(&folder).unwrap();
+    let records = [
+        serde_json::json!({"type": "user", "timestamp": "2026-10-30T13:00:00.000Z",
+            "sessionId": SESSION, "promptId": "p1", "cwd": CHECKOUT,
+            "message": {"role": "user", "content": "빌드 폴더를 지워줘"}}),
+        // The same command ran once already and has its result.
+        serde_json::json!({"type": "assistant", "timestamp": "2026-10-30T13:00:01.000Z",
+            "sessionId": SESSION, "cwd": CHECKOUT, "message": {"role": "assistant",
+            "content": [{"type": "tool_use", "id": "toolu_once", "name": "Bash",
+                         "input": {"command": "rm -rf build", "description": "Clean"}}]}}),
+        serde_json::json!({"type": "user", "timestamp": "2026-10-30T13:00:02.000Z",
+            "sessionId": SESSION, "cwd": CHECKOUT, "message": {"role": "user",
+            "content": [{"type": "tool_result", "tool_use_id": "toolu_once", "content": ""}]}}),
+        serde_json::json!({"type": "assistant", "timestamp": "2026-10-30T13:00:03.000Z",
+            "sessionId": SESSION, "cwd": CHECKOUT, "message": {"role": "assistant",
+            "content": [{"type": "tool_use", "id": "toolu_bash", "name": "Bash",
+                         "input": {"description": "Clean", "command": "rm -rf build"}}]}}),
+        serde_json::json!({"type": "user", "timestamp": "2026-10-30T13:00:05.000Z",
+            "sessionId": SESSION, "cwd": CHECKOUT, "message": {"role": "user",
+            "content": [{"type": "tool_result", "tool_use_id": "toolu_bash", "is_error": true,
+                         "content": "The user doesn't want to proceed with this tool use."}]},
+            "permissionDecision": {"decision": "reject", "source": "user_reject"}}),
+        serde_json::json!({"type": "assistant", "timestamp": "2026-10-30T13:00:06.000Z",
+            "sessionId": SESSION, "cwd": CHECKOUT, "message": {"role": "assistant",
+            "content": [{"type": "text", "text": "알겠습니다. 다른 방법을 설명하겠습니다."}]}}),
+    ];
+    let turns = |records: &[serde_json::Value]| {
+        std::fs::write(
+            folder.join(format!("{SESSION}.jsonl")),
+            records
+                .iter()
+                .map(|record| format!("{record}\n"))
+                .collect::<String>(),
+        )
+        .unwrap();
+        read(
+            home.path(),
+            &LabelTranscriptRequest {
+                agent: hide_session::Agent::Claude,
+                reference_kind: "id".to_owned(),
+                reference_value: SESSION.to_owned(),
+                cwd: None,
+                checkpoint: None,
+                subagents: Default::default(),
+                turns: None,
+                tools: None,
+            },
+        )
+        .unwrap()
+        .turns
+    };
+    let overlay = |runtime: &mut Runtime, records: &[serde_json::Value], seq: u64| {
+        let record = PaneRecord {
+            owner: hide_session::label_reference_token("claude", "id", SESSION),
+            turns: turns(records),
+            turns_seq: Some(seq),
+            ..PaneRecord::default()
+        };
+        runtime.set_label_overlay(LabelOverlay::of_records(
+            [(&PANE.to_owned(), &record)],
+            true,
+            false,
+        ));
+    };
+    let claude = |status: &str, seq: u64| {
+        let mut payload = projection(SESSION);
+        for agent in &mut payload.agents {
+            agent.agent_status = Some(status.to_owned());
+            agent.state_change_seq = Some(seq);
+        }
+        payload
+    };
+    let axes = |runtime: &Runtime| {
+        let row = row(runtime);
+        (
+            row["activity"].as_str().unwrap().to_owned(),
+            row["demand"].as_str().unwrap().to_owned(),
+        )
+    };
+
+    let mut runtime = runtime();
+    runtime
+        .ingest_hook_status(
+            crate::node::TEST_NODE,
+            PANE,
+            &HookStatusReport {
+                runtime: "claude-code".to_owned(),
+                version: hide_agent_hooks::HOOK_VERSION,
+                session: Some(SESSION.to_owned()),
+                turn: Some(HookTurn::Working),
+                counts: None,
+                session_start: false,
+                waiting: Some(vec![call]),
+            },
+        )
+        .unwrap();
+    runtime.ingest_session(Ok(claude("blocked", 4)));
+    assert_eq!(axes(&runtime).1, "approval");
+
+    // The first run's result is not the waited call's: the dialog stays.
+    overlay(&mut runtime, &records[..4], 5);
+    runtime.ingest_session(Ok(claude("blocked", 5)));
+    assert_eq!(axes(&runtime).1, "approval");
+
+    // The operator refuses with a note; Herdr reads the agent working again,
+    // and the read under that state finds the refusal.
+    overlay(&mut runtime, &records, 6);
+    runtime.ingest_session(Ok(claude("working", 6)));
+    assert_eq!(axes(&runtime), ("working".to_owned(), "none".to_owned()));
+}

@@ -65,21 +65,25 @@ import type { TFunction } from "i18next";
 /** The card that stands for the report every node ends in; a node key is letters, digits, `-`, `_` and `.`, so none is this. */
 const REPORT = "#report";
 
-export function MissionMap({ missionId, actions }: { missionId: string; actions: Actions }) {
+/**
+ * `onNode` hears a node card picked, so a page that holds the map beside a
+ * thread can show the node's own (Desk, PRD session-docs-and-assistant B34).
+ */
+export function MissionMap({ missionId, actions, onNode }: { missionId: string; actions: Actions; onNode?: (node: MissionNode) => void }) {
   const { t } = useInterfaceTranslation();
   const mission = useShellStore((s) => missionOf(s.rest, missionId));
   const failed = useShellStore((s) => s.rest?.missions?.failed ?? null);
   if (failed) return <MapState text={t("mission.unreadable")} tone="text-destructive" state="unreadable" />;
   if (!mission) return <MapState text={t("mission.gone")} state="gone" />;
   // Another mission is another page: it opens at 맞춤 with nothing picked.
-  return <MissionBody key={mission.id} mission={mission} actions={actions} />;
+  return <MissionBody key={mission.id} mission={mission} actions={actions} onNode={onNode} />;
 }
 
 function MapState({ text, tone, state }: { text: string; tone?: string; state: string }) {
   return <p className={cn("px-md py-md text-body text-muted-foreground", tone)} data-mission-state={state}>{text}</p>;
 }
 
-function MissionBody({ mission, actions }: { mission: Mission; actions: Actions }) {
+function MissionBody({ mission, actions, onNode }: { mission: Mission; actions: Actions; onNode?: (node: MissionNode) => void }) {
   const { t } = useInterfaceTranslation();
   const [picked, setPicked] = useState<string | null>(null);
   const panel = useRef<HTMLDivElement>(null);
@@ -131,7 +135,17 @@ function MissionBody({ mission, actions }: { mission: Mission; actions: Actions 
               data-mission-map="true"
             >
               <MissionMapCanvas wide={wide} page={page}>
-                <Graph mission={mission} selected={selected} onSelect={(key) => select(selected === key ? null : key)} events={log?.events ?? null} end={end} />
+                <Graph
+                  mission={mission}
+                  selected={selected}
+                  onSelect={(key) => {
+                    select(selected === key ? null : key);
+                    const picked = selected === key ? undefined : mission.nodes.find((one) => one.key === key);
+                    if (picked) onNode?.(picked);
+                  }}
+                  events={log?.events ?? null}
+                  end={end}
+                />
               </MissionMapCanvas>
             </div>
             {/* The column beside the map: a pick's panel, else the mission's summary (B19, B30, B31). */}

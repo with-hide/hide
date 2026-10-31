@@ -1079,6 +1079,19 @@
         "stages": { "type": "array", "items": { "type": "string" } }
       }
     },
+    "threadInput": {
+      "description": "A session thread's input box (PRD session-docs-and-assistant B29). `thread_input` {generation, pane_id, request_id, text, stages} types `text` into the pane of the thread the core holds open, with the files staged under `stages` (staged as an attachment's are, `clipboard` false) quoted before it as a terminal attachment pastes them, then Enter, through Herdr's `pane.send_input` as a phone's reply is. `generation` and `pane_id` are the open thread's (`session_thread`), `request_id` the 36-character UUID the core requires. hided commits the stages and sends the core `session_thread_input` {generation, pane_id, request_id, text, paths}, an event only hided makes: a client that sends it is answered with an error frame and it never reaches the core. A refusal before the core is answered as an `attachment_refused` {request_id, reason} with the input's request id; the core's answer is the thread section's `input` {request_id, state: `sending`, `sent` or `refused`, reason}.",
+      "type": "object",
+      "required": ["generation", "pane_id", "request_id", "text", "stages"],
+      "additionalProperties": false,
+      "properties": {
+        "generation": { "type": "integer", "minimum": 1 },
+        "pane_id": { "type": "string" },
+        "request_id": { "type": "string" },
+        "text": { "type": "string" },
+        "stages": { "type": "array", "maxItems": 8, "items": { "type": "string" } }
+      }
+    },
     "attachmentRefused": {
       "description": "Payload of an attachment_refused frame: the request that failed and why nothing was staged.",
       "type": "object",

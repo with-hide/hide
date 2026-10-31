@@ -21,10 +21,29 @@ use crate::model::AgentActionRefusal;
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(in crate::runtime) struct SleepMark {
     pub(in crate::runtime) agent_id: String,
+    /// The mission and node whose finish marked it; for a plan's step, the
+    /// plan and the step (PRD hide-plan-delegate B18).
     mission: String,
     node: String,
+    /// A plan step's finish marked it, not a mission node's: the mission
+    /// book's finishes neither keep nor drop it.
+    plan: bool,
     /// The pane whose end this mark started and that has not landed yet.
     ending: Option<String>,
+}
+
+impl SleepMark {
+    /// A plan step its main finished or took back asks its child to sleep
+    /// (B17, B18), by the minute decision a node's finish uses.
+    pub(in crate::runtime) fn plan(agent_id: &str, plan: &str, step: &str) -> Self {
+        Self {
+            agent_id: agent_id.to_owned(),
+            mission: plan.to_owned(),
+            node: step.to_owned(),
+            plan: true,
+            ending: None,
+        }
+    }
 }
 
 /// Whether a node is finished for its agents (D-17): its status is done,
@@ -88,7 +107,7 @@ impl Runtime {
         let missions = &mut self.missions;
         missions
             .sleep_marks
-            .retain(|mark| now.contains(&(mark.mission.clone(), mark.node.clone())));
+            .retain(|mark| mark.plan || now.contains(&(mark.mission.clone(), mark.node.clone())));
         for mission in &missions.book.missions {
             for node in &mission.nodes {
                 let key = (mission.id.clone(), node.key.clone());
@@ -111,6 +130,7 @@ impl Runtime {
                         agent_id: agent.to_owned(),
                         mission: mission.id.clone(),
                         node: node.key.clone(),
+                        plan: false,
                         ending: None,
                     });
                 }

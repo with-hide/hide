@@ -195,6 +195,13 @@ pub fn github_snapshot(state_dir: &Path) -> PathBuf {
     state_dir.join("github-snapshot.json")
 }
 
+/// What each pane's agent hook last reported about its session (runtime,
+/// hook version, subagent counts), restored when the daemon starts; its
+/// owner is the core's hook facts (`herdr_core::agent_hooks`).
+pub fn hook_facts(state_dir: &Path) -> PathBuf {
+    state_dir.join("hook-facts.json")
+}
+
 /// The link record: which sessions made or worked on which pull request,
 /// kept after a pane closes; its owner is the core's link worker.
 pub fn links_store(state_dir: &Path) -> PathBuf {
@@ -208,6 +215,24 @@ pub fn suggestions_store(state_dir: &Path) -> PathBuf {
 }
 
 pub const SUGGESTIONS_STORE: &str = "suggestions.sqlite3";
+
+/// Desk's own folder (PRD Desk 1차): the store of its conversation and
+/// settings, and each Desk process's working folder, launcher and markers.
+pub fn desk_dir(state_dir: &Path) -> PathBuf {
+    state_dir.join("desk")
+}
+
+/// Desk's conversation, choices and settings; its owner is the core's Desk.
+pub fn desk_store(state_dir: &Path) -> PathBuf {
+    desk_dir(state_dir).join("desk.json")
+}
+
+/// The ACP adapters Desk installs from their pinned locks, one folder per
+/// adapter version (`<id>-<version>`). Account-wide like the helper root: an
+/// installed version is the same for every state folder.
+pub fn desk_adapters(home: &Path) -> PathBuf {
+    hide_home(home).join("desk-adapters")
+}
 
 /// The Hide global instruction every session started in a Hide pane receives
 /// at its start, in every Project (PRD memory-self-improve D-23, D-29): Hide's

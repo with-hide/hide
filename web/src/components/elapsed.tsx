@@ -49,6 +49,22 @@ export function useElapsed(since: number | null | undefined): string | null {
   return useSyncExternalStore(subscribe, () => (since == null ? null : formatElapsed(language, (timer === null ? Date.now() : now) - since)));
 }
 
+/** `0:12`, `3:04`, `1:02:09`: a run's length as a clock reads it; a moment from the future is `0:00`. */
+export function formatRunning(elapsedMs: number): string {
+  const seconds = Math.floor(Math.max(0, elapsedMs) / 1000);
+  const two = (value: number) => String(value).padStart(2, "0");
+  const hours = Math.floor(seconds / 3600);
+  const minutes = Math.floor((seconds % 3600) / 60);
+  return hours > 0 ? `${hours}:${two(minutes)}:${two(seconds % 60)}` : `${minutes}:${two(seconds % 60)}`;
+}
+
+const still = () => () => {};
+
+/** How long something has run since `since` on the same clock, ticking each second; `null`, and no clock, without a start. */
+export function useRunningClock(since: number | null | undefined): string | null {
+  return useSyncExternalStore(since == null ? still : subscribe, () => (since == null ? null : formatRunning((timer === null ? Date.now() : now) - since)));
+}
+
 /** Now on the same clock, to the minute, so a time axis re-renders once a minute rather than every second. */
 export function useMinuteClock(): number {
   return useSyncExternalStore(subscribe, () => Math.floor((timer === null ? Date.now() : now) / 60_000) * 60_000);

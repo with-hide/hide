@@ -1299,6 +1299,10 @@ async fn screen_loop(
 /// What a refused delivery or agent command asks of its caller.
 pub(crate) fn delivery_next_action(code: &str) -> &'static str {
     match herdr_core::coordination::split_refusal(code).0 {
+        // A spawn that hands a plan step, or a letter that would wake a
+        // plan's sleeping child, is refused as the plan words it (PRD
+        // hide-plan-delegate B5, B6).
+        code if code.starts_with("plan_") => herdr_core::plans::next_action(code),
         "agent_pane_required" => {
             "Run the command inside a pane where the agent is running; an agent on Codex's shared daemon needs a session started with --no-daemon"
         }
@@ -1315,6 +1319,15 @@ pub(crate) fn delivery_next_action(code: &str) -> &'static str {
             "Install the agent CLI on the device so it is on the device's PATH, then run the command again"
         }
         "spawn_busy" => "The first request is still running; wait, then run the same command again",
+        "composer_not_empty" => {
+            "Someone is typing in the recipient's input, so nothing was typed or recorded; send it again without --force, and it is delivered once they submit"
+        }
+        "composer_unconfirmed" => {
+            "Hide could not read the recipient's input as empty (a menu or dialog may be open), so nothing was typed or recorded; send it again without --force"
+        }
+        "force_target_asleep" => {
+            "The recipient is asleep; send it again without --force, and a request or block wakes it"
+        }
         "machine_not_permitted" => {
             "Run the command from an agent on the machine that runs Hide, or leave out --machine"
         }
@@ -1426,33 +1439,20 @@ fn refusal_answer(reason: String, next_action: &'static str) -> (String, String)
             code.to_owned(),
             format!("{next_action}; {name} conducts it now"),
         ),
-        // A plan's refusal names the step or the field to fix (PRD hide-plan
-        // B1, B2), and a mission's the node and the lines it means (PRD
-        // mission-map-git-criteria B1, B9, B10).
-        (
-            code @ ("plan_invalid"
-            | "plan_order_refused"
-            | "plan_too_large"
-            | "plan_node_unknown"
-            | "mission_criteria_missing"
-            | "mission_criteria_too_many"
-            | "mission_criteria_unmet"
-            | "mission_criteria_protected"
-            | "mission_checkers_invalid"
-            | "mission_checker_is_worker"
-            | "mission_external_invalid"
-            | "mission_nodes_unfinished"),
-            Some(detail),
-        ) => (code.to_owned(), format!("{next_action} ({detail})")),
-        (code, Some("")) => (
+        // Only an unknown machine's detail lists the devices to name.
+        (code @ "machine_unknown", Some("")) => (
             code.to_owned(),
             "No other device is connected; connect one in Settings > Devices, then retry"
                 .to_owned(),
         ),
-        (code, Some(connected)) => (
+        (code @ "machine_unknown", Some(connected)) => (
             code.to_owned(),
             format!("Use one of the connected device ids with --machine: {connected}"),
         ),
+        // Every other detail names the step, node, field or evidence to fix:
+        // a plan's (PRD hide-plan B1, B2; hide-plan-delegate B5, B10-B13) and
+        // a mission's (PRD mission-map-git-criteria B1, B9, B10).
+        (code, Some(detail)) => (code.to_owned(), format!("{next_action} ({detail})")),
         (_, None) => (reason, next_action.to_owned()),
     }
 }
@@ -1499,8 +1499,17 @@ enum ScopedRequest {
         id: String,
         actor: Option<String>,
     },
+    /// `hide agent archive <id> [--actor <id>]`: the screen's `세션 보관`
+    /// for a registered agent, admitted by the core.
+    AgentArchive {
+        id: String,
+        actor: Option<String>,
+    },
     /// `hide device`: the core's own device registrations.
     Device(herdr_core::device_command::DeviceCommand),
+    /// `hide pane`, `hide agent read` and `hide workspace purpose`: run
+    /// through the core's engine, which needs no shell.
+    Pane(herdr_core::pane_command::PaneCommand),
     /// `hide <path>`: a folder of the caller's machine opened as a project
     /// (`project_open`).
     ProjectOpen(String),
@@ -1521,7 +1530,9 @@ impl ScopedRequest {
                 | Self::AgentCatalog(..)
                 | Self::Ps { .. }
                 | Self::AgentSleep { .. }
+                | Self::AgentArchive { .. }
                 | Self::Device(..)
+                | Self::Pane(..)
                 | Self::ProjectOpen(..)
         )
     }
@@ -1642,7 +1653,7 @@ async fn scoped_client_loop(
                             Some(Value::Bool(true)) => Some(ScopedRequest::Ps { all: true }),
                             _ => None,
                         },
-                        Some("agent_sleep") => {
+                        Some(kind @ ("agent_sleep" | "agent_archive")) => {
                             let text = |value: &Value| -> Option<String> {
                                 value
                                     .as_str()
@@ -1654,17 +1665,19 @@ async fn scoped_client_loop(
                                     .map(str::to_owned)
                             };
                             match (text(&value["id"]), value.get("actor")) {
-                                (Some(id), None | Some(Value::Null)) => {
-                                    Some(ScopedRequest::AgentSleep { id, actor: None })
-                                }
+                                (Some(id), None | Some(Value::Null)) => Some((id, None)),
                                 (Some(id), Some(actor)) => {
-                                    text(actor).map(|actor| ScopedRequest::AgentSleep {
-                                        id,
-                                        actor: Some(actor),
-                                    })
+                                    text(actor).map(|actor| (id, Some(actor)))
                                 }
                                 _ => None,
                             }
+                            .map(|(id, actor)| {
+                                if kind == "agent_sleep" {
+                                    ScopedRequest::AgentSleep { id, actor }
+                                } else {
+                                    ScopedRequest::AgentArchive { id, actor }
+                                }
+                            })
                         }
                         Some("device") => serde_json::from_value::<
                             herdr_core::device_command::DeviceCommand,
@@ -1672,6 +1685,11 @@ async fn scoped_client_loop(
                         .ok()
                         .filter(herdr_core::device_command::DeviceCommand::valid)
                         .map(ScopedRequest::Device),
+                        Some("pane") => serde_json::from_value::<
+                            herdr_core::pane_command::PaneCommand,
+                        >(value["command"].clone())
+                        .ok()
+                        .map(ScopedRequest::Pane),
                         Some("project_open") => value["path"]
                             .as_str()
                             .filter(|path| herdr_core::project_open::valid_path(path))
@@ -1684,6 +1702,7 @@ async fn scoped_client_loop(
                         || (value["type"] != "delivery"
                             && value["type"] != "mission"
                             && value["type"] != "plan"
+                            && value["type"] != "pane"
                             && text.len() > 16 * 1024)
                         || request_id.is_empty()
                         || request_id.len() > 64
@@ -1825,6 +1844,13 @@ async fn scoped_client_loop(
                                             (code, next)
                                         })?
                                 }
+                                ScopedRequest::AgentArchive { id, actor } => {
+                                    core.agent_archive(&cap.context.device_id, &cap.pane_id, &cap.context, id, actor)
+                                        .map_err(|code| {
+                                            let next = herdr_core::coordination::archive_next_action(&code);
+                                            (code, next)
+                                        })?
+                                }
                                 ScopedRequest::ProjectOpen(path) => crate::project_open::run(
                                     &core,
                                                                         &roots,
@@ -1834,6 +1860,16 @@ async fn scoped_client_loop(
                                     &path,
                                     &command_request_id,
                                 )?,
+                                ScopedRequest::Pane(command) => {
+                                    let refusal = |code: String| {
+                                        let next = herdr_core::pane_command::next_action(&code)
+                                            .unwrap_or_else(|| crate::server::delivery_next_action(&code));
+                                        (code, next)
+                                    };
+                                    core.prepare_pane(&cap.context.device_id, &cap.pane_id, &cap.context, command)
+                                        .and_then(herdr_core::pane_command::Prepared::run)
+                                        .map_err(refusal)?
+                                }
                                 ScopedRequest::Device(command) => {
                                     core.device_command(&cap.context.device_id, command)
                                         .map_err(|code| {
@@ -2214,6 +2250,9 @@ fn handle_client_text(
             return Ok(ClientAction::Replies(handle_attachment_commit(
                 state, &event,
             )));
+        }
+        Some("thread_input") => {
+            return Ok(ClientAction::Replies(handle_thread_input(state, &event)));
         }
         Some("path_import") => {
             return Ok(ClientAction::Replies(handle_path_import(state, &event)));
@@ -3028,6 +3067,67 @@ fn attachment_refused(request_id: &str, reason: &str) -> Value {
     json!({"type": "attachment_refused", "payload": {"request_id": request_id, "reason": reason}})
 }
 
+/// A session thread's input box (PRD session-docs-and-assistant B29): the
+/// files it staged are committed here, where they were staged, and the core
+/// is told their paths with the words, which it types into the thread's
+/// pane. A refusal before the core is answered as an attachment's is, by
+/// the input's request id; the core's own answer is in the thread section.
+fn handle_thread_input(state: &AppState, event: &Value) -> Vec<Message> {
+    let request_id = payload_str(event, "request_id");
+    let refuse = |reason: &str| {
+        vec![Message::Text(
+            attachment_refused(&request_id, reason).to_string().into(),
+        )]
+    };
+    if !attachments::valid_request_id(&request_id) {
+        return refuse("invalid_request_id");
+    }
+    let (Some(generation), Some(text)) = (
+        event.pointer("/payload/generation").and_then(Value::as_u64),
+        event.pointer("/payload/text").and_then(Value::as_str),
+    ) else {
+        return refuse("invalid_item");
+    };
+    let stages: Vec<String> = event
+        .pointer("/payload/stages")
+        .and_then(Value::as_array)
+        .map(|stages| {
+            stages
+                .iter()
+                .filter_map(Value::as_str)
+                .map(str::to_owned)
+                .collect()
+        })
+        .unwrap_or_default();
+    let paths = if stages.is_empty() {
+        Vec::new()
+    } else {
+        match state.attachments.commit(&stages, false) {
+            Ok(paths) => paths,
+            Err(reason) => return refuse(reason),
+        }
+    };
+    let input = json!({
+        "schema_version": 2,
+        "kind": "session_thread_input",
+        "payload": {
+            "generation": generation,
+            "pane_id": payload_str(event, "pane_id"),
+            "request_id": request_id,
+            "text": text,
+            "paths": paths,
+        },
+    });
+    if let Err(error) = state
+        .core
+        .dispatch(serde_json::to_vec(&input).unwrap_or_default())
+    {
+        log_snapshot_failure("thread_input", &error);
+        return refuse("forward_failed");
+    }
+    Vec::new()
+}
+
 /// Opens one staged upload the client will send bytes for. The caps are
 /// checked here so a too-large file is refused before its bytes arrive.
 fn handle_attachment_stage(state: &AppState, event: &Value, connection: u64) -> Vec<Message> {
@@ -3767,13 +3867,14 @@ fn apply_boundary(boundary: &Boundary, event: &mut Value) -> Option<Value> {
         {
             browser_url(boundary, event, &kind)
         }
-        // The shell's attachment events name files the operator's machine
-        // shows it; hided is their only producer for a web client (which
-        // stages bytes instead), so a client that sends one is naming an
-        // arbitrary path and never reaches the core.
-        "terminal_attachment" | "terminal_attachment_ready" | "terminal_attachment_action" => {
-            rejected(kind.as_str())
-        }
+        // The shell's attachment events and a thread's input name files the
+        // operator's machine shows it; hided is their only producer for a
+        // web client (which stages bytes instead), so a client that sends
+        // one is naming an arbitrary path and never reaches the core.
+        "terminal_attachment"
+        | "terminal_attachment_ready"
+        | "terminal_attachment_action"
+        | "session_thread_input" => rejected(kind.as_str()),
         _ => None,
     }
 }
@@ -4772,6 +4873,63 @@ mod tests {
             let (reason, next) = refusal_answer(code.to_owned(), delivery_next_action(code));
             assert_eq!(reason, code);
             assert_ne!(next, delivery_next_action("other"), "{code}");
+        }
+    }
+
+    /// A plan's refusal answers as the plan words it, with the step, field or
+    /// evidence it names, from `hide plan` and from a spawn or a letter
+    /// alike, never as a device list (PRD hide-plan-delegate B5, B10, B24).
+    #[test]
+    fn a_plan_refusal_answers_the_plans_next_action_and_what_it_names() {
+        for (reason, words) in [
+            ("plan_evidence_missing\u{1f}pr --pr", "--pr <number>"),
+            ("plan_pr_not_yours\u{1f}pr #12", "name the pull request"),
+            ("plan_pr_unconfirmed\u{1f}pr #12", "ask GitHub"),
+            (
+                "plan_file_outside\u{1f}spec ../spec.md",
+                "inside this session's checkout",
+            ),
+            ("plan_file_missing\u{1f}spec docs/spec.md", "write it"),
+            (
+                "plan_file_unconfirmed\u{1f}spec docs/spec.md",
+                "run the same command again",
+            ),
+            ("plan_report_missing\u{1f}web", "report letter"),
+            (
+                "plan_order_refused\u{1f}web waits on spec",
+                "Finish or drop",
+            ),
+            ("plan_node_finished\u{1f}web", "already done or dropped"),
+            ("plan_node_unknown\u{1f}nope", "hide plan show"),
+            ("plan_delegate_full\u{1f}3", "do this step yourself"),
+        ] {
+            let (code, detail) = herdr_core::coordination::split_refusal(reason);
+            let detail = detail.unwrap();
+            for next in [
+                herdr_core::plans::next_action(code),
+                delivery_next_action(reason),
+            ] {
+                let (answered, text) = refusal_answer(reason.to_owned(), next);
+                assert_eq!(answered, code);
+                assert!(text.contains(words), "{code}: {text}");
+                assert!(text.ends_with(&format!("({detail})")), "{code}: {text}");
+                assert!(!text.contains("--machine"), "{code}: {text}");
+            }
+        }
+        // A spawn's refusals that carry nothing more read as the plan's.
+        for code in [
+            "plan_missing",
+            "plan_review_pending",
+            "plan_delegate_needs_parent",
+            "plan_candidate_refused",
+            "plan_delegate_not_permitted",
+            "plan_unavailable",
+            "plan_session_unknown",
+        ] {
+            let (answered, text) = refusal_answer(code.to_owned(), delivery_next_action(code));
+            assert_eq!(answered, code);
+            assert_eq!(text, herdr_core::plans::next_action(code));
+            assert_ne!(text, herdr_core::plans::next_action("other"), "{code}");
         }
     }
 

@@ -237,6 +237,21 @@
             "title": "AgentView",
             "type": "object"
         },
+        "agent_archived": {
+            "properties": {
+                "archived": {
+                    "type": "object"
+                },
+                "pane_id": {
+                    "type": "object"
+                }
+            },
+            "required": [
+                "archived",
+                "pane_id"
+            ],
+            "type": "object"
+        },
         "agent_catalog": {
             "properties": {
                 "installed_known": {
@@ -745,6 +760,11 @@
                                 "null"
                             ]
                         },
+                        "forced": {
+                            "default": false,
+                            "description": "Sent with `hide request send --force` (PRD engine-bundle-1 D-14): its composer was read empty when it was sent, and the doorbell types its bell even while the recipient works, after reading the composer empty once more; a composer that shows text then leaves it an ordinary letter sent with `--now`. An older build drops the field and the letter waits as a `--now` letter.",
+                            "type": "boolean"
+                        },
                         "hook_confirmed": {
                             "default": null,
                             "type": [
@@ -840,6 +860,7 @@
                         "bell_turn",
                         "intake_from",
                         "immediate",
+                        "forced",
                         "tool_handovers"
                     ],
                     "type": "object"
@@ -1091,6 +1112,11 @@
                         "null"
                     ]
                 },
+                "forced": {
+                    "default": false,
+                    "description": "Sent with `hide request send --force` (PRD engine-bundle-1 D-14): its composer was read empty when it was sent, and the doorbell types its bell even while the recipient works, after reading the composer empty once more; a composer that shows text then leaves it an ordinary letter sent with `--now`. An older build drops the field and the letter waits as a `--now` letter.",
+                    "type": "boolean"
+                },
                 "hook_confirmed": {
                     "default": null,
                     "type": [
@@ -1186,6 +1212,7 @@
                 "bell_turn",
                 "intake_from",
                 "immediate",
+                "forced",
                 "tool_handovers"
             ],
             "title": "Letter",
@@ -1252,6 +1279,66 @@
             "required": [
                 "settings"
             ],
+            "type": "object"
+        },
+        "pane_opened": {
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "description": "`hide pane open`: the pane made beside the caller's, and whether it took the keyboard focus.",
+            "properties": {
+                "focused": {
+                    "type": "boolean"
+                },
+                "pane": {
+                    "type": "string"
+                }
+            },
+            "required": [
+                "focused",
+                "pane"
+            ],
+            "title": "PaneOpened",
+            "type": "object"
+        },
+        "pane_read": {
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "description": "`hide pane read` and `hide agent read`: the pane's last lines, unwrapped.",
+            "properties": {
+                "pane": {
+                    "description": "The pane read: a pane of the caller's own machine bare, as `hide ps` lists it there (`w1:p2`), another machine's as `remote:<device>:pane:<id>`.",
+                    "type": "string"
+                },
+                "text": {
+                    "type": "string"
+                },
+                "truncated": {
+                    "description": "Whether the engine cut the answer short.",
+                    "type": "boolean"
+                }
+            },
+            "required": [
+                "pane",
+                "text",
+                "truncated"
+            ],
+            "title": "PaneRead",
+            "type": "object"
+        },
+        "pane_sent": {
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "description": "`hide pane send`: the pane typed into, and whether Enter followed.",
+            "properties": {
+                "pane": {
+                    "type": "string"
+                },
+                "submitted": {
+                    "type": "boolean"
+                }
+            },
+            "required": [
+                "pane",
+                "submitted"
+            ],
+            "title": "PaneSent",
             "type": "object"
         },
         "plan": {
@@ -1526,6 +1613,20 @@
                 "missions_unreadable"
             ],
             "title": "Ps",
+            "type": "object"
+        },
+        "purpose_set": {
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "description": "`hide workspace purpose`: the purpose the checkout now shows.",
+            "properties": {
+                "purpose": {
+                    "type": "string"
+                }
+            },
+            "required": [
+                "purpose"
+            ],
+            "title": "PurposeSet",
             "type": "object"
         },
         "stopped": {
@@ -2001,6 +2102,56 @@
         },
         {
             "answers": [
+                "agent_archived"
+            ],
+            "arguments": [
+                {
+                    "name": "id",
+                    "value": {
+                        "type": "text"
+                    }
+                }
+            ],
+            "command": "agent archive",
+            "options": [
+                {
+                    "name": "--actor",
+                    "required": false,
+                    "requires": [],
+                    "value": {
+                        "type": "text"
+                    }
+                },
+                {
+                    "name": "--json",
+                    "required": false,
+                    "requires": [],
+                    "value": null
+                }
+            ],
+            "refusals": [
+                "agent_pane_required",
+                "agent_unavailable",
+                "agent_ended",
+                "parent_authority_required",
+                "actor_identity_conflict",
+                "archive_confirmation_required",
+                "archive_not_offered",
+                "archive_delegated",
+                "archive_device_disconnected",
+                "archive_session_unknown",
+                "archive_status_unknown",
+                "archive_target_unknown",
+                "archive_too_many",
+                "archive_busy",
+                "archive_context_unavailable",
+                "archive_full"
+            ],
+            "repeats_at_most": null,
+            "rest": null
+        },
+        {
+            "answers": [
                 "agent"
             ],
             "arguments": [],
@@ -2037,11 +2188,25 @@
                     }
                 },
                 {
+                    "conflicts": [
+                        "--plan-node"
+                    ],
                     "name": "--intent",
-                    "required": true,
+                    "required": false,
                     "requires": [],
                     "value": {
                         "type": "text"
+                    }
+                },
+                {
+                    "conflicts": [
+                        "--intent"
+                    ],
+                    "name": "--plan-node",
+                    "required": false,
+                    "requires": [],
+                    "value": {
+                        "type": "key"
                     }
                 },
                 {
@@ -2150,7 +2315,18 @@
                 "beside_other_checkout",
                 "beside_other_machine",
                 "beside_needs_agent_pane",
-                "beside_pane_unavailable"
+                "beside_pane_unavailable",
+                "plan_missing",
+                "plan_node_unknown",
+                "plan_node_finished",
+                "plan_delegate_needs_parent",
+                "plan_order_refused",
+                "plan_review_pending",
+                "plan_candidate_refused",
+                "plan_delegate_full",
+                "plan_delegate_not_permitted",
+                "plan_unavailable",
+                "plan_session_unknown"
             ],
             "repeats_at_most": null,
             "rest": "the agent's own arguments"
@@ -2321,6 +2497,170 @@
         },
         {
             "answers": [
+                "pane_read"
+            ],
+            "arguments": [
+                {
+                    "name": "pane",
+                    "value": {
+                        "type": "key"
+                    }
+                }
+            ],
+            "command": "pane read",
+            "options": [
+                {
+                    "name": "--lines",
+                    "required": false,
+                    "requires": [],
+                    "value": {
+                        "type": "unsigned"
+                    }
+                },
+                {
+                    "name": "--json",
+                    "required": false,
+                    "requires": [],
+                    "value": null
+                }
+            ],
+            "refusals": [
+                "pane_required",
+                "lines_out_of_range",
+                "pane_unavailable"
+            ],
+            "repeats_at_most": null,
+            "rest": null
+        },
+        {
+            "answers": [
+                "pane_sent"
+            ],
+            "arguments": [
+                {
+                    "name": "pane",
+                    "value": {
+                        "type": "key"
+                    }
+                },
+                {
+                    "name": "text",
+                    "value": {
+                        "type": "body"
+                    }
+                }
+            ],
+            "command": "pane send",
+            "options": [
+                {
+                    "name": "--enter",
+                    "required": false,
+                    "requires": [],
+                    "value": null
+                }
+            ],
+            "refusals": [
+                "pane_required",
+                "text_too_long",
+                "pane_unavailable"
+            ],
+            "repeats_at_most": null,
+            "rest": null
+        },
+        {
+            "answers": [
+                "pane_opened"
+            ],
+            "arguments": [],
+            "command": "pane open",
+            "options": [
+                {
+                    "name": "--beside",
+                    "required": true,
+                    "requires": [],
+                    "value": null
+                },
+                {
+                    "name": "--focus",
+                    "required": false,
+                    "requires": [],
+                    "value": null
+                }
+            ],
+            "refusals": [
+                "pane_required",
+                "command_invalid",
+                "command_too_long",
+                "pane_unavailable",
+                "pane_open_unconfirmed",
+                "shell_not_ready"
+            ],
+            "repeats_at_most": null,
+            "rest": "the command the new pane's shell runs, its words joined by spaces into one line"
+        },
+        {
+            "answers": [
+                "pane_read"
+            ],
+            "arguments": [
+                {
+                    "name": "agent",
+                    "value": {
+                        "type": "key"
+                    }
+                }
+            ],
+            "command": "agent read",
+            "options": [
+                {
+                    "name": "--lines",
+                    "required": false,
+                    "requires": [],
+                    "value": {
+                        "type": "unsigned"
+                    }
+                },
+                {
+                    "name": "--json",
+                    "required": false,
+                    "requires": [],
+                    "value": null
+                }
+            ],
+            "refusals": [
+                "pane_required",
+                "lines_out_of_range",
+                "agent_unavailable",
+                "target_ambiguous"
+            ],
+            "repeats_at_most": null,
+            "rest": null
+        },
+        {
+            "answers": [
+                "purpose_set"
+            ],
+            "arguments": [
+                {
+                    "name": "text",
+                    "value": {
+                        "type": "text"
+                    }
+                }
+            ],
+            "command": "workspace purpose",
+            "options": [],
+            "refusals": [
+                "pane_required",
+                "purpose_invalid",
+                "purpose_too_long",
+                "purpose_no_workspace"
+            ],
+            "repeats_at_most": null,
+            "rest": null
+        },
+        {
+            "answers": [
                 "letter"
             ],
             "arguments": [
@@ -2364,11 +2704,28 @@
                     }
                 },
                 {
+                    "conflicts": [
+                        "--force"
+                    ],
                     "name": "--now",
                     "required": false,
                     "requires": [],
                     "value": null
+                },
+                {
+                    "conflicts": [
+                        "--now"
+                    ],
+                    "name": "--force",
+                    "required": false,
+                    "requires": [],
+                    "value": null
                 }
+            ],
+            "refusals": [
+                "composer_not_empty",
+                "composer_unconfirmed",
+                "force_target_asleep"
             ],
             "repeats_at_most": null,
             "rest": null
@@ -3566,7 +3923,14 @@
                 "plan_too_large",
                 "plan_full",
                 "plan_unavailable",
-                "plan_session_unknown"
+                "plan_session_unknown",
+                "plan_evidence_missing",
+                "plan_pr_not_yours",
+                "plan_pr_unconfirmed",
+                "plan_file_outside",
+                "plan_file_missing",
+                "plan_file_unconfirmed",
+                "plan_report_missing"
             ],
             "repeats_at_most": null,
             "rest": null
@@ -3592,9 +3956,9 @@
                     "value": {
                         "type": "one_of",
                         "values": [
+                            "done",
                             "planned",
                             "working",
-                            "done",
                             "dropped"
                         ]
                     }
@@ -3606,12 +3970,41 @@
                     "value": {
                         "type": "text"
                     }
+                },
+                {
+                    "conflicts": [
+                        "--file"
+                    ],
+                    "name": "--pr",
+                    "required": false,
+                    "requires": [],
+                    "value": {
+                        "type": "unsigned"
+                    }
+                },
+                {
+                    "conflicts": [
+                        "--pr"
+                    ],
+                    "name": "--file",
+                    "required": false,
+                    "requires": [],
+                    "value": {
+                        "type": "text"
+                    }
                 }
             ],
             "refusals": [
                 "plan_missing",
                 "plan_node_unknown",
-                "plan_order_refused"
+                "plan_order_refused",
+                "plan_evidence_missing",
+                "plan_pr_not_yours",
+                "plan_pr_unconfirmed",
+                "plan_file_outside",
+                "plan_file_missing",
+                "plan_file_unconfirmed",
+                "plan_report_missing"
             ],
             "repeats_at_most": null,
             "rest": null
@@ -3659,7 +4052,7 @@
             "rest": null
         }
     ],
-    "digest": "sha256:0826270596fd45f7884584e06cb8b1447ea7abb392f60949609f66d18536e3bd",
+    "digest": "sha256:1019ebe976aed86140577551008d5a94cfd2bde2fcbc7723871f2cd01fefde6f",
     "envelopes": {
         "agent": {
             "answer": "value",
@@ -3681,6 +4074,11 @@
             "code": "reason",
             "ok": "ok"
         },
+        "pane": {
+            "answer": "value",
+            "code": "error.code",
+            "ok": "ok"
+        },
         "plan": {
             "answer": "result",
             "code": "reason",
@@ -3699,6 +4097,11 @@
         "watch": {
             "answer": "result",
             "code": "reason",
+            "ok": "ok"
+        },
+        "workspace": {
+            "answer": "value",
+            "code": "error.code",
             "ok": "ok"
         }
     },

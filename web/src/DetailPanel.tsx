@@ -1,5 +1,6 @@
 import { ArrowLeftIcon, CoinsIcon, ExternalLinkIcon, FileDiffIcon, FileTextIcon, FolderGit2Icon, GitBranchIcon, GitPullRequestIcon, ListChecksIcon, SettingsIcon, WaypointsIcon, XIcon } from "lucide-react";
 import { cn } from "./lib/utils";
+import { ProjectLanePin } from "./ProjectLanePin";
 import { PR_LOOK } from "./prMark";
 import type { Actions } from "./actions";
 import { Button } from "./components/ui/button";
@@ -137,6 +138,7 @@ export function DetailPanel({ actions }: { actions: Actions }) {
             </Button>
           </Hint>
         ) : null}
+        <ProjectLanePin column="view" actions={actions} />
         <Hint label={t("detail.close")}>
           <Button variant="ghost" size="icon-sm" className="text-muted-foreground" aria-label={t("detail.close")} onClick={() => actions.detailClose()} data-detail-close="true">
             <XIcon />

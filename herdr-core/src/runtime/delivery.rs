@@ -51,6 +51,9 @@ pub(crate) struct Observation {
     /// composer declaration is checked (`composer_check_due`).
     pub hook_submit_at_unix_ms: u64,
     pub session: Option<hide_session::session_activity::SessionActivityRequest>,
+    /// The session a thread of this pane reads, for every agent with a
+    /// thread reader, OpenCode's database included.
+    pub thread: Option<super::session_thread::ThreadReference>,
     pub host_scope: Option<String>,
     pub turn: Turn,
 }
@@ -231,6 +234,7 @@ impl Runtime {
                 released_input_at_unix_ms: previous.map_or(0, |old| old.released_input_at_unix_ms),
                 hook_submit_at_unix_ms: previous.map_or(0, |old| old.hook_submit_at_unix_ms),
                 session,
+                thread: super::session_thread::ThreadReference::of(agent),
                 host_scope: host_scope
                     .filter(|scope| scope.len() <= 4096)
                     .map(str::to_owned),
@@ -257,6 +261,7 @@ impl Runtime {
         // follows publishes whatever this settles.
         self.settle_dormant_registrations();
         self.follow_resumed_conductors(device);
+        self.follow_session_thread(device, payload);
     }
 
     /// Continue a registration only when this host still reports its terminal
@@ -660,16 +665,16 @@ impl Runtime {
         }
     }
 
-    /// The phone's reply is text hide sent and submitted in one write to an
-    /// agent waiting on the operator, so it is a key and a submit.
-    pub(crate) fn note_delivery_reply(&mut self, pane_id: &str) {
+    /// A phone's reply or a thread's input is text hide sent and submitted
+    /// in one write, so it is a key and a submit; `source` names which.
+    pub(crate) fn note_delivery_reply(&mut self, pane_id: &str, source: &'static str) {
         self.reopen_resolved_session(pane_id);
         if let Some(observation) = self.delivery_observations.get_mut(pane_id) {
             let now = unix_milliseconds();
             observation.last_input_at_unix_ms = now;
             observation.last_submit_at_unix_ms = now;
             self.sync_composer_mark(pane_id, now);
-            self.trace_delivery_input(pane_id, "phone_reply");
+            self.trace_delivery_input(pane_id, source);
         }
     }
 
@@ -959,13 +964,6 @@ impl Runtime {
         hint: Option<&str>,
         mut command: Command,
     ) -> Result<Prepared, String> {
-        let context = self
-            .workspace_control_query(device, caller, Query::Info)
-            .map_err(|refusal| refusal.reason.to_owned())?
-            .context;
-        if context != *expected {
-            return Err("caller_context_changed".into());
-        }
         // Herdr numbers panes per machine and an agent learns the numbers from
         // its own machine's Herdr, so a bare pane id names a pane on the
         // caller's machine; the core's panes are observed under their bare ids
@@ -981,21 +979,40 @@ impl Runtime {
         };
         // Only Hide's pane attestation names the agent a command acts as; a
         // checkout-bound caller has no pane, and a hint cannot lend it one.
-        let Caller::Pane(actor_pane) = Caller::parse(caller) else {
-            return Err("agent_pane_required".into());
+        // The Desk process acts as Hide's own `hide:desk` while it runs.
+        let (context, actor) = if Caller::parse(caller) == Caller::Desk {
+            if hint.is_some() {
+                return Err("caller_identity_conflict".into());
+            }
+            self.desk_authority(device)?
+        } else {
+            let context = self
+                .workspace_control_query(device, caller, Query::Info)
+                .map_err(|refusal| refusal.reason.to_owned())?
+                .context;
+            let Caller::Pane(actor_pane) = Caller::parse(caller) else {
+                return Err("agent_pane_required".into());
+            };
+            if hint.is_some_and(|hint| qualify(hint) != actor_pane) {
+                return Err("caller_identity_conflict".into());
+            }
+            let actor = self
+                .delivery_observations
+                .get(actor_pane)
+                .ok_or("agent_pane_required")?
+                .actor
+                .clone();
+            (context, actor)
         };
-        if hint.is_some_and(|hint| qualify(hint) != actor_pane) {
-            return Err("caller_identity_conflict".into());
+        if context != *expected {
+            return Err("caller_context_changed".into());
         }
-        let actor = self
-            .delivery_observations
-            .get(actor_pane)
-            .ok_or("agent_pane_required")?
-            .actor
-            .clone();
+        let actor_pane = actor.pane_id.as_str();
         actor.require_native_identity()?;
-        if crate::delivery::reserved_name(&actor.name) {
-            // A pane named like a Factory would read as one (D-14).
+        if !actor.code_owned() && crate::delivery::reserved_name(&actor.name) {
+            // A pane named like a Factory would read as one (D-14); Hide's
+            // own actors, such as Desk's `hide:desk`, carry their reserved
+            // names.
             return Err("reserved_name".into());
         }
         // A Conductor's spawn is one of its mission's workers: refused before
@@ -1004,24 +1021,46 @@ impl Runtime {
         if let Command::Agents {
             command:
                 crate::coordination::Command::Spawn {
+                    parent,
                     machine,
                     mission,
                     kind,
                     launch,
                     intent,
                     brief,
+                    plan_node,
+                    plan,
                     ..
                 },
         } = &mut command
         {
-            *mission = self.mission_spawn_admission(
-                &actor,
-                machine.as_deref(),
-                kind,
-                launch,
-                intent,
-                brief.is_some(),
-            )?;
+            // A plan's child and a mission's worker or checker start no
+            // agents, and a step's spawn takes the intent the core makes for
+            // its attempt (PRD hide-plan-delegate B1, B7, B8).
+            *plan = self
+                .plan_spawn_admission(
+                    &actor,
+                    device,
+                    parent.as_deref(),
+                    plan_node.as_deref(),
+                    kind,
+                    launch,
+                    self.missions.book.conducted_open(&actor).is_some(),
+                )?
+                .map(Box::new);
+            if let Some(admission) = plan {
+                *intent = crate::coordination::plan_intent(&admission.link);
+            }
+            *mission = self
+                .mission_spawn_admission(
+                    &actor,
+                    machine.as_deref(),
+                    kind,
+                    launch,
+                    intent,
+                    brief.is_some(),
+                )?
+                .map(Box::new);
         }
         // Only the pane's own session proves its composer was submitted, so a
         // stray `hide inbox --hook` from a tool in the pane clears no draft.
@@ -1092,6 +1131,8 @@ impl Runtime {
             }
             _ => {}
         }
+        // A spawn of Desk's past its places waits in Desk's queue (B21).
+        let queued = self.desk_spawn_admission(&actor, &command)?;
         let repeated = match &command {
             Command::Send { intent, .. } => self.delivery_ledger.as_ref().is_ok_and(|ledger| {
                 crate::delivery::mailbox::existing_intent(
@@ -1144,6 +1185,15 @@ impl Runtime {
                         .and_then(|ledger| self.sleeping_target(ledger, registered, &pane)),
                     (_, first) => first,
                 };
+                // A letter that wakes a sleeping plan child waits for a place
+                // under its main's cap, and is not kept without one (PRD
+                // hide-plan-delegate B6).
+                if let (Command::Send { kind, .. }, Some(observation)) = (&command, &first)
+                    && matches!(kind.as_str(), "request" | "block")
+                    && self.asleep_route(&observation.actor).is_some()
+                {
+                    self.plan_wake_admission(&actor, &observation.actor)?;
+                }
                 if first.is_none() && !self.delivery_overflow.is_empty() {
                     return Err("capacity".into());
                 }
@@ -1168,7 +1218,33 @@ impl Runtime {
                 .actor
                 .require_native_identity()?;
         }
-        Ok(Prepared::new(
+        let after = if queued.is_some() {
+            self.desk_queued_after()
+        } else if !repeated {
+            self.desk_after(&actor, &command, target.as_ref())
+        } else {
+            None
+        };
+        // A forced letter is typed into a pane that runs now, so its
+        // composer can be read; a sleeping recipient is woken by an ordinary
+        // letter instead (PRD engine-bundle-1 D-14).
+        let forced = match (&command, &target) {
+            (Command::Send { force: true, .. }, Some(target)) if !repeated => {
+                let live = self
+                    .delivery_observations
+                    .get(&target.actor.pane_id)
+                    .is_some_and(|observation| observation.actor.same_identity(&target.actor));
+                if !live {
+                    return Err("force_target_asleep".into());
+                }
+                Some(
+                    self.delivery_engine(&target.actor.device_id)
+                        .ok_or("delivery_unavailable")?,
+                )
+            }
+            _ => None,
+        };
+        let prepared = Prepared::new(
             self.delivery_client.clone().ok_or("delivery_unavailable")?,
             Authority {
                 caller: caller.to_owned(),
@@ -1177,7 +1253,16 @@ impl Runtime {
             actor,
             target,
             command,
-        ))
+        )
+        .then(after);
+        let prepared = match forced {
+            Some(engine) => prepared.forced_through(engine),
+            None => prepared,
+        };
+        Ok(match queued {
+            Some(answer) => prepared.answered(answer),
+            None => prepared,
+        })
     }
 
     pub(crate) fn install_delivery_client(&mut self, client: Client) {
@@ -1401,12 +1486,16 @@ impl Runtime {
         let continued = self.settle_dormant_registrations();
         self.feed_link_parents();
         let lineage = (waiters_moved || started_moved) && self.refresh_agent_lineage();
+        // A plan step's child moved by its letters or its end (PRD
+        // hide-plan-delegate B16, B17).
+        let plans = self.fold_delegations();
         changed
             | graph_changed
             | reopened
             | feedback
             | continued
             | lineage
+            | plans
             | self.sync_session_state()
             | self.refresh_agent_scopes()
     }
@@ -1419,6 +1508,8 @@ impl Runtime {
                 || *actor == Actor::hide(super::missions::CONDUCTOR_ROLE, self.node.as_str())
                 || *actor
                     == Actor::hide(super::agent_sleep::letters::WAKE_ROLE, self.node.as_str())
+                || (*actor == Actor::hide(crate::delivery::HIDE_DESK_ROLE, self.node.as_str())
+                    && self.desk_installed())
                 || *actor == Actor::operator(self.node.as_str()))
     }
 
@@ -1828,6 +1919,7 @@ pub(crate) mod tests {
     const WAITED: crate::delivery::doorbell::Patience = crate::delivery::doorbell::Patience {
         arrived_at_unix_ms: 0,
         now: false,
+        forced: false,
     };
     use crate::delivery::worker::Worker;
     use crate::handle::ChangeNotifier;
@@ -2272,6 +2364,7 @@ pub(crate) mod tests {
             let patience = Patience {
                 arrived_at_unix_ms: 0,
                 now: true,
+                forced: false,
             };
             assert_eq!(
                 judge(&observed(&guard, "recipient"), patience, u64::MAX),
@@ -2995,6 +3088,7 @@ pub(crate) mod tests {
             body: format!("{intent} body"),
             kind: "request".into(),
             now,
+            force: false,
         };
         let sender_context = authority(&sender).context;
         let mut sent = Vec::new();
@@ -3190,6 +3284,7 @@ pub(crate) mod tests {
                     body: "done".into(),
                     kind: "report".into(),
                     now: false,
+                    force: false,
                 },
             )
             .unwrap();
@@ -3260,6 +3355,7 @@ pub(crate) mod tests {
             body: "done".into(),
             kind: "report".into(),
             now: false,
+            force: false,
         }
     }
 
@@ -3438,6 +3534,7 @@ pub(crate) mod tests {
                 body: "hello".into(),
                 kind: "request".into(),
                 now: false,
+                force: false,
             },
             Command::Inbox,
             Command::WatchStart {
@@ -3527,6 +3624,7 @@ pub(crate) mod tests {
                         body: "private".into(),
                         kind: "request".into(),
                         now: false,
+                        force: false,
                     },
                 )
                 .unwrap()
@@ -4119,6 +4217,7 @@ pub(crate) mod tests {
                 body: "read me after a restart".into(),
                 kind: "request".into(),
                 now: false,
+                force: false,
             },
         )
         .unwrap();

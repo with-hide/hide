@@ -255,9 +255,14 @@ int main(int argc, char **argv) {
   snprintf(session, sizeof session, "fixture-%d", process_id());
   for (int i = 1; i + 1 < argc; i++)
     if (strcmp(argv[i], "--resume") == 0) snprintf(session, sizeof session, "%s", argv[i + 1]);
+  /* Run under another agent's name (a Grok pane's), the pane is that agent's, which Herdr reads from the
+     program; only the Claude Code stand-in reports a session of its own. */
+  const char *base = argv[0];
+  for (const char *at = argv[0]; *at; at++) if (*at == '/' || *at == '\\') base = at + 1;
+  int claude = strcmp(base, "claude") == 0 || strcmp(base, "claude.exe") == 0;
   char *report[] = { (char *)herdr_binary, "pane", "report-agent-session", (char *)pane,
     "--source", "herdr:claude", "--agent", "claude", "--agent-session-id", session, "--seq", "1", NULL };
-  if (run_child(report) != 0) return 1;
+  if (claude && run_child(report) != 0) return 1;
   raw_terminal();
   static const char ready[] = "\r\nClaude Code fixture\r\nclaude fixture ready\r\n❯ ";
   if (terminal_write(ready, sizeof ready - 1) != (fixture_count_t)(sizeof ready - 1)) return 1;

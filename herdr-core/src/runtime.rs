@@ -9,6 +9,7 @@ mod agent_catalog;
 pub(crate) mod agent_choice;
 mod agent_close;
 mod agent_groups;
+mod agent_hook_status;
 mod agent_sleep;
 mod agents;
 mod attachments;
@@ -22,6 +23,7 @@ mod clone;
 mod control_lane;
 pub(crate) mod core_move;
 pub(crate) mod delivery;
+mod desk;
 mod detail;
 mod device_analytics;
 mod device_catalog;
@@ -60,6 +62,7 @@ mod op_timing;
 mod operations;
 pub(crate) mod output_language;
 mod overview_graph;
+mod pane_command;
 pub(crate) mod pane_move;
 mod pane_move_preview;
 mod pane_prediction;
@@ -79,6 +82,7 @@ mod request_view;
 mod session;
 mod session_archive;
 mod session_state;
+mod session_thread;
 mod snapshot_delta;
 mod ssh_hosts;
 mod strays;
@@ -1404,6 +1408,8 @@ pub struct Runtime {
     /// Moving the operator's older Herdr server onto this app's Herdr
     /// (`runtime/herdr_takeover.rs`); session-only.
     herdr_takeover: herdr_takeover::Takeover,
+    /// The Desk room and its one Desk process (`runtime/desk.rs`).
+    desk: desk::Desk,
     /// When this Mac's kit is next re-read while Settings is on screen.
     local_kit_next_status: Option<Instant>,
     /// A Settings tab asked for one read of this Mac's kit.
@@ -1588,6 +1594,8 @@ pub struct Runtime {
     archive_detail_load_generation: u64,
     /// What the link worker was last handed, and its panel reads.
     links_work: links::LinksWork,
+    /// The one session thread a screen has open (`runtime/session_thread.rs`).
+    session_thread: session_thread::ThreadWork,
     backlog_work: backlog::BacklogWork,
     issue_detail_work: issues::IssueDetailWork,
     /// The minute the PRs tool's list was last judged against the clock
@@ -1710,6 +1718,12 @@ pub struct Runtime {
     /// The last labels the local session-sync coordinator published, laid on
     /// every local projection this runtime ingests, whichever path brings it.
     label_overlay: crate::labels::overlay::LabelOverlay,
+    /// What each pane's agent hook last reported (`agent_hooks::facts`),
+    /// shared with the device coordinators that lay it on their sessions.
+    hook_facts: crate::agent_hooks::facts::SharedHookFacts,
+    /// The hook tokens the last local session laid, by pane, until the next
+    /// session replaces them.
+    local_hook_tokens: BTreeMap<String, crate::agent_hooks::PaneHookTokens>,
     /// The label store and analyzer every session-sync coordinator's worker
     /// shares; `None` when the core was made without them (tests).
     label_services: Option<std::sync::Arc<crate::labels::LabelServices>>,
@@ -2369,6 +2383,7 @@ impl Runtime {
             local_kit_pending: None,
             first_run_apply: None,
             herdr_takeover: herdr_takeover::Takeover::default(),
+            desk: desk::Desk::default(),
             local_kit_next_status: None,
             local_kit_check_requested: false,
             device_kit_pending: BTreeMap::new(),
@@ -2442,6 +2457,7 @@ impl Runtime {
             memory_sessions_load_generation: 0,
             archive_detail_load_generation: 0,
             links_work: links::LinksWork::default(),
+            session_thread: session_thread::ThreadWork::default(),
             backlog_work: backlog::BacklogWork::default(),
             issue_detail_work: issues::IssueDetailWork::default(),
             work_clock_minute: 0,
@@ -2493,6 +2509,8 @@ impl Runtime {
             window_focused: false,
             unseen_laid_generation: 0,
             label_overlay: Default::default(),
+            hook_facts: Default::default(),
+            local_hook_tokens: BTreeMap::new(),
             label_services: None,
             pull_request_times: Default::default(),
             request_view_observed: false,

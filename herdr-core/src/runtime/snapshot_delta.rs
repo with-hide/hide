@@ -36,6 +36,15 @@ pub(super) struct DeltaState {
     suggestions_revision: u64,
     /// `None` until the Hide AI tool opens a Project.
     last_suggestions: Option<Arc<crate::model::SuggestionsSnapshot>>,
+    desk_revision: u64,
+    /// `None` until Desk is installed.
+    last_desk: Option<Arc<crate::model::DeskSnapshot>>,
+    desk_live_revision: u64,
+    last_desk_live: Option<Arc<crate::model::DeskLiveSnapshot>>,
+    desk_jobs_revision: u64,
+    last_desk_jobs: Option<Arc<crate::model::DeskJobsSnapshot>>,
+    desk_mentions_revision: u64,
+    last_desk_mentions: Option<Arc<crate::model::DeskMentionsSnapshot>>,
     link_summaries_revision: u64,
     last_link_summaries: Option<Arc<crate::links::LinkSummariesSnapshot>>,
     link_panel_revision: u64,
@@ -44,6 +53,10 @@ pub(super) struct DeltaState {
     last_session_record: Option<Arc<crate::links::ledger::SessionRecordSnapshot>>,
     session_work_search_revision: u64,
     last_session_work_search: Option<Arc<crate::links::ledger::SessionSearchSnapshot>>,
+    session_thread_revision: u64,
+    last_session_thread: Option<Arc<crate::model::SessionThreadSnapshot>>,
+    session_thread_history_revision: u64,
+    last_session_thread_history: Option<Arc<crate::model::SessionThreadHistorySnapshot>>,
     /// Reference-counted so a delta can carry the section out of the lock
     /// without copying it. The runtime never mutates one in place: a changed
     /// section becomes a new `Arc`, which leaves any payload already handed
@@ -121,6 +134,9 @@ impl Runtime {
             self.delta.revision = rest.revision();
             self.delta.rest_revision = self.delta.revision;
             self.delta.last_rest = Some(Arc::new(rest));
+            // Desk's cards read the rows, which ride `rest`: they are
+            // followed only when it moved.
+            self.refresh_desk_jobs();
         }
         if self.delta.last_editor.as_deref() != Some(&self.snapshot.editor) {
             self.delta.revision += 1;
@@ -163,6 +179,51 @@ impl Runtime {
             self.delta.suggestions_revision = self.delta.revision;
             self.delta.last_suggestions = Some(Arc::clone(suggestions));
         }
+        // Each Desk section is a new Arc whenever it changes.
+        if let Some(desk) = &self.snapshot.desk
+            && self
+                .delta
+                .last_desk
+                .as_ref()
+                .is_none_or(|last| !Arc::ptr_eq(last, desk))
+        {
+            self.delta.revision += 1;
+            self.delta.desk_revision = self.delta.revision;
+            self.delta.last_desk = Some(Arc::clone(desk));
+        }
+        if let Some(live) = &self.snapshot.desk_live
+            && self
+                .delta
+                .last_desk_live
+                .as_ref()
+                .is_none_or(|last| !Arc::ptr_eq(last, live))
+        {
+            self.delta.revision += 1;
+            self.delta.desk_live_revision = self.delta.revision;
+            self.delta.last_desk_live = Some(Arc::clone(live));
+        }
+        if let Some(jobs) = &self.snapshot.desk_jobs
+            && self
+                .delta
+                .last_desk_jobs
+                .as_ref()
+                .is_none_or(|last| !Arc::ptr_eq(last, jobs))
+        {
+            self.delta.revision += 1;
+            self.delta.desk_jobs_revision = self.delta.revision;
+            self.delta.last_desk_jobs = Some(Arc::clone(jobs));
+        }
+        if let Some(mentions) = &self.snapshot.desk_mentions
+            && self
+                .delta
+                .last_desk_mentions
+                .as_ref()
+                .is_none_or(|last| !Arc::ptr_eq(last, mentions))
+        {
+            self.delta.revision += 1;
+            self.delta.desk_mentions_revision = self.delta.revision;
+            self.delta.last_desk_mentions = Some(Arc::clone(mentions));
+        }
         if let Some(summaries) = &self.snapshot.link_summaries
             && self.delta.last_link_summaries.as_deref() != Some(summaries)
         {
@@ -200,6 +261,28 @@ impl Runtime {
             self.delta.revision += 1;
             self.delta.session_work_search_revision = self.delta.revision;
             self.delta.last_session_work_search = Some(Arc::clone(search));
+        }
+        if let Some(thread) = &self.snapshot.session_thread
+            && self
+                .delta
+                .last_session_thread
+                .as_ref()
+                .is_none_or(|last| !Arc::ptr_eq(last, thread))
+        {
+            self.delta.revision += 1;
+            self.delta.session_thread_revision = self.delta.revision;
+            self.delta.last_session_thread = Some(Arc::clone(thread));
+        }
+        if let Some(history) = &self.snapshot.session_thread_history
+            && self
+                .delta
+                .last_session_thread_history
+                .as_ref()
+                .is_none_or(|last| !Arc::ptr_eq(last, history))
+        {
+            self.delta.revision += 1;
+            self.delta.session_thread_history_revision = self.delta.revision;
+            self.delta.last_session_thread_history = Some(Arc::clone(history));
         }
         // A cursor from the future has no valid meaning in-process; treat it
         // as a fresh reader so the response converges on full state.
@@ -264,6 +347,30 @@ impl Runtime {
                 .as_ref()
                 .filter(|_| self.delta.suggestions_revision > have_revision)
                 .map(Arc::clone),
+            desk: self
+                .delta
+                .last_desk
+                .as_ref()
+                .filter(|_| self.delta.desk_revision > have_revision)
+                .map(Arc::clone),
+            desk_live: self
+                .delta
+                .last_desk_live
+                .as_ref()
+                .filter(|_| self.delta.desk_live_revision > have_revision)
+                .map(Arc::clone),
+            desk_jobs: self
+                .delta
+                .last_desk_jobs
+                .as_ref()
+                .filter(|_| self.delta.desk_jobs_revision > have_revision)
+                .map(Arc::clone),
+            desk_mentions: self
+                .delta
+                .last_desk_mentions
+                .as_ref()
+                .filter(|_| self.delta.desk_mentions_revision > have_revision)
+                .map(Arc::clone),
             link_summaries: self
                 .delta
                 .last_link_summaries
@@ -287,6 +394,18 @@ impl Runtime {
                 .last_session_work_search
                 .as_ref()
                 .filter(|_| self.delta.session_work_search_revision > have_revision)
+                .map(Arc::clone),
+            session_thread: self
+                .delta
+                .last_session_thread
+                .as_ref()
+                .filter(|_| self.delta.session_thread_revision > have_revision)
+                .map(Arc::clone),
+            session_thread_history: self
+                .delta
+                .last_session_thread_history
+                .as_ref()
+                .filter(|_| self.delta.session_thread_history_revision > have_revision)
                 .map(Arc::clone),
             // Cloning a section clones the summary's `Arc` and at most the
             // capped answers, never the cards.

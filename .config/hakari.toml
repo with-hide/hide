@@ -22,7 +22,9 @@ platforms = [
 
 # The operating-system layer and the Herdr client stay off the shared feature
 # set: the OS contract lanes build and test exactly these two crates, which
-# would otherwise compile tokio, hyper and schemars for nothing. Their own
-# dependencies still count toward everyone else's features.
+# would otherwise compile tokio, hyper and schemars for nothing. The terminal
+# parser stays off it for the same reason: the vt lane builds it alone, and
+# the pane holder that links it is meant to carry its few dependencies only.
+# Their own dependencies still count toward everyone else's features.
 [final-excludes]
-workspace-members = ["hide-platform", "hide-herdr-client"]
+workspace-members = ["hide-platform", "hide-herdr-client", "hide-vt"]

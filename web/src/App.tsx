@@ -47,6 +47,7 @@ import { TooltipProvider } from "./components/ui/tooltip";
 import { useUsageWindowHint } from "./components/usage";
 import { useUiStore } from "./ui";
 import { WorkspaceScreen } from "./WorkspaceScreen";
+import { DeskScreen } from "./DeskScreen";
 import { connectShell, type DispatchFn } from "./ws";
 
 const noop: DispatchFn = () => {};
@@ -422,6 +423,7 @@ function CenterScreen({ actions }: { actions: Actions }) {
       </div>
     );
   }
+  if (screen.kind === "desk") return <DeskScreen actions={actions} />;
   if (screen.kind === "workspace" && front && hasView) return <WorkspaceScreen actions={actions} />;
   return <OverviewPage actions={actions} />;
 }

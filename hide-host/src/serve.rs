@@ -843,6 +843,7 @@ fn session_refusal(refusal: hide_session::ReadRefusal) -> HostError {
         hide_session::ReadRefusal::Refused(reason) => match reason.as_str() {
             "session_file_missing" => ErrorCode::NotFound,
             "session_kind_unsupported"
+            | "thread_unsupported"
             | "opencode_db_schema_unknown"
             | "opencode_data_home_invalid" => ErrorCode::Unsupported,
             reason if reason.starts_with("session_capacity:") => ErrorCode::TooLarge,
@@ -860,6 +861,16 @@ fn antigravity_fork_refusal(refusal: hide_session::ReadRefusal) -> HostError {
         hide_session::ReadRefusal::Refused(_) => ErrorCode::Io,
     };
     HostError::new(code, refusal.reason())
+}
+
+/// One page of a pane's thread, read where its session is: ACP updates and
+/// cursors, never a path.
+pub fn session_thread(
+    home: &Path,
+    request: &hide_session::thread::ThreadRequest,
+) -> HostResult<Value> {
+    let page = hide_session::thread::read_pane_thread(home, request).map_err(session_refusal)?;
+    to_value(page)
 }
 
 /// Local and remote activity share this path-free, metadata-only answer.
@@ -1554,6 +1565,10 @@ pub fn handle_with_progress(
         Call::SessionActivity { request } => {
             let home = env.home("session_activity_home_unavailable")?;
             session_activity(Path::new(&home), &request)
+        }
+        Call::SessionThread { request } => {
+            let home = env.home("session_thread_home_unavailable")?;
+            session_thread(Path::new(&home), &request)
         }
         Call::LinkFiles {
             since_unix_ms,

@@ -49,16 +49,22 @@ if (!app.requestSingleInstanceLock()) {
   const system = keySystemOf(process.platform);
   let shown: string | null = null;
   let current: readonly Command[] = systemRegistry(system);
+  // Desk is off until the page reports otherwise (D-76): its command is then left out.
+  let desk = false;
   const showMenu = (registry: readonly Command[]) => {
     current = registry;
     host.setBrowserRegistry(registry);
-    const key = JSON.stringify([language.language, registry.map((command) => command.electron)]);
+    const key = JSON.stringify([language.language, desk, registry.map((command) => command.electron)]);
     if (key === shown) return;
     shown = key;
     Menu.setApplicationMenu(
-      Menu.buildFromTemplate(menuTemplate({ appName: app.getName(), send: (id) => host.sendCommand(id), developer: !app.isPackaged, system, registry, t: language.t })),
+      Menu.buildFromTemplate(menuTemplate({ appName: app.getName(), send: (id) => host.sendCommand(id), developer: !app.isPackaged, system, registry, desk, t: language.t })),
     );
   };
+  host.listenDesk((on) => {
+    desk = on;
+    showMenu(current);
+  });
   host.listenLanguage(() => {
     showMenu(current);
     host.languageChanged();

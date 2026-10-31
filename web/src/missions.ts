@@ -252,8 +252,13 @@ export function missionHeadCells(mission: Mission): HeadCell[] {
 
 /** The colour a mission's own chip wears on the sidebar row and the Overview (B35): its decision, else its state. */
 export function missionTone(mission: Mission): CellTone {
-  if (missionDeciding(mission)) return "hold";
-  switch (mission.status) {
+  return missionToneOf(mission.status, missionDeciding(mission));
+}
+
+/** A mission chip's colour from its status and whether a decision waits: the one rule every mission chip, the sidebar's and Desk's, follows. */
+export function missionToneOf(status: Mission["status"], deciding: boolean): CellTone {
+  if (deciding) return "hold";
+  switch (status) {
     case "planning":
       return "waiting";
     case "running":

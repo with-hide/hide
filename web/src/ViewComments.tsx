@@ -274,7 +274,7 @@ export function NoteFormCard({ form, meta, full, workspace, actions, add, close 
         <Button variant="ghost" size="sm" onClick={close} data-view-note-cancel="true">
           {t("common.cancel")}
         </Button>
-        <Button size="sm" disabled={!text || refused || busy} onClick={() => void submit()} data-view-note-submit="true">
+        <Button variant="secondary" size="sm" disabled={!text || refused || busy} onClick={() => void submit()} data-view-note-submit="true">
           {editing ? t("feedback.note.save") : t("feedback.note.add")}
         </Button>
       </div>
@@ -555,6 +555,7 @@ function SendButton({ group, display, workspace, actions, again = false }: { gro
       <div className="flex shrink-0 items-center" data-view-feedback-send={group.key || "choose"}>
         {live && recipient ? (
           <Button
+            variant="secondary"
             size="sm"
             className="min-w-0 max-w-(--size-view-note) rounded-r-none"
             data-view-feedback-send-main="default"
@@ -574,14 +575,14 @@ function SendButton({ group, display, workspace, actions, again = false }: { gro
           </Button>
         ) : (
           <DropdownMenuTrigger asChild>
-            <Button size="sm" className="rounded-r-none" data-view-feedback-send-main="choose">
+            <Button variant="secondary" size="sm" className="rounded-r-none" data-view-feedback-send-main="choose">
               <SendIcon />
               <span>{main}</span>
             </Button>
           </DropdownMenuTrigger>
         )}
         <DropdownMenuTrigger asChild>
-          <Button size="sm" className="rounded-l-none border-l border-primary-foreground/20 px-xs" aria-label={t("feedback.sendMenu")} data-view-feedback-send-menu="true">
+          <Button variant="secondary" size="sm" className="rounded-l-none px-xs" aria-label={t("feedback.sendMenu")} data-view-feedback-send-menu="true">
             <ChevronDownIcon />
           </Button>
         </DropdownMenuTrigger>

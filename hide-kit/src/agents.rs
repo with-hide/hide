@@ -227,12 +227,15 @@ pub const GUIDE_SKILL: Skill = Skill {
     // The intent table is the session-start note's own (PRD
     // agent-beside-and-session-guide D-14); version 1 had none, and version
     // 2 opened files and pages with the --beside open no longer takes (PRD
-    // unseen-agent-views D-24).
+    // unseen-agent-views D-24); version 4 drops the Herdr commands the
+    // table named for Hide's own (PRD engine-bundle-1 D-6), and version 5
+    // adds the row for splitting the work across agents (PRD
+    // hide-plan-delegate D-11).
     body: concat!(
         "First check that this session runs in a pane Hide manages: Hide's session guidance names this checkout, or `hide workspace info` answers `\"ok\":true`. If neither, stop here; this skill does not apply. Inside Hide, run `hide guide` and follow what it prints. It explains what Hide keeps, how to send and answer letters, how to start and follow agents here or on a connected device, how to show the operator a file or a diff and how to use Project Memory, and it sends a browser display to `hide browser help` and a mission of agents to `hide mission help`.\n\n",
         hide_agent_hooks::intent_table!()
     ),
-    version: 3,
+    version: 5,
 };
 
 /// The Conductor's stub: a mission of agents, which `hide mission help`

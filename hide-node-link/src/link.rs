@@ -463,6 +463,7 @@ fn reader_requirements(call: &Call) -> Vec<(hide_session::Agent, ReaderFeature)>
         Call::SessionWorkTurn { request } => vec![(request.agent, ReaderFeature::Labels)],
         Call::SessionActivity { request } => vec![(request.agent, ReaderFeature::Activity)],
         Call::SessionConversation { agent, .. } => vec![(*agent, ReaderFeature::Conversation)],
+        Call::SessionThread { request } => vec![(request.agent, ReaderFeature::Thread)],
         Call::UsageFiles { agent, .. } | Call::UsageRead { agent, .. } => {
             vec![(*agent, ReaderFeature::Usage)]
         }

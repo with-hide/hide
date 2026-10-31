@@ -357,7 +357,7 @@ impl Runtime {
         }
         let opener = match Caller::parse(caller_id) {
             Caller::Pane(pane) => self.opener_of_pane(pane),
-            Caller::Checkout { .. } => None,
+            Caller::Checkout { .. } | Caller::Desk => None,
         };
         // An agent's open is for the operator to look at (PRD
         // unseen-agent-views D-06); nobody's is the operator's own, and a
@@ -1991,6 +1991,7 @@ fn run_send(job: &SendJob, runtime: &Weak<Mutex<Runtime>>, stop: &AtomicBool) ->
                 body,
                 kind: "report".into(),
                 now: false,
+                force: false,
             },
         );
     drop(runtime);

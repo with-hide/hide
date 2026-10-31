@@ -733,7 +733,11 @@ impl Runtime {
 
     /// The agent row for a pane on this machine or on a device.
     pub(super) fn agent_row(&self, pane_id: &str) -> Option<&SidebarAgentSnapshot> {
-        let local = self.snapshot.navigator.agents.iter();
+        self.agent_rows().find(|agent| agent.pane_id == pane_id)
+    }
+
+    /// Every agent row, this machine's then each device's.
+    pub(super) fn agent_rows(&self) -> impl Iterator<Item = &SidebarAgentSnapshot> {
         let devices = self
             .snapshot
             .status
@@ -741,7 +745,7 @@ impl Runtime {
             .iter()
             .filter_map(|remote| remote.session.as_ref())
             .flat_map(|session| session.agents.iter());
-        local.chain(devices).find(|agent| agent.pane_id == pane_id)
+        self.snapshot.navigator.agents.iter().chain(devices)
     }
     /// Moves a pane's view by a wheel's signed lines (positive shows older
     /// lines), and whether that changed the snapshot.

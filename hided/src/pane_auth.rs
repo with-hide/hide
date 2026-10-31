@@ -50,7 +50,17 @@ enum Binding {
         shell_started: u64,
     },
     Checkout,
+    /// The Desk process hided starts (PRD Desk 1차): valid while that
+    /// process runs with this start time, whatever its age. `pid` is 0
+    /// between issue and bind, which the process's start takes.
+    Desk {
+        pid: i32,
+        started: u64,
+    },
 }
+
+/// What a Desk command refused for an ended Desk process says to do.
+const DESK_NEXT_ACTION: &str = "Restart Desk from its room in Hide";
 
 #[derive(Clone)]
 pub struct Capability {
@@ -74,7 +84,7 @@ impl Capability {
     pub(crate) fn pane_terminal(&self) -> Option<&str> {
         match &self.binding {
             Binding::Pane { terminal_id, .. } => Some(terminal_id),
-            Binding::Checkout => None,
+            Binding::Checkout | Binding::Desk { .. } => None,
         }
     }
 
@@ -114,6 +124,7 @@ impl Capability {
         match self.binding {
             Binding::Pane { .. } => ("pane_changed", PANE_NEXT_ACTION),
             Binding::Checkout => ("checkout_not_registered", CHECKOUT_NEXT_ACTION),
+            Binding::Desk { .. } => ("desk_not_running", DESK_NEXT_ACTION),
         }
     }
 }
@@ -187,6 +198,14 @@ fn pane_binding(identity: PaneIdentity) -> Binding {
 }
 
 fn entry_alive(entry: &Capability) -> bool {
+    if let Binding::Desk { pid, started } = entry.binding {
+        return entry.path.is_file()
+            && if pid == 0 {
+                entry.created.elapsed() < UNCLAIMED_LIFETIME
+            } else {
+                process_start(pid) == Some(started)
+            };
+    }
     if entry.created.elapsed() >= CAPABILITY_LIFETIME
         || (!entry.claimed && entry.created.elapsed() >= UNCLAIMED_LIFETIME)
     {
@@ -201,7 +220,7 @@ fn entry_alive(entry: &Capability) -> bool {
             shell_started,
             ..
         } => process_start(*shell_pid) == Some(*shell_started),
-        Binding::Checkout => true,
+        Binding::Checkout | Binding::Desk { .. } => true,
     };
     entry.path.is_file()
         && shell_alive
@@ -406,6 +425,55 @@ impl Registry {
         Ok((token, true))
     }
 
+    /// Issues the Desk process's capability, acting as `context` (Hide's
+    /// `hide:desk`); it holds only for the start until
+    /// [`Registry::bind_desk`] names the process.
+    pub fn issue_desk(
+        &self,
+        nonce: &str,
+        port: u16,
+        context: Context,
+    ) -> Result<PathBuf, &'static str> {
+        let attestation = Attestation {
+            pane_id: herdr_core::workspace_control::DESK_CALLER.to_owned(),
+            context,
+            binding: Binding::Desk { pid: 0, started: 0 },
+        };
+        self.issue_with_token(&attestation, nonce, port, Some((0, 0)))
+            .map(|(path, _, _)| path)
+    }
+
+    /// Binds the Desk capability at `path` to the process that started.
+    pub fn bind_desk(&self, path: &Path, pid: i32, started: u64) -> Result<(), &'static str> {
+        let mut entries = self.entries.lock().map_err(|_| "capability_unavailable")?;
+        let entry = entries
+            .values_mut()
+            .find(|entry| {
+                entry.path == path && matches!(entry.binding, Binding::Desk { pid: 0, .. })
+            })
+            .ok_or("credential_expired")?;
+        entry.binding = Binding::Desk { pid, started };
+        // Issued as a one-shot holder so no other caller's capability is
+        // reused for it; bound, it serves every command the process runs.
+        entry.holder = None;
+        entry.one_shot = false;
+        entry.claimed = true;
+        Ok(())
+    }
+
+    /// Ends the Desk capability at `path`.
+    pub fn revoke_desk(&self, path: &Path) {
+        if let Ok(mut entries) = self.entries.lock() {
+            entries.retain(|_, entry| {
+                let desk = entry.path == path && matches!(entry.binding, Binding::Desk { .. });
+                if desk {
+                    remove_local_reference(entry);
+                }
+                !desk
+            });
+        }
+    }
+
     pub fn get(&self, token: &str) -> Option<Capability> {
         let mut entries = self.entries.lock().ok()?;
         if self.closed.load(Ordering::SeqCst) {
@@ -504,6 +572,11 @@ impl Registry {
         attested: Option<&StreamAttestation>,
     ) -> Result<Capability, &'static str> {
         let mut cap = self.get(token).ok_or("credential_expired")?;
+        // The Desk process is proved by its pid and start time, which `get`
+        // checked; the core checks that Desk still runs it.
+        if matches!(cap.binding, Binding::Desk { .. }) {
+            return Ok(cap);
+        }
         if cap.binding == Binding::Checkout {
             // Only registration and connection are rechecked: the checkout
             // must still resolve, on the same device, to the same context.
@@ -1615,6 +1688,45 @@ mod tests {
         assert_eq!(next, bootstrap_socket_path(&state_dir).unwrap());
         drop(listener);
         assert!(!next.parent().unwrap().exists());
+    }
+
+    #[test]
+    fn a_desk_capability_holds_while_its_process_runs_and_ends_when_revoked() {
+        let directory = tempfile::tempdir().unwrap();
+        let registry = Registry::new(directory.path()).unwrap();
+        let context = herdr_core::desk::desk_context("local");
+        let nonce = "0123456789abcdef0123456789abcdef";
+        let path = registry.issue_desk(nonce, 12345, context.clone()).unwrap();
+        let reference: Reference = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+        let token = reference.token;
+        // Bound to this process: it holds past any capability lifetime.
+        let pid = std::process::id() as i32;
+        registry
+            .bind_desk(&path, pid, process_start(pid).unwrap())
+            .unwrap();
+        let capability = registry.get(&token).unwrap();
+        assert_eq!(
+            capability.pane_id,
+            herdr_core::workspace_control::DESK_CALLER
+        );
+        assert_eq!(capability.context, context);
+        assert!(!capability.one_shot);
+        assert_eq!(capability.changed_refusal().0, "desk_not_running");
+        // A second bind names no unbound capability.
+        assert_eq!(
+            registry.bind_desk(&path, pid, 1).unwrap_err(),
+            "credential_expired"
+        );
+        registry.revoke_desk(&path);
+        assert!(!path.exists());
+        assert!(registry.get(&token).is_none());
+
+        // Bound to a start time the process does not have: refused.
+        let nonce = "fedcba9876543210fedcba9876543210";
+        let path = registry.issue_desk(nonce, 12345, context).unwrap();
+        let reference: Reference = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+        registry.bind_desk(&path, pid, 1).unwrap();
+        assert!(registry.get(&reference.token).is_none());
     }
 
     #[test]

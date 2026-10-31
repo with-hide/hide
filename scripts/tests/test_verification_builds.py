@@ -36,6 +36,8 @@ class BuildFixture(unittest.TestCase):
         (root / 'scripts').mkdir(parents=True)
         for name in SCRIPTS:
             shutil.copyfile(ROOT / 'scripts' / name, root / 'scripts' / name)
+        # The fixture workspace has no hide-vt, so it has no inputs to prepare.
+        (root / 'scripts' / 'prepare-vt-inputs.py').write_text('')
         subprocess.run(['git', 'init', '-q', str(root)], check=True, env=self.env)
         return root
 

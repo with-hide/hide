@@ -363,6 +363,20 @@ impl Core {
                 crate::github_store::GithubStore::new(hide_kit::layout::github_snapshot(directory));
             let restored = store.restore();
             lock_recover(&runtime).install_github_store(store, restored);
+            // Before any coordinator lays them, so a pane whose agent last
+            // reported before this start keeps its connection and counts.
+            let hook_facts = crate::agent_hooks::facts::HookFacts::restore(
+                hide_kit::layout::hook_facts(directory),
+                || {
+                    environment_home.as_deref().map_or_else(Vec::new, |home| {
+                        hide_agent_hooks::counters::every_pane(
+                            home,
+                            crate::agent_hooks::facts::PANE_LIMIT,
+                        )
+                    })
+                },
+            );
+            lock_recover(&runtime).install_hook_facts(hook_facts);
             let composers = crate::composer_store::ComposerStore::new(
                 hide_kit::layout::composer_marks(directory),
             );
@@ -386,9 +400,12 @@ impl Core {
                 }
                 _ => std::collections::HashMap::new(),
             };
+            let desk = crate::desk::DeskStore::new(hide_kit::layout::desk_store(directory));
+            let desk_restored = desk.restore();
             let mut guard = lock_recover(&runtime);
             guard.install_mission_store(missions, restored);
             guard.install_mission_events(events, logs);
+            guard.install_desk_store(desk, desk_restored);
             drop(guard);
         }
         // Before any coordinator starts, because each builds its label worker
@@ -627,24 +644,49 @@ impl Core {
         Ok(answer)
     }
 
+    /// Runs `hide agent archive`: the screen's `세션 보관` for one registered
+    /// agent, admitted under the lock like the screen's event.
+    pub fn agent_archive(
+        &self,
+        device: &str,
+        caller: &str,
+        expected: &crate::workspace_control::Context,
+        id: &str,
+        actor: Option<&str>,
+    ) -> Result<serde_json::Value, String> {
+        if !check_owner_thread(self, "agent.archive") {
+            return Err("agent_unavailable".into());
+        }
+        let (answer, changed) = lock_recover(&self.runtime)
+            .agent_archive_command(device, caller, expected, id, actor)?;
+        if changed {
+            notify_change(self);
+        }
+        Ok(answer)
+    }
+
     /// Runs a `hide plan` command (PRD hide-plan D-27): one change under the
-    /// lock, saved by the link worker.
+    /// lock, saved by the link worker, judged with the evidence `proofs`
+    /// already read. A change whose evidence still needs reading answers
+    /// the reads, which the caller makes off the owner thread before asking
+    /// again with what they read (PRD hide-plan-delegate D-19).
     pub fn plan_command(
         &self,
         device: &str,
         caller: &str,
         expected: &crate::workspace_control::Context,
         command: crate::plans::PlanCommand,
-    ) -> Result<serde_json::Value, String> {
+        proofs: &crate::plans::Proofs,
+    ) -> Result<crate::plans::PlanTurn, String> {
         if !check_owner_thread(self, "plan.command") {
             return Err("plan_unavailable".into());
         }
-        let (answer, changed) =
-            lock_recover(&self.runtime).plan_command(device, caller, expected, command)?;
-        if changed {
+        let turn =
+            lock_recover(&self.runtime).plan_command(device, caller, expected, command, proofs)?;
+        if let crate::plans::PlanTurn::Answered { changed: true, .. } = &turn {
             notify_change(self);
         }
-        Ok(answer)
+        Ok(turn)
     }
 
     /// The plan and mission summary the prompt hook keeps for `caller`'s
@@ -658,6 +700,21 @@ impl Core {
             return None;
         }
         lock_recover(&self.runtime).plan_context(device, caller)
+    }
+
+    /// What the agent hook in `caller`'s pane on `device` reported
+    /// (`HookCommand::Status`). A short admission that records it in memory;
+    /// the coordinator it wakes publishes what changed.
+    pub fn hook_status(
+        &self,
+        device: &str,
+        caller: &str,
+        report: &hide_node_link::panes::HookStatusReport,
+    ) -> Result<(), &'static str> {
+        if !check_owner_thread(self, "hook.status") {
+            return Err("hook_status_unavailable");
+        }
+        lock_recover(&self.runtime).ingest_hook_status(device, caller, report)
     }
 
     /// `hide agent catalog`: the agents, models and efforts of `machine`, or
@@ -739,6 +796,22 @@ impl Core {
         }
         let rows = lock_recover(&self.runtime).ps_rows(device, pane)?;
         serde_json::to_value(rows.answer(all)).map_err(|_| "ps_unavailable".into())
+    }
+
+    /// Checks a `hide pane`, `hide agent read` or `hide workspace purpose`
+    /// caller and resolves what its command acts on; the command's engine
+    /// calls then run on the daemon's blocking task, off this lock.
+    pub fn prepare_pane_command(
+        &self,
+        device: &str,
+        caller: &str,
+        expected: &crate::workspace_control::Context,
+        command: crate::pane_command::PaneCommand,
+    ) -> Result<crate::pane_command::Prepared, String> {
+        if !check_owner_thread(self, "pane.prepare") {
+            return Err("pane_unavailable".into());
+        }
+        lock_recover(&self.runtime).prepare_pane_command(device, caller, expected, command)
     }
 
     /// Checks a `hide memory` caller and takes what its command needs; the
@@ -825,6 +898,21 @@ impl Core {
                 Arc::downgrade(&self.runtime),
                 self.notifier.clone(),
             );
+        }
+    }
+
+    /// What gives the Desk process its identity and places (PRD Desk 1차);
+    /// starts Desk's worker, which looks at the agents at once.
+    pub fn set_desk(&self, platform: Arc<dyn crate::desk::DeskPlatform>) {
+        if check_owner_thread(self, "set_desk") {
+            let mut runtime = lock_recover(&self.runtime);
+            runtime.install_desk(
+                platform,
+                Arc::downgrade(&self.runtime),
+                self.notifier.clone(),
+            );
+            drop(runtime);
+            notify_change(self);
         }
     }
 

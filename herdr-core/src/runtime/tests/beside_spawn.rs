@@ -373,6 +373,8 @@ impl Spawner {
             self.actor.clone(),
             Command::Spawn {
                 mission: None,
+                plan_node: None,
+                plan: None,
                 parent: ask.parent.map(str::to_owned),
                 machine: ask.machine.map(str::to_owned),
                 name: "worker".into(),

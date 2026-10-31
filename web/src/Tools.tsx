@@ -1,4 +1,4 @@
-import { BrainIcon, BriefcaseIcon, EllipsisIcon, FileDiffIcon, FilesIcon, FolderIcon, FolderOpenIcon, GitBranchIcon, PinIcon, WaypointsIcon, XIcon, type LucideIcon } from "lucide-react";
+import { BrainIcon, BriefcaseIcon, EllipsisIcon, FileDiffIcon, FilesIcon, FolderIcon, FolderOpenIcon, GitBranchIcon, WaypointsIcon, XIcon, type LucideIcon } from "lucide-react";
 import { Fragment, useState } from "react";
 import type { Actions } from "./actions";
 import { Button } from "./components/ui/button";
@@ -23,6 +23,7 @@ import { useUiStore } from "./ui";
 import { ViewAreas } from "./ViewAreas";
 import { workspaceKey } from "./viewLayout";
 import { TOOLS, TOOL_SCOPES, type LaneFrame, type LaneSizes, type LaneView, type Tool, type WorkspaceView } from "./workspace";
+import { ProjectLanePin } from "./ProjectLanePin";
 import { useInterfaceTranslation } from "./i18n/client";
 import type { MessageKey } from "./i18n/catalogs";
 
@@ -157,7 +158,6 @@ export function ToolRail({ actions }: { actions: Actions }) {
         );
       })}
       <div className="mt-auto flex flex-col items-center gap-xxs">
-        <PinButton actions={actions} />
         <LaneMenu />
       </div>
     </nav>
@@ -183,34 +183,6 @@ function DetailSlotButton({ actions, pressed }: { actions: Actions; pressed: boo
       >
         {pressed ? <span aria-hidden="true" className="absolute -left-xxs inset-y-sm w-(--size-tab-indicator) rounded-full bg-primary" data-lane-tool-bar="true" /> : null}
         <DetailIcon item={item} className="size-(--size-icon-lg)" />
-      </button>
-    </Hint>
-  );
-}
-
-/**
- * The rail's pin (B15, B19): filled and pressed while the lane is pinned,
- * its hint saying what a press does, or that a pinned lane is drawn over
- * the agents because the body is too narrow to dock it.
- */
-function PinButton({ actions }: { actions: Actions }) {
-  const { t } = useInterfaceTranslation();
-  const pinned = useShellStore((s) => (s.rest?.workspace_view as WorkspaceView | undefined)?.pinned ?? null);
-  const narrow = useUiStore((s) => s.drawnLane.mode === "overlay");
-  if (pinned === null) return null;
-  const hint = pinned ? (narrow ? t("panes.lane.narrowPinHint") : t("panes.lane.unpinHint")) : t("panes.lane.pinHint");
-  return (
-    <Hint label={hint} side="left">
-      <button
-        type="button"
-        aria-pressed={pinned}
-        aria-label={t("panes.lane.pin")}
-        aria-description={hint}
-        className={cn(RAIL_BUTTON, pinned ? "bg-secondary font-medium text-foreground" : "text-muted-foreground")}
-        data-lane-pin={pinned ? (narrow ? "narrow" : "on") : "off"}
-        onClick={() => actions.setLanePinned(!pinned)}
-      >
-        <PinIcon aria-hidden="true" className={cn("size-(--size-icon-lg)", pinned && "fill-current")} />
       </button>
     </Hint>
   );
@@ -302,6 +274,7 @@ function ToolColumn({ tool, width, checkout, actions }: { tool: Tool; width: num
             {scope(tool)}
           </span>
         </span>
+        <ProjectLanePin column="tool" actions={actions} />
         <Hint label={t("panes.lane.closeTool")}>
           <Button variant="ghost" size="icon-sm" className="text-muted-foreground" aria-label={t("panes.lane.closeTool")} data-lane-tool-close={tool} onClick={() => actions.closeTool()}>
             <XIcon />

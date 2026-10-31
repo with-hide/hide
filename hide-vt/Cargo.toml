@@ -1,0 +1,19 @@
+[package]
+name = "hide-vt"
+version = "0.1.0"
+# Kept at Herdr's edition so the imported sources stay as Herdr wrote them
+# (hide-vt/PATCHES.md).
+edition = "2021"
+description = "The terminal parser: Herdr's binding to libghostty-vt, built from hash-pinned inputs"
+license = "Apache-2.0"
+publish = false
+
+[dependencies]
+base64 = "0.22.1"
+libc = "0.2"
+png = "0.17"
+tracing = { version = "0.1.44", default-features = false, features = ["std"] }
+
+[build-dependencies]
+serde_json = "1"
+sha2 = "0.10"

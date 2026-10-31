@@ -67,6 +67,38 @@ impl Runtime {
         }
     }
 
+    /// The operator looked at `view_id` of `key` somewhere other than its
+    /// own View area: Desk's lane shows a job's output with the file viewers
+    /// (PRD session-docs-and-assistant B31). A View already seen, or gone,
+    /// changes nothing.
+    pub(super) fn mark_view_seen(&mut self, key: &WorkspaceKey, view_id: &str) -> bool {
+        let unseen = self
+            .view_layout_of(key)
+            .and_then(|layout| layout.display(view_id))
+            .is_some_and(|display| display.unseen.is_some());
+        if !unseen {
+            return false;
+        }
+        let seen = self.change_view_layout(key, |layout, _| {
+            let display = layout
+                .display_mut(view_id)
+                .ok_or_else(|| crate::view_layout::LayoutError::UnknownDisplay(view_id.into()))?;
+            Ok(((), display.unseen.take().is_some()))
+        });
+        if let Err(error) = seen {
+            crate::diagnostic!(serde_json::json!({
+                "component": "unseen_views",
+                "kind": "unseen.seen_failed",
+                "device": key.0,
+                "view": view_id,
+                "error": error.kind(),
+            }));
+            return false;
+        }
+        self.refresh_unseen_rows();
+        true
+    }
+
     /// Settles before a snapshot read: the View in front is seen, and when a
     /// View list moved since the rows were laid (a View closed, one opened
     /// on another path) while anything is unseen, the rows are laid again.
@@ -129,31 +161,7 @@ impl Runtime {
         let Some((key, view_id)) = self.looked_at_view() else {
             return false;
         };
-        let unseen = self
-            .view_layout_of(&key)
-            .and_then(|layout| layout.display(&view_id))
-            .is_some_and(|display| display.unseen.is_some());
-        if !unseen {
-            return false;
-        }
-        let seen = self.change_view_layout(&key, |layout, _| {
-            let display = layout
-                .display_mut(&view_id)
-                .ok_or_else(|| crate::view_layout::LayoutError::UnknownDisplay(view_id.clone()))?;
-            Ok(((), display.unseen.take().is_some()))
-        });
-        if let Err(error) = seen {
-            crate::diagnostic!(serde_json::json!({
-                "component": "unseen_views",
-                "kind": "unseen.seen_failed",
-                "device": key.0,
-                "view": view_id,
-                "error": error.kind(),
-            }));
-            return false;
-        }
-        self.refresh_unseen_rows();
-        true
+        self.mark_view_seen(&key, &view_id)
     }
 
     /// An ancestor of the agent that opened `view_id` read it through the CLI
@@ -274,23 +282,48 @@ impl Runtime {
         self.refresh_agent_lineage() | self.refresh_pane_read_state()
     }
 
-    /// Adds to a report's `body` the Views the session of `pane_id` opened
-    /// that are still open, whether the operator has seen each, so the agent
-    /// that answers for it can read or show them (D-21). A list that would
-    /// not fit the letter is cut, and says how many it left out.
-    pub(super) fn list_opened_views(&self, pane_id: &str, body: &mut String) {
-        let Some(scope) = self.session_scope_of_pane(pane_id) else {
-            return;
-        };
-        let lines = self
-            .every_view_layout()
+    /// The Views the session of `pane_id` opened that are still open, its
+    /// results as a report and a Desk card list them.
+    pub(super) fn session_displays(&self, pane_id: &str) -> Vec<&crate::view_layout::Display> {
+        self.session_displays_among(pane_id, &self.open_displays())
+    }
+
+    /// Every open View, for callers that look through them for many sessions.
+    pub(super) fn open_displays(&self) -> Vec<&crate::view_layout::Display> {
+        self.every_view_layout()
             .flat_map(|(_, layout)| layout.displays())
+            .collect()
+    }
+
+    /// The Views among `displays` the session of `pane_id` opened.
+    pub(super) fn session_displays_among<'a>(
+        &self,
+        pane_id: &str,
+        displays: &[&'a crate::view_layout::Display],
+    ) -> Vec<&'a crate::view_layout::Display> {
+        let Some(scope) = self.session_scope_of_pane(pane_id) else {
+            return Vec::new();
+        };
+        displays
+            .iter()
             .filter(|display| {
                 display
                     .openers
                     .iter()
                     .any(|opener| opener.of_session(&scope))
             })
+            .copied()
+            .collect()
+    }
+
+    /// Adds to a report's `body` the Views the session of `pane_id` opened
+    /// that are still open, whether the operator has seen each, so the agent
+    /// that answers for it can read or show them (D-21). A list that would
+    /// not fit the letter is cut, and says how many it left out.
+    pub(super) fn list_opened_views(&self, pane_id: &str, body: &mut String) {
+        let lines = self
+            .session_displays(pane_id)
+            .into_iter()
             .map(|display| {
                 // A name is the file's or the page's, so a control character
                 // in it never starts a line of its own in the letter.

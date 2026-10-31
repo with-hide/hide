@@ -129,7 +129,7 @@ export async function pinState(page: Page): Promise<string | null> {
   return page.locator("[data-lane-pin]").getAttribute("data-lane-pin");
 }
 
-/** Pins or unpins the lane with the rail's pin button (B15). */
+/** Pins or unpins the lane with the pin beside `✕` of its edge column, so the lane must be up (B15; PRD session-docs-and-assistant B33). */
 export async function setLanePinned(page: Page, pinned: boolean): Promise<void> {
   const button = page.locator("[data-lane-pin]");
   const on = (await button.getAttribute("data-lane-pin")) !== "off";

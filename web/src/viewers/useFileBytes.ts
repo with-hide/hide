@@ -24,8 +24,12 @@ export function useFileSource(): FileSource {
 }
 
 export function useFileBytes(path: string): FileBytesState {
+  return useFileBytesFrom(path, useFileSource());
+}
+
+/** A file's bytes from a named source, for a viewer showing a file outside the checkout in front (Desk's 결과물). */
+export function useFileBytesFrom(path: string, source: FileSource): FileBytesState {
   const [state, setState] = useState<FileBytesState>({ status: "loading" });
-  const source = useFileSource();
   const device = source?.device ?? null;
   const root = source?.root ?? null;
   useEffect(() => {

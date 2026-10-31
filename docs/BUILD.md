@@ -1,7 +1,7 @@
 # Build output and worktrees
 
-This document owns where build output goes and why: every build inside the worktree that asked for it, the release binaries at their fixed path, a debug build kept small, one Rust version named by the repository, and the machine's toolchain reused rather than reinstalled.
-The scripts named here are the executable authority; `scripts/tests/test_toolchain_reuse.py`, `test_rust_toolchain_pin.py`, `test_ci_gate_portability.py`, `test_verification_builds.py` and `test_debug_build_size.py` assert the parts a workflow depends on.
+This document owns where build output goes and why: every build inside the worktree that asked for it, the release binaries at their fixed path, a debug build kept small, one Rust version named by the repository, the machine's toolchain reused rather than reinstalled, and the terminal parser's Zig build from pinned inputs.
+The scripts named here are the executable authority; `scripts/tests/test_toolchain_reuse.py`, `test_rust_toolchain_pin.py`, `test_ci_gate_portability.py`, `test_verification_builds.py`, `test_debug_build_size.py`, `test_prepare_vt_inputs.py` and `test_vt_cache.py` assert the parts a workflow depends on.
 
 ## One rule: build output lives in the worktree
 
@@ -108,6 +108,19 @@ Key echo and CPU did not move beyond the spread between trials, idle or with fiv
 Startup to a healthy `/health` took 168 ms against 134 ms, the median of four trials each, about 35 ms more.
 `hided` holds about 4.7 MiB more resident memory (62 MiB against 57 MiB) in every trial, probably the larger binary's code.
 
+## A pull request's release build
+
+A pull request's package lane builds its release binaries at opt-level 1 without LTO, in 256 codegen units (`.github/actions/quick-release-build`).
+That lane checks that the app packages, installs, starts and updates; none of that depends on how well the binaries are optimized, and the optimization was most of the lane's time.
+Each of the three binaries runs thin LTO over the whole program at its link, so after the last hide crate started compiling, a Windows release build still took about 12 more minutes (2026-10-30, pull request #1913).
+Measured on 2026-10-30 (pull request #1916) against the same lane's recent pull-request runs: `compile (windows)` went from 17-24 minutes to 7.6, `compile (macos)` from 15-21 to 8.8, and `package (linux)` from 16-22 to 12.1.
+The Windows cargo build alone went from 14.7 minutes in #1913 to 6.2, both compiling every dependency from source, since this setting rebuilds them anyway.
+
+The settings are cargo's own profile variables, set in the job's environment, so the binaries still land in `target/release`, the path `desktop/scripts/package.mjs` reads, and keep the release profile's name, strip and debug-assertion settings.
+The cost is that a pull request's package never holds what ships.
+Main's push run, the nightly, a candidate and a release build with the release profile itself, and main's runs are the only savers of the `release` dependency set, so that set always holds the release profile's dependencies; a pull request restores it and rebuilds its dependencies at its own settings, because cargo rebuilds a dependency whose profile differs.
+`scripts/tests/test_quick_release_build.py` fails when another caller of `package.yml` turns the setting on, or a job that builds release binaries ignores it.
+
 ## The toolchain is never copied
 
 `scripts/toolchain-env.sh` is sourced by every script that calls cargo, and it resolves `CARGO_HOME` and `RUSTUP_HOME` from the cargo shim's own location so an isolated HOME reuses the machine's installed toolchain.
@@ -161,6 +174,38 @@ Cargo reuses a cached dependency only when its fingerprint matches what this che
 A run reads entries saved by its own ref and by main, so the only entries a candidate or a release tag can read are those saved by runs on main, where a pull request's code arrives only through a reviewed merge; a pull request never saves (`save` is false off main), and an entry is never overwritten once saved.
 The argument stops at the artifact itself: cargo does not hash a compiled dependency against its source, so a release dependency is as trustworthy as the jobs that run on main, since any of them can save an entry under a key that does not exist yet.
 The macOS app the private publisher signs is built on the Mac mini from its own checkout and reads none of these caches, and the Linux device helpers (`device-helpers.yml`) still build cold.
+
+## The terminal parser and Zig
+
+`hide-vt` is the terminal parser the pane holder will link: Herdr's binding to libghostty-vt, renamed ([hide-vt/PATCHES.md](../hide-vt/PATCHES.md) lists its origin and every change).
+libghostty-vt is Zig and C, 22 MB of source, and is never copied into this repository, so a build needs three inputs it downloads once: the Zig 0.16.0 compiler for the machine, the Herdr source archive whose `vendor/libghostty-vt` is the source dist with Herdr's patches applied, and the eight Zig packages that build reads.
+`hide-vt/build-inputs.json` pins each one by digest; it is the only place the versions are written, and it pins its own Herdr release, separate from the Herdr release Hide bundles (`contracts/herdr-bundle.json`), because the parser moves only when someone moves it.
+
+`scripts/prepare-vt-inputs.py` is the one preparation step, on every system and in every lane.
+It downloads each input, refuses one whose sha256 differs from its pin, checks that every one of Herdr's patches applies in reverse to the extracted tree (so the tree is the dist plus exactly those patches), has Zig fetch the packages, which Zig checks against its own content hash, and moves the finished folder into place in one rename.
+A refusal names the input, the digest it found and the one pinned, and leaves nothing behind.
+The folder is `<cache>/vt/<pin digest>-<system>`, where `<cache>` is `HIDE_BUILD_CACHE`, else `~/.cache/hide-build`, else `%LOCALAPPDATA%\hide-build` on Windows; on macOS it holds about 470 MB, 415 MB of it the Zig compiler.
+It is a download cache like the Rust toolchain, shared by every checkout and never written by a build, and the three most recently prepared entries are kept.
+`scripts/toolchain-env.sh` points `HIDE_BUILD_CACHE` at the machine's own home, for the same reason it does so for rustup: a verification runner under its own HOME would otherwise download and keep a private copy.
+
+`hide-vt/build.rs` reads only that folder and downloads nothing.
+It stops with the reason and the command to run when the folder is not prepared, when Zig is missing, and when `ZIG` names a Zig of another version.
+It runs Zig with `--system <packages>`, which turns package fetching off, and `-fno-sys` for each of libghostty's system integrations, so every package comes from the prepared folder and a missing one is a failure naming it, never a download.
+Zig compiles into the worktree: its caches are about 260 MB per target, kept in the build's `OUT_DIR` for that build only and removed after it, unless `HIDE_VT_ZIG_CACHE` names a folder to keep, which only CI does.
+A cold build on an Apple M-series Mac took 46 s with a peak of 1.07 GB in the Zig compiler (2026-10-31); the vt lane measures each system in CI.
+
+`scripts/verify-cargo.sh` prepares the inputs before every mode that can build hide-vt (`test`, `lint`, and a scoped mode naming `--workspace` or `-p hide-vt`), which does nothing when they are ready.
+When the preparation fails, as it does without a network the first time, the command stops before cargo with the reason and the command to run where ziglang.org, github.com, codeberg.org and deps.files.ghostty.org are reachable.
+`release` and `cli` build no hide-vt, so the app's packaging needs no Zig; nothing in the app or a device kit carries libghostty-vt until the pane holder ships.
+The Mac mini's release jobs build only those binaries, so the runner has no Zig installed; when the holder ships, the same preparation installs it under the runner account's cache.
+
+In CI, `.github/actions/vt-cache` restores the prepared folder, keyed by the pin file, system and architecture, and Zig's caches, keyed by the pin file, `hide-vt/build.rs` (which fixes the target mapping and the `ReleaseFast` optimize mode), system and architecture.
+Both live under the runner's temporary folder at fixed paths, because Zig's C-header cache keys include the compiler's installation path, and outside `target/`, which the workspace set's rust-cache entry holds.
+The `vt` lane is each system's one saver, on main only; `rust workspace`, `windows check` and the release's workspace tests restore, and a miss costs a download, never a failure.
+`scripts/tests/test_vt_cache.py` holds every job to that.
+
+The `vt` lane (`.github/workflows/vt.yml`) builds hide-vt on Linux, macOS and Windows from empty Zig caches and again from kept ones, measuring each with `scripts/measure-build.py` (wall time, and the largest process's peak memory), runs its tests and Clippy, builds it again with the network denied on Linux (`unshare --net`) and macOS (`sandbox-exec`) after showing the wrapper denies it, and runs `scripts/check-vt-build-refusals.sh`, which shows a missing Zig, another Zig version and a download of other bytes each stopping with its reason.
+`scripts/tests/test_prepare_vt_inputs.py` covers the preparation's refusals without a network.
 
 ## Two entrypoints
 

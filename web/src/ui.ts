@@ -12,7 +12,9 @@ import type { CycleItem } from "./recent";
 import type { NumberedFamily } from "./shortcuts";
 import type { ViewFocusRequest, ViewWorkspace } from "./viewLayout";
 import type { KeyboardOwner } from "./viewFocus";
+import { DESK_LANE_CLOSED, type DeskLaneWindow } from "./deskLane";
 import type { BrowserDevice } from "./browserDevice";
+import type { DeskMention } from "./desk";
 import { NO_CALLS_SEEN, type CallsSeen, type LaneMode, type LaneSide, type LaneView } from "./workspace";
 import type { Tool } from "./laneTools";
 
@@ -63,9 +65,13 @@ export type PendingViewsClose = {
  * `null` until the first snapshot decides where the page starts (D-11).
  * `main` is one device's all-projects Overview, the screen its Home row opens
  * (PRD home-device-rail D-13): `deviceId` names the device, and without one it
- * is the device in front.
+ * is the device in front. `desk` is Desk's room (PRD Desk 1차 B1), which
+ * the sidebar's `◆ Desk` row opens.
  */
-export type Screen = { kind: "main"; deviceId?: string } | { kind: "workspace" };
+export type Screen = { kind: "main"; deviceId?: string } | { kind: "workspace" } | { kind: "desk" };
+
+/** What the operator is writing to Desk, kept while they go elsewhere: the words and the sessions and projects picked from the `@` menu. */
+export type DeskDraft = { text: string; mentions: DeskMention[] };
 
 /**
  * The Overview's five tabs share the selected device and project, except
@@ -206,6 +212,11 @@ export type PendingTrash = {
 
 type UiStore = {
   screen: Screen | null;
+  deskDraft: DeskDraft;
+  setDeskDraft: (draft: DeskDraft) => void;
+  /** Desk's lane in this window: its columns, the tool column's thread and the preview tab (`deskLane.ts`). */
+  deskLane: DeskLaneWindow;
+  setDeskLane: (change: (lane: DeskLaneWindow) => DeskLaneWindow) => void;
   /** Overview is a shell layer; opening it leaves the Workspace mounted. */
   overviewOpen: boolean;
   overview: OverviewPlace;
@@ -416,6 +427,10 @@ export function coveringLayer(layers: readonly (() => void)[]): (() => void) | n
 
 export const useUiStore = create<UiStore>((set, get) => ({
   screen: null,
+  deskDraft: { text: "", mentions: [] },
+  setDeskDraft: (deskDraft) => set({ deskDraft }),
+  deskLane: DESK_LANE_CLOSED,
+  setDeskLane: (change) => set((state) => ({ deskLane: change(state.deskLane) })),
   overviewOpen: false,
   overview: OVERVIEW_ENTRY,
   overviewReturnFocus: null,

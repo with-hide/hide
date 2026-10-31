@@ -511,7 +511,7 @@ it("lights a picked card and the cards one edge away and dims the rest, and the 
 it("opens the picked node's panel: its head, where it is, what it made, its finish lines as one list, its connections that pick, its ways out and its folded events (B31-B33)", async () => {
   const plan = {
     pane_id: "p2", session: { device_id: "mac", agent: "codex", session_id: "worker-session" },
-    steps: [{ key: "parse", title: "Command parser", depends_on: [], status: "working" as const, line: null, output: null, changed: false, change: null, waiting: false }],
+    steps: [{ key: "parse", title: "Command parser", depends_on: [], status: "working" as const, line: null, output: null, changed: false, change: null, waiting: false, delegate: false, evidence: null, delegation: null }],
     review: "approved" as const, ask: null, progress: { current: "parse", next: null, done: 0, total: 1, finished: false }, created_at_unix_ms: 1, updated_at_unix_ms: Date.now(),
   };
   const nodes = [
@@ -574,7 +574,7 @@ it("opens the picked node's panel: its head, where it is, what it made, its fini
 it("puts a held node's question and choices in its panel, read only, and the worker's plan line in the summary (B31; PRD hide-plan B16; PRD mission-tool B19)", async () => {
   const own = {
     pane_id: "p2", session: { device_id: "mac", agent: "codex", session_id: "worker-session" },
-    steps: [{ key: "core", title: "Core events", depends_on: [], status: "working" as const, line: null, output: null, changed: false, change: null, waiting: false }, { key: "web", title: "Web map", depends_on: ["core"], status: "planned" as const, line: null, output: "pr" as const, changed: false, change: null, waiting: true }],
+    steps: [{ key: "core", title: "Core events", depends_on: [], status: "working" as const, line: null, output: null, changed: false, change: null, waiting: false, delegate: false, evidence: null, delegation: null }, { key: "web", title: "Web map", depends_on: ["core"], status: "planned" as const, line: null, output: "pr" as const, changed: false, change: null, waiting: true, delegate: false, evidence: null, delegation: null }],
     review: "approved" as const, ask: null, progress: { current: "core", next: "web", done: 0, total: 2, finished: false }, created_at_unix_ms: 1, updated_at_unix_ms: Date.now(),
   };
   const map = await mount({ items: [asked({ nodes: [node("api", { status: "working", line: "Conductor's line", plan: own }), node("screen", { title: "API screen", status: "held" })] })] });

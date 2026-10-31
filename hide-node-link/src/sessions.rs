@@ -18,6 +18,8 @@ pub enum ReaderFeature {
     Turns,
     UserTurnContent,
     Usage,
+    /// The session read as ACP session updates (`Call::SessionThread`).
+    Thread,
 }
 
 /// Limits on the existing Hello's reader field. The outer transport already
@@ -73,6 +75,9 @@ impl ReaderFeatures {
             }
             if agent.reports_turns() {
                 features.extend([Turns, UserTurnContent]);
+            }
+            if hide_session::thread::reads(agent.format()) {
+                features.insert(Thread);
             }
             result.providers.insert(agent.as_str().to_owned(), features);
         }

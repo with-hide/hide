@@ -19,6 +19,7 @@ import { PaneLetterButton } from "./components/letter-mark";
 import { StatusMark } from "./components/status-mark";
 import { Button } from "./components/ui/button";
 import { Hint } from "./components/ui/tooltip";
+import { PaneDeskReturn } from "./DeskScreen";
 import { PaneAskMark, PaneForkMark, PaneHeadChildren, PaneHeaderBand, PanePrChip, PaneRecordButton, usePaneAgents } from "./PaneHeaderBand";
 import { PaneWorkChip } from "./PaneMissionChip";
 import { PaneViews } from "./ViewComments";
@@ -114,7 +115,7 @@ function SleepBody({ paneId, sleep, actions }: { paneId: string; sleep: AgentSle
           <MoonIcon className="size-(--size-icon-lg) text-muted-foreground" aria-hidden="true" />
           <p className="text-subhead text-foreground">{t("panes.sleep.sleeping")}</p>
           {sleep.progress ? <p className="max-w-full truncate text-caption text-muted-foreground">{sleep.progress}</p> : null}
-          <Button size="sm" className="mt-xs" data-agent-wake={paneId} onClick={() => actions.wakeAgent(paneId)}>
+          <Button variant="secondary" size="sm" className="mt-xs" data-agent-wake={paneId} onClick={() => actions.wakeAgent(paneId)}>
             {t("panes.sleep.wake")}
           </Button>
         </>
@@ -422,6 +423,7 @@ export const PaneView = memo(function PaneView({
         {agentKind ? <PaneAskMark paneId={paneId} header={header} actions={actions} /> : null}
         {agentKind && lettersWaiting > 0 ? <PaneLetterButton paneId={paneId} letters={lettersWaiting} onDeliver={actions.deliverLettersNow} /> : null}
         <span data-pane-move-blank="true" className="h-full flex-1" />
+        <PaneDeskReturn paneId={paneId} actions={actions} />
         {agentKind ? <PaneHeadChildren paneId={paneId} actions={actions} /> : null}
         <PaneConnectionChip pane={pane} agentKind={agentKind} actions={actions} local={local} />
         {agentKind ? <PaneMention paneId={paneId} actions={actions} className={tools} /> : null}

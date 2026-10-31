@@ -187,6 +187,11 @@ pub const PR_FEEDBACK_FIELDS: &str = "body,statusCheckRollup,reviews";
 /// project's list does not hold it: open, closed or merged.
 pub const OUTSIDE_PR_FIELDS: &str = "state";
 
+/// The fields a plan step's `--pr` is checked by (PRD hide-plan-delegate
+/// D-19): the branch it was made from, whether that branch is in another
+/// repository, and its address, which names the repository it is in.
+pub const PLAN_PR_FIELDS: &str = "headRefName,isCrossRepository,url";
+
 /// What the list of every pull request asks for. `statusCheckRollup` is
 /// left out: asking GitHub for the checks of all 200 pull requests, merged
 /// and closed ones included, is what made one read take 11 - 14 seconds
@@ -590,7 +595,8 @@ pub fn allowed(arguments: &[&str]) -> bool {
             && arguments[3] == "--json"
             && (arguments[4] == "body"
                 || arguments[4] == PR_FEEDBACK_FIELDS
-                || arguments[4] == OUTSIDE_PR_FIELDS))
+                || arguments[4] == OUTSIDE_PR_FIELDS
+                || arguments[4] == PLAN_PR_FIELDS))
         || (arguments.len() == 7
             && arguments[..2] == ["issue", "view"]
             && arguments[3] == "--repo"
@@ -1375,6 +1381,7 @@ mod tests {
             issues(ISSUE_LIST_FIELDS),
             issues(ISSUE_LIST_PROJECT_FIELDS),
             vec!["pr", "view", "1232", "--json", OUTSIDE_PR_FIELDS],
+            vec!["pr", "view", "1232", "--json", PLAN_PR_FIELDS],
         ] {
             assert!(allowed(&arguments), "{arguments:?} must be allowed");
         }
@@ -1394,6 +1401,7 @@ mod tests {
             vec!["issue", "list"],
             vec!["pr", "list"],
             vec!["pr", "view", "main", "--json", OUTSIDE_PR_FIELDS],
+            vec!["pr", "view", "main", "--json", PLAN_PR_FIELDS],
             vec!["pr", "view", "1232", "--json", "state,body"],
         ] {
             assert!(!allowed(&arguments), "{arguments:?} must be refused");

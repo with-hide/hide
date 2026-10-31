@@ -1491,6 +1491,20 @@ export type PlanStepStatus = "planned" | "working" | "done" | "dropped";
 export type PlanReview = "approved" | "proposed";
 /** What a step leaves behind, the tail of its card (`plan_output`, D-02). */
 export type PlanOutput = "pr" | "file" | "none";
+/** Where a handed step's current attempt stands (`plan_delegation_state`, PRD hide-plan-delegate D-07, D-22): working, its report came (보고 옴), it sent a block (막힘), or its pane closed for good without a report (닫힘). */
+export type PlanDelegationState = "working" | "reported" | "blocked" | "closed";
+/** What a finished step left, checked when its done was recorded (`plan_evidence_kind`, D-13, D-19): a pull request by repository and number, or a file by its path below the session's checkout. A step done before evidence existed carries none. */
+export type PlanEvidence = { kind: "pr"; repo: string; number: number } | { kind: "file"; path: string };
+/** The child a step is handed to, or was when it finished (B20): its pane while shown and its session, by which the child's own plan is found in `PlansSnapshot.items`. `agent_id` is null while the child is still being started. */
+export type PlanDelegation = {
+  state: PlanDelegationState;
+  attempt: number;
+  agent_id: string | null;
+  name: string;
+  agent: string;
+  pane_id: string | null;
+  session: WorkSession | null;
+};
 
 /** One step as the map draws it (`StepView`). */
 export type PlanStep = {
@@ -1505,6 +1519,11 @@ export type PlanStep = {
   change: string | null;
   /** A step it waits on is neither done nor dropped: the card is dashed (B7). */
   waiting: boolean;
+  /** 맡길 예정: the agent means to hand the step to another agent (PRD hide-plan-delegate B3). */
+  delegate: boolean;
+  evidence: PlanEvidence | null;
+  /** Null for a step the main does itself or took back. */
+  delegation: PlanDelegation | null;
 };
 
 /** The current and next step and the count, as the core reads them (D-03, D-25). */
@@ -1522,7 +1541,7 @@ export type PlanView = {
   updated_at_unix_ms: number;
 };
 
-/** The plans the core keeps for the panes on screen. */
+/** The plans the core keeps for the panes on screen, and the plans of the children their steps are handed to, whether or not those panes are shown (`pane_id` empty then). */
 export type PlansSnapshot = { items: PlanView[] };
 
 /** Settings › Conductor (D-31): the cap, the default scope, the worker candidates, a new mission's verification strength and whether its checkers come from another company. */
@@ -2612,6 +2631,132 @@ export type ProjectSuggestions = {
   global?: { path: string; unusable: GlobalInstructionUnusable | null } | null;
 };
 
+/** An agent Desk talks to over ACP (PRD Desk 1차); `contracts/snapshot-wire-enums.json` `desk_agent`. */
+export type DeskAgentId = "claude" | "codex" | "pi";
+export type DeskAgentState = "checking" | "ready" | "preparing" | "not_installed" | "install_failed" | "node_missing" | "cli_missing" | "login_needed" | "no_ask_mode" | "not_offered";
+export type DeskHostState = "idle" | "starting" | "ready" | "thinking" | "stopped";
+export type DeskApprovalState = "waiting" | "allowed" | "rejected" | "closed";
+export type DeskNotice = "blocked" | "preparing" | "host_stopped" | "resume_failed" | "login_needed" | "install_failed" | "no_ask_mode" | "turn_failed";
+export type DeskLocation = "desk" | "worktree" | "checkout";
+export type DeskChoice = { id: string; label: string };
+export type DeskMention = { kind: "session" | "project"; id: string; name: string };
+/** A session a conversation line names, drawn as a chip with its row's mark now (`null` once it has no row or the line is past the newest 64). */
+export type DeskSessionChip = { pane_id: string; name: string; agent_kind: string | null; mark: RowMark | null };
+
+export type DeskAgent = {
+  id: DeskAgentId;
+  label: string;
+  state: DeskAgentState;
+  /** What the state names: the Node version found, the install's last line, the missing CLI. */
+  detail: string | null;
+  /** Shown with `login_needed`. */
+  login_command: string;
+  /** What the agent's last session offered; empty until one opened. */
+  models: DeskChoice[];
+  efforts: DeskChoice[];
+};
+
+/** One line of the Desk conversation. A message's text holds a mention as `@session(<id> <name>)` or `@project(<path> <name>)`. */
+export type DeskItem =
+  | { kind: "user"; id: number; text: string; at_ms: number; mentions: DeskMention[] }
+  /** `thought_ms` and `steps` fold the turn into one line: `생각 8초 · 세션 4개 읽음`; `mentions` are the sessions its text names as `@session(<pane> <name>)`. */
+  | { kind: "reply"; id: number; agent: DeskAgentId; text: string; at_ms: number; state: "done" | "stopped"; thought_ms: number | null; steps: DeskSteps; mentions: DeskSessionChip[] }
+  | { kind: "switch"; id: number; from: DeskAgentId | null; to: DeskAgentId; carried: "all" | "trimmed" | "none" }
+  | { kind: "model"; id: number; model: string | null; effort: string | null }
+  | { kind: "approval"; id: number; card: "command" | "edit" | "other"; command: string; folder: string | null; reason: string | null; state: DeskApprovalState }
+  /** `detail` is the install's last line, the sign-in command for `login_needed`, or the blocked call. */
+  | { kind: "notice"; id: number; notice: DeskNotice; agent: DeskAgentId | null; detail: string | null }
+  /** A letter Desk sent a running session (B16): handed work when `letter_kind` is `request`; no state, no place. `read` once its runtime took it in; `mark` is the recipient row's now, for its chip. */
+  | { kind: "handed"; id: number; agent_id: string; pane_id: string; name: string; project: string | null; letter_kind: string; line: string; letter_id: string | null; read: boolean; agent_kind: string | null; mark: RowMark | null }
+  /** Desk started or queued a job; its card is `jobs`' entry `job_id`. */
+  | { kind: "job"; id: number; job_id: string };
+
+/** `contracts/snapshot-wire-enums.json` `desk_job_state`. */
+export type DeskJobState = "queued" | "starting" | "working" | "asking" | "done" | "failed" | "cancelled" | "closed" | "moved_out" | "sleeping" | "archived";
+/** `desk_ask_kind`: the verb an asking job's line starts with. */
+export type DeskAskKind = "question" | "approval" | "decision" | "plan_review" | "blocked";
+/** What Desk's agent did in a turn, counted from its tool calls. */
+export type DeskSteps = { sessions: number; files: number; letters: number; starts: number; other: number };
+/** `desk_job_reason`. */
+export type DeskJobReason = "spawn_failed" | "exited" | "device_disconnected";
+/** `desk_job_failure`: why a start failed, grouped by what the operator can do (`desk.jobFailure.*`). */
+export type DeskJobFailure = "device_unavailable" | "agent_not_installed" | "branch_in_use" | "project_unavailable" | "already_started" | "busy" | "not_started" | "invalid_request" | "other";
+/** `desk_output_kind`. */
+export type DeskOutputKind = "image" | "page" | "doc" | "pr";
+/**
+ * A job's result; `pr_state` is a pull request's one state, its PR mark's.
+ * A View's file is read from `path` under `checkout` on `device_id`, so the
+ * lane shows it without a View of its own (B31); a page and a pull request
+ * carry `url`.
+ */
+export type DeskOutput = { id: string; kind: DeskOutputKind; label: string; thumb: string | null; seen: boolean; pr_state: PrState | null; device_id: string | null; checkout: string | null; path: string | null; url: string | null };
+/** A tab kept in Desk's 보기 column: a job's output as its card listed it when it was kept, or a mission's map (B31, B34). */
+export type DeskKeptTab = { kind: "output"; job: string; output: DeskOutput } | { kind: "mission"; mission: string; title: string };
+/** The mission a Conductor job runs, as its `미션 k/n` chip (B34). */
+export type DeskMission = { id: string; title: string; status: MissionStatus; done: number; total: number; deciding: boolean };
+/** One session Desk started or queued; `id` is the spawn's intent, `pane_id` its thread's key. */
+export type DeskJob = {
+  id: string;
+  agent_id: string | null;
+  pane_id: string | null;
+  title: string;
+  agent_kind: string;
+  project: { workspace_id: string | null; label: string };
+  location: { kind: "checkout" | "worktree"; label: string };
+  state: DeskJobState;
+  queue_position: number | null;
+  now: string | null;
+  plan: { done: number; total: number } | null;
+  question: string | null;
+  summary: string | null;
+  pull_requests: { number: number; state: PrState }[];
+  outputs: DeskOutput[];
+  joined: boolean;
+  reason: DeskJobReason | null;
+  /** Why a failed start failed. */
+  failure: DeskJobFailure | null;
+  ask: DeskAskKind | null;
+  /** The sidebar row's mark, drawn with `StatusMark`; `mark_read` is its hollow read ask. */
+  mark: RowMark | null;
+  mark_read: boolean;
+  machine: string | null;
+  disconnected: boolean;
+  changed_at_unix_ms: number;
+  read: boolean;
+  mission: DeskMission | null;
+  /** The panes of a Conductor's workers. */
+  workers: string[];
+};
+/** The `desk_mentions` section, the `@` menu: recent sessions, then projects with their running sessions' panes. */
+export type DeskMentions = {
+  sessions: { id: string; name: string; agent_kind: string; mark: RowMark; detail: string | null }[];
+  projects: { id: string; name: string; sessions: string[] }[];
+};
+
+/** The `desk` section: absent until hided starts Desk. */
+export type DeskSection = {
+  selection: { agent: DeskAgentId | null; model: string | null; effort: string | null };
+  agents: DeskAgent[];
+  host: { state: DeskHostState; detail: string | null };
+  /** `generation` moves on 새 대화; `dropped` items left the front past the cap. */
+  conversation: { generation: number; items: DeskItem[]; dropped: number };
+  approvals_waiting: number;
+  /** `enabled` is Settings › Desk's switch, off by default (D-76): off, no entry to Desk is drawn. */
+  settings: { enabled: boolean; default_agent: DeskAgentId | null; location: DeskLocation; cap: number };
+  /** The lane's pin and the tabs kept in its 보기 column, oldest first, at most 16 (B31, B32). */
+  lane: { pinned: boolean; kept: DeskKeptTab[] };
+};
+
+/** The `desk_jobs` section: Desk's sessions as cards, newest first and at most 64, apart so a card's change never resends the conversation. */
+export type DeskJobsSection = {
+  jobs: DeskJob[];
+  /** The workers of the missions Desk's jobs conduct, as cards of their own: listed under their Conductor and opened from a mission map's node, never drawn in the chat (B28, B34). */
+  workers: DeskJob[];
+};
+
+/** The `desk_live` section: the reply being written, `null` between turns. */
+export type DeskLive = { text: string | null; started_at_ms: number | null };
+
 /** The `suggestions` section: absent until the Hide AI tool opens a Project. */
 export type SuggestionsSection = { project: ProjectSuggestions | null };
 
@@ -2759,6 +2904,57 @@ export type SessionRecordSection = {
   /** The Views past the core's cap, counted. */
   views_omitted?: number;
 };
+/**
+ * A session thread (PRD session-docs-and-assistant B25-B29): the record of one
+ * agent pane's session read as ACP session updates, `sessionUpdate` naming the
+ * variant and fields in camelCase, and the input box's words to that pane.
+ * The core sends its state and the live page in `session_thread`, the kept
+ * pages before it in `session_thread_history`, each on its own revision.
+ */
+export type ThreadUpdate = { sessionUpdate: string } & Record<string, unknown>;
+/** A `hide` command the session ran, by what it made (`contracts/snapshot-wire-enums.json`: `session_thread_part_kind`, `session_thread_view_kind`); the screen looks its part up by these names (B26). */
+export type ThreadPart =
+  | { kind: "plan" }
+  | { kind: "spawn"; name: string | null; intent: string | null; agent_id: string | null }
+  | { kind: "letter"; to: string; body: string | null }
+  | { kind: "view"; view: "browser" | "file" | "diff"; target: string }
+  | { kind: "mission"; mission: string | null };
+/** Where a session a thread names runs: its pane as the agent rows key it, on its machine. */
+export type ThreadSession = { pane_id: string; machine: string };
+/**
+ * One page: its updates in record order, the parts of its tool calls by tool
+ * call id, and where each session a letter, a spawn or a letter's sender
+ * names runs, by the name as written; a name no live session answers to is absent.
+ */
+export type ThreadPage = { updates: ThreadUpdate[]; parts: Record<string, ThreadPart>; sessions: Record<string, ThreadSession> };
+/** `contracts/snapshot-wire-enums.json`: `session_thread_state`. */
+export type SessionThreadState = "closed" | "loading" | "ready" | "failed";
+/** Why the record could not be read (B27; `session_thread_failure`). */
+export type SessionThreadFailure = "no_record" | "refused";
+/** Whether the pane still runs the thread's session (`session_thread_pane`); input goes only to `same`. */
+export type SessionThreadPane = "same" | "changed" | "gone";
+/** The read of the page before the oldest (`session_thread_older`). */
+export type SessionThreadOlder = "idle" | "loading" | "capacity" | "failed";
+/** What became of the input box's words (`session_thread_input_state`); `reason` is a refusal's code. */
+export type SessionThreadInput = { request_id: string; state: "sending" | "sent" | "refused"; reason?: string };
+export type SessionThreadSection = {
+  /** Advances with every open; an older page or an input answers only this one. */
+  generation: number;
+  state: SessionThreadState;
+  pane_id: string | null;
+  machine: string | null;
+  failure: SessionThreadFailure | null;
+  pane: SessionThreadPane;
+  /** Whether the machine's node answers now; a thread whose node does not keeps what it read. */
+  connected: boolean;
+  has_older: boolean;
+  older: SessionThreadOlder;
+  /** The page the session is still writing. */
+  tail: ThreadPage | null;
+  input: SessionThreadInput | null;
+};
+/** The whole pages before the live one, oldest first. */
+export type SessionThreadHistorySection = { generation: number; pages: ThreadPage[] };
 export type SessionSearchStatus = "current" | "working" | "done" | "needs_you" | "archived" | "retained";
 export type SessionSearchCursor = { at_unix_ms: number; device_id: string; agent: string; session_id: string };
 export type SessionSearchOptions = { request_id?: string | null; device_id?: string | null; project_root?: string | null; agent?: string | null; since_unix_ms?: number | null; until_unix_ms?: number | null; status?: SessionSearchStatus | null; include_titles?: boolean; include_flows?: boolean; cursor?: SessionSearchCursor | null };

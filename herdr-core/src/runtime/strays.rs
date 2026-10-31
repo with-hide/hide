@@ -227,7 +227,7 @@ impl Runtime {
         };
         if result.is_ok() {
             // The words are the operator's own message to the session.
-            self.note_delivery_reply(pane_id);
+            self.note_delivery_reply(pane_id, "stray_hand_off");
             self.record_operator_submit(pane_id);
         }
         self.settle_stray_hand_off(request_id, &checkout, result);

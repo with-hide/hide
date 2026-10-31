@@ -1250,7 +1250,9 @@ mod tests {
                 "subagentStop",
                 "stop",
                 "preToolUse",
-                "postToolUse"
+                "postToolUse",
+                "permissionRequest",
+                "interrupt"
             ]
         );
     }

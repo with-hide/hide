@@ -1,2 +1,18 @@
 hide
 Copyright 2026 Grab Lee
+
+This product includes software from these projects.
+
+hide-vt/ is derived from Herdr's crates/ghostty-vt
+(https://github.com/herdrdev/herdr, release v0.9.5, commit 2ecf19a).
+Copyright 2025 herdr contributors.
+Licensed under the Apache License, Version 2.0.
+Hide changed it: each file says what changed, and hide-vt/PATCHES.md lists
+every change.
+
+hide-vt links libghostty-vt, which its build downloads from that Herdr release
+(vendor/libghostty-vt: the libghostty-vt source dist of Ghostty commit
+44f2a44df7e8c4a0c6df3f7d872ef3d7ead88e51 with Herdr's patches 0002, 0004,
+0005, 0006 and 0007 applied) and does not copy into this repository.
+Copyright (c) 2024 Mitchell Hashimoto, Ghostty contributors.
+Licensed under the MIT License.

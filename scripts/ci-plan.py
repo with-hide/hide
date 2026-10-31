@@ -10,8 +10,8 @@ A push to main, a comparison that cannot be computed and a path no rule
 claims use the existing full plan (without `package` or `agent-clis`).
 CI definition changes on a pull request exercise every lane, including those two.
 No lane takes a macOS runner for anything but what only macOS proves
-(`os-contract-macos`, `desktop-e2e`, `omp-contract`'s SDK boundary, and
-`package`'s packaged app); the rest of the macOS checks are jobs of `nightly.yml`.
+(`os-contract-macos`, `desktop-e2e`, `omp-contract`'s SDK boundary, `vt`'s
+macOS build of libghostty-vt, and `package`'s packaged app); the rest of the macOS checks are jobs of `nightly.yml`.
 Nightly explicitly owns agy and the journey in its direct calls and removes
 those two internal lanes from its verify plan.
 
@@ -44,6 +44,7 @@ LANES = (
     "checks",
     "os-contract",
     "os-contract-macos",
+    "vt",
     "agy-contract",
     "omp-contract",
     "agent-journey",
@@ -332,6 +333,10 @@ SYSTEM_TESTS = (
     ("scripts/tests/test_agent_live_windows.py", JOURNEY_LANES),
 )
 NAMED_LANES = (
+    # The vt lane's own scripts; `prepare-vt-inputs.py`, which every Rust lane
+    # runs through `verify-cargo.sh`, plans every lane.
+    ("scripts/check-vt-build-refusals.sh", {"vt"}),
+    ("scripts/measure-build.py", {"vt"}),
     ("scripts/agent_live_check/*", LIVE_CHECK_LANES),
     ("scripts/agent-live-check.py", LIVE_CHECK_LANES),
     ("web/e2e/shims/claude-shim.c", WEB_E2E_LANES | JOURNEY_LANES),
@@ -477,6 +482,9 @@ def classify(path, status, crates, root):
             lanes.update(OS_LANES)
         if crate["name"] in AGY_CRATES:
             lanes.add("agy-contract")
+        if crate["name"] == "hide-vt":
+            # Its Zig build differs by system; the vt lane builds it on all three.
+            lanes.add("vt")
         if path.as_posix() in JOURNEY_CRATE_FILES or is_journey_product(path):
             lanes.update(JOURNEY_LANES)
         return lanes, f"crate {crate['name']}: {path}", packages

@@ -71,6 +71,13 @@ enum Command {
         command: herdr_core::memory_command::MemoryCommand,
         reply: Sender<Result<herdr_core::memory_command::PreparedMemory, String>>,
     },
+    PanePrepare {
+        device_id: String,
+        pane_id: String,
+        expected: Context,
+        command: herdr_core::pane_command::PaneCommand,
+        reply: Sender<Result<herdr_core::pane_command::Prepared, String>>,
+    },
     Mission {
         device_id: String,
         pane_id: String,
@@ -83,12 +90,19 @@ enum Command {
         pane_id: String,
         expected: Context,
         command: herdr_core::plans::PlanCommand,
-        reply: Sender<Result<serde_json::Value, String>>,
+        proofs: herdr_core::plans::Proofs,
+        reply: Sender<Result<herdr_core::plans::PlanTurn, String>>,
     },
     PlanContext {
         device_id: String,
         pane_id: String,
         reply: Sender<Option<hide_agent_hooks::plan_record::PlanContext>>,
+    },
+    HookStatus {
+        device_id: String,
+        pane_id: String,
+        report: hide_node_link::panes::HookStatusReport,
+        reply: Sender<Result<(), &'static str>>,
     },
     AgentCatalog {
         device_id: String,
@@ -104,6 +118,14 @@ enum Command {
         reply: Sender<Result<serde_json::Value, String>>,
     },
     AgentSleep {
+        device_id: String,
+        pane_id: String,
+        expected: Context,
+        id: String,
+        actor: Option<String>,
+        reply: Sender<Result<serde_json::Value, String>>,
+    },
+    AgentArchive {
         device_id: String,
         pane_id: String,
         expected: Context,
@@ -130,6 +152,9 @@ enum Command {
     SetFileRoots {
         roots: Vec<(std::path::PathBuf, std::fs::File)>,
         reply: Sender<Result<(), String>>,
+    },
+    SetDesk {
+        platform: Arc<dyn herdr_core::desk::DeskPlatform>,
     },
     Dispatch {
         event: Vec<u8>,
@@ -358,6 +383,29 @@ impl CoreHandle {
         result.recv().map_err(|_| "memory_unavailable".to_owned())?
     }
 
+    /// Admits a `hide pane`, `hide agent read` or `hide workspace purpose`
+    /// caller on the owner thread; the command's engine calls run on the
+    /// caller's blocking task.
+    pub fn prepare_pane(
+        &self,
+        device: &str,
+        pane: &str,
+        expected: &Context,
+        command: herdr_core::pane_command::PaneCommand,
+    ) -> Result<herdr_core::pane_command::Prepared, String> {
+        let (reply, result) = mpsc::channel();
+        self.commands
+            .send(Command::PanePrepare {
+                device_id: device.to_owned(),
+                pane_id: pane.to_owned(),
+                expected: expected.clone(),
+                command,
+                reply,
+            })
+            .map_err(|_| "pane_unavailable".to_owned())?;
+        result.recv().map_err(|_| "pane_unavailable".to_owned())?
+    }
+
     /// Runs a Conductor's `hide mission` command on the owner thread.
     pub fn mission(
         &self,
@@ -381,7 +429,12 @@ impl CoreHandle {
             .map_err(|_| "mission_unavailable".to_owned())?
     }
 
-    /// Runs a `hide plan` command on the owner thread.
+    /// Runs a `hide plan` command on the owner thread. A change whose
+    /// evidence needs reading (a step's pull request or file, PRD
+    /// hide-plan-delegate D-19) has it read here, on the caller's request
+    /// thread, and is asked again with what was read; a plan that moved in
+    /// between is judged again, and a change still asking after three rounds
+    /// is answered as unconfirmed.
     pub fn plan(
         &self,
         device: &str,
@@ -389,17 +442,34 @@ impl CoreHandle {
         expected: &Context,
         command: herdr_core::plans::PlanCommand,
     ) -> Result<serde_json::Value, String> {
-        let (reply, result) = mpsc::channel();
-        self.commands
-            .send(Command::Plan {
-                device_id: device.to_owned(),
-                pane_id: pane.to_owned(),
-                expected: expected.clone(),
-                command,
-                reply,
-            })
-            .map_err(|_| "plan_unavailable".to_owned())?;
-        result.recv().map_err(|_| "plan_unavailable".to_owned())?
+        let mut proofs = herdr_core::plans::Proofs::default();
+        let mut owed = None;
+        for _ in 0..3 {
+            let (reply, result) = mpsc::channel();
+            self.commands
+                .send(Command::Plan {
+                    device_id: device.to_owned(),
+                    pane_id: pane.to_owned(),
+                    expected: expected.clone(),
+                    command: command.clone(),
+                    proofs: proofs.clone(),
+                    reply,
+                })
+                .map_err(|_| "plan_unavailable".to_owned())?;
+            match result.recv().map_err(|_| "plan_unavailable".to_owned())?? {
+                herdr_core::plans::PlanTurn::Answered { answer, .. } => return Ok(answer),
+                herdr_core::plans::PlanTurn::Prove(proof) => {
+                    proof.run(&mut proofs);
+                    owed = Some(proof);
+                }
+            }
+        }
+        // The plan kept moving under three rounds of reads: refuse with the
+        // evidence still owed, as a read that failed is refused.
+        Err(owed.map_or_else(
+            || "plan_unavailable".to_owned(),
+            |proof| proof.unconfirmed(),
+        ))
     }
 
     /// The pane's plan summary for its prompt hook, on the owner thread;
@@ -418,6 +488,25 @@ impl CoreHandle {
             })
             .ok()?;
         result.recv().ok()?
+    }
+
+    /// What a pane's agent hook reported, recorded on the owner thread.
+    pub fn hook_status(
+        &self,
+        device: &str,
+        pane: &str,
+        report: hide_node_link::panes::HookStatusReport,
+    ) -> Result<(), &'static str> {
+        let (reply, result) = mpsc::channel();
+        self.commands
+            .send(Command::HookStatus {
+                device_id: device.to_owned(),
+                pane_id: pane.to_owned(),
+                report,
+                reply,
+            })
+            .map_err(|_| "hook_status_unavailable")?;
+        result.recv().map_err(|_| "hook_status_unavailable")?
     }
 
     /// `hide agent catalog`, read on the owner thread. While the core says a
@@ -476,6 +565,29 @@ impl CoreHandle {
         let (reply, result) = mpsc::channel();
         self.commands
             .send(Command::AgentSleep {
+                device_id: device.to_owned(),
+                pane_id: pane.to_owned(),
+                expected: expected.clone(),
+                id,
+                actor,
+                reply,
+            })
+            .map_err(|_| "agent_unavailable".to_owned())?;
+        result.recv().map_err(|_| "agent_unavailable".to_owned())?
+    }
+
+    /// `hide agent archive`, run on the owner thread.
+    pub fn agent_archive(
+        &self,
+        device: &str,
+        pane: &str,
+        expected: &Context,
+        id: String,
+        actor: Option<String>,
+    ) -> Result<serde_json::Value, String> {
+        let (reply, result) = mpsc::channel();
+        self.commands
+            .send(Command::AgentArchive {
                 device_id: device.to_owned(),
                 pane_id: pane.to_owned(),
                 expected: expected.clone(),
@@ -582,6 +694,16 @@ impl CoreHandle {
             .map_err(|_| "core owner thread is gone".to_owned())?;
         rx.recv()
             .map_err(|_| "core owner thread dropped file-root reply".to_owned())?
+    }
+
+    /// Starts Desk with the identity and places hided gives its process.
+    pub fn set_desk(
+        &self,
+        platform: Arc<dyn herdr_core::desk::DeskPlatform>,
+    ) -> Result<(), String> {
+        self.commands
+            .send(Command::SetDesk { platform })
+            .map_err(|_| "core owner thread is gone".to_owned())
     }
 
     /// `panes` is where each device's node link sends its panes' proofs and
@@ -1146,6 +1268,16 @@ fn owner_loop(
             } => {
                 let _ = reply.send(core.prepare_memory(&device_id, &pane_id, &expected, command));
             }
+            Command::PanePrepare {
+                device_id,
+                pane_id,
+                expected,
+                command,
+                reply,
+            } => {
+                let _ =
+                    reply.send(core.prepare_pane_command(&device_id, &pane_id, &expected, command));
+            }
             Command::Mission {
                 device_id,
                 pane_id,
@@ -1160,9 +1292,11 @@ fn owner_loop(
                 pane_id,
                 expected,
                 command,
+                proofs,
                 reply,
             } => {
-                let _ = reply.send(core.plan_command(&device_id, &pane_id, &expected, command));
+                let _ = reply
+                    .send(core.plan_command(&device_id, &pane_id, &expected, command, &proofs));
             }
             Command::PlanContext {
                 device_id,
@@ -1170,6 +1304,14 @@ fn owner_loop(
                 reply,
             } => {
                 let _ = reply.send(core.plan_context(&device_id, &pane_id));
+            }
+            Command::HookStatus {
+                device_id,
+                pane_id,
+                report,
+                reply,
+            } => {
+                let _ = reply.send(core.hook_status(&device_id, &pane_id, &report));
             }
             Command::AgentCatalog {
                 device_id,
@@ -1196,6 +1338,23 @@ fn owner_loop(
                 reply,
             } => {
                 let _ = reply.send(core.agent_sleep(
+                    &device_id,
+                    &pane_id,
+                    &expected,
+                    &id,
+                    actor.as_deref(),
+                ));
+            }
+
+            Command::AgentArchive {
+                device_id,
+                pane_id,
+                expected,
+                id,
+                actor,
+                reply,
+            } => {
+                let _ = reply.send(core.agent_archive(
                     &device_id,
                     &pane_id,
                     &expected,
@@ -1242,6 +1401,7 @@ fn owner_loop(
                     command,
                 ));
             }
+            Command::SetDesk { platform } => core.set_desk(platform),
             Command::SetFileRoots { roots, reply } => {
                 // This node holds the opened roots while the core pins their
                 // identities; the previous set closes once it is replaced.

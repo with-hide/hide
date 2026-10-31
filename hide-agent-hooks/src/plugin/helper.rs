@@ -60,6 +60,9 @@ struct Input {
     args: Option<Value>,
     working: u32,
     done: u32,
+    /// The turn the script saw the session's own events start, end or wait
+    /// in (the `turn` operation).
+    turn: Option<report::HookTurn>,
     /// Helper calls the script skipped at its cap or gave up on since its last
     /// call: recorded here, since the script has no log of its own.
     lost: u32,
@@ -161,8 +164,9 @@ pub fn run(agent: &str, operation: Option<&str>, started: Instant) {
             letters(&home, input, started + LETTERS_BUDGET)
         }
         Some("subagents") if agent.adapter.subagent_counts.is_some() => {
-            subagents(&home, &agent, input)
+            subagents(&home, &agent, input, started)
         }
+        Some("turn") => turn(&home, &agent, input, started),
         _ => json!({}),
     };
     answer(&output);
@@ -469,8 +473,8 @@ fn tool(home: &Path, agent: &Agent, input: Input, deadline: Instant) -> Value {
 }
 
 /// The pane's subagent counts as the script keeps them, stored and reported to
-/// Herdr the way the Claude Code and Codex hooks report theirs.
-fn subagents(home: &Path, agent: &Agent, input: Input) -> Value {
+/// the core the way the Claude Code and Codex hooks report theirs.
+fn subagents(home: &Path, agent: &Agent, input: Input, started: Instant) -> Value {
     let Some(pane) = pane() else {
         return json!({});
     };
@@ -478,24 +482,80 @@ fn subagents(home: &Path, agent: &Agent, input: Input) -> Value {
         working: input.working,
         done: input.done,
     };
-    let who = counters::Reporter {
+    let who = reporter(agent, &input);
+    if counters::store(home, &pane, counts, who).is_err() {
+        return json!({});
+    }
+    let outcome = report::report(
+        &report::HookStatusReport {
+            runtime: agent.runtime().to_owned(),
+            version: hide_agent_hooks::HOOK_VERSION,
+            session: who.session.map(str::to_owned),
+            turn: None,
+            counts: Some(report::HookCounts {
+                working: counts.working,
+                done: counts.done,
+            }),
+            session_start: false,
+            waiting: None,
+        },
+        started + report::REPORT_TIMEOUT,
+    );
+    let _ = report::record_outcome(home, &pane, agent.runtime(), "subagent count", &outcome);
+    json!({ "reported": outcome.is_ok() })
+}
+
+/// The turn of the script's own session: working, done, waiting on a
+/// permission, or at rest after an interrupt (PRD engine-bundle-1 D-10).
+fn turn(home: &Path, agent: &Agent, input: Input, started: Instant) -> Value {
+    let (Some(pane), Some(turn)) = (pane(), input.turn) else {
+        return json!({});
+    };
+    if input.guard_only {
+        return json!({});
+    }
+    let who = reporter(agent, &input);
+    let counted = agent.adapter.subagent_counts.is_some();
+    let outcome = counters::apply(
+        home,
+        &pane,
+        counters::Change::None,
+        who,
+        counters::Said::Turn(turn),
+        None,
+    )
+    .map_err(|error| format!("the pane's record could not be changed: {error}"))
+    .and_then(|applied| {
+        report::report(
+            &report::HookStatusReport {
+                runtime: agent.runtime().to_owned(),
+                version: hide_agent_hooks::HOOK_VERSION,
+                session: who.session.map(str::to_owned),
+                turn: Some(turn),
+                counts: counted.then_some(report::HookCounts {
+                    working: applied.counters.working,
+                    done: applied.counters.done,
+                }),
+                session_start: false,
+                waiting: None,
+            },
+            started + report::REPORT_TIMEOUT,
+        )
+    });
+    let _ = report::record_outcome(home, &pane, agent.runtime(), "turn", &outcome);
+    json!({ "reported": outcome.is_ok() })
+}
+
+/// The script's session as the pane record and the core key it: the agent's
+/// own id, which is what Herdr reports for OpenCode's pane.
+fn reporter<'a>(agent: &Agent, input: &'a Input) -> counters::Reporter<'a> {
+    counters::Reporter {
         agent: Some(agent.runtime()),
         session: input
             .session_id
             .as_deref()
             .filter(|id| delivery::valid_session(id)),
-    };
-    if counters::store(home, &pane, counts, who).is_err() {
-        return json!({});
     }
-    let socket_path = report::socket_path(home);
-    let outcome = match &socket_path {
-        Ok(path) => report::report(path, &pane, counts),
-        Err(error) => Err(error.clone()),
-    };
-    let socket_path = socket_path.unwrap_or_default();
-    let _ = report::record_outcome(home, &pane, "subagent count", &socket_path, &outcome);
-    json!({ "reported": outcome.is_ok() })
 }
 
 #[cfg(test)]

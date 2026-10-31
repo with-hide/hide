@@ -97,6 +97,10 @@ pub(crate) enum Hold {
     /// The core waits for its move's link before it types into any pane
     /// (`effects.rs`).
     CorePending,
+    /// Right before a forced letter's bell, the screen could not be read as
+    /// an empty composer: no declaration for the kind, none where it is
+    /// declared, as under a menu or a dialog, or a failed or cut read.
+    ComposerUnread,
 }
 
 impl Hold {
@@ -120,6 +124,7 @@ impl Hold {
             Self::Letter => "letter_changed",
             Self::Exhausted => "attempts_exhausted",
             Self::CorePending => "core_pending",
+            Self::ComposerUnread => "composer_unconfirmed",
         }
     }
 }
@@ -153,6 +158,9 @@ pub(crate) enum Turn {
 pub(crate) struct Patience {
     pub arrived_at_unix_ms: u64,
     pub now: bool,
+    /// Sent with `--force` (PRD engine-bundle-1 D-14): the composer read
+    /// right before the bell decides instead of the draft and quiet clocks.
+    pub forced: bool,
 }
 
 impl Patience {
@@ -160,6 +168,7 @@ impl Patience {
         Self {
             arrived_at_unix_ms: letter.created_at_unix_ms,
             now: letter.immediate,
+            forced: letter.forced,
         }
     }
 
@@ -180,11 +189,17 @@ impl Patience {
 /// newer than the last submission and the last start of work (input before
 /// either was consumed by it, a menu answer for one), and the pane still hosts
 /// the session the letter was written for.
+///
+/// A forced letter skips the kind's bell declaration, the mid-turn wait, an
+/// unsettled session read, the draft and the quiet period: the doorbell reads
+/// the composer empty right before it types instead. It still waits for a
+/// menu, a question of the agent's own, and a kind that takes letters at its
+/// tools while it works, whose next tool hands the letter over.
 pub(crate) fn judge(observation: &Observation, patience: Patience, now: u64) -> Result<(), Hold> {
     if observation.telemetry_stale {
         return Err(Hold::Status);
     }
-    if !bell_target(&observation.actor.kind) {
+    if !patience.forced && !bell_target(&observation.actor.kind) {
         return Err(Hold::Kind);
     }
     if observation.actor.require_native_identity().is_err() {
@@ -195,7 +210,8 @@ pub(crate) fn judge(observation: &Observation, patience: Patience, now: u64) -> 
         "working"
             if observation.state_change_seq.is_some()
                 && !super::mailbox::tool_letters(&observation.actor.kind)
-                && patience.due(observation.entered_working_at_unix_ms, now) => {}
+                && (patience.forced
+                    || patience.due(observation.entered_working_at_unix_ms, now)) => {}
         "working" => return Err(Hold::Working),
         "blocked" => return Err(Hold::Blocked),
         _ => return Err(Hold::Status),
@@ -205,7 +221,11 @@ pub(crate) fn judge(observation: &Observation, patience: Patience, now: u64) -> 
         Turn::Read(Waiting::Question | Waiting::PlanApproval) => {
             return Err(Hold::AwaitingOperator);
         }
+        Turn::Unread if patience.forced => {}
         Turn::Unread => return Err(Hold::SessionUnread),
+    }
+    if patience.forced {
+        return Ok(());
     }
     if observation.unsent_draft() {
         return Err(Hold::Draft);
@@ -454,6 +474,24 @@ impl Doorbell {
                     other.id != letter.id && other.recipient.same_identity(&letter.recipient)
                 })
                 .count();
+            // A forced letter is typed only over a composer read empty now;
+            // one that shows text stays, as an ordinary letter (D-14).
+            if letter.forced
+                && let Err(reason) = super::composer::forced_clear(
+                    engine.as_ref(),
+                    &observed.raw_pane_id,
+                    &observed.actor.kind,
+                )
+            {
+                defer(client, letter, reason);
+                let hold = if reason == super::composer::NOT_EMPTY {
+                    Hold::Draft
+                } else {
+                    Hold::ComposerUnread
+                };
+                self.hold(&letter.id, pane, hold);
+                continue;
+            }
             let sender = bell_sender(owner, &ledger, letter);
             let line = bell_line(&sender, letter, others, language);
             match deliver(
@@ -692,7 +730,10 @@ fn bell_line(
         kind: &letter.kind,
         body: &letter.body,
         others,
-        inbox: super::bell::names_inbox(&letter.recipient.kind),
+        // A kind the doorbell does not ring has no bell turn of its own, so
+        // a forced bell there says where the letter is.
+        inbox: super::bell::names_inbox(&letter.recipient.kind)
+            || (letter.forced && !bell_target(&letter.recipient.kind)),
         language,
     })
 }
@@ -718,6 +759,27 @@ fn bell_sender(owner: &Mutex<Runtime>, ledger: &Ledger, letter: &Letter) -> Stri
         })
         .filter(|name| crate::display_text::one_line(name, 1).is_some())
         .unwrap_or_else(|| crate::sidebar::provider_name(Some(&about.kind)))
+}
+
+/// Leaves a forced letter whose recipient's composer was not read empty as
+/// an ordinary letter, logged with why and never with the screen's text.
+fn defer(client: &Client, letter: &Letter, reason: &str) {
+    crate::diagnostic!(
+        json!({"component":"delivery","kind":"delivery.forced_deferred",
+        "letter_id":letter.id,"pane_id":letter.recipient.pane_id,"reason":reason})
+    );
+    if let Err(code) = client.submit(
+        Effect::Deferred {
+            id: letter.id.clone(),
+            recipient: letter.recipient.clone(),
+        },
+        Duration::from_secs(5),
+    ) {
+        crate::diagnostic!(
+            json!({"component":"delivery","kind":"doorbell.transaction_failed",
+            "letter_id":letter.id,"code":code})
+        );
+    }
 }
 
 fn record(client: &Client, id: &str, observed: &Observation, sent: bool) {
@@ -917,6 +979,7 @@ mod tests {
     const WAITED: Patience = Patience {
         arrived_at_unix_ms: 0,
         now: false,
+        forced: false,
     };
 
     /// A pane at rest: idle for a minute, last keys and submit a minute ago.
@@ -942,6 +1005,7 @@ mod tests {
             released_input_at_unix_ms: 0,
             hook_submit_at_unix_ms: 0,
             session: None,
+            thread: None,
             host_scope: None,
             turn: if kind == "codex" {
                 Turn::Read(Waiting::Nothing)
@@ -1176,10 +1240,12 @@ mod tests {
         let arrived = |at| Patience {
             arrived_at_unix_ms: at,
             now: false,
+            forced: false,
         };
         let urgent = Patience {
             arrived_at_unix_ms: NOW - 1_000,
             now: true,
+            forced: false,
         };
         let mut pane = at_rest("claude");
         pane.status = "working".into();
@@ -1345,6 +1411,7 @@ mod tests {
                             body: "private".into(),
                             kind: "report".into(),
                             now: false,
+                            force: false,
                         }),
                     },
                     Duration::from_secs(5),
@@ -1378,6 +1445,27 @@ mod tests {
 
         /// Another letter from the same sender to the same pane, pending.
         fn send_another(&self, intent: &str, now: bool) -> String {
+            self.send_with(intent, now, false)
+        }
+
+        /// Another letter as `--force` records it, its composer already read
+        /// empty when it was sent.
+        fn send_forced(&self, intent: &str) -> String {
+            self.send_with(intent, false, true)
+        }
+
+        fn letter_forced(&self, id: &str) -> bool {
+            let guard = self.runtime.lock().unwrap();
+            let ledger = guard.delivery_state().unwrap();
+            ledger
+                .letters
+                .iter()
+                .find(|letter| letter.id == id)
+                .unwrap()
+                .forced
+        }
+
+        fn send_with(&self, intent: &str, now: bool, force: bool) -> String {
             use crate::delivery::Command;
             use crate::runtime::delivery::tests::authority;
             let (sender, recipient) = {
@@ -1401,6 +1489,7 @@ mod tests {
                             body: "private".into(),
                             kind: "report".into(),
                             now,
+                            force,
                         }),
                     },
                     Duration::from_secs(5),
@@ -1559,6 +1648,147 @@ mod tests {
         assert_eq!(bell.typed().len(), 2);
         assert_eq!(attempts(&third), (1, true));
         assert_eq!(attempts(&bell.letter), (0, false));
+    }
+
+    /// PRD engine-bundle-1 D-14, B4: a forced letter goes into a working
+    /// agent's input at the next pass, past the mid-turn wait, the quiet
+    /// period and Hide's draft record, once the composer reads empty right
+    /// then; a letter sent without --force beside it stays held.
+    #[test]
+    fn a_forced_letter_is_typed_into_a_working_agent_over_an_empty_composer() {
+        let bell = Bell::start(json!({}));
+        *bell.screen.lock().unwrap() = CODEX_EMPTY.into();
+        let mut doorbell = Doorbell::default();
+        let start = now();
+        bell.working_since(start - 1_000);
+        // A key routed a moment ago, which would hold an ordinary letter as
+        // a draft and in the quiet period.
+        bell.runtime
+            .lock()
+            .unwrap()
+            .note_delivery_key_at("recipient", start - 500);
+        let forced = bell.send_forced("forced");
+        bell.pass(&mut doorbell, start);
+        assert_eq!(bell.typed().len(), 1, "the forced letter is typed at once");
+        assert_eq!(bell.reads(), 1, "its composer is read right before");
+        assert_eq!(bell.attempts(), 0, "the ordinary letter still waits");
+        assert!(bell.letter_forced(&forced));
+    }
+
+    /// PRD engine-bundle-1 D-14: someone starts typing between the send
+    /// and the doorbell's turn. The composer read right before typing shows
+    /// their text, so nothing is typed, `delivery.forced_deferred` is
+    /// logged, and the letter stays as an ordinary letter that waits like
+    /// any other.
+    #[test]
+    fn a_forced_letter_meeting_text_in_the_composer_is_not_typed_and_waits_as_a_letter() {
+        // Someone's text, and a screen that cannot be read as an empty
+        // composer, each held for its own reason until the next pass.
+        for (screen, reason, hold) in [
+            (CODEX_DRAFT, "composer_not_empty", "draft"),
+            (
+                "$ ls\r\nREADME.md\r\n",
+                "composer_unconfirmed",
+                "composer_unconfirmed",
+            ),
+        ] {
+            let bell = Bell::start(json!({}));
+            *bell.screen.lock().unwrap() = screen.into();
+            let mut doorbell = Doorbell::default();
+            let start = now();
+            bell.working_since(start - 1_000);
+            let forced = bell.send_forced("forced");
+            let ((), logged) = crate::diagnostics::capture(|| {
+                doorbell.pass(&bell.runtime, &bell.client, &AtomicBool::new(false), start)
+            });
+            let deferred: Vec<_> = logged
+                .iter()
+                .filter(|record| record["kind"] == "delivery.forced_deferred")
+                .collect();
+            assert_eq!(deferred.len(), 1, "{reason}");
+            assert_eq!(deferred[0]["letter_id"], forced.as_str());
+            assert_eq!(deferred[0]["reason"], reason);
+            assert!(
+                deferred[0].get("text").is_none(),
+                "no screen text is logged"
+            );
+            assert!(
+                logged
+                    .iter()
+                    .any(|record| record["letter_id"] == forced.as_str()
+                        && record["kind"] == "doorbell.held"
+                        && record["reason"] == hold)
+            );
+            assert!(bell.typed().is_empty(), "nothing is typed: {reason}");
+            assert!(!bell.letter_forced(&forced), "it is an ordinary letter now");
+            // The screen clears, but the letter no longer forces its way in:
+            // it keeps the urgency of --now and waits behind every ordinary
+            // guard, here the quiet period after the pane's last change.
+            *bell.screen.lock().unwrap() = CODEX_EMPTY.into();
+            let ((), later) = crate::diagnostics::capture(|| {
+                doorbell.pass(
+                    &bell.runtime,
+                    &bell.client,
+                    &AtomicBool::new(false),
+                    start + 250,
+                )
+            });
+            assert!(bell.typed().is_empty());
+            assert!(
+                later
+                    .iter()
+                    .any(|record| record["letter_id"] == forced.as_str()
+                        && record["kind"] == "doorbell.held"
+                        && record["reason"] == "quiet_period")
+            );
+        }
+    }
+
+    /// PRD engine-bundle-1 B4: a `--force` send reads the recipient's
+    /// composer first, and while it shows someone's text, or cannot be read
+    /// empty, the send is refused with nothing recorded and nothing typed.
+    #[test]
+    fn a_forced_send_is_refused_over_text_in_the_composer_and_records_nothing() {
+        use crate::delivery::Command;
+        use crate::runtime::delivery::tests::{authority, observed};
+        for (screen, code) in [
+            (CODEX_DRAFT, "composer_not_empty"),
+            ("$ ls\r\nREADME.md\r\n", "composer_unconfirmed"),
+        ] {
+            let bell = Bell::start(json!({}));
+            *bell.screen.lock().unwrap() = screen.into();
+            let (sender, recipient, engine, letters) = {
+                let guard = bell.runtime.lock().unwrap();
+                let recipient = observed(&guard, "recipient");
+                let engine = guard.delivery_engine(&recipient.actor.device_id).unwrap();
+                let letters = guard.delivery_state().unwrap().letters.len();
+                (observed(&guard, "sender").actor, recipient, engine, letters)
+            };
+            let prepared = crate::delivery::worker::Prepared::new(
+                bell.client.clone(),
+                authority(&sender),
+                sender,
+                Some(recipient),
+                Command::Send {
+                    target: "recipient".into(),
+                    intent: "forced".into(),
+                    body: "now".into(),
+                    kind: "request".into(),
+                    now: false,
+                    force: true,
+                },
+            )
+            .forced_through(engine);
+            assert_eq!(prepared.run(Duration::from_secs(5)), Err(code.to_owned()));
+            let guard = bell.runtime.lock().unwrap();
+            assert_eq!(
+                guard.delivery_state().unwrap().letters.len(),
+                letters,
+                "{code}"
+            );
+            drop(guard);
+            assert!(bell.typed().is_empty(), "{code}");
+        }
     }
 
     /// A ring whose Herdr call failed as the device's link went away is

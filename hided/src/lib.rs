@@ -18,6 +18,7 @@ pub mod core_move;
 pub mod core_update;
 pub mod delivery_cli;
 pub mod demand;
+pub mod desk_host;
 pub mod desktop_notices;
 pub mod device_cli;
 pub mod ending;
@@ -37,6 +38,7 @@ pub mod node_pages;
 pub mod node_uploads;
 mod outside_open;
 pub mod page_forward;
+pub mod pane_cli;
 pub mod plan_cli;
 mod project_open;
 
@@ -453,6 +455,20 @@ pub async fn start_core_role(env: Env, seat: seat::SeatParts) -> Result<RunningD
     #[cfg(unix)]
     state_move::log_left_behind(env.legacy_state_dir.as_deref(), &env.state_dir);
     let pane_capabilities = Arc::new(pane_auth::Registry::new(&env.state_dir)?);
+    // Desk's agent runs the `hide` beside this hided, as its capability.
+    if let Some(hide_dir) = std::env::current_exe()
+        .ok()
+        .and_then(|exe| exe.parent().map(std::path::Path::to_path_buf))
+    {
+        core.set_desk(Arc::new(desk_host::DeskHost::new(
+            Arc::clone(&pane_capabilities),
+            port,
+            core.node().as_str().to_owned(),
+            &env.home,
+            &env.state_dir,
+            hide_dir,
+        )))?;
+    }
     let (pane_listener, pane_bootstrap_socket) = pane_auth::bind(&env.state_dir)?;
     let (attach_listener, node_attach_socket) = attach::bind(&env.state_dir)?;
     let relay_grants = Arc::new(attach::RelayGrants::default());

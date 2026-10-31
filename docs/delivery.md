@@ -53,6 +53,7 @@ hide watch list
 hide watch stop watch-2
 hide request send parent-name --kind progress --intent task-plan-1 --body 'Plan: core first, then web.'
 hide request send parent-name --kind report --intent task-complete-1 --body 'The check passed.'
+hide request send child-name --intent task-stop-1 --body 'Stop and report what you have.' --force
 ```
 
 A `request` or `block` letter waits for an answer; a `progress` letter is an interim report, such as a plan or a checkpoint, and a `report` letter says the work is finished.
@@ -251,6 +252,22 @@ A background workflow approval card on Grok's daemon route is not yet verified: 
 Until a native `blocked` status or a session wait is measured for that card, do not treat it as a proven bell hold; this remains a native-route coverage gap.
 A swallowed bell moves no observed state, so `Rung` prevents another ring in that episode; at most three later episodes ring before the letter waits for `hide inbox`.
 
+### Forced letters
+
+`hide request send … --force` puts a letter into the recipient's input now, even while it works (PRD engine-bundle-1 D-5, D-14, B4); there is no separate prompt command, and the letter is recorded, answered and retried like any other.
+It is how an agent hands another agent input since Hide stopped teaching Herdr's `agent prompt`, and the letter's record replaces the relationship a passive observation of that call recorded ([agent-hooks.md](agent-hooks.md#passive-direct-prompt-observations)).
+
+1. Before anything is recorded, the daemon reads the recipient's visible screen off the runtime lock and judges it by the agent's composer declaration ([Reading the composer](#reading-the-composer)), for any version of the agent (`delivery/composer.rs`, `forced_clear`).
+   Text there refuses the send with `composer_not_empty`, and a screen that cannot be read empty (no declaration for the kind, no composer where it is declared, as under a menu or a dialog, or a failed or cut read) with `composer_unconfirmed`; nothing is recorded or typed, each refusal is logged as `delivery.forced_refused` with the pane and the code, and its `next_action` says to send again without `--force`.
+   A recipient Hide put to sleep has no input to read and is refused `force_target_asleep`; an ordinary `request` or `block` wakes it.
+2. The letter is then recorded as one sent with `--now` and marked `forced` (`Letter.forced`), and the doorbell's next pass, within 250 ms, judges it without the kind's bell declaration, the mid-turn wait, an unsettled session read, Hide's draft record and the quiet period (`doorbell::judge`); it still waits while Herdr reads the agent `blocked`, while the agent's own question or plan approval waits for the operator, and, for a kind that takes letters at its tools, while it works, since its next tool call hands the letter over.
+3. Right before it types the bell line, the doorbell reads the composer again, inside its eight Herdr calls a pass, because someone can start typing between the send and the bell.
+   Text there, or a screen not read empty, types nothing: the letter loses its `forced` mark and stays pending as a `--now` letter behind every ordinary guard, and `delivery.forced_deferred` is logged with the letter, the pane and the reason, never the screen's text.
+   Until the next pass the letter is held as `draft` for text and `composer_unconfirmed` for an unread screen.
+
+The bell line names `hide inbox` for a kind the doorbell does not ring on its own, whose prompt hook then takes the letter as it takes any prompt's.
+The residual is the [external-input race](#safe-intake-and-manual-fallback) every bell has: a key that lands between the second read and the bell's submission.
+
 ### The bell line
 
 The doorbell submits one line through Herdr's `agent.prompt`: `🦉 <writer> <kind>: <the letter's first line>`, followed by how many more letters wait for the same recipient when there are any, and ` · hide inbox` for a Codex or Grok recipient (the adapter's `bell_names_inbox` declaration):
@@ -414,7 +431,7 @@ Kinds whose session readers report no turns retain the other delivery guards; th
 "No, stay in Plan mode" writes nothing to the session (measured with Codex CLI 0.160.1), so the wait, the hold and the row in Needs You last until Codex's next turn starts or a person's message is written.
 The first start of a build with this rule resumes a stored session at its last person's message, after that turn's `task_started`, so a plan already waiting then is not known until Herdr's next state; that start holds the bell rather than ringing it.
 The rule reads the session Herdr reports for the pane, so a pane reported with another session is judged by that session.
-It guards against hide's own bell, not against a process of the same account, which could append records to the session file or type into the pane through Herdr directly.
+It guards against hide's own bell, not against a process of the same account, which could append records to the session file or type into the pane with `hide pane send` or through Herdr directly.
 
 ## Persistence, clocks and limits
 
@@ -526,7 +543,7 @@ The `factory:` name prefix remains reserved for compatibility with historical re
 No Factory recipient is active in this release.
 
 Hide itself is a code-owned identity, `hide:<role>` of kind `hide`: `hide:memory`, the origin of the agent a Memory card's promotion starts ([ARCHITECTURE.md: Project sessions and Memory](ARCHITECTURE.md#project-sessions-and-memory)), and `hide:conductor`, the sender of a mission's wakes ([Missions](#missions)).
-`hide:memory` is registered on its first spawn, sends nothing and receives nothing; `hide:conductor` sends progress letters to a mission's Conductor and receives nothing; and a pane or agent name that starts with `hide:` is refused at registration like `factory:`.
+Each `hide:<role>` that starts agents (`hide:memory`, `hide:desk`) is registered by its first spawn without a parent, which takes that record as the origin, since Hide has no pane for Herdr to report (`coordination::executor::spawn`, `Actor::hide_owned`); `hide:memory` sends nothing and receives nothing; `hide:conductor` sends progress letters to a mission's Conductor and receives nothing; and a pane or agent name that starts with `hide:` is refused at registration like `factory:`.
 A spawn is Hide AI's own when it is a handoff whose origin is that identity (`coordination::started::hide_started`): a pane agent's handoff has a pane's identity as its origin, so neither counts, and no branch or worktree name ever decides it.
 Only that identity may give a spawn a `task` (`SpawnTask`: a `kind` code such as `memory_promote` and a `target` such as the card `m72`, the codes the screen words), on a handoff; any other caller that sets one is refused `task_reserved`, and the task is part of the intent, so the same intent with another task is an `intent_conflict`.
 A receipt from before the task existed has none, and its agent and checkout are still Hide AI's, which the screen names `Hide AI` alone.
@@ -534,6 +551,19 @@ The kind is a closed set in code (`TaskKind`), and each known kind names its hom
 A kind this build does not know loads from the ledger as it was written, so a record a newer build wrote never fails the load or loses the rest of the ledger, and its agent stays an operator's row.
 A new spawn of a kind with no home is refused `task_kind_unknown`, and the first time an agent of such a kind is seen the diagnostic log records `hide_ai.task_kind_unknown` once.
 
+
+### Desk
+
+`hide:desk` is Desk's agent (PRD Desk 1차, [ARCHITECTURE.md: Desk](ARCHITECTURE.md#desk)): the process the core starts for the agent the operator chose, which has no pane and no checkout.
+Its `hide` presents a capability hided binds to that process's pid and start time (`Binding::Desk`), recorded with the caller id `hide:desk` (`workspace_control::DESK_CALLER`) and the context `desk_context`: this machine, workspace and checkout `hide:desk`, no path.
+A delivery command on it (`hide agent`, `hide request`, `hide inbox`, `hide watch`) acts as `Actor::hide("desk")` while the core says Desk runs a session (`desk_authority`), and on this machine only; with Desk ended it is refused `desk_not_running`, and the capability is revoked with the process.
+Every Workspace, View, Memory, mission or plan command refuses it `desk_has_no_checkout`, so Desk opens nothing on the operator's screen and reads no Project's Memory.
+A spawn Desk makes without `--parent` is a handoff whose origin is `hide:desk`, registered by Desk's first spawn: the agent is the operator's own, and `hide_started` leaves it out of Hide AI's work; one with `--parent` is refused `invalid_request`, since it would skip Desk's places and send its asks to Desk, which no screen shows.
+`hide:desk` is in `code_owned_authority_current` while this daemon runs Desk, so a spawn waiting in its queue starts after a restart; its capability still holds only while its process runs.
+A spawn of Desk's past its places (Settings › Desk, 8 at most) is taken into Desk's queue in `desk.json` and answered `{"queued":true,"intent","position","next_action"}` without running; asking again with the same intent answers the same place.
+The core starts the first waiting spawn as `hide:desk` on a thread of its own when a place frees, and a spawn whose start failed waits in the queue as failed until the operator retries it; a retry resumes the same intent, so the ledger's unfinished record converges.
+The core watches each session Desk started with `hide:desk` as its observer once its spawn completed; its warnings are code-owned and reach no person's notification.
+The job counts as watched once the watch's answer came back; a refused ask is logged (`desk.watch_refused`) and asked again on a later publish, three times at most.
 
 ## The operator's View feedback
 
@@ -579,7 +609,12 @@ A longer session is refused `session_too_long` when the record is made, never as
 An empty session or one holding a control character is refused `invalid_registration` by the same rule (`coordination::kept_session`).
 A build before this one reads a session past 256 bytes as a damaged ledger, so going back to it after such a registration answers every delivery and agent command `ledger_unavailable` until this build or a later one runs again.
 A caller with no such record is refused `participant_ended` when its record ended, `participant_session_changed` when its pane's live record belongs to another session (the pane's agent session changed), `ambiguous_participant` when two live records match, and `participant_unavailable` otherwise; a remote participant on a pane of the same name is never the local caller.
-`hide agent spawn` requires `--name`, `--intent`, `--kind`, `--repo` and `--branch`, with optional `--parent`, `--machine`, `--beside`, `--path`, `--model`, `--effort`, `--brief <text>` or `--brief-file <path>`, and native arguments after `--`.
+`hide agent archive <id> [--actor <id>]` does what `세션 보관` does for the session registration `<id>` holds ([UI_BEHAVIOR.md](UI_BEHAVIOR.md)), through the same admission as the screen's `archive_session` event (`Runtime::admit_archive`), and answers `{"archived":"<id>","pane_id":"<pane>"}` once the archive begins: its save first, its closes after.
+The agent itself or its parent may ask, as for `hide agent sleep`; Desk may ask for any live registration, because the operator approves its card before Desk runs the command (`desk_authority`).
+A session that is working is refused `archive_confirmation_required`, with the next action to ask the operator to archive it from Hide's screen, where they confirm stopping the work, and the screen shows nothing for that refusal.
+Every other refusal of the screen's archive is the same kind with `_` for the dot (`archive_delegated`, `archive_session_unknown`, `archive_device_disconnected`, `archive_busy` and the rest), beside `agent_unavailable`, `agent_ended`, `parent_authority_required`, `actor_identity_conflict` and `agent_pane_required`.
+Asking again while the archive runs answers the same success and closes nothing twice.
+`hide agent spawn` requires `--name`, `--intent` (or `--plan-node <key>`, which hands a step of the caller's plan and leaves the intent to the core, [Plans](#handing-a-step-to-a-child)), `--kind`, `--repo` and `--branch`, with optional `--parent`, `--machine`, `--beside`, `--path`, `--model`, `--effort`, `--brief <text>` or `--brief-file <path>`, and native arguments after `--`.
 The brief is the child's first prompt: once Herdr reports the started agent ready for input (up to 30 s, `BRIEF_READY_WAIT`), the spawn submits it through `agent.prompt`, the one submission path the doorbell uses too, and only then waits for the child's session, so an agent that reports its session at its first turn (Codex, OpenCode 2) reports it on that turn and binds at once instead of waiting.
 When the child binds, the same text is recorded as a letter under the spawn's intent, kind `request`, delivered and hook-confirmed, so `hide inbox`, the ledger and a later wake carry what the child was started on, and a letter the parent sends under that intent afterwards is this one.
 The brief is part of the intent like `args` (another brief under the same intent is `intent_conflict`), the ledger marks it submitted (`briefed`) so the same command again never submits it twice, a blank brief or one past a letter's body limit (16 KiB) is `invalid_brief` before anything is made, and an agent that takes no input within the wait, or a submission Herdr refuses, is `brief_not_submitted` with nothing typed, where the same command submits it on the next try without starting the agent again.
@@ -732,6 +767,24 @@ At most 64 waits are held at once: a spawn past that answers `identity_waits_ful
 The waits ride on the existing one-second agent refresh, with no timer, no Herdr read of their own and no work under `Mutex<Runtime>`; an unchanged list with unchanged waits plans nothing.
 A ledger with no wait writes no `identity_waits` field, and a build from before waits ignores the field.
 
+## Pane commands
+
+`hide pane read <pane> [--lines <n>]`, `hide agent read <agent> [--lines <n>]`, `hide pane send <pane> <text> [--enter]`, `hide pane open --beside [--focus] -- <command>` and `hide workspace purpose <text>` are an agent's reads of and input to the panes of its machine, and its checkout's purpose, in place of Herdr's own commands (PRD engine-bundle-1 D-5, D-13).
+They need the running daemon and a pane-bound caller, like the letter commands; a caller outside a Hide pane is refused by the credential boundary, and a checkout-bound one with `pane_required`.
+The daemon admits the caller's pane and checkout on the core's owner thread (`Runtime::prepare_pane_command`), and the engine calls run on the caller's task, off the runtime lock, through the engine boundary (`herdr_core::pane_command`); nothing they do is recorded in the ledger.
+
+- They reach every pane of the machine they name, as Herdr's commands did: a bare pane id is a pane of the caller's machine, as `hide ps` lists it, and `remote:<device>:pane:<id>` a device's; an agent is named as a letter's target is, by its name, registration id or pane, and two agents of one name are `target_ambiguous`.
+- A read prints the pane's last 120 lines unwrapped and without styling (`recent_unwrapped`), at most 2,000 (`lines_out_of_range` past it); `--json` prints the answer line `{"ok":true,"value":{"pane","text","truncated"}}` instead.
+- `hide pane send` types at most 16 KiB (`text_too_long`) and presses Enter only with `--enter`.
+  Typing into an agent's pane is input, not a letter: it has no reply, retry or record, and Hide's draft guard does not see it.
+- `hide pane open --beside` splits the caller's pane to its right, unfocused, in the caller's checkout, waits up to 10 s for the new shell to hold its terminal alone, as an agent start does, types the command as one line of at most 1,000 bytes (`command_too_long`, under the shortest terminal line a supported system keeps whole) and answers the new pane's id; `--focus` then focuses it.
+  One word after `--` is the command line as written, so `-- 'npm run dev | tee log'` keeps its shell syntax; several are one argument each, and the CLI quotes every word a shell would expand for its own machine's shell (a POSIX shell, PowerShell on Windows, `install::command_line_for_shell`), so `-- sh -c 'echo a b'` keeps its three arguments.
+  On Windows that is PowerShell, Herdr's default shell; with another `default_shell`, such as cmd.exe or Git Bash, pass the command as one word ([INSTALL.md](INSTALL.md#what-each-system-supports)).
+  A split whose answer never came is `pane_open_unconfirmed`, and a shell that did not take the command is `shell_not_ready` with the pane open.
+- `hide workspace purpose` writes the checkout's purpose token on its engine workspace, the one the checkout row's Set purpose writes, at most 40 characters on one line (`purpose_too_long`, `purpose_invalid`).
+- Every refusal is one line, `{"ok":false,"error":{"code","message"}}`, whose message is the next step, with a non-zero exit; a limit is checked by the CLI before it asks the daemon and by the daemon again.
+- They work the same on macOS, Linux and Windows: each step is an engine call, and the command line is typed into whatever shell the pane runs.
+
 ## What runs now: `hide ps`
 
 `hide ps` prints every live pane and the agent in it as one tree: project, checkout, tab, then pane, with each delegated agent under the agent that delegated it.
@@ -860,16 +913,41 @@ Merged or in main is done, closed without a merge is failed, which blocks the no
 
 A plan (PRD hide-plan) is one native session's own list of steps, which the agent puts up and keeps current with `hide plan`; `hide plan help` is its guide, which the `hide-plan` skill the kit installs points at ([agent-hooks.md](agent-hooks.md#what-the-kit-puts-down)).
 Only a pane-bound credential can ask (`agent_pane_required`), on this machine or from a connected device's pane through its helper, as a letter does, and the plan is keyed by the pane's native session (device, agent, session id): a resumed session goes on with it, a fork starts with none, and only that session changes it.
-The commands are `set` (`--file <plan.json>` or `--json <plan>`, with `--ask [why]` and `--reason <text>`), `node <key>` (`--status planned|working|done|dropped`, `--line <text>`), `approve`, `drop`, `show [<agent>]` and `help`; each answers one JSON line, `{"ok":true,"result":{"session","plan","context"}}`, and the same command again changes nothing more.
-A step has a `key`, a `title`, the keys it `depends_on` and a `status`, and may carry a one-line `line` and an `output` of `pr`, `file` or `none`.
+The commands are `set` (`--file <plan.json>` or `--json <plan>`, with `--ask [why]` and `--reason <text>`), `node <key>` (`--status planned|working|done|dropped`, `--line <text>`, and with `--status done` one of `--pr <number>` or `--file <path>`), `approve`, `drop`, `show [<agent>]` and `help`; each answers one JSON line, `{"ok":true,"result":{"session","plan","context"}}`, and the same command again changes nothing more.
+A step has a `key`, a `title`, the keys it `depends_on` and a `status`, and may carry a one-line `line`, an `output` of `pr`, `file` or `none`, `delegate` for a step meant for another agent, and, in `set`, a done step's `pr` number or `file` path.
 The graph is checked by the same module the missions use (`herdr-core/src/dag.rs`): a key or title that is malformed, a dependency that names no step and a cycle are refused `plan_invalid` with where; more than 64 steps is `plan_too_large`, and a step waits on at most 8.
-A step set `done` while a step it waits on is neither done nor dropped is refused `plan_order_refused` with the step it waits on; a dropped step holds nothing below it.
+Every change of a step's status, by `node` and by `set` alike, goes through one judgment (`plans::judge`), and a refusal keeps the whole plan as it was (PRD hide-plan-delegate D-13, D-14):
+- a step newly `working` or `done`, or a done step a replan gave other edges, while a step it waits on is neither done nor dropped is refused `plan_order_refused` with the step it waits on; a dropped step holds nothing below it, and a step that stays as it was is not judged again, so moving a step back never locks the plan;
+- a step newly `done` carries what its output asks for, a `pr` step `--pr <number>` and a `file` step `--file <path>`, else `plan_evidence_missing` with the flag; a `none` step needs nothing;
+- a step newly `done` while it is handed to a child needs that attempt's report first (`plan_report_missing`); a handed `pr` step needs the pull request too, while a handed `file` step ends on the report, since the file is on the child's branch until the main takes it in;
+- evidence new to a step is checked off the lock: the pull request must be one in the checkout's repository whose head is the checkout's current branch, any other local branch of it (`git show-ref refs/heads/<branch>` on the node) or the branch of a child the session handed a step to, else `plan_pr_not_yours`, and GitHub or a node that cannot be asked now (`gh pr view <n> --json headRefName,isCrossRepository,url`, on the checkout's node) is `plan_pr_unconfirmed`, a retryable refusal, which, like each evidence refusal, names the step and the number or path; the file is read from the main session's checkout, on the device that owns it, and a path out of it is `plan_file_outside`, a missing file `plan_file_missing` and a node that cannot be asked `plan_file_unconfirmed`.
+The core answers the command with the reads it still owes, hided runs them on the request thread with the session's node link (the local node or the device's helper, 20 s each) and asks again with the answers, and the core judges the plan again as it is then, so a plan that moved in between is judged as it now stands; at most three rounds.
+An accepted pull request keeps its repository and number on the step, a file its path below the checkout; a step that is not done carries none, and a done step put up again by `set` keeps its evidence and its child.
+A step that was done before these checks stays done without evidence, and the next change of that plan is judged as above (B15).
 The current step is the topmost working one, else the topmost planned one; `n/m` counts done over done, working and planned, and a dropped step is in neither.
 A `set` over a plan whose steps are not all finished keeps the steps it left out as dropped and marks every new, renamed or dropped step changed, with `--reason` (or `--ask`'s why) as the change; a `set` over a finished plan replaces it whole.
 A plan put up with `--ask` waits for the operator's review (`proposed`); a plan without it is `approved`, and a later `set` without `--ask` keeps the review it had.
 The operator answers in the conversation: the agent runs `approve` when the operator agrees, `set --ask` again with the change asked for, or `drop` when told not to; there is no button that approves.
 `approve` and `drop` naming another agent are refused `plan_not_yours`, while `show` of another agent reads its plan; a name or id that matches no running registration is `plan_agent_unknown`.
 While the saved plans have not been read back yet the answer is `plan_unavailable` and the read starts again; a session Hide cannot name yet is `plan_session_unknown`.
+
+### Handing a step to a child
+
+A step that delivers something goes to another Hide agent with `hide agent spawn --parent here --plan-node <key> …`; research stays with the main agent's own subagents, which are not on the map (PRD hide-plan-delegate D-01, D-11).
+The core admits the spawn under the lock before the ledger reserves it (`plan_spawn_admission`) and refuses, before anything is made: a spawn by an agent a plan or an open mission started, with or without `--plan-node`, and a Conductor's `--plan-node` (`plan_delegate_not_permitted`, D-23); one without `--parent` (`plan_delegate_needs_parent`); a caller with no plan (`plan_missing`), a key it does not have (`plan_node_unknown`) or a step already done or dropped (`plan_node_finished`); a plan waiting for review (`plan_review_pending`); a step whose steps it waits on are unfinished (`plan_order_refused`); and a kind or launch choice outside Settings > Conductor's worker candidates when any are set (`plan_candidate_refused`).
+The intent is the core's, `plan:<plan id>:<key>:<attempt>`, so the same command again finds the same spawn and the same child: the attempt stays while the child works or has reported, and moves to the next once the child is blocked, closed or taken back, which starts a new agent; a report of an earlier attempt no longer counts.
+The spawn record keeps the link (`plan`: plan id, step, attempt and the parent's native session).
+The ledger counts the main session's plan children when it reserves, under the same lock as a mission's cap: spawns made for one of its steps whose child has neither ended nor gone to sleep, and those still being made, at most three (`PLAN_DELEGATE_LIMIT`); a fourth is refused `plan_delegate_full` with `3`, and so is a request or block letter from the main that would wake a sleeping child past the cap (B6).
+That wake check covers only the main's own letters to its plan children: a letter from the operator, another agent or Hide itself wakes the child as before, and the child then counts at the main's next spawn.
+A child holds its place until its sleep has landed: one whose end still runs, that is waking or whose wake failed counts, for a spawn and a waking letter alike.
+
+The core follows the published ledger into the plans (`fold_delegations`): a step's spawn links it to its attempt and turns a planned step working; the child's registration is named once it binds; the attempt's letters between the child and its main move where it stands, a `report` from the child to 보고 옴 (`reported`), a `block` to 막힘 (`blocked`), and a `progress` from the child or any letter from the main back to `working`; and a child that ended without a report closes it (`closed`).
+The state is saved on the step with the last letter it read, since letters are pruned and a fold after a restart must neither repeat nor lose one.
+`hide plan node <key> --status working` on a blocked or closed step takes it back as the main's own, and `planned` or `dropped` releases any child; once a handed step is done or released, its child is marked for sleep and the minute decision puts it to sleep when it rests off screen ([ARCHITECTURE.md: Agent sleep](ARCHITECTURE.md#agent-sleep)).
+A child stopped by an expired login reaches the operator through its own row, and the step stays as it is.
+
+The plans section of the snapshot carries, on each step, `delegate`, `evidence` (`{kind: "pr", repo, number}` or `{kind: "file", path}`, null while not done) and `delegation` (`state`, `attempt`, `agent_id`, null until the child binds, its `name` and `agent` kind, and the child's `pane_id` and native `session` when known), null for a step never handed or taken back; the enums are in `contracts/snapshot-wire-enums.json` (`plan_delegation_state`, `plan_evidence_kind`).
+A plan on screen also carries its children's plans, keyed by their sessions, whether or not their panes are shown.
 
 The core keeps the plans beside each session's record in the link store (`ledger_plans` in `links.sqlite3`, schema 9), written by the link worker off the lock and read back once when the worker starts; a plan goes with its session when the session is deleted or pruned.
 The book holds at most 128 plans: a new session's plan takes the place of the one updated longest ago whose session runs in no pane (`plans.evicted`), and with every one of them on screen it is refused `plan_full`.

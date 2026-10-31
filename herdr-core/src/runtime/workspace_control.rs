@@ -821,6 +821,9 @@ impl Runtime {
         device_id: &str,
         caller: Caller<'_>,
     ) -> Result<Context, Refusal> {
+        if caller == Caller::Desk {
+            return Err(DESK_REFUSAL);
+        }
         let mut found: Option<Context> = None;
         for workspace in self.catalog_workspaces() {
             if workspace.device_id != device_id {
@@ -880,10 +883,13 @@ impl Runtime {
                             _ => found = Some(context()),
                         }
                     }
+                    // Refused before the loop.
+                    Caller::Desk => {}
                 }
             }
         }
         found.ok_or(match caller {
+            Caller::Desk => DESK_REFUSAL,
             Caller::Pane(_) => Refusal {
                 reason: "pane_not_connected",
                 next_action: "Reconnect the pane in Hide and run hide workspace info again",
@@ -915,7 +921,7 @@ impl Runtime {
         let layout = self.view_layout_of(&key).unwrap_or(&empty);
         let caller_session = match Caller::parse(pane_id) {
             Caller::Pane(pane) => self.session_scope_of_pane(pane),
-            Caller::Checkout { .. } => None,
+            Caller::Checkout { .. } | Caller::Desk => None,
         };
         let views = (query == Query::ViewList).then(|| {
             layout
@@ -1026,10 +1032,19 @@ impl Runtime {
     }
 }
 
+/// Desk has no pane and no checkout: it acts through delivery commands
+/// alone (`hide agent`, `hide request`, `hide inbox`, `hide watch`, `hide
+/// ps`), never a Workspace or View command.
+const DESK_REFUSAL: Refusal = Refusal {
+    reason: "desk_has_no_checkout",
+    next_action: "Use hide agent, hide request, hide inbox or hide ps",
+};
+
 /// The refusal for a caller whose checkout membership no longer matches what
 /// its capability recorded.
 fn caller_changed(caller_id: &str) -> Refusal {
     match Caller::parse(caller_id) {
+        Caller::Desk => DESK_REFUSAL,
         Caller::Pane(_) => Refusal {
             reason: "pane_changed",
             next_action: "Reconnect the pane and run hide workspace info again",

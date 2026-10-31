@@ -1,0 +1,7 @@
+{
+  "name": "hide-desk-pi",
+  "private": true,
+  "dependencies": {
+    "pi-acp": "0.0.34"
+  }
+}

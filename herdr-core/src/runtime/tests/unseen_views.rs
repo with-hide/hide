@@ -760,3 +760,23 @@ fn no_pane_request_decodes_an_outside_file_open() {
     });
     assert!(serde_json::from_value::<Action>(wire).is_err());
 }
+
+#[test]
+fn an_output_looked_at_in_desks_lane_is_seen_and_its_row_leaves_needs_you() {
+    let (_root, runtime) = fixture(false);
+    let mut guard = runtime.lock().unwrap();
+    guard.start_test_desk();
+    keyboard(&mut guard, Some("sender"));
+    let view = open(&mut guard, "recipient", "notes.md");
+    assert_eq!(row(&guard, "recipient").mark, RowMark::Look);
+    // PRD session-docs-and-assistant B31: Desk's 보기 column shows the
+    // output with the file viewers, outside the checkout's View areas.
+    guard.dispatch_json(&explorer_event(
+        "desk_output_seen",
+        json!({"device_id": crate::node::TEST_NODE, "checkout": CHECKOUT, "id": view}),
+    ));
+    assert!(!unseen(&guard, &view));
+    let recipient = row(&guard, "recipient");
+    assert_eq!(recipient.group, "working");
+    assert!(recipient.look.is_none());
+}

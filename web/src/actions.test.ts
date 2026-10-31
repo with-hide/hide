@@ -362,7 +362,7 @@ describe("input after a confirmed View close", () => {
     const { noteDrawnViews, keyboardOwner } = await import("./viewFocus");
     let command: (id: string) => void = () => {};
     const previousHost = window.hideHost;
-    Object.assign(window, { hideHost: { kind: "electron", platform: "darwin", onCommand: (listener: typeof command) => { command = listener; return () => {}; }, reportBindings: vi.fn(), reportLanguage: vi.fn() } });
+    Object.assign(window, { hideHost: { kind: "electron", platform: "darwin", onCommand: (listener: typeof command) => { command = listener; return () => {}; }, reportBindings: vi.fn(), reportLanguage: vi.fn(), reportDesk: vi.fn() } });
     useUiStore.setState({ screen: { kind: "workspace" }, drawnLane: { mode: "docked", view: "documents", tool: null, stacked: false } });
     useShellStore.setState({ editor: { active_tab_id: "d1" } as never });
     noteDrawnViews({ workspace, layout: frame(["d1", "d2"], "d1").layout, geometry: { areas: [{ id: "a1" }] } } as never);
@@ -380,6 +380,31 @@ describe("input after a confirmed View close", () => {
       expect(useUiStore.getState().editorFindDisplay).toBe("d1");
       expect(useUiStore.getState().overlay).not.toBe("find");
     } finally { stopKeyboard(); noteDrawnViews(null); window.hideHost = previousHost; remove(); }
+  });
+
+  it("leaves Desk's menu command and room shut while Desk is off, and tells the host when it turns on (D-76)", async () => {
+    const { remove, actions } = await setup();
+    const { installKeyboard } = await import("./keyboard");
+    let command: (id: string) => void = () => {};
+    const reportDesk = vi.fn();
+    const previousHost = window.hideHost;
+    Object.assign(window, { hideHost: { kind: "electron", platform: "darwin", onCommand: (listener: typeof command) => { command = listener; return () => {}; }, reportBindings: vi.fn(), reportLanguage: vi.fn(), reportDesk } });
+    const desk = (enabled: boolean) => ({ settings: { enabled, default_agent: null, location: "desk", cap: 8 } }) as never;
+    useUiStore.setState({ screen: { kind: "workspace" } });
+    // The pane in front is a Desk thread, so ⌘J would open Desk were it on.
+    useShellStore.setState({ desk: desk(false), deskJobs: { jobs: [{ id: "job-1", pane_id: "w1:p1" }], workers: [] } as never, focusedPaneId: "w1:p1" });
+    const stopKeyboard = installKeyboard(actions);
+    try {
+      expect(reportDesk).toHaveBeenLastCalledWith(false);
+      command("desk_terminal");
+      actions.openDesk();
+      expect(useUiStore.getState().screen).toEqual({ kind: "workspace" });
+
+      useShellStore.setState({ desk: desk(true) });
+      expect(reportDesk).toHaveBeenLastCalledWith(true);
+      command("desk_terminal");
+      expect(useUiStore.getState().screen).toEqual({ kind: "desk" });
+    } finally { stopKeyboard(); window.hideHost = previousHost; remove(); }
   });
 
   it("continues a delayed menu close after automatic focus return", async () => {

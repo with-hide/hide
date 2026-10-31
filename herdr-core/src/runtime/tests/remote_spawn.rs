@@ -427,6 +427,8 @@ impl Spawner {
             self.actor.clone(),
             Command::Spawn {
                 mission: None,
+                plan_node: None,
+                plan: None,
                 parent: parent.map(str::to_owned),
                 machine: machine.map(str::to_owned),
                 name: "worker".into(),
@@ -498,6 +500,100 @@ impl Spawner {
             std::time::Instant::now(),
         );
     }
+}
+
+/// A spawn asked as the Desk process asks it and run as hided runs it.
+fn desk_ask(spawner: &Spawner, intent: &str) -> Result<Value, String> {
+    let command = crate::delivery::Command::Agents {
+        command: Command::Spawn {
+            mission: None,
+            plan_node: None,
+            plan: None,
+            parent: None,
+            machine: Some(DEVICE.into()),
+            // The device's Herdr names its one agent `worker`.
+            name: "worker".into(),
+            intent: intent.into(),
+            kind: "codex".into(),
+            repo: "/srv/repo".into(),
+            branch: "topic".into(),
+            path: None,
+            args: Vec::new(),
+            launch: Default::default(),
+            task: None,
+            brief: None,
+            beside: false,
+        },
+    };
+    let prepared = spawner.runtime.lock().unwrap().prepare_delivery(
+        crate::node::TEST_NODE,
+        crate::workspace_control::DESK_CALLER,
+        &crate::desk::desk_context(crate::node::TEST_NODE),
+        None,
+        command,
+    );
+    prepared.and_then(|prepared| prepared.run(Duration::from_secs(30)))
+}
+
+/// Desk's own spawn (PRD Desk 1차 B20, B21), asked as the Desk process asks
+/// it and run as hided runs it, with no record of `hide:desk` made
+/// beforehand: it starts on the device under the record it registers, its
+/// card reads working, and it takes Desk's one place, so the next waits.
+#[test]
+fn a_spawn_desk_asks_for_starts_with_no_record_made_beforehand_and_takes_its_place() {
+    let spawner = spawner();
+    let ask = |intent: &str| desk_ask(&spawner, intent);
+    {
+        let mut runtime = spawner.runtime.lock().unwrap();
+        runtime.install_delivery_client(spawner.client.clone());
+        runtime.open_test_desk(1);
+    }
+
+    let started = ask("first").unwrap();
+    assert_eq!(started["machine"], DEVICE);
+    let desk = Actor::hide(crate::delivery::HIDE_DESK_ROLE, crate::node::TEST_NODE);
+    let ledger = spawner.ledger();
+    let origin = ledger
+        .agents
+        .iter()
+        .find(|agent| agent.actor.same_identity(&desk))
+        .expect("Desk's record, registered by its spawn");
+    assert!(
+        ledger
+            .spawns
+            .iter()
+            .any(|spawn| spawn.intent == "first" && spawn.parent == origin.id)
+    );
+    {
+        let mut runtime = spawner.runtime.lock().unwrap();
+        runtime.refresh_desk_jobs();
+        let jobs = &runtime.snapshot.desk_jobs.as_ref().unwrap().jobs;
+        let cards: Vec<_> = jobs
+            .iter()
+            .map(|job| (job.id.as_str(), job.state))
+            .collect();
+        assert_eq!(cards, [("first", crate::model::DeskJobState::Working)]);
+    }
+
+    let waiting = ask("second").unwrap();
+    assert_eq!(
+        (&waiting["queued"], &waiting["position"]),
+        (&json!(true), &json!(1))
+    );
+    // Its card is in the snapshot with that answer, not at the next refresh.
+    let runtime = spawner.runtime.lock().unwrap();
+    let queued = runtime
+        .snapshot
+        .desk_jobs
+        .as_ref()
+        .unwrap()
+        .jobs
+        .iter()
+        .find(|job| job.id == "second")
+        .map(|job| (job.state, job.queue_position));
+    assert_eq!(queued, Some((crate::model::DeskJobState::Queued, Some(1))));
+    drop(runtime);
+    assert_eq!(spawner.count("agent.start"), 1);
 }
 
 /// B1, B2, B3, B7 (the token's `parent_machine`): a delegated child is made on
@@ -1004,6 +1100,8 @@ fn a_spawn_by_a_device_caller_is_refused_before_anything_is_made() {
             actor.clone(),
             Command::Spawn {
                 mission: None,
+                plan_node: None,
+                plan: None,
                 parent: Some("here".into()),
                 machine: Some(machine.into()),
                 name: "worker".into(),
@@ -1292,4 +1390,65 @@ fn an_explicit_registration_keeps_a_session_past_256_bytes() {
     let past = format!("/{}", "s".repeat(crate::delivery::SESSION_LIMIT));
     assert_eq!(register(past).unwrap_err(), "session_too_long");
     assert_eq!(local.methods().len(), asked);
+}
+
+/// D-76: a spawn waiting in Desk's queue starts nothing while Desk is
+/// switched off, even with a place free, and starts once Desk is on again.
+#[test]
+fn a_queued_spawn_waits_while_desk_is_off_and_starts_when_it_is_on_again() {
+    use crate::runtime::desk::DeskEvent;
+    let spawner = spawner();
+    let (told, answered) = std::sync::mpsc::channel();
+    {
+        let mut runtime = spawner.runtime.lock().unwrap();
+        runtime.install_delivery_client(spawner.client.clone());
+        runtime.open_test_desk(1);
+        runtime.hand_test_desk(
+            Arc::downgrade(&spawner.runtime),
+            ChangeNotifier::announcing(move || {
+                let _ = told.send(());
+            }),
+        );
+    }
+    desk_ask(&spawner, "first").unwrap();
+    assert_eq!(desk_ask(&spawner, "second").unwrap()["queued"], true);
+    let settings = |runtime: &mut Runtime, payload: Value| {
+        runtime.desk_event(DeskEvent::decode("desk_settings_set", payload).unwrap())
+    };
+    let second = |runtime: &Runtime| {
+        runtime
+            .snapshot
+            .desk_jobs
+            .as_ref()
+            .unwrap()
+            .jobs
+            .iter()
+            .find(|job| job.id == "second")
+            .map(|job| job.state)
+    };
+    {
+        let mut runtime = spawner.runtime.lock().unwrap();
+        assert!(settings(&mut runtime, json!({"enabled": false})));
+        // A second place frees for it, and the queue still starts nothing.
+        assert!(settings(&mut runtime, json!({"cap": 2})));
+        runtime.refresh_desk_jobs();
+        assert_eq!(second(&runtime), Some(crate::model::DeskJobState::Queued));
+
+        assert!(settings(&mut runtime, json!({"enabled": true})));
+        assert_eq!(second(&runtime), Some(crate::model::DeskJobState::Starting));
+    }
+    // The start ran on the queue's thread and its answer came back to the
+    // card; an earlier notice, such as the queued answer's, may come first.
+    let state = loop {
+        answered
+            .recv_timeout(Duration::from_secs(30))
+            .expect("the queued spawn never answered");
+        let state = second(&spawner.runtime.lock().unwrap());
+        if state != Some(crate::model::DeskJobState::Starting) {
+            break state;
+        }
+    };
+    assert_eq!(state, Some(crate::model::DeskJobState::Working));
+    // The second spawn made its own worktree on the device, as the first did.
+    assert_eq!(spawner.count("worktree.create"), 2);
 }

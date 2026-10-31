@@ -224,7 +224,7 @@ function SessionLineView({ entry, project, checkoutBranch, opener, actions }: { 
   const resumeButton = <LineButton icon={resuming ? <LoaderCircleIcon aria-hidden="true" className="animate-spin" /> : <PlayIcon aria-hidden="true" />} label={t(resume.uncertain ? "groups.confirm" : resuming ? "links.resuming" : "links.resume")} blocked={resumeOff} busy={resuming} onClick={resumeLine} data="resume" id={line.id} />;
   // An asking row keeps `Answer` under the line (B8); every other row reveals its buttons in the time's place.
   const below = live?.kind === "question" ? (
-    <Button size="sm" onClick={() => actions.openAgent(live.agent.pane_id)} data-link-answer={line.id}>
+    <Button variant="secondary" size="sm" onClick={() => actions.openAgent(live.agent.pane_id)} data-link-answer={line.id}>
       <CircleHelpIcon aria-hidden="true" />
       {t("links.answer")}
     </Button>

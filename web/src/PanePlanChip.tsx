@@ -2,6 +2,7 @@ import { CheckIcon, ChevronRightIcon, ListChecksIcon } from "lucide-react";
 import { useEffect, useMemo, useRef, useState, type MouseEvent } from "react";
 import type { Actions } from "./actions";
 import { ProgressCells } from "./components/mission-tone";
+import type { CellTone } from "./missions";
 import { Popover, PopoverAnchor, PopoverContent } from "./components/ui/popover";
 import { useInterfaceTranslation } from "./i18n/client";
 import { cn } from "./lib/utils";
@@ -9,7 +10,8 @@ import { paneChildren } from "./paneChildren";
 import { usePaneAgents } from "./PaneHeaderBand";
 import { PlanChecklist } from "./components/plan-checklist";
 import { PlanSummaryLine } from "./PlanMap";
-import { planCells, planCount, planOfPane, planProposed, stepOf } from "./plans";
+import { handedPanes, planCells, planCount, planOfPane, planProposed, stepOf } from "./plans";
+import type { PlanView } from "./snapshot";
 import { shellDragging } from "./shellDrag";
 import { useShellStore } from "./store";
 import { useUiStore } from "./ui";
@@ -42,7 +44,6 @@ export function PanePlanChip({ paneId, actions }: { paneId: string; actions: Act
       : current
         ? t("plan.chipNow", { progress: planCount(plan), step: current.title })
         : t("plan.chip", { progress: planCount(plan) });
-  const Mark = finished ? CheckIcon : ListChecksIcon;
   return (
     <Popover {...chip.popover}>
       <PopoverAnchor asChild>
@@ -51,16 +52,9 @@ export function PanePlanChip({ paneId, actions }: { paneId: string; actions: Act
           aria-label={label}
           data-pane-plan-chip={paneId}
           data-plan-chip-state={proposed ? "review" : finished ? "finished" : "running"}
-          className={cn(
-            "flex h-(--size-sidebar-line-detail) shrink-0 items-center gap-xxs rounded-xs border border-border bg-background px-xs text-micro text-muted-foreground outline-none hover:bg-popover hover:text-foreground focus-visible:ring-1 focus-visible:ring-ring data-[state=open]:border-ring data-[state=open]:text-foreground",
-            proposed && "border-mission-hold text-mission-hold data-[state=open]:border-mission-hold data-[state=open]:text-mission-hold",
-            finished && "text-mission-done data-[state=open]:text-mission-done",
-          )}
+          className={cn(planChipLook(proposed, finished), "outline-none hover:bg-popover hover:text-foreground focus-visible:ring-1 focus-visible:ring-ring data-[state=open]:border-ring data-[state=open]:text-foreground", proposed && "data-[state=open]:border-mission-hold data-[state=open]:text-mission-hold", finished && "data-[state=open]:text-mission-done")}
         >
-          <Mark aria-hidden="true" className="size-(--size-icon-sm) shrink-0" />
-          <span className="whitespace-nowrap">{proposed ? t("plan.review") : t("plan.title")}</span>
-          <ProgressCells tones={planCells(plan)} size="chip" />
-          {proposed ? null : <span className="font-mono tabular-nums">{planCount(plan)}</span>}
+          <PlanChipFace tones={planCells(plan)} count={planCount(plan)} proposed={proposed} finished={finished} />
         </button>
       </PopoverAnchor>
       <PopoverContent
@@ -88,12 +82,47 @@ export function PanePlanChip({ paneId, actions }: { paneId: string; actions: Act
             </button>
           </div>
           <div className="px-xs py-sm">
-            <PlanChecklist plan={plan} popover />
+            <PlanChecklist
+              plan={plan}
+              popover
+              openPane={(child) => {
+                close();
+                actions.openAgent(child);
+              }}
+            />
           </div>
-          <Delegated paneId={paneId} />
+          <Delegated paneId={paneId} plan={plan} />
         </div>
       </PopoverContent>
     </Popover>
+  );
+}
+
+/** The plan chip's box, in its review or finished colour. */
+export function planChipLook(proposed: boolean, finished: boolean): string {
+  return cn(
+    "flex h-(--size-sidebar-line-detail) shrink-0 items-center gap-xxs rounded-xs border border-border bg-background px-xs text-micro text-muted-foreground",
+    proposed && "border-mission-hold text-mission-hold",
+    finished && "text-mission-done",
+  );
+}
+
+/**
+ * What the plan chip shows (PRD hide-plan B7): its mark, `계획` or `검토`, a
+ * cell per step and `n/m`. The pane head wraps it in its press; Desk's card
+ * and thread head draw it from a job's own plan (PRD
+ * session-docs-and-assistant B24, B25).
+ */
+export function PlanChipFace({ tones, count, proposed, finished }: { tones: readonly CellTone[]; count: string; proposed: boolean; finished: boolean }) {
+  const { t } = useInterfaceTranslation();
+  const Mark = finished ? CheckIcon : ListChecksIcon;
+  return (
+    <>
+      <Mark aria-hidden="true" className="size-(--size-icon-sm) shrink-0" />
+      <span className="whitespace-nowrap">{proposed ? t("plan.review") : t("plan.title")}</span>
+      <ProgressCells tones={tones} size="chip" />
+      {proposed ? null : <span className="font-mono tabular-nums">{count}</span>}
+    </>
   );
 }
 
@@ -178,17 +207,26 @@ export function usePaneChipPopover(paneId: string, present: boolean) {
   };
 }
 
-/** `맡긴 일 N · 끝남 k`: the pane's direct children, by the core's counts. */
-function Delegated({ paneId }: { paneId: string }) {
+/**
+ * `맡긴 일 N · 끝남 k`: the pane's direct children that no step of its plan
+ * is handed to, since a handed child is read on its step's row (PRD
+ * hide-plan-delegate B29); no line when there are none.
+ */
+function Delegated({ paneId, plan }: { paneId: string; plan: PlanView }) {
   const { t } = useInterfaceTranslation();
   const agents = usePaneAgents();
   const rest = useShellStore((s) => s.rest);
-  const children = useMemo(() => paneChildren(paneId, agents, rest), [paneId, agents, rest]);
-  if (!children) return null;
-  const done = children.parts.find((part) => part.kind === "result")?.count ?? 0;
+  const { children, unavailable } = useMemo(() => {
+    const handed = handedPanes(plan);
+    const all = paneChildren(paneId, agents, rest);
+    return { children: (all?.children ?? []).filter((child) => !handed.has(child.pane_id)), unavailable: Boolean(all?.unavailableDevice) };
+  }, [paneId, plan, agents, rest]);
+  if (children.length === 0) return null;
+  // A device that does not answer leaves the finished count unknown, so it is not said.
+  const done = unavailable ? 0 : children.filter((child) => child.group === "done").length;
   return (
-    <p className="flex items-baseline gap-xs px-sm pb-sm text-micro font-medium text-muted-foreground" data-pane-plan-children={children.children.length}>
-      {t("sessionWork.delegatedCount", { count: children.children.length })}
+    <p className="flex items-baseline gap-xs px-sm pb-sm text-micro font-medium text-muted-foreground" data-pane-plan-children={children.length}>
+      {t("sessionWork.delegatedCount", { count: children.length })}
       {done > 0 ? <span className="font-normal">· {t("plan.childrenDone", { count: done })}</span> : null}
     </p>
   );

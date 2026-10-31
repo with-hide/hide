@@ -31,6 +31,8 @@ import { ViewsCloseScene } from "./ViewsCloseScene";
 import { MissionScene } from "./MissionScene";
 import { PlanScene } from "./PlanScene";
 import { SharedPartsScene } from "./SharedPartsScene";
+import { DeskScene } from "./DeskScene";
+import { DeskThreadScene } from "./DeskThreadScene";
 import { PracticeScene, practiceSceneParams } from "./PracticeScene";
 import { PALETTE_HIDE_CLASS } from "../theme";
 
@@ -91,6 +93,16 @@ export function mountGallery(root: Root) {
     }
     if (scene === "practice") {
       root.render(<StrictMode><PracticeScene {...practiceSceneParams(params)} /></StrictMode>);
+      return;
+    }
+    if (scene === "desk-thread") {
+      document.title = "hide · Desk thread scene";
+      root.render(<StrictMode><DeskThreadScene params={params} /></StrictMode>);
+      return;
+    }
+    if (scene === "desk") {
+      document.title = "hide · Desk scene";
+      root.render(<StrictMode><DeskScene params={params} /></StrictMode>);
       return;
     }
     if (scene === "shared-parts") {

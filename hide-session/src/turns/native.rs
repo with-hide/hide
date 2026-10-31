@@ -188,6 +188,17 @@ pub(crate) fn claude(item: &Value) -> Mark {
                     content: block.get("input").and_then(question_content),
                 })
             }
+            // Every other call, so a wait on it (a permission dialog, which
+            // names no call id) can be told answered by the session read.
+            (Some("assistant"), Some("tool_use")) => {
+                let key = block.get("name").and_then(Value::as_str).and_then(|name| {
+                    crate::calls::key(name, block.get("input").unwrap_or(&Value::Null))
+                });
+                match (id(block.get("id"))?, key) {
+                    (Some(call), Some(key)) => Some(ToolTurnMark::Called { call, key }),
+                    _ => None,
+                }
+            }
             (Some("user"), Some("tool_result")) => {
                 id(block.get("tool_use_id"))?.map(|call| ToolTurnMark::Answered { call })
             }
@@ -199,6 +210,9 @@ pub(crate) fn claude(item: &Value) -> Mark {
             }
             marks.push(mark);
         }
+    }
+    if marks.is_empty() && role == Some("assistant") {
+        return Ok(Some(TurnMark::Reply));
     }
     Ok((!marks.is_empty()).then_some(TurnMark::Tools(marks)))
 }

@@ -57,6 +57,9 @@ pub const HIDE_KIND: &str = "hide";
 pub const HIDE_PREFIX: &str = "hide:";
 /// The one role Hide starts agents as today.
 pub const HIDE_MEMORY_ROLE: &str = "memory";
+/// Desk's agent (PRD Desk 1차): the origin of the sessions it starts, and
+/// the observer of their watches.
+pub const HIDE_DESK_ROLE: &str = "desk";
 /// The kind of the operator's own code-owned identity: the sender of the
 /// feedback letters the desktop app's Send makes from the operator's View
 /// comments (PRD view-opener-feedback D-17). It has no pane, reads no
