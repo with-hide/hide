@@ -1116,7 +1116,8 @@ test("refresh focus: a page that loads itself again never takes the keyboard fro
   await expect(keyboardOnPage).toHaveCount(1);
   // Playwright's click reaches the shell's renderer, not the native responder.
   await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]!.webContents.focus());
-  await page.locator('[data-pane-view][data-focused="true"] .xterm-screen').click();
+  // The lane overlays the terminal's right side; its top left stays the terminal's.
+  await page.locator('[data-pane-view][data-focused="true"] .xterm-screen').click({ position: { x: 12, y: 12 } });
   const terminal = page.locator('[data-pane-view][data-focused="true"] .xterm-helper-textarea');
   await expect(keyboardOnPage).toHaveCount(0);
   const holds = () => app!.evaluate(({ BrowserWindow }, url) => {
