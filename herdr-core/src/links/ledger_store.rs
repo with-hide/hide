@@ -423,6 +423,13 @@ pub(super) fn apply_reader(
                 params![device,agent,id,kind,mark.repository.to_ascii_lowercase(),mark.number as i64,mark.at_unix_ms as i64]).map_err(failed)?;
         }
     }
+    // The session's `git commit` calls are one row, kind `commit` with no
+    // repository or number, holding the last one's time (PRD
+    // project-panel-results D-20).
+    if let Some(at) = facts.committed_at {
+        tx.execute("INSERT INTO ledger_sightings VALUES(?1,?2,?3,'commit','',0,?4) ON CONFLICT(device,agent,id,kind,repo,number) DO UPDATE SET at=MAX(at,excluded.at)",
+            params![device,agent,id,at as i64]).map_err(failed)?;
+    }
     cap_requests(tx, &session)?;
     cap(tx, &session, "ledger_sightings", SIGHTING_LIMIT)?;
     Ok(())
@@ -2006,38 +2013,6 @@ impl LinkStore {
                 held = parent;
             }
         }
-        // The open asks by session, for the Project tool's 할 일 (PRD
-        // lane-two-columns B34): one bounded grouped read, like the counts.
-        let asks = self
-            .connection
-            .prepare(
-                "SELECT device,agent,id,count(*) FROM ledger_missed \
-            WHERE status=?1 AND kind=?3 GROUP BY device,agent,id LIMIT ?2",
-            )
-            .map_err(failed)?
-            .query_map(
-                params![
-                    encoded(&MissedStatus::Open)?,
-                    SUMMARY_SESSION_LIMIT as i64 + 1,
-                    encoded(&MissedKind::Ask)?
-                ],
-                |r| {
-                    Ok((
-                        SessionIdentity {
-                            device_id: r.get(0)?,
-                            agent: r.get(1)?,
-                            session_id: r.get(2)?,
-                        },
-                        r.get::<_, i64>(3)? as usize,
-                    ))
-                },
-            )
-            .map_err(failed)?
-            .collect::<Result<BTreeMap<_, _>, _>>()
-            .map_err(failed)?;
-        if asks.len() > SUMMARY_SESSION_LIMIT {
-            return Err("ledger_summary_capacity".into());
-        }
         let sessions = self
             .all_sessions()?
             .into_iter()
@@ -2050,12 +2025,14 @@ impl LinkStore {
         let mut statement=self.connection.prepare("SELECT \
             (SELECT goal FROM ledger_chapters WHERE device=?1 AND agent=?2 AND id=?3 ORDER BY at DESC LIMIT 1), \
             (SELECT native_title FROM ledger_titles WHERE device=?1 AND agent=?2 AND id=?3), \
-            (SELECT manual_title FROM ledger_titles WHERE device=?1 AND agent=?2 AND id=?3)").map_err(failed)?;
+            (SELECT manual_title FROM ledger_titles WHERE device=?1 AND agent=?2 AND id=?3), \
+            (SELECT line FROM ledger_turns WHERE device=?1 AND agent=?2 AND id=?3 AND line<>'' ORDER BY offset DESC LIMIT 1), \
+            (SELECT at FROM ledger_sightings WHERE device=?1 AND agent=?2 AND id=?3 AND kind='commit')").map_err(failed)?;
         let mut summaries = Vec::new();
         let mut missed_count = 0;
         for session in sessions {
             let identity = identity(&session.key);
-            let (goal, native, manual) = statement
+            let (goal, native, manual, last_line, committed_at) = statement
                 .query_row(
                     params![identity.device_id, identity.agent, identity.session_id],
                     |r| {
@@ -2063,6 +2040,8 @@ impl LinkStore {
                             r.get::<_, Option<String>>(0)?,
                             r.get::<_, Option<String>>(1)?,
                             r.get::<_, Option<String>>(2)?,
+                            r.get::<_, Option<String>>(3)?,
+                            r.get::<_, Option<i64>>(4)?,
                         ))
                     },
                 )
@@ -2093,7 +2072,8 @@ impl LinkStore {
                 open_missed: counts.get(&identity).copied().unwrap_or(0),
                 subtree_open_missed: subtree.get(&identity).copied().unwrap_or(0),
                 missed,
-                open_asks: asks.get(&identity).copied().unwrap_or(0),
+                last_line,
+                committed_at_unix_ms: committed_at.and_then(|at| u64::try_from(at).ok()),
                 parent: parents.get(&identity).cloned(),
                 session: identity,
             });

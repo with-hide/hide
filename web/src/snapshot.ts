@@ -1261,6 +1261,9 @@ export type TaskView = "status" | "project";
 /** The one project the sidebar's 태스크 and PR lists show, on its machine. */
 export type SidebarProject = { device_id: string; workspace_id: string };
 
+/** One 마무리 맡기기 and where it stands (`status.stray_hand_offs`). */
+export type StrayHandOff = { request_id: string; checkout_id: string; state: "sending" | "sent" | "failed" };
+
 /** One thing the lane's 보기 slot shows (`DetailItem`, PRD sidebar-task-lens D-50). */
 export type DetailItem =
   | { kind: "pull_request"; workspace_id: string; number: number }
@@ -1270,6 +1273,8 @@ export type DetailItem =
   | { kind: "worktrees"; workspace_id: string }
   /** A project's last seven days of cost, from the Project tool's cost tile (B31). */
   | { kind: "cost"; workspace_id: string }
+  /** What a worktree left unfinished: its changed files and unpushed commits (PRD project-panel-results B9). */
+  | { kind: "remains"; workspace_id: string; checkout_id: string }
   | { kind: "plan"; session: WorkSession }
   /** A Hide AI branch waiting for a decision, by its 제안 row: its files, or one file's diff (PRD hide-ai-branch-first-apply B4). */
   | { kind: "branch"; workspace_id: string; row: string; path?: string | null };
@@ -1283,6 +1288,7 @@ export function sameDetailItem(a: DetailItem | null | undefined, b: DetailItem):
     case "mission": return b.kind === "mission" && a.mission === b.mission;
     case "worktrees": return b.kind === "worktrees" && a.workspace_id === b.workspace_id;
     case "cost": return b.kind === "cost" && a.workspace_id === b.workspace_id;
+    case "remains": return b.kind === "remains" && a.workspace_id === b.workspace_id && a.checkout_id === b.checkout_id;
     case "plan": return b.kind === "plan" && a.session.device_id === b.session.device_id && a.session.agent === b.session.agent && a.session.session_id === b.session.session_id;
     case "branch": return b.kind === "branch" && a.workspace_id === b.workspace_id && a.row === b.row && (a.path ?? null) === (b.path ?? null);
   }
@@ -1738,6 +1744,9 @@ export type ChangedFileSnapshot = {
  * Explorer surface is visible, so the web asks for it by sending that ui state
  * rather than by opening a second read path (PRD B1).
  */
+/** `남은 것`'s read with the checkout it was read for; a nested worktree's folder lies inside its primary's, so the view matches the checkout. */
+export type RemainsSnapshot = ChangesSnapshot & { workspace_id: string; checkout_id: string };
+
 export type ChangesSnapshot = {
   root_path: string | null;
   entries: ChangedFileSnapshot[];
@@ -3020,6 +3029,8 @@ export type SnapshotRest = {
   /** Each pane's own plan (PRD hide-plan). */
   plans?: PlansSnapshot;
   git_worktrees_loading?: boolean;
+  /** The Project tool's `남은 것`: the shown worktree's changes, read by its own path (PRD project-panel-results B9). */
+  remains?: RemainsSnapshot | null;
   navigator?: {
     agent_scope?: AgentScope;
     focused_workspace_id?: string | null;
@@ -3163,6 +3174,8 @@ export type SnapshotRest = {
     pane_focus_request?: PaneFocusRequest | null;
     /** The answers to the latest `browser_open` events that named themselves, oldest first and bounded. */
     browser_opens?: import("./viewLayout").BrowserOpenReceipt[];
+    /** The latest 마무리 맡기기 presses, oldest first and bounded (PRD project-panel-results B12, B13). */
+    stray_hand_offs?: StrayHandOff[];
     /** The core's most recent failure; the shell logs its detail (B5). */
     last_error?: { kind: string; message: string; retryable: boolean; occurred_at: number; request_id?: string | null; confirm?: string | null } | null;
   };

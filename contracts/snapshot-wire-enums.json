@@ -20,7 +20,7 @@
   "plan_output": ["pr", "file", "none"],
   "plan_delegation_state": ["working", "reported", "blocked", "closed"],
   "plan_evidence_kind": ["pr", "file"],
-  "detail_item_kind": ["pull_request", "record", "mission", "worktrees", "cost", "plan", "branch"],
+  "detail_item_kind": ["pull_request", "record", "mission", "worktrees", "cost", "remains", "plan", "branch"],
   "agent_onboarding": ["pending", "done"],
   "agent_wait": ["children", "background", "reply", "checks"],
   "row_mark": ["turn", "going", "waiting", "done", "unread", "quiet", "unknown", "asleep", "look"],

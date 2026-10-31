@@ -108,6 +108,12 @@ pub struct Snapshot {
     pub git_worktrees: Option<ProjectWorktreesSnapshot>,
     pub git_worktrees_loading: bool,
     pub git_worktrees_remote: bool,
+    /// The Project tool's `남은 것` (PRD project-panel-results B9): the
+    /// changed files and the committed group of the worktree the viewing
+    /// column shows, read by that worktree's path on a read of its own, so
+    /// it never waits on the checkout in front. Absent while nothing shows
+    /// it; it carries no diff text.
+    pub remains: Option<RemainsSnapshot>,
     pub worktree_removal: Option<WorktreeRemovalSnapshot>,
     pub task_operation: Option<TaskOperationSnapshot>,
     pub repository_clone: Option<RepositoryCloneSnapshot>,
@@ -4194,6 +4200,13 @@ pub enum DetailItem {
     Worktrees { workspace_id: String },
     /// A project's last seven days of cost, from its Project tool (B31).
     Cost { workspace_id: String },
+    /// What a worktree left unfinished, from its Project tool's 흘린 것: its
+    /// changed files and the commits it has not pushed (PRD
+    /// project-panel-results B9).
+    Remains {
+        workspace_id: String,
+        checkout_id: String,
+    },
     /// A Hide AI branch waiting for the operator's decision, by its 제안 row,
     /// with the file whose diff it shows, or its card of files (PRD
     /// hide-ai-branch-first-apply B4).
@@ -4254,6 +4267,11 @@ pub struct UiStateSnapshot {
     /// The operator's 다시 볼 것 marks, by root pane (PRD revisit-group D-11).
     #[serde(default)]
     pub revisit_sessions: BTreeMap<String, crate::agent_state::sessions::RevisitMark>,
+    /// The operator's 놔두기 on the Project tool's 흘린 것, by checkout
+    /// (PRD project-panel-results D-17). Core only.
+    #[serde(default, skip_serializing)]
+    pub stray_dismissals:
+        BTreeMap<String, crate::agent_state::tally::project_status::StrayDismissal>,
     /// A new input starts work beyond any PR that had already settled.
     #[serde(default)]
     pub session_resolution_inputs: BTreeMap<String, u64>,
@@ -5275,6 +5293,7 @@ impl Default for UiStateSnapshot {
         Self {
             resolved_sessions: BTreeMap::new(),
             revisit_sessions: BTreeMap::new(),
+            stray_dismissals: BTreeMap::new(),
             session_resolution_inputs: BTreeMap::new(),
             session_collapsed_checkout_ids: Vec::new(),
             session_open_folds: Vec::new(),
@@ -5592,6 +5611,17 @@ pub struct EditorConflictSnapshot {
     /// What the file holds now; absent when it was removed or could not be
     /// read.
     pub disk_revision: Option<String>,
+}
+
+/// `남은 것`'s read with the checkout it was read for: a nested worktree's
+/// folder lies inside its primary checkout's, so the view matches the
+/// checkout, never a folder prefix.
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct RemainsSnapshot {
+    pub workspace_id: String,
+    pub checkout_id: String,
+    #[serde(flatten)]
+    pub changes: ChangesSnapshot,
 }
 
 /// One checkout's Git working-tree state, plus the diff of the file the user
@@ -6723,6 +6753,9 @@ pub struct StatusSnapshot {
     /// themselves, oldest first and bounded, so a `hide browser open` waiting
     /// on one reads its own (issue 155).
     pub browser_opens: Vec<BrowserOpenReceiptSnapshot>,
+    /// The latest 마무리 맡기기 presses, oldest first and bounded, so a 흘린
+    /// 것 row reads its own (PRD project-panel-results B12, B13).
+    pub stray_hand_offs: Vec<StrayHandOffSnapshot>,
 }
 
 /// The concrete Host entries of the account's `~/.ssh/config`, as Add device
@@ -6865,6 +6898,17 @@ pub enum HerdrProfileRefusal {
 pub struct ServerDiscoverySnapshot {
     pub loading: bool,
     pub failure: Option<String>,
+}
+
+/// One 마무리 맡기기 and where it stands: `sending` while the words go to the
+/// session's pane or a new agent starts, `sent` once they went, `failed`
+/// with the reason in the diagnostic log (PRD project-panel-results B12,
+/// B13).
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct StrayHandOffSnapshot {
+    pub request_id: String,
+    pub checkout_id: String,
+    pub state: &'static str,
 }
 
 /// One `browser_open` request's outcome: where the page opened, or why not.
@@ -7413,6 +7457,7 @@ impl Snapshot {
             git_worktrees: None,
             git_worktrees_loading: true,
             git_worktrees_remote: false,
+            remains: None,
             worktree_removal: None,
             task_operation: None,
             repository_clone: None,
@@ -7453,6 +7498,7 @@ impl Snapshot {
                 pane_move_preview: None,
                 pane_focus_request: None,
                 browser_opens: Vec::new(),
+                stray_hand_offs: Vec::new(),
                 server_discovery: ServerDiscoverySnapshot {
                     loading: true,
                     failure: None,
@@ -9361,6 +9407,10 @@ mod wire_enum_tests {
             DetailItem::Cost {
                 workspace_id: "w".into(),
             },
+            DetailItem::Remains {
+                workspace_id: "w".into(),
+                checkout_id: "c".into(),
+            },
             DetailItem::Plan { session },
             DetailItem::Branch {
                 workspace_id: "w".into(),
@@ -9375,6 +9425,7 @@ mod wire_enum_tests {
                 | DetailItem::Mission { .. }
                 | DetailItem::Worktrees { .. }
                 | DetailItem::Cost { .. }
+                | DetailItem::Remains { .. }
                 | DetailItem::Plan { .. }
                 | DetailItem::Branch { .. } => {}
             }

@@ -101,13 +101,6 @@ pub(crate) fn ask_stamp(agent: &SidebarAgentSnapshot) -> Option<u64> {
     agent.laid_since_unix_ms.or(agent.changed_at_unix_ms)
 }
 
-/// Whether 치우기 put the row's read ask away (needs-you-cleanup B15): the ask
-/// stands but the row carries no read ask, so nothing lists it until the agent
-/// asks again.
-pub(crate) fn ask_put_away(agent: &SidebarAgentSnapshot) -> bool {
-    read_open_ask(agent) && !agent.revisit.is_some_and(|revisit| revisit.read_ask)
-}
-
 /// Why the operator cannot resolve the row now: work that still runs or
 /// waits, or an approval prompt that holds the agent, would rest a task
 /// whose mark says it is not at rest.

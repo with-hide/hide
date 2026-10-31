@@ -43,7 +43,7 @@ import { useUiStore } from "../ui";
 import { workspaceKey } from "../viewLayout";
 import { WorkspaceScreen } from "../WorkspaceScreen";
 import { LEAD_PANE, laneItem, withSessions, landingMission, landingPrCard, landingPrLink, landingPrWork, landingRecord, type LandingLane } from "./landingLaneData";
-import { BROWSER_DISPLAY, BROWSER_PANE, HERO_PANES, browserTerminal, landingSpecPdf, type BrowserStep, HERO_TERMINALS, RULE, landingBrowser, landingDevices, landingMap, landingMemory, landingPlainSidebar, landingSidebar, landingUsage, landingWorkspace, withoutHideAi } from "./landingSceneData";
+import { BROWSER_DISPLAY, BROWSER_PANE, HERO_PANES, browserTerminal, landingSpecPdf, type BrowserStep, HERO_TERMINALS, RULE, landingBrowser, landingDevices, landingMap, landingMemory, landingPlainSidebar, landingSidebar, landingTaskTitles, landingUsage, landingWorkspace, withoutHideAi } from "./landingSceneData";
 // The invoices page the agent opened, after its click: what the desktop host would show in the browser display.
 import invoicesDark from "./landing-invoices-dark.svg?url";
 import invoicesLight from "./landing-invoices-light.svg?url";
@@ -153,7 +153,7 @@ export function LandingScene({ shot, theme }: LandingSceneParams) {
   }, [shot]);
 
   useLayoutEffect(() => {
-    useShellStore.setState({ rest: fixture.rest, agents: fixture.agents, mobile: fixture.mobile, usage: fixture.usage ? { nodes: [fixture.usage] } : null, memory: { project: fixture.memory }, connection: "live", linkPanel: fixture.linkPanel, sessionRecord: fixture.sessionRecord, ...(fixture.editor ? { editor: fixture.editor, documents: fixture.documents } : {}) });
+    useShellStore.setState({ rest: fixture.rest, agents: fixture.agents, mobile: fixture.mobile, usage: fixture.usage ? { nodes: [fixture.usage] } : null, linkSummaries: fixture.usage ? landingTaskTitles() : null, memory: { project: fixture.memory }, connection: "live", linkPanel: fixture.linkPanel, sessionRecord: fixture.sessionRecord, ...(fixture.editor ? { editor: fixture.editor, documents: fixture.documents } : {}) });
     useUiStore.setState({ screen: { kind: workspace ? "workspace" : "main" }, overviewOpen: false, stackFront: "view", ...(shot === "map" ? { mainView: "work" as const } : shot === "projects" ? { mainView: "projects" as const } : {}) });
     const root = document.documentElement;
     root.classList.toggle("dark", theme === "dark");

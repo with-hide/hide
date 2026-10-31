@@ -1510,9 +1510,7 @@ pub fn handle_with_progress(
                 shared_git: shared_git.iter().map(PathBuf::from).collect(),
             };
             to_value(crate::disk::read_with(&request, |row| {
-                if let Ok(row) = serde_json::to_value(row) {
-                    progress(row);
-                }
+                serde_json::to_value(row).map_or(true, &mut *progress)
             }))
         }
         Call::Gh {

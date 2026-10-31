@@ -1620,6 +1620,9 @@ pub(super) enum Event {
     ResolveSession(PaneTargetPayload),
     RevisitStar(PaneTargetPayload),
     RevisitDone(PaneTargetPayload),
+    StrayDismiss(super::strays::StrayPayload),
+    StrayRestore(super::strays::StrayPayload),
+    StrayHandOff(super::strays::StrayHandOffPayload),
     DeliverLettersNow(PaneTargetPayload),
     PaneVisit(PaneTargetPayload),
     AgentWake(AgentWakePayload),
@@ -1910,6 +1913,9 @@ pub(super) fn validate_event(event: EventEnvelope) -> Result<Event, EventValidat
         "resolve_session" => decode!(PaneTargetPayload, ResolveSession),
         "revisit_star" => decode!(PaneTargetPayload, RevisitStar),
         "revisit_done" => decode!(PaneTargetPayload, RevisitDone),
+        "stray_dismiss" => decode!(super::strays::StrayPayload, StrayDismiss),
+        "stray_restore" => decode!(super::strays::StrayPayload, StrayRestore),
+        "stray_hand_off" => decode!(super::strays::StrayHandOffPayload, StrayHandOff),
         "deliver_letters_now" => decode!(PaneTargetPayload, DeliverLettersNow),
         "pane_visit" => decode!(PaneTargetPayload, PaneVisit),
         "agent_wake" => decode!(AgentWakePayload, AgentWake),
@@ -2335,6 +2341,9 @@ impl Runtime {
             ),
             Event::RevisitStar(payload) => self.star_session(&payload.pane_id),
             Event::RevisitDone(payload) => self.finish_revisit(&payload.pane_id),
+            Event::StrayDismiss(payload) => self.dismiss_stray(payload),
+            Event::StrayRestore(payload) => self.restore_stray(payload),
+            Event::StrayHandOff(payload) => self.hand_off_stray(payload),
             Event::PaneInputSent(payload) => {
                 self.note_delivery_key(&payload.pane_id, "phone");
                 false
@@ -4382,6 +4391,7 @@ impl Runtime {
                         .unwrap_or(current.right_panel_section),
                     resolved_sessions: current.resolved_sessions,
                     revisit_sessions: current.revisit_sessions,
+                    stray_dismissals: current.stray_dismissals,
                     session_resolution_inputs: current.session_resolution_inputs,
                     session_collapsed_checkout_ids: current.session_collapsed_checkout_ids,
                     session_open_folds: current.session_open_folds,

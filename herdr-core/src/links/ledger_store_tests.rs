@@ -2625,17 +2625,57 @@ fn an_ask_waits_in_the_record_and_never_reaches_the_backlogs_missed_work() {
             .collect::<Vec<_>>(),
         [MissedKind::Problem]
     );
-    // The summary still says the session waits on the operator, for the
-    // Project tool's 할 일 (PRD lane-two-columns B34), until an answer.
-    assert_eq!(mine.open_asks, 1);
-    request(&mut store, 2, "범위는 Q4 전체로");
-    end(&mut store, 2, TurnJudgment::default());
-    let summaries = store.ledger_summaries(&project.key).unwrap();
-    let mine = summaries
-        .iter()
-        .find(|summary| summary.session == session())
-        .unwrap();
-    assert_eq!(mine.open_asks, 0);
+}
+
+/// PRD project-panel-results D-20, D-21: a session's summary carries the
+/// line its last judged turn left, skipping a turn that left none, and the
+/// time of its last `git commit` call, which a later read never moves back.
+#[test]
+fn a_summary_carries_the_last_turn_line_and_the_last_commit() {
+    let directory = tempfile::tempdir().unwrap();
+    let (mut store, _) = LinkStore::open(&directory.path().join("links.sqlite3")).unwrap();
+    let project = origin_project("device-a", "acme/app", 0);
+    store.apply_project(&project, 500).unwrap();
+    let summary = |store: &LinkStore| {
+        store
+            .ledger_summaries(&project.key)
+            .unwrap()
+            .into_iter()
+            .find(|summary| summary.session == session())
+            .unwrap()
+    };
+    for (offset, line) in [(1, "테스트를 고쳤어요"), (2, "")] {
+        request(&mut store, offset, "계속");
+        store
+            .apply_ledger_update(&LedgerUpdate::TurnEnd {
+                session: session(),
+                offset,
+                started_at_unix_ms: offset * 1_000 + 500,
+                at_unix_ms: offset * 1_000 + 500,
+                end: LabelEnd::Done,
+                work_author: true,
+                asks_answered: true,
+                line: line.into(),
+                turn_witness: None,
+                judgment: TurnJudgment::default(),
+            })
+            .unwrap();
+    }
+    assert_eq!(
+        summary(&store).last_line.as_deref(),
+        Some("테스트를 고쳤어요")
+    );
+    assert_eq!(summary(&store).committed_at_unix_ms, None);
+    for at in [9_000, 4_000] {
+        let facts = hide_session::links::LinkFacts {
+            committed_at: Some(at),
+            ..Default::default()
+        };
+        let tx = store.connection.transaction().unwrap();
+        apply_reader(&tx, "device-a", "codex", "session-a", &facts).unwrap();
+        tx.commit().unwrap();
+    }
+    assert_eq!(summary(&store).committed_at_unix_ms, Some(9_000));
 }
 
 /// Only Claude Code and Codex have `/goal`; the same words typed to another

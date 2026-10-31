@@ -1,21 +1,17 @@
-//! The Project tool's 현황 (PRD lane-two-columns D-14, D-15, D-16, B27-B38):
-//! one project's to-do list, its pull request counts and its worktrees'
-//! state, derived from what its scope already holds (the 태스크 cards and
-//! the PRs list's groups), the open asks its sessions' records hold (the
-//! link worker's summaries) and the catalog's Git facts. It is rebuilt only
-//! with the scope cache's compared input (B42), never stored, and the shell
-//! only draws it. Sessions are the scope's own `buckets`.
-use super::tasks::{TaskState, Tasks};
+//! The Project tool's results column (PRD project-panel-results D-04, D-05,
+//! B1-B17): one project's pull request counts, its worktrees' state and its
+//! 흘린 것, derived from what its scope already holds (the PRs list's
+//! groups and the agents' rows), the sessions its record says ran in each
+//! worktree (the link worker's summaries) and the catalog's Git facts. It is
+//! rebuilt only with the scope cache's compared input, never stored, and the
+//! shell only draws it. Sessions are the scope's own `buckets`.
 use crate::agent_state::work::board::Board;
 use crate::links::LinkSummariesSnapshot;
-use crate::model::{PrState, PullRequestChecks, SidebarAgentSnapshot, WorkspaceSnapshot};
+use crate::model::{
+    PrState, PullRequestBadge, PullRequestChecks, SidebarAgentSnapshot, WorkspaceSnapshot,
+};
 use serde::Serialize;
-use std::collections::{HashMap, HashSet};
-
-/// The most to-do rows one project publishes; past it the oldest of the
-/// list's order go, `todo_total` keeps the real count and a diagnostic
-/// says so (engineering principle 15).
-pub const TODO_LIMIT: usize = 64;
+use std::collections::{BTreeMap, HashMap, HashSet};
 
 /// The most worktree marks one project publishes; the counts stay exact.
 pub const DOT_LIMIT: usize = 96;
@@ -26,35 +22,85 @@ pub struct ProjectStatus {
     /// carries none and leaves it off the wire.
     #[serde(skip)]
     pub projected: bool,
-    /// In the order the 할 일 list draws them: new asks, then 다시 볼 것,
-    /// then the operator's pull requests and reviews (B37).
-    pub todo: Vec<Todo>,
-    /// Every to-do row, the ones past `TODO_LIMIT` included: the rail's
-    /// number (B38).
-    pub todo_total: usize,
-    /// How many of `todo_total` are agents' rows (asks and 다시 볼 것), the
-    /// rest being pull requests: where the rows past the cap are found,
-    /// the sidebar's 태스크 or PR list (B37).
-    pub todo_agents: usize,
     pub prs: PrCounts,
     pub git: GitCounts,
+    /// 흘린 것 (PRD project-panel-results D-05, B6-B8): the worktrees where
+    /// work ended unfinished, at most `STRAY_LIMIT`, the latest left first.
+    pub strays: Vec<Stray>,
+    /// Every such worktree, the ones past `STRAY_LIMIT` included: the
+    /// rail's number.
+    pub strays_total: usize,
 }
 
-/// One row the operator's move unblocks (D-16). The shell draws the agent's
-/// row by `pane_id` and the pull request by `number`.
+/// The most 흘린 것 rows one project publishes; past it the oldest go,
+/// `strays_total` keeps the real count and a diagnostic says so
+/// (engineering principle 15).
+pub const STRAY_LIMIT: usize = 64;
+
+/// One worktree where nobody works or waits on the operator and something
+/// is left: changes not committed, commits not pushed, or a pull request
+/// whose CI failed (PRD project-panel-results D-05). A pull request a
+/// reviewer only asked changes of is not one.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
-pub struct Todo {
-    /// `ask` (a question or decision not read yet), `revisit` (a read,
-    /// unanswered ask or a ★, B34) or `pr` (a Needs You pull request, B35).
-    pub kind: &'static str,
+pub struct Stray {
+    pub checkout_id: String,
+    pub branch: Option<String>,
+    /// The task that last worked here: its live row's name, else the
+    /// record's title for the session that last ran here (B6).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    /// The live pane of the session that last worked here, which a press
+    /// brings forward and a hand-off writes to (B9, B11).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub pane_id: Option<String>,
+    /// That session's agent, which a hand-off starts again in the worktree
+    /// when its pane is gone (B11). Core only.
+    #[serde(skip)]
+    pub agent: Option<String>,
+    pub changed_files: u32,
+    pub unpushed: u32,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub number: Option<u32>,
-    /// The line stands for an open ask the session's record holds rather
-    /// than a 태스크 card (B34).
-    #[serde(skip_serializing_if = "std::ops::Not::not")]
-    pub record: bool,
+    pub failed_pr: Option<u32>,
+    /// When work last happened here: the last row's change, the record's
+    /// end or the last commit (B6).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub since_unix_ms: Option<u64>,
+    /// The commit 놔두기 binds to (D-08). Core only.
+    #[serde(skip)]
+    pub head: Option<String>,
+}
+
+/// The operator's 놔두기 on one worktree (PRD project-panel-results D-08,
+/// D-17): bound to the commit and the failing pull request it saw, so a new
+/// commit or a new CI failure stands the row again.
+#[derive(Clone, Debug, Default, Eq, PartialEq, serde::Deserialize, Serialize)]
+pub struct StrayDismissal {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub head: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub failed_pr: Option<u32>,
+    pub at_unix_ms: u64,
+}
+
+impl StrayDismissal {
+    /// Whether this 놔두기 still holds `stray` down.
+    pub(crate) fn holds(&self, stray: &Stray) -> bool {
+        self.head == stray.head && (stray.failed_pr.is_none() || stray.failed_pr == self.failed_pr)
+    }
+}
+
+/// How many 놔두기 the core keeps; past it the oldest goes and its row
+/// stands again (B16).
+pub const MAX_STRAY_DISMISSALS: usize = 256;
+
+/// A session the record says ran in a project, for a worktree with no live
+/// row: who it was and when it ended.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct RecordedRun {
+    pub cwd: String,
+    pub agent: String,
+    pub title: String,
+    pub ended_at_unix_ms: Option<u64>,
 }
 
 /// The open pull requests the PRs list holds, by where each stands (B29).
@@ -94,138 +140,186 @@ pub struct Dot {
     pub state: &'static str,
 }
 
-/// A session of this machine whose record holds an open ask (session
-/// record D-12), by the agent and native session the ledger keys it by.
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct RecordAsk {
-    pub agent: String,
-    pub session_id: String,
-}
-
-/// The sessions with an open ask in each local project's record, keyed by
-/// device and project. The summaries are the link worker's, read off the
-/// runtime lock; a project on another device has no record here.
-pub(super) fn record_asks(
+/// For each local worktree with something left, the last session its
+/// project's record says ran there, keyed by device and project: what a 흘린
+/// 것 row names and starts again when no live row works there (B6, B11).
+/// Only worktrees with something left are looked up, so a publish reads no
+/// more of the summaries than the rows it can make.
+pub(super) fn recorded_runs(
     summaries: Option<&LinkSummariesSnapshot>,
     device: &str,
     projects: &[&WorkspaceSnapshot],
-) -> HashMap<(String, String), Vec<RecordAsk>> {
+) -> HashMap<(String, String), Vec<RecordedRun>> {
     let Some(summaries) = summaries else {
         return HashMap::new();
     };
     projects
         .iter()
-        .filter(|project| project.device_id == device)
+        .filter(|project| project.device_id == device && project.is_git)
         .filter_map(|project| {
-            let asks: Vec<_> = summaries
-                .projects
-                .get(&project.id)?
-                .work
+            let work = &summaries.projects.get(&project.id)?.work;
+            let runs: Vec<_> = project
+                .checkouts
                 .iter()
-                .filter(|work| work.open_asks > 0 && work.session.device_id == device)
-                .map(|work| RecordAsk {
-                    agent: work.session.agent.clone(),
-                    session_id: work.session.session_id.clone(),
+                .filter(|checkout| {
+                    checkout.worktree.as_ref().is_some_and(|w| w.dirty)
+                        || checkout.unpushed.as_ref().is_some_and(|u| u.count > 0)
+                        || checkout.ahead > 0
+                        || checkout
+                            .pull_request
+                            .as_ref()
+                            .is_some_and(|pr| pr.checks == PullRequestChecks::Failed)
+                })
+                .filter_map(|checkout| {
+                    work.iter()
+                        .filter(|run| run.session.device_id == device)
+                        .filter_map(|run| Some((run, run.cwd.as_deref()?)))
+                        .filter(|(_, cwd)| {
+                            crate::files::path_inside_root(&checkout.path, cwd, true).is_ok()
+                        })
+                        .max_by_key(|(run, _)| run.ended_at_unix_ms)
+                        .map(|(run, cwd)| RecordedRun {
+                            cwd: cwd.to_owned(),
+                            agent: run.session.agent.clone(),
+                            title: run.title.clone(),
+                            ended_at_unix_ms: run.ended_at_unix_ms,
+                        })
                 })
                 .collect();
-            (!asks.is_empty()).then(|| ((project.device_id.clone(), project.id.clone()), asks))
+            (!runs.is_empty()).then(|| ((project.device_id.clone(), project.id.clone()), runs))
         })
         .collect()
 }
 
-/// The status of one project.
-///
-/// 할 일's asks are the 태스크 cards standing in Needs You and 다시 볼 것, then
-/// the live sessions whose record still holds an open ask the cards do not
-/// already show (B34): one line per pane, the card's line winning, an ask
-/// read or not (needs-you-cleanup B11), gone when an answer
-/// resolves the ask in the record, 치우기 puts it away (B15) or the agent
-/// works again. A closed
-/// session's ask stays in its record and blocks nothing, so it is no line.
+/// The status of one project: its pull request counts, its worktrees and
+/// its 흘린 것, the 놔두기 still holding a row left out.
 pub(super) fn project(
     project: &WorkspaceSnapshot,
-    tasks: &Tasks,
     board: &Board,
-    record_asks: &[RecordAsk],
     agents: &[&SidebarAgentSnapshot],
+    dismissals: &BTreeMap<String, StrayDismissal>,
+    recorded: &[RecordedRun],
 ) -> ProjectStatus {
-    let mut asks = Vec::new();
-    let mut revisits = Vec::new();
-    let mut asking = HashSet::new();
-    for (state, list) in [
-        (TaskState::NeedsYou, &mut asks),
-        (TaskState::Revisit, &mut revisits),
-    ] {
-        for card in tasks.cards.iter().filter(|card| card.state == state) {
-            asking.extend(card.members.iter().map(String::as_str));
-            list.push((card.root.clone(), false));
-        }
-    }
-    let panes: HashSet<_> = project
+    let mut strays: Vec<_> = project
         .checkouts
         .iter()
-        .flat_map(|checkout| &checkout.tabs)
+        .filter_map(|checkout| stray(project, checkout, agents, recorded))
+        .filter(|row| {
+            !dismissals
+                .get(&row.checkout_id)
+                .is_some_and(|dismissal| dismissal.holds(row))
+        })
+        .collect();
+    strays.sort_by(|a, b| {
+        b.since_unix_ms
+            .cmp(&a.since_unix_ms)
+            .then_with(|| a.checkout_id.cmp(&b.checkout_id))
+    });
+    let strays_total = strays.len();
+    strays.truncate(STRAY_LIMIT);
+    ProjectStatus {
+        projected: true,
+        prs: pr_counts(project, board),
+        git: git_counts(project),
+        strays,
+        strays_total,
+    }
+}
+
+/// A worktree's 흘린 것 row, before any 놔두기 (PRD project-panel-results
+/// D-05, B6, B7): none on a checkout of the default branch, while an agent
+/// there works or waits on the operator, or with nothing left.
+pub(crate) fn stray(
+    project: &WorkspaceSnapshot,
+    checkout: &crate::model::CheckoutSnapshot,
+    agents: &[&SidebarAgentSnapshot],
+    recorded: &[RecordedRun],
+) -> Option<Stray> {
+    if !project.is_git {
+        return None;
+    }
+    let worktree = checkout.worktree.as_ref().filter(|w| !w.missing)?;
+    let branch = checkout.branch.as_deref()?;
+    if checkout.base_branch.as_deref() == Some(branch) {
+        return None;
+    }
+    let changed_files = if worktree.dirty {
+        worktree.changed_file_count.max(1)
+    } else {
+        0
+    };
+    // The same rule the worktree's mark reads (`checkout_mark`).
+    let unpushed = match &checkout.unpushed {
+        Some(unpushed) => unpushed.count,
+        None if checkout.pull_request.is_none() && !checkout.landed => checkout.ahead,
+        None => 0,
+    };
+    // CI alone: a reviewer's change request is the PR list's to show.
+    let failed_pr = checkout
+        .pull_request
+        .as_ref()
+        .filter(|pr| {
+            matches!(pr.badge, PullRequestBadge::Open | PullRequestBadge::Review)
+                && !pr.is_draft
+                && pr.checks == PullRequestChecks::Failed
+        })
+        .map(|pr| pr.number);
+    if changed_files == 0 && unpushed == 0 && failed_pr.is_none() {
+        return None;
+    }
+    let panes: HashSet<&str> = checkout
+        .tabs
+        .iter()
         .flat_map(|tab| &tab.panes)
         .map(|pane| pane.id.as_str())
         .collect();
-    for ask in record_asks {
-        let row = agents.iter().find(|row| {
-            panes.contains(row.pane_id.as_str())
-                && row.session_id.as_deref() == Some(ask.session_id.as_str())
-                && hide_session::Agent::from_kind(&row.agent_kind)
-                    .is_some_and(|agent| agent.as_str() == ask.agent)
-        });
-        let Some(row) = row else { continue };
-        if asking.contains(row.pane_id.as_str())
-            || row.activity == "working"
-            || row.resolved.is_some()
-            || crate::agent_state::sessions::ask_put_away(row)
-        {
-            continue;
-        }
-        // Read or not, an unanswered ask is the operator's to answer
-        // (needs-you-cleanup B11); only ☆ puts it off, and 치우기 away (B15).
-        asking.insert(row.pane_id.as_str());
-        asks.push((row.pane_id.clone(), true));
-    }
-    let mut todo: Vec<_> = asks
-        .into_iter()
-        .map(|line| ("ask", line))
-        .chain(revisits.into_iter().map(|line| ("revisit", line)))
-        .map(|(kind, (pane, record))| Todo {
-            kind,
-            pane_id: Some(pane),
-            number: None,
-            record,
-        })
+    let rows: Vec<_> = agents
+        .iter()
+        .filter(|row| panes.contains(row.pane_id.as_str()))
         .collect();
-    for row in &board.rows {
-        // An agent asking about its pull request is already its ask row.
-        let asked = row.reason.kind == "reply"
-            && row
-                .agent_pane
-                .as_deref()
-                .is_some_and(|pane| asking.contains(pane));
-        if row.group == "needs_you" && row.fold.is_none() && !asked {
-            todo.push(Todo {
-                kind: "pr",
-                pane_id: None,
-                number: Some(row.number),
-                record: false,
-            });
-        }
+    if rows.iter().any(|row| {
+        matches!(
+            crate::agent_state::turn::AgentUse::of(&row.demand, row.blocked, &row.activity),
+            crate::agent_state::turn::AgentUse::Working
+                | crate::agent_state::turn::AgentUse::Waiting
+        )
+    }) {
+        return None;
     }
-    let todo_total = todo.len();
-    let todo_agents = todo.iter().filter(|row| row.kind != "pr").count();
-    todo.truncate(TODO_LIMIT);
-    ProjectStatus {
-        projected: true,
-        todo,
-        todo_total,
-        todo_agents,
-        prs: pr_counts(project, board),
-        git: git_counts(project),
-    }
+    let last = rows.iter().max_by_key(|row| row.changed_at_unix_ms);
+    let run = recorded
+        .iter()
+        .filter(|run| crate::files::path_inside_root(&checkout.path, &run.cwd, true).is_ok())
+        .max_by_key(|run| run.ended_at_unix_ms);
+    let commit = worktree
+        .last_commit_unix_seconds
+        .map(|seconds| seconds.saturating_mul(1000));
+    let since = [
+        last.and_then(|row| row.changed_at_unix_ms),
+        run.and_then(|run| run.ended_at_unix_ms),
+        commit,
+    ]
+    .into_iter()
+    .flatten()
+    .max();
+    Some(Stray {
+        checkout_id: checkout.id.clone(),
+        branch: Some(branch.to_owned()),
+        name: last
+            .map(|row| row.identity_label.clone())
+            .or_else(|| run.map(|run| run.title.clone()))
+            .filter(|name| !name.is_empty()),
+        pane_id: last.map(|row| row.pane_id.clone()),
+        agent: last
+            .and_then(|row| hide_session::Agent::from_kind(&row.agent_kind))
+            .map(|agent| agent.as_str().to_owned())
+            .or_else(|| run.map(|run| run.agent.clone())),
+        changed_files,
+        unpushed,
+        failed_pr,
+        since_unix_ms: since,
+        head: checkout.head_sha().map(str::to_owned),
+    })
 }
 
 fn pr_counts(project: &WorkspaceSnapshot, board: &Board) -> PrCounts {

@@ -632,7 +632,7 @@ pub(crate) fn read_as(
     request: &LabelTranscriptRequest,
     owner: Owner<'_>,
 ) -> Result<(LabelTranscript, Proven), ReadRefusal> {
-    read_links(home, request, owner).map(|(transcript, proven, _)| (transcript, proven))
+    read_links(home, request, owner).map(|(transcript, proven, _, _)| (transcript, proven))
 }
 
 /// The pull requests each tool call of a read named, with the call's time.
@@ -644,10 +644,10 @@ pub(crate) fn read_links(
     home: &Path,
     request: &LabelTranscriptRequest,
     owner: Owner<'_>,
-) -> Result<(LabelTranscript, Proven, NamedCalls), ReadRefusal> {
+) -> Result<(LabelTranscript, Proven, NamedCalls, Option<u64>), ReadRefusal> {
     Ok(with_read(home, |connection, schema| {
         read_connection(connection, schema, request, owner)
-            .map(|page| (page.transcript, page.proven, page.named))
+            .map(|page| (page.transcript, page.proven, page.named, page.committed_at))
     })??)
 }
 
@@ -697,6 +697,8 @@ struct Page {
     /// When each of `transcript.memory_receipts`' messages was written.
     receipt_times: Vec<u64>,
     named: NamedCalls,
+    /// When the read's last `git commit` call ran.
+    committed_at: Option<u64>,
 }
 
 impl Page {
@@ -801,6 +803,7 @@ fn read_connection(
         sightings: Vec::new(),
         issue_sightings: Vec::new(),
         named: Vec::new(),
+        committed_at: None,
         receipts: Vec::new(),
         receipt_times: Vec::new(),
         skipped: std::collections::BTreeMap::new(),
@@ -877,6 +880,7 @@ fn read_connection(
         .collect();
     let receipt_times = transcript.receipt_times;
     let named = transcript.named;
+    let committed_at = transcript.committed_at;
     let transcript = LabelTranscript {
         confirmed: proven.confirmed(session_id)?,
         events: transcript.events,
@@ -902,6 +906,7 @@ fn read_connection(
         read_bytes: spent,
         receipt_times,
         named,
+        committed_at,
     })
 }
 
@@ -1196,6 +1201,8 @@ struct Read {
     issue_sightings: Vec<PrSighting>,
     /// The pull requests each tool call named ([`crate::named_prs`]).
     named: NamedCalls,
+    /// When the last `git commit` call ran.
+    committed_at: Option<u64>,
     receipts: Vec<MemoryReceiptPart>,
     /// When each receipt's message was written, beside `receipts`.
     receipt_times: Vec<u64>,
@@ -1349,6 +1356,9 @@ impl Read {
         let Some(input) = input else {
             return;
         };
+        if crate::named_prs::runs_git_commit(input) {
+            self.committed_at = self.committed_at.max(Some(at));
+        }
         let named = crate::named_prs::tool_call(input, None);
         if named.is_empty() {
             return;

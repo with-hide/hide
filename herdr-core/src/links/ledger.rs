@@ -731,11 +731,16 @@ pub struct SessionWorkSummary {
     pub open_missed: usize,
     pub subtree_open_missed: usize,
     pub missed: Vec<MissedWork>,
-    /// The record's open asks (D-12), which are no missed work: the Project
-    /// tool's 할 일 counts the session as waiting on the operator while one
-    /// stands (PRD lane-two-columns B34). Core only.
+    /// The line the record keeps for the session's last judged turn, empty
+    /// when none was judged: a task's `마지막에 한 말` (PRD
+    /// project-panel-results D-21). Core only.
     #[serde(skip)]
-    pub open_asks: usize,
+    pub last_line: Option<String>,
+    /// When the session last ran `git commit`, as its file recorded it: a
+    /// task's `main 커밋` result reads it (PRD project-panel-results D-20).
+    /// Core only.
+    #[serde(skip)]
+    pub committed_at_unix_ms: Option<u64>,
     /// The session that started this one, as the record keeps the edge after
     /// either ends: a session's pull requests gather its ended descendants'
     /// along it (`agent_state::work::Recorded`). Core only.

@@ -113,13 +113,10 @@
     "button": 4
   },
   "web/src/ProjectDetail.tsx": {
-    "button": 2
+    "button": 1
   },
   "web/src/ProjectGuardrails.tsx": {
     "button": 1
-  },
-  "web/src/ProjectTool.tsx": {
-    "button": 6
   },
   "web/src/QuickAdd.tsx": {
     "input": 1

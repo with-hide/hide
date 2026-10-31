@@ -103,13 +103,15 @@ impl Runtime {
     }
 
     pub(crate) fn ingest_ledger(&mut self, value: Publication) -> bool {
+        self.ledger_spends = value.projects.built;
+        let mut changed = self.publish_project_tasks();
         let own = &mut self.snapshot.usage.nodes[0];
-        let mut changed = own.history != value.history
-            || own.projects != value.projects.built
-            || own.projects_failed != value.projects.failed;
+        changed |= own.history != value.history
+            || own.projects_failed != value.projects.failed
+            || own.hide_ai_week_micro_usd != value.projects.hide_ai_micro_usd;
         own.history = value.history;
-        own.projects = value.projects.built;
         own.projects_failed = value.projects.failed;
+        own.hide_ai_week_micro_usd = value.projects.hide_ai_micro_usd;
         for (name, consumption) in value.agents {
             if let Some(row) = own.agents.iter_mut().find(|row| row.agent == name) {
                 changed |= row.consumption != consumption;

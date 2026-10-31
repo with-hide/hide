@@ -97,8 +97,8 @@ test("the PR list groups by whose move it is and says why on each row", async ({
     // The rail is the documents button, then Project · Memory | Explorer · Changes; the list is the sidebar's (PRD lane-two-columns B25, B41).
     await expect(page.locator("[data-lane-tool]")).toHaveCount(6);
     await expect(page.locator('[data-sidebar-lens-option="prs"]')).toHaveAttribute("aria-checked", "true");
-    // The Project icon counts its to-do: the three Needs You PRs (B35, B38).
-    await expect(page.locator('[data-lane-tool="project"] [data-lane-todo-count]')).toHaveText("3");
+    // The Project icon counts worktrees left behind, not the PRs that wait on the operator: those are this list's (PRD project-panel-results D-01).
+    await expect(page.locator('[data-lane-tool="project"] [data-lane-todo-count]')).toHaveCount(0);
 
     // The groups by whose move it is; each row says why in its second line (B6, B8, B24).
     const groups = work.locator("[data-pr-group]");
@@ -170,8 +170,6 @@ test("an unreadable account keeps the list and leaves every pull request's owner
       expect((await groupsOf(work)).drafts).toEqual(["35"]);
       expect((await groupsOf(work)).bots).toEqual(["36"]);
       expect((await groupsOf(work)).merged).toEqual(["37"]);
-      // Nothing is asked of the operator, so the rail's Project icon carries no number.
-      await expect(page.locator('[data-lane-tool="project"] [data-lane-todo-count]')).toHaveCount(0);
       await warnsWith(page, work, "GitHub read incomplete · could not read the signed-in account", "work-prs-unread-account-light");
     },
     { failing: ["account"] },
@@ -208,7 +206,6 @@ test("an unreadable facts query keeps the list, holds back only the pull request
         await expect(reasonOf(work, number)).toHaveAttribute("data-pr-reason", "unjudged");
         await expect(reasonOf(work, number)).toContainText("Unsorted · can't tell if it is in the merge queue");
       }
-      await expect(page.locator('[data-lane-tool="project"] [data-lane-todo-count]')).toHaveText("1");
       // The facts query that failed carries the reviewers too (PRD pr-review-status B15).
       await warnsWith(page, work, "GitHub read incomplete · could not read the merge queue, reviews", "work-prs-unread-merge-queue-light");
     },
@@ -224,8 +221,6 @@ test("all four extra questions failing still lists every pull request and names 
       expect(Object.keys(groups)).toEqual(["waiting", "drafts", "bots", "merged"]);
       expect(groups.waiting).toEqual(["31", "32", "33", "34", "38"]);
       await expect(reasonOf(work, 31)).toContainText("Unsorted · can't tell if it is yours");
-      // Plain Waiting says nothing of whose move it is, so the rail's Project icon carries no number.
-      await expect(page.locator('[data-lane-tool="project"] [data-lane-todo-count]')).toHaveCount(0);
       await warnsWith(page, work, "GitHub read incomplete · could not read the signed-in account, review requests, the merge queue, reviews", "work-prs-unread-all-light");
     },
     { failing: ["account", "review_requests", "merge_queue"], teamAsk: true },
@@ -363,20 +358,10 @@ test("in a stacked lane with the Project tool in front, every way of opening the
     await expect(cardOf(page, 31)).toBeVisible({ timeout: 30_000 });
     await expect(screen).toHaveAttribute("data-lane-view", "detail");
     await expect(screen).toHaveAttribute("data-lane-shows", "none");
-    // The 할 일's pull request row.
+    // The count line's worktree number.
     await toolInFront();
-    await tool.locator('[data-todo-pr="33"] button').click();
-    await expect(cardOf(page, 33)).toBeVisible({ timeout: 30_000 });
-    await expect(screen).toHaveAttribute("data-lane-view", "detail");
-    // The Git tile.
-    await toolInFront();
-    await tool.locator('[data-project-tile-press="git"]').click();
+    await tool.locator('[data-project-count="worktrees"]').click();
     await expect(page.locator('aside[data-lane="detail"] [data-worktrees-view]')).toBeVisible({ timeout: 30_000 });
-    await expect(screen).toHaveAttribute("data-lane-view", "detail");
-    // The cost tile.
-    await toolInFront();
-    await tool.locator('[data-project-tile-press="cost"]').click();
-    await expect(page.locator('aside[data-lane="detail"][data-detail="cost"]')).toBeVisible({ timeout: 30_000 });
     await expect(screen).toHaveAttribute("data-lane-view", "detail");
     // The slot button brings the card back after the tool.
     await toolInFront();

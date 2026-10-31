@@ -259,6 +259,13 @@ type UiStore = {
   /** Shows the Hide AI tool's tab, with `row` open in 제안 or none. */
   showHideAiTab: (tab: HideAiTab, row?: string | null) => void;
   /**
+   * The 작업 비용 table's filter and the task it shows unfolded (PRD
+   * project-panel-results D-14, B22, B25): the panel opens the table on one,
+   * and the table's own filter and folds move it. Page-local and never sent.
+   */
+  taskTable: { filter: import("./projectStatus").TaskFilter; task: string | null };
+  showTaskTable: (filter: import("./projectStatus").TaskFilter, task: string | null) => void;
+  /**
    * The Mission tool's page, its start guide unfolded above the list and its
    * 끝남 group opened whole (PRD mission-tool B7-B9). Page-local and never
    * sent: the defaults it edits are the core's Settings › Conductor values.
@@ -525,6 +532,8 @@ export const useUiStore = create<UiStore>((set, get) => ({
   setMissionGuideOpen: (missionGuideOpen) => set({ missionGuideOpen }),
   setMissionClosedAll: (missionClosedAll) => set({ missionClosedAll }),
   showHideAiTab: (hideAiTab, row) => set(row === undefined ? { hideAiTab } : { hideAiTab, openSuggestion: row }),
+  taskTable: { filter: "all", task: null },
+  showTaskTable: (filter, task) => set({ taskTable: { filter, task } }),
   setLaneExpanded: (laneExpanded) => {
     if (get().laneExpanded !== laneExpanded) set({ laneExpanded });
   },

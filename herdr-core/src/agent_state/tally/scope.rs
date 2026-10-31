@@ -524,16 +524,36 @@ struct PlaceInput {
     checkouts: Vec<CheckoutInput>,
     /// What the Project tool's Git counts read (B30).
     git_facts: Vec<GitInput>,
-    /// The sessions whose record holds an open ask, which the Project
-    /// tool's 할 일 reads (B34).
-    record_asks: Vec<super::project_status::RecordAsk>,
+    /// What the Project tool's 흘린 것 reads beyond `git_facts`
+    /// (project-panel-results B6, B7): each checkout's branch, base, changed
+    /// file count, head, last commit and pull request checks.
+    stray_facts: Vec<StrayInput>,
+    /// The last session the record says ran in each worktree with something
+    /// left.
+    recorded_runs: Vec<super::project_status::RecordedRun>,
 }
+
+/// A checkout's branch and base, changed files, head, last commit time, and
+/// its pull request's number, badge, draft and checks.
+type StrayInput = (
+    Option<String>,
+    Option<String>,
+    u32,
+    Option<String>,
+    Option<u64>,
+    Option<(
+        u32,
+        crate::model::PullRequestBadge,
+        bool,
+        crate::model::PullRequestChecks,
+    )>,
+);
 
 /// A checkout's worktree (missing, main, dirty, behind its upstream), its
 /// unpushed count, commits since its base, whether it has a pull request,
 /// is primary and has landed.
 type GitInput = (
-    Option<(bool, bool, bool, Option<u32>)>,
+    Option<(bool, bool, bool, Option<u32>, Option<bool>)>,
     Option<u32>,
     u32,
     bool,
@@ -557,6 +577,8 @@ struct Input {
     /// stalled and a pull request turns old with the clock alone (PRD
     /// work-tab-pr-lens D-10, D-11), and nothing else would republish.
     clock_minute: u64,
+    /// The operator's 놔두기 on 흘린 것 rows (project-panel-results D-17).
+    stray_dismissals: std::collections::BTreeMap<String, super::project_status::StrayDismissal>,
 }
 
 /// One owned comparison input, bounded by the snapshot's agents and catalog.
@@ -564,13 +586,16 @@ struct Input {
 #[derive(Default)]
 pub(crate) struct Cache {
     previous: Option<Input>,
+    /// Counts the projections whose input moved, for a reader that follows
+    /// the same input (the project tasks).
+    pub(crate) input_generation: u64,
     output: Output,
     /// Where each pull request stood on the last projection, by project: a
     /// pull request GitHub has not judged yet keeps its place (B12).
     placements: HashMap<(String, String), HashMap<u32, &'static str>>,
-    /// The projects whose to-do list was past its cap on the last
-    /// projection, so a crossing is logged once.
-    todo_over: HashSet<(String, String)>,
+    /// The projects whose 흘린 것 was past its cap on the last projection,
+    /// so a crossing is logged once.
+    strays_over: HashSet<(String, String)>,
 }
 
 #[derive(Default)]
@@ -670,13 +695,14 @@ fn device_rows(snapshot: &crate::model::Snapshot) -> Vec<DeviceRows<'_>> {
 impl Cache {
     pub(crate) fn refresh(&mut self, snapshot: &mut crate::model::Snapshot, now: u64) -> bool {
         let devices = device_rows(snapshot);
-        let record_asks = super::project_status::record_asks(
+        let recorded_runs = super::project_status::recorded_runs(
             snapshot.link_summaries.as_ref(),
             devices[0].id,
             &devices[0].projects,
         );
         let input = Input {
             clock_minute: now / 60_000,
+            stray_dismissals: snapshot.ui_state.stray_dismissals.clone(),
             devices: devices
                 .iter()
                 .map(|d| DeviceInput {
@@ -736,18 +762,34 @@ impl Cache {
                             )
                         })
                         .collect(),
-                    record_asks: record_asks
+                    recorded_runs: recorded_runs
                         .get(&(p.device_id.clone(), p.id.clone()))
                         .cloned()
                         .unwrap_or_default(),
+                    stray_facts: p
+                        .checkouts
+                        .iter()
+                        .map(|c| {
+                            (
+                                c.branch.clone(),
+                                c.base_branch.clone(),
+                                c.worktree.as_ref().map_or(0, |w| w.changed_file_count),
+                                c.head_sha().map(str::to_owned),
+                                c.worktree.as_ref().and_then(|w| w.last_commit_unix_seconds),
+                                c.pull_request
+                                    .as_ref()
+                                    .map(|pr| (pr.number, pr.badge, pr.is_draft, pr.checks)),
+                            )
+                        })
+                        .collect(),
                     git_facts: p
                         .checkouts
                         .iter()
                         .map(|c| {
                             (
-                                c.worktree
-                                    .as_ref()
-                                    .map(|w| (w.missing, w.is_main, w.dirty, w.behind_upstream)),
+                                c.worktree.as_ref().map(|w| {
+                                    (w.missing, w.is_main, w.dirty, w.behind_upstream, w.merged)
+                                }),
                                 c.unpushed.as_ref().map(|u| u.count),
                                 c.ahead,
                                 c.pull_request.is_some(),
@@ -781,11 +823,12 @@ impl Cache {
         if self.previous.as_ref() == Some(&input) {
             return self.apply(snapshot);
         }
+        self.input_generation = self.input_generation.wrapping_add(1);
         let mut projects = HashMap::new();
         let mut checkouts = HashMap::new();
         let mut device_scopes = HashMap::new();
         let mut placements = HashMap::new();
-        let mut todo_over = HashSet::new();
+        let mut strays_over = HashSet::new();
         let all: Vec<_> = devices
             .iter()
             .flat_map(|d| d.agents.iter().copied())
@@ -895,25 +938,25 @@ impl Cache {
                     .unwrap_or_default();
                 projected.status = super::project_status::project(
                     project,
-                    &projected.tasks,
                     &projected.prs,
-                    record_asks
+                    &device.agents,
+                    &input.stray_dismissals,
+                    recorded_runs
                         .get(&(project.device_id.clone(), project.id.clone()))
                         .map_or(&[], Vec::as_slice),
-                    &device.agents,
                 );
                 let key = (project.device_id.clone(), project.id.clone());
-                let over = projected.status.todo_total > super::project_status::TODO_LIMIT;
-                if over && !self.todo_over.contains(&key) {
+                let over = projected.status.strays_total > super::project_status::STRAY_LIMIT;
+                if over && !self.strays_over.contains(&key) {
                     crate::diagnostic!(serde_json::json!({
-                        "component": "project_status", "kind": "todo_capacity",
+                        "component": "project_status", "kind": "stray_capacity",
                         "device": project.device_id, "project": project.id,
-                        "count": projected.status.todo_total,
-                        "limit": super::project_status::TODO_LIMIT,
+                        "count": projected.status.strays_total,
+                        "limit": super::project_status::STRAY_LIMIT,
                     }));
                 }
                 if over {
-                    todo_over.insert(key);
+                    strays_over.insert(key);
                 }
                 for checkout in &project.checkouts {
                     let pane_ids: HashSet<_> = checkout
@@ -1106,7 +1149,7 @@ impl Cache {
             overall,
         };
         self.placements = placements;
-        self.todo_over = todo_over;
+        self.strays_over = strays_over;
         self.previous = Some(input);
         self.apply(snapshot)
     }

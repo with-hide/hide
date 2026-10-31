@@ -550,6 +550,14 @@ pub const KEYS: &[(&str, &str, Mechanism, Moves)] = &[
         Mechanism::Owned,
         Moves::Checkout,
     ),
+    // 놔두기 on a 흘린 것 row, by the worktree's checkout (PRD
+    // project-panel-results D-08).
+    (
+        CORE_STATE,
+        "/stray_dismissals/{key}",
+        Mechanism::Owned,
+        Moves::Checkout,
+    ),
     (
         CORE_STATE,
         "/session_open_folds/*",
@@ -1632,6 +1640,19 @@ mod tests {
         old_project: String,
     }
 
+    /// One more field on a fixture whose `json!` is already at the macro's
+    /// recursion limit.
+    trait TapInsert {
+        fn tap_insert(self, key: &str, value: Value) -> Value;
+    }
+
+    impl TapInsert for Value {
+        fn tap_insert(mut self, key: &str, value: Value) -> Value {
+            self.as_object_mut().unwrap().insert(key.to_owned(), value);
+            self
+        }
+    }
+
     fn legacy() -> Legacy {
         let dir = tempfile::tempdir().unwrap();
         let state = dir.path().join("state");
@@ -1715,7 +1736,11 @@ mod tests {
                 "collapsed_workspace_ids": ["workspace:a"],
                 "collapsed_checkout_ids": ["workspace:a"],
                 "expanded_checkout_ids": ["workspace:a"],
-            }),
+            })
+            .tap_insert(
+                "stray_dismissals",
+                json!({"workspace:a:checkout:1": {"head": "aaa", "at_unix_ms": 1}}),
+            ),
         );
         write(
             WORKSPACE_VIEWS,

@@ -146,6 +146,18 @@ pub(crate) fn creates_pull_request(name: Option<&str>, input: &Value) -> bool {
     found.creates && !found.fallback
 }
 
+/// Whether a tool call runs `git commit` (PRD project-panel-results D-20):
+/// a shell command whose git subcommand, past git's own options, is
+/// `commit`. Whether the commit took is the checkout's to say.
+pub(crate) fn runs_git_commit(input: &Value) -> bool {
+    let Some(object) = input.as_object() else {
+        return false;
+    };
+    let mut found = Found::default();
+    commands(object, &Place::Session, &mut found);
+    found.commits
+}
+
 /// The pull requests a creating call's output gives back: an address alone
 /// on its line, as `gh pr create` prints the one it made, or the `html_url`
 /// of GitHub's answer to the create request. An address inside other text,
@@ -182,6 +194,8 @@ struct Found {
     creates: bool,
     /// A line among them holds an `||`.
     fallback: bool,
+    /// A command among them is `git commit`.
+    commits: bool,
 }
 
 impl Found {
@@ -246,6 +260,7 @@ fn command(words: &[String], place: &mut Place, found: &mut Found) {
             };
         }
         "gh" => gh(args, repository_variable, place, found),
+        "git" => found.commits |= git_subcommand(args) == Some("commit"),
         "open" | "xdg-open" | "start" | "curl" | "wget" => addresses(args, found),
         "hide"
             if args.first().is_some_and(|word| word == "browser")
@@ -255,6 +270,22 @@ fn command(words: &[String], place: &mut Place, found: &mut Found) {
         }
         _ => {}
     }
+}
+
+/// The subcommand of a `git` call, past git's own options (`-C <path>`,
+/// `-c <name=value>` and the `--flag[=value]` forms).
+fn git_subcommand(args: &[String]) -> Option<&str> {
+    let mut words = args.iter();
+    while let Some(word) = words.next() {
+        match word.as_str() {
+            "-C" | "-c" | "--git-dir" | "--work-tree" | "--namespace" => {
+                words.next();
+            }
+            option if option.starts_with('-') => {}
+            subcommand => return Some(subcommand),
+        }
+    }
+    None
 }
 
 /// Every argument that is a pull request's address.
@@ -860,5 +891,32 @@ mod tests {
             ),
             vec![here(23)]
         );
+    }
+
+    /// D-20: a call that runs `git commit`, past git's own options and in a
+    /// list, is a commit; another git command or a commit only named is not.
+    #[test]
+    fn a_git_commit_call_is_read_as_a_commit() {
+        for command in [
+            "git commit -m 'fix: x'",
+            "git -C /work/app -c user.name=x commit --amend --no-edit",
+            "cd /work/app && git add -A && git commit -m x && git push",
+        ] {
+            assert!(runs_git_commit(&json!({ "command": command })), "{command}");
+        }
+        assert!(runs_git_commit(
+            &json!({ "command": ["git", "commit", "-m", "x"] })
+        ));
+        for command in [
+            "git status",
+            "git log --grep commit",
+            "echo git commit",
+            "gh pr create --fill",
+        ] {
+            assert!(
+                !runs_git_commit(&json!({ "command": command })),
+                "{command}"
+            );
+        }
     }
 }

@@ -451,6 +451,7 @@ impl Runtime {
                 | DetailItem::Plan { .. }
                 | DetailItem::Worktrees { .. }
                 | DetailItem::Cost { .. }
+                | DetailItem::Remains { .. }
                 | DetailItem::Branch { .. },
             )
             | None => {

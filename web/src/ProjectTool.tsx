@@ -1,38 +1,41 @@
-import { SettingsIcon, TriangleAlertIcon, XIcon } from "lucide-react";
-import { useMemo, useState, type ReactNode } from "react";
+import { ArrowUpIcon, ChevronRightIcon, CircleXIcon, FileDiffIcon, LoaderCircleIcon, SettingsIcon, TriangleAlertIcon, XIcon } from "lucide-react";
+import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { ProjectLanePin } from "./ProjectLanePin";
 import type { Actions } from "./actions";
-import type { ProjectStatus, ProjectTodo } from "./agentScope";
+import type { ProjectStatus, ProjectStray } from "./agentScope";
 import { agentProductName } from "./agentAdapters";
-import { markWords, rowLine } from "./agentRow";
 import { PrMark } from "./components/pr-mark";
-import { StatusMark } from "./components/status-mark";
 import { Button } from "./components/ui/button";
+import { RowOverlayButton } from "./components/ui/row-button";
 import { Hint } from "./components/ui/tooltip";
-import { localDeviceId } from "./devices";
+import { openDiskCleanup, LAYER_DOT } from "./DiskCleanupSheet";
+import { readsHere } from "./devices";
+import { entranceBytes, layerLines } from "./diskCleanup";
+import { useDiskWatch } from "./diskWatch";
+import type { TaskCost } from "./generated/hided-ws";
 import { summariesEnabled } from "./hideAi";
+import { formatBytes } from "./i18n/format";
 import { useInterfaceTranslation } from "./i18n/client";
 import { requireInterfaceLanguage } from "./i18n/locale";
 import { cn } from "./lib/utils";
 import { ageWords } from "./overviewLens";
-import { agentsByPane, allAgents } from "./paneAgents";
-import { ReasonLine } from "./prReason";
+import { allAgents } from "./paneAgents";
 import { hasPullRequests, prListModel } from "./prWork";
 import { projectRepository, settingsTarget } from "./projectSettings";
-import { agentShares, costPrefix, dayHeights, frontProject, missedCount, projectCost, todoView, usd } from "./projectStatus";
+import { COSTLY_SHOWN, costPrefix, dayHeights, durationWords, frontProject, missedCount, projectCost, removableDisk, strayParts, strayView, taskName, tokenWords, usd, type TaskFilter } from "./projectStatus";
 import { machineName } from "./screenMachine";
-import { sameDetailItem, type AgentRow, type DetailItem, type Workspace } from "./snapshot";
+import { catalogWorkspaces, localDeviceId, sameDetailItem, type DetailItem, type Workspace } from "./snapshot";
 import { useShellStore } from "./store";
 import { useUiStore } from "./ui";
 
-// The lane's Project tool (PRD lane-two-columns D-14..D-18, B26-B38): the
-// front checkout's project and its 현황; its Memory is a tool of its own
-// (operator decision 2026-10-23, replacing D-20). Every count is the core's
-// (`agent_scope.status`, the usage frame's `projects`); a tile sends the
-// operator where the list or the detail lives, the sidebar or the 보기 slot,
-// and the rows carry no button of their own (D-17).
+// The lane's Project tool as the results column (PRD project-panel-results
+// D-01..D-19, B1-B37): left is state, the middle is work under way, and this
+// is what came of it. Under its head one line of counts, then 흘린 것, the
+// disk, the last seven days, the costliest tasks and Hide AI's suggestions.
+// Every row and number is the core's (`agent_scope.status`, the usage
+// frame's `projects`); a press goes where the list or the detail lives.
 
-/** Whether the viewing column draws `item` now, so its tile or row reads `닫기 ✕` (B32). */
+/** Whether the viewing column draws `item` now, so its control reads pressed. */
 function useDetailOpen(item: DetailItem): boolean {
   const drawn = useUiStore((s) => s.drawnLane.view === "detail" && s.drawnLane.mode !== "closed");
   const top = useShellStore((s) => {
@@ -49,12 +52,12 @@ export function ProjectTool({ actions }: { actions: Actions }) {
   return (
     <div className="flex min-h-0 min-w-0 flex-1 flex-col" data-project-tool={project.id}>
       <Header project={project} actions={actions} />
-      <Status project={project} actions={actions} />
+      <Results project={project} actions={actions} />
     </div>
   );
 }
 
-/** The tool's head (B26): the project's name, its repository, path and machine, ⚙ and ×. */
+/** The tool's head: the project's name, its repository, path and machine, ⚙ and ×. */
 function Header({ project, actions }: { project: Workspace; actions: Actions }) {
   const { t } = useInterfaceTranslation();
   const repository = useShellStore((s) => projectRepository(s.rest, project));
@@ -81,307 +84,483 @@ function Header({ project, actions }: { project: Workspace; actions: Actions }) 
   );
 }
 
-function Status({ project, actions }: { project: Workspace; actions: Actions }) {
+function Results({ project, actions }: { project: Workspace; actions: Actions }) {
   const status = project.agent_scope.status ?? null;
+  const measures = useShellStore((s) => project.is_git && readsHere(project, s.rest?.navigator?.devices));
+  const overviewOpen = useUiStore((s) => s.overviewOpen);
+  // While the tool shows, its one project's disk is measured; the Overview's Projects tab takes the watch while it is open (D-15, B20).
+  useDiskWatch(actions, measures && !overviewOpen ? project.id : null);
   return (
-    <div className="flex min-h-0 min-w-0 flex-1 flex-col gap-lg overflow-y-auto px-md py-md" data-project-status="true">
-      <div className="grid grid-cols-2 gap-sm" data-project-tiles="true">
-        <SessionsTile project={project} actions={actions} />
-        <PrsTile project={project} status={status} actions={actions} />
-        <GitTile project={project} status={status} actions={actions} />
-        <CostTile project={project} actions={actions} />
-      </div>
-      {status ? <TodoList project={project} status={status} actions={actions} /> : null}
+    <div className="flex min-h-0 min-w-0 flex-1 flex-col gap-lg overflow-y-auto px-md pb-md pt-xs" data-project-status="true">
+      <Counts project={project} status={status} actions={actions} />
+      {status ? <Strays project={project} status={status} actions={actions} /> : null}
+      {measures ? <DiskLine project={project} /> : null}
+      <Week project={project} actions={actions} />
+      <Suggestions project={project} actions={actions} />
     </div>
   );
 }
 
-/** One stacked bar of counts, each part its tone; nothing drawn while every part is 0. */
-function Bar({ parts }: { parts: { key: string; count: number; tone: string }[] }) {
-  if (parts.every((part) => part.count === 0)) return <span aria-hidden="true" className="block h-(--lens-bar-height) w-full rounded-xs bg-muted" />;
-  return (
-    <span aria-hidden="true" className="flex h-(--lens-bar-height) w-full gap-px overflow-hidden rounded-xs bg-muted">
-      {parts.filter((part) => part.count > 0).map((part) => <span key={part.key} className={part.tone} style={{ flexGrow: part.count, flexBasis: 0 }} data-tile-bar={part.key} />)}
-    </span>
-  );
+/** A quiet bar where a number goes before the core's first answer (B5). */
+function Pending({ className }: { className?: string }) {
+  return <span aria-hidden="true" className={cn("inline-block h-(--size-icon-sm) w-(--size-control) rounded-xs bg-muted align-middle", className)} data-count-pending="true" />;
 }
 
 /**
- * One 현황 tile (B27-B33): its name and where it goes, `닫기 ✕` while the
- * viewing column shows what it opened, its number or a quiet bar before the
- * core's first answer, then its bar and its words.
+ * The count line (B1-B5): 세션, PR and 워크트리, each opening where its list
+ * lives, and 놓친 일 while there is some. A 0 is drawn as 0.
  */
-function Tile({ name, kind, target, open, value, disabled, onPress, children }: {
-  name: string;
-  kind: string;
-  target: "sidebar" | "view";
-  open?: boolean;
-  /** Null before the core's first answer (B33). */
-  value: ReactNode | null;
-  disabled?: boolean;
-  onPress: () => void;
-  children?: ReactNode;
-}) {
-  const { t } = useInterfaceTranslation();
-  return (
-    // The press layer covers the tile; the text sits above it (`relative`, later in order) so a hover tints behind it.
-    <div className="relative flex min-w-0 flex-col gap-xs rounded-md border border-border p-sm" data-project-tile={kind} data-tile-open={open ? "true" : undefined}>
-      <button type="button" disabled={disabled} aria-pressed={target === "view" ? Boolean(open) : undefined} aria-label={name} className="absolute inset-0 rounded-md outline-none hover:bg-accent focus-visible:ring-1 focus-visible:ring-ring disabled:pointer-events-none" onClick={onPress} data-project-tile-press={kind} />
-      <span className="pointer-events-none relative flex min-w-0 items-center gap-xs text-micro text-muted-foreground">
-        <span className="min-w-0 flex-1 truncate">{name}</span>
-        {disabled ? null : <span className={cn("shrink-0", open && "text-foreground")} data-tile-target={open ? "close" : target}>{open ? t("projectTool.close") : t(target === "sidebar" ? "projectTool.tile.toSidebar" : "projectTool.tile.toView")}</span>}
-      </span>
-      <span className="pointer-events-none relative min-h-(--size-control-sm) text-subhead font-semibold tabular-nums text-foreground" data-tile-value={value === null ? "pending" : "ready"}>
-        {value === null ? <span className="block h-(--size-control-sm) w-1/2 rounded-sm bg-muted" /> : value}
-      </span>
-      <div className="pointer-events-none relative flex min-w-0 flex-col gap-xxs text-micro text-muted-foreground">{children}</div>
-    </div>
-  );
-}
-
-const SESSION_TONES = { turn: "bg-warning", working: "bg-agent-working", delegating: "bg-muted-foreground", resting: "bg-border" } as const;
-
-function SessionsTile({ project, actions }: { project: Workspace; actions: Actions }) {
-  const { t } = useInterfaceTranslation();
-  const buckets = project.agent_scope.buckets;
-  const missed = useShellStore((s) => missedCount(s.linkSummaries, project.id, summariesEnabled(s.rest?.status?.background_ai)));
-  const total = buckets.turn + buckets.working + buckets.delegating + buckets.resting;
-  const parts = (Object.keys(SESSION_TONES) as (keyof typeof SESSION_TONES)[]).map((key) => ({ key, count: buckets[key], tone: SESSION_TONES[key] }));
-  return (
-    <div className="relative min-w-0">
-      <Tile name={t("projectTool.tile.sessions")} kind="sessions" target="sidebar" value={total} onPress={() => actions.showProjectInSidebar("tasks", project.device_id, project.id)}>
-        <Bar parts={parts} />
-        <span className="truncate" data-tile-sessions={total}>{parts.filter((part) => part.count > 0).map((part) => t(`projectTool.sessions.${part.key}`, { count: part.count })).join(" · ")}</span>
-      </Tile>
-      {/* Above the tile's press, its own: the backlog's 놓친 일 for the project (B28). */}
-      {missed > 0 ? (
-        <Hint label={t("projectTool.sessions.missedHint")}>
-          <button type="button" className="absolute bottom-sm right-sm z-1 rounded-xs px-xxs text-micro font-medium text-warning outline-none hover:bg-accent focus-visible:ring-1 focus-visible:ring-ring" onClick={() => actions.openProjectMissed(project.device_id, project.id)} data-tile-missed={missed}>
-            {t("projectTool.sessions.missed", { count: missed })}
-          </button>
-        </Hint>
-      ) : null}
-    </div>
-  );
-}
-
-const PR_TONES = { mergeable: "bg-pr-mergeable", failed: "bg-pr-failed", review: "bg-pr-pending", checking: "bg-muted-foreground" } as const;
-
-function PrsTile({ project, status, actions }: { project: Workspace; status: ProjectStatus | null; actions: Actions }) {
+function Counts({ project, status, actions }: { project: Workspace; status: ProjectStatus | null; actions: Actions }) {
   const { t, i18n } = useInterfaceTranslation();
   const language = requireInterfaceLanguage(i18n.language);
+  const buckets = project.agent_scope.buckets;
+  const sessions = buckets.turn + buckets.working + buckets.delegating + buckets.resting;
+  const missed = useShellStore((s) => missedCount(s.linkSummaries, project.id, summariesEnabled(s.rest?.status?.background_ai)));
   const agents = useShellStore((s) => s.agents);
   const reading = useMemo(() => prListModel([{ workspace: project, agents, device: null }], null, Date.now()).reading, [project, agents]);
-  if (!hasPullRequests(project)) {
-    return <Tile name={t("projectTool.tile.prs")} kind="prs" target="sidebar" disabled value={<span className="text-caption font-normal text-muted-foreground" data-tile-prs="no-remote">{t("prs.noRemote")}</span>} onPress={() => {}} />;
-  }
-  const counts = status?.prs ?? null;
-  const pending = counts === null || reading.state === "reading";
-  const stale = reading.state === "stale";
-  const age = stale && reading.minutes !== null ? ageWords(language, reading.minutes * 60_000, t) : null;
-  return (
-    <Tile name={t("projectTool.tile.prs")} kind="prs" target="sidebar" onPress={() => actions.showProjectInSidebar("prs", project.device_id, project.id)}
-      value={pending ? null : (
-        <span className="flex items-center gap-xs" data-tile-prs={counts.open}>
-          {counts.open}
-          {stale ? <TriangleAlertIcon role="img" aria-label={t("projectTool.prs.lastRead", { age: age ?? "" })} className="size-(--size-icon-sm) text-warning" data-tile-prs-stale="true" /> : null}
-        </span>
-      )}>
-      {counts && !pending ? (
-        <>
-          <Bar parts={(Object.keys(PR_TONES) as (keyof typeof PR_TONES)[]).map((key) => ({ key, count: counts[key], tone: PR_TONES[key] }))} />
-          <span className="truncate">{(Object.keys(PR_TONES) as (keyof typeof PR_TONES)[]).filter((key) => counts[key] > 0).map((key) => t(`projectTool.prs.${key}`, { count: counts[key] })).join(" · ")}</span>
-          {age ? <span className="truncate text-warning" data-tile-prs-age="true">{t("projectTool.prs.lastRead", { age })}</span> : null}
-        </>
-      ) : null}
-    </Tile>
-  );
-}
-
-const DOT_TONES = { changed: "bg-warning", unpushed: "bg-agent-working", removable: "bg-pr-merged", clean: "bg-border" } as const;
-
-function GitTile({ project, status, actions }: { project: Workspace; status: ProjectStatus | null; actions: Actions }) {
-  const { t } = useInterfaceTranslation();
-  const item: DetailItem = { kind: "worktrees", workspace_id: project.id };
-  const open = useDetailOpen(item);
-  if (!project.is_git) {
-    return <Tile name={t("projectTool.tile.git")} kind="git" target="view" disabled value={<span className="text-caption font-normal text-muted-foreground">{t("projectTool.git.noGit")}</span>} onPress={() => {}} />;
-  }
-  const git = status?.git ?? null;
-  return (
-    <Tile name={t("projectTool.tile.git")} kind="git" target="view" open={open} onPress={() => actions.toggleDetailItem(item)}
-      value={git ? <span data-tile-git={git.worktrees}>{t("projectTool.git.worktrees", { count: git.worktrees })}</span> : null}>
-      {git ? (
-        <>
-          <span className="flex flex-wrap gap-xxs" data-tile-git-dots={git.dots.length}>
-            {git.dots.map((dot) => <span key={dot.checkout_id} aria-hidden="true" className={cn("size-(--size-status-mark) rounded-full", DOT_TONES[dot.state])} data-git-dot={dot.state} />)}
+  const worktrees: DetailItem = { kind: "worktrees", workspace_id: project.id };
+  const worktreesOpen = useDetailOpen(worktrees);
+  const prs = status?.prs.open ?? null;
+  const prPending = prs === null || reading.state === "reading";
+  const prAge = reading.state === "stale" && reading.minutes !== null ? ageWords(language, reading.minutes * 60_000, t) : null;
+  const items: ReactNode[] = [
+    <Button key="sessions" variant="text" size="inline" className="text-caption" onClick={() => actions.showProjectInSidebar("tasks", project.device_id, project.id)} data-project-count="sessions">
+      {t("projectTool.count.sessions")} <span className="tabular-nums text-foreground" data-count-value={sessions}>{sessions}</span>
+    </Button>,
+  ];
+  if (hasPullRequests(project)) {
+    items.push(
+      <Button key="prs" variant="text" size="inline" className="text-caption" onClick={() => actions.showProjectInSidebar("prs", project.device_id, project.id)} data-project-count="prs">
+        {t("projectTool.count.prs")} {prPending ? <Pending /> : <span className="tabular-nums text-foreground" data-count-value={prs}>{prs}</span>}
+        {reading.state === "stale" ? (
+          <span className="inline-flex items-center gap-xxs text-warning" data-count-stale="true">
+            <TriangleAlertIcon aria-hidden="true" className="size-(--size-icon-sm)" />
+            {prAge ? t("projectTool.prs.lastRead", { age: prAge }) : null}
           </span>
-          <span className="truncate">
-            {[git.behind ? t("projectTool.git.behind", { count: git.behind }) : null, git.changed ? t("projectTool.git.changed", { count: git.changed }) : null, git.unpushed ? t("projectTool.git.unpushed", { count: git.unpushed }) : null, git.removable ? t("projectTool.git.removable", { count: git.removable }) : null].filter(Boolean).join(" · ")}
-          </span>
-        </>
-      ) : null}
-    </Tile>
-  );
-}
-
-function CostTile({ project, actions }: { project: Workspace; actions: Actions }) {
-  const { t, i18n } = useInterfaceTranslation();
-  const language = requireInterfaceLanguage(i18n.language);
-  const item: DetailItem = { kind: "cost", workspace_id: project.id };
-  const open = useDetailOpen(item);
-  const local = useShellStore((s) => project.device_id === localDeviceId(s.rest));
-  const node = useShellStore((s) => s.usage?.nodes[0]);
-  const read = useMemo(() => projectCost(node, project.id), [node, project.id]);
-  if (!local) {
-    return <Tile name={t("projectTool.tile.cost")} kind="cost" target="view" disabled value={<span className="text-caption font-normal text-muted-foreground">{t("projectTool.cost.otherDevice")}</span>} onPress={() => {}} />;
+        ) : null}
+      </Button>,
+    );
   }
-  const cost = read.state === "ready" ? read.cost : null;
-  const heights = cost ? dayHeights(cost.days) : [];
-  const value = read.state === "pending" ? null
-    : read.state === "failed" ? <span role="img" aria-label={t("projectTool.cost.failed")} className="text-muted-foreground" data-tile-cost-failed="true">–</span>
-    : <span data-tile-cost={cost?.micro_usd ?? 0}>{cost && cost.micro_usd > 0 ? `${costPrefix(cost)} ${usd(cost.micro_usd, language)}` : usd(0, language)}</span>;
-  return (
-    <Tile name={t("projectTool.tile.cost")} kind="cost" target="view" open={open} onPress={() => actions.toggleDetailItem(item)} value={value}>
-      {cost ? (
-        <>
-          <span aria-hidden="true" className="flex h-(--size-control-sm) items-end gap-px">
-            {heights.map((height, index) => <span key={cost.days[index]!.date} className="flex-1 rounded-t-xs bg-primary" style={{ height: `${Math.max(height * 100, height > 0 ? 8 : 2)}%`, opacity: height > 0 ? 1 : 0.3 }} data-cost-day={cost.days[index]!.date} />)}
-          </span>
-          <span className="truncate">{agentShares(cost).map((row) => `${agentProductName(row.agent)} ${Math.round(row.share * 100)}%`).join(" · ")}</span>
-          {cost.unpriced_agents.length > 0 ? <span className="truncate" data-tile-cost-unpriced={cost.unpriced_agents.length}>{t("projectTool.cost.unpriced", { agents: cost.unpriced_agents.map((agent) => agentProductName(agent)).join(", ") })}</span> : null}
-        </>
-      ) : null}
-    </Tile>
-  );
-}
-
-/**
- * 할 일 (B34-B37): the agents waiting for the operator, new asks then 다시
- * 볼 것, then the operator's pull requests and reviews; five until `+N 더`.
- * A row says where it goes and does nothing else there (D-17).
- */
-function TodoList({ project, status, actions }: { project: Workspace; status: ProjectStatus; actions: Actions }) {
-  const { t } = useInterfaceTranslation();
-  const [open, setOpen] = useState(false);
-  const local = useShellStore((s) => s.agents);
-  const remote = useShellStore((s) => s.rest?.status?.remote);
-  const byPane = useMemo(() => agentsByPane(allAgents(local, remote)), [local, remote]);
-  const promoted = useShellStore((s) => {
-    const memory = s.memory?.project;
-    return memory?.workspace_id === project.id ? memory.rows.flatMap((row) => (row.promotion?.pr_number ? [row.promotion.pr_number] : [])).join(",") : "";
-  });
-  const fromMemory = useMemo(() => new Set(promoted ? promoted.split(",").map(Number) : []), [promoted]);
-  const view = todoView(status, open);
-  if (status.todo_total === 0) {
-    return (
-      <section className="flex min-w-0 flex-col gap-xs" aria-label={t("projectTool.todo")} data-project-todo="empty">
-        <SectionHead title={t("projectTool.todo")} count={0} />
-        <p className="px-xs text-caption text-subtle-foreground opacity-(--opacity-dimmed)">{t("projectTool.todo.empty")}</p>
-      </section>
+  if (project.is_git) {
+    const count = status?.git.worktrees ?? null;
+    items.push(
+      <Button key="worktrees" variant="text" size="inline" className={cn("text-caption", worktreesOpen && "text-foreground")} aria-pressed={worktreesOpen} onClick={() => actions.toggleDetailItem(worktrees)} data-project-count="worktrees">
+        {t("projectTool.count.worktrees")} {count === null ? <Pending /> : <span className="tabular-nums text-foreground" data-count-value={count}>{count}</span>}
+      </Button>,
+    );
+  }
+  if (missed > 0) {
+    items.push(
+      <Hint key="missed" label={t("projectTool.sessions.missedHint")}>
+        <Button variant="text" size="inline" className="text-caption text-warning hover:text-warning" onClick={() => actions.openProjectMissed(project.device_id, project.id)} data-project-count="missed" data-count-value={missed}>
+          {t("projectTool.sessions.missed", { count: missed })}
+        </Button>
+      </Hint>,
     );
   }
   return (
-    <section className="flex min-w-0 flex-col gap-xs" aria-label={t("projectTool.todo")} data-project-todo={status.todo_total}>
-      <SectionHead title={t("projectTool.todo")} count={status.todo_total} />
-      {view.asks.length + view.revisit.length > 0 ? (
-        <TodoGroup title={t("projectTool.todo.agents")} kind="agents">
-          {view.asks.map((row) => <AgentTodo key={`ask:${row.kind === "ask" ? row.pane_id : ""}`} row={row} agent={row.kind === "ask" ? byPane.get(row.pane_id) : undefined} actions={actions} />)}
-          {view.revisit.length > 0 ? <li className="px-xs pt-xs text-micro text-muted-foreground" data-project-todo-band="revisit">{t("projectTool.todo.revisit")}</li> : null}
-          {view.revisit.map((row) => <AgentTodo key={`revisit:${row.kind === "revisit" ? row.pane_id : ""}`} row={row} agent={row.kind === "revisit" ? byPane.get(row.pane_id) : undefined} actions={actions} />)}
-        </TodoGroup>
+    <div className="flex min-w-0 flex-wrap items-center gap-x-xs gap-y-xxs px-xs" data-project-counts="true">
+      {items.map((item, index) => (
+        <span key={index} className="inline-flex items-center gap-xs">
+          {index > 0 ? <span aria-hidden="true" className="text-caption text-muted-foreground">·</span> : null}
+          {item}
+        </span>
+      ))}
+    </div>
+  );
+}
+
+/** A part's head: one size above its rows and bolder, with its count. */
+function SectionHead({ title, count, children }: { title: string; count?: number; children?: ReactNode }) {
+  return (
+    <div className="flex min-w-0 items-baseline gap-xs px-xs pb-xxs">
+      <h3 className="text-body font-semibold text-foreground">{title}</h3>
+      {count !== undefined ? <span className="text-caption tabular-nums text-warning" data-project-section-count={count}>{count}</span> : null}
+      <span className="min-w-0 flex-1" />
+      {children}
+    </div>
+  );
+}
+
+/** How long a 놔두기's 되돌리기 stays (B15). */
+const UNDO_MS = 6_000;
+
+/**
+ * 흘린 것 (B6-B16): a row per worktree where work ended unfinished. Its
+ * press brings the session that last worked there forward and opens the
+ * evidence; hovered or focused, its age gives way to 마무리 맡기기 and
+ * 놔두기. With no row the part is not drawn (B8).
+ */
+function Strays({ project, status, actions }: { project: Workspace; status: ProjectStatus; actions: Actions }) {
+  const { t } = useInterfaceTranslation();
+  const [open, setOpen] = useState(false);
+  const [undo, setUndo] = useState<string | null>(null);
+  useEffect(() => {
+    if (!undo) return;
+    const timer = window.setTimeout(() => setUndo(null), UNDO_MS);
+    return () => window.clearTimeout(timer);
+  }, [undo]);
+  const strays = status.strays ?? [];
+  const total = status.strays_total ?? 0;
+  if (total === 0 && !undo) return null;
+  const view = strayView(strays, total, open);
+  return (
+    <section className="flex min-w-0 flex-col" aria-label={t("projectTool.strays")} data-project-strays={total}>
+      <SectionHead title={t("projectTool.strays")} count={total}>
+        <span className="truncate text-micro text-muted-foreground">{t("projectTool.strays.hint")}</span>
+      </SectionHead>
+      <ul className="flex min-w-0 flex-col">
+        {view.shown.map((stray) => <StrayRow key={stray.checkout_id} project={project} stray={stray} actions={actions} onDismiss={() => setUndo(stray.checkout_id)} />)}
+      </ul>
+      {undo ? (
+        <p className="flex items-center gap-xs px-xs py-xxs text-caption text-muted-foreground" data-stray-undo={undo}>
+          {t("projectTool.strays.dismissed")}
+          <Button variant="text-link" size="inline" onClick={() => { actions.restoreStray(project.id, undo); setUndo(null); }} data-stray-restore={undo}>{t("projectTool.strays.undo")}</Button>
+        </p>
       ) : null}
-      {view.prs.length > 0 ? (
-        <TodoGroup title={t("projectTool.todo.prs")} kind="prs">
-          {view.prs.map((row) => row.kind === "pr" ? <PrTodo key={`pr:${row.number}`} project={project} number={row.number} fromMemory={fromMemory.has(row.number)} actions={actions} /> : null)}
-        </TodoGroup>
-      ) : null}
-      {view.more > 0 ? (
-        <button type="button" className="self-start rounded-xs px-xs text-caption text-subtle-foreground outline-none hover:bg-accent focus-visible:ring-1 focus-visible:ring-ring" onClick={() => setOpen(true)} data-project-todo-more={view.more}>
-          {t("projectTool.todo.more", { count: view.more })}
-        </button>
-      ) : view.beyond.agents + view.beyond.prs > 0 ? (
-        // The rows past the core's cap, each kind to the sidebar list that holds it, narrowed to the project.
-        <div className="flex flex-wrap gap-xs" data-project-todo-beyond={view.beyond.agents + view.beyond.prs}>
-          {([["agents", "tasks"], ["prs", "prs"]] as const).map(([kind, lens]) => view.beyond[kind] > 0 ? (
-            <button key={kind} type="button" className="rounded-xs px-xs text-caption text-subtle-foreground outline-none hover:bg-accent focus-visible:ring-1 focus-visible:ring-ring" onClick={() => actions.showProjectInSidebar(lens, project.device_id, project.id)} data-project-todo-beyond-to={lens}>
-              {t(`projectTool.todo.beyond.${kind}`, { count: view.beyond[kind] })}
-            </button>
-          ) : null)}
-        </div>
+      {view.more > 0 && !open ? (
+        <Button variant="text" size="inline" className="self-start px-xs text-caption" onClick={() => setOpen(true)} data-project-strays-more={view.more}>
+          {t("projectTool.strays.more", { count: view.more })}
+        </Button>
+      ) : view.more > 0 ? (
+        // Past the core's cap the rest are counted, not listed (B8).
+        <span className="px-xs text-caption text-muted-foreground" data-project-strays-more={view.more}>{t("projectTool.strays.more", { count: view.more })}</span>
       ) : null}
     </section>
   );
 }
 
-/**
- * 할 일's head: one size above its rows and bolder, so the part reads before
- * its rows; a group inside the part keeps the small muted head, a third step.
- */
-function SectionHead({ title, count }: { title: string; count: number }) {
+const STRAY_ICON = { changes: FileDiffIcon, unpushed: ArrowUpIcon, ci: CircleXIcon } as const;
+const STRAY_TONE = { changes: "text-warning", unpushed: "text-agent-working", ci: "text-pr-failed" } as const;
+
+function StrayRow({ project, stray, actions, onDismiss }: { project: Workspace; stray: ProjectStray; actions: Actions; onDismiss: () => void }) {
+  const { t, i18n } = useInterfaceTranslation();
+  const language = requireInterfaceLanguage(i18n.language);
+  const [request, setRequest] = useState<string | null>(null);
+  const receipt = useShellStore((s) => (request ? s.rest?.status?.stray_hand_offs?.find((row) => row.request_id === request) ?? null : null));
+  // Once sent, the words go once (B12): the button stays off until the row
+  // leaves as the agent starts, or the hand-off fails. A receipt the core let
+  // go after `sent` still reads sent. A row that comes back (B14) is a new
+  // row, keyed by its checkout, and starts over.
+  const [sent, setSent] = useState(false);
+  useEffect(() => {
+    if (receipt?.state === "sent") setSent(true);
+    if (receipt?.state === "failed") {
+      setSent(false);
+      setRequest(null);
+    }
+  }, [receipt?.state]);
+  const sending = request !== null && !sent && (receipt === null || receipt.state === "sending");
+  const handedOff = request !== null && (sending || sent);
+  const parts = strayParts(stray);
+  const first = parts[0]!;
+  const Icon = STRAY_ICON[first.kind];
+  const name = stray.name ?? stray.branch ?? stray.checkout_id;
+  const words = parts.map((part) => part.kind === "ci" ? t("projectTool.strays.ci", { number: String(part.number) }) : t(`projectTool.strays.${part.kind}`, { count: part.count })).join(" · ");
+  const age = stray.since_unix_ms ? ageWords(language, Date.now() - stray.since_unix_ms, t) : null;
+  const press = () => {
+    if (stray.pane_id) actions.openAgent(stray.pane_id);
+    if (stray.failed_pr != null && stray.changed_files === 0 && stray.unpushed === 0) actions.openPrCard(project.id, stray.failed_pr, stray.checkout_id);
+    else actions.openDetail({ kind: "remains", workspace_id: project.id, checkout_id: stray.checkout_id });
+  };
   return (
-    <div className="flex min-w-0 items-center gap-xs px-xs pb-xxs">
-      <h3 className="text-body font-semibold text-foreground">{title}</h3>
-      <span className="text-caption tabular-nums text-subtle-foreground" data-project-section-count={count}>{count}</span>
-    </div>
-  );
-}
-
-function TodoGroup({ title, kind, children }: { title: string; kind: string; children: ReactNode }) {
-  return (
-    <div className="flex min-w-0 flex-col" data-project-todo-group={kind}>
-      <h4 className="px-xs pb-xxs text-micro font-medium text-subtle-foreground">{title}</h4>
-      <ul className="flex min-w-0 flex-col">{children}</ul>
-    </div>
-  );
-}
-
-/** A row's right side: where it goes (B36), or `닫기 ✕` while the viewing column shows it (B32). */
-function Tail({ children, open }: { children: ReactNode; open?: boolean }) {
-  return <span className={cn("shrink-0 text-micro", open ? "text-foreground" : "text-muted-foreground")} data-todo-tail={open ? "close" : "go"}>{children}</span>;
-}
-
-const ROW = "flex w-full min-w-0 items-center gap-xs rounded-xs px-xs py-xs text-left outline-none hover:bg-accent focus-visible:ring-1 focus-visible:ring-ring";
-
-/** An ask or a 다시 볼 것 (B34): the agent's mark, name and what it asks; the press brings its pane and the keyboard. */
-function AgentTodo({ row, agent, actions }: { row: ProjectTodo; agent: AgentRow | undefined; actions: Actions }) {
-  const { t } = useInterfaceTranslation();
-  if (row.kind === "pr") return null;
-  const words = row.kind === "revisit"
-    ? t("projectTool.todo.starred")
-    : (agent ? (rowLine(agent)?.text ?? markWords(t, agent)) : t("projectTool.todo.ask"));
-  return (
-    <li className="min-w-0" data-project-todo-row={row.kind} data-todo-pane={row.pane_id}>
-      <button type="button" className={ROW} onClick={() => actions.openAgent(row.pane_id)}>
-        <StatusMark mark={agent?.mark ?? null} />
-        <span className="min-w-0 flex-1 truncate text-caption">
-          <span className="font-medium text-foreground">{agent?.identity_label ?? t("projectTool.todo.unknownAgent")}</span>
-          <span className="text-muted-foreground"> · {words}</span>
-        </span>
-        <Tail>{t("projectTool.todo.toPane")}</Tail>
-      </button>
-    </li>
-  );
-}
-
-/** A Needs You pull request (B35): its mark, title and reason; the press opens its card in the viewing column, or folds it. */
-function PrTodo({ project, number, fromMemory, actions }: { project: Workspace; number: number; fromMemory: boolean; actions: Actions }) {
-  const { t } = useInterfaceTranslation();
-  const item: DetailItem = { kind: "pull_request", workspace_id: project.id, number };
-  const open = useDetailOpen(item);
-  const pull = project.pull_requests?.find((row) => row.number === number);
-  const board = project.agent_scope.prs.rows.find((row) => row.number === number);
-  return (
-    <li className="min-w-0" data-project-todo-row="pr" data-todo-pr={number}>
-      <button type="button" className={ROW} aria-pressed={open} onClick={() => (open ? actions.toggleDetailItem(item) : actions.openPrCard(project.id, number))}>
-        {pull ? <PrMark state={pull.state} number={number} compact /> : <span className="shrink-0 text-micro text-muted-foreground">#{number}</span>}
+    <li className="group relative min-w-0 rounded-xs" data-stray-row={stray.checkout_id}>
+      <RowOverlayButton aria-label={t("projectTool.strays.open", { name })} onClick={press} data-stray-open={stray.checkout_id} />
+      <span className="pointer-events-none relative flex min-h-(--size-control) min-w-0 items-center gap-xs px-xs py-xs">
+        <Icon aria-hidden="true" className={cn("size-(--size-icon-sm) shrink-0", STRAY_TONE[first.kind])} />
         <span className="flex min-w-0 flex-1 flex-col">
-          <span className="truncate text-caption text-foreground">{pull?.title ?? `#${number}`}</span>
-          {board ? <ReasonLine reason={board.reason} group={board.group} /> : null}
+          <span className="truncate text-caption text-foreground" title={name}>{name}</span>
+          <span className="truncate text-micro text-muted-foreground" title={words}>{words}</span>
         </span>
-        {fromMemory ? <span className="shrink-0 text-micro text-subtle-foreground" data-todo-memory={number}>◆ {t("projectTool.todo.fromMemory")}</span> : null}
-        <Tail open={open}>{open ? t("projectTool.close") : t("projectTool.todo.toView")}</Tail>
-      </button>
+        <span className={cn("shrink-0 text-micro text-muted-foreground", !handedOff && "group-focus-within:hidden group-hover:hidden")} data-stray-age={age ?? ""}>{handedOff ? null : age}</span>
+        <span className={cn("pointer-events-auto shrink-0 items-center gap-xxs", handedOff ? "flex" : "hidden group-focus-within:flex group-hover:flex")}>
+          <Button size="sm" variant="secondary" disabled={handedOff} onClick={() => { const id = `stray-${crypto.randomUUID()}`; setRequest(id); actions.handOffStray(project.id, stray.checkout_id, id); }} data-stray-hand-off={stray.checkout_id}>
+            {sending ? <LoaderCircleIcon role="status" aria-label={t("projectTool.strays.sending")} className="animate-spin" /> : null}
+            {t("projectTool.strays.handOff")}
+          </Button>
+          {sending ? null : (
+            <Button size="sm" variant="ghost" onClick={() => { actions.dismissStray(project.id, stray.checkout_id); onDismiss(); }} data-stray-dismiss={stray.checkout_id}>
+              {t("projectTool.strays.dismiss")}
+            </Button>
+          )}
+        </span>
+      </span>
     </li>
+  );
+}
+
+/**
+ * The disk line (B18, B19): the project's layers in one bar, its size, what
+ * the merged worktrees would free and `정리`, which opens the cleanup sheet.
+ * While measured it is a skeleton; a project measured only in part is dim
+ * and has no size.
+ */
+function DiskLine({ project }: { project: Workspace }) {
+  const { t, i18n } = useInterfaceTranslation();
+  const language = requireInterfaceLanguage(i18n.language);
+  const lines = layerLines(project, t);
+  const size = entranceBytes(project);
+  const removable = removableDisk(project);
+  const measuring = project.disk?.measuring === true || (!project.disk?.layers && !project.disk?.unavailable_reason);
+  if (measuring && !lines) {
+    return <div role="status" aria-label={t("overviewProjects.measuring")} className="mx-xs h-(--size-control) rounded-sm bg-muted" data-project-disk="measuring" />;
+  }
+  const partial = !size || size.partial;
+  return (
+    <section className={cn("flex min-w-0 items-center gap-sm rounded-sm bg-card px-sm py-xs", partial && "opacity-(--opacity-dimmed)")} aria-label={t("projectTool.disk")} data-project-disk={partial ? "partial" : "measured"}>
+      <span className="flex min-w-0 flex-1 flex-col gap-xxs">
+        <span aria-hidden="true" className="flex h-(--lens-bar-height) w-full overflow-hidden rounded-xs bg-muted">
+          {(lines ?? []).map((line) => <span key={line.key} className={LAYER_DOT[line.key]} style={{ flexGrow: line.bytes, flexBasis: 0 }} />)}
+        </span>
+        <span className="truncate text-micro text-muted-foreground">
+          {[t("projectTool.disk"), size && !size.partial ? formatBytes(language, size.bytes) : null, removable.count > 0 ? t("projectTool.disk.reclaimable", { count: removable.count, size: formatBytes(language, removable.bytes) }) : null].filter(Boolean).join(" · ")}
+        </span>
+      </span>
+      {removable.count > 0 ? <Button size="sm" variant="secondary" onClick={() => openDiskCleanup(project.id, "done")} data-project-disk-cleanup="true">{t("projectTool.disk.cleanup")}</Button> : null}
+    </section>
+  );
+}
+
+/**
+ * 최근 7일 (B21-B25): merged pull requests, what one cost and took, the
+ * missions, the week's cost with each day's merges, the tasks that left
+ * nothing, and the three costliest tasks. A project on a connected device
+ * is counted on that machine only (B23).
+ */
+function Week({ project, actions }: { project: Workspace; actions: Actions }) {
+  const { t, i18n } = useInterfaceTranslation();
+  const language = requireInterfaceLanguage(i18n.language);
+  const local = useShellStore((s) => project.device_id === localDeviceId(s.rest));
+  const node = useShellStore((s) => s.usage?.nodes[0]);
+  const read = useMemo(() => projectCost(node, project.id), [node, project.id]);
+  const agents = useShellStore((s) => allAgents(s.agents, s.rest?.status?.remote));
+  const links = useShellStore((s) => s.linkSummaries);
+  const summaries = useShellStore((s) => summariesEnabled(s.rest?.status?.background_ai));
+  const openTable = (filter: TaskFilter, task?: string) => {
+    useUiStore.getState().showTaskTable(filter, task ?? null);
+    actions.openDetail({ kind: "cost", workspace_id: project.id });
+  };
+  if (!local) {
+    return (
+      <section className="flex min-w-0 flex-col" data-project-week="other-device">
+        <SectionHead title={t("projectTool.week")} />
+        <p className="px-xs text-caption text-muted-foreground">{t("projectTool.cost.otherDevice")}</p>
+      </section>
+    );
+  }
+  if (read.state === "pending") return <div role="status" aria-label={t("projectTool.cost.reading")} className="mx-xs h-(--size-control-lg) rounded-sm bg-muted" data-project-week="pending" />;
+  if (read.state === "failed") {
+    return (
+      <section className="flex min-w-0 flex-col" data-project-week="failed">
+        <SectionHead title={t("projectTool.week")} />
+        <p className="px-xs text-caption text-muted-foreground"><span role="img" aria-label={t("projectTool.cost.failed")}>–</span></p>
+      </section>
+    );
+  }
+  const cost = read.cost;
+  // A week with no task, no cost, no mission and no pull request draws its shape faint under what fills it, never a 0 or a $0.00 (B21);
+  // the pull request counts are the project's own, so a week a person merged in is not empty.
+  if (!cost || (cost.tasks_total === 0 && cost.micro_usd === 0 && cost.week.missions === 0 && cost.week.merged_prs === 0 && cost.week.open_prs === 0)) return <WeekPreview project={project} actions={actions} />;
+  const week = cost.week;
+  const total = cost.micro_usd > 0 ? `${costPrefix(cost)} ${usd(cost.micro_usd, language)}` : usd(0, language);
+  const heights = dayHeights(cost.days);
+  const costly = cost.tasks.slice(0, COSTLY_SHOWN);
+  const perPr = week.per_pr;
+  return (
+    <>
+      <section className="flex min-w-0 flex-col gap-xs" aria-label={t("projectTool.week")} data-project-week={project.id}>
+        <SectionHead title={t("projectTool.week")} />
+        <div className="grid grid-cols-2 gap-xs px-xs">
+          <Figure label={t("projectTool.week.merged")} value={String(week.merged_prs)} note={t("projectTool.week.open", { count: week.open_prs })} kind="merged" />
+          {perPr ? <Figure label={t("projectTool.week.perPrCost")} value={`${perPr.unpriced ? "≥ " : ""}${usd(perPr.micro_usd, language)}`} note={t("projectTool.week.tokens", { tokens: tokenWords(language, perPr.tokens) })} kind="per-pr-cost" /> : <Figure label={t("projectTool.week.perPrCost")} empty={t("projectTool.week.whenMerged")} kind="per-pr-cost" />}
+          {perPr ? <Figure label={t("projectTool.week.perPrTime")} value={durationWords(language, perPr.elapsed_ms)} note={t("projectTool.week.worked", { time: durationWords(language, perPr.worked_ms) })} kind="per-pr-time" /> : <Figure label={t("projectTool.week.perPrTime")} empty={t("projectTool.week.whenMerged")} kind="per-pr-time" />}
+          {week.missions > 0 ? <Figure label={t("projectTool.week.missions")} value={String(week.missions)} note={week.mission_reopened > 0 ? t("projectTool.week.reopened", { count: week.mission_reopened }) : null} kind="missions" /> : <Figure label={t("projectTool.week.missions")} empty={t("projectTool.week.noMission")} kind="missions" />}
+        </div>
+        <div className="flex min-w-0 flex-col gap-xxs px-xs">
+          <span className="flex min-w-0 items-baseline gap-xs text-caption text-muted-foreground">
+            {t("projectTool.week.cost")} <span className="font-semibold tabular-nums text-foreground" data-week-cost={cost.micro_usd}>{total}</span>
+            {read.failed ? <span className="text-micro">{t("projectTool.cost.failedKept")}</span> : null}
+            <span className="min-w-0 flex-1" />
+            <span className="flex shrink-0 items-center gap-sm text-micro text-subtle-foreground" data-week-legend="true">
+              <span className="inline-flex items-center gap-xxs"><span aria-hidden="true" className="size-(--size-legend-mark) rounded-xs bg-primary" />{t("projectTool.week.cost")}</span>
+              <span className="inline-flex items-center gap-xxs"><span aria-hidden="true" className="size-(--size-legend-mark) rounded-full bg-pr-merged" />{t("projectTool.week.legendMerged")}</span>
+            </span>
+          </span>
+          <DayBars days={cost.days} heights={heights} merged={week.merged_by_day} />
+          {cost.unpriced_agents.length > 0 ? <span className="truncate text-micro text-muted-foreground" data-week-unpriced={cost.unpriced_agents.length}>{t("projectTool.cost.unpriced", { agents: cost.unpriced_agents.map((agent) => agentProductName(agent)).join(", ") })}</span> : null}
+        </div>
+        {week.no_result_tasks > 0 ? (
+          <Button variant="text" size="inline" className="mx-xs mt-xs flex min-w-0 items-center gap-xs text-caption text-muted-foreground" onClick={() => openTable("none")} data-week-no-result={week.no_result_tasks}>
+            <span className="truncate">{t("projectTool.week.noResult")}</span>
+            <span className="shrink-0 tabular-nums text-warning">{t("projectTool.week.noResultValue", { count: week.no_result_tasks, cost: `${week.no_result_unpriced ? "≥ " : ""}${usd(week.no_result_micro_usd, language)}` })}</span>
+            <span className="min-w-0 flex-1" />
+            <ChevronRightIcon aria-hidden="true" className="size-(--size-icon-sm) shrink-0 text-subtle-foreground" />
+          </Button>
+        ) : null}
+      </section>
+      {costly.length > 0 ? (
+        <section className="flex min-w-0 flex-col" aria-label={t("projectTool.costly")} data-project-costly={costly.length}>
+          <SectionHead title={t("projectTool.costly")}>
+            <Button variant="text" size="inline" className="text-caption" onClick={() => openTable("all")} data-costly-all="true">{t("projectTool.costly.all")}</Button>
+          </SectionHead>
+          <ul className="flex min-w-0 flex-col">
+            {costly.map((task) => <CostlyRow key={task.id} task={task} name={taskName(task, agents, links, project.id, summaries) ?? t("projectTool.cost.session", { agent: agentProductName(task.root.agent) })} projectId={project.id} onPress={() => openTable("all", task.id)} />)}
+          </ul>
+        </section>
+      ) : null}
+    </>
+  );
+}
+
+/**
+ * The week's bars, oldest first with today last (B21): a bar's height is its
+ * day's cost against the week's largest, a dot over it says something merged
+ * that day, and hovered or focused it names the day, its cost and merges.
+ */
+function DayBars({ days, heights, merged }: { days: readonly { date: string; micro_usd: number }[]; heights: readonly number[]; merged: readonly number[] }) {
+  const { t, i18n } = useInterfaceTranslation();
+  const language = requireInterfaceLanguage(i18n.language);
+  const names = days.map((day, index) => (index === days.length - 1 ? t("projectTool.week.today") : weekdayWords(language, day.date)));
+  return (
+    <div className="flex min-w-0 flex-col gap-xxs" data-week-days={days.length}>
+      <span className="flex h-(--size-control-sm) items-end gap-px">
+        {days.map((day, index) => {
+          const height = heights[index] ?? 0;
+          const count = merged[index] ?? 0;
+          const label = t("projectTool.week.dayHint", { day: names[index]!, cost: usd(day.micro_usd, language), count });
+          return (
+            <Hint key={day.date} label={label}>
+              <span role="img" tabIndex={0} className="flex h-full min-w-0 flex-1 flex-col items-center justify-end gap-px rounded-xs outline-none focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-ring" data-cost-day={day.date} data-day-merged={count}>
+                {count > 0 ? <span className="size-(--lens-bar-height) shrink-0 rounded-full bg-pr-merged" data-day-merge-dot="true" /> : null}
+                <span className="w-full shrink-0 rounded-t-xs bg-primary" style={{ height: `${Math.max(height * 80, height > 0 ? 8 : 2)}%`, opacity: height > 0 ? 1 : 0.3 }} />
+              </span>
+            </Hint>
+          );
+        })}
+      </span>
+      <span aria-hidden="true" className="flex gap-px text-micro text-subtle-foreground">
+        {names.map((name, index) => <span key={days[index]!.date} className="min-w-0 flex-1 truncate text-center">{name}</span>)}
+      </span>
+    </div>
+  );
+}
+
+/** A day's short weekday name, read as the calendar date it is (`금`). */
+function weekdayWords(language: string, date: string): string {
+  return new Intl.DateTimeFormat(language, { weekday: "short", timeZone: "UTC" }).format(new Date(`${date}T00:00:00Z`));
+}
+
+/** The decorative heights of the empty week's faint bars; never a reading. */
+const PREVIEW_DAYS = [30, 55, 20, 75, 45, 95, 40] as const;
+
+/**
+ * 최근 7일 with nothing in it (B21): the week and the costly tasks drawn
+ * faint and colourless, with no number in them, under what fills them and a
+ * start. Only the words and the button are read or pressed.
+ */
+function WeekPreview({ project, actions }: { project: Workspace; actions: Actions }) {
+  const { t } = useInterfaceTranslation();
+  const labels = [t("projectTool.week.merged"), t("projectTool.week.perPrCost"), t("projectTool.week.perPrTime"), t("projectTool.week.missions")];
+  return (
+    <section className="relative min-w-0" aria-label={t("projectTool.week")} data-project-week="empty">
+      <div aria-hidden="true" className="pointer-events-none flex min-w-0 flex-col gap-xs opacity-(--opacity-preview) saturate-25 select-none" data-week-preview="true">
+        <SectionHead title={t("projectTool.week")} />
+        <div className="grid grid-cols-2 gap-xs px-xs">
+          {labels.map((label) => (
+            <span key={label} className="flex min-w-0 flex-col gap-xxs rounded-sm bg-muted px-sm py-xs">
+              <span className="truncate text-micro text-muted-foreground">{label}</span>
+              <span className="h-(--size-icon-sm) w-2/5 rounded-xs bg-muted-foreground" />
+            </span>
+          ))}
+        </div>
+        <span className="flex h-(--size-control-sm) items-end gap-px px-xs">
+          {PREVIEW_DAYS.map((height, index) => <span key={index} className="min-w-0 flex-1 rounded-t-xs bg-primary" style={{ height: `${height}%` }} />)}
+        </span>
+        <SectionHead title={t("projectTool.costly")} />
+        {[100, 70, 55].map((width) => (
+          <span key={width} className="flex items-center gap-xs px-xs py-xs">
+            <span className="h-(--size-legend-mark) w-(--size-control) shrink-0 rounded-xs bg-muted-foreground" />
+            <span className="min-w-0 flex-1"><span className="block h-(--size-legend-mark) rounded-xs bg-muted-foreground" style={{ width: `${width}%` }} /></span>
+            <span className="h-(--size-legend-mark) w-(--size-control) shrink-0 rounded-xs bg-muted-foreground" />
+          </span>
+        ))}
+      </div>
+      <div className="absolute inset-0 flex flex-col items-center justify-center gap-xs bg-radial from-card from-60% to-transparent px-md text-center">
+        <p className="text-body font-semibold text-foreground">{t("projectTool.week.emptyTitle")}</p>
+        <p className="text-caption text-muted-foreground">{t("projectTool.week.emptyBody")}</p>
+        <Button size="sm" variant="secondary" className="mt-xxs" onClick={() => actions.openStartPanel(project.id)} data-week-start={project.id}>{t("projectTool.week.start")}</Button>
+      </div>
+    </section>
+  );
+}
+
+/** A 최근 7일 figure: its value and note, or, with nothing yet, what fills it, dimmed (B21). */
+function Figure({ label, kind, ...shown }: { label: string; kind: string } & ({ value: string; note: string | null } | { empty: string })) {
+  if ("empty" in shown) {
+    return (
+      <span className="flex min-w-0 flex-col rounded-sm bg-card px-sm py-xs opacity-(--opacity-secondary)" data-week-figure={kind} data-week-figure-empty="true">
+        <span className="truncate text-micro text-muted-foreground">{label}</span>
+        <span className="truncate py-xxs text-caption text-subtle-foreground">{shown.empty}</span>
+      </span>
+    );
+  }
+  return (
+    <span className="flex min-w-0 flex-col rounded-sm bg-card px-sm py-xs" data-week-figure={kind}>
+      <span className="truncate text-micro text-muted-foreground">{label}</span>
+      <span className="truncate text-subhead font-semibold tabular-nums text-foreground">{shown.value}</span>
+      {shown.note ? <span className="truncate text-micro text-muted-foreground">{shown.note}</span> : null}
+    </span>
+  );
+}
+
+/** A costly task's row (B25): its result in a fixed column, name, children, cost and how long it took; the press opens the table on it. */
+function CostlyRow({ task, name, projectId, onPress }: { task: TaskCost; name: string; projectId: string; onPress: () => void }) {
+  const { t, i18n } = useInterfaceTranslation();
+  const language = requireInterfaceLanguage(i18n.language);
+  const children = Math.max(0, task.sessions_total - 1);
+  return (
+    <li className="relative min-w-0 rounded-xs" data-costly-task={task.id}>
+      <RowOverlayButton aria-label={children > 0 ? `${name} · ${t("projectTool.task.childrenHint", { count: children })}` : name} onClick={onPress} />
+      <span className="pointer-events-none relative flex min-w-0 items-center gap-xs px-xs py-xs">
+        <span className="flex w-(--size-task-column) shrink-0 items-center overflow-hidden" data-costly-result="true"><TaskResultMark task={task} projectId={projectId} numbered /></span>
+        <span className="min-w-0 flex-1 truncate text-caption text-foreground" title={name}>{name}</span>
+        {children > 0 ? <span aria-hidden="true" className="shrink-0 text-micro tabular-nums text-muted-foreground">{t("projectTool.task.children", { count: children })}</span> : null}
+        <span className="shrink-0 text-right font-mono text-micro tabular-nums text-foreground">{task.unpriced ? "≥ " : ""}{usd(task.micro_usd, language)}</span>
+        <span className="min-w-(--size-control) shrink-0 whitespace-nowrap text-right text-micro tabular-nums text-muted-foreground">{durationWords(language, task.elapsed_ms)}</span>
+      </span>
+    </li>
+  );
+}
+
+/** A task's result as its mark (B30): its pull request's mark, with its number where `numbered`, or the kind's word. */
+export function TaskResultMark({ task, projectId, numbered = false }: { task: TaskCost; projectId: string; numbered?: boolean }) {
+  const { t } = useInterfaceTranslation();
+  const result = task.result;
+  // An open pull request draws the state the PR list gives it.
+  const openState = useShellStore((s) => result.kind === "pr" && result.state === "open"
+    ? catalogWorkspaces(s.rest).find((row) => row.id === projectId)?.pull_requests?.find((row) => row.number === result.number)?.state ?? null
+    : null);
+  if (task.kind === "mission" && task.mission) return <span className="min-w-0 truncate text-micro text-muted-foreground" data-task-result="mission">{t("projectTool.task.missionPrs", { count: task.mission.prs, merged: task.mission.merged })}</span>;
+  if (result.kind === "pr" && result.number != null) return <PrMark state={result.state === "merged" ? "merged" : result.state === "closed" ? "closed" : (openState ?? "pending")} number={result.number} compact={!numbered} className={numbered ? "text-micro" : undefined} />;
+  return <span className={cn("min-w-0 truncate text-micro", result.kind === "working" ? "text-agent-working" : result.kind === "none" ? "text-warning" : "text-muted-foreground")} data-task-result={result.kind}>{t(`projectTool.task.result.${result.kind}`)}</span>;
+}
+
+/** Hide AI 제안 N (B26): one row under a rule at the column's end, opening the Hide AI tool's 제안 tab; none while Hide AI is off or has nothing. */
+function Suggestions({ project, actions }: { project: Workspace; actions: Actions }) {
+  const { t } = useInterfaceTranslation();
+  const count = useShellStore((s) => {
+    const opened = s.suggestions?.project;
+    return opened && opened.workspace_id === project.id ? opened.counts.suggestions : 0;
+  });
+  if (count === 0) return null;
+  return (
+    <div className="border-t border-border pt-sm">
+      <Button variant="text" size="inline" className="flex w-full min-w-0 items-center gap-xs px-xs text-caption text-muted-foreground" onClick={() => actions.openSuggestions(project.device_id, project.id)} data-project-suggestions={count}>
+        <span className="truncate">{t("projectTool.suggestions")}</span>
+        <span className="font-medium tabular-nums text-foreground">{count}</span>
+        <span className="min-w-0 flex-1" />
+        <ChevronRightIcon aria-hidden="true" className="size-(--size-icon-sm) shrink-0 text-subtle-foreground" />
+      </Button>
+    </div>
   );
 }

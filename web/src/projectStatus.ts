@@ -1,18 +1,22 @@
-// The Project tool's rules (PRD lane-two-columns D-14..D-19, B26-B39): which
-// project it is about, how its 할 일 is cut, and how its cost reads. The core
-// derives every count (`agent_state/tally/project_status.rs`,
-// `usage_ledger/project_cost.rs`); these functions only shape what it sent,
-// so they are testable without a page.
+// The Project tool's rules (PRD project-panel-results D-03..D-16, B1-B37):
+// which project it is about, how its 흘린 것 and tasks are cut and named,
+// and how its cost reads. The core derives every row and number
+// (`agent_state/tally/project_status.rs`, `usage_ledger/project_cost.rs`);
+// these functions only shape what it sent, so they are testable without a
+// page.
 
-import type { ProjectStatus, ProjectTodo } from "./agentScope";
-import type { NodeUsage, ProjectCost } from "./generated/hided-ws";
+import type { ProjectStray } from "./agentScope";
+import type { NodeUsage, ProjectCost, TaskCost } from "./generated/hided-ws";
+import { formatUnit } from "./i18n/format";
 import type { InterfaceLanguage } from "./i18n/locale";
-import { openMissedWork } from "./sessionWork";
-import { catalogWorkspaces, frontCheckout, type LinkSummaries, type SnapshotRest, type Workspace } from "./snapshot";
+import { openMissedWork, recordTitle } from "./sessionWork";
+import { catalogWorkspaces, frontCheckout, type AgentRow, type LinkSummaries, type SnapshotRest, type Workspace } from "./snapshot";
 
-/** The 할 일 rows shown before `+N 더` (B37). */
-export const TODO_SHOWN = 5;
+/** The 흘린 것 rows shown before `+N 더` (B8). */
+export const STRAYS_SHOWN = 5;
 
+/** The tasks the panel lists as the costliest (B25). */
+export const COSTLY_SHOWN = 3;
 
 /** The Project of the checkout in front, or null at Home or in a device's Home folder. */
 export function frontProject(rest: SnapshotRest | null): Workspace | null {
@@ -22,48 +26,39 @@ export function frontProject(rest: SnapshotRest | null): Workspace | null {
   return project && !project.is_home ? project : null;
 }
 
-export type TodoView = {
-  /** New asks, in the core's order. */
-  asks: ProjectTodo[];
-  /** 다시 볼 것, under the asks in the same group. */
-  revisit: ProjectTodo[];
-  /** The operator's pull requests and reviews. */
-  prs: ProjectTodo[];
-  /** Rows the core sent past the cut, `+N 더`; 0 when every sent row shows. */
-  more: number;
-  /** Rows past the core's cap that it did not send, by where they are: agents' rows in the sidebar's 태스크, pull requests in its PR list. */
-  beyond: { agents: number; prs: number };
-};
-
-/**
- * The 할 일 the list draws (B34, B35, B37): the core's rows in their order,
- * the first five until `open`, the rest of the sent rows counted, and apart
- * from them the rows `todo_total` counts past the core's cap.
- */
-export function todoView(status: ProjectStatus, open: boolean): TodoView {
-  const shown = open ? status.todo : status.todo.slice(0, TODO_SHOWN);
-  return {
-    asks: shown.filter((row) => row.kind === "ask"),
-    revisit: shown.filter((row) => row.kind === "revisit"),
-    prs: shown.filter((row) => row.kind === "pr"),
-    more: open ? 0 : status.todo.length - shown.length,
-    beyond: {
-      agents: Math.max(0, status.todo_agents - status.todo.filter((row) => row.kind !== "pr").length),
-      prs: Math.max(0, status.todo_total - status.todo_agents - status.todo.filter((row) => row.kind === "pr").length),
-    },
-  };
+/** The 흘린 것 rows drawn (B8): five until `open`, and how many the core sent past them or left past its cap. */
+export function strayView(strays: readonly ProjectStray[], total: number, open: boolean): { shown: ProjectStray[]; more: number } {
+  const shown = open ? [...strays] : strays.slice(0, STRAYS_SHOWN);
+  return { shown, more: total - shown.length };
 }
 
-/** The open missed work of a project (B28), none while Hide AI's summaries are off. */
+/** What a 흘린 것 row says is left (B6), in its order: changes, then commits, then the failed pull request. */
+export type StrayPart = { kind: "changes"; count: number } | { kind: "unpushed"; count: number } | { kind: "ci"; number: number };
+
+export function strayParts(stray: ProjectStray): StrayPart[] {
+  const parts: StrayPart[] = [];
+  if (stray.changed_files > 0) parts.push({ kind: "changes", count: stray.changed_files });
+  if (stray.unpushed > 0) parts.push({ kind: "unpushed", count: stray.unpushed });
+  if (stray.failed_pr != null) parts.push({ kind: "ci", number: stray.failed_pr });
+  return parts;
+}
+
+/** The project's worktrees the disk line offers to clean (B18): the ones whose mark says they can go, and their measured size. */
+export function removableDisk(project: Workspace): { count: number; bytes: number } {
+  const rows = project.checkouts.filter((checkout) => checkout.agent_scope.git_mark === "removable");
+  return { count: rows.length, bytes: rows.reduce((sum, checkout) => sum + (checkout.worktree?.disk?.total_bytes ?? 0), 0) };
+}
+
+/** The open missed work of a project (B4), none while Hide AI's summaries are off. */
 export function missedCount(links: LinkSummaries | null, projectId: string, enabled: boolean): number {
   return enabled ? openMissedWork(links?.projects[projectId]?.work ?? []).length : 0;
 }
 
 /**
- * A project's cost as the core's usage frame carries it (B31, B33): `pending`
+ * A project's cost as the core's usage frame carries it (B23): `pending`
  * before the core's first build, `failed` when no build has succeeded, or
- * `ready` with the cost (null when no priced call ran there in seven days)
- * and whether the latest build failed, the last one kept.
+ * `ready` with the cost (null when no call ran there in seven days) and
+ * whether the latest build failed, the last one kept.
  */
 export type CostRead = { state: "pending" } | { state: "failed" } | { state: "ready"; cost: ProjectCost | null; failed: boolean };
 
@@ -82,14 +77,71 @@ export function costPrefix(cost: Pick<ProjectCost, "partial" | "waiting" | "limi
   return cost.partial || cost.waiting || cost.limited ? "≥" : "≈";
 }
 
-/** Each priced agent's share of the total, largest first (B31). */
-export function agentShares(cost: Pick<ProjectCost, "agents" | "micro_usd">): { agent: string; share: number }[] {
-  if (cost.micro_usd === 0) return [];
-  return cost.agents.map((row) => ({ agent: row.agent, share: row.micro_usd / cost.micro_usd }));
-}
-
 /** A bar's height in the day chart: its share of the largest day, 0 for none. */
 export function dayHeights(days: readonly { micro_usd: number }[]): number[] {
   const largest = Math.max(0, ...days.map((day) => day.micro_usd));
   return days.map((day) => (largest === 0 ? 0 : day.micro_usd / largest));
+}
+
+/** Tokens in a short form (`6.2M`). */
+export function tokenWords(language: InterfaceLanguage, tokens: number): string {
+  return new Intl.NumberFormat(language, { notation: "compact", maximumFractionDigits: 1 }).format(tokens);
+}
+
+/** A span of time in minutes below an hour, else hours to one decimal, else days past two (`3.4h`). */
+export function durationWords(language: InterfaceLanguage, ms: number): string {
+  const minutes = Math.max(0, Math.round(ms / 60_000));
+  if (minutes < 60) return formatUnit(language, minutes, "minute");
+  const hours = ms / 3_600_000;
+  if (hours < 48) return formatUnit(language, Math.round(hours * 10) / 10, "hour");
+  return formatUnit(language, Math.round(hours / 24), "day");
+}
+
+/** The 작업 비용 table's filters (B27). */
+export const TASK_FILTERS = ["all", "merged", "going", "mission", "none"] as const;
+export type TaskFilter = (typeof TASK_FILTERS)[number];
+
+/**
+ * Whether a task stands under `filter`: 머지됨 is a merged pull request, 진행
+ * 중 work still on its way (an agent working, an open pull request, changes
+ * left), 미션 a mission, 결과 없음 a task that left nothing (B30).
+ */
+export function taskIn(task: TaskCost, filter: TaskFilter): boolean {
+  const result = task.result;
+  switch (filter) {
+    case "all": return true;
+    case "merged": return result.kind === "pr" && result.state === "merged";
+    case "going": return result.kind === "working" || result.kind === "changes" || (result.kind === "pr" && result.state === "open");
+    case "mission": return task.kind === "mission";
+    case "none": return result.kind === "none";
+  }
+}
+
+/** Each filter's count over the tasks the core sent. */
+export function filterCounts(tasks: readonly TaskCost[]): Record<TaskFilter, number> {
+  return Object.fromEntries(TASK_FILTERS.map((filter) => [filter, tasks.filter((task) => taskIn(task, filter)).length])) as Record<TaskFilter, number>;
+}
+
+/**
+ * What a task is called (B25, B27): a mission's title; else its root
+ * session's name while the agent is listed, else the record's title; null
+ * when nothing names it, which the caller words as the agent's session.
+ */
+export function taskName(task: Pick<TaskCost, "kind" | "mission" | "root">, agents: readonly Pick<AgentRow, "session_id" | "identity_label">[], links: LinkSummaries | null, projectId: string, summaries: boolean): string | null {
+  if (task.kind === "mission" && task.mission) return task.mission.title;
+  return sessionName(task.root.session_id, agents, links, projectId, summaries);
+}
+
+/**
+ * A session's name as the sidebar reads it: its agent row's title while it
+ * is listed, else its record's (`recordTitle`). A record whose only title is
+ * its tool's name has none, so the caller says `<agent> 세션` instead.
+ */
+export function sessionName(sessionId: string, agents: readonly Pick<AgentRow, "session_id" | "identity_label">[], links: LinkSummaries | null, projectId: string, summaries: boolean): string | null {
+  const listed = agents.find((row) => row.session_id === sessionId)?.identity_label;
+  if (listed) return listed;
+  const work = links?.projects[projectId]?.work?.find((row) => row.session.session_id === sessionId);
+  if (!work) return null;
+  const title = recordTitle(work, summaries);
+  return title && title !== work.fallback_title ? title : null;
 }

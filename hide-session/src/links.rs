@@ -128,6 +128,10 @@ pub struct LinkFacts {
     pub last_at_unix_ms: Option<u64>,
     /// The last operator request in the chunk with its time.
     pub last_request: Option<(u64, String)>,
+    /// When the chunk's last `git commit` call ran
+    /// (`named_prs::runs_git_commit`).
+    #[serde(default)]
+    pub committed_at: Option<u64>,
 }
 
 impl LinkFacts {
@@ -355,7 +359,15 @@ impl LinkAccumulator {
             if !named.is_empty() {
                 self.named(named, at);
             }
+            if crate::named_prs::runs_git_commit(input) {
+                self.committed(at);
+            }
         }
+    }
+
+    /// A `git commit` call at `at`.
+    pub(crate) fn committed(&mut self, at: u64) {
+        self.facts.committed_at = self.facts.committed_at.max(Some(at));
     }
 
     fn pr(&mut self, repository: &str, number: u64, at: u64, made: bool) {
@@ -1101,7 +1113,7 @@ fn read_opencode(home: &std::path::Path, request: &ReadRequest, answer: &mut Rea
     };
     // A link line is each session as its own row records it, a subagent's
     // child session included; it never joins the root's conversation.
-    let (transcript, proven, named) =
+    let (transcript, proven, named, committed_at) =
         match crate::opencode::read_links(home, &label, crate::opencode::Owner::Recorded) {
             Ok(read) => read,
             Err(refusal) => {
@@ -1155,6 +1167,9 @@ fn read_opencode(home: &std::path::Path, request: &ReadRequest, answer: &mut Rea
     for (at, call) in named {
         links.activity(at);
         links.named(call, at);
+    }
+    if let Some(at) = committed_at {
+        links.committed(at);
     }
     links.issue_sightings(&transcript.issue_sightings);
     answer.rescanned = transcript.rescanned.is_some();

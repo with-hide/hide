@@ -27,7 +27,7 @@ use std::time::Duration;
 #[path = "ledger_store.rs"]
 mod ledger;
 
-const SCHEMA_VERSION: i64 = 13;
+const SCHEMA_VERSION: i64 = 14;
 
 const SCHEMA: &str = "
 CREATE TABLE projects(key TEXT PRIMARY KEY, device TEXT NOT NULL, root TEXT NOT NULL,
@@ -2512,8 +2512,10 @@ fn migrate(connection: &Connection) -> Result<(), OpenFailure> {
         let named = if version < 10 { NAMED_SCHEMA } else { "" };
         let reviews = if version < 13 { REVIEW_SCHEMA } else { "" };
         // A store before version 12 is read again for `made`, which also
-        // gives one before version 10 its named pull requests.
-        let reread = if (1..12).contains(&version) {
+        // gives one before version 10 its named pull requests; one before
+        // version 14 for the sessions' `git commit` calls (PRD
+        // project-panel-results D-20), which a task's `main 커밋` reads.
+        let reread = if (1..14).contains(&version) {
             NAMED_REREAD
         } else {
             ""

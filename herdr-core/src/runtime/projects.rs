@@ -281,6 +281,132 @@ impl Runtime {
         })
     }
 
+    /// The worktree the viewing column's `남은 것` shows (PRD
+    /// project-panel-results B9): its workspace, checkout and the folder
+    /// read, while a renderer is attached and the item is on top.
+    fn remains_target(&self) -> Option<(String, String, String)> {
+        if !self.ui_attached {
+            return None;
+        }
+        let detail = &self.snapshot.ui_state.detail;
+        let Some(crate::model::DetailItem::Remains {
+            workspace_id,
+            checkout_id,
+        }) = detail.shown.then(|| detail.top()).flatten()
+        else {
+            return None;
+        };
+        let root_path = self.changes_root_path(workspace_id, checkout_id)?;
+        Some((workspace_id.clone(), checkout_id.clone(), root_path))
+    }
+
+    /// What `남은 것` needs read: the worktree's own changes and committed
+    /// group by its path, apart from the checkout in front, with no row and
+    /// no diff; `None` while nothing shows it. The flag is true when this
+    /// call changed the snapshot: nothing shown clears the held read, and a
+    /// worktree this daemon did not open is published as unreadable rather
+    /// than left waiting.
+    pub fn remains_request(&mut self) -> (Option<crate::changes::ChangesRequest>, bool) {
+        let Some((workspace_id, checkout_id, root_path)) = self.remains_target() else {
+            return (None, self.snapshot.remains.take().is_some());
+        };
+        let root = match self.document_root(&workspace_id, &checkout_id) {
+            Ok(root) => root,
+            Err(detail) => {
+                let refused = crate::model::RemainsSnapshot {
+                    workspace_id,
+                    checkout_id,
+                    changes: crate::model::ChangesSnapshot {
+                        root_path: Some(root_path),
+                        unavailable_reason: Some("host.root_not_opened".to_owned()),
+                        ..Default::default()
+                    },
+                };
+                if self.snapshot.remains.as_ref() == Some(&refused) {
+                    return (None, false);
+                }
+                crate::diagnostic!(serde_json::json!({
+                    "component": "changes",
+                    "kind": "remains.unavailable",
+                    "error": "host.root_not_opened",
+                    "reason": detail,
+                }));
+                self.snapshot.remains = Some(refused);
+                return (None, true);
+            }
+        };
+        let channel = self
+            .changes_channel(&root.device_id)
+            .map(crate::changes::ChannelRef);
+        let base_branch = self
+            .catalog_checkout(&workspace_id, &checkout_id)
+            .and_then(|(_, checkout)| checkout.base_branch.clone());
+        let request = crate::changes::ChangesRequest {
+            root,
+            channel,
+            root_path,
+            selected_path: None,
+            selected_committed: false,
+            base_branch,
+            diffs: Vec::new(),
+        };
+        (Some(request), false)
+    }
+
+    /// Takes a `남은 것` read when it still describes the worktree shown; an
+    /// answer for one the operator has left is dropped. A failed read of the
+    /// worktree already listed keeps that list, marked stale. True when the
+    /// snapshot changed.
+    pub fn ingest_remains(&mut self, answer: crate::changes::ChangesAnswer) -> bool {
+        let Some((workspace_id, checkout_id, root_path)) = self.remains_target() else {
+            return false;
+        };
+        let Some((workspace, _)) = self.catalog_checkout(&workspace_id, &checkout_id) else {
+            return false;
+        };
+        let key = crate::changes::ChangesKey {
+            device_id: workspace.device_id.clone(),
+            root_path,
+        };
+        if answer.key.as_ref() != Some(&key) {
+            return false;
+        }
+        let mut changes = answer.changes;
+        if let Some(reason) = changes.unavailable_reason.clone()
+            && let Some(held) = self.snapshot.remains.as_ref()
+            && held.checkout_id == checkout_id
+            && held.changes.unavailable_reason.is_none()
+        {
+            let mut kept = held.changes.clone();
+            kept.stale_reason = Some(reason);
+            changes = kept;
+        }
+        let next = Some(crate::model::RemainsSnapshot {
+            workspace_id,
+            checkout_id,
+            changes,
+        });
+        if self.snapshot.remains == next {
+            return false;
+        }
+        if let Some(reason) = next.as_ref().and_then(|remains| {
+            remains
+                .changes
+                .unavailable_reason
+                .clone()
+                .or_else(|| remains.changes.stale_reason.clone())
+        }) {
+            crate::diagnostic!(serde_json::json!({
+                "component": "changes",
+                "kind": "remains.unavailable",
+                "error": reason,
+                "reason": answer.detail,
+            }));
+        }
+        self.snapshot.remains = next;
+        true
+    }
+
     /// The row whose diff the next read takes, and its group: the diff in
     /// front, otherwise the row History has selected.
     fn changes_selection(&self) -> (Option<String>, bool) {
@@ -297,8 +423,12 @@ impl Runtime {
     /// The device and folder the changes view is about now, the fence every
     /// answer passes.
     pub(crate) fn changes_key(&self) -> Option<crate::changes::ChangesKey> {
-        self.changes_target()?;
-        self.front_changes_key()
+        let (workspace_id, checkout_id, root_path) = self.changes_target()?;
+        let (workspace, _) = self.catalog_checkout(&workspace_id, &checkout_id)?;
+        Some(crate::changes::ChangesKey {
+            device_id: workspace.device_id.clone(),
+            root_path,
+        })
     }
 
     /// The device and folder History describes for the checkout in front,
@@ -379,6 +509,12 @@ impl Runtime {
     /// Linked worktree rows use their own checkout root.
     pub(super) fn focused_changes_root_path(&self) -> Option<String> {
         let (workspace_id, checkout_id) = self.front_checkout()?;
+        self.changes_root_path(workspace_id, checkout_id)
+    }
+
+    /// The folder a checkout's changes are read under: the registered
+    /// project's folder when the checkout holds it, else the checkout's own.
+    fn changes_root_path(&self, workspace_id: &str, checkout_id: &str) -> Option<String> {
         let (workspace, checkout) = self.catalog_checkout(workspace_id, checkout_id)?;
         if workspace.registered
             && let Some(registered) = self
@@ -402,7 +538,7 @@ impl Runtime {
         // The same folder on another device is another checkout: a projection
         // read on the one left behind is dropped in this same frame rather
         // than shown under the new device until the next read lands (B22).
-        let front = self.front_changes_key();
+        let front = self.changes_key().or_else(|| self.front_changes_key());
         if self.changes_published_key.is_some() && self.changes_published_key != front {
             self.snapshot
                 .changes

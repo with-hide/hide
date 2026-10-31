@@ -51,7 +51,7 @@ pub struct PaneFindOutcome {
 /// with the id that Herdr knows the pane by beside the id the core projects.
 #[derive(Clone)]
 pub struct PaneApiRoute {
-    pane_id: String,
+    pub(crate) pane_id: String,
     herdr_pane_id: String,
     engine: SharedEngine,
     runtime: Weak<Mutex<Runtime>>,
@@ -85,7 +85,7 @@ impl PaneApiRoute {
 
     /// Runs `work` on its own thread and hands its result to `ingest` under
     /// the runtime lock, notifying when that changed the snapshot.
-    fn spawn<T: Send + 'static>(
+    pub(crate) fn spawn<T: Send + 'static>(
         self,
         name: &str,
         work: impl FnOnce(&dyn Engine, &str) -> T + Send + 'static,

@@ -1384,6 +1384,10 @@ mod tests {
         let checkouts = before("checkout");
         let registrations = before("registration");
         let actor = |index: usize| json!({"pane_id": panes[index], "name": "a", "kind": "claude", "device_id": devices[index]});
+        let dismissals: serde_json::Map<String, Value> = checkouts
+            .iter()
+            .map(|id| (id.to_string(), json!({"head": "aaa", "at_unix_ms": 1})))
+            .collect();
         let archive = json!({"archive-1": {"project_root": M_ROOT, "members": (0..3).map(|index| json!({
             "machine": devices[index], "pane_id": panes[index], "checkout_path": M_ROOT, "cwd": M_ROOT,
             "resume": {"state": "done", "pane_id": panes[index]},
@@ -1463,6 +1467,7 @@ mod tests {
                 "collapsed_checkout_ids": checkouts,
                 "expanded_checkout_ids": checkouts,
                 "session_collapsed_checkout_ids": checkouts,
+                "stray_dismissals": dismissals,
                 "session_open_folds": before("fold"),
             }),
         );

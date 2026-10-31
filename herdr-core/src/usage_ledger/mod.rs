@@ -6,6 +6,7 @@ pub mod prices;
 pub mod project_cost;
 pub mod query;
 pub mod store;
+pub mod tasks;
 pub mod worker;
 
 pub const DAY_MS: u64 = 86_400_000;
