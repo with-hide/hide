@@ -251,7 +251,7 @@ class Selection(unittest.TestCase):
     def test_an_adapter_change_tests_its_real_consumers_and_compiles_on_windows(self):
         # These consumers follow the workspace manifests, independently of the planner.
         consumers = [
-            "herdr-core", "hide-agent-adapter", "hide-agent-hooks", "hide-host", "hide-kit",
+            "herdr-core", "hide-agent-adapter", "hide-agent-hooks", "hide-desk", "hide-host", "hide-kit",
             "hide-node", "hide-node-link", "hide-session", "hided",
         ]
         for path in ("hide-agent-adapter/src/lib.rs", "hide-agent-adapter/Cargo.toml"):
