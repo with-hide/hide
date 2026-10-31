@@ -153,37 +153,27 @@ fn wait_native_identity(
         );
     }
 }
-/// Submits `brief` to the agent `name` in `pane` through Herdr's
-/// `agent.prompt`, the one submission path the doorbell uses too, once
-/// Herdr reports the agent ready for input (`BRIEF_READY_WAIT`). An agent
-/// that never takes input in that time, or a refused submission, is
-/// `brief_not_submitted`: nothing was typed, and the same command submits
-/// it then.
+/// Waits until Herdr reports the agent `name` in `pane` ready for input
+/// (`BRIEF_READY_WAIT`), the moment the spawn's brief may be typed. An agent
+/// that never takes input in that time is `brief_not_submitted`: nothing was
+/// typed, and the same command waits again.
 #[allow(clippy::disallowed_methods)] // a production wait on Herdr's readiness, bounded by the deadline
-fn submit_brief(
-    engine: &dyn Engine,
-    spawn: &str,
-    pane: &str,
-    name: &str,
-    brief: &str,
-) -> Result<(), String> {
+fn brief_ready(engine: &dyn Engine, spawn: &str, pane: &str, name: &str) -> Result<(), String> {
     let deadline = Instant::now() + super::BRIEF_READY_WAIT;
-    let refused = |kind: &str, detail: String| {
-        crate::diagnostic!(json!({
-            "component": "spawn", "kind": kind, "spawn": spawn, "pane_id": pane, "detail": detail,
-        }));
-        "brief_not_submitted".to_owned()
-    };
     loop {
         let agent = match engine.delivery_agent(Wait::Each(Duration::from_secs(5)), pane) {
             Err(EngineError::Request(message)) => return Err(message),
-            agent => agent.map_err(|error| refused("brief.agent_unread", error.to_string()))?,
+            agent => agent.map_err(|error| {
+                brief_refused(spawn, pane, "brief.agent_unread", error.to_string())
+            })?,
         };
         if agent.pane_id == pane && agent.name == name && agent.readiness.accepts_input() {
-            break;
+            return Ok(());
         }
         if Instant::now() >= deadline {
-            return Err(refused(
+            return Err(brief_refused(
+                spawn,
+                pane,
                 "brief.agent_not_ready",
                 format!(
                     "readiness {:?} after {:?}",
@@ -194,10 +184,37 @@ fn submit_brief(
         }
         std::thread::sleep(Duration::from_millis(250));
     }
+}
+
+fn brief_refused(spawn: &str, pane: &str, kind: &str, detail: String) -> String {
+    crate::diagnostic!(json!({
+        "component": "spawn", "kind": kind, "spawn": spawn, "pane_id": pane, "detail": detail,
+    }));
+    "brief_not_submitted".to_owned()
+}
+
+/// Types `brief` into `pane` through Herdr's `agent.prompt`, the one
+/// submission path the doorbell uses too. Its typing was reserved first
+/// (`Mutation::BriefTyping`), and success only means the text reached the
+/// pane: the agent's own record confirms it (`delivery::typed`). A
+/// submission Herdr refuses is `brief_not_submitted`.
+pub(crate) fn type_brief(
+    engine: &dyn Engine,
+    spawn: &str,
+    pane: &str,
+    brief: &str,
+) -> Result<(), String> {
     match engine.prompt_agent(Wait::Each(Duration::from_secs(10)), pane, brief) {
         Ok(()) => {}
         Err(EngineError::Request(message)) => return Err(message),
-        Err(error) => return Err(refused("brief.prompt_refused", error.to_string())),
+        Err(error) => {
+            return Err(brief_refused(
+                spawn,
+                pane,
+                "brief.prompt_refused",
+                error.to_string(),
+            ));
+        }
     }
     crate::diagnostic!(json!({
         "component": "spawn", "kind": "brief.submitted", "spawn": spawn, "pane_id": pane,
@@ -1081,8 +1098,40 @@ fn spawn(
         // reports its session only at its first turn (Codex, OpenCode 2)
         // reports it on this very turn. A spawn asked again after the brief
         // went in never submits it twice.
-        if let Some(brief) = reserved.brief.as_deref().filter(|_| !reserved.briefed) {
-            submit_brief(engine.as_ref(), &reserved.id, pane, name, brief)?;
+        if let Some(brief) = reserved.brief.clone().filter(|_| !reserved.briefed) {
+            if hide_agent_adapter::adapter(kind).is_some_and(|row| row.key.brief_after_session()) {
+                // Its session start drops an Enter typed during it
+                // (`AgentId::brief_after_session`). Unseen within the wait,
+                // the brief goes in anyway and its record still judges it.
+                if let Err(reason) = wait_native_identity(engine.as_ref(), pane, Some(name), kind) {
+                    crate::diagnostic!(json!({
+                        "component": "spawn", "kind": "brief.session_unseen",
+                        "spawn": reserved.id, "pane_id": pane, "reason": reason,
+                    }));
+                }
+            }
+            brief_ready(engine.as_ref(), &reserved.id, pane, name)?;
+            // Saved before it is typed, so a typing a crash interrupts is
+            // counted and never repeated blindly (engineering #11).
+            reserved = serde_json::from_value(
+                mutate(
+                    client,
+                    authority,
+                    actor,
+                    Mutation::BriefTyping {
+                        id: reserved.id.clone(),
+                    },
+                )
+                .map_err(|code| {
+                    if code == "brief_attempts_spent" {
+                        brief_refused(&reserved.id, pane, "brief.attempts_spent", code)
+                    } else {
+                        code
+                    }
+                })?,
+            )
+            .map_err(|_| "spawn_unavailable")?;
+            type_brief(engine.as_ref(), &reserved.id, pane, &brief)?;
             reserved = serde_json::from_value(mutate(
                 client,
                 authority,

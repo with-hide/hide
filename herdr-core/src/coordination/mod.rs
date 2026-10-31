@@ -1,7 +1,7 @@
 //! Persistent participant identities and resumable child creation. The delivery
 //! store is the sole writer; native I/O is performed by request workers.
 
-mod executor;
+pub(crate) mod executor;
 pub(crate) mod identity_wait;
 pub(crate) mod lineage;
 pub(crate) mod naming;
@@ -539,6 +539,11 @@ pub struct SpawnRecord {
     /// never submits it twice (engineering #11).
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub briefed: bool,
+    /// The brief's typings and the agent's record of it
+    /// (`delivery::typed`); absent until the first typing is reserved, and
+    /// on every record written before typed input was confirmed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub brief_input: Option<crate::delivery::typed::TypedInput>,
     /// The child's pane was split beside the caller's (`Command::Spawn::
     /// beside`), part of the intent. Delegated-child relocation leaves the
     /// child of such a spawn in the caller's tab.
@@ -552,6 +557,18 @@ pub struct SpawnRecord {
 
 fn is_zero(value: &u64) -> bool {
     *value == 0
+}
+
+/// Whether `caller` is Hide's own identity for typed input, the only one
+/// that reports a brief's record or its notice (`delivery::typed`).
+fn input_authority(caller: &Actor) -> bool {
+    caller.hide_owned()
+        && caller.name
+            == format!(
+                "{}{}",
+                crate::delivery::HIDE_PREFIX,
+                crate::delivery::typed::INPUT_ROLE
+            )
 }
 
 pub(crate) enum Mutation {
@@ -570,6 +587,22 @@ pub(crate) enum Mutation {
     /// The spawn's brief was submitted to its agent.
     Briefed {
         id: String,
+    },
+    /// One typing of the spawn's brief is reserved before it is typed
+    /// (`delivery::typed`): the spawn's first, by its parent, or a later
+    /// one, by Hide once someone answered the agent's screen.
+    BriefTyping {
+        id: String,
+    },
+    /// The agent recorded the brief: its prompt hook's digest, or the user
+    /// message in its session file. Hide's own identity reports it.
+    BriefConfirmed {
+        id: String,
+    },
+    /// Hide told the spawn's parent that typing `attempt` was not taken.
+    BriefNoticed {
+        id: String,
+        attempt: u8,
     },
     Advance {
         seed_tab: Option<naming::SeedTab>,
@@ -1319,6 +1352,7 @@ pub(crate) fn apply(
                 plan: plan.as_ref().map(|admission| admission.link.clone()),
                 brief: brief.clone(),
                 briefed: false,
+                brief_input: None,
                 beside: *beside,
                 reserved_at_unix_ms: now,
             };
@@ -1345,6 +1379,69 @@ pub(crate) fn apply(
                 return Err("spawn_incomplete".into());
             }
             record.briefed = true;
+            Ok(json!(record))
+        }
+        Mutation::BriefTyping { id } => {
+            let parent = ledger
+                .spawns
+                .iter()
+                .find(|record| &record.id == id)
+                .ok_or("spawn_unavailable")?
+                .parent
+                .clone();
+            if !input_authority(caller)
+                && !resolve_actor(ledger, &parent)
+                    .is_some_and(|parent| parent.same_identity(caller))
+            {
+                return Err("parent_authority_required".into());
+            }
+            let record = ledger
+                .spawns
+                .iter_mut()
+                .find(|record| &record.id == id)
+                .ok_or("spawn_unavailable")?;
+            if record.pane.is_none() || record.typed == 0 || record.brief.is_none() {
+                return Err("spawn_incomplete".into());
+            }
+            let input = record.brief_input.get_or_insert_with(Default::default);
+            if input.confirmed_at_unix_ms.is_some() {
+                return Err("brief_confirmed".into());
+            }
+            if input.attempts >= crate::delivery::typed::INPUT_ATTEMPTS {
+                return Err("brief_attempts_spent".into());
+            }
+            input.attempts += 1;
+            input.typed_at_unix_ms = now;
+            Ok(json!(record))
+        }
+        Mutation::BriefConfirmed { id } => {
+            if !input_authority(caller) {
+                return Err("caller_identity_conflict".into());
+            }
+            let record = ledger
+                .spawns
+                .iter_mut()
+                .find(|record| &record.id == id)
+                .ok_or("spawn_unavailable")?;
+            let input = record.brief_input.as_mut().ok_or("brief_not_typed")?;
+            // A record of any typing ends it once; a late one changes nothing.
+            input.confirmed_at_unix_ms.get_or_insert(now);
+            Ok(json!(record))
+        }
+        Mutation::BriefNoticed { id, attempt } => {
+            if !input_authority(caller) {
+                return Err("caller_identity_conflict".into());
+            }
+            let record = ledger
+                .spawns
+                .iter_mut()
+                .find(|record| &record.id == id)
+                .ok_or("spawn_unavailable")?;
+            let input = record.brief_input.as_mut().ok_or("brief_not_typed")?;
+            if *attempt > input.noticed && *attempt <= input.attempts {
+                input.noticed = *attempt;
+                input.noticed_at_unix_ms = now;
+            }
             Ok(json!(record))
         }
         Mutation::Advance {
@@ -3014,6 +3111,132 @@ mod tests {
     /// retry never types it twice, and becomes the child's first letter when
     /// the child binds: delivered and confirmed under the spawn's intent,
     /// from the parent, so the ledger and a later wake carry it.
+    /// Each typing of a brief is reserved before it is typed, at most three,
+    /// only by the spawn's parent or Hide's own input identity; the agent's
+    /// record ends it whichever typing it records, and a late record or a
+    /// late typing changes nothing more (`delivery::typed`, engineering #11).
+    #[test]
+    fn a_briefs_typings_are_capped_and_its_record_ends_them_once() {
+        let mut ledger = Ledger::default();
+        let parent = record("parent", "native-parent", None);
+        let actor = parent.actor.clone();
+        let parent_id = register(&mut ledger, parent, &actor);
+        let mut spawn_command = command("mission-1:api");
+        if let Command::Spawn { brief, .. } = &mut spawn_command {
+            *brief = Some("Node api: add the call.".into());
+        }
+        let spawn = apply(
+            &mut ledger,
+            &actor,
+            &Mutation::Reserve {
+                parent: parent_id,
+                command: spawn_command,
+            },
+            1,
+        )
+        .unwrap()["id"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        let typing = |ledger: &mut Ledger, caller: &Actor, now: u64| {
+            apply(
+                ledger,
+                caller,
+                &Mutation::BriefTyping { id: spawn.clone() },
+                now,
+            )
+        };
+        assert_eq!(
+            typing(&mut ledger, &actor, 2).unwrap_err(),
+            "spawn_incomplete",
+            "nothing is typed before the agent was started"
+        );
+        for mutation in [
+            Mutation::Advance {
+                seed_tab: None,
+                id: spawn.clone(),
+                path: Some("/fixture/topic".into()),
+                pane: Some("worker-pane".into()),
+                terminal: None,
+                shell: None,
+                child: None,
+            },
+            Mutation::Typed { id: spawn.clone() },
+        ] {
+            apply(&mut ledger, &actor, &mutation, 2).unwrap();
+        }
+        let input = Actor::hide(crate::delivery::typed::INPUT_ROLE, "node");
+        let stranger = record("stranger", "native-stranger", None).actor;
+        assert_eq!(
+            typing(&mut ledger, &stranger, 3).unwrap_err(),
+            "parent_authority_required"
+        );
+        let first = typing(&mut ledger, &actor, 3).unwrap();
+        assert_eq!(first["brief_input"]["attempts"], 1);
+        assert_eq!(first["brief_input"]["typed_at_unix_ms"], 3);
+        typing(&mut ledger, &input, 4).unwrap();
+        typing(&mut ledger, &input, 5).unwrap();
+        assert_eq!(
+            typing(&mut ledger, &input, 6).unwrap_err(),
+            "brief_attempts_spent",
+            "a fourth typing is refused"
+        );
+        // Only Hide's own identity reports the record or the notice.
+        for mutation in [
+            Mutation::BriefConfirmed { id: spawn.clone() },
+            Mutation::BriefNoticed {
+                id: spawn.clone(),
+                attempt: 1,
+            },
+        ] {
+            assert_eq!(
+                apply(&mut ledger, &actor, &mutation, 7).unwrap_err(),
+                "caller_identity_conflict"
+            );
+        }
+        let noticed = apply(
+            &mut ledger,
+            &input,
+            &Mutation::BriefNoticed {
+                id: spawn.clone(),
+                attempt: 3,
+            },
+            7,
+        )
+        .unwrap();
+        assert_eq!(noticed["brief_input"]["noticed"], 3);
+        // A notice of an earlier typing that lands late moves nothing back.
+        let late = apply(
+            &mut ledger,
+            &input,
+            &Mutation::BriefNoticed {
+                id: spawn.clone(),
+                attempt: 1,
+            },
+            8,
+        )
+        .unwrap();
+        assert_eq!(late["brief_input"]["noticed"], 3);
+        assert_eq!(late["brief_input"]["noticed_at_unix_ms"], 7);
+        let confirmed = apply(
+            &mut ledger,
+            &input,
+            &Mutation::BriefConfirmed { id: spawn.clone() },
+            9,
+        )
+        .unwrap();
+        assert_eq!(confirmed["brief_input"]["confirmed_at_unix_ms"], 9);
+        // The record of an earlier typing arriving later keeps the first.
+        let again = apply(
+            &mut ledger,
+            &input,
+            &Mutation::BriefConfirmed { id: spawn.clone() },
+            10,
+        )
+        .unwrap();
+        assert_eq!(again["brief_input"]["confirmed_at_unix_ms"], 9);
+    }
+
     #[test]
     fn a_spawns_brief_is_one_delivered_letter_under_its_intent() {
         let mut ledger = Ledger::default();

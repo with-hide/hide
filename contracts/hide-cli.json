@@ -746,6 +746,16 @@
                             ],
                             "default": null
                         },
+                        "bell_typed_at_unix_ms": {
+                            "default": null,
+                            "description": "When the doorbell last typed this letter's bell into its recipient's pane (`agent.prompt` answered); the recipient's own record of the prompt confirms it (`delivery::typed`). Null until a bell was typed.",
+                            "format": "uint64",
+                            "minimum": 0.0,
+                            "type": [
+                                "integer",
+                                "null"
+                            ]
+                        },
                         "body": {
                             "type": "string"
                         },
@@ -785,6 +795,20 @@
                             "default": false,
                             "description": "Sent with `hide request send --now`: delivered at the recipient's next safe gap while it works, without the mid-turn wait (PRD letters-to-busy-agents D-05). An older build drops the field at its next save, and the letter then waits as any other.",
                             "type": "boolean"
+                        },
+                        "input_noticed": {
+                            "default": 0,
+                            "description": "The bell whose unconfirmed notice the sender was sent, 0 for none.",
+                            "format": "uint8",
+                            "minimum": 0.0,
+                            "type": "integer"
+                        },
+                        "input_noticed_at_unix_ms": {
+                            "default": 0,
+                            "description": "When that notice was sent, 0 for none.",
+                            "format": "uint64",
+                            "minimum": 0.0,
+                            "type": "integer"
                         },
                         "intake_from": {
                             "default": null,
@@ -863,7 +887,10 @@
                         "intake_from",
                         "immediate",
                         "forced",
-                        "tool_handovers"
+                        "tool_handovers",
+                        "bell_typed_at_unix_ms",
+                        "input_noticed",
+                        "input_noticed_at_unix_ms"
                     ],
                     "type": "object"
                 },
@@ -1098,6 +1125,16 @@
                     ],
                     "default": null
                 },
+                "bell_typed_at_unix_ms": {
+                    "default": null,
+                    "description": "When the doorbell last typed this letter's bell into its recipient's pane (`agent.prompt` answered); the recipient's own record of the prompt confirms it (`delivery::typed`). Null until a bell was typed.",
+                    "format": "uint64",
+                    "minimum": 0.0,
+                    "type": [
+                        "integer",
+                        "null"
+                    ]
+                },
                 "body": {
                     "type": "string"
                 },
@@ -1137,6 +1174,20 @@
                     "default": false,
                     "description": "Sent with `hide request send --now`: delivered at the recipient's next safe gap while it works, without the mid-turn wait (PRD letters-to-busy-agents D-05). An older build drops the field at its next save, and the letter then waits as any other.",
                     "type": "boolean"
+                },
+                "input_noticed": {
+                    "default": 0,
+                    "description": "The bell whose unconfirmed notice the sender was sent, 0 for none.",
+                    "format": "uint8",
+                    "minimum": 0.0,
+                    "type": "integer"
+                },
+                "input_noticed_at_unix_ms": {
+                    "default": 0,
+                    "description": "When that notice was sent, 0 for none.",
+                    "format": "uint64",
+                    "minimum": 0.0,
+                    "type": "integer"
                 },
                 "intake_from": {
                     "default": null,
@@ -1215,7 +1266,10 @@
                 "intake_from",
                 "immediate",
                 "forced",
-                "tool_handovers"
+                "tool_handovers",
+                "bell_typed_at_unix_ms",
+                "input_noticed",
+                "input_noticed_at_unix_ms"
             ],
             "title": "Letter",
             "type": "object"
@@ -4063,7 +4117,7 @@
             "rest": null
         }
     ],
-    "digest": "sha256:ac348ac161f2ba6267e99dc9876fcd8caea697ba8df30b135374609763b94284",
+    "digest": "sha256:0edb46d563a8bd136e6eb519f45ee71dece6632ace5bdbfc2c47b13911081aeb",
     "envelopes": {
         "agent": {
             "answer": "value",

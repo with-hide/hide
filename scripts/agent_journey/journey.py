@@ -39,6 +39,9 @@ RETRY = ("request_timeout", "spawn_busy", "native_identity_unavailable")
 # An agent whose letters ride its next prompt confirms one once its host
 # wrote the reply after it (Pi, omp), which can land after the turn reads idle.
 CONFIRM_SECONDS = 60
+# How long the start waits after the brief's turn for the agent's record of
+# the brief to reach the ledger file: the record wait (15 s) and a save.
+BRIEF_RECORD_SECONDS = 30
 # A letter's path at rest is the contract's `letter` form (contracts/agent-journey.json).
 TOOL_LETTER = ("this agent takes a letter only at a tool call its model makes while it works, or through a "
                "hide inbox it runs, and the journey never asks a model to choose an action (PRD agent-journey-check D-11); "
@@ -76,8 +79,11 @@ def prompt(value):
 
 class Journey:
     def __init__(self, runtime, daemon, controller, table, contract_row, repository, record, reader, *,
-                 branch, created, sessions, route, composer_judge, model=None):
+                 branch, created, sessions, route, composer_judge, model=None, brief_start=True):
         self.runtime, self.daemon, self.controller = runtime, daemon, controller
+        # The real CLIs start on Hide's brief, which their own record has to
+        # confirm; the stand-ins imitate only the agent's prompt argument.
+        self.brief_start = brief_start
         self.table, self.row, self.repository = table, contract_row, repository
         self.record, self.reader = record, reader
         # `journey_composer`, which judges a screen by the adapter's composer declaration.
@@ -270,11 +276,12 @@ class Journey:
                     self.settle(cell, (cells.FAIL, str(error)))
                     break
 
-    def spawn(self, name, repository, branch, path, prompt_text):
+    def spawn(self, name, repository, branch, path, prompt_text, brief=False):
         """`hide agent spawn` from the controller; a local request_timeout is the
         CLI's own wait running out while the spawn continues, so the same intent
-        is asked again until it answers (it converges on one agent)."""
-        flag = self.row["prompt_flag"]
+        is asked again until it answers (it converges on one agent). With
+        `brief` the first prompt is Hide's brief, typed once the agent is
+        ready; otherwise it is the agent's own prompt argument."""
         args = ["agent", "spawn", "--parent", "here", "--name", name, "--intent", name,
                 "--kind", self.kind, "--repo", str(repository),
                 "--branch", branch, "--path", str(path)]
@@ -282,7 +289,10 @@ class Journey:
         # native arguments after -- reach only this first start.
         if self.model:
             args.extend(["--model", self.model])
-        args.extend(["--", flag, prompt_text])
+        if brief:
+            args.extend(["--brief", prompt_text])
+        else:
+            args.extend(["--", self.row["prompt_flag"], prompt_text])
         attempts = []
         end = time.monotonic() + SPAWN_SECONDS
         while True:
@@ -303,7 +313,10 @@ class Journey:
         # Named before the spawn, so a spawn that raises or is stopped still leaves its branch to the cleanup.
         entry = {"branch": self.branch, "start": None, "worktree": str(worktree)}
         self.created.append(entry)
-        args, answer, attempts = self.spawn("journey-" + self.id, self.repository, self.branch, worktree, prompt(first))
+        # The first start types Hide's brief, which the agent's own record has
+        # to confirm; the untrusted start keeps the agent's prompt argument.
+        args, answer, attempts = self.spawn("journey-" + self.id, self.repository, self.branch, worktree, prompt(first),
+                                            brief=self.brief_start)
         entry.update(created_branch(self.runtime, self.repository, self.branch, worktree))
         self.record["spawn"] = {"argv": ["hide", *args], "route": self.route,
                                 "answers": attempts}
@@ -326,12 +339,36 @@ class Journey:
         self.reference = native.get("agent_session") or self.reference
         self.record["start"] = {"activities": observed, "turn": turn, "herdr_agent": native,
                                 "row": self.daemon.row(self.pane)}
+        checks = [spawned, turn, cells.emitter_verdict(self.reference, self.row["herdr_source"])]
+        if self.brief_start:
+            spawn_record = self.spawn_record("journey-" + self.id)
+            self.record["start"]["brief_input"] = (spawn_record or {}).get("brief_input")
+            checks.append(cells.brief_verdict(spawn_record))
         evidence = self.evidence("start", self.record["start"])
-        verdict = cells.start_verdict(spawned, turn, cells.emitter_verdict(self.reference, self.row["herdr_source"]))
+        verdict = cells.start_verdict(*checks)
         if not self.settle("start", verdict, evidence):
             return
         self.record["reply"] = {"token": first, "read": read}
         self.settle("reply", cells.reply_verdict(read, self.session, first), self.evidence("reply", self.record["reply"]))
+
+    def spawn_record(self, intent):
+        """The spawn's record in the candidate's delivery ledger once its brief
+        is confirmed, or as it stands after BRIEF_RECORD_SECONDS. The record is
+        posted to the ledger's worker as the agent's hook or session read
+        arrives and saved by its save thread, so it can trail the turn."""
+        path = self.runtime.state / "delivery-ledger.json"
+        end = time.monotonic() + BRIEF_RECORD_SECONDS
+        found = None
+        while True:
+            try:
+                spawns = json.loads(path.read_text(encoding="utf-8")).get("spawns") or []
+            except (OSError, ValueError):
+                spawns = []
+            found = next((spawn for spawn in spawns if spawn.get("intent") == intent), None)
+            if (found or {}).get("brief_input", {}).get("confirmed_at_unix_ms") is not None or time.monotonic() > end:
+                return found
+            if self.runtime.owner.cancelled.wait(1):
+                raise ProcessError("run_cancelled")
 
     def letter(self):
         """The letter's path at rest is the agent's own, as the contract

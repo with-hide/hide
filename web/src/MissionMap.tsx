@@ -359,7 +359,7 @@ function NodeCard({ mission, node, selected, dimmed, onSelect, events, end, acti
   const shown = line && !moving ? line : null;
   const waits = shown && look === "waiting" && !node.blocked && node.kind !== "external" ? waitingFor(mission, node) : [];
   const tally = criteriaTally(mission, node);
-  const landing = landingLeft(mission, node);
+  const landing = landingLeft(node);
   const times = useNodeTimes(mission, node, events, end);
   const time = look === "hold" ? (times?.held ? t("mission.time.held", { elapsed: times.held }) : null) : times?.took ?? null;
   // Who works it, from the same launch proof as a checker's; an outside node has no worker.
