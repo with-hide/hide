@@ -1258,6 +1258,23 @@ pub fn name_of(pid: u32) -> io::Result<String> {
     sys::name_of(pid)
 }
 
+/// The processes in process group `group`, zombies included, as one look at
+/// the system's process table finds them: a terminal's foreground is a
+/// group (`tcgetpgrp`). `Unsupported` on Windows, which has no process
+/// groups a terminal names.
+pub fn group_members(group: u32) -> io::Result<Vec<u32>> {
+    #[cfg(unix)]
+    return sys::group_members(group);
+    #[cfg(windows)]
+    {
+        let _ = group;
+        Err(io::Error::new(
+            io::ErrorKind::Unsupported,
+            "Windows has no process group a terminal names",
+        ))
+    }
+}
+
 /// The program file a process runs, as the kernel keeps it.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Image {
@@ -1282,12 +1299,118 @@ pub fn image_of(pid: u32) -> io::Result<Image> {
 /// file under another path (renamed, linked or deleted since) is one of
 /// them, and one started from a newer file at the same path is not. A
 /// process the system will not describe (another account's) or that ends
-/// during the look is left out. `Unsupported` where [`image_of`] is.
+/// during the look is left out.
+///
+/// Windows keeps no identity of a process's image, only the path it names
+/// for it, so there a process counts when the file at that path is `file`:
+/// Windows refuses to delete or overwrite a file a running process was
+/// started from, so that file is its image unless the file or a folder above
+/// it was renamed since. A process whose image was renamed may be left out,
+/// but one started from another file is never counted.
 pub fn running(file: &crate::fs::identity::FileId) -> io::Result<Vec<u32>> {
-    Ok(sys::all_pids()?
-        .into_iter()
-        .filter(|pid| image_of(*pid).is_ok_and(|image| image.file == *file))
-        .collect())
+    sys::running_file(file)
+}
+
+/// The words `pid` was started with, its program first, as the kernel keeps
+/// them: `/proc/<pid>/cmdline` on Linux, `KERN_PROCARGS2` on macOS, and on
+/// Windows its command line split the way the C runtime splits it. A process
+/// that rewrote them since is read as it rewrote them. `NotFound` when the
+/// process is gone, `PermissionDenied` when the system will not say (another
+/// account's), and an error when another process took its pid while they
+/// were read, so the answer is never another process's.
+pub fn arguments(pid: u32) -> io::Result<Vec<std::ffi::OsString>> {
+    let before = start_time(pid)?;
+    let read = sys::arguments(pid);
+    // A process that ended or was replaced meanwhile is reported as gone,
+    // whatever the read answered, never as a refusal or as its words.
+    if start_time(pid).ok() != Some(before) || !is_alive(pid) {
+        return Err(io::Error::new(
+            io::ErrorKind::NotFound,
+            format!("process {pid} ended while its arguments were read"),
+        ));
+    }
+    read
+}
+
+/// A Windows command line split into its words the way the C runtime splits
+/// it, which is how [`ResidentCommand`] quotes: the program's path ends at
+/// the next quote when it starts with one and at a space or tab otherwise;
+/// a later word ends at a space or tab outside quoting, a quote opens or
+/// closes quoting, two quotes inside quoting are one quote, and backslashes
+/// are themselves unless a quote follows them, where each pair is one
+/// backslash and an odd one makes the quote part of the word.
+#[cfg_attr(not(windows), allow(dead_code))]
+fn split_command_line(line: &[u16]) -> Vec<Vec<u16>> {
+    const QUOTE: u16 = b'"' as u16;
+    const SLASH: u16 = b'\\' as u16;
+    let blank = |unit: u16| unit == u16::from(b' ') || unit == u16::from(b'\t');
+    let mut words = Vec::new();
+    let mut at = 0;
+    let mut program = Vec::new();
+    if line.first() == Some(&QUOTE) {
+        at = 1;
+        while at < line.len() && line[at] != QUOTE {
+            program.push(line[at]);
+            at += 1;
+        }
+        at += 1;
+    } else {
+        while at < line.len() && !blank(line[at]) {
+            program.push(line[at]);
+            at += 1;
+        }
+    }
+    words.push(program);
+    loop {
+        while at < line.len() && blank(line[at]) {
+            at += 1;
+        }
+        if at >= line.len() {
+            return words;
+        }
+        let mut word = Vec::new();
+        let mut quoted = false;
+        while at < line.len() {
+            let unit = line[at];
+            if unit == SLASH {
+                let run = line[at..].iter().take_while(|unit| **unit == SLASH).count();
+                at += run;
+                if line.get(at) == Some(&QUOTE) {
+                    word.extend(std::iter::repeat_n(SLASH, run / 2));
+                    if run % 2 == 1 {
+                        word.push(QUOTE);
+                        at += 1;
+                    }
+                } else {
+                    word.extend(std::iter::repeat_n(SLASH, run));
+                }
+            } else if unit == QUOTE {
+                if quoted && line.get(at + 1) == Some(&QUOTE) {
+                    word.push(QUOTE);
+                    at += 2;
+                } else {
+                    quoted = !quoted;
+                    at += 1;
+                }
+            } else if blank(unit) && !quoted {
+                break;
+            } else {
+                word.push(unit);
+                at += 1;
+            }
+        }
+        words.push(word);
+    }
+}
+
+/// What tells this boot of the machine from every other, as the kernel
+/// names it: `/proc/sys/kernel/random/boot_id` on Linux and
+/// `kern.bootsessionuuid` on macOS, both made at boot and never changed until
+/// the next one. A process named by its pid and [`start_time`] is the same
+/// process only within one boot, since Linux counts a start time from the
+/// boot. `Unsupported` on Windows, whose start time is a time of day.
+pub fn boot_id() -> io::Result<String> {
+    sys::boot_id()
 }
 
 /// How the terminal a process controls takes typed input, which decides
@@ -3226,7 +3349,7 @@ mod sys {
 
     /// The processes whose group is `group`, zombies included.
     #[cfg(target_os = "macos")]
-    fn group_members(group: u32) -> io::Result<Vec<u32>> {
+    pub(super) fn group_members(group: u32) -> io::Result<Vec<u32>> {
         let group = libc::pid_t::try_from(group)
             .map_err(|_| io::Error::from(io::ErrorKind::InvalidInput))?;
         // `proc_listpgrppids` counts pids, as `proc_listchildpids` does (see
@@ -3257,7 +3380,7 @@ mod sys {
 
     /// The processes whose group is `group`, zombies included.
     #[cfg(target_os = "linux")]
-    fn group_members(group: u32) -> io::Result<Vec<u32>> {
+    pub(super) fn group_members(group: u32) -> io::Result<Vec<u32>> {
         let mut members = Vec::new();
         for entry in std::fs::read_dir("/proc")? {
             let Ok(entry) = entry else { continue };
@@ -4046,6 +4169,163 @@ mod sys {
                 format!("{error}; the output stays at {} ({back})", aside.display()),
             ),
         }
+    }
+
+    pub(super) fn running_file(file: &crate::fs::identity::FileId) -> io::Result<Vec<u32>> {
+        Ok(all_pids()?
+            .into_iter()
+            .filter(|pid| image_of(*pid).is_ok_and(|image| image.file == *file))
+            .collect())
+    }
+
+    /// `/proc/<pid>/cmdline`: each word ends with a nul.
+    #[cfg(target_os = "linux")]
+    pub(super) fn arguments(pid: u32) -> io::Result<Vec<std::ffi::OsString>> {
+        use std::os::unix::ffi::OsStringExt;
+
+        let bytes = std::fs::read(format!("/proc/{pid}/cmdline")).map_err(|error| {
+            if error.raw_os_error() == Some(libc::ESRCH) {
+                io::ErrorKind::NotFound.into()
+            } else {
+                error
+            }
+        })?;
+        if bytes.is_empty() {
+            // A process that has ended, or a kernel thread, lists none.
+            return Err(io::Error::new(
+                io::ErrorKind::NotFound,
+                format!("process {pid} lists no arguments"),
+            ));
+        }
+        let words = bytes.strip_suffix(&[0]).unwrap_or(&bytes);
+        Ok(words
+            .split(|byte| *byte == 0)
+            .map(|word| std::ffi::OsString::from_vec(word.to_vec()))
+            .collect())
+    }
+
+    /// `KERN_PROCARGS2`: the word count, the program's path, nuls, then the
+    /// words, each ending with a nul, then the environment.
+    #[cfg(target_os = "macos")]
+    pub(super) fn arguments(pid: u32) -> io::Result<Vec<std::ffi::OsString>> {
+        use std::os::unix::ffi::OsStringExt;
+
+        let pid =
+            libc::c_int::try_from(pid).map_err(|_| io::Error::from(io::ErrorKind::NotFound))?;
+        let mut limit: libc::c_int = 0;
+        let mut size = std::mem::size_of::<libc::c_int>();
+        let mut name = [libc::CTL_KERN, libc::KERN_ARGMAX];
+        // SAFETY: the name is two ints and the answer one int we own.
+        if unsafe {
+            libc::sysctl(
+                name.as_mut_ptr(),
+                name.len() as libc::c_uint,
+                (&mut limit as *mut libc::c_int).cast(),
+                &mut size,
+                std::ptr::null_mut(),
+                0,
+            )
+        } != 0
+        {
+            return Err(io::Error::last_os_error());
+        }
+        let mut buffer = vec![0_u8; usize::try_from(limit).unwrap_or(0).max(4096)];
+        let mut size = buffer.len();
+        let mut name = [libc::CTL_KERN, libc::KERN_PROCARGS2, pid];
+        // SAFETY: the name is three ints, and the buffer is valid for `size`
+        // bytes, of which only the ones the call reports are read.
+        if unsafe {
+            libc::sysctl(
+                name.as_mut_ptr(),
+                name.len() as libc::c_uint,
+                buffer.as_mut_ptr().cast(),
+                &mut size,
+                std::ptr::null_mut(),
+                0,
+            )
+        } != 0
+        {
+            let error = io::Error::last_os_error();
+            // The kernel answers `EINVAL` for a process that has ended and
+            // for one of another account alike.
+            return Err(match error.raw_os_error() {
+                Some(libc::ESRCH) => io::ErrorKind::NotFound.into(),
+                Some(libc::EINVAL | libc::EPERM) => io::Error::new(
+                    io::ErrorKind::PermissionDenied,
+                    format!("the system does not say what process {pid} was started with"),
+                ),
+                _ => error,
+            });
+        }
+        buffer.truncate(size);
+        let unreadable = || io::Error::other(format!("process {pid}'s arguments are unreadable"));
+        let count = buffer
+            .get(..4)
+            .and_then(|head| <[u8; 4]>::try_from(head).ok())
+            .map(i32::from_ne_bytes)
+            .and_then(|count| usize::try_from(count).ok())
+            .ok_or_else(unreadable)?;
+        let mut rest = &buffer[4..];
+        // The program's path, then the nuls that pad it.
+        let path_end = rest
+            .iter()
+            .position(|byte| *byte == 0)
+            .ok_or_else(unreadable)?;
+        rest = &rest[path_end..];
+        let words_start = rest
+            .iter()
+            .position(|byte| *byte != 0)
+            .ok_or_else(unreadable)?;
+        rest = &rest[words_start..];
+        let mut words = Vec::with_capacity(count);
+        for _ in 0..count {
+            let end = rest
+                .iter()
+                .position(|byte| *byte == 0)
+                .ok_or_else(unreadable)?;
+            words.push(std::ffi::OsString::from_vec(rest[..end].to_vec()));
+            rest = &rest[end + 1..];
+        }
+        Ok(words)
+    }
+
+    #[cfg(target_os = "linux")]
+    pub(super) fn boot_id() -> io::Result<String> {
+        let id = std::fs::read_to_string("/proc/sys/kernel/random/boot_id")?;
+        let id = id.trim();
+        if id.is_empty() {
+            return Err(io::Error::other("the kernel names no boot id"));
+        }
+        Ok(id.to_owned())
+    }
+
+    #[cfg(target_os = "macos")]
+    pub(super) fn boot_id() -> io::Result<String> {
+        let mut buffer = [0_u8; 64];
+        let mut size = buffer.len();
+        // SAFETY: the name is a nul-terminated string and the buffer is
+        // valid for `size` bytes, of which only the ones reported are read.
+        if unsafe {
+            libc::sysctlbyname(
+                c"kern.bootsessionuuid".as_ptr(),
+                buffer.as_mut_ptr().cast(),
+                &mut size,
+                std::ptr::null_mut(),
+                0,
+            )
+        } != 0
+        {
+            return Err(io::Error::last_os_error());
+        }
+        let id: String = buffer[..size.min(buffer.len())]
+            .iter()
+            .take_while(|byte| **byte != 0)
+            .map(|byte| *byte as char)
+            .collect();
+        if id.is_empty() {
+            return Err(io::Error::other("the kernel names no boot session"));
+        }
+        Ok(id)
     }
 
     /// Every pid `/proc` lists now.
@@ -5631,11 +5911,134 @@ mod sys {
         ))
     }
 
-    /// No pid is worth listing where no image can be compared.
-    pub(super) fn all_pids() -> io::Result<Vec<u32>> {
+    /// The path `pid` was started from, as the system names it.
+    fn image_path(pid: u32) -> io::Result<PathBuf> {
+        use std::os::windows::ffi::OsStringExt;
+
+        let process = open_live(pid, PROCESS_QUERY_LIMITED_INFORMATION)?;
+        let mut buffer = vec![0_u16; 32 * 1024];
+        let mut length = buffer.len() as u32;
+        // SAFETY: the handle is open, and the buffer holds the `length` units
+        // the call is told of.
+        let named =
+            unsafe { QueryFullProcessImageNameW(process.0, 0, buffer.as_mut_ptr(), &mut length) };
+        if named == 0 {
+            return Err(io::Error::last_os_error());
+        }
+        buffer.truncate(length as usize);
+        Ok(PathBuf::from(std::ffi::OsString::from_wide(&buffer)))
+    }
+
+    /// See [`super::running`]: the file at the path each process was
+    /// started from.
+    pub(super) fn running_file(file: &crate::fs::identity::FileId) -> io::Result<Vec<u32>> {
+        let mut found = Vec::new();
+        for (pid, _) in process_table()? {
+            // The idle and system processes have no image file.
+            if pid == 0 || pid == 4 {
+                continue;
+            }
+            let Ok(path) = image_path(pid) else {
+                continue;
+            };
+            if crate::fs::identity::file_id(&path).is_ok_and(|id| id == *file) {
+                found.push(pid);
+            }
+        }
+        Ok(found)
+    }
+
+    /// `ProcessCommandLineInformation`, which asks only for the right to
+    /// query a little about the process, split the way the C runtime splits
+    /// a command line.
+    pub(super) fn arguments(pid: u32) -> io::Result<Vec<std::ffi::OsString>> {
+        use std::os::windows::ffi::OsStringExt;
+        use windows_sys::Win32::Foundation::RtlNtStatusToDosError;
+        use windows_sys::Win32::System::LibraryLoader::{GetModuleHandleW, GetProcAddress};
+
+        type Query =
+            unsafe extern "system" fn(HANDLE, u32, *mut std::ffi::c_void, u32, *mut u32) -> i32;
+        const COMMAND_LINE_INFORMATION: u32 = 60;
+
+        /// `UNICODE_STRING`: the bytes, the room, and where the text is,
+        /// which the call puts in the same buffer after this header.
+        #[repr(C)]
+        struct Text {
+            length: u16,
+            room: u16,
+            buffer: *const u16,
+        }
+
+        let process = open_live(pid, PROCESS_QUERY_LIMITED_INFORMATION)?;
+        let ntdll: Vec<u16> = "ntdll.dll\0".encode_utf16().collect();
+        // SAFETY: a nul-terminated name of a module every process loads.
+        let module = unsafe { GetModuleHandleW(ntdll.as_ptr()) };
+        // SAFETY: a nul-terminated name, asked of a loaded module.
+        let function = (!module.is_null())
+            .then(|| unsafe {
+                GetProcAddress(module, c"NtQueryInformationProcess".as_ptr().cast())
+            })
+            .flatten()
+            .ok_or_else(|| {
+                io::Error::new(
+                    io::ErrorKind::Unsupported,
+                    "NtQueryInformationProcess is unavailable",
+                )
+            })?;
+        // SAFETY: the documented signature of `NtQueryInformationProcess`,
+        // resolved at run time as Microsoft asks for this native query.
+        let query =
+            unsafe { std::mem::transmute::<unsafe extern "system" fn() -> isize, Query>(function) };
+        // The header and the longest command line Windows takes (32767
+        // units), in a buffer aligned for the header.
+        let mut buffer = vec![0_u64; (std::mem::size_of::<Text>() + 65536).div_ceil(8)];
+        let capacity = buffer.len() * 8;
+        let mut written = 0_u32;
+        // SAFETY: the handle is open and the buffer is valid for `capacity`
+        // bytes; the answer is checked against that room below.
+        let status = unsafe {
+            query(
+                process.0,
+                COMMAND_LINE_INFORMATION,
+                buffer.as_mut_ptr().cast(),
+                capacity as u32,
+                &mut written,
+            )
+        };
+        if status < 0 {
+            // SAFETY: a plain conversion of a status code.
+            return Err(io::Error::from_raw_os_error(
+                unsafe { RtlNtStatusToDosError(status) } as i32,
+            ));
+        }
+        // SAFETY: the buffer is aligned for the header and at least as long.
+        let text = unsafe { std::ptr::read(buffer.as_ptr().cast::<Text>()) };
+        let start = buffer.as_ptr() as usize;
+        let at = text.buffer as usize;
+        let units = usize::from(text.length) / 2;
+        if text.length % 2 != 0
+            || (units > 0 && (at < start || at + usize::from(text.length) > start + capacity))
+        {
+            return Err(io::Error::other(format!(
+                "process {pid}'s command line was answered out of bounds"
+            )));
+        }
+        let line: &[u16] = if units == 0 {
+            &[]
+        } else {
+            // SAFETY: the text lies inside the buffer, as checked above.
+            unsafe { std::slice::from_raw_parts(text.buffer, units) }
+        };
+        Ok(super::split_command_line(line)
+            .into_iter()
+            .map(|word| std::ffi::OsString::from_wide(&word))
+            .collect())
+    }
+
+    pub(super) fn boot_id() -> io::Result<String> {
         Err(io::Error::new(
             io::ErrorKind::Unsupported,
-            "Windows keeps no identity of a process's image file",
+            "a Windows start time is a time of day, which needs no boot to compare",
         ))
     }
 
@@ -5979,5 +6382,40 @@ mod run_cleanup_tests {
         );
         child.kill_tree().unwrap();
         child.wait().unwrap();
+    }
+}
+
+#[cfg(test)]
+mod command_line_tests {
+    use super::split_command_line;
+
+    fn split(line: &str) -> Vec<String> {
+        let units: Vec<u16> = line.encode_utf16().collect();
+        split_command_line(&units)
+            .into_iter()
+            .map(|word| String::from_utf16(&word).unwrap())
+            .collect()
+    }
+
+    /// The C runtime's own examples ("Parsing C command-line arguments"),
+    /// after a program path that keeps its backslashes.
+    #[test]
+    fn a_command_line_splits_as_the_c_runtime_splits_it() {
+        let cases: [(&str, &[&str]); 7] = [
+            (r#""a b c" d e"#, &["a b c", "d", "e"]),
+            (r#""ab\"c" "\\" d"#, &[r#"ab"c"#, r"\", "d"]),
+            (r#"a\\\b d"e f"g h"#, &[r"a\\\b", "de fg", "h"]),
+            (r#"a\\\"b c d"#, &[r#"a\"b"#, "c", "d"]),
+            (r#"a\\\\"b c" d e"#, &[r"a\\b c", "d", "e"]),
+            (r#"a"b"" c d"#, &[r#"ab" c d"#]),
+            (r#""" x"#, &["", "x"]),
+        ];
+        for (arguments, expected) in cases {
+            let line = format!(r#""C:\Program Files\p.exe" {arguments}"#);
+            let mut want = vec![r"C:\Program Files\p.exe".to_owned()];
+            want.extend(expected.iter().map(|word| (*word).to_owned()));
+            assert_eq!(split(&line), want, "{line}");
+        }
+        assert_eq!(split(r"C:\p.exe  a	b "), [r"C:\p.exe", "a", "b"]);
     }
 }

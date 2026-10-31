@@ -33,6 +33,7 @@ mod labels;
 pub mod layout;
 pub mod legacy;
 mod local;
+pub mod panes;
 pub mod process;
 mod record;
 mod refusal;

@@ -5,6 +5,7 @@ import { AgentMark } from "../../AgentMark";
 import { useInterfaceTranslation } from "../../i18n/client";
 import { cn } from "../../lib/utils";
 import { Elapsed } from "../elapsed";
+import { MENTION_PRESS, MENTION_TONE } from "../mention-chip";
 import { PrMark } from "../pr-mark";
 import { StatusMark } from "../status-mark";
 import { Badge } from "../ui/badge";
@@ -60,9 +61,9 @@ export function useSessionChipBridge(): (node: ReactNode) => ReactNode {
 
 /**
  * A session named inside a line (a reply's `@session`, a letter's other
- * side, a task handed on) on the chip ground (B26, B50, D-75): its status,
- * its agent and its name, the same chip in the chat, a thread and its
- * history. A session the sidebar no longer lists is dimmed with no status
+ * side, a task handed on, a `@` the operator picked) in the session blue
+ * (B26, B49, B50, D-75, D-85): its status, its agent and its name, the same
+ * chip in the composer, the chat, a thread and its history. A session the sidebar no longer lists is dimmed with no status
  * (D-86). Under the pointer or focus a listed session shows its card; a
  * press, on the chip or the card's `스레드 열기 ›`, opens its thread.
  * `card={false}` draws the chip alone, as inside another card.
@@ -75,13 +76,13 @@ export function SessionChip({ session, onPress, card: carded = true, className }
   const mark = facts?.listed ? facts.mark : gone ? null : session.mark;
   const agent = facts?.listed ? facts.agent_kind : gone ? null : session.agent_kind;
   const lead = agent === null ? null : <><StatusMark mark={mark} /><AgentMark kind={agent} /></>;
-  const look = cn("inline-flex max-w-full min-w-0 items-center gap-xxs rounded-xs bg-secondary px-xxs align-middle text-foreground", gone && "opacity-(--opacity-dimmed)", className);
+  const look = cn("inline-flex max-w-full min-w-0 items-center gap-xxs rounded-xs px-xxs align-middle", MENTION_TONE.session, gone && "opacity-(--opacity-dimmed)", className);
   // A session no longer listed has nothing left to open.
   const press = gone ? undefined : onPress;
   const chip = !press ? (
     <span className={look} aria-label={gone ? t("desk.chip.gone", { name: session.name }) : undefined} data-desk-session-chip={session.name} data-desk-session-gone={gone ? "true" : undefined}>{lead}<span className="truncate">{session.name}</span></span>
   ) : (
-    <Button variant="text" size="inline" className={cn(look, "hover:bg-accent hover:text-foreground")} aria-label={gone ? t("desk.chip.gone", { name: session.name }) : t("desk.mention.open", { name: session.name })} data-desk-session-chip={session.name} data-desk-session-gone={gone ? "true" : undefined} onClick={press}>
+    <Button variant="text" size="inline" className={cn(look, MENTION_PRESS.session)} aria-label={gone ? t("desk.chip.gone", { name: session.name }) : t("desk.mention.open", { name: session.name })} data-desk-session-chip={session.name} data-desk-session-gone={gone ? "true" : undefined} onClick={press}>
       {lead}
       <span className="truncate">{session.name}</span>
     </Button>

@@ -55,6 +55,9 @@ const FILE_REFUSAL_EVENTS = {
 } as const;
 type FileRefusal = keyof typeof FILE_REFUSAL_EVENTS;
 
+/** Input that presses in a page, as `input-event` names it. */
+const PRESSES = new Set(["mouseDown", "touchStart", "gestureTapDown"]);
+
 type Page = {
   key: string;
   workspace: string;
@@ -109,7 +112,18 @@ type Page = {
   readonly grant?: string;
   /** What each public name a local file page asked for resolved to, bounded. */
   readonly hostVerdicts: Map<string, boolean>;
+  /** Its document navigation in flight that began while something else held the keyboard. */
+  grab: NavigationGrab | null;
 };
+/**
+ * Chromium hands the keyboard to a page's view as each new document commits,
+ * whoever held it: a page that reloads itself (a dashboard's meta refresh) or
+ * that an agent navigates would take the keys the operator is typing into a
+ * terminal. A navigation that began while the shell (`from` null) or another
+ * page held the keyboard gives it back; a press in the page while it loads
+ * (`claimed`) keeps it there.
+ */
+type NavigationGrab = { readonly from: Page | null; claimed: boolean };
 /**
  * One load the core asked of a page, so its stages are logged against it
  * alone: `native` once its own `loadURL` was called, since until then a
@@ -182,6 +196,8 @@ export class BrowserViews {
    * yet back would hand that restore the keyboard a page was just given.
    */
   private windowBack = true;
+  /** What took the keyboard in the window last on purpose: a page, or the shell (null). */
+  private keyboard: Page | null = null;
 
   setRegistry(registry: readonly Command[]): void { this.registry = registry; }
 
@@ -191,7 +207,7 @@ export class BrowserViews {
     if (!page) return;
     if (!page.visible || !this.windowBack) return;
     this.returnTo = null;
-    page.view.webContents.focus();
+    this.focusPage(page);
     this.log.event("browser.window_return", { id: page.id, page_focused: page.view.webContents.isFocused() });
   }
 
@@ -328,7 +344,7 @@ export class BrowserViews {
       const zoom = SHELL_ZOOM_COMMANDS[command];
       if (zoom) this.zoom(page, zoom);
       else if (command === "focus") {
-        if (page.visible && this.window?.isFocused()) contents.focus();
+        if (page.visible && this.window?.isFocused()) this.focusPage(page);
       } else if (command === "back" && contents.navigationHistory.canGoBack()) contents.navigationHistory.goBack();
       else if (command === "forward" && contents.navigationHistory.canGoForward()) contents.navigationHistory.goForward();
       else if (command === "stop") contents.stop();
@@ -374,7 +390,10 @@ export class BrowserViews {
     });
     // Where the keyboard goes after a window's return: the order of these, the
     // pages' focus, blur and visibility after `browser.window_return`, says what took it.
-    window.webContents.on("focus", () => this.log.event("browser.shell_focus", { window_focused: window.isFocused(), owed: this.returnTo !== null }));
+    window.webContents.on("focus", () => {
+      this.keyboard = null;
+      this.log.event("browser.shell_focus", { window_focused: window.isFocused(), owed: this.returnTo !== null });
+    });
     // macOS reports the window hidden while nothing of it is drawn (covered,
     // or ordered out), and the shell then draws no frame, so it sends no sync.
     window.on("show", () => this.log.event("browser.window_visible", { visible: true, owed: this.returnTo !== null }));
@@ -618,6 +637,7 @@ export class BrowserViews {
       cdpDownloadRefused: false,
       cdpFileFrame: false,
       fileRefusals: new Set(),
+      grab: null,
       hostVerdicts: new Map(),
       ...(display.grant ? { grant: display.grant } : {}),
     };
@@ -800,7 +820,18 @@ export class BrowserViews {
     const contents = page.view.webContents;
     const history = () => ({ canGoBack: contents.navigationHistory.canGoBack(), canGoForward: contents.navigationHistory.canGoForward() });
     contents.on("did-start-loading", () => this.update(page, { loading: true, failure: null }));
-    contents.on("did-stop-loading", () => this.update(page, { loading: false, ...history() }));
+    contents.on("did-stop-loading", () => {
+      page.grab = null;
+      this.update(page, { loading: false, ...history() });
+    });
+    contents.on("did-start-navigation", (details) => {
+      if (!details.isMainFrame || details.isSameDocument) return;
+      page.grab = this.keyboard === page || contents.isFocused() ? null : { from: this.keyboard, claimed: false };
+    });
+    // A press in a loading page is the operator choosing it: its keyboard stays.
+    contents.on("input-event", (_event, input) => {
+      if (page.grab && PRESSES.has(input.type)) page.grab.claimed = true;
+    });
     contents.on("did-navigate", (_event, url) => {
       // Electron emits this as the navigation finishes, so a commit before
       // the current load's own `loadURL` is the load before it.
@@ -846,10 +877,9 @@ export class BrowserViews {
     });
     contents.on("blur", () => this.log.event("browser.page_blur", { id: page.id, owed_page: this.returnTo === page, visible: page.visible, window_focused: this.window?.isFocused() ?? false, owed: this.returnTo !== null }));
     contents.on("focus", () => {
-      this.log.event("browser.page_focus", { id: page.id, owed_page: this.returnTo === page, visible: page.visible, window_focused: this.window?.isFocused() ?? false, owed: this.returnTo !== null });
-      // Another page holding the keyboard settles the debt: it is not the page the hold began on.
-      if (this.returnTo && this.returnTo !== page) this.returnTo = null;
-      if (page.visible) this.emit({ kind: "focus", workspace: page.workspace, id: page.id });
+      this.log.event("browser.page_focus", { id: page.id, owed_page: this.returnTo === page, visible: page.visible, window_focused: this.window?.isFocused() ?? false, owed: this.returnTo !== null, navigating: page.grab !== null });
+      if (page.grab) this.undoGrab(page, page.grab);
+      else this.tookKeyboard(page);
     });
     this.guard(page, contents);
   }
@@ -1148,6 +1178,40 @@ export class BrowserViews {
     if (!visible && (keyboard || this.cycleInput?.page === page) && this.window?.isFocused()) this.window.webContents.focus();
   }
 
+  /** The host gives `page` the keyboard on purpose, so a navigation in flight keeps it there. */
+  private focusPage(page: Page): void {
+    if (page.grab) page.grab.claimed = true;
+    page.view.webContents.focus();
+  }
+
+  private tookKeyboard(page: Page): void {
+    this.keyboard = page;
+    // Another page holding the keyboard settles the debt: it is not the page the hold began on.
+    if (this.returnTo && this.returnTo !== page) this.returnTo = null;
+    if (page.visible) this.emit({ kind: "focus", workspace: page.workspace, id: page.id });
+  }
+
+  /**
+   * A navigation's commit focused `page`. The press that would claim it
+   * reaches `input-event` after the native focus it causes, in the same
+   * turn, so the keyboard goes back on the next one unless a press came.
+   * A window in the background is left alone: macOS gives it back the
+   * focus it stored on blur when it returns, and focusing contents there
+   * would bring the window forward.
+   */
+  private undoGrab(page: Page, grab: NavigationGrab): void {
+    setImmediate(() => {
+      if (this.pages.get(page.key) !== page || page.view.webContents.isDestroyed() || !page.view.webContents.isFocused()) return;
+      if (grab.claimed) return this.tookKeyboard(page);
+      const window = this.window;
+      if (!window?.isFocused() || window.webContents.isDestroyed()) return;
+      const from = grab.from && this.pages.get(grab.from.key) === grab.from && grab.from.visible ? grab.from : null;
+      if (from) from.view.webContents.focus();
+      else window.webContents.focus();
+      this.log.event("browser.navigation_focus_returned", { id: page.id, to: from?.id ?? "shell" });
+    });
+  }
+
   /** Closes the hidden pages past `MAX_LIVE_VIEWS`, least recently shown first, whatever holds them (B2). */
   private evictOverCap(): void {
     for (const key of overCap([...this.pages.values()], MAX_LIVE_VIEWS)) {
@@ -1261,6 +1325,7 @@ export class BrowserViews {
     for (const done of [...page.settled]) done();
     if (this.cycleInput?.page === page) this.cancelCycle();
     if (this.returnTo === page) this.returnTo = null;
+    if (this.keyboard === page) this.keyboard = null;
     this.pages.delete(page.key);
     this.publishCdp({ contentsId: page.view.webContents.id, reason: reason === "idle" ? "evicted" : reason });
     // An outside file's page resolved no route, so the daemon has none to let go.

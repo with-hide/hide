@@ -18,9 +18,10 @@ use hide_platform::fs::identity::{canonical, file_id};
 use hide_platform::process::GuardedSpawnError;
 use hide_platform::process::{
     CaptureFailureKind, GroupEnd, MAX_CAPTURE_BYTES, OWNER_LAUNCH_KEYS, OwnedChild, OwnerWatch,
-    RUN_OUTPUT_CAP, RunFailure, cwd_of, descendants, descends_from, detach, image_of, is_alive,
-    kill_tree, measure_tree, name_of, parent_of, restrict_to_login_environment, run_to_end,
-    running, set_output_aside, start_time, terminate, terminate_group,
+    RUN_OUTPUT_CAP, RunFailure, arguments, boot_id, cwd_of, descendants, descends_from, detach,
+    group_members, image_of, is_alive, kill_tree, measure_tree, name_of, parent_of,
+    restrict_to_login_environment, run_to_end, running, set_output_aside, start_time, terminate,
+    terminate_group,
 };
 
 const ROLE: &str = "HIDE_PLATFORM_PROC_ROLE";
@@ -2162,6 +2163,58 @@ fn the_image_of_a_process_is_the_file_it_started_from_wherever_that_file_goes() 
     assert_eq!(image_of(pid).unwrap_err().kind(), ErrorKind::NotFound);
 }
 
+/// What tells a pane's holder from another state folder's: the words a
+/// process was started with read back as they were given, quoting and all,
+/// and none once the process is gone.
+#[test]
+fn the_words_a_process_was_started_with_read_back_as_given() {
+    let _serial = serial();
+    let words = [
+        "two words",
+        "quote\"inside",
+        "back\\slash",
+        "trailing\\",
+        "\\\\\"mixed",
+        "\u{d55c}\u{ae00} word",
+        "",
+        "\ttab",
+    ];
+    let mut child = role_command("sleep").args(words).spawn().unwrap();
+    ready_number(child.stdout.take().unwrap());
+    let pid = child.id();
+    let read = arguments(pid).unwrap();
+    let expected: Vec<std::ffi::OsString> = [
+        "--exact",
+        "process::child_role",
+        "--nocapture",
+        "--test-threads=1",
+    ]
+    .into_iter()
+    .chain(words)
+    .map(std::ffi::OsString::from)
+    .collect();
+    assert!(!read[0].is_empty(), "{read:?}");
+    assert_eq!(read[1..], expected[..]);
+
+    child.kill().unwrap();
+    child.wait().unwrap();
+    assert_eq!(arguments(pid).unwrap_err().kind(), ErrorKind::NotFound);
+}
+
+/// What tells a record from an earlier boot: the same id for as long as the
+/// machine runs, on the systems whose start times count from the boot.
+#[test]
+fn the_boot_id_names_this_boot_and_holds_still() {
+    let first = boot_id();
+    if cfg!(windows) {
+        assert_eq!(first.unwrap_err().kind(), ErrorKind::Unsupported);
+        return;
+    }
+    let first = first.unwrap();
+    assert!(!first.is_empty());
+    assert_eq!(boot_id().unwrap(), first);
+}
+
 /// What keeps a device's old Herdr copy while a server runs it: the
 /// processes that run a file are found by the file, wherever it went, and a
 /// file no process runs has none.
@@ -2182,22 +2235,21 @@ fn the_processes_running_a_file_are_found_by_the_file_not_its_path() {
     ready_number(child.stdout.take().unwrap());
     let pid = child.id();
 
-    let found = running(&file);
-    if cfg!(windows) {
-        assert_eq!(found.unwrap_err().kind(), ErrorKind::Unsupported);
-        child.kill().unwrap();
-        child.wait().unwrap();
-        return;
-    }
-    assert_eq!(found.unwrap(), vec![pid]);
+    assert_eq!(running(&file).unwrap(), vec![pid]);
     assert_eq!(
         running(&file_id(&unused).unwrap()).unwrap(),
         Vec::<u32>::new()
     );
 
+    // Windows names an image by its path alone, so a renamed one is only
+    // ever left out there, never taken for another file's.
     let moved = root.path().join("moved");
     std::fs::rename(&program, &moved).unwrap();
-    assert_eq!(running(&file).unwrap(), vec![pid]);
+    if cfg!(windows) {
+        assert!(running(&file_id(&unused).unwrap()).unwrap().is_empty());
+    } else {
+        assert_eq!(running(&file).unwrap(), vec![pid]);
+    }
 
     child.kill().unwrap();
     child.wait().unwrap();
@@ -2490,6 +2542,26 @@ fn a_process_is_named_by_the_program_it_runs() {
         name_of(u32::MAX - 1).unwrap_err().kind(),
         ErrorKind::NotFound,
         "no process, no name"
+    );
+}
+
+#[test]
+fn a_process_group_lists_its_members_where_the_system_has_them() {
+    #[cfg(unix)]
+    {
+        // SAFETY: getpgrp has no preconditions.
+        let group = unsafe { libc::getpgrp() } as u32;
+        let members = group_members(group).unwrap();
+        assert!(members.contains(&std::process::id()), "{members:?}");
+        assert!(
+            group_members(u32::MAX >> 2).unwrap().is_empty(),
+            "no such group"
+        );
+    }
+    #[cfg(windows)]
+    assert_eq!(
+        group_members(std::process::id()).unwrap_err().kind(),
+        ErrorKind::Unsupported
     );
 }
 

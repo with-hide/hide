@@ -1012,6 +1012,7 @@ mod tests {
             } else {
                 Turn::NotReported
             },
+            unreadable: None,
         }
     }
 

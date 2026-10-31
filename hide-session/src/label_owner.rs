@@ -1,11 +1,14 @@
 //! Proven transcript ownership for labels. Other session discovery callers
 //! retain their existing cwd fallback policy.
 
-use crate::{Agent, FileIdentity, SESSION_INCREMENT_READ_LIMIT_BYTES, SESSION_LINE_LIMIT_BYTES};
+use crate::{
+    Agent, FileIdentity, SESSION_INCREMENT_READ_LIMIT_BYTES, SESSION_LINE_LIMIT_BYTES,
+    SESSION_READ_LIMIT_BYTES,
+};
 use anyhow::{Result, anyhow};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
-use std::io::{BufRead, BufReader, Read};
+use std::io::{BufReader, Read};
 use std::path::Path;
 
 /// A compact, path-free token that consumers can compare with Herdr's current
@@ -192,18 +195,20 @@ fn confirm_metadata(
         }
         native_id = Some(header.id);
     } else {
+        // The id is on the first person's or assistant's record, and the
+        // first person's record can carry pasted images far larger than one
+        // record's cap or one poll's increment: records over the cap are
+        // passed over, and the scan as a whole is bounded like a whole-file
+        // read.
+        reader.get_mut().set_limit(SESSION_READ_LIMIT_BYTES);
         loop {
-            let mut line = Vec::new();
-            Read::by_ref(&mut reader)
-                .take((SESSION_LINE_LIMIT_BYTES + 1) as u64)
-                .read_until(b'\n', &mut line)
-                .map_err(|_| anyhow!("label_session_metadata_read_failed"))?;
-            if line.len() > SESSION_LINE_LIMIT_BYTES {
-                return Err(anyhow!("label_session_metadata_line_capacity"));
-            }
-            if line.last() != Some(&b'\n') {
-                break;
-            }
+            let line = match crate::read_head_record(&mut reader, SESSION_LINE_LIMIT_BYTES)
+                .map_err(|_| anyhow!("label_session_metadata_read_failed"))?
+            {
+                Some(crate::HeadRecord::Complete(line)) => line,
+                Some(crate::HeadRecord::Passed) => continue,
+                Some(crate::HeadRecord::Unfinished(_)) | None => break,
+            };
             let Ok(record) = serde_json::from_slice::<serde_json::Value>(&line) else {
                 continue;
             };
@@ -429,17 +434,36 @@ mod tests {
         )
         .unwrap();
         assert!(confirm_label_session(Agent::Codex, &path, None).is_err());
+        // A record over the cap is passed over, not refused: the id after
+        // it still confirms the session.
+        let meta = "{\"type\":\"session_meta\",\"payload\":{\"id\":\"native-a\"}}\n";
+        let oversized = format!("{}\n", "x".repeat(SESSION_LINE_LIMIT_BYTES + 1));
+        fs::write(&path, format!("{oversized}{meta}")).unwrap();
+        assert_eq!(
+            confirm_label_session(Agent::Codex, &path, None)
+                .unwrap()
+                .native_session_id
+                .as_deref(),
+            Some("native-a")
+        );
         fs::write(&path, "x".repeat(SESSION_LINE_LIMIT_BYTES + 1)).unwrap();
         assert_eq!(
             confirm_label_session(Agent::Codex, &path, None)
                 .unwrap_err()
                 .to_string(),
-            "label_session_metadata_line_capacity"
+            "label_session_metadata_unconfirmed"
         );
-        let mut contents = "{}\n".repeat((SESSION_INCREMENT_READ_LIMIT_BYTES / 3) as usize + 1);
+        // The scan as a whole stops at the whole-file read cap.
+        let mut contents = oversized
+            .repeat((SESSION_READ_LIMIT_BYTES as usize).div_ceil(SESSION_LINE_LIMIT_BYTES + 2));
         contents.push_str("{\"type\":\"session_meta\",\"payload\":{\"id\":\"too-late\"}}\n");
         fs::write(&path, contents).unwrap();
-        assert!(confirm_label_session(Agent::Codex, &path, None).is_err());
+        assert_eq!(
+            confirm_label_session(Agent::Codex, &path, None)
+                .unwrap_err()
+                .to_string(),
+            "label_session_metadata_unconfirmed"
+        );
         assert_eq!(
             confirm_label_session(Agent::Codex, root.path(), None)
                 .unwrap_err()

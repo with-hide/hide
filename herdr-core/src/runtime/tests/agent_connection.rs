@@ -1284,3 +1284,50 @@ fn an_agent_started_again_in_its_pane_follows_its_hook_over_herdrs_earlier_sessi
     listed(&mut runtime, "working");
     assert_eq!(activity(&runtime), "stopped");
 }
+
+/// A session Hide cannot read holds the letters and mission answers to it,
+/// whatever its hooks say and for any agent whose read reports turns, so
+/// its pane says so; neither Reopen nor Settings fixes it, and a read that
+/// lands takes the mark away.
+#[test]
+fn a_session_hide_cannot_read_marks_its_pane_until_a_read_lands() {
+    let mut runtime = runtime();
+    kit_rows(&mut runtime, None);
+    runtime.ingest_hook_diagnosis(diagnosis(installed(), installed()));
+    let panes = [("w1:p1", "claude", true), ("w1:p2", "grok", false)];
+    let observe = |runtime: &mut Runtime, refused: bool| {
+        let payload: crate::sidebar::SessionSnapshotPayload =
+            serde_json::from_value(session(&panes)).unwrap();
+        let labels = crate::labels::overlay::LabelOverlay::default().with_refusals(
+            panes.iter().filter(|_| refused).map(|(pane, agent, _)| {
+                (
+                    (*pane).to_owned(),
+                    hide_session::label_reference_token(agent, "id", &format!("session-{pane}")),
+                    "session_capacity:line_bytes:262144".to_owned(),
+                )
+            }),
+        );
+        runtime.observe_delivery(crate::node::TEST_NODE, &payload, None, Some(&labels));
+        feed(runtime, &panes);
+    };
+    observe(&mut runtime, true);
+    for (pane, _, _) in panes {
+        assert_eq!(
+            connection_of(&runtime, pane),
+            Some(PaneConnectionSnapshot {
+                connected: false,
+                can_reopen: false,
+                reason: Some(PaneConnectionReason::SessionUnreadable),
+                reopen: None,
+                update: None,
+            }),
+            "{pane}"
+        );
+    }
+    observe(&mut runtime, false);
+    assert_eq!(
+        connection_of(&runtime, "w1:p1").map(|connection| connection.connected),
+        Some(true)
+    );
+    assert_eq!(connection_of(&runtime, "w1:p2"), None);
+}

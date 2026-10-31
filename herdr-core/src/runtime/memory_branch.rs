@@ -58,8 +58,10 @@ pub(super) type BatchReach = (
 /// Reads each checked batch's branch on its machine and moves its cards
 /// (D-08, B5, B13, B20): a stopped agent's branch with commits makes the
 /// placed cards ready and returns the rest with their reason, one with none
-/// fails every card (`바뀐 것 없이 끝났어요`); a ready branch whose commit
-/// reached the base merged its cards, one gone unmerged was discarded.
+/// merges the cards placed where their document already says them and
+/// fails every card when none was placed (`바뀐 것 없이 끝났어요`); a ready
+/// branch whose commit reached the base merged its cards, one gone unmerged
+/// was discarded.
 pub(super) fn read_batches(
     checks: Vec<BatchCheck>,
     reach: &HashMap<NodeId, BatchReach>,
@@ -130,6 +132,12 @@ fn read_stopped(
         .cards
         .iter()
         .any(|(_, promotion)| promotion.target_path.is_some());
+    // A placed card on a branch with nothing of its own is one the agent
+    // found its document already says: it is in the documents now, with no
+    // branch for the operator to decide on.
+    if placed && summary.is_none() && facts.exists {
+        return settle_documented(check, place, store, now, read);
+    }
     let Some(summary) = summary.filter(|_| placed) else {
         for (number, promotion) in &check.cards {
             if promotion.state == PromotionState::Running {
@@ -187,6 +195,58 @@ fn read_stopped(
     log_batch(check, "promotion.batch_ready", "ready");
     read.facts
         .push(((check.project_id.clone(), check.branch.clone()), summary));
+    Ok(moved)
+}
+
+/// Ends a stopped batch whose agent placed cards without a commit: each
+/// placed card is merged where its document already says it, the rest are
+/// returned with their reason, and the batch's agent and worktree retire as
+/// a merged batch's do.
+fn settle_documented(
+    check: &BatchCheck,
+    place: &BranchPlace,
+    store: &mut MemoryStore,
+    now: u64,
+    read: &mut BatchesRead,
+) -> Result<bool, String> {
+    let mut moved = false;
+    for (number, promotion) in &check.cards {
+        if promotion.state != PromotionState::Running {
+            continue;
+        }
+        moved |= if promotion.target_path.is_some() {
+            store
+                .move_promotion(
+                    &check.project_id,
+                    *number,
+                    promotion,
+                    PromotionState::Merged,
+                    None,
+                    now,
+                )
+                .map_err(|error| error.to_string())?
+        } else {
+            store
+                .skip_promotion(
+                    &check.project_id,
+                    *number,
+                    promotion,
+                    "The card was not processed before the task ended",
+                    now,
+                    None,
+                )
+                .map_err(|error| error.to_string())?
+        };
+    }
+    log_batch(check, "promotion.batch_ended", "already_documented");
+    read.merged.push((
+        retire_of(place),
+        check
+            .cards
+            .iter()
+            .filter_map(|(_, promotion)| promotion.agent_id.clone())
+            .collect(),
+    ));
     Ok(moved)
 }
 
@@ -926,4 +986,108 @@ fn restart_batch(
         &place.project_id,
         start,
     ))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::super::memory_promotion::tests::{running, seed};
+    use super::*;
+    use std::path::Path;
+
+    fn check(project: &str, cards: Vec<(u64, Promotion)>) -> BatchCheck {
+        BatchCheck {
+            node: NodeId::parse("test-node").unwrap(),
+            project_id: project.into(),
+            root: format!("/checkouts/{project}"),
+            branch: "hide-memory-m1-x".into(),
+            base: Some("main".into()),
+            tip: None,
+            purpose: BatchPurpose::Branch,
+            cards,
+        }
+    }
+
+    /// A branch that exists and holds no commit of its own.
+    fn empty_branch() -> BranchFacts {
+        BranchFacts {
+            exists: true,
+            tip: Some("abc123".into()),
+            ahead: 0,
+            merged: Some(false),
+            files: Vec::new(),
+            files_total: 0,
+            added: 0,
+            removed: 0,
+        }
+    }
+
+    #[test]
+    fn a_card_placed_without_a_commit_is_merged_where_its_document_already_says_it() {
+        let folder = tempfile::tempdir().unwrap();
+        let mut store = MemoryStore::open(&folder.path().join("memory.sqlite3")).unwrap();
+        for project in ["p", "q"] {
+            store
+                .ensure_project(
+                    project,
+                    Path::new(&format!("/checkouts/{project}")),
+                    "test-node",
+                )
+                .unwrap();
+            seed(&mut store, project, "Devices lists ssh config Hosts");
+        }
+        let placed = Promotion {
+            target_path: Some("docs/UI_BEHAVIOR.md".into()),
+            ..running(Some("agent-1"), 1_000)
+        };
+        store.set_promotion("p", 1, &placed).unwrap();
+        let unplaced = running(Some("agent-2"), 1_000);
+        store.set_promotion("q", 1, &unplaced).unwrap();
+
+        let documented = check("p", vec![(1, placed)]);
+        let place = |check: &BatchCheck| BranchPlace {
+            node: check.node.clone(),
+            project_id: check.project_id.clone(),
+            root: check.root.clone(),
+            branch: check.branch.clone(),
+            base: "main".into(),
+        };
+        let mut read = BatchesRead::default();
+        let moved = read_stopped(
+            &documented,
+            &place(&documented),
+            empty_branch(),
+            &mut store,
+            2_000,
+            &mut read,
+        )
+        .unwrap();
+        assert!(moved);
+        let (_, promotion) = store.promotions("p").unwrap().remove(0);
+        assert_eq!(promotion.state, PromotionState::Merged);
+        assert_eq!(
+            promotion.target_path.as_deref(),
+            Some("docs/UI_BEHAVIOR.md")
+        );
+        // Nothing for the operator to decide; its agent and worktree retire.
+        assert!(read.facts.is_empty());
+        assert_eq!(read.merged.len(), 1);
+        assert_eq!(read.merged[0].1, ["agent-1"]);
+
+        // An agent that ended with nothing placed and nothing committed
+        // still changed nothing.
+        let nothing = check("q", vec![(1, unplaced)]);
+        let mut read = BatchesRead::default();
+        read_stopped(
+            &nothing,
+            &place(&nothing),
+            empty_branch(),
+            &mut store,
+            2_000,
+            &mut read,
+        )
+        .unwrap();
+        let (_, promotion) = store.promotions("q").unwrap().remove(0);
+        assert_eq!(promotion.state, PromotionState::Failed);
+        assert!(read.merged.is_empty());
+    }
 }

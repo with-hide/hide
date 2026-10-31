@@ -215,8 +215,8 @@ function candidate() {
   const page = (id: string) => {
     let focused = true;
     const pageFocus = vi.fn();
-    const contents = Object.assign(new EventEmitter(), { isFocused: () => focused, setWindowOpenHandler: vi.fn(), focus: pageFocus });
-    const value = { key: id, workspace: "fixture", id, visible: true, view: { webContents: contents, setVisible: vi.fn() }, state: {}, report: null, route: null, applied: 1, partition: "fixture", shownAt: 0 };
+    const contents = Object.assign(new EventEmitter(), { isFocused: () => focused, isDestroyed: () => false, setWindowOpenHandler: vi.fn(), focus: pageFocus, navigationHistory: { canGoBack: () => false, canGoForward: () => false } });
+    const value = { key: id, workspace: "fixture", id, visible: true, view: { webContents: contents, setVisible: vi.fn() }, state: {}, report: null, route: null, applied: 1, partition: "fixture", shownAt: 0, settled: new Set() };
     const watch = Reflect.get(subject, "watch") as (page: unknown) => void;
     watch.call(subject, value);
     (Reflect.get(subject, "pages") as Map<string, unknown>).set(id, value);
@@ -227,10 +227,14 @@ function candidate() {
       show: (visible: boolean) => Reflect.get(subject, "show").call(subject, value, visible),
       visibility: value.view.setVisible,
       input: (type?: string, key?: string, control?: boolean, alt?: boolean) => input(contents, type, key, control, alt),
+      /** A new document starts loading in the page, as a meta refresh or an agent's navigate does. */
+      navigate: () => contents.emit("did-start-navigation", { isMainFrame: true, isSameDocument: false }),
+      press: () => contents.emit("input-event", {}, { type: "mouseDown" }),
+      stopLoading: () => contents.emit("did-stop-loading"),
     };
   };
   const forwarded = () => send.mock.calls.filter(([channel]) => channel === BROWSER_EVENT_CHANNEL).map(([, value]) => value as { kind: string; id: string; cycleId: number; key: string });
-  return { page, forwarded, shellFocus, shellInput: (type?: string, key?: string, control?: boolean, alt?: boolean) => input(shellContents, type, key, control, alt), registry: (rows: readonly Command[]) => subject.setRegistry(rows), blur: () => window.emit("blur"), windowReturn: () => window.emit("focus"), windowFocus: (focused: boolean) => { windowFocused = focused; } };
+  return { page, forwarded, shellFocus, shellTakesFocus: () => shellContents.emit("focus"), shellInput: (type?: string, key?: string, control?: boolean, alt?: boolean) => input(shellContents, type, key, control, alt), registry: (rows: readonly Command[]) => subject.setRegistry(rows), blur: () => window.emit("blur"), windowReturn: () => window.emit("focus"), windowFocus: (focused: boolean) => { windowFocused = focused; } };
 }
 
 describe("native held cycle delivery", () => {
@@ -635,5 +639,78 @@ describe("unloading hidden pages (PRD browser-tab-idle-unload)", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+});
+
+describe("a page's navigation and the keyboard", () => {
+  beforeEach(() => ipc.clear());
+  const turn = () => new Promise((done) => setImmediate(done));
+  const pageFocusReports = (forwarded: () => { kind: string; id: string }[]) => forwarded().filter((event) => event.kind === "focus").map((event) => event.id);
+
+  it("gives the keyboard back to the shell when a page's new document takes it", async () => {
+    const { page, forwarded, shellFocus, shellTakesFocus } = candidate();
+    const dashboard = page("dashboard");
+    dashboard.focus(false);
+    shellTakesFocus();
+    dashboard.navigate();
+    // Chromium focuses the committed document's view.
+    dashboard.focus(true);
+    dashboard.takeFocus();
+    await turn();
+    expect(shellFocus).toHaveBeenCalledOnce();
+    expect(pageFocusReports(forwarded)).toEqual([]);
+  });
+
+  it("gives it back to the page that held it", async () => {
+    const { page, forwarded, shellFocus } = candidate();
+    const reading = page("reading"), dashboard = page("dashboard");
+    reading.takeFocus();
+    reading.focus(false);
+    dashboard.focus(false);
+    dashboard.navigate();
+    dashboard.focus(true);
+    dashboard.takeFocus();
+    await turn();
+    expect(reading.pageFocus).toHaveBeenCalledOnce();
+    expect(shellFocus).not.toHaveBeenCalled();
+    expect(pageFocusReports(forwarded)).toEqual(["reading"]);
+  });
+
+  it("keeps the keyboard in a page that held it, or that the operator pressed while it loaded", async () => {
+    const { page, forwarded, shellFocus, shellTakesFocus } = candidate();
+    const typing = page("typing");
+    typing.takeFocus();
+    typing.navigate();
+    typing.takeFocus();
+    const pressed = page("pressed");
+    pressed.focus(false);
+    shellTakesFocus();
+    pressed.navigate();
+    pressed.focus(true);
+    pressed.takeFocus();
+    pressed.press();
+    await turn();
+    expect(shellFocus).not.toHaveBeenCalled();
+    expect(pageFocusReports(forwarded)).toEqual(["typing", "typing", "pressed"]);
+  });
+
+  it("leaves a background window alone and treats focus after the load as the operator's", async () => {
+    const { page, forwarded, shellFocus, shellTakesFocus, windowFocus } = candidate();
+    const dashboard = page("dashboard");
+    dashboard.focus(false);
+    shellTakesFocus();
+    windowFocus(false);
+    dashboard.navigate();
+    dashboard.focus(true);
+    dashboard.takeFocus();
+    await turn();
+    expect(shellFocus).not.toHaveBeenCalled();
+    expect(pageFocusReports(forwarded)).toEqual([]);
+    windowFocus(true);
+    dashboard.stopLoading();
+    dashboard.takeFocus();
+    await turn();
+    expect(shellFocus).not.toHaveBeenCalled();
+    expect(pageFocusReports(forwarded)).toEqual(["dashboard"]);
   });
 });

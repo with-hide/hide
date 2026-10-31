@@ -84,6 +84,17 @@ jobs:
         run: |
           bash scripts/verify-cargo.sh nextest --profile ci -p hide-vt
           bash scripts/verify-cargo.sh clippy -p hide-vt --all-targets -- -D warnings
+      # The holder's screen tests draw its fragments on a headless xterm of
+      # their own, under Node (docs/TESTING.md, The pane holder).
+      - uses: pnpm/action-setup@v6
+        with:
+          version: 10
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Install the holder tests' xterm
+        timeout-minutes: 3
+        run: bash scripts/verify-web.sh install holder
       - name: Fetch the pinned ConPTY runtime
         # A Windows holder runs a pane only on the pinned ConPTY runtime: the
         # conpty folder beside the pinned Herdr's herdr.exe, which the fetch

@@ -26,6 +26,9 @@ use crate::sidebar::{
 pub(crate) struct LabelOverlay {
     panes: HashMap<String, OverlayPane>,
     records: HashMap<String, super::record::RecordBinding>,
+    /// Each pane whose current session's last read refused for a reason
+    /// reading again cannot clear, with the reference it was read under.
+    refusals: HashMap<String, (Option<String>, String)>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -110,7 +113,19 @@ impl LabelOverlay {
         Self {
             panes,
             records: HashMap::new(),
+            refusals: HashMap::new(),
         }
+    }
+
+    pub(crate) fn with_refusals(
+        mut self,
+        refusals: impl IntoIterator<Item = (String, Option<String>, String)>,
+    ) -> Self {
+        self.refusals = refusals
+            .into_iter()
+            .map(|(pane, reference, reason)| (pane, (reference, reason)))
+            .collect();
+        self
     }
 
     pub(crate) fn with_bindings(
@@ -143,6 +158,23 @@ impl LabelOverlay {
         (agent.state_change_seq == Some(seq))
             .then_some(waiting)
             .flatten()
+    }
+
+    /// Why the session `agent` runs now cannot be read: its last read
+    /// refused, and reading again gives the same answer until the session
+    /// changes (the reader's code, such as `session_capacity:line_bytes:262144`).
+    /// `None` for a session read since, another session, or none refused.
+    pub(crate) fn refusal(&self, agent: &SessionAgentPayload) -> Option<&str> {
+        let pane_id = agent.pane_id.as_deref().or(agent.id.as_deref())?;
+        let (reference, reason) = self.refusals.get(pane_id)?;
+        let current = agent.agent_session.as_ref().and_then(|session| {
+            label_reference_token(
+                agent.agent.as_deref().unwrap_or_default(),
+                &session.kind,
+                &session.value,
+            )
+        });
+        (reference.is_some() && *reference == current).then_some(reason.as_str())
     }
 
     /// The native session and its lifecycle reference this pane's label

@@ -596,7 +596,13 @@ fn session_leader() {
         .spawn()
         .unwrap();
     println!("READY {}", stubborn.id());
-    if std::env::var(SETUP).is_ok_and(|setup| setup == "exit") {
+    let setup = std::env::var(SETUP).unwrap_or_default();
+    if setup == "exit_when_told" {
+        // Ends once the test has named it while it runs.
+        let mut told = [0u8; 1];
+        let _ = std::io::stdin().read_exact(&mut told);
+    }
+    if setup == "exit" || setup == "exit_when_told" {
         // The shell exits on its own and leaves its child behind.
         std::mem::forget(stubborn);
         return;
@@ -767,6 +773,62 @@ fn a_session_whose_leader_exited_still_ends_what_it_left() {
             "member {pid} outlived its session's end"
         );
     }
+}
+
+/// What a pane's holder killed outright leaves: its program's session, whose
+/// leader ended with the terminal and whose member ignored the hangup. A
+/// node that recorded the leader by its pid and start time finds the session
+/// again with nobody holding it, and ends it whole.
+#[cfg(unix)]
+#[test]
+fn a_session_left_by_its_holder_is_found_again_by_its_recorded_leader() {
+    let folder = tempfile::tempdir().unwrap();
+    let pids = folder.path().join("pids");
+    let mut command = role_command("session_leader");
+    command
+        .env(SETUP, "exit_when_told")
+        .env(PIDS_FILE, &pids)
+        .stdin(Stdio::piped());
+    let mut leader = Owned(command.spawn().unwrap());
+    let _ = line_after(leader.0.stdout.take().unwrap(), "READY ");
+    let recorded = Pinned::of(leader.0.id()).expect("the leader ended before it was named");
+    let members = pids_in(&pids, 1);
+    let named = pinned(&members);
+    leader.0.stdin.take().unwrap().write_all(b"g").unwrap();
+    leader.0.wait().unwrap();
+    assert!(
+        named.iter().any(Pinned::is_running),
+        "the leader's child ended with it"
+    );
+
+    let mut session = Session::left_by(recorded.pid, recorded.started).unwrap();
+    assert!(session.members().unwrap().contains(&members[0]));
+    assert_eq!(session.end(END_LIMIT).unwrap(), SessionEnd::Ended);
+    for pid in pids_in(&pids, 1) {
+        assert!(
+            Pinned::of(pid).is_none(),
+            "member {pid} outlived its session's end"
+        );
+    }
+}
+
+/// A recorded leader whose pid another process holds now, one with another
+/// start time, names a session that is over: nothing of the process that
+/// holds the pid is a member, and the end touches nothing.
+#[cfg(unix)]
+#[test]
+fn a_recorded_leader_whose_pid_another_process_holds_names_no_member() {
+    let mut other = Owned(role_command("sleep").spawn().unwrap());
+    let _ = line_after(other.0.stdout.take().unwrap(), "READY ");
+    let other_pid = other.0.id();
+    let started = start_time(other_pid).unwrap();
+    let mut session = Session::left_by(other_pid, started + 1).unwrap();
+    assert_eq!(session.members().unwrap(), Vec::<u32>::new());
+    assert_eq!(session.end(END_LIMIT).unwrap(), SessionEnd::Ended);
+    assert!(
+        is_alive(other_pid) && start_time(other_pid).ok() == Some(started),
+        "the end reached the process that holds the pid now"
+    );
 }
 
 /// On Linux a program file stays busy while any process holds it open for

@@ -412,6 +412,9 @@ pub fn read(home: &Path, request: &LabelTranscriptRequest) -> Result<LabelTransc
             format!("session_capacity:{resource}:{limit}")
         }
         SessionError::SessionFileMissing => "session_file_missing".to_owned(),
+        // A stable code the reader refused with, such as a Grok state file
+        // over its cap; the reason, not a generic failure, reaches the log.
+        SessionError::Checkpoint(reason) => reason,
         _ => "label_session_read_failed".to_owned(),
     })?;
     for reason in [
@@ -620,7 +623,9 @@ pub(crate) fn locate_confirmed(
         .locate("label", agent, Some(&identity), cwd)
         .map_err(|error| match error {
             SessionError::SessionFileMissing => "session_file_missing".into(),
-            SessionError::Capacity { .. } => "session_capacity".into(),
+            SessionError::Capacity { resource, limit } => {
+                format!("session_capacity:{resource}:{limit}").into()
+            }
             SessionError::InMotion(reason) => ReadRefusal::InMotion(reason),
             _ => "label_session_location_unavailable".into(),
         })?;

@@ -20,20 +20,36 @@
 //! [`CloseReason::UnsupportedVersion`] and its own version when there is
 //! none. A side never sends a message the other did not say it accepts.
 //!
-//! In version 1 a node sends input bytes, a size, a release and a
-//! terminate, and the holder sends what the pane's program wrote and why it
+//! In version 1 a node sends input, a size, a theme, a redraw, a release and
+//! a terminate, and the holder sends the screen as [`Fragment`]s and why it
 //! closed. Releasing lets go of the connection and leaves the pane running;
 //! terminating ends the pane's program and everything it started, then the
 //! holder.
 //!
-//! [`Capability::RawOutput`] carries the program's output as the bytes the
-//! PTY gave. It is the holder's first output path and a stand-in: the screen
-//! the holder parses goes out as display-only screen fragments, which
-//! replace it, and once they do this capability is removed, not kept beside
-//! them (PRD engine-bundle-2-pane-holder D-7).
+//! Input comes in two kinds (PRD engine-bundle-2-pane-holder D-8): bytes
+//! already encoded ([`ClientMessage::Input`]), written as they are, and
+//! requests that mean something ([`ClientMessage::Paste`],
+//! [`ClientMessage::Mouse`], [`ClientMessage::Scroll`]), which the holder
+//! encodes for the pane's settings at that moment. Nothing guesses from
+//! bytes what they were.
+//!
+//! A fragment is display-only ANSI (D-7): it never turns on mouse reports,
+//! bracketed paste, a keyboard protocol or focus reports, and never asks the
+//! receiver a question, so a terminal that draws it answers nothing. A full
+//! fragment starts a new epoch at sequence 0 and gives the same screen
+//! whatever the receiver drew before; each fragment after it in the epoch is
+//! one more in sequence and applies only on the one before it. A receiver
+//! that misses one asks [`ClientMessage::Redraw`], and the next is full.
+//!
+//! A connection whose first message is an [`Ask`] instead of a hello asks one
+//! question, the pane's recent text or its processes, and is answered once
+//! and closed; it never takes the holder over and leaves the screen
+//! connection and its scroll position as they were (D-11, D-18).
 
 use std::io::{self, Read, Write};
 use std::time::Duration;
+
+pub mod record;
 
 /// The version of this protocol this build speaks as a holder.
 pub const PROTOCOL_VERSION: u16 = 1;
@@ -42,8 +58,14 @@ pub const PROTOCOL_VERSION: u16 = 1;
 /// than this is reported as unsupported and left running, never ended.
 pub const OLDEST_HOLDER_VERSION: u16 = 1;
 
-/// The most bytes one frame carries, kind byte included.
-pub const MAX_FRAME: usize = 1024 * 1024;
+/// The most bytes one [`Fragment`]'s ANSI carries: what a node can draw at
+/// once. A screen that encodes to more is sent as several fragments, split
+/// between rows, so no screen is ever refused for its size.
+pub const MAX_FRAGMENT: usize = 4 * 1024 * 1024;
+
+/// The most bytes one frame carries, kind byte included: a fragment and its
+/// header.
+pub const MAX_FRAME: usize = MAX_FRAGMENT + 1024;
 
 /// The most bytes a [`Hello`] frame carries.
 pub const MAX_HELLO: usize = 4 * 1024;
@@ -53,6 +75,24 @@ pub const HELLO_LIMIT: Duration = Duration::from_secs(2);
 
 /// The most input bytes one [`ClientMessage::Input`] carries.
 pub const MAX_INPUT: usize = 64 * 1024;
+
+/// The most bytes one [`ClientMessage::Paste`] carries.
+pub const MAX_PASTE: usize = 512 * 1024;
+
+/// The most bytes a node's message after its hello carries.
+const MAX_CLIENT: usize = MAX_PASTE + 64;
+
+/// The most rows one [`Ask::Read`] asks for.
+pub const MAX_READ_LINES: u16 = 2000;
+
+/// The most text bytes one [`Answer::Text`] carries; older text past it is
+/// left out and the answer is marked truncated.
+pub const MAX_READ_BYTES: usize = 1024 * 1024;
+
+/// The most processes one [`Answer::Processes`] names, and the most bytes of
+/// one process's name.
+pub const MAX_PROCESSES: usize = 256;
+pub const MAX_PROCESS_NAME: usize = 256;
 
 /// The most capabilities one side names.
 pub const MAX_CAPABILITIES: usize = 32;
@@ -78,17 +118,26 @@ mod kind {
     pub const RESIZE: u8 = 0x03;
     pub const RELEASE: u8 = 0x04;
     pub const TERMINATE: u8 = 0x05;
+    // The screen and meaning input: 0x10..=0x1f from a node, 0x90..=0x9f from
+    // a holder.
+    pub const REDRAW: u8 = 0x10;
+    pub const PASTE: u8 = 0x11;
+    pub const MOUSE: u8 = 0x12;
+    pub const SCROLL: u8 = 0x13;
+    pub const THEME: u8 = 0x14;
+    /// A first message, like [`HELLO`].
+    pub const ASK: u8 = 0x18;
     pub const WELCOME: u8 = 0x81;
-    pub const OUTPUT: u8 = 0x82;
     pub const CLOSED: u8 = 0x83;
+    pub const FRAGMENT: u8 = 0x90;
+    pub const ANSWER: u8 = 0x91;
 }
 
 /// Something one side can do that the other must accept before it is used.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Capability {
-    /// The holder sends the program's output as raw PTY bytes
-    /// ([`HolderMessage::Output`]). See the crate documentation.
-    RawOutput,
+    /// The holder sends the screen as [`Fragment`]s.
+    Screen,
     /// A capability this build does not know, kept by name so a side can
     /// answer with the ones it does.
     Other(String),
@@ -97,14 +146,14 @@ pub enum Capability {
 impl Capability {
     fn name(&self) -> &str {
         match self {
-            Self::RawOutput => "raw_output",
+            Self::Screen => "screen",
             Self::Other(name) => name,
         }
     }
 
     fn from_name(name: &str) -> Self {
         match name {
-            "raw_output" => Self::RawOutput,
+            "screen" => Self::Screen,
             other => Self::Other(other.to_owned()),
         }
     }
@@ -192,9 +241,6 @@ pub enum CloseReason {
     /// The node sent input faster than the pane's program took it, past the
     /// holder's input bound.
     InputQueueFull,
-    /// The node read output slower than the program wrote it, past the
-    /// holder's output bound.
-    OutputQueueFull,
     /// A size outside the bounds.
     SizeInvalid,
     /// The pane's processes were asked to end and some still ran when the
@@ -211,10 +257,15 @@ pub enum CloseReason {
     /// Too many connections were reading their hello at once; this one was
     /// closed unread. Opening again later is answered.
     OpeningFull,
+    /// An [`Ask`] outside its bounds, such as more rows than
+    /// [`MAX_READ_LINES`].
+    AskInvalid,
+    /// The holder could not answer an [`Ask`]; the detail says why.
+    AskFailed,
 }
 
 impl CloseReason {
-    const ALL: [Self; 17] = [
+    const ALL: [Self; 18] = [
         Self::Released,
         Self::Terminated,
         Self::ProgramExited,
@@ -225,16 +276,19 @@ impl CloseReason {
         Self::FrameTooLarge,
         Self::ProtocolError,
         Self::InputQueueFull,
-        Self::OutputQueueFull,
         Self::SizeInvalid,
         Self::TreeEndUnconfirmed,
         Self::HolderFailed,
         Self::InputFailed,
         Self::ResizeFailed,
         Self::OpeningFull,
+        Self::AskInvalid,
+        Self::AskFailed,
     ];
 
-    /// The code on the wire, which never changes meaning.
+    /// The code on the wire, which never changes meaning. 11 is retired
+    /// (the raw output queue it named is gone) and never reused; the screen
+    /// and its questions number from 40.
     pub fn code(self) -> u16 {
         match self {
             Self::Released => 1,
@@ -247,13 +301,14 @@ impl CloseReason {
             Self::FrameTooLarge => 8,
             Self::ProtocolError => 9,
             Self::InputQueueFull => 10,
-            Self::OutputQueueFull => 11,
             Self::SizeInvalid => 12,
             Self::TreeEndUnconfirmed => 13,
             Self::HolderFailed => 14,
             Self::InputFailed => 15,
             Self::ResizeFailed => 16,
             Self::OpeningFull => 17,
+            Self::AskInvalid => 40,
+            Self::AskFailed => 41,
         }
     }
 
@@ -275,13 +330,14 @@ impl CloseReason {
             Self::FrameTooLarge => "frame_too_large",
             Self::ProtocolError => "protocol_error",
             Self::InputQueueFull => "input_queue_full",
-            Self::OutputQueueFull => "output_queue_full",
             Self::SizeInvalid => "size_invalid",
             Self::TreeEndUnconfirmed => "tree_end_unconfirmed",
             Self::HolderFailed => "holder_failed",
             Self::InputFailed => "input_failed",
             Self::ResizeFailed => "resize_failed",
             Self::OpeningFull => "opening_full",
+            Self::AskInvalid => "ask_invalid",
+            Self::AskFailed => "ask_failed",
         }
     }
 }
@@ -315,25 +371,283 @@ impl Closed {
     }
 }
 
+/// A color as red, green and blue.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub struct Rgb {
+    pub r: u8,
+    pub g: u8,
+    pub b: u8,
+}
+
+/// Whether the node's theme is dark or light, which a program can ask
+/// (`CSI ? 996 n`) and be told of when it changes (mode 2031).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Appearance {
+    Unknown,
+    Dark,
+    Light,
+}
+
+/// The colors the node draws the pane with. The holder answers the
+/// program's color questions with them until the program sets its own, and
+/// again once it resets them (PRD engine-bundle-2-pane-holder D-9). A node
+/// passes the one it has when it starts the holder (`--theme`, in
+/// [`Theme::to_arg`]'s form), so the program's first question is answered
+/// with it, and sends one whenever its theme changes. A color left `None` is
+/// one the node does not know, and a question about it is answered with the
+/// parser's own default, as every question is when no theme was given, so a
+/// program never waits for an answer that does not come.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Theme {
+    pub foreground: Option<Rgb>,
+    pub background: Option<Rgb>,
+    pub cursor: Option<Rgb>,
+    /// Palette entries the theme sets; the rest keep the xterm defaults.
+    pub palette: Vec<(u8, Rgb)>,
+    pub appearance: Appearance,
+}
+
+impl Theme {
+    fn put(&self, payload: &mut Vec<u8>) {
+        put_rgb(payload, self.foreground);
+        put_rgb(payload, self.background);
+        put_rgb(payload, self.cursor);
+        payload.push(match self.appearance {
+            Appearance::Unknown => 0,
+            Appearance::Dark => 1,
+            Appearance::Light => 2,
+        });
+        let palette = &self.palette[..self.palette.len().min(256)];
+        payload.extend_from_slice(&(palette.len() as u16).to_le_bytes());
+        for (index, color) in palette {
+            payload.extend_from_slice(&[*index, color.r, color.g, color.b]);
+        }
+    }
+
+    fn take(payload: &mut Payload<'_>) -> Result<Self, FrameError> {
+        let foreground = payload.rgb()?;
+        let background = payload.rgb()?;
+        let cursor = payload.rgb()?;
+        let appearance = match payload.u8()? {
+            0 => Appearance::Unknown,
+            1 => Appearance::Dark,
+            2 => Appearance::Light,
+            other => {
+                return Err(FrameError::Malformed(format!(
+                    "an unknown appearance {other}"
+                )));
+            }
+        };
+        let count = payload.u16()? as usize;
+        if count > 256 {
+            return Err(FrameError::Malformed(format!(
+                "{count} palette entries are past the bound"
+            )));
+        }
+        let palette = (0..count)
+            .map(|_| {
+                let entry = payload.take(4)?;
+                Ok((
+                    entry[0],
+                    Rgb {
+                        r: entry[1],
+                        g: entry[2],
+                        b: entry[3],
+                    },
+                ))
+            })
+            .collect::<Result<_, FrameError>>()?;
+        Ok(Self {
+            foreground,
+            background,
+            cursor,
+            palette,
+            appearance,
+        })
+    }
+
+    /// The theme as the holder's `--theme` argument: the message's bytes
+    /// in hex, at most 2,070 characters.
+    pub fn to_arg(&self) -> String {
+        let mut payload = Vec::new();
+        self.put(&mut payload);
+        payload.iter().map(|byte| format!("{byte:02x}")).collect()
+    }
+
+    /// Reads a `--theme` argument [`Theme::to_arg`] wrote.
+    pub fn from_arg(text: &str) -> Result<Self, String> {
+        if !text.len().is_multiple_of(2) || text.len() > 2 * (16 + 256 * 4) {
+            return Err("the theme is not a theme argument".to_owned());
+        }
+        let bytes = (0..text.len())
+            .step_by(2)
+            .map(|at| u8::from_str_radix(text.get(at..at + 2).unwrap_or("zz"), 16))
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|_| "the theme is not hex".to_owned())?;
+        let mut payload = Payload(&bytes);
+        let theme = Self::take(&mut payload).map_err(|error| error.to_string())?;
+        payload.end().map_err(|error| error.to_string())?;
+        Ok(theme)
+    }
+}
+
+/// Which keys were held, as one bit each.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub struct Modifiers(pub u8);
+
+impl Modifiers {
+    pub const SHIFT: u8 = 1;
+    pub const CTRL: u8 = 2;
+    pub const ALT: u8 = 4;
+    pub const SUPER: u8 = 8;
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum MouseAction {
+    Press,
+    Release,
+    Motion,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum MouseButton {
+    Left,
+    Middle,
+    Right,
+}
+
+/// A pointer event over a cell, zero-based. The holder reports it in the
+/// pane's mouse mode and format at that moment, or drops it when the
+/// program does not track the mouse.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Mouse {
+    pub action: MouseAction,
+    /// `None` for motion with no button held.
+    pub button: Option<MouseButton>,
+    pub col: u16,
+    pub row: u16,
+    pub modifiers: Modifiers,
+}
+
+/// A wheel turned by `lines`, positive up, over a cell when the node knows
+/// which. The holder reports it to a program that tracks the mouse, turns it
+/// into arrow keys on the alternate screen with mode 1007, or else moves the
+/// screen through its scrollback.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Scroll {
+    pub lines: i16,
+    pub cell: Option<(u16, u16)>,
+    pub modifiers: Modifiers,
+}
+
+/// A piece of the screen as display-only ANSI. See the crate documentation.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Fragment {
+    /// One more for each full fragment, across every connection the holder
+    /// serves.
+    pub epoch: u64,
+    /// 0 for the full fragment that starts the epoch, one more for each
+    /// fragment after it.
+    pub seq: u64,
+    /// Whether this fragment gives the whole screen whatever the receiver
+    /// drew before. A full screen that encodes to more than [`MAX_FRAGMENT`]
+    /// goes on in the fragments after it, which are not full.
+    pub full: bool,
+    /// The screen's size when it was drawn.
+    pub size: Size,
+    pub bytes: Vec<u8>,
+}
+
+/// A connection's only question, in place of a hello.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Ask {
+    /// The last `lines` rows of the screen and its scrollback, as text with
+    /// soft wraps joined, at most [`MAX_READ_LINES`].
+    Read { lines: u16 },
+    /// The pane's shell and the processes in its terminal's foreground.
+    Processes,
+}
+
+/// Why a holder does not know a pane's foreground.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Unknown {
+    /// This system has no foreground process group for a terminal
+    /// (Windows).
+    NotOnThisSystem,
+    /// The terminal has no foreground group now.
+    NoGroup,
+    /// The system did not say.
+    Unreadable,
+}
+
+/// A process in a pane's foreground.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Member {
+    pub pid: u32,
+    /// `None` when the system did not say.
+    pub name: Option<String>,
+}
+
+/// What runs in a pane's terminal.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Foreground {
+    /// The terminal's foreground process group and its processes.
+    Known {
+        group: u32,
+        members: Vec<Member>,
+    },
+    Unknown(Unknown),
+}
+
+/// The answer to an [`Ask`].
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Answer {
+    Text {
+        text: String,
+        /// Whether rows the ask reached were left out: more than it asked
+        /// for exist, or the text passed [`MAX_READ_BYTES`].
+        truncated: bool,
+    },
+    Processes {
+        /// The pane's program, the one the holder started.
+        shell: u32,
+        foreground: Foreground,
+    },
+}
+
 /// What a node sends.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ClientMessage {
-    Hello(Hello),
     /// Bytes for the pane's program, written as they are.
     Input(Vec<u8>),
+    /// Pasted text, wrapped for bracketed paste only when the program turned
+    /// it on.
+    Paste(Vec<u8>),
+    Mouse(Mouse),
+    Scroll(Scroll),
     Resize(Size),
+    Theme(Theme),
+    /// The next fragment is full: the node lost track of the screen.
+    Redraw,
     /// Lets go of the connection; the pane runs on.
     Release,
     /// Ends the pane's program and everything it started, then the holder.
     Terminate,
 }
 
+/// A connection's first message.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Opening {
+    Hello(Hello),
+    Ask(Ask),
+}
+
 /// What a holder sends.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum HolderMessage {
     Welcome(Welcome),
-    /// What the pane's program wrote, as the PTY gave it.
-    Output(Vec<u8>),
+    Fragment(Fragment),
+    Answer(Answer),
     Closed(Closed),
 }
 
@@ -405,7 +719,14 @@ pub fn read_frame(reader: &mut impl Read, bound: usize) -> Result<(u8, Vec<u8>),
 }
 
 fn write_frame(writer: &mut impl Write, kind: u8, payload: &[u8]) -> io::Result<()> {
-    let length = payload.len() + 1;
+    write_frame_parts(writer, kind, &[payload])
+}
+
+/// Writes one frame whose payload is `parts` in order, copied once into the
+/// frame: a fragment's screen bytes go in after its header without first
+/// being gathered into a payload of their own.
+fn write_frame_parts(writer: &mut impl Write, kind: u8, parts: &[&[u8]]) -> io::Result<()> {
+    let length = parts.iter().map(|part| part.len()).sum::<usize>() + 1;
     if length > MAX_FRAME {
         return Err(io::Error::new(
             io::ErrorKind::InvalidInput,
@@ -415,7 +736,9 @@ fn write_frame(writer: &mut impl Write, kind: u8, payload: &[u8]) -> io::Result<
     let mut frame = Vec::with_capacity(length + 4);
     frame.extend_from_slice(&(length as u32).to_le_bytes());
     frame.push(kind);
-    frame.extend_from_slice(payload);
+    for part in parts {
+        frame.extend_from_slice(part);
+    }
     writer.write_all(&frame)?;
     writer.flush()
 }
@@ -472,6 +795,34 @@ impl Payload<'_> {
             .collect()
     }
 
+    fn rest_bounded(&mut self, what: &str, bound: usize) -> Result<Vec<u8>, FrameError> {
+        if self.0.len() > bound {
+            return Err(FrameError::Malformed(format!(
+                "{} {what} bytes are past the bound of {bound}",
+                self.0.len()
+            )));
+        }
+        let rest = self.0.to_vec();
+        self.0 = &[];
+        Ok(rest)
+    }
+
+    fn rgb(&mut self) -> Result<Option<Rgb>, FrameError> {
+        let color = self.take(4)?;
+        Ok((color[0] != 0).then_some(Rgb {
+            r: color[1],
+            g: color[2],
+            b: color[3],
+        }))
+    }
+
+    fn cell(&mut self) -> Result<Option<(u16, u16)>, FrameError> {
+        let known = self.u8()? != 0;
+        let col = self.u16()?;
+        let row = self.u16()?;
+        Ok(known.then_some((col, row)))
+    }
+
     fn size(&mut self) -> Result<Size, FrameError> {
         let rows = self.u16()?;
         let cols = self.u16()?;
@@ -502,81 +853,222 @@ fn put_capabilities(payload: &mut Vec<u8>, capabilities: &[Capability]) {
     }
 }
 
+fn put_rgb(payload: &mut Vec<u8>, color: Option<Rgb>) {
+    match color {
+        Some(Rgb { r, g, b }) => payload.extend_from_slice(&[1, r, g, b]),
+        None => payload.extend_from_slice(&[0, 0, 0, 0]),
+    }
+}
+
+fn put_cell(payload: &mut Vec<u8>, cell: Option<(u16, u16)>) {
+    match cell {
+        Some((col, row)) => {
+            payload.push(1);
+            payload.extend_from_slice(&col.to_le_bytes());
+            payload.extend_from_slice(&row.to_le_bytes());
+        }
+        None => payload.extend_from_slice(&[0; 5]),
+    }
+}
+
+fn too_long(what: &str, length: usize, bound: usize) -> io::Error {
+    io::Error::new(
+        io::ErrorKind::InvalidInput,
+        format!("{length} {what} bytes are past the bound of {bound}"),
+    )
+}
+
 /// Writes one message from a node.
 pub fn write_client(writer: &mut impl Write, message: &ClientMessage) -> io::Result<()> {
     match message {
-        ClientMessage::Hello(hello) => {
-            let mut payload = MAGIC.to_vec();
-            payload.extend_from_slice(&hello.versions.0.to_le_bytes());
-            payload.extend_from_slice(&hello.versions.1.to_le_bytes());
-            put_capabilities(&mut payload, &hello.accepts);
-            write_frame(writer, kind::HELLO, &payload)
-        }
         ClientMessage::Input(bytes) => {
             if bytes.len() > MAX_INPUT {
-                return Err(io::Error::new(
-                    io::ErrorKind::InvalidInput,
-                    format!(
-                        "{} input bytes are past the bound of {MAX_INPUT}",
-                        bytes.len()
-                    ),
-                ));
+                return Err(too_long("input", bytes.len(), MAX_INPUT));
             }
             write_frame(writer, kind::INPUT, bytes)
+        }
+        ClientMessage::Paste(bytes) => {
+            if bytes.len() > MAX_PASTE {
+                return Err(too_long("paste", bytes.len(), MAX_PASTE));
+            }
+            write_frame(writer, kind::PASTE, bytes)
+        }
+        ClientMessage::Mouse(mouse) => {
+            let action = match mouse.action {
+                MouseAction::Press => 0,
+                MouseAction::Release => 1,
+                MouseAction::Motion => 2,
+            };
+            let button = match mouse.button {
+                None => 0,
+                Some(MouseButton::Left) => 1,
+                Some(MouseButton::Middle) => 2,
+                Some(MouseButton::Right) => 3,
+            };
+            let mut payload = vec![action, button];
+            payload.extend_from_slice(&mouse.col.to_le_bytes());
+            payload.extend_from_slice(&mouse.row.to_le_bytes());
+            payload.push(mouse.modifiers.0);
+            write_frame(writer, kind::MOUSE, &payload)
+        }
+        ClientMessage::Scroll(scroll) => {
+            let mut payload = scroll.lines.to_le_bytes().to_vec();
+            put_cell(&mut payload, scroll.cell);
+            payload.push(scroll.modifiers.0);
+            write_frame(writer, kind::SCROLL, &payload)
         }
         ClientMessage::Resize(size) => {
             let mut payload = size.rows.to_le_bytes().to_vec();
             payload.extend_from_slice(&size.cols.to_le_bytes());
             write_frame(writer, kind::RESIZE, &payload)
         }
+        ClientMessage::Theme(theme) => {
+            let mut payload = Vec::with_capacity(16 + theme.palette.len() * 4);
+            theme.put(&mut payload);
+            write_frame(writer, kind::THEME, &payload)
+        }
+        ClientMessage::Redraw => write_frame(writer, kind::REDRAW, &[]),
         ClientMessage::Release => write_frame(writer, kind::RELEASE, &[]),
         ClientMessage::Terminate => write_frame(writer, kind::TERMINATE, &[]),
     }
 }
 
-/// Reads a connection's first message, which must be a [`Hello`] within
-/// [`MAX_HELLO`] bytes. The caller bounds the time.
-pub fn read_hello(reader: &mut impl Read) -> Result<Hello, FrameError> {
+/// Writes a connection's first message.
+pub fn write_opening(writer: &mut impl Write, opening: &Opening) -> io::Result<()> {
+    match opening {
+        Opening::Hello(hello) => {
+            let mut payload = MAGIC.to_vec();
+            payload.extend_from_slice(&hello.versions.0.to_le_bytes());
+            payload.extend_from_slice(&hello.versions.1.to_le_bytes());
+            put_capabilities(&mut payload, &hello.accepts);
+            write_frame(writer, kind::HELLO, &payload)
+        }
+        Opening::Ask(ask) => {
+            let mut payload = MAGIC.to_vec();
+            payload.extend_from_slice(&PROTOCOL_VERSION.to_le_bytes());
+            match ask {
+                Ask::Read { lines } => {
+                    payload.push(1);
+                    payload.extend_from_slice(&lines.to_le_bytes());
+                }
+                Ask::Processes => payload.push(2),
+            }
+            write_frame(writer, kind::ASK, &payload)
+        }
+    }
+}
+
+/// Reads a connection's first message, a [`Hello`] or an [`Ask`] within
+/// [`MAX_HELLO`] bytes. The caller bounds the time. An ask is read whatever
+/// it asks; [`Ask::check`] says whether the holder answers it.
+pub fn read_opening(reader: &mut impl Read) -> Result<Opening, FrameError> {
     let (kind, payload) = read_frame(reader, MAX_HELLO)?;
-    if kind != kind::HELLO {
+    if kind != kind::HELLO && kind != kind::ASK {
         return Err(FrameError::Malformed(format!(
-            "the first message is of kind {kind:#04x}, not a hello"
+            "the first message is of kind {kind:#04x}, not a hello or an ask"
         )));
     }
     let mut payload = Payload(&payload);
     if payload.take(MAGIC.len())? != MAGIC {
         return Err(FrameError::Malformed(
-            "the first message is not a node's hello".to_owned(),
+            "the first message is not a node's".to_owned(),
         ));
     }
-    let versions = (payload.u16()?, payload.u16()?);
-    let accepts = payload.capabilities()?;
+    let opening = if kind == kind::HELLO {
+        let versions = (payload.u16()?, payload.u16()?);
+        let accepts = payload.capabilities()?;
+        if versions.0 > versions.1 {
+            return Err(FrameError::Malformed(format!(
+                "the versions {}..{} are empty",
+                versions.0, versions.1
+            )));
+        }
+        Opening::Hello(Hello { versions, accepts })
+    } else {
+        let version = payload.u16()?;
+        if version != PROTOCOL_VERSION {
+            return Err(FrameError::Malformed(format!(
+                "an ask in version {version}, not {PROTOCOL_VERSION}"
+            )));
+        }
+        match payload.u8()? {
+            1 => Opening::Ask(Ask::Read {
+                lines: payload.u16()?,
+            }),
+            2 => Opening::Ask(Ask::Processes),
+            other => {
+                return Err(FrameError::Malformed(format!("an unknown ask {other}")));
+            }
+        }
+    };
     payload.end()?;
-    if versions.0 > versions.1 {
-        return Err(FrameError::Malformed(format!(
-            "the versions {}..{} are empty",
-            versions.0, versions.1
-        )));
+    Ok(opening)
+}
+
+impl Ask {
+    /// Whether the holder answers this ask, or the [`Closed`] that refuses
+    /// it.
+    pub fn check(&self) -> Result<(), Closed> {
+        match self {
+            Self::Read { lines } if *lines == 0 || *lines > MAX_READ_LINES => Err(Closed::new(
+                CloseReason::AskInvalid,
+                format!("{lines} rows asked for, not 1 to {MAX_READ_LINES}"),
+            )),
+            _ => Ok(()),
+        }
     }
-    Ok(Hello { versions, accepts })
 }
 
 /// Reads one message from a node after its hello.
 pub fn read_client(reader: &mut impl Read) -> Result<ClientMessage, FrameError> {
-    let (kind, payload) = read_frame(reader, MAX_INPUT + 1)?;
+    let (kind, payload) = read_frame(reader, MAX_CLIENT)?;
     let mut payload = Payload(&payload);
     let message = match kind {
-        kind::INPUT => {
-            let bytes = payload.0.to_vec();
-            payload.0 = &[];
-            ClientMessage::Input(bytes)
+        kind::INPUT => ClientMessage::Input(payload.rest_bounded("input", MAX_INPUT)?),
+        kind::PASTE => ClientMessage::Paste(payload.rest_bounded("paste", MAX_PASTE)?),
+        kind::MOUSE => {
+            let action = match payload.u8()? {
+                0 => MouseAction::Press,
+                1 => MouseAction::Release,
+                2 => MouseAction::Motion,
+                other => {
+                    return Err(FrameError::Malformed(format!(
+                        "an unknown mouse action {other}"
+                    )));
+                }
+            };
+            let button = match payload.u8()? {
+                0 => None,
+                1 => Some(MouseButton::Left),
+                2 => Some(MouseButton::Middle),
+                3 => Some(MouseButton::Right),
+                other => {
+                    return Err(FrameError::Malformed(format!(
+                        "an unknown mouse button {other}"
+                    )));
+                }
+            };
+            ClientMessage::Mouse(Mouse {
+                action,
+                button,
+                col: payload.u16()?,
+                row: payload.u16()?,
+                modifiers: Modifiers(payload.u8()?),
+            })
         }
+        kind::SCROLL => ClientMessage::Scroll(Scroll {
+            lines: payload.u16()? as i16,
+            cell: payload.cell()?,
+            modifiers: Modifiers(payload.u8()?),
+        }),
         kind::RESIZE => ClientMessage::Resize(payload.size()?),
+        kind::THEME => ClientMessage::Theme(Theme::take(&mut payload)?),
+        kind::REDRAW => ClientMessage::Redraw,
         kind::RELEASE => ClientMessage::Release,
         kind::TERMINATE => ClientMessage::Terminate,
-        kind::HELLO => {
+        kind::HELLO | kind::ASK => {
             return Err(FrameError::Malformed(
-                "a second hello on one connection".to_owned(),
+                "a second first message on one connection".to_owned(),
             ));
         }
         other => {
@@ -601,7 +1093,62 @@ pub fn write_holder(writer: &mut impl Write, message: &HolderMessage) -> io::Res
             put_capabilities(&mut payload, &welcome.sends);
             write_frame(writer, kind::WELCOME, &payload)
         }
-        HolderMessage::Output(bytes) => write_frame(writer, kind::OUTPUT, bytes),
+        HolderMessage::Fragment(fragment) => {
+            if fragment.bytes.len() > MAX_FRAGMENT {
+                return Err(too_long("fragment", fragment.bytes.len(), MAX_FRAGMENT));
+            }
+            let mut header = Vec::with_capacity(21);
+            header.extend_from_slice(&fragment.epoch.to_le_bytes());
+            header.extend_from_slice(&fragment.seq.to_le_bytes());
+            header.push(u8::from(fragment.full));
+            header.extend_from_slice(&fragment.size.rows.to_le_bytes());
+            header.extend_from_slice(&fragment.size.cols.to_le_bytes());
+            write_frame_parts(writer, kind::FRAGMENT, &[&header, &fragment.bytes])
+        }
+        HolderMessage::Answer(answer) => {
+            let mut payload = Vec::new();
+            match answer {
+                Answer::Text { text, truncated } => {
+                    if text.len() > MAX_READ_BYTES {
+                        return Err(too_long("text", text.len(), MAX_READ_BYTES));
+                    }
+                    payload.push(1);
+                    payload.push(u8::from(*truncated));
+                    payload.extend_from_slice(&(text.len() as u32).to_le_bytes());
+                    payload.extend_from_slice(text.as_bytes());
+                }
+                Answer::Processes { shell, foreground } => {
+                    payload.push(2);
+                    payload.extend_from_slice(&shell.to_le_bytes());
+                    match foreground {
+                        Foreground::Known { group, members } => {
+                            payload.push(0);
+                            payload.extend_from_slice(&group.to_le_bytes());
+                            let members = &members[..members.len().min(MAX_PROCESSES)];
+                            payload.extend_from_slice(&(members.len() as u16).to_le_bytes());
+                            for member in members {
+                                payload.extend_from_slice(&member.pid.to_le_bytes());
+                                match &member.name {
+                                    Some(name) => {
+                                        let mut name = name.clone();
+                                        truncate(&mut name, MAX_PROCESS_NAME);
+                                        payload.push(1);
+                                        put_text(&mut payload, &name);
+                                    }
+                                    None => payload.push(0),
+                                }
+                            }
+                        }
+                        Foreground::Unknown(why) => payload.push(match why {
+                            Unknown::NotOnThisSystem => 1,
+                            Unknown::NoGroup => 2,
+                            Unknown::Unreadable => 3,
+                        }),
+                    }
+                }
+            }
+            write_frame(writer, kind::ANSWER, &payload)
+        }
         HolderMessage::Closed(closed) => {
             let mut payload = closed.reason.code().to_le_bytes().to_vec();
             payload.extend_from_slice(&closed.version.to_le_bytes());
@@ -644,11 +1191,71 @@ pub fn read_holder(reader: &mut impl Read) -> Result<HolderMessage, FrameError> 
                 sends,
             })
         }
-        kind::OUTPUT => {
-            let bytes = payload.0.to_vec();
-            payload.0 = &[];
-            HolderMessage::Output(bytes)
+        kind::FRAGMENT => {
+            let epoch = payload.u64()?;
+            let seq = payload.u64()?;
+            let full = payload.u8()? != 0;
+            let size = payload.size()?;
+            let bytes = payload.rest_bounded("fragment", MAX_FRAGMENT)?;
+            HolderMessage::Fragment(Fragment {
+                epoch,
+                seq,
+                full,
+                size,
+                bytes,
+            })
         }
+        kind::ANSWER => HolderMessage::Answer(match payload.u8()? {
+            1 => {
+                let truncated = payload.u8()? != 0;
+                let length = payload.u32()? as usize;
+                if length > MAX_READ_BYTES {
+                    return Err(FrameError::Malformed(format!(
+                        "a text of {length} bytes is past its bound"
+                    )));
+                }
+                let text = String::from_utf8(payload.take(length)?.to_vec())
+                    .map_err(|_| FrameError::Malformed("a text is not UTF-8".to_owned()))?;
+                Answer::Text { text, truncated }
+            }
+            2 => {
+                let shell = payload.u32()?;
+                let foreground = match payload.u8()? {
+                    0 => {
+                        let group = payload.u32()?;
+                        let count = payload.u16()? as usize;
+                        if count > MAX_PROCESSES {
+                            return Err(FrameError::Malformed(format!(
+                                "{count} processes are past the bound"
+                            )));
+                        }
+                        let members = (0..count)
+                            .map(|_| {
+                                let pid = payload.u32()?;
+                                let name = match payload.u8()? {
+                                    0 => None,
+                                    _ => Some(payload.text(MAX_PROCESS_NAME)?),
+                                };
+                                Ok(Member { pid, name })
+                            })
+                            .collect::<Result<_, FrameError>>()?;
+                        Foreground::Known { group, members }
+                    }
+                    1 => Foreground::Unknown(Unknown::NotOnThisSystem),
+                    2 => Foreground::Unknown(Unknown::NoGroup),
+                    3 => Foreground::Unknown(Unknown::Unreadable),
+                    other => {
+                        return Err(FrameError::Malformed(format!(
+                            "an unknown foreground {other}"
+                        )));
+                    }
+                };
+                Answer::Processes { shell, foreground }
+            }
+            other => {
+                return Err(FrameError::Malformed(format!("an unknown answer {other}")));
+            }
+        }),
         kind::CLOSED => {
             let code = payload.u16()?;
             let reason = CloseReason::from_code(code)
@@ -705,7 +1312,8 @@ pub fn agree(hello: &Hello, holder_sends: &[Capability]) -> Result<(u16, Vec<Cap
     Ok((PROTOCOL_VERSION, sends))
 }
 
-/// How a node's opening of a holder ended without a [`Welcome`].
+/// How a node's opening of a holder ended without a [`Welcome`] or an
+/// [`Answer`].
 #[derive(Debug)]
 pub enum OpenError {
     /// The stream could not be reached or failed.
@@ -742,6 +1350,25 @@ impl std::fmt::Display for OpenError {
 
 impl std::error::Error for OpenError {}
 
+impl From<FrameError> for OpenError {
+    fn from(error: FrameError) -> Self {
+        match error {
+            FrameError::Io(error) => Self::Io(error),
+            error => Self::Protocol(error),
+        }
+    }
+}
+
+fn refused(closed: Closed) -> OpenError {
+    if closed.reason == CloseReason::UnsupportedVersion && closed.version < OLDEST_HOLDER_VERSION {
+        OpenError::Unsupported {
+            version: closed.version,
+        }
+    } else {
+        OpenError::Refused(closed)
+    }
+}
+
 /// Opens a connection to the holder at `path`: connects, says [`Hello`]
 /// with `accepts`, and reads the holder's answer, all by `deadline`. The
 /// stream it answers has no deadline of its own.
@@ -752,31 +1379,42 @@ pub fn open(
 ) -> Result<(hide_platform::ipc::LocalStream, Welcome), OpenError> {
     let stream =
         hide_platform::ipc::LocalStream::connect_until(path, deadline).map_err(OpenError::Io)?;
+    // The opening is bounded on a handle of its own; the connection goes on
+    // past the deadline.
     let mut bounded = stream.duplicate();
-    bounded.set_deadline(deadline);
-    write_client(&mut bounded, &ClientMessage::Hello(Hello::current(accepts)))
-        .map_err(OpenError::Io)?;
-    match read_holder(&mut bounded) {
-        Ok(HolderMessage::Welcome(welcome)) if welcome.version < OLDEST_HOLDER_VERSION => {
+    stream.clear_deadline();
+    write_opening(&mut bounded, &Opening::Hello(Hello::current(accepts))).map_err(OpenError::Io)?;
+    match read_holder(&mut bounded)? {
+        HolderMessage::Welcome(welcome) if welcome.version < OLDEST_HOLDER_VERSION => {
             Err(OpenError::Unsupported {
                 version: welcome.version,
             })
         }
-        Ok(HolderMessage::Welcome(welcome)) => Ok((stream, welcome)),
-        Ok(HolderMessage::Closed(closed))
-            if closed.reason == CloseReason::UnsupportedVersion
-                && closed.version < OLDEST_HOLDER_VERSION =>
-        {
-            Err(OpenError::Unsupported {
-                version: closed.version,
-            })
-        }
-        Ok(HolderMessage::Closed(closed)) => Err(OpenError::Refused(closed)),
-        Ok(HolderMessage::Output(_)) => Err(OpenError::Protocol(FrameError::Malformed(
-            "output before the welcome".to_owned(),
-        ))),
-        Err(FrameError::Io(error)) => Err(OpenError::Io(error)),
-        Err(error) => Err(OpenError::Protocol(error)),
+        HolderMessage::Welcome(welcome) => Ok((stream, welcome)),
+        HolderMessage::Closed(closed) => Err(refused(closed)),
+        HolderMessage::Fragment(_) | HolderMessage::Answer(_) => Err(OpenError::Protocol(
+            FrameError::Malformed("a screen or an answer before the welcome".to_owned()),
+        )),
+    }
+}
+
+/// Asks the holder at `path` one question on a connection of its own, by
+/// `deadline`. The connection that holds the pane, if any, goes on as it was.
+pub fn ask(
+    path: &std::path::Path,
+    ask: Ask,
+    deadline: std::time::Instant,
+) -> Result<Answer, OpenError> {
+    let mut stream =
+        hide_platform::ipc::LocalStream::connect_until(path, deadline).map_err(OpenError::Io)?;
+    stream.set_deadline(deadline);
+    write_opening(&mut stream, &Opening::Ask(ask)).map_err(OpenError::Io)?;
+    match read_holder(&mut stream)? {
+        HolderMessage::Answer(answer) => Ok(answer),
+        HolderMessage::Closed(closed) => Err(refused(closed)),
+        HolderMessage::Welcome(_) | HolderMessage::Fragment(_) => Err(OpenError::Protocol(
+            FrameError::Malformed("an ask answered with a screen".to_owned()),
+        )),
     }
 }
 
@@ -787,10 +1425,13 @@ mod tests {
     fn round_client(message: ClientMessage) -> ClientMessage {
         let mut bytes = Vec::new();
         write_client(&mut bytes, &message).unwrap();
-        match &message {
-            ClientMessage::Hello(_) => ClientMessage::Hello(read_hello(&mut &bytes[..]).unwrap()),
-            _ => read_client(&mut &bytes[..]).unwrap(),
-        }
+        read_client(&mut &bytes[..]).unwrap()
+    }
+
+    fn round_opening(opening: Opening) -> Opening {
+        let mut bytes = Vec::new();
+        write_opening(&mut bytes, &opening).unwrap();
+        read_opening(&mut &bytes[..]).unwrap()
     }
 
     fn round_holder(message: HolderMessage) -> HolderMessage {
@@ -801,16 +1442,55 @@ mod tests {
 
     #[test]
     fn every_message_reads_back_as_written() {
-        for message in [
-            ClientMessage::Hello(Hello::current(vec![
-                Capability::RawOutput,
+        for opening in [
+            Opening::Hello(Hello::current(vec![
+                Capability::Screen,
                 Capability::Other("later".to_owned()),
             ])),
+            Opening::Ask(Ask::Read { lines: 2000 }),
+            Opening::Ask(Ask::Processes),
+        ] {
+            assert_eq!(round_opening(opening.clone()), opening);
+        }
+        for message in [
             ClientMessage::Input(b"echo \x1b[A\r".to_vec()),
+            ClientMessage::Paste(b"two\nlines\x1b".to_vec()),
+            ClientMessage::Mouse(Mouse {
+                action: MouseAction::Press,
+                button: Some(MouseButton::Right),
+                col: 3,
+                row: 7,
+                modifiers: Modifiers(Modifiers::CTRL | Modifiers::SHIFT),
+            }),
+            ClientMessage::Mouse(Mouse {
+                action: MouseAction::Motion,
+                button: None,
+                col: 0,
+                row: 0,
+                modifiers: Modifiers::default(),
+            }),
+            ClientMessage::Scroll(Scroll {
+                lines: -3,
+                cell: Some((24, 12)),
+                modifiers: Modifiers(Modifiers::ALT),
+            }),
+            ClientMessage::Scroll(Scroll {
+                lines: 5,
+                cell: None,
+                modifiers: Modifiers::default(),
+            }),
             ClientMessage::Resize(Size {
                 rows: 40,
                 cols: 120,
             }),
+            ClientMessage::Theme(Theme {
+                foreground: Some(Rgb { r: 1, g: 2, b: 3 }),
+                background: None,
+                cursor: Some(Rgb { r: 9, g: 8, b: 7 }),
+                palette: vec![(0, Rgb::default()), (255, Rgb { r: 255, g: 0, b: 1 })],
+                appearance: Appearance::Light,
+            }),
+            ClientMessage::Redraw,
             ClientMessage::Release,
             ClientMessage::Terminate,
         ] {
@@ -825,12 +1505,74 @@ mod tests {
                 generation: 7,
                 program: 1234,
                 size: Size { rows: 24, cols: 80 },
-                sends: vec![Capability::RawOutput],
+                sends: vec![Capability::Screen],
             }),
-            HolderMessage::Output(vec![0, 255, 27]),
+            HolderMessage::Fragment(Fragment {
+                epoch: 3,
+                seq: 9,
+                full: true,
+                size: Size { rows: 2, cols: 4 },
+                bytes: vec![0, 255, 27],
+            }),
+            HolderMessage::Answer(Answer::Text {
+                text: "a\nb".to_owned(),
+                truncated: true,
+            }),
+            HolderMessage::Answer(Answer::Processes {
+                shell: 10,
+                foreground: Foreground::Known {
+                    group: 11,
+                    members: vec![
+                        Member {
+                            pid: 11,
+                            name: Some("vim".to_owned()),
+                        },
+                        Member {
+                            pid: 12,
+                            name: None,
+                        },
+                    ],
+                },
+            }),
+            HolderMessage::Answer(Answer::Processes {
+                shell: 10,
+                foreground: Foreground::Unknown(Unknown::NotOnThisSystem),
+            }),
             HolderMessage::Closed(closed),
         ] {
             assert_eq!(round_holder(message.clone()), message);
+        }
+    }
+
+    #[test]
+    fn a_theme_passes_as_a_start_argument() {
+        let theme = Theme {
+            foreground: Some(Rgb { r: 1, g: 2, b: 3 }),
+            background: None,
+            cursor: Some(Rgb {
+                r: 255,
+                g: 0,
+                b: 16,
+            }),
+            palette: (0..=255)
+                .map(|index| {
+                    (
+                        index,
+                        Rgb {
+                            r: index,
+                            g: 0,
+                            b: 1,
+                        },
+                    )
+                })
+                .collect(),
+            appearance: Appearance::Light,
+        };
+        let arg = theme.to_arg();
+        assert!(arg.len() <= 2 * (16 + 256 * 4), "{}", arg.len());
+        assert_eq!(Theme::from_arg(&arg), Ok(theme));
+        for wrong in ["", "0", "zz", &format!("{arg}00")] {
+            assert!(Theme::from_arg(wrong).is_err(), "{wrong:?}");
         }
     }
 
@@ -841,33 +1583,76 @@ mod tests {
         }
         assert_eq!(CloseReason::TakenOver.code(), 4);
         assert_eq!(CloseReason::TreeEndUnconfirmed.code(), 13);
+        assert_eq!(CloseReason::AskInvalid.code(), 40);
         assert_eq!(CloseReason::from_code(0), None);
+        assert_eq!(CloseReason::from_code(11), None);
     }
 
     #[test]
-    fn a_hello_past_its_bound_or_not_a_hello_is_refused() {
+    fn an_opening_past_its_bound_or_not_an_opening_is_refused() {
         let mut long = Vec::new();
         long.extend_from_slice(&((MAX_HELLO + 1) as u32).to_le_bytes());
         long.push(kind::HELLO);
         long.extend(std::iter::repeat_n(0u8, MAX_HELLO));
         assert!(matches!(
-            read_hello(&mut &long[..]),
+            read_opening(&mut &long[..]),
             Err(FrameError::TooLarge(_))
         ));
 
         let mut input = Vec::new();
         write_client(&mut input, &ClientMessage::Input(b"x".to_vec())).unwrap();
         assert!(matches!(
-            read_hello(&mut &input[..]),
+            read_opening(&mut &input[..]),
             Err(FrameError::Malformed(_))
         ));
 
         let mut not_ours = Vec::new();
         write_frame(&mut not_ours, kind::HELLO, b"GET / HTTP/1.1").unwrap();
         assert!(matches!(
-            read_hello(&mut &not_ours[..]),
+            read_opening(&mut &not_ours[..]),
             Err(FrameError::Malformed(_))
         ));
+    }
+
+    #[test]
+    fn an_ask_past_its_rows_is_refused_with_a_reason() {
+        assert!(Ask::Read { lines: 1 }.check().is_ok());
+        assert!(
+            Ask::Read {
+                lines: MAX_READ_LINES
+            }
+            .check()
+            .is_ok()
+        );
+        for lines in [0, MAX_READ_LINES + 1] {
+            let refused = Ask::Read { lines }.check().unwrap_err();
+            assert_eq!(refused.reason, CloseReason::AskInvalid);
+        }
+    }
+
+    #[test]
+    fn a_message_past_its_bound_is_not_written_or_read() {
+        let paste = ClientMessage::Paste(vec![b'x'; MAX_PASTE + 1]);
+        assert!(write_client(&mut Vec::new(), &paste).is_err());
+        let mut forged = Vec::new();
+        write_frame(&mut forged, kind::INPUT, &vec![b'x'; MAX_INPUT + 1]).unwrap();
+        assert!(matches!(
+            read_client(&mut &forged[..]),
+            Err(FrameError::Malformed(_))
+        ));
+        let fragment = HolderMessage::Fragment(Fragment {
+            epoch: 1,
+            seq: 0,
+            full: true,
+            size: Size { rows: 1, cols: 1 },
+            bytes: vec![b'x'; MAX_FRAGMENT + 1],
+        });
+        assert!(write_holder(&mut Vec::new(), &fragment).is_err());
+        let text = HolderMessage::Answer(Answer::Text {
+            text: "x".repeat(MAX_READ_BYTES + 1),
+            truncated: false,
+        });
+        assert!(write_holder(&mut Vec::new(), &text).is_err());
     }
 
     #[test]
@@ -877,14 +1662,14 @@ mod tests {
             accepts: vec![Capability::Other("x".to_owned())],
         };
         assert_eq!(
-            agree(&hello, &[Capability::RawOutput]),
+            agree(&hello, &[Capability::Screen]),
             Ok((PROTOCOL_VERSION, Vec::new()))
         );
         let newer = Hello {
             versions: (PROTOCOL_VERSION + 1, PROTOCOL_VERSION + 2),
-            accepts: vec![Capability::RawOutput],
+            accepts: vec![Capability::Screen],
         };
-        let refused = agree(&newer, &[Capability::RawOutput]).unwrap_err();
+        let refused = agree(&newer, &[Capability::Screen]).unwrap_err();
         assert_eq!(refused.reason, CloseReason::UnsupportedVersion);
         assert_eq!(refused.version, PROTOCOL_VERSION);
     }
@@ -892,21 +1677,29 @@ mod tests {
     #[test]
     fn a_node_message_a_node_may_not_send_is_refused() {
         let mut bytes = Vec::new();
-        write_holder(&mut bytes, &HolderMessage::Output(b"x".to_vec())).unwrap();
+        write_holder(
+            &mut bytes,
+            &HolderMessage::Answer(Answer::Text {
+                text: String::new(),
+                truncated: false,
+            }),
+        )
+        .unwrap();
         assert!(matches!(
             read_client(&mut &bytes[..]),
             Err(FrameError::Malformed(_))
         ));
-        let mut hello = Vec::new();
-        write_client(
-            &mut hello,
-            &ClientMessage::Hello(Hello::current(Vec::new())),
-        )
-        .unwrap();
-        assert!(matches!(
-            read_client(&mut &hello[..]),
-            Err(FrameError::Malformed(_))
-        ));
+        for opening in [
+            Opening::Hello(Hello::current(Vec::new())),
+            Opening::Ask(Ask::Processes),
+        ] {
+            let mut first = Vec::new();
+            write_opening(&mut first, &opening).unwrap();
+            assert!(matches!(
+                read_client(&mut &first[..]),
+                Err(FrameError::Malformed(_))
+            ));
+        }
     }
 
     #[test]
