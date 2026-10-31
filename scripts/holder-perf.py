@@ -455,6 +455,9 @@ def window(path, seconds):
     return measured
 
 
+LEFT = "the round left running: "
+
+
 class Round:
     def __init__(self, args):
         self.args = args
@@ -473,7 +476,11 @@ class Round:
             self.path.state = self.state
             self.node = self.new_node()
         except BaseException:
-            self.close()
+            # The failure stays the one raised; what is left beside it is
+            # told, never put in its place.
+            left = self.close()
+            if left:
+                print(LEFT + "; ".join(left), file=sys.stderr)
             raise
         self.result = {"path": args.path, "panes": args.panes, "rows": ROWS, "cols": COLS,
                        "conditions_start": conditions(), "phases": {}}
@@ -622,12 +629,16 @@ class Round:
 
     def close(self):
         """Ends everything the round started, by pid and start time, and
-        fails the round when any of it is left running."""
-        left = self.owned.close()
+        answers what is left running or could not be closed; it never
+        raises, so a failure of the round is not replaced by its own."""
+        left = []
         if self.path is not None:
-            self.path.close()
-        if left:
-            raise SystemExit("the round left running: " + "; ".join(left))
+            try:
+                self.path.close()
+            except Exception as error:
+                left.append(f"the {self.args.path} path did not close: {error}")
+        left.extend(self.owned.close())
+        return left
 
 
 def main():
@@ -647,10 +658,18 @@ def main():
     holder_owned.abort_on_signals()
     try:
         current = Round(args)
+        failed = True
         try:
             result = current.run()
+            failed = False
         finally:
-            current.close()
+            left = current.close()
+            # A round that failed keeps its own failure and tells what is
+            # left beside it; one that measured fails on what is left.
+            if left and failed:
+                print(LEFT + "; ".join(left), file=sys.stderr)
+            elif left:
+                raise SystemExit(LEFT + "; ".join(left))
     except holder_owned.Aborted as stop:
         print(f"aborted: {stop}", file=sys.stderr)
         return 128 + stop.signum
