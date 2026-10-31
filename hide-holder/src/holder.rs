@@ -145,6 +145,12 @@ struct Pending {
     full: bool,
     /// One more each time the screen changes.
     version: u64,
+    /// Whether the writer waits for the screen to change. Only then does a
+    /// change wake it: while it waits out the interval between fragments,
+    /// a flood's every read would otherwise wake it for nothing (about
+    /// 100,000 wakes for 100 MB on macOS, where a PTY read gives about
+    /// 1 KiB).
+    waits_for_change: bool,
 }
 
 impl Outbox {
@@ -161,8 +167,11 @@ impl Outbox {
         let mut pending = self.pending();
         pending.changed = true;
         pending.version += 1;
+        let wake = std::mem::take(&mut pending.waits_for_change);
         drop(pending);
-        self.wake.notify_one();
+        if wake {
+            self.wake.notify_one();
+        }
     }
 
     /// The next screen is sent whole.
@@ -1115,18 +1124,24 @@ impl ScreenWriter {
             }
             if pending.changed {
                 let mut at = next;
+                // Held for the program's synchronized output: a change may
+                // be the end of it, so it wakes the writer.
+                let mut waits_for_change = false;
                 if let Some((version, until)) = held
                     && version == pending.version
                 {
                     at = at.max(until);
+                    waits_for_change = true;
                 }
                 let now = Instant::now();
                 if now >= at {
                     pending.changed = false;
+                    pending.waits_for_change = false;
                     return Job::Draw {
                         full: std::mem::take(&mut pending.full),
                     };
                 }
+                pending.waits_for_change = waits_for_change;
                 pending = self
                     .outbox
                     .wake
@@ -1135,6 +1150,7 @@ impl ScreenWriter {
                     .0;
                 continue;
             }
+            pending.waits_for_change = true;
             pending = self
                 .outbox
                 .wake

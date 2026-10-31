@@ -630,7 +630,14 @@ pub fn read_frame(reader: &mut impl Read, bound: usize) -> Result<(u8, Vec<u8>),
 }
 
 fn write_frame(writer: &mut impl Write, kind: u8, payload: &[u8]) -> io::Result<()> {
-    let length = payload.len() + 1;
+    write_frame_parts(writer, kind, &[payload])
+}
+
+/// Writes one frame whose payload is `parts` in order, copied once into the
+/// frame: a fragment's screen bytes go in after its header without first
+/// being gathered into a payload of their own.
+fn write_frame_parts(writer: &mut impl Write, kind: u8, parts: &[&[u8]]) -> io::Result<()> {
+    let length = parts.iter().map(|part| part.len()).sum::<usize>() + 1;
     if length > MAX_FRAME {
         return Err(io::Error::new(
             io::ErrorKind::InvalidInput,
@@ -640,7 +647,9 @@ fn write_frame(writer: &mut impl Write, kind: u8, payload: &[u8]) -> io::Result<
     let mut frame = Vec::with_capacity(length + 4);
     frame.extend_from_slice(&(length as u32).to_le_bytes());
     frame.push(kind);
-    frame.extend_from_slice(payload);
+    for part in parts {
+        frame.extend_from_slice(part);
+    }
     writer.write_all(&frame)?;
     writer.flush()
 }
@@ -1051,14 +1060,13 @@ pub fn write_holder(writer: &mut impl Write, message: &HolderMessage) -> io::Res
             if fragment.bytes.len() > MAX_FRAGMENT {
                 return Err(too_long("fragment", fragment.bytes.len(), MAX_FRAGMENT));
             }
-            let mut payload = Vec::with_capacity(fragment.bytes.len() + 24);
-            payload.extend_from_slice(&fragment.epoch.to_le_bytes());
-            payload.extend_from_slice(&fragment.seq.to_le_bytes());
-            payload.push(u8::from(fragment.full));
-            payload.extend_from_slice(&fragment.size.rows.to_le_bytes());
-            payload.extend_from_slice(&fragment.size.cols.to_le_bytes());
-            payload.extend_from_slice(&fragment.bytes);
-            write_frame(writer, kind::FRAGMENT, &payload)
+            let mut header = Vec::with_capacity(21);
+            header.extend_from_slice(&fragment.epoch.to_le_bytes());
+            header.extend_from_slice(&fragment.seq.to_le_bytes());
+            header.push(u8::from(fragment.full));
+            header.extend_from_slice(&fragment.size.rows.to_le_bytes());
+            header.extend_from_slice(&fragment.size.cols.to_le_bytes());
+            write_frame_parts(writer, kind::FRAGMENT, &[&header, &fragment.bytes])
         }
         HolderMessage::Answer(answer) => {
             let mut payload = Vec::new();
