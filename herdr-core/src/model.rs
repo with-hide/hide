@@ -2716,6 +2716,11 @@ pub enum PaneConnectionReason {
     /// Hide put none of its pieces in: the fix is updating the agent, with
     /// the command in `PaneConnectionSnapshot::update`.
     UpdateAgent,
+    /// Hide's read of the session refuses, for a reason reading again
+    /// cannot clear, so letters and mission answers to it wait: any agent
+    /// whose read reports turns. Neither Settings nor Reopen fixes it; a new
+    /// session does.
+    SessionUnreadable,
 }
 
 /// What a Reopen of a not connected pane is doing.
@@ -8743,13 +8748,15 @@ mod wire_enum_tests {
             PaneConnectionReason::StartedBeforeHide,
             PaneConnectionReason::SetupNeeded,
             PaneConnectionReason::UpdateAgent,
+            PaneConnectionReason::SessionUnreadable,
         ];
         for variant in reasons {
             match variant {
                 PaneConnectionReason::CodexSharedServer
                 | PaneConnectionReason::StartedBeforeHide
                 | PaneConnectionReason::SetupNeeded
-                | PaneConnectionReason::UpdateAgent => {}
+                | PaneConnectionReason::UpdateAgent
+                | PaneConnectionReason::SessionUnreadable => {}
             }
         }
         assert_wire(&contract, "pane_connection_reason", &reasons);
@@ -9317,12 +9324,14 @@ mod wire_enum_tests {
                 AnswerFailure::ConductorGone,
                 AnswerFailure::DeviceDisconnected,
                 AnswerFailure::SendFailed,
+                AnswerFailure::SessionUnreadable,
             ];
             for variant in failures {
                 match variant {
                     AnswerFailure::ConductorGone
                     | AnswerFailure::DeviceDisconnected
-                    | AnswerFailure::SendFailed => {}
+                    | AnswerFailure::SendFailed
+                    | AnswerFailure::SessionUnreadable => {}
                 }
             }
             assert_wire(&contract, "mission_answer_failure", &failures);

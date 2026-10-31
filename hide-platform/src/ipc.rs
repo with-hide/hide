@@ -23,7 +23,8 @@
 //!   `TimedOut`.
 //! - A stream opened for one exchange ([`LocalStream::connect_until`]) waits
 //!   for its connect, and for each later read and write, no later than the
-//!   exchange's deadline, and answers `TimedOut` once it has passed.
+//!   exchange's deadline, and answers `TimedOut` once it has passed, until
+//!   [`LocalStream::clear_deadline`] lets it go on as a long-lived stream.
 //! - A [`LocalStream::duplicate`] reads on one thread while the original
 //!   writes on another, and the bytes of each direction arrive whole.
 //! - [`ShutdownHandle::shutdown`] called from another thread ends a read
@@ -226,6 +227,13 @@ impl LocalStream {
             .store(deadline_nanos(deadline), Ordering::Relaxed);
     }
 
+    /// Takes away this handle's deadline, so a stream opened for its first
+    /// exchange goes on as a long-lived one; a duplicate made before keeps
+    /// its own.
+    pub fn clear_deadline(&self) {
+        self.deadline.store(0, Ordering::Relaxed);
+    }
+
     /// Bounds every later read. `None` blocks until data, end of stream or a
     /// shutdown. A zero timeout is `InvalidInput`.
     pub fn set_read_timeout(&self, timeout: Option<Duration>) -> io::Result<()> {
@@ -388,7 +396,7 @@ impl LocalListener {
         // Held from before the leftover check to the end of the listener, so
         // two binds at one path take turns and a live listener is known by
         // its lock, not by how a connect to it fails.
-        let presence = Presence::claim(path)?;
+        let presence = Presence::claim(path, Duration::ZERO)?;
         clear_leftover(path)?;
         let inner = sys::Listener::bind(path)?;
         #[cfg(windows)]
@@ -467,6 +475,25 @@ pub fn is_endpoint(path: &Path) -> io::Result<bool> {
     fs::symlink_metadata(path).map(|metadata| sys::is_leftover_kind(&metadata))
 }
 
+/// Removes what a listener that ended without its drop (a process killed
+/// outright) left at `path`: the endpoint (a socket on Unix, the marker file
+/// on Windows) and its `<path>.lock`. Answers whether an endpoint was there.
+/// `AddrInUse` while a listener lives at the path, which is told by its lock
+/// as [`LocalListener::bind`] tells it, and an error for anything at the path
+/// a listener does not leave, which is never removed.
+///
+/// A caller that knows the listener's process has ended gives `wait` for its
+/// lock to go: Windows releases a dead process's file locks a moment after
+/// the process ends, so a lock still held then is waited out up to `wait`.
+pub fn remove_leftover(path: &Path, wait: Duration) -> io::Result<bool> {
+    let presence = Presence::claim(path, wait)?;
+    let there = fs::symlink_metadata(path).is_ok();
+    clear_leftover(path)?;
+    // Dropped while the endpoint is gone: the lock file goes with it.
+    drop(presence);
+    Ok(there)
+}
+
 /// An exclusive lock on `<endpoint>.lock`, held by a listener from before it
 /// binds until it is dropped.
 ///
@@ -492,7 +519,7 @@ impl Presence {
     /// the account's own private regular file, opened as itself: a link, a
     /// file of another account or one with a second name is refused rather
     /// than followed or locked, as it may sit in a folder others can write.
-    fn claim(endpoint: &Path) -> io::Result<Self> {
+    fn claim(endpoint: &Path, wait: Duration) -> io::Result<Self> {
         use crate::fs::identity::{file_id_nofollow, file_id_of};
         use crate::fs::lock::{Mode, Waited, lock_file};
         use crate::fs::private::open_own_file;
@@ -503,7 +530,7 @@ impl Presence {
         for _ in 0..Self::REOPENS {
             let file = open_own_file(&path, true).map_err(|error| at(&path, error))?;
             let opened = file_id_of(&file).map_err(|error| at(&path, error))?;
-            match lock_file(file, Mode::Exclusive, Duration::ZERO, &|| false)
+            match lock_file(file, Mode::Exclusive, wait, &|| false)
                 .map_err(|error| at(&path, error))?
             {
                 Waited::Locked(lock) => {

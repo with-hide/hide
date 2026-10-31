@@ -200,10 +200,18 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       # hide-agent-hooks runs Hide's OpenCode plugin under Node in its tests
-      # (`tests/it/opencode_plugin.rs`); the version is pinned, not the image's.
+      # (`tests/it/opencode_plugin.rs`), and the pane holder's screen tests
+      # draw on a headless xterm under Node; the version is pinned, not the
+      # image's.
+      - uses: pnpm/action-setup@v6
+        with:
+          version: 10
       - uses: actions/setup-node@v4
         with:
           node-version: 22
+      - name: Install the holder tests' xterm
+        timeout-minutes: 3
+        run: bash scripts/verify-web.sh install holder
       # Linux's one saver of the workspace set: it builds every member's tests,
       # the most of any Linux job (docs/BUILD.md, "CI's Rust caches").
       - uses: ./.github/actions/rust-cache

@@ -97,9 +97,12 @@ impl Display for VerifyError {
 
 impl std::error::Error for VerifyError {}
 
-/// How much of a file is read to choose an excerpt from; a longer file is
-/// read to this bound and its tail is never offered.
-pub const EXCERPT_SOURCE_BYTES: usize = 96 * 1024;
+/// How much of a file is read to choose an excerpt from: one node read
+/// (`hide_host::bytes::MAX_RANGE`), so a long owning document such as a
+/// 600 KB behavior guide is searched to its end; a longer file is read to
+/// this bound and its tail is never offered. Only the excerpt reaches a
+/// prompt.
+pub const EXCERPT_SOURCE_BYTES: usize = 4 * 1024 * 1024;
 
 /// What an excerpt shows where it leaves a stretch of the file out.
 const EXCERPT_GAP: &str = "\n[...]\n";
@@ -194,13 +197,7 @@ pub fn relevant_excerpt(
         .collect::<Vec<_>>();
     let scores = sections
         .iter()
-        .map(|section| {
-            let lowered = section.to_lowercase();
-            words
-                .iter()
-                .filter(|word| lowered.contains(word.as_str()))
-                .count()
-        })
+        .map(|section| shared_words(section, words))
         .collect::<Vec<_>>();
     if scores.iter().all(|score| *score == 0) {
         return Excerpt {
@@ -211,7 +208,7 @@ pub fn relevant_excerpt(
     }
     let mut order = (0..sections.len()).collect::<Vec<_>>();
     order.sort_by_key(|index| (std::cmp::Reverse(scores[*index]), *index));
-    let mut chosen = vec![None::<&str>; sections.len()];
+    let mut chosen = vec![None::<String>; sections.len()];
     let mut left = limit;
     for index in order {
         if scores[index] == 0 || left <= EXCERPT_GAP.len() {
@@ -219,7 +216,11 @@ pub fn relevant_excerpt(
         }
         let section = sections[index];
         let room = left - EXCERPT_GAP.len();
-        let section = cut_to(section, room);
+        let section = if section.len() <= room {
+            section.to_owned()
+        } else {
+            section_lines(section, words, room)
+        };
         left -= section.len() + EXCERPT_GAP.len();
         chosen[index] = Some(section);
     }
@@ -233,6 +234,50 @@ pub fn relevant_excerpt(
         text,
         truncated: true,
     }
+}
+
+/// How many of the card's words `text` holds.
+fn shared_words(text: &str, words: &[String]) -> usize {
+    let lowered = text.to_lowercase();
+    words
+        .iter()
+        .filter(|word| lowered.contains(word.as_str()))
+        .count()
+}
+
+/// A section longer than `room`, given as its heading line and the lines
+/// that share most words with the card, in the section's order with a gap
+/// where lines are left out, so a sentence deep in a long section is seen
+/// rather than only the section's beginning. Never longer than `room`.
+fn section_lines(section: &str, words: &[String], room: usize) -> String {
+    let lines = section.split_inclusive('\n').collect::<Vec<_>>();
+    let mut order = (1..lines.len())
+        .map(|index| (shared_words(lines[index], words), index))
+        .filter(|(score, _)| *score > 0)
+        .collect::<Vec<_>>();
+    order.sort_by_key(|(score, index)| (std::cmp::Reverse(*score), *index));
+    // Each kept line is charged a gap, which covers the gaps joining them.
+    let mut kept = vec![None::<&str>; lines.len()];
+    let mut left = room;
+    for index in std::iter::once(0).chain(order.into_iter().map(|(_, index)| index)) {
+        if left <= EXCERPT_GAP.len() {
+            break;
+        }
+        let line = cut_to(lines[index], left - EXCERPT_GAP.len());
+        left -= line.len() + EXCERPT_GAP.len();
+        kept[index] = Some(line);
+    }
+    let mut text = String::new();
+    let mut previous = None;
+    for (index, line) in kept.into_iter().enumerate() {
+        let Some(line) = line else { continue };
+        if previous.is_some_and(|previous: usize| previous + 1 != index) {
+            text.push_str(EXCERPT_GAP);
+        }
+        text.push_str(line);
+        previous = Some(index);
+    }
+    text
 }
 
 /// A file's text as the node gave it, cut to a bound.
@@ -712,6 +757,25 @@ mod tests {
         let none = relevant_excerpt("~/AGENTS.md", &file, false, &query_words(&["zzzz"]), 2_000);
         assert!(none.text.starts_with("# Intro"));
         assert_eq!(none.text.len(), 2_000);
+        // A section longer than the bound gives its heading and the lines
+        // that share words, not only its beginning.
+        let mut long = String::from("# Intro\nshort\n## First run\n");
+        long.push_str(&"filler line about nothing\n".repeat(400));
+        long.push_str("Devices lists the Host entries of the ssh config.\n");
+        long.push_str(&"more filler\n".repeat(400));
+        let deep = relevant_excerpt(
+            "docs/UI.md",
+            &long,
+            false,
+            &query_words(&["ssh config Host"]),
+            2_000,
+        );
+        assert!(deep.text.len() <= 2_000);
+        assert!(deep.text.starts_with("## First run\n"), "{}", deep.text);
+        assert!(
+            deep.text
+                .contains("Devices lists the Host entries of the ssh config.")
+        );
         // A file that fits is given whole.
         let whole = relevant_excerpt("a.md", "# A\nshort\n", false, &words, 2_000);
         assert_eq!(

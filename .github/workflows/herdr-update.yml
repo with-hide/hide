@@ -106,11 +106,19 @@ jobs:
         if: steps.existing.outputs.proceed == 'true'
         run: zsh scripts/check-herdr-pin-single-source.sh
 
-      # The suite runs Hide's OpenCode plugin under Node (`hide-agent-hooks/tests/it/opencode_plugin.rs`).
+      # The suite runs Hide's OpenCode plugin under Node (`hide-agent-hooks/tests/it/opencode_plugin.rs`),
+      # and the pane holder's screen tests draw on a headless xterm under Node.
+      - uses: pnpm/action-setup@v6
+        if: steps.existing.outputs.proceed == 'true'
+        with:
+          version: 10
       - uses: actions/setup-node@v4
         if: steps.existing.outputs.proceed == 'true'
         with:
           node-version: 22
+      - name: Install the holder tests' xterm
+        if: steps.existing.outputs.proceed == 'true'
+        run: bash scripts/verify-web.sh install holder
 
       - name: Install cargo-nextest
         if: steps.existing.outputs.proceed == 'true'

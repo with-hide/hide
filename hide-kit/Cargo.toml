@@ -14,6 +14,7 @@ publish = false
 hide-agent-adapter = { path = "../hide-agent-adapter" }
 hide-agent-hooks = { path = "../hide-agent-hooks" }
 hide-herdr-client = { path = "../hide-herdr-client" }
+hide-holder-protocol = { path = "../hide-holder-protocol" }
 hide-platform = { path = "../hide-platform" }
 serde = { version = "=1.0.229", features = ["derive"] }
 serde_json = "=1.0.151"

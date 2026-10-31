@@ -37,7 +37,7 @@ fn a_pane_runs_on_the_pinned_conpty_in_its_version_folder() {
     connection
         .send(ClientMessage::Input(print_ok().to_vec()))
         .unwrap();
-    connection.wait_for_output("hide-ok");
+    connection.wait_for_text("hide-ok");
     assert!(
         held(&open_console),
         "the shell runs on a console other than the version folder's OpenConsole"

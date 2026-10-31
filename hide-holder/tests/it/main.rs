@@ -1,10 +1,14 @@
 //! The holder's contract, checked against the built `hide-holder` started
 //! as a node starts it, without a node (docs/TESTING.md, The pane holder).
 
+mod asks;
 mod connections;
 #[cfg(windows)]
 mod conpty;
 mod folders;
 mod lifecycle;
+mod meaning;
+mod records;
 mod role;
+mod screen;
 mod support;

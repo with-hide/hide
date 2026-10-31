@@ -373,11 +373,17 @@ struct ReadJob {
     import_legacy: bool,
 }
 
-/// Whether a refused read says only that the session is not there yet. The
-/// reason code is the one `hide-session` gives a located file that is absent,
-/// on this machine and, through the helper, on a device.
+/// Whether a refused read says only that the session is not there yet or
+/// was being written as it was read, so reading again can answer. The codes
+/// are the ones `hide-session` gives a located file that is absent and a
+/// file that changed during the read, on this machine and, through the
+/// helper, on a device. Any other refusal is the reader's answer for the
+/// session's bytes as they are.
 fn refusal_clears_by_itself(reason: &str) -> bool {
-    reason == "session_file_missing"
+    matches!(
+        reason,
+        "session_file_missing" | "label_session_read_changed"
+    )
 }
 
 struct PaneState {
@@ -410,6 +416,11 @@ struct PaneState {
     read_retries: u8,
     /// The last failure logged, so a repeating one is logged once.
     last_failure: Option<String>,
+    /// Why the current session's last read refused, when reading again
+    /// cannot answer (`refusal_clears_by_itself`): letters to the pane wait
+    /// on a read that will not come. A read that lands and another session
+    /// clear it.
+    refused: Option<String>,
     /// When this worker began seeing the pane, and so its input (D-19).
     input_observed_since_unix_ms: u64,
     /// The newest operator submit matched to a message.
@@ -689,6 +700,7 @@ impl LabelWorker {
                             follow_up_armed: status_moved,
                             read_retries: 0,
                             last_failure: None,
+                            refused: None,
                             input_observed_since_unix_ms: now_unix_ms,
                             claimed_submit: None,
                             end_retried: None,
@@ -710,6 +722,7 @@ impl LabelWorker {
                         pane.next_analysis_at = None;
                         pane.follow_up_at = None;
                         pane.read_retries = 0;
+                        pane.refused = None;
                         pane.needs_read = true;
                         pane.record_connection = RecordConnection::Checking;
                         // A newly reported session supersedes the provisional
@@ -1025,6 +1038,11 @@ impl LabelWorker {
     /// What these labels lay onto a projection; see [`LabelOverlay`].
     pub(crate) fn overlay(&self) -> LabelOverlay {
         LabelOverlay::of_records(&self.records, self.generator.shows(), self.summaries)
+            .with_refusals(self.panes.iter().filter_map(|(id, pane)| {
+                pane.refused
+                    .clone()
+                    .map(|reason| (id.clone(), pane.reference_token.clone(), reason))
+            }))
             .with_bindings(
                 self.panes
                     .iter()
@@ -1585,8 +1603,7 @@ impl LabelWorker {
             && label_reference_token(pane.agent.as_str(), "id", id).as_deref()
                 != Some(transcript.confirmed.owner.as_str())
         {
-            self.log_failure(pane_id, "read.refused", "label_session_id_mismatch");
-            return self.invalidate_turn_read(pane_id);
+            return self.refuse_read(pane_id, "label_session_id_mismatch", now);
         }
         let pi_name = pane.agent == hide_session::Agent::Pi;
         let target = self.target.clone();
@@ -1937,6 +1954,7 @@ impl LabelWorker {
                 .extend(transcript.skipped_reasons.keys().cloned());
         }
         pane.last_failure = None;
+        pane.refused = None;
         pane.read_retries = 0;
         if from_start || transcript.rescanned.is_some() {
             pane.events.clear();
@@ -1997,14 +2015,18 @@ impl LabelWorker {
     /// pane is read again when its refusal can clear.
     fn refuse_read(&mut self, pane_id: &str, reason: &str, now: Instant) -> bool {
         self.log_failure(pane_id, "read.refused", reason);
+        let mut changed = false;
         if let Some(pane) = self.panes.get_mut(pane_id) {
+            let refused = (!refusal_clears_by_itself(reason)).then(|| reason.to_owned());
+            changed = pane.refused != refused;
+            pane.refused = refused;
             if pane.agent.requires_native_file_proof() {
                 pane.follow_up_at = Some(now + UNAVAILABLE_RETRY);
             } else if refusal_clears_by_itself(reason) && !pane.retry_later(now) {
                 self.log_failure(pane_id, "read.retry_capped", reason);
             }
         }
-        self.invalidate_turn_read(pane_id)
+        self.invalidate_turn_read(pane_id) || changed
     }
 
     fn invalidate_turn_read(&mut self, pane_id: &str) -> bool {

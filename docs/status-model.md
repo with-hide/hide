@@ -687,6 +687,7 @@ Settings counts sessions and never these connections, so a pane that needs a Reo
 | `session_predates_install`, any other | `started_before_hide` |
 | `hooks_not_installed`, `config_unreadable`, `hook_outdated` | `setup_needed` (fix it in the agent's row in Settings; Reopen would change nothing) |
 | `hooks_switched_off`, `unknown`, an agent with no hook, or an agent asleep | no connection, so no chip |
+| any of the above, for an agent whose read reports turns and whose session Hide's read refuses for a reason reading again cannot clear ([delivery.md](delivery.md#letters-while-the-agent-works)) | `session_unreadable` (letters and mission answers wait; no Reopen, which resumes the same session) |
 
 A Herdr live handoff or restart does not move a connected pane to `started_before_hide`: the hook reports to the core, which keeps what it reported in its own `hook-facts.json`, so nothing the instrumented judgement reads goes with Herdr's server, for a pane on a device as for this Mac's ([agent-hooks.md](agent-hooks.md#what-the-hook-returns-and-reports-back)).
 `can_reopen` is false for `setup_needed`, `update_agent`, an agent other than Claude Code and Codex, and a pane on another device, because a Reopen restarts a Claude Code or Codex session through this Mac's Herdr and changes no agent's version.

@@ -11,8 +11,8 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use hide_holder_protocol::{
-    Capability, ClientMessage, Closed, HolderMessage, OpenError, PROTOCOL_VERSION, Welcome,
-    read_holder, write_client,
+    Answer, Ask, Capability, ClientMessage, Closed, Fragment, HolderMessage, MAX_READ_LINES,
+    OpenError, PROTOCOL_VERSION, Welcome, read_holder, write_client,
 };
 use hide_kit::holders::{Reservation, Source};
 use hide_platform::ipc::LocalStream;
@@ -29,6 +29,8 @@ pub const CONPTY_VARIABLE: &str = "HIDE_HOLDER_CONPTY";
 pub const ROLE: &str = "HIDE_HOLDER_TEST_ROLE";
 /// Where a role writes the pids it started.
 pub const PIDS_FILE: &str = "HIDE_HOLDER_TEST_PIDS";
+/// The folder the `script` role plays its steps from.
+pub const SCRIPT: &str = "HIDE_HOLDER_TEST_SCRIPT";
 
 /// A private HOME for one test.
 pub struct Home {
@@ -176,6 +178,27 @@ pub fn start_with(
     start_folder: &Path,
     cwd: &Path,
 ) -> Start {
+    start_themed(
+        program_path,
+        socket,
+        program,
+        environment,
+        start_folder,
+        cwd,
+        None,
+    )
+}
+
+/// As [`start_with`], given the node's theme at the start (`--theme`).
+pub fn start_themed(
+    program_path: &Path,
+    socket: &Path,
+    program: &[OsString],
+    environment: &[(&str, &OsString)],
+    start_folder: &Path,
+    cwd: &Path,
+    theme: Option<&hide_holder_protocol::Theme>,
+) -> Start {
     let log = socket.with_extension("log");
     let mut command = ResidentCommand::new(program_path);
     command
@@ -185,9 +208,11 @@ pub fn start_with(
         .args(["--rows", "24", "--cols", "80", "--id", "test-pane", "--log"])
         .arg(&log)
         .arg("--cwd")
-        .arg(cwd)
-        .arg("--")
-        .args(program);
+        .arg(cwd);
+    if let Some(theme) = theme {
+        command.arg("--theme").arg(theme.to_arg());
+    }
+    command.arg("--").args(program);
     for (key, value) in environment {
         command.env(key, value);
     }
@@ -252,18 +277,23 @@ pub fn start_ready(
 }
 
 impl Holder {
-    /// Opens a connection that accepts the program's raw output.
+    /// Opens a connection that takes the screen.
     pub fn open(&self) -> Connection {
         let (stream, welcome) = self.try_open().unwrap();
-        Connection::new(stream, welcome)
+        Connection::new(stream, welcome, &self.socket)
     }
 
     pub fn try_open(&self) -> Result<(LocalStream, Welcome), OpenError> {
         hide_holder_protocol::open(
             &self.socket,
-            vec![Capability::RawOutput],
+            vec![Capability::Screen],
             Instant::now() + HANG_LIMIT,
         )
+    }
+
+    /// The pane's recent text, read on a connection of its own.
+    pub fn read(&self, lines: u16) -> (String, bool) {
+        read_text(&self.socket, lines)
     }
 
     /// Waits until the holder process has ended.
@@ -289,7 +319,7 @@ impl Drop for Holder {
 }
 
 #[allow(clippy::disallowed_methods)] // a polling helper bounded by a deadline
-pub fn wait_until(what: &str, done: impl Fn() -> bool) {
+pub fn wait_until(what: &str, mut done: impl FnMut() -> bool) {
     let started = Instant::now();
     while !done() {
         assert!(started.elapsed() < HANG_LIMIT, "{what} never happened");
@@ -309,18 +339,27 @@ fn first_line(reader: impl std::io::Read + Send + 'static) -> String {
         .expect("the holder said nothing on its report pipe")
 }
 
+/// The recent text of the pane whose holder listens at `socket`.
+pub fn read_text(socket: &Path, lines: u16) -> (String, bool) {
+    match hide_holder_protocol::ask(socket, Ask::Read { lines }, Instant::now() + HANG_LIMIT) {
+        Ok(Answer::Text { text, truncated }) => (text, truncated),
+        other => panic!("a read was answered {other:?}"),
+    }
+}
+
 /// A node's side of a connection: a reader thread collects what the holder
-/// sends, so a test reads output and the close without blocking on either.
+/// sends, so a test reads fragments and the close without blocking on either.
 pub struct Connection {
     pub welcome: Welcome,
     stream: LocalStream,
+    socket: PathBuf,
     heard: mpsc::Receiver<HolderMessage>,
-    pub output: Vec<u8>,
+    pub fragments: Vec<Fragment>,
     pub closed: Option<Closed>,
 }
 
 impl Connection {
-    pub fn new(stream: LocalStream, welcome: Welcome) -> Self {
+    pub fn new(stream: LocalStream, welcome: Welcome, socket: &Path) -> Self {
         let mut reading = stream.duplicate();
         let (sender, heard) = mpsc::channel();
         thread::spawn(move || {
@@ -334,8 +373,9 @@ impl Connection {
         Self {
             welcome,
             stream,
+            socket: socket.to_owned(),
             heard,
-            output: Vec::new(),
+            fragments: Vec::new(),
             closed: None,
         }
     }
@@ -346,35 +386,44 @@ impl Connection {
 
     fn take(&mut self, wait: Duration) -> bool {
         match self.heard.recv_timeout(wait) {
-            Ok(HolderMessage::Output(bytes)) => {
-                self.output.extend_from_slice(&bytes);
+            Ok(HolderMessage::Fragment(fragment)) => {
+                self.fragments.push(fragment);
                 true
             }
             Ok(HolderMessage::Closed(closed)) => {
                 self.closed = Some(closed);
                 true
             }
-            Ok(HolderMessage::Welcome(_)) => panic!("a second welcome"),
+            Ok(other) => panic!("{other:?} on a screen connection"),
             Err(_) => false,
         }
     }
 
-    /// Reads output until it holds `text`.
-    pub fn wait_for_output(&mut self, text: &str) {
+    /// Takes what the holder sent until now.
+    pub fn drain(&mut self) {
+        while self.take(Duration::ZERO) {}
+    }
+
+    /// Waits until the pane's text holds `text`, while this connection stays
+    /// open, and answers the text.
+    pub fn wait_for_text(&mut self, text: &str) -> String {
         let started = Instant::now();
-        while !String::from_utf8_lossy(&self.output).contains(text) {
+        loop {
+            self.drain();
             assert!(
                 self.closed.is_none(),
-                "closed ({:?}) before {text:?} came; output: {}",
+                "closed ({:?}) before {text:?} came",
                 self.closed,
-                String::from_utf8_lossy(&self.output)
             );
+            let (seen, _) = read_text(&self.socket, MAX_READ_LINES);
+            if seen.contains(text) {
+                return seen;
+            }
             assert!(
                 started.elapsed() < HANG_LIMIT,
-                "{text:?} never came; output: {}",
-                String::from_utf8_lossy(&self.output)
+                "{text:?} never came; the pane shows: {seen}"
             );
-            self.take(Duration::from_millis(100));
+            self.take(Duration::from_millis(50));
         }
     }
 
@@ -407,4 +456,285 @@ pub fn pids_in(path: &Path, count: usize) -> Vec<u32> {
 
 pub fn current_version() -> u16 {
     PROTOCOL_VERSION
+}
+
+/// The steps the `script` role plays, in a folder of the test's HOME.
+pub struct Script {
+    pub folder: PathBuf,
+    /// Every step's bytes, in order.
+    pub steps: Vec<Vec<u8>>,
+    /// The theme the holder is started with.
+    pub theme: Option<hide_holder_protocol::Theme>,
+}
+
+impl Script {
+    pub fn new(home: &Home, steps: Vec<Vec<u8>>) -> Self {
+        let folder = home.path().join("script");
+        std::fs::create_dir_all(&folder).unwrap();
+        for (index, step) in steps.iter().enumerate() {
+            std::fs::write(folder.join(format!("step-{index}")), step).unwrap();
+        }
+        Self {
+            folder,
+            steps,
+            theme: None,
+        }
+    }
+
+    /// The holder is started with `theme`, as a node passes its own. Unix
+    /// only, like the answers it is checked by (`meaning.rs`).
+    #[cfg(unix)]
+    pub fn with_theme(mut self, theme: hide_holder_protocol::Theme) -> Self {
+        self.theme = Some(theme);
+        self
+    }
+
+    /// Lets the role play step `step`.
+    pub fn go(&self, step: usize) {
+        std::fs::write(self.folder.join(format!("go-{step}")), b"").unwrap();
+    }
+
+    /// What the program was sent, as it came.
+    pub fn heard(&self) -> Vec<u8> {
+        std::fs::read(self.folder.join("heard")).unwrap_or_default()
+    }
+
+    /// Waits until the program was sent `expected`, and nothing else. On
+    /// Windows ConPTY changes what reaches the program, so no test there
+    /// compares it byte for byte.
+    #[cfg(unix)]
+    pub fn wait_heard(&self, expected: &[u8]) {
+        let mut heard = Vec::new();
+        wait_until(
+            &format!(
+                "the program to be sent {:?}",
+                String::from_utf8_lossy(expected)
+            ),
+            || {
+                heard = self.heard();
+                heard.len() >= expected.len()
+            },
+        );
+        assert_eq!(
+            String::from_utf8_lossy(&heard),
+            String::from_utf8_lossy(expected),
+            "the program was sent something else"
+        );
+    }
+
+    /// Starts a holder whose program plays this script.
+    pub fn start(&self, home: &Home) -> Holder {
+        let folder = home.prepare(current_version(), &source());
+        let role: OsString = "script".into();
+        let script: OsString = self.folder.clone().into();
+        let socket = home.socket("p");
+        let place = socket.parent().unwrap().to_owned();
+        match start_themed(
+            &folder.program,
+            &socket,
+            &role_program("script"),
+            &[(ROLE, &role), (SCRIPT, &script)],
+            &place,
+            &place,
+            self.theme.as_ref(),
+        ) {
+            Start::Ready(holder) => holder,
+            Start::Failed(reason) => panic!("the holder did not start: {reason}"),
+        }
+    }
+}
+
+/// One thing a terminal is given to draw.
+pub enum Draw {
+    Bytes(Vec<u8>),
+    Resize { cols: u16, rows: u16 },
+}
+
+/// What an xterm shows once it drew everything.
+#[derive(Debug, PartialEq, Eq)]
+pub struct Shown {
+    pub lines: Vec<String>,
+    /// Each row's cells as runs of how they look (`draw.mjs`).
+    pub styles: Vec<String>,
+    pub cursor: (u64, u64),
+    pub cursor_visible: bool,
+    pub cursor_shape: (String, Option<bool>),
+    pub buffer: String,
+    /// What the terminal answered or reported while it drew.
+    pub data: Vec<u8>,
+    pub mouse: String,
+}
+
+fn hex(bytes: &[u8]) -> String {
+    bytes.iter().map(|byte| format!("{byte:02x}")).collect()
+}
+
+fn unhex(text: &str) -> Vec<u8> {
+    (0..text.len())
+        .step_by(2)
+        .map(|at| u8::from_str_radix(&text[at..at + 2], 16).unwrap())
+        .collect()
+}
+
+/// Draws each terminal, `(cols, rows, what)`, on an xterm of its own: the
+/// headless xterm in `tests/xterm`, which `scripts/verify-web.sh install
+/// holder` (or the whole install) installs, run by Node.
+/// The pane's default colors when no theme was given: libghostty's own,
+/// which the holder answers color questions with and writes out when it
+/// resolves reverse video.
+pub const PARSER_DEFAULTS: (&str, &str) = ("#ffffff", "#000000");
+
+pub fn draw(terminals: &[(u16, u16, Vec<Draw>)]) -> Vec<Shown> {
+    draw_with(terminals, PARSER_DEFAULTS)
+}
+
+/// As [`draw`], with the pane's default colors `defaults`, foreground and
+/// background, as `#rrggbb`.
+pub fn draw_with(terminals: &[(u16, u16, Vec<Draw>)], defaults: (&str, &str)) -> Vec<Shown> {
+    let package = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/xterm");
+    assert!(
+        package.join("node_modules/@xterm/headless").is_dir(),
+        "the test xterm is not installed in {}: run `bash scripts/verify-web.sh install holder`",
+        package.display()
+    );
+    let input = serde_json::json!({
+        "terminals": terminals.iter().map(|(cols, rows, steps)| serde_json::json!({
+            "cols": cols,
+            "rows": rows,
+            "defaults": { "fg": defaults.0, "bg": defaults.1 },
+            "steps": steps.iter().map(|step| match step {
+                Draw::Bytes(bytes) => serde_json::json!({ "write": hex(bytes) }),
+                Draw::Resize { cols, rows } => serde_json::json!({ "resize": [cols, rows] }),
+            }).collect::<Vec<_>>(),
+        })).collect::<Vec<_>>(),
+    });
+    let mut node = std::process::Command::new("node")
+        .arg(package.join("draw.mjs"))
+        .current_dir(&package)
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .spawn()
+        .unwrap_or_else(|error| panic!("node, which draws the test xterm, did not start: {error}"));
+    {
+        use std::io::Write;
+        let mut stdin = node.stdin.take().unwrap();
+        stdin.write_all(input.to_string().as_bytes()).unwrap();
+    }
+    let output = node.wait_with_output().unwrap();
+    assert!(
+        output.status.success(),
+        "the test xterm failed: {:?}",
+        output.status
+    );
+    let answer: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    answer["screens"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|screen| Shown {
+            lines: screen["lines"]
+                .as_array()
+                .unwrap()
+                .iter()
+                // A fragment writes every cell, blank ones as spaces, where a
+                // program leaves them unwritten: the same to the eye.
+                .map(|line| line.as_str().unwrap().trim_end().to_owned())
+                .collect(),
+            styles: screen["styles"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|row| row.as_str().unwrap().to_owned())
+                .collect(),
+            cursor: (screen["x"].as_u64().unwrap(), screen["y"].as_u64().unwrap()),
+            cursor_visible: screen["cursorVisible"].as_bool().unwrap(),
+            cursor_shape: (
+                screen["cursorStyle"].as_str().unwrap().to_owned(),
+                screen["cursorBlink"].as_bool(),
+            ),
+            buffer: screen["buffer"].as_str().unwrap().to_owned(),
+            data: unhex(screen["data"].as_str().unwrap()),
+            mouse: screen["mouse"].as_str().unwrap().to_owned(),
+        })
+        .collect()
+}
+
+/// The fragments drawn in order on a terminal that first drew `prior` at
+/// `size`: each fragment's size is the terminal's before its bytes.
+pub fn fragments_after(
+    prior: &[u8],
+    size: (u16, u16),
+    fragments: &[Fragment],
+) -> (u16, u16, Vec<Draw>) {
+    let mut steps = vec![Draw::Bytes(prior.to_vec())];
+    let mut current = size;
+    for fragment in fragments {
+        let wanted = (fragment.size.cols, fragment.size.rows);
+        if wanted != current {
+            steps.push(Draw::Resize {
+                cols: wanted.0,
+                rows: wanted.1,
+            });
+            current = wanted;
+        }
+        steps.push(Draw::Bytes(fragment.bytes.clone()));
+    }
+    (size.0, size.1, steps)
+}
+
+impl Connection {
+    /// Waits until the fragments so far, drawn on an xterm, show `marker`,
+    /// the last thing a script step writes, so they show everything the
+    /// step wrote; answers how many fragments that took. A change's
+    /// fragment carries only the cells that changed, so the marker is
+    /// looked for on the drawn screen, not in the bytes.
+    pub fn wait_for_drawn(&mut self, marker: &str) -> usize {
+        let started = Instant::now();
+        let mut checked = 0;
+        loop {
+            self.drain();
+            if self.fragments.len() > checked {
+                checked = self.fragments.len();
+                let first = self.fragments[0].size;
+                let shown = draw(&[fragments_after(
+                    b"",
+                    (first.cols, first.rows),
+                    &self.fragments,
+                )]);
+                if shown[0].lines.iter().any(|line| line.contains(marker)) {
+                    return checked;
+                }
+            }
+            assert!(
+                self.closed.is_none(),
+                "closed ({:?}) before {marker:?} was drawn",
+                self.closed
+            );
+            assert!(started.elapsed() < HANG_LIMIT, "{marker:?} was never drawn");
+            self.take(Duration::from_millis(50));
+        }
+    }
+
+    /// Asks for the screen whole and waits for it: the fragments up to and
+    /// including the full one that answered.
+    pub fn redraw(&mut self) -> usize {
+        let before = self.fragments.len();
+        self.send(ClientMessage::Redraw).unwrap();
+        let started = Instant::now();
+        loop {
+            if let Some(index) = self.fragments[before..]
+                .iter()
+                .position(|fragment| fragment.full)
+            {
+                return before + index + 1;
+            }
+            assert!(
+                self.closed.is_none(),
+                "closed ({:?}) before a full screen came",
+                self.closed
+            );
+            assert!(started.elapsed() < HANG_LIMIT, "no full screen came");
+            self.take(Duration::from_millis(50));
+        }
+    }
 }

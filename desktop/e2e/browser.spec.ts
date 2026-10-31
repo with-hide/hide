@@ -45,6 +45,8 @@ const PAGES: Record<string, string> = {
   // A site that lays out for phones below 768 CSS pixels, as most do.
   "/site.html": '<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Site</title><style>body{margin:0;font:16px system-ui}nav{display:flex;gap:16px;padding:12px;background:#1e293b;color:#fff}@media (max-width:767px){nav span+span{display:none}}</style><nav><span>Northwind</span><span>Docs</span><span>Pricing</span></nav><h1>Ship your storefront</h1>',
   "/site-2.html": '<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Site two</title><h1>Second page</h1>',
+  // A dashboard that loads itself again every second.
+  "/refresh.html": '<!doctype html><meta charset="utf-8"><meta http-equiv="refresh" content="1"><title>Refresh</title><h1>Refresh</h1>',
 };
 /** Answers with a server-side redirect to another app's link, the way a sign-in hands back to a native app. */
 const APP_REDIRECT = "/to-app";
@@ -1094,6 +1096,41 @@ test("zoom: the text-size commands zoom a focused page in Chrome's steps and a p
   await expect.poll(() => inPage<number>(moved, "window.visualViewport.scale")).toBe(1);
   expect(await pinch(moved)).toBeGreaterThan(1.2);
   await windowShot("browser-zoom-pinched");
+});
+
+// Chromium focuses a page's view as each new document commits; a page that
+// reloads itself took the keyboard from the terminal the operator typed in.
+test("refresh focus: a page that loads itself again never takes the keyboard from the terminal", { tag: NEEDS_FOCUS }, async () => {
+  ({ app } = await launch(run.env));
+  await fitWindow(app, WINDOW);
+  const page = await app.firstWindow();
+  await enterWorkspace(page, "fixture");
+  const refresh = `${origin}/refresh.html`;
+  expect(await openFromCli(refresh, ["--wait"])).toMatchObject({ ok: true });
+  await expect.poll(async () => (await viewOf(refresh)).visible).toBe(true);
+  // The window takes the keyboard (through the page, the only way the
+  // fixture makes it key), then the terminal takes it back, natively and in
+  // the shell, so its area holds the keyboard before the page loads again.
+  await focusPage(app, { url: refresh });
+  const keyboardOnPage = page.locator("[data-keyboard-area=true] [data-view-tab-bar]");
+  await expect(keyboardOnPage).toHaveCount(1);
+  // Playwright's click reaches the shell's renderer, not the native responder.
+  await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]!.webContents.focus());
+  // The lane overlays the terminal's right side; its top left stays the terminal's.
+  await page.locator('[data-pane-view][data-focused="true"] .xterm-screen').click({ position: { x: 12, y: 12 } });
+  const terminal = page.locator('[data-pane-view][data-focused="true"] .xterm-helper-textarea');
+  await expect(keyboardOnPage).toHaveCount(0);
+  const holds = () => app!.evaluate(({ BrowserWindow }, url) => {
+    const window = BrowserWindow.getAllWindows().find((candidate) => candidate.getParentWindow() === null)!;
+    const child = window.contentView.children.find((view) => (view as { webContents?: Electron.WebContents }).webContents?.getURL() === url) as unknown as { webContents: Electron.WebContents } | undefined;
+    return { window: window.isFocused(), shell: window.webContents.isFocused(), page: child?.webContents.isFocused() ?? null };
+  }, refresh);
+  await expect.poll(holds).toEqual({ window: true, shell: true, page: false });
+  const returned = () => hostLog(run.env).filter((line) => line.event === "browser.navigation_focus_returned").length;
+  await expect.poll(returned, { message: "three of the page's loads took the keyboard and gave it back", timeout: 15_000 }).toBeGreaterThanOrEqual(3);
+  await expect.poll(holds).toEqual({ window: true, shell: true, page: false });
+  expect(await terminal.evaluate((element) => element === document.activeElement), "the terminal keeps the shell's keyboard").toBe(true);
+  await expect(keyboardOnPage, "the page's area never became the keyboard's").toHaveCount(0);
 });
 
 test("expand: Zoom pane in a focused page expands the lane and back while the page keeps the keyboard", { tag: NEEDS_FOCUS }, async () => {

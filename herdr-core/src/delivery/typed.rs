@@ -232,6 +232,7 @@ mod tests {
             thread: None,
             host_scope: None,
             turn: Turn::NotReported,
+            unreadable: None,
         }
     }
 

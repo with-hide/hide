@@ -1,0 +1,13 @@
+{
+  "name": "hide-holder-xterm",
+  "private": true,
+  "type": "module",
+  "description": "An xterm of its own that the pane holder's screen tests draw the holder's fragments on, apart from the web shell's.",
+  "engines": {
+    "node": ">=22.12.0"
+  },
+  "dependencies": {
+    "@xterm/addon-unicode11": "^0.9.0",
+    "@xterm/headless": "^6.0.0"
+  }
+}

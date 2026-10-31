@@ -135,6 +135,13 @@ export function DecisionBanner({ mission, device, actions, onNode }: { mission: 
           <span className="shrink-0 text-caption text-mission-hold">· {t("mission.banner.unconfirmed")}</span>
           <Button size="sm" variant="ghost" disabled={unreachable} onClick={resend} data-mission-resend="true">{t("mission.banner.resend")}</Button>
         </p>
+      ) : sent?.state === "waiting" && mission.answer_failed === "session_unreadable" ? (
+        // The answer waits on a Conductor session Hide cannot read: it is not delivered until a read lands.
+        <p className="flex min-w-0 items-center gap-xs text-body" data-mission-banner-sent={sent.state}>
+          <CircleAlertIcon aria-hidden="true" className="size-(--size-icon-sm) shrink-0 text-mission-failed" />
+          <span className="min-w-0 truncate font-semibold" title={sent.text}>{sent.text}</span>
+          <span className="min-w-0 truncate text-caption text-mission-failed" data-mission-banner-reason="session_unreadable">· {t("mission.banner.failed.session_unreadable")}</span>
+        </p>
       ) : sent ? (
         <p className="flex min-w-0 items-center gap-xs text-body" data-mission-banner-sent={sent.state}>
           <CheckIcon aria-hidden="true" className="size-(--size-icon-sm) shrink-0 text-mission-done" />

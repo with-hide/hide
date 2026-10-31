@@ -248,7 +248,10 @@ mod tests {
         };
         assert_eq!(
             read(home.path(), &input).unwrap_err(),
-            ReadRefusal::Refused("session_capacity".into())
+            ReadRefusal::Refused(format!(
+                "session_capacity:discovery_entries:{}",
+                crate::SESSION_DISCOVERY_LIMIT
+            ))
         );
         assert!(
             home.path()

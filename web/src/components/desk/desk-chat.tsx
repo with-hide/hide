@@ -3,7 +3,6 @@ import { useMemo, type ReactNode } from "react";
 import { Trans } from "react-i18next";
 import type { DeskAgent, DeskItem, DeskJob, DeskMention, DeskNoticeKind, DeskSessionRef, DeskSteps } from "../../desk";
 import { chipMention, handedSession, markedMention, mentionParts, namedMention } from "../../desk";
-import { AgentMark } from "../../AgentMark";
 import { useInterfaceTranslation } from "../../i18n/client";
 import { requireInterfaceLanguage } from "../../i18n/locale";
 import type { MessageKey } from "../../i18n/catalogs";
@@ -32,17 +31,17 @@ export function MentionText({ text, mentions, token = namedMention, onMention }:
 
 /**
  * One mention as Desk draws it wherever it stands, in the composer, the
- * operator's message and a thread alike (D-85): a session leads with its
- * status and agent marks once Hide knows them, a project with ⌂.
+ * operator's message and a thread alike (D-85): a session is its
+ * `SessionChip`, the same one a reply names, and a project a green chip led
+ * by ⌂.
  */
 export function DeskMentionChip({ mention, onPress }: { mention: DeskMention; onPress?: () => void }) {
   const { t } = useInterfaceTranslation();
-  const lead = mention.kind === "project"
-    ? <HouseIcon aria-hidden="true" className="size-(--size-icon-sm)" />
-    : mention.agent_kind ? <><StatusMark mark={mention.mark ?? null} /><AgentMark kind={mention.agent_kind} /></> : undefined;
+  if (mention.kind === "session") return <SessionChip session={{ name: mention.name, mark: mention.mark ?? null, agent_kind: mention.agent_kind ?? null, pane_id: mention.id }} onPress={onPress} />;
+  const lead = <HouseIcon aria-hidden="true" className="size-(--size-icon-sm)" />;
   return onPress
-    ? <MentionChip kind={mention.kind} name={mention.name} lead={lead} label={t("desk.mention.open", { name: mention.name })} onPress={onPress} />
-    : <MentionChip kind={mention.kind} name={mention.name} lead={lead} />;
+    ? <MentionChip kind="project" name={mention.name} lead={lead} label={t("desk.mention.open", { name: mention.name })} onPress={onPress} />
+    : <MentionChip kind="project" name={mention.name} lead={lead} />;
 }
 
 /** The operator's own words, the one thing drawn as a bubble (B7, D-75). */

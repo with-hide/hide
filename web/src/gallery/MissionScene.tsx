@@ -5,7 +5,8 @@
 // rejected (running, with the search fix's check failed and one reviewer's
 // rejection, its short reason first), decision (a decision, a failed node, a stuck worker and an outside PR
 // closed unmerged in the operator's turn), decision-sent (its answer waiting
-// for the Conductor's turn), decision-unconfirmed (its answer typed without
+// for the Conductor's turn), decision-unreadable (its answer waiting on a
+// Conductor session Hide cannot read), decision-unconfirmed (its answer typed without
 // Herdr confirming it), stack (the merge order), no-conductor, stale, failed
 // (the record unreadable), wide (a row wider than the slot, shrunk to fit),
 // done, cancelled, no-pr (a finished mission with no pull request), exempt
@@ -213,7 +214,8 @@ const OLD_CRITERION = "목록 화면이 새 API로 페이지를 넘기고, 필�
 
 export function missionFixture(shown: string, now: number): { mission: Mission; rest: SnapshotRest } {
   // An answer sent from the banner draws the decision with that answer on it.
-  const state = shown === "decision-sent" || shown === "decision-unconfirmed" ? "decision" : shown === "exempt" ? "done" : shown === "rejected" ? "running" : shown;
+  const answered = shown === "decision-sent" || shown === "decision-unreadable" || shown === "decision-unconfirmed";
+  const state = answered ? "decision" : shown === "exempt" ? "done" : shown === "rejected" ? "running" : shown;
   // A mission from before finish lines keeps each node's one old sentence (B23); a rejected one has a reviewer say no.
   const nodes = shown === "exempt" ? plan(state, now).map((one) => ({ ...one, ...finish(own(1, OLD_CRITERION, "pass")) })) : shown === "rejected" ? plan(state, now).map(rejectedReview) : plan(state, now);
   const mission: Mission = {
@@ -226,8 +228,8 @@ export function missionFixture(shown: string, now: number): { mission: Mission; 
     question: state === "decision"
       ? { key: 2, why: `API PR ${no(1503)}이 아직 리뷰 중이라 그 위에 쌓으면 리베이스가 생길 수 있어요`, options: [`${no(1503)} 위에 쌓기`, `${no(1503)} 머지 뒤 main에서`, "화면 PR을 둘로 나누기"], recommend: 1, node: "screen", asked_at_unix_ms: now - 8 * MINUTE }
       : null,
-    answer: shown === "decision-sent" || shown === "decision-unconfirmed" ? { key: 2, text: `${no(1503)} 위에 쌓기`, option: 1, state: shown === "decision-sent" ? "waiting" : "unconfirmed" } : null,
-    answer_failed: null,
+    answer: answered ? { key: 2, text: `${no(1503)} 위에 쌓기`, option: 1, state: shown === "decision-unconfirmed" ? "unconfirmed" : "waiting" } : null,
+    answer_failed: shown === "decision-unreadable" ? "session_unreadable" : null,
     delay: null, report: state === "done" ? REPORT : state === "no-pr" ? "1.0.0 릴리스 끝. private 배포, 사이트 반영, floor 올림." : null,
     created_at_unix_ms: now - 320 * MINUTE,
     started_at_unix_ms: state === "plan" ? null : now - (STARTED_AGO[state] ?? 44) * MINUTE,

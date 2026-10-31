@@ -6,7 +6,7 @@ use std::process::{Command, Stdio};
 use std::thread;
 use std::time::{Duration, Instant};
 
-use crate::support::{PIDS_FILE, ROLE};
+use crate::support::{PIDS_FILE, ROLE, SCRIPT};
 
 /// How long a role that nobody ends lives.
 const ROLE_LIFE: Duration = Duration::from_secs(60);
@@ -14,6 +14,9 @@ const ROLE_LIFE: Duration = Duration::from_secs(60);
 /// Exit on its own once its child runs: a shell that exits and leaves a
 /// process behind.
 pub const EXIT_EARLY: &str = "HIDE_HOLDER_TEST_EXIT_EARLY";
+
+/// The file whose appearance tells `exit_when_told` to exit.
+pub const GO: &str = "HIDE_HOLDER_TEST_GO";
 
 #[test]
 fn play() {
@@ -24,6 +27,8 @@ fn play() {
         "stubborn_tree" => stubborn_tree(),
         "stubborn_child" => stubborn_child(),
         "flood" => flood(),
+        "script" => script(),
+        "exit_when_told" => exit_when_told(),
         other => panic!("unknown role {other}"),
     }
 }
@@ -35,7 +40,8 @@ fn record(pid: u32) {
         .create(true)
         .open(path)
         .unwrap();
-    writeln!(file, "{pid}").unwrap();
+    // One write, so lines that panes write at once never interleave.
+    file.write_all(format!("{pid}\n").as_bytes()).unwrap();
 }
 
 fn command(role: &str) -> Command {
@@ -93,7 +99,10 @@ fn stubborn_tree() {
         #[allow(clippy::disallowed_methods)] // the role's own pace
         thread::sleep(Duration::from_millis(5));
     }
-    println!("TREE READY");
+    // A terminal whose holder was killed refuses the write; a program that
+    // ignores the hangup lives on past that, as this one must.
+    let mut out = std::io::stdout();
+    let _ = writeln!(out, "TREE READY").and_then(|()| out.flush());
     if std::env::var_os(EXIT_EARLY).is_some() {
         return;
     }
@@ -143,4 +152,108 @@ fn flood() {
             return;
         }
     }
+}
+
+/// Plays the steps a test wrote to the folder `HIDE_HOLDER_TEST_SCRIPT`
+/// names: `step-0` at once, and each `step-<n>` after it once the test has
+/// made `go-<n>`, each in one write. The terminal is raw, so the bytes go out
+/// as they are and everything the program is sent (input, answers) comes in
+/// unchanged and unechoed; it is kept in `heard`, as it comes.
+fn script() {
+    let folder = std::path::PathBuf::from(std::env::var_os(SCRIPT).unwrap());
+    raw_terminal();
+    thread::spawn({
+        let heard = folder.join("heard");
+        move || {
+            let mut stdin = std::io::stdin().lock();
+            let mut buffer = [0u8; 4096];
+            loop {
+                use std::io::Read;
+                let count = match stdin.read(&mut buffer) {
+                    Ok(0) | Err(_) => return,
+                    Ok(count) => count,
+                };
+                let mut file = std::fs::OpenOptions::new()
+                    .append(true)
+                    .create(true)
+                    .open(&heard)
+                    .unwrap();
+                file.write_all(&buffer[..count]).unwrap();
+            }
+        }
+    });
+    let mut out = std::io::stdout().lock();
+    for step in 0.. {
+        let Ok(bytes) = std::fs::read(folder.join(format!("step-{step}"))) else {
+            break;
+        };
+        if step > 0 {
+            let go = folder.join(format!("go-{step}"));
+            let deadline = Instant::now() + ROLE_LIFE;
+            while !go.exists() && Instant::now() < deadline {
+                #[allow(clippy::disallowed_methods)] // the role's own pace
+                thread::sleep(Duration::from_millis(5));
+            }
+        }
+        out.write_all(&bytes).unwrap();
+        out.flush().unwrap();
+    }
+    drop(out);
+    live_out();
+}
+
+/// Puts the pane's terminal in raw mode: no echo, no line editing, output
+/// written as it is.
+#[cfg(unix)]
+fn raw_terminal() {
+    // SAFETY: termios is a plain struct tcgetattr fills for fd 0, a terminal.
+    unsafe {
+        let mut termios = std::mem::zeroed::<libc::termios>();
+        assert_eq!(libc::tcgetattr(0, &mut termios), 0);
+        libc::cfmakeraw(&mut termios);
+        assert_eq!(libc::tcsetattr(0, libc::TCSANOW, &termios), 0);
+    }
+}
+
+/// Puts the pane's console in raw mode: input as VT bytes with no echo or
+/// line editing, output read as VT sequences with no newline translation.
+#[cfg(windows)]
+fn raw_terminal() {
+    use windows_sys::Win32::System::Console::{
+        DISABLE_NEWLINE_AUTO_RETURN, ENABLE_PROCESSED_OUTPUT, ENABLE_VIRTUAL_TERMINAL_INPUT,
+        ENABLE_VIRTUAL_TERMINAL_PROCESSING, GetStdHandle, STD_INPUT_HANDLE, STD_OUTPUT_HANDLE,
+        SetConsoleMode,
+    };
+    // SAFETY: the handles are this process's own standard handles.
+    unsafe {
+        assert_ne!(
+            SetConsoleMode(
+                GetStdHandle(STD_INPUT_HANDLE),
+                ENABLE_VIRTUAL_TERMINAL_INPUT
+            ),
+            0
+        );
+        assert_ne!(
+            SetConsoleMode(
+                GetStdHandle(STD_OUTPUT_HANDLE),
+                ENABLE_PROCESSED_OUTPUT
+                    | ENABLE_VIRTUAL_TERMINAL_PROCESSING
+                    | DISABLE_NEWLINE_AUTO_RETURN,
+            ),
+            0
+        );
+    }
+}
+
+/// Exits with 3 once the file `GO` names exists: a shell that ends on its own
+/// while no node is connected, at the moment the test chooses.
+fn exit_when_told() {
+    record(std::process::id());
+    let go = std::path::PathBuf::from(std::env::var_os(GO).unwrap());
+    let deadline = Instant::now() + ROLE_LIFE;
+    while !go.exists() && Instant::now() < deadline {
+        #[allow(clippy::disallowed_methods)] // the role's own pace
+        thread::sleep(Duration::from_millis(5));
+    }
+    std::process::exit(3);
 }

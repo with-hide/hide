@@ -96,6 +96,7 @@ mod terminal_input;
 mod tree_close;
 mod tree_reopen;
 pub(crate) mod typed_input;
+mod unreadable_letters;
 mod unseen_views;
 pub(crate) mod usage_ledger;
 mod usage_limit;
@@ -1850,6 +1851,8 @@ pub struct Runtime {
     /// The wakes letters to sleeping agents ask for, and the letters a
     /// failed one leaves undelivered (PRD mission-worker-sleep).
     letter_wakes: agent_sleep::letters::LetterWakes,
+    /// The letters held on a session Hide cannot read whose senders were told.
+    unreadable_letters: unreadable_letters::UnreadableLetters,
     /// Panes with a Reopen running or just refused, until the pane connects,
     /// leaves, or stops showing a connection chip (B29). One entry per pane,
     /// so a second press while one runs starts nothing.
@@ -2561,6 +2564,7 @@ impl Runtime {
             agent_sleep_backoff: HashMap::new(),
             agent_wake_started: HashMap::new(),
             letter_wakes: Default::default(),
+            unreadable_letters: Default::default(),
             pane_reopens: HashMap::new(),
             update_badges: HashMap::new(),
             fork_sequence: 0,

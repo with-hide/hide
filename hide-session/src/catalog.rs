@@ -2,7 +2,6 @@ use crate::file_cache;
 use crate::{
     Agent, ConversationCheckpoint, ConversationCursor, ConversationEvent, EventKind, ParsedSession,
     SESSION_LINE_LIMIT_BYTES, SESSION_READ_LIMIT_BYTES, SessionError, parse_events, read_bounded,
-    read_bounded_line,
 };
 use hide_project::ProjectIdentity;
 use serde::{Deserialize, Serialize};
@@ -127,9 +126,11 @@ pub struct ProjectSessions {
     pub refusals: Vec<SessionStoreRefusal>,
 }
 
-/// One agent store the catalog could not read. It rides the node's
-/// session list as a row of its own (`{"agent", "store_refused"}`), which a
-/// core that does not know the shape counts as one refused row.
+/// One agent store the catalog could not read, or a session in it whose
+/// header it refuses by rule (Codex's `session_meta` over the record cap,
+/// once per reason). It rides the node's session list as a row of its own
+/// (`{"agent", "store_refused"}`), which a core that does not know the
+/// shape counts as one refused row.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SessionStoreRefusal {
     pub agent: Agent,
@@ -229,14 +230,25 @@ impl SessionCatalog {
             // leaves a stamp older than the bytes, so the next call reads again.
             let stamp = crate::stamp::stamp_at(&path);
             let kept_stamp = file_cache::keeps(agent).then(|| stamp.clone()).flatten();
-            let Some(cwd) = (if agent == Agent::Cursor {
-                crate::cursor::header(&self.home, &path)
+            let cwd = if agent == Agent::Cursor {
+                Ok(crate::cursor::header(&self.home, &path)
                     .ok()
-                    .map(|header| header.cwd)
+                    .map(|header| header.cwd))
             } else {
                 file_cache::header_cwd(&path, kept_stamp.clone(), || session_cwd(agent, &path))
-            }) else {
-                continue;
+            };
+            let cwd = match cwd {
+                Ok(Some(cwd)) => cwd,
+                Ok(None) => continue,
+                // A file whose header is refused belongs to no Project the
+                // listing can name, so its refusal is the store's, once.
+                Err(reason) => {
+                    let refusal = SessionStoreRefusal { agent, reason };
+                    if !refusals.contains(&refusal) {
+                        refusals.push(refusal);
+                    }
+                    continue;
+                }
             };
             let Ok(identity) = hide_project::resolve(&cwd, &self.device_id) else {
                 continue;
@@ -409,34 +421,45 @@ fn collect_grok(
     Ok(())
 }
 
-fn session_cwd(agent: Agent, path: &Path) -> Option<PathBuf> {
+/// The cwd a session file names, `Err` with the reason when its record that
+/// names it is one the reader refuses by rule (Codex's `session_meta` over
+/// the record cap), so the listing says so rather than leaving it out.
+fn session_cwd(agent: Agent, path: &Path) -> Result<Option<PathBuf>, String> {
     match agent {
         Agent::Grok | Agent::Pi | Agent::Omp | Agent::Antigravity => {
-            crate::native_file::header(agent, path)
+            Ok(crate::native_file::header(agent, path)
                 .ok()
-                .map(|header| header.cwd)
+                .map(|header| header.cwd))
         }
-        Agent::Codex => crate::codex_session_cwd(path).map(PathBuf::from),
-        Agent::Claude => {
-            let file = File::open(path).ok()?;
-            let mut reader = BufReader::new(file);
-            for _ in 0..128 {
-                let line = match read_bounded_line(&mut reader, SESSION_LINE_LIMIT_BYTES) {
-                    Ok(Some(line)) => line,
-                    Ok(None) => break,
-                    Err(_) => return None,
-                };
-                let Ok(value) = serde_json::from_slice::<Value>(&line) else {
-                    continue;
-                };
-                if let Some(cwd) = value.get("cwd").and_then(Value::as_str) {
-                    return Some(PathBuf::from(cwd));
-                }
-            }
-            None
-        }
-        Agent::OpenCode | Agent::Cursor => None,
+        Agent::Codex => crate::codex_session_cwd(path)
+            .map(|cwd| cwd.map(PathBuf::from))
+            .map_err(|error| error.to_string()),
+        Agent::Claude => Ok(claude_session_cwd(path)),
+        Agent::OpenCode | Agent::Cursor => Ok(None),
     }
+}
+
+/// The first cwd a Claude Code record names, within its first 128 records.
+fn claude_session_cwd(path: &Path) -> Option<PathBuf> {
+    let file = File::open(path).ok()?;
+    let mut reader = BufReader::new(std::io::Read::take(file, SESSION_READ_LIMIT_BYTES));
+    for _ in 0..128 {
+        let line = match crate::read_head_record(&mut reader, SESSION_LINE_LIMIT_BYTES) {
+            Ok(Some(crate::HeadRecord::Complete(line) | crate::HeadRecord::Unfinished(line))) => {
+                line
+            }
+            Ok(Some(crate::HeadRecord::Passed)) => continue,
+            Ok(None) => break,
+            Err(_) => return None,
+        };
+        let Ok(value) = serde_json::from_slice::<Value>(&line) else {
+            continue;
+        };
+        if let Some(cwd) = value.get("cwd").and_then(Value::as_str) {
+            return Some(PathBuf::from(cwd));
+        }
+    }
+    None
 }
 
 /// A session of an agent other than Claude Code and Codex
@@ -737,15 +760,17 @@ fn session_id(agent: Agent, path: &Path) -> String {
     if agent == Agent::Claude {
         return stem.to_owned();
     }
-    let explicit = File::open(path).ok().and_then(|file| {
-        let mut reader = BufReader::new(file);
-        let line = read_bounded_line(&mut reader, SESSION_LINE_LIMIT_BYTES).ok()??;
-        let value: Value = serde_json::from_slice(&line).ok()?;
-        value
-            .pointer("/payload/id")
-            .and_then(Value::as_str)
-            .map(str::to_owned)
-    });
+    // The listing reached this file because its `session_meta` named its
+    // cwd within the cap; a file rewritten since keeps the path's id.
+    let explicit = crate::codex_session_meta(path)
+        .ok()
+        .flatten()
+        .and_then(|value| {
+            value
+                .pointer("/payload/id")
+                .and_then(Value::as_str)
+                .map(str::to_owned)
+        });
     explicit.unwrap_or_else(|| {
         let digest = Sha256::digest(path.to_string_lossy().as_bytes());
         format!("codex:{:x}", digest)
@@ -926,7 +951,7 @@ mod tests {
     #[test]
     fn bounded_line_reader_refuses_before_allocating_past_the_limit() {
         let mut reader = BufReader::new(std::io::Cursor::new(b"123456789\nnext\n"));
-        let error = read_bounded_line(&mut reader, 8).unwrap_err();
+        let error = crate::read_bounded_line(&mut reader, 8).unwrap_err();
         assert_eq!(error.kind(), std::io::ErrorKind::InvalidData);
     }
 
@@ -1030,6 +1055,48 @@ mod tests {
                 Some("alpha request".to_owned()),
                 Some("beta request".to_owned())
             ]
+        );
+    }
+
+    /// A Claude Code session that opens with a pasted screenshot is listed
+    /// by the cwd of a record after it; a Codex `session_meta`, the only
+    /// record that names its cwd, over the record cap is a refusal row of
+    /// the listing, not a session that silently goes missing.
+    #[test]
+    fn an_oversized_first_record_is_passed_over_or_refused_never_silently_dropped() {
+        let root = tempdir().unwrap();
+        let home = root.path().join("home");
+        let project_root = root.path().join("project");
+        fs::create_dir_all(home.join(".claude/projects/p")).unwrap();
+        fs::create_dir_all(home.join(".codex/sessions/2026/09/21")).unwrap();
+        fs::create_dir_all(&project_root).unwrap();
+        let project = hide_project::resolve(&project_root, "local").unwrap();
+        let cwd = serde_json::to_string(&project_root).unwrap();
+        let screenshot = "A".repeat(2 * SESSION_LINE_LIMIT_BYTES);
+        fs::write(
+            home.join(".claude/projects/p/claude-screenshot.jsonl"),
+            format!(
+                "{{\"type\":\"user\",\"message\":{{\"role\":\"user\",\"content\":[{{\"type\":\"image\",\"source\":{{\"data\":\"{screenshot}\"}}}}]}}}}\n{{\"type\":\"user\",\"cwd\":{cwd},\"timestamp\":\"2026-09-21T01:00:00Z\",\"userType\":\"external\",\"promptId\":\"prompt-1\",\"message\":{{\"role\":\"user\",\"content\":\"alpha request\"}}}}\n"
+            ),
+        )
+        .unwrap();
+        fs::write(
+            home.join(".codex/sessions/2026/09/21/rollout-huge-meta.jsonl"),
+            format!("{{\"type\":\"session_meta\",\"payload\":{{\"id\":\"codex-huge\",\"cwd\":{cwd},\"instructions\":\"{screenshot}\"}}}}\n"),
+        )
+        .unwrap();
+
+        let listed = SessionCatalog::new(&home, "local")
+            .project_sessions(&project)
+            .unwrap();
+        assert_eq!(listed.sessions.len(), 1);
+        assert_eq!(listed.sessions[0].agent, Agent::Claude);
+        assert_eq!(
+            listed.refusals,
+            vec![SessionStoreRefusal {
+                agent: Agent::Codex,
+                reason: format!("session_capacity:line_bytes:{SESSION_LINE_LIMIT_BYTES}"),
+            }]
         );
     }
 

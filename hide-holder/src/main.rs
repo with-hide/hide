@@ -3,8 +3,17 @@
 //!
 //! ```text
 //! hide-holder --socket <path> --rows <n> --cols <n> --cwd <dir> [--log <file>]
-//!             [--id <pane>] -- <program> [<argument>...]
+//!             [--id <pane>] [--record <file> --record-lock <file> --incarnation <n>]
+//!             [--theme <theme>] -- <program> [<argument>...]
 //! ```
+//!
+//! With `--record` it keeps its pane's record (`record.rs`): it writes
+//! itself in before it starts the program and fails the start when the
+//! record no longer reserves it.
+//!
+//! `--theme` is the node's theme in `Theme::to_arg`'s form, so the program's
+//! first color question is answered with it; without it the parser's own
+//! defaults answer until a theme message comes.
 //!
 //! It is started as a resident child (`hide_platform::process::start_resident`)
 //! lent one pipe, on which it says `ready holder=<pid> program=<pid>
@@ -20,8 +29,14 @@
 //! as when the holder is killed, rather than running on with part of the
 //! holder gone.
 
+mod answers;
+mod ask;
+mod encode;
 mod holder;
 mod log;
+mod pane;
+mod record;
+mod screen;
 
 use std::io::Write;
 use std::path::PathBuf;
@@ -37,7 +52,16 @@ pub struct Config {
     pub cwd: PathBuf,
     pub log: Option<PathBuf>,
     pub id: String,
+    pub record: Option<RecordArgs>,
     pub program: Vec<std::ffi::OsString>,
+    pub theme: Option<hide_holder_protocol::Theme>,
+}
+
+/// The pane's record, its lock and the start this holder is.
+pub struct RecordArgs {
+    pub record: PathBuf,
+    pub lock: PathBuf,
+    pub incarnation: u64,
 }
 
 fn parse(mut arguments: impl Iterator<Item = std::ffi::OsString>) -> Result<Config, String> {
@@ -47,6 +71,10 @@ fn parse(mut arguments: impl Iterator<Item = std::ffi::OsString>) -> Result<Conf
     let mut cwd = None;
     let mut log = None;
     let mut id = String::new();
+    let mut record = None;
+    let mut record_lock = None;
+    let mut incarnation = None;
+    let mut theme = None;
     let value = |name: &str, arguments: &mut dyn Iterator<Item = std::ffi::OsString>| {
         arguments
             .next()
@@ -66,6 +94,32 @@ fn parse(mut arguments: impl Iterator<Item = std::ffi::OsString>) -> Result<Conf
                     .into_string()
                     .map_err(|_| "--id is not text".to_owned())?;
             }
+            Some("--record") => {
+                record = Some(absolute("--record", value("--record", &mut arguments)?)?)
+            }
+            Some("--record-lock") => {
+                record_lock = Some(absolute(
+                    "--record-lock",
+                    value("--record-lock", &mut arguments)?,
+                )?)
+            }
+            Some("--incarnation") => {
+                incarnation = Some(
+                    value("--incarnation", &mut arguments)?
+                        .to_str()
+                        .and_then(|text| text.parse::<u64>().ok())
+                        .ok_or("--incarnation is not a number")?,
+                )
+            }
+            Some("--theme") => {
+                theme = Some(
+                    value("--theme", &mut arguments)?
+                        .to_str()
+                        .ok_or_else(|| "not text".to_owned())
+                        .and_then(hide_holder_protocol::Theme::from_arg)
+                        .map_err(|error| format!("--theme: {error}"))?,
+                )
+            }
             Some("--") => break,
             _ => return Err(format!("unknown argument {argument:?}")),
         }
@@ -74,6 +128,15 @@ fn parse(mut arguments: impl Iterator<Item = std::ffi::OsString>) -> Result<Conf
     if program.is_empty() {
         return Err("no program to hold after --".to_owned());
     }
+    let record = match (record, record_lock, incarnation) {
+        (Some(record), Some(lock), Some(incarnation)) => Some(RecordArgs {
+            record,
+            lock,
+            incarnation,
+        }),
+        (None, None, None) => None,
+        _ => return Err("--record, --record-lock and --incarnation go together".to_owned()),
+    };
     let size = Size::checked(
         rows.ok_or("--rows is missing")?,
         cols.ok_or("--cols is missing")?,
@@ -84,7 +147,9 @@ fn parse(mut arguments: impl Iterator<Item = std::ffi::OsString>) -> Result<Conf
         cwd: cwd.ok_or("--cwd is missing")?,
         log,
         id,
+        record,
         program,
+        theme,
     })
 }
 
@@ -204,7 +269,24 @@ fn main() -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
-    match holder::Holder::start(&config, log.clone(), &job) {
+    let claim = match &config.record {
+        Some(args) => {
+            match record::Claim::take(args.record.clone(), args.lock.clone(), args.incarnation) {
+                Ok(claim) => Some(claim),
+                Err(reason) => {
+                    let reason = format!("the pane's record: {reason}");
+                    log.event("holder.start_failed", &[("reason", reason.as_str().into())]);
+                    report(&format!("failed {reason}"));
+                    return ExitCode::FAILURE;
+                }
+            }
+        }
+        None => None,
+    };
+    // The start's own failure goes into the record too, so the node reads
+    // why rather than a holder that ended without a word.
+    let failure = claim.clone();
+    match holder::Holder::start(&config, log.clone(), &job, claim) {
         Ok(holder) => {
             report(&format!(
                 "ready holder={} program={} job={job}",
@@ -215,6 +297,27 @@ fn main() -> ExitCode {
         }
         Err(reason) => {
             log.event("holder.start_failed", &[("reason", reason.as_str().into())]);
+            if let Some(claim) = failure {
+                let end = hide_holder_protocol::record::End::new(
+                    hide_holder_protocol::record::EndReason::StartFailed,
+                    reason.as_str(),
+                );
+                if let Err(error) = claim.end(end) {
+                    log.event(
+                        hide_holder_protocol::record::UNWRITTEN_EVENT,
+                        &[
+                            (
+                                "reason",
+                                hide_holder_protocol::record::EndReason::StartFailed
+                                    .name()
+                                    .into(),
+                            ),
+                            ("incarnation", claim.incarnation().into()),
+                            ("error", error.as_str().into()),
+                        ],
+                    );
+                }
+            }
             report(&format!("failed {reason}"));
             ExitCode::FAILURE
         }
@@ -248,6 +351,51 @@ mod tests {
         .into_iter()
         .map(OsString::from)
         .collect()
+    }
+
+    #[test]
+    fn a_record_is_named_with_its_lock_and_its_start_or_not_at_all() {
+        let root = if cfg!(windows) { "C:\\h" } else { "/h" };
+        let at = |name: &str| format!("{root}/{name}");
+        let with = |extra: &[&str]| {
+            let mut words = arguments(&at("p.s"), &at("w"), &at("p.log"));
+            let program = words.split_off(words.len() - 2);
+            words.extend(extra.iter().map(OsString::from));
+            words.extend(program);
+            parse(words.into_iter())
+        };
+        let record = at("r/p.json");
+        let lock = at("r/.lock");
+        let parsed = with(&[
+            "--record",
+            &record,
+            "--record-lock",
+            &lock,
+            "--incarnation",
+            "9",
+        ])
+        .unwrap()
+        .record
+        .unwrap();
+        assert_eq!(parsed.incarnation, 9);
+        for partial in [
+            vec!["--record", record.as_str()],
+            vec!["--record", record.as_str(), "--record-lock", lock.as_str()],
+            vec!["--incarnation", "9"],
+        ] {
+            assert!(with(&partial).is_err(), "{partial:?} was taken");
+        }
+        assert!(
+            with(&[
+                "--record",
+                "r.json",
+                "--record-lock",
+                &lock,
+                "--incarnation",
+                "9"
+            ])
+            .is_err()
+        );
     }
 
     #[test]
