@@ -1802,6 +1802,7 @@ fn recent_closed_failure_retains_and_missing_file_consumes() {
     runtime.push_recent_closed(item.clone());
     let request = crate::recent_closed::reopen::ReopenRequest {
         codex_daemon: Default::default(),
+        permissions: Default::default(),
         item,
         workspace_exists: true,
         tab_exists: true,
@@ -1843,6 +1844,7 @@ fn reopen_completion_preserves_a_newer_close() {
     runtime.push_recent_closed(closed_file("second", "/repo/second.rs"));
     let request = crate::recent_closed::reopen::ReopenRequest {
         codex_daemon: Default::default(),
+        permissions: Default::default(),
         item: first,
         workspace_exists: true,
         tab_exists: true,
@@ -1885,6 +1887,7 @@ fn every_consuming_reopen_result_removes_only_its_request_key() {
             runtime.push_recent_closed(closed_file("second", "/repo/second.rs"));
             let request = crate::recent_closed::reopen::ReopenRequest {
                 codex_daemon: Default::default(),
+                permissions: Default::default(),
                 item: first,
                 workspace_exists: true,
                 tab_exists: true,
@@ -1948,6 +1951,7 @@ fn completion_is_safe_after_the_in_flight_item_was_evicted() {
     }
     let request = crate::recent_closed::reopen::ReopenRequest {
         codex_daemon: Default::default(),
+        permissions: Default::default(),
         item: first,
         workspace_exists: true,
         tab_exists: true,

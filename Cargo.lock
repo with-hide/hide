@@ -900,6 +900,7 @@ dependencies = [
  "hide-platform",
  "hide-project",
  "hide-session",
+ "hide-shell",
  "jiff",
  "libc",
  "md5",

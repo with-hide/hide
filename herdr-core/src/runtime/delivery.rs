@@ -1865,6 +1865,7 @@ impl Runtime {
             host_scope: scope,
             machine,
             codex: self.codex_daemon(device),
+            permissions: self.agent_permissions_of(device),
             on_node,
             node,
         })
@@ -1923,6 +1924,9 @@ pub(crate) struct CoordinationContext {
     pub(crate) host_scope: String,
     pub(crate) machine: String,
     pub(crate) codex: crate::codex_launch::CodexDaemon,
+    /// The 권한 of each agent on the machine (`agent_permission`), read as
+    /// the spawn asked for it.
+    pub(crate) permissions: crate::agent_permission::AgentPermissions,
     /// The machine is the core's own node, whose Herdr the core reaches directly.
     pub(crate) on_node: bool,
     /// The machine's node, which a start with a long line asks whether the

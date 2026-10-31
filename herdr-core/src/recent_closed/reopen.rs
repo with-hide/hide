@@ -31,6 +31,9 @@ pub struct ReopenRequest {
     /// (PRD checkout-workspace-binding D-16). `None` for a file.
     pub owner: Option<OwnerOpen>,
     pub(crate) codex_daemon: crate::codex_launch::CodexDaemon,
+    /// The 권한 of each agent on the machine the item reopens on, read when
+    /// the reopen was asked for (`agent_permission`).
+    pub(crate) permissions: crate::agent_permission::AgentPermissions,
 }
 
 pub(crate) const REOPEN_INTENT_ENV: &str = "HIDE_REOPEN_INTENT";
@@ -307,6 +310,7 @@ fn run_herdr_reopen(
             &layout.root,
             panes,
             request.codex_daemon,
+            &request.permissions,
         ),
         ClosedItem::File { .. } => unreachable!("file reopen uses the filesystem worker"),
         ClosedItem::Draft { .. } => unreachable!("draft reopen is local"),
@@ -665,6 +669,7 @@ fn reopen_pane(
                 &restored_pane_id,
                 agent,
                 request.codex_daemon,
+                &request.permissions,
                 &mut notices,
             )
         })
@@ -764,6 +769,7 @@ fn reopen_tab(
     root: &ClosedLayoutNode,
     panes: &[ClosedPane],
     codex_daemon: crate::codex_launch::CodexDaemon,
+    permissions: &crate::agent_permission::AgentPermissions,
 ) -> Result<ReopenOutcome, String> {
     let pane_map = panes
         .iter()
@@ -814,6 +820,7 @@ fn reopen_tab(
                 new_id,
                 agent,
                 codex_daemon,
+                permissions,
                 &mut pane_notices,
             ));
         }
@@ -864,7 +871,9 @@ fn restored_cwd(
 
 /// Starts `agent` in a restored pane with its conversation, or a new one when
 /// the resume does not take, each with the launch choice it was started
-/// with; answers what started, or none when only the shell was kept.
+/// with and the machine's permission choice; answers what started, or none
+/// when only the shell was kept.
+#[allow(clippy::too_many_arguments)] // the pane's identity plus its machine's two start facts
 fn start_or_degrade_agent(
     engine: &dyn Engine,
     key: &str,
@@ -872,10 +881,15 @@ fn start_or_degrade_agent(
     pane_id: &str,
     agent: &ClosedAgent,
     codex_daemon: crate::codex_launch::CodexDaemon,
+    permissions: &crate::agent_permission::AgentPermissions,
     notices: &mut Vec<String>,
 ) -> Option<ReopenedAgent> {
     let name = format!("reopen-{key}-{index}");
-    let launch = match crate::runtime::agent_choice::launch_arguments(&agent.kind, &agent.launch) {
+    let launch = match crate::runtime::agent_choice::launch_arguments(
+        &agent.kind,
+        &agent.launch,
+        &crate::agent_permission::of(permissions, &agent.kind),
+    ) {
         Ok(launch) => launch,
         Err(message) => {
             notices.push(format!(
@@ -985,6 +999,7 @@ fn agent_is_running(engine: &dyn Engine, pane_id: &str, kind: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
+    use crate::agent_permission::AgentPermission;
     use serde_json::json;
     use std::path::Path;
     use std::sync::Arc;
@@ -1040,9 +1055,18 @@ mod tests {
                 launch: launch.clone(),
             },
             crate::codex_launch::CodexDaemon::Unsupported,
+            // No saved choice: full access, on the resume and on the new
+            // start that follows its refusal alike.
+            &Default::default(),
             &mut notices,
         );
-        let choice = ["--model", "gpt-6-luna", "-c", "model_reasoning_effort=low"];
+        let choice = [
+            "--dangerously-bypass-approvals-and-sandbox",
+            "--model",
+            "gpt-6-luna",
+            "-c",
+            "model_reasoning_effort=low",
+        ];
         assert_eq!(
             *starts.lock().unwrap(),
             [
@@ -1106,6 +1130,12 @@ mod tests {
                     ..Default::default()
                 },
                 crate::codex_launch::CodexDaemon::Unsupported,
+                // 매번 물어보기 adds nothing after the resume arguments.
+                &[
+                    ("claude-code".to_owned(), AgentPermission::Ask),
+                    ("codex".to_owned(), AgentPermission::Ask),
+                ]
+                .into(),
                 &mut notices,
             );
             assert!(notices.is_empty(), "{kind}: {notices:?}");
@@ -1227,6 +1257,7 @@ mod tests {
         };
         let request = ReopenRequest {
             codex_daemon: Default::default(),
+            permissions: Default::default(),
             item: ClosedItem::Pane {
                 key: "nested-intent".into(),
                 context: context.clone(),
@@ -1419,6 +1450,7 @@ mod tests {
         };
         let request = ReopenRequest {
             codex_daemon: Default::default(),
+            permissions: Default::default(),
             item: ClosedItem::Pane {
                 key: "first-attempt".into(),
                 context: context.clone(),

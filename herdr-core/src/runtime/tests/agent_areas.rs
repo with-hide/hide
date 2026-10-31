@@ -752,6 +752,7 @@ fn reopen_unknown_claim_survives_error_and_retry_launch_failure_then_transfers_t
     runtime.push_recent_closed(item.clone());
     let request = crate::recent_closed::reopen::ReopenRequest {
         codex_daemon: Default::default(),
+        permissions: Default::default(),
         item,
         workspace_exists: true,
         tab_exists: false,
@@ -1560,6 +1561,7 @@ fn a_followed_reopen_seed_that_goes_leaves_the_operator_on_the_restored_tab() {
     runtime.ingest_reopen_result(
         &crate::recent_closed::reopen::ReopenRequest {
             codex_daemon: Default::default(),
+            permissions: Default::default(),
             item,
             workspace_exists: true,
             tab_exists: false,

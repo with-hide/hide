@@ -1710,6 +1710,7 @@ pub(super) enum Event {
     CancelRepositoryClone(CancelRepositoryClonePayload),
     KitReinstall(KitReinstallPayload),
     KitAgentSet(KitAgentSetPayload),
+    AgentPermissionSet(super::agent_permission::AgentPermissionSetPayload),
     CodexDaemonDisable(CodexDaemonDisablePayload),
     KitCheck(KitCheckPayload),
     SshHostsList(SshHostsListPayload),
@@ -2047,6 +2048,10 @@ pub(super) fn validate_event(event: EventEnvelope) -> Result<Event, EventValidat
         "cancel_repository_clone" => decode!(CancelRepositoryClonePayload, CancelRepositoryClone),
         "kit_reinstall" => decode!(KitReinstallPayload, KitReinstall),
         "kit_agent_set" => decode!(KitAgentSetPayload, KitAgentSet),
+        "agent_permission_set" => decode!(
+            super::agent_permission::AgentPermissionSetPayload,
+            AgentPermissionSet
+        ),
         "codex_daemon_disable" => decode!(CodexDaemonDisablePayload, CodexDaemonDisable),
         "kit_check" => decode!(KitCheckPayload, KitCheck),
         "ssh_hosts_list" => decode!(SshHostsListPayload, SshHostsList),
@@ -2457,6 +2462,7 @@ impl Runtime {
                 self.reconnect_terminal(&pane_id);
                 true
             }
+            Event::AgentPermissionSet(payload) => self.set_agent_permission(payload),
             Event::KitAgentSet(payload) => {
                 self.request_kit_agent_set(&payload.device_id, &payload.agent, payload.enabled)
             }
@@ -3358,8 +3364,9 @@ impl Runtime {
                 // A choice the agent does not take is refused before any pane
                 // is made for the fork.
                 let launch = self.launch_choice_of(agent);
+                let permission = self.agent_permission_for_pane(&pane_id, agent_kind.kind());
                 if let Err(detail) =
-                    super::agent_choice::launch_arguments(agent_kind.kind(), &launch)
+                    super::agent_choice::launch_arguments(agent_kind.kind(), &launch, &permission)
                 {
                     self.set_error(
                         "pane.fork_invalid_launch_choice",
@@ -3434,6 +3441,7 @@ impl Runtime {
                     placement: payload.placement,
                     codex_daemon: self.codex_daemon_for_pane(&pane_id),
                     launch,
+                    permission,
                 };
                 // Keys typed between the press and the agent's start wait for
                 // the fork's agent rather than reaching the shell that starts
@@ -4575,6 +4583,8 @@ impl Runtime {
                     issue_settings: current.issue_settings,
                     // Settings › Conductor owns it through its own event.
                     conductor_settings: current.conductor_settings,
+                    agent_permissions: current.agent_permissions,
+                    device_agent_permissions: current.device_agent_permissions,
                     // Every agent start owns this; a shared save carries it.
                     agent_start: current.agent_start,
                     agent_sleep: current.agent_sleep,

@@ -34,6 +34,8 @@ pub(crate) struct ReopenRequest {
     /// The model and effort the agent was started with, which the start
     /// after the end carries again.
     pub(crate) launch: hide_agent_adapter::LaunchChoice,
+    /// The machine's 권한 for the agent as the reopen was asked for.
+    pub(crate) permission: crate::agent_permission::AgentPermission,
 }
 
 /// A reopen that did not happen: `code` is what the pane says, `detail` what
@@ -85,8 +87,12 @@ pub(crate) fn reopen(
         ));
     };
     args.extend(
-        crate::runtime::agent_choice::launch_arguments(&request.kind, &request.launch)
-            .map_err(|detail| failure(PaneReopenFailure::StartRefused, detail))?,
+        crate::runtime::agent_choice::launch_arguments(
+            &request.kind,
+            &request.launch,
+            &request.permission,
+        )
+        .map_err(|detail| failure(PaneReopenFailure::StartRefused, detail))?,
     );
     if let Some(cwd) = request.cwd.as_deref()
         && !crate::node_access::is_directory(node, cwd)
@@ -172,6 +178,7 @@ mod tests {
             cwd: None,
             codex_daemon: daemon,
             launch: Default::default(),
+            permission: Default::default(),
         }
     }
 

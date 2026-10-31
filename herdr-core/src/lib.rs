@@ -4,6 +4,7 @@ mod agent_find;
 /// The one spelling of an id the core scopes to a device.
 pub use hide_node_link::address;
 pub mod agent_hooks;
+mod agent_permission;
 mod agent_sleep;
 mod agent_sleep_herdr;
 mod agent_start;

@@ -594,10 +594,11 @@ class NamedPaths(unittest.TestCase):
                          {"policy", "agent-journey", "agent-clis", "agy-contract"})
 
     def test_the_journey_and_its_stand_ins_plan_the_journey_lane(self):
-        for path in ("scripts/agent_journey/cells.py", "scripts/agent-journey-check.py", "scripts/agent-journey-lane.py",
-                     "contracts/agent-journey.json"):
+        for path in ("scripts/agent_journey/cells.py", "scripts/agent-journey-check.py", "scripts/agent-journey-lane.py"):
             with self.subTest(path=path):
                 self.assertEqual(self.lanes(path), {"policy", "agent-journey"})
+        # The installer finds the contract's full-access flags in each CLI's help.
+        self.assertEqual(self.lanes("contracts/agent-journey.json"), {"policy", "agent-journey", "agent-clis"})
         for path in ("web/e2e/shims/claude-shim.c", "web/e2e/shims/live-check.h", "web/e2e/shims/spawn-provider.c"):
             with self.subTest(path=path):
                 self.assertEqual(self.lanes(path), {"policy", "checks", "web-e2e", "windows-e2e", "desktop-e2e",

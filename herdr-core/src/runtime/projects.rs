@@ -4127,10 +4127,20 @@ impl Runtime {
             }
         };
         self.remember_agent_choice(payload.agent_kind.as_deref(), model.as_deref());
+        let permission = payload
+            .agent_kind
+            .as_deref()
+            .map_or_else(Default::default, |kind| {
+                self.agent_permission(device.as_deref().unwrap_or(self.node.as_str()), kind)
+            });
         self.set_task_agent_launch(
             id,
             prompt,
-            agent_choice::agent_arguments(payload.agent_kind.as_deref(), model.as_deref(), &[]),
+            agent_choice::agent_arguments(
+                payload.agent_kind.as_deref(),
+                model.as_deref(),
+                &permission,
+            ),
             hide_agent_adapter::LaunchChoice {
                 model,
                 effort: None,
@@ -4596,10 +4606,13 @@ impl Runtime {
             self.remember_agent_choice(agent_kind.as_deref(), model.as_deref());
         }
         let mut arguments = resume.unwrap_or_default();
+        let permission = agent_kind.as_deref().map_or_else(Default::default, |kind| {
+            self.agent_permission(&device, kind)
+        });
         arguments.extend(agent_choice::agent_arguments(
             agent_kind.as_deref(),
             model.as_deref(),
-            &[],
+            &permission,
         ));
         self.set_task_agent_launch(
             id,

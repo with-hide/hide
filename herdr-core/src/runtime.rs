@@ -10,6 +10,7 @@ pub(crate) mod agent_choice;
 mod agent_close;
 mod agent_groups;
 mod agent_hook_status;
+mod agent_permission;
 mod agent_sleep;
 mod agents;
 mod attachments;
@@ -2141,6 +2142,10 @@ impl Runtime {
                     persistence::UnrecognizedField::ConductorSettings => (
                         "ui_state.conductor_settings_unknown",
                         "The stored Settings > Conductor was not recognized; the defaults were used",
+                    ),
+                    persistence::UnrecognizedField::AgentPermissions => (
+                        "ui_state.agent_permissions_unknown",
+                        "An agent's stored permission choice was not recognized; it asks each time",
                     ),
                 })
                 .collect(),

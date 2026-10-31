@@ -233,6 +233,14 @@ struct StoredUiState {
     /// store unreadable.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     conductor_settings: Option<serde_json::Value>,
+    /// Settings › Agents › 권한, this machine's and each device's, kept as
+    /// values: an entry this build cannot read loads as 매번 물어보기 rather
+    /// than as the default full access, and the rest loads
+    /// (`stored_permissions`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    agent_permissions: Option<serde_json::Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    device_agent_permissions: Option<serde_json::Value>,
     /// The agent kind and per-kind model last started with. Absent in a
     /// store written before it existed, which seeds it once from the removed
     /// `issue_settings.default_agent` (PRD home-device-rail D-18).
@@ -310,6 +318,35 @@ pub enum UnrecognizedField {
     OverviewGraph,
     /// Settings › Conductor; the defaults were used.
     ConductorSettings,
+    /// An agent's 권한 in Settings › Agents; 매번 물어보기 was used for it.
+    AgentPermissions,
+}
+
+/// One machine's stored 권한 by agent. An entry this build cannot read is
+/// 매번 물어보기, never the default full access, and so is every agent when
+/// the whole value cannot be read: a choice the operator made to be asked is
+/// not widened by a file it cannot read; `unread` says so.
+fn stored_permissions(
+    value: Option<serde_json::Value>,
+    unread: &mut bool,
+) -> crate::agent_permission::AgentPermissions {
+    match value {
+        None => BTreeMap::new(),
+        Some(serde_json::Value::Object(agents)) => agents
+            .into_iter()
+            .map(|(agent, value)| {
+                let permission = serde_json::from_value(value).unwrap_or_else(|_| {
+                    *unread = true;
+                    crate::agent_permission::AgentPermission::Ask
+                });
+                (agent, permission)
+            })
+            .collect(),
+        Some(_) => {
+            *unread = true;
+            crate::agent_permission::every_agent_asks()
+        }
+    }
 }
 
 /// What the removed native app's state file holds for `shortcut_bindings`.
@@ -541,6 +578,39 @@ fn decode(bytes: &[u8]) -> (UiStateSnapshot, PaneTerminalSizes, LoadDisposition)
             }
         },
     };
+    let mut permissions_unread = false;
+    let agent_permissions = stored_permissions(stored.agent_permissions, &mut permissions_unread);
+    let device_agent_permissions: BTreeMap<String, crate::agent_permission::AgentPermissions> =
+        match stored.device_agent_permissions {
+            None => BTreeMap::new(),
+            Some(serde_json::Value::Object(devices)) => devices
+                .into_iter()
+                .map(|(device, value)| {
+                    (
+                        device,
+                        stored_permissions(Some(value), &mut permissions_unread),
+                    )
+                })
+                .collect(),
+            // Which devices it named is lost with it: every device this
+            // state registers asks for every agent.
+            Some(_) => {
+                permissions_unread = true;
+                stored
+                    .device_registrations
+                    .iter()
+                    .map(|device| {
+                        (
+                            device.id.clone(),
+                            crate::agent_permission::every_agent_asks(),
+                        )
+                    })
+                    .collect()
+            }
+        };
+    if permissions_unread {
+        unrecognized.push(UnrecognizedField::AgentPermissions);
+    }
     let conductor_settings = match stored.conductor_settings {
         None => crate::missions::ConductorSettings::default(),
         Some(value) => crate::missions::ConductorSettings::from_stored(value)
@@ -647,6 +717,8 @@ fn decode(bytes: &[u8]) -> (UiStateSnapshot, PaneTerminalSizes, LoadDisposition)
             }),
             issue_settings: stored.issue_settings.settings,
             conductor_settings,
+            agent_permissions,
+            device_agent_permissions,
             agent_sleep: {
                 let mut store = stored.agent_sleep;
                 store.after_load();
@@ -827,6 +899,13 @@ pub fn save(
                 .expect("Settings › Conductor serializes"),
         ),
         agent_start: Some(state.agent_start.clone()),
+        agent_permissions: (!state.agent_permissions.is_empty()).then(|| {
+            serde_json::to_value(&state.agent_permissions).expect("agent permissions serialize")
+        }),
+        device_agent_permissions: (!state.device_agent_permissions.is_empty()).then(|| {
+            serde_json::to_value(&state.device_agent_permissions)
+                .expect("agent permissions serialize")
+        }),
         agent_sleep: state.agent_sleep.clone(),
         session_archive: state.session_archive.clone(),
         recent_checkouts: state.recent_checkouts.clone(),
@@ -1723,6 +1802,87 @@ mod tests {
     /// Settings › Conductor survives a relaunch, and a value this build
     /// cannot read (a later build's field, a cap out of range) loads the
     /// defaults and says so while every other stored choice still loads.
+    /// A 권한 survives a save, and one this build cannot read asks every
+    /// time rather than widening to the default full access.
+    #[test]
+    fn an_agent_permission_this_build_cannot_read_asks_every_time_and_the_rest_loads() {
+        use crate::agent_permission::AgentPermission;
+        let folder = tempfile::tempdir().unwrap();
+        let path = folder.path().join("state.json");
+        let mut state = UiStateSnapshot::default();
+        state
+            .agent_permissions
+            .insert("claude-code".into(), AgentPermission::Ask);
+        state.device_agent_permissions.insert(
+            "mini".into(),
+            [(
+                "codex".to_owned(),
+                AgentPermission::custom("--full-auto").unwrap(),
+            )]
+            .into(),
+        );
+        save(&path, &state, &PaneTerminalSizes::new()).expect("persist the choices");
+        let (restored, _sizes, disposition) = load(&path);
+        assert_eq!(disposition, LoadDisposition::Loaded);
+        assert_eq!(restored.agent_permissions, state.agent_permissions);
+        assert_eq!(
+            restored.device_agent_permissions,
+            state.device_agent_permissions
+        );
+
+        let stored = r#"{"schema_version":1,"expanded_paths":[],"selected_path":null,"selected_pane_id":null,
+            "sidebar_lens":"tasks","agent_permissions":{"codex":{"mode":"later_mode"},"grok":{"mode":"ask"}},
+            "device_agent_permissions":{"mini":{"omp":"full"}}}"#;
+        let (state, _sizes, disposition) = decode(stored.as_bytes());
+        assert_eq!(
+            disposition,
+            LoadDisposition::Unrecognized(vec![UnrecognizedField::AgentPermissions])
+        );
+        assert_eq!(state.agent_permissions["codex"], AgentPermission::Ask);
+        assert_eq!(state.agent_permissions["grok"], AgentPermission::Ask);
+        assert_eq!(
+            state.device_agent_permissions["mini"]["omp"],
+            AgentPermission::Ask
+        );
+        assert_eq!(state.sidebar_lens, SidebarLens::Tasks);
+    }
+
+    #[test]
+    fn agent_permissions_stored_as_something_else_ask_for_every_agent_on_every_machine() {
+        use crate::agent_permission::AgentPermission;
+        let stored = r#"{"schema_version":1,"expanded_paths":[],"selected_path":null,"selected_pane_id":null,
+            "device_registrations":[{"id":"mini","label":"mini","ssh_alias":"mini-host"}],
+            "agent_permissions":["claude-code"],"device_agent_permissions":"full"}"#;
+        let (state, _sizes, disposition) = decode(stored.as_bytes());
+        assert_eq!(
+            disposition,
+            LoadDisposition::Unrecognized(vec![UnrecognizedField::AgentPermissions])
+        );
+        let asks = |permissions: &crate::agent_permission::AgentPermissions| {
+            [
+                "claude-code",
+                "codex",
+                "grok",
+                "opencode",
+                "omp",
+                "antigravity",
+                "pi",
+            ]
+            .into_iter()
+            .all(|agent| permissions.get(agent) == Some(&AgentPermission::Ask))
+        };
+        assert!(
+            asks(&state.agent_permissions),
+            "{:?}",
+            state.agent_permissions
+        );
+        assert_eq!(
+            state.device_agent_permissions.keys().collect::<Vec<_>>(),
+            ["mini"]
+        );
+        assert!(asks(&state.device_agent_permissions["mini"]));
+    }
+
     #[test]
     fn conductor_settings_this_build_cannot_read_load_the_defaults_and_keep_the_rest() {
         let folder = tempfile::tempdir().unwrap();

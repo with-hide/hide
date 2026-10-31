@@ -12,7 +12,12 @@ the later steps, and with GITHUB_OUTPUT set it writes the same lines as the
 step's outputs. npm installs run no package's install scripts but those of
 a row that names why it needs them (`install_scripts`). A CLI that answers
 another version than the table's fails the install, so a vendor release moves
-the pin in a pull request before a lane measures it.
+the pin in a pull request before a lane measures it. So does a CLI whose
+`--help` lists no full-access option its adapter declares
+(contracts/agent-journey.json, `full_access_flag`, each option's name):
+Settings › Agents adds it
+to every start Hide makes, and a CLI that does not know it would refuse to
+start.
 """
 
 import argparse
@@ -172,6 +177,25 @@ def answered(program):
     return (result.stdout + result.stderr).strip().splitlines()[0][:120] if result.stdout + result.stderr else ""
 
 
+def full_access_flags():
+    """Each started agent's full-access arguments by its Herdr kind, from the
+    generated adapter contract."""
+    rows = json.loads((CHECKOUT / "contracts/agent-journey.json").read_text())
+    return {row["herdr_kind"]: row.get("full_access_flag") or [] for row in rows}
+
+
+def helped(program):
+    """What the program's `--help` prints."""
+    result = subprocess.run([str(program), "--help"], capture_output=True, text=True, timeout=120,
+                            stdin=subprocess.DEVNULL)
+    return result.stdout + result.stderr
+
+
+def unknown_flags(flags, help_text):
+    """The declared flags the help does not list as a whole word."""
+    return [flag for flag in flags if not re.search(r"(?<![\w-])" + re.escape(flag) + r"(?![\w-])", help_text)]
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("kinds", nargs="*")
@@ -200,6 +224,7 @@ def main(argv=None):
         if rows[kind]["installer"] != "npm":
             programs[kind] = INSTALLERS[rows[kind]["installer"]](rows[kind], prefix)
     lines, notes, mismatches = [], [], []
+    access = full_access_flags()
     for kind in kinds:
         program = programs[kind]
         if not program.is_file():
@@ -215,12 +240,17 @@ def main(argv=None):
         notes.append(f"{kind} {version}")
         if not matches(rows[kind]["version"], version):
             mismatches.append(f"{kind} answered {version!r}, {TABLE.name} pins {rows[kind]['version']}")
+        flags = access.get(kind, [])
+        missing = unknown_flags(flags, helped(program)) if flags else []
+        if missing:
+            mismatches.append(f"{kind} {version}: --help lists no {', '.join(missing)}, "
+                              "which its adapter declares as full access")
         lines.append(f"{kind}={program}")
     print(f"::notice title=agent CLIs::{', '.join(notes)}")
     if mismatches:
         for mismatch in mismatches:
-            print(f"::error title=agent CLI version::{mismatch}")
-        raise SystemExit("an installed CLI is not the pinned version: " + "; ".join(mismatches))
+            print(f"::error title=agent CLI::{mismatch}")
+        raise SystemExit("an installed CLI does not answer as its pin and adapter say: " + "; ".join(mismatches))
     for name, value in (("GITHUB_PATH", "\n".join(dict.fromkeys(str(programs[kind].parent) for kind in kinds))),
                         ("GITHUB_OUTPUT", "\n".join(lines))):
         if os.environ.get(name):

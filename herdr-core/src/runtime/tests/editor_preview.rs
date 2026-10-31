@@ -524,6 +524,7 @@ fn reveal_and_reopen_open_ordinary_tabs() {
         .expect("the closed file");
     let request = crate::recent_closed::reopen::ReopenRequest {
         codex_daemon: Default::default(),
+        permissions: Default::default(),
         item,
         workspace_exists: true,
         tab_exists: true,

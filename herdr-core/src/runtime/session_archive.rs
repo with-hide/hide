@@ -1476,7 +1476,7 @@ impl Runtime {
         arguments.extend(super::agent_choice::agent_arguments(
             Some(member.kind.as_str()),
             None,
-            &[],
+            &self.agent_permission(&member.machine, &member.kind),
         ));
         let local = member.machine == self.node.as_str();
         let context = if local {
