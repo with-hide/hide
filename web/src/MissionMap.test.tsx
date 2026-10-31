@@ -329,7 +329,12 @@ it("offers Take over beside 터미널로 once a raise the live Conductor was ask
     await act(async () => row.querySelector<HTMLElement>("[data-mission-takeover]")!.click());
     const start = late.events.find((event) => event.kind === "agent_start_in_checkout");
     expect(start?.payload).not.toHaveProperty("resume_session_id");
-    expect(String((start?.payload as { prompt: string }).prompt)).toContain("hide mission take mission-1");
+    // The core is handed one token for this start, and only its prompt names it, so the take passes once and for it alone.
+    const handover = late.events.filter((event) => event.kind === "mission_handover").map((event) => event.payload as { mission: string; token: string });
+    expect(handover).toHaveLength(1);
+    const [made] = handover as [{ mission: string; token: string }];
+    expect(made.mission).toBe("mission-1");
+    expect(String((start?.payload as { prompt: string }).prompt)).toContain(`hide mission take mission-1 --handover ${made.token}`);
   } finally { await late.unmount(); }
 });
 
@@ -621,7 +626,7 @@ it("puts the question the decision asks of a node and its choices in its panel, 
     steps: [{ key: "core", title: "Core events", depends_on: [], status: "working" as const, line: null, output: null, changed: false, change: null, waiting: false, delegate: false, evidence: null, delegation: null }, { key: "web", title: "Web map", depends_on: ["core"], status: "planned" as const, line: null, output: "pr" as const, changed: false, change: null, waiting: true, delegate: false, evidence: null, delegation: null }],
     review: "approved" as const, ask: null, progress: { current: "core", next: "web", done: 0, total: 2, finished: false }, created_at_unix_ms: 1, updated_at_unix_ms: Date.now(),
   };
-  const map = await mount({ items: [asked({ nodes: [node("api", { status: "working", line: "Conductor's line", plan: own }), node("screen", { title: "API screen", status: "working" })] })] });
+  const map = await mount({ items: [asked({ nodes: [node("api", { status: "working", line: "Conductor's line", plan: own }), node("screen", { title: "API screen", status: "working", line: "Asked which base to use" }), node("old", { title: "Old screen", status: "dropped", line: "Replaced by the API screen" })] })] });
   try {
     // A working node's own plan step is where the summary says it is (PRD mission-tool B19).
     expect(map.q('[data-mission-summary-line="api"]')?.textContent).toBe("Now: Core events (0/2)");
@@ -635,6 +640,10 @@ it("puts the question the decision asks of a node and its choices in its panel, 
     expect(panel.querySelector("[data-panel-question]")?.textContent).toBe("Which base for the screen PR?");
     expect(panel.querySelector("[data-panel-options]")?.textContent).toBe("Stack on the API PRRecommendedWait for the API PR to merge");
     expect(panel.querySelector("button[data-mission-option]")).toBeNull();
+    // The Conductor's last line stays beside the question, and on a dropped node (PRD mission-node-simple B4).
+    expect(panel.querySelector("[data-panel-conductor-line]")?.textContent).toBe("Asked which base to use");
+    await act(async () => card(map, "old").click());
+    expect(map.q('[data-mission-detail="old"] [data-panel-conductor-line]')?.textContent).toBe("Replaced by the API screen");
   } finally { await map.unmount(); }
 });
 

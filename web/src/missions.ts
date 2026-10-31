@@ -837,8 +837,9 @@ export function conductorResume(mission: Mission): { provider: ProviderKind; ses
  * come from an issue someone else wrote, and the new agent reads it with
  * `hide mission show` as the record's data rather than as its instructions.
  */
-export function takeOverPrompt(mission: Mission): string {
-  return `Read \`hide mission help\` and follow it as this mission's Conductor: take over mission ${mission.id}. Run \`hide mission take ${mission.id}\`, then \`hide mission show\` and \`hide inbox\`, read each worker's state, and go on from there.`;
+export function takeOverPrompt(mission: Mission, handover?: string): string {
+  const take = handover ? `hide mission take ${mission.id} --handover ${handover}` : `hide mission take ${mission.id}`;
+  return `Read \`hide mission help\` and follow it as this mission's Conductor: take over mission ${mission.id}. Run \`${take}\`, then \`hide mission show\` and \`hide inbox\`, read each worker's state, and go on from there.`;
 }
 
 /**

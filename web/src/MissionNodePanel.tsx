@@ -139,44 +139,38 @@ function Attention({ mission, node, actions }: { mission: Mission; node: Mission
 /**
  * Where the node is now (B4, B31): the decision's question and choices while
  * it names the node, its worker's own plan while it works, its checkers at
- * work, else what it waits on; and the Conductor's last line in every state
- * but a cancelled or dropped one, finished work and a node with a plan too,
- * dimmed once Hide's facts moved past it (PRD mission-node-simple B4).
+ * work, else what it waits on; and the Conductor's last line in every state,
+ * beside a question, a plan, finished work and a dropped or cancelled node
+ * too, dimmed once Hide's facts moved past it (PRD mission-node-simple B4).
  */
 function Now({ mission, node, events }: { mission: Mission; node: MissionNode; events: MissionEvent[] | null }) {
   const { t } = useInterfaceTranslation();
   const look = nodeLook(mission, node);
-  if (look === "cancelled" || look === "dropped") return null;
-  const question = nodeQuestion(mission, node);
-  if (question) {
-    const options = mission.question?.options ?? [];
-    return (
-      <Part title={t("mission.field.now")} part="now">
-        <p className="min-w-0 break-words border-l-2 border-mission-hold pl-sm" data-panel-question="true">{question}</p>
-        {options.length > 0 ? (
-          <ul className="flex min-w-0 flex-wrap gap-xs text-caption" data-panel-options={options.length}>
-            {options.map((option, index) => (
-              <li key={index} className="min-w-0 rounded-xs bg-muted px-xs">
-                <span className="break-words">{option}</span>
-                {mission.question?.recommend === index + 1 ? <span className="ml-xxs text-mission-hold">{t("mission.banner.recommended")}</span> : null}
-              </li>
-            ))}
-          </ul>
-        ) : null}
-      </Part>
-    );
-  }
-  const plan = look === "working" ? node.plan : null;
+  const ended = look === "cancelled" || look === "dropped";
+  const question = ended ? null : nodeQuestion(mission, node);
+  const options = question ? (mission.question?.options ?? []) : [];
+  const plan = !question && look === "working" ? node.plan : null;
   const planLine = plan ? planNowLine(plan, t) : null;
-  const checks = look === "done" ? [] : node.criteria.filter((line) => (line.kind === "review" || line.kind === "verify") && line.state === "open" && (line.checkers?.length ?? 0) > 0);
-  // Finished work and a worker's plan leave only the Conductor's own line to say; a done research node's line is its conclusion, which the result shows.
+  const checks = ended || question || look === "done" ? [] : node.criteria.filter((line) => (line.kind === "review" || line.kind === "verify") && line.state === "open" && (line.checkers?.length ?? 0) > 0);
+  // Beside a question, a plan, finished work or an ended node only the Conductor's own line is left to say; a done research node's line is its conclusion, which the result shows.
   const own = node.line && node.line !== planLine && !(node.kind === "research" && look === "done") ? { text: node.line, attention: false } : null;
-  const line = look === "done" || plan ? own : cardLine(mission, node, null, t);
-  if (!plan && !line && checks.length === 0) return null;
+  const line = ended || question || look === "done" || plan ? own : cardLine(mission, node, null, t);
+  if (!question && !plan && !line && checks.length === 0) return null;
   // The Conductor's line is its own word; once Hide's facts moved past it, it stays readable but dimmed (B4).
   const behind = line !== null && line.text === node.line && lineOutrun(node, events);
   return (
     <Part title={t("mission.field.now")} part="now">
+      {question ? <p className="min-w-0 break-words border-l-2 border-mission-hold pl-sm" data-panel-question="true">{question}</p> : null}
+      {options.length > 0 ? (
+        <ul className="flex min-w-0 flex-wrap gap-xs text-caption" data-panel-options={options.length}>
+          {options.map((option, index) => (
+            <li key={index} className="min-w-0 rounded-xs bg-muted px-xs">
+              <span className="break-words">{option}</span>
+              {mission.question?.recommend === index + 1 ? <span className="ml-xxs text-mission-hold">{t("mission.banner.recommended")}</span> : null}
+            </li>
+          ))}
+        </ul>
+      ) : null}
       {planLine ? <p className="min-w-0 break-words">{planLine}</p> : null}
       {plan ? <div className="min-w-0 text-caption" data-panel-plan="true"><PlanChecklist plan={plan} /></div> : null}
       {line ? (
