@@ -3474,6 +3474,14 @@
                     }
                 },
                 {
+                    "name": "--summary",
+                    "required": false,
+                    "requires": [],
+                    "value": {
+                        "type": "text"
+                    }
+                },
+                {
                     "name": "--commit",
                     "required": false,
                     "requires": [],
@@ -3495,6 +3503,7 @@
                 "mission_commit_required",
                 "mission_rerun_spent",
                 "mission_evidence_missing",
+                "mission_summary_invalid",
                 "mission_checkout_unknown",
                 "mission_closed"
             ],
@@ -4052,7 +4061,7 @@
             "rest": null
         }
     ],
-    "digest": "sha256:1019ebe976aed86140577551008d5a94cfd2bde2fcbc7723871f2cd01fefde6f",
+    "digest": "sha256:ca37594430bd2e8ccd38a722621dd1c4112b84994f9982f2902bf98c641fad94",
     "envelopes": {
         "agent": {
             "answer": "value",

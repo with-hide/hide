@@ -2,6 +2,8 @@ import { ChevronRightIcon, GitBranchIcon, XIcon } from "lucide-react";
 import { useMemo, useState, type ReactNode } from "react";
 import type { Actions } from "./actions";
 import { AgentMark } from "./AgentMark";
+import { agentMarkOf } from "./agentLogos";
+import { CheckerPopover, useCheckerStatus, VerdictReason, VERDICT_TONE } from "./components/mission-checker";
 import { CriterionMark } from "./components/criterion-mark";
 import { MissionNodeMark } from "./components/mission-node-mark";
 import { MissionPrMark } from "./components/mission-pr";
@@ -14,6 +16,7 @@ import { cn } from "./lib/utils";
 import { CheckerRow, lookWord, RunText, useNodeTimes, useRunWords, useWorkerRow } from "./missionParts";
 import {
   cardLine,
+  checkerState,
   criteriaTally,
   criterionName,
   criterionNote,
@@ -28,7 +31,8 @@ import {
 import { PlanChecklist } from "./components/plan-checklist";
 import { planNowLine } from "./plans";
 import { sessionOfAgent } from "./sessionWork";
-import type { Mission, MissionCriterion, MissionEvent, MissionNode } from "./snapshot";
+import type { MessageKey } from "./i18n/catalogs";
+import type { Mission, MissionChecker, MissionCriterion, MissionEvent, MissionNode } from "./snapshot";
 import { useShellStore } from "./store";
 
 // The node the operator picked on a mission's map (PRD mission-map-git-criteria
@@ -75,7 +79,7 @@ export function MissionNodePanel({ mission, node, events, end, onSelect, onClose
       </section>
       <Now mission={mission} node={node} />
       <Made mission={mission} node={node} />
-      <Criteria mission={mission} node={node} />
+      <Criteria mission={mission} node={node} actions={actions} />
       <Links mission={mission} node={node} onSelect={onSelect} />
       <Ways mission={mission} node={node} actions={actions} />
       <Events node={node} events={events} />
@@ -212,12 +216,22 @@ function LineState({ mission, line }: { mission: Mission; line: MissionCriterion
   );
 }
 
+const GROUPS: { key: string; kinds: MissionCriterion["kind"][]; title: MessageKey }[] = [
+  { key: "own", kinds: ["own", "defect"], title: "mission.criteria.group.own" },
+  { key: "auto", kinds: ["check", "ci"], title: "mission.criteria.group.auto" },
+  { key: "agents", kinds: ["review", "verify"], title: "mission.criteria.group.agents" },
+];
+
 /**
- * The finish lines as one list (B32): ✓ ○ ⤳ ✕ and each line's words, a
- * review or verification named by its checkers, a skipped line's reason, a
- * rerun that passed. A mission from before criteria shows its sentence (B23).
+ * The finish lines (B32), grouped by who decides them: the work's own lines
+ * and defects, the automatic checks, and the other agents' review or
+ * verification. Each line is ✓ ○ ⤳ ✕ and its words; a skipped or failed line
+ * carries its verdict under it, the short reason first and the full text
+ * folded, and a review or verification names each checker by a chip that
+ * opens its answer and the way to its terminal or record. A mission from
+ * before criteria shows its sentence (B23).
  */
-function Criteria({ mission, node }: { mission: Mission; node: MissionNode }) {
+function Criteria({ mission, node, actions }: { mission: Mission; node: MissionNode; actions: Actions }) {
   const { t } = useInterfaceTranslation();
   if (mission.exempt) {
     const before = ownCriteria(node);
@@ -231,21 +245,93 @@ function Criteria({ mission, node }: { mission: Mission; node: MissionNode }) {
   if (!tally) return null;
   return (
     <Part title={`${t("mission.field.criteria")} · ${tally.passed}/${tally.total}`} part="criteria">
-      <ul className="flex min-w-0 flex-col gap-xxs" data-panel-criteria={node.criteria.map((line) => `${line.key}:${line.state}`).join(" ")}>
-        {node.criteria.map((line) => {
-          const note = criterionNote(line, mission, t);
+      <div className="flex min-w-0 flex-col gap-sm" data-panel-criteria={node.criteria.map((line) => `${line.key}:${line.state}`).join(" ")}>
+        {GROUPS.map((group) => {
+          const lines = node.criteria.filter((line) => group.kinds.includes(line.kind));
+          if (lines.length === 0) return null;
           return (
-            <li key={line.key} className="grid min-w-0 grid-cols-[var(--size-agent-mark)_minmax(0,1fr)] gap-xs" title={line.evidence} data-panel-line={line.key} data-line-state={line.state}>
-              <CriterionMark state={line.state} />
-              <span className="min-w-0 break-words">
-                {criterionName(line, t)}
-                {note ? <span className={cn("ml-xs text-caption", line.state === "skipped" ? "text-mission-hold" : "text-muted-foreground")} data-line-note="true">{note}</span> : null}
-              </span>
-            </li>
+            <div key={group.key} className="flex min-w-0 flex-col gap-xxs" data-criteria-group={group.key}>
+              <h5 className="text-micro text-subtle-foreground">{t(group.title)}</h5>
+              <ul className="flex min-w-0 flex-col gap-xs">
+                {lines.map((line) => <CriterionLine key={line.key} mission={mission} line={line} actions={actions} />)}
+              </ul>
+            </div>
           );
         })}
-      </ul>
+      </div>
     </Part>
+  );
+}
+
+function CriterionLine({ mission, line, actions }: { mission: Mission; line: MissionCriterion; actions: Actions }) {
+  const { t } = useInterfaceTranslation();
+  const name = criterionName(line, t);
+  // A skipped line's reason stands in its verdict, not after its words.
+  const note = line.state === "skipped" ? null : criterionNote(line, mission, t);
+  const checks = line.kind === "review" || line.kind === "verify" ? { kind: line.kind, checkers: line.checkers ?? [] } : null;
+  return (
+    <li className="grid min-w-0 grid-cols-[var(--size-agent-mark)_minmax(0,1fr)] gap-x-xs gap-y-xxs">
+      <div className="contents" data-panel-line={line.key} data-line-state={line.state}>
+        <CriterionMark state={line.state} />
+        <span className="min-w-0">
+          <span className="line-clamp-2 break-words" title={line.evidence ? `${name}\n\n${line.evidence}` : name}>{name}</span>
+          {note ? <span className="text-caption text-muted-foreground" data-line-note="true">{note}</span> : null}
+        </span>
+      </div>
+      {line.state === "skipped" && line.skip ? (
+        <Verdict tone="skipped" word={t("mission.verdict.skipped")}>
+          <p className="min-w-0 break-words text-foreground" data-verdict-summary="true">{criterionNote(line, mission, t)}</p>
+        </Verdict>
+      ) : null}
+      {line.state === "fail" && !checks ? (
+        <Verdict tone="fail" word={t("mission.verdict.failed")}>
+          <VerdictReason summary={line.summary} evidence={line.evidence} />
+        </Verdict>
+      ) : null}
+      {checks && checks.checkers.length > 0 ? (
+        <div className="col-start-2 flex min-w-0 flex-col gap-xs" data-panel-checker-chips={checks.checkers.length}>
+          <div className="flex min-w-0 flex-wrap gap-xs">
+            {checks.checkers.map((checker, index) => <CheckerChip key={index} mission={mission} kind={checks.kind} checker={checker} actions={actions} />)}
+          </div>
+          {checks.checkers.filter((checker) => checker.state === "fail").map((checker, index) => (
+            <Verdict key={index} tone="fail" word={t("mission.verdict.rejected")} who={checker.worker.agent}>
+              <VerdictReason summary={checker.summary} evidence={checker.evidence} />
+            </Verdict>
+          ))}
+        </div>
+      ) : null}
+    </li>
+  );
+}
+
+/** A skipped or rejected line's verdict, under its words: its word in its colour, who gave it, and why. */
+function Verdict({ tone, word, who, children }: { tone: "fail" | "skipped"; word: string; who?: string; children: ReactNode }) {
+  return (
+    <div className={cn("col-start-2 flex min-w-0 flex-col gap-xxs rounded-xs border-l-2 bg-secondary px-sm py-xs text-caption", tone === "fail" ? "border-mission-failed" : "border-mission-hold")} data-panel-verdict={tone}>
+      <span className="flex min-w-0 items-center gap-xs">
+        <span className={cn("shrink-0 rounded-full px-xs text-micro font-semibold", tone === "fail" ? "bg-mission-failed/15 text-mission-failed" : "bg-mission-hold/15 text-mission-hold")}>{word}</span>
+        {who ? <span className="flex min-w-0 items-center gap-xxs text-muted-foreground"><AgentMark kind={who} /><span className="truncate">{agentMarkOf(who)?.label ?? who}</span></span> : null}
+      </span>
+      {children}
+    </div>
+  );
+}
+
+/** A checker of a review or verification by its agent and its answer; pressing it opens its popover (B17, B32). */
+function CheckerChip({ mission, kind, checker, actions }: { mission: Mission; kind: "review" | "verify"; checker: MissionChecker; actions: Actions }) {
+  const { t } = useInterfaceTranslation();
+  const state = checkerState(checker);
+  const status = useCheckerStatus(kind, checker);
+  const name = agentMarkOf(checker.worker.agent)?.label ?? checker.worker.agent;
+  return (
+    <CheckerPopover mission={mission} kind={kind} checker={checker} actions={actions} hint={`${name} · ${status}`}>
+      <Button variant="secondary" size="sm" className="h-auto gap-xxs px-xs py-xxs text-caption" data-panel-checker={checker.worker.agent} data-checker-state={state}>
+        <AgentMark kind={checker.worker.agent} />
+        <span>{name}</span>
+        <span className={cn("rounded-full px-xs text-micro font-semibold", VERDICT_TONE[state])}>{state === "fail" ? t("mission.verdict.rejected") : status}</span>
+        <ChevronRightIcon aria-hidden="true" className="size-(--size-icon-sm) text-muted-foreground" />
+      </Button>
+    </CheckerPopover>
   );
 }
 
