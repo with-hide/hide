@@ -419,10 +419,13 @@ fn session_cwd(agent: Agent, path: &Path) -> Option<PathBuf> {
         Agent::Codex => crate::codex_session_cwd(path).map(PathBuf::from),
         Agent::Claude => {
             let file = File::open(path).ok()?;
-            let mut reader = BufReader::new(file);
+            let mut reader = BufReader::new(std::io::Read::take(file, SESSION_READ_LIMIT_BYTES));
             for _ in 0..128 {
-                let line = match read_bounded_line(&mut reader, SESSION_LINE_LIMIT_BYTES) {
-                    Ok(Some(line)) => line,
+                let line = match crate::read_head_record(&mut reader, SESSION_LINE_LIMIT_BYTES) {
+                    Ok(Some(
+                        crate::HeadRecord::Complete(line) | crate::HeadRecord::Unfinished(line),
+                    )) => line,
+                    Ok(Some(crate::HeadRecord::Passed)) => continue,
                     Ok(None) => break,
                     Err(_) => return None,
                 };

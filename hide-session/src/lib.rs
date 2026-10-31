@@ -1257,6 +1257,69 @@ pub fn read_bounded(path: &Path, maximum_bytes: u64) -> Result<String> {
     Ok(String::from_utf8_lossy(&bytes).into_owned())
 }
 
+/// One record of a scan that looks through a session's head for a fact a
+/// record carries (its native id, its cwd).
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) enum HeadRecord {
+    /// A whole record, without its newline.
+    Complete(Vec<u8>),
+    /// The last bytes read, with no newline yet: a record still being
+    /// written, or the end of the scan's budget.
+    Unfinished(Vec<u8>),
+    /// A record longer than the scan keeps, such as a first message that
+    /// carries a pasted image: its bytes were read to its newline and
+    /// dropped, so the record cap bounds memory, not what a session may
+    /// hold.
+    Passed,
+}
+
+/// The next record of a head scan, `None` at the end of `reader`. A record
+/// over `maximum_bytes` is passed over rather than refused; the caller
+/// bounds the whole scan by wrapping its file in `Read::take`.
+pub(crate) fn read_head_record(
+    reader: &mut impl BufRead,
+    maximum_bytes: usize,
+) -> io::Result<Option<HeadRecord>> {
+    let mut line = Vec::with_capacity(maximum_bytes.min(8 * 1024));
+    let read = std::io::Read::take(&mut *reader, maximum_bytes.saturating_add(1) as u64)
+        .read_until(b'\n', &mut line)?;
+    if read == 0 {
+        return Ok(None);
+    }
+    if line.len() > maximum_bytes {
+        if line.last() != Some(&b'\n') {
+            discard_through_newline(reader)?;
+        }
+        return Ok(Some(HeadRecord::Passed));
+    }
+    if line.last() != Some(&b'\n') {
+        return Ok(Some(HeadRecord::Unfinished(line)));
+    }
+    line.pop();
+    Ok(Some(HeadRecord::Complete(line)))
+}
+
+/// Read through the next newline, or to the end of `reader`, keeping
+/// nothing.
+fn discard_through_newline(reader: &mut impl BufRead) -> io::Result<()> {
+    loop {
+        let buffer = reader.fill_buf()?;
+        if buffer.is_empty() {
+            return Ok(());
+        }
+        match buffer.iter().position(|byte| *byte == b'\n') {
+            Some(index) => {
+                reader.consume(index + 1);
+                return Ok(());
+            }
+            None => {
+                let length = buffer.len();
+                reader.consume(length);
+            }
+        }
+    }
+}
+
 pub(crate) fn read_bounded_line(
     reader: &mut impl BufRead,
     maximum_bytes: usize,

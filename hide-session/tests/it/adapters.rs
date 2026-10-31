@@ -5191,3 +5191,83 @@ fn a_turn_hands_on_only_the_tool_calls_it_left_failed() {
         "the turn still open carries its failure"
     );
 }
+
+/// A Claude Code session that opens with a pasted screenshot: its first
+/// person's record is larger than one record's cap and than one read's
+/// budget. The session is still proven and read, and the turn the doorbell
+/// asks about settles on the records after it.
+#[test]
+fn a_claude_session_opening_with_an_oversized_message_reads_its_turn() {
+    let id = "a1b2c3d4-0000-4000-8000-000000000003";
+    let home = tempfile::tempdir().unwrap();
+    let folder = home.path().join(".claude/projects/-work-app");
+    std::fs::create_dir_all(&folder).unwrap();
+    let path = folder.join(format!("{id}.jsonl"));
+    let stamped = |record: serde_json::Value| {
+        let mut record = record;
+        record.as_object_mut().unwrap().extend(
+            serde_json::json!({"isSidechain": false, "userType": "external",
+                "entrypoint": "cli", "cwd": "/work/app", "sessionId": id,
+                "version": "2.1.288", "gitBranch": "main"})
+            .as_object()
+            .unwrap()
+            .clone(),
+        );
+        record
+    };
+    let screenshot = "A".repeat(2 * hide_session::SESSION_INCREMENT_READ_LIMIT_BYTES as usize);
+    std::fs::write(
+        &path,
+        format!(
+            "{}\n",
+            serde_json::json!({"type": "permission-mode", "permissionMode": "default",
+                "sessionId": id})
+        ),
+    )
+    .unwrap();
+    append(
+        &path,
+        &[
+            stamped(serde_json::json!({"parentUuid": null, "type": "user",
+                "message": {"role": "user", "content": [
+                    {"type": "text", "text": "이 화면 봐줘"},
+                    {"type": "image", "source": {"type": "base64",
+                        "media_type": "image/png", "data": screenshot}}]},
+                "uuid": "u1", "timestamp": "2026-10-31T01:00:00.000Z", "promptId": "p1",
+                "imagePasteIds": [1], "origin": {"kind": "human"}, "promptSource": "user"})),
+            stamped(serde_json::json!({"parentUuid": "u1", "type": "assistant",
+                "message": {"model": "claude-model", "id": "msg_1", "type": "message",
+                    "role": "assistant", "content": [{"type": "text", "text": "봤습니다"}],
+                    "stop_reason": "end_turn"},
+                "uuid": "a1", "timestamp": "2026-10-31T01:00:10.000Z"})),
+        ],
+    );
+
+    let mut request = LabelTranscriptRequest {
+        reference_value: id.to_owned(),
+        ..self::request(Agent::Claude)
+    };
+    let mut events = Vec::new();
+    let answer = loop {
+        let answer = read(home.path(), &request).unwrap();
+        assert_eq!(answer.confirmed.native_session_id.as_deref(), Some(id));
+        events.extend(
+            answer
+                .events
+                .iter()
+                .map(|event| (event.kind, event.text.clone())),
+        );
+        if !answer.has_more {
+            break answer;
+        }
+        request.checkpoint = Some(answer.checkpoint.clone());
+        request.subagents = answer.subagents.clone();
+        request.turns = answer.turns.clone();
+        request.tools = answer.tools.clone();
+    };
+    assert!(events.contains(&(LabelEventKind::Assistant, "봤습니다".to_owned())));
+    assert_eq!(
+        answer.turns.as_ref().and_then(|turns| turns.waiting()),
+        Some(Waiting::Nothing)
+    );
+}
