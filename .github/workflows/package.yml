@@ -73,6 +73,11 @@ on:
         type: string
         required: false
         default: adhoc
+      macos-compile-runner:
+        description: The `runs-on` of `compile (macos)` as JSON (verify's call only; docs/BUILD.md, The Mac mini CI runner); empty for GitHub's macos-15.
+        type: string
+        required: false
+        default: ''
       quick-build:
         description: Build the release binaries at opt-level 1 without LTO (a pull request only; docs/BUILD.md).
         type: boolean
@@ -605,7 +610,10 @@ jobs:
       # binaries' record against its own before it uses them.
       HIDE_VERSION: ${{ needs.helper-identity.outputs.version }}
       HIDE_BUILD_ORDER: ${{ needs.helper-identity.outputs.build-order }}
-    runs-on: macos-15
+    # It needs no screen, keychain or login session, so verify's call may
+    # send it to the Mac mini's CI runner; the package job, which starts the
+    # app, stays on GitHub's.
+    runs-on: ${{ fromJSON(inputs.macos-compile-runner || '"macos-15"') }}
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@v7
