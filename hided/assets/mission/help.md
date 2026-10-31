@@ -230,7 +230,7 @@ CI, review and merge waits call no one, and a worker waiting on them is not warn
 The operator's words are the controls; there are no buttons.
 
 - The operator speaks in their own language, and the examples below mean the same in any. An instruction whose meaning is clear ("drop node 3", "do this one first") is applied at once: change the plan, explain the change in the nodes' `change`, and say what you did.
-- An instruction that throws away work already done, or moves several nodes, stops only the nodes it touches (`--status held`), shows the change, and is applied once the operator approves; the other nodes keep running.
+- An instruction that throws away work already done, or moves several nodes, holds only the nodes it touches: start none of them and change none of them, show the change with `hide mission decide --line <the change> --node <key>`, and apply it once the operator approves; the other nodes keep running.
 - "stop" (멈춰): start no new node; the running workers finish the turn they are in and then wait. "resume" (재개) goes on.
 - "cancel" (취소): ask what to do with the open pull requests; the default to offer is to close each with a reason and keep its branch.
   After the answer, end every worker; in a worktree you made, commit what is not committed onto its branch, then remove only the folder.

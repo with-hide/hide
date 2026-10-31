@@ -90,6 +90,13 @@ impl MissionStatus {
     pub fn open(self) -> bool {
         matches!(self, Self::Planning | Self::Running | Self::MergeWait)
     }
+
+    /// Whether a node's attention still reaches someone: an open mission's,
+    /// and a done one's, whose merged worktrees Hide cleans after the close
+    /// (B20); a cancelled mission asks nothing.
+    pub(crate) fn asks(self) -> bool {
+        self.open() || self == Self::Done
+    }
 }
 
 /// How far the mission goes (D-04, D-05): up to ready pull requests or

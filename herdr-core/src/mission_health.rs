@@ -121,7 +121,7 @@ fn node_acts(
         return;
     }
     if let Some(attention) = &node.attention
-        && !still_holds(node, attention, fact, facts)
+        && !still_holds(mission, node, attention, fact, facts)
     {
         acts.push(Act::Clear { node: at });
     }
@@ -366,6 +366,7 @@ fn closes(mission: &Mission, acts: &[Act]) -> bool {
 /// evaluation raises goes the moment its fact does; what only a person
 /// settles stays until they do.
 fn still_holds(
+    mission: &Mission,
     node: &MissionNode,
     attention: &crate::missions::Attention,
     fact: &NodeFacts,
@@ -390,12 +391,18 @@ fn still_holds(
             }),
             None => true,
         },
-        AttentionReason::UnplannedPr => facts.pulls.is_none_or(|pulls| {
-            attention
+        // A node took it in, or it settled.
+        AttentionReason::UnplannedPr => {
+            !attention
                 .pr
-                .and_then(|number| find(pulls, number))
-                .is_some_and(|pull| !pull.badge.is_settled())
-        }),
+                .is_some_and(|number| held_by_any(mission, number))
+                && facts.pulls.is_none_or(|pulls| {
+                    attention
+                        .pr
+                        .and_then(|number| find(pulls, number))
+                        .is_some_and(|pull| !pull.badge.is_settled())
+                })
+        }
         AttentionReason::WorktreeDirty
         | AttentionReason::CleanupAsk
         | AttentionReason::ConductorFailed
@@ -630,6 +637,23 @@ mod tests {
                 agent: None,
             }]
         );
+    }
+
+    /// B2: an unplanned pull request stops waiting once a node holds it.
+    #[test]
+    fn an_unplanned_pull_request_clears_once_a_node_holds_it() {
+        let mut m = running(&["a", "b"]);
+        m.nodes[0].attention = Some(attention(AttentionReason::UnplannedPr, Some(12)));
+        m.nodes[1].prs = vec![12];
+        let pulls = listed(vec![pull(12, "spike/a", PullRequestBadge::Open)]);
+        let acts = evaluate(
+            &m,
+            &facts(
+                Some(&pulls),
+                vec![worker(WorkerLife::Running), worker(WorkerLife::Running)],
+            ),
+        );
+        assert!(acts.contains(&Act::Clear { node: 0 }), "{acts:?}");
     }
 
     /// B10, D-13: a sleeping worker is woken about what its pull request

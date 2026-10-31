@@ -291,10 +291,12 @@ impl Runtime {
         let mut changed = Vec::new();
         for index in 0..self.missions.book.missions.len() {
             let mission = &self.missions.book.missions[index];
-            if !mission.status.open() || self.mission_stale(mission) {
+            if !mission.status.asks() || self.mission_stale(mission) {
                 continue;
             }
-            let present = self.conductor_present(&mission.conductor.actor);
+            // A closed mission's Conductor has finished with it: what its
+            // cleanup raises goes to the operator at once.
+            let present = mission.status.open() && self.conductor_present(&mission.conductor.actor);
             let mission = &mut self.missions.book.missions[index];
             let mut events = Vec::new();
             for node in &mut mission.nodes {
@@ -1125,7 +1127,7 @@ impl Runtime {
         let ledger = self.delivery_state().ok();
         let mut claims = Vec::new();
         for (at, mission) in self.missions.book.missions.iter().enumerate() {
-            if !mission.status.open() || self.mission_stale(mission) {
+            if !mission.status.asks() || self.mission_stale(mission) {
                 continue;
             }
             for (index, node) in mission.nodes.iter().enumerate() {

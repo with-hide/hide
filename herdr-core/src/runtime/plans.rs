@@ -1010,7 +1010,7 @@ impl Runtime {
         let ledger = self.delivery_state().ok();
         let mut out = Vec::new();
         for mission in &self.missions.book.missions {
-            if !mission.status.open() {
+            if !mission.status.asks() {
                 continue;
             }
             for node in &mission.nodes {
