@@ -128,30 +128,6 @@ impl Screens {
             .map_or(0, |frames| frames.iter().filter(|(_, full)| *full).count())
     }
 
-    /// Waits for `pane` to draw `text` in any frame after its first `after`.
-    fn wait_drawn_after(&self, pane: &str, after: usize, text: &str) {
-        let deadline = Instant::now() + HANG_LIMIT;
-        let mut frames = self.lock();
-        loop {
-            if frames
-                .get(pane)
-                .into_iter()
-                .flatten()
-                .skip(after)
-                .any(|(bytes, _)| text_of(bytes).contains(text))
-            {
-                return;
-            }
-            let left = deadline.saturating_duration_since(Instant::now());
-            assert!(!left.is_zero(), "pane {pane} never drew {text:?}");
-            frames = self
-                .changed
-                .wait_timeout(frames, left)
-                .unwrap_or_else(PoisonError::into_inner)
-                .0;
-        }
-    }
-
     fn count(&self, pane: &str) -> usize {
         self.lock().get(pane).map_or(0, Vec::len)
     }
@@ -493,8 +469,8 @@ fn a_started_pane_shows_its_first_full_screen_takes_input_and_converges() {
 }
 
 /// A redraw, and a view at the grid the pane already runs at, each bring a
-/// full frame from the holder, and what the program prints after either is
-/// drawn: the node waits for a full frame after both, and a holder answers
+/// full frame from the holder, and the frames of what the program prints
+/// after either reach the screen: the node waits for a full frame after both, and a holder answers
 /// a same-size resize with nothing, so each asks for the screen with a
 /// redraw instead.
 #[test]
@@ -512,14 +488,21 @@ fn a_redraw_on_a_holder_pane_draws_its_screen_again_and_what_follows() {
     ];
     for (word, ask) in asks {
         let fulls = node.screens.fulls("r1");
-        let drawn = node.screens.count("r1");
         ask();
         wait_until("a full frame after the ask", || {
             node.screens.fulls("r1") > fulls
         });
+        let drawn = node.screens.count("r1");
         node.type_into("r1", &print_node(word));
-        node.screens
-            .wait_drawn_after("r1", drawn, &format!("{word}-node"));
+        let printed = format!("{word}-node");
+        wait_until("the program's answer", || {
+            node.text("r1").contains(&printed)
+        });
+        // The frames that carry it reach the screen: a frame the holder
+        // diffs from its own grid need not hold the line as one text.
+        wait_until("a frame after the answer", || {
+            node.screens.count("r1") > drawn
+        });
     }
     node.holders().terminate(&node.service, "r1").unwrap();
 }
