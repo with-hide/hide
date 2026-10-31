@@ -1,15 +1,21 @@
 import { ExternalLinkIcon } from "lucide-react";
+import { useState } from "react";
 import type { Actions } from "../actions";
 import { AgentLogo } from "../components/agent-logo";
 import { Note, Row, Status } from "../components/settings-rows";
 import { Button } from "../components/ui/button";
+import { Input } from "../components/ui/input";
+import { Select, SelectContent, SelectItem, SelectSeparator, SelectTrigger, SelectValue } from "../components/ui/select";
 import { Switch } from "../components/ui/switch";
+import { coreErrorText } from "../coreError";
+import { useErrorSince } from "../errorSince";
+import { useShellStore } from "../store";
 import { useInterfaceTranslation } from "../i18n/client";
 import { kitWhyText } from "../kitWhy";
 import { kitPartText } from "../settings";
-import type { Device, KitAgent } from "../snapshot";
+import { agentPermission, type Device, type KitAgent } from "../snapshot";
 import { AgentUpdateGuide } from "../AgentUpdate";
-import { agentHookWait, agentLeftover, agentProblems, agentStatus, agentTooOld, agentUnsupportedHere, docsUrl, installDocUrl, machineSystem } from "./agentRows";
+import { agentHookWait, agentLeftover, agentProblems, agentStatus, agentTooOld, agentUnsupportedHere, docsUrl, installDocUrl, machineSystem, permissionOffer, permissionOptions, type PermissionOffer } from "./agentRows";
 import { PartialChip } from "./PartialChip";
 
 /** The link an agent row offers, as the row words it: a label and the arrow that says it leaves the app. */
@@ -59,6 +65,106 @@ export function NotInstalledRow({ agent }: { agent: KitAgent }) {
   );
 }
 
+type PermissionMode = "full" | "ask" | "custom";
+
+/**
+ * The agent's 권한 on this machine, the row's second line: `권한`, the choice,
+ * then the command Hide will run, in machine text. 직접 입력 turns the
+ * command into a field after the program, saved on Enter or when it loses
+ * focus; Escape puts back what is saved. An agent with no permission question
+ * says so instead of offering a choice.
+ */
+function PermissionLine({ device, agent, offer, actions }: { device: Device; agent: KitAgent; offer: PermissionOffer; actions: Actions }) {
+  const { t } = useInterfaceTranslation();
+  const permission = useShellStore((s) => agentPermission(s.rest, device.id, agent.id));
+  const saved = permission.mode === "custom" ? permission.text : "";
+  const [draft, setDraft] = useState<string | null>(null);
+  const [sentAt, setSentAt] = useState<number | null>(null);
+  const error = useErrorSince(sentAt, ["agent_permission."]);
+  const key = `${device.id}:${agent.id}`;
+  const label = <span className="shrink-0 text-body text-muted-foreground">{t("agents.permission.label")}</span>;
+  if (!offer.asks) {
+    return (
+      <div className="flex flex-wrap items-center gap-x-sm gap-y-xs" data-agent-permission={`${key}:not-asked`}>
+        {label}
+        <span className="text-body text-muted-foreground">{t("agents.permission.notAsked")}</span>
+      </div>
+    );
+  }
+  const send = (next: { mode: "full" | "ask" } | { mode: "custom"; text: string }) => {
+    setSentAt(Date.now());
+    actions.setAgentPermission(device.id, agent.id, next);
+  };
+  const commit = () => {
+    if (draft !== null && draft.trim() !== saved) send({ mode: "custom", text: draft });
+    setDraft(null);
+  };
+  const options = permissionOptions(offer, permission);
+  return (
+    <div className="flex flex-col gap-xs" data-agent-permission={`${key}:${permission.mode}`}>
+      <div className="flex flex-wrap items-center gap-x-sm gap-y-xs">
+        {label}
+        <Select
+          value={permission.mode}
+          onValueChange={(value) => {
+            if (value === permission.mode) return;
+            const mode = value as PermissionMode;
+            send(mode === "custom" ? { mode, text: saved } : { mode });
+          }}
+        >
+          <SelectTrigger size="sm" className="w-auto" aria-label={t("agents.permission.aria", { agent: agent.label })} data-agent-permission-select={key}>
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="full" data-agent-permission-option="full">{t("agents.permission.full")}</SelectItem>
+            <SelectItem value="ask" data-agent-permission-option="ask">{t("agents.permission.ask")}</SelectItem>
+            <SelectSeparator />
+            <SelectItem value="custom" data-agent-permission-option="custom">{t("agents.permission.custom")}</SelectItem>
+          </SelectContent>
+        </Select>
+        {permission.mode === "custom" ? (
+          <span className="flex min-w-0 flex-1 basis-(--size-settings-control-w) items-center gap-xs">
+            <span className="shrink-0 font-mono text-body text-muted-foreground">{offer.program}</span>
+            <Input
+              mono
+              className="h-(--size-control-sm)"
+              value={draft ?? saved}
+              placeholder={t("agents.permission.customPlaceholder")}
+              spellCheck={false}
+              autoCapitalize="off"
+              autoCorrect="off"
+              aria-label={t("agents.permission.customAria", { agent: agent.label })}
+              aria-invalid={error ? true : undefined}
+              onChange={(event) => setDraft(event.target.value)}
+              onBlur={commit}
+              onKeyDown={(event) => {
+                if (event.key === "Enter") {
+                  event.preventDefault();
+                  commit();
+                } else if (event.key === "Escape" && draft !== null) {
+                  event.preventDefault();
+                  event.stopPropagation();
+                  setDraft(null);
+                }
+              }}
+              data-agent-permission-input={key}
+            />
+          </span>
+        ) : (
+          <code className="min-w-0 break-all font-mono text-body text-muted-foreground" data-agent-permission-command={key}>
+            {options ? `${offer.program} ${options}` : offer.program}
+          </code>
+        )}
+      </div>
+      {error ? (
+        <Note tone="error" data-agent-permission-error={key} data-core-error={error.kind}>
+          {coreErrorText(error, t, "agents.permission.notSaved")}
+        </Note>
+      ) : null}
+    </div>
+  );
+}
+
 /**
  * One installed agent of one machine (D-08, D-09): its mark and name, the Basic
  * chip when Hide does only some things for it, the status of an agent that is
@@ -78,6 +184,8 @@ export function AgentRow({ device, agent, actions, onAct }: { device: Device; ag
   const tooOld = agentTooOld(agent);
   const docs = docsUrl(agent.id);
   const worst = problems.some(({ piece }) => piece.state === "failed") ? "error" : "warn";
+  // Hide starts this agent here, so its 권한 applies (none where it cannot attach).
+  const offer = agentUnsupportedHere(agent) ? null : permissionOffer(agent.id);
   return (
     <Row
       className="group/agent"
@@ -98,6 +206,7 @@ export function AgentRow({ device, agent, actions, onAct }: { device: Device; ag
       data-agent-row={`${device.id}:${agent.id}:${agent.enabled ? "on" : "off"}`}
       detail={
         <>
+          {offer ? <PermissionLine device={device} agent={agent} offer={offer} actions={actions} /> : null}
           {problems.length > 0 ? (
             <div className="flex flex-wrap items-center gap-x-sm gap-y-xs" data-agent-problem={`${device.id}:${agent.id}`}>
               <Status tone={worst}>

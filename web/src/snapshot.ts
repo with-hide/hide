@@ -3175,6 +3175,10 @@ export type SnapshotRest = {
     project_settings_writes?: Record<string, ProjectSettingsWrite & { device_id: string; root: string }>;
     issue_settings?: IssueSettings;
     conductor_settings?: ConductorSettings;
+    /** Settings › Agents › 권한 of this machine's agents by adapter id; an agent with none has full access. */
+    agent_permissions?: Record<string, AgentPermission>;
+    /** The same for each registered device's agents, by device id. */
+    device_agent_permissions?: Record<string, Record<string, AgentPermission>>;
     agent_start?: AgentStartChoice;
     /** The checkouts last brought to the front, newest first, up to ten (PRD cmdk-recent). */
     recent_checkouts?: RecentCheckout[];
@@ -3344,6 +3348,18 @@ export function editorTabFor(editor: EditorSnapshot | null, tabId: string | null
 }
 
 const NO_PATHS: string[] = [];
+
+/** One agent's 권한 on one machine (`herdr-core/src/agent_permission.rs`). */
+export type AgentPermission = { mode: "full" } | { mode: "ask" } | { mode: "custom"; text: string; options: string[] };
+
+const FULL_ACCESS: AgentPermission = { mode: "full" };
+
+/** An agent's 권한 on a machine; full access when the core has saved none. */
+export function agentPermission(rest: SnapshotRest | null, deviceId: string, agentId: string): AgentPermission {
+  const state = rest?.ui_state;
+  const saved = deviceId === localDeviceId(rest) ? state?.agent_permissions : state?.device_agent_permissions?.[deviceId];
+  return saved?.[agentId] ?? FULL_ACCESS;
+}
 
 /**
  * What the Explorer draws: the selected device, the checkout in front on it,

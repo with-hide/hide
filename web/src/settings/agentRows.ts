@@ -193,3 +193,24 @@ export function agentStatus(agent: KitAgent): AgentStatus {
   if (agent.sessions === 0) return { kind: "ready" };
   return { kind: "sessions", count: agent.sessions };
 }
+
+/**
+ * What Settings › Agents › 권한 offers for an agent: the program and the
+ * options a full-access start adds, from the adapter's declaration; `asks`
+ * false for an agent with no permission question (Pi), and null for one Hide
+ * does not start.
+ */
+export type PermissionOffer = { program: string; fullAccess: string[]; asks: boolean };
+
+export function permissionOffer(agentId: string): PermissionOffer | null {
+  const adapter = agentAdapter(agentId);
+  if (!adapter?.full_access) return null;
+  return { program: adapter.program, fullAccess: [...adapter.full_access], asks: adapter.full_access.length > 0 };
+}
+
+/** The options a start adds after the program for this choice, as the row shows them. */
+export function permissionOptions(offer: PermissionOffer, permission: { mode: string; text?: string }): string {
+  if (permission.mode === "full") return offer.fullAccess.join(" ");
+  if (permission.mode === "custom") return permission.text ?? "";
+  return "";
+}

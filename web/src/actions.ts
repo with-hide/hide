@@ -1453,6 +1453,11 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
       dispatch({ schema_version: 2, kind: "kit_agent_set", payload: { device_id: deviceId, agent, enabled } });
     },
 
+    /** An agent's 권한 on its machine's row: full access, the CLI's own questions, or options the operator typed. */
+    setAgentPermission(deviceId: string, agent: string, permission: { mode: "full" | "ask" } | { mode: "custom"; text: string }) {
+      dispatch({ schema_version: 2, kind: "agent_permission_set", payload: { device_id: deviceId, agent, ...permission } });
+    },
+
     /** A tab showing the kit opened: this Mac's parts are read once. */
     checkKit() {
       dispatch({ schema_version: 2, kind: "kit_check", payload: {} });
