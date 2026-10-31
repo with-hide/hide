@@ -101,7 +101,7 @@ export function allAgents(remote: RemoteStatus[] | undefined, localAgents: Agent
     if (!agent || agent.pane_id !== entry.pane_id) throw new Error(`Missing listed agent: ${entry.pane_id}`);
     // Each machine as this window calls it (PRD core-host-node-move B2); the core's own word before devices are listed.
     const label = devices ? machineName(devices, entry.device_id, translate) : (entry.device_label ?? translate(thisMachineKey(null)));
-    return { agent: { ...agent, device_id: entry.device_id, device_label: label }, device: entry.remote ? label : null };
+    return { agent: { ...agent, device_label: label }, device: entry.remote ? label : null };
   });
 }
 

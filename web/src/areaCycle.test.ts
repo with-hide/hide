@@ -101,7 +101,7 @@ function devices(): SnapshotRest {
   nav.devices!.push({ id: "mini", label: "mini", kind: "remote", state: "connected" } as never);
   const agent = (pane: string, label: string) => ({ id: label, pane_id: pane, identity_label: label, agent_kind: "claude", mark: "going", status_code: "working" });
   nav.agents = [agent("t1-pane", "planner"), agent("t2-pane", "writer"), agent("other-tab-pane", "fixer"), agent("outside-pane", "porter"), agent("child-pane", "child")] as never;
-  const miniTab = { id: "remote:mini:tab:m1", label: "m1", panes: [{ id: "remote:mini:pane:p1" }], workspace_id: "remote:mini:workspace:w", checkout_id: "remote:mini:checkout:c", empty: false, delegated: false };
+  const miniTab = { id: "remote:mini:tab:m1", label: "m1", panes: [{ id: "remote:mini:pane:p1", device_id: "mini" }], workspace_id: "remote:mini:workspace:w", checkout_id: "remote:mini:checkout:c", empty: false, delegated: false };
   const miniCheckout = { agent_scope: emptyScope(), id: "remote:mini:checkout:c", workspace_id: "remote:mini:workspace:w", path: "/mini", label: "api", tabs: [miniTab], active_tab_id: miniTab.id, strip: [] };
   rest.status = { remote: [{ target_id: "mini", state: "connected", session: { workspaces: [{ agent_scope: emptyScope(), id: "remote:mini:workspace:w", label: "api", device_id: "mini", checkouts: [miniCheckout] }], agents: [{ id: "b", pane_id: "remote:mini:pane:p1", identity_label: "reviewer", agent_kind: "codex", mark: "going", status_code: "working" }], active_tab_ids: {}, focused_workspace_id: null, focused_checkout_id: null, focused_tab_id: null, focused_pane_id: null, pane_layouts: [] } }] } as never;
   return rest;

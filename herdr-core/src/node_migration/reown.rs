@@ -13,6 +13,7 @@
 //! file and place (engineering principle 4). The source folder is never
 //! written. A move back is the same change with the two machines swapped.
 
+use crate::address::{Kind, Scoped};
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
@@ -62,15 +63,14 @@ impl OwnerChange {
 
     /// A Herdr-scoped id (`pane`, `tab`): unqualified for the owner,
     /// `remote:<device>:<kind>:<raw>` for every other machine.
-    fn scoped(&self, kind: &str, id: &str) -> Option<String> {
-        let target = format!("remote:{}:{kind}:", self.new_owner_was);
-        if let Some(raw) = id.strip_prefix(&target) {
+    fn scoped(&self, kind: Kind, id: &str) -> Option<String> {
+        if let Some(raw) = Scoped::strip(id, &self.new_owner_was, kind) {
             return Some(raw.to_owned());
         }
-        if id.starts_with("remote:") || id.is_empty() {
+        if crate::address::is_device_scoped(id) || id.is_empty() {
             return None;
         }
-        Some(format!("remote:{}:{kind}:{id}", self.old_owner_as))
+        Some(crate::address::scoped_id(&self.old_owner_as, kind, id))
     }
 }
 
@@ -298,8 +298,8 @@ impl Mapper<'_> {
         let to = |mapped: Option<String>| mapped.map_or(Mapped::Same, Mapped::To);
         match moves {
             Moves::Device => to(self.change.device(value)),
-            Moves::Pane => to(self.change.scoped("pane", value)),
-            Moves::Tab => to(self.change.scoped("tab", value)),
+            Moves::Pane => to(self.change.scoped(Kind::Pane, value)),
+            Moves::Tab => to(self.change.scoped(Kind::Tab, value)),
             Moves::Registration => self.table(&self.ids.registrations, value),
             Moves::Checkout => self.table(&self.ids.checkouts, value),
             Moves::Fold => {
@@ -332,8 +332,8 @@ impl Mapper<'_> {
         if let Some(id) = table.get(value) {
             return Mapped::To(id.clone());
         }
-        let theirs = format!("remote:{}:", self.change.new_owner_was);
-        if value.starts_with("workspace:") || value.starts_with(&theirs) {
+        let theirs = crate::address::device_of(value) == Some(self.change.new_owner_was.as_str());
+        if value.starts_with("workspace:") || theirs {
             Mapped::Drop
         } else {
             Mapped::Same
@@ -1068,14 +1068,12 @@ const MACHINE_FIELDS: &[&str] = &[
 /// is not read.
 fn still_naming(value: &Value, change: &OwnerChange, at: &str) -> Option<String> {
     let old_id = change.new_owner_was.as_str();
-    let qualified = format!("remote:{old_id}:");
+
     // A new owner known by its node id keeps that id as the owner's.
     let alias = old_id != change.new_owner;
     // A sleeping project's fold names the project after its own prefix.
     let carries = |text: &str| {
-        text.strip_prefix("asleep/")
-            .unwrap_or(text)
-            .starts_with(&qualified)
+        crate::address::device_of(text.strip_prefix("asleep/").unwrap_or(text)) == Some(old_id)
     };
     let is_alias = |text: &str| {
         alias

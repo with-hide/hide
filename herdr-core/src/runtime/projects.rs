@@ -704,7 +704,7 @@ impl Runtime {
                 *panes = panes
                     .iter()
                     .filter_map(|pane| {
-                        let named = super::remote_pane_source_id(node, pane).map(str::to_owned);
+                        let named = crate::address::pane_of(pane, node).map(str::to_owned);
                         unnamed += usize::from(named.is_none());
                         named
                     })
@@ -2317,7 +2317,7 @@ impl Runtime {
             .flat_map(|checkout| &checkout.tabs)
             .flat_map(|tab| &tab.panes)
             .filter_map(|pane| match device {
-                Some(device) => super::remote_pane_source_id(device, &pane.id).map(str::to_owned),
+                Some(device) => crate::address::pane_of(&pane.id, device).map(str::to_owned),
                 None => Some(pane.id.clone()),
             })
             .collect()
@@ -2340,7 +2340,7 @@ impl Runtime {
             .checkout_pane_ids(device.as_deref(), &checkout_path)
             .into_iter()
             .map(|pane| match device.as_deref() {
-                Some(device) => crate::session_sync::remote_pane_id(device, &pane),
+                Some(device) => crate::address::scoped_pane_id(device, &pane),
                 None => pane,
             })
             .collect::<HashSet<_>>();
@@ -2798,7 +2798,7 @@ impl Runtime {
             let inside = inside
                 .into_iter()
                 .map(|pane| match device.as_deref() {
-                    Some(device) => crate::session_sync::remote_pane_id(device, &pane),
+                    Some(device) => crate::address::scoped_pane_id(device, &pane),
                     None => pane,
                 })
                 .collect::<HashSet<_>>();
@@ -2847,7 +2847,7 @@ impl Runtime {
                     panes.extend(checkout.tabs.iter().flat_map(|tab| &tab.panes).filter_map(
                         |pane| match device {
                             Some(device) => {
-                                super::remote_pane_source_id(device, &pane.id).map(str::to_owned)
+                                crate::address::pane_of(&pane.id, device).map(str::to_owned)
                             }
                             None => Some(pane.id.clone()),
                         },
@@ -3199,7 +3199,7 @@ impl Runtime {
                 .flat_map(|tab| &tab.panes)
                 .any(|pane| {
                     let id = match device {
-                        Some(device) => super::remote_pane_source_id(device, &pane.id),
+                        Some(device) => crate::address::pane_of(&pane.id, device),
                         None => Some(pane.id.as_str()),
                     };
                     id.is_none_or(|id| !closed_pane_ids.iter().any(|closed| closed == id))

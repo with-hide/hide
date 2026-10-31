@@ -8,6 +8,8 @@ import { initializeInterfaceI18n } from "./i18n/instance";
 import { RELATION_ANSWER_TIMEOUT_MS } from "./lineage";
 import { PaneAskMark, PaneHeadChildren, PaneHeaderBand, PanePrChip, PaneRecordButton } from "./PaneHeaderBand";
 import type { AgentRow, PaneBand, PaneHeader, PaneFocusRequest, SessionPull, SnapshotRest, Workspace } from "./snapshot";
+import { localDeviceId } from "./snapshot";
+import { LOCAL } from "../test/legacyAgentRow";
 import { legacyAgentRow } from "../test/legacyAgentRow";
 import { sessionPull } from "../test/sessionPull";
 import { useShellStore } from "./store";
@@ -38,7 +40,10 @@ async function mount(value = header, agents: AgentRow[] = [], options: { rest?: 
   Element.prototype.scrollIntoView = () => {};
   initializeInterfaceI18n("en");
   useUiStore.setState({relation: null});
-  useShellStore.setState({agents, rest: options.rest ?? {status: {pane_focus_request: null}} as SnapshotRest});
+  const rest = options.rest ?? {status: {pane_focus_request: null}} as SnapshotRest;
+  // The core names every row's machine; a fixture row that names none is this one's.
+  for (const agent of agents) if (agent.device_id === LOCAL) agent.device_id = localDeviceId(rest);
+  useShellStore.setState({agents, rest});
   const events: Parameters<DispatchFn>[0][] = [];
   const actions = createActions(event => {events.push(event); return true;});
   const container = document.createElement("div");
@@ -379,7 +384,7 @@ it("marks a nested raised agent as a descendant", async () => {
 it("blocks Open on a raised descendant whose device is not connected and says why", async () => {
   const pane = "remote:mini:pane:w1:p2";
   const band = header.band!;
-  const {container, unmount} = await mount({ ...header, band: { ...band, action: {pane_id: pane, label: "자식 검증"}, raised: { ...band.raised!, raised_pane_id: pane, pane_id: pane, open_pane_id: pane } } });
+  const {container, unmount} = await mount({ ...header, band: { ...band, action: {pane_id: pane, label: "자식 검증"}, raised: { ...band.raised!, raised_pane_id: pane, pane_id: pane, open_pane_id: pane, open_device_id: "mini" } } });
   try {
     await act(async () => useShellStore.setState({rest: {status: {pane_focus_request: null, remote: [{target_id: "mini", state: "unreachable", message: "ssh: connect to host mini port 22: Connection refused"}]}} as unknown as SnapshotRest}));
     expect(container.querySelector<HTMLButtonElement>("[data-pane-band-open]")!.disabled).toBe(true);
@@ -414,6 +419,7 @@ async function mountChip(paneId: string, agents: AgentRow[]) {
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
   vi.stubGlobal("ResizeObserver", class { observe() {} unobserve() {} disconnect() {} });
   initializeInterfaceI18n("en");
+  for (const agent of agents) if (agent.device_id === LOCAL) agent.device_id = "";
   useShellStore.setState({ agents, rest: { status: { pane_focus_request: null } } as SnapshotRest });
   const actions = createActions(() => true);
   const container = document.createElement("div");
@@ -518,8 +524,8 @@ it.each([["hq3mini", "a dialed device"], ["b06a260a-6c14-5287-9caf-672044350d94"
   initializeInterfaceI18n("en");
   const core = "14ad0319-60d7-5a7c-ae5a-f71550dc8a60";
   const pane = `remote:${target}:pane:w1:p4`;
-  const agent = legacyAgentRow({ id: "a", pane_id: pane, identity_label: "Fix the login", agent_kind: "claude", session_id: "s-1" });
-  expect(agent.device_id).toBeUndefined();
+  // The core names the row's device on the row itself.
+  const agent = legacyAgentRow({ id: "a", pane_id: pane, device_id: target, device_pane_id: "w1:p4", identity_label: "Fix the login", agent_kind: "claude", session_id: "s-1" });
   useShellStore.getState().applyFrame({ type: "snapshot", payload: { revision: 1, rest: {
     navigator: { devices: [{ id: core, kind: "local" }, { id: target, kind: "remote" }] },
     status: { pane_focus_request: null, remote: [{ target_id: target, state: "connected", message: null, herdr_version: null, session: { agents: [agent] } }] },

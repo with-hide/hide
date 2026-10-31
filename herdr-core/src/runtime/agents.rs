@@ -472,7 +472,7 @@ impl Runtime {
                     false,
                 );
             }
-            source_pane_id = remote_pane_source_id(&target_id, &pane_id).map(str::to_owned);
+            source_pane_id = crate::address::pane_of(&pane_id, &target_id).map(str::to_owned);
             if source_pane_id.is_none() {
                 fail_request!(
                     "remote.control.invalid_pane_scope",
@@ -622,7 +622,7 @@ impl Runtime {
                     .active_tab_ids
                     .get(&checkout.id)
                     .or_else(|| checkout.tabs.first().and_then(|tab| tab.id.as_ref()))
-                    .and_then(|tab| remote_tab_source_id(&target_id, tab));
+                    .and_then(|tab| crate::address::tab_of(tab, &target_id));
                 match (tab, &checkout.owner_workspace_id) {
                     (Some(tab), _) => RemoteControlAction::FocusTab {
                         tab_id: tab.to_owned(),
@@ -666,7 +666,7 @@ impl Runtime {
                     );
                     return false;
                 }
-                let Some(source_id) = remote_tab_source_id(&target_id, &tab_id) else {
+                let Some(source_id) = crate::address::tab_of(&tab_id, &target_id) else {
                     self.report_remote_failure(
                         report,
                         &target_id,
@@ -812,7 +812,7 @@ impl Runtime {
                     );
                     return false;
                 }
-                let Some(source_id) = remote_tab_source_id(&target_id, &tab_id) else {
+                let Some(source_id) = crate::address::tab_of(&tab_id, &target_id) else {
                     self.report_remote_failure(
                         report,
                         &target_id,
@@ -933,7 +933,7 @@ impl Runtime {
             .flat_map(|checkout| checkout.tabs.iter())
             .flat_map(|tab| tab.panes.iter().map(move |pane| (tab, pane)))
             .filter_map(|(tab, pane)| {
-                let source = remote_pane_source_id(&target_id, &pane.id)?;
+                let source = crate::address::pane_of(&pane.id, &target_id)?;
                 let selected = match &action {
                     RemoteControlAction::Pane(PaneControlAction::Close { pane_id }) => {
                         pane_id == source
@@ -941,7 +941,7 @@ impl Runtime {
                     RemoteControlAction::CloseTab { tab_id } => {
                         tab.id
                             .as_deref()
-                            .and_then(|id| remote_tab_source_id(&target_id, id))
+                            .and_then(|id| crate::address::tab_of(id, &target_id))
                             == Some(tab_id.as_str())
                     }
                     _ => false,
@@ -964,13 +964,13 @@ impl Runtime {
                 RemoteControlAction::CloseTab { tab_id } => {
                     tab.id
                         .as_deref()
-                        .and_then(|id| remote_tab_source_id(&target_id, id))
+                        .and_then(|id| crate::address::tab_of(id, &target_id))
                         == Some(tab_id.as_str())
                 }
                 _ => false,
             })
             .flat_map(|tab| tab.panes.iter())
-            .filter_map(|pane| remote_pane_source_id(&target_id, &pane.id).map(str::to_owned))
+            .filter_map(|pane| crate::address::pane_of(&pane.id, &target_id).map(str::to_owned))
             .collect();
         let approved_peers = session
             .workspaces
@@ -980,7 +980,7 @@ impl Runtime {
             .flat_map(|tab| &tab.panes)
             .filter(|pane| pane.requires_close_confirmation && pane.failed_terminal_id.is_none())
             .filter_map(|pane| {
-                let source = remote_pane_source_id(&target_id, &pane.id)?;
+                let source = crate::address::pane_of(&pane.id, &target_id)?;
                 scope_pane_ids.contains(&source.to_owned()).then_some(())?;
                 Some(crate::recent_closed::capture::ClosePeer {
                     pane_id: source.to_owned(),
@@ -1003,12 +1003,12 @@ impl Runtime {
             .flat_map(|tab| tab.panes.iter().map(move |pane| (tab, pane)))
             .filter(|(tab, pane)| match &action {
                 RemoteControlAction::Pane(PaneControlAction::Close { pane_id }) => {
-                    remote_pane_source_id(&target_id, &pane.id) == Some(pane_id.as_str())
+                    crate::address::pane_of(&pane.id, &target_id) == Some(pane_id.as_str())
                 }
                 RemoteControlAction::CloseTab { tab_id } => {
                     tab.id
                         .as_deref()
-                        .and_then(|id| remote_tab_source_id(&target_id, id))
+                        .and_then(|id| crate::address::tab_of(id, &target_id))
                         == Some(tab_id.as_str())
                 }
                 _ => false,
@@ -1305,7 +1305,7 @@ impl Runtime {
     /// mark, by Herdr's own pane id: those whose saved read record or
     /// completion names it. The lineage writer writes the ones that do not.
     pub(crate) fn wanted_server_marks(&self, target_id: Option<&str>) -> BTreeMap<String, String> {
-        let (connection, agents, prefix) = match target_id {
+        let (connection, agents, device) = match target_id {
             None => (
                 &self.local_read_connection,
                 self.snapshot.navigator.agents.as_slice(),
@@ -1325,11 +1325,7 @@ impl Runtime {
                 else {
                     return BTreeMap::new();
                 };
-                (
-                    connection,
-                    session.agents.as_slice(),
-                    Some(remote_pane_id_prefix(target_id)),
-                )
+                (connection, session.agents.as_slice(), Some(target_id))
             }
         };
         let names = |server: &Option<String>| server.as_deref() == Some(connection.mark.as_str());
@@ -1347,9 +1343,9 @@ impl Runtime {
                         .is_some_and(|completion| names(&completion.server))
             })
             .filter_map(|agent| {
-                let pane_id = match &prefix {
+                let pane_id = match device {
                     None => agent.pane_id.as_str(),
-                    Some(prefix) => agent.pane_id.strip_prefix(prefix.as_str())?,
+                    Some(device) => crate::address::pane_of(&agent.pane_id, device)?,
                 };
                 Some((pane_id.to_owned(), connection.mark.clone()))
             })
@@ -1479,7 +1475,6 @@ impl Runtime {
                     })
             })
         });
-        let prefix = remote_pane_id_prefix(target_id);
         let live_pane_ids = session
             .workspaces
             .iter()
@@ -1494,26 +1489,26 @@ impl Runtime {
         let lineage_pruned = crate::agent_state::prune_lineage_expansion(
             &mut self.snapshot.ui_state.expanded_agent_pane_ids,
             &session.agents,
-            ReadRecordScope::Remote(&prefix),
+            ReadRecordScope::Remote(target_id),
         ) | crate::agent_state::prune_lineage_expansion(
             &mut self.snapshot.ui_state.sessions_expanded_agent_pane_ids,
             &session.agents,
-            ReadRecordScope::Remote(&prefix),
+            ReadRecordScope::Remote(target_id),
         );
         self.apply_pane_completions(
             &mut session.agents,
             Some(target_id),
-            ReadRecordScope::Remote(&prefix),
+            ReadRecordScope::Remote(target_id),
             Some(&live_pane_ids),
         );
         self.apply_pane_launches(
             &session.agents,
-            ReadRecordScope::Remote(&prefix),
+            ReadRecordScope::Remote(target_id),
             Some(&live_pane_ids),
         );
         self.lay_start_prompts(
             &mut session.agents,
-            ReadRecordScope::Remote(&prefix),
+            ReadRecordScope::Remote(target_id),
             Some(&live_pane_ids),
         );
         self.lay_unseen_views(&mut session.agents);
@@ -1526,7 +1521,7 @@ impl Runtime {
         let mut changes = crate::agent_state::prune_read_records(
             &mut records,
             &live_pane_ids,
-            ReadRecordScope::Remote(&prefix),
+            ReadRecordScope::Remote(target_id),
         );
         let connection = self.read_connection(Some(target_id));
         connection
@@ -1553,7 +1548,7 @@ impl Runtime {
             &mut self.snapshot.ui_state.pane_text_scales,
             &session.workspaces,
             &session.agents,
-            ReadRecordScope::Remote(&prefix),
+            ReadRecordScope::Remote(target_id),
         );
         if changes.is_empty() && !pruned && !lineage_pruned {
             // These copies were just projected from Herdr, not the previous
@@ -1842,7 +1837,7 @@ impl Runtime {
         {
             // A remote pane's answer is fixed and was decided where it was
             // projected; the local hook state says nothing about it.
-            if crate::agent_hooks::is_remote_pane(&pane.id) {
+            if crate::address::is_device_scoped(&pane.id) {
                 continue;
             }
             let tokens = self
@@ -1900,7 +1895,7 @@ impl Runtime {
                 .flat_map(|workspace| workspace.checkouts.iter())
                 .flat_map(|checkout| checkout.tabs.iter())
                 .flat_map(|tab| tab.panes.iter())
-                .filter(|pane| !crate::agent_hooks::is_remote_pane(&pane.id))
+                .filter(|pane| !crate::address::is_device_scoped(&pane.id))
                 .map(|pane| (pane.id.as_str(), pane.children.as_ref())),
             &previous_badges,
         );
@@ -1979,7 +1974,7 @@ impl Runtime {
         let mut beside = None;
         for agent in &self.snapshot.navigator.agents {
             if !agent.delegated
-                || crate::agent_hooks::is_remote_pane(&agent.pane_id)
+                || crate::address::is_device_scoped(&agent.pane_id)
                 || self.manually_placed_pane(&agent.pane_id)
                 || beside
                     .get_or_insert_with(|| self.beside_spawned_panes())
@@ -2940,7 +2935,7 @@ impl Runtime {
         // created tab is and a split as a split Hide asked for is, so its
         // checkout holds it before Herdr's layout lists it
         // (`created_pane_place`). A device's pane is drawn by that device.
-        if !crate::agent_hooks::is_remote_pane(source_pane_id) {
+        if !crate::address::is_device_scoped(source_pane_id) {
             match (tab_id, checkout_path.as_deref(), source_workspace_id) {
                 (Some(tab_id), Some(path), Some(workspace_id)) => {
                     self.draw_created_tab(super::drawn_ahead::ProvisionalTab {
@@ -3294,7 +3289,7 @@ impl Runtime {
         {
             if placement_capacity {
                 store.agent_placements.insert(
-                    crate::session_sync::remote_tab_id(target_id, tab),
+                    crate::address::scoped_tab_id(target_id, tab),
                     (key, group.as_deref().map(str::to_owned), area.clone(), None),
                 );
             } else {
@@ -3451,7 +3446,7 @@ impl Runtime {
                     self.note_terminal_choice(
                         target_id,
                         request_id,
-                        crate::session_sync::remote_tab_id(target_id, tab_id),
+                        crate::address::scoped_tab_id(target_id, tab_id),
                     );
                     self.record_created_device_tab(target_id, tab_id, cwd);
                 }
@@ -3733,13 +3728,13 @@ impl Runtime {
             };
             agent.spawned_from_pane_id = match agent.spawned_from_machine_id.as_deref() {
                 None => Some(match origin {
-                    Some(target) => crate::session_sync::remote_pane_id(target, parent),
+                    Some(target) => crate::address::scoped_pane_id(target, parent),
                     None => parent.to_owned(),
                 }),
                 Some(machine) if self.node == machine => Some(parent.to_owned()),
                 Some(machine) => machine_targets
                     .get(machine)
-                    .map(|target| crate::session_sync::remote_pane_id(target, parent)),
+                    .map(|target| crate::address::scoped_pane_id(target, parent)),
             };
             if agent.spawned_from_machine_id.is_some() && agent.spawned_from_pane_id.is_none() {
                 unresolved.insert(agent.pane_id.clone());

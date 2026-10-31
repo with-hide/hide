@@ -11,7 +11,7 @@ import { Elapsed } from "./components/elapsed";
 import { Hint } from "./components/ui/tooltip";
 import { useInterfaceTranslation } from "./i18n/client";
 import { cn } from "./lib/utils";
-import { localDeviceId, type PaneBand, type PaneHeader, type PaneRow, type SnapshotRest, type AgentRow, type Device, type RemoteStatus } from "./snapshot";
+import { type PaneBand, type PaneHeader, type PaneRow, type SnapshotRest, type AgentRow, type Device, type RemoteStatus } from "./snapshot";
 import { remoteStateText } from "./coreError";
 import { machineName } from "./screenMachine";
 import { useShellStore } from "./store";
@@ -23,7 +23,7 @@ import { useRelationProgress } from "./PaneRelations";
 import { markTone, markWords, recordWords, waitWord } from "./agentRow";
 import { allAgents, agentsByPane } from "./paneAgents";
 import { paneChildren, type PaneChildren } from "./paneChildren";
-import { sessionOfAgentOn } from "./sessionWork";
+import { sessionOfAgent } from "./sessionWork";
 import { statusText } from "./agentStatus";
 import { StatusMark } from "./components/status-mark";
 import { PaneTurnCard, requestWords, type TurnCardTrigger } from "./PaneTurnCard";
@@ -125,7 +125,8 @@ export function PaneHeaderBand({ paneId, header, actions }: { paneId: string; he
   // A Conductor's mission line already names the work its children do.
   const waitingOnChildren = band || off || missionLine ? null : header?.waiting_on_children ?? null;
   // Before any early return: a hook runs on every render.
-  const unreachable = useUnreachable(band?.action?.pane_id ?? null);
+  // A raised ask names the device its pane is on; any other band's pane is looked up in the rows.
+  const unreachable = useUnreachable(band?.raised ? { device: band.raised.open_device_id ?? null } : band?.action ? { pane: band.action.pane_id } : null);
   const workingLine = header?.working ? <div className="pointer-events-none absolute inset-x-0 top-0 z-10 h-[calc(2*var(--size-hairline))] bg-agent-working" data-pane-working-line={paneId} /> : null;
   if (off || (!band && !children && !ownProgress && !request && !finished && !waitingOnChildren)) return workingLine;
   const tracked = band?.action && relation?.sourcePaneId === paneId && relation.targetPaneId === band.action.pane_id ? relation : null;
@@ -315,11 +316,11 @@ function notConnectedText(remote: readonly RemoteStatus[] | undefined, devices: 
 }
 
 /** Why a pane on a device that is not connected cannot be opened now, or null when it can (B8). */
-function useUnreachable(paneId: string | null): string | null {
+function useUnreachable(target: { device: string | null } | { pane: string } | null): string | null {
   const { t } = useInterfaceTranslation();
   return useShellStore((state) => {
-    if (paneId === null) return null;
-    const device = remoteTargetOfPane(state.rest, paneId);
+    if (target === null) return null;
+    const device = "device" in target ? target.device : remoteTargetOfPane(state.rest, target.pane);
     if (device === null || deviceConnected(state.rest, device)) return null;
     return notConnectedText(state.rest?.status?.remote, state.rest?.navigator?.devices, device, t);
   });
@@ -355,8 +356,7 @@ export function PaneRecordButton({ paneId, title, product, actions, children, pl
   const { t } = useInterfaceTranslation();
   const agent = agentsByPane(usePaneAgents()).get(paneId);
   // Only this machine's id, so the head redraws on its own pane's changes rather than on every snapshot.
-  const localId = useShellStore((s) => localDeviceId(s.rest));
-  const session = agent ? sessionOfAgentOn(agent, localId) : null;
+  const session = agent ? sessionOfAgent(agent) : null;
   if (!session) return <>{plain}</>;
   // The mark's words ride the button's name, which the mark sits inside (status-marks B36).
   const words = agent ? [markWords(t, agent), recordWords(t, agent), agent.record_summary].filter(Boolean).join(" · ") : null;

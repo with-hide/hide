@@ -2019,3 +2019,83 @@ fn a_pre_check_reaches_the_record_as_its_session_and_a_failed_or_closed_start_is
     );
     assert_eq!(runtime.links_work.pre_checks[0].request_id, "r-cap-2");
 }
+
+/// The same Herdr pane id on this machine and on a device names two panes:
+/// a device worker's parent is that device's lead, found by the device's own
+/// address, and never this machine's pane of the same raw id.
+#[test]
+fn a_device_workers_parent_is_named_by_its_own_devices_pane_not_a_local_one_of_the_same_id() {
+    let mut runtime = runtime();
+    let scoped = |pane: &str| crate::address::scoped_pane_id("remote", pane);
+    runtime.snapshot.navigator.workspaces = vec![record_workspace(
+        crate::node::TEST_NODE,
+        "workspace:local",
+        &["lead"],
+    )];
+    runtime.snapshot.status.remote = vec![remote_session(vec![record_workspace(
+        "remote",
+        "remote:remote:workspace:w",
+        &[&scoped("lead"), &scoped("worker")],
+    )])];
+    let both: SessionSnapshotPayload = serde_json::from_value(serde_json::json!({"agents":[
+        {"id":"lead","pane_id":"lead","agent":"claude","agent_status":"idle","state_change_seq":1,
+         "lineage_session":crate::engine::tokens::session_digest("lead-native")},
+        {"id":"worker","pane_id":"worker","agent":"claude","agent_status":"idle","state_change_seq":1,
+         "lineage_session":crate::engine::tokens::session_digest("worker-native")},
+    ]}))
+    .unwrap();
+    let local: SessionSnapshotPayload = serde_json::from_value(serde_json::json!({"agents":[
+        {"id":"lead","pane_id":"lead","agent":"claude","agent_status":"idle","state_change_seq":1,
+         "lineage_session":crate::engine::tokens::session_digest("local-native")},
+    ]}))
+    .unwrap();
+    runtime.observe_delivery(crate::node::TEST_NODE, &local, Some("scope"), None);
+    runtime.observe_delivery("remote", &both, None, None);
+    let lead = runtime.delivery_observations[&scoped("lead")].actor.clone();
+    let local_lead = runtime.delivery_observations["lead"].actor.clone();
+    assert!(!lead.same_identity(&local_lead));
+    let record = |id: &str, actor: &crate::delivery::Actor, machine: &str| {
+        let mut record = spawned_record(id, "claude", &format!("{id}-native"), None);
+        record.name = None;
+        record.machine = machine.into();
+        record.host_scope = if machine == "remote" {
+            "remote"
+        } else {
+            "scope"
+        }
+        .into();
+        record.pane = crate::address::pane_of(&actor.pane_id, machine)
+            .unwrap_or(&actor.pane_id)
+            .to_owned();
+        record.actor = actor.clone();
+        record
+    };
+    runtime.delivery_ledger = Ok(Arc::new(crate::delivery::ledger::Ledger {
+        agents: vec![
+            record("agent-1", &local_lead, crate::node::TEST_NODE),
+            record("agent-2", &lead, "remote"),
+        ],
+        next_id: 3,
+        ..Default::default()
+    }));
+    let mut device_worker = record_agent(&scoped("worker"), "worker-native", Some(&scoped("lead")));
+    device_worker.identity_label = "Device work".into();
+    runtime.snapshot.navigator.agents = vec![record_agent("lead", "local-native", None)];
+    runtime.snapshot.status.remote[0]
+        .session
+        .as_mut()
+        .unwrap()
+        .agents = vec![
+        record_agent(&scoped("lead"), "lead-native", None),
+        device_worker,
+    ];
+
+    let fact = runtime
+        .link_parent_facts()
+        .into_iter()
+        .find(|fact| fact.session_id == "worker-native")
+        .expect("the device worker's parent is known");
+    assert_eq!(fact.parent_device_id, "remote");
+    assert_eq!(fact.parent_session_id, "lead-native");
+    assert_eq!(fact.parent_name, "agent-2");
+}

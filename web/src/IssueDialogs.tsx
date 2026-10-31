@@ -168,7 +168,7 @@ export function StartIssueDialog({ actions, workspace, task, onClose }: { action
   useEffect(() => {
     if (created?.phase !== "ready") return;
     if (created.agent_phase) useUiStore.getState().setWatchedTask(created.id);
-    if (created.pane_id) followStartedPane(created.pane_id);
+    if (created.pane_id) followStartedPane(created.pane_id, created.device_id);
     onClose();
   }, [created, onClose]);
 

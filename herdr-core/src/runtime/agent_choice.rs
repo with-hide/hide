@@ -215,10 +215,9 @@ impl Runtime {
     /// Forgets the launch records of a device's panes once the device is
     /// removed: no pass of its own will settle them again.
     pub(super) fn forget_device_launches(&mut self, device: &str) {
-        let prefix = remote_pane_id_prefix(device);
         let launches = &mut self.snapshot.ui_state.pane_launches;
         let count = launches.len();
-        launches.retain(|pane_id, _| !pane_id.starts_with(&prefix));
+        launches.retain(|pane_id, _| !crate::address::is_pane_of(pane_id, device));
         if launches.len() != count {
             self.persist_ui_state();
         }

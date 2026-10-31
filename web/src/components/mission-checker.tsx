@@ -58,7 +58,7 @@ function useCheckerWays(checker: MissionChecker) {
   const row = useShellStore((s) => (checker.pane_id ? agentsByPane(allAgents(s.agents, s.rest?.status?.remote)).get(checker.pane_id) ?? null : null));
   // Derived outside the selector: it builds a new session each call, which a selector must not return.
   const rest = useShellStore((s) => s.rest);
-  const session = useMemo(() => (row ? sessionOfAgent(row, rest) : null), [row, rest]);
+  const session = useMemo(() => (row ? sessionOfAgent(row) : null), [row, rest]);
   return { row, session };
 }
 

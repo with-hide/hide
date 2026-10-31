@@ -309,7 +309,6 @@ async fn attached(
         Arc::clone(&state.attachments),
         connection,
         state.boundary.node().as_str(),
-        &state.terminals.own_prefix,
     );
     // A move of the core is this machine's hided's, beside the core's
     // traffic.

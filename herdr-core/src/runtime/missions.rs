@@ -601,11 +601,7 @@ impl Runtime {
         let Caller::Pane(pane) = Caller::parse(caller) else {
             return Err("agent_pane_required".into());
         };
-        let pane = if device == self.node.as_str() || pane.starts_with("remote:") {
-            pane.to_owned()
-        } else {
-            format!("remote:{device}:pane:{pane}")
-        };
+        let pane = crate::address::named_pane_id(self.node.as_str(), device, pane);
         let actor = self
             .delivery_observations
             .get(&pane)
@@ -1076,11 +1072,12 @@ impl Runtime {
     }
 
     fn conductor_of(&self, device: &str, pane: &str, actor: Actor) -> Conductor {
-        let raw = pane.rsplit_once(":pane:").map_or(pane, |(_, raw)| raw);
         let session = self
             .machine_agents(device)
             .iter()
-            .find(|agent| agent.pane_id == raw || agent.pane_id == pane)
+            .find(|agent| {
+                crate::address::same_pane(self.node.as_str(), device, &agent.pane_id, pane)
+            })
             .and_then(|agent| {
                 Some(crate::links::ledger::SessionIdentity {
                     device_id: device.to_owned(),
@@ -1166,11 +1163,8 @@ impl Runtime {
                         && hide_session::Agent::from_kind(&agent.agent_kind)
                             .is_some_and(|kind| kind.as_str() == session.agent)
                 })?;
-                let pane = if device == self.node.as_str() {
-                    row.pane_id.clone()
-                } else {
-                    format!("remote:{device}:pane:{}", row.pane_id)
-                };
+                // A device row already carries its scoped id, which stands as it is.
+                let pane = crate::address::named_pane_id(self.node.as_str(), device, &row.pane_id);
                 let actor = self.delivery_observations.get(&pane)?.actor.clone();
                 // A pane that already conducts another open mission keeps it.
                 self.missions

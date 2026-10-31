@@ -219,7 +219,7 @@ fn actor_for(agent: &ProjectedAgent, device: &str, on_node: bool) -> Result<Acto
         pane_id: if on_node {
             agent.pane_id.clone()
         } else {
-            format!("remote:{device}:pane:{}", agent.pane_id)
+            crate::address::scoped_pane_id(device, &agent.pane_id)
         },
         // Herdr's own identifier for the agent: its name, else its pane. It
         // keys the pane, never labels it (`AgentRecord::wire_name`).
@@ -1139,7 +1139,7 @@ fn spawn(
             let pane_id = if on_node {
                 pane.to_owned()
             } else {
-                crate::session_sync::remote_pane_id(&child_device, pane)
+                crate::address::scoped_pane_id(&child_device, pane)
             };
             runtime
                 .lock()
@@ -1276,9 +1276,7 @@ fn beside_target(
     if actor.code_owned() || checkout.is_empty() {
         return Err(refused("beside_needs_agent_pane"));
     }
-    let pane = actor
-        .pane_id
-        .strip_prefix(&format!("remote:{}:pane:", actor.device_id))
+    let pane = crate::address::pane_of(&actor.pane_id, &actor.device_id)
         .unwrap_or(&actor.pane_id)
         .to_owned();
     let Some((repo, branch, path)) = target else {
