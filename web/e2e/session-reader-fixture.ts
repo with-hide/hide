@@ -181,7 +181,8 @@ const { DatabaseSync } = require("node:sqlite");
 const config = JSON.parse(fs.readFileSync(path.join(path.dirname(process.argv[1]), "opencode-double.json"), "utf8"));
 const argv = process.argv.slice(2);
 fs.appendFileSync(config.launches, JSON.stringify(argv) + "\n");
-if (!(argv[0] === "-s" && argv[1] === config.id && argv.length === 2)) {
+// A wake selects the session first and may add options after it, such as the default full-access option.
+if (!(argv[0] === "-s" && argv[1] === config.id)) {
   fs.mkdirSync(path.dirname(config.database), { recursive: true });
   const db = new DatabaseSync(config.database);
   db.exec(config.schema);

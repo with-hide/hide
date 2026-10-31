@@ -341,7 +341,9 @@ static int native_session(int argc, char **argv) {
   fclose(file);
   destination[size] = 0;
   if (!complete || !size || strchr(destination, '\n') || strchr(destination, '\r')) return 1;
-  int resume = argc == 3 && strcmp(argv[1], resume_flag) == 0;
+  /* A restart puts its selector first and may add options after it, such as
+     the full-access option Hide adds by default. */
+  int resume = argc >= 3 && strcmp(argv[1], resume_flag) == 0;
   if (resume) {
     file = fopen(destination, "rb");
     if (!file) return 1;
