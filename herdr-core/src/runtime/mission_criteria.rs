@@ -405,8 +405,8 @@ impl Runtime {
                         .ok_or("mission_checkout_unknown")?;
                     let moved = next.folder.as_deref() != Some(folder.as_str());
                     next.folder = Some(folder);
-                    let mut effect =
-                        next.criteria[at].record(pass, evidence, summary, commit, rerun, recorder)?;
+                    let mut effect = next.criteria[at]
+                        .record(pass, evidence, summary, commit, rerun, recorder)?;
                     effect.changed |= moved;
                     effect
                 } else {

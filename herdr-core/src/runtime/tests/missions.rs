@@ -444,7 +444,11 @@ fn a_conductors_conversation_resumed_in_another_pane_conducts_its_mission() {
     // A resumed conversation gets no prompt of its own: one letter waits
     // to tell it to go on, and seeing the pane again adds none.
     let events = |runtime: &Runtime| -> Vec<crate::missions::WakeEvent> {
-        runtime.missions.book.missions[0].wakes.iter().map(|wake| wake.event).collect()
+        runtime.missions.book.missions[0]
+            .wakes
+            .iter()
+            .map(|wake| wake.event)
+            .collect()
     };
     assert_eq!(events(&runtime), [crate::missions::WakeEvent::Resumed]);
     seen(&mut runtime, "resumed", "sender-session");

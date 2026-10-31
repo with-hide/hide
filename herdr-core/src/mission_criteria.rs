@@ -639,8 +639,15 @@ mod tests {
             line.record(true, None, None, None, false, by(Role::Worker)),
             Err("mission_commit_required".into())
         );
-        line.record(true, None, None, Some(A[..7].into()), false, by(Role::Worker))
-            .unwrap();
+        line.record(
+            true,
+            None,
+            None,
+            Some(A[..7].into()),
+            false,
+            by(Role::Worker),
+        )
+        .unwrap();
         assert!(line.met(Some(A)));
         assert_eq!(line.shown(Some(B)), CriterionState::Open);
         assert!(!line.met(Some(B)));
@@ -652,7 +659,14 @@ mod tests {
     fn a_failed_check_gets_one_rerun_per_commit_and_a_repeat_changes_nothing() {
         let mut line = Criterion::new("check", CriterionKind::Check);
         let fail = |line: &mut Criterion, commit: &str, rerun: bool| {
-            line.record(false, None, None, Some(commit.into()), rerun, by(Role::Worker))
+            line.record(
+                false,
+                None,
+                None,
+                Some(commit.into()),
+                rerun,
+                by(Role::Worker),
+            )
         };
         assert!(fail(&mut line, A, false).unwrap().changed);
         // The same failure sent again is the same record.
