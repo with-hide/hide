@@ -128,6 +128,37 @@ impl Screens {
             .map_or(0, |frames| frames.iter().filter(|(_, full)| *full).count())
     }
 
+    /// Waits for `pane` to draw `text` in the frames after its first
+    /// `after`, read together, since one printed line may come in more than
+    /// one frame.
+    fn wait_drawn_after(&self, pane: &str, after: usize, text: &str) {
+        let deadline = Instant::now() + HANG_LIMIT;
+        let mut frames = self.lock();
+        loop {
+            let drawn: Vec<u8> = frames
+                .get(pane)
+                .into_iter()
+                .flatten()
+                .skip(after)
+                .flat_map(|(bytes, _)| bytes.iter().copied())
+                .collect();
+            let drawn = text_of(&drawn);
+            if drawn.contains(text) {
+                return;
+            }
+            let left = deadline.saturating_duration_since(Instant::now());
+            assert!(
+                !left.is_zero(),
+                "pane {pane} never drew {text:?}; it drew:\n{drawn}"
+            );
+            frames = self
+                .changed
+                .wait_timeout(frames, left)
+                .unwrap_or_else(PoisonError::into_inner)
+                .0;
+        }
+    }
+
     fn count(&self, pane: &str) -> usize {
         self.lock().get(pane).map_or(0, Vec::len)
     }
@@ -380,9 +411,12 @@ fn request(
 }
 
 /// A line that prints `<word>-node` without that text in the line itself.
+/// On Windows the caret keeps the typed line from holding it; a variable
+/// would not do twice in one shell, since cmd expands `%B%` when it reads
+/// the line, before its `set` runs, and prints the word set before.
 fn print_node(word: &str) -> Vec<u8> {
     if cfg!(windows) {
-        format!("set B={word}& call echo %B%-node\r").into_bytes()
+        format!("echo {word}^-node\r").into_bytes()
     } else {
         format!("B={word}; echo \"$B-node\"\r").into_bytes()
     }
@@ -469,8 +503,8 @@ fn a_started_pane_shows_its_first_full_screen_takes_input_and_converges() {
 }
 
 /// A redraw, and a view at the grid the pane already runs at, each bring a
-/// full frame from the holder, and the frames of what the program prints
-/// after either reach the screen: the node waits for a full frame after both, and a holder answers
+/// full frame from the holder, and what the program prints after either is
+/// drawn: the node waits for a full frame after both, and a holder answers
 /// a same-size resize with nothing, so each asks for the screen with a
 /// redraw instead.
 #[test]
@@ -495,14 +529,20 @@ fn a_redraw_on_a_holder_pane_draws_its_screen_again_and_what_follows() {
         let drawn = node.screens.count("r1");
         node.type_into("r1", &print_node(word));
         let printed = format!("{word}-node");
-        wait_until("the program's answer", || {
-            node.text("r1").contains(&printed)
-        });
-        // The frames that carry it reach the screen: a frame the holder
-        // diffs from its own grid need not hold the line as one text.
-        wait_until("a frame after the answer", || {
-            node.screens.count("r1") > drawn
-        });
+        let started = Instant::now();
+        loop {
+            let text = node.text("r1");
+            if text.contains(&printed) {
+                break;
+            }
+            assert!(
+                started.elapsed() < HANG_LIMIT,
+                "the program never printed {printed:?}; the pane holds:\n{text}"
+            );
+            #[allow(clippy::disallowed_methods)] // a read, not an event to wait on
+            thread::sleep(Duration::from_millis(50));
+        }
+        node.screens.wait_drawn_after("r1", drawn, &printed);
     }
     node.holders().terminate(&node.service, "r1").unwrap();
 }
