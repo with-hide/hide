@@ -992,8 +992,10 @@ impl Runtime {
                 }
                 // Taken back to work from a finish, it is not finished again
                 // by Hide on the pull requests it holds now.
+                // The mark names the pull requests it held when it was taken
+                // back, so one named in the same command finishes it again.
                 if current.nodes[index].status.finished() && next.status == NodeStatus::Working {
-                    next.note_handled(next.resumed_cause());
+                    next.note_handled(current.nodes[index].resumed_cause());
                 }
                 let reads = reads_branch(current.status, &next);
                 let target = self.missions.book.get_mut(&id).ok_or("mission_unknown")?;

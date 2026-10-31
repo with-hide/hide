@@ -4769,3 +4769,50 @@ fn the_operators_resume_reopens_a_closed_mission_or_changes_nothing() {
     assert_eq!(mission_status(&runtime), MissionStatus::Running);
     assert_eq!(node_view(&runtime, "fix").status, NodeStatus::Working);
 }
+
+/// A node the Conductor takes back to work is not finished again on the
+/// pull request it held, and is once the follow-up it names in the same
+/// command merges.
+#[test]
+fn a_node_taken_back_to_work_is_finished_again_only_on_its_next_pull_request() {
+    let fixture = conducting();
+    let mut runtime = fixture.runtime.lock().unwrap();
+    let now = crate::runtime::unix_milliseconds();
+    running_criteria_mission(&mut runtime);
+    met_fix(&mut runtime);
+    let merged = |runtime: &mut Runtime, pulls: Vec<PullRequestSnapshot>| {
+        let read = github(pulls, false);
+        runtime.github = read.clone();
+        runtime.note_mission_pulls(crate::node::TEST_NODE, &read);
+        runtime.drive_mission_health(now);
+    };
+    merged(
+        &mut runtime,
+        vec![pull(7, HEAD, PullRequestBadge::Merged, None)],
+    );
+    assert_eq!(node_view(&runtime, "fix").status, NodeStatus::Done);
+
+    // Back to work with its follow-up named in the same command.
+    command(
+        &mut runtime,
+        "sender",
+        json!({"op": "node", "node": "fix", "patch": {"status": "working", "pr": 8}}),
+    )
+    .unwrap();
+    merged(
+        &mut runtime,
+        vec![
+            pull(7, HEAD, PullRequestBadge::Merged, None),
+            pull(8, HEAD, PullRequestBadge::Open, None),
+        ],
+    );
+    assert_eq!(node_view(&runtime, "fix").status, NodeStatus::Working);
+    merged(
+        &mut runtime,
+        vec![
+            pull(7, HEAD, PullRequestBadge::Merged, None),
+            pull(8, HEAD, PullRequestBadge::Merged, None),
+        ],
+    );
+    assert_eq!(node_view(&runtime, "fix").status, NodeStatus::Done);
+}
