@@ -2,16 +2,12 @@
 //! fragments drawn on an xterm of their own, whatever it drew before, show
 //! what the program's own output shows on a fresh one (the expected screen
 //! comes from xterm, not from the holder), and drawing them answers and
-//! reports nothing.
+//! reports nothing. Text, colors, attributes and links are compared cell
+//! by cell.
 
 use hide_holder_protocol::{ClientMessage, Size};
 
 use crate::support::{Draw, Home, Script, Shown, draw, fragments_after};
-
-/// Less than the holder's one second bound on synchronized output, with room
-/// for the open and the program's write: a takeover sooner than this must
-/// still find the screen held.
-const HELD_WITHIN: std::time::Duration = std::time::Duration::from_millis(700);
 
 /// What a receiver drew before: the alternate screen, a scroll region,
 /// origin mode, line drawing characters, insert mode, colors, a hidden
@@ -21,16 +17,19 @@ const PRIOR: &[u8] = b"\x1b[?1049h\x1b[3;6r\x1b[?6h\x1b(0\x1b[4h\x1b[1;31;44mqqq
     \x1b[2;2Hgarbage\x1b[?25l\x1b[?5h\x1b[7m";
 const PRIOR_SIZE: (u16, u16) = (40, 12);
 
-/// A screen with styles, wide characters, a hyperlink, a moved cursor and
-/// a cursor shape, which also turns on the input modes and asks questions
-/// a fragment must carry neither of.
+/// A screen with styles, wide and combined characters, a hyperlink, a
+/// moved cursor and a cursor shape, which also turns on the input modes and
+/// asks questions a fragment must carry neither of.
 fn first_screen() -> Vec<u8> {
     [
         "\x1b[H\x1b[2J",
         "\x1b[1;32mgreen bold\x1b[0m plain \x1b[38;2;10;20;30mrgb\x1b[0m\r\n",
-        "wide: \u{4e2d}\u{6587} done\r\n",
+        "wide: \u{4e2d}\u{6587} done, combined: e\u{301}\u{1f600} after\r\n",
         "\x1b]8;;https://example.com\x1b\\link\x1b]8;;\x1b\\ after\r\n",
         "\x1b[4:3mcurly\x1b[0m \x1b[9mstrike\x1b[0m \x1b[7minverse\x1b[0m\r\n",
+        "\x1b[2mdim\x1b[0m \x1b[3mitalic\x1b[0m \x1b[5mblink\x1b[0m \x1b[53mover\x1b[0m ",
+        "\x1b[4:2mdouble\x1b[0m \x1b[8mhidden\x1b[0m \x1b[38;5;123;48;2;200;100;50mmixed",
+        "\x1b[7m reversed\x1b[0m\r\n",
         "\x1b[?1000h\x1b[?1006h\x1b[?2004h\x1b[?1004h\x1b[>1u\x1b[6n\x1b[c",
         "\x1b[5 q",
         "\x1b[10;5Hmarker-one",
@@ -52,6 +51,10 @@ fn assert_same(candidate: &Shown, expected: &Shown, what: &str) {
     assert_eq!(
         candidate.cursor_visible, expected.cursor_visible,
         "{what}: the cursor's visibility differs"
+    );
+    assert_eq!(
+        candidate.styles, expected.styles,
+        "{what}: the colors, attributes or links differ"
     );
     assert!(
         candidate.data.is_empty(),
@@ -183,22 +186,14 @@ fn a_resize_and_a_takeover_during_synchronized_output_give_the_same_screen() {
     crate::support::wait_until("the half-drawn screen to be parsed", || {
         holder.read(10).0.contains("half drawn")
     });
-    let parsed = std::time::Instant::now();
     let mut second = holder.open();
-    let released = parsed.elapsed();
     script.go(2);
     let drawn = second.wait_for_drawn("marker-r1");
     let fragments = second.fragments[..drawn].to_vec();
     assert!(fragments[0].full, "{:?}", fragments[0]);
-    // Held while the program held its output: the first screen came once
-    // it ended it, unless the holder's bound passed first. On Windows
-    // ConPTY, not the program, decides what reaches the holder and when.
-    if cfg!(unix) && released < HELD_WITHIN {
-        assert!(
-            crate::support::contains(&fragments[0].bytes, b"far right"),
-            "a screen was drawn while the program held its output"
-        );
-    }
+    // Whether the first screen waited for the end of the synchronized
+    // output depends on how long this took against the holder's bound, so
+    // the wait itself is the pane's unit test, on instants it is given.
     let mut sent = vec![Draw::Bytes(script.steps[0].clone())];
     sent.push(Draw::Resize {
         cols: 100,
@@ -211,4 +206,29 @@ fn a_resize_and_a_takeover_during_synchronized_output_give_the_same_screen() {
         fragments_after(PRIOR, PRIOR_SIZE, &fragments),
     ]);
     assert_same(&shown[1], &shown[0], "after a resize and a takeover");
+}
+
+/// A character newer than the receiver's width table: libghostty, like the
+/// program that wrote it, counts U+1FAE0 (Unicode 14) as two columns, while
+/// the web shell's xterm (the Unicode 11 table) counts one. The holder
+/// places every cell where the program put it, so what follows stays in the
+/// program's column and the receiver draws the glyph in the first of the two.
+#[test]
+fn text_after_a_character_newer_than_the_receivers_table_stays_where_the_program_put_it() {
+    let home = Home::new();
+    let script = Script::new(
+        &home,
+        vec!["\x1b[H\x1b[2Ja\u{1fae0}b marker-e".as_bytes().to_vec()],
+    );
+    let holder = script.start(&home);
+    let mut connection = holder.open();
+    let drawn = connection.wait_for_drawn("marker-e");
+    let shown = draw(&[fragments_after(
+        PRIOR,
+        PRIOR_SIZE,
+        &connection.fragments[..drawn],
+    )]);
+    // `a` in column 0, the character in 1 and 2, `b` in 3.
+    assert_eq!(shown[0].lines[0], "a\u{1fae0} b marker-e");
+    assert_eq!(shown[0].cursor, (13, 0));
 }

@@ -178,6 +178,27 @@ pub fn start_with(
     start_folder: &Path,
     cwd: &Path,
 ) -> Start {
+    start_themed(
+        program_path,
+        socket,
+        program,
+        environment,
+        start_folder,
+        cwd,
+        None,
+    )
+}
+
+/// As [`start_with`], given the node's theme at the start (`--theme`).
+pub fn start_themed(
+    program_path: &Path,
+    socket: &Path,
+    program: &[OsString],
+    environment: &[(&str, &OsString)],
+    start_folder: &Path,
+    cwd: &Path,
+    theme: Option<&hide_holder_protocol::Theme>,
+) -> Start {
     let log = socket.with_extension("log");
     let mut command = ResidentCommand::new(program_path);
     command
@@ -187,9 +208,11 @@ pub fn start_with(
         .args(["--rows", "24", "--cols", "80", "--id", "test-pane", "--log"])
         .arg(&log)
         .arg("--cwd")
-        .arg(cwd)
-        .arg("--")
-        .args(program);
+        .arg(cwd);
+    if let Some(theme) = theme {
+        command.arg("--theme").arg(theme.to_arg());
+    }
+    command.arg("--").args(program);
     for (key, value) in environment {
         command.env(key, value);
     }
@@ -440,6 +463,8 @@ pub struct Script {
     pub folder: PathBuf,
     /// Every step's bytes, in order.
     pub steps: Vec<Vec<u8>>,
+    /// The theme the holder is started with.
+    pub theme: Option<hide_holder_protocol::Theme>,
 }
 
 impl Script {
@@ -449,7 +474,17 @@ impl Script {
         for (index, step) in steps.iter().enumerate() {
             std::fs::write(folder.join(format!("step-{index}")), step).unwrap();
         }
-        Self { folder, steps }
+        Self {
+            folder,
+            steps,
+            theme: None,
+        }
+    }
+
+    /// The holder is started with `theme`, as a node passes its own.
+    pub fn with_theme(mut self, theme: hide_holder_protocol::Theme) -> Self {
+        self.theme = Some(theme);
+        self
     }
 
     /// Lets the role play step `step`.
@@ -462,7 +497,10 @@ impl Script {
         std::fs::read(self.folder.join("heard")).unwrap_or_default()
     }
 
-    /// Waits until the program was sent `expected`, and nothing else.
+    /// Waits until the program was sent `expected`, and nothing else. On
+    /// Windows ConPTY changes what reaches the program, so no test there
+    /// compares it byte for byte.
+    #[cfg(unix)]
     pub fn wait_heard(&self, expected: &[u8]) {
         let mut heard = Vec::new();
         wait_until(
@@ -487,12 +525,20 @@ impl Script {
         let folder = home.prepare(current_version(), &source());
         let role: OsString = "script".into();
         let script: OsString = self.folder.clone().into();
-        start_ready(
+        let socket = home.socket("p");
+        let place = socket.parent().unwrap().to_owned();
+        match start_themed(
             &folder.program,
-            &home.socket("p"),
+            &socket,
             &role_program("script"),
             &[(ROLE, &role), (SCRIPT, &script)],
-        )
+            &place,
+            &place,
+            self.theme.as_ref(),
+        ) {
+            Start::Ready(holder) => holder,
+            Start::Failed(reason) => panic!("the holder did not start: {reason}"),
+        }
     }
 }
 
@@ -506,6 +552,8 @@ pub enum Draw {
 #[derive(Debug, PartialEq, Eq)]
 pub struct Shown {
     pub lines: Vec<String>,
+    /// Each row's cells as runs of how they look (`draw.mjs`).
+    pub styles: Vec<String>,
     pub cursor: (u64, u64),
     pub cursor_visible: bool,
     pub cursor_shape: (String, Option<bool>),
@@ -529,7 +577,18 @@ fn unhex(text: &str) -> Vec<u8> {
 /// Draws each terminal, `(cols, rows, what)`, on an xterm of its own: the
 /// headless xterm in `tests/xterm`, which `scripts/verify-web.sh install
 /// holder` (or the whole install) installs, run by Node.
+/// The pane's default colors when no theme was given: libghostty's own,
+/// which the holder answers color questions with and writes out when it
+/// resolves reverse video.
+pub const PARSER_DEFAULTS: (&str, &str) = ("#ffffff", "#000000");
+
 pub fn draw(terminals: &[(u16, u16, Vec<Draw>)]) -> Vec<Shown> {
+    draw_with(terminals, PARSER_DEFAULTS)
+}
+
+/// As [`draw`], with the pane's default colors `defaults`, foreground and
+/// background, as `#rrggbb`.
+pub fn draw_with(terminals: &[(u16, u16, Vec<Draw>)], defaults: (&str, &str)) -> Vec<Shown> {
     let package = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/xterm");
     assert!(
         package.join("node_modules/@xterm/headless").is_dir(),
@@ -540,6 +599,7 @@ pub fn draw(terminals: &[(u16, u16, Vec<Draw>)]) -> Vec<Shown> {
         "terminals": terminals.iter().map(|(cols, rows, steps)| serde_json::json!({
             "cols": cols,
             "rows": rows,
+            "defaults": { "fg": defaults.0, "bg": defaults.1 },
             "steps": steps.iter().map(|step| match step {
                 Draw::Bytes(bytes) => serde_json::json!({ "write": hex(bytes) }),
                 Draw::Resize { cols, rows } => serde_json::json!({ "resize": [cols, rows] }),
@@ -578,6 +638,12 @@ pub fn draw(terminals: &[(u16, u16, Vec<Draw>)]) -> Vec<Shown> {
                 // program leaves them unwritten: the same to the eye.
                 .map(|line| line.as_str().unwrap().trim_end().to_owned())
                 .collect(),
+            styles: screen["styles"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|row| row.as_str().unwrap().to_owned())
+                .collect(),
             cursor: (screen["x"].as_u64().unwrap(), screen["y"].as_u64().unwrap()),
             cursor_visible: screen["cursorVisible"].as_bool().unwrap(),
             cursor_shape: (
@@ -615,18 +681,27 @@ pub fn fragments_after(
 }
 
 impl Connection {
-    /// Waits for the fragment that draws `marker`, the last thing a script
-    /// step writes, so it shows everything the step wrote; answers how many
-    /// fragments came by then.
+    /// Waits until the fragments so far, drawn on an xterm, show `marker`,
+    /// the last thing a script step writes, so they show everything the
+    /// step wrote; answers how many fragments that took. A change's
+    /// fragment carries only the cells that changed, so the marker is
+    /// looked for on the drawn screen, not in the bytes.
     pub fn wait_for_drawn(&mut self, marker: &str) -> usize {
         let started = Instant::now();
+        let mut checked = 0;
         loop {
-            if let Some(index) = self
-                .fragments
-                .iter()
-                .position(|fragment| contains(&fragment.bytes, marker.as_bytes()))
-            {
-                return index + 1;
+            self.drain();
+            if self.fragments.len() > checked {
+                checked = self.fragments.len();
+                let first = self.fragments[0].size;
+                let shown = draw(&[fragments_after(
+                    b"",
+                    (first.cols, first.rows),
+                    &self.fragments,
+                )]);
+                if shown[0].lines.iter().any(|line| line.contains(marker)) {
+                    return checked;
+                }
             }
             assert!(
                 self.closed.is_none(),
@@ -660,8 +735,4 @@ impl Connection {
             self.take(Duration::from_millis(50));
         }
     }
-}
-
-pub fn contains(bytes: &[u8], wanted: &[u8]) -> bool {
-    bytes.windows(wanted.len()).any(|window| window == wanted)
 }

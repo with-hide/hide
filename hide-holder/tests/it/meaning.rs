@@ -111,7 +111,9 @@ fn theme() -> ClientMessage {
 /// No node is connected while the program asks: a question split across
 /// two writes, then several at once, are each answered once, in the order
 /// asked, by libghostty or the holder as `answers.rs` divides them, and what
-/// the path does not carry is not advertised.
+/// the path does not carry is not advertised. Started with no theme, the
+/// holder answers a color question with libghostty's own default rather
+/// than leaving the program to wait for an answer.
 #[cfg(unix)]
 #[test]
 fn questions_are_answered_once_each_in_order_with_no_node_connected() {
@@ -134,7 +136,7 @@ fn questions_are_answered_once_each_in_order_with_no_node_connected() {
         holder.read(5).0.contains("asked")
     });
     script.wait_heard(
-        b"\x1b[1;11R\x1b[?62;22c\x1b[8;24;80t\
+        b"\x1b[1;11R\x1b[?62;22c\x1b[8;24;80t\x1b]10;rgb:ffff/ffff/ffff\x07\
           \x1bP1+r544E=787465726D2D323536636F6C6F72\x1b\\",
     );
 
@@ -144,11 +146,26 @@ fn questions_are_answered_once_each_in_order_with_no_node_connected() {
     connection.wait_closed();
     script.go(2);
     script.wait_heard(
-        b"\x1b[1;11R\x1b[?62;22c\x1b[8;24;80t\
+        b"\x1b[1;11R\x1b[?62;22c\x1b[8;24;80t\x1b]10;rgb:ffff/ffff/ffff\x07\
           \x1bP1+r544E=787465726D2D323536636F6C6F72\x1b\\\
           \x1b]10;rgb:1010/2020/3030\x07\x1b]10;rgb:abab/cdcd/efef\x07\
           \x1b]10;rgb:1010/2020/3030\x07",
     );
+}
+
+/// The node's theme comes with the holder's start, so the program's first
+/// color question, asked before any node connects, is answered with it; a
+/// color the theme leaves out is answered with libghostty's default.
+#[cfg(unix)]
+#[test]
+fn a_color_question_asked_before_any_node_connects_is_answered_with_the_starting_theme() {
+    let home = Home::new();
+    let ClientMessage::Theme(theme) = theme() else {
+        unreachable!()
+    };
+    let script = Script::new(&home, vec![b"\x1b]10;?\x07\x1b]11;?\x07".to_vec()]).with_theme(theme);
+    let _holder = script.start(&home);
+    script.wait_heard(b"\x1b]10;rgb:1010/2020/3030\x07\x1b]11;rgb:0000/0000/0000\x07");
 }
 
 /// On Windows the program's questions go to ConPTY first, which answers
