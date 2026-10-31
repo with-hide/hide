@@ -31,6 +31,7 @@ use serde_json::json;
 
 use crate::Config;
 use crate::log::Log;
+use crate::record::Claim;
 
 /// How long ending the pane's session may take before it is reported as
 /// unconfirmed.
@@ -163,13 +164,22 @@ pub struct Holder {
     /// closed with.
     ending: Arc<Mutex<Option<Closed>>>,
     opening: Arc<Opening>,
+    /// The pane's record, which the holder writes why the pane ended into.
+    record: Option<Claim>,
 }
 
 impl Holder {
     /// Starts the program on a new PTY and listens at the socket. An error
     /// leaves nothing running.
-    /// `job` names the job that holds the holder, for the log.
-    pub fn start(config: &Config, log: Log, job: &str) -> Result<Self, String> {
+    /// `job` names the job that holds the holder, for the log; `record` is
+    /// the pane's record, told the program once it runs and `running` once
+    /// the socket listens.
+    pub fn start(
+        config: &Config,
+        log: Log,
+        job: &str,
+        record: Option<Claim>,
+    ) -> Result<Self, String> {
         #[cfg(windows)]
         portable_pty::win::verify_runtime().map_err(|error| error.to_string())?;
         let mut session = Session::new().map_err(|error| format!("the pane's session: {error}"))?;
@@ -202,6 +212,11 @@ impl Holder {
             session: Some(session),
             log: log.clone(),
         };
+        if let Some(record) = &record {
+            record
+                .program(program)
+                .map_err(|reason| format!("the pane's record: {reason}"))?;
+        }
         drop(pair.slave);
         let master = pair.master;
         let reader = master
@@ -219,6 +234,11 @@ impl Holder {
             )
         })?;
         let closer = listener.closer();
+        if let Some(record) = &record {
+            record
+                .running()
+                .map_err(|reason| format!("the pane's record: {reason}"))?;
+        }
         let session = started.keep();
 
         let (sender, events) = mpsc::channel();
@@ -292,6 +312,7 @@ impl Holder {
             pty_closed: false,
             ending,
             opening,
+            record,
         })
     }
 
@@ -601,6 +622,9 @@ impl Holder {
         if !self.close_pty() {
             status = ExitCode::FAILURE;
         }
+        // Before the connection hears it, so a node told the pane ended
+        // reads the same end in the record.
+        self.write_end(&closed);
         if let Some(connection) = self.current.take() {
             self.publish(None);
             connection.close(closed.clone());
@@ -631,6 +655,28 @@ impl Holder {
             ],
         );
         status
+    }
+
+    /// Writes why the pane ended into its record. One it cannot write is
+    /// logged with the end it meant to write, so the next node reads the end
+    /// from the log rather than taking the holder for one that was killed.
+    fn write_end(&self, closed: &Closed) {
+        let Some(record) = &self.record else { return };
+        let reason = hide_holder_protocol::record::EndReason::of_close(closed.reason);
+        let mut end = hide_holder_protocol::record::End::new(reason, closed.detail.clone());
+        end.exit_code = closed.exit_code;
+        end.left = closed.left.clone();
+        if let Err(error) = record.end(end) {
+            self.log.event(
+                hide_holder_protocol::record::UNWRITTEN_EVENT,
+                &[
+                    ("reason", reason.name().into()),
+                    ("exit_code", json!(closed.exit_code)),
+                    ("left", json!(closed.left)),
+                    ("error", error.as_str().into()),
+                ],
+            );
+        }
     }
 
     /// Closes the PTY on a thread of its own while the reader goes on taking
