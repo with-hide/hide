@@ -964,14 +964,14 @@ impl Runtime {
         // Removing a device removes Hide's own record of it: its
         // project registrations, expanded folders and file tabs. Its
         // panes, agents and folders are not touched.
-        let scope = format!("remote:{}:", device_id);
+        let theirs = |id: &str| crate::address::device_of(id) == Some(device_id);
         let device_folds = [
             format!("cleanup/{}", device_id),
             crate::project_context::no_agents_fold_key(device_id),
         ];
         self.snapshot.ui_state.session_open_folds.retain(|key| {
             let project = key.strip_prefix("asleep/").unwrap_or(key);
-            !project.starts_with(&scope) && !device_folds.contains(key)
+            !theirs(project) && !device_folds.contains(key)
         });
         let registrations = self.snapshot.ui_state.workspace_registrations.len();
         self.snapshot
@@ -986,7 +986,7 @@ impl Runtime {
             .editor
             .tabs
             .iter()
-            .filter(|tab| tab.checkout_id.starts_with(&scope))
+            .filter(|tab| theirs(&tab.checkout_id))
             .count();
         self.retire_device_editor_tabs(device_id);
         self.forget_device_views(device_id);
@@ -1086,13 +1086,12 @@ impl Runtime {
             DeviceCommand::Remove { device_id } => {
                 // A file tab's unsaved draft lives in the shell, which
                 // Settings' Remove asks to store first; this command cannot.
-                let scope = format!("remote:{device_id}:");
                 if self
                     .snapshot
                     .editor
                     .tabs
                     .iter()
-                    .any(|tab| tab.checkout_id.starts_with(&scope))
+                    .any(|tab| crate::address::device_of(&tab.checkout_id) == Some(device_id.as_str()))
                 {
                     return Err("device_files_open".into());
                 }

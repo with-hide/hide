@@ -957,10 +957,9 @@ impl Runtime {
     }
 
     fn agent_sleep_tab_panes(&self, tab_id: &str) -> Vec<String> {
-        let device = tab_id
-            .strip_prefix("remote:")
-            .and_then(|rest| rest.split_once(":tab:"))
-            .map(|(device, _)| device);
+        let device = crate::address::Scoped::parse(tab_id)
+            .filter(|scoped| scoped.kind == crate::address::Kind::Tab)
+            .map(|scoped| scoped.device);
         self.sleep_workspaces(device)
             .iter()
             .flat_map(|workspace| workspace.checkouts.iter())

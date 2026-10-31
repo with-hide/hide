@@ -450,13 +450,12 @@ impl Runtime {
     /// drops its closed items. A dirty tab's draft stays in the shell's own
     /// store, where a draft no tab stands for is offered for export (B26).
     pub(super) fn retire_device_editor_tabs(&mut self, device_id: &str) {
-        let scope = format!("remote:{device_id}:");
         while let Some(index) = self
             .snapshot
             .editor
             .tabs
             .iter()
-            .position(|tab| tab.checkout_id.starts_with(&scope))
+            .position(|tab| crate::address::device_of(&tab.checkout_id) == Some(device_id))
         {
             self.retire_editor_tab(index);
         }
@@ -464,7 +463,7 @@ impl Runtime {
         self.recent_closed
             .retain(|item| item.device_id(node) != device_id);
         self.sync_recent_closed_snapshot();
-        self.forget_device_opens(&scope);
+        self.forget_device_opens(device_id);
     }
 
     /// Makes a preview tab an ordinary tab in the same slot. Returns whether

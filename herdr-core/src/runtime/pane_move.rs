@@ -1,5 +1,6 @@
 //! Existing-terminal relocation. Reservations cover both tabs, a saved intent
 //! precedes every external effect, and recovery only reads authoritative state.
+use crate::address::{Kind, Scoped};
 use super::*;
 use crate::engine::{Engine, SharedEngine, Wait, Zoom};
 use crate::sidebar::SessionSnapshotPayload;
@@ -156,7 +157,7 @@ impl Runtime {
                 || op.publication_barrier.is_some())
                 && (op.intent.request.source.tab_id == tab
                     || op.intent.result_tab.as_ref().is_some_and(|id| {
-                        self.pane_move_public(&op.intent.request.workspace.device_id, "tab", id)
+                        self.pane_move_public(&op.intent.request.workspace.device_id, Kind::Tab, id)
                             == tab
                     })
                     || op
@@ -215,22 +216,17 @@ impl Runtime {
     fn pane_move_raw<'a>(
         &self,
         device: &str,
-        kind: &str,
+        kind: Kind,
         value: &'a str,
     ) -> Result<&'a str, String> {
         if device == self.node.as_str() {
             return Ok(value);
         }
-        value
-            .strip_prefix(&format!("remote:{device}:{kind}:"))
+        Scoped::strip(value, device, kind)
             .ok_or_else(|| "The pane or tab belongs to another device".into())
     }
-    fn pane_move_public(&self, device: &str, kind: &str, value: &str) -> String {
-        if device == self.node.as_str() {
-            value.into()
-        } else {
-            format!("remote:{device}:{kind}:{value}")
-        }
+    fn pane_move_public(&self, device: &str, kind: Kind, value: &str) -> String {
+        crate::address::id_on(self.node.as_str(), device, kind, value)
     }
     fn validate_pane_move(&self, request: &Request) -> Result<(String, String, bool), String> {
         if request.request_id.is_empty() || request.request_id.len() > 128 {
@@ -373,7 +369,7 @@ impl Runtime {
         .ok_or("The source native layout is unavailable")?;
         Ok((
             terminal,
-            self.pane_move_raw(&key.0, "workspace", native_workspace)?
+            self.pane_move_raw(&key.0, Kind::Workspace, native_workspace)?
                 .to_owned(),
             source.panes.len() == 1,
         ))
@@ -742,7 +738,7 @@ impl Runtime {
                     if let Some(result) = &intent.result_tab {
                         let public = self.pane_move_public(
                             &intent.request.workspace.device_id,
-                            "tab",
+                            Kind::Tab,
                             result,
                         );
                         if !tabs.contains(&public) {
@@ -824,8 +820,8 @@ impl Runtime {
             intent.request.workspace.device_id.clone(),
             intent.request.workspace.checkout_path.clone(),
         );
-        let pane = self.pane_move_public(&key.0, "pane", raw_pane);
-        let tab = self.pane_move_public(&key.0, "tab", raw_tab);
+        let pane = self.pane_move_public(&key.0, Kind::Pane, raw_pane);
+        let tab = self.pane_move_public(&key.0, Kind::Tab, raw_tab);
         if let Some(store) = self.workspace_views.as_mut() {
             let view = store.views.entry(&key.0, &key.1);
             // Intermediate topology never chose a group or area. Apply the
@@ -1057,7 +1053,7 @@ impl Runtime {
                 .intent
                 .result_tab
                 .as_ref()
-                .map(|id| self.pane_move_public(device, "tab", id));
+                .map(|id| self.pane_move_public(device, Kind::Tab, id));
             let affected = |id: &str| {
                 id == source
                     || target == Some(id)
@@ -1212,23 +1208,23 @@ const CALL_WAIT: Wait = Wait::Each(CALL_TIMEOUT);
 fn execute(engine: &dyn Engine, intent: &Intent, local: bool) -> Result<(), String> {
     let request = &intent.request;
     let device = &request.workspace.device_id;
-    let raw = |kind: &str, id: &str| -> Result<String, String> {
+    let raw = |kind: Kind, id: &str| -> Result<String, String> {
         if local {
             Ok(id.into())
         } else {
-            id.strip_prefix(&format!("remote:{device}:{kind}:"))
+            Scoped::strip(id, device, kind)
                 .map(str::to_owned)
                 .ok_or_else(|| "The target device changed".into())
         }
     };
-    let source = raw("pane", &request.source.pane_id)?;
-    let source_tab = raw("tab", &request.source.tab_id)?;
+    let source = raw(Kind::Pane, &request.source.pane_id)?;
+    let source_tab = raw(Kind::Tab, &request.source.tab_id)?;
     let mut current = source.clone();
     // Explicit off is harmless for a nonzoomed tab and never runs during drag.
     engine.set_zoom(CALL_WAIT, &source, Zoom::Off)?;
     if let Some((tab, pane, edge)) = request.destination.target() {
-        let tab = raw("tab", tab)?;
-        let pane = raw("pane", pane)?;
+        let tab = raw(Kind::Tab, tab)?;
+        let pane = raw(Kind::Pane, pane)?;
         if tab != source_tab {
             engine.set_zoom(CALL_WAIT, &pane, Zoom::Off)?;
         }
@@ -1313,12 +1309,12 @@ fn run(
                 let mut guard = runtime.lock().unwrap_or_else(|e| e.into_inner());
                 if guard.pane_move_raw(
                     &intent.request.workspace.device_id,
-                    "pane",
+                    Kind::Pane,
                     &intent.request.source.pane_id,
                 )? != pane
                     || guard.pane_move_raw(
                         &intent.request.workspace.device_id,
-                        "tab",
+                        Kind::Tab,
                         &intent.request.source.tab_id,
                     )? != tab
                     || workspace != intent.workspace_id
@@ -1328,12 +1324,12 @@ fn run(
                 if let Some((target_tab, target_pane, edge)) = intent.request.destination.target() {
                     let target_tab = guard.pane_move_raw(
                         &intent.request.workspace.device_id,
-                        "tab",
+                        Kind::Tab,
                         target_tab,
                     )?;
                     let target_pane = guard.pane_move_raw(
                         &intent.request.workspace.device_id,
-                        "pane",
+                        Kind::Pane,
                         target_pane,
                     )?;
                     let target_layout = payload
@@ -1562,25 +1558,21 @@ fn confirms(payload: &SessionSnapshotPayload, intent: &Intent, local: bool) -> b
     let Ok((pane, tab, _)) = locate(payload, &intent.terminal_id) else {
         return false;
     };
-    let raw = |kind: &str, id: &str| {
+    let raw = |kind: Kind, id: &str| {
         if local {
             Some(id.to_owned())
         } else {
-            id.strip_prefix(&format!(
-                "remote:{}:{kind}:",
-                intent.request.workspace.device_id
-            ))
-            .map(str::to_owned)
+            Scoped::strip(id, &intent.request.workspace.device_id, kind).map(str::to_owned)
         }
     };
     let Some(layout) = payload.layouts.iter().find(|layout| layout.tab_id == tab) else {
         return false;
     };
     if let Some((target_tab, target, edge)) = intent.request.destination.target() {
-        if raw("tab", target_tab).as_deref() != Some(tab) {
+        if raw(Kind::Tab, target_tab).as_deref() != Some(tab) {
             return false;
         }
-        let target = raw("pane", target);
+        let target = raw(Kind::Pane, target);
         if !payload.panes.iter().any(|pane| {
             Some(pane.pane_id.as_str()) == target.as_deref()
                 && pane.terminal_id == intent.target_terminal
@@ -1626,7 +1618,7 @@ fn confirms(payload: &SessionSnapshotPayload, intent: &Intent, local: bool) -> b
             }
         }
     } else {
-        layout.panes.len() == 1 && raw("tab", &intent.request.source.tab_id).as_deref() != Some(tab)
+        layout.panes.len() == 1 && raw(Kind::Tab, &intent.request.source.tab_id).as_deref() != Some(tab)
     }
 }
 

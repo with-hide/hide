@@ -709,7 +709,7 @@ impl SessionReplica {
             .collect::<Vec<_>>();
         for agent in &mut agents {
             let source_pane_id = agent.pane_id.clone();
-            agent.id = format!("remote:{target_id}:agent:{source_pane_id}");
+            agent.id = crate::address::scoped_id(target_id, crate::address::Kind::Agent, &source_pane_id);
             agent.pane_id = crate::address::scoped_pane_id(target_id, &source_pane_id);
             // A declaration without a machine stays within this device. A
             // machine-qualified declaration is resolved after every device's
