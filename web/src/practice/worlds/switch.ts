@@ -193,7 +193,7 @@ function snapshot(model: SwitchModel, nowMs: number): WorldSnapshot {
       ...view, open: true, documents: true, pinned: true, lane_called: model.calls, lane_calls: model.calls, lane_called_side: "view",
       layout: { root: { area: { id: "v1", active: display.id, displays: [display] } }, active_area: "v1", display_count: 1, limits: { areas: 4, depth: 3, displays: 32 } },
     };
-    const tab: EditorTabSnapshot = { id: EDITOR_TAB, workspace_id: place.project, checkout_id: `${place.project}:${place.branch}`, path, label, kind: "file", diff_committed: null, markdown_live: true, wrap: false, dirty: false, preview: true };
+    const tab: EditorTabSnapshot = { id: EDITOR_TAB, device_id: "local", workspace_id: place.project, checkout_id: `${place.project}:${place.branch}`, path, label, kind: "file", diff_committed: null, markdown_live: true, wrap: false, dirty: false, preview: true };
     const markdown = path.endsWith(".md");
     const document: EditorDocumentSnapshot = { path, language: markdown ? "markdown" : "typescript", document_kind: markdown ? "markdown" : "text", contents_utf8: CONTENTS[opened.path] ?? "", revision: "sha256:0", dirty: false, readonly_reason: null, conflict: null, save: null };
     frames.editor = { tabs: [tab], active_tab_id: EDITOR_TAB };

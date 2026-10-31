@@ -236,6 +236,8 @@ describe("row menus", () => {
   it("names the agents a deletion stops once, by name and state, beside the gate's warnings", () => {
     const pane = (id: string, identity: string | null, status: AgentStatusCode) => ({
       id,
+      device_id: "local",
+      device_pane_id: id,
       herdr_label: null,
       terminal_title: null,
       cwd: "/Users/example/hide.worktrees/feature",

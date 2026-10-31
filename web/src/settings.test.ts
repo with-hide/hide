@@ -141,9 +141,9 @@ describe("deviceRemovalLines", () => {
       "mini",
       [{ device_id: "mini" }, { device_id: "local" }],
       [
-        { id: "t1", checkout_id: "remote:mini:checkout:w1", dirty: true },
-        { id: "t2", checkout_id: "remote:mini:checkout:w2", dirty: false },
-        { id: "t3", checkout_id: "checkout:here", dirty: true },
+        { id: "t1", device_id: "mini", dirty: true },
+        { id: "t2", device_id: "mini", dirty: false },
+        { id: "t3", device_id: "local", dirty: true },
       ],
       [{ device: "mini" }, { device: "local" }, { device: null }],
     );
@@ -156,8 +156,8 @@ describe("deviceRemovalLines", () => {
 
   it("says a draft that was only exported leaves as that file, not as a stored draft (B44)", () => {
     const tabs = [
-      { id: "t1", checkout_id: "remote:mini:checkout:w1", dirty: true },
-      { id: "t2", checkout_id: "remote:mini:checkout:w1", dirty: true },
+      { id: "t1", device_id: "mini", dirty: true },
+      { id: "t2", device_id: "mini", dirty: true },
     ];
     expect(deviceRemovalLines("mini", [], tabs, [], (tabId) => tabId === "t1")).toEqual([
       "Hide forgets 0 registered projects and closes 2 file tabs from it here.",
@@ -302,9 +302,9 @@ describe("settings rules", () => {
 describe("unstoredDeviceDrafts (S5.5 B26, B44)", () => {
   it("names the device's tabs whose draft is only in the tab", () => {
     const tabs = [
-      { id: "t1", checkout_id: "remote:mac:checkout:w1", path: "/r/a.txt" },
-      { id: "t2", checkout_id: "remote:mac:checkout:w1", path: "/r/b.txt" },
-      { id: "t3", checkout_id: "local:checkout", path: "/r/a.txt" },
+      { id: "t1", device_id: "mac", path: "/r/a.txt" },
+      { id: "t2", device_id: "mac", path: "/r/b.txt" },
+      { id: "t3", device_id: "local", path: "/r/a.txt" },
     ];
     expect(unstoredDeviceDrafts("mac", tabs, new Set(["t2", "t3"]))).toEqual(["/r/b.txt"]);
     expect(unstoredDeviceDrafts("mac", tabs, new Set())).toEqual([]);
@@ -353,7 +353,7 @@ describe("the install kit rows (PRD device-parity B7, B8, B27)", () => {
 
 describe("in Korean", () => {
   it("words the removal summary, the sleep choices and a missing value in the interface language", () => {
-    const lines = deviceRemovalLinesIn("mini", [{ device_id: "mini" }], [{ id: "t1", checkout_id: "remote:mini:checkout:w1", dirty: true }], [{ device: "mini" }], () => false, korean);
+    const lines = deviceRemovalLinesIn("mini", [{ device_id: "mini" }], [{ id: "t1", device_id: "mini", dirty: true }], [{ device: "mini" }], () => false, korean);
     expect(lines).toEqual([
       "여기서 프로젝트 1개의 등록을 지우고, 열린 파일 탭 1개도 닫아요.",
       "저장하지 않은 초안 2개는 이 브라우저에 남아요. 저장하지 않은 초안 목록에서 내보내거나 버릴 수 있어요.",

@@ -1547,7 +1547,7 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
     async removeDevice(deviceId: string): Promise<string[]> {
       const state = useShellStore.getState();
       const keys = (state.editor?.tabs ?? [])
-        .filter((tab) => tab.checkout_id.startsWith(`remote:${deviceId}:`))
+        .filter((tab) => tab.device_id === deviceId)
         .map((tab) => tabBufferKey(state.daemon?.host_id, state.rest, tab))
         .filter((key): key is BufferKey => key !== null);
       await Promise.all(keys.map((key) => flushBuffer(key)));
@@ -2027,7 +2027,7 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
      */
     revealTask(paneId: string) {
       const agent = allPaneAgents(useShellStore.getState().agents, rest()?.status?.remote).find((row) => row.pane_id === paneId);
-      const session = agent ? sessionOfAgent(agent, rest()) : null;
+      const session = agent ? sessionOfAgent(agent) : null;
       const inFront = workspaceInFront() && !ui().overviewOpen;
       dispatch({ schema_version: 2, kind: "task_reveal", payload: { pane_id: paneId, ...(inFront && session ? { session } : {}) } });
       if (!inFront && session) this.openOverview(session.device_id, { panel: { kind: "record", session } });
@@ -2077,7 +2077,7 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
     openPaneInOverview(paneId: string) {
       const agent = allPaneAgents(useShellStore.getState().agents, rest()?.status?.remote).find((row) => row.pane_id === paneId);
       const deviceId = agent?.device_id ?? localDeviceId(rest());
-      const session = agent ? sessionOfAgent(agent, rest()) : null;
+      const session = agent ? sessionOfAgent(agent) : null;
       this.openOverview(deviceId, { view: "work" });
       // A pane whose session is not reported yet opens Work with nothing chosen (B10).
       if (!session) useShellStore.getState().noteDiagnostic(`overview: pane ${paneId} has no session to choose on the map`);

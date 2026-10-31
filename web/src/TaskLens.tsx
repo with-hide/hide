@@ -33,10 +33,9 @@ import { cn } from "./lib/utils";
 import { numberedPanes, numberOf } from "./numbering";
 import { allAgents as everyPaneAgent, agentsByPane } from "./paneAgents";
 import { rowPulls } from "./prMark";
-import { remoteTargetOfPane } from "./remote";
 import { machineName } from "./screenMachine";
 import { checkoutPathOfPane, sessionTreeLines } from "./sessionTree";
-import { sessionOfAgentOn } from "./sessionWork";
+import { sessionOfAgent } from "./sessionWork";
 import { commandLabel } from "./shortcutLabels";
 import { revealRow, sidebarFocusPane } from "./sidebarFocus";
 import type { SidebarTreeLine } from "./sidebarTree";
@@ -355,9 +354,7 @@ function TaskTree({ entry, lines, byPane, opened, selected, number, showProject,
 function TaskRow({ entry, open, selected, number, showProject, disabled, actions }: { entry: TaskEntry; open: boolean | null; selected: boolean; number: number | null; showProject: boolean; disabled: boolean; actions: Actions }) {
   const { t } = useInterfaceTranslation();
   const { agent, card, project } = entry;
-  // A primitive, so a snapshot that moves nothing of this row leaves it alone.
-  const localId = useShellStore((s) => localDeviceId(s.rest));
-  const session = useMemo(() => sessionOfAgentOn(agent, localId), [agent, localId]);
+  const session = useMemo(() => sessionOfAgent(agent), [agent]);
   const go = () => { if (!disabled) actions.openListedAgent(agent.pane_id); };
   const record = session ? () => actions.openSessionRecord(session) : null;
   const toggle = () => actions.toggleSessionTree(agent.pane_id);
@@ -643,12 +640,11 @@ const partsTitle = (parts: LineParts) => [parts.lead, parts.text, parts.tail].fi
  */
 function ChildRow({ parent, child, depth, place, open, selected, disabled, actions, workspace }: { parent: AgentRow; child: AgentRow; depth: number; place: TreePlace; open: boolean | null; selected: boolean; disabled: boolean; actions: Actions; workspace: string | null }) {
   const { t } = useInterfaceTranslation();
+  const session = useMemo(() => sessionOfAgent(child), [child]);
   // A primitive, so a snapshot that moves nothing of this row leaves it alone.
-  const localId = useShellStore((s) => localDeviceId(s.rest));
-  const session = useMemo(() => sessionOfAgentOn(child, localId), [child, localId]);
   const device = useShellStore((s) => {
-    const own = remoteTargetOfPane(s.rest, child.pane_id);
-    return own !== remoteTargetOfPane(s.rest, parent.pane_id) && own !== null ? machineName(s.rest?.navigator?.devices, own, t) : null;
+    const own = child.device_id;
+    return own !== parent.device_id && own !== localDeviceId(s.rest) ? machineName(s.rest?.navigator?.devices, own, t) : null;
   });
   const go = () => { if (!disabled) actions.openListedAgent(child.pane_id); };
   const record = session ? () => actions.openSessionRecord(session) : null;

@@ -32,7 +32,7 @@ function checkout(servers: { host: string; port: number }[]): Checkout {
     tabs: [{
       id: "tab:studio", workspace_id: "project:studio", checkout_id: "checkout:studio", label: "1", empty: false, delegated: false,
       panes: [{
-        id: "pane:studio", herdr_label: null, terminal_title: null, cwd: view.path,
+        id: "pane:studio", device_id: "studio", device_pane_id: "pane:studio", herdr_label: null, terminal_title: null, cwd: view.path,
         status_code: "unknown", requires_close_confirmation: false, requires_close_status_check: false,
         identity_label: null, servers,
       }],

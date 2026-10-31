@@ -290,7 +290,7 @@ function NewWorktreeDialog({ actions, workspace, onClose }: { actions: Actions; 
     // The core focused the created pane; the agent's answer, if one was
     // chosen, is reported by the task notice after this dialog is gone.
     if (task.agent_phase) useUiStore.getState().setWatchedTask(task.id);
-    if (task.pane_id) followStartedPane(task.pane_id);
+    if (task.pane_id) followStartedPane(task.pane_id, task.device_id);
     onClose();
   }, [task, onClose]);
 
