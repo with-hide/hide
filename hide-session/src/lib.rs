@@ -1021,10 +1021,12 @@ impl SessionLocator {
             }
         }
         candidates.sort_by_key(|(modified, _)| std::cmp::Reverse(*modified));
-        Ok(candidates
-            .into_iter()
-            .map(|(_, path)| path)
-            .find(|path| codex_session_cwd(path).as_deref() == Some(cwd)))
+        for (_, path) in candidates {
+            if codex_session_cwd(&path)?.as_deref() == Some(cwd) {
+                return Ok(Some(path));
+            }
+        }
+        Ok(None)
     }
 
     fn recent_codex_days(&self, budget: &mut DiscoveryBudget) -> Result<Vec<PathBuf>> {
@@ -1345,15 +1347,37 @@ pub(crate) fn read_bounded_line(
     Ok(Some(line))
 }
 
-/// Read the cwd from Codex's first session_meta line.
-pub fn codex_session_cwd(path: &Path) -> Option<String> {
-    let mut reader = BufReader::new(open_session_file(path).ok()?);
-    let first = read_bounded_line(&mut reader, SESSION_LINE_LIMIT_BYTES).ok()??;
-    let value: Value = serde_json::from_slice(&first).ok()?;
-    value
-        .pointer("/payload/cwd")
-        .and_then(Value::as_str)
-        .map(str::to_owned)
+/// Codex's first record, `session_meta`, the one that names the session's
+/// id and cwd. It cannot be passed over like a record further down: no
+/// other record names them. Codex writes it in tens of KB, so one over the
+/// record cap is refused as [`SessionError::Capacity`] rather than read as
+/// a session without one. `None` is a file that cannot be opened, holds no
+/// record, or starts with one that is not JSON.
+pub(crate) fn codex_session_meta(path: &Path) -> Result<Option<Value>> {
+    let Ok(file) = open_session_file(path) else {
+        return Ok(None);
+    };
+    let first = match read_bounded_line(&mut BufReader::new(file), SESSION_LINE_LIMIT_BYTES) {
+        Ok(first) => first,
+        Err(error) if error.kind() == io::ErrorKind::InvalidData => {
+            return Err(SessionError::Capacity {
+                resource: "line_bytes",
+                limit: SESSION_LINE_LIMIT_BYTES as u64,
+            });
+        }
+        Err(_) => return Ok(None),
+    };
+    Ok(first.and_then(|first| serde_json::from_slice(&first).ok()))
+}
+
+/// The cwd Codex's `session_meta` names ([`codex_session_meta`]).
+pub(crate) fn codex_session_cwd(path: &Path) -> Result<Option<String>> {
+    Ok(codex_session_meta(path)?.and_then(|value| {
+        value
+            .pointer("/payload/cwd")
+            .and_then(Value::as_str)
+            .map(str::to_owned)
+    }))
 }
 
 enum LineResult {
@@ -2424,7 +2448,13 @@ mod tests {
         let path = directory.path().join("session.jsonl");
         fs::write(&path, vec![b'x'; SESSION_LINE_LIMIT_BYTES + 1]).unwrap();
 
-        assert_eq!(codex_session_cwd(&path), None);
+        assert!(matches!(
+            codex_session_cwd(&path),
+            Err(SessionError::Capacity {
+                resource: "line_bytes",
+                limit
+            }) if limit == SESSION_LINE_LIMIT_BYTES as u64
+        ));
     }
 
     #[test]

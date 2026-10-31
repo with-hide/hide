@@ -572,6 +572,10 @@ pub(crate) fn locate(
             .collect(),
         _ => crate::jsonl_files(&directory, budget)?,
     };
+    // A header over the record cap cannot say whose session its file is.
+    // When no other file is the one asked for, that is the answer, not a
+    // session that is missing.
+    let mut oversized = None;
     for path in paths {
         if inside_root(home, agent, &path).is_err() {
             continue;
@@ -583,6 +587,13 @@ pub(crate) fn locate(
                     resource: "discovery_read_bytes",
                     limit: crate::SESSION_INCREMENT_READ_LIMIT_BYTES,
                 });
+            }
+            Err(error) if error.to_string() == "label_session_metadata_line_capacity" => {
+                oversized = Some(SessionError::Capacity {
+                    resource: "line_bytes",
+                    limit: SESSION_LINE_LIMIT_BYTES as u64,
+                });
+                continue;
             }
             Err(_) => continue,
         };
@@ -601,7 +612,7 @@ pub(crate) fn locate(
         .into_iter()
         .next()
         .map(|(_, path)| path)
-        .ok_or(SessionError::SessionFileMissing)?;
+        .ok_or_else(|| oversized.unwrap_or(SessionError::SessionFileMissing))?;
     crate::confirm_session_file(home, agent, &path, reported_id, Some(cwd))
         .map_err(|error| SessionError::Checkpoint(error.to_string()))?;
     Ok(path)

@@ -498,7 +498,7 @@ For that acceptance, the requested observer must be the actual caller; `--actor`
 Activity is the later of Herdr's status-transition time and the confirmed native session file's modification time.
 A local read and the device helper's `session_activity` use the same session ownership and root-confinement checks.
 Session lookup has one total budget of 10000 directory entries, including skipped extensions and unmatched names, 64 visited directories and 8 MiB of retained path bytes.
-Crossing a limit returns the path-free `session_capacity` outcome; the watch uses its existing status fallback and records the failure.
+Crossing a limit returns the path-free `session_capacity:<resource>:<limit>` outcome (a native header over the 256 KiB record cap is `session_capacity:line_bytes:262144`, never a session that is missing); the watch uses its existing status fallback and records the failure.
 Below those limits, reported identity and provider ownership take precedence over cwd fallback, and each tick samples fresh metadata.
 The helper returns only modification time and file size; conversation text, paths and native IDs do not appear in the activity answer.
 The helper acquires the platform's `OwnerWatch` before reading arguments, stdin or files and retains it through shutdown.

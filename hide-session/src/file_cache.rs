@@ -17,7 +17,7 @@ use std::sync::{Mutex, MutexGuard, OnceLock};
 
 type Kept<T> = Mutex<HashMap<PathBuf, (String, T)>>;
 
-static HEADERS: OnceLock<Kept<Option<PathBuf>>> = OnceLock::new();
+static HEADERS: OnceLock<Kept<Result<Option<PathBuf>, String>>> = OnceLock::new();
 static SESSIONS: OnceLock<Kept<Listed>> = OnceLock::new();
 
 /// A transcript's listed facts and where its read stopped; `None` for a file
@@ -31,16 +31,23 @@ pub(crate) fn keeps(agent: Agent) -> bool {
     matches!(agent, Agent::Claude | Agent::Codex)
 }
 
-/// The working directory a file's header names, kept while `path` holds
-/// `stamp`. Only a header that named a directory is kept: `None` cannot tell
-/// a file without one from a file that could not be opened, and the latter
-/// must be read again once it can be.
+/// The working directory a file's header names, or the reason its header
+/// is refused by rule, kept while `path` holds `stamp`. Only a header that
+/// named a directory or was refused for its bytes is kept: `None` cannot
+/// tell a file without one from a file that could not be opened, and the
+/// latter must be read again once it can be.
 pub(crate) fn header_cwd(
     path: &Path,
     stamp: Option<String>,
-    read: impl FnOnce() -> Option<PathBuf>,
-) -> Option<PathBuf> {
-    fetch(&HEADERS, path, stamp, |_| read(), |cwd| cwd.is_some())
+    read: impl FnOnce() -> Result<Option<PathBuf>, String>,
+) -> Result<Option<PathBuf>, String> {
+    fetch(
+        &HEADERS,
+        path,
+        stamp,
+        |_| read(),
+        |cwd| !matches!(cwd, Ok(None)),
+    )
 }
 
 /// The listed facts of a session file, kept while `path` holds `stamp`.
