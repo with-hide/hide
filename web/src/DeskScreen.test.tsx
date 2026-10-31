@@ -5,7 +5,7 @@ import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vites
 import { createActions } from "./actions";
 import { TooltipProvider } from "./components/ui/tooltip";
 import type { DeskAgent, DeskItem } from "./desk";
-import { DeskScreen } from "./DeskScreen";
+import { DeskScreen, DeskSidebarEntry } from "./DeskScreen";
 import { clientI18n } from "./i18n/translator";
 import type { DeskSection, SnapshotRest } from "./snapshot";
 import { useShellStore } from "./store";
@@ -41,7 +41,7 @@ const desk = (items: DeskItem[], state: DeskAgent["state"] = "ready"): DeskSecti
   host: { state: "ready", detail: null },
   conversation: { generation: 1, items, dropped: 0 },
   approvals_waiting: 0,
-  settings: { default_agent: "claude", location: "worktree", cap: 8 },
+  settings: { enabled: true, default_agent: "claude", location: "worktree", cap: 8 },
   lane: { pinned: false, kept: [] },
 });
 
@@ -87,6 +87,25 @@ describe("Desk's room", () => {
     if (!element) throw new Error(`missing ${selector}`);
     await act(async () => element.click());
   };
+
+  it("draws no sidebar entry while Desk is off, and leaves the room when it is switched off in front (B41)", async () => {
+    const off = (section: DeskSection): DeskSection => ({ ...section, settings: { ...section.settings, enabled: false } });
+    const actions = createActions((event) => { events.push(event); return true; });
+    await act(async () => {
+      useShellStore.setState({ connection: "live", rest, desk: off(desk([])), deskLive: null, deskJobs: { jobs: [], workers: [] }, deskMentions: { sessions: [], projects: [] } });
+      root.render(<TooltipProvider><DeskSidebarEntry actions={actions} /></TooltipProvider>);
+    });
+    expect(document.body.querySelector("[data-desk-sidebar-row]")).toBeNull();
+    await show(desk([]));
+    expect(document.body.querySelector("[data-desk-sidebar-row]")).not.toBeNull();
+
+    await act(async () => useUiStore.getState().setScreen({ kind: "desk" }));
+    await render(desk([]));
+    expect(useUiStore.getState().screen).toEqual({ kind: "desk" });
+    // No panel came before Desk here, so All projects takes its place.
+    await show(off(desk([])));
+    expect(useUiStore.getState().screen).toEqual({ kind: "main" });
+  });
 
   it("keeps a sent message in the box until the conversation shows it, so a refused one stays", async () => {
     useUiStore.setState({ deskDraft: { text: "ask @fixer", mentions: [fixer] } });

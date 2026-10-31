@@ -36,6 +36,7 @@ import { coveringLayer, useUiStore, type Cycle } from "./ui";
 import { installWindowFocus } from "./windowFocus";
 import { drawnViews, installKeyboardOwner, keyboardCommandOwner, noteCommandDelivered, subscribeKeyboardOwner } from "./viewFocus";
 import { composingKey } from "./keys";
+import { deskOn } from "./desk";
 
 /**
  * Recent Panels: every surface the shell holds on every connected device and
@@ -131,6 +132,21 @@ export function commitCycle(cycle: Cycle, actions: Actions): boolean {
     actions.focusView(chosen.target.surface.id, true);
     return true;
   }
+  return goToItem(chosen, actions);
+}
+
+/**
+ * Desk switched off while its room is in front (PRD session-docs-and-assistant
+ * B41): back to the panel used before it, which leads Recent Panels since Desk
+ * is never one of them, or All projects when none is left.
+ */
+export function leaveDesk(actions: Actions): void {
+  const rest = useShellStore.getState().rest;
+  const before = recentEntries().map((entry) => panelItem(rest, entry)).find((item) => item !== null);
+  if (!before || !goToItem(before, actions)) useUiStore.getState().setScreen({ kind: "main" });
+}
+
+function goToItem(chosen: CycleItem, actions: Actions): boolean {
   const target = chosen.target;
   switch (target.kind) {
     case "surface":
@@ -524,6 +540,8 @@ export function installKeyboard(actions: Actions): () => void {
     const { registry } = hostRegistry(useShellStore.getState().rest?.ui_state, host, system);
     const command = matchHost(event, registry, host);
     if (!command) return;
+    // Desk switched off has no chord (D-76): the key goes on to the page or the terminal.
+    if (command.id === "desk_terminal" && !deskOn(useShellStore.getState().desk)) return;
     event.preventDefault();
     event.stopPropagation();
     run(command.id, event);

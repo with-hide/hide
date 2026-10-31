@@ -7,9 +7,10 @@ import { startHided, type Daemon } from "./hided-fixture";
 import { chord } from "./chords";
 import { enterWorkspace } from "./wire";
 
-// PRD session-docs-and-assistant B28, B29, B32, B35: Desk's lane, its rail,
-// its pin and ⌘J between a thread and its Agent tab. Each test starts one
-// stack and asserts one contract.
+// PRD session-docs-and-assistant B28, B29, B32, B35, B41: Desk's lane, its
+// rail, its pin, ⌘J between a thread and its Agent tab, and Settings › Desk's
+// switch, off on a new install. Each test starts one stack and asserts one
+// contract.
 //
 // A Desk job is a spawn of Desk's own identity in the delivery ledger. Only
 // Desk's agent makes one, and the stack runs none, so the fixture writes the
@@ -41,8 +42,19 @@ function deskLedger(node: string, pane: string, repo: string): unknown {
   };
 }
 
-/** A Workspace whose second pane is a thread Desk started, and the page on Desk's room. */
-async function startDesk(page: Page, name: string): Promise<Desk> {
+/** Settings › Desk's switch, turned to `on` and closed again; every window follows the core without a restart. */
+async function switchDesk(page: Page, on: boolean) {
+  await page.locator("[data-open-settings]").click();
+  await page.locator('[data-settings-tab="desk"]').click();
+  const use = page.locator("[data-desk-use]");
+  if ((await use.getAttribute("data-desk-use")) !== String(on)) await use.click();
+  await expect(use).toHaveAttribute("data-desk-use", String(on));
+  await page.locator("[data-settings-close]").click();
+  await expect(page.locator("[data-settings]")).toHaveCount(0);
+}
+
+/** A Workspace whose second pane is a thread Desk started, Desk switched on, and the page on Desk's room unless `open` is false. */
+async function startDesk(page: Page, name: string, open = true): Promise<Desk> {
   const herdr = await startHerdr({ agents: false });
   const repo = path.join(herdr.root, "fixture");
   const pane = herdr.panes[1];
@@ -53,6 +65,8 @@ async function startDesk(page: Page, name: string): Promise<Desk> {
   await page.goto("about:blank");
   await page.goto(`${daemon.origin}/?probe=1#token=${daemon.token}`);
   await enterWorkspace(page, "fixture");
+  if (!open) return { page, herdr, daemon, pane };
+  await switchDesk(page, true);
   await page.locator("[data-desk-sidebar-row]").click();
   await expect(page.locator("[data-desk-screen]")).toBeVisible();
   return { page, herdr, daemon, pane };
@@ -150,6 +164,34 @@ test("⌘J goes from a thread to its Agent tab and back to Desk with the thread 
     // `터미널로` does what ⌘J does.
     await panel.locator("[data-desk-thread-terminal]").click();
     await expect(page.locator(`[data-pane-view="${desk.pane}"]`)).toHaveAttribute("data-focused", "true");
+  } finally {
+    desk.daemon.stop();
+    desk.herdr.stop();
+  }
+});
+
+test("Desk is off on a new install, Settings › Desk shows it without a restart, and switching it off in the room goes back to the tab before it with Desk's session kept (PRD session-docs-and-assistant B41) @platform", async ({ page }) => {
+  test.setTimeout(120_000);
+  const desk = await startDesk(page, "desk-lane-switch", false);
+  try {
+    await expect(page.locator("[data-workspace-screen]")).toBeVisible();
+    await expect(page.locator("[data-desk-sidebar-row]")).toHaveCount(0);
+    await expect(page.locator(`[data-pane-view="${desk.pane}"] [data-desk-pane-to-desk]`)).toHaveCount(0);
+    const front = await page.locator('[data-pane-view][data-focused="true"]').getAttribute("data-pane-view");
+
+    await switchDesk(page, true);
+    await expect(page.locator(`[data-pane-view="${desk.pane}"] [data-desk-pane-to-desk]`)).toBeVisible();
+    await page.locator("[data-desk-sidebar-row]").click();
+    await expect(page.locator("[data-desk-screen]")).toBeVisible();
+
+    await switchDesk(page, false);
+    await expect(page.locator("[data-desk-screen]")).toHaveCount(0);
+    await expect(page.locator("[data-workspace-screen]")).toBeVisible();
+    await expect(page.locator(`[data-pane-view="${front}"]`)).toHaveAttribute("data-focused", "true");
+    await expect(page.locator("[data-desk-sidebar-row]")).toHaveCount(0);
+    // The session Desk started stays, an ordinary session with no way back to a Desk that is off.
+    await expect(page.locator(`[data-pane-view="${desk.pane}"]`)).toBeVisible();
+    await expect(page.locator(`[data-pane-view="${desk.pane}"] [data-desk-pane-to-desk]`)).toHaveCount(0);
   } finally {
     desk.daemon.stop();
     desk.herdr.stop();

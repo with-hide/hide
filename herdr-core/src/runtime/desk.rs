@@ -150,6 +150,7 @@ pub(super) struct InstallPayload {
 
 #[derive(Debug, Deserialize)]
 pub(super) struct SettingsPayload {
+    enabled: Option<bool>,
     /// `null` clears it; absent leaves it.
     #[serde(default, deserialize_with = "present")]
     default_agent: Option<Option<AdapterId>>,
@@ -225,7 +226,10 @@ impl Runtime {
         });
         match worker::start(platform, runtime, notifier) {
             Ok(handle) => {
-                let _ = handle.orders.send(Order::Check);
+                // Desk switched off looks at no agent (D-76).
+                if self.desk.stored.settings.enabled {
+                    let _ = handle.orders.send(Order::Check);
+                }
                 self.desk.worker = Some(handle);
             }
             Err(error) => crate::diagnostic!(json!({
@@ -240,6 +244,10 @@ impl Runtime {
     pub(super) fn desk_event(&mut self, event: DeskEvent) -> bool {
         if self.desk.worker.is_none() {
             return refused("desk_unavailable");
+        }
+        // Switched off, only the switch reaches Desk (D-76).
+        if !self.desk.stored.settings.enabled && !matches!(event, DeskEvent::SettingsSet(_)) {
+            return refused("desk_off");
         }
         // A card's change moves only the cards: the conversation is not sent again.
         let room = !matches!(
@@ -601,6 +609,9 @@ impl Runtime {
         }
         let settings = &mut self.desk.stored.settings;
         let before = *settings;
+        if let Some(enabled) = payload.enabled {
+            settings.enabled = enabled;
+        }
         if let Some(agent) = payload.default_agent {
             settings.default_agent = agent;
         }
@@ -615,6 +626,19 @@ impl Runtime {
         }
         if self.desk.stored.selection.agent.is_none() {
             self.desk.stored.selection.agent = settings.default_agent;
+        }
+        let enabled = self.desk.stored.settings.enabled;
+        if enabled != before.enabled {
+            if enabled {
+                self.order(Order::Check);
+            } else {
+                // Off ends the process and its turn; the sessions it started
+                // and the conversation stay.
+                if self.desk.turn.is_some() {
+                    self.order(Order::Cancel);
+                }
+                self.end_desk_process();
+            }
         }
         before != self.desk.stored.settings
     }
@@ -1056,6 +1080,7 @@ impl Runtime {
     pub(in crate::runtime) fn start_test_desk(&mut self) {
         let (orders, _unread) = std::sync::mpsc::channel();
         self.desk.worker = Some(worker::Handle { orders });
+        self.desk.stored.settings.enabled = true;
         self.compose_desk_sections();
     }
 
@@ -1108,6 +1133,7 @@ mod tests {
         );
         let (orders, received) = mpsc::channel();
         runtime.desk.worker = Some(worker::Handle { orders });
+        runtime.desk.stored.settings.enabled = true;
         runtime.desk_report(Report::Availability(vec![
             (AdapterId::Claude, DeskAgentState::Ready, None),
             (AdapterId::Pi, DeskAgentState::Ready, None),
@@ -1159,6 +1185,75 @@ mod tests {
             reason: None,
         });
         items(runtime).last().unwrap().id()
+    }
+
+    #[test]
+    fn desk_is_off_by_default_and_only_its_switch_reaches_it_while_off() {
+        assert!(!crate::model::DeskSettings::default().enabled);
+        let root = tempfile::tempdir().unwrap();
+        let (mut runtime, received) = runtime(root.path());
+        runtime.desk.stored.settings.enabled = false;
+        for (kind, payload) in [
+            ("desk_select", json!({"agent": "claude"})),
+            ("desk_send", json!({"text": "start something"})),
+            ("desk_lane", json!({"action": "pin", "pinned": true})),
+        ] {
+            assert!(!event(&mut runtime, kind, payload), "{kind}");
+        }
+        assert!(received.try_iter().next().is_none());
+
+        assert!(event(
+            &mut runtime,
+            "desk_settings_set",
+            json!({"enabled": true})
+        ));
+        assert!(matches!(received.try_recv(), Ok(Order::Check)));
+        assert!(runtime.snapshot.desk.as_ref().unwrap().settings.enabled);
+        assert!(event(
+            &mut runtime,
+            "desk_select",
+            json!({"agent": "claude"})
+        ));
+    }
+
+    #[test]
+    fn switching_desk_off_ends_its_process_and_keeps_its_conversation() {
+        let root = tempfile::tempdir().unwrap();
+        let (mut runtime, received) = runtime(root.path());
+        event(&mut runtime, "desk_select", json!({"agent": "claude"}));
+        assert!(event(
+            &mut runtime,
+            "desk_send",
+            json!({"text": "what runs now?"})
+        ));
+        sent(&received);
+        opened(&mut runtime, AdapterId::Claude);
+        let card = ask(&mut runtime);
+        assert!(runtime.desk_authority("test-node").is_ok());
+        let before = items(&runtime).len();
+
+        assert!(event(
+            &mut runtime,
+            "desk_settings_set",
+            json!({"enabled": false})
+        ));
+        let orders: Vec<Order> = received.try_iter().collect();
+        assert!(orders.iter().any(|order| matches!(order, Order::Cancel)));
+        assert!(orders.iter().any(|order| matches!(order, Order::End)));
+        assert_eq!(
+            runtime.desk_authority("test-node"),
+            Err("desk_not_running".into())
+        );
+        let items = items(&runtime);
+        assert!(items.len() >= before);
+        assert!(
+            items
+                .iter()
+                .any(|item| matches!(item, DeskItem::User { .. }))
+        );
+        assert!(items.iter().any(|item| matches!(item,
+            DeskItem::Approval { id, state: DeskApprovalState::Closed, .. } if *id == card)));
+        assert!(!runtime.snapshot.desk.as_ref().unwrap().settings.enabled);
     }
 
     #[test]

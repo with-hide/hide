@@ -58,6 +58,7 @@ export const DESK_SCENES = [
   { state: "chat-states", label: "채팅 상태: 승인 답, 알림 줄, 생각 중 · 중단 (B5-B8, B11, B13-B15)" },
   { state: "thread-states", label: "스레드 읽기 실패 · 읽는 중 · 빈 · 연결 안 됨 (B23, B27)" },
   { state: "settings", label: "Settings › Desk (B4, B19, B21)" },
+  { state: "settings-off", label: "Settings › Desk 꺼짐, 기본값 (D-76, B41)" },
 ] as const;
 
 type SceneState = (typeof DESK_SCENES)[number]["state"];
@@ -312,8 +313,9 @@ export function DeskScene({ params }: { params: URLSearchParams }) {
       break;
     }
     case "settings":
+    case "settings-off":
       sidebar = null;
-      body = <div className="w-(--size-settings-sheet-w) max-w-full p-xl"><DeskSettingsTab settings={{ default_agent: "claude", location: "desk", cap: 8 }} agents={AGENTS} onChange={noop} /></div>;
+      body = <div className="w-(--size-settings-sheet-w) max-w-full p-xl"><DeskSettingsTab settings={{ enabled: state === "settings", default_agent: "claude", location: "desk", cap: 8 }} agents={AGENTS} onChange={noop} /></div>;
       break;
   }
   return (

@@ -13,6 +13,11 @@ import type { DeskAgent, DeskAskKind, DeskItem, DeskJob, DeskMention as WireMent
 export type { DeskAgent, DeskAgentId, DeskAgentState, DeskApprovalState, DeskChoice, DeskItem, DeskJob, DeskJobFailure, DeskJobState, DeskLive, DeskLocation, DeskMission, DeskOutput, DeskOutputKind, DeskSteps } from "./snapshot";
 
 export type DeskSelection = DeskSection["selection"];
+
+/** Whether Desk is switched on in Settings › Desk (D-76, B41); before the section arrives it is not. */
+export function deskOn(desk: DeskSection | null | undefined): boolean {
+  return desk?.settings.enabled === true;
+}
 export type DeskSettings = DeskSection["settings"];
 export type DeskNoticeKind = DeskNotice;
 /** What an asking job waits on, each said with its own verb (B20): a question, a terminal's permission, a mission's decision, a plan to review, a call that stopped. */

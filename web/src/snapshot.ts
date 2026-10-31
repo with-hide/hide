@@ -2732,7 +2732,8 @@ export type DeskSection = {
   /** `generation` moves on 새 대화; `dropped` items left the front past the cap. */
   conversation: { generation: number; items: DeskItem[]; dropped: number };
   approvals_waiting: number;
-  settings: { default_agent: DeskAgentId | null; location: DeskLocation; cap: number };
+  /** `enabled` is Settings › Desk's switch, off by default (D-76): off, no entry to Desk is drawn. */
+  settings: { enabled: boolean; default_agent: DeskAgentId | null; location: DeskLocation; cap: number };
   /** The lane's pin and the tabs kept in its 보기 column, oldest first, at most 16 (B31, B32). */
   lane: { pinned: boolean; kept: DeskKeptTab[] };
 };

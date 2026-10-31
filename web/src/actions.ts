@@ -2249,7 +2249,7 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
     },
 
     /** Settings › Desk (B4, B19, B21). */
-    deskSettings(settings: { default_agent: DeskAgentId | null; location: DeskLocation; cap: number }) {
+    deskSettings(settings: { enabled: boolean; default_agent: DeskAgentId | null; location: DeskLocation; cap: number }) {
       dispatch({ schema_version: 2, kind: "desk_settings_set", payload: settings });
     },
 

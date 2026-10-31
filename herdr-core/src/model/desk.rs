@@ -658,6 +658,11 @@ pub enum DeskLocation {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct DeskSettings {
+    /// Settings › Desk's switch (D-76): off by default. While off no entry
+    /// to Desk is drawn, its process does not run and every `desk_*` event
+    /// but this setting is refused; its sessions stay ordinary sessions.
+    #[serde(default)]
+    pub enabled: bool,
     /// The agent a new conversation starts with.
     pub default_agent: Option<AdapterId>,
     pub location: DeskLocation,
@@ -668,6 +673,7 @@ pub struct DeskSettings {
 impl Default for DeskSettings {
     fn default() -> Self {
         Self {
+            enabled: false,
             default_agent: None,
             location: DeskLocation::Desk,
             cap: DESK_CAP_DEFAULT,

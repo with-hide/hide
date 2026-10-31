@@ -8,7 +8,7 @@
 import { MapIcon } from "lucide-react";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent, type ReactNode, type RefObject } from "react";
 import type { Actions } from "./actions";
-import { askingCount, unseenOutputs, type DeskItem, type DeskJob, type DeskMention, type DeskOutput, type DeskSessionRef } from "./desk";
+import { askingCount, deskOn, unseenOutputs, type DeskItem, type DeskJob, type DeskMention, type DeskOutput, type DeskSessionRef } from "./desk";
 import { activeTab, backFromThread, namesView, closeLane, closeTab, closeTool, closeView, openMission, openThread, outputTab, showTab, showThreads, tabKey, toggleOutputs, toggleThreads, viewTabs } from "./deskLane";
 import { DeskOutputView } from "./DeskOutputView";
 import { MissionMap } from "./MissionMap";
@@ -18,6 +18,7 @@ import { ThreadList } from "./components/desk/thread-list";
 import { ThreadPanel } from "./components/desk/thread-panel";
 import type { DeskKeptTab } from "./snapshot";
 import { commandLabel } from "./shortcutLabels";
+import { leaveDesk } from "./keyboard";
 import { mentionAt, mentionRows, outgoing, pickMention } from "./deskComposer";
 import { DeskChat, DeskEmpty, type DeskChatActions, type DeskNoticeAction } from "./components/desk/desk-chat";
 import { DeskAgentBar, DeskComposer } from "./components/desk/desk-composer";
@@ -34,9 +35,9 @@ import { windowIsActive } from "./viewFocus";
 const NO_JOBS: DeskJob[] = [];
 const NO_TABS: DeskKeptTab[] = [];
 
-/** The sidebar's `◆ Desk` row (B1), once hided runs Desk. */
+/** The sidebar's `◆ Desk` row (B1), once hided runs Desk and Settings › Desk switched it on (B41). */
 export function DeskSidebarEntry({ actions }: { actions: Actions }) {
-  const shown = useShellStore((s) => s.desk !== null);
+  const shown = useShellStore((s) => deskOn(s.desk));
   const selected = useUiStore((s) => s.screen?.kind === "desk");
   const asking = useShellStore((s) => askingCount(s.deskJobs?.jobs ?? NO_JOBS));
   if (!shown) return null;
@@ -106,6 +107,11 @@ type MenuPlace = { dismissed: number | null; entered: string | null; active: str
 export function DeskScreen({ actions }: { actions: Actions }) {
   const { t } = useInterfaceTranslation();
   const desk = useShellStore((s) => s.desk);
+  // Switched off while in front, the room goes and the panel before it comes back (B41).
+  const off = desk !== null && !deskOn(desk);
+  useEffect(() => {
+    if (off) leaveDesk(actions);
+  }, [off, actions]);
   const live = useShellStore((s) => s.deskLive);
   const jobs = useShellStore((s) => s.deskJobs?.jobs ?? NO_JOBS);
   const mentions = useShellStore((s) => s.deskMentions);
@@ -549,6 +555,7 @@ function DeskLaneColumns({ actions, lane, chat }: { actions: Actions; lane: Lane
 export function PaneDeskReturn({ paneId, actions }: { paneId: string; actions: Actions }) {
   const job = useShellStore((s) => s.deskJobs?.jobs.find((one) => one.pane_id === paneId) ?? s.deskJobs?.workers.find((one) => one.pane_id === paneId) ?? null);
   const chord = useShellStore((s) => commandLabel("desk_terminal", s.rest?.ui_state)) || null;
-  if (!job) return null;
+  const on = useShellStore((s) => deskOn(s.desk));
+  if (!job || !on) return null;
   return <DeskPaneReturn joined={job.joined} chord={chord} onDesk={() => actions.openDeskThread(job.id)} />;
 }

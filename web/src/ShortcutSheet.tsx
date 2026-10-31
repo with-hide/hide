@@ -7,6 +7,7 @@ import { resolvedRegistry, sheetRows, storedBindings, type Command } from "./sho
 import { useShellStore } from "./store";
 import { useInterfaceTranslation } from "./i18n/client";
 import { commandGroupTitle, passthroughText, sheetRowTitle } from "./shortcutLabels";
+import { deskOn } from "./desk";
 
 // The sheet is generated from the registry (PRD S2 B11): every mapping of the
 // running host by group, a "moved for Chrome" note on the chords Chrome
@@ -25,6 +26,8 @@ export function ShortcutSheet({ actions }: { actions: Actions }) {
   const system = keySystem();
   const stored = useShellStore((s) => storedBindings(s.rest?.ui_state, host));
   const { registry, diagnostic } = resolvedRegistry(stored, host, system);
+  // Desk's chord is listed only while Desk is on (D-76); Settings › Shortcuts still rebinds it.
+  const desk = useShellStore((s) => deskOn(s.desk));
   // The gate in App.tsx only mounts this component while the overlay is
   // "shortcuts", so the dialog is always open here; closing it (Escape, a
   // click outside, or the trigger elsewhere) toggles that overlay off.
@@ -45,7 +48,7 @@ export function ShortcutSheet({ actions }: { actions: Actions }) {
             <section key={group} className="mb-md">
               <h3 className="mb-xs text-caption uppercase text-muted-foreground">{commandGroupTitle(group, t)}</h3>
               <ul>
-                {sheetRows(group, registry, host, system).map((row) => (
+                {sheetRows(group, registry, host, system).filter((row) => desk || row.id !== "desk_terminal").map((row) => (
                   <li key={row.id} className="flex items-center gap-md py-xxs" data-shortcut={row.id}>
                     <span className="min-w-0 flex-1 truncate">{sheetRowTitle(row, t)}</span>
                     {host === "browser" && row.moved && row.movedFrom ? (
