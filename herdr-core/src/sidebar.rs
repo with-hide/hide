@@ -765,8 +765,8 @@ fn project_agent(agent: SessionAgentPayload) -> Result<SidebarAgentSnapshot, Str
     });
     let identity_label = title.unwrap_or_else(|| provider_name(agent.agent.as_deref()));
     let projected = SidebarAgentSnapshot {
-        device_id: String::new(),
-        device_pane_id: String::new(),
+        device_id: Default::default(),
+        device_pane_id: Default::default(),
         telemetry_stale: agent.telemetry_stale,
         start: if agent_starting(&agent) {
             AgentStart::Starting {
@@ -1249,8 +1249,8 @@ mod tests {
                 panes: panes
                     .iter()
                     .map(|id| PaneSnapshot {
-                        device_id: String::new(),
-                        device_pane_id: String::new(),
+                        device_id: Default::default(),
+                        device_pane_id: Default::default(),
                         start_claim: None,
                         terminal_id: None,
                         failed_terminal_id: None,

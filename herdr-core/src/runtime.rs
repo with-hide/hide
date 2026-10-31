@@ -2949,8 +2949,8 @@ fn project_layout_panes(
                 .unwrap_or_else(|| fallback_cwd.to_owned());
             let ports = crate::ports::attributed_ports(&cwd, listening_ports);
             PaneSnapshot {
-                device_id: String::new(),
-                device_pane_id: String::new(),
+                device_id: Default::default(),
+                device_pane_id: Default::default(),
                 start_claim: source.and_then(|source| {
                     source
                         .start_claim

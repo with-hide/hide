@@ -116,12 +116,12 @@ impl Runtime {
                 .flat_map(|checkout| checkout.tabs.iter_mut())
                 .flat_map(|tab| tab.panes.iter_mut())
             {
-                stamp(node, &pane.id, &mut pane.device_id, &mut pane.device_pane_id);
+                stamp(node, &pane.id, &mut pane.device_id.0, &mut pane.device_pane_id.0);
             }
         }
         fn stamp_agents(node: &str, agents: &mut [crate::model::SidebarAgentSnapshot]) {
             for agent in agents {
-                stamp(node, &agent.pane_id, &mut agent.device_id, &mut agent.device_pane_id);
+                stamp(node, &agent.pane_id, &mut agent.device_id.0, &mut agent.device_pane_id.0);
             }
         }
         let node = self.node.as_str().to_owned();
@@ -139,8 +139,8 @@ impl Runtime {
         }
         for tab in &mut self.snapshot.editor.tabs {
             let machine = crate::address::device_of(&tab.checkout_id).unwrap_or(&node);
-            if tab.device_id != machine {
-                tab.device_id = machine.to_owned();
+            if tab.device_id.0 != machine {
+                tab.device_id.0 = machine.to_owned();
             }
         }
     }

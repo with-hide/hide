@@ -1364,7 +1364,7 @@ impl Runtime {
         }
         self.place_editor_tab(EditorTabSnapshot {
             id: tab_id,
-            device_id: String::new(),
+            device_id: Default::default(),
             workspace_id: workspace_id.to_owned(),
             checkout_id: checkout_id.to_owned(),
             path: path.to_owned(),

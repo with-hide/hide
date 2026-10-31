@@ -1470,6 +1470,23 @@ pub enum AskSubject {
     MissionDecision { line: String },
 }
 
+/// A published value the core derives from other fields of its row before
+/// every snapshot (`Runtime::stamp_row_addresses`). Equality ignores it,
+/// because the fields it is derived from are compared already: a freshly
+/// projected row, not yet stamped, is the same row as the stamped one it
+/// replaces, so no comparison reads a stamp as a change.
+#[derive(Clone, Debug, Default, Serialize)]
+#[serde(transparent)]
+pub struct Derived<T>(pub T);
+
+impl<T> PartialEq for Derived<T> {
+    fn eq(&self, _: &Self) -> bool {
+        true
+    }
+}
+
+impl<T> Eq for Derived<T> {}
+
 /// An agent's state on four independent lifecycle axes, plus the values the shell draws
 /// from them.
 ///
@@ -1486,8 +1503,8 @@ pub struct SidebarAgentSnapshot {
     /// `pane_id` by the one address owner (`crate::address`) before every
     /// snapshot (`Runtime::stamp_row_addresses`), so no reader splits the
     /// pane id itself.
-    pub device_id: String,
-    pub device_pane_id: String,
+    pub device_id: Derived<String>,
+    pub device_pane_id: Derived<String>,
     /// Display provenance only; independent of hook health and GitHub reads.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub record_connection: Option<crate::labels::record::RecordConnection>,
@@ -2645,8 +2662,8 @@ pub struct TabSnapshot {
 pub struct PaneSnapshot {
     /// The machine the pane is on and the id that machine gives it, as on
     /// an agent row ([`SidebarAgentSnapshot::device_id`]).
-    pub device_id: String,
-    pub device_pane_id: String,
+    pub device_id: Derived<String>,
+    pub device_pane_id: Derived<String>,
     /// Exact creation descriptor used only for start reconciliation, never a title.
     #[serde(skip_serializing)]
     pub start_claim: Option<String>,
@@ -3141,7 +3158,7 @@ pub struct EditorTabSnapshot {
     pub id: String,
     /// The machine the tab's checkout is on, read from `checkout_id` by the
     /// one address owner before every snapshot (`stamp_row_addresses`).
-    pub device_id: String,
+    pub device_id: Derived<String>,
     pub workspace_id: String,
     pub checkout_id: String,
     pub path: String,

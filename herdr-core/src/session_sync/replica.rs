@@ -521,8 +521,8 @@ impl SessionReplica {
                                 let agent =
                                     agents.iter().find(|agent| agent.pane_id == pane.pane_id);
                                 PaneSnapshot {
-                                    device_id: String::new(),
-                                    device_pane_id: String::new(),
+                                    device_id: Default::default(),
+                                    device_pane_id: Default::default(),
                                     start_claim: pane
                                         .label
                                         .as_deref()

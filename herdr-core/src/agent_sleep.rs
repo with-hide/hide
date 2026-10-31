@@ -680,8 +680,8 @@ mod tests {
 
     fn agent(pane_id: &str) -> SidebarAgentSnapshot {
         SidebarAgentSnapshot {
-            device_id: String::new(),
-            device_pane_id: String::new(),
+            device_id: Default::default(),
+            device_pane_id: Default::default(),
             record_connection: None,
             record_summary: None,
             record_metadata: None,
