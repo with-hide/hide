@@ -2146,7 +2146,9 @@ mod tests {
             .map(|n| row(&format!("p{n}"), if n == 7 { "blocked" } else { "working" }))
             .collect();
         // Twenty listed sessions and one the sidebar no longer lists.
-        let text: String = (1..=21).map(|n| format!("@session(p{n} job-{n}) ")).collect();
+        let text: String = (1..=21)
+            .map(|n| format!("@session(p{n} job-{n}) "))
+            .collect();
         let mentions = hide_desk::session_mentions(&text)
             .into_iter()
             .map(|(pane_id, name)| crate::model::DeskSessionChip {
