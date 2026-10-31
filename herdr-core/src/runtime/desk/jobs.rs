@@ -1945,7 +1945,7 @@ mod tests {
         let id = runtime.desk.stored.conversation.next_id();
         runtime.desk.stored.conversation.push(DeskItem::Reply {
             id,
-            agent: hide_desk::AdapterId::Claude,
+            agent: hide_desk::AdapterId::CLAUDE,
             text: "@session(p3 fixer) works".into(),
             at_ms: 0,
             state: crate::model::DeskReplyState::Done,

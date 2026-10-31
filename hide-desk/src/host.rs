@@ -97,6 +97,12 @@ impl Host {
         for (path, body, executable) in &launch.files {
             write_file(path, body, *executable)?;
         }
+        for (target, link) in &launch.links {
+            if let Some(parent) = link.parent() {
+                hide_platform::fs::private::create_dir_all(parent)?;
+            }
+            hide_platform::fs::link::replace_link(target, link)?;
+        }
         let mut command = Command::new(&launch.program);
         command
             .args(&launch.args)

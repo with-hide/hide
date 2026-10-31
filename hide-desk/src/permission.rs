@@ -250,9 +250,9 @@ pub fn read_request(adapter: AdapterId, params: &Value, announced: Option<&Value
         .get("toolCallId")
         .and_then(Value::as_str)
         .map(str::to_owned);
-    let action = match adapter {
-        AdapterId::Pi => pi_action(&call),
-        AdapterId::Claude | AdapterId::Codex => tool_action(&call, announced),
+    let action = match adapter.ask_mode() {
+        Some(crate::adapter::AskMode::PiExtension) => pi_action(&call),
+        _ => tool_action(&call, announced),
     };
     Request {
         tool_call_id,
@@ -321,8 +321,11 @@ fn tool_action(call: &Value, announced: Option<&Value>) -> Option<Action> {
     match kind.as_str() {
         "read" | "search" => Some(Action::Read),
         "execute" => {
-            let command = command_text(raw.and_then(|raw| raw.get("command")))?;
-            let folder = text(raw.and_then(|raw| raw.get("cwd")));
+            // Antigravity names them `CommandLine` and `Cwd`.
+            let command = command_text(
+                raw.and_then(|raw| raw.get("command").or_else(|| raw.get("CommandLine"))),
+            )?;
+            let folder = text(raw.and_then(|raw| raw.get("cwd").or_else(|| raw.get("Cwd"))));
             Some(Action::Command {
                 command,
                 folder,
@@ -489,7 +492,7 @@ mod tests {
 
     fn claude_bash(command: &str) -> Request {
         read_request(
-            AdapterId::Claude,
+            AdapterId::CLAUDE,
             &json!({"toolCall": {"toolCallId": "t1", "kind": "execute", "title": command,
                 "rawInput": {"command": command, "description": "Why it runs"}},
                 "options": options()}),
@@ -561,14 +564,14 @@ mod tests {
     #[test]
     fn a_read_runs_and_an_edit_asks_with_its_files() {
         let read = read_request(
-            AdapterId::Claude,
+            AdapterId::CLAUDE,
             &json!({"toolCall": {"toolCallId": "t2", "kind": "read", "title": "Read"},
                 "options": options()}),
             None,
         );
         assert_eq!(decide(&read, Path::new(HIDE)), Verdict::Allow);
         let edit = read_request(
-            AdapterId::Claude,
+            AdapterId::CLAUDE,
             &json!({"toolCall": {"toolCallId": "t3", "kind": "edit", "title": "Edit",
                 "rawInput": {"file_path": "/r/web/src/PaneHeader.tsx"}},
                 "options": options()}),
@@ -588,7 +591,7 @@ mod tests {
             "kind": "execute", "title": "touch x",
             "rawInput": {"command": ["/bin/zsh", "-lc", "touch x"], "cwd": "/r"}});
         let request = read_request(
-            AdapterId::Codex,
+            AdapterId::CODEX,
             &json!({"toolCall": {"toolCallId": "exec-1", "kind": "execute", "status": "pending"},
                 "options": [{"optionId": "allow_once", "kind": "allow_once"},
                             {"optionId": "cancel", "kind": "reject_once"}]}),
@@ -605,14 +608,14 @@ mod tests {
     #[test]
     fn a_request_hide_cannot_read_does_not_run() {
         let bare = read_request(
-            AdapterId::Codex,
+            AdapterId::CODEX,
             &json!({"toolCall": {"toolCallId": "exec-2", "kind": "execute"}, "options": options()}),
             None,
         );
         assert_eq!(bare.action, None);
         assert_eq!(decide(&bare, Path::new(HIDE)), Verdict::Refuse);
         let no_once = read_request(
-            AdapterId::Claude,
+            AdapterId::CLAUDE,
             &json!({"toolCall": {"toolCallId": "t", "kind": "read"},
                 "options": [{"optionId": "always", "kind": "allow_always"}]}),
             None,
@@ -624,7 +627,7 @@ mod tests {
     fn pi_s_confirm_from_desk_s_extension_is_read_and_another_is_not() {
         let confirm = |title: &str, message: &str| {
             read_request(
-                AdapterId::Pi,
+                AdapterId::PI,
                 &json!({"toolCall": {"toolCallId": "pi-ui-1", "kind": "other", "title": title,
                     "rawInput": {"method": "confirm", "title": title, "message": message}},
                     "options": [{"optionId": "yes", "kind": "allow_once"},
@@ -644,5 +647,43 @@ mod tests {
         assert!(matches!(decide(&write, Path::new(HIDE)), Verdict::Ask(_)));
         let other = confirm("Delete branch?", "yes or no");
         assert_eq!(decide(&other, Path::new(HIDE)), Verdict::Refuse);
+    }
+
+    #[test]
+    fn each_agent_s_own_request_for_a_command_or_an_edit_becomes_a_card() {
+        // The requests OpenCode 2.0.29, omp 18.7.0 and agy 1.4.12 sent for
+        // `touch x` and for writing notes.txt, measured on 2026-10-31.
+        let options = json!([{"optionId": "once", "kind": "allow_once"},
+                             {"optionId": "reject", "kind": "reject_once"}]);
+        let ask = |adapter: AdapterId, call: Value| {
+            let request = read_request(
+                adapter,
+                &json!({"toolCall": call, "options": options.clone()}),
+                None,
+            );
+            match decide(&request, Path::new(HIDE)) {
+                Verdict::Ask(card) => card,
+                other => panic!("{adapter:?} {other:?}"),
+            }
+        };
+        for (adapter, raw) in [
+            (AdapterId::OPENCODE, json!({"command": "touch x", "cwd": "/r"})),
+            (AdapterId::OMP, json!({"command": "touch x"})),
+            (AdapterId::ANTIGRAVITY, json!({"CommandLine": "touch x", "IsDaemon": false})),
+        ] {
+            let card = ask(
+                adapter,
+                json!({"toolCallId": "c1", "kind": "execute", "title": "touch x", "rawInput": raw}),
+            );
+            assert_eq!((card.kind, card.command.as_str()), (CardKind::Command, "touch x"));
+        }
+        for adapter in [AdapterId::OPENCODE, AdapterId::ANTIGRAVITY] {
+            let card = ask(
+                adapter,
+                json!({"toolCallId": "e1", "kind": "edit", "title": "notes.txt",
+                    "locations": [{"path": "/r/notes.txt"}], "rawInput": {"Path": "/r/notes.txt"}}),
+            );
+            assert_eq!((card.kind, card.command.as_str()), (CardKind::Edit, "/r/notes.txt"));
+        }
     }
 }

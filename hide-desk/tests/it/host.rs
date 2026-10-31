@@ -142,6 +142,20 @@ fn stand_in_agent() {
     drop(sleeper);
 }
 
+/// Whether this account may link a file, which a Windows account may not
+/// without a privilege or Developer Mode.
+fn file_links_allowed(dir: &Path) -> bool {
+    let probe = dir.join("link-probe");
+    match hide_platform::fs::link::create_link(&dir.join("absent"), &probe) {
+        Ok(()) => {
+            hide_platform::fs::link::remove_link(&probe).unwrap();
+            true
+        }
+        Err(error) if cfg!(windows) && hide_platform::fs::link::needs_privilege(&error) => false,
+        Err(error) => panic!("{error}"),
+    }
+}
+
 /// The arguments that run this binary as the stand-in agent alone.
 const STAND_IN: [&str; 4] = ["--exact", "host::stand_in_agent", "-q", "--test-threads=1"];
 
@@ -152,6 +166,7 @@ fn launch(role: &str, cwd: &Path) -> Launch {
         env: vec![(ROLE.into(), role.into())],
         cwd: cwd.to_owned(),
         files: Vec::new(),
+        links: Vec::new(),
         pi_marker: None,
     }
 }
@@ -197,7 +212,7 @@ fn a_turn_s_reply_and_its_permission_request_reach_the_owner() {
     let folder = tempfile::tempdir().unwrap();
     let (host, received) = start("agent", folder.path());
     let connection = host.connection().clone();
-    let opened = session::open(&connection, AdapterId::Claude, folder.path(), None, &|| {
+    let opened = session::open(&connection, AdapterId::CLAUDE, folder.path(), None, &|| {
         Ok(())
     })
     .unwrap();
@@ -213,7 +228,7 @@ fn a_turn_s_reply_and_its_permission_request_reach_the_owner() {
         panic!("no permission request");
     };
     assert_eq!(method, "session/request_permission");
-    let request = hide_desk::permission::read_request(AdapterId::Claude, &params, None);
+    let request = hide_desk::permission::read_request(AdapterId::CLAUDE, &params, None);
     assert_eq!(request.allow_once(), Some("yes"));
     let reject = request.reject().unwrap().to_owned();
     connection
@@ -237,7 +252,7 @@ fn a_session_whose_ask_mode_is_refused_is_not_used() {
     let (host, _received) = start("refuse-mode", folder.path());
     let opened = session::open(
         host.connection(),
-        AdapterId::Codex,
+        AdapterId::CODEX,
         folder.path(),
         None,
         &|| Ok(()),
@@ -260,28 +275,43 @@ fn a_command_desk_s_codex_runs_finds_desk_s_own_hide_before_the_account_s() {
     let account = root.path().join("account-bin");
     hide_in(&account);
     let codex_home = desk.join("codex");
+    // The operator's own Codex sign-in, which Desk's Codex reads through a
+    // link and never copies.
+    let sign_in = root.path().join("operator-codex").join("auth.json");
+    std::fs::create_dir_all(sign_in.parent().unwrap()).unwrap();
+    std::fs::write(&sign_in, "{}").unwrap();
     let mut launch = adapter::launch(
-        AdapterId::Codex,
+        AdapterId::CODEX,
         &Paths {
-            package: &root.path().join("adapter"),
-            node: &std::env::current_exe().unwrap(),
+            package: Some((&root.path().join("adapter"), &std::env::current_exe().unwrap())),
+            own_cli: None,
             hide_dir: desk_hide.parent().unwrap(),
             search: Some(&account.clone().into_os_string()),
             desk: &desk,
             capability: &root.path().join("desk.json"),
             codex_home: &codex_home,
-            own_cli: None,
+            codex_sign_in: &sign_in,
         },
         "n1",
-    );
+    )
+    .unwrap();
     launch.args = STAND_IN.into_iter().map(OsString::from).collect();
     launch.env.push((ROLE.into(), "agent".into()));
+    // A Windows account without the privilege to link a file cannot run
+    // Desk's Codex at all; the rest of the start is still checked there.
+    let links = file_links_allowed(root.path());
+    if !links {
+        launch.links.clear();
+    }
     let (host, received) = start_launch(&launch);
     // Desk's Codex configuration and rules are in its own home before it runs.
     assert!(codex_home.join("config.toml").is_file());
     assert!(codex_home.join("rules").join("hide-desk.rules").is_file());
+    assert!(
+        !links || hide_platform::fs::link::is_link_to(&codex_home.join("auth.json"), &sign_in)
+    );
     let connection = host.connection().clone();
-    session::open(&connection, AdapterId::Codex, &desk, None, &|| Ok(())).unwrap();
+    session::open(&connection, AdapterId::CODEX, &desk, None, &|| Ok(())).unwrap();
 
     session::prompt(&connection, "s1", "which hide", 1).unwrap();
     let found = text(next(&received));
@@ -298,7 +328,7 @@ fn ending_the_host_leaves_nothing_it_started_running() {
     let folder = tempfile::tempdir().unwrap();
     let (host, received) = start("agent", folder.path());
     let connection = host.connection().clone();
-    session::open(&connection, AdapterId::Claude, folder.path(), None, &|| {
+    session::open(&connection, AdapterId::CLAUDE, folder.path(), None, &|| {
         Ok(())
     })
     .unwrap();

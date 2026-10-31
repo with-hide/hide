@@ -1,11 +1,12 @@
-//! Putting an adapter's pinned package in place the first time it is chosen
-//! (PRD Desk D-17, D-58).
+//! Putting an adapter's pinned package in place when Desk is turned on
+//! (PRD Desk D-58, D-80), for each agent Desk speaks to through its vendor's
+//! adapter.
 //!
 //! `npm ci` installs exactly the lock in `contracts/desk-adapters/<id>/`,
 //! every package checked against its integrity, into a staging folder that
 //! is renamed into place only once the program is there, so a failed or
 //! interrupted install leaves nothing that looks installed and the next
-//! choice tries again. An installed version needs no network afterwards.
+//! try (`다시 받기`, or Desk turned on again) starts over. An installed version needs no network afterwards.
 //! Node 22 or later and npm come from the account's `PATH`: Hide does not
 //! fetch Node.
 
@@ -16,7 +17,7 @@ use std::time::Duration;
 use hide_platform::process;
 use hide_platform::programs::Program;
 
-use crate::adapter::AdapterId;
+use crate::adapter::{AdapterId, Pin};
 
 /// The oldest Node the adapters run on.
 pub const MIN_NODE_MAJOR: u32 = 22;
@@ -40,16 +41,17 @@ pub enum InstallError {
 }
 
 /// The folder one adapter version is installed in.
-pub fn version_dir(root: &Path, adapter: AdapterId) -> PathBuf {
-    let pin = adapter.pin();
+fn version_dir(root: &Path, adapter: AdapterId, pin: &Pin) -> PathBuf {
     root.join(format!("{}-{}", adapter.as_str(), pin.version))
 }
 
-/// The installed package folder, when this version is in place.
+/// The installed package folder, when `adapter` has a pinned package and
+/// this version is in place.
 pub fn installed(root: &Path, adapter: AdapterId) -> Option<PathBuf> {
-    let dir = version_dir(root, adapter);
-    let package = dir.join("node_modules").join(adapter.pin().package);
-    (dir.join(DONE).is_file() && package.join(adapter.pin().entry).is_file()).then_some(package)
+    let pin = adapter.pin()?;
+    let dir = version_dir(root, adapter, &pin);
+    let package = dir.join("node_modules").join(pin.package);
+    (dir.join(DONE).is_file() && package.join(pin.entry).is_file()).then_some(package)
 }
 
 /// Checks the account's Node, which every adapter runs on.
@@ -78,6 +80,12 @@ pub fn install(
     npm: &Program,
     stop: &AtomicBool,
 ) -> Result<PathBuf, InstallError> {
+    let Some(pin) = adapter.pin() else {
+        return Err(InstallError::Failed(format!(
+            "{} has no adapter to install",
+            adapter.label()
+        )));
+    };
     if let Some(package) = installed(root, adapter) {
         return Ok(package);
     }
@@ -102,7 +110,6 @@ pub fn install(
     if let Some(package) = installed(root, adapter) {
         return Ok(package);
     }
-    let pin = adapter.pin();
     let staging = root.join(format!(".{}-{}.staging", adapter.as_str(), pin.version));
     if staging.exists() {
         std::fs::remove_dir_all(&staging).map_err(failed)?;
@@ -138,7 +145,7 @@ pub fn install(
         ));
     }
     std::fs::write(staging.join(DONE), pin.version).map_err(failed)?;
-    let target = version_dir(root, adapter);
+    let target = version_dir(root, adapter, &pin);
     if target.exists() {
         // A folder without the done marker is an install that never
         // finished.
@@ -156,12 +163,12 @@ mod tests {
     #[test]
     fn a_folder_without_the_done_marker_is_not_installed() {
         let root = tempfile::tempdir().unwrap();
-        let dir = version_dir(root.path(), AdapterId::Pi);
+        let dir = version_dir(root.path(), AdapterId::PI, &AdapterId::PI.pin().unwrap());
         let package = dir.join("node_modules").join("pi-acp");
         std::fs::create_dir_all(package.join("dist")).unwrap();
         std::fs::write(package.join("dist/index.js"), "").unwrap();
-        assert_eq!(installed(root.path(), AdapterId::Pi), None);
+        assert_eq!(installed(root.path(), AdapterId::PI), None);
         std::fs::write(dir.join(DONE), "0.0.34").unwrap();
-        assert_eq!(installed(root.path(), AdapterId::Pi), Some(package));
+        assert_eq!(installed(root.path(), AdapterId::PI), Some(package));
     }
 }

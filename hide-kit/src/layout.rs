@@ -228,9 +228,9 @@ pub fn desk_store(state_dir: &Path) -> PathBuf {
 }
 
 /// Desk's own `CODEX_HOME`: the configuration and rules Desk writes for its
-/// Codex, Codex's own records of Desk's sessions, and the Desk-only sign-in
-/// (`auth.json`) the operator makes with `hide desk login codex`. Desk's Codex
-/// reads nothing of the operator's `~/.codex`.
+/// Codex, Codex's own records of Desk's sessions, and `auth.json`, a link to
+/// the operator's own Codex sign-in. Desk's Codex reads nothing else of the
+/// operator's `~/.codex`.
 pub fn desk_codex_home(state_dir: &Path) -> PathBuf {
     desk_dir(state_dir).join("codex")
 }

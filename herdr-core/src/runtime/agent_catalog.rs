@@ -77,17 +77,14 @@ impl Runtime {
             self.ask_ai_catalog_read();
         }
         let kit = self.kit_states.get(machine);
-        let ai = &self.snapshot.status.background_ai;
         let items: Vec<Value> = hide_agent_adapter::ADAPTERS
             .iter()
             .filter_map(|adapter| Some((adapter, adapter.start?)))
             .map(|(adapter, dialect)| {
                 let options = dialect.options();
-                let reported = kit.and_then(|kit| kit.agents.iter().find(|agent| agent.id == adapter.id));
+                let reported = self.catalog_kit_agent(machine, adapter.id);
                 let installed = reported.map(|agent| agent.availability == hide_kit::Availability::Available);
-                let provider = on_core
-                    .then(|| ai.providers.iter().find(|provider| provider.agent == adapter.id))
-                    .flatten();
+                let provider = on_core.then(|| self.catalog_provider(adapter.id)).flatten();
                 let takes_model = !options.model.is_empty();
                 // Hide AI reads model lists on the core's own machine only;
                 // a device's agents are started with a model the caller
@@ -148,5 +145,32 @@ impl Runtime {
             "models_read_pending": pending,
             "items": items,
         }))
+    }
+
+    /// What `machine`'s kit last reported of the agent `id` (its switch and
+    /// whether its program is there), which the catalog, Settings › Agents
+    /// and Desk's bar read alike; `None` before the kit reported it.
+    pub(super) fn catalog_kit_agent(
+        &self,
+        machine: &str,
+        id: &str,
+    ) -> Option<&crate::model::KitAgentSnapshot> {
+        self.kit_states
+            .get(machine)
+            .and_then(|kit| kit.agents.iter().find(|agent| agent.id == id))
+    }
+
+    /// Hide AI's last read of the agent `id` on the core's own machine,
+    /// which says whether the operator is signed in to it.
+    pub(super) fn catalog_provider(
+        &self,
+        id: &str,
+    ) -> Option<&crate::model::BackgroundAiProviderSnapshot> {
+        self.snapshot
+            .status
+            .background_ai
+            .providers
+            .iter()
+            .find(|provider| provider.agent == id)
     }
 }
