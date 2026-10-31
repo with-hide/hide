@@ -11,7 +11,7 @@ publish = false
 # core-host-node D-02).
 
 [dependencies]
-ureq = { version = "=3.4.2", default-features = false, features = ["rustls"] }
+ureq = { version = "=3.5.0", default-features = false, features = ["rustls"] }
 hide-agent-adapter = { path = "../hide-agent-adapter" }
 base64 = "=0.23.1"
 cap-std = "=4.0.3"
@@ -24,9 +24,9 @@ hide-node-link = { path = "../hide-node-link" }
 hide-platform = { path = "../hide-platform" }
 hide-session = { path = "../hide-session" }
 ignore = "=0.4.33"
-libc = "=0.2.190"
+libc = "=0.2.191"
 serde = { version = "=1.0.229", features = ["derive"] }
-serde_json = "=1.0.151"
+serde_json = "=1.0.154"
 sha2 = "=0.10.9"
 tempfile = "=3.27.0"
 workspace-hack = { version = "0.1", path = "../workspace-hack" }
