@@ -279,6 +279,8 @@ POLICY_ONLY = (
     "scripts/check-release-assets.mjs", "scripts/release-draft.mjs", "scripts/premerge-check.py",
     "scripts/merge-order.py", "scripts/pull_requests.py",
     "scripts/pen-*.mjs", "scripts/design-review.mjs", "scripts/web-shell-measure/*",
+    # The pane holder's measurement, run by hand on macOS (docs/PERFORMANCE_TESTING.md).
+    "scripts/holder-perf.py",
     # The design contract's generators, their token map and its checks:
     # `design-contract.yml` runs the checks on every pull request, and what
     # the generators write (`web/src/tokens.css`, the Pen files) is committed
