@@ -284,7 +284,7 @@ impl Holder {
         let writer = master
             .take_writer()
             .map_err(|error| format!("the PTY's input: {error}"))?;
-        let pane = Pane::new(size)?;
+        let pane = Pane::new(size, config.theme.as_ref())?;
         let listener = LocalListener::bind(&config.socket).map_err(|error| {
             format!(
                 "{} could not be listened on: {error}",
@@ -532,8 +532,12 @@ impl Holder {
                 &[("generation", generation.into())],
             );
         }
+        // In this order, so no change falls between them: the PTY reader
+        // marks this outbox changed from here on, the first screen is asked
+        // for whole, and only then can the writer take it.
         let screen = sends.contains(&Capability::Screen);
         if screen {
+            self.publish(Some(outbox.clone()));
             outbox.redraw();
         }
         spawn_named("connection-writer", {
@@ -551,9 +555,6 @@ impl Holder {
             let sender = self.sender.clone();
             move || read_connection(stream, generation, &sender)
         });
-        if screen {
-            self.publish(Some(outbox.clone()));
-        }
         self.current = Some(Connection {
             generation,
             outbox,
@@ -1417,7 +1418,7 @@ impl Asked {
         let group = group
             .recv_timeout(deadline.saturating_duration_since(Instant::now()))
             .map_err(|_| "the pane's terminal did not say its foreground".to_owned())?;
-        Ok(crate::ask::processes(self.shell, group))
+        Ok(crate::ask::processes(self.shell, group, &self.log))
     }
 }
 

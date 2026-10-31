@@ -3,8 +3,12 @@
 //!
 //! ```text
 //! hide-holder --socket <path> --rows <n> --cols <n> --cwd <dir> [--log <file>]
-//!             [--id <pane>] -- <program> [<argument>...]
+//!             [--id <pane>] [--theme <theme>] -- <program> [<argument>...]
 //! ```
+//!
+//! `--theme` is the node's theme in `Theme::to_arg`'s form, so the program's
+//! first color question is answered with it; without it the parser's own
+//! defaults answer until a theme message comes.
 //!
 //! It is started as a resident child (`hide_platform::process::start_resident`)
 //! lent one pipe, on which it says `ready holder=<pid> program=<pid>
@@ -43,6 +47,7 @@ pub struct Config {
     pub log: Option<PathBuf>,
     pub id: String,
     pub program: Vec<std::ffi::OsString>,
+    pub theme: Option<hide_holder_protocol::Theme>,
 }
 
 fn parse(mut arguments: impl Iterator<Item = std::ffi::OsString>) -> Result<Config, String> {
@@ -52,6 +57,7 @@ fn parse(mut arguments: impl Iterator<Item = std::ffi::OsString>) -> Result<Conf
     let mut cwd = None;
     let mut log = None;
     let mut id = String::new();
+    let mut theme = None;
     let value = |name: &str, arguments: &mut dyn Iterator<Item = std::ffi::OsString>| {
         arguments
             .next()
@@ -70,6 +76,15 @@ fn parse(mut arguments: impl Iterator<Item = std::ffi::OsString>) -> Result<Conf
                 id = value("--id", &mut arguments)?
                     .into_string()
                     .map_err(|_| "--id is not text".to_owned())?;
+            }
+            Some("--theme") => {
+                let text = value("--theme", &mut arguments)?
+                    .into_string()
+                    .map_err(|_| "--theme is not text".to_owned())?;
+                theme = Some(
+                    hide_holder_protocol::Theme::from_arg(&text)
+                        .map_err(|error| format!("--theme: {error}"))?,
+                );
             }
             Some("--") => break,
             _ => return Err(format!("unknown argument {argument:?}")),
@@ -90,6 +105,7 @@ fn parse(mut arguments: impl Iterator<Item = std::ffi::OsString>) -> Result<Conf
         log,
         id,
         program,
+        theme,
     })
 }
 

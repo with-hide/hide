@@ -5,13 +5,14 @@
 //!
 //! | Question | Answered by |
 //! | --- | --- |
-//! | DSR 5n, 6n; DECRQM; DECRQSS; XTVERSION; kitty keyboard `CSI ? u`; DA1, DA2, DA3 | libghostty |
+//! | DSR 5n, 6n; DECRQM; DECRQSS; XTVERSION; DA1, DA2, DA3 | libghostty |
 //! | OSC 10, 11, 12 and OSC 4 colors, `CSI ? 996 n` | libghostty, from the theme the node sent ([`crate::pane`]) |
 //! | XTGETTCAP | libghostty, less what this path does not carry ([`UNSUPPORTED`]) |
 //! | XTWINOPS 18t, the text area in cells | the holder ([`Scanner`]) |
 //! | XTWINOPS 14t, 16t | nobody: the cell's pixel size is not known, and libghostty answers neither without it |
 //! | mode 2048 size reports (`CSI 48 ; ... t`) | nobody: libghostty's carry pixels it does not know, so the holder drops them ([`keeps`]) |
 //! | `CSI ? 997 n` appearance changes | the holder, on a theme whose appearance changed while mode 2031 is on |
+//! | kitty keyboard `CSI ? u` | nobody: libghostty's answer is dropped ([`keeps`]), since this path cannot send kitty keys, and a program that hears none keeps to legacy keys |
 //! | ENQ, OSC 52 reads, 21t title | nobody |
 //!
 //! DA1 is libghostty's default, VT220 with ANSI color (`CSI ? 62 ; 22 c`),
@@ -33,6 +34,8 @@ pub enum Mark {
     CursorShape(u8),
     /// RIS: the terminal was reset.
     Reset,
+    /// DECSET 2026: the program began a synchronized frame.
+    SyncStart,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -143,6 +146,13 @@ impl Scanner {
 fn csi_mark(params: &[u8], last: u8) -> Option<Mark> {
     match (params, last) {
         (b"18", b't') => Some(Mark::SizeQuery),
+        (params, b'h') => {
+            let modes = params.strip_prefix(b"?")?;
+            modes
+                .split(|byte| *byte == b';')
+                .any(|mode| mode == b"2026")
+                .then_some(Mark::SyncStart)
+        }
         (params, b'q') => {
             let shape = params.strip_suffix(b" ")?;
             if shape.is_empty() {
@@ -157,10 +167,18 @@ fn csi_mark(params: &[u8], last: u8) -> Option<Mark> {
 
 /// Whether libghostty's `answer` is one this path keeps: an XTGETTCAP
 /// answer naming a capability in [`UNSUPPORTED`] is dropped, as one
-/// libghostty does not know is, and so is an in-band size report, whose
-/// pixels nobody knows.
+/// libghostty does not know is, and so are an in-band size report, whose
+/// pixels nobody knows, and the kitty keyboard flags, whose keys this path
+/// cannot send.
 pub fn keeps(answer: &[u8]) -> bool {
     if answer.starts_with(b"\x1b[48;") && answer.ends_with(b"t") {
+        return false;
+    }
+    if let Some(flags) = answer
+        .strip_prefix(b"\x1b[?")
+        .and_then(|rest| rest.strip_suffix(b"u"))
+        && flags.iter().all(u8::is_ascii_digit)
+    {
         return false;
     }
     let Some(rest) = answer.strip_prefix(b"\x1bP1+r") else {
@@ -234,6 +252,14 @@ mod tests {
     }
 
     #[test]
+    fn each_synchronized_frame_start_is_found() {
+        assert_eq!(
+            marks(&[b"\x1b[?2026h", b"x\x1b[?2026l\x1b[?1;2026h\x1b[2026h"]),
+            [(0, 8, Mark::SyncStart), (1, 19, Mark::SyncStart)]
+        );
+    }
+
+    #[test]
     fn only_unsupported_capabilities_are_dropped() {
         assert!(!keeps(b"\x1bP1+r4D73=5C45\x1b\\"));
         assert!(!keeps(b"\x1bP1+r536574756C63=x\x1b\\"));
@@ -241,5 +267,8 @@ mod tests {
         assert!(keeps(b"\x1b[?62;22c"));
         assert!(!keeps(b"\x1b[48;30;100;30;100t"));
         assert!(keeps(b"\x1b[8;30;100t"));
+        assert!(!keeps(b"\x1b[?0u"));
+        assert!(!keeps(b"\x1b[?31u"));
+        assert!(keeps(b"\x1b[?2004;2$y"));
     }
 }

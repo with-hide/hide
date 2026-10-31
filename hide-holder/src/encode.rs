@@ -73,19 +73,23 @@ impl Encoder {
             .filter(|last| !full && last.cols == frame.cols && last.rows == frame.rows);
         let mut out = Pieces::default();
         out.push(SYNC_START);
-        out.push(b"\x1b[?25l");
         // Unlinked cells must not inherit a hyperlink left open.
         out.push(b"\x1b]8;;\x1b\\");
         let full = previous.is_none();
         let mut wrote = false;
         match &previous {
             None => {
+                // After the reset, whose soft reset shows the cursor again.
                 out.push(RESET);
+                out.push(b"\x1b[?25l");
                 write_all_cells(&mut out, &frame);
                 self.shape = 0;
                 wrote = true;
             }
-            Some(previous) => wrote |= write_changed_cells(&mut out, &frame, previous),
+            Some(previous) => {
+                out.push(b"\x1b[?25l");
+                wrote |= write_changed_cells(&mut out, &frame, previous);
+            }
         }
         let unchanged = previous
             .as_ref()
@@ -178,6 +182,7 @@ fn build_sgr(fg: Color, bg: Color, bits: u16) -> String {
     }
     for (bit, part) in [
         (attrs::BLINK, "5"),
+        (attrs::INVISIBLE, "8"),
         (attrs::STRIKE, "9"),
         (attrs::OVERLINE, "53"),
     ] {
@@ -346,7 +351,7 @@ mod tests {
             rows: 512,
             cols: 512,
         };
-        let mut pane = crate::pane::Pane::new(size).unwrap();
+        let mut pane = crate::pane::Pane::new(size, None).unwrap();
         let mut screen = String::new();
         for row in 0..size.rows {
             screen.push_str(&format!("\x1b[{};1H", row + 1));

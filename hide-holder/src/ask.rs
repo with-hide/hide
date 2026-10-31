@@ -5,9 +5,12 @@
 
 use hide_holder_protocol::{Answer, Foreground, MAX_PROCESSES, Member, Unknown};
 
+use crate::log::Log;
+
 /// `shell` is the pane's program; `group` the terminal's foreground group,
-/// or why it is not known.
-pub fn processes(shell: u32, group: Result<u32, Unknown>) -> Answer {
+/// or why it is not known. A group the system would not list is logged with
+/// the system's reason, which the answer does not carry.
+pub fn processes(shell: u32, group: Result<u32, Unknown>, log: &Log) -> Answer {
     let foreground = match group {
         Ok(group) => match hide_platform::process::group_members(group) {
             Ok(mut pids) => {
@@ -24,7 +27,13 @@ pub fn processes(shell: u32, group: Result<u32, Unknown>) -> Answer {
                         .collect(),
                 }
             }
-            Err(_) => Foreground::Unknown(Unknown::Unreadable),
+            Err(error) => {
+                log.event(
+                    "holder.processes_unreadable",
+                    &[("group", group.into()), ("error", error.to_string().into())],
+                );
+                Foreground::Unknown(Unknown::Unreadable)
+            }
         },
         Err(why) => Foreground::Unknown(why),
     };

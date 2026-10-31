@@ -2126,9 +2126,11 @@ Every connection the holder does not take is closed with a reason, including one
 The screen goes out as display-only fragments (`screen`, the one capability a holder sends), drawn from the parsed terminal, never the program's own bytes (PRD engine-bundle-2-pane-holder D-7).
 A full fragment starts an epoch, numbered across the holder's life, at sequence 0, and the deltas after it count up in the same epoch; each carries the size it was drawn at.
 A full one first puts the receiver back to a known display (the normal screen, a soft reset, autowrap and reverse video off, a clear), so whatever the receiver drew before is gone, and no fragment turns on an input mode or asks the receiver anything, so a terminal that draws one answers nothing; the encoder is Herdr v0.9.5's `render_ansi.rs`, changed for this (`hide-holder/src/encode.rs`).
+Hidden text is sent as hidden (SGR 8), not as Herdr draws it, in the background color, which shows it on the receiver's default background.
 The screen is pulled, not pushed: the PTY reader only marks it changed, and the connection's own writer draws it as it is when the connection can take a write, at most once per 16 ms, so a slow node gets fewer, larger fragments and never a queue, and with no connection nothing is drawn.
+The reader wakes the writer only when the writer waits for a change, not while it waits out the 16 ms, as Herdr's render signal does: a wake per read cost a 100 MB flood about 100,000 wakes and put the holder's CPU above the Herdr server's.
 A connection is sent a full fragment when it takes the pane over, after a resize and when it asks for a redraw, which is how a receiver that lost fragments, or fell behind, is put right.
-While the program holds its output (synchronized output, mode 2026) the writer waits, up to one second from when the hold began, so a half-drawn screen is not sent.
+While the program holds its output (synchronized output, mode 2026) the writer waits, up to one second from the latest start of the hold, which each `?2026h` restarts as in Ghostty and kitty, so a half-drawn screen is not sent.
 A full screen larger than one fragment is split between rows into several, the first full and the rest deltas of its epoch; a row is bounded well below a fragment (64 bytes of text and a 2 KiB link per cell, 1024 columns), so a screen is never refused: closing a connection for its size would recur on every reattach to the same screen.
 
 Input bytes go to the program as they came, already encoded by the node.
@@ -2137,7 +2139,9 @@ Input moves a scrolled view back to the bottom.
 Input and the answers to the program's questions reach the PTY through one writer, in the order they came.
 
 The holder answers the program's questions whether or not a node is connected, each once, in the order asked; who answers what is fixed in a table in `hide-holder/src/answers.rs`, split between libghostty and the holder so nothing is answered twice.
-Color questions are answered from the theme the node sends (the first one it has, then each change); a color the program set itself wins over the theme until it resets it, and a reset returns to the theme.
+Color questions are answered from the theme the node gives at the holder's start (`--theme`, part of the pane start a node adapter makes, so the program's first question is answered before any node connects), then from each change a connection sends; a color the program set itself wins over the theme until it resets it, and a reset returns to the theme.
+A color no theme names, as in a start without one, is answered with libghostty's default, as Herdr does, so a program never waits out its own timeout for an answer.
+The kitty keyboard query (`CSI ? u`) is not answered: this path sends no kitty-encoded keys, so the program keeps to legacy keys (D-9).
 Nothing that needs the cell's pixel size is answered while it is unknown, and the device attributes and XTGETTCAP advertise only what this path carries.
 Answers wait for the PTY behind a 64 KiB queue; past it an answer is dropped and logged once (`holder.answers_dropped`), and the program's output goes on being read.
 

@@ -389,9 +389,12 @@ pub enum Appearance {
 /// The colors the node draws the pane with. The holder answers the
 /// program's color questions with them until the program sets its own, and
 /// again once it resets them (PRD engine-bundle-2-pane-holder D-9). A node
-/// sends one after its hello and again whenever its theme changes; a color
-/// left `None` is one the node does not know, and a question about it goes
-/// unanswered.
+/// passes the one it has when it starts the holder (`--theme`, in
+/// [`Theme::to_arg`]'s form), so the program's first question is answered
+/// with it, and sends one whenever its theme changes. A color left `None` is
+/// one the node does not know, and a question about it is answered with the
+/// parser's own default, as every question is when no theme was given, so a
+/// program never waits for an answer that does not come.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Theme {
     pub foreground: Option<Rgb>,
@@ -400,6 +403,90 @@ pub struct Theme {
     /// Palette entries the theme sets; the rest keep the xterm defaults.
     pub palette: Vec<(u8, Rgb)>,
     pub appearance: Appearance,
+}
+
+impl Theme {
+    fn put(&self, payload: &mut Vec<u8>) {
+        put_rgb(payload, self.foreground);
+        put_rgb(payload, self.background);
+        put_rgb(payload, self.cursor);
+        payload.push(match self.appearance {
+            Appearance::Unknown => 0,
+            Appearance::Dark => 1,
+            Appearance::Light => 2,
+        });
+        let palette = &self.palette[..self.palette.len().min(256)];
+        payload.extend_from_slice(&(palette.len() as u16).to_le_bytes());
+        for (index, color) in palette {
+            payload.extend_from_slice(&[*index, color.r, color.g, color.b]);
+        }
+    }
+
+    fn take(payload: &mut Payload<'_>) -> Result<Self, FrameError> {
+        let foreground = payload.rgb()?;
+        let background = payload.rgb()?;
+        let cursor = payload.rgb()?;
+        let appearance = match payload.u8()? {
+            0 => Appearance::Unknown,
+            1 => Appearance::Dark,
+            2 => Appearance::Light,
+            other => {
+                return Err(FrameError::Malformed(format!(
+                    "an unknown appearance {other}"
+                )));
+            }
+        };
+        let count = payload.u16()? as usize;
+        if count > 256 {
+            return Err(FrameError::Malformed(format!(
+                "{count} palette entries are past the bound"
+            )));
+        }
+        let palette = (0..count)
+            .map(|_| {
+                let entry = payload.take(4)?;
+                Ok((
+                    entry[0],
+                    Rgb {
+                        r: entry[1],
+                        g: entry[2],
+                        b: entry[3],
+                    },
+                ))
+            })
+            .collect::<Result<_, FrameError>>()?;
+        Ok(Self {
+            foreground,
+            background,
+            cursor,
+            palette,
+            appearance,
+        })
+    }
+
+    /// The theme as the holder's `--theme` argument: the message's bytes
+    /// in hex, at most 2,070 characters.
+    pub fn to_arg(&self) -> String {
+        let mut payload = Vec::new();
+        self.put(&mut payload);
+        payload.iter().map(|byte| format!("{byte:02x}")).collect()
+    }
+
+    /// Reads a `--theme` argument [`Theme::to_arg`] wrote.
+    pub fn from_arg(text: &str) -> Result<Self, String> {
+        if !text.len().is_multiple_of(2) || text.len() > 2 * (16 + 256 * 4) {
+            return Err("the theme is not a theme argument".to_owned());
+        }
+        let bytes = (0..text.len())
+            .step_by(2)
+            .map(|at| u8::from_str_radix(text.get(at..at + 2).unwrap_or("zz"), 16))
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|_| "the theme is not hex".to_owned())?;
+        let mut payload = Payload(&bytes);
+        let theme = Self::take(&mut payload).map_err(|error| error.to_string())?;
+        payload.end().map_err(|error| error.to_string())?;
+        Ok(theme)
+    }
 }
 
 /// Which keys were held, as one bit each.
@@ -835,19 +922,7 @@ pub fn write_client(writer: &mut impl Write, message: &ClientMessage) -> io::Res
         }
         ClientMessage::Theme(theme) => {
             let mut payload = Vec::with_capacity(16 + theme.palette.len() * 4);
-            put_rgb(&mut payload, theme.foreground);
-            put_rgb(&mut payload, theme.background);
-            put_rgb(&mut payload, theme.cursor);
-            payload.push(match theme.appearance {
-                Appearance::Unknown => 0,
-                Appearance::Dark => 1,
-                Appearance::Light => 2,
-            });
-            let palette = &theme.palette[..theme.palette.len().min(256)];
-            payload.extend_from_slice(&(palette.len() as u16).to_le_bytes());
-            for (index, color) in palette {
-                payload.extend_from_slice(&[*index, color.r, color.g, color.b]);
-            }
+            theme.put(&mut payload);
             write_frame(writer, kind::THEME, &payload)
         }
         ClientMessage::Redraw => write_frame(writer, kind::REDRAW, &[]),
@@ -985,47 +1060,7 @@ pub fn read_client(reader: &mut impl Read) -> Result<ClientMessage, FrameError> 
             modifiers: Modifiers(payload.u8()?),
         }),
         kind::RESIZE => ClientMessage::Resize(payload.size()?),
-        kind::THEME => {
-            let foreground = payload.rgb()?;
-            let background = payload.rgb()?;
-            let cursor = payload.rgb()?;
-            let appearance = match payload.u8()? {
-                0 => Appearance::Unknown,
-                1 => Appearance::Dark,
-                2 => Appearance::Light,
-                other => {
-                    return Err(FrameError::Malformed(format!(
-                        "an unknown appearance {other}"
-                    )));
-                }
-            };
-            let count = payload.u16()? as usize;
-            if count > 256 {
-                return Err(FrameError::Malformed(format!(
-                    "{count} palette entries are past the bound"
-                )));
-            }
-            let palette = (0..count)
-                .map(|_| {
-                    let entry = payload.take(4)?;
-                    Ok((
-                        entry[0],
-                        Rgb {
-                            r: entry[1],
-                            g: entry[2],
-                            b: entry[3],
-                        },
-                    ))
-                })
-                .collect::<Result<_, FrameError>>()?;
-            ClientMessage::Theme(Theme {
-                foreground,
-                background,
-                cursor,
-                palette,
-                appearance,
-            })
-        }
+        kind::THEME => ClientMessage::Theme(Theme::take(&mut payload)?),
         kind::REDRAW => ClientMessage::Redraw,
         kind::RELEASE => ClientMessage::Release,
         kind::TERMINATE => ClientMessage::Terminate,
@@ -1502,6 +1537,38 @@ mod tests {
             HolderMessage::Closed(closed),
         ] {
             assert_eq!(round_holder(message.clone()), message);
+        }
+    }
+
+    #[test]
+    fn a_theme_passes_as_a_start_argument() {
+        let theme = Theme {
+            foreground: Some(Rgb { r: 1, g: 2, b: 3 }),
+            background: None,
+            cursor: Some(Rgb {
+                r: 255,
+                g: 0,
+                b: 16,
+            }),
+            palette: (0..=255)
+                .map(|index| {
+                    (
+                        index,
+                        Rgb {
+                            r: index,
+                            g: 0,
+                            b: 1,
+                        },
+                    )
+                })
+                .collect(),
+            appearance: Appearance::Light,
+        };
+        let arg = theme.to_arg();
+        assert!(arg.len() <= 2 * (16 + 256 * 4), "{}", arg.len());
+        assert_eq!(Theme::from_arg(&arg), Ok(theme));
+        for wrong in ["", "0", "zz", &format!("{arg}00")] {
+            assert!(Theme::from_arg(wrong).is_err(), "{wrong:?}");
         }
     }
 

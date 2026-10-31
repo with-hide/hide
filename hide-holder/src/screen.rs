@@ -58,6 +58,7 @@ pub mod attrs {
     pub const BLINK: u16 = 1 << 4;
     pub const STRIKE: u16 = 1 << 5;
     pub const OVERLINE: u16 = 1 << 6;
+    pub const INVISIBLE: u16 = 1 << 7;
     pub const UNDERLINE_STYLE_SHIFT: u16 = 8;
     pub const UNDERLINE_STYLE: u16 = 0xf << UNDERLINE_STYLE_SHIFT;
 }
@@ -401,9 +402,6 @@ fn style(cells: &RowCellIter<'_>, basic: &CellBasicData, palette: &Palette) -> (
         .map(|color| cell_color(color, palette))
         .or_else(|| cells.bg_color().ok().flatten().map(Color::from))
         .or(palette.default_bg);
-    if style.invisible {
-        fg = bg.or(palette.default_bg);
-    }
     if style.inverse {
         // A default background swapped into the foreground would draw in
         // the receiver's default foreground, the same hue as the new
@@ -421,6 +419,9 @@ fn style(cells: &RowCellIter<'_>, basic: &CellBasicData, palette: &Palette) -> (
         (style.blink, attrs::BLINK),
         (style.strikethrough, attrs::STRIKE),
         (style.overline, attrs::OVERLINE),
+        // Sent as SGR 8 rather than drawn in the background's color, which
+        // is unknown while the background is the receiver's default.
+        (style.invisible, attrs::INVISIBLE),
     ] {
         if on {
             bits |= bit;

@@ -29,7 +29,9 @@ use crate::screen::{Capture, Defaults, Frame};
 const SCROLLBACK_BYTES: usize = 2 * 1024 * 1024;
 
 /// How long the screen waits on a program that turned synchronized output
-/// on before it is drawn anyway, as Ghostty and kitty bound it.
+/// on before it is drawn anyway, as Ghostty and kitty bound it: from the
+/// last time it turned it on, so a program that begins each frame with it
+/// is waited on per frame.
 pub const SYNC_LIMIT: Duration = Duration::from_secs(1);
 
 /// What a wheel turned into.
@@ -53,14 +55,16 @@ pub struct Pane {
     appearance: Appearance,
     /// The program chose its cursor's shape (DECSCUSR other than 0).
     shaped: bool,
-    /// Since when the program has held synchronized output on.
+    /// When the program last turned synchronized output on, while it is on.
     sync_since: Option<Instant>,
     /// The next capture reads every row: the colors or the size changed.
     everything: bool,
 }
 
 impl Pane {
-    pub fn new(size: Size) -> Result<Self, String> {
+    /// A parser of `size` that answers color questions with `theme`, or
+    /// with its own defaults where the theme, or any theme, is missing.
+    pub fn new(size: Size, theme: Option<&Theme>) -> Result<Self, String> {
         let mut terminal = Terminal::new(size.cols, size.rows, SCROLLBACK_BYTES)
             .map_err(|error| format!("the terminal parser: {error}"))?;
         let replies = Arc::new(Mutex::new(Vec::new()));
@@ -80,7 +84,7 @@ impl Pane {
         let (initial_fg, initial_bg) = capture
             .colors(&terminal)
             .map_err(|error| format!("the terminal parser's colors: {error}"))?;
-        Ok(Self {
+        let mut pane = Self {
             terminal,
             capture,
             replies,
@@ -95,12 +99,26 @@ impl Pane {
             shaped: false,
             sync_since: None,
             everything: true,
-        })
+        };
+        let theme = theme.cloned().unwrap_or(Theme {
+            foreground: None,
+            background: None,
+            cursor: None,
+            palette: Vec::new(),
+            appearance: Appearance::Unknown,
+        });
+        pane.theme(&theme, &mut Vec::new())
+            .map_err(|error| format!("the terminal parser's theme: {error}"))?;
+        Ok(pane)
     }
 
     /// Parses what the program wrote and answers what it asked, in the
     /// order it asked.
     pub fn feed(&mut self, bytes: &[u8], answers: &mut Vec<u8>) {
+        self.feed_at(bytes, answers, Instant::now());
+    }
+
+    fn feed_at(&mut self, bytes: &[u8], answers: &mut Vec<u8>, now: Instant) {
         self.marks.clear();
         self.scanner.scan(bytes, &mut self.marks);
         let mut start = 0;
@@ -118,6 +136,7 @@ impl Pane {
                 }
                 Mark::CursorShape(shape) => self.shaped = shape != 0,
                 Mark::Reset => self.shaped = false,
+                Mark::SyncStart => self.sync_since = Some(now),
             }
             start = end;
         }
@@ -129,7 +148,9 @@ impl Pane {
             .unwrap_or(false);
         self.sync_since = match (synchronized, self.sync_since) {
             (true, Some(since)) => Some(since),
-            (true, None) => Some(Instant::now()),
+            // Turned on in a way the scanner does not mark, such as with
+            // other modes in one sequence.
+            (true, None) => Some(now),
             (false, _) => None,
         };
     }
@@ -177,10 +198,16 @@ impl Pane {
                 b: color.b,
             })
         };
-        self.terminal
-            .set_default_color(DefaultColor::Foreground, rgb(theme.foreground))?;
-        self.terminal
-            .set_default_color(DefaultColor::Background, rgb(theme.background))?;
+        // A color the node did not give is answered with the parser's own
+        // default, never left unanswered.
+        self.terminal.set_default_color(
+            DefaultColor::Foreground,
+            rgb(theme.foreground).or(self.defaults.initial_fg),
+        )?;
+        self.terminal.set_default_color(
+            DefaultColor::Background,
+            rgb(theme.background).or(self.defaults.initial_bg),
+        )?;
         self.terminal
             .set_default_color(DefaultColor::Cursor, rgb(theme.cursor))?;
         let mut palette = hide_vt::default_palette();
@@ -340,7 +367,6 @@ impl Pane {
     /// in the whole screen.
     pub fn read(&self, lines: u16) -> Result<Answer, hide_vt::Error> {
         let lines = usize::from(lines);
-        let total = self.terminal.total_rows()?;
         let cols = self.terminal.cols()?;
         let Some((start, end)) = self.recent_range(lines)? else {
             return Ok(Answer::Text {
@@ -353,7 +379,9 @@ impl Pane {
             (cols.saturating_sub(1), end as u32),
             false,
         )?;
-        let mut truncated = total > lines;
+        // Rows before the range were left out; blank rows after the last
+        // with text are not text.
+        let mut truncated = start > 0;
         if text.len() > MAX_READ_BYTES {
             let mut cut = text.len() - MAX_READ_BYTES;
             while !text.is_char_boundary(cut) {
@@ -425,7 +453,7 @@ mod tests {
     use super::*;
 
     fn pane() -> Pane {
-        Pane::new(Size { rows: 24, cols: 80 }).unwrap()
+        Pane::new(Size { rows: 24, cols: 80 }, None).unwrap()
     }
 
     fn answers(pane: &mut Pane, chunks: &[&[u8]]) -> String {
@@ -469,7 +497,7 @@ mod tests {
         assert_eq!(
             asked,
             "\x1b[1;1R\x1b[?62;22c\x1b[>1;0;0c\x1bP!|00000000\x1b\\\x1b[8;24;80t\
-             \x1b]4;1;rgb:cccc/6666/6666\x07\x1bP1+r544E=787465726D2D323536636F6C6F72\x1b\\\
+             \x1b]10;rgb:ffff/ffff/ffff\x07\x1b]4;1;rgb:cccc/6666/6666\x07\x1bP1+r544E=787465726D2D323536636F6C6F72\x1b\\\
              \x1bP1+r5463\x1b\\\x1bP>|libghostty\x1b\\\x1b[?2004;2$y"
         );
     }
@@ -503,7 +531,12 @@ mod tests {
     #[test]
     fn a_theme_answers_colors_until_the_program_sets_its_own_and_after_it_resets_them() {
         let mut pane = pane();
-        assert_eq!(answers(&mut pane, &[b"\x1b]10;?\x07\x1b]11;?\x07"]), "");
+        // No theme yet: the parser's own defaults answer, so a program
+        // never waits for an answer that does not come.
+        assert_eq!(
+            answers(&mut pane, &[b"\x1b]10;?\x07\x1b]11;?\x07"]),
+            "\x1b]10;rgb:ffff/ffff/ffff\x07\x1b]11;rgb:0000/0000/0000\x07"
+        );
         theme(&mut pane, Appearance::Dark);
         let asked = b"\x1b]10;?\x07\x1b]11;?\x1b\\\x1b]4;1;?\x07";
         let themed = "\x1b]10;rgb:1010/2020/3030\x07\x1b]11;rgb:0101/0202/0303\x1b\\\
@@ -518,6 +551,39 @@ mod tests {
         assert_eq!(answers(&mut pane, &[asked]), own);
         answers(&mut pane, &[b"\x1b]110\x07\x1b]104;1\x07"]);
         assert_eq!(answers(&mut pane, &[asked]), themed);
+    }
+
+    #[test]
+    fn a_theme_given_at_the_start_answers_the_first_question() {
+        let theme = Theme {
+            foreground: None,
+            background: Some(Rgb { r: 1, g: 2, b: 3 }),
+            cursor: None,
+            palette: Vec::new(),
+            appearance: Appearance::Light,
+        };
+        let mut pane = Pane::new(Size { rows: 24, cols: 80 }, Some(&theme)).unwrap();
+        assert_eq!(
+            answers(&mut pane, &[b"\x1b]10;?\x07\x1b]11;?\x07\x1b[?996n"]),
+            "\x1b]10;rgb:ffff/ffff/ffff\x07\x1b]11;rgb:0101/0202/0303\x07\x1b[?997;2n"
+        );
+    }
+
+    #[test]
+    fn synchronized_output_is_waited_on_from_each_start_up_to_its_bound() {
+        let mut pane = pane();
+        let start = Instant::now();
+        pane.feed_at(b"\x1b[?2026hframe one", &mut Vec::new(), start);
+        assert_eq!(pane.drawable_at(), Some(start + SYNC_LIMIT));
+        // A program that begins its next frame before ending the last is
+        // waited on from that frame's start, as Ghostty and kitty do.
+        let later = start + Duration::from_millis(700);
+        pane.feed_at(b"\x1b[?2026hframe two", &mut Vec::new(), later);
+        assert_eq!(pane.drawable_at(), Some(later + SYNC_LIMIT));
+        pane.feed_at(b"more", &mut Vec::new(), later + Duration::from_millis(500));
+        assert_eq!(pane.drawable_at(), Some(later + SYNC_LIMIT));
+        pane.feed_at(b"\x1b[?2026l", &mut Vec::new(), later);
+        assert_eq!(pane.drawable_at(), None);
     }
 
     #[test]
@@ -621,16 +687,30 @@ mod tests {
         };
         assert!(!truncated, "{text}");
         assert!(text.starts_with("row 0\n"), "{text}");
+        // Every row with text, and blank rows after it on the screen.
+        let mut short = Pane::new(Size { rows: 24, cols: 80 }, None).unwrap();
+        answers(&mut short, &[b"one\r\ntwo"]);
+        let Answer::Text { text, truncated } = short.read(2).unwrap() else {
+            panic!("not a text");
+        };
+        assert_eq!((text.as_str(), truncated), ("one\ntwo", false));
+        let Answer::Text { text, truncated } = short.read(1).unwrap() else {
+            panic!("not a text");
+        };
+        assert_eq!((text.as_str(), truncated), ("two", true));
     }
 
     #[test]
     fn a_read_past_its_byte_bound_keeps_the_newest_text() {
         // Each cell carries a letter and four combining marks, nine bytes,
         // so 512 rows of 512 hold far more than the bound.
-        let mut pane = Pane::new(Size {
-            rows: 512,
-            cols: 512,
-        })
+        let mut pane = Pane::new(
+            Size {
+                rows: 512,
+                cols: 512,
+            },
+            None,
+        )
         .unwrap();
         let cell = "e\u{301}\u{302}\u{303}\u{304}";
         let mut screen = String::new();
