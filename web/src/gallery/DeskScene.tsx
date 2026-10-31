@@ -50,7 +50,8 @@ export const DESK_SCENES = [
   { state: "s6", label: "6 Threads 목록, 핀 안 됨 (B28)" },
   { state: "s7", label: "7 결과물이 스레드 옆에 (B30, B31)" },
   { state: "every-output", label: "▣ 모든 결과물, 칸 머리 📌 (B31, B32)" },
-  { state: "agent", label: "에이전트 고르기 · 바꿈 (B4, B8, B9)" },
+  { state: "agent", label: "에이전트 고르기 · 바꿈 (B4, B8, B9, B44)" },
+  { state: "agent-preparing", label: "Desk를 켠 직후 · 어댑터 받는 중 (B44, D-80)" },
   { state: "mention", label: "@ 메뉴: 부모만, 물어보는 자식은 펼침 (B18, B48)" },
   { state: "mention-open", label: "@ 메뉴: ▾ 하위 펼침 (B48)" },
   { state: "mention-search", label: "@리뷰: 부모 먼저, 그다음 하위 세션 (B48)" },
@@ -115,7 +116,7 @@ function ChatComposer({ agents = AGENTS, selection, menuOpen = null, value = "",
   const [text, setText] = useState(value);
   return (
     <DeskComposer value={text} draft={{ text, mentions }} label={t("desk.composer.label")} placeholder={t("desk.composer.placeholder")} answering={answering} focused={mention !== null} menu={mention} menuOpen={mention !== null} onChange={setText} onSend={noop} onStop={noop} onAttach={noop} onRemoveAttachment={noop}>
-      <DeskAgentBar agents={agents} selection={selection} open={menuOpen} onAgent={noop} onModel={noop} onEffort={noop} />
+      <DeskAgentBar agents={agents} selection={selection} open={menuOpen} onAgent={noop} onModel={noop} onEffort={noop} onAgentSettings={noop} />
     </DeskComposer>
   );
 }
@@ -263,6 +264,9 @@ export function DeskScene({ params }: { params: URLSearchParams }) {
     }
     case "agent":
       body = <DeskRoom pinned={false} rail={rail(false, false)} chat={chat(switchedItems(now), <ChatComposer selection={CODEX} menuOpen="agent" />)} />;
+      break;
+    case "agent-preparing":
+      body = <DeskRoom pinned={false} rail={rail(false, false)} chat={chat([], <ChatComposer agents={AGENTS_PREPARING} selection={CLAUDE} menuOpen="agent" />)} />;
       break;
     case "mention":
     case "mention-open":

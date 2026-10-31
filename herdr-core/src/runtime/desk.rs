@@ -44,6 +44,8 @@ pub(super) struct Desk {
     /// How a thread of Desk's other than the worker answers.
     handle: Option<jobs::DeskHandle>,
     agents: BTreeMap<AdapterId, (DeskAgentState, Option<String>)>,
+    /// What the catalog said of each agent when the bar was last composed.
+    catalog: Vec<CatalogAgent>,
     host: Host,
     /// The turn under way: its tag and the reply written so far.
     turn: Option<Turn>,
@@ -52,6 +54,27 @@ pub(super) struct Desk {
     /// Watch asks for Desk's sessions that have no watch yet, by intent;
     /// only sessions the ledger still holds are kept.
     watch_asks: HashMap<String, jobs::WatchAsk>,
+}
+
+/// One of Desk's agents as Hide's catalog says it on the core's own
+/// machine: switched on in its kit (D-79) and whether the operator is signed
+/// in to it (D-81).
+#[derive(Clone, Debug, PartialEq)]
+struct CatalogAgent {
+    id: AdapterId,
+    enabled: bool,
+    signed_in: Option<bool>,
+}
+
+/// Whether Hide AI's read of an agent says the operator is signed in, as
+/// Settings words it: only a read that checked the sign-in says yes, and an
+/// unread or failed read says nothing.
+fn signed_in(provider: &crate::model::BackgroundAiProviderSnapshot) -> Option<bool> {
+    match provider.state.as_str() {
+        "needs_login" => Some(false),
+        "ready" | "usage_limited" if provider.login_checked => Some(true),
+        _ => None,
+    }
 }
 
 #[derive(Default)]
@@ -231,6 +254,7 @@ impl Runtime {
                 // Desk switched off looks at no agent (D-76).
                 if self.desk.stored.settings.enabled {
                     let _ = handle.orders.send(Order::Check);
+                    self.ask_ai_catalog_read();
                 }
                 self.desk.worker = Some(handle);
             }
@@ -270,7 +294,10 @@ impl Runtime {
             DeskEvent::Restart => self.desk_restart(),
             DeskEvent::Select(payload) => self.desk_select(payload),
             DeskEvent::Install(payload) => {
-                self.order(Order::Install(payload.agent));
+                self.order(Order::Install {
+                    adapter: payload.agent,
+                    asked: true,
+                });
                 false
             }
             DeskEvent::SettingsSet(payload) => self.desk_settings(payload),
@@ -376,10 +403,7 @@ impl Runtime {
         let Some(agent) = self.desk.stored.selection.agent else {
             return refused("no_agent");
         };
-        if !matches!(
-            self.desk.agents.get(&agent).map(|(state, _)| *state),
-            Some(DeskAgentState::Ready | DeskAgentState::LoginNeeded)
-        ) {
+        if self.desk_agent_state(agent) != DeskAgentState::Ready {
             return refused("agent_not_ready");
         }
         if self.desk.turn.is_some() {
@@ -530,6 +554,14 @@ impl Runtime {
         if let Some(agent) = payload.agent
             && Some(agent) != selection.agent
         {
+            // Only an agent the bar offers is chosen: switched on in the
+            // catalog and one Desk can hold in its ask mode (D-53, D-79).
+            if matches!(
+                self.desk_agent_state(agent),
+                DeskAgentState::Off | DeskAgentState::NoAskMode
+            ) {
+                return refused("agent_not_offered");
+            }
             if self.desk.turn.is_some() {
                 self.order(Order::Cancel);
             }
@@ -552,12 +584,6 @@ impl Runtime {
                 model: payload.model,
                 effort: payload.effort,
             };
-            if matches!(
-                self.desk.agents.get(&agent).map(|(state, _)| *state),
-                Some(DeskAgentState::NotInstalled | DeskAgentState::InstallFailed)
-            ) {
-                self.order(Order::Install(agent));
-            }
             return true;
         }
         let model = payload.model.or(selection.model.clone());
@@ -622,7 +648,10 @@ impl Runtime {
         let enabled = self.desk.stored.settings.enabled;
         if enabled != before.enabled {
             if enabled {
+                // Every adapter is installed now, not when it is chosen
+                // (D-80), and the sign-ins are read (D-81).
                 self.order(Order::Check);
+                self.ask_ai_catalog_read();
                 self.desk_start_queued();
             } else {
                 // Off ends the process and its turn; the sessions it started
@@ -631,6 +660,9 @@ impl Runtime {
                     self.order(Order::Cancel);
                 }
                 self.end_desk_process();
+                // Every adapter download under way ends with Desk, not later
+                // in a folder nobody watches (engineering principle 14).
+                self.order(Order::Off);
             }
         }
         before != self.desk.stored.settings
@@ -744,12 +776,17 @@ impl Runtime {
                     return false;
                 }
             }
-            Report::Installing(adapter) => {
+            Report::Installing { adapter, asked } => {
                 self.desk
                     .agents
                     .insert(adapter, (DeskAgentState::Preparing, None));
-                self.push_notice(DeskNotice::Preparing, Some(adapter), None);
-                self.save_desk();
+                // The installs Desk turned on starts show in the bar alone;
+                // a `다시 받기` the operator pressed is answered where it was
+                // pressed.
+                if asked {
+                    self.push_notice(DeskNotice::Preparing, Some(adapter), None);
+                    self.save_desk();
+                }
             }
             Report::Starting => {
                 self.desk.host.state = Some(DeskHostState::Starting);
@@ -780,9 +817,14 @@ impl Runtime {
                 self.save_desk();
             }
             Report::OpenFailed { adapter, error } => {
+                // A sign-in the agent asked for leaves its state as it is: the
+                // bar's sign-in word is Settings' read of the agent (D-81).
                 let (state, notice, detail) = match error {
                     OpenError::Login => (
-                        DeskAgentState::LoginNeeded,
+                        self.desk
+                            .agents
+                            .get(&adapter)
+                            .map_or(DeskAgentState::Ready, |(state, _)| *state),
                         DeskNotice::LoginNeeded,
                         Some(adapter.login_command().to_owned()),
                     ),
@@ -816,7 +858,15 @@ impl Runtime {
                 {
                     self.desk.stored.conversation.remove(turn.message);
                 }
-                self.desk.agents.insert(adapter, (state, detail.clone()));
+                let kept = if notice == DeskNotice::LoginNeeded {
+                    self.desk
+                        .agents
+                        .get(&adapter)
+                        .and_then(|(_, kept)| kept.clone())
+                } else {
+                    detail.clone()
+                };
+                self.desk.agents.insert(adapter, (state, kept));
                 self.desk.host = Host {
                     state: Some(DeskHostState::Idle),
                     ..Host::default()
@@ -1002,15 +1052,23 @@ impl Runtime {
         if self.desk.worker.is_none() {
             return;
         }
+        let catalog = self.desk_catalog();
+        self.desk.catalog = catalog.clone();
         let desk = &self.desk;
-        let agents = AdapterId::ALL
+        let selected = desk.stored.selection.agent;
+        let agents = catalog
             .into_iter()
-            .map(|id| {
-                let (state, detail) = desk
-                    .agents
-                    .get(&id)
-                    .cloned()
-                    .unwrap_or((DeskAgentState::Checking, None));
+            .filter(|agent| agent.enabled || Some(agent.id) == selected)
+            .map(|agent| {
+                let id = agent.id;
+                let (state, detail) = if agent.enabled {
+                    desk.agents
+                        .get(&id)
+                        .cloned()
+                        .unwrap_or((DeskAgentState::Checking, None))
+                } else {
+                    (DeskAgentState::Off, None)
+                };
                 let known = desk
                     .stored
                     .choices
@@ -1023,6 +1081,7 @@ impl Runtime {
                     label: id.label(),
                     state,
                     detail,
+                    signed_in: agent.signed_in,
                     login_command: id.login_command(),
                     models: known.models,
                     efforts: known.efforts,
@@ -1055,6 +1114,46 @@ impl Runtime {
             settings: desk.stored.settings,
             lane: desk.stored.lane.clone(),
         }));
+    }
+
+    /// Desk's agents as the catalog says them now, in its order.
+    fn desk_catalog(&self) -> Vec<CatalogAgent> {
+        let node = self.node.as_str();
+        AdapterId::all()
+            .map(|id| {
+                let row = id.catalog();
+                CatalogAgent {
+                    id,
+                    enabled: self
+                        .catalog_kit_agent(node, row.id)
+                        .is_some_and(|agent| agent.enabled),
+                    signed_in: self.catalog_provider(row.id).and_then(signed_in),
+                }
+            })
+            .collect()
+    }
+
+    /// This machine's kit or Hide AI's read of its agents moved: the bar is
+    /// composed again when what it says of Desk's agents moved.
+    pub(in crate::runtime) fn desk_catalog_moved(&mut self) {
+        if self.desk.worker.is_some() && self.desk_catalog() != self.desk.catalog {
+            self.compose_desk();
+        }
+    }
+
+    /// Whether Desk can talk to `agent` now: `off` when it is not switched on
+    /// in the catalog, else what the worker last found.
+    fn desk_agent_state(&self, agent: AdapterId) -> DeskAgentState {
+        let enabled = self
+            .catalog_kit_agent(self.node.as_str(), agent.catalog().id)
+            .is_some_and(|row| row.enabled);
+        if !enabled {
+            return DeskAgentState::Off;
+        }
+        self.desk
+            .agents
+            .get(&agent)
+            .map_or(DeskAgentState::Checking, |(state, _)| *state)
     }
 
     /// Every Desk section but the reply being written.
@@ -1123,8 +1222,8 @@ mod tests {
     use super::*;
     use crate::model::DeskItem;
 
-    /// A runtime whose Desk worker is a channel the test reads, with Claude
-    /// and Pi installed.
+    /// A runtime whose Desk worker is a channel the test reads, with every
+    /// agent switched on in the catalog and ready.
     pub(super) fn runtime(root: &std::path::Path) -> (Runtime, Receiver<Order>) {
         let state = root.join("state");
         hide_platform::fs::private::create_dir_all(&state).unwrap();
@@ -1146,11 +1245,63 @@ mod tests {
         let (orders, received) = mpsc::channel();
         runtime.desk.worker = Some(worker::Handle { orders });
         runtime.desk.stored.settings.enabled = true;
-        runtime.desk_report(Report::Availability(vec![
-            (AdapterId::Claude, DeskAgentState::Ready, None),
-            (AdapterId::Pi, DeskAgentState::Ready, None),
-        ]));
+        kit_on(
+            &mut runtime,
+            &AdapterId::all()
+                .map(|agent| agent.catalog().id)
+                .collect::<Vec<_>>(),
+        );
+        runtime.desk_report(Report::Availability(
+            AdapterId::all()
+                .map(|agent| (agent, DeskAgentState::Ready, None))
+                .collect(),
+        ));
         (runtime, received)
+    }
+
+    /// Switches the agents `ids` names on in this machine's kit, the others
+    /// off, as Settings › Agents does.
+    fn kit_on(runtime: &mut Runtime, ids: &[&str]) {
+        let node = runtime.node.as_str().to_owned();
+        let mut kit = runtime.kit_state(&node);
+        kit.agents = hide_agent_adapter::ADAPTERS
+            .iter()
+            .map(|adapter| crate::model::KitAgentSnapshot {
+                id: adapter.id.to_owned(),
+                label: adapter.label.to_owned(),
+                availability: hide_kit::Availability::Available,
+                enabled: ids.contains(&adapter.id),
+                chosen: false,
+                skill: crate::model::KitPieceSnapshot {
+                    state: hide_kit::ComponentState::Installed,
+                    why: None,
+                    location: None,
+                },
+                hook: None,
+                herdr: None,
+                partial: false,
+                features: Vec::new(),
+                sessions: None,
+                update: None,
+                doc_url: String::new(),
+            })
+            .collect();
+        runtime.set_kit_state(&node, kit);
+    }
+
+    /// Hide AI's read of these agents: `(agent, state, sign-in checked)`.
+    fn read(rows: &[(&str, &str, bool)]) -> crate::model::BackgroundAiSnapshot {
+        let mut snapshot = crate::model::BackgroundAiSnapshot::unread();
+        for (agent, state, checked) in rows {
+            let row = snapshot
+                .providers
+                .iter_mut()
+                .find(|row| row.agent == *agent && row.device_id.is_none())
+                .unwrap_or_else(|| panic!("no Hide AI row for {agent}"));
+            row.state = (*state).to_owned();
+            row.login_checked = *checked;
+        }
+        snapshot
     }
 
     fn event(runtime: &mut Runtime, kind: &str, payload: serde_json::Value) -> bool {
@@ -1239,7 +1390,7 @@ mod tests {
             json!({"text": "what runs now?"})
         ));
         sent(&received);
-        opened(&mut runtime, AdapterId::Claude);
+        opened(&mut runtime, AdapterId::CLAUDE);
         let card = ask(&mut runtime);
         assert!(runtime.desk_authority("test-node").is_ok());
         let before = items(&runtime).len();
@@ -1251,7 +1402,7 @@ mod tests {
         ));
         let orders: Vec<Order> = received.try_iter().collect();
         assert!(orders.iter().any(|order| matches!(order, Order::Cancel)));
-        assert!(orders.iter().any(|order| matches!(order, Order::End)));
+        assert!(orders.iter().any(|order| matches!(order, Order::Off)));
         assert_eq!(
             runtime.desk_authority("test-node"),
             Err("desk_not_running".into())
@@ -1283,12 +1434,12 @@ mod tests {
             json!({"text": "  what runs now?  "})
         ));
         let send = sent(&received);
-        assert_eq!(send.adapter, AdapterId::Claude);
+        assert_eq!(send.adapter, AdapterId::CLAUDE);
         assert_eq!(send.text, "what runs now?");
         assert_eq!(send.resume, None);
         assert!(!event(&mut runtime, "desk_send", json!({"text": "again"})));
 
-        opened(&mut runtime, AdapterId::Claude);
+        opened(&mut runtime, AdapterId::CLAUDE);
         runtime.desk_report(Report::Text {
             tag: send.tag,
             text: "two ".into(),
@@ -1332,38 +1483,159 @@ mod tests {
     }
 
     #[test]
-    fn codex_is_chosen_installed_and_made_the_default_like_any_agent() {
+    fn the_bar_lists_every_agent_switched_on_in_the_catalog_with_its_sign_in_as_settings_reads_it()
+    {
+        let root = tempfile::tempdir().unwrap();
+        let (mut runtime, _received) = runtime(root.path());
+        // Switched off in Settings › Agents: Grok is left out.
+        kit_on(
+            &mut runtime,
+            &[
+                "claude-code",
+                "codex",
+                "opencode",
+                "pi",
+                "omp",
+                "antigravity",
+            ],
+        );
+        runtime.ingest_background_ai(read(&[
+            ("claude-code", "ready", true),
+            ("codex", "ready", true),
+            ("antigravity", "needs_login", true),
+            ("opencode", "ready", false),
+        ]));
+        let desk = runtime.snapshot.desk.as_ref().unwrap();
+        let bar: Vec<(&str, &str, Option<bool>)> = desk
+            .agents
+            .iter()
+            .map(|agent| (agent.id.as_str(), agent.label, agent.signed_in))
+            .collect();
+        assert_eq!(
+            bar,
+            [
+                ("claude", "Claude Code", Some(true)),
+                ("codex", "Codex", Some(true)),
+                // A read that could not check the sign-in claims none.
+                ("opencode", "OpenCode", None),
+                // Not read yet: nothing is claimed.
+                ("pi", "Pi", None),
+                ("omp", "omp", None),
+                ("agy", "Antigravity", Some(false)),
+            ]
+        );
+        // An adapter in place is not a sign-in: Pi is ready and its sign-in
+        // still unknown.
+        let pi = desk
+            .agents
+            .iter()
+            .find(|agent| agent.id == AdapterId::PI)
+            .unwrap();
+        assert_eq!((pi.state, pi.signed_in), (DeskAgentState::Ready, None));
+        assert!(!event(
+            &mut runtime,
+            "desk_select",
+            json!({"agent": "grok"})
+        ));
+    }
+
+    #[test]
+    fn the_chosen_agent_switched_off_stays_named_and_is_not_sent_to() {
+        let root = tempfile::tempdir().unwrap();
+        let (mut runtime, received) = runtime(root.path());
+        event(&mut runtime, "desk_select", json!({"agent": "pi"}));
+        kit_on(&mut runtime, &["claude-code"]);
+        let desk = runtime.snapshot.desk.as_ref().unwrap();
+        let shown: Vec<(&str, DeskAgentState)> = desk
+            .agents
+            .iter()
+            .map(|agent| (agent.id.as_str(), agent.state))
+            .collect();
+        assert_eq!(
+            shown,
+            [
+                ("claude", DeskAgentState::Ready),
+                ("pi", DeskAgentState::Off)
+            ]
+        );
+        assert!(!event(&mut runtime, "desk_send", json!({"text": "hi"})));
+        assert!(
+            received
+                .try_iter()
+                .all(|order| !matches!(order, Order::Send(_)))
+        );
+    }
+
+    #[test]
+    fn choosing_an_agent_installs_nothing_and_desk_turned_on_looks_at_every_agent() {
         let root = tempfile::tempdir().unwrap();
         let (mut runtime, received) = runtime(root.path());
         event(&mut runtime, "desk_select", json!({"agent": "codex"}));
-        event(&mut runtime, "desk_install", json!({"agent": "codex"}));
         event(
             &mut runtime,
             "desk_settings_set",
             json!({"default_agent": "codex"}),
         );
-        assert_eq!(runtime.desk.stored.selection.agent, Some(AdapterId::Codex));
+        assert_eq!(runtime.desk.stored.selection.agent, Some(AdapterId::CODEX));
         assert_eq!(
             runtime.desk.stored.settings.default_agent,
-            Some(AdapterId::Codex)
+            Some(AdapterId::CODEX)
         );
         assert!(
             received
                 .try_iter()
-                .any(|order| matches!(order, Order::Install(AdapterId::Codex)))
+                .all(|order| !matches!(order, Order::Install { .. })),
+            "an agent is not installed when chosen (D-80)"
         );
+        event(&mut runtime, "desk_settings_set", json!({"enabled": false}));
+        event(&mut runtime, "desk_settings_set", json!({"enabled": true}));
+        assert!(
+            received
+                .try_iter()
+                .any(|order| matches!(order, Order::Check))
+        );
+        // `다시 받기` installs the one agent, as the operator's own ask.
+        event(&mut runtime, "desk_install", json!({"agent": "codex"}));
+        assert!(received.try_iter().any(|order| matches!(
+            order,
+            Order::Install {
+                adapter: AdapterId::CODEX,
+                asked: true
+            }
+        )));
     }
 
     #[test]
-    fn a_message_codex_could_not_take_for_its_sign_in_leaves_the_conversation_with_the_login_line()
-    {
+    fn the_installs_desk_turned_on_starts_show_in_the_bar_and_not_in_the_conversation() {
+        let root = tempfile::tempdir().unwrap();
+        let (mut runtime, _received) = runtime(root.path());
+        let before = runtime.desk.stored.conversation.items.len();
+        runtime.desk_report(Report::Installing {
+            adapter: AdapterId::CODEX,
+            asked: false,
+        });
+        assert_eq!(runtime.desk.stored.conversation.items.len(), before);
+        assert_eq!(
+            runtime.desk.agents[&AdapterId::CODEX].0,
+            DeskAgentState::Preparing
+        );
+        runtime.desk_report(Report::Installing {
+            adapter: AdapterId::PI,
+            asked: true,
+        });
+        assert!(matches!(
+            runtime.desk.stored.conversation.items.last(),
+            Some(DeskItem::Notice {
+                notice: DeskNotice::Preparing,
+                ..
+            })
+        ));
+    }
+
+    #[test]
+    fn a_message_codex_could_not_take_for_its_sign_in_points_at_the_operator_s_own_codex_login() {
         let root = tempfile::tempdir().unwrap();
         let (mut runtime, received) = runtime(root.path());
-        runtime.desk_report(Report::Availability(vec![(
-            AdapterId::Codex,
-            DeskAgentState::Ready,
-            None,
-        )]));
         event(&mut runtime, "desk_select", json!({"agent": "codex"}));
         assert!(event(
             &mut runtime,
@@ -1372,7 +1644,7 @@ mod tests {
         ));
         sent(&received);
         runtime.desk_report(Report::OpenFailed {
-            adapter: AdapterId::Codex,
+            adapter: AdapterId::CODEX,
             error: OpenError::Login,
         });
         let conversation = &runtime.desk.stored.conversation.items;
@@ -1385,11 +1657,12 @@ mod tests {
         assert!(conversation.iter().any(|item| matches!(
             item,
             DeskItem::Notice { notice: DeskNotice::LoginNeeded, detail: Some(command), .. }
-                if command == "hide desk login codex"
+                if command == "codex login"
         )));
+        // The bar's word stays Settings' read; the agent is still ready.
         assert_eq!(
-            runtime.desk.agents[&AdapterId::Codex].0,
-            DeskAgentState::LoginNeeded
+            runtime.desk.agents[&AdapterId::CODEX].0,
+            DeskAgentState::Ready
         );
     }
 
@@ -1400,7 +1673,7 @@ mod tests {
         event(&mut runtime, "desk_select", json!({"agent": "pi"}));
         event(&mut runtime, "desk_send", json!({"text": "make a file"}));
         sent(&received);
-        opened(&mut runtime, AdapterId::Pi);
+        opened(&mut runtime, AdapterId::PI);
         let card = ask(&mut runtime);
         assert_eq!(runtime.snapshot.desk.as_ref().unwrap().approvals_waiting, 1);
 
@@ -1444,7 +1717,7 @@ mod tests {
         event(&mut runtime, "desk_select", json!({"agent": "claude"}));
         event(&mut runtime, "desk_send", json!({"text": "edit it"}));
         let first = sent(&received);
-        opened(&mut runtime, AdapterId::Claude);
+        opened(&mut runtime, AdapterId::CLAUDE);
         let card = ask(&mut runtime);
 
         assert!(event(&mut runtime, "desk_restart", json!({})));
@@ -1481,7 +1754,7 @@ mod tests {
         event(&mut runtime, "desk_select", json!({"agent": "claude"}));
         event(&mut runtime, "desk_send", json!({"text": "hello"}));
         let first = sent(&received);
-        opened(&mut runtime, AdapterId::Claude);
+        opened(&mut runtime, AdapterId::CLAUDE);
         runtime.desk_report(Report::Text {
             tag: first.tag,
             text: "hi".into(),
@@ -1495,15 +1768,18 @@ mod tests {
         assert!(matches!(
             items(&runtime).last(),
             Some(DeskItem::Switch {
-                to: AdapterId::Pi,
+                to: AdapterId::PI,
                 carried: crate::model::DeskCarried::All,
                 ..
             })
         ));
         event(&mut runtime, "desk_send", json!({"text": "continue"}));
         let send = sent(&received);
-        assert_eq!(send.adapter, AdapterId::Pi);
-        assert_eq!(send.carried.as_deref(), Some("Operator: hello\nClaude: hi"));
+        assert_eq!(send.adapter, AdapterId::PI);
+        assert_eq!(
+            send.carried.as_deref(),
+            Some("Operator: hello\nClaude Code: hi")
+        );
     }
 
     #[test]
@@ -1516,7 +1792,7 @@ mod tests {
             json!({"text": "no agent yet"})
         ));
         runtime.desk_report(Report::Availability(vec![(
-            AdapterId::Pi,
+            AdapterId::PI,
             DeskAgentState::CliMissing,
             Some("pi".into()),
         )]));

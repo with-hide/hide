@@ -2636,9 +2636,10 @@ export type ProjectSuggestions = {
   global?: { path: string; unusable: GlobalInstructionUnusable | null } | null;
 };
 
-/** An agent Desk talks to over ACP (PRD Desk 1차); `contracts/snapshot-wire-enums.json` `desk_agent`. */
-export type DeskAgentId = "claude" | "codex" | "pi";
-export type DeskAgentState = "checking" | "ready" | "preparing" | "not_installed" | "install_failed" | "node_missing" | "cli_missing" | "login_needed" | "no_ask_mode";
+/** An agent Desk talks to over ACP, by its Herdr name (PRD Desk 1차, D-79); `contracts/snapshot-wire-enums.json` `desk_agent`. */
+export type DeskAgentId = "claude" | "codex" | "grok" | "opencode" | "pi" | "omp" | "agy";
+/** `desk_agent_state`; `off` is a chosen agent Settings › Agents has since switched off. */
+export type DeskAgentState = "checking" | "ready" | "preparing" | "install_failed" | "node_missing" | "cli_missing" | "no_ask_mode" | "off";
 export type DeskHostState = "idle" | "starting" | "ready" | "thinking" | "stopped";
 export type DeskApprovalState = "waiting" | "allowed" | "rejected" | "closed";
 export type DeskNotice = "blocked" | "preparing" | "host_stopped" | "resume_failed" | "login_needed" | "install_failed" | "no_ask_mode" | "turn_failed";
@@ -2654,7 +2655,9 @@ export type DeskAgent = {
   state: DeskAgentState;
   /** What the state names: the Node version found, the install's last line, the missing CLI. */
   detail: string | null;
-  /** Shown with `login_needed`. */
+  /** The sign-in Settings › Agents reads for this agent (D-81): `null` while it is unread. */
+  signed_in: boolean | null;
+  /** The agent's own sign-in command, for the `login_needed` notice. */
   login_command: string;
   /** What the agent's last session offered; empty until one opened. */
   models: DeskChoice[];

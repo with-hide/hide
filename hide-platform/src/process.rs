@@ -950,6 +950,27 @@ pub fn run_to_end(
     deadline: std::time::Duration,
     stop: &std::sync::atomic::AtomicBool,
 ) -> Result<Finished, RunFailure> {
+    run_owned(command, deadline, stop, OwnedChild::spawn)
+}
+
+/// [`run_to_end`] with the child started tied to this process
+/// ([`OwnedChild::spawn_tied`]), so its tree also ends when this process
+/// ends without returning here: for a long run a daemon starts that must not
+/// outlive it, such as a download into a folder the daemon owns.
+pub fn run_to_end_tied(
+    command: &mut Command,
+    deadline: std::time::Duration,
+    stop: &std::sync::atomic::AtomicBool,
+) -> Result<Finished, RunFailure> {
+    run_owned(command, deadline, stop, OwnedChild::spawn_tied)
+}
+
+fn run_owned(
+    command: &mut Command,
+    deadline: std::time::Duration,
+    stop: &std::sync::atomic::AtomicBool,
+    spawn: fn(&mut Command) -> io::Result<OwnedChild>,
+) -> Result<Finished, RunFailure> {
     use std::process::Stdio;
     use std::time::Instant;
     let end = Instant::now().checked_add(deadline).ok_or_else(|| {
@@ -962,8 +983,11 @@ pub fn run_to_end(
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
-    let mut child = OwnedChild::spawn(command).map_err(RunFailure::Start)?;
+    let mut child = spawn(command).map_err(RunFailure::Start)?;
     child.bounded_drop = true;
+    // A tied child's input is always a pipe; closing it gives the child the
+    // same end of input as a null one.
+    drop(child.take_stdin());
     let outcome = capture_run(&mut child, end, stop);
     let cleanup = child
         .kill_tree()

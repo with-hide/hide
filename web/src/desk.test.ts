@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { askedOnce, askingCount, markedMention, mentionParts, outputKindOf, sessionFacts, threadGroups, threadLines, threadTurns, unseenOutputs, type AcpSessionUpdate, type DeskJob } from "./desk";
+import { agentPickable, askedOnce, askingCount, deskAgentWord, markedMention, mentionParts, outputKindOf, sessionFacts, threadGroups, threadLines, threadTurns, unseenOutputs, type AcpSessionUpdate, type DeskAgent, type DeskJob } from "./desk";
 import type { AgentRow } from "./snapshot";
 
 const job = (id: string, state: DeskJob["state"], extra: Partial<DeskJob> = {}): DeskJob => ({
@@ -141,6 +141,29 @@ describe("an asking thread's question (D-75)", () => {
     expect(askedOnce(turns("라이트는 끝났어요.\n다크 모드도 찍을까요?"), "다크 모드도 찍을까요?")[0]!.answer.map((line) => line.text)).toEqual(["라이트는 끝났어요."]);
     expect(askedOnce(turns("라이트는 끝났어요."), "다크 모드도 찍을까요?")[0]!.answer.map((line) => line.text)).toEqual(["라이트는 끝났어요."]);
     expect(askedOnce(turns("다크 모드도 찍을까요?"), null)[0]!.answer).toHaveLength(1);
+  });
+});
+
+describe("an agent in Desk's bar (D-79, D-81, B44)", () => {
+  const agent = (state: DeskAgent["state"], signed_in: boolean | null): DeskAgent => ({ id: "codex", label: "Codex", state, detail: null, signed_in, login_command: "codex login", models: [], efforts: [] });
+
+  it("says a ready agent's sign-in as Settings reads it, and nothing while that is unread", () => {
+    expect(deskAgentWord(agent("ready", true))).toBe("signed_in");
+    expect(deskAgentWord(agent("ready", false))).toBe("signed_out");
+    expect(deskAgentWord(agent("ready", null))).toBeNull();
+  });
+
+  it("says the state of one not ready, whatever its sign-in, so a downloaded adapter never reads as signed in", () => {
+    expect(deskAgentWord(agent("preparing", true))).toBe("preparing");
+    expect(deskAgentWord(agent("install_failed", true))).toBe("install_failed");
+    expect(deskAgentWord(agent("no_ask_mode", true))).toBe("no_ask_mode");
+  });
+
+  it("cannot be given an agent Hide cannot hold to asking or one switched off, and can be given one signed out", () => {
+    expect(agentPickable(agent("no_ask_mode", true))).toBe(false);
+    expect(agentPickable(agent("off", true))).toBe(false);
+    expect(agentPickable(agent("ready", false))).toBe(true);
+    expect(agentPickable(agent("preparing", null))).toBe(true);
   });
 });
 

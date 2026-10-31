@@ -138,7 +138,8 @@ export function DeskScreen({ actions }: { actions: Actions }) {
   const answering = turn !== null;
   const liveText = live?.text ? live.text : null;
   const agent = desk?.selection.agent ? desk.agents.find((one) => one.id === desk.selection.agent) : undefined;
-  const canSend = !answering && (agent?.state === "ready" || agent?.state === "login_needed");
+  // A ready agent takes a message even when Settings reads it signed out: the agent's own refusal comes back as the sign-in line (B6).
+  const canSend = !answering && agent?.state === "ready";
 
   const lastUserId = (list: readonly DeskItem[]) => list.reduce((last, item) => (item.kind === "user" ? item.id : last), -1);
   useEffect(() => {
@@ -330,7 +331,7 @@ export function DeskScreen({ actions }: { actions: Actions }) {
       onSend={() => send()}
       onStop={actions.deskStop}
     >
-      <DeskAgentBar agents={desk.agents} selection={desk.selection} onAgent={(id) => actions.deskSelect(id, null, null)} onModel={(model) => actions.deskSelect(null, model, null)} onEffort={(effort) => actions.deskSelect(null, null, effort)} />
+      <DeskAgentBar agents={desk.agents} selection={desk.selection} onAgent={(id) => actions.deskSelect(id, null, null)} onModel={(model) => actions.deskSelect(null, model, null)} onEffort={(effort) => actions.deskSelect(null, null, effort)} onAgentSettings={() => actions.openSettings("agents")} />
     </DeskComposer>
   );
   return (

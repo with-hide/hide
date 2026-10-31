@@ -974,6 +974,7 @@ dependencies = [
 name = "hide-desk"
 version = "0.1.0"
 dependencies = [
+ "hide-agent-adapter",
  "hide-platform",
  "hide-shell",
  "serde",

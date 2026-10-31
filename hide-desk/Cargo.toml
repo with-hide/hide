@@ -3,12 +3,13 @@ name = "hide-desk"
 version = "0.1.0"
 edition = "2024"
 publish = false
-description = "Desk's agent boundary: the ACP client for the operator's chosen agent, its adapters, their installation and the permission rule"
+description = "Desk's agent boundary: the ACP client for the operator's chosen agent, how each catalog agent speaks ACP in its ask mode, the adapters' installation and the permission rule"
 
 [lib]
 name = "hide_desk"
 
 [dependencies]
+hide-agent-adapter = { path = "../hide-agent-adapter" }
 hide-platform = { path = "../hide-platform" }
 hide-shell = { path = "../hide-shell" }
 serde = { version = "=1.0.229", features = ["derive"] }

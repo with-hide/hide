@@ -34,9 +34,15 @@ const MAX_QUEUED_INCOMING: usize = 4096;
 const MAX_ANNOUNCED: usize = 256;
 
 pub(super) enum Order {
-    /// Look at every adapter: installed, Node, its own CLI.
+    /// Look at every agent (its adapter, Node, its own CLI) and install
+    /// every adapter not in place (D-80).
     Check,
-    Install(AdapterId),
+    /// Install `adapter`'s adapter; `asked` when the operator pressed
+    /// `다시 받기`.
+    Install {
+        adapter: AdapterId,
+        asked: bool,
+    },
     Send(Send),
     /// Ends the turn under way.
     Cancel,
@@ -51,6 +57,9 @@ pub(super) enum Order {
     },
     /// Ends the Desk process; the next message starts a new one.
     End,
+    /// Desk was turned off: ends the process and every install under way,
+    /// whose staging folders go with them (engineering principle 14).
+    Off,
     Incoming(Incoming),
     Installed(AdapterId, Result<(), InstallError>),
     /// The runtime is gone: end the process and the worker.
@@ -73,7 +82,10 @@ pub(super) struct Send {
 /// What the worker tells the runtime.
 pub(super) enum Report {
     Availability(Vec<(AdapterId, DeskAgentState, Option<String>)>),
-    Installing(AdapterId),
+    Installing {
+        adapter: AdapterId,
+        asked: bool,
+    },
     Starting,
     Opened {
         adapter: AdapterId,
@@ -152,6 +164,7 @@ pub(super) fn start(
         queued: Arc::new(AtomicUsize::new(0)),
         dropped_reported: Arc::new(AtomicBool::new(false)),
         stop: Arc::new(AtomicBool::new(false)),
+        on: false,
         running: None,
         installing: Vec::new(),
     };
@@ -170,8 +183,12 @@ struct Worker {
     queued: Arc<AtomicUsize>,
     /// Reply text was dropped past [`MAX_QUEUED_INCOMING`] and logged once.
     dropped_reported: Arc<AtomicBool>,
-    /// Set when the worker ends, so an install under way stops.
+    /// Raised when Desk is turned off or the worker ends, so every install
+    /// under way stops; turning Desk on again starts a new one.
     stop: Arc<AtomicBool>,
+    /// Whether Desk is on, as the last `Check` or `Off` said: an install a
+    /// quick off and on stopped is started again only while it is.
+    on: bool,
     running: Option<Running>,
     installing: Vec<AdapterId>,
 }
@@ -211,7 +228,7 @@ impl Worker {
     fn handle(&mut self, order: Order) {
         match order {
             Order::Check => self.check(),
-            Order::Install(adapter) => self.install(adapter),
+            Order::Install { adapter, asked } => self.install(adapter, asked),
             Order::Send(send) => self.send(send),
             Order::Cancel => {
                 if let Some(running) = &self.running
@@ -227,6 +244,12 @@ impl Worker {
             }
             Order::SetChoice { config_id, value } => self.set_choice(&config_id, &value),
             Order::End => self.end_process(false),
+            Order::Off => {
+                self.on = false;
+                self.stop.store(true, Ordering::SeqCst);
+                self.stop = Arc::new(AtomicBool::new(false));
+                self.end_process(false);
+            }
             Order::Shutdown => {}
             Order::Incoming(incoming) => {
                 self.queued.fetch_sub(1, Ordering::SeqCst);
@@ -234,6 +257,14 @@ impl Worker {
             }
             Order::Installed(adapter, result) => {
                 self.installing.retain(|installing| *installing != adapter);
+                if let Err(InstallError::Stopped) = result {
+                    // Desk was turned off and maybe on again before this
+                    // install ended: the agent is looked at again while on.
+                    if self.on {
+                        self.install(adapter, false);
+                    }
+                    return;
+                }
                 if let Err(error) = result {
                     crate::diagnostic!(json!({
                         "component": "desk",
@@ -244,7 +275,11 @@ impl Worker {
                     self.report(Report::Availability(vec![install_state(adapter, &error)]));
                     return;
                 }
-                self.check();
+                self.report(Report::Availability(vec![(
+                    adapter,
+                    DeskAgentState::Ready,
+                    None,
+                )]));
             }
         }
     }
@@ -263,35 +298,42 @@ impl Worker {
         }
     }
 
-    fn check(&self) {
+    /// Looks at every agent and installs each adapter that is not in
+    /// place, all at once (D-80): an agent is never left waiting for its
+    /// adapter until it is chosen.
+    fn check(&mut self) {
+        self.on = true;
         let places = self.platform.places();
         let node = programs::find_cli("node");
         let node_state = match &node {
             None => Err(InstallError::NodeMissing),
             Some(node) => install::check_node(node),
         };
-        let states = AdapterId::ALL
-            .into_iter()
+        let mut missing = Vec::new();
+        let states = AdapterId::all()
             .filter(|adapter| !self.installing.contains(adapter))
-            .map(|adapter| {
-                if let Err(error) = &node_state {
-                    return install_state(adapter, error);
-                }
-                if let Some(cli) = adapter.own_cli()
-                    && programs::find_cli(cli).is_none()
-                {
-                    return (adapter, DeskAgentState::CliMissing, Some(cli.to_owned()));
-                }
-                match install::installed(&places.adapters, adapter) {
-                    Some(_) => (adapter, DeskAgentState::Ready, None),
-                    None => (adapter, DeskAgentState::NotInstalled, None),
+            .filter_map(|adapter| {
+                match look(
+                    adapter,
+                    &node_state,
+                    &|cli| programs::find_cli(cli).is_some(),
+                    &|adapter| install::installed(&places.adapters, adapter).is_some(),
+                ) {
+                    Look::State(state, detail) => Some((adapter, state, detail)),
+                    Look::Install => {
+                        missing.push(adapter);
+                        None
+                    }
                 }
             })
             .collect();
         self.report(Report::Availability(states));
+        for adapter in missing {
+            self.install(adapter, false);
+        }
     }
 
-    fn install(&mut self, adapter: AdapterId) {
+    fn install(&mut self, adapter: AdapterId, asked: bool) {
         if self.installing.contains(&adapter) {
             return;
         }
@@ -321,7 +363,7 @@ impl Worker {
         match spawned {
             Ok(_) => {
                 self.installing.push(adapter);
-                self.report(Report::Installing(adapter));
+                self.report(Report::Installing { adapter, asked });
             }
             Err(error) => {
                 let error = InstallError::Failed(error.to_string());
@@ -403,9 +445,16 @@ impl Worker {
         let adapter = send.adapter;
         let places = self.platform.places();
         let failed = |what: &str| OpenError::Failed(what.to_owned());
-        let package = install::installed(&places.adapters, adapter)
-            .ok_or_else(|| failed("the agent is not installed"))?;
-        let node = programs::find_cli("node").ok_or_else(|| failed("node is missing"))?;
+        let package = match adapter.pin() {
+            Some(_) => Some((
+                install::installed(&places.adapters, adapter)
+                    .ok_or_else(|| failed("the agent's adapter is not installed"))?,
+                programs::find_cli("node")
+                    .ok_or_else(|| failed("node is missing"))?
+                    .into_path(),
+            )),
+            None => None,
+        };
         let own_cli = match adapter.own_cli() {
             Some(cli) => Some(
                 programs::find_cli(cli)
@@ -419,17 +468,26 @@ impl Worker {
         let launch = adapter::launch(
             adapter,
             &Paths {
-                package: &package,
-                node: node.path(),
+                package: package
+                    .as_ref()
+                    .map(|(package, node)| (package.as_path(), node.as_path())),
+                own_cli: own_cli.as_deref(),
                 hide_dir: &places.hide_dir,
                 search: search.as_ref(),
                 desk: &places.desk,
                 capability: &credential.reference,
                 codex_home: &places.codex_home,
-                own_cli: own_cli.as_deref(),
+                codex_sign_in: &places.codex_sign_in,
             },
             &credential.nonce,
         );
+        let launch = match launch {
+            Ok(launch) => launch,
+            Err(error) => {
+                self.platform.revoke(&credential);
+                return Err(OpenError::Failed(error));
+            }
+        };
         let host = match Host::start(&launch, self.sink()) {
             Ok(host) => host,
             Err(error) => {
@@ -634,7 +692,7 @@ impl Worker {
         let Some(running) = &self.running else {
             return;
         };
-        if let adapter::AskMode::SetMode(ask) = running.adapter.ask_mode()
+        if let Some(adapter::AskMode::SetMode(ask)) = running.adapter.ask_mode()
             && mode != ask
         {
             let adapter = running.adapter;
@@ -784,6 +842,41 @@ fn merge_choices(choices: &mut Choices, answer: Choices) {
     }
 }
 
+/// What looking at one agent found: its state, or an adapter to install.
+#[derive(Debug, PartialEq)]
+enum Look {
+    State(DeskAgentState, Option<String>),
+    Install,
+}
+
+/// Looks at `adapter` with the account's Node (`node`), whether a CLI is on
+/// the account's `PATH` and whether an adapter is installed.
+fn look(
+    adapter: AdapterId,
+    node: &Result<(), InstallError>,
+    cli_found: &dyn Fn(&str) -> bool,
+    installed: &dyn Fn(AdapterId) -> bool,
+) -> Look {
+    if adapter.ask_mode().is_none() {
+        return Look::State(DeskAgentState::NoAskMode, None);
+    }
+    if let Some(cli) = adapter.own_cli()
+        && !cli_found(cli)
+    {
+        return Look::State(DeskAgentState::CliMissing, Some(cli.to_owned()));
+    }
+    if adapter.pin().is_none() || installed(adapter) {
+        return Look::State(DeskAgentState::Ready, None);
+    }
+    match node {
+        Err(error) => {
+            let (_, state, detail) = install_state(adapter, error);
+            Look::State(state, detail)
+        }
+        Ok(()) => Look::Install,
+    }
+}
+
 fn install_state(
     adapter: AdapterId,
     error: &InstallError,
@@ -798,9 +891,81 @@ fn install_state(
         InstallError::Failed(detail) => {
             (adapter, DeskAgentState::InstallFailed, Some(detail.clone()))
         }
+        // Reported only while Desk is on, whose next look starts it again.
+        InstallError::Stopped => (adapter, DeskAgentState::Preparing, None),
     }
 }
 
 fn hide_program() -> &'static str {
     if cfg!(windows) { "hide.exe" } else { "hide" }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn looked(
+        node: Result<(), InstallError>,
+        missing_cli: &[&str],
+        installed: &[AdapterId],
+    ) -> Vec<(&'static str, Look)> {
+        AdapterId::all()
+            .map(|adapter| {
+                (
+                    adapter.as_str(),
+                    look(
+                        adapter,
+                        &node,
+                        &|cli| !missing_cli.contains(&cli),
+                        &|adapter| installed.contains(&adapter),
+                    ),
+                )
+            })
+            .collect()
+    }
+
+    #[test]
+    fn desk_turned_on_installs_every_adapter_not_in_place_at_once() {
+        let ready = Look::State(DeskAgentState::Ready, None);
+        assert_eq!(
+            looked(Ok(()), &[], &[]),
+            [
+                ("claude", Look::Install),
+                ("codex", Look::Install),
+                ("grok", Look::State(DeskAgentState::NoAskMode, None)),
+                ("opencode", ready),
+                ("pi", Look::Install),
+                ("omp", Look::State(DeskAgentState::Ready, None)),
+                ("agy", Look::State(DeskAgentState::Ready, None)),
+            ]
+        );
+        // An installed adapter is ready without the network.
+        assert_eq!(
+            looked(Err(InstallError::NodeMissing), &[], &[AdapterId::CLAUDE])[0],
+            ("claude", Look::State(DeskAgentState::Ready, None))
+        );
+    }
+
+    #[test]
+    fn an_agent_whose_own_cli_or_node_is_missing_says_which() {
+        let looked = looked(Err(InstallError::NodeMissing), &["omp", "pi"], &[]);
+        assert_eq!(
+            looked[1],
+            ("codex", Look::State(DeskAgentState::NodeMissing, None))
+        );
+        assert_eq!(
+            looked[4],
+            (
+                "pi",
+                Look::State(DeskAgentState::CliMissing, Some("pi".into()))
+            )
+        );
+        assert_eq!(
+            looked[5],
+            (
+                "omp",
+                Look::State(DeskAgentState::CliMissing, Some("omp".into()))
+            )
+        );
+    }
 }

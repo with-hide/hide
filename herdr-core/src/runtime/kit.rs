@@ -1730,6 +1730,10 @@ impl Runtime {
             // the panes are judged again at once.
             self.sync_pane_lineage();
         }
+        // Desk's bar lists the agents switched on here (PRD Desk D-79).
+        if device_id == self.node.as_str() {
+            self.desk_catalog_moved();
+        }
         true
     }
 }

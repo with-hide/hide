@@ -33,11 +33,11 @@ const rest = {
   },
 } as unknown as SnapshotRest;
 
-const claude = (state: DeskAgent["state"]): DeskAgent => ({ id: "claude", label: "Claude", state, detail: null, login_command: "claude /login", models: [], efforts: [] });
+const claude = (state: DeskAgent["state"], signedIn: boolean | null): DeskAgent => ({ id: "claude", label: "Claude Code", state, detail: null, signed_in: signedIn, login_command: "claude /login", models: [], efforts: [] });
 
-const desk = (items: DeskItem[], state: DeskAgent["state"] = "ready"): DeskSection => ({
+const desk = (items: DeskItem[], state: DeskAgent["state"] = "ready", signedIn: boolean | null = true): DeskSection => ({
   selection: { agent: "claude", model: null, effort: null },
-  agents: [claude(state)],
+  agents: [claude(state, signedIn)],
   host: { state: "ready", detail: null },
   conversation: { generation: 1, items, dropped: 0 },
   approvals_waiting: 0,
@@ -128,13 +128,13 @@ describe("Desk's room", () => {
 
   it("puts a sent message back in the box when the agent turned out not to be signed in (B6)", async () => {
     useUiStore.setState({ deskDraft: { text: "ask @session(w1:p2 fixer)", mentions: [fixer] } });
-    await render(desk([], "login_needed"));
+    await render(desk([], "ready", false));
     await press("[data-desk-composer-send]");
-    await show(desk([{ kind: "user", id: 1, text: "ask @session(w1:p2 fixer)", at_ms: 0, mentions: [fixer] }], "login_needed"));
+    await show(desk([{ kind: "user", id: 1, text: "ask @session(w1:p2 fixer)", at_ms: 0, mentions: [fixer] }], "ready", false));
     expect(useUiStore.getState().deskDraft).toEqual({ text: "", mentions: [] });
 
     // The core takes the message out again and says how to sign in.
-    await show(desk([{ kind: "notice", id: 2, notice: "login_needed", agent: "claude", detail: "claude /login" }], "login_needed"));
+    await show(desk([{ kind: "notice", id: 2, notice: "login_needed", agent: "claude", detail: "claude /login" }], "ready", false));
     expect(useUiStore.getState().deskDraft).toEqual({ text: "ask @session(w1:p2 fixer)", mentions: [fixer] });
   });
 

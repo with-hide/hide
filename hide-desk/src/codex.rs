@@ -1,7 +1,7 @@
 //! Desk's own Codex home (with-hide/hide-private#388): the `CODEX_HOME`
 //! Desk's Codex runs with, so it reads none of the operator's `~/.codex`
-//! (global `AGENTS.md`, skills, MCP servers, hooks, rules or sign-in), and
-//! the configuration and rules Hide writes there before every start.
+//! setup (global `AGENTS.md`, skills, MCP servers, hooks or rules), and the
+//! configuration and rules Hide writes there before every start.
 //!
 //! Codex's read-only sandbox blocks loopback, so a `hide` command run inside
 //! it never reaches hided. Codex runs a command its rules `allow` outside the
@@ -12,18 +12,20 @@
 //! why a Desk spawn's words for the agent's own CLI are refused by the core
 //! rather than asked for here.
 //!
-//! The sign-in is a file in that home, so Desk needs one Codex sign-in of
-//! its own, which `hide desk login codex` makes with the adapter's own Codex.
+//! The sign-in stays the operator's own (PRD Desk D-81): the home's
+//! `auth.json` is a link to the operator's, made again before every start,
+//! as Hide AI's Codex homes do. Codex writes a refreshed token through such
+//! a link to its target (its credential file module: "Symlinks retain their
+//! target"; a hard link it refuses), so both read the same sign-in, and
+//! Hide never reads or copies it. A file an earlier Desk-only sign-in left
+//! there is replaced by the link. A link to a file needs a privilege on a
+//! Windows account without Developer Mode, where Desk's Codex then does not
+//! start.
 
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
-use std::process::Command;
 
 use crate::permission::HIDE_WITHOUT_CARD;
-
-/// What `hide desk login codex` is called; the line Desk shows when Codex
-/// needs signing in (B6).
-pub const LOGIN_COMMAND: &str = "hide desk login codex";
 
 /// Desk's Codex configuration. Commands run with Desk's own `PATH`, not the
 /// login shell's or a snapshot of it, so the `hide` Desk put first is the
@@ -76,18 +78,19 @@ pub fn home_variable(home: &Path) -> (OsString, OsString) {
     ("CODEX_HOME".into(), home.into())
 }
 
-/// `codex login` run by the adapter's own Codex with Desk's home, with the
-/// operator's own options for it (`--device-auth`, `--with-api-key`). The
-/// caller gives it the terminal and creates `home` first.
-pub fn login(node: &Path, package: &Path, home: &Path, options: &[String]) -> Command {
-    let mut command = Command::new(node);
-    command
-        .arg(package.join(crate::AdapterId::Codex.pin().entry))
-        .args(["cli", "login"])
-        .args(options);
-    let (name, value) = home_variable(home);
-    command.env(name, value);
-    command
+/// The operator's own Codex sign-in: `auth.json` in the folder their Codex
+/// uses, the account's `CODEX_HOME` or else `~/.codex` under `home`.
+pub fn operator_sign_in(home: &Path, codex_home: Option<&std::ffi::OsStr>) -> PathBuf {
+    codex_home
+        .filter(|folder| !folder.is_empty())
+        .map_or_else(|| home.join(".codex"), PathBuf::from)
+        .join("auth.json")
+}
+
+/// The link Desk makes before Codex starts, `(target, link)`: Desk's home's
+/// `auth.json` leads to the operator's sign-in.
+pub fn sign_in_link(operator: &Path, home: &Path) -> (PathBuf, PathBuf) {
+    (operator.to_path_buf(), home.join("auth.json"))
 }
 
 #[cfg(test)]
@@ -112,5 +115,22 @@ mod tests {
         );
         assert!(!rules.contains("[\"hide\", \"stop\"]"));
         assert!(!rules.contains("\"archive\""));
+    }
+
+    #[test]
+    fn the_sign_in_is_the_operator_s_from_their_codex_folder() {
+        let home = Path::new("/home/me");
+        assert_eq!(
+            operator_sign_in(home, None),
+            home.join(".codex").join("auth.json")
+        );
+        assert_eq!(
+            operator_sign_in(home, Some(std::ffi::OsStr::new("/elsewhere/codex"))),
+            Path::new("/elsewhere/codex").join("auth.json")
+        );
+        assert_eq!(
+            operator_sign_in(home, Some(std::ffi::OsStr::new(""))),
+            home.join(".codex").join("auth.json")
+        );
     }
 }

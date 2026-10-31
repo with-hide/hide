@@ -13,7 +13,7 @@ pub use journey::{JourneyAdapter, JourneyCells, JourneyLetter, JourneyWake, jour
 mod web;
 pub use web::{HookKind, WebAdapter, web_contract};
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub enum AgentId {
     ClaudeCode,
     Codex,
