@@ -205,7 +205,7 @@ export const deskEnglish = {
   "desk.settings.location.checkout": "Always this checkout",
   "desk.settings.cap": "Tasks at once",
   "desk.settings.capDetail": "More wait in line and start on their own",
-  "desk.settings.accounts": "Desk uses the account each agent CLI is signed in with. Hide keeps no keys.",
+  "desk.settings.accounts": "Desk uses the account each agent CLI is signed in with; Codex signs in once more for Desk with hide desk login codex. Hide keeps no keys.",
   "desk.pane.toDesk": "Back to Desk",
 };
 
@@ -410,7 +410,7 @@ const ko: Catalog<typeof deskEnglish> = {
   "desk.settings.location.checkout": "항상 지금 체크아웃",
   "desk.settings.cap": "동시 실행 상한",
   "desk.settings.capDetail": "넘치면 대기 중으로 줄 서고 앞의 일이 끝나면 저절로 시작해요",
-  "desk.settings.accounts": "Desk는 각 에이전트 CLI에 로그인된 계정을 써요. Hide는 키를 저장하지 않아요.",
+  "desk.settings.accounts": "Desk는 각 에이전트 CLI에 로그인된 계정을 써요. Codex는 hide desk login codex로 Desk용 로그인을 한 번 더 해요. Hide는 키를 저장하지 않아요.",
   "desk.pane.toDesk": "Desk로",
 };
 
@@ -615,7 +615,7 @@ const zh: Catalog<typeof deskEnglish> = {
   "desk.settings.location.checkout": "总是当前检出目录",
   "desk.settings.cap": "同时运行上限",
   "desk.settings.capDetail": "超出的任务排队，前面的完成后自动开始",
-  "desk.settings.accounts": "Desk 使用各智能体 CLI 登录的账号。Hide 不保存密钥。",
+  "desk.settings.accounts": "Desk 使用各智能体 CLI 登录的账号；Codex 需要用 hide desk login codex 为 Desk 再登录一次。Hide 不保存密钥。",
   "desk.pane.toDesk": "回到 Desk",
 };
 
@@ -820,7 +820,7 @@ const ja: Catalog<typeof deskEnglish> = {
   "desk.settings.location.checkout": "常にいまのチェックアウト",
   "desk.settings.cap": "同時に動かす上限",
   "desk.settings.capDetail": "超えた分は待機し、前の仕事が終わると自動で始まります",
-  "desk.settings.accounts": "Deskは各エージェント CLI にログインしたアカウントを使います。Hide はキーを保存しません。",
+  "desk.settings.accounts": "Deskは各エージェント CLI にログインしたアカウントを使います。Codex は hide desk login codex で Desk 用にもう一度ログインします。Hide はキーを保存しません。",
   "desk.pane.toDesk": "Deskへ",
 };
 

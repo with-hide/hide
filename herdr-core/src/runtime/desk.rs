@@ -65,6 +65,8 @@ struct Host {
 struct Turn {
     tag: u64,
     agent: AdapterId,
+    /// The operator's message the turn answers.
+    message: u64,
     text: String,
     cut: bool,
     started_at_ms: u64,
@@ -398,6 +400,7 @@ impl Runtime {
         self.desk.turn = Some(Turn {
             tag,
             agent,
+            message: id,
             text: String::new(),
             cut: false,
             started_at_ms: crate::links::now_ms(),
@@ -804,6 +807,13 @@ impl Runtime {
                         return true;
                     }
                 };
+                // No agent received the message: it goes back to the
+                // operator's input, and the screen keeps its words (B6).
+                if notice == DeskNotice::LoginNeeded
+                    && let Some(turn) = &self.desk.turn
+                {
+                    self.desk.stored.conversation.remove(turn.message);
+                }
                 self.desk.agents.insert(adapter, (state, detail.clone()));
                 self.desk.host = Host {
                     state: Some(DeskHostState::Idle),
@@ -1339,6 +1349,41 @@ mod tests {
             received
                 .try_iter()
                 .any(|order| matches!(order, Order::Install(AdapterId::Codex)))
+        );
+    }
+
+    #[test]
+    fn a_message_codex_could_not_take_for_its_sign_in_leaves_the_conversation_with_the_login_line()
+    {
+        let root = tempfile::tempdir().unwrap();
+        let (mut runtime, received) = runtime(root.path());
+        runtime.desk_report(Report::Availability(vec![(
+            AdapterId::Codex,
+            DeskAgentState::Ready,
+            None,
+        )]));
+        event(&mut runtime, "desk_select", json!({"agent": "codex"}));
+        assert!(event(&mut runtime, "desk_send", json!({"text": "what runs now"})));
+        sent(&received);
+        runtime.desk_report(Report::OpenFailed {
+            adapter: AdapterId::Codex,
+            error: OpenError::Login,
+        });
+        let conversation = &runtime.desk.stored.conversation.items;
+        assert!(
+            !conversation
+                .iter()
+                .any(|item| matches!(item, DeskItem::User { .. })),
+            "{conversation:?}"
+        );
+        assert!(conversation.iter().any(|item| matches!(
+            item,
+            DeskItem::Notice { notice: DeskNotice::LoginNeeded, detail: Some(command), .. }
+                if command == "hide desk login codex"
+        )));
+        assert_eq!(
+            runtime.desk.agents[&AdapterId::Codex].0,
+            DeskAgentState::LoginNeeded
         );
     }
 

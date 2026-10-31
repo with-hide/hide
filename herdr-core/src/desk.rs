@@ -113,6 +113,11 @@ impl Conversation {
         }
     }
 
+    /// Takes an item out again, such as a message no agent received.
+    pub(crate) fn remove(&mut self, id: u64) {
+        self.items.retain(|item| item.id() != id);
+    }
+
     /// Starts a new conversation: everything above is gone from the screen.
     pub(crate) fn clear(&mut self) {
         self.generation += 1;
