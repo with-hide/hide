@@ -485,21 +485,21 @@ The [external-input race](#safe-intake-and-manual-fallback) every bell has appli
 
 How soon each agent records a brief, in seconds after the typing.
 The local runs were measured 2026-10-31 on macOS at the pinned CLIs with the journey's isolated setup (private Herdr and `hided`, private HOME, the fake model held 20 s on the brief's turn so the take and the answer are apart).
-The CI runs are the agent journey's fake-model lane (`agent-journey.yml`, run 41195283433), whose `start` cell spawns with `--brief` and requires the brief recorded after one typing ([VERIFICATION.md](VERIFICATION.md)):
+The CI runs are the agent journey's fake-model lane (`agent-journey.yml`, run 41198805395 at this change), whose `start` cell spawns with `--brief` and requires the brief recorded after one typing ([VERIFICATION.md](VERIFICATION.md)):
 
 | Agent | Record | Local macOS | Rested after (local) | CI Linux | CI macOS | CI Windows |
 | --- | --- | --- | --- | --- | --- | --- |
-| Claude Code | prompt hook | 2.7 | 21.7 | 0.5 | 0.6 | 0.9 |
-| Codex | prompt hook | 0.0 | 20.3 | 0.5 | 0.7 | 2.0 |
-| Grok | prompt hook | 4.2 | 22.3 | 0.4 | 0.4 | 1.2 |
-| Pi | session file | 1.0 | 20.6 | 1.5 | 0.7 | 1.4 |
-| omp | session file | 25.6 to 28.3 (3 runs of 3 with the session wait; before it, 1 of 3 at 1.6) | 25.6 to 26.9 | 1.7 | 1.9 | 1.6 |
-| OpenCode 2 | session file | not run locally ([VERIFICATION.md](VERIFICATION.md)) | | 1.8 | 1.7 | 1.6 |
-| Antigravity | session file | not run locally ([VERIFICATION.md](VERIFICATION.md)) | | 1.0 | 0.9 | took the first typing, record seen only after the notice |
+| Claude Code | prompt hook | 2.7 | 21.7 | 0.4 | 0.5 | 1.0 |
+| Codex | prompt hook | 0.0 | 20.3 | 0.5 | 1.2 | 2.7 |
+| Grok | prompt hook | 4.2 | 22.3 | 0.3 | 0.4 | 3.4 |
+| Pi | session file | 1.0 | 20.6 | 1.8 | 1.9 | 1.6 |
+| omp | session file | 25.6 to 28.3 (3 runs of 3 with the session wait; before it, 1 of 3 at 1.6) | 25.6 to 26.9 | 1.7 | 1.8 | 2.5 |
+| OpenCode 2 | session file | not run locally ([VERIFICATION.md](VERIFICATION.md)) | | 1.0 | 2.2 | 1.6 |
+| Antigravity | session file | not run locally ([VERIFICATION.md](VERIFICATION.md)) | | 1.7 | 1.8 | 1.8 |
 
 Every agent records at the take or, omp locally, at most 1.4 s after it rests from the brief's turn, well inside `RECORD_WAIT_MS`, so none needs a wait of its own: a working agent owes no record.
-On Windows, Antigravity took the brief but the session read that would have seen it ran before its session write; the parent was told at about 16 s and the brief was typed a second time at about 31 s.
-The fresh session read before the verdict closes that: the record it finds ends the input before any notice or retype.
+In the run before the fresh session read (41195283433), Antigravity on Windows took the brief but the session read that would have seen it ran before its session write; the parent was told at about 16 s and the brief was typed a second time at about 31 s.
+With the fresh read before the verdict, the same lane recorded it after one typing on all three systems.
 The Codex 0.163.0 start with another program's entries at the front of `hooks.json` reproduced the incident in the local setup: without this change the brief went to the hooks review and nothing followed; with it the parent was told, and after its screen was answered through `hide pane send` the brief was typed again and the prompt hook confirmed it.
 
 ## Persistence, clocks and limits
