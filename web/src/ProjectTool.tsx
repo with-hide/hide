@@ -429,7 +429,7 @@ function DayBars({ days, heights, merged }: { days: readonly { date: string; mic
           const count = merged[index] ?? 0;
           const label = t("projectTool.week.dayHint", { day: names[index]!, cost: usd(day.micro_usd, language), count });
           return (
-            <Hint key={day.date} label={label}>
+            <Hint key={day.date} label={label} side="bottom">
               <span role="img" tabIndex={0} className="flex h-full min-w-0 flex-1 flex-col items-center justify-end gap-px rounded-xs outline-none focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-ring" data-cost-day={day.date} data-day-merged={count}>
                 {count > 0 ? <span className="size-(--lens-bar-height) shrink-0 rounded-full bg-pr-merged" data-day-merge-dot="true" /> : null}
                 <span className="w-full shrink-0 rounded-t-xs bg-primary" style={{ height: `${Math.max(height * 80, height > 0 ? 8 : 2)}%`, opacity: height > 0 ? 1 : 0.3 }} />
@@ -494,12 +494,16 @@ function WeekPreview({ project, actions }: { project: Workspace; actions: Action
   );
 }
 
-/** A 최근 7일 figure: its value and note, or, with nothing yet, what fills it, dimmed (B21). */
+/**
+ * A 최근 7일 figure: its value and note, or, with nothing yet, what fills it,
+ * dimmed (B21). The dimming is the words' colour, never the card's opacity:
+ * a translucent card lets its background show through unevenly at its edges.
+ */
 function Figure({ label, kind, ...shown }: { label: string; kind: string } & ({ value: string; note: string | null } | { empty: string })) {
   if ("empty" in shown) {
     return (
-      <span className="flex min-w-0 flex-col rounded-sm bg-card px-sm py-xs opacity-(--opacity-secondary)" data-week-figure={kind} data-week-figure-empty="true">
-        <span className="truncate text-micro text-muted-foreground">{label}</span>
+      <span className="flex min-w-0 flex-col rounded-sm bg-card px-sm py-xs" data-week-figure={kind} data-week-figure-empty="true">
+        <span className="truncate text-micro text-subtle-foreground">{label}</span>
         <span className="truncate py-xxs text-caption text-subtle-foreground">{shown.empty}</span>
       </span>
     );
