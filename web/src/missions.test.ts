@@ -4,7 +4,7 @@ import { describe, expect, it } from "vitest";
 import { STRENGTHS } from "./conductorSettings";
 import { english } from "./i18n/catalogs";
 import { initializeInterfaceI18n } from "./i18n/instance";
-import { cardLine, checkerState, conductorState, missionResultCounts, nextNodes, reportLine, chipWords, conductedBy, criteriaTally, launchSession, runWords, criterionName, missionHeadCells, criterionNote, defectEdges, firstPlans, kindWord, landingLeft, missionCells, missionOfPane, missionResults, missionTally, missionTone, missionWorkLine, neighbours, nodeLook, nodeResult, nodeTimes, nodeTone, paneChipWords, missionCounts, nodeLine, nodeMark, stackWaiting, stageWord, takeOverPrompt, takeOverProvider, turnItems } from "./missions";
+import { cardLine, checkerState, conductorState, missionResultCounts, nextNodes, reportLine, chipWords, conductedBy, criteriaTally, launchSession, runWords, criterionName, missionHeadCells, criterionNote, defectEdges, firstPlans, kindWord, landingLeft, nodeLanded, missionCells, missionOfPane, missionResults, missionTally, missionTone, missionWorkLine, neighbours, nodeLook, nodeResult, nodeTimes, nodeTone, paneChipWords, missionCounts, nodeLine, nodeMark, stackWaiting, stageWord, takeOverPrompt, takeOverProvider, turnItems } from "./missions";
 import type { AgentRow, Mission, MissionCriterion, MissionEvent, MissionNode, SnapshotRest } from "./snapshot";
 
 // What the map and the Conductor row read from a mission (PRD
@@ -15,11 +15,11 @@ const t = initializeInterfaceI18n("en").getFixedT(null, "translation");
 const contract = JSON.parse(fs.readFileSync(path.resolve(__dirname, "../../contracts/snapshot-wire-enums.json"), "utf8"));
 
 function node(key: string, extra: Partial<MissionNode> = {}): MissionNode {
-  return { key, title: key, kind: "change", depends_on: [], status: "planned", blocked: null, delivery: "pr", worker: null, agent_id: null, pane_id: null, machine: null, pr: null, base_pr: null, branch: null, pr_state: null, pr_url: null, stage: null, attempts: 0, line: null, change: null, review: null, criteria: [], criteria_met: 0, criteria_skipped: 0, external: null, unread: false, reopened: 0, started_at_unix_ms: null, finished_at_unix_ms: null, commit: null, verdict: null, checks: null, ...extra };
+  return { key, title: key, kind: "change", depends_on: [], status: "planned", blocked: null, delivery: "pr", worker: null, agent_id: null, pane_id: null, machine: null, pr: null, base_pr: null, branch: null, pr_state: null, pr_url: null, stage: null, attempts: 0, line: null, change: null, review: null, criteria: [], criteria_met: 0, criteria_skipped: 0, external: null, unread: false, reopened: 0, started_at_unix_ms: null, finished_at_unix_ms: null, commit: null, landing: null, verdict: null, checks: null, ...extra };
 }
 
 function mission(id: string, extra: Partial<Mission> = {}): Mission {
-  return { id, title: `Mission ${id}`, workspace_id: "w", project: "/repo", checkout_path: "/repo", device_id: "mac", status: "running", scope: "pr", cap: 4, exempt: false, strength: null, other_vendor: null, conductor: { pane_id: "p1", name: "conductor", agent_kind: "claude", session: { device_id: "mac", agent: "claude", session_id: "s-1" }, present: true, takes_answers: true }, nodes: [], merge_order: [], check: null, github: null, decision: null, question: null, answer: null, answer_failed: null, delay: null, report: null, created_at_unix_ms: 1, started_at_unix_ms: 1, closed_at_unix_ms: null, running: 0, stale: false, github_stale: false, github_read_at_unix_ms: null, ...extra };
+  return { id, title: `Mission ${id}`, workspace_id: "w", project: "/repo", checkout_path: "/repo", device_id: "mac", status: "running", scope: "pr", cap: 4, exempt: false, strength: null, other_vendor: null, conductor: { pane_id: "p1", name: "conductor", agent_kind: "claude", session: { device_id: "mac", agent: "claude", session_id: "s-1" }, present: true, takes_answers: true }, nodes: [], merge_order: [], landing_order: [], check: null, github: null, decision: null, question: null, answer: null, answer_failed: null, delay: null, report: null, created_at_unix_ms: 1, started_at_unix_ms: 1, closed_at_unix_ms: null, running: 0, stale: false, github_stale: false, github_read_at_unix_ms: null, ...extra };
 }
 
 const rest = (items: Mission[]) => ({ missions: { items } }) as unknown as SnapshotRest;
@@ -33,6 +33,7 @@ describe("the wire values", () => {
     expect(STRENGTHS).toEqual(contract.mission_strength);
     for (const strength of contract.mission_strength) expect(english).toHaveProperty(`mission.strength.${strength}`);
     for (const status of contract.mission_status) expect(chipWords(mission("m", { status })).key).toMatch(/^mission\.chip/);
+    for (const action of contract.mission_landing_action) expect(english).toHaveProperty(`mission.landing.${action}`);
   });
 });
 
@@ -235,37 +236,29 @@ describe("a card's look (PRD mission-map-git-criteria D-02, B26, B27)", () => {
     expect(nodeLook(mission("m", { status: "cancelled" }), node("n", { status: "working" }))).toBe("cancelled");
   });
 
-  it("tags finished work not in main as a merge left for a pull request the core read open and a join left for a branch it reads while the mission runs or waits, and nothing it does not know", () => {
-    const m = mission("m");
-    const landing = mission("m", { status: "merge_wait" });
-    expect(landingLeft(m, node("a", { status: "done", pr: 4, pr_state: "mergeable" }))).toBe("merge");
-    expect(landingLeft(m, node("a", { status: "done", pr: 4, pr_state: "draft" }))).toBe("merge");
-    // A pull request whose state the core never read (a mission recorded before it kept one) says nothing.
-    expect(landingLeft(m, node("a", { status: "done", pr: 4, pr_state: null }))).toBeNull();
-    expect(landingLeft(m, node("a", { status: "done", pr: 4, pr_state: "closed" }))).toBeNull();
-    // A done branch is read while the mission runs or waits, not once it closed; one it could not read says nothing.
-    expect(landingLeft(landing, node("b", { status: "done", delivery: "direct", branch: "feat/b" }))).toBe("join");
-    expect(landingLeft(m, node("b", { status: "done", delivery: "direct", branch: "feat/b" }))).toBe("join");
-    expect(landingLeft(mission("m", { status: "done" }), node("b", { status: "done", delivery: "direct", branch: "feat/b" }))).toBeNull();
-    expect(landingLeft(landing, node("b", { status: "done", delivery: "direct", branch: "feat/b", unread: true }))).toBeNull();
-    expect(landingLeft(landing, node("b", { status: "done", delivery: "direct" }))).toBeNull();
-    expect(landingLeft(m, node("c", { status: "done", pr: 5, pr_state: "merged" }))).toBeNull();
-    expect(landingLeft(m, node("d", { status: "done", kind: "research", delivery: null }))).toBeNull();
-    expect(landingLeft(m, node("e", { status: "working", pr: 6, pr_state: "mergeable" }))).toBeNull();
-    expect(landingLeft(mission("m", { status: "cancelled" }), node("f", { status: "done", delivery: "direct", branch: "f" }))).toBeNull();
+  it("tags finished work with what the core left before main, and nothing it could not read or that landed", () => {
+    // The core decides each node's landing (`herdr-core/src/runtime/mission_landing.rs`); the card only words it.
+    expect(landingLeft(node("a", { status: "done", pr: 4, landing: { state: "left", action: "merge" } }))).toBe("merge");
+    expect(landingLeft(node("b", { status: "done", delivery: "direct", branch: "feat/b", landing: { state: "left", action: "join" } }))).toBe("join");
+    expect(landingLeft(node("c", { status: "done", delivery: "direct", branch: "feat/c", unread: true, landing: { state: "unread", action: "join" } }))).toBeNull();
+    expect(landingLeft(node("d", { status: "done", pr: 5, landing: { state: "landed", proof: { by: "merged" } } }))).toBeNull();
+    expect(landingLeft(node("e", { status: "done", kind: "research", delivery: null }))).toBeNull();
   });
 
   it("draws a branch's commit Hide found in main as → main, before one recorded by hand, and the node is in main with nothing left to join (B17)", () => {
     const m = mission("m", { status: "merge_wait" });
-    const joined = node("b", { status: "done", delivery: "direct", branch: "feat/b", in_main: "9f3e2a1c0b7d" });
+    const inMain = (commit: string) => ({ state: "landed", proof: { by: "in_main", commit } }) as const;
+    const joined = node("b", { status: "done", delivery: "direct", branch: "feat/b", landing: inMain("9f3e2a1c0b7d") });
     expect(nodeResult(joined)).toEqual({ kind: "commit", commit: "9f3e2a1c0b7d" });
-    expect([nodeLook(m, joined), landingLeft(m, joined)]).toEqual(["done", null]);
-    // The commit found in main wins over one the Conductor recorded; a recorded one stands alone for a direct change.
-    expect(nodeResult(node("c", { status: "done", delivery: "direct", branch: "feat/c", in_main: "aaaaaaa1", commit: "bbbbbbb2" }))).toEqual({ kind: "commit", commit: "aaaaaaa1" });
-    expect(nodeResult(node("d", { status: "done", delivery: "direct", commit: "c216793eb4a1" }))).toEqual({ kind: "commit", commit: "c216793eb4a1" });
-    // While the read does not stand the branch shows, and joining is left.
-    const waiting = node("e", { status: "done", delivery: "direct", branch: "feat/e" });
-    expect([nodeResult(waiting), landingLeft(m, waiting)]).toEqual([{ kind: "branch", branch: "feat/e" }, "join"]);
+    expect([nodeLook(m, joined), landingLeft(joined), nodeLanded(joined)]).toEqual(["done", null, true]);
+    // The commit found in main wins over one the Conductor recorded; a recorded one stands alone as the shown result.
+    expect(nodeResult(node("c", { status: "done", delivery: "direct", branch: "feat/c", landing: inMain("aaaaaaa1"), commit: "bbbbbbb2" }))).toEqual({ kind: "commit", commit: "aaaaaaa1" });
+    // A recorded commit is the result shown, never proof: the core still leaves the branch to join (mission-23 disagreement 1).
+    const recorded = node("d", { status: "done", delivery: "direct", branch: "feat/d", commit: "c216793eb4a1", landing: { state: "left", action: "join" } });
+    expect([nodeResult(recorded), landingLeft(recorded), nodeLanded(recorded)]).toEqual([{ kind: "commit", commit: "c216793eb4a1" }, "join", false]);
+    // While no read stands the branch shows, and joining is left.
+    const waiting = node("e", { status: "done", delivery: "direct", branch: "feat/e", landing: { state: "left", action: "join" } });
+    expect([nodeResult(waiting), landingLeft(waiting)]).toEqual([{ kind: "branch", branch: "feat/e" }, "join"]);
   });
 });
 
@@ -375,13 +368,18 @@ describe("the operator's turn (PRD mission-map-git-criteria B18, B20, B25)", () 
   });
 
   it("lists what waits for main in the Conductor's merge order while the mission waits to merge, a branch-only one as a join", () => {
-    const prs = [node("ui", { status: "done", pr: 1705, pr_state: "mergeable" }), node("core", { status: "done", pr: 1703, pr_state: "mergeable" }), node("done", { status: "done", pr: 1700, pr_state: "merged" })];
-    const merge = turnItems(mission("m", { status: "merge_wait", nodes: prs, merge_order: ["core", "ui"] }), none);
+    const left = { state: "left", action: "merge" } as const;
+    const prs = [node("ui", { status: "done", pr: 1705, landing: left }), node("core", { status: "done", pr: 1703, landing: left }), node("done", { status: "done", pr: 1700, landing: { state: "landed", proof: { by: "merged" } } })];
+    // The core gives the order (`landing_order`); the list follows it.
+    const merge = turnItems(mission("m", { status: "merge_wait", nodes: prs, merge_order: ["core", "ui"], landing_order: ["core", "ui"] }), none);
     expect(merge).toHaveLength(1);
     expect(merge[0]).toMatchObject({ kind: "landing", git: false });
     expect(merge[0]!.kind === "landing" && merge[0]!.nodes.map((n) => n.key)).toEqual(["core", "ui"]);
-    const branches = [node("a", { status: "done", delivery: "direct", branch: "a" }), node("b", { status: "done", delivery: "direct", branch: "b" })];
-    expect(turnItems(mission("m", { status: "merge_wait", nodes: branches }), none)[0]).toMatchObject({ kind: "landing", git: true });
+    const join = { state: "left", action: "join" } as const;
+    const branches = [node("a", { status: "done", delivery: "direct", branch: "a", landing: join }), node("b", { status: "done", delivery: "direct", branch: "b", landing: join })];
+    expect(turnItems(mission("m", { status: "merge_wait", nodes: branches, landing_order: ["a", "b"] }), none)[0]).toMatchObject({ kind: "landing", git: true });
+    // While the mission runs, the order the core gives is the card's, not a turn item.
+    expect(turnItems(mission("m", { nodes: branches, landing_order: ["a", "b"] }), none)).toEqual([]);
   });
 
   it("asks for a takeover when no Conductor holds an open mission, and is empty once the mission ended", () => {
@@ -399,12 +397,12 @@ describe("a finished mission's results and the map's summary (PRD mission-tool B
     const done = mission("m", {
       status: "done",
       nodes: [
-        node("a", { status: "done", agent_id: "w1", pr: 1, pr_state: "merged", criteria: [pass("c1"), { key: "c2", kind: "own", state: "skipped" }, checked("pass", "r1")], criteria_met: 3, criteria_skipped: 1 }),
-        node("b", { status: "done", agent_id: "w2", pr: 2, pr_state: "mergeable", criteria: [pass("c1"), { key: "ci", kind: "ci", state: "fail" }], criteria_met: 1, criteria_skipped: 0 }),
-        node("c", { status: "done", agent_id: "w3", delivery: "direct", branch: "c", in_main: "abc1234" }),
+        node("a", { status: "done", agent_id: "w1", pr: 1, pr_state: "merged", landing: { state: "landed", proof: { by: "merged" } }, criteria: [pass("c1"), { key: "c2", kind: "own", state: "skipped" }, checked("pass", "r1")], criteria_met: 3, criteria_skipped: 1 }),
+        node("b", { status: "done", agent_id: "w2", pr: 2, pr_state: "mergeable", landing: { state: "left", action: "merge" }, criteria: [pass("c1"), { key: "ci", kind: "ci", state: "fail" }], criteria_met: 1, criteria_skipped: 0 }),
+        node("c", { status: "done", agent_id: "w3", delivery: "direct", branch: "c", landing: { state: "landed", proof: { by: "in_main", commit: "abc1234" } } }),
         node("check", { kind: "verify", delivery: null, status: "done", agent_id: "w4" }),
         // An outside pull request and a dropped node are not the mission's results.
-        node("out", { kind: "external", delivery: null, external: { pr: 9 }, pr: 9, pr_state: "merged", status: "done" }),
+        node("out", { kind: "external", delivery: null, external: { pr: 9 }, pr: 9, pr_state: "merged", status: "done", landing: { state: "landed", proof: { by: "outside" } } }),
         node("gone", { status: "dropped", agent_id: "w5", pr: 3, pr_state: "closed" }),
       ],
     });

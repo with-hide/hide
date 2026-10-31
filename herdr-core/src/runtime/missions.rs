@@ -12,6 +12,9 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
 use super::Runtime;
+use super::mission_landing::{
+    NodeLanding, landing_order, node_landing, reads_branch, stack_settled,
+};
 use crate::delivery::Actor;
 use crate::mission_criteria::{CheckKind, Criterion, CriterionState};
 use crate::mission_events::History;
@@ -68,6 +71,9 @@ pub struct MissionView {
     pub conductor: ConductorView,
     pub nodes: Vec<NodeView>,
     pub merge_order: Vec<String>,
+    /// The nodes left for the operator to merge or join, in the order to
+    /// take them (`mission_landing::landing_order`, B18, B25).
+    pub landing_order: Vec<String>,
     pub check: Option<String>,
     pub github: Option<String>,
     pub decision: Option<String>,
@@ -179,11 +185,10 @@ pub struct NodeView {
     pub started_at_unix_ms: Option<u64>,
     pub finished_at_unix_ms: Option<u64>,
     pub commit: Option<String>,
-    /// The commit of the node's branch Hide read in main for a mission
-    /// waiting on its branches, while that read stands (B17 `→ main
-    /// <sha7>`); `commit` is what the Conductor recorded.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub in_main: Option<String>,
+    /// Where its work is on its way to main and what is left before it
+    /// (`mission_landing`): the card's `머지 남음` or `합치기 남음` and its
+    /// `→ main <sha7>` read it; `commit` is what the Conductor recorded.
+    pub landing: Option<NodeLanding>,
     pub verdict: Option<Verdict>,
     pub checks: Option<Checks>,
     /// The worker's own plan (PRD hide-plan D-17, D-18): the value its pane's
@@ -282,39 +287,6 @@ struct ViewsMadeFrom {
     made: bool,
 }
 
-/// Every pull request the mission still stands behind is merged or closed,
-/// as GitHub last answered, and every direct change's branch is in main, as
-/// Hide last read it off the lock (B18, `mission_outside`): a node that
-/// failed or was dropped is out of its stack, and a mission with neither has
-/// nothing to wait on.
-fn stack_settled(mission: &Mission) -> bool {
-    mission
-        .nodes
-        .iter()
-        .filter(|node| !matches!(node.status, NodeStatus::Dropped | NodeStatus::Failed))
-        .all(|node| match node.pr {
-            Some(_) => node
-                .pr_seen
-                .as_ref()
-                .is_some_and(|seen| seen.merged || seen.closed),
-            None => !lands_by_branch(node) || landed(node).is_some(),
-        })
-}
-
-/// The commit Hide read in main for the branch the node names now, while
-/// that read stands (B17 `→ main <sha7>`).
-pub(super) fn landed(node: &crate::missions::MissionNode) -> Option<&str> {
-    node.in_main
-        .as_ref()
-        .filter(|landed| node.branch.as_deref() == Some(landed.branch.as_str()))
-        .map(|landed| landed.commit.as_str())
-}
-
-/// A change that reaches main as its branch, with no pull request.
-pub(super) fn lands_by_branch(node: &crate::missions::MissionNode) -> bool {
-    node.kind == NodeKind::Change && node.delivery == Some(Delivery::Direct) && node.pr.is_none()
-}
-
 fn seen_of(pull: &crate::model::PullRequestSnapshot) -> PrSeen {
     PrSeen {
         head: pull.head_oid.clone(),
@@ -322,6 +294,28 @@ fn seen_of(pull: &crate::model::PullRequestSnapshot) -> PrSeen {
         changes_requested: pull.review == Some(ReviewDecision::ChangesRequested),
         closed: pull.badge == PullRequestBadge::Closed,
     }
+}
+
+/// Records what `project`'s list says of each of `mission`'s pull requests
+/// it holds; whether anything moved.
+fn refresh_seen(mission: &mut Mission, project: &crate::model::GithubProjectSnapshot) -> bool {
+    let mut moved = false;
+    for node in &mut mission.nodes {
+        let Some(number) = node.pr else { continue };
+        let Some(pull) = project
+            .pull_requests
+            .iter()
+            .find(|pull| pull.number == number)
+        else {
+            continue;
+        };
+        let seen = seen_of(pull);
+        if node.pr_seen.as_ref() != Some(&seen) {
+            node.pr_seen = Some(seen);
+            moved = true;
+        }
+    }
+    moved
 }
 
 /// What a Conductor woken about a pull request of its own does.
@@ -769,7 +763,7 @@ impl Runtime {
                 {
                     next.pr_seen = self.pull_seen(&current.device_id, &current.project, number);
                 }
-                let landing = lands_by_branch(&next) && next.status == NodeStatus::Done;
+                let reads = reads_branch(current.status, &next);
                 let target = self.missions.book.get_mut(&id).ok_or("mission_unknown")?;
                 let changed = target.nodes[index] != next;
                 let events = super::mission_events::node_events(&target.nodes[index], &next, now);
@@ -777,11 +771,7 @@ impl Runtime {
                 // A waiting mission's node named another branch or finished
                 // again, or a direct change finished or moved to another
                 // branch while its mission runs: its branches are read now.
-                let follow = match target.status {
-                    MissionStatus::MergeWait => true,
-                    MissionStatus::Running => landing,
-                    _ => false,
-                };
+                let follow = target.status == MissionStatus::MergeWait || reads;
                 if changed {
                     target.updated_at_unix_ms = now;
                     self.save_missions();
@@ -1341,13 +1331,21 @@ impl Runtime {
         let mut changed = false;
         for index in 0..self.missions.book.missions.len() {
             let mission = &self.missions.book.missions[index];
-            if mission.status == MissionStatus::Cancelled || mission.device_id != device {
+            if mission.device_id != device {
                 continue;
             }
             let Some(project) = github.project(&mission.project) else {
                 continue;
             };
             if project.status.stale || !project.pull_requests_read {
+                continue;
+            }
+            // `pr_seen` is the record every landing reads (`mission_landing`),
+            // so it follows each fresh list a cancelled mission's map draws
+            // too; a cancelled mission is woken, read for CI and closed by
+            // nothing (D-51).
+            if mission.status == MissionStatus::Cancelled {
+                changed |= refresh_seen(&mut self.missions.book.missions[index], project);
                 continue;
             }
             let (ci_changed, spent) = super::mission_criteria::read_mission_ci(
@@ -1822,7 +1820,11 @@ impl Runtime {
                     started_at_unix_ms: node.started_at_unix_ms,
                     finished_at_unix_ms: node.finished_at_unix_ms,
                     commit: node.commit.clone(),
-                    in_main: landed(node).map(str::to_owned),
+                    landing: node_landing(
+                        mission,
+                        node,
+                        self.missions.outside.unread(&mission.id, &node.key),
+                    ),
                     verdict: node.verdict,
                     checks: node.checks,
                     plan: record.and_then(|record| self.worker_plan(&record.machine, &record.pane)),
@@ -1861,6 +1863,13 @@ impl Runtime {
                 ),
             },
             nodes,
+            landing_order: landing_order(mission, |node| {
+                node_landing(
+                    mission,
+                    node,
+                    self.missions.outside.unread(&mission.id, &node.key),
+                )
+            }),
             merge_order: mission.merge_order.clone(),
             check: mission.check.clone(),
             github: mission.github.clone(),

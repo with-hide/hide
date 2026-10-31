@@ -16,7 +16,7 @@ vi.hoisted(() => { HTMLCanvasElement.prototype.getContext = () => null; });
 
 afterEach(() => { vi.unstubAllGlobals(); document.body.innerHTML = ""; });
 
-const gone = (session: Mission["conductor"]["session"]): Mission => ({ id: "mission-1", title: "Fix the bug", workspace_id: "w", project: "/repo", checkout_path: "/repo", device_id: "mac", status: "running", scope: "pr", cap: 4, exempt: false, strength: null, other_vendor: null, conductor: { pane_id: "p1", name: "conductor", agent_kind: "claude", session, present: false, takes_answers: true }, nodes: [], merge_order: [], check: null, github: null, decision: null, question: null, answer: null, answer_failed: null, delay: null, report: null, created_at_unix_ms: 1, started_at_unix_ms: 1, closed_at_unix_ms: null, running: 0, stale: false, github_stale: false, github_read_at_unix_ms: null });
+const gone = (session: Mission["conductor"]["session"]): Mission => ({ id: "mission-1", title: "Fix the bug", workspace_id: "w", project: "/repo", checkout_path: "/repo", device_id: "mac", status: "running", scope: "pr", cap: 4, exempt: false, strength: null, other_vendor: null, conductor: { pane_id: "p1", name: "conductor", agent_kind: "claude", session, present: false, takes_answers: true }, nodes: [], merge_order: [], landing_order: [], check: null, github: null, decision: null, question: null, answer: null, answer_failed: null, delay: null, report: null, created_at_unix_ms: 1, started_at_unix_ms: 1, closed_at_unix_ms: null, running: 0, stale: false, github_stale: false, github_read_at_unix_ms: null });
 
 async function mount(mission: Mission) {
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);

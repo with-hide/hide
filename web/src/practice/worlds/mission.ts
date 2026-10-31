@@ -139,7 +139,7 @@ const PR_URL = (number: number) => `https://example.com/${PLACE.project}/pull/${
 const NODE: Omit<MissionNode, "key" | "title" | "status" | "worker"> = {
   kind: "change", depends_on: [], blocked: null, delivery: "pr", agent_id: null, pane_id: null, machine: null,
   pr: null, base_pr: null, branch: null, pr_state: null, pr_url: null, stage: null, attempts: 1,
-  line: null, change: null, review: null, criteria: [], criteria_met: 0, criteria_skipped: 0, external: null, unread: false, reopened: 0, started_at_unix_ms: null, finished_at_unix_ms: null, commit: null, verdict: null, checks: null, plan: null,
+  line: null, change: null, review: null, criteria: [], criteria_met: 0, criteria_skipped: 0, external: null, unread: false, reopened: 0, started_at_unix_ms: null, finished_at_unix_ms: null, commit: null, landing: null, verdict: null, checks: null, plan: null,
 };
 
 /** The plan's three nodes, as the record holds them at `stage`. */
@@ -151,7 +151,7 @@ function nodes(model: MissionModel): MissionNode[] {
     {
       ...NODE, key: "config", title: "Read the retry count from settings", status: "done",
       worker: { agent: "codex", model: "gpt-5.5", effort: "medium" },
-      pr: 21, pr_state: "mergeable", pr_url: PR_URL(21), branch: "practice/retry-config", stage: 3,
+      pr: 21, pr_state: "mergeable", landing: { state: "left", action: "merge" }, pr_url: PR_URL(21), branch: "practice/retry-config", stage: 3,
       line: "CI passed · reviewed", review: "Approved by a second agent",
       started_at_unix_ms: at - 9 * minute, finished_at_unix_ms: at - 2 * minute,
     },
@@ -181,7 +181,7 @@ function mission(model: MissionModel): Mission | null {
     status: "running", scope: "pr", cap: 2, exempt: false, strength: "normal", other_vendor: true,
     // No session: this practice keeps no record to open.
     conductor: { pane_id: CONDUCTOR, name: TITLE, agent_kind: "claude", session: null, present: true, takes_answers: true },
-    nodes: nodes(model), merge_order: ["config", "backoff"], check: "pnpm test", github: "practice-bot",
+    nodes: nodes(model), merge_order: ["config", "backoff"], landing_order: ["config"], check: "pnpm test", github: "practice-bot",
     decision: model.stage === 1 ? DECISION : null,
     question: model.stage === 1 ? { key: 1, why: "Both change docs/retries.md, so two PRs would conflict.", options: OPTIONS, recommend: 1, node: "docs", asked_at_unix_ms: model.startedAt } : null,
     answer: null, answer_failed: null, delay: null, report: null,

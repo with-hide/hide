@@ -7,6 +7,7 @@
   "mission_node_status": ["planned", "working", "waiting", "review", "held", "done", "failed", "dropped"],
   "mission_blocked": ["upstream_failed", "upstream_dropped"],
   "mission_verdict": ["pass", "fail"],
+  "mission_landing_action": ["merge", "join"],
   "mission_criterion_kind": ["own", "check", "ci", "review", "verify", "defect"],
   "mission_criterion_state": ["open", "pass", "fail", "skipped"],
   "mission_check_rule": ["all", "majority"],

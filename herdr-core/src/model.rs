@@ -9183,6 +9183,15 @@ mod wire_enum_tests {
             }
             assert_wire(&contract, "mission_verdict", &verdicts);
             checked.insert("mission_verdict");
+            use crate::runtime::mission_landing::LandingAction;
+            let landing_actions = [LandingAction::Merge, LandingAction::Join];
+            for variant in landing_actions {
+                match variant {
+                    LandingAction::Merge | LandingAction::Join => {}
+                }
+            }
+            assert_wire(&contract, "mission_landing_action", &landing_actions);
+            checked.insert("mission_landing_action");
             use crate::mission_criteria::{CriterionKind, CriterionState, Role, Rule};
             let criterion_kinds = [
                 CriterionKind::Own,

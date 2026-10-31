@@ -2635,6 +2635,16 @@ fn node_view(runtime: &Runtime, key: &str) -> crate::runtime::missions::NodeView
         .unwrap()
 }
 
+/// The commit the view publishes as the node's proof of being in main.
+fn in_main(view: &crate::runtime::missions::NodeView) -> Option<String> {
+    match &view.landing {
+        Some(crate::runtime::mission_landing::NodeLanding::Landed {
+            proof: crate::runtime::mission_landing::LandingProof::InMain { commit },
+        }) => Some(commit.clone()),
+        _ => None,
+    }
+}
+
 /// PRD mission-map-git-criteria B19, B20: an outside pull request is
 /// followed to main from the project's list, an outside branch from its
 /// read, and one Hide cannot read waits and says so; the Conductor cannot
@@ -3015,7 +3025,7 @@ fn a_branch_mission_waits_for_its_branch_to_reach_main_then_closes() {
     assert_eq!(status(&runtime), MissionStatus::MergeWait);
     land(&mut runtime, "fix", Found::InMain(Some(HEAD.into())));
     assert_eq!(status(&runtime), MissionStatus::Done);
-    assert_eq!(node_view(&runtime, "fix").in_main.as_deref(), Some(HEAD));
+    assert_eq!(in_main(&node_view(&runtime, "fix")).as_deref(), Some(HEAD));
 }
 
 /// The branch read Hide asks for `node` of the waiting mission now.
@@ -3180,7 +3190,7 @@ fn a_branch_read_in_main_proves_only_that_branch_while_its_node_and_wait_stand()
     waiting_on_branches(&mut runtime);
     let (a1, b1, c1) = ("a".repeat(40), "b".repeat(40), "c".repeat(40));
     land(&mut runtime, "a", Found::InMain(Some(a1.clone())));
-    assert_eq!(node_view(&runtime, "a").in_main, Some(a1.clone()));
+    assert_eq!(in_main(&node_view(&runtime, "a")), Some(a1.clone()));
     let before_move = landing_ask(&runtime, "a");
 
     // The Conductor moves `a` to another branch: what was read of the old
@@ -3191,15 +3201,15 @@ fn a_branch_read_in_main_proves_only_that_branch_while_its_node_and_wait_stand()
         json!({"op": "node", "node": "a", "patch": {"branch": "feat/c"}}),
     )
     .unwrap();
-    assert_eq!(node_view(&runtime, "a").in_main, None);
+    assert_eq!(in_main(&node_view(&runtime, "a")), None);
     answer(&mut runtime, before_move, Found::InMain(Some(a1)));
     land(&mut runtime, "b", Found::InMain(Some(b1.clone())));
     assert_eq!(mission_status(&runtime), MissionStatus::MergeWait);
-    assert_eq!(node_view(&runtime, "a").in_main, None);
+    assert_eq!(in_main(&node_view(&runtime, "a")), None);
 
     // A branch that moved on past main is no longer in it.
     land(&mut runtime, "b", Found::Open);
-    assert_eq!(node_view(&runtime, "b").in_main, None);
+    assert_eq!(in_main(&node_view(&runtime, "b")), None);
     land(&mut runtime, "b", Found::InMain(Some(b1.clone())));
     land(&mut runtime, "a", Found::InMain(Some(c1.clone())));
     assert_eq!(mission_status(&runtime), MissionStatus::Done);
@@ -3210,8 +3220,8 @@ fn a_branch_read_in_main_proves_only_that_branch_while_its_node_and_wait_stand()
     command(&mut runtime, "sender", json!({"op": "reopen"})).unwrap();
     assert_eq!(
         (
-            node_view(&runtime, "a").in_main,
-            node_view(&runtime, "b").in_main
+            in_main(&node_view(&runtime, "a")),
+            in_main(&node_view(&runtime, "b"))
         ),
         (None, None)
     );
@@ -3225,7 +3235,7 @@ fn a_branch_read_in_main_proves_only_that_branch_while_its_node_and_wait_stand()
     land(&mut runtime, "b", Found::InMain(Some(b1)));
     answer(&mut runtime, earlier, Found::InMain(Some(c1.clone())));
     assert_eq!(mission_status(&runtime), MissionStatus::MergeWait);
-    assert_eq!(node_view(&runtime, "a").in_main, None);
+    assert_eq!(in_main(&node_view(&runtime, "a")), None);
     land(&mut runtime, "a", Found::InMain(Some(c1)));
     assert_eq!(mission_status(&runtime), MissionStatus::Done);
 }
@@ -3243,7 +3253,7 @@ fn a_branch_that_could_not_be_read_again_keeps_its_mission_waiting_until_read_in
     waiting_on_branches(&mut runtime);
     let (a1, b1) = ("a".repeat(40), "b".repeat(40));
     land(&mut runtime, "a", Found::InMain(Some(a1.clone())));
-    assert_eq!(node_view(&runtime, "a").in_main, Some(a1.clone()));
+    assert_eq!(in_main(&node_view(&runtime, "a")), Some(a1.clone()));
 
     // The next read cannot see `a` while `b` reaches main.
     land(
@@ -3254,7 +3264,7 @@ fn a_branch_that_could_not_be_read_again_keeps_its_mission_waiting_until_read_in
     land(&mut runtime, "b", Found::InMain(Some(b1)));
     assert_eq!(mission_status(&runtime), MissionStatus::MergeWait);
     let a = node_view(&runtime, "a");
-    assert_eq!((a.in_main, a.unread), (None, true));
+    assert_eq!((in_main(&a), a.unread), (None, true));
     let (closed, _) = command(
         &mut runtime,
         "sender",
@@ -3266,7 +3276,7 @@ fn a_branch_that_could_not_be_read_again_keeps_its_mission_waiting_until_read_in
     land(&mut runtime, "a", Found::InMain(Some(a1.clone())));
     assert_eq!(mission_status(&runtime), MissionStatus::Done);
     let a = node_view(&runtime, "a");
-    assert_eq!((a.in_main, a.unread), (Some(a1), false));
+    assert_eq!((in_main(&a), a.unread), (Some(a1), false));
 }
 
 /// This machine's host answering a node's calls, as the core's link to it
@@ -3414,7 +3424,7 @@ fn a_git_mission_in_a_repository_with_no_remote_follows_its_branches_into_main()
     .unwrap();
     let fix = &shown["mission"]["nodes"][1];
     assert_eq!(
-        (&fix["in_main"], &fix["commit"]),
+        (&fix["landing"]["proof"]["commit"], &fix["commit"]),
         (&json!(landed), &Value::Null)
     );
     runtime.refresh_missions();
@@ -3425,7 +3435,10 @@ fn a_git_mission_in_a_repository_with_no_remote_follows_its_branches_into_main()
         .iter()
         .find(|mission| mission["id"] == "mission-1")
         .unwrap();
-    assert_eq!(published["nodes"][1]["in_main"], json!(landed));
+    assert_eq!(
+        published["nodes"][1]["landing"]["proof"]["commit"],
+        json!(landed)
+    );
 }
 
 /// verify-screen's finding on #1729: a direct change already in main is
@@ -3499,7 +3512,7 @@ fn a_direct_change_already_in_main_is_read_there_when_it_is_done_while_its_missi
         )
         .unwrap();
         command(&mut runtime, "recipient", record_of("a", "c1", json!({}))).unwrap();
-        assert_eq!(node_view(&runtime, "a").in_main, None);
+        assert_eq!(in_main(&node_view(&runtime, "a")), None);
         command(
             &mut runtime,
             "sender",
@@ -3511,7 +3524,7 @@ fn a_direct_change_already_in_main_is_read_there_when_it_is_done_while_its_missi
     loop {
         {
             let runtime = fixture.runtime.lock().unwrap();
-            if node_view(&runtime, "a").in_main.is_some() {
+            if in_main(&node_view(&runtime, "a")).is_some() {
                 break;
             }
         }
@@ -3526,7 +3539,10 @@ fn a_direct_change_already_in_main_is_read_there_when_it_is_done_while_its_missi
         json!({"op": "show", "mission": "mission-1"}),
     )
     .unwrap();
-    assert_eq!(shown["mission"]["nodes"][0]["in_main"], json!(landed));
+    assert_eq!(
+        shown["mission"]["nodes"][0]["landing"]["proof"]["commit"],
+        json!(landed)
+    );
     assert_eq!(mission_status(&runtime), MissionStatus::Running);
     let (closed, _) = command(
         &mut runtime,
@@ -3929,4 +3945,377 @@ fn a_decision_laid_by_a_sync_and_cleared_before_the_next_refresh_leaves_the_row(
     )
     .unwrap();
     assert_eq!(conductor_shown(&mut runtime).ask_subject, None);
+}
+
+/// One landing case: what the record holds, and what the core answers.
+struct LandingCase {
+    name: &'static str,
+    status: MissionStatus,
+    /// Sets the nodes `pr` (a pull request), `direct` (a branch), `first`
+    /// (a pull request the merge order puts first) and `research` as the
+    /// case needs, after each was made done.
+    set: fn(&mut crate::missions::Mission),
+    /// The branch read answered unread for `direct` (`확인 못 함`).
+    direct_unread: bool,
+    /// (node, landing as the view publishes it), for every node.
+    landing: [(&'static str, Value); 4],
+    order: &'static [&'static str],
+    /// Whether a mission waiting on its merges closed itself as done.
+    closes: bool,
+}
+
+const SHA: &str = "4f1c9a27be03aa00bb11cc22dd33ee44ff556677";
+
+fn seen(merged: bool, closed: bool) -> Option<crate::missions::PrSeen> {
+    Some(crate::missions::PrSeen {
+        head: Some("head".into()),
+        merged,
+        closed,
+        changes_requested: false,
+    })
+}
+
+fn node_mut<'a>(
+    mission: &'a mut crate::missions::Mission,
+    key: &str,
+) -> &'a mut crate::missions::MissionNode {
+    mission
+        .nodes
+        .iter_mut()
+        .find(|node| node.key == key)
+        .unwrap()
+}
+
+/// `direct`'s branch read in main at `SHA`.
+fn direct_in_main(mission: &mut crate::missions::Mission) {
+    node_mut(mission, "direct").in_main = Some(crate::missions::Landed {
+        branch: "feat/direct".into(),
+        commit: SHA.into(),
+    });
+}
+
+/// Both pull requests merged and the branch in main: nothing waits.
+fn all_landed(mission: &mut crate::missions::Mission) {
+    node_mut(mission, "pr").pr_seen = seen(true, false);
+    node_mut(mission, "first").pr_seen = seen(true, false);
+    direct_in_main(mission);
+}
+
+/// mission-23 c2: one matrix of the cases a mission's landing is decided
+/// in, asserting both the close Hide makes itself and what the view
+/// publishes for the map: each node's landing, and the order of what is
+/// left (`mission_landing`).
+#[test]
+fn a_missions_landing_decides_its_close_and_its_published_actions_from_one_rule() {
+    let landed_merged = json!({"state": "landed", "proof": {"by": "merged"}});
+    let landed_main = json!({"state": "landed", "proof": {"by": "in_main", "commit": SHA}});
+    let left_merge = json!({"state": "left", "action": "merge"});
+    let left_join = json!({"state": "left", "action": "join"});
+    let unread_merge = json!({"state": "unread", "action": "merge"});
+    let unread_join = json!({"state": "unread", "action": "join"});
+    let none = Value::Null;
+    let cases = vec![
+        LandingCase {
+            name: "merge_wait, everything in main",
+            status: MissionStatus::MergeWait,
+            set: all_landed,
+            direct_unread: false,
+            landing: [
+                ("pr", landed_merged.clone()),
+                ("direct", landed_main.clone()),
+                ("first", landed_merged.clone()),
+                ("research", none.clone()),
+            ],
+            order: &[],
+            closes: true,
+        },
+        LandingCase {
+            name: "merge_wait, pull requests open and the branch not in main, by merge order",
+            status: MissionStatus::MergeWait,
+            set: |mission| {
+                node_mut(mission, "pr").pr_seen = seen(false, false);
+                node_mut(mission, "first").pr_seen = seen(false, false);
+            },
+            direct_unread: false,
+            landing: [
+                ("pr", left_merge.clone()),
+                ("direct", left_join.clone()),
+                ("first", left_merge.clone()),
+                ("research", none.clone()),
+            ],
+            order: &["first", "pr", "direct"],
+            closes: false,
+        },
+        LandingCase {
+            name: "merge_wait, a pull request closed unmerged waits on nothing",
+            status: MissionStatus::MergeWait,
+            set: |mission| {
+                all_landed(mission);
+                node_mut(mission, "pr").pr_seen = seen(false, true);
+            },
+            direct_unread: false,
+            landing: [
+                ("pr", none.clone()),
+                ("direct", landed_main.clone()),
+                ("first", landed_merged.clone()),
+                ("research", none.clone()),
+            ],
+            order: &[],
+            closes: true,
+        },
+        LandingCase {
+            name: "merge_wait, a pull request GitHub never answered for waits unread",
+            status: MissionStatus::MergeWait,
+            set: |mission| {
+                all_landed(mission);
+                node_mut(mission, "pr").pr_seen = None;
+            },
+            direct_unread: false,
+            landing: [
+                ("pr", unread_merge.clone()),
+                ("direct", landed_main.clone()),
+                ("first", landed_merged.clone()),
+                ("research", none.clone()),
+            ],
+            order: &[],
+            closes: false,
+        },
+        LandingCase {
+            name: "merge_wait, a branch read could not answer",
+            status: MissionStatus::MergeWait,
+            set: |mission| {
+                all_landed(mission);
+                node_mut(mission, "direct").in_main = None;
+            },
+            direct_unread: true,
+            landing: [
+                ("pr", landed_merged.clone()),
+                ("direct", unread_join.clone()),
+                ("first", landed_merged.clone()),
+                ("research", none.clone()),
+            ],
+            order: &[],
+            closes: false,
+        },
+        LandingCase {
+            name: "merge_wait, a stale proof read for the branch the node named before",
+            status: MissionStatus::MergeWait,
+            set: |mission| {
+                all_landed(mission);
+                node_mut(mission, "direct").in_main = Some(crate::missions::Landed {
+                    branch: "feat/old".into(),
+                    commit: SHA.into(),
+                });
+            },
+            direct_unread: false,
+            landing: [
+                ("pr", landed_merged.clone()),
+                ("direct", left_join.clone()),
+                ("first", landed_merged.clone()),
+                ("research", none.clone()),
+            ],
+            order: &["direct"],
+            closes: false,
+        },
+        LandingCase {
+            name: "merge_wait, a commit the Conductor recorded is no proof",
+            status: MissionStatus::MergeWait,
+            set: |mission| {
+                all_landed(mission);
+                let direct = node_mut(mission, "direct");
+                direct.in_main = None;
+                direct.commit = Some(SHA.into());
+            },
+            direct_unread: false,
+            landing: [
+                ("pr", landed_merged.clone()),
+                ("direct", left_join.clone()),
+                ("first", landed_merged.clone()),
+                ("research", none.clone()),
+            ],
+            order: &["direct"],
+            closes: false,
+        },
+        LandingCase {
+            name: "merge_wait, a direct change that names no branch waits unread",
+            status: MissionStatus::MergeWait,
+            set: |mission| {
+                all_landed(mission);
+                let direct = node_mut(mission, "direct");
+                direct.in_main = None;
+                direct.branch = None;
+            },
+            direct_unread: false,
+            landing: [
+                ("pr", landed_merged.clone()),
+                ("direct", unread_join.clone()),
+                ("first", landed_merged.clone()),
+                ("research", none.clone()),
+            ],
+            order: &[],
+            closes: false,
+        },
+        LandingCase {
+            name: "merge_wait, a failed node keeps it waiting and has no landing",
+            status: MissionStatus::MergeWait,
+            set: |mission| {
+                all_landed(mission);
+                node_mut(mission, "direct").status = NodeStatus::Failed;
+            },
+            direct_unread: false,
+            landing: [
+                ("pr", landed_merged.clone()),
+                ("direct", none.clone()),
+                ("first", landed_merged.clone()),
+                ("research", none.clone()),
+            ],
+            order: &[],
+            closes: false,
+        },
+        LandingCase {
+            name: "merge_wait, a dropped node's open pull request waits on nothing",
+            status: MissionStatus::MergeWait,
+            set: |mission| {
+                all_landed(mission);
+                let pr = node_mut(mission, "pr");
+                pr.status = NodeStatus::Dropped;
+                pr.pr_seen = seen(false, false);
+            },
+            direct_unread: false,
+            landing: [
+                ("pr", none.clone()),
+                ("direct", landed_main.clone()),
+                ("first", landed_merged.clone()),
+                ("research", none.clone()),
+            ],
+            order: &[],
+            closes: true,
+        },
+        LandingCase {
+            name: "running, what is left shows while the mission runs and nothing closes",
+            status: MissionStatus::Running,
+            set: |mission| {
+                all_landed(mission);
+                node_mut(mission, "pr").pr_seen = seen(false, false);
+                node_mut(mission, "direct").in_main = None;
+            },
+            direct_unread: false,
+            landing: [
+                ("pr", left_merge.clone()),
+                ("direct", left_join.clone()),
+                ("first", landed_merged.clone()),
+                ("research", none.clone()),
+            ],
+            order: &["pr", "direct"],
+            closes: false,
+        },
+        LandingCase {
+            name: "cancelled, nothing is left and what landed stays proven",
+            status: MissionStatus::Cancelled,
+            set: |mission| {
+                node_mut(mission, "pr").pr_seen = seen(false, false);
+                node_mut(mission, "first").pr_seen = seen(true, false);
+            },
+            direct_unread: false,
+            landing: [
+                ("pr", none.clone()),
+                ("direct", none.clone()),
+                ("first", landed_merged.clone()),
+                ("research", none.clone()),
+            ],
+            order: &[],
+            closes: false,
+        },
+        LandingCase {
+            name: "done, an open pull request is still left and a branch no longer read",
+            status: MissionStatus::Done,
+            set: |mission| node_mut(mission, "pr").pr_seen = seen(false, false),
+            direct_unread: false,
+            landing: [
+                ("pr", left_merge.clone()),
+                ("direct", none.clone()),
+                ("first", unread_merge.clone()),
+                ("research", none.clone()),
+            ],
+            order: &["pr"],
+            closes: false,
+        },
+    ];
+    for case in cases {
+        let fixture = conducting();
+        let mut runtime = fixture.runtime.lock().unwrap();
+        command(
+            &mut runtime,
+            "sender",
+            json!({"op": "create", "title": "Landing"}),
+        )
+        .unwrap();
+        command(
+            &mut runtime,
+            "sender",
+            json!({"op": "plan", "plan": {"nodes": [
+                {"key": "research", "title": "Research", "kind": "research", "criteria": ["it works"]},
+                {"key": "pr", "title": "PR", "kind": "change", "delivery": "pr", "criteria": ["it works"], "depends_on": ["research"]},
+                {"key": "direct", "title": "Direct", "kind": "change", "delivery": "direct", "criteria": ["it works"], "depends_on": ["research"]},
+                {"key": "first", "title": "First", "kind": "change", "delivery": "pr", "criteria": ["it works"]},
+            ], "merge_order": ["first"]}}),
+        )
+        .unwrap();
+        command(&mut runtime, "sender", json!({"op": "start"})).unwrap();
+        {
+            let mission = runtime.missions.book.get_mut("mission-1").unwrap();
+            // Gated, with every line met: only the landing and a node's state
+            // decide the close.
+            for node in &mut mission.nodes {
+                node.criteria = if node.delivery == Some(crate::missions::Delivery::Pr) {
+                    vec![
+                        serde_json::from_value(json!({"key": "ci", "kind": "ci", "state": "pass"}))
+                            .unwrap(),
+                    ]
+                } else {
+                    Vec::new()
+                };
+                node.status = NodeStatus::Done;
+                node.finished_at_unix_ms = Some(1);
+            }
+            node_mut(mission, "pr").pr = Some(11);
+            node_mut(mission, "first").pr = Some(10);
+            node_mut(mission, "direct").branch = Some("feat/direct".into());
+            mission.status = case.status;
+            (case.set)(mission);
+        }
+        if case.direct_unread {
+            land(
+                &mut runtime,
+                "direct",
+                crate::runtime::mission_outside::Found::Unread("not in this repository".into()),
+            );
+        }
+        let closed = runtime.close_if_landed("mission-1", 2);
+        assert_eq!(closed, case.closes, "{}: close", case.name);
+        if case.closes {
+            assert_eq!(
+                mission_status(&runtime),
+                MissionStatus::Done,
+                "{}",
+                case.name
+            );
+        }
+        let view = serde_json::to_value(runtime.mission_view_of("mission-1").unwrap()).unwrap();
+        for (key, expected) in &case.landing {
+            let node = view["nodes"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|node| node["key"] == *key)
+                .unwrap();
+            assert_eq!(&node["landing"], expected, "{}: {key}", case.name);
+        }
+        assert_eq!(
+            view["landing_order"],
+            json!(case.order),
+            "{}: order",
+            case.name
+        );
+    }
 }

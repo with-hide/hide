@@ -6,11 +6,11 @@ import type { AgentRow, Mission, MissionNode } from "./snapshot";
 // missions it lists, the group each stands in, and the rail's number.
 
 function node(key: string, extra: Partial<MissionNode> = {}): MissionNode {
-  return { key, title: key, kind: "change", depends_on: [], status: "planned", blocked: null, delivery: "pr", worker: null, agent_id: null, pane_id: null, machine: null, pr: null, base_pr: null, branch: null, pr_state: null, pr_url: null, stage: null, attempts: 0, line: null, change: null, review: null, criteria: [], criteria_met: 0, criteria_skipped: 0, external: null, unread: false, reopened: 0, started_at_unix_ms: null, finished_at_unix_ms: null, commit: null, verdict: null, checks: null, ...extra };
+  return { key, title: key, kind: "change", depends_on: [], status: "planned", blocked: null, delivery: "pr", worker: null, agent_id: null, pane_id: null, machine: null, pr: null, base_pr: null, branch: null, pr_state: null, pr_url: null, stage: null, attempts: 0, line: null, change: null, review: null, criteria: [], criteria_met: 0, criteria_skipped: 0, external: null, unread: false, reopened: 0, started_at_unix_ms: null, finished_at_unix_ms: null, commit: null, landing: null, verdict: null, checks: null, ...extra };
 }
 
 function mission(id: string, extra: Partial<Mission> = {}): Mission {
-  return { id, title: `Mission ${id}`, workspace_id: "w", project: "/repo", checkout_path: "/repo", device_id: "mac", status: "running", scope: "pr", cap: 4, exempt: false, strength: null, other_vendor: null, conductor: { pane_id: "p1", name: "conductor", agent_kind: "claude", session: null, present: true, takes_answers: true }, nodes: [], merge_order: [], check: null, github: null, decision: null, question: null, answer: null, answer_failed: null, delay: null, report: null, created_at_unix_ms: 1, started_at_unix_ms: 1, closed_at_unix_ms: null, running: 0, stale: false, github_stale: false, github_read_at_unix_ms: null, ...extra };
+  return { id, title: `Mission ${id}`, workspace_id: "w", project: "/repo", checkout_path: "/repo", device_id: "mac", status: "running", scope: "pr", cap: 4, exempt: false, strength: null, other_vendor: null, conductor: { pane_id: "p1", name: "conductor", agent_kind: "claude", session: null, present: true, takes_answers: true }, nodes: [], merge_order: [], landing_order: [], check: null, github: null, decision: null, question: null, answer: null, answer_failed: null, delay: null, report: null, created_at_unix_ms: 1, started_at_unix_ms: 1, closed_at_unix_ms: null, running: 0, stale: false, github_stale: false, github_read_at_unix_ms: null, ...extra };
 }
 
 const noRows = () => null;
@@ -32,7 +32,7 @@ describe("the group a mission stands in (B5) and the rail's number (D-08)", () =
     expect(group(mission("m", { decision: "Which order?" }))).toBe("turn");
     expect(group(mission("m", { conductor: { pane_id: "p1", name: "c", agent_kind: "claude", session: null, present: false, takes_answers: true } }))).toBe("turn");
     expect(group(mission("m", { nodes: [node("x", { kind: "external", status: "failed" })] }))).toBe("turn");
-    expect(group(mission("m", { status: "merge_wait", nodes: [node("x", { status: "done", pr: 3, pr_state: "mergeable" })] }))).toBe("turn");
+    expect(group(mission("m", { status: "merge_wait", nodes: [node("x", { status: "done", pr: 3, pr_state: "mergeable", landing: { state: "left", action: "merge" } })], landing_order: ["x"] }))).toBe("turn");
     const raised = { escalation: { cause: "bell_exhausted" } } as unknown as AgentRow;
     expect(group(mission("m", { nodes: [node("x", { status: "working", pane_id: "p9" })] }), (n) => (n.pane_id === "p9" ? raised : null))).toBe("turn");
   });
@@ -40,13 +40,13 @@ describe("the group a mission stands in (B5) and the rail's number (D-08)", () =
   it("puts a plan or a running mission with nothing for the operator in 진행 중, a quiet merge wait in 머지 기다림, and a closed one in 끝남", () => {
     expect(group(mission("m", { status: "planning" }))).toBe("running");
     expect(group(mission("m", { nodes: [node("x", { status: "working" })] }))).toBe("running");
-    expect(group(mission("m", { status: "merge_wait", nodes: [node("x", { status: "done", pr: 3, pr_state: "merged" })] }))).toBe("merge_wait");
+    expect(group(mission("m", { status: "merge_wait", nodes: [node("x", { status: "done", pr: 3, pr_state: "merged", landing: { state: "landed", proof: { by: "merged" } } })] }))).toBe("merge_wait");
     expect(group(mission("m", { status: "done", decision: "left over" }))).toBe("closed");
     expect(group(mission("m", { status: "cancelled" }))).toBe("closed");
   });
 
   it("counts the missions in 내 차례, so the rail and the group never disagree", () => {
-    const entries = [mission("a", { decision: "?" }), mission("b"), mission("c", { status: "done", decision: "?" }), mission("d", { status: "merge_wait", nodes: [node("x", { status: "done", pr: 1, pr_state: "pending" })] })].map((m) => missionEntry(m, noRows));
+    const entries = [mission("a", { decision: "?" }), mission("b"), mission("c", { status: "done", decision: "?" }), mission("d", { status: "merge_wait", nodes: [node("x", { status: "done", pr: 1, pr_state: "pending", landing: { state: "left", action: "merge" } })], landing_order: ["x"] })].map((m) => missionEntry(m, noRows));
     expect(turnCount(entries)).toBe(2);
     expect(turnCount([])).toBe(0);
   });
