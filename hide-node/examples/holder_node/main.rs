@@ -36,7 +36,7 @@ use hide_holder_protocol::record;
 use hide_holder_protocol::{Answer, Appearance, Rgb, Size, Theme};
 use hide_kit::layout;
 use hide_kit::panes::{StartRequest, Started};
-use hide_node::terminal::holder::{Holders, LocalTerminals, Switch};
+use hide_node::terminal::holder::{HolderFolders, Holders, LocalTerminals, Switch};
 use hide_node::terminal::{Attacher, LocalAttacher, Mode, OutputSink, ReportSink, SessionParts};
 use hide_node_link::terminal::{GridSize, KeyTarget, TerminalControl, TerminalNode};
 use serde_json::{Value, json};
@@ -140,9 +140,10 @@ fn node(options: &Options) -> Result<(), String> {
         None => Box::new(NoHerdr),
     };
     let terminals = Holders::start_local(
-        switch,
-        &options.home,
-        &options.state,
+        (switch == Switch::On).then_some(HolderFolders {
+            home: &options.home,
+            state_dir: &options.state,
+        }),
         options.herdr_bin.as_deref(),
         herdr,
         Arc::clone(&screens) as Arc<dyn OutputSink>,

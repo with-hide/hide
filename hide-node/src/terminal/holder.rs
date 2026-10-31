@@ -432,28 +432,31 @@ pub struct LocalTerminals {
     pub holders: Option<Arc<Holders>>,
 }
 
+/// Where a node's holder panes live: the home whose version folders the
+/// holders are copied into, and the state folder that keeps their records.
+/// Only a node with the switch on has them.
+#[derive(Clone, Copy, Debug)]
+pub struct HolderFolders<'a> {
+    pub home: &'a Path,
+    pub state_dir: &'a Path,
+}
+
 impl Holders {
-    /// The holder panes of `state_dir`, whose holders are copied from
-    /// `source` into version folders under `home`, when `switch` is on;
-    /// `None` when it is off, and then nothing of holders is opened.
+    /// The holder panes of `folders.state_dir`, whose holders are copied
+    /// from `source` into version folders under `folders.home`.
     pub fn open(
-        switch: Switch,
-        home: &Path,
-        state_dir: &Path,
+        folders: HolderFolders<'_>,
         source: Source,
         reports: Arc<dyn ReportSink>,
-    ) -> Result<Option<Self>, String> {
-        if switch == Switch::Off {
-            return Ok(None);
-        }
-        let panes = Panes::open(home, state_dir, crate::diagnostics::emit)?;
-        Ok(Some(Self {
+    ) -> Result<Self, String> {
+        let panes = Panes::open(folders.home, folders.state_dir, crate::diagnostics::emit)?;
+        Ok(Self {
             panes,
             source,
-            state_dir: state_dir.to_owned(),
+            state_dir: folders.state_dir.to_owned(),
             known: Arc::default(),
             reports,
-        }))
+        })
     }
 
     /// The local node's holder program: the one beside this program, and on
@@ -483,34 +486,29 @@ impl Holders {
         })
     }
 
-    /// The local node's terminal service as a daemon starts it: with
-    /// `switch` on, the state folder's holder panes beside `herdr`'s
-    /// sessions, the holder from [`Holders::local_source`], and the holders
-    /// that ran on while no node was there found again in the background
-    /// ([`Holders::recover_in_background`]); off, `herdr`'s sessions alone and
-    /// nothing of holders opened. hided and the tools that measure a node
+    /// The local node's terminal service as a daemon starts it: given
+    /// `holders` (the switch on), their state folder's holder panes beside
+    /// `herdr`'s sessions, the holder from [`Holders::local_source`], and
+    /// the holders that ran on while no node was there found again in the
+    /// background ([`Holders::recover_in_background`]); given none (the
+    /// switch off), `herdr`'s sessions alone and nothing of holders opened
+    /// or read. hided and the tools that measure a node
     /// (`hide-node/examples/holder_node.rs`) start it here, so what they
     /// measure is how the daemon is built.
-    #[allow(clippy::too_many_arguments)]
     pub fn start_local(
-        switch: Switch,
-        home: &Path,
-        state_dir: &Path,
+        holders: Option<HolderFolders<'_>>,
         herdr_bin: Option<&Path>,
         herdr: Box<dyn Attacher>,
         outputs: Arc<dyn super::OutputSink>,
         reports: Arc<dyn ReportSink>,
     ) -> Result<LocalTerminals, String> {
-        let holders = match switch {
-            Switch::Off => None,
-            Switch::On => Self::open(
-                switch,
-                home,
-                state_dir,
+        let holders = match holders {
+            None => None,
+            Some(folders) => Some(Arc::new(Self::open(
+                folders,
                 Self::local_source(herdr_bin)?,
                 Arc::clone(&reports),
-            )?
-            .map(Arc::new),
+            )?)),
         };
         let attacher = match &holders {
             Some(holders) => holders.attacher(herdr),

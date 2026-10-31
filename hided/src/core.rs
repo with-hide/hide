@@ -1100,23 +1100,25 @@ fn local_terminals(
     outputs: Arc<dyn OutputSink>,
     reports: Arc<dyn ReportSink>,
 ) -> Result<Arc<Service>, String> {
-    use hide_node::terminal::holder::{Holders, Switch};
-    let switch = crate::env::pane_holder_switch()?;
-    let state_dir = std::path::Path::new(&options.app_state_path)
-        .parent()
-        .ok_or("the app state path has no folder")?
-        .to_path_buf();
-    // Off, no holder is opened and the home is never read.
-    let home = match (switch, options.home.as_ref()) {
-        (Switch::Off, _) => std::path::PathBuf::new(),
-        (Switch::On, Some(home)) => std::path::PathBuf::from(home),
-        (Switch::On, None) => hide_platform::host::home_dir()
-            .map_err(|error| format!("pane holders need a home folder: {error}"))?,
+    use hide_node::terminal::holder::{HolderFolders, Holders, Switch};
+    // Off, no holder is opened and neither folder is read.
+    let folders = match crate::env::pane_holder_switch()? {
+        Switch::Off => None,
+        Switch::On => {
+            let state_dir = std::path::Path::new(&options.app_state_path)
+                .parent()
+                .ok_or("the app state path has no folder")?
+                .to_path_buf();
+            let home = match options.home.as_ref() {
+                Some(home) => std::path::PathBuf::from(home),
+                None => hide_platform::host::home_dir()
+                    .map_err(|error| format!("pane holders need a home folder: {error}"))?,
+            };
+            Some((home, state_dir))
+        }
     };
     Holders::start_local(
-        switch,
-        &home,
-        &state_dir,
+        folders.as_ref().map(|(home, state_dir)| HolderFolders { home, state_dir }),
         options.herdr_bin_path.as_deref().map(std::path::Path::new),
         local_attacher(options),
         outputs,

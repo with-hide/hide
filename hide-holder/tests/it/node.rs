@@ -25,7 +25,7 @@ use hide_holder_protocol::record::{self, EndReason, Identity, PaneRecord, Phase,
 use hide_holder_protocol::{Answer, Size};
 use hide_kit::layout;
 use hide_kit::panes::{StartRequest, Started};
-use hide_node::terminal::holder::{Holders, Switch, open_holder};
+use hide_node::terminal::holder::{HolderFolders, Holders, Switch, open_holder};
 use hide_node::terminal::protocol::SessionEvent;
 use hide_node::terminal::{
     Attacher, Mode, OutputSink, ReportSink, RetryPolicy, Service, SessionParts,
@@ -282,14 +282,17 @@ impl Node {
     fn start(switch: Switch, home: &Path, state: &Path) -> Self {
         let screens = Arc::new(Screens::default());
         let reports = Arc::new(Reports::default());
-        let holders = Holders::open(
-            switch,
-            home,
-            state,
-            source(),
-            Arc::clone(&reports) as Arc<dyn ReportSink>,
-        )
-        .unwrap();
+        let holders = (switch == Switch::On).then(|| {
+            Holders::open(
+                HolderFolders {
+                    home,
+                    state_dir: state,
+                },
+                source(),
+                Arc::clone(&reports) as Arc<dyn ReportSink>,
+            )
+            .unwrap()
+        });
         let (opened, herdr_opened) = channel();
         let herdr: Box<dyn Attacher> = Box::new(Herdr(Mutex::new(opened)));
         let attacher = match &holders {
