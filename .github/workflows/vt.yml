@@ -4,12 +4,13 @@
 # `scripts/prepare-vt-inputs.py` downloads and checks against
 # `hide-vt/build-inputs.json`. Each leg prepares those inputs, builds the crate
 # from empty Zig caches and again from kept ones, measuring both, runs its
-# tests and Clippy, builds it with the network denied (macOS and Linux), and
-# shows that a missing Zig, another Zig version and a download of other bytes
-# each stop the build with its reason. docs/BUILD.md, "The terminal parser and
-# Zig", owns the reasons; `pr.yml` runs this lane for a change to hide-vt or
-# its scripts, and every full plan runs it, which is how main's entries in the
-# vt cache are saved.
+# tests and Clippy, runs the pane holder's tests and Clippy (the holder links
+# hide-vt), builds it with the network denied (macOS and Linux), and shows
+# that a missing Zig, another Zig version and a download of other bytes each
+# stop the build with its reason. docs/BUILD.md, "The terminal parser and
+# Zig", owns the reasons; `pr.yml` runs this lane for a change to hide-vt, the
+# holder or their scripts, and every full plan runs it, which is how main's
+# entries in the vt cache are saved.
 name: vt
 
 on:
@@ -48,6 +49,12 @@ jobs:
       - uses: ./.github/actions/vt-cache
         with:
           save: ${{ github.ref == 'refs/heads/main' }}
+      # The pane holder's tests build hide-kit, whose dependencies are the
+      # workspace set's; this lane reads it and saves nothing.
+      - uses: ./.github/actions/rust-cache
+        with:
+          set: workspace
+          save: false
       - name: Prepare the build inputs
         # A download only when the restored entry is missing.
         timeout-minutes: 10
@@ -77,6 +84,27 @@ jobs:
         run: |
           bash scripts/verify-cargo.sh nextest --profile ci -p hide-vt
           bash scripts/verify-cargo.sh clippy -p hide-vt --all-targets -- -D warnings
+      - name: Fetch the pinned ConPTY runtime
+        # A Windows holder runs a pane only on the pinned ConPTY runtime: the
+        # conpty folder beside the pinned Herdr's herdr.exe, which the fetch
+        # checks against the pin's digest.
+        id: conpty
+        if: matrix.system == 'windows'
+        timeout-minutes: 5
+        shell: pwsh
+        run: |
+          $bin = (pwsh -NoProfile -File scripts/fetch-herdr-runtime.ps1 | Select-Object -Last 1).Trim()
+          "folder=$(Join-Path (Split-Path -Parent $bin) 'conpty')" >> $env:GITHUB_OUTPUT
+      - name: The pane holder's tests and Clippy
+        # The holder links hide-vt; its tests start the built holder from a
+        # version folder as a node does, without one (docs/TESTING.md, The
+        # pane holder).
+        timeout-minutes: 10
+        env:
+          HIDE_HOLDER_CONPTY: ${{ steps.conpty.outputs.folder }}
+        run: |
+          bash scripts/verify-cargo.sh nextest --profile ci -p hide-holder -p hide-holder-protocol
+          bash scripts/verify-cargo.sh clippy -p hide-holder -p hide-holder-protocol --all-targets -- -D warnings
       - name: Build with the network denied
         # The build runs Zig with package fetching off, so a reachable network
         # proves nothing: each wrapper first shows that it denies the network,
