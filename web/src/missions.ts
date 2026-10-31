@@ -375,14 +375,14 @@ export function missionResults(mission: Mission): { node: MissionNode; result: N
 /**
  * How a card is drawn (PRD mission-node-simple D-01, B1): one of three
  * shapes, waiting, in progress and done, each readable without its colour;
- * a working node whose worker sleeps wears the sleeping row's moon, and what
- * someone has to look at is the card's `!` tag (`node.attention`), not a
+ * a working node whose worker sleeps is still in progress, its sleep said by
+ * the mark's hover and the panel, and what someone has to look at is the card's `!` tag (`node.attention`), not a
  * shape. Finished work has one look whether or not it reached main. An
  * outside node watches until its pull request merges or its branch reaches
  * main. Being outside is a node's kind, not a state: its card keeps the
  * dotted border and `↗` in every look (B19).
  */
-export type NodeLook = "waiting" | "working" | "asleep" | "done" | "external" | "cancelled" | "dropped";
+export type NodeLook = "waiting" | "working" | "done" | "external" | "cancelled" | "dropped";
 
 /**
  * A node at work whose worker Hide put to sleep, read from the core's one
@@ -399,7 +399,8 @@ export function nodeLook(mission: Mission, node: MissionNode): NodeLook {
   if (mission.status === "cancelled") return "cancelled";
   if (node.kind === "external") return "external";
   if (node.blocked || node.status === "planned") return "waiting";
-  return workerAsleep(node) ? "asleep" : "working";
+  // A worker Hide put to sleep leaves its node in progress (PRD mission-node-simple D-01, B1): its sleep is the panel's and the mark's hover words.
+  return "working";
 }
 
 /** Whether the core found a node's work in main (B17, B19). */
@@ -553,7 +554,7 @@ export function cardLine(mission: Mission, node: MissionNode, planLine: string |
     return { text: t(node.unread ? "mission.outside.unread" : "mission.outside.waiting"), attention: false };
   }
   if (look === "done") return null;
-  if (look === "working" || look === "asleep") {
+  if (look === "working") {
     const left = linesLeft(node);
     const text = planLine ?? node.line ?? (left.length > 0 ? t("mission.line.left", { lines: left.map((line) => criterionShort(line, t)).join(", ") }) : null);
     return text ? { text, attention: false } : null;
@@ -739,9 +740,28 @@ export function lineOutrun(node: MissionNode, events: readonly MissionEvent[] | 
  * The operator's choices for a node that waits on someone to look, by why
  * (PRD mission-node-simple B15, B20, B26): each is one `mission_attention`
  * event, and `terminal` brings the worker's pane forward. A mission no
- * Conductor holds offers 이어받기 on its Conductor row just above.
+ * Conductor holds, or whose Conductor left a raise unanswered for ten
+ * minutes (`conductorUnanswered`), offers 이어받기 on its Conductor row just
+ * above.
  */
 export type AttentionChoice = MissionOperatorAction | "terminal";
+
+/** The reasons only the operator settles, which reach them at once rather than after the Conductor's ten minutes (D-05, B20, B26). */
+const OPERATOR_FIRST: readonly MissionAttentionReason[] = ["cleanup_ask", "conductor_failed"];
+
+/**
+ * Whether a Conductor that holds the mission let a raise reach the operator
+ * (PRD mission-node-simple D-05, B15): a node's `!` the Conductor was asked
+ * first now says `! 나`, so it stood ten minutes unanswered and the operator
+ * may take the mission over.
+ */
+export function conductorUnanswered(mission: Mission): boolean {
+  if (!missionOpen(mission) || !mission.conductor.present) return false;
+  return mission.nodes.some((node) => {
+    const attention = openAttention(mission, node);
+    return attention?.to === "operator" && !OPERATOR_FIRST.includes(attention.reason);
+  });
+}
 
 export function attentionChoices(reason: MissionAttentionReason): AttentionChoice[] {
   switch (reason) {
@@ -799,9 +819,13 @@ export function takeOverProvider(mission: Mission, remembered: AgentStartChoice 
 /**
  * What 이어받기 resumes first (PRD mission-tool D-11, B14): the gone
  * Conductor's own conversation, when its agent can resume one; null when it
- * has none to resume, and 이어받기 starts a new agent instead (B15).
+ * has none to resume, and 이어받기 starts a new agent instead (B15). A
+ * Conductor still there that left a raise unanswered keeps its conversation
+ * in its own pane, so a takeover of it starts a new agent (PRD
+ * mission-node-simple B15).
  */
 export function conductorResume(mission: Mission): { provider: ProviderKind; sessionId: string } | null {
+  if (mission.conductor.present) return null;
   const session = mission.conductor.session;
   const provider = session ? resumeProvider(session.agent) : null;
   return session && provider ? { provider, sessionId: session.session_id } : null;

@@ -7,7 +7,7 @@ import { MissionPrMark } from "./components/mission-pr";
 import { useInterfaceTranslation } from "./i18n/client";
 import { requireInterfaceLanguage } from "./i18n/locale";
 import { cn } from "./lib/utils";
-import { checkerState, launchSession, nodeTimes, runWords, shortCommit, type NodeLook, type NodeResult } from "./missions";
+import { checkerState, launchSession, nodeTimes, runWords, shortCommit, workerAsleep, type NodeLook, type NodeResult } from "./missions";
 import { allAgents, agentsByPane } from "./paneAgents";
 import type { Mission, MissionChecker, MissionEvent, MissionNode, MissionWorker } from "./snapshot";
 import { useShellStore } from "./store";
@@ -69,6 +69,11 @@ export function useWorkerRow(node: MissionNode) {
 /** The look's word, the same on the card's mark, its hover and its accessible name (B26). */
 export function lookWord(look: NodeLook, t: TFunction<"translation">): string {
   return t(`mission.look.${look}`);
+}
+
+/** A node mark's hover and accessible name (PRD mission-node-simple B1): its look's word, and a sleeping worker's sleep beside it, since the mark itself has no fourth shape. */
+export function markWord(node: MissionNode, look: NodeLook, t: TFunction<"translation">): string {
+  return look === "working" && workerAsleep(node) ? `${lookWord(look, t)} · ${t("mission.worker.asleep")}` : lookWord(look, t);
 }
 
 /** How long a node took, from its events (B28); nothing moves while its device does not answer (B35). */

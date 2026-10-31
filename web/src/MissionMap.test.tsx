@@ -314,6 +314,25 @@ it("offers Take over on the Conductor row when no Conductor holds an open missio
   } finally { await done.unmount(); }
 });
 
+it("offers Take over beside 터미널로 once a raise the live Conductor was asked first reached the operator, starting a new agent rather than resuming its live conversation (PRD mission-node-simple B15)", async () => {
+  const conductor = [{ pane_id: "p1", mark: "quiet" } as AgentRow];
+  const asked = (to: "conductor" | "operator") => mission({ conductor: { ...mission().conductor, session: { device_id: "mac", agent: "claude", session_id: "s-1" } }, nodes: [node("a", { status: "working", pr: 7, attention: { reason: "pr_closed", pr: 7, to, since_unix_ms: 1 } })] });
+  const fresh = await mount({ items: [asked("conductor")] }, [], [], {}, conductor);
+  try {
+    expect(fresh.q("[data-mission-conductor] [data-mission-takeover]")).toBeNull();
+  } finally { await fresh.unmount(); }
+  const late = await mount({ items: [asked("operator")] }, [], [], {}, conductor);
+  try {
+    const row = late.q("[data-mission-conductor]")!;
+    expect(row.dataset.missionConductor).toBe("resting");
+    expect([...row.querySelectorAll("button")].map((button) => button.textContent)).toEqual(["Go to terminal", "Take over"]);
+    await act(async () => row.querySelector<HTMLElement>("[data-mission-takeover]")!.click());
+    const start = late.events.find((event) => event.kind === "agent_start_in_checkout");
+    expect(start?.payload).not.toHaveProperty("resume_session_id");
+    expect(String((start?.payload as { prompt: string }).prompt)).toContain("hide mission take mission-1");
+  } finally { await late.unmount(); }
+});
+
 it("names the Conductor under the head with its model and state, and 터미널로 brings its pane forward (PRD mission-tool B12)", async () => {
   const conductor = (mark: AgentRow["mark"]) => [{ pane_id: "p1", mark } as AgentRow];
   const launch = [{ device_id: "mac", pane_id: "p1", session_digest: "c", launch_model: "opus", launch_effort: "high" }];
@@ -377,12 +396,16 @@ it("draws each card as its mark, its title, its pull requests and `!` with who l
     node("closed-out", { kind: "external", delivery: null, external: { pr: 1605 }, status: "working", attention: { reason: "pr_closed", pr: 1605, to: "conductor", since_unix_ms: 1 } }),
     node("merged-out", { kind: "external", delivery: null, external: { pr: 1702 }, status: "done", landing: { state: "landed", proof: { by: "outside" } } }),
     node("next", { depends_on: ["core", "outside"] }),
+    node("sleeping", { status: "working", agent_id: "agent-2", agent_runtime: "asleep" }),
   ];
   const map = await mount({ items: [mission({ nodes })] });
   try {
-    expect(Object.fromEntries(nodes.map((n) => [n.key, card(map, n.key).dataset.nodeLook]))).toEqual({ core: "working", raised: "working", asked: "working", api: "done", branch: "done", outside: "external", "closed-out": "external", "merged-out": "done", next: "waiting" });
+    expect(Object.fromEntries(nodes.map((n) => [n.key, card(map, n.key).dataset.nodeLook]))).toEqual({ core: "working", raised: "working", asked: "working", api: "done", branch: "done", outside: "external", "closed-out": "external", "merged-out": "done", next: "waiting", sleeping: "working" });
     // One of three shapes, its word on hover and first in the card's name.
     expect(["next", "core", "api"].map((key) => card(map, key).querySelector("[data-node-mark]")?.getAttribute("aria-label"))).toEqual(["Waiting", "In progress", "Done"]);
+    // A worker Hide put to sleep leaves its node in progress, the same ring; only its words name the sleep (B1).
+    expect([card(map, "sleeping").dataset.nodeLook, card(map, "sleeping").querySelector("[data-node-mark]")?.getAttribute("aria-label")]).toEqual(["working", "In progress · Worker asleep"]);
+    expect(card(map, "sleeping").querySelector("[data-node-mark] svg")?.getAttribute("class")).toContain("animate-spin");
     // Every pull request the node holds is its own PR mark, in the order it got them (D-10).
     expect([...card(map, "core").querySelectorAll<HTMLElement>("[data-node-pr]")].map((mark) => mark.dataset.nodePr)).toEqual(["1703", "1704"]);
     // Who works it, its times, its finish lines, its line and its badges are the panel's (D-07).
@@ -602,6 +625,11 @@ it("puts the question the decision asks of a node and its choices in its panel, 
   try {
     // A working node's own plan step is where the summary says it is (PRD mission-tool B19).
     expect(map.q('[data-mission-summary-line="api"]')?.textContent).toBe("Now: Core events (0/2)");
+    // The node's panel keeps the Conductor's last line under the worker's plan (PRD mission-node-simple B4).
+    await act(async () => card(map, "api").click());
+    const api = map.q('[data-mission-detail="api"]')!;
+    expect(api.querySelector("[data-panel-plan]")).not.toBeNull();
+    expect(api.querySelector("[data-panel-conductor-line]")?.textContent).toBe("Conductor's line");
     await act(async () => card(map, "screen").click());
     const panel = map.q('[data-mission-detail="screen"]')!;
     expect(panel.querySelector("[data-panel-question]")?.textContent).toBe("Which base for the screen PR?");
@@ -658,10 +686,11 @@ it("lists only what the operator can do in 내 차례: the decision whose node c
 it("puts in a node's panel what waits on whom with its choices, the worker's life, the Conductor's line dimmed once Hide's facts passed it, Hide's record, and 다시 진행 on finished work (PRD mission-node-simple B4, B15-B17, B20)", async () => {
   const nodes = [
     node("ended", { title: "Holder record", status: "working", line: "fixing the review", agent_runtime: "ended", worker: { agent: "claude", model: "opus", effort: null, effort_auto: false }, attention: { reason: "worker_ended", pr: null, to: "conductor", since_unix_ms: 50 } }),
-    node("done", { title: "Holder life", status: "done", pr: 1918, pr_state: "merged", worktree: "removed", hide: { action: "cleaned", at_unix_ms: 70 } }),
+    node("done", { title: "Holder life", status: "done", pr: 1918, pr_state: "merged", line: "waiting on CI", finished_at_unix_ms: 60, worktree: "removed", hide: { action: "cleaned", at_unix_ms: 70 } }),
   ];
   const events: MissionEvent[] = [
     { at_unix_ms: 10, kind: "node", node: "ended", status: "working", line: "fixing the review" },
+    { at_unix_ms: 20, kind: "node", node: "done", status: "working", line: "waiting on CI" },
     { at_unix_ms: 50, kind: "raised", node: "ended", reason: "worker_ended" },
     { at_unix_ms: 60, kind: "hide", node: "done", hide: "done" },
     { at_unix_ms: 70, kind: "hide", node: "done", hide: "cleaned" },
@@ -682,6 +711,8 @@ it("puts in a node's panel what waits on whom with its choices, the worker's lif
     await act(async () => card(map, "done").click());
     const done = map.q('[data-mission-detail="done"]')!;
     expect(done.querySelector("[data-panel-worktree]")?.textContent).toBe("Removed, branch kept");
+    // Finished work keeps the Conductor's last line, dimmed since Hide finished it after (B4).
+    expect(done.querySelector("[data-panel-line-behind]")?.textContent).toBe("waiting on CI");
     expect([...done.querySelectorAll<HTMLElement>("[data-panel-hide-event]")].map((row) => row.textContent?.replace(/^.*?Hide/, "Hide"))).toEqual(["Hide · Marked done", "Hide · Removed the worktree"]);
     await act(async () => done.querySelector<HTMLElement>("[data-node-resume]")!.click());
     await act(async () => done.querySelector<HTMLElement>("[data-node-resume]")!.click());
@@ -711,6 +742,26 @@ it("shows a mission from before criteria with its old sentence and no count (B23
     expect(map.q("[data-panel-old-criteria]")?.textContent).toBe("the lens keeps its filter");
     expect(map.q("[data-panel-line]")).toBeNull();
   } finally { await map.unmount(); }
+});
+
+it("opens a closed mission again from its map's head with one event, and offers it on no open or cancelled mission (PRD mission-node-simple B18)", async () => {
+  for (const status of ["done", "merge_wait"] as const) {
+    const closed = await mount({ items: [mission({ status, nodes: [node("a", { status: "done", pr: 1, pr_state: "merged" })], closed_at_unix_ms: 2 })] });
+    try {
+      await act(async () => closed.q("[data-mission-reopen]")!.click());
+      expect(closed.events.filter((event) => event.kind === "mission_reopen").map((event) => event.payload)).toEqual([{ mission: "mission-1" }]);
+    } finally { await closed.unmount(); }
+  }
+  const stale = await mount({ items: [mission({ status: "done", stale: true, nodes: [node("a", { status: "done" })] })] });
+  try {
+    expect((stale.q("[data-mission-reopen]") as HTMLButtonElement | null)?.disabled).toBe(true);
+  } finally { await stale.unmount(); }
+  for (const status of ["running", "cancelled"] as const) {
+    const other = await mount({ items: [mission({ status, nodes: [node("a")] })] });
+    try {
+      expect(other.q("[data-mission-reopen]")).toBeNull();
+    } finally { await other.unmount(); }
+  }
 });
 
 it("folds a finished mission's report into its first words without Markdown marks, opens it drawn as Markdown, and rests a cancelled mission's unfinished cards (B24, B35)", async () => {

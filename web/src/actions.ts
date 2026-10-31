@@ -1871,6 +1871,10 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
     endMission(missionId: string) {
       dispatch({ schema_version: 2, kind: "mission_end", payload: { mission: missionId } });
     },
+    /** 다시 열기 on a closed mission's map (PRD mission-node-simple B18): the operator's reopen, as the Conductor's `hide mission reopen`. */
+    reopenMission(missionId: string) {
+      dispatch({ schema_version: 2, kind: "mission_reopen", payload: { mission: missionId } });
+    },
 
     /**
      * The operator's choice for a mission node that waits on someone to look,

@@ -22,7 +22,6 @@ export const HEAD_FILL: Record<HeadCell, string> = {
   waiting: "bg-muted",
   external: "bg-muted",
   working: "bg-mission-working",
-  asleep: "bg-muted",
   attention: "bg-mission-hold",
   done: "bg-mission-done",
   cancelled: "bg-mission-cancelled",

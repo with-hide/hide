@@ -13,7 +13,7 @@ import { useInterfaceTranslation } from "./i18n/client";
 import { formatDateTime } from "./i18n/format";
 import { requireInterfaceLanguage } from "./i18n/locale";
 import { cn } from "./lib/utils";
-import { CheckerRow, lookWord, RunText, useNodeTimes, useRunWords, useWorkerRow } from "./missionParts";
+import { CheckerRow, lookWord, markWord, RunText, useNodeTimes, useRunWords, useWorkerRow } from "./missionParts";
 import {
   attentionWords,
   cardLine,
@@ -61,12 +61,12 @@ export function MissionNodePanel({ mission, node, events, end, onSelect, onClose
     ...(node.change && missionOpen(mission) ? [`${t("mission.changed")} · ${node.change}`] : []),
   ];
   // The worker's life beside its model (B4): asleep or ended, as `hide agent show` says it.
-  const life = node.agent_runtime === "asleep" || node.agent_runtime === "ended" ? t(node.agent_runtime === "asleep" ? "mission.look.asleep" : "mission.worker.ended") : null;
+  const life = node.agent_runtime === "asleep" || node.agent_runtime === "ended" ? t(node.agent_runtime === "asleep" ? "mission.worker.asleep" : "mission.worker.ended") : null;
   return (
     <div className="flex min-w-0 flex-col gap-md px-md py-sm text-body" data-mission-detail={node.key}>
       <section className="flex min-w-0 flex-col gap-xxs" data-panel-part="head">
         <div className="flex min-w-0 items-start gap-xs">
-          <MissionNodeMark look={look} label={lookWord(look, t)} className="mt-xxs" />
+          <MissionNodeMark look={look} label={markWord(node, look, t)} className="mt-xxs" />
           <h3 className="min-w-0 flex-1 break-words text-subhead font-semibold" data-panel-title="true">{node.title}</h3>
           <Hint label={t("mission.panel.close")}>
             <Button variant="ghost" size="icon-sm" className="-mr-xs shrink-0 text-muted-foreground" aria-label={t("mission.panel.close")} onClick={onClose} data-panel-close="true">
@@ -139,13 +139,14 @@ function Attention({ mission, node, actions }: { mission: Mission; node: Mission
 /**
  * Where the node is now (B4, B31): the decision's question and choices while
  * it names the node, its worker's own plan while it works, its checkers at
- * work, else the Conductor's line, dimmed once Hide's facts moved past it, or
- * what it waits on; finished work has no now.
+ * work, else what it waits on; and the Conductor's last line in every state
+ * but a cancelled or dropped one, finished work and a node with a plan too,
+ * dimmed once Hide's facts moved past it (PRD mission-node-simple B4).
  */
 function Now({ mission, node, events }: { mission: Mission; node: MissionNode; events: MissionEvent[] | null }) {
   const { t } = useInterfaceTranslation();
   const look = nodeLook(mission, node);
-  if (look === "done" || look === "cancelled" || look === "dropped") return null;
+  if (look === "cancelled" || look === "dropped") return null;
   const question = nodeQuestion(mission, node);
   if (question) {
     const options = mission.question?.options ?? [];
@@ -165,23 +166,21 @@ function Now({ mission, node, events }: { mission: Mission; node: MissionNode; e
       </Part>
     );
   }
-  if ((look === "working" || look === "asleep") && node.plan) {
-    return (
-      <Part title={t("mission.field.now")} part="now">
-        {planNowLine(node.plan, t) ? <p className="min-w-0 break-words">{planNowLine(node.plan, t)}</p> : null}
-        <div className="min-w-0 text-caption" data-panel-plan="true"><PlanChecklist plan={node.plan} /></div>
-      </Part>
-    );
-  }
-  const checks = node.criteria.filter((line) => (line.kind === "review" || line.kind === "verify") && line.state === "open" && (line.checkers?.length ?? 0) > 0);
-  const line = cardLine(mission, node, null, t);
-  if (!line && checks.length === 0) return null;
+  const plan = look === "working" ? node.plan : null;
+  const planLine = plan ? planNowLine(plan, t) : null;
+  const checks = look === "done" ? [] : node.criteria.filter((line) => (line.kind === "review" || line.kind === "verify") && line.state === "open" && (line.checkers?.length ?? 0) > 0);
+  // Finished work and a worker's plan leave only the Conductor's own line to say; a done research node's line is its conclusion, which the result shows.
+  const own = node.line && node.line !== planLine && !(node.kind === "research" && look === "done") ? { text: node.line, attention: false } : null;
+  const line = look === "done" || plan ? own : cardLine(mission, node, null, t);
+  if (!plan && !line && checks.length === 0) return null;
   // The Conductor's line is its own word; once Hide's facts moved past it, it stays readable but dimmed (B4).
   const behind = line !== null && line.text === node.line && lineOutrun(node, events);
   return (
     <Part title={t("mission.field.now")} part="now">
+      {planLine ? <p className="min-w-0 break-words">{planLine}</p> : null}
+      {plan ? <div className="min-w-0 text-caption" data-panel-plan="true"><PlanChecklist plan={plan} /></div> : null}
       {line ? (
-        <p className={cn("min-w-0 break-words", line.attention && "text-mission-failed", behind && "text-muted-foreground opacity-(--opacity-dimmed)")} title={behind ? t("mission.line.behind") : undefined} data-panel-line-behind={behind || undefined}>
+        <p className={cn("min-w-0 break-words", line.attention && "text-mission-failed", behind && "text-muted-foreground opacity-(--opacity-dimmed)")} title={behind ? t("mission.line.behind") : undefined} data-panel-line-behind={behind || undefined} data-panel-conductor-line={line.text === node.line || undefined}>
           {line.text}
         </p>
       ) : null}

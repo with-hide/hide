@@ -4,7 +4,7 @@ import { describe, expect, it } from "vitest";
 import { STRENGTHS } from "./conductorSettings";
 import { english } from "./i18n/catalogs";
 import { initializeInterfaceI18n } from "./i18n/instance";
-import { attentionChoices, attentionWords, cardLine, checkerState, eventWords, hideWords, lineOutrun, nodeResumable, summaryGroups, liveNodes, conductorState, missionResultCounts, reportLine, chipWords, conductedBy, criteriaTally, launchSession, runWords, criterionName, missionHeadCells, criterionNote, defectEdges, firstPlans, kindWord, landingLeft, mainCommit, nodeLanded, missionCells, missionOfPane, missionResults, missionTally, missionTone, missionWorkLine, neighbours, nodeLook, nodeResult, nodeTimes, nodeTone, paneChipWords, missionCounts, nodeLine, nodeMark, stackWaiting, stageWord, takeOverPrompt, takeOverProvider, turnItems } from "./missions";
+import { attentionChoices, attentionWords, cardLine, checkerState, eventWords, hideWords, lineOutrun, nodeResumable, summaryGroups, liveNodes, conductorState, missionResultCounts, reportLine, chipWords, conductedBy, criteriaTally, launchSession, runWords, criterionName, missionHeadCells, criterionNote, defectEdges, firstPlans, kindWord, landingLeft, mainCommit, nodeLanded, missionCells, missionOfPane, missionResults, missionTally, missionTone, missionWorkLine, neighbours, nodeLook, nodeResult, nodeTimes, nodeTone, paneChipWords, missionCounts, nodeLine, nodeMark, workerAsleep, conductorUnanswered, conductorResume, stackWaiting, stageWord, takeOverPrompt, takeOverProvider, turnItems } from "./missions";
 import type { AgentRow, Mission, MissionAttention, MissionCriterion, MissionEvent, MissionLanding, MissionNode, SnapshotRest } from "./snapshot";
 
 // What the map and the Conductor row read from a mission (PRD
@@ -261,22 +261,24 @@ describe("a card's look (PRD mission-node-simple D-01, B1)", () => {
     expect(nodeLook(mission("m", { status: "cancelled" }), node("n", { status: "working" }))).toBe("cancelled");
   });
 
-  it("draws a working node whose worker Hide put to sleep as asleep, not working, on the card, the head, the chip and the live list", () => {
+  it("keeps a working node whose worker Hide put to sleep in progress on the card and the head, its worker's row asleep in the pane chip and off the live list", () => {
     const m = mission("m");
     const sleeping = node("s", { status: "working", agent_id: "agent-2", agent_runtime: "asleep" });
     const awake = node("a", { status: "working", agent_id: "agent-3", agent_runtime: "running" });
-    expect(nodeLook(m, sleeping)).toBe("asleep");
-    expect(nodeLook(m, awake)).toBe("working");
+    // Three shapes only (PRD mission-node-simple D-01, B1): the sleep is the panel's and the mark's hover words.
+    expect(nodeLook(m, sleeping)).toBe("working");
+    expect(workerAsleep(sleeping)).toBe(true);
+    expect(workerAsleep(awake)).toBe(false);
     // Without the core's answer (an older core) the Conductor's record stands.
-    expect(nodeLook(m, node("o", { status: "working" }))).toBe("working");
-    // The pane chip's mark, with or without the worker's row.
+    expect(workerAsleep(node("o", { status: "working" }))).toBe(false);
+    // The pane chip's row is its worker's own mark, with or without the worker's row.
     expect(nodeMark(sleeping, null)).toBe("asleep");
     expect(nodeMark(sleeping, "going")).toBe("asleep");
     expect(nodeMark(awake, null)).toBe("going");
     const both = mission("m", { nodes: [sleeping, awake] });
-    expect(missionHeadCells(both)).toEqual(["asleep", "working"]);
+    expect(missionHeadCells(both)).toEqual(["working", "working"]);
     expect(liveNodes(both).map((one) => one.key)).toEqual(["a"]);
-    expect(english).toHaveProperty("mission.look.asleep");
+    expect(english).toHaveProperty("mission.worker.asleep");
   });
 
   it("tags finished work with what the core left before main, and nothing it could not read or that landed", () => {
@@ -476,6 +478,22 @@ describe("a finished mission's results and the map's summary (PRD mission-tool B
     // A closed mission is never taken over; with no row there is nothing to bring forward.
     expect(conductorState(mission("m", { status: "done", conductor: gone }), row("asleep"))).toBe("asleep");
     expect(conductorState(mission("m", { status: "done", conductor: gone }), null)).toBeNull();
+  });
+
+  it("offers 이어받기 of a Conductor still there only once a raise it was asked first reached the operator, and never resumes its live conversation", () => {
+    const asked = (to: "conductor" | "operator", reason: MissionAttention["reason"]) => mission("m", { nodes: [node("n", { status: "working", attention: raised(to, reason, 12) })] });
+    // A raise the Conductor still has (B14) or one only the operator settles (B20, B26) is no sign it stopped answering.
+    expect(conductorUnanswered(asked("conductor", "pr_closed"))).toBe(false);
+    expect(conductorUnanswered(asked("operator", "cleanup_ask"))).toBe(false);
+    expect(conductorUnanswered(asked("operator", "conductor_failed"))).toBe(false);
+    // Ten minutes unanswered moved it to the operator (D-05, B15).
+    expect(conductorUnanswered(asked("operator", "pr_closed"))).toBe(true);
+    // A mission no Conductor holds already offers it on its gone row; a closed one is not taken over.
+    expect(conductorUnanswered({ ...asked("operator", "pr_closed"), conductor: { ...mission("m").conductor, present: false } })).toBe(false);
+    expect(conductorUnanswered({ ...asked("operator", "pr_closed"), status: "done" })).toBe(false);
+    // The live Conductor keeps its own conversation; the gone one's is resumed first.
+    expect(conductorResume(mission("m"))).toBeNull();
+    expect(conductorResume(mission("m", { conductor: { ...mission("m").conductor, present: false } }))).toEqual({ provider: "claude", sessionId: "s-1" });
   });
 });
 

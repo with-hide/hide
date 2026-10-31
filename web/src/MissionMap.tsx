@@ -12,6 +12,7 @@ import { PullList, ResultTiles } from "./components/mission-results";
 import { satelliteLines, Satellites } from "./components/mission-satellites";
 import { MissionSummary } from "./components/mission-summary";
 import { HEAD_FILL, ProgressCells } from "./components/mission-tone";
+import { Button } from "./components/ui/button";
 import { Hint } from "./components/ui/tooltip";
 import { useInterfaceTranslation } from "./i18n/client";
 import { requireInterfaceLanguage } from "./i18n/locale";
@@ -21,7 +22,7 @@ import { markdownPlainText } from "./markdownPlain";
 import { MissionMapCanvas } from "./MissionMapCanvas";
 import { MissionNodePanel } from "./MissionNodePanel";
 import { MissionTurn } from "./MissionTurn";
-import { lookWord } from "./missionParts";
+import { markWord } from "./missionParts";
 import {
   attentionWords,
   defectEdges,
@@ -228,7 +229,15 @@ function Head({ mission, actions }: { mission: Mission; actions: Actions }) {
       ) : null}
       {/* An end the Conductor was asked for says so until it closes the mission. */}
       {mission.end_asked && mission.conductor.present && missionOpen(mission) ? <span className="shrink-0 text-caption text-mission-hold" data-mission-end-asked="true">{t("mission.end.askedNote")}</span> : null}
-      <span className="ml-auto shrink-0"><MissionEnd mission={mission} actions={actions} /></span>
+      <span className="ml-auto flex shrink-0 items-center gap-xs">
+        {/* A closed mission opens again from its map (PRD mission-node-simple B18); a cancelled one never does. */}
+        {mission.status === "done" || mission.status === "merge_wait" ? (
+          <Button variant="text" size="inline" className="text-caption" disabled={mission.stale} onClick={() => actions.reopenMission(mission.id)} data-mission-reopen={mission.id}>
+            {t("mission.reopen")}
+          </Button>
+        ) : null}
+        <MissionEnd mission={mission} actions={actions} />
+      </span>
     </div>
   );
 }
@@ -319,7 +328,6 @@ function Graph({ mission, selected, onSelect, actions }: { mission: Mission; sel
 const LOOK_CARD: Record<NodeLook, string> = {
   waiting: "border-dashed border-mission-waiting bg-transparent",
   working: "border-mission-working ring-2 ring-mission-working/20",
-  asleep: "border-border",
   done: "border-border bg-mission-done/10",
   external: "border-dotted border-mission-waiting bg-transparent",
   cancelled: "border-dashed border-mission-cancelled bg-transparent",
@@ -347,7 +355,7 @@ function NodeCard({ mission, node, selected, dimmed, onSelect, actions }: { miss
   const attention = openAttention(mission, node) ? attentionWords(node, t) : null;
   const hide = hideWords(mission, node, t);
   const satellites = satelliteLines(node.criteria);
-  const word = lookWord(look, t);
+  const word = markWord(node, look, t);
   const card = (
     <button
       type="button"
