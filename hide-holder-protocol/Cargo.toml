@@ -1,0 +1,13 @@
+[package]
+name = "hide-holder-protocol"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+# What a node and a pane's holder say to each other: the messages, the
+# version and capabilities each side speaks, and the bounds a message is
+# kept to. It links no terminal parser, so a node depends on this alone and
+# never on the holder (PRD engine-bundle-2-pane-holder D-6, D-10).
+
+[dependencies]
+hide-platform = { path = "../hide-platform" }

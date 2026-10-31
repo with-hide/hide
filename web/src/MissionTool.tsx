@@ -7,7 +7,7 @@ import { useElapsed } from "./components/elapsed";
 import { ProgressCells } from "./components/mission-tone";
 import { PrMark } from "./components/pr-mark";
 import { Button } from "./components/ui/button";
-import { RowButton } from "./components/ui/row-button";
+import { RowButton, RowOverlayButton } from "./components/ui/row-button";
 import { Hint } from "./components/ui/tooltip";
 import { DEFAULT_CONDUCTOR } from "./conductorSettings";
 import { useInterfaceTranslation } from "./i18n/client";
@@ -16,6 +16,7 @@ import { requireInterfaceLanguage } from "./i18n/locale";
 import { cn } from "./lib/utils";
 import { PILL } from "./MissionMap";
 import { MissionStartGuide } from "./MissionStartGuide";
+import { MissionTakeOver } from "./MissionTakeOver";
 import { groupMissions, CLOSED_SHOWN, missionEntry, projectMissions, shownMission, turnCount, type MissionEntry, type MissionGroup } from "./missionList";
 import { liveNodes, missionCells, missionCounts, type TurnItem } from "./missions";
 import { allAgents, agentsByPane } from "./paneAgents";
@@ -182,12 +183,11 @@ function OpenRow({ entry, selected, actions }: { entry: MissionEntry; selected: 
   const { mission, group, turn } = entry;
   const { done, total } = missionCounts(mission);
   const elapsed = useElapsed(mission.stale ? null : (mission.started_at_unix_ms ?? mission.created_at_unix_ms));
+  // A row the operator has to take over carries its 이어받기 beside the line, so the row is an overlay button.
   return (
-    <RowButton
-      aria-label={t("missionTool.open", { title: mission.title })}
-      aria-current={selected ? "true" : undefined}
+    <div
       className={cn(
-        "flex-col items-stretch gap-xxs rounded-md border bg-card px-sm py-xs",
+        "relative flex min-w-0 flex-col gap-xxs rounded-md border bg-card px-sm py-xs",
         selected ? "border-primary ring-1 ring-primary" : group === "turn" ? "border-mission-hold/40" : "border-border",
         mission.stale && "opacity-(--opacity-dimmed)",
       )}
@@ -195,15 +195,18 @@ function OpenRow({ entry, selected, actions }: { entry: MissionEntry; selected: 
       data-mission-row-group={group}
       data-mission-row-stale={mission.stale || undefined}
       data-selected={selected ? "true" : undefined}
-      onClick={() => actions.openMission(mission.id)}
     >
-      <span className="flex min-w-0 items-center gap-xs">
+      <RowOverlayButton className="rounded-md" aria-label={t("missionTool.open", { title: mission.title })} aria-current={selected ? "true" : undefined} onClick={() => actions.openMission(mission.id)} />
+      <span className="pointer-events-none relative flex min-w-0 items-center gap-xs">
         <Pill mission={mission} turn={turn[0] ?? null} />
         <span className="min-w-0 truncate text-body font-semibold text-foreground" title={mission.title}>{mission.title}</span>
       </span>
-      <RowLine mission={mission} turn={turn[0] ?? null} />
+      <span className="pointer-events-none relative flex min-w-0 items-center gap-xs">
+        <RowLine mission={mission} turn={turn[0] ?? null} />
+        {turn[0]?.kind === "takeover" ? <span className="pointer-events-auto ml-auto shrink-0"><MissionTakeOver mission={mission} actions={actions} /></span> : null}
+      </span>
       {mission.nodes.length > 0 || elapsed ? (
-        <span className="flex min-w-0 items-center gap-xs text-caption text-muted-foreground">
+        <span className="pointer-events-none relative flex min-w-0 items-center gap-xs text-caption text-muted-foreground">
           {mission.nodes.length > 0 ? (
             <>
               <ProgressCells tones={missionCells(mission)} size="chip" />
@@ -213,7 +216,7 @@ function OpenRow({ entry, selected, actions }: { entry: MissionEntry; selected: 
           {elapsed ? <span className="shrink-0" data-mission-row-elapsed="true">· {elapsed}</span> : null}
         </span>
       ) : null}
-    </RowButton>
+    </div>
   );
 }
 
@@ -248,8 +251,12 @@ function RowLine({ mission, turn }: { mission: Mission; turn: TurnItem | null })
     switch (turn.kind) {
       case "decision":
         return <Line data="decision">{mission.decision}</Line>;
-      case "takeover":
-        return <Line data="takeover">{t("mission.noConductor")}</Line>;
+      case "takeover": {
+        // The pill already says no Conductor holds it; the line says what is left for the one who takes it.
+        const { done, total } = missionCounts(mission);
+        const left = total - done;
+        return <Line data="takeover">{left > 0 ? t("missionTool.takeoverLeft", { count: left }) : t("missionTool.takeoverReport")}</Line>;
+      }
       case "worker_blocked":
         return <Line data="worker_blocked">{turn.node.title} · {turn.line ?? t(`mission.turn.cause.${turn.cause}`)}</Line>;
       case "outside_closed":

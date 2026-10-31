@@ -72,6 +72,7 @@ After adding or changing a dependency or its features, run `cargo hakari generat
 It writes each version as a semver range rather than the members' exact pins, since `Cargo.lock` decides the version either way, so a patch or minor bump such as Dependabot's weekly group leaves it unchanged; a major bump or a changed feature set needs the two commands.
 The rust lane runs `scripts/verify-cargo.sh hakari`, which fails when either command would change a file.
 `hide-platform` and `hide-herdr-client` stay off the shared set (`final-excludes`): the OS contract lanes build and test exactly those two, which would otherwise compile tokio, hyper and schemars for nothing.
+`hide-vt`, `hide-holder` and `hide-holder-protocol` stay off it too: a pane's holder runs for as long as its pane, so the program carries only the few dependencies it names.
 Their own dependencies still count toward the set, and a command that selects them alone builds their small subtree once more.
 
 hakari cannot unify a member's own features, so no member has a feature only a test build turns on.
@@ -177,7 +178,7 @@ The macOS app the private publisher signs is built on the Mac mini from its own 
 
 ## The terminal parser and Zig
 
-`hide-vt` is the terminal parser the pane holder will link: Herdr's binding to libghostty-vt, renamed ([hide-vt/PATCHES.md](../hide-vt/PATCHES.md) lists its origin and every change).
+`hide-vt` is the terminal parser the pane holder (`hide-holder`) links: Herdr's binding to libghostty-vt, renamed ([hide-vt/PATCHES.md](../hide-vt/PATCHES.md) lists its origin and every change).
 libghostty-vt is Zig and C, 22 MB of source, and is never copied into this repository, so a build needs three inputs it downloads once: the Zig 0.16.0 compiler for the machine, the Herdr source archive whose `vendor/libghostty-vt` is the source dist with Herdr's patches applied, and the eight Zig packages that build reads.
 `hide-vt/build-inputs.json` pins each one by digest; it is the only place the versions are written, and it pins its own Herdr release, separate from the Herdr release Hide bundles (`contracts/herdr-bundle.json`), because the parser moves only when someone moves it.
 
@@ -194,7 +195,7 @@ It runs Zig with `--system <packages>`, which turns package fetching off, and `-
 Zig compiles into the worktree: its caches are about 260 MB per target, kept in the build's `OUT_DIR` for that build only and removed after it, unless `HIDE_VT_ZIG_CACHE` names a folder to keep, which only CI does.
 A cold build on an Apple M-series Mac took 46 s with a peak of 1.07 GB in the Zig compiler (2026-10-31); the vt lane measures each system in CI.
 
-`scripts/verify-cargo.sh` prepares the inputs before every mode that can build hide-vt (`test`, `lint`, and a scoped mode naming `--workspace` or `-p hide-vt`), which does nothing when they are ready.
+`scripts/verify-cargo.sh` prepares the inputs before every mode that can build hide-vt (`test`, `lint`, and a scoped mode naming `--workspace`, `-p hide-vt` or `-p hide-holder`), which does nothing when they are ready.
 When the preparation fails, as it does without a network the first time, the command stops before cargo with the reason and the command to run where ziglang.org, github.com, codeberg.org and deps.files.ghostty.org are reachable.
 `release` and `cli` build no hide-vt, so the app's packaging needs no Zig; nothing in the app or a device kit carries libghostty-vt until the pane holder ships.
 The Mac mini's release jobs build only those binaries, so the runner has no Zig installed; when the holder ships, the same preparation installs it under the runner account's cache.
@@ -204,8 +205,15 @@ Both live under the runner's temporary folder at fixed paths, because Zig's C-he
 The `vt` lane is each system's one saver, on main only; `rust workspace`, `windows check` and the release's workspace tests restore, and a miss costs a download, never a failure.
 `scripts/tests/test_vt_cache.py` holds every job to that.
 
-The `vt` lane (`.github/workflows/vt.yml`) builds hide-vt on Linux, macOS and Windows from empty Zig caches and again from kept ones, measuring each with `scripts/measure-build.py` (wall time, and the largest process's peak memory), runs its tests and Clippy, builds it again with the network denied on Linux (`unshare --net`) and macOS (`sandbox-exec`) after showing the wrapper denies it, and runs `scripts/check-vt-build-refusals.sh`, which shows a missing Zig, another Zig version and a download of other bytes each stopping with its reason.
+The `vt` lane (`.github/workflows/vt.yml`) builds hide-vt on Linux, macOS and Windows from empty Zig caches and again from kept ones, measuring each with `scripts/measure-build.py` (wall time, and the largest process's peak memory), runs its tests and Clippy and the pane holder's ([TESTING.md](TESTING.md#the-pane-holder)), builds it again with the network denied on Linux (`unshare --net`) and macOS (`sandbox-exec`) after showing the wrapper denies it, and runs `scripts/check-vt-build-refusals.sh`, which shows a missing Zig, another Zig version and a download of other bytes each stopping with its reason.
 `scripts/tests/test_prepare_vt_inputs.py` covers the preparation's refusals without a network.
+
+## The vendored PTY crate
+
+The pane holder opens its PTY with `portable-pty` 0.9.0 as Herdr v0.9.5 vendors it, with Herdr's four patches and Hide's own changes, in `vendor/portable-pty` ([PATCHES.md](../vendor/portable-pty/PATCHES.md) lists its origin and every change).
+The root manifest's `[patch.crates-io]` puts that copy in place of the published crate for the whole workspace; it is not a member, so the workspace's Clippy and tests do not cover it, and the holder's tests are what check it.
+Its Windows side loads only the pinned ConPTY runtime beside the holder (the `conpty/` folder the pinned Herdr release ships beside `herdr.exe`, Microsoft's `Microsoft.Windows.Console.ConPTY`), which this repository does not carry: the holder's tests on Windows read it from the folder `HIDE_HOLDER_CONPTY` names, and the vt lane fetches it with `scripts/fetch-herdr-runtime.ps1`.
+A change there plans the same lanes as a change to `hide-holder` (`scripts/ci-plan.py`).
 
 ## Two entrypoints
 

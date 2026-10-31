@@ -103,7 +103,8 @@ it("ends the head with the mission's verification strength to read, not to chang
   try {
     const stat = strong.q('[data-mission-stat="strength"]');
     expect(stat?.textContent).toBe("Verification Thorough");
-    expect(stat?.closest("[data-mission-summary]")?.querySelectorAll("button, [role=button], select, input")).toHaveLength(0);
+    // Nothing in the head changes it; its one control is the mission's ⋯ menu.
+    expect([...stat!.closest("[data-mission-summary]")!.querySelectorAll<HTMLElement>("button, [role=button], select, input")].map((control) => control.dataset.missionMore)).toEqual(["mission-1"]);
   } finally { await strong.unmount(); }
   const before = await mount({ items: [mission({ nodes: [node("a")] })] });
   try {
@@ -204,6 +205,43 @@ it("keeps an answer Herdr may have typed as unconfirmed and types it again only 
     await map.rerender({ ...unconfirmed, conductor: { ...unconfirmed.conductor, present: false } });
     expect((map.q("[data-mission-resend]") as HTMLButtonElement).disabled).toBe(true);
   } finally { await map.unmount(); }
+});
+
+it("ends an open mission from its head's menu: asks a present Conductor once, cancels one no Conductor holds, after a confirm either way (UI_BEHAVIOR, A mission's map)", async () => {
+  const openMenu = async (map: Awaited<ReturnType<typeof mount>>) => {
+    await act(async () => map.q("[data-mission-more]")!.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true })));
+    return document.querySelector<HTMLElement>('[role="menuitem"]')!;
+  };
+  const held = await mount({ items: [mission()] });
+  try {
+    const item = await openMenu(held);
+    expect(item.textContent).toContain("End mission…");
+    await act(async () => item.click());
+    expect(document.querySelector("[data-mission-end-confirm]")?.getAttribute("data-mission-end-confirm")).toBe("ask");
+    // Nothing is sent before the confirm.
+    expect(held.events.some((event) => event.kind === "mission_end")).toBe(false);
+    await act(async () => document.querySelector<HTMLElement>("[data-mission-end-action]")!.click());
+    expect(held.events.filter((event) => event.kind === "mission_end")).toEqual([{ schema_version: 2, kind: "mission_end", payload: { mission: "mission-1" } }]);
+    // Asked once: the head says so and the item stays off with its reason until the Conductor closes the mission.
+    await held.rerender(mission({ end_asked: true }));
+    expect(held.q("[data-mission-end-asked]")?.textContent).toBe("End asked · the Conductor is wrapping up");
+    expect((await openMenu(held)).getAttribute("aria-disabled")).toBe("true");
+  } finally { await held.unmount(); }
+  const gone = await mount({ items: [mission({ end_asked: true, conductor: { ...mission().conductor, present: false } })] });
+  try {
+    // Once the Conductor is gone an earlier ask holds nothing: the press cancels the mission itself.
+    expect(gone.q("[data-mission-end-asked]")).toBeNull();
+    await act(async () => openMenu(gone).then((item) => item.click()));
+    expect(document.querySelector("[data-mission-end-confirm]")?.getAttribute("data-mission-end-confirm")).toBe("cancel");
+    expect(document.querySelector("[data-mission-end-confirm]")?.textContent).toContain("A cancelled mission does not reopen.");
+    await act(async () => document.querySelector<HTMLElement>("[data-mission-end-keep]")!.click());
+    expect(gone.events.some((event) => event.kind === "mission_end")).toBe(false);
+  } finally { await gone.unmount(); }
+  // A closed mission has nothing to end.
+  const closed = await mount({ items: [mission({ status: "cancelled", closed_at_unix_ms: 2 })] });
+  try {
+    expect(closed.q("[data-mission-more]")).toBeNull();
+  } finally { await closed.unmount(); }
 });
 
 it("turns the choices off with a reason when no Conductor or no device can read the answer, and says why an answer did not arrive (B28, B39)", async () => {
@@ -423,7 +461,7 @@ it("draws each card's state as its mark and border, colour only for what wants a
 it("tethers each agent checking a node to its card's right side as a satellite, its ring the check's state, its name the agent, the model and effort its pane was started with or the plan's marked planned, and the state (PRD mission-tool B17)", async () => {
   const nodes = [
     node("core", { status: "review", criteria: [line("review", "review", { checkers: [{ ...checker("codex", "open", "agent-7"), pane_id: "w1:p4" }] })] }),
-    node("all", { depends_on: ["core"], kind: "verify", delivery: null, criteria: [line("verify", "verify", { rule: "all", checkers: [checker("claude", "pass", "agent-8"), checker("codex", "fail", "agent-9"), checker("gemini")] })] }),
+    node("all", { depends_on: ["core"], kind: "verify", delivery: null, criteria: [line("verify", "verify", { rule: "all", checkers: [checker("claude", "pass", "agent-8"), { ...checker("codex", "fail", "agent-9"), summary: "The filter resets on reload", evidence: "Opened /lens, set a filter, reloaded: the filter was gone. Steps 1-4 of the plan pass." }, checker("gemini")] })] }),
     node("alone", { status: "working", criteria: [line("c1", "own")] }),
   ];
   // The reviewer's pane was started with another effort than the plan asked; the launch is what shows.
@@ -444,11 +482,23 @@ it("tethers each agent checking a node to its card's right side as a satellite, 
     // A node checked by no other agent has none, and its box is the card alone.
     expect(box("alone").querySelector("[data-node-satellites]")).toBeNull();
     expect(box("alone").firstElementChild).toBe(card(map, "alone"));
-    // A satellite is reached by the keyboard and picks its node.
-    const reviewer = box("core").querySelector<HTMLElement>("[data-node-satellite]")!;
-    expect(reviewer.tagName).toBe("BUTTON");
-    await act(async () => reviewer.click());
-    expect(map.q('[data-mission-panel="core"]')).not.toBeNull();
+    // A satellite is reached by the keyboard and opens its answer: why it rejected, the full text folded, and the ways on.
+    const rejecter = box("all").querySelectorAll<HTMLElement>("[data-node-satellite]")[1]!;
+    expect(rejecter.tagName).toBe("BUTTON");
+    await act(async () => rejecter.click());
+    const popover = document.querySelector<HTMLElement>('[data-checker-popover="codex"]')!;
+    expect(popover.querySelector("[data-checker-popover-state]")?.textContent).toBe("Rejected");
+    expect(popover.querySelector("[data-verdict-summary]")?.textContent).toBe("The filter resets on reload");
+    expect(popover.querySelector("[data-verdict-raw]")).toBeNull();
+    await act(async () => popover.querySelector<HTMLElement>("[data-verdict-raw-toggle]")!.click());
+    expect(popover.querySelector('[data-verdict-raw="open"]')?.textContent).toContain("the filter was gone");
+    // Its pane is not among the agents Hide knows, so neither its terminal nor its record can open.
+    expect(popover.querySelector<HTMLButtonElement>("[data-checker-terminal]")?.disabled).toBe(true);
+    expect(popover.querySelector<HTMLButtonElement>("[data-checker-record]")?.disabled).toBe(true);
+    // 노드 상세 picks its node.
+    await act(async () => popover.querySelector<HTMLElement>("[data-checker-node]")!.click());
+    expect(map.q('[data-mission-panel="all"]')).not.toBeNull();
+    expect(document.querySelector("[data-checker-popover]")).toBeNull();
   } finally { await map.unmount(); }
 });
 
@@ -519,7 +569,7 @@ it("opens the picked node's panel: its head, where it is, what it made, its fini
     node("engine", {
       title: "조사 에이전트: Hide가 실행하는 명령 읽기", status: "working", depends_on: ["core"], pr: 1704, base_pr: 1703, pr_state: "mergeable", pr_url: "https://github.com/o/r/pull/1704", branch: "hide-ai-engine", plan, attempts: 2,
       worker: { agent: "claude", model: "opus", effort: "xhigh", effort_auto: false },
-      criteria: [line("c1", "own", { text: "명령 읽기가 cat/rg 잡음을 걸러낸다", state: "pass" }), line("c2", "own", { text: "실제 세션 50개 replay", state: "skipped", skip: { reason: "세션이 31개뿐" } }), line("check", "check", { state: "fail" }), line("ci", "ci", { state: "pass", reruns: 1 }), line("review", "review", { checkers: [checker("codex")] })],
+      criteria: [line("c1", "own", { text: "명령 읽기가 cat/rg 잡음을 걸러낸다", state: "pass" }), line("c2", "own", { text: "실제 세션 50개 replay", state: "skipped", skip: { reason: "세션이 31개뿐" } }), line("check", "check", { state: "fail", summary: "3 tests fail", evidence: "cargo nextest: 3 failed, 120 passed" }), line("ci", "ci", { state: "pass", reruns: 1 }), line("review", "review", { checkers: [checker("codex")] })],
       criteria_met: 3, criteria_skipped: 1,
     }),
     node("verify", { title: "세 PR 함께 확인", kind: "verify", delivery: null, depends_on: ["engine"] }),
@@ -547,7 +597,20 @@ it("opens the picked node's panel: its head, where it is, what it made, its fini
     expect(panel.querySelector("[data-panel-branch]")?.textContent).toBe("hide-ai-engine");
     // One list of ✓ ○ ⤳ ✕, a skipped line with its reason, the review by its checker's name.
     const lines = [...panel.querySelectorAll<HTMLElement>("[data-panel-line]")].map((row) => row.textContent);
-    expect(lines).toEqual(["✓명령 읽기가 cat/rg 잡음을 걸러낸다", "⤳실제 세션 50개 replay세션이 31개뿐", "✕Check command passes", "✓CI passesrerun 1 time", "○codex review"]);
+    expect(lines).toEqual(["✓명령 읽기가 cat/rg 잡음을 걸러낸다", "⤳실제 세션 50개 replay", "✕Check command passes", "✓CI passesrerun 1 time", "○codex review"]);
+    // Grouped by who decides them; a skipped line carries its reason and a failed one its short reason, the full text folded.
+    expect([...panel.querySelectorAll<HTMLElement>("[data-criteria-group]")].map((group) => group.dataset.criteriaGroup)).toEqual(["own", "auto", "agents"]);
+    expect([...panel.querySelectorAll<HTMLElement>("[data-panel-verdict]")].map((verdict) => [verdict.dataset.panelVerdict, verdict.textContent])).toEqual([
+      ["skipped", "Skipped세션이 31개뿐"],
+      ["fail", "Failed3 tests failFull text"],
+    ]);
+    // The review names its checker by a chip that opens its answer.
+    const chip = panel.querySelector<HTMLElement>('[data-panel-checker="codex"]')!;
+    expect(chip.dataset.checkerState).toBe("waiting");
+    await act(async () => chip.click());
+    expect(document.querySelector('[data-checker-popover="codex"]')).not.toBeNull();
+    expect(document.querySelector("[data-checker-node]")).toBeNull();
+    await act(async () => chip.click());
     // The CI result and every line name their state with one mark's word.
     const named = (scope: string) => [...panel.querySelectorAll(`${scope} [data-criterion-mark]`)].map((mark) => mark.getAttribute("aria-label"));
     expect(named('[data-panel-part="result"]')).toEqual(["passed"]);

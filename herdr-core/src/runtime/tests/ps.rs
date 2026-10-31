@@ -325,6 +325,7 @@ fn mission(
         question: None,
         answer: None,
         answer_failed: None,
+        end_asked: false,
         delay: None,
         report: None,
         created_at_unix_ms: 0,

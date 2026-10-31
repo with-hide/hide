@@ -1323,7 +1323,7 @@ export type MissionCheckRule = "all" | "majority";
 
 /** One agent of a review or verification: what the plan asked, the registration bound to it and its own answer. */
 /** One checker of a review or verify line; `pane_id` and `machine` are the bound checker's pane now, as the core resolves it from `agent_id` (B29). */
-export type MissionChecker = { worker: MissionWorker; agent_id?: string; state: MissionCriterionState; evidence?: string; at_unix_ms?: number; pane_id?: string; machine?: string };
+export type MissionChecker = { worker: MissionWorker; agent_id?: string; state: MissionCriterionState; evidence?: string; summary?: string; at_unix_ms?: number; pane_id?: string; machine?: string };
 
 /** One finish line of a node (`Criterion`): only the fields its kind carries are present. */
 export type MissionCriterion = {
@@ -1334,6 +1334,8 @@ export type MissionCriterion = {
   state: MissionCriterionState;
   by?: { role: MissionRecordedRole; name: string; agent_id?: string; at_unix_ms: number };
   evidence?: string;
+  /** One line for the operator, in their language, beside the evidence (`--summary`). */
+  summary?: string;
   commit?: string;
   reruns?: number;
   rerunning?: boolean;
@@ -1468,6 +1470,8 @@ export type Mission = {
   /** What the Conductor said beside `decision`; null for a decision from before it. */
   question: MissionQuestion | null;
   answer: MissionAnswer | null;
+  /** The operator asked the Conductor to end the mission and it has not closed it yet (`미션 종료`). */
+  end_asked?: boolean;
   answer_failed: MissionAnswerFailure | null;
   delay: string | null;
   report: string | null;

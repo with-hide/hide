@@ -43,6 +43,9 @@ it("resumes the gone Conductor's own conversation first, with no prompt", async 
     expect(view.starts()).toHaveLength(1);
     expect(view.starts()[0]).toMatchObject({ checkout_path: "/repo", provider: "claude", resume_session_id: "native-1" });
     expect(view.starts()[0]!.prompt).toBeUndefined();
+    // While the start is on its way the button says so and takes no second press.
+    expect(view.button().textContent).toBe("Taking over…");
+    expect(view.button().disabled).toBe(true);
   } finally { await view.unmount(); }
 });
 

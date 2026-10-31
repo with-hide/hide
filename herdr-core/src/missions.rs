@@ -52,6 +52,8 @@ const DEPENDENCY_LIMIT: usize = 16;
 const TOUCH_LIMIT: usize = 32;
 const TITLE_LIMIT: usize = 200;
 const LINE_LIMIT: usize = 600;
+/// A record's summary, one line the map shows whole, counted in characters.
+const SUMMARY_LIMIT: usize = 160;
 const REPORT_LIMIT: usize = 16 * 1024;
 /// Choices one decision offers the operator (PRD mission-plan-visibility
 /// B32), each short enough to be a button.
@@ -215,6 +217,14 @@ pub enum WakeEvent {
     OutsideDone,
     /// An outside pull request closed without a merge (B20).
     OutsideFailed,
+    /// The Conductor's own conversation came back in another pane and
+    /// conducts the mission again (PRD mission-tool D-11, B14): a resumed
+    /// conversation gets no prompt of its own, so this letter tells it to
+    /// read the mission and go on.
+    Resumed,
+    /// The operator asked from the map to end the mission (`미션 종료`):
+    /// the Conductor asks about its open pull requests and cancels it.
+    EndAsked,
 }
 
 impl WakeEvent {
@@ -225,6 +235,8 @@ impl WakeEvent {
             Self::NewHead => "new_head",
             Self::OutsideDone => "outside_done",
             Self::OutsideFailed => "outside_failed",
+            Self::Resumed => "resumed",
+            Self::EndAsked => "end_asked",
         }
     }
 }
@@ -486,6 +498,10 @@ pub struct Mission {
     /// How many wakes this mission has had; the next one's `seq`.
     #[serde(default)]
     pub wake_seq: u64,
+    /// When the operator asked the Conductor to end the mission (`미션
+    /// 종료`), until it closes; a second press asks nothing more.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub end_asked_at_unix_ms: Option<u64>,
 }
 
 impl Mission {
@@ -845,6 +861,10 @@ pub enum MissionCommand {
         /// way on, rather than one it cannot read.
         #[serde(default)]
         evidence: String,
+        /// The result in one short line of the operator's words, which the
+        /// map shows before the evidence.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        summary: Option<String>,
         /// The commit a check command ran on.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         commit: Option<String>,
@@ -1523,6 +1543,21 @@ pub struct Landed {
     pub commit: String,
 }
 
+/// A record's summary as the book keeps it: trimmed, none when blank, and
+/// refused when it is not one line within `SUMMARY_LIMIT` characters.
+pub(crate) fn summary_line(summary: Option<String>) -> Result<Option<String>, String> {
+    let Some(summary) = summary.map(|summary| summary.trim().to_owned()) else {
+        return Ok(None);
+    };
+    if summary.is_empty() {
+        return Ok(None);
+    }
+    if summary.chars().count() > SUMMARY_LIMIT || summary.chars().any(char::is_control) {
+        return Err("mission_summary_invalid".into());
+    }
+    Ok(Some(summary))
+}
+
 /// A commit as Git names one: 7 to 64 hexadecimal digits.
 pub fn valid_commit(value: &str) -> bool {
     (7..=64).contains(&value.len()) && value.bytes().all(|byte| byte.is_ascii_hexdigit())
@@ -1717,6 +1752,9 @@ pub fn next_action(code: &str) -> &'static str {
         }
         "mission_rerun_spent" => {
             "This commit already had its one rerun: fix the failure, commit, and run the check again on the new commit"
+        }
+        "mission_summary_invalid" => {
+            "Give --summary as one line of at most 160 characters in the operator's language: what the result means for them, the details staying in --evidence"
         }
         "mission_evidence_missing" => {
             "Give --evidence with the one line the result rests on: the command and what it printed, or what the review read"
@@ -2021,6 +2059,7 @@ mod tests {
             closed_at_unix_ms: None,
             wakes: Vec::new(),
             wake_seq: 0,
+            end_asked_at_unix_ms: None,
         }
     }
 

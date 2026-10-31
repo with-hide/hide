@@ -17,7 +17,8 @@ use super::Runtime;
 use crate::delivery::Actor;
 use crate::mission_events::{AnswerSource, EventKind, History, MissionEvent};
 use crate::missions::{
-    ANSWER_LIMIT, Answer, AnswerFailure, Mission, MissionNode, MissionStatus, Question,
+    ANSWER_LIMIT, Answer, AnswerFailure, Mission, MissionEnd, MissionNode, MissionStatus, Question,
+    WakeEvent,
 };
 use crate::model::DetailItem;
 
@@ -476,6 +477,51 @@ impl Runtime {
                 }
             }
         }
+    }
+
+    /// The operator's `미션 종료` from the map: a Conductor that holds the
+    /// mission is asked to end it, by an `end_asked` wake, once until it
+    /// closes, so it still asks about the open pull requests; a mission no
+    /// Conductor holds is cancelled at once, its pull requests, branches
+    /// and workers left as they are. A mission whose device does not answer,
+    /// or one already closed, changes nothing and goes to the log.
+    pub(super) fn end_mission(&mut self, id: &str) -> Result<bool, String> {
+        let now = super::memory::now_ms();
+        let mission = self.missions.book.get(id).ok_or("mission_unknown")?;
+        if !mission.status.open() {
+            return Err("mission_closed".into());
+        }
+        if self.mission_stale(mission) {
+            return Err("mission_device_disconnected".into());
+        }
+        if !self.conductor_present(&mission.conductor.actor) {
+            return self.close_mission(id, MissionEnd::Cancelled, None, "operator", now);
+        }
+        if mission.end_asked_at_unix_ms.is_some() {
+            return Ok(false);
+        }
+        let target = self.missions.book.get_mut(id).ok_or("mission_unknown")?;
+        target.end_asked_at_unix_ms = Some(now);
+        target.updated_at_unix_ms = now;
+        let intent =
+            super::missions::record_wake(target, String::new(), None, WakeEvent::EndAsked, None);
+        crate::diagnostic!(json!({
+            "component": "missions", "kind": "mission.end_asked",
+            "mission": id, "intent": intent,
+        }));
+        self.save_missions();
+        self.flush_mission_wakes();
+        Ok(true)
+    }
+
+    pub(super) fn mission_end_event(&mut self, id: &str) -> bool {
+        self.end_mission(id).unwrap_or_else(|code| {
+            crate::diagnostic!(json!({
+                "component": "missions", "kind": "mission.end_refused",
+                "mission": id, "code": code,
+            }));
+            false
+        })
     }
 
     /// The answers the doorbell is to type now. An answer whose Conductor

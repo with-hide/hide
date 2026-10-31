@@ -429,6 +429,36 @@ pub fn runtime_dir(home: &Path, build: &str) -> PathBuf {
     runtime_root(home).join(build)
 }
 
+/// The folder each pane holder build's version folder sits in (PRD
+/// engine-bundle-2-pane-holder D-16): outside the app, so an update can
+/// replace the app while holders run, and apart from [`RUNTIME_ROOT`], so
+/// neither folder's cleanup ever reaches the other's.
+pub const HOLDERS_ROOT: &str = "holders";
+
+pub fn holders_root(home: &Path) -> PathBuf {
+    hide_home(home).join(HOLDERS_ROOT)
+}
+
+/// One holder build's version folder; `name` is `v<version>-<content hash>`
+/// (`crate::holders::version_name`).
+pub fn holder_dir(home: &Path, name: &str) -> PathBuf {
+    holders_root(home).join(name)
+}
+
+/// The folder a state folder's holders listen and log in, one socket and
+/// one log per pane.
+pub fn holder_panes(state_dir: &Path) -> PathBuf {
+    state_dir.join("holders")
+}
+
+pub fn holder_socket(state_dir: &Path, pane: &str) -> PathBuf {
+    holder_panes(state_dir).join(format!("{pane}.sock"))
+}
+
+pub fn holder_log(state_dir: &Path, pane: &str) -> PathBuf {
+    holder_panes(state_dir).join(format!("{pane}.log"))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -511,9 +541,14 @@ mod tests {
             default_state_dir(home),
             helper_root(home),
             crate::kit_state_dir(home),
+            holders_root(home),
         ] {
             assert!(path.starts_with("/home/me/.hide"), "{}", path.display());
         }
+        // Neither the runtime copies nor the holder folders are inside the
+        // other, so neither's cleanup can reach the other's folders.
+        assert!(!holders_root(home).starts_with(runtime_root(home)));
+        assert!(!runtime_root(home).starts_with(holders_root(home)));
     }
 
     #[cfg(unix)]

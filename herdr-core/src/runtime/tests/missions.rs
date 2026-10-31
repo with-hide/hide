@@ -435,11 +435,80 @@ fn a_conductors_conversation_resumed_in_another_pane_conducts_its_mission() {
     };
     seen(&mut runtime, "stranger", "another-session");
     assert!(!runtime.snapshot.missions.items[0].conductor.present);
+    assert!(runtime.missions.book.missions[0].wakes.is_empty());
 
     seen(&mut runtime, "resumed", "sender-session");
     let conductor = &runtime.snapshot.missions.items[0].conductor;
     assert!(conductor.present);
     assert_eq!(conductor.pane_id, "resumed");
+    // A resumed conversation gets no prompt of its own: one letter waits
+    // to tell it to go on, and seeing the pane again adds none.
+    let events = |runtime: &Runtime| -> Vec<crate::missions::WakeEvent> {
+        runtime.missions.book.missions[0]
+            .wakes
+            .iter()
+            .map(|wake| wake.event)
+            .collect()
+    };
+    assert_eq!(events(&runtime), [crate::missions::WakeEvent::Resumed]);
+    seen(&mut runtime, "resumed", "sender-session");
+    assert_eq!(events(&runtime), [crate::missions::WakeEvent::Resumed]);
+}
+
+/// 미션 종료 from the map (UI_BEHAVIOR, A mission's map): a Conductor that
+/// holds the mission is asked once, by a letter, and keeps it open to ask
+/// about its pull requests; once no Conductor holds it, the same press
+/// cancels it at once, and a closed mission takes no more.
+#[test]
+fn the_operators_end_asks_a_present_conductor_once_and_cancels_a_mission_none_holds() {
+    let fixture = conducting();
+    let mut runtime = fixture.runtime.lock().unwrap();
+    command(
+        &mut runtime,
+        "sender",
+        json!({"op": "create", "title": "Fix the bug"}),
+    )
+    .unwrap();
+    let wakes = |runtime: &Runtime| -> Vec<crate::missions::WakeEvent> {
+        runtime.missions.book.missions[0]
+            .wakes
+            .iter()
+            .map(|wake| wake.event)
+            .collect()
+    };
+
+    assert!(runtime.mission_end_event("mission-1"));
+    runtime.refresh_missions();
+    let view = &runtime.snapshot.missions.items[0];
+    assert!(view.status.open(), "the Conductor closes it, not the press");
+    assert!(view.end_asked);
+    assert_eq!(wakes(&runtime), [crate::missions::WakeEvent::EndAsked]);
+    // A second press asks nothing more.
+    assert!(!runtime.mission_end_event("mission-1"));
+    assert_eq!(wakes(&runtime), [crate::missions::WakeEvent::EndAsked]);
+
+    // The Conductor's pane closed before it ended the mission.
+    runtime.delivery_observations.remove("sender");
+    runtime.refresh_missions();
+    assert!(runtime.mission_end_event("mission-1"));
+    runtime.refresh_missions();
+    let view = &runtime.snapshot.missions.items[0];
+    assert_eq!(view.status, MissionStatus::Cancelled);
+    assert!(!view.end_asked);
+    assert!(view.closed_at_unix_ms.is_some());
+    assert!(
+        wakes(&runtime).is_empty(),
+        "a cancelled mission wakes no one"
+    );
+    assert_eq!(
+        runtime.missions.events["mission-1"]
+            .events
+            .last()
+            .map(|event| event.kind),
+        Some(crate::mission_events::EventKind::Cancelled)
+    );
+    // Closed, it takes no more presses.
+    assert!(!runtime.mission_end_event("mission-1"));
 }
 
 #[test]
@@ -2271,7 +2340,33 @@ fn a_node_is_done_only_once_its_owners_met_every_line() {
         .unwrap_err(),
         "mission_evidence_missing"
     );
-    command(&mut runtime, "reviewer", record("review", json!({}))).unwrap();
+    // A summary is one short line the map shows whole; a second line or a
+    // paragraph is refused with its way on, and a blank one is none.
+    for summary in ["첫 줄\n둘째 줄", &"가".repeat(161)] {
+        assert_eq!(
+            command(
+                &mut runtime,
+                "reviewer",
+                record("review", json!({"summary": summary}))
+            )
+            .unwrap_err(),
+            "mission_summary_invalid"
+        );
+    }
+    let (shown, _) = command(
+        &mut runtime,
+        "reviewer",
+        record("review", json!({"summary": "  문제 없음  "})),
+    )
+    .unwrap();
+    let review = shown["mission"]["nodes"][0]["criteria"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|line| line["key"] == "review")
+        .unwrap();
+    assert_eq!(review["checkers"][0]["summary"], "문제 없음");
+    assert_eq!(review["checkers"][0]["evidence"], "it ran");
     // GitHub reads the pull request with its CI passing on that head.
     let read = github(vec![pull(7, HEAD, PullRequestBadge::Open, None)], false);
     runtime.github = read.clone();

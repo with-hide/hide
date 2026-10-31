@@ -46,6 +46,15 @@ use std::path::{Path, PathBuf};
 use std::process::{Child, ChildStderr, ChildStdin, ChildStdout, Command, ExitStatus};
 use std::time::{Duration, Instant};
 
+mod resident;
+mod session;
+
+pub use resident::{
+    JobLimits, LENT_KEY, Lent, MAX_LENT, Resident, ResidentCommand, Taken, own_job, start_resident,
+    take_lent,
+};
+pub use session::{Session, SessionEnd};
+
 /// How deep the walk down a process tree goes. A real tree is a handful deep;
 /// the bound only stops a pid-reuse cycle in a corrupt reading from looping.
 const MAX_DEPTH: usize = 32;
@@ -785,6 +794,13 @@ impl OwnedChild {
             sys::reap_later(pid);
         }
     }
+}
+
+/// Waits `period` between two looks at the process table.
+#[cfg(unix)]
+#[allow(clippy::disallowed_methods)] // a production wait, not test code
+fn pause(period: Duration) {
+    std::thread::sleep(period);
 }
 
 #[allow(clippy::disallowed_methods)] // a production wait, not test code
@@ -2944,7 +2960,7 @@ mod sys {
     /// The descriptor value below which the fallback scan marks: the open-file
     /// limit, or the bound when the limit is indeterminate (`sysconf` answers
     /// -1) or larger than the bound.
-    fn fallback_limit() -> libc::c_int {
+    pub(super) fn fallback_limit() -> libc::c_int {
         // SAFETY: `sysconf` takes an integer and has no memory effects.
         let table = unsafe { libc::sysconf(libc::_SC_OPEN_MAX) };
         if table <= 0 {
@@ -2961,7 +2977,7 @@ mod sys {
     /// library reports a failed exec to its parent through a descriptor in
     /// this range that must survive until the exec. `limit` is where the
     /// fallback scan stops, computed before the fork.
-    fn mark_inherited_descriptors(limit: libc::c_int) -> io::Result<()> {
+    pub(super) fn mark_inherited_descriptors(limit: libc::c_int) -> io::Result<()> {
         #[cfg(target_os = "linux")]
         {
             // `close_range` with CLOSE_RANGE_CLOEXEC marks the whole range in
@@ -4329,8 +4345,8 @@ mod sys {
         JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE, JOBOBJECT_ASSOCIATE_COMPLETION_PORT,
         JOBOBJECT_BASIC_ACCOUNTING_INFORMATION, JOBOBJECT_EXTENDED_LIMIT_INFORMATION,
         JobObjectAssociateCompletionPortInformation, JobObjectBasicAccountingInformation,
-        JobObjectExtendedLimitInformation, OpenJobObjectW, QueryInformationJobObject,
-        SetInformationJobObject, TerminateJobObject,
+        JobObjectBasicProcessIdList, JobObjectExtendedLimitInformation, OpenJobObjectW,
+        QueryInformationJobObject, SetInformationJobObject, TerminateJobObject,
     };
     use windows_sys::Win32::System::Pipes::PeekNamedPipe;
     use windows_sys::Win32::System::ProcessStatus::{
@@ -4845,6 +4861,86 @@ mod sys {
                 return super::Ending::Unconfirmed { left: Some(left) }.result();
             }
             pause_until(Instant::now() + Duration::from_millis(1));
+        }
+    }
+
+    /// The kill-on-close job a terminal session's program joins before it
+    /// runs ([`super::Session`]), followed like an owned child's from before
+    /// anything joins it. Its handle is never inherited, so the job closes,
+    /// and ends what it holds, when this process ends however it ends.
+    pub(super) struct SessionJob(Tie);
+
+    /// The most processes [`SessionJob::pids`] names; a job with more names
+    /// this many.
+    const SESSION_PIDS_CAP: usize = 1024;
+
+    impl SessionJob {
+        pub(super) fn new() -> io::Result<Self> {
+            // SAFETY: no attributes and no name: a new job nobody else holds.
+            let job = unsafe { CreateJobObjectW(std::ptr::null(), std::ptr::null()) };
+            if job.is_null() {
+                return Err(io::Error::last_os_error());
+            }
+            let job = Owned(job);
+            // SAFETY: an all-zero limit structure is a valid value.
+            let mut limits: JOBOBJECT_EXTENDED_LIMIT_INFORMATION = unsafe { std::mem::zeroed() };
+            limits.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+            // SAFETY: `limits` is valid for the size passed.
+            let set = unsafe {
+                SetInformationJobObject(
+                    job.0,
+                    JobObjectExtendedLimitInformation,
+                    (&limits as *const JOBOBJECT_EXTENDED_LIMIT_INFORMATION).cast(),
+                    std::mem::size_of::<JOBOBJECT_EXTENDED_LIMIT_INFORMATION>() as u32,
+                )
+            };
+            if set == 0 {
+                return Err(io::Error::last_os_error());
+            }
+            let members = Members::follow(&job)?;
+            Ok(Self(Tie(job, true, None, members)))
+        }
+
+        pub(super) fn handle(&self) -> std::os::windows::io::RawHandle {
+            (self.0).0.0.cast()
+        }
+
+        /// The processes the job counts as running.
+        pub(super) fn pids(&self) -> io::Result<Vec<u32>> {
+            #[repr(C)]
+            struct List {
+                assigned: u32,
+                listed: u32,
+                ids: [usize; SESSION_PIDS_CAP],
+            }
+            // SAFETY: an all-zero list is a valid value.
+            let mut list: Box<List> = Box::new(unsafe { std::mem::zeroed() });
+            // SAFETY: the job handle is open and `list` is valid for the
+            // size passed.
+            let queried = unsafe {
+                QueryInformationJobObject(
+                    (self.0).0.0,
+                    JobObjectBasicProcessIdList,
+                    (&mut *list as *mut List).cast(),
+                    std::mem::size_of::<List>() as u32,
+                    std::ptr::null_mut(),
+                )
+            };
+            if queried == 0 {
+                return Err(io::Error::last_os_error());
+            }
+            let listed = (list.listed as usize).min(SESSION_PIDS_CAP);
+            Ok(list.ids[..listed].iter().map(|id| *id as u32).collect())
+        }
+
+        pub(super) fn end(&mut self, limit: Duration) -> io::Result<super::SessionEnd> {
+            match end_job(&mut self.0, limit) {
+                Ok(_) => Ok(super::SessionEnd::Ended),
+                Err(error) if error.kind() == io::ErrorKind::TimedOut => {
+                    Ok(super::SessionEnd::Unconfirmed { left: self.pids()? })
+                }
+                Err(error) => Err(error),
+            }
         }
     }
 
