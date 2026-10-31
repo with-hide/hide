@@ -1780,6 +1780,51 @@ fn a_banner_answer_waits_for_its_question_and_is_kept_once() {
     );
 }
 
+/// An answer held on a Conductor's session Hide cannot read says why on the
+/// banner for as long as the read refuses, and nothing once a read lands.
+#[test]
+fn an_answer_held_on_an_unreadable_conductor_session_says_why() {
+    let fixture = conducting();
+    let mut runtime = fixture.runtime.lock().unwrap();
+    running(&mut runtime);
+    command(
+        &mut runtime,
+        "sender",
+        json!({"op": "decide", "line": "Which base?", "options": ["main", "#1503"]}),
+    )
+    .unwrap();
+    assert!(runtime.mission_answer_event("mission-1", 1, Some(2), None, false));
+    let observe = |runtime: &mut Runtime, refused: bool| {
+        let payload: SessionSnapshotPayload = serde_json::from_value(json!({"agents":[
+            {"id":"sender","pane_id":"sender","agent":"codex","agent_status":"idle",
+             "state_change_seq":2,"lineage_session":"sender-session",
+             "agent_session":{"kind":"id","value":"sender-native"}},
+        ]}))
+        .unwrap();
+        let labels =
+            crate::labels::overlay::LabelOverlay::default().with_refusals(refused.then(|| {
+                (
+                    "sender".to_owned(),
+                    hide_session::label_reference_token("codex", "id", "sender-native"),
+                    "session_capacity:line_bytes:262144".to_owned(),
+                )
+            }));
+        runtime.observe_delivery(crate::node::TEST_NODE, &payload, None, Some(&labels));
+        runtime.refresh_missions();
+        runtime.snapshot.missions.items[0].answer_failed
+    };
+    runtime.mission_answer_held("mission-1");
+    assert_eq!(
+        observe(&mut runtime, true),
+        Some(AnswerFailure::SessionUnreadable)
+    );
+    assert_eq!(observe(&mut runtime, false), None, "a read that lands");
+    assert!(
+        runtime.missions.book.missions[0].answer_failed.is_none(),
+        "the reason is shown, never kept"
+    );
+}
+
 #[test]
 fn an_answer_whose_conductor_left_or_whose_question_changed_is_not_delivered() {
     let fixture = conducting();

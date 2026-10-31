@@ -273,6 +273,9 @@ struct ViewsMadeFrom {
     /// open one, and whether its device answers.
     present: Vec<bool>,
     stale: Vec<bool>,
+    /// Per mission in book order: whether its Conductor's session cannot be
+    /// read, which an answer waiting on it shows.
+    unreadable: Vec<bool>,
     /// The earliest time a worker still being made stops counting against
     /// its mission's cap (`MISSION_RESERVATION_HOLD_MS`).
     until: u64,
@@ -1883,11 +1886,27 @@ impl Runtime {
             }),
             // A reason holds only while its cause does: a Conductor that took
             // the mission over, or a device back, can be answered again (B39).
-            answer_failed: mission.answer_failed.filter(|failure| match failure {
-                AnswerFailure::ConductorGone => !self.conductor_present(&mission.conductor.actor),
-                AnswerFailure::DeviceDisconnected => self.mission_stale(mission),
-                AnswerFailure::SendFailed => true,
-            }),
+            answer_failed: mission
+                .answer_failed
+                .filter(|failure| match failure {
+                    AnswerFailure::ConductorGone => {
+                        !self.conductor_present(&mission.conductor.actor)
+                    }
+                    AnswerFailure::DeviceDisconnected => self.mission_stale(mission),
+                    AnswerFailure::SendFailed => true,
+                    AnswerFailure::SessionUnreadable => false,
+                })
+                .or_else(|| {
+                    // An answer the doorbell holds on a session it cannot
+                    // read says so, for as long as the read refuses.
+                    (mission
+                        .answer
+                        .as_ref()
+                        .is_some_and(|answer| !answer.delivered)
+                        && self.missions.answers_held.contains(&mission.id)
+                        && self.delivery_unreadable(&mission.conductor.actor).is_some())
+                    .then_some(AnswerFailure::SessionUnreadable)
+                }),
             end_asked: mission.end_asked_at_unix_ms.is_some(),
             delay: mission.delay.clone(),
             report: mission.report.clone(),
@@ -1947,6 +1966,13 @@ impl Runtime {
             .iter()
             .map(|mission| self.mission_stale(mission))
             .collect();
+        let unreadable: Vec<bool> = self
+            .missions
+            .book
+            .missions
+            .iter()
+            .map(|mission| self.delivery_unreadable(&mission.conductor.actor).is_some())
+            .collect();
         let before = &self.missions.views;
         let same_ledger = match (&before.ledger, &ledger) {
             (Some(weak), Some(ledger)) => std::ptr::eq(weak.as_ptr(), Arc::as_ptr(ledger)),
@@ -1961,6 +1987,7 @@ impl Runtime {
         if closed_kept
             && same_ledger
             && before.present == present
+            && before.unreadable == unreadable
             && now < before.until
             && self.snapshot.missions.failed == failed
         {
@@ -2011,6 +2038,7 @@ impl Runtime {
             ledger: ledger.as_ref().map(Arc::downgrade),
             present,
             stale,
+            unreadable,
             until,
             made: true,
         };

@@ -1446,6 +1446,7 @@ mod tests {
             thread: None,
             host_scope: Some("fixture".into()),
             turn: crate::delivery::doorbell::Turn::Unread,
+            unreadable: None,
         };
         for expected in [100, 200] {
             let work = [&first, &second]

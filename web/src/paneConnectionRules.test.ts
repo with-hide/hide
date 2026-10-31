@@ -19,7 +19,10 @@ it("offers Reopen only where the core says it can and the reason is one Reopen f
   expect(offered({ reason: "started_before_hide", can_reopen: false })).toBe(false);
   expect(offered({ reason: "setup_needed", can_reopen: true })).toBe(false);
   expect(offered({ reason: "update_agent", can_reopen: true })).toBe(false);
+  // Reopen resumes the same session, which Hide still cannot read.
+  expect(offered({ reason: "session_unreadable", can_reopen: true })).toBe(false);
   expect(connectionCopy("setup_needed").reopen).toBeNull();
+  expect(connectionCopy("session_unreadable").title).toBe("panes.connection.sessionUnreadable.title");
 });
 
 it("offers the shared-server link for the shared server alone", () => {

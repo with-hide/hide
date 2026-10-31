@@ -215,13 +215,15 @@ export function SessionWorkflowScene({ scene: kind, theme, content, scale, width
     document.documentElement.classList.toggle("light", theme === "light");
     document.documentElement.style.setProperty("--interface-scale", String(scale));
   }, [fixture, theme, scale, turnRow]);
-  // state=connection: a copy too old for Hide wears the Update needed badge, and a session started before the update
-  // put the piece in says to restart; the other headers keep the integration icon (docs/UI_BEHAVIOR.md).
+  // state=connection: a copy too old for Hide wears the Update needed badge, a session started before the update
+  // put the piece in says to restart, and a session Hide cannot read says its letters wait; the other headers keep
+  // the integration icon (docs/UI_BEHAVIOR.md).
   if (kind === "pane-header" && state === "connection") {
     const header = (id: string, connection: PaneConnection) => ({ ...fixture.pane, id, identity_label: "Group tab 기능 설계", children: { instrumented: false, uninstrumented_reason: null, uninstrumented_label: null, chips: [], ...fixture.pane.children, connection } });
     const cases: [string, string, string, PaneConnection][] = [
       ["update-agent", "업데이트 필요 · Claude Code 2.1.200", "claude", { connected: false, can_reopen: false, reason: "update_agent", reopen: null, update: { installed: "2.1.200", minimum: "2.1.278", path: "/Users/me/.local/share/claude/versions/2.1.200", command: "claude update" } }],
       ["restart-agent", "업데이트 뒤 · 다시 시작하면 연결", "omp", { connected: false, can_reopen: false, reason: "started_before_hide", reopen: null }],
+      ["session-unreadable", "세션을 읽지 못함 · 편지가 기다림", "claude", { connected: false, can_reopen: false, reason: "session_unreadable", reopen: null }],
     ];
     return <TooltipProvider><div style={{ width: width ?? undefined }} className="flex flex-col gap-lg bg-background p-xl text-foreground" data-gallery-scene={kind} data-gallery-state={state}>{cases.map(([id, label, agentKind, connection]) => <div key={id} data-pane-header-case={id} className="min-w-0"><div className="pb-xs text-micro text-muted-foreground">{label}</div><div className="h-[var(--size-pane-state-example)] min-w-0 border border-border"><PaneView pane={header(id, connection)} transport={undefined} focused={false} scale={1} actions={actions} agentKind={agentKind} markSymbol="quiet" markTone="text-muted-foreground" paneCount={2} zoomed={false} /></div></div>)}</div></TooltipProvider>;
   }

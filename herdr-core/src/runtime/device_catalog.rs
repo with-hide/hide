@@ -172,9 +172,20 @@ impl Runtime {
         };
         let update_of = |kind: &str| crate::agent_hooks::kit_update(&kit, kind);
         let none = std::collections::BTreeSet::new();
+        let unreadable = |pane: &str| {
+            let key = if pane.starts_with("remote:") {
+                pane.to_owned()
+            } else {
+                format!("{}{pane}", super::remote_pane_id_prefix(target))
+            };
+            self.delivery_observations
+                .get(&key)
+                .is_some_and(|observation| observation.unreadable.is_some())
+        };
         let updates = crate::sidebar::PaneUpdates {
             update_of: &update_of,
             badged: self.update_badges.get(target).unwrap_or(&none),
+            unreadable: &unreadable,
         };
         let agents = &session.agents;
         let tokens = &session.pane_hook_tokens;

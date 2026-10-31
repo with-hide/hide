@@ -1800,9 +1800,16 @@ impl Runtime {
             .update_badges
             .remove(self.node.as_str())
             .unwrap_or_default();
+        let observations = &self.delivery_observations;
+        let unreadable = |pane: &str| {
+            observations
+                .get(pane)
+                .is_some_and(|observation| observation.unreadable.is_some())
+        };
         let updates = crate::sidebar::PaneUpdates {
             update_of: &update_of,
             badged: &previous_badges,
+            unreadable: &unreadable,
         };
         let mut changed = false;
         let mut reopen_scope = ReopenScope::default();
