@@ -600,6 +600,10 @@ test("the phone caches group and row status words in the desktop language", asyn
         status_waiting: "대기",
         status_stopped: "멈춤",
         status_unfinished: "일 남음",
+        subject_input_unconfirmed_brief: "브리프 확인 안 됨",
+        subject_input_unconfirmed_letter: "편지 확인 안 됨",
+        subject_input_unconfirmed_brief_held: "브리프 못 받음",
+        subject_input_unconfirmed_letter_held: "편지 못 받음",
         subject_mission_decision: "판단",
         subject_plan_review: "계획 검토 · {{count}}단계",
       });
