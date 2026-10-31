@@ -156,14 +156,24 @@ fn a_connection_past_the_opening_bound_is_told_so_and_the_pane_runs_on() {
     let home = Home::new();
     let holder = shell_holder(&home);
     let mut holding = holder.open();
-    // Eight connections read their hello at once, the bound; each waits out
-    // its hello's bound, so the ninth arrives while all eight are opening.
-    let _opening: Vec<LocalStream> = (0..8).map(|_| silent_stream(&holder)).collect();
-    let ninth = raw_reply(&holder, None);
-    assert!(
-        matches!(&ninth, HolderMessage::Closed(closed) if closed.reason == CloseReason::OpeningFull),
-        "{ninth:?}"
-    );
+    // Nine connections that say nothing: eight read their hello at once, the
+    // bound, and wait out its bound; the one the holder takes ninth, which on
+    // Windows need not be the ninth to connect, is told at once.
+    let silent: Vec<LocalStream> = (0..9).map(|_| silent_stream(&holder)).collect();
+    let reasons: Vec<CloseReason> = silent
+        .into_iter()
+        .map(|stream| {
+            let mut reading = stream.duplicate();
+            reading.set_deadline(std::time::Instant::now() + HANG_LIMIT);
+            match read_holder(&mut reading).unwrap() {
+                HolderMessage::Closed(closed) => closed.reason,
+                other => panic!("{other:?}"),
+            }
+        })
+        .collect();
+    let told = |reason: CloseReason| reasons.iter().filter(|seen| **seen == reason).count();
+    assert_eq!(told(CloseReason::OpeningFull), 1, "{reasons:?}");
+    assert_eq!(told(CloseReason::HelloTimeout), 8, "{reasons:?}");
     holding
         .send(ClientMessage::Input(print_ok().to_vec()))
         .unwrap();
