@@ -77,9 +77,6 @@ pub(super) struct Send {
     pub effort: Option<String>,
     /// Where Settings › Desk puts each task's work (B19).
     pub placement: hide_desk::Placement,
-    /// The agent's 권한 on this machine is 전부 허용 (Settings › Agents):
-    /// what it asks to run during this turn runs without a card.
-    pub full_access: bool,
 }
 
 /// What the worker tells the runtime.
@@ -211,9 +208,6 @@ struct Running {
     /// The work placement this session was last told; none for a session
     /// resumed from an earlier run.
     placement: Option<hide_desk::Placement>,
-    /// The 권한 the last message was sent under, which decides the
-    /// permission requests of its turn.
-    full_access: bool,
     /// The startup text the adapter said it writes on its own, until it
     /// arrives; it may land inside the first turn and is not its reply.
     prelude: Option<String>,
@@ -423,7 +417,6 @@ impl Worker {
             hide_desk::next_message(changed, &send.text)
         };
         running.placement = Some(send.placement);
-        running.full_access = send.full_access;
         match session::prompt(
             running.host.connection(),
             &running.session_id,
@@ -561,7 +554,6 @@ impl Worker {
                 turn: None,
                 turn_calls: Vec::new(),
                 placement: None,
-                full_access: send.full_access,
                 prelude: opened.prelude,
             },
             opened.resume_failed,
@@ -725,7 +717,7 @@ impl Worker {
         let connection = running.host.connection();
         let selected =
             |option: &str| json!({"outcome": {"outcome": "selected", "optionId": option}});
-        match permission::decide(&request, &hide, running.full_access) {
+        match permission::decide(&request, &hide) {
             Verdict::Allow => {
                 if let Some(allow) = request.allow_once() {
                     let _ = connection.respond(&rpc_id, selected(allow));

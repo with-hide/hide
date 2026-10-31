@@ -451,8 +451,6 @@ impl Runtime {
                 DeskLocation::Worktree => hide_desk::Placement::Worktree,
                 DeskLocation::Checkout => hide_desk::Placement::Checkout,
             },
-            full_access: self.agent_permission(self.node.as_str(), agent.key().adapter().id)
-                == crate::agent_permission::AgentPermission::Full,
         }));
         self.desk.host.state = Some(if self.desk.host.open {
             DeskHostState::Thinking
