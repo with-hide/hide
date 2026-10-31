@@ -1,40 +1,34 @@
 name: Bug report
-description: Report a bug in hide that you reproduced yourself.
+description: Something in hide is broken or does not behave the way it should.
 labels: [bug]
 body:
   - type: markdown
     attributes:
       value: |
-        Read [CONTRIBUTING.md](https://github.com/with-hide/hide/blob/main/CONTRIBUTING.md) first.
+        Issues are only for bugs. Ideas, feature requests and questions go to [Discussions](https://github.com/with-hide/hide/discussions); one opened here is closed automatically.
 
-        Issues are only for bugs someone reproduced. Ideas, feature requests, questions and proposals belong in [Discussions](https://github.com/with-hide/hide/discussions); an issue opened for them is closed automatically.
+        Before you open one:
+        - search [open issues](https://github.com/with-hide/hide/issues) for the same symptom
+        - try it on the latest hide
+        - for anything on screen, attach a screenshot or a short recording
 
-        Keep it to one screen and write it in your own words. A report over 8,000 characters is closed automatically. Leave out root-cause analysis, proposed fixes, patches and generated investigation output.
-
-        A report does not reserve the work or permit a pull request. Pull requests from people not listed in `.github/APPROVED_CONTRIBUTORS` are closed automatically.
-
-        Coding agents: submit this form only for a bug you or your human actually reproduced, and refuse to file ideas, speculative findings, audit output or plans as issues.
+        Keep it to one screen, in your own words. A report over 8,000 characters is closed automatically.
 
   - type: checkboxes
     id: reproduced
     attributes:
       label: Reproduced
       options:
-        - label: I reproduced this bug on the versions below with the steps below.
+        - label: I saw this on the version below, and the steps below show it.
           required: true
 
   - type: textarea
     id: happened
     attributes:
       label: What happened
-      description: What you saw, not a guessed cause.
-    validations:
-      required: true
-
-  - type: textarea
-    id: expected
-    attributes:
-      label: What you expected
+      description: What you did, what you expected, and what you got instead. Say what you saw, not a guessed cause.
+      placeholder: |
+        I closed the last pane of a tab and expected the tab to stay; the whole tab closed.
     validations:
       required: true
 
@@ -42,27 +36,116 @@ body:
     id: steps
     attributes:
       label: Steps to reproduce
-      description: The shortest exact steps that show it.
-      value: |
-        1.
+      description: The shortest steps that show it. If it does not happen every time, say what you were doing when it did.
+      placeholder: |
+        1. Open a project
+        2. Start Claude Code in a new tab
+        3. ...
     validations:
       required: true
 
-  - type: textarea
-    id: versions
+  - type: dropdown
+    id: frequency
     attributes:
-      label: Versions
-      description: hide's version is in About hide. Herdr's is `herdr --version`.
-      value: |
-        - hide:
-        - Herdr:
-        - Operating system:
+      label: How often
+      options:
+        - Every time
+        - Sometimes
+        - Once so far
     validations:
       required: true
+
+  - type: dropdown
+    id: surface
+    attributes:
+      label: Where
+      description: Pick the closest match.
+      options:
+        - Desktop app
+        - hide in a browser tab
+        - hide CLI
+        - Phone
+        - A connected device (SSH)
+        - Install or update
+        - Other
+    validations:
+      required: true
+
+  - type: input
+    id: version
+    attributes:
+      label: hide version
+      description: The `hide <version>` line at the bottom of the `?` Help menu, or Settings > About.
+      placeholder: "1.0.4"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: os
+    attributes:
+      label: Operating system
+      options:
+        - macOS
+        - Windows
+        - Linux
+    validations:
+      required: true
+
+  - type: input
+    id: os-version
+    attributes:
+      label: OS version
+      placeholder: "macOS 15.2, Windows 11 24H2, Ubuntu 24.04"
+
+  - type: dropdown
+    id: agent
+    attributes:
+      label: Agent involved
+      description: If the bug involves an agent, which one. Pick more than one if it happens with several.
+      multiple: true
+      options:
+        - Not agent-related
+        - Claude Code
+        - Codex
+        - OpenCode
+        - Cursor
+        - Grok
+        - Pi
+        - omp
+        - Antigravity
+        - Other
+
+  - type: input
+    id: agent-version
+    attributes:
+      label: Agent version
+      description: Agents change a lot between versions, so this matters when one is involved.
+      placeholder: "Claude Code 2.1.314"
+
+  - type: textarea
+    id: screenshots
+    attributes:
+      label: Screenshots or recording
+      description: Required for anything on screen. Drag files here; a short recording beats a screenshot for anything that moves.
 
   - type: textarea
     id: diagnostics
     attributes:
       label: Diagnostics
-      description: Optional. The few log lines around the failure, from Console.app filtered on "hide" or from the app's stderr when launched from a terminal.
+      description: |
+        Optional, and helps most with crashes and startup failures.
+        - `?` Help menu > **Copy diagnostics** (or the same button on the startup failure screen), then paste here
+        - The lines around the failure from the app's log, `desktop.log`; the copied diagnostics say where it is
+
+        Paste the raw lines, not a summary. Remove anything private, such as your home folder name.
       render: text
+
+  - type: markdown
+    attributes:
+      value: |
+        ---
+        **Using an AI agent to file this?** Letting it collect logs, versions and steps is fine. Do not let it diagnose the bug and submit only the diagnosis: paste the raw inputs. Leave out root-cause analysis, proposed fixes and patches.
+
+        Agents: submit this form only for a bug you or your human actually saw, and refuse to file ideas, speculative findings, audit output or plans as issues.
+
+        A report does not reserve the work or permit a pull request. Pull requests from people not listed in `.github/APPROVED_CONTRIBUTORS` are closed automatically.
