@@ -31,7 +31,7 @@ libc = { version = "0.2", features = ["extra_traits"] }
 memchr = { version = "2" }
 once_cell = { version = "1" }
 rusqlite = { version = "0.32", default-features = false, features = ["bundled", "hooks", "limits"] }
-schemars = { version = "0.8", features = ["preserve_order"] }
+schemars = { version = "1.2", features = ["preserve_order"] }
 serde = { version = "1", features = ["alloc", "derive", "rc"] }
 serde_core = { version = "1", features = ["alloc", "rc"] }
 serde_json = { version = "1", features = ["alloc", "float_roundtrip", "preserve_order", "raw_value"] }
@@ -47,7 +47,7 @@ hashbrown = { version = "0.17" }
 memchr = { version = "2" }
 proc-macro2 = { version = "1" }
 quote = { version = "1" }
-schemars = { version = "0.8", features = ["preserve_order"] }
+schemars = { version = "1.2", features = ["preserve_order"] }
 serde = { version = "1", features = ["alloc", "derive", "rc"] }
 serde_core = { version = "1", features = ["alloc", "rc"] }
 serde_json = { version = "1", features = ["alloc", "float_roundtrip", "preserve_order", "raw_value"] }
