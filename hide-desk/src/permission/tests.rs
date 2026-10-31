@@ -514,3 +514,189 @@ fn pi_s_confirm_from_desk_s_extension_is_read_and_another_is_not() {
     let other = confirm("Delete branch?", "yes or no");
     assert_eq!(readable(&other), None);
 }
+
+const UNREADABLE: Ask = Ask::Irreversible(Irreversible::Unreadable);
+const OUTSIDE: Ask = Ask::Irreversible(Irreversible::DeleteOutside);
+
+#[test]
+fn code_a_shell_or_an_interpreter_runs_that_hide_does_not_read_always_asks() {
+    for line in [
+        "printf '%s' 'rm -f /fixture/outside/victim' | sh",
+        "sh script.sh",
+        "bash -s < steps.sh",
+        "bash <<EOF\nrm -f /fixture/outside/victim\nEOF",
+        "python3 -c 'import shutil; shutil.rmtree(\"/fixture/outside\")'",
+        "python3.12 tool.py",
+        "node -e 'require(\"fs\").rmSync(\"/fixture/outside\", {recursive: true})'",
+        "hide ps | awk '{system(\"rm -f /fixture/outside/victim\")}'",
+        "fish -c 'rm (pwd)/victim'",
+        "xargs sh < list.txt",
+        r"find . -name '*.sh' -exec sh {} \;",
+        "source ./setup.sh",
+        "git -c core.pager='rm -f /fixture/outside/victim' log",
+        "git --exec-path=/fixture/bin status",
+    ] {
+        assert!(asks(line).contains(&UNREADABLE), "{line}");
+    }
+    // A shell line given to `-c` is read like any other.
+    assert_eq!(asks("sh -c 'rm -f /fixture/outside/victim'"), [OUTSIDE]);
+    assert_eq!(asks("bash -c 'hide ps | head'"), []);
+}
+
+#[test]
+fn what_a_heredoc_body_substitutes_is_read_unless_its_end_word_is_quoted() {
+    for line in [
+        "cat <<EOF\n$(rm -f /fixture/outside/victim)\nEOF",
+        "cat <<-EOF\n\t`rm -f /fixture/outside/victim`\n\tEOF",
+        "hide request send a --intent i --body-file - <<EOF\nnote $(rm -rf /fixture/outside)\nEOF",
+    ] {
+        assert_eq!(asks(line), [OUTSIDE], "{line}");
+    }
+    for line in [
+        "cat <<'EOF'\n$(rm -f /fixture/outside/victim)\nEOF",
+        "cat <<\"EOF\"\n`rm -f /fixture/outside/victim`\nEOF",
+        "cat <<\\EOF\n$(rm -f /fixture/outside/victim)\nEOF",
+        "cat <<EOF\nonly \\$(text) here\nEOF",
+    ] {
+        assert_eq!(asks(line), [], "{line}");
+    }
+}
+
+#[test]
+fn a_program_named_by_path_or_run_with_a_changed_environment_always_asks() {
+    for line in [
+        "/fixture/bin/cat README.md",
+        "./cat README.md",
+        "hide ps | /fixture/bin/cat",
+        "PATH=/fixture/bin cat README.md",
+        "export PATH=/fixture/bin; cat README.md",
+        "path=(/fixture/bin $path); cat README.md",
+        "for PATH in /fixture/bin; do cat README.md; done",
+        "env PATH=/fixture/bin hide ps",
+        "LESSOPEN='|rm -f /fixture/outside/victim %s' less README.md",
+        "hash -p /fixture/bin/cat cat; cat README.md",
+        "{rm,-f,/fixture/outside/victim}",
+        "alias cat='rm -f /fixture/outside/victim'; cat x",
+    ] {
+        assert!(
+            asks(line).contains(&UNREADABLE) || asks(line).contains(&OUTSIDE),
+            "{line}"
+        );
+    }
+    // A loop's own lowercase variable changes no program.
+    assert_eq!(
+        asks("for id in agent-1 agent-2; do hide agent read $id --lines 20; done"),
+        []
+    );
+    assert_eq!(
+        reading("for id in agent-1 agent-2; do hide agent read $id; done").row,
+        Row::Hide
+    );
+}
+
+#[test]
+fn a_relative_delete_is_judged_in_every_folder_the_shell_may_be_in_then() {
+    for line in [
+        // A subshell's `cd` ends with it.
+        "cd /fixture/outside; (cd /r/herdr-ide); rm -f victim",
+        "cd /fixture/outside && (cd /r/herdr-ide) && rm -f victim",
+        // A `cd` may fail, and what follows `;` or `||` runs anyway.
+        "cd /r/herdr-ide/missing; rm -f victim",
+        "cd /r/herdr-ide || rm -f victim",
+        "cd /fixture/outside || cd /r/herdr-ide && rm -f victim",
+        // A function, a loop or `eval` may move the shell anywhere.
+        "f() { cd /fixture/outside; }; cd /r/herdr-ide && f && rm -f victim",
+        "cd /r/herdr-ide && for d in a b; do cd $d; done; rm -f victim",
+        "cd /r/herdr-ide && eval cd /fixture/outside && rm -f victim",
+        // `env` runs a program named `cd`, which leaves the shell's folder.
+        "env cd /r/herdr-ide && rm -f victim",
+        // A pattern in a folder's name may match a link.
+        "rm -f /r/herdr-ide/*/victim",
+        "rm -f /r/herdr-ide/{a,../../fixture/outside}/victim",
+    ] {
+        assert_eq!(asks(line), [OUTSIDE], "{line}");
+    }
+    for line in [
+        "cd /r/herdr-ide && rm -rf target web/dist",
+        "(cd /r/herdr-ide && rm -rf target)",
+        "cd /r/herdr-ide && cd ./web && rm -rf dist",
+        "cd /r/herdr-ide && command cd ./web/src && rm -f old.ts",
+        "rm -f /r/herdr-ide/*.log",
+    ] {
+        assert_eq!(asks(line), [], "{line}");
+    }
+}
+
+#[test]
+fn a_delete_after_a_command_that_may_make_a_link_cannot_be_named() {
+    for line in [
+        "ln -s /fixture/outside /r/herdr-ide/link && rm -f /r/herdr-ide/link/victim",
+        "rm -f /r/herdr-ide/link/victim | ln -s /fixture/outside /r/herdr-ide/link",
+        "git checkout links && rm -rf /r/herdr-ide/link/",
+        "echo $(ln -s /fixture/outside /r/herdr-ide/link); rm -f /r/herdr-ide/link/victim",
+    ] {
+        assert_eq!(asks(line), [OUTSIDE], "{line}");
+    }
+    // What only reads, deletes or makes folders and files makes no link.
+    assert_eq!(
+        asks(
+            "ls /r/herdr-ide && rm -rf /r/herdr-ide/build && mkdir /r/herdr-ide/build && rm -f /r/herdr-ide/build/x"
+        ),
+        []
+    );
+}
+
+/// The core's facts about one project on this machine's disk.
+struct OnDisk {
+    project: String,
+}
+
+impl Facts for OnDisk {
+    fn working(&self, _: &str) -> bool {
+        false
+    }
+
+    fn in_project(&self, path: &str) -> bool {
+        hide_platform::path::wire_relative(&self.project, path).is_ok_and(|below| !below.is_root())
+    }
+}
+
+#[test]
+fn a_delete_through_a_link_is_judged_where_the_link_leads() {
+    let root = tempfile::tempdir().unwrap();
+    let wire = |path: &Path| hide_platform::path::to_wire_lossy(path);
+    let project = root.path().join("project");
+    let outside = root.path().join("outside");
+    std::fs::create_dir_all(project.join("real")).unwrap();
+    std::fs::create_dir_all(&outside).unwrap();
+    hide_platform::fs::link::create_link(&outside, &project.join("link")).unwrap();
+    let facts = OnDisk {
+        project: wire(&hide_platform::fs::identity::canonical(&project).unwrap()),
+    };
+    // The paths are written as the operator's shell names them, which may
+    // itself pass through a link (macOS's temporary folder does).
+    let project = wire(&project);
+    let asks = |line: &str| {
+        let mut reading = reading(line);
+        follow_links(&mut reading);
+        decide(&reading, &Table::default(), &facts, &BTreeSet::new()).asks
+    };
+    for line in [
+        format!("rm -f {project}/link/victim"),
+        format!("rm -rf {project}/link/"),
+        format!("cd {project}/link && rm -f victim"),
+        format!("rm -rf {project}/link/../victim"),
+        format!("find {project}/link -name '*.log' -delete"),
+        format!("git -C {project}/link clean -fdx"),
+    ] {
+        assert_eq!(asks(&line), [OUTSIDE], "{line}");
+    }
+    for line in [
+        // Deleting the link removes the link, inside the project.
+        format!("rm -f {project}/link"),
+        format!("rm -rf {project}/real/victim {project}/new/victim"),
+        format!("cd {project}/real && rm -f ../victim"),
+    ] {
+        assert_eq!(asks(&line), [], "{line}");
+    }
+}

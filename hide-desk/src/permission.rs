@@ -15,6 +15,7 @@
 use std::collections::BTreeSet;
 use std::path::Path;
 
+use hide_shell::Join;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -311,9 +312,12 @@ pub fn classify(action: &Action, place: &Place<'_>) -> Reading {
                 .map(wire_word)
                 .unwrap_or_else(|| place.cwd.to_owned());
             let mut line = Line::default();
-            read_line(command, Some(cwd), place, 0, &mut line);
+            read_line(command, &vec![Some(cwd)], place, 0, &mut line);
+            // A line that changes the environment its programs read may
+            // change which program a name runs and what it does.
+            let unreadable = line.unreadable || line.environment;
             Reading {
-                row: if line.other {
+                row: if line.other || unreadable {
                     Row::Shell
                 } else if line.hide {
                     Row::Hide
@@ -329,7 +333,7 @@ pub fn classify(action: &Action, place: &Place<'_>) -> Reading {
                 ends: line.ends,
                 deletes: line.deletes,
                 force_push: line.force_push,
-                unreadable: line.unreadable,
+                unreadable,
             }
         }
         Action::Edit {
@@ -348,7 +352,7 @@ pub fn classify(action: &Action, place: &Place<'_>) -> Reading {
             deletes: if *delete {
                 paths
                     .iter()
-                    .map(|path| resolve(path, Some(place.cwd), place.home))
+                    .map(|path| path_of(path, Some(place.cwd), place.home))
                     .collect()
             } else {
                 Vec::new()
@@ -397,6 +401,97 @@ struct Line {
     deletes: Vec<Option<String>>,
     force_push: bool,
     unreadable: bool,
+    /// The line sets a variable programs read from the environment.
+    environment: bool,
+    /// A command has run that may make or move a link, so a path deleted
+    /// after it may lead somewhere it does not lead now.
+    writes: bool,
+}
+
+impl Line {
+    /// A command Hide cannot read: it could do anything.
+    fn unreadable(&mut self) {
+        self.other = true;
+        self.unreadable = true;
+        self.writes = true;
+    }
+
+    /// A path the line deletes; after a command that may make links, one
+    /// Hide cannot name.
+    fn delete(&mut self, path: Option<String>) {
+        self.deletes.push(path.filter(|_| !self.writes));
+    }
+}
+
+/// The folders a command may run in. `None` stands for one Hide cannot
+/// name, in which a relative path cannot be named either.
+type Folders = Vec<Option<String>>;
+
+fn add(folders: &mut Folders, folder: Option<String>) {
+    if !folders.contains(&folder) {
+        folders.push(folder);
+    }
+}
+
+fn joined(left: &Folders, right: &Folders) -> Folders {
+    let mut all = left.clone();
+    for folder in right {
+        add(&mut all, folder.clone());
+    }
+    all
+}
+
+/// What a command does to the folder of the shell it runs in.
+enum Move {
+    Stay,
+    /// It goes to one of these when it succeeds and stays when it fails.
+    To(Folders),
+    /// It may go anywhere.
+    Unknown,
+}
+
+/// Where the shell may be after a command, by whether it succeeded.
+#[derive(Clone)]
+struct After {
+    ok: Folders,
+    failed: Folders,
+}
+
+impl After {
+    /// Where a command that follows by `join` runs.
+    fn runs(&self, join: Join) -> Folders {
+        match join {
+            Join::And => self.ok.clone(),
+            Join::Or => self.failed.clone(),
+            Join::List | Join::Pipe => joined(&self.ok, &self.failed),
+        }
+    }
+
+    /// Where the shell may be after a command that followed by `join`, ran
+    /// in `ran` and did `moved`. Past `&&` or `||`, the shell may also be
+    /// where it was when the command did not run.
+    fn then(&self, join: Join, ran: &Folders, moved: Move) -> After {
+        let (ok, failed) = match moved {
+            Move::Stay => (ran.clone(), ran.clone()),
+            Move::To(to) => (to, ran.clone()),
+            Move::Unknown => {
+                let mut anywhere = ran.clone();
+                add(&mut anywhere, None);
+                (anywhere.clone(), anywhere)
+            }
+        };
+        match join {
+            Join::And => After {
+                failed: joined(&failed, &self.failed),
+                ok,
+            },
+            Join::Or => After {
+                ok: joined(&self.ok, &ok),
+                failed,
+            },
+            Join::List | Join::Pipe => After { ok, failed },
+        }
+    }
 }
 
 /// How deep a command inside a command (`$(...)`, `bash -c`, `eval`) is
@@ -668,13 +763,61 @@ const WRAPPERS: &[Wrapper] = &[
     },
 ];
 
-/// Shells whose `-c` runs the script after it.
-const SHELLS: &[&str] = &["bash", "sh", "zsh", "dash", "ksh", "mksh", "fish"];
+/// Shells whose `-c` runs the script after it, which Hide reads as a line
+/// of its own; a script from a file or from the shell's input is not read.
+const SHELLS: &[&str] = &["bash", "sh", "zsh", "dash", "ksh", "mksh"];
 
-fn read_line(text: &str, cwd: Option<String>, place: &Place<'_>, depth: usize, line: &mut Line) {
+/// Programs that run code in a language Hide does not read, from their
+/// words, a file or their input; a version in the name (`python3.12`)
+/// counts.
+const CODE_RUNNERS: &[&str] = &[
+    "python",
+    "pypy",
+    "node",
+    "nodejs",
+    "deno",
+    "bun",
+    "perl",
+    "ruby",
+    "php",
+    "lua",
+    "luajit",
+    "Rscript",
+    "osascript",
+    "pwsh",
+    "powershell",
+    "cmd",
+    "fish",
+    "tclsh",
+    "wish",
+    "expect",
+    "awk",
+    "gawk",
+    "mawk",
+    "nawk",
+    "busybox",
+];
+
+/// Commands that set the variables their words name.
+const ASSIGNING: &[&str] = &[
+    "export",
+    "declare",
+    "typeset",
+    "readonly",
+    "local",
+    "read",
+    "mapfile",
+    "readarray",
+    "getopts",
+    "printf",
+];
+
+/// Programs that change files without making or moving a link.
+const NO_LINKS: &[&str] = &["mkdir", "touch", "chmod"];
+
+fn read_line(text: &str, folders: &Folders, place: &Place<'_>, depth: usize, line: &mut Line) {
     if depth > MAX_DEPTH {
-        line.other = true;
-        line.unreadable = true;
+        line.unreadable();
         return;
     }
     let parsed = hide_shell::shell_line(text);
@@ -682,9 +825,12 @@ fn read_line(text: &str, cwd: Option<String>, place: &Place<'_>, depth: usize, l
         line.other = true;
         // A quote the text ended inside makes the shell run none of it;
         // anything but blank lines and comments is read as unknown.
-        line.unreadable |= text
+        if text
             .lines()
-            .any(|row| !row.trim().is_empty() && !row.trim_start().starts_with('#'));
+            .any(|row| !row.trim().is_empty() && !row.trim_start().starts_with('#'))
+        {
+            line.unreadable();
+        }
         return;
     }
     if parsed
@@ -694,50 +840,149 @@ fn read_line(text: &str, cwd: Option<String>, place: &Place<'_>, depth: usize, l
     {
         line.other = true;
     }
-    let mut cwd = cwd;
-    for words in &parsed.commands {
-        read_command(words, &mut cwd, place, depth, line);
+    let first_delete = line.deletes.len();
+    let mut start = folders.clone();
+    if parsed.functions {
+        // A later word may call a function the line defines, which may
+        // change folder.
+        add(&mut start, None);
     }
+    let mut after = After {
+        ok: start.clone(),
+        failed: start.clone(),
+    };
+    // Every folder a command of the line may run in, which is where the
+    // substitutions run.
+    let mut ever = start;
+    // Each open subshell: its number, how it follows the command before
+    // it, and where the shell was then.
+    let mut open: Vec<(usize, Join, After)> = Vec::new();
+    let mut pipeline = first_delete;
+    for (index, words) in parsed.commands.iter().enumerate() {
+        let scope = &parsed.scopes[index];
+        while open
+            .last()
+            .is_some_and(|(number, _, _)| !scope.contains(number))
+        {
+            if let Some((_, join, before)) = open.pop() {
+                // A subshell's folder ends with it.
+                after = before.then(join, &before.runs(join), Move::Stay);
+            }
+        }
+        let join = parsed.joins[index];
+        for number in scope {
+            if !open.iter().any(|(opened, _, _)| opened == number) {
+                open.push((*number, join, after.clone()));
+            }
+        }
+        if join != Join::Pipe {
+            pipeline = line.deletes.len();
+        }
+        let ran = after.runs(join);
+        ever = joined(&ever, &ran);
+        let moved = match read_command(words, &ran, place, depth, line) {
+            // A body may run more than once, or after what follows it.
+            Move::To(_) if parsed.bodies[index] => Move::Unknown,
+            moved => moved,
+        };
+        after = after.then(join, &ran, moved);
+        if line.writes {
+            // The commands of a pipeline run together: one may make a link
+            // before another deletes through it.
+            unname(&mut line.deletes[pipeline..]);
+        }
+    }
+    let wrote = line.writes;
     for inner in parsed
         .substitutions
         .iter()
         .map(|(_, text)| text)
         .chain(&parsed.backquoted)
     {
-        read_line(inner, cwd.clone(), place, depth + 1, line);
+        read_line(inner, &ever, place, depth + 1, line);
+    }
+    if line.writes && !wrote {
+        // A substitution runs before the command it belongs to.
+        unname(&mut line.deletes[first_delete..]);
+    }
+}
+
+fn unname(deletes: &mut [Option<String>]) {
+    for path in deletes {
+        *path = None;
     }
 }
 
 fn read_command(
     words: &[String],
-    cwd: &mut Option<String>,
+    folders: &Folders,
     place: &Place<'_>,
     depth: usize,
     line: &mut Line,
-) {
+) -> Move {
     let mut words = words;
+    let mut looped = false;
     while let Some((first, rest)) = words.split_first()
         && KEYWORDS.contains(&first.as_str())
     {
+        looped |= matches!(first.as_str(), "while" | "until");
         words = rest;
     }
     let Some(first) = words.first() else {
-        return;
+        return Move::Stay;
     };
     if CONTROL.contains(&first.as_str()) {
-        return;
+        // `for NAME in` and `select NAME in` set NAME.
+        if matches!(first.as_str(), "for" | "select")
+            && words.get(1).is_some_and(|name| sets_environment(name))
+        {
+            line.environment = true;
+        }
+        return Move::Stay;
     }
     let mut assigned = false;
     while let Some((first, rest)) = words.split_first()
         && hide_shell::is_assignment(first)
     {
         assigned = true;
+        line.environment |= sets_environment(first);
         words = rest;
     }
     if words.is_empty() {
-        return;
+        return Move::Stay;
     }
-    run_program(words, assigned, false, cwd, place, depth, line);
+    match run_program(words, assigned, false, folders, place, depth, line) {
+        // A loop's test runs again and again.
+        Move::To(_) if looped => Move::Unknown,
+        moved => moved,
+    }
+}
+
+/// Whether a word that sets a variable (`NAME=value`, `NAME+=value`, or a
+/// name a command sets) sets one programs read from the environment: a
+/// name in capitals, as the environment's are, or zsh's `path`, which is
+/// `PATH`.
+fn sets_environment(word: &str) -> bool {
+    let name = word.split(['=', '+', '[']).next().unwrap_or(word);
+    let is_name = name
+        .chars()
+        .enumerate()
+        .all(|(index, c)| c == '_' || c.is_ascii_alphabetic() || (index > 0 && c.is_ascii_digit()));
+    !name.is_empty() && is_name && (name.chars().any(|c| c.is_ascii_uppercase()) || name == "path")
+}
+
+/// Whether the shell expands a program word into something Hide does not
+/// see: a variable, a substitution, a pattern or braces.
+fn expands(program: &str) -> bool {
+    program.contains(['$', '`', '*', '?', '{'])
+        || (program.contains('[') && !matches!(program, "[" | "[["))
+}
+
+fn runs_code(name: &str) -> bool {
+    CODE_RUNNERS.iter().any(|runner| {
+        name.strip_prefix(runner)
+            .is_some_and(|version| version.chars().all(|c| c.is_ascii_digit() || c == '.'))
+    })
 }
 
 /// One program and its words. `assigned` when variables were set for it,
@@ -747,18 +992,17 @@ fn run_program(
     words: &[String],
     assigned: bool,
     stdin_names: bool,
-    cwd: &mut Option<String>,
+    folders: &Folders,
     place: &Place<'_>,
     depth: usize,
     line: &mut Line,
-) {
+) -> Move {
     let Some((program, args)) = words.split_first() else {
-        return;
+        return Move::Stay;
     };
-    if program.contains(['$', '`', '*', '?']) {
-        line.other = true;
-        line.unreadable = true;
-        return;
+    if expands(program) {
+        line.unreadable();
+        return Move::Stay;
     }
     if names_hide(program, place.hide) {
         if assigned {
@@ -781,7 +1025,13 @@ fn run_program(
                 );
             }
         }
-        return;
+        return Move::Stay;
+    }
+    if program.contains('/') || (cfg!(windows) && program.contains('\\')) {
+        // A program named by its path: Hide knows programs by their names,
+        // and the file there may hold anything.
+        line.unreadable();
+        return Move::Stay;
     }
     let name = program_name(program);
     if let Some(wrapper) = WRAPPERS.iter().find(|wrapper| wrapper.name == name) {
@@ -795,16 +1045,16 @@ fn run_program(
             }
             if name == "env" && hide_shell::is_assignment(word) {
                 assigned = true;
+                line.environment |= sets_environment(word);
             } else if !word.starts_with('-') {
                 break;
             } else if name == "command" && matches!(word.as_str(), "-v" | "-V") {
                 // `command -v` names what would run and runs nothing.
-                return;
+                return Move::Stay;
             } else if name == "env" && word.starts_with("-S") {
                 // `env -S` splits its value into the command line.
-                line.other = true;
-                line.unreadable = true;
-                return;
+                line.unreadable();
+                return Move::Stay;
             } else if wrapper.valued.contains(&word.as_str()) {
                 at += 1;
             }
@@ -815,18 +1065,25 @@ fn run_program(
             at += 1;
         }
         let inner = args.get(at..).unwrap_or_default();
-        if !inner.is_empty() {
-            run_program(
-                inner,
-                assigned,
-                stdin_names || name == "xargs",
-                cwd,
-                place,
-                depth,
-                line,
-            );
+        if inner.is_empty() {
+            return Move::Stay;
         }
-        return;
+        let moved = run_program(
+            inner,
+            assigned,
+            stdin_names || name == "xargs",
+            folders,
+            place,
+            depth,
+            line,
+        );
+        // Only the shell's own `command` and `builtin` run its `cd`; the
+        // others run a program, whose folder is its own.
+        return if matches!(name, "command" | "builtin") {
+            moved
+        } else {
+            Move::Stay
+        };
     }
     if SHELLS.contains(&name) {
         let mut runs_script = false;
@@ -839,25 +1096,62 @@ fn run_program(
             at += 1;
         }
         match args.get(at).filter(|_| runs_script) {
-            Some(script) => read_line(script, cwd.clone(), place, depth + 1, line),
-            // A script file or the shell's input: a program Hide does not
-            // read, like any other.
-            None => line.other = true,
+            Some(script) => read_line(script, folders, place, depth + 1, line),
+            // A script from a file or from the shell's input (a pipe, a
+            // heredoc), which Hide does not read.
+            None => line.unreadable(),
         }
-        return;
+        return Move::Stay;
+    }
+    if runs_code(name) {
+        line.unreadable();
+        return Move::Stay;
+    }
+    if ASSIGNING.contains(&name) && args.iter().any(|word| sets_environment(word)) {
+        line.environment = true;
     }
     match name {
-        "eval" => read_line(&args.join(" "), cwd.clone(), place, depth + 1, line),
-        "cd" | "pushd" => {
-            *cwd = match args.iter().find(|word| !word.starts_with('-')) {
-                Some(dir) => resolve(dir, cwd.as_deref(), place.home),
-                None => place.home.map(str::to_owned),
-            };
+        // It runs in this shell, so where it leaves the shell is not
+        // followed.
+        "eval" => {
+            read_line(&args.join(" "), folders, place, depth + 1, line);
+            Move::Unknown
         }
-        "popd" => *cwd = None,
-        "git" => git(args, cwd, place, line),
+        "source" | "." => {
+            line.unreadable();
+            Move::Unknown
+        }
+        "cd" | "pushd" => cd(args, folders, place.home),
+        "popd" => Move::Unknown,
+        // A name a later word may run as its value.
+        "alias" => {
+            line.other = true;
+            for value in args.iter().filter_map(|word| word.split_once('=')) {
+                read_line(value.1, folders, place, depth + 1, line);
+            }
+            Move::Unknown
+        }
+        // What the shell runs on a signal or as it exits.
+        "trap" => {
+            line.other = true;
+            if let Some(action) = args.iter().find(|word| !word.starts_with('-')) {
+                read_line(action, folders, place, depth + 1, line);
+            }
+            Move::Stay
+        }
+        // They change which program a name runs.
+        "hash" | "enable" if !args.is_empty() => {
+            line.other = true;
+            line.environment = true;
+            Move::Stay
+        }
+        "git" => {
+            git(args, folders, place, line);
+            Move::Stay
+        }
         "herdr" => {
             line.other = true;
+            line.writes = true;
             if HERDR_CLOSES.iter().any(|close| {
                 args.windows(close.len()).any(|window| {
                     window
@@ -868,14 +1162,19 @@ fn run_program(
             }) {
                 line.ends.push(None);
             }
+            Move::Stay
         }
-        "find" => find(args, cwd, place, depth, line),
+        "find" => {
+            find(args, folders, place, depth, line);
+            Move::Stay
+        }
         _ if DELETERS.contains(&name) => {
             line.other = true;
-            delete_names(args, cwd.as_deref(), place, line);
+            delete_names(args, folders, place, line);
             if stdin_names {
-                line.deletes.push(None);
+                line.delete(None);
             }
+            Move::Stay
         }
         _ => {
             let reads = READ_ONLY
@@ -887,9 +1186,49 @@ fn run_program(
                             args.iter().filter(|word| !word.starts_with('-')).count() <= most
                         })
                 });
-            line.other |= !reads;
+            if !reads {
+                line.other = true;
+                line.writes |= !NO_LINKS.contains(&name);
+            }
+            Move::Stay
         }
     }
+}
+
+/// Where `cd` (or `pushd`) goes: lexically, as the shell's `cd` without
+/// `-P` goes. `cd -` goes back to a folder Hide does not track, `-P` with
+/// `..` goes up from where a link leads, and a name that starts with no
+/// `/`, `~` or `.` may be found through `CDPATH`.
+fn cd(args: &[String], folders: &Folders, home: Option<&str>) -> Move {
+    let mut physical = false;
+    let mut options = true;
+    let mut target = None;
+    for word in args {
+        if options && word == "--" {
+            options = false;
+        } else if options && word.starts_with('-') && word != "-" {
+            physical |= word.contains('P');
+        } else {
+            target = Some(word.as_str());
+            break;
+        }
+    }
+    let Some(target) = target else {
+        return Move::To(vec![home.map(str::to_owned)]);
+    };
+    if target == "-" || (physical && target.split('/').any(|name| name == "..")) {
+        return Move::Unknown;
+    }
+    let mut to: Folders = Vec::new();
+    for path in paths(target, folders, home) {
+        add(&mut to, path.map(|path| normalize(&path)));
+    }
+    if !(target.starts_with(['/', '~', '.'])
+        || hide_platform::path::is_wire_absolute(&wire_word(target)))
+    {
+        add(&mut to, None);
+    }
+    Move::To(to)
 }
 
 fn names_hide(program: &str, hide: &Path) -> bool {
@@ -922,18 +1261,28 @@ fn refused(word: &str, flags: &[&str]) -> bool {
     })
 }
 
-fn git(args: &[String], cwd: &mut Option<String>, place: &Place<'_>, line: &mut Line) {
-    let mut cwd = cwd.clone();
+fn git(args: &[String], folders: &Folders, place: &Place<'_>, line: &mut Line) {
+    let mut folders = folders.clone();
     let mut at = 0;
     while let Some(word) = args.get(at) {
         match word.as_str() {
             "-C" => {
-                cwd = args
+                folders = args
                     .get(at + 1)
-                    .and_then(|dir| resolve(dir, cwd.as_deref(), place.home));
+                    .map_or_else(|| vec![None], |dir| paths(dir, &folders, place.home));
                 at += 2;
             }
-            "-c" | "--git-dir" | "--work-tree" | "--namespace" => at += 2,
+            // A setting given here, or the folder git's commands come from,
+            // may run any program (an alias, a pager, a hook).
+            "-c" | "--config-env" => {
+                line.unreadable();
+                return;
+            }
+            word if word.starts_with("--exec-path") || word.starts_with("--config-env=") => {
+                line.unreadable();
+                return;
+            }
+            "--git-dir" | "--work-tree" | "--namespace" => at += 2,
             word if word.starts_with('-') => at += 1,
             _ => break,
         }
@@ -964,11 +1313,14 @@ fn git(args: &[String], cwd: &mut Option<String>, place: &Place<'_>, line: &mut 
             // the one it runs in.
             let names: Vec<&String> = rest.iter().filter(|word| !word.starts_with('-')).collect();
             if names.is_empty() {
-                line.deletes.push(cwd.as_deref().map(below));
+                for folder in &folders {
+                    line.delete(folder.as_deref().map(below));
+                }
             } else {
                 for name in names {
-                    line.deletes
-                        .push(resolve(name, cwd.as_deref(), place.home).map(|path| below(&path)));
+                    for path in paths(name, &folders, place.home) {
+                        line.delete(path.map(|path| below(&path)));
+                    }
                 }
             }
         }
@@ -980,17 +1332,15 @@ fn git(args: &[String], cwd: &mut Option<String>, place: &Place<'_>, line: &mut 
         sub if GIT_READS.contains(&sub) => {
             line.other |= rest.iter().any(|word| refused(word, &[GIT_WRITES_OUTPUT]));
         }
-        _ => line.other = true,
+        // A checkout, a merge or a pull may make links.
+        _ => {
+            line.other = true;
+            line.writes = true;
+        }
     }
 }
 
-fn find(
-    args: &[String],
-    cwd: &mut Option<String>,
-    place: &Place<'_>,
-    depth: usize,
-    line: &mut Line,
-) {
+fn find(args: &[String], folders: &Folders, place: &Place<'_>, depth: usize, line: &mut Line) {
     let roots: Vec<&String> = args
         .iter()
         .take_while(|word| !word.starts_with('-') && *word != "(" && *word != "!")
@@ -1006,8 +1356,9 @@ fn find(
             "-delete" => {
                 line.other = true;
                 for root in &roots {
-                    line.deletes
-                        .push(resolve(root, cwd.as_deref(), place.home).map(|path| below(&path)));
+                    for path in paths(root, folders, place.home) {
+                        line.delete(path.map(|path| below(&path)));
+                    }
                 }
             }
             "-exec" | "-execdir" | "-ok" | "-okdir" => {
@@ -1016,20 +1367,25 @@ fn find(
                     .position(|word| word == ";" || word == "+")
                     .map_or(args.len(), |offset| at + 1 + offset);
                 let inner = &args[at + 1..end];
+                // `-execdir` runs the command in the folder of each file
+                // found, at a depth Hide cannot name.
+                let here = word.ends_with("dir");
                 for root in &roots {
-                    // What `find` hands the command lies below its root.
-                    let found = format!("{}/{{}}", root.trim_end_matches('/'));
-                    let words: Vec<String> = inner
-                        .iter()
-                        .map(|word| {
-                            if word == "{}" {
-                                found.clone()
-                            } else {
-                                word.clone()
-                            }
-                        })
-                        .collect();
-                    run_program(&words, false, false, &mut cwd.clone(), place, depth, line);
+                    for folder in folders {
+                        // What `find` hands the command lies below its root.
+                        let found = path_of(root, folder.as_deref(), place.home)
+                            .map_or_else(|| "$found".to_owned(), |root| below(&root));
+                        let words: Vec<String> = inner
+                            .iter()
+                            .map(|word| word.replace("{}", &found))
+                            .collect();
+                        let runs_in = if here {
+                            vec![None]
+                        } else {
+                            vec![folder.clone()]
+                        };
+                        run_program(&words, false, false, &runs_in, place, depth, line);
+                    }
                 }
                 at = end;
             }
@@ -1040,7 +1396,7 @@ fn find(
     }
 }
 
-fn delete_names(args: &[String], cwd: Option<&str>, place: &Place<'_>, line: &mut Line) {
+fn delete_names(args: &[String], folders: &Folders, place: &Place<'_>, line: &mut Line) {
     let mut options = true;
     for word in args {
         if options && word == "--" {
@@ -1050,7 +1406,9 @@ fn delete_names(args: &[String], cwd: Option<&str>, place: &Place<'_>, line: &mu
         if options && word.starts_with('-') && word.len() > 1 {
             continue;
         }
-        line.deletes.push(resolve(word, cwd, place.home));
+        for path in paths(word, folders, place.home) {
+            line.delete(path);
+        }
     }
 }
 
@@ -1060,15 +1418,42 @@ fn below(folder: &str) -> String {
     format!("{}/{{}}", folder.trim_end_matches('/'))
 }
 
+/// The paths a word names from each folder a command may run in.
+fn paths(word: &str, folders: &Folders, home: Option<&str>) -> Folders {
+    let mut found = Folders::new();
+    for folder in folders {
+        add(&mut found, path_of(word, folder.as_deref(), home));
+    }
+    if folders.is_empty() {
+        add(&mut found, path_of(word, None, home));
+    }
+    found
+}
+
 /// A word a command names as a path, in wire spelling: absolute, from
-/// `~`, or from the folder the command runs in. `None` when Hide cannot
-/// tell: a variable, a substitution, another account's `~`, or a relative
-/// path in a folder it cannot tell.
-fn resolve(word: &str, cwd: Option<&str>, home: Option<&str>) -> Option<String> {
-    if word.contains(['$', '`']) {
+/// `~`, or from the folder the command runs in, with its `..` kept, since
+/// the system takes `..` from where a link leads ([`follow_links`]).
+/// `None` when Hide cannot tell: a variable or a substitution, braces the
+/// shell expands into other words, a pattern in a folder's name, which may
+/// match a link, another account's `~`, or a relative path in a folder it
+/// cannot tell.
+fn path_of(word: &str, cwd: Option<&str>, home: Option<&str>) -> Option<String> {
+    if word.contains(['$', '`']) || braces_expand(word) {
         return None;
     }
     let word = wire_word(word);
+    let names: Vec<&str> = word.split('/').collect();
+    let pattern = |name: &&str| name.contains(['*', '?', '[']);
+    let last = names
+        .iter()
+        .rposition(|name| !name.is_empty() && *name != ".");
+    if names
+        .iter()
+        .enumerate()
+        .any(|(index, name)| pattern(name) && (Some(index) != last || word.ends_with('/')))
+    {
+        return None;
+    }
     let joined = if let Some(rest) = word.strip_prefix('~') {
         if !(rest.is_empty() || rest.starts_with('/')) {
             return None;
@@ -1079,7 +1464,108 @@ fn resolve(word: &str, cwd: Option<&str>, home: Option<&str>) -> Option<String> 
     } else {
         format!("{}/{word}", cwd?)
     };
-    Some(normalize(&joined))
+    Some(tidy(&joined))
+}
+
+/// Whether the shell expands braces in a word into more words (`{a,b}`,
+/// `{1..3}`); `{}` stays as it is.
+fn braces_expand(word: &str) -> bool {
+    let mut rest = word;
+    while let Some(open) = rest.find('{') {
+        let after = &rest[open + 1..];
+        let Some(close) = after.find('}') else {
+            return false;
+        };
+        let inside = &after[..close];
+        if inside.contains(',') || inside.contains("..") {
+            return true;
+        }
+        rest = &after[close + 1..];
+    }
+    false
+}
+
+/// A path without its empty and `.` names; its `..` stay, and a last `/`
+/// (or `/.`), which makes the system follow a link at the last name, stays
+/// as `/`.
+fn tidy(path: &str) -> String {
+    let (root, rest) = if let Some(rest) = path.strip_prefix("//") {
+        ("//", rest)
+    } else if let Some(rest) = path.strip_prefix('/') {
+        ("/", rest)
+    } else {
+        ("", path)
+    };
+    let names: Vec<&str> = rest
+        .split('/')
+        .filter(|name| !name.is_empty() && *name != ".")
+        .collect();
+    let follows = !names.is_empty() && (rest.ends_with('/') || rest.ends_with("/."));
+    format!(
+        "{root}{}{}",
+        names.join("/"),
+        if follows { "/" } else { "" }
+    )
+}
+
+/// The paths a reading deletes where the system finds them: each link on
+/// the way followed and each `..` taken from where it leads. It reads the
+/// filesystem, so it runs off the core's lock, in the worker that read the
+/// request, before the core answers it.
+pub fn follow_links(reading: &mut Reading) {
+    for path in &mut reading.deletes {
+        *path = path.take().and_then(|path| real_path(&path));
+    }
+}
+
+/// `path` with the links on the way to it followed. Deleting a name
+/// removes that name, so a link there is not followed unless the path ends
+/// in `/` or stands for what lies below a folder (`/{}`); the names past
+/// the last one that exists are kept as written, since the system finds
+/// none of them.
+fn real_path(path: &str) -> Option<String> {
+    let (path, below) = match path.strip_suffix("/{}") {
+        Some(folder) => (folder, true),
+        None => (path, false),
+    };
+    let follows = below || path.ends_with('/') || path.ends_with("/..");
+    let path = path.trim_end_matches('/');
+    let (folder, last) = if follows {
+        (path, None)
+    } else {
+        let (folder, last) = path.rsplit_once('/')?;
+        (if folder.is_empty() { "/" } else { folder }, Some(last))
+    };
+    let mut real = real_folder(folder)?;
+    if let Some(last) = last {
+        real = format!("{}/{last}", real.trim_end_matches('/'));
+    }
+    if below {
+        real = format!("{}/{{}}", real.trim_end_matches('/'));
+    }
+    Some(real)
+}
+
+/// A folder with every link on the way to it followed, through the longest
+/// part of it that exists.
+fn real_folder(folder: &str) -> Option<String> {
+    let names: Vec<&str> = folder.split('/').collect();
+    (1..=names.len()).rev().find_map(|keep| {
+        let mut found = names[..keep].join("/");
+        // The root: `/`, or a Windows drive's (`C:/`).
+        if found.is_empty() || found.ends_with(':') {
+            found.push('/');
+        }
+        let native = hide_platform::path::from_wire(&found).ok()?;
+        let real = hide_platform::fs::identity::canonical(&native).ok()?;
+        let real = hide_platform::path::to_wire_lossy(&real);
+        let rest = names[keep..].join("/");
+        Some(if rest.is_empty() {
+            real
+        } else {
+            normalize(&format!("{}/{rest}", real.trim_end_matches('/')))
+        })
+    })
 }
 
 /// A path as a command names it, in wire spelling; on Windows a Git Bash

@@ -1429,7 +1429,7 @@ mod tests {
             folder: None,
             reason: None,
         };
-        let reading = hide_desk::permission::classify(
+        let mut reading = hide_desk::permission::classify(
             &action,
             &hide_desk::permission::Place {
                 hide: std::path::Path::new("/app/hide"),
@@ -1437,6 +1437,7 @@ mod tests {
                 home: Some("/home/u"),
             },
         );
+        hide_desk::permission::follow_links(&mut reading);
         Report::Permission {
             rpc_id: json!(7),
             allow: "allow-once".into(),
@@ -1532,11 +1533,17 @@ mod tests {
         use hide_desk::permission::{Ask, Irreversible};
         let root = tempfile::tempdir().unwrap();
         let (mut runtime, _received, _) = talking(root.path());
-        let id = ask(&mut runtime);
+        // The card names where the deletion lands, its links followed.
+        let real = hide_platform::path::to_wire_lossy(
+            &hide_platform::fs::identity::canonical(root.path()).unwrap(),
+        );
+        let written = hide_platform::path::to_wire_lossy(root.path());
+        let id = request(&mut runtime, &format!("rm -rf {written}/outside/x")).expect("asks");
         assert!(matches!(
             card(&runtime, id),
             DeskItem::Approval { asks, subject: Some(subject), .. }
-                if asks == [Ask::Irreversible(Irreversible::DeleteOutside)] && subject == "/tmp/x"
+                if asks == [Ask::Irreversible(Irreversible::DeleteOutside)]
+                    && subject == format!("{real}/outside/x")
         ));
     }
 

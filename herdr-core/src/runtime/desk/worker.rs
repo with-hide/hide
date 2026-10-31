@@ -681,7 +681,7 @@ impl Worker {
         let home = hide_platform::host::home_dir()
             .ok()
             .map(|home| hide_platform::path::to_wire_lossy(&home));
-        let reading = permission::classify(
+        let mut reading = permission::classify(
             action,
             &permission::Place {
                 hide: &hide,
@@ -689,6 +689,9 @@ impl Worker {
                 home: home.as_deref(),
             },
         );
+        // Where a deleted path leads is read from the filesystem here, off
+        // the lock, so the core judges the place the command would reach.
+        permission::follow_links(&mut reading);
         self.report(Report::Permission {
             rpc_id,
             allow: allow.to_owned(),
