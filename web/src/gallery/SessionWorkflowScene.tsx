@@ -31,7 +31,7 @@ const EXAMPLES: Example[] = [
   { title: "검토 나눠 맡기기", group: "working", line: null, wait: "children" },
   { title: "PR 체크 기다리기", group: "working", line: null, wait: "checks", pull: 1846 },
   // A delegated reviewer whose start screen took its brief, raised to the operator once its parent could not clear it.
-  { title: "리뷰어 시작", group: "needs_you", line: null, ask: { verb: "answer", what: null, more: 0, subject: { cause: "input_unconfirmed", input: "brief", spent: false } } },
+  { title: "리뷰어 시작", group: "needs_you", line: null, ask: { verb: "answer", what: null, more: 0, subject: { cause: "input_unconfirmed", input: "brief", spent: false, held: false } } },
 ];
 const RAISED: RaisedAsk = { verb: "approval", what: "검증 명령 실행 권한이 필요합니다", raised_pane_id: "a1c1", origin_title: "한국어 입력 경계 검토", pane_id: "a1c1", title: "한국어 입력 경계 검토", agent_kind: "codex", open_pane_id: "a1c1", since_unix_ms: null, path: ["입력과 세션 복귀 흐름 검토", "한국어 입력 경계 검토"], checkout: "prd/session-ui", human_notice: true };
 const PANE_RAISED: RaisedAsk = { ...RAISED, raised_pane_id: "pane-raised-child", origin_title: "UI 검증", pane_id: "pane-raised-child", open_pane_id: "pane-raised-child", title: "UI 검증", what: "권한 승인을 기다리고 있어요", path: ["Group tab 기능 설계", "UI 검증"] };

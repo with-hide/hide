@@ -6,7 +6,7 @@
 import type { TFunction } from "i18next";
 import type { AskSubject } from "./snapshot";
 
-/** What is asked: a plan review's words, a mission decision's own line, or a brief or letter the agent never took (`input_unconfirmed`). */
+/** What is asked: a plan review's words, a mission decision's own line, or a brief or letter the agent has not confirmed (`input_unconfirmed`). */
 export function askSubjectText(t: TFunction<"translation">, subject: AskSubject): string {
   switch (subject.cause) {
     case "plan_review":
@@ -14,7 +14,8 @@ export function askSubjectText(t: TFunction<"translation">, subject: AskSubject)
     case "mission_decision":
       return subject.line;
     case "input_unconfirmed": {
-      const what = t(subject.input === "brief" ? "agents.input.brief" : "agents.input.letter");
+      // Not received only when the composer was read still holding it; else not confirmed.
+      const what = t(`agents.input.${subject.input}${subject.held ? "Held" : ""}`);
       return subject.spent ? t("agents.input.spent", { what }) : what;
     }
   }

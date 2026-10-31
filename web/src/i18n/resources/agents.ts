@@ -4,8 +4,10 @@ import type { Catalog, Catalogs } from "../schema";
 // names stay in English in every language; a status is a count and a word, and
 // what Hide does not do for an agent is named in the Basic popover.
 export const agentsEnglish = {
-  "agents.input.brief": "Brief not received",
-  "agents.input.letter": "Letter not received",
+  "agents.input.brief": "Brief not confirmed",
+  "agents.input.letter": "Letter not confirmed",
+  "agents.input.briefHeld": "Brief not received",
+  "agents.input.letterHeld": "Letter not received",
   "agents.input.spent": "{{what}} · retries used up",
   "agents.machine": "Device",
   "agents.installedCount": "Installed {{count}}",
@@ -74,8 +76,10 @@ export const agentsEnglish = {
 } as const;
 
 const ko = {
-  "agents.input.brief": "브리프 못 받음",
-  "agents.input.letter": "편지 못 받음",
+  "agents.input.brief": "브리프 확인 안 됨",
+  "agents.input.letter": "편지 확인 안 됨",
+  "agents.input.briefHeld": "브리프 못 받음",
+  "agents.input.letterHeld": "편지 못 받음",
   "agents.input.spent": "{{what}} · 재시도 다 씀",
   "agents.machine": "기기",
   "agents.installedCount": "설치됨 {{count}}",
@@ -144,8 +148,10 @@ const ko = {
 } satisfies Catalog<typeof agentsEnglish>;
 
 const zhCN = {
-  "agents.input.brief": "未收到简报",
-  "agents.input.letter": "未收到信件",
+  "agents.input.brief": "简报未确认",
+  "agents.input.letter": "信件未确认",
+  "agents.input.briefHeld": "未收到简报",
+  "agents.input.letterHeld": "未收到信件",
   "agents.input.spent": "{{what}} · 重试已用完",
   "agents.machine": "设备",
   "agents.installedCount": "已安装 {{count}}",
@@ -214,8 +220,10 @@ const zhCN = {
 } satisfies Catalog<typeof agentsEnglish>;
 
 const ja = {
-  "agents.input.brief": "ブリーフ未受信",
-  "agents.input.letter": "レター未受信",
+  "agents.input.brief": "ブリーフ未確認",
+  "agents.input.letter": "レター未確認",
+  "agents.input.briefHeld": "ブリーフ未受信",
+  "agents.input.letterHeld": "レター未受信",
   "agents.input.spent": "{{what}} · 再試行を使い切り",
   "agents.machine": "デバイス",
   "agents.installedCount": "インストール済み {{count}}",

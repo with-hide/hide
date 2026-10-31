@@ -198,7 +198,7 @@ export type UserTurnFact = {
 
 export const ASK_SUBJECT_CAUSES = ["plan_review", "mission_decision", "input_unconfirmed"] as const;
 /** A question the core asks on a row for the agent (`AskSubject`), which every surface words in the interface language: a plan waiting for review, or the decision a Conductor's mission waits on, or a brief or letter Hide typed that the agent never took. */
-export type AskSubject = { cause: "plan_review"; steps: number } | { cause: "mission_decision"; line: string } | { cause: "input_unconfirmed"; input: "brief" | "letter"; spent: boolean };
+export type AskSubject = { cause: "plan_review"; steps: number } | { cause: "mission_decision"; line: string } | { cause: "input_unconfirmed"; input: "brief" | "letter"; spent: boolean; held: boolean };
 
 /** How the label read a turn's end (`LabelEnd`). */
 export type LabelEnd = "working" | "question" | "blocked" | "done" | "waiting" | "unfinished" | "limited";
