@@ -29,8 +29,14 @@ pub enum SessionEvent {
         full: bool,
         bytes: Vec<u8>,
     },
-    Closed {
-        reason: Option<String>,
+    /// Herdr's `terminal.closed`, or its stream's end; its reason is read by
+    /// [`closed_category`].
+    Closed { reason: Option<String> },
+    /// A session that closed with a reason its transport names itself (a
+    /// pane's holder), never read from words.
+    Ended {
+        category: &'static str,
+        message: String,
     },
 }
 

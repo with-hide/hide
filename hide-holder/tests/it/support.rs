@@ -77,6 +77,27 @@ pub fn source() -> Source {
     }
 }
 
+/// The theme a node starts a pane with: a node always passes its own, so
+/// the program's first color question is answered with it.
+pub fn node_theme() -> hide_holder_protocol::Theme {
+    use hide_holder_protocol::{Appearance, Rgb, Theme};
+    Theme {
+        foreground: Some(Rgb {
+            r: 0xd0,
+            g: 0xd0,
+            b: 0xd0,
+        }),
+        background: Some(Rgb {
+            r: 0x10,
+            g: 0x10,
+            b: 0x10,
+        }),
+        cursor: None,
+        palette: Vec::new(),
+        appearance: Appearance::Dark,
+    }
+}
+
 /// The interactive shell a pane runs.
 pub fn shell() -> Vec<OsString> {
     if cfg!(windows) {
@@ -341,7 +362,12 @@ fn first_line(reader: impl std::io::Read + Send + 'static) -> String {
 
 /// The recent text of the pane whose holder listens at `socket`.
 pub fn read_text(socket: &Path, lines: u16) -> (String, bool) {
-    match hide_holder_protocol::ask(socket, Ask::Read { lines }, Instant::now() + HANG_LIMIT) {
+    match hide_holder_protocol::ask(
+        socket,
+        Ask::Read { lines },
+        hide_holder_protocol::PROTOCOL_VERSION,
+        Instant::now() + HANG_LIMIT,
+    ) {
         Ok(Answer::Text { text, truncated }) => (text, truncated),
         other => panic!("a read was answered {other:?}"),
     }

@@ -8,7 +8,7 @@ use std::time::Instant;
 
 use hide_holder_protocol::{
     Answer, Ask, ClientMessage, CloseReason, Foreground, MAX_READ_LINES, Modifiers, OpenError,
-    Scroll, ask,
+    PROTOCOL_VERSION, Scroll, ask,
 };
 
 use crate::support::{
@@ -17,7 +17,12 @@ use crate::support::{
 };
 
 fn refusal(holder: &Holder, question: Ask) -> CloseReason {
-    match ask(&holder.socket, question, Instant::now() + HANG_LIMIT) {
+    match ask(
+        &holder.socket,
+        question,
+        PROTOCOL_VERSION,
+        Instant::now() + HANG_LIMIT,
+    ) {
         Err(OpenError::Refused(closed)) => closed.reason,
         other => panic!("{other:?}"),
     }
@@ -64,7 +69,13 @@ fn a_read_leaves_the_screen_connection_and_its_scroll_position_as_they_were() {
     });
     let scrolled = connection.fragments.clone();
     let _ = holder.read(MAX_READ_LINES);
-    let _ = ask(&holder.socket, Ask::Processes, Instant::now() + HANG_LIMIT).unwrap();
+    let _ = ask(
+        &holder.socket,
+        Ask::Processes,
+        PROTOCOL_VERSION,
+        Instant::now() + HANG_LIMIT,
+    )
+    .unwrap();
     let answered = connection.redraw();
     let full = connection.fragments[answered - 1].clone();
     let shown = draw(&[
@@ -93,7 +104,12 @@ fn processes_name_the_shell_and_the_foreground_or_say_it_is_not_known() {
     let home = Home::new();
     let folder = home.prepare(current_version(), &source());
     let holder = start_ready(&folder.program, &home.socket("p"), &shell(), &[]);
-    let processes = || match ask(&holder.socket, Ask::Processes, Instant::now() + HANG_LIMIT) {
+    let processes = || match ask(
+        &holder.socket,
+        Ask::Processes,
+        PROTOCOL_VERSION,
+        Instant::now() + HANG_LIMIT,
+    ) {
         Ok(Answer::Processes { shell, foreground }) => (shell, foreground),
         other => panic!("{other:?}"),
     };

@@ -29,6 +29,9 @@ fn play() {
         "flood" => flood(),
         "script" => script(),
         "exit_when_told" => exit_when_told(),
+        "print_when_told" => print_when_told(),
+        "node" => crate::node::node_role(),
+        "holder_v1" => crate::fixture_v1::holder_v1(),
         other => panic!("unknown role {other}"),
     }
 }
@@ -256,4 +259,20 @@ fn exit_when_told() {
         thread::sleep(Duration::from_millis(5));
     }
     std::process::exit(3);
+}
+
+/// Prints a line once the `GO` file appears, then lives on: output a pane's
+/// program writes while no node is connected. It lives longer than the
+/// other roles, since a node starts many panes before it is told.
+fn print_when_told() {
+    let go = std::path::PathBuf::from(std::env::var_os(GO).unwrap());
+    let deadline = Instant::now() + 4 * ROLE_LIFE;
+    while !go.exists() && Instant::now() < deadline {
+        #[allow(clippy::disallowed_methods)] // the role's own pace
+        thread::sleep(Duration::from_millis(5));
+    }
+    let mut out = std::io::stdout();
+    let _ = writeln!(out, "while-away").and_then(|()| out.flush());
+    #[allow(clippy::disallowed_methods)] // the role's own life
+    thread::sleep(4 * ROLE_LIFE);
 }
