@@ -670,11 +670,11 @@ fn a_reconcile_past_its_budget_leaves_the_rest_to_the_next() {
     }
 }
 
-/// A closing pane whose holder cannot be asked to end stays closing for the
-/// next reconcile, never adopted as alive.
+/// A closing pane whose holder nothing answers for at its socket is ended
+/// by its pids, as an orphan is, and settled as a lost holder.
 #[cfg(unix)]
 #[test]
-fn a_close_that_cannot_be_asked_stays_closing() {
+fn a_closing_pane_whose_holder_cannot_be_asked_is_ended_by_its_pids() {
     let folder = Folder::new();
     let named = folder.orphan("c1", &shell(), &[]);
     let mut closing = folder.reserved("c1", Phase::Closing);
@@ -684,10 +684,66 @@ fn a_close_that_cannot_be_asked_stays_closing() {
     std::fs::remove_file(&named.socket).unwrap();
 
     let found = folder.panes.reconcile(RECONCILE_BUDGET);
+    let Some(Judgment::Ended(ended)) = found.panes.get("c1") else {
+        panic!("{found:?}");
+    };
+    assert_eq!(end_reason(ended), EndReason::HolderLost, "{ended:?}");
+    named.process.wait_gone();
+    named.program.wait_gone();
+}
+
+/// A pane closing when it is started again is ended first, then started as
+/// a new incarnation.
+#[test]
+fn a_closing_pane_started_again_ends_first() {
+    let folder = Folder::new();
+    let request = folder.request("p1", shell(), Vec::new());
+    let first = folder.start(&request);
+    let holder = first.holder.expect("the holder wrote itself in");
+    let mut closing = folder.record("p1");
+    closing.phase = Phase::Closing;
+    folder.write(&closing);
+
+    let again = folder.start(&request);
+    assert!(again.incarnation > first.incarnation, "{again:?}");
+    assert!(!holder.runs());
+    assert_ne!(again.holder, Some(holder));
+}
+
+/// An earlier start that ended but left processes running holds the pane's
+/// id, naming them, until they are gone.
+#[test]
+fn an_earlier_start_that_left_processes_holds_its_id_until_they_end() {
+    let folder = Folder::new();
+    let named = folder.orphan("e1", &shell(), &[]);
+    let program = identity(&named.program);
+    let mut ended = folder.reserved("e1", Phase::Ended);
+    ended.program = Some(program);
+    let mut end = record::End::new(EndReason::TreeEndUnconfirmed, "left running");
+    end.left = vec![program.pid];
+    ended.end = Some(end);
+    folder.write(&ended);
+    let request = folder.request("e1", shell(), Vec::new());
+
+    match folder.panes.start(&request, &source()) {
+        Err(StartRefusal::EarlierRuns(left)) => assert!(left.contains(&program.pid), "{left:?}"),
+        other => panic!("the pane's id was taken while its program ran: {other:?}"),
+    }
+    drop(named);
+    let started = folder.start(&request);
+    assert_eq!(started.phase, Phase::Running, "{started:?}");
+    assert_ne!(started.program, Some(program), "{started:?}");
+}
+
+#[test]
+fn closing_a_pane_still_starting_says_so() {
+    let folder = Folder::new();
+    folder.write(&folder.reserved("s1", Phase::Preparing));
+    let answer = folder.panes.close("s1");
     assert!(
-        matches!(found.panes.get("c1"), Some(Judgment::Closing(_, _))),
-        "{found:?}"
+        matches!(answer, Err(hide_kit::panes::CloseError::Starting)),
+        "{answer:?}"
     );
-    assert_eq!(folder.record("c1").phase, Phase::Closing);
-    assert!(named.process.is_running());
+    // The start finds the record no longer reserves it.
+    assert_eq!(folder.record("s1").phase, Phase::Closing);
 }
