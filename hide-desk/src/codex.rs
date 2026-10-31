@@ -57,7 +57,11 @@ const RULES: &str = "\
 pub fn files(home: &Path) -> Vec<(PathBuf, String, bool)> {
     vec![
         (home.join("config.toml"), CONFIG.to_owned(), false),
-        (home.join("rules").join("hide-desk.rules"), RULES.to_owned(), false),
+        (
+            home.join("rules").join("hide-desk.rules"),
+            RULES.to_owned(),
+            false,
+        ),
     ]
 }
 

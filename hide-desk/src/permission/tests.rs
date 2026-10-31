@@ -124,7 +124,12 @@ fn a_hide_line_that_writes_or_runs_more_than_reads_is_another_shell_command() {
         [Ask::Row(Row::Shell)]
     );
     assert_eq!(
-        asks_with("hide agent list | jq .", &shell_asks, &NONE_WORKING, &BTreeSet::new()),
+        asks_with(
+            "hide agent list | jq .",
+            &shell_asks,
+            &NONE_WORKING,
+            &BTreeSet::new()
+        ),
         []
     );
 }
@@ -175,13 +180,21 @@ fn archiving_a_working_session_always_asks_and_an_ended_one_follows_the_hide_row
         working: &["agent-3"],
     };
     let line = "hide agent archive agent-3";
-    let decision = decide(&reading(line), &Table::default(), &working, &BTreeSet::new());
+    let decision = decide(
+        &reading(line),
+        &Table::default(),
+        &working,
+        &BTreeSet::new(),
+    );
     assert_eq!(
         decision.asks,
         [Ask::Irreversible(Irreversible::EndWorkingSession)]
     );
     assert_eq!(decision.sessions, ["agent-3"]);
-    assert_eq!(asks_with(line, &Table::default(), &NONE_WORKING, &BTreeSet::new()), []);
+    assert_eq!(
+        asks_with(line, &Table::default(), &NONE_WORKING, &BTreeSet::new()),
+        []
+    );
     let hide_asks = Table {
         hide: Answer::Ask,
         ..Table::default()
@@ -314,7 +327,9 @@ fn a_program_hide_cannot_read_always_asks() {
         asks("bash -c \"sh -c 'git push -f'\""),
         [Ask::Irreversible(Irreversible::ForcePush)]
     );
-    let deep = (0..=MAX_DEPTH).fold("hide ps".to_owned(), |inner, _| format!("echo \"$({inner})\""));
+    let deep = (0..=MAX_DEPTH).fold("hide ps".to_owned(), |inner, _| {
+        format!("echo \"$({inner})\"")
+    });
     assert!(asks(&deep).contains(&Ask::Irreversible(Irreversible::Unreadable)));
 }
 
@@ -322,7 +337,10 @@ fn a_program_hide_cannot_read_always_asks() {
 fn what_the_operator_allowed_in_this_conversation_stops_asking_that_kind_only() {
     let mut allowed = BTreeSet::new();
     allowed.insert(Ask::Row(Row::Shell));
-    assert_eq!(asks_with("cargo test", &ALL_ASK, &NONE_WORKING, &allowed), []);
+    assert_eq!(
+        asks_with("cargo test", &ALL_ASK, &NONE_WORKING, &allowed),
+        []
+    );
     assert_eq!(
         asks_with("hide agent list", &ALL_ASK, &NONE_WORKING, &allowed),
         [Ask::Row(Row::Hide)]
@@ -333,7 +351,10 @@ fn what_the_operator_allowed_in_this_conversation_stops_asking_that_kind_only() 
         [Ask::Irreversible(Irreversible::ForcePush)]
     );
     allowed.insert(Ask::Irreversible(Irreversible::ForcePush));
-    assert_eq!(asks_with("git push -f", &ALL_ASK, &NONE_WORKING, &allowed), []);
+    assert_eq!(
+        asks_with("git push -f", &ALL_ASK, &NONE_WORKING, &allowed),
+        []
+    );
     assert_eq!(
         asks_with("rm -rf /tmp/x", &Table::default(), &NONE_WORKING, &allowed),
         [Ask::Irreversible(Irreversible::DeleteOutside)]
@@ -343,7 +364,12 @@ fn what_the_operator_allowed_in_this_conversation_stops_asking_that_kind_only() 
 #[test]
 fn a_card_asks_irreversible_kinds_before_its_row() {
     assert_eq!(
-        asks_with("rm -rf /tmp/x; git push -f", &ALL_ASK, &NONE_WORKING, &BTreeSet::new()),
+        asks_with(
+            "rm -rf /tmp/x; git push -f",
+            &ALL_ASK,
+            &NONE_WORKING,
+            &BTreeSet::new()
+        ),
         [
             Ask::Irreversible(Irreversible::ForcePush),
             Ask::Irreversible(Irreversible::DeleteOutside),

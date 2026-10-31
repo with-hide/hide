@@ -30,9 +30,9 @@ use crate::desk::{
 };
 use crate::handle::ChangeNotifier;
 use crate::model::{
-    DESK_CAP_MAX, DeskAgentSnapshot, DeskAgentState, DeskApprovalState, DeskChoiceSnapshot,
-    DeskConversationSnapshot, DeskHostSnapshot, DeskHostState, DeskItem, DeskLiveSnapshot,
-    DeskCardKind, DeskLocation, DeskMention, DeskNotice, DeskReplyState, DeskSnapshot,
+    DESK_CAP_MAX, DeskAgentSnapshot, DeskAgentState, DeskApprovalState, DeskCardKind,
+    DeskChoiceSnapshot, DeskConversationSnapshot, DeskHostSnapshot, DeskHostState, DeskItem,
+    DeskLiveSnapshot, DeskLocation, DeskMention, DeskNotice, DeskReplyState, DeskSnapshot,
 };
 use hide_desk::permission::{self, Ask, Irreversible};
 use hide_desk::session::{Choice, Choices, OpenError};
@@ -530,10 +530,9 @@ impl Runtime {
             .text
             .map(|text| text.split_whitespace().collect::<Vec<_>>().join(" "))
             .filter(|text| !text.is_empty());
-        if text
-            .as_ref()
-            .is_some_and(|text| text.len() > MAX_REFUSAL_BYTES || payload.answer != ApprovalAnswer::Reject)
-        {
+        if text.as_ref().is_some_and(|text| {
+            text.len() > MAX_REFUSAL_BYTES || payload.answer != ApprovalAnswer::Reject
+        }) {
             return refused("approval_text");
         }
         let approval = self.desk.approvals.remove(index);
@@ -565,7 +564,12 @@ impl Runtime {
                 .approvals
                 .iter()
                 .enumerate()
-                .filter(|(_, waiting)| waiting.asks.iter().all(|ask| self.desk.allowed.contains(ask)))
+                .filter(|(_, waiting)| {
+                    waiting
+                        .asks
+                        .iter()
+                        .all(|ask| self.desk.allowed.contains(ask))
+                })
                 .map(|(index, _)| index)
                 .collect();
             for index in covered.into_iter().rev() {
@@ -599,7 +603,12 @@ impl Runtime {
         {
             return true;
         }
-        match self.desk.archive_grants.iter().position(|grant| grant == id) {
+        match self
+            .desk
+            .archive_grants
+            .iter()
+            .position(|grant| grant == id)
+        {
             Some(index) => {
                 self.desk.archive_grants.remove(index);
                 true
@@ -1309,8 +1318,12 @@ impl permission::Facts for DeskFacts<'_> {
             .catalog_workspaces()
             .filter(|workspace| workspace.device_id == node)
             .flat_map(|workspace| {
-                std::iter::once(workspace.path.as_str())
-                    .chain(workspace.checkouts.iter().map(|checkout| checkout.path.as_str()))
+                std::iter::once(workspace.path.as_str()).chain(
+                    workspace
+                        .checkouts
+                        .iter()
+                        .map(|checkout| checkout.path.as_str()),
+                )
             })
             .any(|root| {
                 hide_platform::path::wire_relative(root, path).is_ok_and(|below| !below.is_root())
@@ -1545,12 +1558,18 @@ mod tests {
         for id in [first, beside] {
             assert!(matches!(
                 card(&runtime, id),
-                DeskItem::Approval { state: DeskApprovalState::AllowedConversation, .. }
+                DeskItem::Approval {
+                    state: DeskApprovalState::AllowedConversation,
+                    ..
+                }
             ));
         }
         assert!(matches!(
             card(&runtime, force),
-            DeskItem::Approval { state: DeskApprovalState::Waiting, .. }
+            DeskItem::Approval {
+                state: DeskApprovalState::Waiting,
+                ..
+            }
         ));
         assert_eq!(request(&mut runtime, "rm -rf /tmp/z"), None);
         assert_eq!(answers(&received), [selected("allow-once")]);
@@ -1575,7 +1594,10 @@ mod tests {
         assert_eq!(answers(&received), [selected("allow-once")]);
         assert!(matches!(
             card(&runtime, id),
-            DeskItem::Approval { state: DeskApprovalState::Allowed, .. }
+            DeskItem::Approval {
+                state: DeskApprovalState::Allowed,
+                ..
+            }
         ));
         assert!(!event(
             &mut runtime,
@@ -1645,7 +1667,11 @@ mod tests {
             tag,
             outcome: TurnOutcome::Done,
         });
-        assert!(!received.try_iter().any(|order| matches!(order, Order::Send(_))));
+        assert!(
+            !received
+                .try_iter()
+                .any(|order| matches!(order, Order::Send(_)))
+        );
     }
 
     #[test]

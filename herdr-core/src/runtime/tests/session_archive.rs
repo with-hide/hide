@@ -299,7 +299,10 @@ fn desk_archives_a_working_session_only_once_the_operator_allows_its_card() {
     assert!(record(&runtime).is_none());
 
     assert!(runtime.desk_test_permission("hide agent archive agent-1"));
-    let crate::model::DeskItem::Approval { id, asks, subject, .. } = desk_card(&runtime) else {
+    let crate::model::DeskItem::Approval {
+        id, asks, subject, ..
+    } = desk_card(&runtime)
+    else {
         panic!("a card")
     };
     assert_eq!(asks, [Ask::Irreversible(Irreversible::EndWorkingSession)]);

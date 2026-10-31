@@ -573,7 +573,15 @@ const FORCE_PUSH_FLAGS: &[&str] = &[
 ];
 
 /// Programs that delete the paths they name.
-const DELETERS: &[&str] = &["rm", "rmdir", "unlink", "shred", "srm", "trash", "trash-put"];
+const DELETERS: &[&str] = &[
+    "rm",
+    "rmdir",
+    "unlink",
+    "shred",
+    "srm",
+    "trash",
+    "trash-put",
+];
 
 /// `hide` commands that end a session registration, which the word after
 /// them names.
@@ -653,7 +661,9 @@ const WRAPPERS: &[Wrapper] = &[
     },
     Wrapper {
         name: "xargs",
-        valued: &["-I", "-L", "-n", "-P", "-s", "-d", "-E", "-a", "-J", "-R", "-S"],
+        valued: &[
+            "-I", "-L", "-n", "-P", "-s", "-d", "-E", "-a", "-J", "-R", "-S",
+        ],
         acts: false,
     },
 ];
@@ -757,7 +767,12 @@ fn run_program(
             line.hide = true;
         }
         for ends in HIDE_ENDS {
-            if args.len() > ends.len() && args.iter().zip(ends.iter()).all(|(word, want)| word == want) {
+            if args.len() > ends.len()
+                && args
+                    .iter()
+                    .zip(ends.iter())
+                    .all(|(word, want)| word == want)
+            {
                 line.ends.push(
                     args[ends.len()..]
                         .iter()
@@ -844,8 +859,12 @@ fn run_program(
         "herdr" => {
             line.other = true;
             if HERDR_CLOSES.iter().any(|close| {
-                args.windows(close.len())
-                    .any(|window| window.iter().zip(close.iter()).all(|(word, want)| word == want))
+                args.windows(close.len()).any(|window| {
+                    window
+                        .iter()
+                        .zip(close.iter())
+                        .all(|(word, want)| word == want)
+                })
             }) {
                 line.ends.push(None);
             }
@@ -859,12 +878,15 @@ fn run_program(
             }
         }
         _ => {
-            let reads = READ_ONLY.iter().find(|entry| entry.name == name).is_some_and(|entry| {
-                !args.iter().any(|word| refused(word, entry.refused))
-                    && entry
-                        .names
-                        .is_none_or(|most| args.iter().filter(|word| !word.starts_with('-')).count() <= most)
-            });
+            let reads = READ_ONLY
+                .iter()
+                .find(|entry| entry.name == name)
+                .is_some_and(|entry| {
+                    !args.iter().any(|word| refused(word, entry.refused))
+                        && entry.names.is_none_or(|most| {
+                            args.iter().filter(|word| !word.starts_with('-')).count() <= most
+                        })
+                });
             line.other |= !reads;
         }
     }
@@ -889,7 +911,10 @@ fn program_name(program: &str) -> &str {
 fn refused(word: &str, flags: &[&str]) -> bool {
     flags.iter().any(|flag| {
         if flag.starts_with("--") {
-            word == *flag || word.strip_prefix(flag).is_some_and(|rest| rest.starts_with('='))
+            word == *flag
+                || word
+                    .strip_prefix(flag)
+                    .is_some_and(|rest| rest.starts_with('='))
         } else {
             let letter = flag.trim_start_matches('-');
             word.starts_with('-') && !word.starts_with("--") && word[1..].contains(letter)
@@ -921,10 +946,12 @@ fn git(args: &[String], cwd: &mut Option<String>, place: &Place<'_>, line: &mut 
         "push" => {
             line.other = true;
             line.force_push |= rest.iter().any(|word| {
-                FORCE_PUSH_FLAGS
-                    .iter()
-                    .any(|flag| word == flag || word.strip_prefix(flag).is_some_and(|tail| tail.starts_with('=')))
-                    || (word.starts_with('-') && !word.starts_with("--") && word.contains('f'))
+                FORCE_PUSH_FLAGS.iter().any(|flag| {
+                    word == flag
+                        || word
+                            .strip_prefix(flag)
+                            .is_some_and(|tail| tail.starts_with('='))
+                }) || (word.starts_with('-') && !word.starts_with("--") && word.contains('f'))
                     || (word.starts_with('+') && word.len() > 1)
             });
         }
@@ -946,7 +973,9 @@ fn git(args: &[String], cwd: &mut Option<String>, place: &Place<'_>, line: &mut 
             }
         }
         "branch" => {
-            line.other |= !rest.iter().all(|word| GIT_BRANCH_LISTS.contains(&word.as_str()));
+            line.other |= !rest
+                .iter()
+                .all(|word| GIT_BRANCH_LISTS.contains(&word.as_str()));
         }
         sub if GIT_READS.contains(&sub) => {
             line.other |= rest.iter().any(|word| refused(word, &[GIT_WRITES_OUTPUT]));
@@ -992,7 +1021,13 @@ fn find(
                     let found = format!("{}/{{}}", root.trim_end_matches('/'));
                     let words: Vec<String> = inner
                         .iter()
-                        .map(|word| if word == "{}" { found.clone() } else { word.clone() })
+                        .map(|word| {
+                            if word == "{}" {
+                                found.clone()
+                            } else {
+                                word.clone()
+                            }
+                        })
                         .collect();
                     run_program(&words, false, false, &mut cwd.clone(), place, depth, line);
                 }
