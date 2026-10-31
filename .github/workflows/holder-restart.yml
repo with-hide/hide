@@ -113,17 +113,23 @@ jobs:
       - name: Install the xterm the lane draws frames on
         timeout-minutes: 3
         run: bash scripts/verify-web.sh install holder
-      - name: Fetch the pinned ConPTY runtime
+      - name: Fetch the pinned Herdr
         # A Windows holder runs a pane only on the pinned ConPTY runtime, the
-        # `conpty` folder beside the pinned Herdr's herdr.exe; Herdr itself
-        # never runs here.
+        # `conpty` folder beside the pinned Herdr's herdr.exe. Herdr itself
+        # runs only for the color question's comparison below.
         id: herdr
-        if: runner.os == 'Windows'
         timeout-minutes: 5
-        shell: pwsh
+        # Assigned first, so a failed fetch fails this step rather than
+        # handing the next one an empty path.
         run: |
-          $bin = (pwsh -NoProfile -File scripts/fetch-herdr-runtime.ps1 | Select-Object -Last 1).Trim()
-          "bin=$bin" >> $env:GITHUB_OUTPUT
+          case "$RUNNER_OS" in
+            Windows) bin=$(pwsh -NoProfile -File scripts/fetch-herdr-runtime.ps1 | tr -d '\r' | tail -n 1) ;;
+            Linux)
+              command -v zsh >/dev/null || sudo apt-get install -y --no-install-recommends zsh
+              bin=$(zsh scripts/fetch-herdr-runtime.sh --platform linux-x86_64) ;;
+            *) bin=$(zsh scripts/fetch-herdr-runtime.sh --platform macos-aarch64) ;;
+          esac
+          echo "bin=$bin" >> "$GITHUB_OUTPUT"
       - name: Restart each agent's node
         timeout-minutes: 60
         env:
@@ -131,8 +137,32 @@ jobs:
         run: |
           options=()
           if [[ -n "$AGENTS" ]]; then options+=(--agents "$AGENTS"); fi
-          if [[ -n "$HERDR_BIN" ]]; then options+=(--herdr-bin "$HERDR_BIN"); fi
+          if [[ "$RUNNER_OS" == Windows ]]; then options+=(--herdr-bin "$HERDR_BIN"); fi
           "$PYTHON" scripts/holder-restart-check.py --bin "$RUNNER_TEMP/holder-bin" --run-dir "$RUN_DIR" "${options[@]}"
+      - name: Antigravity five times more on Windows
+        # Its cell failed once in four runs (prompt editor opened by a color
+        # answer read as keys); five passes in a row are the evidence the
+        # pull request carries.
+        if: ${{ !cancelled() && runner.os == 'Windows' && (inputs.agents == '' || contains(inputs.agents, 'antigravity')) }}
+        timeout-minutes: 30
+        env:
+          HERDR_BIN: ${{ steps.herdr.outputs.bin }}
+        run: |
+          failed=0
+          for round in 1 2 3 4 5; do
+            "$PYTHON" scripts/holder-restart-check.py --bin "$RUNNER_TEMP/holder-bin" --run-dir "$RUN_DIR/agy-$round" \
+              --agents antigravity --herdr-bin "$HERDR_BIN" || failed=$((failed + 1))
+          done
+          echo "antigravity: $((5 - failed)) of 5 passed"
+          (( failed == 0 ))
+      - name: Time a color question on both paths
+        if: ${{ !cancelled() }}
+        timeout-minutes: 10
+        env:
+          HERDR_BIN: ${{ steps.herdr.outputs.bin }}
+        run: |
+          "$PYTHON" scripts/holder-color-probe.py --bin "$RUNNER_TEMP/holder-bin" --herdr "$HERDR_BIN" \
+            --run-dir "$RUN_DIR" --count 20
       - name: The cells
         timeout-minutes: 1
         if: ${{ !cancelled() }}
@@ -147,4 +177,6 @@ jobs:
             ${{ env.RUN_DIR }}/report.*
             ${{ env.RUN_DIR }}/*.jsonl
             ${{ env.RUN_DIR }}/*.log
+            ${{ env.RUN_DIR }}/color-probe.json
+            ${{ env.RUN_DIR }}/agy-*/report.*
           if-no-files-found: warn

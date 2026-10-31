@@ -2,8 +2,8 @@
 //! B15, D-17): once its screen has been still for a second, a holder gives
 //! the allocator's freed pages back. Run beside a holder that keeps what it
 //! freed (`HIDE_HOLDER_TEST_KEEP_FREED`, debug builds only), it prints both
-//! on every system and holds the return to having saved something on macOS
-//! and Linux. The bound itself, 6 MiB after a flood, is a release holder's
+//! on every system and holds the return to having saved something on macOS,
+//! the one system where a flood leaves the allocator holding much. The bound itself, 6 MiB after a flood, is a release holder's
 //! and is judged by the measurement (docs/PERFORMANCE_TESTING.md, The pane
 //! holder's path): a debug holder's own allocations move its figure by
 //! megabytes from run to run.
@@ -134,8 +134,11 @@ fn a_holder_gives_back_what_a_flood_freed_once_its_screen_is_still() {
         mib(before),
         mib(after)
     );
-    // Windows: whether `HeapCompact` saves anything is what this prints.
-    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    // macOS's allocator keeps what a flood freed and gives it back (7.0
+    // against 5.4 MiB on a runner); glibc's leaves almost nothing to give
+    // (2.96 against 2.95 MiB), and Windows' heap gains nothing from
+    // `HeapCompact` (3.81 against 4.20 MiB), so there it is printed only.
+    #[cfg(target_os = "macos")]
     assert!(
         after < kept_after,
         "giving freed pages back saved nothing: {:.2} MiB against {:.2}",
