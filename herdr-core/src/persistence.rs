@@ -585,7 +585,10 @@ fn decode(bytes: &[u8]) -> (UiStateSnapshot, PaneTerminalSizes, LoadDisposition)
             Some(serde_json::Value::Object(devices)) => devices
                 .into_iter()
                 .map(|(device, value)| {
-                    (device, stored_permissions(Some(value), &mut permissions_unread))
+                    (
+                        device,
+                        stored_permissions(Some(value), &mut permissions_unread),
+                    )
                 })
                 .collect(),
             Some(_) => {
@@ -1787,6 +1790,51 @@ mod tests {
     /// Settings › Conductor survives a relaunch, and a value this build
     /// cannot read (a later build's field, a cap out of range) loads the
     /// defaults and says so while every other stored choice still loads.
+    /// A 권한 survives a save, and one this build cannot read asks every
+    /// time rather than widening to the default full access.
+    #[test]
+    fn an_agent_permission_this_build_cannot_read_asks_every_time_and_the_rest_loads() {
+        use crate::agent_permission::AgentPermission;
+        let folder = tempfile::tempdir().unwrap();
+        let path = folder.path().join("state.json");
+        let mut state = UiStateSnapshot::default();
+        state
+            .agent_permissions
+            .insert("claude-code".into(), AgentPermission::Ask);
+        state.device_agent_permissions.insert(
+            "mini".into(),
+            [(
+                "codex".to_owned(),
+                AgentPermission::custom("--full-auto").unwrap(),
+            )]
+            .into(),
+        );
+        save(&path, &state, &PaneTerminalSizes::new()).expect("persist the choices");
+        let (restored, _sizes, disposition) = load(&path);
+        assert_eq!(disposition, LoadDisposition::Loaded);
+        assert_eq!(restored.agent_permissions, state.agent_permissions);
+        assert_eq!(
+            restored.device_agent_permissions,
+            state.device_agent_permissions
+        );
+
+        let stored = r#"{"schema_version":1,"expanded_paths":[],"selected_path":null,"selected_pane_id":null,
+            "sidebar_lens":"tasks","agent_permissions":{"codex":{"mode":"later_mode"},"grok":{"mode":"ask"}},
+            "device_agent_permissions":{"mini":{"omp":"full"}}}"#;
+        let (state, _sizes, disposition) = decode(stored.as_bytes());
+        assert_eq!(
+            disposition,
+            LoadDisposition::Unrecognized(vec![UnrecognizedField::AgentPermissions])
+        );
+        assert_eq!(state.agent_permissions["codex"], AgentPermission::Ask);
+        assert_eq!(state.agent_permissions["grok"], AgentPermission::Ask);
+        assert_eq!(
+            state.device_agent_permissions["mini"]["omp"],
+            AgentPermission::Ask
+        );
+        assert_eq!(state.sidebar_lens, SidebarLens::Tasks);
+    }
+
     #[test]
     fn conductor_settings_this_build_cannot_read_load_the_defaults_and_keep_the_rest() {
         let folder = tempfile::tempdir().unwrap();

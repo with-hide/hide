@@ -677,24 +677,23 @@ impl Runtime {
         } else {
             mode
         };
-        let launch =
-            match crate::runtime::agent_choice::launch_arguments(
-                &record.kind,
-                &record.launch,
-                &permission,
-            ) {
-                Ok(launch) => launch,
-                Err(detail) => {
-                    return self.ingest_agent_wake(
-                        pane_id,
-                        mode,
-                        WakeOutcome::Failed {
-                            reason: agent_sleep_herdr::WAKE_LAUNCH_CHOICE.to_owned(),
-                            detail,
-                        },
-                    );
-                }
-            };
+        let launch = match crate::runtime::agent_choice::launch_arguments(
+            &record.kind,
+            &record.launch,
+            &permission,
+        ) {
+            Ok(launch) => launch,
+            Err(detail) => {
+                return self.ingest_agent_wake(
+                    pane_id,
+                    mode,
+                    WakeOutcome::Failed {
+                        reason: agent_sleep_herdr::WAKE_LAUNCH_CHOICE.to_owned(),
+                        detail,
+                    },
+                );
+            }
+        };
         let choice = record.launch.clone();
         let mut args = match mode {
             WakeMode::Resume => {

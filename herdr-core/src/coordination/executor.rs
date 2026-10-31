@@ -600,8 +600,8 @@ fn spawn(
     // The choice goes before the native arguments, which may end with the
     // first prompt after `--`; the machine's permission choice goes before
     // both once the child's machine is known.
-    let mut start_args = crate::runtime::agent_choice::choice_arguments(kind, launch)
-        .map_err(|detail| {
+    let mut start_args =
+        crate::runtime::agent_choice::choice_arguments(kind, launch).map_err(|detail| {
             crate::diagnostic!(json!({
                 "component": "spawn", "kind": "spawn.invalid_launch_choice", "intent": intent,
                 "agent_kind": kind, "detail": detail,

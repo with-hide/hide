@@ -54,7 +54,8 @@ impl Runtime {
     /// not the default; the same choice again changes nothing (engineering
     /// rule 11).
     pub(super) fn set_agent_permission(&mut self, payload: AgentPermissionSetPayload) -> bool {
-        let Some(row) = hide_agent_adapter::adapter(&payload.agent).filter(|row| row.start.is_some())
+        let Some(row) =
+            hide_agent_adapter::adapter(&payload.agent).filter(|row| row.start.is_some())
         else {
             self.set_error(
                 "agent_permission.unknown_agent",

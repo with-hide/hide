@@ -58,7 +58,10 @@ impl AgentPermission {
             || !line.substitutions.is_empty()
             || line.fallback
         {
-            return Err("options are words only, with no second command, redirection or substitution".into());
+            return Err(
+                "options are words only, with no second command, redirection or substitution"
+                    .into(),
+            );
         }
         let options = line.commands.pop().unwrap_or_default();
         if options.len() > OPTIONS_WORD_LIMIT {
@@ -123,18 +126,16 @@ mod tests {
             ("terminal", Vec::new()),
         ] {
             assert_eq!(arguments(kind, &AgentPermission::Full), expected, "{kind}");
-            assert_eq!(
-                arguments(kind, &AgentPermission::Ask),
-                Vec::<String>::new()
-            );
+            assert_eq!(arguments(kind, &AgentPermission::Ask), Vec::<String>::new());
         }
     }
 
     #[test]
     fn typed_options_are_split_as_a_shell_reads_them_and_passed_as_given() {
-        let permission =
-            AgentPermission::custom("  --permission-mode acceptEdits --append-system-prompt 'be brief'  ")
-                .unwrap();
+        let permission = AgentPermission::custom(
+            "  --permission-mode acceptEdits --append-system-prompt 'be brief'  ",
+        )
+        .unwrap();
         assert_eq!(
             arguments("claude", &permission),
             words(&[
@@ -201,6 +202,9 @@ mod tests {
         }))
         .unwrap();
         assert_eq!(of(&permissions, "claude"), AgentPermission::Ask);
-        assert_eq!(arguments("codex", &of(&permissions, "codex")), words(&["--full-auto"]));
+        assert_eq!(
+            arguments("codex", &of(&permissions, "codex")),
+            words(&["--full-auto"])
+        );
     }
 }

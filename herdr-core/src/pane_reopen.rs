@@ -92,7 +92,7 @@ pub(crate) fn reopen(
             &request.launch,
             &request.permission,
         )
-            .map_err(|detail| failure(PaneReopenFailure::StartRefused, detail))?,
+        .map_err(|detail| failure(PaneReopenFailure::StartRefused, detail))?,
     );
     if let Some(cwd) = request.cwd.as_deref()
         && !crate::node_access::is_directory(node, cwd)

@@ -712,9 +712,13 @@ impl Mapper<'_> {
 /// The owner's settings that belong to its own machine and the map beside
 /// each that keeps the same setting for every other machine, keyed by its
 /// id (PRD core-host-node-move Q19): the Explorer's open folders, which the
-/// web reads per machine. Settings keyed by a project path are read the same
+/// web reads per machine, and each agent's 권한 (Settings › Agents), which
+/// a start on that machine reads. Settings keyed by a project path are read the same
 /// whichever machine holds the project, so they stay (`Moves::Stays`).
-pub const OWN_PATHS: &[(&str, &str)] = &[("expanded_paths", "device_expanded_paths")];
+pub const OWN_PATHS: &[(&str, &str)] = &[
+    ("expanded_paths", "device_expanded_paths"),
+    ("agent_permissions", "device_agent_permissions"),
+];
 
 /// The old owner's `own` value moves under `devices[old_owner_as]`, and the
 /// new owner's entry in `devices` becomes `own`; the rest of `devices`
@@ -1393,9 +1397,12 @@ mod tests {
             "resume": {"state": "done", "pane_id": panes[index]},
             "registration": {"id": format!("agent-{index}"), "actor": actor(index)},
         })).collect::<Vec<_>>()}});
-        write(
-            CORE_STATE,
-            json!({
+        let permissions = json!({"codex": {"mode": "ask"}});
+        let device_permissions =
+            json!({ALIAS: {"claude-code": {"mode": "ask"}}, X: {"grok": {"mode": "ask"}}});
+        write(CORE_STATE, {
+            // Past `json!`'s recursion limit, so added after.
+            let mut core = json!({
                 "schema_version": 1,
                 "workspace_registrations": [
                     {"id": registrations[0], "label": "alpha", "path": M_ROOT, "device_id": M, "primary_checkout_id": checkouts[0]},
@@ -1469,8 +1476,11 @@ mod tests {
                 "session_collapsed_checkout_ids": checkouts,
                 "stray_dismissals": dismissals,
                 "session_open_folds": before("fold"),
-            }),
-        );
+            });
+            core["agent_permissions"] = permissions;
+            core["device_agent_permissions"] = device_permissions;
+            core
+        });
         let tabs = before("tab");
         let feedback_comments: Vec<Value> = [M, ALIAS, X]
             .iter()
@@ -1680,6 +1690,16 @@ mod tests {
         assert_eq!(
             core["device_expanded_paths"],
             json!({M: [M_ROOT], X: [X_ROOT]})
+        );
+        // Each machine keeps its agents' 권한: the new owner's become the
+        // core's own, the old owner's move under its id.
+        assert_eq!(
+            core["agent_permissions"],
+            json!({"claude-code": {"mode": "ask"}})
+        );
+        assert_eq!(
+            core["device_agent_permissions"],
+            json!({M: {"codex": {"mode": "ask"}}, X: {"grok": {"mode": "ask"}}})
         );
         // A Project's choices follow their machine to the id it has on the
         // new core, record and key together, so the new core reads each one

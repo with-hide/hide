@@ -172,12 +172,11 @@ fn run_agent_fork_with_registration(
     // does not take never leaves a pane to close. The choice is checked before
     // the fork is made, so a refused one never leaves a session an OpenCode 2
     // server made either.
-    let choice =
-        crate::runtime::agent_choice::launch_arguments(
-            request.agent.kind(),
-            &request.launch,
-            &request.permission,
-        )?;
+    let choice = crate::runtime::agent_choice::launch_arguments(
+        request.agent.kind(),
+        &request.launch,
+        &request.permission,
+    )?;
     let (mut args, made) = fork_arguments(node, request)?;
     args.extend(choice);
     // Everything after an OpenCode 2 fork can still fail (the parent's tab,
@@ -699,7 +698,17 @@ mod tests {
                     "agent.start" => {
                         assert_eq!(params["pane_id"], "child-pane");
                         assert_eq!(params["kind"], kind);
-                        assert_eq!(params["args"], json!(["--fork", "native-pi"]));
+                        // Pi asks no permission question; omp's full access
+                        // is `--auto-approve` (its help, 18.7.0).
+                        let access: &[&str] = if kind == "omp" {
+                            &["--auto-approve"]
+                        } else {
+                            &[]
+                        };
+                        assert_eq!(
+                            params["args"],
+                            json!([["--fork", "native-pi"].as_slice(), access].concat())
+                        );
                         if refused {
                             return Err(("start_refused".into(), "fixture refused".into()));
                         }
@@ -893,7 +902,10 @@ mod tests {
                     }
                     "agent.start" => {
                         assert_eq!(params["kind"], "opencode");
-                        assert_eq!(params["args"], json!(["-s", "ses_root", "--fork"]));
+                        assert_eq!(
+                            params["args"],
+                            json!(["-s", "ses_root", "--fork", "--auto"])
+                        );
                         if case == "refused" {
                             return Err(("start_refused".into(), "fixture refused".into()));
                         }
@@ -1063,7 +1075,7 @@ mod tests {
                         "tokens":{"hide_prompt":"1"}}}),
                         "agent.start" => {
                             assert_eq!(params["kind"], "opencode");
-                            assert_eq!(params["args"], json!(["-s", "ses_fork"]));
+                            assert_eq!(params["args"], json!(["-s", "ses_fork", "--auto"]));
                             if case == "start_failed" {
                                 return Err(("start_refused".into(), "fixture refused".into()));
                             }
@@ -1199,7 +1211,10 @@ mod tests {
                     }
                     "agent.start" => {
                         assert_eq!(params["kind"], "grok");
-                        assert_eq!(params["args"], json!(["--resume", id, "--fork-session"]));
+                        assert_eq!(
+                            params["args"],
+                            json!(["--resume", id, "--fork-session", "--always-approve"])
+                        );
                         if case == "refused" {
                             return Err(("start_refused".into(), "fixture refused".into()));
                         }

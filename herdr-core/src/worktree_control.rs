@@ -4591,10 +4591,22 @@ mod tests {
                 Some("fixture-model"),
                 Some("--dangerously-bypass-approvals-and-sandbox"),
             ),
-            ("grok", "--", false, Some("fixture-model"), Some("--always-approve")),
+            (
+                "grok",
+                "--",
+                false,
+                Some("fixture-model"),
+                Some("--always-approve"),
+            ),
             ("opencode", "--prompt", false, None, Some("--auto")),
             ("pi", "--", false, Some("fixture-model"), None),
-            ("omp", "--", true, Some("fixture-model"), Some("--auto-approve")),
+            (
+                "omp",
+                "--",
+                true,
+                Some("fixture-model"),
+                Some("--auto-approve"),
+            ),
         ] {
             let server = server(vec![
                 shell_ready(),

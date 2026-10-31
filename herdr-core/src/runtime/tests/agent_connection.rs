@@ -906,7 +906,10 @@ fn a_reopen_through_the_worker_waits_for_herdr_to_release_the_name() {
                 Ok(json!({"type": "ok"}))
             }
             "agent.start" => {
-                assert_eq!(params["args"], json!(["--resume", SESSION_ID]));
+                assert_eq!(
+                    params["args"],
+                    json!(["--resume", SESSION_ID, "--dangerously-skip-permissions"])
+                );
                 if attempts.fetch_add(1, Ordering::SeqCst) < 2 {
                     Err((
                         "agent_name_taken".into(),
@@ -1082,7 +1085,13 @@ fn a_reopen_in_its_pane_resumes_with_the_choice_the_agent_was_started_with() {
             .recv_timeout(Duration::from_secs(10))
             .expect("the reopen started the agent"),
         json!([
-            "--resume", SESSION_ID, "--model", "sonnet", "--effort", "high"
+            "--resume",
+            SESSION_ID,
+            "--dangerously-skip-permissions",
+            "--model",
+            "sonnet",
+            "--effort",
+            "high"
         ])
     );
     wait(&shared, "the reopen to settle", |runtime| {
