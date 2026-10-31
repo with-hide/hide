@@ -990,11 +990,17 @@ impl Runtime {
                 if patch.status.is_some() {
                     super::mission_health::settle(&id, &mut next, "conductor");
                 }
+                // Taken back to work from a finish, it is not finished again
+                // by Hide on the pull requests it holds now.
+                if current.nodes[index].status.finished() && next.status == NodeStatus::Working {
+                    next.note_handled(next.resumed_cause());
+                }
                 let reads = reads_branch(current.status, &next);
                 let target = self.missions.book.get_mut(&id).ok_or("mission_unknown")?;
                 let changed = target.nodes[index] != next;
                 let events = super::mission_events::node_events(&target.nodes[index], &next, now);
                 target.nodes[index] = next;
+                super::mission_health::prune_attention_wakes(target);
                 // A waiting mission's node named another branch or finished
                 // again, or a direct change finished or moved to another
                 // branch while its mission runs: its branches are read now.

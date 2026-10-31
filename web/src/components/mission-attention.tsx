@@ -33,7 +33,7 @@ export function AttentionChoices({ mission, node, attention, actions }: { missio
             disabled={sent}
             onClick={() => {
               setSent(true);
-              actions.settleMissionNode(mission.id, node.key, choice);
+              actions.settleMissionNode(mission.id, node.key, choice, attention.since_unix_ms);
             }}
             data-attention-choice={choice}
           >

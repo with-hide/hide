@@ -4557,17 +4557,19 @@ fn a_merge_with_a_line_unmet_is_raised_to_the_conductor_once() {
         )
     );
     let raised = |runtime: &Runtime| {
-        runtime
-            .missions
-            .book
-            .get("mission-1")
-            .unwrap()
-            .wakes
+        runtime.missions.events["mission-1"]
+            .events
             .iter()
-            .filter(|wake| wake.event == WakeEvent::Attention)
+            .filter(|event| event.kind == crate::mission_events::EventKind::Raised)
             .count()
     };
     assert_eq!(raised(&runtime), 1);
+    let letters = &runtime.missions.book.get("mission-1").unwrap().wakes;
+    assert!(
+        letters
+            .iter()
+            .any(|wake| wake.event == WakeEvent::Attention)
+    );
     // The Conductor drops the node: the mark goes and nothing is raised again.
     command(
         &mut runtime,
@@ -4642,4 +4644,128 @@ fn a_raise_with_no_row_to_lay_it_on_is_told_to_the_operator_once() {
             .unwrap()
             .notified
     );
+}
+
+/// The fix node of `running_criteria_mission`, its pull request 7 merged
+/// with no line recorded: raised to the Conductor as `merged_unproven`.
+fn merged_unproven(runtime: &mut Runtime, now: u64) {
+    running_criteria_mission(runtime);
+    command(
+        runtime,
+        "sender",
+        json!({"op": "node", "node": "fix", "patch": {"status": "working", "agent_id": "agent-2", "pr": 7}}),
+    )
+    .unwrap();
+    let merged = github(vec![pull(7, HEAD, PullRequestBadge::Merged, None)], false);
+    runtime.github = merged.clone();
+    runtime.note_mission_pulls(crate::node::TEST_NODE, &merged);
+    runtime.drive_mission_health(now);
+    assert!(node_view(runtime, "fix").attention.is_some());
+}
+
+/// The operator's `action` on `node`, made on the raise the map shows now.
+fn operator_chose(runtime: &mut Runtime, node: &str, action: &str) {
+    let since = node_view(runtime, node)
+        .attention
+        .map(|attention| attention.since_unix_ms);
+    let payload = serde_json::from_value(
+        json!({"mission": "mission-1", "node": node, "action": action, "since_unix_ms": since}),
+    )
+    .unwrap();
+    runtime.mission_attention_event(payload);
+}
+
+/// PRD mission-node-simple B16, B17, D-15: the operator's `끝으로` finishes
+/// the node past each open line as the operator's own decision, and the
+/// Conductor is told what was settled instead of the raise.
+#[test]
+fn the_operators_done_skips_the_open_lines_as_their_decision_and_tells_the_conductor() {
+    use crate::mission_criteria::{CriterionState, Role};
+    use crate::missions::{OperatorAction, WakeEvent};
+    let fixture = conducting();
+    let mut runtime = fixture.runtime.lock().unwrap();
+    let now = crate::runtime::unix_milliseconds();
+    merged_unproven(&mut runtime, now);
+    // A choice made on a raise that is not the one standing is refused.
+    let stale = serde_json::from_value(
+        json!({"mission": "mission-1", "node": "fix", "action": "drop", "since_unix_ms": 1}),
+    )
+    .unwrap();
+    runtime.mission_attention_event(stale);
+    assert_eq!(node_view(&runtime, "fix").status, NodeStatus::Working);
+    operator_chose(&mut runtime, "fix", "done");
+    let fix = node_view(&runtime, "fix");
+    assert_eq!(fix.status, NodeStatus::Done);
+    assert!(fix.attention.is_none());
+    let skipped: Vec<_> = fix
+        .criteria
+        .iter()
+        .filter(|line| line.state == CriterionState::Skipped)
+        .collect();
+    assert!(!skipped.is_empty());
+    assert!(
+        skipped
+            .iter()
+            .all(|line| { line.by.as_ref().is_some_and(|by| by.role == Role::Operator) })
+    );
+    let wakes = &runtime.missions.book.get("mission-1").unwrap().wakes;
+    assert!(
+        !wakes.iter().any(|wake| wake.event == WakeEvent::Attention),
+        "the raise's own letter is withdrawn: {wakes:?}"
+    );
+    assert!(
+        wakes
+            .iter()
+            .any(|wake| wake.event == WakeEvent::Resolved
+                && wake.action == Some(OperatorAction::Done)),
+        "{wakes:?}"
+    );
+}
+
+/// PRD mission-node-simple B16, B18: `다시 진행` on a node of a mission Hide
+/// closed opens the mission again with the node at work; a mission whose
+/// Conductor already conducts another open one is refused with both left
+/// as they were.
+#[test]
+fn the_operators_resume_reopens_a_closed_mission_or_changes_nothing() {
+    let fixture = conducting();
+    let mut runtime = fixture.runtime.lock().unwrap();
+    running(&mut runtime);
+    for node in ["cause", "fix"] {
+        command(
+            &mut runtime,
+            "sender",
+            json!({"op": "node", "node": node, "patch": {"status": "dropped"}}),
+        )
+        .unwrap();
+    }
+    without_gate(&mut runtime);
+    command(
+        &mut runtime,
+        "sender",
+        json!({"op": "close", "end": "done", "report": "Done."}),
+    )
+    .unwrap();
+    assert_eq!(mission_status(&runtime), MissionStatus::Done);
+
+    // The same Conductor opens another mission: the first cannot reopen.
+    command(
+        &mut runtime,
+        "sender",
+        json!({"op": "create", "title": "Next"}),
+    )
+    .unwrap();
+    operator_chose(&mut runtime, "fix", "resume");
+    assert_eq!(mission_status(&runtime), MissionStatus::Done);
+    assert_eq!(node_view(&runtime, "fix").status, NodeStatus::Dropped);
+
+    command(
+        &mut runtime,
+        "sender",
+        json!({"op": "close", "end": "cancelled"}),
+    )
+    .unwrap();
+    operator_chose(&mut runtime, "fix", "resume");
+    assert_eq!(mission_status(&runtime), MissionStatus::Running);
+    assert_eq!(node_view(&runtime, "fix").status, NodeStatus::Working);
 }

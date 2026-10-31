@@ -969,6 +969,7 @@ What it does by itself, each through the gate a Conductor's own command meets:
 - **Done.**
   A node at work is set `done` when every pull request it holds that is not closed is merged (scope `merge`), or merged or open, out of draft, with green or no checks and approved (scope `pr`), and its lines pass the same gate as `--status done` (`gate_node_done`; a refusal is logged as `mission.hide_done_refused` and changes nothing).
   GitHub's list must hold every pull request the node names; one it does not hold is not known, and nothing rests on a guess.
+  A node a person took back to work from done or dropped (the Conductor's `--status working` or the operator's `다시 진행`) is not set done again on the pull requests it holds then; it is once it holds another.
   A `research` or `verify` node, and a `direct` change, with no pull request is set `done` when it has at least one line and every line passes or was skipped; a `pr` change with no pull request yet is never finished on its lines, and neither is an outside node or a node of a mission from before finish lines.
 - **Attach.**
   An open pull request whose head is the node's own branch, not a fork's and not into its own branch, and that no node or outside node holds, joins the node as its current one; the node is judged again with it held, never finished past it, and a done node it joins works again.
@@ -979,11 +980,11 @@ What it does by itself, each through the gate a Conductor's own command meets:
   A worker's wake needs the worker in its pane or asleep; with neither it waits in the record.
   A wake whose letter the ledger refuses leaves the record and is raised to the Conductor as `wake_refused`.
 - **Close the mission.**
-  When every node is `done` or `dropped` and nothing waits on anyone, Hide closes a running mission through the close gate as a Conductor's `hide mission close --as merge_wait` would: `merge_wait` while a pull request or branch is not in main, `done` otherwise (see [Finish lines](#finish-lines)).
+  When every node is `done` or `dropped` and nothing waits on anyone, in an evaluation that has nothing else to do but clean worktrees, Hide closes a running mission through the close gate as a Conductor's `hide mission close --as merge_wait` would: `merge_wait` while a pull request or branch is not in main, `done` otherwise (see [Finish lines](#finish-lines)).
   Its report, when the Conductor gave none, lists each node with its status, pull requests and lines met, and the Conductor gets one `progress` letter saying Hide closed it; `hide mission reopen` and a pull request change open it again as before.
-  A gate that refuses is raised as `close_refused` on the node the refusal names, else the last node.
+  A gate that refuses is raised as `close_refused` on the first node the refusal's detail names, else the last node.
 - **Clean a worktree.**
-  A done node whose worker's worktree is on a branch with every pull request it holds settled and one of them merged is cleaned once, by Settings › Conductor's `끝난 worktree 정리` (`worktree_cleanup`, `auto` by default).
+  A done node whose worker sleeps or ended, and whose worktree is on a branch with every pull request it holds settled and one of them merged is cleaned once, by Settings › Conductor's `끝난 worktree 정리` (`worktree_cleanup`, `auto` by default).
   `auto` closes the node's own panes and removes the worktree off the lock on a thread of its own (at most two at a time, on the mission's device), with the branch kept; `ask` raises `cleanup_ask` to the operator first, and its `정리` does the same removal.
   The removal is the one `worktree_control::retire_worktree`, which memory promotion's failed attempts use too: it keeps the worktree when it is the Project's own folder, another agent works in it, a program runs in one of its panes, it holds uncommitted changes, or its head has a commit no merged pull request carried.
   Only the last two hold the operator's work, and they are raised to the Conductor as `worktree_dirty`; the others leave the worktree and say nothing.
@@ -1013,8 +1014,9 @@ While GitHub's list is stale or was never read, nothing that rests on a pull req
 
 An attention goes to the Conductor first (D-05).
 It is recorded as a `raised` event, and one `progress` letter from `hide:conductor` names the node, why and what to do about it.
-It goes to the operator, as a `raised_to_operator` event, when it has stood ten minutes, or at the next minute decision when no Conductor holds the mission, and at once for the two reasons only the operator settles, `cleanup_ask` and `conductor_failed`.
-A mission Hide already closed as done still cleans its merged worktrees, so what that cleanup raises (`cleanup_ask`, `worktree_dirty`) reaches the operator at the next minute decision without waiting on its Conductor, in Needs You or by notice as below; a cancelled mission raises nothing.
+It goes to the operator, as a `raised_to_operator` event, when it has stood ten minutes, counted in the minute decision; at once, in the same evaluation, when no Conductor holds the mission or its Conductor just left; and at once for the two reasons only the operator settles, `cleanup_ask` and `conductor_failed`.
+A raise settled, cleared or finished before its letter went takes its letter off the Conductor's queue.
+A mission Hide already closed as done still cleans its merged worktrees, so what that cleanup raises (`cleanup_ask`, `worktree_dirty`) reaches the operator at once without waiting on its Conductor, in Needs You or by notice as below; a cancelled mission raises nothing.
 An attention on a mission that is done or cancelled, or whose device does not answer, is neither laid in Needs You nor noticed.
 
 Where an attention for the operator shows:
@@ -1024,13 +1026,13 @@ Where an attention for the operator shows:
 - As a notice when neither row stands: one notice per cause, marked in the book before any channel runs so a restart never tells it again, through the existing human-notice path of an overdue letter: the phone's push and the Herdr toast, with the skip reasons and the `human.channels_failed` record that path already has, `mission_attention` as its kind, and, at most eight in one pass, the rest waiting for the next.
   The toast reads `Hide: a mission needs you` and `<mission>: <node> needs a look. Open it with hide mission show --mission <id>.`
 
-The operator answers from the map or the Needs You item with one `mission_attention` event naming the mission, the node and the choice (B15, B16):
+The operator answers from the map or the Needs You item with one `mission_attention` event naming the mission, the node, the choice and the raise it was made on (`since_unix_ms`, when the raise reached whom it waits on); every choice but `resume` on a raise that is not the one standing, gone or replaced since the screen drew it, is refused `mission_attention_moved` and changes nothing (B15, B16):
 
 | Choice | What it does |
 | --- | --- |
 | `done` | sets the node `done` past the lines left open, which are skipped with the reason `운영자 판단`, the operator as recorder and the time |
 | `drop` | drops the node |
-| `resume` | sets the node to work again; a done or merge-waiting mission opens again |
+| `resume` | sets the node to work again; a done or merge-waiting mission opens again first, and a reopen its Conductor's other open mission refuses changes nothing |
 | `attach` | adds the unplanned pull request to the node (refused `mission_attention_moved` for any other attention) |
 | `leave` | leaves a kept or asked-about worktree as it is |
 | `cleanup` | removes the worktree now (refused `mission_attention_moved` unless the attention is `cleanup_ask`) |

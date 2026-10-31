@@ -41,15 +41,34 @@ const CLEANUP_LIMIT: usize = 2;
 
 /// What the last evaluation read, so a tick with nothing moved does
 /// nothing.
-#[derive(Default, PartialEq)]
+#[derive(Default)]
 pub(crate) struct HealthMadeFrom {
     book_edit: u64,
     github_edit: u64,
-    ledger: Option<usize>,
+    /// Held, so its address is not reused by a later ledger and two
+    /// publishes cannot read as one.
+    ledger: Option<Arc<crate::delivery::ledger::Ledger>>,
     sleeping: crate::coordination::Sleeping,
     present: Vec<bool>,
     stale: Vec<bool>,
     made: bool,
+}
+
+impl PartialEq for HealthMadeFrom {
+    fn eq(&self, other: &Self) -> bool {
+        let ledger = match (&self.ledger, &other.ledger) {
+            (Some(left), Some(right)) => Arc::ptr_eq(left, right),
+            (None, None) => true,
+            _ => false,
+        };
+        ledger
+            && self.book_edit == other.book_edit
+            && self.github_edit == other.github_edit
+            && self.sleeping == other.sleeping
+            && self.present == other.present
+            && self.stale == other.stale
+            && self.made == other.made
+    }
 }
 
 /// What the operator chose for a raised node (`mission_attention`).
@@ -59,6 +78,10 @@ pub(super) struct MissionAttentionPayload {
     pub(super) mission: String,
     pub(super) node: String,
     pub(super) action: OperatorAction,
+    /// The raise the choice was made on (its `since`); every choice but
+    /// `resume` names one.
+    #[serde(default)]
+    pub(super) since_unix_ms: Option<u64>,
 }
 
 /// Raises `reason` for node `key` of `mission`: to the Conductor with a
@@ -170,6 +193,24 @@ pub(super) fn settle(mission: &str, node: &mut MissionNode, by: &str) {
     }
 }
 
+/// Drops the Conductor's letters about raises that no longer stand (B17):
+/// a raise settled, cleared or finished before its letter went says
+/// nothing the Conductor needs.
+pub(super) fn prune_attention_wakes(mission: &mut Mission) {
+    let standing: Vec<(String, AttentionReason)> = mission
+        .nodes
+        .iter()
+        .filter_map(|node| Some((node.key.clone(), node.attention.as_ref()?.reason)))
+        .collect();
+    mission.wakes.retain(|wake| {
+        wake.event != WakeEvent::Attention
+            || wake.to.is_some()
+            || wake
+                .reason
+                .is_some_and(|reason| standing.contains(&(wake.node.clone(), reason)))
+    });
+}
+
 fn hide_event(now: u64, node: &str, mark: &HideMark) -> MissionEvent {
     let mut event = MissionEvent::new(now, EventKind::Hide).node(node);
     event.hide = Some(mark.action);
@@ -242,7 +283,7 @@ impl Runtime {
         let made = HealthMadeFrom {
             book_edit: self.missions.book_edit,
             github_edit: self.missions.github_edit,
-            ledger: ledger.as_ref().map(|ledger| Arc::as_ptr(ledger) as usize),
+            ledger: ledger.clone(),
             sleeping,
             present: self
                 .missions
@@ -281,6 +322,9 @@ impl Runtime {
         for id in ids {
             changed |= self.mission_health(&id, now);
         }
+        // A raise with no Conductor to wait on, or whose Conductor just
+        // left, reaches the operator now rather than at the minute (D-08).
+        changed |= self.raise_to_operator(now);
         changed
     }
 
@@ -478,6 +522,7 @@ impl Runtime {
         if changed {
             if let Some(mission) = self.missions.book.get_mut(id) {
                 mission.updated_at_unix_ms = now;
+                prune_attention_wakes(mission);
             }
             self.save_missions();
             self.record_mission_events(id, events);
@@ -691,14 +736,22 @@ impl Runtime {
                 let Some(mission) = self.missions.book.get_mut(id) else {
                     return false;
                 };
-                // The node the refusal names, else the last one.
+                // The first node the refusal's detail names (`<node>: <lines>;
+                // …` or a list of nodes), else the last one.
+                let named: Vec<&str> = crate::coordination::split_refusal(&code)
+                    .1
+                    .map(|detail| {
+                        detail
+                            .split([';', ','])
+                            .filter_map(|part| part.split(':').next())
+                            .map(str::trim)
+                            .collect()
+                    })
+                    .unwrap_or_default();
                 let key = mission
                     .nodes
                     .iter()
-                    .find(|node| {
-                        code.contains(&format!("{}:", node.key))
-                            || code.contains(&format!(" {}", node.key))
-                    })
+                    .find(|node| named.contains(&node.key.as_str()))
                     .or(mission.nodes.last())
                     .map(|node| node.key.clone());
                 crate::diagnostic!(json!({
@@ -766,6 +819,17 @@ impl Runtime {
             .ok_or("mission_node_unknown")?;
         let node = &mission.nodes[at];
         let attention = node.attention.clone();
+        // A choice made on a raise that has since gone, or been replaced,
+        // is refused rather than applied to a node that no longer waits.
+        // The screen names a raise by when it reached whom it waits on.
+        let names_it = |attention: &crate::missions::Attention| {
+            payload.since_unix_ms.is_some_and(|since| {
+                since == attention.since_unix_ms || Some(since) == attention.operator_at_unix_ms
+            })
+        };
+        if payload.action != OperatorAction::Resume && !attention.as_ref().is_some_and(names_it) {
+            return Err("mission_attention_moved".into());
+        }
         let mut events = Vec::new();
         let mut next = node.clone();
         match payload.action {
@@ -810,6 +874,7 @@ impl Runtime {
                 next.status = NodeStatus::Working;
                 next.finished_at_unix_ms = None;
                 next.in_main = None;
+                next.note_handled(next.resumed_cause());
             }
             OperatorAction::Attach => {
                 let pr = attention
@@ -852,6 +917,11 @@ impl Runtime {
                 mission.status,
                 MissionStatus::Done | MissionStatus::MergeWait
             );
+        // The mission opens before the node moves, so a refused reopen
+        // leaves both as they were.
+        if reopen {
+            self.reopen_mission(&payload.mission, now)?;
+        }
         let mission = self
             .missions
             .book
@@ -860,6 +930,7 @@ impl Runtime {
         settle(&payload.mission, &mut next, "operator");
         mission.nodes[at] = next;
         mission.updated_at_unix_ms = now;
+        prune_attention_wakes(mission);
         // The Conductor is told what the operator settled (B17).
         if attention.is_some() || reopen {
             mission.wake_seq += 1;
@@ -880,9 +951,6 @@ impl Runtime {
         }
         self.save_missions();
         self.record_mission_events(&payload.mission, events);
-        if reopen {
-            self.reopen_mission(&payload.mission, now)?;
-        }
         if payload.action == OperatorAction::Cleanup {
             self.start_node_cleanup(&payload.mission, at);
         }

@@ -630,7 +630,7 @@ it("lists only what the operator can do in 내 차례: the decision whose node c
     expect(drop.textContent).toBe("Drop node");
     await act(async () => drop.click());
     await act(async () => drop.click());
-    expect(map.events.filter((event) => event.kind === "mission_attention").map((event) => event.payload)).toEqual([{ mission: "mission-1", node: "outside", action: "drop" }]);
+    expect(map.events.filter((event) => event.kind === "mission_attention").map((event) => event.payload)).toEqual([{ mission: "mission-1", node: "outside", action: "drop", since_unix_ms: expect.any(Number) }]);
     expect(drop.disabled).toBe(true);
     // The node chip of an item picks its node on the map.
     await act(async () => map.q("[data-mission-banner-node]")!.click());
@@ -675,7 +675,7 @@ it("puts in a node's panel what waits on whom with its choices, the worker's lif
     expect(panel.querySelector("[data-panel-worker-life]")?.textContent).toBe("Worker ended");
     // The operator may settle it before the Conductor does (B17).
     await act(async () => panel.querySelector<HTMLElement>('[data-attention-choice="drop"]')!.click());
-    expect(map.events.filter((event) => event.kind === "mission_attention").map((event) => event.payload)).toEqual([{ mission: "mission-1", node: "ended", action: "drop" }]);
+    expect(map.events.filter((event) => event.kind === "mission_attention").map((event) => event.payload)).toEqual([{ mission: "mission-1", node: "ended", action: "drop", since_unix_ms: expect.any(Number) }]);
     // The Conductor's line stays readable, dimmed, once Hide raised the node after it.
     expect(panel.querySelector("[data-panel-line-behind]")?.textContent).toBe("fixing the review");
     expect([...panel.querySelectorAll<HTMLElement>("[data-panel-hide-event]")].map((row) => row.textContent)).toEqual([expect.stringContaining("! Conductor · Worker ended with work left")]);
@@ -685,7 +685,7 @@ it("puts in a node's panel what waits on whom with its choices, the worker's lif
     expect([...done.querySelectorAll<HTMLElement>("[data-panel-hide-event]")].map((row) => row.textContent?.replace(/^.*?Hide/, "Hide"))).toEqual(["Hide · Marked done", "Hide · Removed the worktree"]);
     await act(async () => done.querySelector<HTMLElement>("[data-node-resume]")!.click());
     await act(async () => done.querySelector<HTMLElement>("[data-node-resume]")!.click());
-    expect(map.events.filter((event) => event.kind === "mission_attention").map((event) => event.payload)).toEqual([{ mission: "mission-1", node: "ended", action: "drop" }, { mission: "mission-1", node: "done", action: "resume" }]);
+    expect(map.events.filter((event) => event.kind === "mission_attention").map((event) => event.payload)).toEqual([{ mission: "mission-1", node: "ended", action: "drop", since_unix_ms: expect.any(Number) }, { mission: "mission-1", node: "done", action: "resume" }]);
   } finally { await map.unmount(); }
 });
 

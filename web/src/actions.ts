@@ -1876,10 +1876,12 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
      * The operator's choice for a mission node that waits on someone to look,
      * or 다시 진행 on a done or dropped one (PRD mission-node-simple B15, B16,
      * B20): the core settles the node, tells the Conductor what changed, and
-     * reopens a closed mission a resumed node belongs to.
+     * reopens a closed mission a resumed node belongs to. `since` names the
+     * raise the choice was made on, so a choice that arrives after the raise
+     * went is refused rather than applied to a node that no longer waits.
      */
-    settleMissionNode(missionId: string, node: string, action: import("./snapshot").MissionOperatorAction) {
-      dispatch({ schema_version: 2, kind: "mission_attention", payload: { mission: missionId, node, action } });
+    settleMissionNode(missionId: string, node: string, action: import("./snapshot").MissionOperatorAction, since?: number) {
+      dispatch({ schema_version: 2, kind: "mission_attention", payload: { mission: missionId, node, action, ...(since === undefined ? {} : { since_unix_ms: since }) } });
     },
     takeOverMission(missionId: string, request?: { requestId: string; confirmOnly: boolean }) {
       const mission = rest()?.missions?.items.find((row) => row.id === missionId);

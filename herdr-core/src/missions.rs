@@ -674,6 +674,14 @@ impl MissionNode {
     }
 
     /// Notes `cause` raised once, forgetting the oldest past the limit.
+    /// The mark a person leaves by taking the node back to work from done
+    /// or dropped: Hide does not finish it again on the pull requests it
+    /// holds now, only once it holds another.
+    pub(crate) fn resumed_cause(&self) -> String {
+        let prs: Vec<String> = self.prs.iter().map(u32::to_string).collect();
+        format!("resumed:{}", prs.join(","))
+    }
+
     pub(crate) fn note_handled(&mut self, cause: String) {
         if self.handled.contains(&cause) {
             return;
@@ -2244,6 +2252,12 @@ fn convert_before_simple(value: &mut serde_json::Value) -> Result<(), String> {
             .get("attention_seq")
             .and_then(serde_json::Value::as_u64)
             .unwrap_or(0);
+        // A closed or cancelled mission asks no one: what failed in it
+        // ended there.
+        let open = matches!(
+            mission.get("status").and_then(serde_json::Value::as_str),
+            Some("planning" | "running" | "merge_wait")
+        );
         let Some(nodes) = mission
             .get_mut("nodes")
             .and_then(serde_json::Value::as_array_mut)
@@ -2261,13 +2275,14 @@ fn convert_before_simple(value: &mut serde_json::Value) -> Result<(), String> {
                 .to_owned();
             let next = match status.as_str() {
                 "planned" | "waiting" => "planned",
+                "failed" if !open => "dropped",
                 "working" | "review" | "held" | "failed" => "working",
                 "done" => "done",
                 "dropped" => "dropped",
                 other => return Err(format!("has a node status {other} it does not know")),
             };
             node.insert("status".into(), next.into());
-            if status == "failed" {
+            if status == "failed" && open {
                 seq += 1;
                 let attention = Attention {
                     reason: AttentionReason::ConductorFailed,

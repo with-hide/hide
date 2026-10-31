@@ -82,7 +82,7 @@ Write the plan as JSON and set it with `hide mission plan --file plan.json`:
     A conclusion that changes the goal or the scope is asked about before it is applied.
   - `verify` checks changes that only work together, merged in one place, with the check command.
   - `external` is a pull request or branch outside the mission that a node waits on: `"external": {"pr": 1232}` or `{"branch": "feat/x"}`, with no worker, delivery, criteria or checks.
-    Hide marks it done when the pull request merges or the branch is in main, and wakes you to start the nodes that waited; a pull request closed without a merge fails it.
+    Hide marks it done when the pull request merges or the branch is in main, and wakes you to start the nodes that waited; a pull request closed without a merge keeps it in progress and is raised to you (`pr_closed`).
     You cannot set it done yourself (`mission_external_invalid`).
 - Every node other than an outside one has its own finish lines in `criteria`: one to three sentences a checker can judge pass or fail (`mission_criteria_missing`, `mission_criteria_too_many`).
   Write what is true when the node is finished, never the steps to get there; a screenshot is a line only when the node needs one.

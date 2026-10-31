@@ -97,9 +97,18 @@ pub(crate) fn evaluate(mission: &Mission, facts: &Facts) -> Vec<Act> {
         }
         // A done node's worktree is cleaned after its mission closed too.
         if runs || mission.status == MissionStatus::Done {
-            cleanup_acts(at, node, facts, &mut acts);
+            cleanup_acts(at, node, fact, facts, &mut acts);
         }
     }
+    // A node Hide finishes in this pass has nothing left to raise.
+    let done: Vec<usize> = acts
+        .iter()
+        .filter_map(|act| match act {
+            Act::Done { node } => Some(*node),
+            _ => None,
+        })
+        .collect();
+    acts.retain(|act| !matches!(act, Act::Raise { node, .. } if done.contains(node)));
     if mission.status == MissionStatus::Running && closes(mission, &acts) {
         acts.push(Act::Close);
     }
@@ -142,7 +151,7 @@ fn node_acts(
     let Some(pulls) = facts.pulls else {
         // No pull request fact while GitHub's answer is stale (B24); a node
         // with none is judged by its lines alone.
-        if pr_less_done(mission, node, fact) {
+        if pr_less_done(mission, node, fact) && !resumed(node) {
             acts.push(Act::Done { node: at });
         }
         return;
@@ -172,7 +181,12 @@ fn node_acts(
         let Some(pull) = find(pulls, number) else {
             continue;
         };
-        if Some(pull.head_branch.as_str()) != node.branch.as_deref()
+        // A node whose branch is not recorded yet cannot tell its own pull
+        // request from another.
+        if node
+            .branch
+            .as_deref()
+            .is_some_and(|branch| pull.head_branch != branch)
             && !pull.cross_repository
             && !pull.badge.is_settled()
             && !held_by_any(mission, number)
@@ -191,7 +205,7 @@ fn node_acts(
         return;
     }
     if node.prs.is_empty() {
-        if pr_less_done(mission, node, fact) {
+        if pr_less_done(mission, node, fact) && !resumed(node) {
             acts.push(Act::Done { node: at });
         }
         return;
@@ -255,7 +269,11 @@ fn node_acts(
         return;
     }
     if fact.unmet.is_empty() {
-        acts.push(Act::Done { node: at });
+        // A node a person took back to work stays there until it holds
+        // another pull request.
+        if !resumed(node) {
+            acts.push(Act::Done { node: at });
+        }
     } else if merged {
         // Merged, but a line is missing or failed (B6, B13).
         raise(
@@ -308,8 +326,17 @@ fn pr_less_done(mission: &Mission, node: &MissionNode, fact: &NodeFacts) -> bool
 
 /// A done node's merged worktree is cleaned, or the operator asked first
 /// (B20); one tried once is not tried again.
-fn cleanup_acts(at: usize, node: &MissionNode, facts: &Facts, acts: &mut Vec<Act>) {
+fn cleanup_acts(
+    at: usize,
+    node: &MissionNode,
+    fact: &NodeFacts,
+    facts: &Facts,
+    acts: &mut Vec<Act>,
+) {
+    // A worker still running may be mid-turn or on the operator's screen;
+    // its worktree waits until it sleeps or ends.
     if node.status != NodeStatus::Done
+        || fact.worker == Some(WorkerLife::Running)
         || node.worktree.is_some()
         || node.agent_id.is_none()
         || node.branch.is_none()
@@ -348,18 +375,15 @@ fn cleanup_acts(at: usize, node: &MissionNode, facts: &Facts, acts: &mut Vec<Act
 /// Whether the mission closes now (B18): it has nodes, each done or
 /// dropped once this evaluation's own acts land, and nothing waits on any.
 fn closes(mission: &Mission, acts: &[Act]) -> bool {
-    let done_now = |at: usize| acts.iter().any(|act| *act == Act::Done { node: at });
-    let raised = |at: usize| {
-        acts.iter()
-            .any(|act| matches!(act, Act::Raise { node, .. } if *node == at))
-    };
+    // The close waits for the pass after every other act landed: a done
+    // that the gate refuses or a follow-up pull request that opens a node
+    // again would make it refused.
     !mission.nodes.is_empty()
-        && mission.nodes.iter().enumerate().all(|(at, node)| {
-            (node.status.finished() || done_now(at))
-                && (node.attention.is_none()
-                    || acts.iter().any(|act| *act == Act::Clear { node: at }))
-                && !raised(at)
-        })
+        && acts.iter().all(|act| matches!(act, Act::Cleanup { .. }))
+        && mission
+            .nodes
+            .iter()
+            .all(|node| node.status.finished() && node.attention.is_none())
 }
 
 /// Whether the cause behind `attention` still stands (B2): what the
@@ -385,10 +409,19 @@ fn still_holds(
         AttentionReason::WakeRefused => fact.worker != Some(WorkerLife::Running),
         AttentionReason::MergedUnproven => !fact.unmet.is_empty(),
         AttentionReason::PrClosed => match facts.pulls {
-            // A pull request of the node's open or merged again settles it.
-            Some(pulls) => node.prs.iter().all(|number| {
-                find(pulls, *number).is_none_or(|pull| pull.badge == PullRequestBadge::Closed)
-            }),
+            // A pull request of the node's, or the outside one it follows,
+            // open or merged again settles it.
+            Some(pulls) => node
+                .prs
+                .iter()
+                .copied()
+                .chain(match &node.external {
+                    Some(crate::missions::External::Pr(number)) => Some(*number),
+                    _ => None,
+                })
+                .all(|number| {
+                    find(pulls, number).is_none_or(|pull| pull.badge == PullRequestBadge::Closed)
+                }),
             None => true,
         },
         // A node took it in, or it settled.
@@ -408,6 +441,12 @@ fn still_holds(
         | AttentionReason::ConductorFailed
         | AttentionReason::CloseRefused => true,
     }
+}
+
+/// Whether a person took the node back to work while it held the pull
+/// requests it holds now (`MissionNode::resumed_cause`).
+fn resumed(node: &MissionNode) -> bool {
+    node.handled.contains(&node.resumed_cause())
 }
 
 /// Whether the same cause was raised for the node before: once raised, a
@@ -566,7 +605,17 @@ mod tests {
         m.nodes[0].prs = vec![7];
         let pulls = listed(vec![pull(7, "feat/a", PullRequestBadge::Merged)]);
         let acts = evaluate(&m, &facts(Some(&pulls), vec![worker(WorkerLife::Running)]));
-        assert_eq!(acts, [Act::Done { node: 0 }, Act::Close]);
+        assert_eq!(acts, [Act::Done { node: 0 }]);
+        // The close waits for the pass after the done landed.
+        m.nodes[0].status = NodeStatus::Done;
+        let acts = evaluate(&m, &facts(Some(&pulls), vec![worker(WorkerLife::Asleep)]));
+        assert_eq!(acts, [Act::Cleanup { node: 0 }, Act::Close]);
+        // A person took it back to work: Hide does not finish it again on
+        // the same pull request.
+        m.nodes[0].status = NodeStatus::Working;
+        let resumed = m.nodes[0].resumed_cause();
+        m.nodes[0].note_handled(resumed);
+        assert!(evaluate(&m, &facts(Some(&pulls), vec![worker(WorkerLife::Running)])).is_empty());
     }
 
     /// B6, B13, B14: a merge with a line unmet is raised once, and a cause
@@ -763,7 +812,7 @@ mod tests {
         research.nodes[0].delivery = None;
         assert_eq!(
             evaluate(&research, &facts(None, vec![worker(WorkerLife::Running)])),
-            [Act::Done { node: 0 }, Act::Close]
+            [Act::Done { node: 0 }]
         );
         let mut stale = facts(None, vec![worker(WorkerLife::Ended)]);
         stale.device_stale = true;
@@ -793,7 +842,7 @@ mod tests {
         let pulls = listed(vec![open]);
         assert_eq!(
             evaluate(&m, &facts(Some(&pulls), vec![worker(WorkerLife::Running)])),
-            [Act::Done { node: 0 }, Act::Close]
+            [Act::Done { node: 0 }]
         );
     }
 
@@ -811,6 +860,10 @@ mod tests {
         assert_eq!(
             evaluate(&m, &facts(Some(&pulls), ended())),
             [Act::Cleanup { node: 0 }]
+        );
+        assert!(
+            evaluate(&m, &facts(Some(&pulls), vec![worker(WorkerLife::Running)])).is_empty(),
+            "a running worker's worktree waits"
         );
         let mut ask = facts(Some(&pulls), ended());
         ask.cleanup = WorktreeCleanup::Ask;
