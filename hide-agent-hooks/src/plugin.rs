@@ -46,8 +46,9 @@ pub struct PluginFile {
     pub source_name: &'static str,
     /// Raised when the file's text changes.
     pub version: u32,
-    /// The agent's own folder below the home, which Hide never creates.
-    pub config: &'static [&'static str],
+    /// The agent whose own folder holds the file: its install-scope folder
+    /// (`hide_agent_adapter::HomeScope::Install`), which Hide never creates.
+    pub config: hide_agent_adapter::AgentId,
     /// The folder inside it the agent loads scripts from, which Hide may create.
     pub folder: &'static str,
     /// Hide's own folder inside that one, for a plugin the agent loads as a
@@ -227,9 +228,7 @@ fn remove_if_empty(folder: &Path) -> Result<(), String> {
 impl PluginFile {
     /// The agent's own folder, the one Herdr's integration for it uses too.
     pub fn config_directory(&self, home: &Path) -> PathBuf {
-        self.config
-            .iter()
-            .fold(home.to_path_buf(), |path, part| path.join(part))
+        self.config.adapter().install_home(home)
     }
 
     pub fn path(&self, home: &Path) -> PathBuf {
@@ -253,9 +252,20 @@ impl PluginFile {
         let literal = serde_json::to_string(&helper.display().to_string())
             .expect("a string always serializes");
         // The constants go in first, so a placeholder's spelling inside the
-        // helper's path is left as the path's.
-        self.constants
+        // helper's path is left as the path's. The global instruction guard's
+        // prefilter is the guard's own (`crate::global_guard`), the same in
+        // every script that asks the helper about a tool call.
+        let guard = crate::global_guard::prefilter_constants();
+        let constants = self
+            .constants
             .iter()
+            .map(|(placeholder, value)| (*placeholder, *value))
+            .chain(
+                guard
+                    .iter()
+                    .map(|(placeholder, value)| (*placeholder, value.as_str())),
+            );
+        constants
             .fold(self.template.to_owned(), |body, (placeholder, value)| {
                 body.replacen(placeholder, value, 1)
             })

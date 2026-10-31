@@ -2,9 +2,9 @@
 // Every agent logo the web shell bundles has a manifest entry with its source
 // URL and licence note, every shared adapter has a logo or a stated reason
 // for a monogram, and no logo file is bundled without a manifest entry
-// (design principle 10: never render a logo the system cannot source). A logo
-// may also belong to a Hide AI provider's agent (hide-ai/src/registry.rs), which
-// the Hide AI tab draws although the kit does not list that agent.
+// (design principle 10: never render a logo the system cannot source). A Hide
+// AI provider is an adapter's own declaration (`hide_agent_adapter::AgentAdapter::ai`),
+// so the adapters cover every logo the Hide AI tab draws.
 // A retired agent may keep its logo for stored history when the manifest
 // explicitly marks it history_only and explains the retained reader.
 import fs from 'node:fs';
@@ -17,17 +17,15 @@ const LOGO_FORMATS = ['svg', 'png'];
 const manifest = JSON.parse(fs.readFileSync(path.join(dir, 'manifest.json'), 'utf8'));
 const adapters = JSON.parse(fs.readFileSync(path.join(root, 'contracts/agent-adapters.json'), 'utf8')).map(row => row.logo_id);
 if (adapters.length === 0) throw new Error('no adapter logo ids read from contracts/agent-adapters.json');
-const providerAgents = [...fs.readFileSync(path.join(root, 'hide-ai/src/registry.rs'), 'utf8').matchAll(/^\s+agent: "([^"]+)",$/gm)].map(match => match[1]);
-if (providerAgents.length === 0) throw new Error('no provider agent ids read from hide-ai/src/registry.rs');
 const problems = [];
 const claimed = new Map();
 const claim = (id, how, entry) => {
-  const active = adapters.includes(id) || providerAgents.includes(id);
+  const active = adapters.includes(id);
   const historyOnly = entry.history_only === true;
   if ('history_only' in entry && !historyOnly) problems.push(`${id}: history_only is either true or absent`);
-  if (historyOnly && active) problems.push(`${id}: an active adapter or provider cannot be history_only`);
+  if (historyOnly && active) problems.push(`${id}: an active adapter cannot be history_only`);
   if (historyOnly && !entry.note?.trim()) problems.push(`${id}: history_only needs a note identifying the retained reader`);
-  if (!active && !historyOnly) problems.push(`${id} (${how}) is neither an adapter in contracts/agent-adapters.json, a provider agent in hide-ai/src/registry.rs, nor declared history_only`);
+  if (!active && !historyOnly) problems.push(`${id} (${how}) is neither an adapter in contracts/agent-adapters.json nor declared history_only`);
   if (claimed.has(id)) problems.push(`${id} is both ${claimed.get(id)} and ${how}`);
   claimed.set(id, how);
 };

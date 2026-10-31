@@ -28,6 +28,8 @@
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 
+use hide_agent_adapter::{AgentId, HomeScope};
+
 /// Desk's Codex configuration. Commands run with Desk's own `PATH`, not the
 /// login shell's or a snapshot of it, so the `hide` Desk put first is the
 /// one that runs; no skill or project instruction file reaches the model.
@@ -73,12 +75,18 @@ pub fn home_variable(home: &Path) -> (OsString, OsString) {
 }
 
 /// The operator's own Codex sign-in: `auth.json` in the folder their Codex
-/// uses, the account's `CODEX_HOME` or else `~/.codex` under `home`.
-pub fn operator_sign_in(home: &Path, codex_home: Option<&std::ffi::OsStr>) -> PathBuf {
-    codex_home
-        .filter(|folder| !folder.is_empty())
-        .map_or_else(|| home.join(".codex"), PathBuf::from)
-        .join("auth.json")
+/// uses, `codex_home` (the account's `CODEX_HOME` as captured) or else
+/// `~/.codex` under `home`, as the one resolver of agent folders reads it.
+/// Refused with the reason for a `CODEX_HOME` Hide cannot place.
+pub fn operator_sign_in(
+    home: &Path,
+    codex_home: Option<&std::ffi::OsStr>,
+) -> Result<PathBuf, String> {
+    AgentId::Codex
+        .adapter()
+        .home(Some(home), codex_home, HomeScope::Read)
+        .map(|folder| folder.join("auth.json"))
+        .map_err(|unresolved| unresolved.to_string())
 }
 
 /// The link Desk makes before Codex starts, `(target, link)`: Desk's home's
@@ -109,17 +117,22 @@ mod tests {
     #[test]
     fn the_sign_in_is_the_operator_s_from_their_codex_folder() {
         let home = Path::new("/home/me");
+        let elsewhere = std::env::temp_dir().join("elsewhere-codex");
         assert_eq!(
             operator_sign_in(home, None),
-            home.join(".codex").join("auth.json")
+            Ok(home.join(".codex").join("auth.json"))
         );
         assert_eq!(
-            operator_sign_in(home, Some(std::ffi::OsStr::new("/elsewhere/codex"))),
-            Path::new("/elsewhere/codex").join("auth.json")
+            operator_sign_in(home, Some(elsewhere.as_os_str())),
+            Ok(elsewhere.join("auth.json"))
         );
         assert_eq!(
             operator_sign_in(home, Some(std::ffi::OsStr::new(""))),
-            home.join(".codex").join("auth.json")
+            Ok(home.join(".codex").join("auth.json"))
+        );
+        assert_eq!(
+            operator_sign_in(home, Some(std::ffi::OsStr::new("relative-codex"))),
+            Err("CODEX_HOME is not an absolute path".to_owned())
         );
     }
 }

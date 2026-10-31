@@ -346,16 +346,16 @@ impl AgentRuntime {
         }
     }
 
-    /// The directory whose presence means this runtime is set up on this Mac.
+    /// The directory whose presence means this runtime is set up on this Mac:
+    /// the agent's folder in the install scope
+    /// (`hide_agent_adapter::HomeScope::Install`), whatever `CODEX_HOME` the
+    /// launching shell carries.
     ///
     /// Hide installs nothing for a runtime the operator does not use: writing
     /// `~/.codex/hooks.json` on a machine with no Codex would create a file
     /// for a tool that is not there.
     pub fn home_directory(self, home: &Path) -> PathBuf {
-        match self {
-            Self::ClaudeCode => home.join(".claude"),
-            Self::Codex => home.join(".codex"),
-        }
+        self.dialect().adapter().install_home(home)
     }
 
     /// The file whose `hooks` object Hide appends to.

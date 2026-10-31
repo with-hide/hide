@@ -26,6 +26,12 @@ const ANSWERS = process.env.HIDE_EXTENSION_HELPER_ANSWERS;
 const HERDR = { HERDR_ENV: "1", HERDR_PANE_ID: "w1:p1", HERDR_SOCKET_PATH: "/tmp/herdr-fixture.sock" };
 const NESTED = ["OMPCODE", "PI_SESSION_ID"];
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+// The global instruction guard's corpus, which the helper's guard is run on too (`src/global_guard.rs`), with
+// `{state}` as this account's state folder.
+const CORPUS = JSON.parse(readFileSync(new URL("../fixtures/global-guard-corpus.json", import.meta.url), "utf8")).cases.map(
+  (entry) => ({ ...entry, text: entry.text.replaceAll("{state}", path.join(homedir(), ".hide", "state")) }),
+);
+const NAMED = CORPUS.filter((entry) => entry.named).length;
 
 /** Writes the guardrails policy the core would publish, with `rules` on the fixture project, or removes it. */
 function policy(rules) {
@@ -193,15 +199,22 @@ test("outside a Herdr pane or in another agent's shell the extension only guards
   }
   await sleep(100);
   assert.deepEqual(calls(), []);
-  // With no protection on, a call naming the Hide global instruction still asks the helper (D-07).
+  // With no protection on, every call of the guard's corpus that names the Hide global instruction still asks the
+  // helper, and no other call does (D-07).
   policy({});
   {
     const host = await extension({});
     answer({ tool: { deny: "Not run: global" } });
-    const write = { ...sample("tool_call.bash").event, input: { command: "echo x >> ~/.hide/state/global-instruction.md" } };
-    assert.deepEqual(await host.emit("tool_call", write, context("tool_call.bash")), { block: true, reason: "Not run: global" });
-    const [call] = await until("tool");
-    assert.equal(call.input.command, write.input.command);
+    for (const entry of CORPUS) {
+      const bash = sample("tool_call.bash").event;
+      const event =
+        entry.tool === "shell"
+          ? { ...bash, input: { command: entry.text } }
+          : { ...bash, toolName: entry.tool, input: { path: entry.text, ...(entry.tool === "write" ? { content: "x" } : {}) } };
+      const blocked = entry.named ? { block: true, reason: "Not run: global" } : undefined;
+      assert.deepEqual(await host.emit("tool_call", event, context("tool_call.bash")), blocked, entry.text);
+    }
+    assert.equal((await until("tool", NAMED)).length, NAMED);
     rmSync(LOG, { force: true });
     answer({});
   }

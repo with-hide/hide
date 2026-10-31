@@ -678,10 +678,7 @@ fn herdr_piece(
     failures: Option<&AgentFailures>,
 ) -> PieceReport {
     let integration = adapter.herdr;
-    let folder = integration
-        .folder
-        .iter()
-        .fold(target.home.clone(), |path, part| path.join(part));
+    let folder = adapter.install_home(&target.home);
     let location = Some(folder.display().to_string());
     let code = herdr_code(adapter);
     let recorded = record.contains_piece(&code);
@@ -1169,10 +1166,7 @@ fn apply_herdr(
             }
             continue;
         }
-        let folder = integration
-            .folder
-            .iter()
-            .fold(target.home.clone(), |path, part| path.join(part));
+        let folder = adapter.install_home(&target.home);
         if !detection.installed(adapter) || !folder.is_dir() {
             continue;
         }

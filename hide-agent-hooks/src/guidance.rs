@@ -40,6 +40,7 @@
 use std::path::{Path, PathBuf};
 
 use base64::Engine;
+use hide_agent_adapter::AgentId;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
 
@@ -254,11 +255,13 @@ impl GuidanceAgent {
             Self::Droid => home.join(".factory"),
             Self::Copilot => home.join(".copilot"),
             Self::Kiro => home.join(".kiro"),
-            Self::Cursor => home.join(".cursor"),
             Self::Augment => home.join(".augment"),
             Self::Junie => home.join(".junie"),
-            Self::Grok => home.join(".grok"),
-            Self::Antigravity => home.join(".gemini").join("config"),
+            // A declared agent's folder is its declaration's, in the install
+            // scope (`hide_agent_adapter::HomeScope::Install`).
+            Self::Cursor => AgentId::Cursor.adapter().install_home(home),
+            Self::Grok => AgentId::Grok.adapter().install_home(home),
+            Self::Antigravity => AgentId::Antigravity.adapter().install_home(home),
         }
     }
 
