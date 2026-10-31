@@ -12,7 +12,7 @@ import { useShellStore } from "./store";
 import type { DispatchFn } from "./ws";
 
 vi.mock("./terminals", () => ({ mountTerminalPreview: () => false }));
-const pane = (id: string): PaneRow => ({ id, herdr_label: id, terminal_title: null, cwd: "/fixture", status_code: "idle", requires_close_confirmation: false, requires_close_status_check: false, identity_label: null });
+const pane = (id: string): PaneRow => ({ id, device_id: "local", device_pane_id: id, herdr_label: id, terminal_title: null, cwd: "/fixture", status_code: "idle", requires_close_confirmation: false, requires_close_status_check: false, identity_label: null });
 const tab = (id: string, panes: string[]): Tab => ({ id, workspace_id: "w1", checkout_id: "checkout", label: id, empty: false, delegated: false, panes: panes.map(pane), sidebar: { number: 1, manual_name: null, named_by_operator: false, focused_pane_id: panes[0] } });
 const tabs = [tab("t1", ["p1", "p2"]), tab("t2", ["p3"]), tab("t3", ["p4"])];
 const checkout: Checkout = { id: "checkout", workspace_id: "project", label: "Fixture", path: "/fixture", branch: null, purpose: null, is_worktree: false, exists: true, has_panes: true, pull_request: null, active_tab_id: "t1", strip: [], next_tab_label: "4", tabs, agent_scope: emptyScope() };

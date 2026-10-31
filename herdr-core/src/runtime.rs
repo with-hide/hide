@@ -795,28 +795,6 @@ impl ViewFocusSlot {
     }
 }
 
-fn remote_tab_source_id<'a>(target_id: &str, projected_id: &'a str) -> Option<&'a str> {
-    projected_id
-        .strip_prefix(&format!("remote:{target_id}:tab:"))
-        .filter(|tab_id| !tab_id.trim().is_empty())
-}
-
-/// The prefix every pane id belonging to one remote target carries. It is
-/// both the terminal-pane ownership test and the read record ledger's scope
-/// for that target, so the two cannot disagree about which panes are its own.
-fn remote_pane_id_prefix(target_id: &str) -> String {
-    format!("remote:{target_id}:pane:")
-}
-
-/// Whether a pane id is one the core scoped to a remote target
-/// (`operations::remote_pane_id`), whichever target it was; a Herdr pane id on
-/// this machine never takes that form.
-fn is_remote_scoped_pane_id(pane_id: &str) -> bool {
-    pane_id
-        .strip_prefix("remote:")
-        .is_some_and(|rest| rest.contains(":pane:"))
-}
-
 /// Copies each pane's status word and close-confirmation answer from the agent
 /// rows that carry the read axis.
 ///
@@ -1026,12 +1004,6 @@ fn prune_pane_text_scales(
     let before = scales.len();
     scales.retain(|pane_id, _| !scope.owns(pane_id) || live.contains(pane_id.as_str()));
     scales.len() != before
-}
-
-fn remote_pane_source_id<'a>(target_id: &str, projected_id: &'a str) -> Option<&'a str> {
-    projected_id
-        .strip_prefix(&remote_pane_id_prefix(target_id))
-        .filter(|pane_id| !pane_id.trim().is_empty())
 }
 
 /// Every pane `session` lists, and the panes on screen: while its machine
@@ -2979,6 +2951,8 @@ fn project_layout_panes(
                 .unwrap_or_else(|| fallback_cwd.to_owned());
             let ports = crate::ports::attributed_ports(&cwd, listening_ports);
             PaneSnapshot {
+                device_id: Default::default(),
+                device_pane_id: Default::default(),
                 start_claim: source.and_then(|source| {
                     source
                         .start_claim

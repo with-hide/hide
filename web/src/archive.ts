@@ -23,7 +23,7 @@ const HIDDEN: ArchiveOffer = { kind: "hidden" };
 export function archiveOffer(rest: SnapshotRest | null, agent: AgentRow | undefined, t: TFunction<"translation"> = translate): ArchiveOffer {
   if (!agent || agent.hide_ai) return HIDDEN;
   if (agent.delegated || agent.lineage_parent_pane_id) return { kind: "offered", unavailable: t("archive.unavailable.delegated") };
-  const device = agent.device_id ?? localDeviceId(rest);
+  const device = agent.device_id;
   if (device !== localDeviceId(rest) && !deviceConnected(rest, device)) {
     return { kind: "offered", unavailable: t("archive.unavailable.disconnected", { device: machineName(rest?.navigator?.devices, device, t) }) };
   }

@@ -611,7 +611,7 @@ fn pane_connection(
     // Reopen restarts a Claude Code or Codex session on this Mac's Herdr, so
     // another agent, a pane on another device, a missing hook and an agent
     // too old are not its to fix.
-    let reopens = agent.runtime.is_some() && !crate::agent_hooks::is_remote_pane(pane_id);
+    let reopens = agent.runtime.is_some() && !crate::address::is_device_scoped(pane_id);
     let not_connected = |reason| PaneConnectionSnapshot {
         connected: false,
         can_reopen: reopens
@@ -765,6 +765,8 @@ fn project_agent(agent: SessionAgentPayload) -> Result<SidebarAgentSnapshot, Str
     });
     let identity_label = title.unwrap_or_else(|| provider_name(agent.agent.as_deref()));
     let projected = SidebarAgentSnapshot {
+        device_id: Default::default(),
+        device_pane_id: Default::default(),
         telemetry_stale: agent.telemetry_stale,
         start: if agent_starting(&agent) {
             AgentStart::Starting {
@@ -1247,6 +1249,8 @@ mod tests {
                 panes: panes
                     .iter()
                     .map(|id| PaneSnapshot {
+                        device_id: Default::default(),
+                        device_pane_id: Default::default(),
                         start_claim: None,
                         terminal_id: None,
                         failed_terminal_id: None,

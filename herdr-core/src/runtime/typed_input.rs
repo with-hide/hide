@@ -83,12 +83,12 @@ impl Runtime {
     /// key it: bare on this machine, in full on a device.
     fn spawn_pane_id(&self, spawn: &SpawnRecord) -> Option<String> {
         let pane = spawn.pane.as_deref()?;
-        Some(match spawn.machine.as_deref() {
-            Some(machine) if machine != self.node.as_str() => {
-                crate::session_sync::remote_pane_id(machine, pane)
-            }
-            _ => pane.to_owned(),
-        })
+        let node = self.node.as_str();
+        Some(crate::address::pane_id_on(
+            node,
+            spawn.machine.as_deref().unwrap_or(node),
+            pane,
+        ))
     }
 
     /// The observation of the pane a spawn's agent runs in, while it still
@@ -333,7 +333,7 @@ impl Runtime {
     /// (`typed::REREAD_WAIT_MS`). A device's pane is read on its own machine
     /// on its state changes alone, so it is judged at once.
     fn reread(&self, id: &str, attempts: u8, pane_id: &str, now: u64) -> Reread {
-        if crate::agent_hooks::is_remote_pane(pane_id) {
+        if crate::address::is_device_scoped(pane_id) {
             return Reread::Settled;
         }
         match self.plans.input_reread.get(id) {

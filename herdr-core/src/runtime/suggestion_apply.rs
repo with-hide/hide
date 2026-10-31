@@ -1321,7 +1321,8 @@ impl Runtime {
             .agents
             .iter()
             .find(|record| record.id == id && !record.ended)?;
-        let device_pane = format!(":pane:{}", record.pane);
+        // The ledger keeps the pane as its own machine numbers it.
+        let pane = crate::address::named_pane_id(self.node.as_str(), &record.machine, &record.pane);
         self.snapshot
             .navigator
             .agents
@@ -1334,7 +1335,7 @@ impl Runtime {
                     .filter_map(|remote| remote.session.as_ref())
                     .flat_map(|session| session.agents.iter()),
             )
-            .find(|agent| agent.pane_id == record.pane || agent.pane_id.ends_with(&device_pane))
+            .find(|agent| agent.pane_id == pane)
     }
 }
 

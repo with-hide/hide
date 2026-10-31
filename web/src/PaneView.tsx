@@ -45,9 +45,9 @@ import { attachTerminal, bracketedPaste, focusTerminal, pasteExplorerCopy, paste
 const LIVE_STATES = new Set(["connected", "controlling", "observing", "idle"]);
 
 export function paneTitle(pane: PaneRow): string {
-  // A remote pane's id is scoped to its device (`remote:<device>:pane:w1:p2`);
-  // the device is already on screen, so the header names the host's own id.
-  return pane.identity_label ?? pane.terminal_title ?? pane.herdr_label ?? pane.id.replace(/^remote:.+?:pane:/, "");
+  // The device is already on screen, so the header names the pane by the
+  // id its own machine gives it.
+  return pane.identity_label ?? pane.terminal_title ?? pane.herdr_label ?? pane.device_pane_id;
 }
 
 /**

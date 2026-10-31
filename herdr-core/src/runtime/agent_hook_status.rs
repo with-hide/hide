@@ -36,11 +36,7 @@ impl Runtime {
         report: &HookStatusReport,
     ) -> Result<(), &'static str> {
         let local = device == self.node.as_str();
-        let pane = if local || caller.starts_with("remote:") {
-            caller.to_owned()
-        } else {
-            crate::session_sync::remote_pane_id(device, caller)
-        };
+        let pane = crate::address::named_pane_id(self.node.as_str(), device, caller);
         let recorded = self
             .hook_facts
             .lock()

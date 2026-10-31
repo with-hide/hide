@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { agentReference, mentionCandidates, referenceLands, referenceText } from "./agentReference";
 import type { SnapshotRest } from "./snapshot";
 
-const reviewer = { pane_id: "w9J:p52", herdr_name: "reviewer", agent_kind: "codex", identity_label: "가입 페이지 문구 수정" };
+const reviewer = { pane_id: "w9J:p52", device_pane_id: "w9J:p52", herdr_name: "reviewer", agent_kind: "codex", identity_label: "가입 페이지 문구 수정" };
 
 describe("an agent reference", () => {
   it("names the agent, its pane id and its task on one line", () => {
@@ -13,8 +13,8 @@ describe("an agent reference", () => {
     expect(agentReference({ ...reviewer, herdr_name: undefined })).toBe("@codex (pane w9J:p52 · 가입 페이지 문구 수정)");
   });
 
-  it("writes a device pane's id as that device's Herdr knows it", () => {
-    expect(agentReference({ ...reviewer, pane_id: "remote:mini:pane:w2:p7" })).toBe("@reviewer (pane w2:p7 · 가입 페이지 문구 수정)");
+  it("writes a device pane's id as the core says that device knows it", () => {
+    expect(agentReference({ ...reviewer, pane_id: "remote:mini:pane:w2:p7", device_pane_id: "w2:p7" })).toBe("@reviewer (pane w2:p7 · 가입 페이지 문구 수정)");
   });
 
   it("never carries a line break, which would submit the prompt it is typed into", () => {
@@ -34,7 +34,8 @@ describe("an agent reference", () => {
 });
 
 describe("where a reference can be typed", () => {
-  const rest = { navigator: { devices: [{ id: "local", kind: "local" }] }, status: { remote: [{ target_id: "mini" }] } } as unknown as SnapshotRest;
+  const miniRow = (pane_id: string) => ({ pane_id, device_id: "mini" });
+  const rest = { navigator: { devices: [{ id: "local", kind: "local" }] }, status: { remote: [{ target_id: "mini", session: { workspaces: [], agents: [miniRow("remote:mini:pane:w2:p7"), miniRow("remote:mini:pane:w2:p1")] } }] } } as unknown as SnapshotRest;
 
   it("lands in another pane on the same device", () => {
     expect(referenceLands(rest, "w9J:p52", "w9J:p1")).toBe(true);

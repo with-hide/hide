@@ -210,8 +210,7 @@ impl Runtime {
         live_pane_ids: &HashSet<String>,
         active_pane_ids: &HashSet<String>,
     ) -> bool {
-        let target_prefix = remote_pane_id_prefix(target_id);
-        let belongs_to_target = |pane_id: &str| pane_id.starts_with(&target_prefix);
+        let belongs_to_target = |pane_id: &str| crate::address::is_pane_of(pane_id, target_id);
         let projected_pane_ids = self
             .snapshot
             .terminal
@@ -913,7 +912,7 @@ impl Runtime {
         &self,
         pane_id: &str,
     ) -> Result<crate::find::pane::PaneApiRoute, String> {
-        if !pane_id.starts_with("remote:") {
+        if !crate::address::is_device_scoped(pane_id) {
             return self
                 .live
                 .as_ref()
@@ -926,7 +925,7 @@ impl Runtime {
             .device_registrations
             .iter()
             .find_map(|device| {
-                super::remote_pane_source_id(&device.id, pane_id).map(|source| (device, source))
+                crate::address::pane_of(pane_id, &device.id).map(|source| (device, source))
             })
             .ok_or_else(|| "This pane's device is no longer registered".to_owned())?;
         let connected = self
@@ -1323,7 +1322,7 @@ impl Runtime {
             .terminal
             .pane_id
             .as_deref()
-            .is_some_and(is_remote_scoped_pane_id)
+            .is_some_and(crate::address::is_device_pane)
         {
             return;
         }
@@ -1333,7 +1332,8 @@ impl Runtime {
             .selected_pane_id
             .clone()
             .filter(|pane_id| {
-                !is_remote_scoped_pane_id(pane_id) && self.layout_holding_pane(pane_id).is_some()
+                !crate::address::is_device_pane(pane_id)
+                    && self.layout_holding_pane(pane_id).is_some()
             });
         let drawn = || {
             let checkout_id = self.snapshot.navigator.focused_checkout_id.as_deref()?;
@@ -1410,7 +1410,7 @@ impl Runtime {
                 .find(|status| status.target_id == target)
                 .and_then(|status| status.session.as_ref())
                 .and_then(|session| session.focused_pane_id.as_deref())
-                .and_then(|id| remote_pane_source_id(target, id))
+                .and_then(|id| crate::address::pane_of(id, target))
                 .map(str::to_owned),
         }
     }
@@ -1482,7 +1482,7 @@ impl Runtime {
             .iter()
             .filter(|(_, state)| state.state != "released")
             .map(|(pane_id, _)| pane_id)
-            .filter(|pane_id| !pane_id.starts_with("remote:"))
+            .filter(|pane_id| !crate::address::is_device_scoped(pane_id))
             .filter(|pane_id| placed.contains(*pane_id) && !attached.contains(*pane_id))
             .cloned()
             .collect::<Vec<_>>();
@@ -1818,7 +1818,7 @@ impl Runtime {
     /// machine's panes in a layout or named by a creation, or a connected
     /// device's pane.
     fn pane_still_terminal(&self, pane: &str) -> bool {
-        if pane.starts_with("remote:") {
+        if crate::address::is_device_scoped(pane) {
             return self
                 .snapshot
                 .terminal

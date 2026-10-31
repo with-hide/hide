@@ -134,7 +134,7 @@ impl Runtime {
                 "A delegated session is archived with its root session".into(),
             ));
         }
-        if let Some(device) = super::agent_sleep::pane_device(&agent.pane_id)
+        if let Some(device) = crate::address::pane_device(&agent.pane_id)
             && !self.archive_device_connected(device)
         {
             return Some((
@@ -169,7 +169,7 @@ impl Runtime {
             .row_facts
             .as_ref()
             .map(|facts| facts.native_reference.clone());
-        match (super::agent_sleep::pane_device(&agent.pane_id), reference) {
+        match (crate::address::pane_device(&agent.pane_id), reference) {
             (Some(_), reference) => Some((session, reference.flatten())),
             (None, Some(reference)) => Some((session, reference)),
             (None, None) if agent.sleep.is_some() => self
@@ -189,7 +189,7 @@ impl Runtime {
 
     /// The machine a row runs on: this core's node or its device.
     fn archive_machine_of(&self, pane_id: &str) -> String {
-        super::agent_sleep::pane_device(pane_id)
+        crate::address::pane_device(pane_id)
             .unwrap_or(self.node.as_str())
             .to_owned()
     }
@@ -505,7 +505,7 @@ impl Runtime {
 
     /// The project path, its label and the checkout path a pane is in.
     fn archive_place(&self, pane_id: &str) -> Option<(String, String, String)> {
-        self.archive_workspaces(super::agent_sleep::pane_device(pane_id))
+        self.archive_workspaces(crate::address::pane_device(pane_id))
             .iter()
             .find_map(|workspace| {
                 workspace.checkouts.iter().find_map(|checkout| {
@@ -525,7 +525,7 @@ impl Runtime {
     }
 
     fn archive_pane_cwd(&self, pane_id: &str) -> Option<String> {
-        self.archive_workspaces(super::agent_sleep::pane_device(pane_id))
+        self.archive_workspaces(crate::address::pane_device(pane_id))
             .iter()
             .flat_map(|workspace| &workspace.checkouts)
             .flat_map(|checkout| &checkout.tabs)

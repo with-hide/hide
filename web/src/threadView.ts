@@ -55,8 +55,7 @@ export function threadInputHeld(thread: SessionThreadSection | null): "pane_chan
  */
 export function threadLaunchModel(rest: SnapshotRest | null | undefined, thread: SessionThreadSection | null): string | null {
   if (!thread?.pane_id || !thread.machine) return null;
-  const raw = thread.pane_id.startsWith(`remote:${thread.machine}:pane:`) ? thread.pane_id.slice(`remote:${thread.machine}:pane:`.length) : thread.pane_id;
-  const launch = rest?.overview_graph?.sessions.find((one) => one.device_id === thread.machine && (one.pane_id === thread.pane_id || one.pane_id === raw));
+  const launch = rest?.overview_graph?.sessions.find((one) => one.device_id === thread.machine && one.pane_id === thread.pane_id);
   return launch?.launch_model ?? null;
 }
 

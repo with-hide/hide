@@ -255,7 +255,7 @@ pub(super) fn relay_attachment(
 ) -> Option<Value> {
     let pane = payload_str(event, "pane_id");
     let own = event.pointer("/payload/staged_on").and_then(Value::as_str) == Some(node)
-        && pane.starts_with(&hide_node_link::terminal::device_pane_prefix(node));
+        && hide_node_link::address::is_pane_of(&pane, node);
     if !own {
         return rejected("terminal_attachment");
     }

@@ -195,6 +195,7 @@ fn pane_bands_prioritize_connection_then_own_demand_then_raised_descendants() {
             title: format!("Task {id}"),
             agent_kind: "claude".into(),
             open_pane_id: id.into(),
+            open_device_id: None,
             since_unix_ms: Some(123),
             unreceived_by: None,
             path: vec!["Root".into(), format!("Task {id}")],

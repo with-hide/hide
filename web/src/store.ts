@@ -16,7 +16,6 @@ import {
   type PaneFind,
   type RowMark,
   type SnapshotRest,
-  stampDeviceAgents,
 } from "./snapshot";
 
 export type { AgentRow, SnapshotRest } from "./snapshot";
@@ -642,7 +641,7 @@ export const useShellStore = create<Store>((set, get) => ({
                 ...(payload.rest?.status ? { status: { ...previous?.status, ...payload.rest.status } } : {}),
               }
             : { ...previous, ...payload.rest, workspace_view: payload.rest?.workspace_view };
-      const rest = share(previous, stampDeviceAgents(incoming));
+      const rest = share(previous, incoming);
       const diagnostics: string[] = [];
       const agents =
         rest.navigator?.agents === previous?.navigator?.agents

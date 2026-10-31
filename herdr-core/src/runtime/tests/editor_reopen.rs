@@ -1080,6 +1080,7 @@ fn explorer_rename_carries_expansion_and_open_tabs_to_the_new_path() {
     let lib = root.join("src/lib.rs").to_string_lossy().into_owned();
     let tab = |id: &str, workspace_id: &str, checkout_id: &str| EditorTabSnapshot {
         id: id.to_owned(),
+        device_id: Default::default(),
         workspace_id: workspace_id.to_owned(),
         checkout_id: checkout_id.to_owned(),
         path: lib.clone(),
@@ -1231,6 +1232,7 @@ fn explorer_trash_removes_the_item_selects_the_named_row_and_keeps_its_tab() {
     ];
     runtime.snapshot.editor.tabs.push(EditorTabSnapshot {
         id: "file:lib".to_owned(),
+        device_id: Default::default(),
         workspace_id: "workspace:0".to_owned(),
         checkout_id: workspace::checkout_id_for_path("workspace:0", &root),
         path: lib.to_string_lossy().into_owned(),
@@ -1757,6 +1759,7 @@ fn recent_closed_tracks_file_tabs_but_not_diff_tabs() {
     ] {
         runtime.snapshot.editor.tabs.push(EditorTabSnapshot {
             id: id.to_owned(),
+            device_id: Default::default(),
             workspace_id: "workspace:0".to_owned(),
             checkout_id: "checkout:0".to_owned(),
             path: format!("/repo/{id}.rs"),
@@ -1988,6 +1991,7 @@ fn a_new_file_at_a_renamed_tabs_old_path_gets_its_own_tab_id() {
     assert_eq!(runtime.new_file_tab_id("w", "c", "/r/a.txt"), base);
     runtime.snapshot.editor.tabs.push(EditorTabSnapshot {
         id: base.clone(),
+        device_id: Default::default(),
         workspace_id: "w".to_owned(),
         checkout_id: "c".to_owned(),
         path: "/r/b.txt".to_owned(),

@@ -462,14 +462,18 @@ impl SessionReplica {
                 frames.push(frame);
             }
             pane_layouts.push(RemotePaneLayoutSnapshot {
-                workspace_id: remote_workspace_id(target_id, &layout.workspace_id),
-                tab_id: remote_tab_id(target_id, &layout.tab_id),
-                focused_pane_id: remote_pane_id(target_id, &layout.focused_pane_id),
+                workspace_id: crate::address::scoped_id(
+                    target_id,
+                    crate::address::Kind::Workspace,
+                    &layout.workspace_id,
+                ),
+                tab_id: crate::address::scoped_tab_id(target_id, &layout.tab_id),
+                focused_pane_id: crate::address::scoped_pane_id(target_id, &layout.focused_pane_id),
                 zoomed: layout.zoomed,
                 frames: frames
                     .into_iter()
                     .map(|mut frame| {
-                        frame.pane_id = remote_pane_id(target_id, &frame.pane_id);
+                        frame.pane_id = crate::address::scoped_pane_id(target_id, &frame.pane_id);
                         frame
                     })
                     .collect(),
@@ -480,8 +484,16 @@ impl SessionReplica {
             .workspaces
             .iter()
             .map(|workspace| {
-                let workspace_id = remote_workspace_id(target_id, &workspace.workspace_id);
-                let checkout_id = remote_checkout_id(target_id, &workspace.workspace_id);
+                let workspace_id = crate::address::scoped_id(
+                    target_id,
+                    crate::address::Kind::Workspace,
+                    &workspace.workspace_id,
+                );
+                let checkout_id = crate::address::scoped_id(
+                    target_id,
+                    crate::address::Kind::Checkout,
+                    &workspace.workspace_id,
+                );
                 let workspace_panes = state
                     .panes
                     .iter()
@@ -521,6 +533,8 @@ impl SessionReplica {
                                 let agent =
                                     agents.iter().find(|agent| agent.pane_id == pane.pane_id);
                                 PaneSnapshot {
+                                    device_id: Default::default(),
+                                    device_pane_id: Default::default(),
                                     start_claim: pane
                                         .label
                                         .as_deref()
@@ -531,7 +545,7 @@ impl SessionReplica {
                                         .restore_error
                                         .as_ref()
                                         .map(|_| pane.terminal_id.clone()),
-                                    id: remote_pane_id(target_id, &pane.pane_id),
+                                    id: crate::address::scoped_pane_id(target_id, &pane.pane_id),
                                     herdr_label: crate::start_claim::public_label(
                                         pane.label.as_deref(),
                                     ),
@@ -589,7 +603,7 @@ impl SessionReplica {
                                 // Rename is recorded for this machine's tabs.
                                 by_operator: false,
                                 focused_pane_id: focused
-                                    .map(|pane| remote_pane_id(target_id, pane))
+                                    .map(|pane| crate::address::scoped_pane_id(target_id, pane))
                                     .unwrap_or_default(),
                                 number: crate::model::tab_number(&tab.label, tab.number),
                                 processes: state
@@ -598,7 +612,13 @@ impl SessionReplica {
                                     .filter(|pane| pane.tab_id == tab.tab_id)
                                     .filter_map(|pane| {
                                         pane.foreground_process.clone().map(|name| {
-                                            (remote_pane_id(target_id, &pane.pane_id), name)
+                                            (
+                                                crate::address::scoped_pane_id(
+                                                    target_id,
+                                                    &pane.pane_id,
+                                                ),
+                                                name,
+                                            )
                                         })
                                     })
                                     .collect(),
@@ -610,7 +630,7 @@ impl SessionReplica {
                                     process,
                                 ),
                             },
-                            id: Some(remote_tab_id(target_id, &tab.tab_id)),
+                            id: Some(crate::address::scoped_tab_id(target_id, &tab.tab_id)),
                             workspace_id: Some(workspace_id.clone()),
                             checkout_id: Some(checkout_id.clone()),
                             label: Some(crate::model::display_tab_label(
@@ -628,8 +648,11 @@ impl SessionReplica {
                 // The Herdr half of the strip in Herdr's order; the runtime
                 // places the device's file tabs among them (`place_device_strips`).
                 let strip = StripTabSnapshot::from_herdr_tabs(&tabs);
-                let active_tab_id = Some(remote_tab_id(target_id, &workspace.active_tab_id))
-                    .filter(|active| tabs.iter().any(|tab| tab.id.as_ref() == Some(active)));
+                let active_tab_id = Some(crate::address::scoped_tab_id(
+                    target_id,
+                    &workspace.active_tab_id,
+                ))
+                .filter(|active| tabs.iter().any(|tab| tab.id.as_ref() == Some(active)));
                 WorkspaceSnapshot {
                     agent_presence: Default::default(),
                     agent_scope: Default::default(),
@@ -709,8 +732,9 @@ impl SessionReplica {
             .collect::<Vec<_>>();
         for agent in &mut agents {
             let source_pane_id = agent.pane_id.clone();
-            agent.id = format!("remote:{target_id}:agent:{source_pane_id}");
-            agent.pane_id = remote_pane_id(target_id, &source_pane_id);
+            agent.id =
+                crate::address::scoped_id(target_id, crate::address::Kind::Agent, &source_pane_id);
+            agent.pane_id = crate::address::scoped_pane_id(target_id, &source_pane_id);
             // A declaration without a machine stays within this device. A
             // machine-qualified declaration is resolved after every device's
             // stable identity is known, so keep its raw pane token here.
@@ -718,7 +742,7 @@ impl SessionReplica {
                 agent.spawned_from_pane_id = agent
                     .spawned_from_pane_id
                     .as_deref()
-                    .map(|parent| remote_pane_id(target_id, parent));
+                    .map(|parent| crate::address::scoped_pane_id(target_id, parent));
             }
         }
 
@@ -741,8 +765,12 @@ impl SessionReplica {
             .iter()
             .map(|workspace| {
                 (
-                    remote_checkout_id(target_id, &workspace.workspace_id),
-                    remote_tab_id(target_id, &workspace.active_tab_id),
+                    crate::address::scoped_id(
+                        target_id,
+                        crate::address::Kind::Checkout,
+                        &workspace.workspace_id,
+                    ),
+                    crate::address::scoped_tab_id(target_id, &workspace.active_tab_id),
                 )
             })
             .collect();
@@ -751,11 +779,22 @@ impl SessionReplica {
             .focused_pane_id
             .as_deref()
             .and_then(|pane_id| state.panes.iter().find(|pane| pane.pane_id == pane_id));
-        let focused_workspace_id =
-            focused.map(|pane| remote_workspace_id(target_id, &pane.workspace_id));
-        let focused_checkout_id =
-            focused.map(|pane| remote_checkout_id(target_id, &pane.workspace_id));
-        let focused_tab_id = focused.map(|pane| remote_tab_id(target_id, &pane.tab_id));
+        let focused_workspace_id = focused.map(|pane| {
+            crate::address::scoped_id(
+                target_id,
+                crate::address::Kind::Workspace,
+                &pane.workspace_id,
+            )
+        });
+        let focused_checkout_id = focused.map(|pane| {
+            crate::address::scoped_id(
+                target_id,
+                crate::address::Kind::Checkout,
+                &pane.workspace_id,
+            )
+        });
+        let focused_tab_id =
+            focused.map(|pane| crate::address::scoped_tab_id(target_id, &pane.tab_id));
 
         Ok((
             RemoteSessionSnapshot {
@@ -768,7 +807,7 @@ impl SessionReplica {
                 focused_pane_id: state
                     .focused_pane_id
                     .as_deref()
-                    .map(|pane_id| remote_pane_id(target_id, pane_id)),
+                    .map(|pane_id| crate::address::scoped_pane_id(target_id, pane_id)),
                 pane_layouts,
                 // The core's hook facts, laid by the device's coordinator;
                 // Herdr's pane tokens carry none of them.
@@ -777,7 +816,9 @@ impl SessionReplica {
                     panes: issue_tokens
                         .panes
                         .into_iter()
-                        .map(|(pane, token)| (remote_pane_id(target_id, &pane), token))
+                        .map(|(pane, token)| {
+                            (crate::address::scoped_pane_id(target_id, &pane), token)
+                        })
                         .collect(),
                     workspaces: issue_tokens.workspaces,
                 },
@@ -2224,22 +2265,6 @@ impl SessionReplica {
         }
         Ok(())
     }
-}
-
-fn remote_workspace_id(target_id: &str, workspace_id: &str) -> String {
-    format!("remote:{target_id}:workspace:{workspace_id}")
-}
-
-fn remote_checkout_id(target_id: &str, workspace_id: &str) -> String {
-    format!("remote:{target_id}:checkout:{workspace_id}")
-}
-
-pub(crate) fn remote_tab_id(target_id: &str, tab_id: &str) -> String {
-    format!("remote:{target_id}:tab:{tab_id}")
-}
-
-pub(crate) fn remote_pane_id(target_id: &str, pane_id: &str) -> String {
-    format!("remote:{target_id}:pane:{pane_id}")
 }
 
 fn unique_ids<'a>(

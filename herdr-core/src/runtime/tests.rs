@@ -666,6 +666,8 @@ fn working_payload() -> SessionSnapshotPayload {
 
 pub(super) fn pane(id: &str, cwd: &str) -> PaneSnapshot {
     PaneSnapshot {
+        device_id: Default::default(),
+        device_pane_id: Default::default(),
         start_claim: None,
         terminal_id: None,
         failed_terminal_id: None,

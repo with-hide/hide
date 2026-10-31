@@ -3,7 +3,7 @@
 // front, or says why it did not come (`navigation.ts`, openingProgress).
 
 import type { OpenTarget } from "./navigation";
-import { remoteTargetOfPane } from "./remote";
+import { localDeviceId } from "./snapshot";
 import { useShellStore } from "./store";
 import { useUiStore } from "./ui";
 
@@ -15,8 +15,8 @@ import { useUiStore } from "./ui";
  * and the action that sent the start began the opening that shows what the
  * core selected, so the page sends no focus of its own.
  */
-export function followStartedPane(paneId: string): void {
-  if (remoteTargetOfPane(useShellStore.getState().rest, paneId)) useUiStore.getState().setFocusWhenListed(paneId);
+export function followStartedPane(paneId: string, deviceId: string | null | undefined): void {
+  if (deviceId && deviceId !== localDeviceId(useShellStore.getState().rest)) useUiStore.getState().setFocusWhenListed(paneId);
 }
 
 /** Remembers what was asked to come forward; `CenterScreen` shows it once it is in front. */

@@ -1098,11 +1098,10 @@ impl Runtime {
                         self.terminals.install_device(device_id, terminals);
                         // The device's panes on screen attach inside the new
                         // link (D-19, B17).
-                        let prefix = remote_pane_id_prefix(device_id);
-                        self.terminal_states
-                            .retain(|pane_id, _| !pane_id.starts_with(&prefix));
+                        let theirs = |pane_id: &str| crate::address::is_pane_of(pane_id, device_id);
+                        self.terminal_states.retain(|pane_id, _| !theirs(pane_id));
                         self.terminal_attach_requested
-                            .retain(|pane_id| !pane_id.starts_with(&prefix));
+                            .retain(|pane_id| !theirs(pane_id));
                         self.reconcile_remote_terminal_selection();
                     }
                     Err(reason) => self.terminals.terminals_unstarted(device_id, &reason),
@@ -1321,11 +1320,10 @@ impl Runtime {
     /// (D-19, B17).
     fn end_device_terminals(&mut self, device_id: &str, reason: &str) {
         self.terminals.remove_device(device_id);
-        let prefix = remote_pane_id_prefix(device_id);
         let panes = self
             .terminal_states
             .iter_mut()
-            .filter(|(pane_id, _)| pane_id.starts_with(&prefix));
+            .filter(|(pane_id, _)| crate::address::is_pane_of(pane_id, device_id));
         let mut ended = Vec::new();
         for (pane_id, state) in panes {
             state.state = "unavailable".to_owned();

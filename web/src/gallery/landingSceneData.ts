@@ -444,7 +444,7 @@ export function landingBrowser(nowMs: number, width: number, step: BrowserStep):
   const main = project.checkouts[0]!;
   const tab = main.tabs[0]!;
   const path = `${main.path}/${SPEC_PATH}`;
-  const file: EditorTabSnapshot = { id: "t-spec", workspace_id: project.id, checkout_id: main.id, path, label: "export-spec.pdf", kind: "file", diff_committed: null, markdown_live: false, wrap: false, dirty: false, preview: false };
+  const file: EditorTabSnapshot = { id: "t-spec", device_id: "local", workspace_id: project.id, checkout_id: main.id, path, label: "export-spec.pdf", kind: "file", diff_committed: null, markdown_live: false, wrap: false, dirty: false, preview: false };
   const spec: ViewDisplaySnapshot = { id: SPEC_DISPLAY, tab_id: file.id, path, label: file.label, kind: "file", committed: null, preview: false, state: "open", reason: null };
   const page: ViewDisplaySnapshot = { id: BROWSER_DISPLAY, tab_id: null, path: "", label: "Invoices", kind: "browser", committed: null, preview: false, state: "open", reason: null, url: BROWSER_URL };
   const displays = step === 1 ? [spec] : [spec, page];

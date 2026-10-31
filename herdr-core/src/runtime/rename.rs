@@ -174,7 +174,7 @@ impl Runtime {
                 return Err("The tab is no longer available".to_owned());
             }
             let tab_id = match target.as_deref() {
-                Some(target) => remote_tab_source_id(target, &payload.tab_id)
+                Some(target) => crate::address::tab_of(&payload.tab_id, target)
                     .ok_or_else(|| "The tab is not scoped to this host".to_owned())?
                     .to_owned(),
                 None => payload.tab_id,

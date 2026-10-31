@@ -12,7 +12,7 @@ import type { TFunction } from "i18next";
 import { statusText } from "./agentStatus";
 import type { MessageKey } from "./i18n/catalogs";
 import { translate } from "./i18n/client";
-import { herdrPaneId, projectsOf } from "./remote";
+import { projectsOf } from "./remote";
 import { PR_LOOK } from "./prMark";
 import { machineName, windowDeviceId, windowFirst, wslPlace } from "./screenMachine";
 import type { AgentRow, Checkout, Device, GithubSearchResult, PrState, PullRequest, SessionWorkSearch, SnapshotRest, Task, WorkSession, Workspace } from "./snapshot";
@@ -63,6 +63,8 @@ export type SearchEntry = {
   agentKind?: string;
   /** The ids the entry activates: a pane, or a workspace/checkout pair. */
   paneId?: string;
+  /** The id the agent's pane has on its own machine, which a pane-id search matches. */
+  devicePaneId?: string;
   workspaceId?: string;
   checkoutId?: string;
   /** An issue's or pull request's number, which `#N` ranks first. */
@@ -208,6 +210,7 @@ export function agentEntry(scope: SearchDevice, agent: AgentRow, place: string |
     group: AGENTS_GROUP,
     agentKind: agent.agent_kind,
     paneId: agent.pane_id,
+    devicePaneId: agent.device_pane_id,
     deviceId: scope.device.id,
     chip: deviceChip(scope, front),
     agent,
@@ -428,7 +431,7 @@ function agentHasPr(entry: SearchEntry, number: number): boolean {
 /** The agents whose pane's Herdr id holds `query`, in its case since Herdr tells `pB` from `pb`, the shortest id (the whole one) first. */
 function paneIdMatches(entries: SearchEntry[], query: string): SearchEntry[] {
   return entries
-    .flatMap((entry) => (entry.kind === "agent" && entry.paneId !== undefined ? [{ entry, id: herdrPaneId(entry.paneId) }] : []))
+    .flatMap((entry) => (entry.kind === "agent" && entry.devicePaneId !== undefined ? [{ entry, id: entry.devicePaneId }] : []))
     .filter(({ id }) => id.includes(query))
     .sort((left, right) => left.id.length - right.id.length)
     .map(({ entry }) => entry);

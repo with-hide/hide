@@ -39,8 +39,8 @@ use hide_holder_protocol::record::{
     self, End, EndReason, Identity, PaneRecord, Phase, RECORD_FORMAT, Unreadable,
 };
 use hide_holder_protocol::{
-    ClientMessage, HolderMessage, OLDEST_HOLDER_VERSION, OpenError, PROTOCOL_VERSION, Size,
-    read_holder, write_client,
+    ClientMessage, FrameError, HolderMessage, OLDEST_HOLDER_VERSION, OpenError, PROTOCOL_VERSION,
+    Size, Theme, read_holder, write_client,
 };
 use hide_platform::process::{ResidentCommand, start_resident};
 use serde_json::json;
@@ -105,6 +105,11 @@ pub struct StartRequest {
     /// Variables added to the node's environment for the pane's program.
     pub env: Vec<(OsString, OsString)>,
     pub size: Size,
+    /// The colors the node draws the pane with, which the holder answers
+    /// the program's color questions with from its first one. Not part of
+    /// the start's key: the same pane asked again with another theme is the
+    /// same pane, and its theme changes by a theme message.
+    pub theme: Theme,
 }
 
 /// A start that has a pane to show for it.
@@ -578,6 +583,8 @@ impl Panes {
             .arg(layout::pane_records_lock(&self.state_dir))
             .arg("--incarnation")
             .arg(reserved.incarnation.to_string())
+            .arg("--theme")
+            .arg(request.theme.to_arg())
             .arg("--")
             .args(&request.program);
         for (key, value) in &request.env {
@@ -615,9 +622,19 @@ impl Panes {
                         if written.incarnation == reserved.incarnation
                             && written.phase != Phase::Preparing =>
                     {
+                        // `job` names the Windows job above the node's that
+                        // keeps the holder, if any (`ready ... job=<limits|none>`).
+                        let job = line
+                            .split_whitespace()
+                            .find_map(|word| word.strip_prefix("job="));
                         self.emit(
                             "pane_holder.started",
-                            json!({ "pane": pane, "incarnation": written.incarnation, "holder": resident.pid }),
+                            json!({
+                                "pane": pane,
+                                "incarnation": written.incarnation,
+                                "holder": resident.pid,
+                                "job": job,
+                            }),
                         );
                         Ok(written)
                     }
@@ -1248,8 +1265,13 @@ impl Panes {
     /// waits for its answer.
     fn terminate(&self, pane: &str, holder: Identity) -> Result<String, NotAsked> {
         let socket = layout::holder_socket(&self.state_dir, pane);
-        let (mut stream, _) =
-            match hide_holder_protocol::open(&socket, Vec::new(), Instant::now() + CONNECT_LIMIT) {
+        let deadline = Instant::now() + CLOSE_LIMIT;
+        loop {
+            let (mut stream, _) = match hide_holder_protocol::open(
+                &socket,
+                Vec::new(),
+                (Instant::now() + CONNECT_LIMIT).min(deadline),
+            ) {
                 Ok(opened) => opened,
                 Err(OpenError::Io(error)) if unreachable(&error, &socket) => {
                     return Err(NotAsked::Unreachable(format!(
@@ -1258,23 +1280,41 @@ impl Panes {
                 }
                 Err(error) => return Err(NotAsked::Refused(error.to_string())),
             };
-        if let Ok(peer) = stream.peer_pid()
-            && peer != holder.pid
-        {
-            return Err(NotAsked::Unreachable(format!(
-                "its socket is held by {peer}, not {}",
-                holder.pid
-            )));
-        }
-        write_client(&mut stream, &ClientMessage::Terminate)
-            .map_err(|error| NotAsked::Refused(error.to_string()))?;
-        stream.set_deadline(Instant::now() + CLOSE_LIMIT);
-        loop {
-            match read_holder(&mut stream) {
-                Ok(HolderMessage::Closed(closed)) => return Ok(closed.reason.name().to_owned()),
-                Ok(_) => {}
-                Err(error) => return Err(NotAsked::Refused(error.to_string())),
+            if let Ok(peer) = stream.peer_pid()
+                && peer != holder.pid
+            {
+                return Err(NotAsked::Unreachable(format!(
+                    "its socket is held by {peer}, not {}",
+                    holder.pid
+                )));
             }
+            write_client(&mut stream, &ClientMessage::Terminate)
+                .map_err(|error| NotAsked::Refused(error.to_string()))?;
+            stream.set_deadline(deadline);
+            let ended = loop {
+                match read_holder(&mut stream) {
+                    Ok(HolderMessage::Closed(closed)) => {
+                        return Ok(closed.reason.name().to_owned());
+                    }
+                    Ok(_) => {}
+                    Err(error) => break error,
+                }
+            };
+            // A holder closes a connection whose output it could not hand
+            // over with no `Closed`, and a terminate it had not read yet goes
+            // with that connection; one that still runs is asked again on a
+            // new connection until the bound.
+            let dropped = matches!(
+                &ended,
+                FrameError::Io(error) if error.kind() == std::io::ErrorKind::UnexpectedEof
+            );
+            if !dropped || Instant::now() >= deadline || !holder.runs() {
+                return Err(NotAsked::Refused(ended.to_string()));
+            }
+            self.emit(
+                "pane_holder.terminate_again",
+                json!({ "pane": pane, "holder": holder.pid }),
+            );
         }
     }
 

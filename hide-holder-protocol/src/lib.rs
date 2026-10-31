@@ -943,19 +943,25 @@ pub fn write_opening(writer: &mut impl Write, opening: &Opening) -> io::Result<(
             put_capabilities(&mut payload, &hello.accepts);
             write_frame(writer, kind::HELLO, &payload)
         }
-        Opening::Ask(ask) => {
-            let mut payload = MAGIC.to_vec();
-            payload.extend_from_slice(&PROTOCOL_VERSION.to_le_bytes());
-            match ask {
-                Ask::Read { lines } => {
-                    payload.push(1);
-                    payload.extend_from_slice(&lines.to_le_bytes());
-                }
-                Ask::Processes => payload.push(2),
-            }
-            write_frame(writer, kind::ASK, &payload)
-        }
+        Opening::Ask(ask) => write_ask(writer, ask, PROTOCOL_VERSION),
     }
+}
+
+/// Writes an [`Ask`] opening in `version`, the version the holder that reads
+/// it speaks: a holder answers an ask only in its own version, so a node asks
+/// an older holder in that holder's version. The bytes are the same in every
+/// version this build speaks to.
+pub fn write_ask(writer: &mut impl Write, ask: &Ask, version: u16) -> io::Result<()> {
+    let mut payload = MAGIC.to_vec();
+    payload.extend_from_slice(&version.to_le_bytes());
+    match ask {
+        Ask::Read { lines } => {
+            payload.push(1);
+            payload.extend_from_slice(&lines.to_le_bytes());
+        }
+        Ask::Processes => payload.push(2),
+    }
+    write_frame(writer, kind::ASK, &payload)
 }
 
 /// Reads a connection's first message, a [`Hello`] or an [`Ask`] within
@@ -1398,17 +1404,22 @@ pub fn open(
     }
 }
 
-/// Asks the holder at `path` one question on a connection of its own, by
-/// `deadline`. The connection that holds the pane, if any, goes on as it was.
+/// Asks the holder at `path` one question on a connection of its own, in
+/// `version` (the one its pane's record names), by `deadline`. The
+/// connection that holds the pane, if any, goes on as it was.
 pub fn ask(
     path: &std::path::Path,
     ask: Ask,
+    version: u16,
     deadline: std::time::Instant,
 ) -> Result<Answer, OpenError> {
+    if version < OLDEST_HOLDER_VERSION {
+        return Err(OpenError::Unsupported { version });
+    }
     let mut stream =
         hide_platform::ipc::LocalStream::connect_until(path, deadline).map_err(OpenError::Io)?;
     stream.set_deadline(deadline);
-    write_opening(&mut stream, &Opening::Ask(ask)).map_err(OpenError::Io)?;
+    write_ask(&mut stream, &ask, version).map_err(OpenError::Io)?;
     match read_holder(&mut stream)? {
         HolderMessage::Answer(answer) => Ok(answer),
         HolderMessage::Closed(closed) => Err(refused(closed)),

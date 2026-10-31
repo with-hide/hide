@@ -210,6 +210,12 @@ pub struct RaisedAsk {
     pub agent_kind: String,
     /// The pane Open goes to: the raised descendant, or the parent holding a draft.
     pub open_pane_id: String,
+    /// The device that pane is on, read from its id by the one address owner
+    /// (`crate::address`); absent for the core's own node. A device that is
+    /// not connected publishes no rows to look the pane up in, so the ask
+    /// names its device itself.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub open_device_id: Option<String>,
     pub since_unix_ms: Option<u64>,
     /// For an answer: the parent that has not received the letter.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -343,6 +349,7 @@ pub(crate) fn lift(
             title: named.identity_label.clone(),
             agent_kind: named.agent_kind.clone(),
             open_pane_id: named.pane_id.clone(),
+            open_device_id: crate::address::pane_device(&named.pane_id).map(str::to_owned),
             since_unix_ms: escalation.since_unix_ms,
             // Only a letter can wait unreceived; a child's own native
             // question was never sent to its parent.

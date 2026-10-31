@@ -49,6 +49,17 @@ fn state(client: &Client) -> Result<Arc<crate::delivery::ledger::Ledger>, String
         .map_err(|_| "delivery_unavailable")?
         .delivery_state()
 }
+/// The ledger with the registrations Hide holds asleep, read under one
+/// hold of the runtime's lock so the two agree.
+fn registrations(
+    client: &Client,
+) -> Result<(Arc<crate::delivery::ledger::Ledger>, super::Sleeping), String> {
+    let runtime = client.runtime.upgrade().ok_or("delivery_unavailable")?;
+    let runtime = runtime.lock().map_err(|_| "delivery_unavailable")?;
+    let ledger = runtime.delivery_state()?;
+    let sleeping = runtime.sleeping_registrations(&ledger.agents);
+    Ok((ledger, sleeping))
+}
 fn mutate(
     client: &Client,
     authority: &Authority,
@@ -219,7 +230,7 @@ fn actor_for(agent: &ProjectedAgent, device: &str, on_node: bool) -> Result<Acto
         pane_id: if on_node {
             agent.pane_id.clone()
         } else {
-            format!("remote:{device}:pane:{}", agent.pane_id)
+            crate::address::scoped_pane_id(device, &agent.pane_id)
         },
         // Herdr's own identifier for the agent: its name, else its pane. It
         // keys the pane, never labels it (`AgentRecord::wire_name`).
@@ -281,27 +292,27 @@ pub(crate) fn run(
 ) -> Result<Value, String> {
     match command {
         Command::List => {
-            let ledger = state(&client)?;
+            let (ledger, sleeping) = registrations(&client)?;
             Ok(json!(crate::delivery::answer::AgentList {
                 items: ledger
                     .agents
                     .iter()
-                    .map(|record| super::agent_view(record, &ledger))
+                    .map(|record| super::agent_view(record, &ledger, &sleeping))
                     .collect(),
             }))
         }
         Command::Show { id } if id == super::HERE => {
-            let ledger = state(&client)?;
-            Ok(view(super::here(&ledger, &actor)?, &ledger))
+            let (ledger, sleeping) = registrations(&client)?;
+            Ok(view(super::here(&ledger, &actor)?, &ledger, &sleeping))
         }
         Command::Show { id } => {
-            let ledger = state(&client)?;
+            let (ledger, sleeping) = registrations(&client)?;
             let record = ledger
                 .agents
                 .iter()
                 .find(|record| record.id == id)
                 .ok_or("agent_unavailable")?;
-            Ok(view(record, &ledger))
+            Ok(view(record, &ledger, &sleeping))
         }
         Command::End {
             id,
@@ -764,7 +775,7 @@ fn spawn(
     let mut reserved: SpawnRecord =
         serde_json::from_value(reserved).map_err(|_| "spawn_unavailable")?;
     if reserved.completed {
-        let ledger = state(client)?;
+        let (ledger, sleeping) = registrations(client)?;
         return Ok(view(
             ledger
                 .agents
@@ -772,6 +783,7 @@ fn spawn(
                 .find(|record| Some(&record.id) == reserved.child.as_ref())
                 .ok_or("child_unavailable")?,
             &ledger,
+            &sleeping,
         ));
     }
     // Everything the child needs happens on its own device; only the parent's
@@ -1139,7 +1151,7 @@ fn spawn(
             let pane_id = if on_node {
                 pane.to_owned()
             } else {
-                crate::session_sync::remote_pane_id(&child_device, pane)
+                crate::address::scoped_pane_id(&child_device, pane)
             };
             runtime
                 .lock()
@@ -1219,7 +1231,7 @@ fn spawn(
         )?;
         // The receipt-driven lineage worker alone owns naming. Keeping it
         // out of this path also keeps completed replay entirely offline.
-        let ledger = state(client)?;
+        let (ledger, sleeping) = registrations(client)?;
         Ok(view(
             ledger
                 .agents
@@ -1227,6 +1239,7 @@ fn spawn(
                 .find(|record| record.id == child_id)
                 .ok_or("child_unavailable")?,
             &ledger,
+            &sleeping,
         ))
     })();
     // Nothing after this creates anything, so a device that has gone quiet
@@ -1276,9 +1289,7 @@ fn beside_target(
     if actor.code_owned() || checkout.is_empty() {
         return Err(refused("beside_needs_agent_pane"));
     }
-    let pane = actor
-        .pane_id
-        .strip_prefix(&format!("remote:{}:pane:", actor.device_id))
+    let pane = crate::address::pane_of(&actor.pane_id, &actor.device_id)
         .unwrap_or(&actor.pane_id)
         .to_owned();
     let Some((repo, branch, path)) = target else {

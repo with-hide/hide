@@ -27,6 +27,9 @@ unicode-width = "=0.2.2"
 
 [dev-dependencies]
 hide-kit = { path = "../hide-kit" }
+# The node's side, run against the built holder (tests/it/node.rs).
+hide-node = { path = "../hide-node" }
+hide-node-link = { path = "../hide-node-link" }
 tempfile = "=3.27.0"
 
 [target.'cfg(unix)'.dev-dependencies]

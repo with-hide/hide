@@ -186,11 +186,7 @@ impl Runtime {
             {
                 continue;
             }
-            let pane_id = if self.node == device {
-                pane.to_owned()
-            } else {
-                format!("remote:{device}:pane:{pane}")
-            };
+            let pane_id = crate::address::pane_id_on(self.node.as_str(), device, pane);
             if !self.delivery_observations.contains_key(&pane_id)
                 && self.delivery_observations.len() >= OBSERVATION_LIMIT
             {
@@ -496,11 +492,7 @@ impl Runtime {
             {
                 continue;
             }
-            let pane_id = if self.node == device {
-                (*pane).to_owned()
-            } else {
-                format!("remote:{device}:pane:{pane}")
-            };
+            let pane_id = crate::address::pane_id_on(self.node.as_str(), device, pane);
             let actor = Actor {
                 pane_id,
                 name: name.to_owned(),
@@ -1107,15 +1099,9 @@ impl Runtime {
         // its own machine's Herdr, so a bare pane id names a pane on the
         // caller's machine; the core's panes are observed under their bare ids
         // and a device's under `remote:<device>:pane:<id>`. A key already
-        // spelled `remote:` is a full address and stays as it is.
-        let on_core = self.node == device;
-        let qualify = |pane: &str| {
-            if on_core || pane.starts_with("remote:") {
-                pane.to_owned()
-            } else {
-                format!("remote:{device}:pane:{pane}")
-            }
-        };
+        // already scoped to a device is a full address and stays as it is.
+        let node = self.node.as_str().to_owned();
+        let qualify = |pane: &str| crate::address::named_pane_id(&node, device, pane);
         // Only Hide's pane attestation names the agent a command acts as; a
         // checkout-bound caller has no pane, and a hint cannot lend it one.
         // The Desk process acts as Hide's own `hide:desk` while it runs.
@@ -2197,6 +2183,8 @@ pub(crate) mod tests {
         let panes = ["sender", "recipient"]
             .into_iter()
             .map(|id| crate::model::PaneSnapshot {
+                device_id: Default::default(),
+                device_pane_id: Default::default(),
                 start_claim: None,
                 terminal_id: None,
                 failed_terminal_id: None,
@@ -4095,7 +4083,7 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn remote_observation_without_a_local_socket_keeps_the_registered_session() {
+    fn remote_pane_move_keeps_the_registered_session_its_letters_and_watch() {
         let root = tempfile::tempdir().unwrap();
         let (runtime, _, _, path) = fixture(root.path());
         let (worker, client) = Worker::store(
@@ -4114,7 +4102,19 @@ pub(crate) mod tests {
             child.host_scope = "device".into();
             child.terminal_id = Some("terminal-child".into());
             let actor = child.actor.clone();
-            ledger.watches[0].target = actor;
+            ledger.watches[0].target = actor.clone();
+            let lead = ledger.agents[0].actor.clone();
+            crate::delivery::mailbox::send(
+                &mut ledger,
+                &lead,
+                &actor,
+                "keep-request",
+                "continue",
+                "request",
+                None,
+                1,
+            )
+            .unwrap();
             crate::delivery::ledger::save(&path, &ledger).unwrap();
             guard.delivery_ledger = Ok(Arc::new(crate::delivery::ledger::load(&path).unwrap()));
             guard.delivery_observations.clear();
@@ -4144,6 +4144,8 @@ pub(crate) mod tests {
         assert_eq!(child.parent.as_deref(), Some("agent-1"));
         assert!(!child.ended);
         assert!(persisted.watches[0].target.same_identity(&child.actor));
+        assert_eq!(persisted.letters.len(), 1);
+        assert!(persisted.letters[0].recipient.same_identity(&child.actor));
         persisted.validate().unwrap();
     }
 

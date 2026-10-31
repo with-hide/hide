@@ -60,9 +60,9 @@ describe("the Sleep idle agents setting and the pane menu", () => {
   });
 
   it("counts only this machine's sleeping agents", () => {
-    const row = (pane_id: string, sleeping: boolean) =>
-      (legacyAgentRow({ pane_id, ...(sleeping ? { sleep: { state: "sleeping", since_unix_ms: 0 } } : {}) })) as AgentRow;
-    expect(sleepingCount([row("w1:p1", true), row("w1:p2", false), row("remote:mini:pane:w1:p1", true)])).toBe(1);
+    const row = (pane_id: string, device_id: string, sleeping: boolean) =>
+      (legacyAgentRow({ pane_id, device_id, ...(sleeping ? { sleep: { state: "sleeping", since_unix_ms: 0 } } : {}) })) as AgentRow;
+    expect(sleepingCount([row("w1:p1", "mac", true), row("w1:p2", "mac", false), row("remote:mini:pane:w1:p1", "mini", true)], "mac")).toBe(1);
   });
 
   it("offers Sleep agent on an awake agent pane, disabled with the core's reason when it cannot sleep", () => {

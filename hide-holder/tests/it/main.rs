@@ -5,9 +5,11 @@ mod asks;
 mod connections;
 #[cfg(windows)]
 mod conpty;
+mod fixture_v1;
 mod folders;
 mod lifecycle;
 mod meaning;
+mod node;
 mod records;
 mod role;
 mod screen;

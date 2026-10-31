@@ -8,7 +8,8 @@
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
-use crate::delivery::answer::{Ps, PsAgent, PsMission, PsPane, PsState};
+use crate::coordination::{Sleeping, life};
+use crate::delivery::answer::{Ps, PsAgent, PsMission, PsPane, PsState, Runtime as Life};
 use crate::delivery::ledger::Ledger;
 use crate::model::SidebarAgentSnapshot;
 
@@ -28,23 +29,21 @@ pub(crate) struct PsRows {
     workers: HashMap<String, PsMission>,
     missions_unreadable: bool,
     ledger: Arc<Ledger>,
+    /// The registrations Hide holds asleep, read with the ledger.
+    sleeping: Sleeping,
 }
 
-/// A pane id as the navigator spells it, as its machine and Herdr's own id.
+/// A pane id as the navigator spells it, as its machine and its own id.
 fn split_pane(node: &str, scoped: &str) -> (String, String) {
-    scoped
-        .strip_prefix("remote:")
-        .and_then(|rest| rest.split_once(":pane:"))
-        .map_or_else(
-            || (node.to_owned(), scoped.to_owned()),
-            |(machine, pane)| (machine.to_owned(), pane.to_owned()),
-        )
+    let (machine, pane) = crate::address::split_pane(node, scoped);
+    (machine.to_owned(), pane.to_owned())
 }
 
 impl Runtime {
     /// The rows `hide ps` answers from, for a caller on `device` in `pane`.
     pub(crate) fn ps_rows(&self, device: &str, pane: &str) -> Result<PsRows, String> {
         let ledger = self.delivery_state()?;
+        let sleeping = self.sleeping_registrations(&ledger.agents);
         let node = self.node.as_str();
         let navigator = &self.snapshot.navigator;
         let disconnected: HashSet<String> = self
@@ -199,6 +198,7 @@ impl Runtime {
             workers,
             missions_unreadable: self.snapshot.missions.failed.is_some(),
             ledger,
+            sleeping,
         })
     }
 }
@@ -215,6 +215,7 @@ impl PsRows {
             workers,
             missions_unreadable,
             ledger,
+            sleeping,
         } = self;
         let mut used = HashSet::new();
         let mut join = |agent: &mut PsAgent| {
@@ -230,6 +231,11 @@ impl PsRows {
                 return;
             };
             used.insert(record.id.clone());
+            agent.state = registered(
+                life(record, &sleeping),
+                disconnected.contains(&agent.machine),
+                Some(agent.state),
+            );
             agent.id = Some(record.id.clone());
             agent.name = Some(record.wire_name().to_owned());
             agent.parent = record.parent.clone();
@@ -260,13 +266,11 @@ impl PsRows {
                     id: Some(record.id.clone()),
                     name: Some(record.wire_name().to_owned()),
                     kind: record.actor.kind.clone(),
-                    state: if record.ended {
-                        PsState::Ended
-                    } else if disconnected.contains(&record.machine) {
-                        PsState::Disconnected
-                    } else {
-                        PsState::Unknown
-                    },
+                    state: registered(
+                        life(record, &sleeping),
+                        disconnected.contains(&record.machine),
+                        None,
+                    ),
                     label: None,
                     line: None,
                     machine: record.machine.clone(),
@@ -284,6 +288,18 @@ impl PsRows {
             agents,
             missions_unreadable,
         }
+    }
+}
+
+/// A registered agent's state: its life (`coordination::life`, the answer
+/// `hide agent list` gives too) first, then a machine that does not answer,
+/// then the mark of the row that draws it while it runs, `unknown` with none.
+fn registered(life: Life, disconnected: bool, mark: Option<PsState>) -> PsState {
+    match life {
+        Life::Ended => PsState::Ended,
+        _ if disconnected => PsState::Disconnected,
+        Life::Asleep => PsState::Asleep,
+        Life::Running => mark.unwrap_or(PsState::Unknown),
     }
 }
 

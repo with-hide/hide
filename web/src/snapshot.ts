@@ -70,6 +70,8 @@ export type RaisedAsk = {
   title: string;
   agent_kind: string;
   open_pane_id: string;
+  /** The device that pane is on; absent for the core's own machine. A device that is not connected publishes no rows to look it up in. */
+  open_device_id?: string;
   since_unix_ms: number | null;
   unreceived_by?: string;
   path: string[];
@@ -129,8 +131,10 @@ export type AgentRow = {
   agent_kind: string;
   /** The checkout that physically owns this pane. */
   checkout_label?: string | null;
-  /** Presentation-only device facts attached by `allAgents`. */
-  device_id?: string;
+  /** The machine the row's pane is on and the id that machine gives the pane (`w9J:p52`), published by the core on every row. */
+  device_id: string;
+  device_pane_id: string;
+  /** Presentation-only device name attached by `allAgents`. */
   device_label?: string;
   mark: RowMark;
   group: string;
@@ -729,6 +733,9 @@ export type CheckoutAgentSummary = {
 export type MarkCounts = { turn: number; going: number; done: number; unread: number };
 
 export type PaneRow = {
+  /** The machine the pane is on and the id that machine gives it, published by the core on every row. */
+  device_id: string;
+  device_pane_id: string;
   terminal_id?: string | null;
   failed_terminal_id?: string;
   ports?: number[];
@@ -1180,6 +1187,8 @@ export type EditorTabKind = "file" | "diff" | "session";
 /** One editor tab the core holds. Its id is the strip entry's `source_id`. */
 export type EditorTabSnapshot = {
   id: string;
+  /** The machine the tab's checkout is on, published by the core. */
+  device_id: string;
   workspace_id: string;
   checkout_id: string;
   path: string;
@@ -1305,6 +1314,8 @@ export type MissionStrength = "fast" | "normal" | "thorough";
 export type MissionNodeKind = "change" | "research" | "verify" | "external";
 /** How a change node's work lands (`mission_delivery`). */
 export type MissionDelivery = "pr" | "direct";
+/** A registered agent's life (`hide agent show`'s `runtime`): running, put to sleep by Hide, or ended. */
+export type AgentRuntime = "running" | "asleep" | "ended";
 /** A node's state as its Conductor records it (`mission_node_status`). */
 export type MissionNodeStatus = "planned" | "working" | "waiting" | "review" | "held" | "done" | "failed" | "dropped";
 /** Why a node waits on an earlier one (`mission_blocked`, D-46). */
@@ -1420,6 +1431,8 @@ export type MissionNode = {
   delivery: MissionDelivery | null;
   worker: MissionWorker | null;
   agent_id: string | null;
+  /** The worker's life as `hide agent show` gives it: a worker Hide put to sleep is `asleep` (`NodeView.agent_runtime`); none with no registration or from an older core. */
+  agent_runtime?: AgentRuntime | null;
   /** The worker's pane on `machine`, which its status mark and 터미널로 이동 follow. */
   pane_id: string | null;
   machine: string | null;
@@ -3251,31 +3264,6 @@ export type SnapshotRest = {
  */
 export function localDeviceId(rest: SnapshotRest | null): string {
   return rest?.navigator?.devices?.find((device) => device.kind !== "remote")?.id ?? "";
-}
-
-/**
- * Every device row named by the device it runs on. The core publishes a
- * device's agents inside that device's status, where the row does not say
- * whose it is, but a session's ledger row is kept under the device id, so
- * every reader that names a row's session (a pane head, a task row, a reveal)
- * has to find the id on the row. This is the one place that sets it; rows
- * already carrying it, and statuses with no agents, are returned as they are
- * so `share` keeps their identity.
- */
-export function stampDeviceAgents(rest: SnapshotRest): SnapshotRest {
-  const remote = rest.status?.remote;
-  if (!remote?.some((status) => status.session?.agents?.some((agent) => agent.device_id !== status.target_id))) return rest;
-  return {
-    ...rest,
-    status: {
-      ...rest.status!,
-      remote: remote.map((status) => {
-        const session = status.session;
-        if (!session?.agents?.some((agent) => agent.device_id !== status.target_id)) return status;
-        return { ...status, session: { ...session, agents: session.agents.map((agent) => (agent.device_id === status.target_id ? agent : { ...agent, device_id: status.target_id })) } };
-      }),
-    },
-  };
 }
 
 export function focusedRemoteDevice(rest: SnapshotRest | null): Device | null {
