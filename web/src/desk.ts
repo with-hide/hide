@@ -8,7 +8,7 @@
 // The fields no section carries (marked `wire gap` below) are a thread's
 // own, which the threads node reads from the session record.
 
-import type { DeskAgent, DeskAskKind, DeskItem, DeskJob, DeskMention as WireMention, DeskMission, DeskNotice, DeskOutput, DeskOutputKind, DeskSection, DeskSessionChip, PlanView, PrState, RowMark } from "./snapshot";
+import type { DeskAgent, DeskAgentState, DeskAskKind, DeskItem, DeskJob, DeskMention as WireMention, DeskMission, DeskNotice, DeskOutput, DeskOutputKind, DeskSection, DeskSessionChip, PlanView, PrState, RowMark } from "./snapshot";
 
 export type { DeskAgent, DeskAgentId, DeskAgentState, DeskApprovalState, DeskChoice, DeskItem, DeskJob, DeskJobFailure, DeskJobState, DeskLive, DeskLocation, DeskMission, DeskOutput, DeskOutputKind, DeskSteps } from "./snapshot";
 
@@ -351,9 +351,18 @@ export const markedMention = (mention: DeskMention) => `@${mention.kind}(${menti
 /** A mention as a session's own words say it. */
 export const namedMention = (mention: DeskMention) => `@${mention.name}`;
 
-/** An agent Desk cannot be given (D-53, B4): one that cannot ask before acting. One not installed or signed in can be picked and says so (B6). */
+/** An agent Desk cannot be given (B4, D-79): one that cannot ask before acting, or one Settings › Agents switched off. One not ready or not signed in can be picked and says so (B6). */
 export function agentPickable(agent: DeskAgent): boolean {
-  return agent.state !== "no_ask_mode";
+  return agent.state !== "no_ask_mode" && agent.state !== "off";
+}
+
+/** What the agent bar says beside an agent (D-81, B44): a ready agent's sign-in as Settings › Agents reads it, nothing while that is unread; otherwise its state. */
+export type DeskAgentWord = Exclude<DeskAgentState, "ready"> | "signed_in" | "signed_out";
+
+export function deskAgentWord(agent: DeskAgent): DeskAgentWord | null {
+  if (agent.state !== "ready") return agent.state;
+  if (agent.signed_in === null) return null;
+  return agent.signed_in ? "signed_in" : "signed_out";
 }
 
 /** One turn of a thread (B25): the words that started it, the work, the answer, and the parts the work made. */

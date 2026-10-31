@@ -1,14 +1,13 @@
-import { ArrowUpIcon, ChevronDownIcon, ImageIcon, PaperclipIcon, SquareIcon, XIcon } from "lucide-react";
+import { ArrowUpIcon, ChevronDownIcon, ImageIcon, LoaderCircleIcon, PaperclipIcon, SquareIcon, XIcon } from "lucide-react";
 import type { KeyboardEvent, ReactNode } from "react";
-import type { DeskAgent, DeskAgentId, DeskChoice, DeskSelection } from "../../desk";
-import { agentPickable } from "../../desk";
+import type { DeskAgent, DeskAgentId, DeskAgentWord, DeskChoice, DeskSelection } from "../../desk";
+import { agentPickable, deskAgentWord } from "../../desk";
 import { useInterfaceTranslation } from "../../i18n/client";
 import type { MessageKey } from "../../i18n/catalogs";
 import { cn } from "../../lib/utils";
 import { AgentMark } from "../../AgentMark";
-import { deskAgentName } from "./desk-agent-name";
 import { Button } from "../ui/button";
-import { DropdownMenu, DropdownMenuContent, DropdownMenuLabel, DropdownMenuRadioGroup, DropdownMenuRadioItem, DropdownMenuSeparator, DropdownMenuTrigger } from "../ui/dropdown-menu";
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuRadioGroup, DropdownMenuRadioItem, DropdownMenuSeparator, DropdownMenuTrigger } from "../ui/dropdown-menu";
 import { Popover, PopoverAnchor, PopoverContent } from "../ui/popover";
 import { Textarea } from "../ui/textarea";
 import { Hint } from "../ui/tooltip";
@@ -104,17 +103,37 @@ export function DeskComposer({ value, label, placeholder, attachments = [], answ
   );
 }
 
-const AGENT_STATE: Record<DeskAgent["state"], MessageKey> = {
+const AGENT_WORD: Record<DeskAgentWord, MessageKey> = {
+  signed_in: "desk.agentState.signed_in",
+  signed_out: "desk.agentState.signed_out",
   checking: "desk.agentState.checking",
-  cli_missing: "desk.agentState.cli_missing",
-  ready: "desk.agentState.ready",
   preparing: "desk.agentState.preparing",
   install_failed: "desk.agentState.install_failed",
   node_missing: "desk.agentState.node_missing",
-  login_needed: "desk.agentState.login_needed",
-  not_installed: "desk.agentState.not_installed",
+  cli_missing: "desk.agentState.cli_missing",
   no_ask_mode: "desk.agentState.no_ask_mode",
+  off: "desk.agentState.off",
 };
+
+/** Why an agent the bar lists cannot be picked, on hover. */
+const UNPICKABLE_HINT: Partial<Record<DeskAgentWord, MessageKey>> = {
+  no_ask_mode: "desk.agentState.noAskModeHint",
+  off: "desk.agentState.offHint",
+};
+
+/** A word that asks the operator to act is in the warning color; one that is passing or settled is quiet. */
+const QUIET_WORDS: ReadonlySet<DeskAgentWord> = new Set(["signed_in", "checking", "preparing", "no_ask_mode", "off"]);
+
+/** The word beside an agent: its sign-in or its state, with the spinner while its adapter downloads. */
+function AgentWord({ word, ...data }: { word: DeskAgentWord } & Record<`data-${string}`, string>) {
+  const { t } = useInterfaceTranslation();
+  return (
+    <span className={cn("flex shrink-0 items-center gap-xxs text-micro", QUIET_WORDS.has(word) ? "text-muted-foreground" : "text-warning")} {...data}>
+      {word === "preparing" ? <LoaderCircleIcon aria-hidden="true" className="size-(--size-icon-sm) motion-safe:animate-spin" /> : null}
+      {t(AGENT_WORD[word])}
+    </span>
+  );
+}
 
 /** One of the bar's three menus: its trigger names the value, and pressing it opens the choices. */
 function BarMenu({ name, value, open, onOpenChange, highlight = false, children, ...data }: { name: string; value: ReactNode; open?: boolean; onOpenChange?: (open: boolean) => void; highlight?: boolean; children: ReactNode } & Record<`data-${string}`, string>) {
@@ -135,44 +154,57 @@ function BarMenu({ name, value, open, onOpenChange, highlight = false, children,
 
 /**
  * Under Desk's composer (D-66, B4, B5): the agent, its model and its effort,
- * each a menu. An agent that cannot ask before acting is listed dim with its
- * reason and cannot be picked; one that is preparing or failed says so;
- * switching keeps the conversation (B9). Before an agent is chosen only the
- * agent menu shows; before its first session the model and effort read as
- * the agent's default. `open` opens one menu, for review.
+ * each a menu. The agent menu lists the agents switched on in Settings ›
+ * Agents (D-79), each with the sign-in Settings reads or its state (D-81);
+ * one that cannot ask before acting is listed dim with its reason and cannot
+ * be picked; switching keeps the conversation (B9). Before an agent is chosen
+ * only the agent menu shows; before its first session the model and effort
+ * read as the agent's default. `open` opens one menu, for review.
  */
-export function DeskAgentBar({ agents, selection, open = null, onAgent, onModel, onEffort }: {
+export function DeskAgentBar({ agents, selection, open = null, onAgent, onModel, onEffort, onAgentSettings }: {
   agents: readonly DeskAgent[];
   selection: DeskSelection;
   open?: "agent" | "model" | "effort" | null;
   onAgent: (agent: DeskAgentId) => void;
   onModel: (model: string) => void;
   onEffort: (effort: string) => void;
+  /** Opens Settings › Agents, where the list and the sign-ins come from. */
+  onAgentSettings: () => void;
 }) {
   const { t } = useInterfaceTranslation();
   const agent = selection.agent === null ? null : agents.find((one) => one.id === selection.agent);
   if (agent === undefined) throw new Error(`Desk selection names an unknown agent ${selection.agent}`);
   const choice = (choices: readonly DeskChoice[], id: string | null) => (id === null ? t("desk.bar.default") : (choices.find((one) => one.id === id)?.label ?? id));
+  const chosenWord = agent ? deskAgentWord(agent) : null;
+  const registered = agents.filter((one) => one.state !== "off").length;
   return (
     <div className="flex min-w-0 items-center justify-end gap-xxs" data-desk-agent-bar="true">
-      {agent && agent.state !== "ready" ? <span className={cn("mr-auto truncate text-micro", agent.state === "preparing" || agent.state === "checking" ? "text-muted-foreground" : "text-warning")} data-desk-agent-bar-state={agent.state}>{t(AGENT_STATE[agent.state])}</span> : null}
-      <BarMenu name={t("desk.bar.agent")} value={agent ? <><AgentMark kind={agent.id} />{deskAgentName(t, agent.id)}</> : t("desk.bar.agent")} open={open === "agent" ? true : undefined} highlight={open === "agent"} data-desk-bar="agent">
-        <DropdownMenuLabel>{t("desk.bar.agent")}</DropdownMenuLabel>
+      {chosenWord && chosenWord !== "signed_in" ? <span className="mr-auto min-w-0 truncate"><AgentWord word={chosenWord} data-desk-agent-bar-state={chosenWord} /></span> : null}
+      <BarMenu name={t("desk.bar.agent")} value={agent ? <><AgentMark kind={agent.id} />{agent.label}</> : t("desk.bar.agent")} open={open === "agent" ? true : undefined} highlight={open === "agent"} data-desk-bar="agent">
+        <DropdownMenuLabel className="flex items-center justify-between gap-sm">
+          <span>{t("desk.bar.agent")}</span>
+          <span className="font-normal text-muted-foreground" data-desk-agent-count={registered}>{t("desk.bar.registered", { n: registered })}</span>
+        </DropdownMenuLabel>
         <DropdownMenuRadioGroup value={selection.agent ?? undefined} onValueChange={(value) => onAgent(value as DeskAgentId)}>
           {agents.map((one) => {
             const pickable = agentPickable(one);
+            const word = deskAgentWord(one);
             const item = (
-              <DropdownMenuRadioItem key={one.id} value={one.id} disabled={!pickable} className="gap-sm" data-desk-agent={one.id} data-desk-agent-state={one.state}>
+              <DropdownMenuRadioItem key={one.id} value={one.id} disabled={!pickable} className="gap-sm" data-desk-agent={one.id} data-desk-agent-state={one.state} data-desk-agent-word={word ?? "none"}>
                 <AgentMark kind={one.id} />
-                <span className="flex-1">{deskAgentName(t, one.id)}</span>
-                <span className={cn("text-micro", one.state === "ready" || one.state === "preparing" || one.state === "checking" ? "text-muted-foreground" : "text-warning")}>{t(AGENT_STATE[one.state])}</span>
+                <span className="flex-1 truncate">{one.label}</span>
+                {word ? <AgentWord word={word} /> : null}
               </DropdownMenuRadioItem>
             );
-            return pickable ? item : <Hint key={one.id} label={t("desk.agentState.noAskModeHint")} side="left"><span>{item}</span></Hint>;
+            const hint = word ? UNPICKABLE_HINT[word] : undefined;
+            return !pickable && hint ? <Hint key={one.id} label={t(hint)} side="left"><span>{item}</span></Hint> : item;
           })}
         </DropdownMenuRadioGroup>
         <DropdownMenuSeparator />
-        <DropdownMenuLabel className="font-normal text-muted-foreground">{t("desk.bar.carries")}</DropdownMenuLabel>
+        <div className="flex items-center justify-between gap-sm">
+          <DropdownMenuLabel className="font-normal text-muted-foreground">{t("desk.bar.carries")}</DropdownMenuLabel>
+          <DropdownMenuItem onSelect={onAgentSettings} className="text-caption text-subtle-foreground" data-desk-agent-settings="true">{t("desk.bar.agentSettings")}</DropdownMenuItem>
+        </div>
       </BarMenu>
       {agent ? (
         <>
