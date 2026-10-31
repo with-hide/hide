@@ -2,7 +2,8 @@
 // software-factory-conductor, mission-map-git-criteria), one state per
 // `state` parameter: plan, running (every card look: working, review with its
 // checkers, done with a merge left, in main, outside, reopened by a defect),
-// decision (a decision, a failed node, a stuck worker and an outside PR
+// rejected (running, with the search fix's check failed and one reviewer's
+// rejection, its short reason first), decision (a decision, a failed node, a stuck worker and an outside PR
 // closed unmerged in the operator's turn), decision-sent (its answer waiting
 // for the Conductor's turn), decision-unconfirmed (its answer typed without
 // Herdr confirming it), stack (the merge order), no-conductor, stale, failed
@@ -149,6 +150,25 @@ function plan(state: string, now: number): MissionNode[] {
   ];
 }
 
+/**
+ * The rejected state's search fix (B32): its check failed with a short reason,
+ * and of its two reviewers one rejected it, the one line it wrote the operator
+ * before its long report, which folds.
+ */
+function rejectedReview(one: MissionNode): MissionNode {
+  if (one.key !== "fix-1490") return one;
+  const report = "Blocking: clearing the query restores the first page, but the scroll position and the selected row are lost. SearchList.tsx resets `selected` in the effect on `query` change (line 88), so the row the operator had picked is gone after clearing. Also the empty-query branch skips the debounce, which makes the list flash twice. Suggest keeping the selection keyed by id and moving the reset into the submit handler.";
+  return {
+    ...one,
+    ...finish(
+      own(1, "검색어를 지우면 처음 목록으로 돌아간다"),
+      line("check", "check", "fail", { summary: "검색 테스트 2개 실패", evidence: "pnpm test: SearchList.test.tsx > keeps the selection after clearing (expected row 3, got none); restores the first page (timeout 5000 ms)" }),
+      line("review", "review", "fail", { rule: "all", checkers: [{ ...checker(opus("high"), "fail", "agent-21"), summary: "검색어를 지우면 고른 줄과 스크롤 위치가 사라져요", evidence: report }, { ...checker(sonnet, "open", "agent-22"), pane_id: REVIEW_PANE }] }),
+      ci("pass"),
+    ),
+  };
+}
+
 /** How many minutes before now each state's mission started; the rest started 44 minutes ago. */
 const STARTED_AGO: Record<string, number> = { stack: 72, done: 300, cancelled: 300, "no-pr": 180 };
 
@@ -193,9 +213,9 @@ const OLD_CRITERION = "목록 화면이 새 API로 페이지를 넘기고, 필�
 
 export function missionFixture(shown: string, now: number): { mission: Mission; rest: SnapshotRest } {
   // An answer sent from the banner draws the decision with that answer on it.
-  const state = shown === "decision-sent" || shown === "decision-unconfirmed" ? "decision" : shown === "exempt" ? "done" : shown;
-  // A mission from before finish lines keeps each node's one old sentence (B23).
-  const nodes = shown === "exempt" ? plan(state, now).map((one) => ({ ...one, ...finish(own(1, OLD_CRITERION, "pass")) })) : plan(state, now);
+  const state = shown === "decision-sent" || shown === "decision-unconfirmed" ? "decision" : shown === "exempt" ? "done" : shown === "rejected" ? "running" : shown;
+  // A mission from before finish lines keeps each node's one old sentence (B23); a rejected one has a reviewer say no.
+  const nodes = shown === "exempt" ? plan(state, now).map((one) => ({ ...one, ...finish(own(1, OLD_CRITERION, "pass")) })) : shown === "rejected" ? plan(state, now).map(rejectedReview) : plan(state, now);
   const mission: Mission = {
     id: "mission-1", title: "이슈 정리", workspace_id: "hide", project: "/projects/herdr-ide", checkout_path: "/projects/herdr-ide", device_id: "local",
     status: state === "plan" ? "planning" : state === "stack" ? "merge_wait" : state === "done" || state === "no-pr" ? "done" : state === "cancelled" ? "cancelled" : "running",
