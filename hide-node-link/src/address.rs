@@ -178,9 +178,9 @@ impl<'a> PaneAddress<'a> {
         }
     }
 
-    /// The pane a caller named on `device`: a full device address stands as
-    /// it is, and a bare id is a pane of `device` (the core's own node's when
-    /// `device` is `node`).
+    /// The pane an id names on `device`, where `node` is the core's own
+    /// node: a full device address stands as it is, and a bare id is a pane
+    /// of `device`.
     pub fn named(node: &str, device: &'a str, id: &'a str) -> Result<Self, NotAPane> {
         match Self::parse(id)? {
             Self::Node(pane) => Ok(Self::on(node, device, pane)),
@@ -268,6 +268,34 @@ pub fn pane_id_on(node: &str, device: &str, pane: &str) -> String {
     PaneAddress::on(node, device, pane).to_string()
 }
 
+/// The core's id for the pane a caller named on `device`, where `node` is
+/// the core's own node. Herdr numbers panes per machine, so a bare id is a
+/// pane of the caller's machine; an id already scoped to a device is a full
+/// address and stands as it is.
+pub fn named_pane_id(node: &str, device: &str, id: &str) -> String {
+    if device == node || is_device_scoped(id) {
+        id.to_owned()
+    } else {
+        scoped_pane_id(device, id)
+    }
+}
+
+/// Whether two ids named on `device` are the same pane: a bare id is a pane
+/// of `device` and a full address names its own device, so the same Herdr
+/// id on two devices is never one pane.
+pub fn same_pane(node: &str, device: &str, a: &str, b: &str) -> bool {
+    a == b
+        || matches!(
+            (PaneAddress::named(node, device, a), PaneAddress::named(node, device, b)),
+            (Ok(a), Ok(b)) if a == b
+        )
+}
+
+/// The device a pane id names, when it is not the core's own node's.
+pub fn pane_device(id: &str) -> Option<&str> {
+    PaneAddress::parse(id).ok().and_then(PaneAddress::device)
+}
+
 /// `id` of `kind` on `device` as the core names it: Herdr's own id on the
 /// core's own `node`, the device-scoped id on any other device.
 pub fn id_on(node: &str, device: &str, kind: Kind, id: &str) -> String {
@@ -351,20 +379,24 @@ mod tests {
 
     #[test]
     fn a_named_pane_is_qualified_by_the_device_unless_it_already_is() {
+        assert_eq!(named_pane_id("core", "mini", "w1:p1"), "remote:mini:pane:w1:p1");
+        assert_eq!(named_pane_id("core", "core", "w1:p1"), "w1:p1");
         assert_eq!(
-            PaneAddress::named("core", "mini", "w1:p1").unwrap().to_string(),
-            "remote:mini:pane:w1:p1"
-        );
-        assert_eq!(
-            PaneAddress::named("core", "core", "w1:p1").unwrap().to_string(),
-            "w1:p1"
-        );
-        assert_eq!(
-            PaneAddress::named("core", "core", "remote:studio:pane:w1:p1")
-                .unwrap()
-                .to_string(),
+            named_pane_id("core", "mini", "remote:studio:pane:w1:p1"),
             "remote:studio:pane:w1:p1"
         );
+    }
+
+    #[test]
+    fn a_pane_is_the_same_only_on_the_same_device() {
+        assert!(same_pane("core", "mini", "w1:p1", "remote:mini:pane:w1:p1"));
+        assert!(same_pane("core", "core", "w1:p1", "w1:p1"));
+        assert!(!same_pane("core", "mini", "remote:studio:pane:w1:p1", "w1:p1"));
+        assert!(!same_pane("core", "mini", "remote:studio:pane:w1:p1", "remote:mini:pane:w1:p1"));
+        assert!(!same_pane("core", "core", "remote:mini:pane:w1:p1", "w1:p1"));
+        assert_eq!(pane_device("remote:mini:pane:w1:p1"), Some("mini"));
+        assert_eq!(pane_device("w1:p1"), None);
+        assert_eq!(pane_device("remote:mini:tab:w1:t1"), None);
     }
 
     #[test]

@@ -120,11 +120,7 @@ impl Runtime {
             {
                 continue;
             }
-            let pane_id = if self.node == device {
-                pane.to_owned()
-            } else {
-                format!("remote:{device}:pane:{pane}")
-            };
+            let pane_id = crate::address::pane_id_on(self.node.as_str(), device, pane);
             if !self.delivery_observations.contains_key(&pane_id)
                 && self.delivery_observations.len() >= OBSERVATION_LIMIT
             {
@@ -373,11 +369,7 @@ impl Runtime {
             {
                 continue;
             }
-            let pane_id = if self.node == device {
-                (*pane).to_owned()
-            } else {
-                format!("remote:{device}:pane:{pane}")
-            };
+            let pane_id = crate::address::pane_id_on(self.node.as_str(), device, pane);
             let actor = Actor {
                 pane_id,
                 name: name.to_owned(),
@@ -984,15 +976,9 @@ impl Runtime {
         // its own machine's Herdr, so a bare pane id names a pane on the
         // caller's machine; the core's panes are observed under their bare ids
         // and a device's under `remote:<device>:pane:<id>`. A key already
-        // spelled `remote:` is a full address and stays as it is.
-        let on_core = self.node == device;
-        let qualify = |pane: &str| {
-            if on_core || pane.starts_with("remote:") {
-                pane.to_owned()
-            } else {
-                format!("remote:{device}:pane:{pane}")
-            }
-        };
+        // already scoped to a device is a full address and stays as it is.
+        let node = self.node.as_str().to_owned();
+        let qualify = |pane: &str| crate::address::named_pane_id(&node, device, pane);
         // Only Hide's pane attestation names the agent a command acts as; a
         // checkout-bound caller has no pane, and a hint cannot lend it one.
         // The Desk process acts as Hide's own `hide:desk` while it runs.

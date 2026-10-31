@@ -13,7 +13,6 @@ use serde_json::json;
 
 use super::super::Runtime;
 use super::super::delivery::Observation;
-use super::pane_device;
 use crate::agent_sleep::{DormantPhase, SleepId, SleepPhase, WakeMode};
 use crate::delivery::Actor;
 use crate::delivery::doorbell::Turn;
@@ -143,7 +142,7 @@ impl Runtime {
     pub(in crate::runtime) fn asleep_route(&self, actor: &Actor) -> Option<(Route, Stage)> {
         let store = &self.snapshot.ui_state.agent_sleep;
         if let Some(record) = store.records.get(&actor.pane_id)
-            && pane_device(&actor.pane_id).unwrap_or(self.node.as_str()) == actor.device_id
+            && crate::address::pane_device(&actor.pane_id).unwrap_or(self.node.as_str()) == actor.device_id
             && record
                 .session_id
                 .as_deref()
@@ -176,7 +175,7 @@ impl Runtime {
                 (
                     pane.clone(),
                     Sleeper {
-                        device_id: pane_device(pane).unwrap_or(self.node.as_str()).to_owned(),
+                        device_id: crate::address::pane_device(pane).unwrap_or(self.node.as_str()).to_owned(),
                         session: record
                             .session_id
                             .as_deref()

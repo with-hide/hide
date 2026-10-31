@@ -1032,12 +1032,8 @@ impl Runtime {
         index: &CardIndex<'_>,
     ) -> crate::model::DeskJobSnapshot {
         use crate::model::{DeskJobLocation, DeskJobLocationKind, DeskJobProject};
-        let machine = super::super::agent_sleep::pane_device(&row.pane_id);
+        let machine = crate::address::pane_device(&row.pane_id);
         let device = machine.unwrap_or(self.node.as_str());
-        let raw = row
-            .pane_id
-            .rsplit_once(":pane:")
-            .map_or(row.pane_id.as_str(), |(_, raw)| raw);
         let place = self
             .catalog_workspaces()
             .filter(|workspace| workspace.device_id == device)
@@ -1049,7 +1045,7 @@ impl Runtime {
                         checkout.tabs.iter().any(|tab| {
                             tab.panes
                                 .iter()
-                                .any(|pane| pane.id == raw || pane.id == row.pane_id)
+                                .any(|pane| crate::address::same_pane(self.node.as_str(), device, &pane.id, &row.pane_id))
                         })
                     })
                     .map(|checkout| (workspace, checkout))

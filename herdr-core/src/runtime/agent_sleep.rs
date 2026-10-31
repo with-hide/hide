@@ -402,7 +402,7 @@ impl Runtime {
     /// or says why it may not: the one check the menu and `hide agent
     /// sleep` share (PRD mission-worker-sleep D-10).
     fn sleep_pane(&mut self, pane_id: &str, trigger: &str) -> Result<bool, SleepRefused> {
-        let device = pane_device(pane_id);
+        let device = crate::address::pane_device(pane_id);
         let machine = self.sleep_machine_of_pane(pane_id);
         let agent = self
             .sleep_agents(device)
@@ -604,7 +604,7 @@ impl Runtime {
             return false;
         };
         let Some(agent) = self
-            .sleep_agents(pane_device(pane_id))
+            .sleep_agents(crate::address::pane_device(pane_id))
             .iter()
             .find(|agent| agent.pane_id == pane_id)
         else {
@@ -758,7 +758,7 @@ impl Runtime {
 
     /// Draws a record's new phase on the rows of the machine the pane is on.
     fn refresh_sleep_rows_of(&mut self, pane_id: &str) -> bool {
-        match pane_device(pane_id) {
+        match crate::address::pane_device(pane_id) {
             None => self.refresh_agent_sleep_rows(),
             Some(device) => self.refresh_node_sleep_rows(device),
         }
@@ -907,13 +907,13 @@ impl Runtime {
     }
 
     pub(super) fn sleep_machine_of_pane(&self, pane_id: &str) -> SleepMachine {
-        pane_device(pane_id).map_or(SleepMachine::Core, |device| self.sleep_machine(device))
+        crate::address::pane_device(pane_id).map_or(SleepMachine::Core, |device| self.sleep_machine(device))
     }
 
     /// Where a pane's sleep or wake runs: the core's own Herdr and node, or
     /// those of the node that dials the core with the pane.
     fn sleep_target(&self, pane_id: &str) -> Option<SleepTarget> {
-        let Some(device) = pane_device(pane_id) else {
+        let Some(device) = crate::address::pane_device(pane_id) else {
             let live = self.live.as_ref()?;
             return Some(SleepTarget {
                 engine: Arc::clone(&live.engine),
@@ -971,7 +971,7 @@ impl Runtime {
     }
 
     fn agent_sleep_pane_cwd(&self, pane_id: &str) -> Option<String> {
-        self.sleep_workspaces(pane_device(pane_id))
+        self.sleep_workspaces(crate::address::pane_device(pane_id))
             .iter()
             .flat_map(|workspace| workspace.checkouts.iter())
             .flat_map(|checkout| checkout.tabs.iter())
@@ -1000,10 +1000,3 @@ impl SleepRefused {
     }
 }
 
-/// The device a pane belongs to, when it is not this core's own.
-pub(super) fn pane_device(pane_id: &str) -> Option<&str> {
-    pane_id
-        .strip_prefix("remote:")
-        .and_then(|rest| rest.split_once(":pane:"))
-        .map(|(device, _)| device)
-}

@@ -7,7 +7,7 @@ use serde_json::{Value, json};
 
 use super::super::Runtime;
 use super::letters::Stage;
-use super::{SleepRefused, pane_device};
+use super::SleepRefused;
 use crate::delivery::Actor;
 use crate::model::AgentActionRefusal;
 use crate::workspace_control::{Caller, Context, Query};
@@ -49,11 +49,7 @@ impl Runtime {
                 let Caller::Pane(pane) = Caller::parse(caller) else {
                     return Err("agent_pane_required".into());
                 };
-                let pane = if device == self.node.as_str() || pane.starts_with("remote:") {
-                    pane.to_owned()
-                } else {
-                    format!("remote:{device}:pane:{pane}")
-                };
+                let pane = crate::address::named_pane_id(self.node.as_str(), device, pane);
                 self.delivery_observations
                     .get(&pane)
                     .ok_or("agent_pane_required")?
@@ -112,7 +108,7 @@ impl Runtime {
             None => {}
         }
         let target = &actor.pane_id;
-        let device = pane_device(target);
+        let device = crate::address::pane_device(target);
         let row = self
             .sleep_agents(device)
             .iter()

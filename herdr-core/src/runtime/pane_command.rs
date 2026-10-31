@@ -119,11 +119,7 @@ impl Runtime {
         device: &str,
         key: &str,
     ) -> Result<&super::delivery::Observation, String> {
-        let pane = if self.node == device || key.starts_with("remote:") {
-            key.to_owned()
-        } else {
-            format!("remote:{device}:pane:{key}")
-        };
+        let pane = crate::address::named_pane_id(self.node.as_str(), device, key);
         let registered = self
             .delivery_ledger
             .as_ref()
