@@ -107,6 +107,11 @@ class Node:
         argv = [str(program), "node", "--home", str(home), "--state", str(state)]
         if herdr_bin:
             argv += ["--herdr-bin", str(herdr_bin)]
+        if WINDOWS:
+            # Through libuv's job, as the desktop app starts its daemon: a
+            # job the runner's own (which lets no process leave it) is
+            # outside of (holder-restart-spawn.mjs).
+            argv = ["node", str(CHECKOUT / "scripts/holder-restart-spawn.mjs"), *argv]
         self.stderr = open(log, "ab")
         self.process = subprocess.Popen(argv, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=self.stderr,
                                         env=env, text=True, encoding="utf-8")
@@ -143,7 +148,8 @@ class Node:
         return self._answer(wait + (timeout or 0) / 1000)
 
     def kill(self):
-        """Kills the node outright, the way a crash ends it."""
+        """Kills the node outright, the way a crash ends it; on Windows the
+        starter, whose job's close ends the node."""
         self.process.kill()
         self.process.wait(30)
         self.stderr.close()
@@ -343,9 +349,11 @@ def cell(row, binaries, herdr_bin, run):
         for attempt in range(1, SCREEN_TRIES + 1):
             before = node.ask("tree", pane=pane)
             node.kill()
+            killed = time.monotonic()
             node = Node(binaries / exe("holder_node"), runtime.home, runtime.state, herdr_bin,
                         run / f"node-{row['id']}.log")
             full = node.ask("wait_full", pane=pane, since=0, timeout_ms=ATTACH * 1000)
+            record["reattach_seconds"] = round(time.monotonic() - killed, 2)
             held = node.ask("read", pane=pane, lines=ROWS)["text"]
             after_read = node.ask("frames", pane=pane)["count"]
             after = node.ask("tree", pane=pane)
@@ -369,12 +377,14 @@ def cell(row, binaries, herdr_bin, run):
             break
         else:
             raise Failed(f"the screen moved between the frame and the read in {SCREEN_TRIES} restarts")
+        typed = time.monotonic()
         text = prompt(second)
         node.ask("key", pane=pane, hex=text.encode().hex())
         node.ask("wait_text", pane=pane, text=text, lines=ROWS, timeout_ms=TURN * 1000)
         node.ask("key", pane=pane, hex=b"\r".hex())
         wait_turn(log, second, TURN)
         node.ask("wait_text", pane=pane, text=second, absent="Reply_", lines=ROWS, timeout_ms=TURN * 1000)
+        record["second_turn_seconds"] = round(time.monotonic() - typed, 1)
         record["states"] = node.ask("states", pane=pane)["states"]
         record["result"] = PASS
         record["reason"] = "the CLI kept its processes, the screen and its second turn across a node restart"
