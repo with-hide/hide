@@ -655,7 +655,7 @@ export function installKeyboard(actions: Actions): () => void {
     const on = deskOn(desk);
     if (on === deskReported) return;
     deskReported = on;
-    bridge?.reportDesk(on);
+    bridge?.reportDesk?.(on);
   };
   const unsubscribeBindings = bridge ? useShellStore.subscribe(() => {
     report();

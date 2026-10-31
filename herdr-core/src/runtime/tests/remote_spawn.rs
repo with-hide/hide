@@ -608,7 +608,7 @@ fn a_delegated_spawn_makes_the_child_on_the_device_under_the_caller() {
     assert_eq!(child["project"], WORKTREE);
     assert_eq!(child["parent"], "agent-1");
     assert_eq!(child["watch"]["parent"]["pane_id"], "sender");
-    assert_eq!(spawner.count("worktree.create"), 2);
+    assert_eq!(spawner.count("worktree.create"), 1);
     assert_eq!(spawner.count("agent.start"), 1);
     // Codex's trust of the worktree the spawn made is recorded on the
     // device, where Codex runs.
@@ -830,7 +830,7 @@ fn the_machine_is_part_of_the_intent() {
     let first = spawner.spawn(Some("here"), Some(DEVICE), "one").unwrap();
     let again = spawner.spawn(Some("here"), Some(DEVICE), "one").unwrap();
     assert_eq!(first["id"], again["id"]);
-    assert_eq!(spawner.count("worktree.create"), 2);
+    assert_eq!(spawner.count("worktree.create"), 1);
     assert_eq!(spawner.count("agent.start"), 1);
     // Even with the device gone, the finished spawn answers from its receipt.
     spawner.runtime.lock().unwrap().snapshot.status.remote[0].state = "not_connected".into();
