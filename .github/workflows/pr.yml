@@ -37,7 +37,7 @@
 # asks for a macOS runner only for what a macOS runner alone proves: `desktop
 # e2e` for a change to the app's own code (the desktop host and the web shell,
 # issue #1288), `os contract (macos)` for a change to `hide-platform` or
-# `hide-herdr-client`, and `package`'s macOS job for a change to what goes into
+# `hide-herdr-client`, `vt (macos)` for a change to hide-vt's Zig build, and `package`'s macOS job for a change to what goes into
 # a package, the one job that starts the packaged app such a change builds.
 # Core and daemon changes add no macOS job: main's push run runs `desktop e2e`
 # for them (#1147, which broke a desktop spec from herdr-core alone, is the
@@ -210,6 +210,10 @@ jobs:
         with:
           set: workspace
           save: ${{ github.ref == 'refs/heads/main' }}
+      # hide-vt's Zig inputs and caches, which the vt lane saves.
+      - uses: ./.github/actions/vt-cache
+        with:
+          save: false
       # rustfmt and Clippy come with the version `rust-toolchain.toml` names,
       # which rustup installs on the job's first `rustc` or `cargo` call; the
       # image's own toolchain is never used. A full plan covers the whole
@@ -365,6 +369,10 @@ jobs:
         with:
           set: workspace
           save: ${{ github.ref == 'refs/heads/main' }}
+      # hide-vt's Zig inputs and caches, which the vt lane saves.
+      - uses: ./.github/actions/vt-cache
+        with:
+          save: false
       - name: Install cargo-nextest
         # The Rust tests below run under nextest's `ci` profile (one retry).
         timeout-minutes: 3
@@ -650,6 +658,20 @@ jobs:
     permissions:
       contents: read
 
+  # The terminal parser on all three systems, for a change to hide-vt or the
+  # scripts that prepare and check its Zig build (see vt.yml).
+  vt:
+    name: vt
+    needs: plan
+    if: contains(fromJSON(needs.plan.outputs.lanes), 'vt')
+    uses: ./.github/workflows/vt.yml
+    secrets:
+      HIDE_ISSUES_APP_KEY: ${{ secrets.HIDE_ISSUES_APP_KEY }}
+    with:
+      systems: '["linux","macos","windows"]'
+    permissions:
+      contents: read
+
   # agy against stand-ins and its installed binary on Windows, for a change
   # to a crate that writes agy's files, reads its conversations or drives it
   # for Hide AI. `rust` runs the same agy tests on Linux; the nightly runs the
@@ -787,7 +809,7 @@ jobs:
     permissions:
       contents: read
       actions: read
-    needs: [plan, policy, rust, checks, os-contract, os-contract-macos, agy-contract, omp-contract, agent-journey, agent-clis, windows-check, windows-e2e, windows-desktop, windows-wsl, web-e2e, remote-mailbox, desktop-e2e, package]
+    needs: [plan, policy, rust, checks, os-contract, os-contract-macos, vt, agy-contract, omp-contract, agent-journey, agent-clis, windows-check, windows-e2e, windows-desktop, windows-wsl, web-e2e, remote-mailbox, desktop-e2e, package]
     if: always()
     runs-on: ubuntu-latest
     timeout-minutes: 5

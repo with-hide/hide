@@ -17,6 +17,8 @@ publish = false
 ahash = { version = "0.8", features = ["serde"] }
 aho-corasick = { version = "1" }
 bytes = { version = "1" }
+crc32fast = { version = "1" }
+flate2 = { version = "1" }
 futures-task = { version = "0.3", default-features = false, features = ["std"] }
 futures-util = { version = "0.3", features = ["sink"] }
 getrandom-468e82937335b1c9 = { package = "getrandom", version = "0.3", default-features = false, features = ["std"] }
@@ -32,6 +34,7 @@ schemars = { version = "0.8", features = ["preserve_order"] }
 serde = { version = "1", features = ["alloc", "derive", "rc"] }
 serde_core = { version = "1", features = ["alloc", "rc"] }
 serde_json = { version = "1", features = ["alloc", "float_roundtrip", "preserve_order", "raw_value"] }
+simd-adler32 = { version = "0.3" }
 smallvec = { version = "1", default-features = false, features = ["const_new"] }
 subtle = { version = "2" }
 tokio = { version = "1", features = ["fs", "io-util", "macros", "net", "process", "rt-multi-thread", "signal", "sync", "time"] }
@@ -49,12 +52,16 @@ serde_core = { version = "1", features = ["alloc", "rc"] }
 serde_json = { version = "1", features = ["alloc", "float_roundtrip", "preserve_order", "raw_value"] }
 syn-7b89eefb6aaa9bf3 = { package = "syn", version = "3", features = ["extra-traits", "full"] }
 syn-f595c2ba2a3f28df = { package = "syn", version = "2", features = ["extra-traits"] }
+typenum = { version = "1", default-features = false, features = ["const-generics"] }
 
 [target.aarch64-apple-darwin.dependencies]
 errno = { version = "0.3" }
 getrandom-9fbad63c4bcf4a8f = { package = "getrandom", version = "0.4", default-features = false, features = ["std", "sys_rng"] }
 libc = { version = "0.2", features = ["extra_traits"] }
 rustix = { version = "1", features = ["fs", "process", "termios", "time"] }
+
+[target.aarch64-apple-darwin.build-dependencies]
+libc = { version = "0.2", features = ["extra_traits"] }
 
 [target.x86_64-unknown-linux-gnu.dependencies]
 bitflags = { version = "2", default-features = false, features = ["std"] }
@@ -71,6 +78,9 @@ libc = { version = "0.2", features = ["extra_traits"] }
 linux-raw-sys = { version = "0.12", default-features = false, features = ["auxvec", "elf", "errno", "general", "ioctl", "no_std", "prctl"] }
 mio = { version = "1", features = ["net", "os-ext"] }
 rustix = { version = "1", features = ["fs", "process", "termios", "time"] }
+
+[target.aarch64-unknown-linux-gnu.build-dependencies]
+libc = { version = "0.2", features = ["extra_traits"] }
 
 [target.x86_64-pc-windows-msvc.dependencies]
 getrandom-9fbad63c4bcf4a8f = { package = "getrandom", version = "0.4", default-features = false, features = ["std", "sys_rng"] }

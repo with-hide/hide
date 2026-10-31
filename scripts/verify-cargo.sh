@@ -52,6 +52,34 @@ report_toolchain() {
     cargo --version >&2
 }
 
+# hide-vt builds libghostty-vt from inputs scripts/prepare-vt-inputs.py
+# downloads and checks once per machine; its build itself downloads nothing.
+# Every mode that can build hide-vt prepares them first, which does nothing
+# when they are ready, and stops with the reason when it cannot, rather than
+# leave the build to fail later. docs/BUILD.md, "The terminal parser and Zig".
+prepare_vt_inputs() {
+    python3 scripts/prepare-vt-inputs.py --quiet >/dev/null || {
+        printf 'The hide-vt build inputs could not be prepared (the reason is above). Run `python3 scripts/prepare-vt-inputs.py` once on this machine where ziglang.org, github.com, codeberg.org and deps.files.ghostty.org are reachable, then run this command again.\n' >&2
+        exit 1
+    }
+}
+
+# Whether scoped cargo arguments select hide-vt: the whole workspace or the
+# crate by name.
+selects_vt() {
+    local argument previous=
+    for argument in "$@"; do
+        case "$argument" in
+            --workspace|--all|-phide-vt|--package=hide-vt) return 0 ;;
+        esac
+        case "$previous:$argument" in
+            -p:hide-vt|--package:hide-vt) return 0 ;;
+        esac
+        previous=$argument
+    done
+    return 1
+}
+
 # Scoped modes cannot move the checkout or its artifacts through cargo flags.
 # Keep the legacy modes unchanged for sealed verification commands.
 case "${1:-}" in
@@ -68,6 +96,7 @@ case "${1:-}" in
             esac
         done
         report_toolchain
+        if [[ "$mode" != metadata ]] && selects_vt "$@"; then prepare_vt_inputs; fi
         if [[ "$mode" == nextest ]]; then
             status=0
             cargo nextest run --locked "$@" || status=$?
@@ -84,6 +113,7 @@ case "${1:-}" in
     test)
         shift
         report_toolchain
+        prepare_vt_inputs
         exec cargo test --locked --workspace "$@"
         ;;
     fmt-check)
@@ -100,6 +130,7 @@ case "${1:-}" in
         ;;
     lint)
         report_toolchain
+        prepare_vt_inputs
         cargo fmt --all --check
         exec cargo clippy --locked --workspace --all-targets -- -D warnings
         ;;

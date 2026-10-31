@@ -255,7 +255,7 @@ class Workflows(unittest.TestCase):
                 if re.search(r"ci-flaky-report\.py --(suite|measurement)", step):
                     steps += 1
                     self.assertEqual(step.count("ci-flaky-report.py"), 1, f"{workflow.name}: {step.splitlines()[0]}")
-        self.assertEqual(steps, 13)
+        self.assertEqual(steps, 14)
 
 
 class Annotating(unittest.TestCase):
