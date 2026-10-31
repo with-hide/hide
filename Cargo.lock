@@ -1014,6 +1014,9 @@ name = "hide-holder-protocol"
 version = "0.1.0"
 dependencies = [
  "hide-platform",
+ "serde",
+ "serde_json",
+ "tempfile",
 ]
 
 [[package]]
@@ -1049,6 +1052,7 @@ dependencies = [
  "hide-agent-adapter",
  "hide-agent-hooks",
  "hide-herdr-client",
+ "hide-holder-protocol",
  "hide-platform",
  "serde",
  "serde_json",

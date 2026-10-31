@@ -84,7 +84,7 @@ import { homeOpening } from "./hideAiOrigin";
 import { agentsByPane, allAgents as allPaneAgents } from "./paneAgents";
 import { archiveWorking } from "./archive";
 import { beginOpening } from "./opening";
-import { deskOn } from "./desk";
+import { deskOn, threadKeyPane } from "./desk";
 import { afterKeep, openThread as openDeskThread, toggleLane as toggleDeskLane } from "./deskLane";
 import { useShellStore } from "./store";
 import { useUiStore, type MainView, type OverviewPlace, type PendingClose, type PendingViewsClose } from "./ui";
@@ -1865,6 +1865,10 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
      * own conversation cannot be resumed; the core refuses it while a
      * Conductor is still there. `request` lets the caller follow its answer.
      */
+    /** 미션 종료 (UI_BEHAVIOR, A mission's map): the core asks the Conductor to end it, or cancels a mission no Conductor holds. */
+    endMission(missionId: string) {
+      dispatch({ schema_version: 2, kind: "mission_end", payload: { mission: missionId } });
+    },
     takeOverMission(missionId: string, request?: { requestId: string; confirmOnly: boolean }) {
       const mission = rest()?.missions?.items.find((row) => row.id === missionId);
       if (!mission) return diagnostic(`mission_take: no mission ${missionId}`);
@@ -2206,9 +2210,12 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
       const state = ui();
       if (state.screen?.kind === "desk") {
         const tool = state.deskLane.up ? state.deskLane.tool : null;
-        const job = tool?.kind === "thread" ? jobs.find((one) => one.id === tool.job) : undefined;
-        if (!job?.pane_id) return diagnostic("desk terminal: no thread in Desk's lane");
-        return this.openAgent(job.pane_id);
+        // A session the conversation names opens in the lane as a thread too (D-86).
+        const job = tool?.kind === "thread" ? [...jobs, ...(section?.named ?? [])].find((one) => one.id === tool.job) : undefined;
+        // A session that is no job opens by its pane, card or not yet (D-87).
+        const pane = job?.pane_id ?? (tool?.kind === "thread" ? threadKeyPane(tool.job) : null);
+        if (!pane) return diagnostic("desk terminal: no thread in Desk's lane");
+        return this.openAgent(pane);
       }
       const pane = useShellStore.getState().focusedPaneId;
       const job = pane ? jobs.find((one) => one.pane_id === pane) : undefined;

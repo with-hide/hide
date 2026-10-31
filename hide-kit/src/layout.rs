@@ -459,6 +459,26 @@ pub fn holder_log(state_dir: &Path, pane: &str) -> PathBuf {
     holder_panes(state_dir).join(format!("{pane}.log"))
 }
 
+/// The folder of a state folder's pane records (`crate::panes`), the
+/// holders' owner (PRD engine-bundle-2-pane-holder D-14).
+pub fn pane_records(state_dir: &Path) -> PathBuf {
+    holder_panes(state_dir).join("records")
+}
+
+pub fn pane_record(state_dir: &Path, pane: &str) -> PathBuf {
+    pane_records(state_dir).join(format!("{pane}.json"))
+}
+
+/// The one lock every change of a pane record is made under.
+pub fn pane_records_lock(state_dir: &Path) -> PathBuf {
+    pane_records(state_dir).join(".lock")
+}
+
+/// The next start's incarnation, which no earlier start of the folder had.
+pub fn pane_incarnations(state_dir: &Path) -> PathBuf {
+    pane_records(state_dir).join("next")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

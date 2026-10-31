@@ -66,6 +66,11 @@ pub struct DeskJobsSnapshot {
     /// node opens a worker's thread (B28, B34); none is Desk's job, and none
     /// is drawn in the chat.
     pub workers: Vec<DeskJobSnapshot>,
+    /// The other sessions the newest lines of the conversation name (a
+    /// reply's chips, a letter's line), as cards of their own read from
+    /// their sidebar rows, so a chip's hover card and its thread show what
+    /// the row shows (D-86); none is drawn in the chat or listed in Threads.
+    pub named: Vec<DeskJobSnapshot>,
 }
 
 /// One session Desk started, or one waiting to start.
@@ -315,6 +320,16 @@ pub struct DeskMentionSession {
     pub agent_kind: String,
     pub mark: crate::agent_state::RowMark,
     pub detail: Option<String>,
+    /// The pane of the session it was spawned from, always one the menu
+    /// lists too, so the menu folds it under that parent (D-84).
+    pub parent: Option<String>,
+    /// The project its pane sits in, as the sidebar names it.
+    pub project: String,
+    /// The branch of the checkout its pane sits in; none for a folder or a
+    /// pane the navigator has not placed.
+    pub branch: Option<String>,
+    /// Its latest request, the time the sidebar row shows.
+    pub last_prompt_at_unix_ms: Option<u64>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]

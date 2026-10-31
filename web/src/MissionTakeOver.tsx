@@ -15,6 +15,7 @@ import { useSessionResume } from "./useSessionResume";
  * the agent failed, and a second press after a resume that brought no
  * Conductor back start a new agent told to take the mission; only when that
  * start fails too does the button say so, and pressing it tries again.
+ * While a start is on its way the button says 이어받는 중… and takes no press.
  */
 export function MissionTakeOver({ mission, actions }: { mission: Mission; actions: Actions }) {
   const { t } = useInterfaceTranslation();
@@ -50,6 +51,6 @@ export function MissionTakeOver({ mission, actions }: { mission: Mission; action
   };
   const failed = fresh.resume.failure !== null;
   return <Button size="sm" variant={failed ? "destructive" : "secondary"} disabled={busy} onClick={press} data-mission-takeover={failed ? "failed" : "true"}>
-    {t(failed ? "mission.takeOverFailed" : "mission.takeOver")}
+    {t(busy ? "mission.takingOver" : failed ? "mission.takeOverFailed" : "mission.takeOver")}
   </Button>;
 }

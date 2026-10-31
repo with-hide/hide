@@ -14,7 +14,7 @@ hide mission node <key> [--status <status>] [--agent-id <id>] [--pr <n>] [--base
                         [--commit <sha>] [--verdict pass|fail] [--checks <passed>/<total>]
                         [--no-agent-id] [--no-pr] [--no-base-pr] [--no-branch] [--no-line] [--no-change] [--no-review]
                         [--no-commit] [--no-verdict] [--no-checks] [--reviewer <agent-id>] [--verifier <agent-id>]
-hide mission record <node> <line> (--pass | --fail) --evidence <text> [--commit <sha>] [--rerun]
+hide mission record <node> <line> (--pass | --fail) --evidence <text> [--summary <text>] [--commit <sha>] [--rerun]
 hide mission skip <node> <line> --reason <text> [--decision <key>]
 hide mission defect <node> --found-by <node> --line <text>
 hide mission start
@@ -142,7 +142,7 @@ A `research` node only when the plan cannot be written without its answer; a que
 Every worker's brief, change or verify, says in its first line what the node is, then:
 
 - the contract and the exact scope (the behaviours or decisions by number), and what is explicitly another node's;
-- the node's finish lines, each with its key from `hide mission show` (`c1`…, `check`, `ci`), and how to record them: `hide mission record <node> <line> --pass|--fail --evidence <one line>`, with `--commit <sha>` for the `check` line;
+- the node's finish lines, each with its key from `hide mission show` (`c1`…, `check`, `ci`), and how to record them: `hide mission record <node> <line> --pass|--fail --evidence <one line> --summary <one line for the operator>`, with `--commit <sha>` for the `check` line;
 - the branch and worktree the spawn made, and that commits go on that branch only;
 - the checks the diff touches, by the repository's own commands;
 - the pull request rules: the repository's template, its title form, no agent attribution anywhere;
@@ -198,6 +198,7 @@ Every worker's brief, change or verify, says in its first line what the node is,
   A close as done or merge_wait is refused while a node is unfinished (`mission_nodes_unfinished`) or a done node's line no longer holds (`mission_criteria_unmet`, `<node>: <lines>`), and a waiting mission closes itself only while every done node's lines hold.
   Then finish the check, skip the line with its reason, or ask the operator.
 - `hide mission skip <node> <line> --reason <why>` leaves a node's own line or a checker's line skipped (⤳) with the reason, and the node goes on.
+  Write the reason as one short line in the operator's language: the map shows it under the line as the skip's verdict.
   The `check` and `ci` lines are the operator's to skip (`mission_criteria_protected`): ask with `hide mission decide --line <question> --node <key>`, and once they answered, skip with `--decision <key>`, the question's `key` in `hide mission show`; the line then reads `⤳ operator 결정`.
   A line that would change the goal or the scope is asked the same way, never skipped on your own.
 - A failed `ci` or `check` line is rerun once, by the worker, on the same commit and only for what failed (`gh run rerun <run-id> --failed` for CI, the failed part of the check command with `--rerun`).
@@ -215,6 +216,7 @@ The operator's words are the controls; there are no buttons.
 - "cancel" (취소): ask what to do with the open pull requests; the default to offer is to close each with a reason and keep its branch.
   After the answer, end every worker; in a worktree you made, commit what is not committed onto its branch, then remove only the folder.
   Then `hide mission close --as cancelled`. A cancelled mission is over: nothing reopens it.
+- The map's one control for this is `미션 종료` (End mission): it reaches you as an `end_asked` letter from Hide, which is the operator saying "cancel". A mission with no Conductor is cancelled by Hide at once, its pull requests, branches and workers left as they are, so the next one to take a mission finds nothing to undo.
 - A node dropped by a replan: close its pull request with a comment in the operator's language that says it was dropped from the mission and why (`Dropped from the mission: <reason>`) and keep the branch; commit what is not committed in its worktree, remove the folder, end its worker, and set `--status dropped`.
 - Commit for a worker only in a worktree the mission made, never in a folder the operator made or in the main checkout.
 
@@ -247,7 +249,8 @@ You conduct one open mission at a time: while another is open, a done one stays 
 
 ## 8. Taking over
 
-If a mission has no Conductor, the map offers Take over (이어받기 in Korean), which starts a new pane and asks it to take the mission.
+If a mission has no Conductor, the map and the mission list offer Take over (이어받기 in Korean), which first brings the gone Conductor's own conversation back, else starts a new pane and asks it to take the mission.
+A conversation brought back gets a `resumed` letter from Hide saying it conducts the mission again: read it as the start of this section.
 Run `hide mission take <id>`, then `hide mission show` and `hide inbox`, read each worker's state (`hide agent list`, its record), and go on from there.
 The take makes the mission's workers yours: asking a start again under its intent answers the worker it already has, and their reports and warnings come to you. A worker still addresses the Conductor it was started by, and letters already sent there stay in that inbox, so send each live worker one letter saying you conduct the mission now.
 Hide refuses a second session while the mission's Conductor is still present (`mission_conducted`).
@@ -258,6 +261,8 @@ A worker or checker of a mission records its own lines from its own pane; the Co
 
 - A worker records its node's own lines and its `check` line: `hide mission record <node> <line> --pass|--fail --evidence <one line>`.
   Every record carries the one line its result rests on (`mission_evidence_missing` without it).
+  Add `--summary` on a failed or rejected result: one line of at most 160 characters, in the operator's language, saying what the result means for them ("검색어를 지우면 고른 줄이 사라져요"), while the details stay in `--evidence`.
+  The map shows the summary first and folds the evidence under it, so a long report in another language never stands in the operator's way (`mission_summary_invalid` for a longer or multi-line one).
   The `check` line names the commit it ran on with `--commit <sha>`, is recorded from a pane in the checkout it ran in (`mission_checkout_unknown` otherwise), and a rerun of a failed check on the same commit adds `--rerun`.
 - A checker records only its `review` or `verify` line, the same way; it is refused on any other line (`mission_criterion_not_yours`).
 - Recording the same result on the same commit again changes nothing.

@@ -49,6 +49,8 @@
 use std::io::{self, Read, Write};
 use std::time::Duration;
 
+pub mod record;
+
 /// The version of this protocol this build speaks as a holder.
 pub const PROTOCOL_VERSION: u16 = 1;
 

@@ -1323,7 +1323,7 @@ export type MissionCheckRule = "all" | "majority";
 
 /** One agent of a review or verification: what the plan asked, the registration bound to it and its own answer. */
 /** One checker of a review or verify line; `pane_id` and `machine` are the bound checker's pane now, as the core resolves it from `agent_id` (B29). */
-export type MissionChecker = { worker: MissionWorker; agent_id?: string; state: MissionCriterionState; evidence?: string; at_unix_ms?: number; pane_id?: string; machine?: string };
+export type MissionChecker = { worker: MissionWorker; agent_id?: string; state: MissionCriterionState; evidence?: string; summary?: string; at_unix_ms?: number; pane_id?: string; machine?: string };
 
 /** One finish line of a node (`Criterion`): only the fields its kind carries are present. */
 export type MissionCriterion = {
@@ -1334,6 +1334,8 @@ export type MissionCriterion = {
   state: MissionCriterionState;
   by?: { role: MissionRecordedRole; name: string; agent_id?: string; at_unix_ms: number };
   evidence?: string;
+  /** One line for the operator, in their language, beside the evidence (`--summary`). */
+  summary?: string;
   commit?: string;
   reruns?: number;
   rerunning?: boolean;
@@ -1468,6 +1470,8 @@ export type Mission = {
   /** What the Conductor said beside `decision`; null for a decision from before it. */
   question: MissionQuestion | null;
   answer: MissionAnswer | null;
+  /** The operator asked the Conductor to end the mission and it has not closed it yet (`미션 종료`). */
+  end_asked?: boolean;
   answer_failed: MissionAnswerFailure | null;
   delay: string | null;
   report: string | null;
@@ -2727,9 +2731,12 @@ export type DeskJob = {
   /** The panes of a Conductor's workers. */
   workers: string[];
 };
-/** The `desk_mentions` section, the `@` menu: recent sessions, then projects with their running sessions' panes. */
+/**
+ * The `desk_mentions` section, the `@` menu: recent sessions, then projects with their running sessions' panes.
+ * A session's `parent` is the pane it was spawned from, always one listed too (D-84); `project` and `branch` are its second line's.
+ */
 export type DeskMentions = {
-  sessions: { id: string; name: string; agent_kind: string; mark: RowMark; detail: string | null }[];
+  sessions: { id: string; name: string; agent_kind: string; mark: RowMark; detail: string | null; parent: string | null; project: string; branch: string | null; last_prompt_at_unix_ms: number | null }[];
   projects: { id: string; name: string; sessions: string[] }[];
 };
 
@@ -2752,6 +2759,8 @@ export type DeskJobsSection = {
   jobs: DeskJob[];
   /** The workers of the missions Desk's jobs conduct, as cards of their own: listed under their Conductor and opened from a mission map's node, never drawn in the chat (B28, B34). */
   workers: DeskJob[];
+  /** The other sessions the newest lines of the conversation name, as cards read from their sidebar rows: a chip's hover card and the thread it opens (D-86); never drawn in the chat or listed in Threads. */
+  named: DeskJob[];
 };
 
 /** The `desk_live` section: the reply being written, `null` between turns. */

@@ -6,6 +6,7 @@ import { DependencyGraphView, type EdgeLook, type OverlayEdge } from "./Dependen
 import type { GraphEdge } from "./dependencyLayout";
 import { formatElapsed, useElapsed, useMinuteClock } from "./components/elapsed";
 import { ConductorRow } from "./components/mission-conductor-row";
+import { MissionEnd } from "./components/mission-end";
 import { MissionNodeMark } from "./components/mission-node-mark";
 import { MissionPrMark } from "./components/mission-pr";
 import { PullList, ResultTiles } from "./components/mission-results";
@@ -113,7 +114,7 @@ function MissionBody({ mission, actions, onNode }: { mission: Mission; actions: 
   return (
     <div ref={rootRef} className="@container/mission flex min-h-0 min-w-0 flex-1 flex-col" data-mission={mission.id} data-mission-status={mission.status} data-mission-stale={mission.stale || undefined} onKeyDown={onKeyDown}>
       <div ref={pageRef} className="flex min-h-0 min-w-0 flex-1 flex-col overflow-auto mission-wide:overflow-hidden" data-mission-scroll="true">
-        <Head mission={mission} />
+        <Head mission={mission} actions={actions} />
         {/* A finished mission leads with what it left (B20); its report's line follows, then its Conductor. */}
         {!open ? <ResultTiles mission={mission} /> : null}
         {!open ? <PullList mission={mission} onSelect={select} /> : null}
@@ -130,12 +131,15 @@ function MissionBody({ mission, actions, onNode }: { mission: Mission; actions: 
               className="flex min-w-0 flex-col mission-wide:min-h-0 mission-wide:flex-1"
               onClick={(event: MouseEvent<HTMLDivElement>) => {
                 // A press on the map outside every card and its checkers lets go of the pick (B30).
+                // A checker's popover is portalled out of the map, yet its presses bubble here through React.
+                if (!event.currentTarget.contains(event.target as Node)) return;
                 if (!(event.target as Element).closest("[data-mission-node], [data-node-satellites]")) setPicked(null);
               }}
               data-mission-map="true"
             >
               <MissionMapCanvas wide={wide} page={page}>
                 <Graph
+                  actions={actions}
                   mission={mission}
                   selected={selected}
                   onSelect={(key) => {
@@ -202,7 +206,7 @@ export const PILL: Record<MissionStatus, { key: MessageKey; tone: string }> = {
  * device that does not answer stops the running time, so no number moves
  * without the record (B35).
  */
-function Head({ mission }: { mission: Mission }) {
+function Head({ mission, actions }: { mission: Mission; actions: Actions }) {
   const { t, i18n } = useInterfaceTranslation();
   const language = requireInterfaceLanguage(i18n.language);
   const running = useElapsed(mission.status !== "done" && mission.status !== "cancelled" && !mission.stale ? mission.started_at_unix_ms : null);
@@ -230,6 +234,9 @@ function Head({ mission }: { mission: Mission }) {
           {t("mission.head.strength", { strength: t(`mission.strength.${mission.strength}`) })}
         </span>
       ) : null}
+      {/* An end the Conductor was asked for says so until it closes the mission. */}
+      {mission.end_asked && mission.conductor.present && missionOpen(mission) ? <span className="shrink-0 text-caption text-mission-hold" data-mission-end-asked="true">{t("mission.end.askedNote")}</span> : null}
+      <span className="ml-auto shrink-0"><MissionEnd mission={mission} actions={actions} /></span>
     </div>
   );
 }
@@ -266,7 +273,7 @@ function ReportLine({ mission }: { mission: Mission }) {
 
 type GraphCard = { key: string; node: MissionNode | null };
 
-function Graph({ mission, selected, onSelect, events, end }: { mission: Mission; selected: string | null; onSelect: (key: string) => void; events: MissionEvent[] | null; end: number }) {
+function Graph({ mission, selected, onSelect, events, end, actions }: { mission: Mission; selected: string | null; onSelect: (key: string) => void; events: MissionEvent[] | null; end: number; actions: Actions }) {
   const nodes = mission.nodes;
   const graph = useMemo(() => {
     const shown = new Set(nodes.map((node) => node.key));
@@ -307,7 +314,7 @@ function Graph({ mission, selected, onSelect, events, end }: { mission: Mission;
       overlay={overlay}
       draw={(card) =>
         card.node ? (
-          <NodeCard key={card.key} mission={mission} node={card.node} selected={selected === card.key} dimmed={lit !== null && !lit.has(card.key)} onSelect={() => onSelect(card.key)} events={events} end={end} />
+          <NodeCard key={card.key} mission={mission} node={card.node} actions={actions} selected={selected === card.key} dimmed={lit !== null && !lit.has(card.key)} onSelect={() => onSelect(card.key)} events={events} end={end} />
         ) : (
           <ReportCard key={card.key} mission={mission} dimmed={lit !== null && !lit.has(REPORT)} />
         )
@@ -339,7 +346,7 @@ const LOOK_CARD: Record<NodeLook, string> = {
  * how long it took or a decision held it, and `기준 n/m` with `⤳k`. The other agents checking it stand beside it as
  * satellites tethered to its right side. Pressing it picks it (B30).
  */
-function NodeCard({ mission, node, selected, dimmed, onSelect, events, end }: { mission: Mission; node: MissionNode; selected: boolean; dimmed: boolean; onSelect: () => void; events: MissionEvent[] | null; end: number }) {
+function NodeCard({ mission, node, selected, dimmed, onSelect, events, end, actions }: { mission: Mission; node: MissionNode; selected: boolean; dimmed: boolean; onSelect: () => void; events: MissionEvent[] | null; end: number; actions: Actions }) {
   const { t } = useInterfaceTranslation();
   const look = nodeLook(mission, node);
   const moving = look === "working" || look === "review";
@@ -433,7 +440,8 @@ function NodeCard({ mission, node, selected, dimmed, onSelect, events, end }: { 
     <div data-dependency-node={node.key} className="grid grid-cols-[var(--spacing-xl)_auto_var(--spacing-xl)] items-center">
       <span aria-hidden="true" />
       {card}
-      <Satellites mission={mission} lines={satellites} dimmed={dimmed} onSelect={onSelect} />
+      {/* 노드 상세 opens the node's panel; it never shuts the panel already open, as a second press on the card does. */}
+      <Satellites mission={mission} lines={satellites} dimmed={dimmed} onSelect={() => !selected && onSelect()} actions={actions} />
     </div>
   );
 }

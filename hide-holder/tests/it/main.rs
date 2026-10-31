@@ -8,6 +8,7 @@ mod conpty;
 mod folders;
 mod lifecycle;
 mod meaning;
+mod records;
 mod role;
 mod screen;
 mod support;
