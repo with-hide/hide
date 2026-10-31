@@ -24,8 +24,10 @@ answered by the agent journey's fake model with no key. For each agent:
 Nothing waits a fixed time: each step waits for the fake model's log, the
 holder's read or a frame. A cell that cannot run fails; the report names each
 agent's system, CLI version, pin, result and reason, and the lane fails
-unless every cell passed. Only the processes the lane started are ended, by
-the pane's own end and then by pid and start time.
+unless every cell passed. A CLI whose version is not the pinned one fails its
+cell. Only the processes the lane started are ended, by the pane's own end
+and then, on every path, a stop signal included, by pid and start time
+(`holder_owned.Owned`); a cell fails when any of them is left running.
 
 Usage: holder-restart-check.py --bin <folder with holder_node and hide-holder>
        --run-dir <new folder under agents/runs> [--agents id,...] [--herdr-bin <herdr>]
@@ -43,7 +45,6 @@ from pathlib import Path
 import platform
 import queue
 import secrets
-import shutil
 import subprocess
 import sys
 import tempfile
@@ -58,6 +59,7 @@ from agent_journey.local import TRUST  # noqa: E402
 from agent_live_check.protection import private_directory, write_private  # noqa: E402
 from agent_live_check.runtime import clean_env  # noqa: E402
 from agent_live_check.system import WINDOWS, home_env, temp_env  # noqa: E402
+import holder_owned  # noqa: E402
 
 ROWS, COLS = 40, 120
 DRAW = CHECKOUT / "hide-holder/tests/xterm/draw.mjs"
@@ -75,6 +77,14 @@ SCREEN_TRIES = 5
 QUIET_MS = 500
 FOLLOW_MS = 1000
 PASS, FAIL = "pass", "fail"
+# Cells whose failure is open as an issue: each still runs and shows its
+# result, and its failure does not fail the lane. An entry is removed in the
+# pull request that closes its issue.
+KNOWN_FAILURES = {
+    # Antigravity on Windows failed one run in ten: it read the holder's
+    # answer to its color question as typed keys and opened its editor.
+    ("agy", "Windows"): "with-hide/hide-private#405",
+}
 
 
 def token():
@@ -105,7 +115,7 @@ class Owner:
 class Node:
     """A `holder_node node` process and its request line."""
 
-    def __init__(self, program, home, state, herdr_bin, log):
+    def __init__(self, program, home, state, herdr_bin, log, owned):
         # The runner's environment less any Herdr, Hide or provider
         # variable: a holder hands the node's environment to its program.
         env = {**clean_env(), **home_env(home)}
@@ -119,8 +129,11 @@ class Node:
             # outside of (holder-restart-spawn.mjs).
             argv = ["node", str(CHECKOUT / "scripts/holder-restart-spawn.mjs"), *argv]
         self.stderr = open(log, "ab")
-        self.process = subprocess.Popen(argv, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=self.stderr,
-                                        env=env, text=True, encoding="utf-8")
+        try:
+            self.process = owned.spawn(argv, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=self.stderr,
+                                       env=env, text=True, encoding="utf-8")
+        finally:
+            self.stderr.close()
         self.lines = queue.Queue()
         threading.Thread(target=self._read, daemon=True).start()
         ready = self._answer(30)
@@ -158,18 +171,16 @@ class Node:
         starter, whose job's close ends the node."""
         self.process.kill()
         self.process.wait(30)
-        self.stderr.close()
 
     def quit(self):
+        """Asks the node to end; one that does not is ended by its Owned."""
         if self.process.poll() is None:
             try:
                 self.process.stdin.write(json.dumps({"op": "quit"}) + "\n")
                 self.process.stdin.flush()
                 self.process.wait(30)
             except (OSError, subprocess.TimeoutExpired):
-                self.process.kill()
-                self.process.wait(30)
-        self.stderr.close()
+                pass
 
 
 def turns(log, value):
@@ -286,6 +297,11 @@ def same_processes(before, after):
     program; the second turn shows it still answers."""
     if before["holder"] != after["holder"]:
         return f"the holder moved: {before['holder']} -> {after['holder']}", []
+    # The node's word checked against the process table's own.
+    holder = after["holder"]
+    if not holder_owned.runs(holder["pid"], holder["started"]):
+        return (f"the holder {holder['pid']} does not run with the start time {holder['started']} "
+                f"(the process table reads {holder_owned.started(holder['pid'])})"), []
     if before["program"] != after["program"]:
         return f"the pane's program moved: {before['program']} -> {after['program']}", []
     now = {(process["pid"], process["started"]) for process in after["processes"]}
@@ -318,7 +334,10 @@ def cell(row, binaries, herdr_bin, run):
     # A short root: a holder's socket is a path under the state folder, and
     # a Unix socket's path is at most about 100 bytes.
     root = Path(tempfile.mkdtemp(prefix="hrl-", dir=None if WINDOWS else "/tmp")).resolve()
+    owned = holder_owned.Owned()
+    owned.remove(root)
     runtime = Runtime(root)
+    owned.records(runtime.state)
     private_directory(runtime.home)
     log = run / f"fake-model-{row['id']}.jsonl"
     server, _ = fake_model.serve(log, row["request_budget"])
@@ -345,15 +364,23 @@ def cell(row, binaries, herdr_bin, run):
                                  timeout=120)
         record["version"] = version.stdout.strip()[:120]
         record["pin"] = clis.pin(kind, record["version"])
+        if record["pin"] is not None and not record["pin"]["matches"]:
+            raise Failed(f"{kind} {record['version']} is not the pinned {record['pin']['version']}")
         first, second = token(), token()
         argv = [str(launch), row["prompt_flag"], prompt(first)]
         if WINDOWS:
             # A .cmd launcher runs under cmd.exe, which a ConPTY start does not add.
             argv = [os.environ.get("COMSPEC", "cmd.exe"), "/d", "/c", *argv]
         pane = kind
-        node = Node(binaries / exe("holder_node"), runtime.home, runtime.state, herdr_bin, run / f"node-{row['id']}.log")
+        node = Node(binaries / exe("holder_node"), runtime.home, runtime.state, herdr_bin, run / f"node-{row['id']}.log",
+                    owned)
         started = time.monotonic()
-        node.ask("start", pane=pane, program=argv, cwd=str(repo), env={}, rows=ROWS, cols=COLS)
+        holder = node.ask("start", pane=pane, program=argv, cwd=str(repo), env={}, rows=ROWS, cols=COLS)
+        holder = holder["record"]["holder"]
+        owned.adopt(holder["pid"], holder["started"])
+        if not holder_owned.runs(holder["pid"], holder["started"]):
+            raise Failed(f"the holder {holder['pid']} does not run with the start time its record names "
+                         f"({holder['started']}; the process table reads {holder_owned.started(holder['pid'])})")
         first_screen = node.ask("wait_full", pane=pane, since=0, timeout_ms=ATTACH * 1000)["hex"]
         wait_turn(log, first, FIRST_TURN)
         node.ask("wait_text", pane=pane, text=first, absent="Reply_", lines=ROWS, timeout_ms=TURN * 1000)
@@ -365,7 +392,7 @@ def cell(row, binaries, herdr_bin, run):
             node.kill()
             killed = time.monotonic()
             node = Node(binaries / exe("holder_node"), runtime.home, runtime.state, herdr_bin,
-                        run / f"node-{row['id']}.log")
+                        run / f"node-{row['id']}.log", owned)
             full = node.ask("wait_full", pane=pane, since=0, timeout_ms=ATTACH * 1000)
             record["reattach_seconds"] = round(time.monotonic() - killed, 2)
             held = node.ask("read", pane=pane, lines=ROWS)["text"]
@@ -411,16 +438,19 @@ def cell(row, binaries, herdr_bin, run):
     except (Failed, OSError, subprocess.SubprocessError, ValueError) as error:
         record["reason"] = str(error)
     finally:
-        record["cleanup"] = clean(node, kind, service, root)
-        server.shutdown()
+        try:
+            record["cleanup"] = clean(node, kind, service, owned)
+        finally:
+            server.shutdown()
     return record
 
 
-def clean(node, pane, service, root):
-    """Ends the pane, then what of the lane's still runs; answers what was
-    left, which fails the cell."""
+def clean(node, pane, service, owned):
+    """Ends the pane, then what of the lane's still runs, by pid and start
+    time; answers what was left, which fails the cell. A stopped run skips
+    the polite end, which can wait minutes, and ends everything at once."""
     left = []
-    if node is not None and node.process.poll() is None:
+    if node is not None and node.process.poll() is None and not holder_owned.aborted():
         try:
             ended = node.ask("terminate", pane=pane, wait=90)
             if ended["record"].get("phase") != "ended":
@@ -428,12 +458,32 @@ def clean(node, pane, service, root):
         except Failed as error:
             left.append(f"the pane did not end: {error}")
         node.quit()
-    if service is not None:
+    if service is not None and not holder_owned.aborted():
         launch, environment, port, mark = service
-        stopped = opencode_service.stop(launch, environment, port, mark, Owner())
-        left.extend(str(item) for item in stopped.get("left", []))
-    shutil.rmtree(root, ignore_errors=True)
+        try:
+            stopped = opencode_service.stop(launch, environment, port, mark, Owner())
+            left.extend(str(item) for item in stopped.get("left", []))
+        except (Failed, OSError, subprocess.SubprocessError) as error:
+            left.append(f"the OpenCode server did not stop: {error}")
+    left.extend(owned.close())
     return {"left": left}
+
+
+def run_cells(selected, binaries, herdr_bin, run, report):
+    for row in selected:
+        print(f"== {row['id']}", flush=True)
+        record = cell(row, binaries, herdr_bin, run)
+        if record["result"] == PASS and record["cleanup"]["left"]:
+            record["result"] = FAIL
+            record["reason"] = "left running: " + "; ".join(record["cleanup"]["left"])
+        issue = KNOWN_FAILURES.get((row["id"], platform.system()))
+        if record["result"] != PASS and issue and not record["cleanup"]["left"]:
+            # Shown in the table and the report; a cell that left a process
+            # running fails the lane whatever is known of it.
+            record["known_failure"] = issue
+        report["cells"].append(record)
+        print(f"   {record['result']}: {record.get('version', '?')}: {record.get('reason')}", flush=True)
+        (run / "report.json").write_text(json.dumps(report, indent=2))
 
 
 def exe(name):
@@ -463,24 +513,29 @@ def main(argv=None):
     private_directory(run)
     rows = json.loads((CHECKOUT / "contracts/agent-journey.json").read_text())
     selected = [row for row in rows if not args.agents or row["id"] in args.agents.split(",")]
+    holder_owned.abort_on_signals()
     report = {"format": 1, "lane": "holder-restart", "system": system(),
               "started": datetime.datetime.now(datetime.timezone.utc).isoformat(), "cells": []}
-    for row in selected:
-        print(f"== {row['id']}", flush=True)
-        record = cell(row, binaries, args.herdr_bin, run)
-        if record["result"] == PASS and record["cleanup"]["left"]:
-            record["result"] = FAIL
-            record["reason"] = "left running: " + "; ".join(record["cleanup"]["left"])
-        report["cells"].append(record)
-        print(f"   {record['result']}: {record.get('version', '?')}: {record.get('reason')}", flush=True)
+    try:
+        run_cells(selected, binaries, args.herdr_bin, run, report)
+    except holder_owned.Aborted as stop:
+        report["aborted"] = str(stop)
+        report["passed"] = False
         (run / "report.json").write_text(json.dumps(report, indent=2))
-    failed = [cell["agent"] for cell in report["cells"] if cell["result"] != PASS]
+        print(f"aborted: {stop}", flush=True)
+        return 128 + stop.signum
+    # A known failure still shows its cell; only the others decide the lane.
+    failed = [cell["agent"] for cell in report["cells"] if cell["result"] != PASS and not cell.get("known_failure")]
     report["passed"] = not failed and len(report["cells"]) == len(selected)
     (run / "report.json").write_text(json.dumps(report, indent=2))
-    lines = [f"| {cell['agent']} | {report['system']['os']} | {cell.get('version', '-')} | {cell['result']} |"
+    lines = [f"| {cell['agent']} | {report['system']['os']} | {cell.get('version', '-')} | {cell['result']}"
+             + (f" (known failure, {cell['known_failure']})" if cell.get("known_failure") else "") + " |"
              for cell in report["cells"]]
     (run / "report.md").write_text("| agent | system | CLI | result |\n| --- | --- | --- | --- |\n"
                                    + "\n".join(lines) + "\n")
+    known = [f"{cell['agent']} ({cell['known_failure']})" for cell in report["cells"] if cell.get("known_failure")]
+    if known:
+        print("known failures, not counted: " + ", ".join(known), flush=True)
     if failed:
         print("failed: " + ", ".join(failed), flush=True)
         return 1
