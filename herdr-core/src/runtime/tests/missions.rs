@@ -455,6 +455,62 @@ fn a_conductors_conversation_resumed_in_another_pane_conducts_its_mission() {
     assert_eq!(events(&runtime), [crate::missions::WakeEvent::Resumed]);
 }
 
+/// 미션 종료 from the map (UI_BEHAVIOR, A mission's map): a Conductor that
+/// holds the mission is asked once, by a letter, and keeps it open to ask
+/// about its pull requests; once no Conductor holds it, the same press
+/// cancels it at once, and a closed mission takes no more.
+#[test]
+fn the_operators_end_asks_a_present_conductor_once_and_cancels_a_mission_none_holds() {
+    let fixture = conducting();
+    let mut runtime = fixture.runtime.lock().unwrap();
+    command(
+        &mut runtime,
+        "sender",
+        json!({"op": "create", "title": "Fix the bug"}),
+    )
+    .unwrap();
+    let wakes = |runtime: &Runtime| -> Vec<crate::missions::WakeEvent> {
+        runtime.missions.book.missions[0]
+            .wakes
+            .iter()
+            .map(|wake| wake.event)
+            .collect()
+    };
+
+    assert!(runtime.mission_end_event("mission-1"));
+    runtime.refresh_missions();
+    let view = &runtime.snapshot.missions.items[0];
+    assert!(view.status.open(), "the Conductor closes it, not the press");
+    assert!(view.end_asked);
+    assert_eq!(wakes(&runtime), [crate::missions::WakeEvent::EndAsked]);
+    // A second press asks nothing more.
+    assert!(!runtime.mission_end_event("mission-1"));
+    assert_eq!(wakes(&runtime), [crate::missions::WakeEvent::EndAsked]);
+
+    // The Conductor's pane closed before it ended the mission.
+    runtime.delivery_observations.remove("sender");
+    runtime.refresh_missions();
+    assert!(runtime.mission_end_event("mission-1"));
+    runtime.refresh_missions();
+    let view = &runtime.snapshot.missions.items[0];
+    assert_eq!(view.status, MissionStatus::Cancelled);
+    assert!(!view.end_asked);
+    assert!(view.closed_at_unix_ms.is_some());
+    assert!(
+        wakes(&runtime).is_empty(),
+        "a cancelled mission wakes no one"
+    );
+    assert_eq!(
+        runtime.missions.events["mission-1"]
+            .events
+            .last()
+            .map(|event| event.kind),
+        Some(crate::mission_events::EventKind::Cancelled)
+    );
+    // Closed, it takes no more presses.
+    assert!(!runtime.mission_end_event("mission-1"));
+}
+
 #[test]
 fn a_cancelled_mission_is_over() {
     let fixture = conducting();

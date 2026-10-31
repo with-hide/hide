@@ -216,6 +216,7 @@ The operator's words are the controls; there are no buttons.
 - "cancel" (취소): ask what to do with the open pull requests; the default to offer is to close each with a reason and keep its branch.
   After the answer, end every worker; in a worktree you made, commit what is not committed onto its branch, then remove only the folder.
   Then `hide mission close --as cancelled`. A cancelled mission is over: nothing reopens it.
+- The map's one control for this is `미션 종료` (End mission): it reaches you as an `end_asked` letter from Hide, which is the operator saying "cancel". A mission with no Conductor is cancelled by Hide at once, its pull requests, branches and workers left as they are, so the next one to take a mission finds nothing to undo.
 - A node dropped by a replan: close its pull request with a comment in the operator's language that says it was dropped from the mission and why (`Dropped from the mission: <reason>`) and keep the branch; commit what is not committed in its worktree, remove the folder, end its worker, and set `--status dropped`.
 - Commit for a worker only in a worktree the mission made, never in a folder the operator made or in the main checkout.
 

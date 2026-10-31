@@ -1009,6 +1009,15 @@ pub(super) struct MissionAnswerPayload {
     pub(super) resend: bool,
 }
 
+/// `mission_end`: the operator's `미션 종료` from a mission's map: the
+/// Conductor is asked to end it, or a mission no Conductor holds is
+/// cancelled at once.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(super) struct MissionEndPayload {
+    pub(super) mission: String,
+}
+
 /// `issue_settings_set`: how starting work from an issue behaves; an absent
 /// field keeps its value.
 #[derive(Debug, Deserialize)]
@@ -1742,6 +1751,7 @@ pub(super) enum Event {
     IssueSettingsSet(IssueSettingsSetPayload),
     ConductorSettingsSet(ConductorSettingsSetPayload),
     MissionAnswer(MissionAnswerPayload),
+    MissionEnd(MissionEndPayload),
     IssueDetailRequest(IssueDetailRequestPayload),
     GithubSearch(GithubSearchPayload),
     WorktreeNameSuggest(WorktreeNameSuggestPayload),
@@ -2084,6 +2094,7 @@ pub(super) fn validate_event(event: EventEnvelope) -> Result<Event, EventValidat
         "issue_settings_set" => decode!(IssueSettingsSetPayload, IssueSettingsSet),
         "conductor_settings_set" => decode!(ConductorSettingsSetPayload, ConductorSettingsSet),
         "mission_answer" => decode!(MissionAnswerPayload, MissionAnswer),
+        "mission_end" => decode!(MissionEndPayload, MissionEnd),
         "issue_detail_request" => decode!(IssueDetailRequestPayload, IssueDetailRequest),
         "github_search" => decode!(GithubSearchPayload, GithubSearch),
         "worktree_name_suggest" => decode!(WorktreeNameSuggestPayload, WorktreeNameSuggest),
@@ -4103,6 +4114,7 @@ impl Runtime {
                 payload.text,
                 payload.resend,
             ),
+            Event::MissionEnd(payload) => self.mission_end_event(&payload.mission),
             Event::IssueDetailRequest(payload) => self.request_issue_detail(payload),
             Event::GithubSearch(payload) => self.request_github_search(payload),
             Event::WorktreeNameSuggest(payload) => self.suggest_worktree_name(payload),

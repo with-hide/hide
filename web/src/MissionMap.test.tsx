@@ -103,7 +103,8 @@ it("ends the head with the mission's verification strength to read, not to chang
   try {
     const stat = strong.q('[data-mission-stat="strength"]');
     expect(stat?.textContent).toBe("Verification Thorough");
-    expect(stat?.closest("[data-mission-summary]")?.querySelectorAll("button, [role=button], select, input")).toHaveLength(0);
+    // Nothing in the head changes it; its one control is the mission's ⋯ menu.
+    expect([...stat!.closest("[data-mission-summary]")!.querySelectorAll<HTMLElement>("button, [role=button], select, input")].map((control) => control.dataset.missionMore)).toEqual(["mission-1"]);
   } finally { await strong.unmount(); }
   const before = await mount({ items: [mission({ nodes: [node("a")] })] });
   try {
@@ -204,6 +205,43 @@ it("keeps an answer Herdr may have typed as unconfirmed and types it again only 
     await map.rerender({ ...unconfirmed, conductor: { ...unconfirmed.conductor, present: false } });
     expect((map.q("[data-mission-resend]") as HTMLButtonElement).disabled).toBe(true);
   } finally { await map.unmount(); }
+});
+
+it("ends an open mission from its head's menu: asks a present Conductor once, cancels one no Conductor holds, after a confirm either way (UI_BEHAVIOR, A mission's map)", async () => {
+  const openMenu = async (map: Awaited<ReturnType<typeof mount>>) => {
+    await act(async () => map.q("[data-mission-more]")!.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true })));
+    return document.querySelector<HTMLElement>('[role="menuitem"]')!;
+  };
+  const held = await mount({ items: [mission()] });
+  try {
+    const item = await openMenu(held);
+    expect(item.textContent).toContain("End mission…");
+    await act(async () => item.click());
+    expect(document.querySelector("[data-mission-end-confirm]")?.getAttribute("data-mission-end-confirm")).toBe("ask");
+    // Nothing is sent before the confirm.
+    expect(held.events.some((event) => event.kind === "mission_end")).toBe(false);
+    await act(async () => document.querySelector<HTMLElement>("[data-mission-end-action]")!.click());
+    expect(held.events.filter((event) => event.kind === "mission_end")).toEqual([{ schema_version: 2, kind: "mission_end", payload: { mission: "mission-1" } }]);
+    // Asked once: the head says so and the item stays off with its reason until the Conductor closes the mission.
+    await held.rerender(mission({ end_asked: true }));
+    expect(held.q("[data-mission-end-asked]")?.textContent).toBe("End asked · the Conductor is wrapping up");
+    expect((await openMenu(held)).getAttribute("aria-disabled")).toBe("true");
+  } finally { await held.unmount(); }
+  const gone = await mount({ items: [mission({ end_asked: true, conductor: { ...mission().conductor, present: false } })] });
+  try {
+    // Once the Conductor is gone an earlier ask holds nothing: the press cancels the mission itself.
+    expect(gone.q("[data-mission-end-asked]")).toBeNull();
+    await act(async () => openMenu(gone).then((item) => item.click()));
+    expect(document.querySelector("[data-mission-end-confirm]")?.getAttribute("data-mission-end-confirm")).toBe("cancel");
+    expect(document.querySelector("[data-mission-end-confirm]")?.textContent).toContain("A cancelled mission does not reopen.");
+    await act(async () => document.querySelector<HTMLElement>("[data-mission-end-keep]")!.click());
+    expect(gone.events.some((event) => event.kind === "mission_end")).toBe(false);
+  } finally { await gone.unmount(); }
+  // A closed mission has nothing to end.
+  const closed = await mount({ items: [mission({ status: "cancelled", closed_at_unix_ms: 2 })] });
+  try {
+    expect(closed.q("[data-mission-more]")).toBeNull();
+  } finally { await closed.unmount(); }
 });
 
 it("turns the choices off with a reason when no Conductor or no device can read the answer, and says why an answer did not arrive (B28, B39)", async () => {
