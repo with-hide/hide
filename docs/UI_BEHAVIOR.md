@@ -270,7 +270,7 @@ Hidden groups add no shown-tab attachments, polling or PTY restart; the existing
 Pane headers, child chips, relationship controls and pane splits remain inside each canvas; find belongs to the focused pane.
 ⌘F on a full-screen Claude Code or Codex pane opens that agent's own search over its whole conversation in the pane, with the agent's own keys and count (Claude Code: type, Enter, `n`/`N`; Codex: type, Enter, Ctrl+P), and no find bar appears; any other pane, and an agent drawing inline, gets the find bar.
 
-An Agent area's tabs share its bar the way a browser's tabs do (the Pen library's `Component / Adaptive Work Tab`), shrinking in three continuous stages so the bar is used to its end and the selected tab keeps its title longest.
+An Agent area's tabs share its bar the way a browser's tabs do (`web/src/TabBar.tsx`), shrinking in three continuous stages so the bar is used to its end and the selected tab keeps its title longest.
 While an equal share still holds the title minimum, each tab asks for the preferred width and all shrink alike with their titles.
 Below that the selected tab keeps the title minimum with its title and close control, and the other tabs split the rest alike down to the icon identity width.
 An unselected tab narrower than the title minimum draws its marks and a truncated title with narrow padding and no close control, and below the icon identity plus one control it draws its marks alone, centred.
