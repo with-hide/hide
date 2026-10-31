@@ -693,8 +693,8 @@ impl Doorbell {
             let id = match &item.key {
                 InputKey::Spawn(id) | InputKey::Letter(id) => id.clone(),
             };
-            if item.recorded {
-                record_brief(owner, &id);
+            if let Some(by) = item.recorded {
+                record_brief(owner, &id, by);
                 continue;
             }
             // The composer first: a brief it still shows gets its Enter, and
@@ -871,7 +871,7 @@ fn send_input_notice(
 }
 
 /// Tells the store that spawn `id`'s brief is in its agent's session file.
-fn record_brief(owner: &Mutex<Runtime>, id: &str) {
+fn record_brief(owner: &Mutex<Runtime>, id: &str, by: &str) {
     let result = owner
         .lock()
         .map_err(|_| "delivery_unavailable".to_owned())
@@ -890,7 +890,7 @@ fn record_brief(owner: &Mutex<Runtime>, id: &str) {
         });
     crate::diagnostic!(
         json!({"component":"delivery","kind":"input.confirmed","spawn":id,
-        "by":"session","code":result.err()})
+        "by":by,"code":result.err()})
     );
 }
 

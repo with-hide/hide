@@ -442,6 +442,7 @@ A successful `agent.prompt` proves only that the text reached the pane, so a spa
 - Claude Code, Codex and Grok record it in their prompt hook: a pull at the prompt point whose digest is the typed text's (`prompt_digest`, the same canonical digest a bell is recognized by) confirms the brief of the spawn whose pane it came from (`Runtime::confirm_brief_by_hook`), before the pull's own identity check, because a child that never registered has no identity yet.
   Each hook carries the multi-line brief as typed, so the digests match with no agent branch (measured 2026-10-31 in the isolated journey setup for the three).
 - OpenCode 1 and 2, Pi, omp and Antigravity record it as the person's message in their session file, which the label worker already reads on each change of the pane's Herdr state; the read keeps the digests of the last eight person messages (`SessionFacts.prompt_digests`), and one equal to the brief's confirms it (`Runtime::typed_input_work`).
+  omp writes that message only when its turn ends, so for omp a turn Herdr reports after the typing is its record of the brief (`AgentId::turn_takes_brief`, `input.confirmed` with `by: turn`): a long first turn is never read as a lost brief, and a freshly spawned omp has no other work to start a turn for.
 - A letter is taken as before: its prompt hook pull, tool intake or turn-end intake moves it out of `pending` ([Recognizing the bell](#recognizing-the-bell)).
 
 Typed input with no record is unconfirmed once the agent rested for `RECORD_WAIT_MS` (15 s) since the typing or since its last state change, whichever is later.
@@ -497,7 +498,7 @@ The CI runs are the agent journey's fake-model lane (`agent-journey.yml`, run 41
 | OpenCode 2 | session file | not run locally ([VERIFICATION.md](VERIFICATION.md)) | | 1.0 | 2.2 | 1.6 |
 | Antigravity | session file | not run locally ([VERIFICATION.md](VERIFICATION.md)) | | 1.7 | 1.8 | 1.8 |
 
-Every agent records at the take or, omp locally, at most 1.4 s after it rests from the brief's turn, well inside `RECORD_WAIT_MS`, so none needs a wait of its own: a working agent owes no record.
+Every agent records at the take or, omp locally, at most 1.4 s after it rests from the brief's turn, well inside `RECORD_WAIT_MS`: the wait starts at the agent's rest, so a working agent owes no record, and omp's turn itself confirms its brief.
 In the run before the fresh session read (41195283433), Antigravity on Windows took the brief but the session read that would have seen it ran before its session write; the parent was told at about 16 s and the brief was typed a second time at about 31 s.
 With the fresh read before the verdict, the same lane recorded it after one typing on all three systems.
 The Codex 0.163.0 start with another program's entries at the front of `hooks.json` reproduced the incident in the local setup: without this change the brief went to the hooks review and nothing followed; with it the parent was told, and after its screen was answered through `hide pane send` the brief was typed again and the prompt hook confirmed it.

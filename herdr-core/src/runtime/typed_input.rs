@@ -42,9 +42,11 @@ pub(crate) struct InputWork {
     /// brief, it gets its Enter; empty, the brief is typed again once
     /// someone answered the screen.
     pub resubmit: Option<Resubmit>,
-    /// The agent's session file records the brief among its user messages:
-    /// the store is told, and nothing else is done for it.
-    pub recorded: bool,
+    /// The agent recorded the brief (`"session"`: among its session's
+    /// person messages; `"turn"`: by starting a turn after its typing,
+    /// `AgentId::turn_takes_brief`): the store is told, and nothing else is
+    /// done for it.
+    pub recorded: Option<&'static str>,
 }
 
 /// A brief the doorbell reads the composer for (`InputWork::resubmit`).
@@ -185,7 +187,23 @@ impl Runtime {
                     observation: observation.clone(),
                     notice: None,
                     resubmit: None,
-                    recorded: true,
+                    recorded: Some("session"),
+                });
+                continue;
+            }
+            // An agent whose session records the brief only at its turn's end
+            // took it once it started a turn after the typing.
+            if observation.status == "working"
+                && observation.status_changed_at_unix_ms >= input.typed_at_unix_ms
+                && hide_agent_adapter::adapter(&spawn.kind)
+                    .is_some_and(|row| row.key.turn_takes_brief())
+            {
+                work.push(InputWork {
+                    key: InputKey::Spawn(spawn.id.clone()),
+                    observation: observation.clone(),
+                    notice: None,
+                    resubmit: None,
+                    recorded: Some("turn"),
                 });
                 continue;
             }
@@ -239,7 +257,7 @@ impl Runtime {
                     observation: observation.clone(),
                     notice,
                     resubmit,
-                    recorded: false,
+                    recorded: None,
                 });
             }
         }
@@ -296,7 +314,7 @@ impl Runtime {
                     target,
                 }),
                 resubmit: None,
-                recorded: false,
+                recorded: None,
             });
         }
         self.plans.input_reread.retain(|id, _| open.contains(id));
@@ -814,6 +832,43 @@ mod tests {
         assert_eq!(runtime.input_asks(at).len(), 1);
     }
 
+    /// An omp that started a turn after its brief was typed took the brief,
+    /// confirmed at once however long the turn runs; an earlier turn or
+    /// another agent's turn confirms nothing.
+    #[test]
+    fn an_omp_turn_after_its_brief_takes_the_brief_however_long_it_runs() {
+        const T: u64 = 100_000;
+        // omp writes the brief to its session only when its turn ends; a
+        // first turn of ten minutes is no lost brief.
+        let (_root, mut runtime, spawn) = spawned_as("omp", false, T);
+        let child = runtime.delivery_observations.get_mut("child").unwrap();
+        child.status = "working".into();
+        child.status_changed_at_unix_ms = T + 6_000;
+        let work = runtime.typed_input_work(T + 6_000);
+        assert_eq!(work.len(), 1);
+        assert_eq!(work[0].key, InputKey::Spawn(spawn.clone()));
+        assert_eq!(work[0].recorded, Some("turn"));
+        assert!(work[0].notice.is_none() && work[0].resubmit.is_none());
+        let late = runtime.typed_input_work(T + 600_000);
+        assert_eq!(late[0].recorded, Some("turn"));
+        assert!(runtime.input_asks(T + 600_000).is_empty());
+
+        // A turn that began before the typing is not this brief's.
+        let (_root, mut runtime, _) = spawned_as("omp", false, T);
+        let child = runtime.delivery_observations.get_mut("child").unwrap();
+        child.status = "working".into();
+        child.status_changed_at_unix_ms = T - 1;
+        assert!(runtime.typed_input_work(T + 600_000).is_empty());
+
+        // Another session-file agent records the person's message at the
+        // take, so its turn alone confirms nothing; it waits for its rest.
+        let (_root, mut runtime, _) = spawned_as("pi", false, T);
+        let child = runtime.delivery_observations.get_mut("child").unwrap();
+        child.status = "working".into();
+        child.status_changed_at_unix_ms = T + 6_000;
+        assert!(runtime.typed_input_work(T + 600_000).is_empty());
+    }
+
     /// An agent whose session file records the brief among its user
     /// messages confirms it: the work says so and owes no notice.
     #[test]
@@ -835,7 +890,7 @@ mod tests {
         let work = runtime.typed_input_work(1_000 + RECORD_WAIT_MS);
         assert_eq!(work.len(), 1);
         assert_eq!(work[0].key, InputKey::Spawn(spawn));
-        assert!(work[0].recorded);
+        assert_eq!(work[0].recorded, Some("session"));
         assert!(work[0].notice.is_none());
     }
 }

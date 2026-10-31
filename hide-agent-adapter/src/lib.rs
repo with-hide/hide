@@ -50,6 +50,18 @@ impl AgentId {
     /// helper. The others record typed input as the person's message in
     /// their session file (Pi and omp measured 2026-10-31; docs/delivery.md,
     /// Input an agent did not take).
+    /// Whether a turn the agent starts after its brief was typed is its
+    /// record of taking the brief. omp 18.7.0 writes the person's message to
+    /// its session only when the turn ends (measured 2026-10-31 on macOS:
+    /// 25.6 to 28.3 s after the typing with the model held 20 s, within
+    /// 1.4 s of its rest), so a long first turn would otherwise leave the
+    /// brief unrecorded for the whole turn; a freshly spawned omp has no
+    /// other work to start one for (docs/delivery.md, Input an agent did
+    /// not take).
+    pub const fn turn_takes_brief(self) -> bool {
+        matches!(self, Self::Omp)
+    }
+
     pub const fn prompt_hook_records(self) -> bool {
         matches!(self, Self::ClaudeCode | Self::Codex | Self::Grok)
     }
