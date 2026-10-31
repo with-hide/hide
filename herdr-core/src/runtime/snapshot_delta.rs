@@ -94,6 +94,50 @@ impl Runtime {
     /// released. Serializing here would put the whole navigator, ui state and
     /// terminal output through `serde_json` while every attach thread and the
     /// shell's next read wait on the mutex.
+    /// Lays each published agent and pane row's machine and own pane id,
+    /// read from its pane id by the one address owner, so the shell reads
+    /// them from the row and never splits an id. A row already carrying
+    /// them is left as it is, so an unchanged section keeps its allocation.
+    fn stamp_row_addresses(&mut self) {
+        fn stamp(node: &str, id: &str, device_id: &mut String, device_pane_id: &mut String) {
+            let (machine, own) = crate::address::split_pane(node, id);
+            if device_id != machine {
+                *device_id = machine.to_owned();
+            }
+            if device_pane_id != own {
+                *device_pane_id = own.to_owned();
+            }
+        }
+        fn stamp_workspaces(node: &str, workspaces: &mut [crate::model::WorkspaceSnapshot]) {
+            for pane in workspaces
+                .iter_mut()
+                .flat_map(|workspace| workspace.checkouts.iter_mut())
+                .flat_map(|checkout| checkout.tabs.iter_mut())
+                .flat_map(|tab| tab.panes.iter_mut())
+            {
+                stamp(node, &pane.id, &mut pane.device_id, &mut pane.device_pane_id);
+            }
+        }
+        fn stamp_agents(node: &str, agents: &mut [crate::model::SidebarAgentSnapshot]) {
+            for agent in agents {
+                stamp(node, &agent.pane_id, &mut agent.device_id, &mut agent.device_pane_id);
+            }
+        }
+        let node = self.node.as_str().to_owned();
+        stamp_agents(&node, &mut self.snapshot.navigator.agents);
+        stamp_workspaces(&node, &mut self.snapshot.navigator.workspaces);
+        for session in self
+            .snapshot
+            .status
+            .remote
+            .iter_mut()
+            .filter_map(|remote| remote.session.as_mut())
+        {
+            stamp_agents(&node, &mut session.agents);
+            stamp_workspaces(&node, &mut session.workspaces);
+        }
+    }
+
     pub fn snapshot_delta_payload(
         &mut self,
         have_revision: u64,
@@ -118,6 +162,8 @@ impl Runtime {
         self.refresh_plans();
         // The 제안 tab follows Hide AI's readiness and GitHub's answer.
         self.refresh_suggestions();
+        // Every published row names its machine and its own pane id.
+        self.stamp_row_addresses();
         self.note_snapshot_sent();
         if self.delta.usage_edit != self.usage_edit {
             self.delta.revision += 1;

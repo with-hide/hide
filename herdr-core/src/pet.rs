@@ -147,6 +147,8 @@ mod tests {
             other => (other, "none"),
         };
         SidebarAgentSnapshot {
+            device_id: String::new(),
+            device_pane_id: String::new(),
             record_connection: None,
             record_summary: None,
             record_metadata: None,

@@ -601,6 +601,8 @@ mod tests {
                 panes: pane_ids
                     .iter()
                     .map(|pane_id| PaneSnapshot {
+                        device_id: String::new(),
+                        device_pane_id: String::new(),
                         start_claim: None,
                         terminal_id: None,
                         failed_terminal_id: None,

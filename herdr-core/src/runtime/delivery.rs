@@ -2044,6 +2044,8 @@ pub(crate) mod tests {
         let panes = ["sender", "recipient"]
             .into_iter()
             .map(|id| crate::model::PaneSnapshot {
+                device_id: String::new(),
+                device_pane_id: String::new(),
                 start_claim: None,
                 terminal_id: None,
                 failed_terminal_id: None,

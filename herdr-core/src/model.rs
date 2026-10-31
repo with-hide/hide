@@ -1481,6 +1481,13 @@ pub enum AskSubject {
 /// rule 4).
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct SidebarAgentSnapshot {
+    /// The machine the row's pane is on (the core's own node id, or a
+    /// device's) and the id that machine gives the pane (`w1:p2`), read from
+    /// `pane_id` by the one address owner (`crate::address`) before every
+    /// snapshot (`Runtime::stamp_row_addresses`), so no reader splits the
+    /// pane id itself.
+    pub device_id: String,
+    pub device_pane_id: String,
     /// Display provenance only; independent of hook health and GitHub reads.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub record_connection: Option<crate::labels::record::RecordConnection>,
@@ -2636,6 +2643,10 @@ pub struct TabSnapshot {
 
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct PaneSnapshot {
+    /// The machine the pane is on and the id that machine gives it, as on
+    /// an agent row ([`SidebarAgentSnapshot::device_id`]).
+    pub device_id: String,
+    pub device_pane_id: String,
     /// Exact creation descriptor used only for start reconciliation, never a title.
     #[serde(skip_serializing)]
     pub start_claim: Option<String>,
