@@ -1979,6 +1979,10 @@ pub struct Runtime {
     /// Identifies one delete handshake across core, Herdr and the shell.
     /// A repeated callback for an older request cannot authorize a newer one.
     next_worktree_removal_id: u64,
+    /// The removal, by id, of a linked worktree whose folder is gone and that
+    /// Git no longer lists: there is nothing for Git to remove, so it closes
+    /// the panes that keep the row and finishes without asking the host.
+    unlisted_worktree_removal: Option<u64>,
     /// Registered projects whose panes a `Remove project…` is closing on a
     /// worker thread. The registration is only removed once the worker
     /// reports Herdr's confirmation, so a repeat for the same project while
@@ -2119,6 +2123,10 @@ impl Runtime {
             &[],
             &crate::model::WorktreeCatalogSnapshot::default(),
             &catalog_paths,
+        );
+        crate::project_settings::apply_names(
+            &snapshot.ui_state.project_settings,
+            &mut snapshot.navigator.workspaces,
         );
         let diagnostics: Vec<(&str, &str)> = match disposition {
             persistence::LoadDisposition::Loaded => Vec::new(),
@@ -2604,6 +2612,7 @@ impl Runtime {
             worktree_removals: 0,
             removed_worktrees: Vec::new(),
             next_worktree_removal_id: 0,
+            unlisted_worktree_removal: None,
             workspace_removals_in_flight: HashSet::new(),
             next_task_operation_id: 0,
             next_repository_clone_id: 0,

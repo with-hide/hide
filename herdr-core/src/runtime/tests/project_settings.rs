@@ -940,3 +940,86 @@ fn acknowledged_remote_repository_edits_invalidate_native_intake_before_returnin
         last_epoch = project.connection_epoch;
     }
 }
+
+fn label(runtime: &Runtime) -> &str {
+    &runtime.snapshot.navigator.workspaces[0].label
+}
+
+/// The display name is the project's label for every reader of the
+/// snapshot; an empty one gives back the folder's name, and the folder's
+/// own record, the registration's label, is never rewritten.
+#[test]
+fn a_project_name_is_saved_trimmed_and_an_empty_one_gives_the_folder_name_back() {
+    let mut runtime = fixture();
+    let id = crate::project_settings::key(crate::node::TEST_NODE, "/fixture/project");
+    assert!(change(
+        &mut runtime,
+        "rename",
+        serde_json::json!({"name": "  Client work  "})
+    ));
+    assert_eq!(
+        runtime.snapshot.ui_state.project_settings_writes[&id].state,
+        WriteState::Saved
+    );
+    assert_eq!(label(&runtime), "Client work");
+    let (loaded, _, _) = crate::persistence::load(&runtime.state_path);
+    assert_eq!(
+        loaded.project_settings[&id].name.as_deref(),
+        Some("Client work")
+    );
+    assert_eq!(
+        runtime.snapshot.navigator.workspaces[0].repo_name,
+        "Project"
+    );
+
+    assert!(change(
+        &mut runtime,
+        "clear",
+        serde_json::json!({"name": "   "})
+    ));
+    assert_eq!(
+        runtime.snapshot.ui_state.project_settings_writes[&id].state,
+        WriteState::Saved
+    );
+    assert_eq!(label(&runtime), "Project");
+    assert_eq!(runtime.snapshot.ui_state.project_settings[&id].name, None);
+}
+
+#[test]
+fn a_project_name_past_its_length_or_with_a_control_character_is_refused() {
+    let mut runtime = fixture();
+    let id = crate::project_settings::key(crate::node::TEST_NODE, "/fixture/project");
+    // Characters, not bytes: 64 Hangul syllables are 192 bytes.
+    let longest = "가".repeat(crate::project_settings::NAME_LENGTH);
+    assert!(change(
+        &mut runtime,
+        "longest",
+        serde_json::json!({"name": longest})
+    ));
+    assert_eq!(label(&runtime), longest);
+    for (request, name) in [
+        (
+            "too-long",
+            "a".repeat(crate::project_settings::NAME_LENGTH + 1),
+        ),
+        ("line-break", "Client\nwork".to_owned()),
+        ("tab", "Client\twork".to_owned()),
+    ] {
+        assert!(change(
+            &mut runtime,
+            request,
+            serde_json::json!({"name": name})
+        ));
+        let receipt = &runtime.snapshot.ui_state.project_settings_writes[&id];
+        assert_eq!(
+            (receipt.state, receipt.error.as_deref()),
+            (WriteState::Failed, Some("project_settings_name_invalid")),
+            "{request}"
+        );
+        assert_eq!(
+            label(&runtime),
+            longest,
+            "{request} keeps the last confirmed name"
+        );
+    }
+}

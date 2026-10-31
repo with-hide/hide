@@ -2158,6 +2158,11 @@ impl Runtime {
                 })
         });
         let Some((repository_root, protected_base_branch, worktree)) = target else {
+            if let Some((root, branch)) =
+                self.unlisted_missing_worktree(None, &payload.checkout_path)
+            {
+                return self.remove_unlisted_worktree(None, root, branch, payload);
+            }
             self.set_error(
                 "worktree.remove_unknown",
                 format!("Worktree is no longer listed: {}", payload.checkout_path),
@@ -2199,6 +2204,21 @@ impl Runtime {
             })
         });
         let Some((repository_root, protected_base_branch, worktree)) = target else {
+            if let Some((root, branch)) =
+                self.unlisted_missing_worktree(Some(device), &payload.checkout_path)
+            {
+                if let Err(message) = self.device_worktree_target(device) {
+                    self.set_error(
+                        "worktree.remove_unavailable",
+                        format!(
+                            "Deleting a worktree on this device needs its connection: {message}"
+                        ),
+                        true,
+                    );
+                    return true;
+                }
+                return self.remove_unlisted_worktree(Some(device), root, branch, payload);
+            }
             self.set_error(
                 "worktree.remove_unknown",
                 format!("Worktree is no longer listed: {}", payload.checkout_path),
@@ -2228,6 +2248,88 @@ impl Runtime {
         self.start_worktree_preflight(
             id,
             Some(device.to_owned()),
+            payload.close_descendant_pane_ids,
+        )
+    }
+
+    /// The project root and branch of a linked worktree row whose folder is
+    /// gone and that Git's last answer for its repository no longer lists:
+    /// Herdr's panes in that folder are all that keep the row.
+    fn unlisted_missing_worktree(
+        &self,
+        device: Option<&str>,
+        checkout_path: &str,
+    ) -> Option<(String, Option<String>)> {
+        let workspaces = match device {
+            Some(device) => self
+                .snapshot
+                .status
+                .remote
+                .iter()
+                .find(|status| status.target_id == device)
+                .and_then(|status| status.session.as_ref())
+                .map(|session| session.workspaces.as_slice())
+                .unwrap_or_default(),
+            None => self.snapshot.navigator.workspaces.as_slice(),
+        };
+        workspaces.iter().find_map(|project| {
+            // Git answered for the repository: its main checkout carries the row.
+            let answered = project
+                .checkouts
+                .iter()
+                .any(|checkout| checkout.worktree.is_some());
+            project
+                .checkouts
+                .iter()
+                .find(|checkout| {
+                    checkout.path == checkout_path
+                        && checkout.is_worktree
+                        && !checkout.exists
+                        && checkout.worktree.is_none()
+                })
+                .filter(|_| answered)
+                .map(|checkout| (project.path.clone(), checkout.branch.clone()))
+        })
+    }
+
+    /// Removes an unlisted missing worktree's row: the gate has nothing to
+    /// weigh (no folder, no Git registration, the branch is not touched), so
+    /// the removal starts at closing its panes, with the same receipt, the
+    /// same close worker and the same chosen descendants as any deletion.
+    fn remove_unlisted_worktree(
+        &mut self,
+        device: Option<&str>,
+        repository_root: String,
+        branch: Option<String>,
+        payload: RemoveWorktreePayload,
+    ) -> bool {
+        self.next_worktree_removal_id = self.next_worktree_removal_id.wrapping_add(1).max(1);
+        let id = self.next_worktree_removal_id;
+        self.snapshot.worktree_removal = Some(crate::model::WorktreeRemovalSnapshot {
+            id,
+            device_id: device.map(str::to_owned),
+            repository_root,
+            checkout_path: payload.checkout_path.clone(),
+            expected_head_sha: None,
+            expected_branch: branch.clone(),
+            protected_base_branch: None,
+            delete_branch: false,
+            force_delete_branch: false,
+            discard_changes: false,
+            expected_ignored_repositories: Vec::new(),
+            branch,
+            phase: "closing".to_owned(),
+            notice: None,
+        });
+        self.unlisted_worktree_removal = Some(id);
+        crate::diagnostic!(serde_json::json!({
+            "component": "worktree_removal", "kind": "unlisted_requested",
+            "id": id, "target": device.unwrap_or(self.node.as_str()),
+        }));
+        self.close_worktree_then_remove(
+            id,
+            device.map(str::to_owned),
+            payload.checkout_path,
             payload.close_descendant_pane_ids,
         )
     }
@@ -3164,20 +3266,31 @@ impl Runtime {
             // which says nothing about the worktree, so only a repository the
             // reader still answers for is compared. The host checks the
             // registration, HEAD and branch again before it removes anything.
-            let identity_changed = catalog
-                .into_iter()
-                .find(|project| project.root_path == active.repository_root)
-                .is_some_and(|project| {
+            let unlisted = self.unlisted_worktree_removal == Some(id);
+            // An unlisted removal changed if Git lists the worktree again.
+            let identity_changed = if unlisted {
+                catalog.into_iter().any(|project| {
                     project
                         .worktrees
                         .iter()
-                        .find(|worktree| worktree.path == active.checkout_path)
-                        .is_none_or(|worktree| {
-                            worktree.head_sha != active.expected_head_sha
-                                || worktree.branch != active.expected_branch
-                                || worktree.deletion_gate.blocked.is_some()
-                        })
-                });
+                        .any(|worktree| worktree.path == active.checkout_path)
+                })
+            } else {
+                catalog
+                    .into_iter()
+                    .find(|project| project.root_path == active.repository_root)
+                    .is_some_and(|project| {
+                        project
+                            .worktrees
+                            .iter()
+                            .find(|worktree| worktree.path == active.checkout_path)
+                            .is_none_or(|worktree| {
+                                worktree.head_sha != active.expected_head_sha
+                                    || worktree.branch != active.expected_branch
+                                    || worktree.deletion_gate.blocked.is_some()
+                            })
+                    })
+            };
             // The close worker names a device's panes by Herdr's own ids.
             let workspaces = match device {
                 Some(device) => self
@@ -3218,8 +3331,29 @@ impl Runtime {
                 });
             }
         }
+        let unlisted = self
+            .unlisted_worktree_removal
+            .take_if(|unlisted| *unlisted == id)
+            .is_some();
         let removal = self.snapshot.worktree_removal.as_mut().unwrap();
         match result {
+            // Nothing is left on disk or in Git: the closed panes took the row.
+            Ok(()) if unlisted => {
+                removal.phase = "finished".to_owned();
+                removal.notice = Some(crate::model::WorktreeRemovalNotice::Removed {
+                    branch: hide_node_link::worktrees::RemovalBranch::Kept,
+                });
+                let device = removal
+                    .device_id
+                    .clone()
+                    .unwrap_or_else(|| self.node.as_str().to_owned());
+                let checkout_path = removal.checkout_path.clone();
+                crate::diagnostic!(serde_json::json!({
+                    "component": "worktree_removal", "kind": "unlisted_finished", "id": id,
+                }));
+                let gone = self.catalog_checkout_ids_at(&device, &checkout_path);
+                self.forget_recent_checkouts(|held| gone.contains(&held.checkout_id));
+            }
             Ok(()) => {
                 removal.phase = "removing".to_owned();
                 removal.notice = None;

@@ -2828,6 +2828,7 @@ pub(super) mod tests {
                 version: 1,
                 device_id: node.as_str().into(),
                 root: repo.into(),
+                name: None,
                 repository: Some(crate::project_settings::RepositoryConnection::Repository {
                     repository: "Acme/Project".into(),
                 }),

@@ -382,6 +382,42 @@ impl Runtime {
         changed
     }
 
+    /// A project whose name changed is drawn under it in the frame its save
+    /// settles: this machine's rows are relabelled where they stand, a
+    /// device's catalog is derived again, and the agents placed in either
+    /// read the new name. A name cleared gives back the catalog's own label.
+    fn rename_project(&mut self, device: &str, root: &str) {
+        if device != self.node.as_str() {
+            self.refresh_device_catalog(device);
+            return;
+        }
+        let registrations = &self.snapshot.ui_state.workspace_registrations;
+        for project in self
+            .snapshot
+            .navigator
+            .workspaces
+            .iter_mut()
+            .filter(|project| {
+                project.device_id == device && project.path == root && !project.is_home
+            })
+        {
+            project.label = registrations
+                .iter()
+                .find(|registration| registration.id == project.id)
+                .map_or_else(
+                    || project.repo_name.clone(),
+                    |registration| registration.label.clone(),
+                );
+        }
+        crate::project_settings::apply_names(
+            &self.snapshot.ui_state.project_settings,
+            &mut self.snapshot.navigator.workspaces,
+        );
+        let mut agents = std::mem::take(&mut self.snapshot.navigator.agents);
+        self.place_agents_in_navigator(&mut agents);
+        self.snapshot.navigator.agents = agents;
+    }
+
     fn project_settings_changed(
         &mut self,
         before: Option<&ProjectSettings>,
@@ -391,6 +427,9 @@ impl Runtime {
             before.and_then(|record| record.repository.as_ref()) != after.repository.as_ref();
         let base_changed =
             before.and_then(|record| record.base_branch.as_ref()) != after.base_branch.as_ref();
+        if before.and_then(|record| record.name.as_ref()) != after.name.as_ref() {
+            self.rename_project(&after.device_id, &after.root);
+        }
         // The header says whether the remote time is Hide's fetch or the
         // operator's own; a switch turned on is fetched on the pump's next
         // pass, since the repository has no fetch record while it is off.

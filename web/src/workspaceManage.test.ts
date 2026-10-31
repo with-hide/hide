@@ -110,6 +110,7 @@ describe("row menus", () => {
     const project = workspace({ checkouts: [primary(), checkout()] });
     expect(drawn(projectMenu(project, desktop))).toEqual([
       "Project settings",
+      "Rename project…",
       "New worktree…",
       "New tab in main ⌘T",
       "─",
@@ -119,7 +120,7 @@ describe("row menus", () => {
       "Pin",
       "Remove project…",
     ]);
-    expect(drawn(projectMenu(project, browser))).toEqual(["Project settings", "New worktree…", "New tab in main ⌥T", "─", "Copy path", "─", "Pin", "Remove project…"]);
+    expect(drawn(projectMenu(project, browser))).toEqual(["Project settings", "Rename project…", "New worktree…", "New tab in main ⌥T", "─", "Copy path", "─", "Pin", "Remove project…"]);
     expect(projectMenu(workspace({ pinned: true, checkouts: [primary()] }), desktop).find((item) => item.id === "unpin")?.label).toBe("Unpin");
     expect(projectMenu(workspace({ is_git: false, checkouts: [primary({ is_primary: false })] }), desktop).find((item) => item.id === "new_worktree")?.unavailable).toMatch(/not a Git/);
   });
@@ -193,6 +194,8 @@ describe("row menus", () => {
       "Set as default checkout",
       "Copy branch name",
       "Copy path",
+      "─",
+      "Remove project…",
     ]);
     expect(checkoutMenu(workspace(), checkout(), desktop).find((item) => item.id === "delete_worktree")?.destructive).toBe(true);
     // A pull request GitHub cannot vouch for now is not offered (checkout-pr-glyph-card B10).
@@ -233,6 +236,27 @@ describe("row menus", () => {
     expect(checkoutMenu(workspace(), checkout({ branch: null }), desktop).find((item) => item.id === "copy_branch")?.unavailable).toMatch(/Detached/);
   });
 
+  it("offers each checkout row the one removal that fits it, a missing folder's included", () => {
+    const removals = (project: Workspace, row: Checkout) => checkoutMenu(project, row, desktop).filter((item) => item.id === "delete_worktree" || item.id === "remove_project").map((item) => [item.label, item.unavailable]);
+    // A plain folder whose folder is gone: the row the cleanup fold draws with no project row above it.
+    const gone = primary({ is_primary: false, branch: null, exists: false, worktree: null });
+    expect(removals(workspace({ is_git: false, checkouts: [gone] }), gone)).toEqual([["Remove project…", null]]);
+    expect(removals(workspace({ checkouts: [primary({ exists: false })] }), primary({ exists: false }))).toEqual([["Remove project…", null]]);
+    expect(removals(workspace(), checkout({ exists: false }))).toEqual([["Delete worktree…", null]]);
+    // What a missing folder cannot do stays offered with its reason.
+    const menu = checkoutMenu(workspace({ is_git: false, checkouts: [gone] }), gone, desktop);
+    expect(menu.filter((item) => item.unavailable !== null).map((item) => item.id)).toEqual(["new_tab_here", "new_group", "set_primary", "copy_branch"]);
+  });
+
+  it("deletes a missing worktree Git no longer lists by closing its panes, once Git has answered for its project", () => {
+    const main = primary();
+    const gone = checkout({ exists: false, worktree: null });
+    expect(manage.unlistedWorktree(workspace({ checkouts: [main, gone] }), gone)).toBe(true);
+    expect(manage.unlistedWorktree(workspace({ checkouts: [primary({ worktree: null }), gone] }), gone)).toBe(false);
+    expect(manage.unlistedWorktree(workspace({ checkouts: [main, checkout({ exists: false })] }), checkout({ exists: false }))).toBe(false);
+    expect(factsLine(manage.unlistedRemovalFacts(gone, 2, t))).toBe("Git no longer lists this worktree · 2 panes close · the row goes with them");
+  });
+
   it("names the agents a deletion stops once, by name and state, beside the gate's warnings", () => {
     const pane = (id: string, identity: string | null, status: AgentStatusCode) => ({
       id,
@@ -256,7 +280,7 @@ describe("row menus", () => {
   it("puts a folder's own checkout items after its project items, past a separator", () => {
     const folder = primary({ is_primary: false, branch: null });
     const menu = folderMenu(workspace({ is_git: false, checkouts: [folder] }), folder, desktop);
-    expect(drawn(menu)).toEqual(["Project settings", "New worktree…", "New tab in main ⌘T", "─", "Reveal in Finder", "Copy path", "─", "Pin", "Remove project…", "─", "Open", "New group…", "Set purpose…"]);
+    expect(drawn(menu)).toEqual(["Project settings", "Rename project…", "New worktree…", "New tab in main ⌘T", "─", "Reveal in Finder", "Copy path", "─", "Pin", "Remove project…", "─", "Open", "New group…", "Set purpose…"]);
     const pr = { number: 7, title: "", url: "https://example.invalid/pull/7", badge: "open" as const, review: null, is_draft: false, state: "pending" as const };
     expect(drawn(folderMenu(workspace({ checkouts: [folder] }), { ...folder, pull_request: pr }, browser)).slice(-5)).toEqual(["─", "Open", "New group…", "Open pull request #7", "Set purpose…"]);
   });

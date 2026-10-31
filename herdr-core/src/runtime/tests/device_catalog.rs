@@ -3454,3 +3454,47 @@ fn a_repeated_device_acknowledgment_keeps_the_settled_record() {
     acknowledge_device_tab(&mut runtime, &t.main);
     assert_eq!(device_tabs_in(&runtime, &t.main), ["t1"]);
 }
+
+/// A device's project is drawn under the name this machine keeps for it, on
+/// the device's id and root, and under its folder's once it has none.
+#[test]
+fn a_device_project_shows_the_name_kept_for_it_and_its_folder_name_without_one() {
+    let t = tree();
+    let (mut runtime, _views) = catalog_device_runtime(vec![herdr_workspace(
+        TARGET,
+        "w2",
+        &t.linked,
+        &[("t3", &t.linked)],
+    )]);
+    let project = |runtime: &Runtime| {
+        runtime.snapshot.status.remote[0]
+            .session
+            .as_ref()
+            .unwrap()
+            .workspaces
+            .iter()
+            .find(|project| {
+                project
+                    .checkouts
+                    .iter()
+                    .any(|checkout| checkout.path == t.linked)
+            })
+            .cloned()
+            .expect("the linked checkout's project")
+    };
+    let folder = project(&runtime);
+    let id = crate::project_settings::key(TARGET, &folder.path);
+    let mut record = crate::project_settings::ProjectSettings::new(TARGET, &folder.path);
+    record.name = Some("Client work".to_owned());
+    runtime
+        .snapshot
+        .ui_state
+        .project_settings
+        .insert(id.clone(), record);
+    assert!(runtime.refresh_device_catalog(TARGET));
+    assert_eq!(project(&runtime).label, "Client work");
+
+    runtime.snapshot.ui_state.project_settings.remove(&id);
+    assert!(runtime.refresh_device_catalog(TARGET));
+    assert_eq!(project(&runtime).label, folder.label);
+}
