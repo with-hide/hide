@@ -5,7 +5,9 @@
 // Changed by Hide: renamed the crate, read the kitty placeholder table from the
 // prepared build inputs instead of a vendored tree, replaced Herdr's name in
 // comments and test paths, and met this repository's Clippy (`as_chunks`, one
-// reasoned `too_many_arguments`). See hide-vt/PATCHES.md.
+// reasoned `too_many_arguments`); added `set_default_color`,
+// `effective_background_color` and `encode_paste` for the pane holder. See
+// hide-vt/PATCHES.md.
 
 #![allow(dead_code)]
 
@@ -390,6 +392,34 @@ impl From<ffi::GhosttyColorRgb> for RgbColor {
             b: value.b,
         }
     }
+}
+
+/// Encodes pasted bytes for a program: control bytes that could end the
+/// paste or start a sequence become spaces, and the text is wrapped in
+/// bracketed paste marks when `bracketed`, or has its newlines turned into
+/// carriage returns when not, as Ghostty pastes.
+pub fn encode_paste(data: &[u8], bracketed: bool) -> Result<Vec<u8>, Error> {
+    let mut data = data.to_vec();
+    encode_with_retry(|buf, len, out_len| unsafe {
+        // SAFETY: data is a live buffer of its length, which the encoder
+        // rewrites in place to the same length; buf is null or `len` bytes.
+        ffi::ghostty_paste_encode(
+            data.as_mut_ptr().cast(),
+            data.len(),
+            bracketed,
+            buf,
+            len,
+            out_len,
+        )
+    })
+}
+
+/// One of a terminal's default colors.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DefaultColor {
+    Foreground,
+    Background,
+    Cursor,
 }
 
 pub fn default_palette() -> [RgbColor; 256] {
@@ -1035,6 +1065,36 @@ impl Terminal {
             )
             .into_result()
         }
+    }
+
+    /// Sets or, with `None`, clears one of the terminal's default colors:
+    /// the colors a program's own OSC 10/11/12 override and OSC 110/111/112
+    /// return to.
+    pub fn set_default_color(
+        &mut self,
+        which: DefaultColor,
+        color: Option<RgbColor>,
+    ) -> Result<(), Error> {
+        let option = match which {
+            DefaultColor::Foreground => {
+                ffi::GhosttyTerminalOption_GHOSTTY_TERMINAL_OPT_COLOR_FOREGROUND
+            }
+            DefaultColor::Background => {
+                ffi::GhosttyTerminalOption_GHOSTTY_TERMINAL_OPT_COLOR_BACKGROUND
+            }
+            DefaultColor::Cursor => ffi::GhosttyTerminalOption_GHOSTTY_TERMINAL_OPT_COLOR_CURSOR,
+        };
+        let color = color.map(|color| ffi::GhosttyColorRgb {
+            r: color.r,
+            g: color.g,
+            b: color.b,
+        });
+        let value = color.as_ref().map_or(ptr::null(), |color| {
+            (color as *const ffi::GhosttyColorRgb).cast()
+        });
+        // SAFETY: self.raw is a live terminal handle, and value is null or
+        // points to one color, which this option reads during the call.
+        unsafe { ffi::ghostty_terminal_set(self.raw, option, value).into_result() }
     }
 
     pub fn default_palette(&self) -> Result<[RgbColor; 256], Error> {
@@ -1768,6 +1828,10 @@ impl Terminal {
 
     pub fn effective_foreground_color(&self) -> Result<Option<RgbColor>, Error> {
         self.get_optional_rgb_color(TERMINAL_DATA_COLOR_FOREGROUND)
+    }
+
+    pub fn effective_background_color(&self) -> Result<Option<RgbColor>, Error> {
+        self.get_optional_rgb_color(ffi::GhosttyTerminalData_GHOSTTY_TERMINAL_DATA_COLOR_BACKGROUND)
     }
 
     pub fn effective_cursor_color(&self) -> Result<Option<RgbColor>, Error> {

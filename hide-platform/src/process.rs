@@ -1258,6 +1258,23 @@ pub fn name_of(pid: u32) -> io::Result<String> {
     sys::name_of(pid)
 }
 
+/// The processes in process group `group`, zombies included, as one look at
+/// the system's process table finds them: a terminal's foreground is a
+/// group (`tcgetpgrp`). `Unsupported` on Windows, which has no process
+/// groups a terminal names.
+pub fn group_members(group: u32) -> io::Result<Vec<u32>> {
+    #[cfg(unix)]
+    return sys::group_members(group);
+    #[cfg(windows)]
+    {
+        let _ = group;
+        Err(io::Error::new(
+            io::ErrorKind::Unsupported,
+            "Windows has no process group a terminal names",
+        ))
+    }
+}
+
 /// The program file a process runs, as the kernel keeps it.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Image {
@@ -3226,7 +3243,7 @@ mod sys {
 
     /// The processes whose group is `group`, zombies included.
     #[cfg(target_os = "macos")]
-    fn group_members(group: u32) -> io::Result<Vec<u32>> {
+    pub(super) fn group_members(group: u32) -> io::Result<Vec<u32>> {
         let group = libc::pid_t::try_from(group)
             .map_err(|_| io::Error::from(io::ErrorKind::InvalidInput))?;
         // `proc_listpgrppids` counts pids, as `proc_listchildpids` does (see
@@ -3257,7 +3274,7 @@ mod sys {
 
     /// The processes whose group is `group`, zombies included.
     #[cfg(target_os = "linux")]
-    fn group_members(group: u32) -> io::Result<Vec<u32>> {
+    pub(super) fn group_members(group: u32) -> io::Result<Vec<u32>> {
         let mut members = Vec::new();
         for entry in std::fs::read_dir("/proc")? {
             let Ok(entry) = entry else { continue };
