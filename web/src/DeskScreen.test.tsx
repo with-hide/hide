@@ -189,7 +189,7 @@ describe("Desk's room", () => {
     const other = { kind: "session" as const, id: "w1:other", name: "other", mark: "going" as const, agent_kind: "claude" };
     expect(useUiStore.getState().deskDraft).toEqual({ text: "@session(w1:other other) ", mentions: [other] });
     expect(box().querySelectorAll("[data-desk-token]")).toHaveLength(1);
-    expect(box().querySelector("[data-mention-chip='session']")?.textContent).toBe("other");
+    expect(box().querySelector("[data-desk-session-chip]")?.textContent).toBe("other");
 
     await press("[data-desk-composer-send]");
     expect(sent("desk_send")).toEqual([{ text: "@session(w1:other other)", mentions: [{ kind: "session", id: "w1:other", name: "other" }] }]);
@@ -222,7 +222,7 @@ describe("Desk's room", () => {
     await render(desk([{ kind: "user", id: 1, text: "@session(w1:p2 fixer) 어디까지 왔어?", at_ms: 0, mentions: [fixer] }]));
     await act(async () => useShellStore.setState({ agents: [row] }));
 
-    await press("[data-mention-chip='session']");
+    await press("[data-desk-session-chip]");
     expect(useUiStore.getState().deskLane.tool).toEqual({ kind: "thread", job: "pane:w1:p2", conductor: null });
     expect(sent("session_thread_open")).toEqual([{ pane_id: "w1:p2" }]);
     expect(useUiStore.getState().screen).toEqual({ kind: "desk" });

@@ -110,7 +110,7 @@ export function SharedPartsScene({ params }: { params: URLSearchParams }) {
         </Part>
         <Part name="@ chip · MentionChip">
           <State name="Session, project"><span className="flex flex-wrap items-baseline gap-xs"><MentionChip kind="session" name="record-now" /><MentionChip kind="project" name="creator" /></span></State>
-          <State name="With its marks (D-85)"><span className="flex flex-wrap items-baseline gap-xs"><MentionChip kind="session" name="record-now" lead={<><StatusMark mark="going" /><AgentMark kind="codex" /></>} /><MentionChip kind="project" name="creator" lead={<HouseIcon aria-hidden="true" className="size-(--size-icon-sm)" />} /></span></State>
+          <State name="Project with ⌂ (D-85)"><MentionChip kind="project" name="creator" lead={<HouseIcon aria-hidden="true" className="size-(--size-icon-sm)" />} /></State>
           <State name="In a sentence"><p className="min-w-0"><MentionChip kind="session" name="record-now" onPress={open} label="record-now 스레드 열기" /> 갤러리 숫자 줄인 거 다크에서도 확인해줘</p></State>
           <State name="Long, narrow"><div className="w-(--size-tab-title-min) min-w-0"><MentionChip kind="project" name="herdr-ide-desk-shared-parts" /></div></State>
         </Part>
