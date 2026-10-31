@@ -55,18 +55,12 @@ fn a_new_connection_takes_the_pane_over_and_the_old_ones_input_no_longer_applies
 
 /// Waits until the pane's text holds `text` `count` times, and answers it.
 fn wait_for_count(connection: &mut crate::support::Connection, text: &str, count: usize) -> String {
-    let started = std::time::Instant::now();
-    loop {
-        let seen = connection.wait_for_text(text);
-        if seen.matches(text).count() >= count {
-            return seen;
-        }
-        assert!(
-            started.elapsed() < HANG_LIMIT,
-            "{text:?} never came {count} times: {seen}"
-        );
-        std::thread::sleep(std::time::Duration::from_millis(20));
-    }
+    let mut seen = String::new();
+    crate::support::wait_until(&format!("{text:?} {count} times"), || {
+        seen = connection.wait_for_text(text);
+        seen.matches(text).count() >= count
+    });
+    seen
 }
 
 /// Opens a raw stream to the holder and answers the holder's reply to what

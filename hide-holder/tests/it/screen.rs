@@ -166,21 +166,16 @@ fn a_resize_and_a_takeover_during_synchronized_output_give_the_same_screen() {
             cols: 100,
         }))
         .unwrap();
-    let started = std::time::Instant::now();
-    while !first.fragments.iter().any(|fragment| {
-        fragment.size
-            == Size {
-                rows: 30,
-                cols: 100,
-            }
-    }) {
-        assert!(
-            started.elapsed() < crate::support::HANG_LIMIT,
-            "no fragment of the new size"
-        );
+    crate::support::wait_until("a fragment of the new size", || {
         first.drain();
-        std::thread::sleep(std::time::Duration::from_millis(20));
-    }
+        first.fragments.iter().any(|fragment| {
+            fragment.size
+                == Size {
+                    rows: 30,
+                    cols: 100,
+                }
+        })
+    });
     script.go(1);
     // Taken over while the program holds its output: the new connection's
     // first screen is full and, once the program ends its synchronized
@@ -196,8 +191,9 @@ fn a_resize_and_a_takeover_during_synchronized_output_give_the_same_screen() {
     let fragments = second.fragments[..drawn].to_vec();
     assert!(fragments[0].full, "{:?}", fragments[0]);
     // Held while the program held its output: the first screen came once
-    // it ended it, unless the holder's bound passed first.
-    if released < HELD_WITHIN {
+    // it ended it, unless the holder's bound passed first. On Windows
+    // ConPTY, not the program, decides what reaches the holder and when.
+    if cfg!(unix) && released < HELD_WITHIN {
         assert!(
             crate::support::contains(&fragments[0].bytes, b"far right"),
             "a screen was drawn while the program held its output"

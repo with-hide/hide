@@ -464,25 +464,22 @@ impl Script {
 
     /// Waits until the program was sent `expected`, and nothing else.
     pub fn wait_heard(&self, expected: &[u8]) {
-        let started = Instant::now();
-        loop {
-            let heard = self.heard();
-            if heard.len() >= expected.len() {
-                assert_eq!(
-                    String::from_utf8_lossy(&heard),
-                    String::from_utf8_lossy(expected),
-                    "the program was sent something else"
-                );
-                return;
-            }
-            assert!(
-                started.elapsed() < HANG_LIMIT,
-                "the program was sent {:?}, not yet {:?}",
-                String::from_utf8_lossy(&heard),
+        let mut heard = Vec::new();
+        wait_until(
+            &format!(
+                "the program to be sent {:?}",
                 String::from_utf8_lossy(expected)
-            );
-            thread::sleep(Duration::from_millis(10));
-        }
+            ),
+            || {
+                heard = self.heard();
+                heard.len() >= expected.len()
+            },
+        );
+        assert_eq!(
+            String::from_utf8_lossy(&heard),
+            String::from_utf8_lossy(expected),
+            "the program was sent something else"
+        );
     }
 
     /// Starts a holder whose program plays this script.

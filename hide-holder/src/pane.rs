@@ -323,7 +323,7 @@ impl Pane {
 
     /// Puts the screen back at the bottom, as typing does; answers whether
     /// it moved.
-    pub fn to_bottom(&mut self) -> bool {
+    pub fn scroll_to_bottom(&mut self) -> bool {
         let Ok(before) = self.terminal.scrollbar() else {
             return false;
         };
@@ -598,8 +598,8 @@ mod tests {
         let lines: String = (0..60).map(|row| format!("row {row}\r\n")).collect();
         answers(&mut pane, &[lines.as_bytes()]);
         assert!(matches!(pane.scroll(&wheel(3)).unwrap(), Wheel::Moved));
-        assert!(pane.to_bottom());
-        assert!(!pane.to_bottom());
+        assert!(pane.scroll_to_bottom());
+        assert!(!pane.scroll_to_bottom());
     }
 
     #[test]

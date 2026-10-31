@@ -5,12 +5,14 @@
 //! whether or not a node is connected. The program records everything it is
 //! sent; its terminal is raw, so nothing is echoed or changed on the way.
 
+#[cfg(unix)]
 use hide_holder_protocol::{
     Appearance, ClientMessage, Modifiers, Mouse, MouseAction, MouseButton, Rgb, Scroll, Theme,
 };
 
 use crate::support::{Home, Script, wait_until};
 
+#[cfg(unix)]
 fn press(action: MouseAction) -> ClientMessage {
     ClientMessage::Mouse(Mouse {
         action,
@@ -21,6 +23,7 @@ fn press(action: MouseAction) -> ClientMessage {
     })
 }
 
+#[cfg(unix)]
 fn wheel(lines: i16) -> ClientMessage {
     ClientMessage::Scroll(Scroll {
         lines,
@@ -90,6 +93,7 @@ fn input_reaches_the_program_as_sent_or_encoded_for_its_modes() {
     script.wait_heard(&expected);
 }
 
+#[cfg(unix)]
 fn theme() -> ClientMessage {
     ClientMessage::Theme(Theme {
         foreground: Some(Rgb {

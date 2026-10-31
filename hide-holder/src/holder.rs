@@ -590,7 +590,7 @@ impl Holder {
         let Some(generation) = self.current_generation() else {
             return;
         };
-        if self.pane().to_bottom() {
+        if self.pane().scroll_to_bottom() {
             self.screen_changed();
         }
         let length = bytes.len();
