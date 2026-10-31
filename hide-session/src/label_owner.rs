@@ -194,9 +194,8 @@ fn confirm_metadata(
         native_id = match agent {
             Agent::Codex => facts::codex_meta_of(&file)
                 .map_err(|error| match error {
-                    crate::SessionError::Capacity { .. } => {
-                        anyhow!("label_session_metadata_line_capacity")
-                    }
+                    // Said as a lookup of a Pi or omp header over the cap says it.
+                    crate::SessionError::Capacity { .. } => anyhow!(error.to_string()),
                     _ => anyhow!("label_session_metadata_read_failed"),
                 })?
                 .and_then(|meta| meta["payload"]["id"].as_str().map(str::to_owned)),
