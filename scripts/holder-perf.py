@@ -21,9 +21,9 @@ terminal service (`Holders::start_local`); both paths' panes run `/bin/sh` at
 2. key-to-frame latency on one echo pane (`holder_node echo`): a token typed
    through the node's `key` until its frame reaches the node's screen sink,
    one after another, alone, beside one pane flooding, beside eight panes
-   flooding, and beside one flooding pane whose screen delivery is slowed;
-   after each flood, once the screen has been still for 2.5 s, the memory
-   again;
+   flooding, and beside one flooding pane whose consumer is slow; after each
+   flood, once the screen has been still for 2.5 s, the memory again, the
+   node's own beside the path's;
 3. the node killed outright and a new one attached again: the time until
    every attached pane drew, and latency after;
 4. what the echo program received, against every token typed: loss,
@@ -35,8 +35,20 @@ clients, or the holders; the panes' shells are the same on both and left out.
 Each round records the load average and the cargo and rustc processes running,
 so a reader can drop a round taken under a build.
 
+A slow consumer is one pane's connection read slowly and nothing else: on the
+holder path, the holder's socket moved aside behind a proxy that passes the
+node's messages at once and reads the holder's for 10 ms of every 40 ms, so
+the holder's own backpressure and its fragment cap run; on Herdr's, that
+pane's `herdr terminal session` client stopped (SIGSTOP) for 30 ms of every
+40 ms. The node's sink is never slowed.
+
+Everything a round starts (the node, the holders, the Herdr server and its
+panes) is ended by pid and start time on every path, a stop signal included
+(`holder_owned.Owned`); a round that leaves any of it running fails.
+
 Usage: holder-perf.py --bin <folder with holder_node and hide-holder> --herdr <pinned herdr>
        --path herdr|holder --panes N --out <file.json> [--idle-seconds S] [--keys K]
+       [--phases all|slow_consumer|flood_unattached]
 """
 
 import argparse
@@ -47,18 +59,24 @@ import os
 from pathlib import Path
 import queue
 import re
-import shutil
-import statistics
+import signal
+import socket
 import subprocess
 import sys
 import tempfile
 import threading
 import time
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+import holder_owned  # noqa: E402
+
 ROWS, COLS = 40, 120
 ATTACH_MAX = 64
 # How long a flood's memory is left to settle before it is read again.
 STILL_SECONDS = 2.5
+# A slow consumer reads, or runs, for SLOW_READ of every SLOW_PERIOD seconds.
+SLOW_READ, SLOW_PERIOD = 0.010, 0.040
 FLOOD = "od -An -tx1 -v /dev/urandom | head -c {bytes}; printf 'flood-%s\\n' done{index}"
 
 
@@ -126,7 +144,7 @@ def conditions():
 # --- the node ---------------------------------------------------------------
 
 class Node:
-    def __init__(self, program, home, state, switch, herdr, socket, log):
+    def __init__(self, program, home, state, switch, herdr, socket, log, owned):
         env = {key: value for key, value in os.environ.items() if not key.startswith(("HERDR_", "HIDE_"))}
         env.update(HOME=str(home), SHELL="/bin/sh", TERM="xterm-256color")
         if switch:
@@ -134,10 +152,10 @@ class Node:
         argv = [str(program), "node", "--home", str(home), "--state", str(state), "--herdr-bin", str(herdr)]
         if socket:
             argv += ["--herdr-socket", str(socket)]
-        self.log = open(log, "ab")
         self.started = time.monotonic()
-        self.process = subprocess.Popen(argv, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=self.log,
-                                        env=env, text=True)
+        with open(log, "ab") as stderr:
+            self.process = owned.spawn(argv, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=stderr,
+                                       env=env, text=True)
         self.answers = queue.Queue()
         threading.Thread(target=self._read, daemon=True).start()
         self.pid = self._answer(30)["ready"]
@@ -153,7 +171,10 @@ class Node:
         self.answers.put(None)
 
     def _answer(self, seconds):
-        value = self.answers.get(timeout=seconds)
+        try:
+            value = self.answers.get(timeout=seconds)
+        except queue.Empty:
+            raise SystemExit(f"the node answered nothing in {seconds:.0f} s") from None
         if value is None:
             raise SystemExit(f"the node exited ({self.process.wait()})")
         if not value["ok"]:
@@ -171,14 +192,6 @@ class Node:
     def kill(self):
         self.process.kill()
         self.process.wait(30)
-        self.log.close()
-
-    def quit(self):
-        if self.process.poll() is None:
-            self.process.stdin.write(json.dumps({"op": "quit"}) + "\n")
-            self.process.stdin.flush()
-            self.process.wait(60)
-        self.log.close()
 
     def children(self):
         found = subprocess.run(["pgrep", "-P", str(self.pid)], capture_output=True, text=True).stdout.split()
@@ -190,27 +203,26 @@ class Node:
 class HerdrPath:
     switch = False
 
-    def __init__(self, herdr, root, panes):
+    def __init__(self, herdr, root, panes, owned):
         self.herdr = herdr
         self.env = {key: value for key, value in os.environ.items() if not key.startswith(("HERDR_", "HIDE_"))}
         for name in ("HOME", "XDG_CONFIG_HOME", "XDG_STATE_HOME", "XDG_DATA_HOME", "XDG_CACHE_HOME"):
             folder = root / ("herdr-" + name.lower())
             folder.mkdir()
             self.env[name] = str(folder)
-        self.socket = Path(f"/tmp/hpf-{os.getpid()}.sock")
+        # In the round's folder, which is short enough for a socket's path:
+        # Herdr leaves files beside it, removed with the folder.
+        self.socket = root / "herdr.sock"
         self.env.update(HERDR_SESSION=f"holder-perf-{os.getpid()}", HERDR_CONFIG_PATH=str(root / "herdr.toml"),
                         HERDR_SOCKET_PATH=str(self.socket), SHELL="/bin/sh", TERM="xterm-256color")
-        self.server = subprocess.Popen([str(herdr), "server"], env=self.env, stdin=subprocess.DEVNULL,
-                                       stdout=open(root / "herdr-server.out", "w"), stderr=subprocess.STDOUT,
-                                       start_new_session=True)
+        # A server left running keeps its panes' terminals, and enough of
+        # them exhaust the machine's (macOS allows 511): its Owned ends it
+        # and every pane under it.
+        with open(root / "herdr-server.out", "w") as log:
+            self.server = owned.spawn([str(herdr), "server"], env=self.env, stdin=subprocess.DEVNULL, stdout=log,
+                                      stderr=subprocess.STDOUT, start_new_session=True)
         self.node = None
-        try:
-            self._populate(root, panes)
-        except BaseException:
-            # A server left running keeps its panes' terminals, and enough of
-            # them exhaust the machine's (macOS allows 511).
-            self.close()
-            raise
+        self._populate(root, panes)
 
     def _populate(self, root, panes):
         deadline = time.monotonic() + 30
@@ -250,22 +262,123 @@ class HerdrPath:
         self.cli("pane", "wait-output", pane, "--match", marker, "--source", "visible",
                  "--timeout", str(int(seconds * 1000)))
 
+    def slow(self, pane):
+        """The pane's session client, stopped for most of every period."""
+        for pid in self.node.children():
+            command = subprocess.run(["ps", "-o", "args=", "-p", str(pid)], capture_output=True,
+                                     text=True).stdout.split()
+            if pane in command:
+                return StoppedClient(pid)
+        raise SystemExit(f"no Herdr session client of {pane} under the node")
+
     def close(self):
-        if self.server.poll() is None:
-            self.server.kill()
-        self.server.wait(30)
-        self.socket.unlink(missing_ok=True)
+        pass
+
+
+class StoppedClient:
+    """A process stopped for all but SLOW_READ of every SLOW_PERIOD, so it
+    reads its server slowly; continued for good on `close`."""
+
+    def __init__(self, pid):
+        self.pid = pid
+        self.birth = holder_owned.started(pid)
+        self.done = threading.Event()
+        self.thread = threading.Thread(target=self._run, daemon=True)
+        self.thread.start()
+
+    def _signal(self, signum):
+        if holder_owned.runs(self.pid, self.birth):
+            os.kill(self.pid, signum)
+
+    def _run(self):
+        while not self.done.is_set():
+            self._signal(signal.SIGSTOP)
+            self.done.wait(SLOW_PERIOD - SLOW_READ)
+            self._signal(signal.SIGCONT)
+            self.done.wait(SLOW_READ)
+
+    def close(self):
+        self.done.set()
+        self.thread.join(5)
+        self._signal(signal.SIGCONT)
+
+
+class SlowLink:
+    """One holder's connection read slowly: its socket moved aside, and a
+    proxy at its path that passes the node's messages at once and reads the
+    holder's for SLOW_READ of every SLOW_PERIOD. The holder keeps listening on
+    the moved socket; `close` puts it back."""
+
+    def __init__(self, path):
+        self.path = path
+        self.moved = path.with_name(path.name + ".slow")
+        os.rename(path, self.moved)
+        self.listener = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        self.listener.bind(str(path))
+        self.listener.listen(1)
+        self.done = threading.Event()
+        self.sockets = [self.listener]
+        threading.Thread(target=self._accept, daemon=True).start()
+
+    def _accept(self):
+        while not self.done.is_set():
+            try:
+                node, _ = self.listener.accept()
+            except OSError:
+                return
+            holder = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+            holder.connect(str(self.moved))
+            self.sockets += [node, holder]
+            threading.Thread(target=self._pass, args=(node, holder, False), daemon=True).start()
+            threading.Thread(target=self._pass, args=(holder, node, True), daemon=True).start()
+
+    def _pass(self, source, sink, slow):
+        try:
+            while not self.done.is_set():
+                if slow:
+                    until = time.monotonic() + SLOW_READ
+                    while (left := until - time.monotonic()) > 0:
+                        source.settimeout(left)
+                        try:
+                            data = source.recv(65536)
+                        except TimeoutError:
+                            break
+                        if not data:
+                            return
+                        sink.sendall(data)
+                    time.sleep(SLOW_PERIOD - SLOW_READ)
+                else:
+                    data = source.recv(65536)
+                    if not data:
+                        return
+                    sink.sendall(data)
+        except OSError:
+            return
+        finally:
+            for end in (source, sink):
+                try:
+                    end.shutdown(socket.SHUT_RDWR)
+                except OSError:
+                    pass
+
+    def close(self):
+        self.done.set()
+        for end in self.sockets:
+            end.close()
+        self.path.unlink(missing_ok=True)
+        os.rename(self.moved, self.path)
 
 
 class HolderPath:
     switch = True
 
-    def __init__(self, herdr, root, panes):
+    def __init__(self, herdr, root, panes, owned):
         self.root = root
         self.panes = [f"p{index:03d}" for index in range(panes)]
         self.socket = None
         self.node = None
         self.holders = []
+        self.owned = owned
 
     def start(self, node):
         self.node = node
@@ -273,7 +386,9 @@ class HolderPath:
             for pane in self.panes:
                 started = node.ask("start", pane=pane, program=["/bin/sh"], cwd=str(self.root),
                                    env={"PS1": "$ "}, rows=ROWS, cols=COLS)
-                self.holders.append(started["record"]["holder"]["pid"])
+                holder = started["record"]["holder"]
+                self.owned.adopt(holder["pid"], holder["started"])
+                self.holders.append(holder["pid"])
             node.ask("wait_drawn", panes=self.panes[:ATTACH_MAX], timeout_ms=120_000)
             for pane in self.panes:
                 node.ask("release", pane=pane)
@@ -292,26 +407,21 @@ class HolderPath:
     def wait_done(self, pane, marker, seconds):
         self.node.ask("wait_text", pane=pane, text=marker, lines=ROWS, every_ms=20, timeout_ms=int(seconds * 1000))
 
+    def slow(self, pane):
+        """The pane's holder connection through a slow proxy: the node lets
+        go of the pane and attaches it again, through the proxy."""
+        link = SlowLink(self.state / "holders" / f"{pane}.sock")
+        self.reconnect(pane)
+        return link
+
+    def reconnect(self, pane):
+        since = self.node.ask("frames", pane=pane)["count"]
+        self.node.ask("release", pane=pane)
+        self.node.ask("attach", pane=pane, rows=ROWS, cols=COLS)
+        self.node.ask("wait_full", pane=pane, since=since, timeout_ms=30_000)
+
     def close(self):
-        if self.node is not None and self.node.process.poll() is None:
-            for pane in self.panes:
-                try:
-                    self.node.ask("terminate", pane=pane, wait=60)
-                except SystemExit:
-                    pass
-        # Whatever no node ended: the holders this round started, by pid while
-        # each still runs this round's holder, and then the shell each held.
-        for pid in self.holders:
-            found = subprocess.run(["ps", "-o", "command=", "-p", str(pid)], capture_output=True, text=True).stdout
-            if str(self.root) not in found:
-                continue
-            shells = subprocess.run(["pgrep", "-P", str(pid)], capture_output=True, text=True).stdout.split()
-            os.kill(pid, 9)
-            for shell in shells:
-                try:
-                    os.kill(int(shell), 9)
-                except ProcessLookupError:
-                    pass
+        pass
 
 
 # --- one round --------------------------------------------------------------
@@ -336,7 +446,12 @@ def window(path, seconds):
     after = sample(pids)
     measured = delta(before, after)
     measured["seconds"] = seconds
-    measured.pop("each")
+    # How many processes woke how many times: one return of freed pages
+    # each after an attach, or more where a screen drew again.
+    counts = {}
+    for item in measured.pop("each").values():
+        counts[item["wakeups"]] = counts.get(item["wakeups"], 0) + 1
+    measured["processes_by_wakeups"] = {str(key): counts[key] for key in sorted(counts)}
     return measured
 
 
@@ -348,25 +463,25 @@ class Round:
         self.home.mkdir()
         self.state = self.home / "s"
         self.sent = []
-        self.path = (HerdrPath if args.path == "herdr" else HolderPath)(args.herdr, self.root, args.panes)
+        self.owned = holder_owned.Owned()
+        self.owned.remove(self.root)
+        self.owned.records(self.state)
+        self.path = self.node = None
         try:
+            self.path = (HerdrPath if args.path == "herdr" else HolderPath)(args.herdr, self.root, args.panes,
+                                                                             self.owned)
+            self.path.state = self.state
             self.node = self.new_node()
         except BaseException:
-            self.path.close()
-            shutil.rmtree(self.root, ignore_errors=True)
+            self.close()
             raise
         self.result = {"path": args.path, "panes": args.panes, "rows": ROWS, "cols": COLS,
                        "conditions_start": conditions(), "phases": {}}
 
     def new_node(self):
         node = Node(self.args.bin / "holder_node", self.home, self.state, self.path.switch, self.args.herdr,
-                    self.path.socket, self.root / "node.log")
-        try:
-            self.path.start(node)
-        except BaseException:
-            self.path.close()
-            node.kill()
-            raise
+                    self.path.socket, self.root / "node.log", self.owned)
+        self.path.start(node)
         return node
 
     def latency(self, name, count):
@@ -381,13 +496,22 @@ class Round:
         measured["lost_on_screen"] = len(answer["lost"])
         return measured
 
-    def flood(self, name, panes, size, slow=0):
+    def flood(self, name, panes, size, slow=False):
+        link = self.path.slow(panes[0]) if slow else None
+        try:
+            return self._flood(name, panes, size)
+        finally:
+            if link is not None:
+                link.close()
+                if isinstance(self.path, HolderPath):
+                    self.path.reconnect(panes[0])
+
+    def _flood(self, name, panes, size):
         node = self.node
-        if slow:
-            node.ask("slow", micros=slow, panes=panes)
         totals_before = node.ask("totals")
         pids = self.path.processes()
         before = sample(pids)
+        node_before = usage(node.pid)
         started = time.monotonic()
         for index, pane in enumerate(panes):
             node.type(pane, FLOOD.format(bytes=size, index=index) + "\r")
@@ -396,13 +520,13 @@ class Round:
             self.path.wait_done(pane, f"flood-done{index}", 600)
         wall = time.monotonic() - started
         after = sample(pids)
+        node_after = usage(node.pid)
         # Then still: a holder gives the flood's freed pages back a second
         # after its screen stops moving.
         time.sleep(STILL_SECONDS)
         settled = delta(before, sample(pids))
+        node_still = usage(node.pid)
         totals_after = node.ask("totals")
-        if slow:
-            node.ask("slow", micros=0, panes=[])
         frames = {item["pane"]: item for item in totals_after["panes"]}
         earlier = {item["pane"]: item for item in totals_before["panes"]}
         flooded = [{"frames": frames[pane]["frames"] - earlier.get(pane, {}).get("frames", 0),
@@ -414,39 +538,47 @@ class Round:
                 "usage": usage_window,
                 "still": {"seconds": STILL_SECONDS, "footprint_bytes": settled["footprint_bytes"],
                           "footprint_max_bytes": settled["footprint_max_bytes"]},
+                "node": {"footprint_before_bytes": node_before[1], "footprint_after_bytes": node_after[1],
+                         "footprint_still_bytes": node_still[1], "cpu_seconds": node_after[0] - node_before[0]},
                 "conditions": conditions()}
 
     def run(self):
         args, path, phases = self.args, self.path, self.result["phases"]
         attached = path.panes[:min(args.panes, ATTACH_MAX)]
         self.echo = path.panes[0]
-        phases["idle_unattached"] = window(path, args.idle_seconds)
-        phases["idle_unattached"]["conditions"] = conditions()
+        if args.phases == "flood_unattached":
+            return self.flood_unattached()
+        if args.phases == "all":
+            phases["idle_unattached"] = window(path, args.idle_seconds)
+            phases["idle_unattached"]["conditions"] = conditions()
         path.attach(attached)
         drawn = self.node.ask("wait_drawn", panes=attached, timeout_ms=120_000)
         assert drawn["drawn"], f"only {drawn['panes_drawn']} of {len(attached)} panes drew"
         # A holder wakes once, a second after its last frame, to give freed
         # pages back; this window shows that wake apart from the idle one.
-        phases["settle_after_attach"] = window(path, STILL_SECONDS)
-        phases["idle_attached"] = window(path, args.idle_seconds)
-        phases["idle_attached"]["attached"] = len(attached)
-        phases["idle_attached"]["conditions"] = conditions()
+        if args.phases == "all":
+            phases["settle_after_attach"] = window(path, STILL_SECONDS)
+            phases["idle_attached"] = window(path, args.idle_seconds)
+            phases["idle_attached"]["attached"] = len(attached)
+            phases["idle_attached"]["conditions"] = conditions()
         self.echo_log = self.root / "echo.log"
         self.node.type(self.echo, f"exec {args.bin / 'holder_node'} echo {self.echo_log}\r")
         path.wait_done(self.echo, "echo ready", 30)
         phases["latency_alone"] = {"latency": self.latency("alone", args.keys), "conditions": conditions()}
         others = path.panes[1:]
         if others:
-            phases["flood_one"] = self.flood("one", others[:1], args.flood_bytes)
-            phases["flood_eight"] = self.flood("eight", others[:8], args.flood_bytes // 4)
-            slow = [pane for pane in others[:1]]
-            phases["slow_consumer"] = self.flood("slow", slow, args.flood_bytes // 4, slow=30000)
-            phases["slow_consumer"]["slow_micros_per_frame"] = 30000
+            if args.phases == "all":
+                phases["flood_one"] = self.flood("one", others[:1], args.flood_bytes)
+                phases["flood_eight"] = self.flood("eight", others[:8], args.flood_bytes // 4)
+            phases["slow_consumer"] = self.flood("slow", others[:1], args.flood_bytes // 4, slow=True)
+            phases["slow_consumer"]["slow"] = {"read_seconds": SLOW_READ, "period_seconds": SLOW_PERIOD,
+                                               "consumer": "holder connection proxy" if path.switch
+                                               else "Herdr session client (SIGSTOP)"}
         # The node killed outright and a new one attached again.
         self.node.kill()
         started = time.monotonic()
         self.node = Node(self.args.bin / "holder_node", self.home, self.state, path.switch, args.herdr, path.socket,
-                         self.root / "node.log")
+                         self.root / "node.log", self.owned)
         path.node = self.node
         path.reattach(attached)
         drawn = self.node.ask("wait_drawn", panes=attached, timeout_ms=300_000)
@@ -466,14 +598,36 @@ class Round:
         self.result["conditions_end"] = conditions()
         return self.result
 
+    def flood_unattached(self):
+        """One holder flooded with no screen attached: its memory after the
+        flood and once still, for the budget an unattached pane keeps."""
+        pane = self.path.panes[-1]
+        pid = self.path.holders[-1]
+        # Keys reach a pane only while it is attached: typed then, and let
+        # go of before the flood starts.
+        self.path.attach([pane])
+        self.node.ask("wait_drawn", panes=[pane], timeout_ms=30_000)
+        self.node.type(pane, "sleep 2; " + FLOOD.format(bytes=self.args.flood_bytes, index=0) + "\r")
+        self.node.ask("release", pane=pane)
+        before = usage(pid)
+        self.path.wait_done(pane, "flood-done0", 600)
+        after = usage(pid)
+        time.sleep(STILL_SECONDS)
+        still = usage(pid)
+        self.result["phases"]["flood_unattached"] = {
+            "flood_bytes": self.args.flood_bytes, "footprint_before_bytes": before[1],
+            "footprint_after_bytes": after[1], "footprint_still_bytes": still[1], "conditions": conditions()}
+        self.result["conditions_end"] = conditions()
+        return self.result
+
     def close(self):
-        try:
+        """Ends everything the round started, by pid and start time, and
+        fails the round when any of it is left running."""
+        left = self.owned.close()
+        if self.path is not None:
             self.path.close()
-            self.node.quit()
-        finally:
-            if isinstance(self.path, HerdrPath):
-                self.path.close()
-            shutil.rmtree(self.root, ignore_errors=True)
+        if left:
+            raise SystemExit("the round left running: " + "; ".join(left))
 
 
 def main():
@@ -486,14 +640,20 @@ def main():
     parser.add_argument("--idle-seconds", type=float, default=20)
     parser.add_argument("--keys", type=int, default=200)
     parser.add_argument("--flood-bytes", type=int, default=20_000_000)
+    parser.add_argument("--phases", choices=("all", "slow_consumer", "flood_unattached"), default="all")
     args = parser.parse_args()
     if sys.platform != "darwin":
         raise SystemExit("this measurement reads macOS's process accounting; Linux and Windows run the CI bounds")
-    current = Round(args)
+    holder_owned.abort_on_signals()
     try:
-        result = current.run()
-    finally:
-        current.close()
+        current = Round(args)
+        try:
+            result = current.run()
+        finally:
+            current.close()
+    except holder_owned.Aborted as stop:
+        print(f"aborted: {stop}", file=sys.stderr)
+        return 128 + stop.signum
     args.out.write_text(json.dumps(result, indent=2))
     print(json.dumps({key: value for key, value in result.items() if key != "phases"}))
     return 0

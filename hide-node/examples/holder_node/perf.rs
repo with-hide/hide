@@ -1,7 +1,8 @@
 //! The measurements' requests (docs/PERFORMANCE_TESTING.md, The pane
-//! holder's path): key-to-frame latency at the node, frame totals, the slow
-//! consumer and attaching a Herdr pane, each the same on the Herdr path and
-//! the holder path.
+//! holder's path): key-to-frame latency at the node, frame totals and
+//! attaching a Herdr pane, each the same on the Herdr path and the holder
+//! path. A slow consumer is made outside the node, on one pane's connection
+//! (`scripts/holder-perf.py`), so the node's sink is never slowed.
 
 use std::time::{Duration, Instant};
 
@@ -38,19 +39,6 @@ pub fn answer(node: &Node, op: &str, request: &Value) -> Result<Value, String> {
             let (frames, bytes, each) = node.screens.totals();
             json!({"frames": frames, "bytes": bytes,
                    "panes": each.into_iter().map(|(pane, count, bytes)| json!({"pane": pane, "frames": count, "bytes": bytes})).collect::<Vec<_>>()})
-        }
-        "slow" => {
-            let panes = request["panes"]
-                .as_array()
-                .map(|panes| {
-                    panes
-                        .iter()
-                        .filter_map(|pane| pane.as_str().map(str::to_owned))
-                        .collect()
-                })
-                .unwrap_or_default();
-            node.screens.set_slow(number(request, "micros", 0), panes);
-            json!({})
         }
         _ => return Err(format!("unknown op {op}")),
     })
