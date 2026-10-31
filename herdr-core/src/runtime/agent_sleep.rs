@@ -907,7 +907,8 @@ impl Runtime {
     }
 
     pub(super) fn sleep_machine_of_pane(&self, pane_id: &str) -> SleepMachine {
-        crate::address::pane_device(pane_id).map_or(SleepMachine::Core, |device| self.sleep_machine(device))
+        crate::address::pane_device(pane_id)
+            .map_or(SleepMachine::Core, |device| self.sleep_machine(device))
     }
 
     /// Where a pane's sleep or wake runs: the core's own Herdr and node, or
@@ -998,4 +999,3 @@ impl SleepRefused {
         }
     }
 }
-

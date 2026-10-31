@@ -3887,7 +3887,7 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn remote_observation_without_a_local_socket_keeps_the_registered_session() {
+    fn remote_pane_move_keeps_the_registered_session_its_letters_and_watch() {
         let root = tempfile::tempdir().unwrap();
         let (runtime, _, _, path) = fixture(root.path());
         let (worker, client) = Worker::store(
@@ -3906,7 +3906,19 @@ pub(crate) mod tests {
             child.host_scope = "device".into();
             child.terminal_id = Some("terminal-child".into());
             let actor = child.actor.clone();
-            ledger.watches[0].target = actor;
+            ledger.watches[0].target = actor.clone();
+            let lead = ledger.agents[0].actor.clone();
+            crate::delivery::mailbox::send(
+                &mut ledger,
+                &lead,
+                &actor,
+                "keep-request",
+                "continue",
+                "request",
+                None,
+                1,
+            )
+            .unwrap();
             crate::delivery::ledger::save(&path, &ledger).unwrap();
             guard.delivery_ledger = Ok(Arc::new(crate::delivery::ledger::load(&path).unwrap()));
             guard.delivery_observations.clear();
@@ -3936,6 +3948,8 @@ pub(crate) mod tests {
         assert_eq!(child.parent.as_deref(), Some("agent-1"));
         assert!(!child.ended);
         assert!(persisted.watches[0].target.same_identity(&child.actor));
+        assert_eq!(persisted.letters.len(), 1);
+        assert!(persisted.letters[0].recipient.same_identity(&child.actor));
         persisted.validate().unwrap();
     }
 

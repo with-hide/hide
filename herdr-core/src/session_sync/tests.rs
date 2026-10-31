@@ -1718,7 +1718,10 @@ fn remote_projection_tab_list_and_order_are_herdr_only() {
             )
         ]
     );
-    assert_eq!(checkout.active_tab_id, Some(crate::address::scoped_tab_id("mini", "w1:t1")));
+    assert_eq!(
+        checkout.active_tab_id,
+        Some(crate::address::scoped_tab_id("mini", "w1:t1"))
+    );
 }
 
 #[test]

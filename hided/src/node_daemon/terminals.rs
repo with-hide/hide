@@ -4,7 +4,7 @@
 
 use super::*;
 use crate::owned_task::AbortOnDrop;
-use hide_node_link::address::{scoped_pane_id, is_pane_of, pane_of};
+use hide_node_link::address::{is_pane_of, pane_of, scoped_pane_id};
 
 /// Terminal lines for the core's panes waiting to go up the terminals
 /// relay, in bytes; past it a key is refused to its screen.

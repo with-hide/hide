@@ -1043,9 +1043,14 @@ impl Runtime {
                     .iter()
                     .find(|checkout| {
                         checkout.tabs.iter().any(|tab| {
-                            tab.panes
-                                .iter()
-                                .any(|pane| crate::address::same_pane(self.node.as_str(), device, &pane.id, &row.pane_id))
+                            tab.panes.iter().any(|pane| {
+                                crate::address::same_pane(
+                                    self.node.as_str(),
+                                    device,
+                                    &pane.id,
+                                    &row.pane_id,
+                                )
+                            })
                         })
                     })
                     .map(|checkout| (workspace, checkout))

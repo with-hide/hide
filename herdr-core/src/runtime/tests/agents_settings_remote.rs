@@ -1961,7 +1961,8 @@ fn read_record_is_scoped_by_pane_id_namespace_across_servers() {
             focused_workspace_id: None,
             focused_checkout_id: None,
             focused_tab_id: None,
-            focused_pane_id: focused.map(|pane_id| crate::address::scoped_pane_id(target_id, pane_id)),
+            focused_pane_id: focused
+                .map(|pane_id| crate::address::scoped_pane_id(target_id, pane_id)),
             pane_layouts: Vec::new(),
             pane_hook_tokens: Default::default(),
             issue_tokens: Default::default(),

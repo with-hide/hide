@@ -11,8 +11,8 @@ use std::collections::{HashMap, HashSet};
 use serde_json::json;
 
 use super::super::Runtime;
-use super::letters::Stage;
 use super::MAX_ENDS_IN_FLIGHT;
+use super::letters::Stage;
 use crate::agent_sleep::{SleepMachine, SleepPhase};
 use crate::missions::{Mission, MissionBook, MissionNode};
 use crate::model::AgentActionRefusal;

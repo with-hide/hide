@@ -1082,7 +1082,9 @@ impl Runtime {
         let session = self
             .machine_agents(device)
             .iter()
-            .find(|agent| crate::address::same_pane(self.node.as_str(), device, &agent.pane_id, pane))
+            .find(|agent| {
+                crate::address::same_pane(self.node.as_str(), device, &agent.pane_id, pane)
+            })
             .and_then(|agent| {
                 Some(crate::links::ledger::SessionIdentity {
                     device_id: device.to_owned(),

@@ -126,7 +126,13 @@ impl<'a> Scoped<'a> {
 
 impl fmt::Display for Scoped<'_> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{PREFIX}{}:{}:{}", self.device, self.kind.word(), self.id)
+        write!(
+            f,
+            "{PREFIX}{}:{}:{}",
+            self.device,
+            self.kind.word(),
+            self.id
+        )
     }
 }
 
@@ -185,14 +191,6 @@ impl<'a> PaneAddress<'a> {
         match Self::parse(id)? {
             Self::Node(pane) => Ok(Self::on(node, device, pane)),
             address => Ok(address),
-        }
-    }
-
-    /// The device the pane is on, with `node` standing for the core's own.
-    pub fn device_or(self, node: &'a str) -> &'a str {
-        match self {
-            Self::Node(_) => node,
-            Self::Device { device, .. } => device,
         }
     }
 
@@ -317,17 +315,6 @@ pub fn id_on(node: &str, device: &str, kind: Kind, id: &str) -> String {
     }
 }
 
-/// The id `device`'s own Herdr gives what `id` names, when `id` names one of
-/// `kind` on `device` as [`id_on`] spells it; `None` when it names another
-/// device's or another kind.
-pub fn own_id<'a>(node: &str, device: &str, kind: Kind, id: &'a str) -> Option<&'a str> {
-    if device == node {
-        (!is_device_scoped(id)).then_some(id)
-    } else {
-        Scoped::strip(id, device, kind)
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -346,7 +333,6 @@ mod tests {
         let local = pane_id_on("core", "core", "w1:p2");
         assert_eq!(local, "w1:p2");
         assert_eq!(PaneAddress::parse(&local), Ok(PaneAddress::Node("w1:p2")));
-        assert_eq!(PaneAddress::parse(&local).unwrap().device_or("core"), "core");
     }
 
     #[test]
@@ -355,7 +341,10 @@ mod tests {
         let studio = scoped_pane_id("studio", "w1:p1");
         assert_ne!(mini, studio);
         assert_ne!(PaneAddress::parse(&mini), PaneAddress::parse(&studio));
-        assert_ne!(PaneAddress::parse(&mini).unwrap(), PaneAddress::Node("w1:p1"));
+        assert_ne!(
+            PaneAddress::parse(&mini).unwrap(),
+            PaneAddress::Node("w1:p1")
+        );
         assert_eq!(
             PaneAddress::parse(&mini).unwrap().device_pane_id(),
             PaneAddress::parse(&studio).unwrap().device_pane_id()
@@ -390,7 +379,10 @@ mod tests {
 
     #[test]
     fn a_named_pane_is_qualified_by_the_device_unless_it_already_is() {
-        assert_eq!(named_pane_id("core", "mini", "w1:p1"), "remote:mini:pane:w1:p1");
+        assert_eq!(
+            named_pane_id("core", "mini", "w1:p1"),
+            "remote:mini:pane:w1:p1"
+        );
         assert_eq!(named_pane_id("core", "core", "w1:p1"), "w1:p1");
         assert_eq!(
             named_pane_id("core", "mini", "remote:studio:pane:w1:p1"),
@@ -402,13 +394,31 @@ mod tests {
     fn a_pane_is_the_same_only_on_the_same_device() {
         assert!(same_pane("core", "mini", "w1:p1", "remote:mini:pane:w1:p1"));
         assert!(same_pane("core", "core", "w1:p1", "w1:p1"));
-        assert!(!same_pane("core", "mini", "remote:studio:pane:w1:p1", "w1:p1"));
-        assert!(!same_pane("core", "mini", "remote:studio:pane:w1:p1", "remote:mini:pane:w1:p1"));
-        assert!(!same_pane("core", "core", "remote:mini:pane:w1:p1", "w1:p1"));
+        assert!(!same_pane(
+            "core",
+            "mini",
+            "remote:studio:pane:w1:p1",
+            "w1:p1"
+        ));
+        assert!(!same_pane(
+            "core",
+            "mini",
+            "remote:studio:pane:w1:p1",
+            "remote:mini:pane:w1:p1"
+        ));
+        assert!(!same_pane(
+            "core",
+            "core",
+            "remote:mini:pane:w1:p1",
+            "w1:p1"
+        ));
         assert_eq!(pane_device("remote:mini:pane:w1:p1"), Some("mini"));
         assert_eq!(pane_device("w1:p1"), None);
         assert_eq!(split_pane("mini", "w1:p1"), ("mini", "w1:p1"));
-        assert_eq!(split_pane("core", "remote:mini:pane:w1:p1"), ("mini", "w1:p1"));
+        assert_eq!(
+            split_pane("core", "remote:mini:pane:w1:p1"),
+            ("mini", "w1:p1")
+        );
         assert_eq!(pane_device("remote:mini:tab:w1:t1"), None);
     }
 
@@ -432,12 +442,11 @@ mod tests {
         assert!(is_device_pane("remote:mini:pane:w1:p1"));
         assert!(!is_device_pane("remote:mini:tab:w1:t1"));
         assert!(!is_device_pane("w1:p1"));
-        assert_eq!(id_on("core", "mini", Kind::Tab, "w1:t1"), "remote:mini:tab:w1:t1");
+        assert_eq!(
+            id_on("core", "mini", Kind::Tab, "w1:t1"),
+            "remote:mini:tab:w1:t1"
+        );
         assert_eq!(id_on("core", "core", Kind::Tab, "w1:t1"), "w1:t1");
-        assert_eq!(own_id("core", "mini", Kind::Tab, "remote:mini:tab:w1:t1"), Some("w1:t1"));
-        assert_eq!(own_id("core", "mini", Kind::Tab, "remote:mini:pane:w1:p1"), None);
-        assert_eq!(own_id("core", "core", Kind::Tab, "w1:t1"), Some("w1:t1"));
-        assert_eq!(own_id("core", "core", Kind::Tab, "remote:mini:tab:w1:t1"), None);
         assert!(!is_device_scoped("w1:p1"));
     }
 

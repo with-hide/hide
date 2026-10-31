@@ -158,7 +158,9 @@ impl OperatorInput {
 
 fn label_key(node: &str, pane_id: &str) -> (String, String) {
     match crate::address::PaneAddress::parse(pane_id) {
-        Ok(crate::address::PaneAddress::Device { device, pane }) => (super::device_target(device), pane.to_owned()),
+        Ok(crate::address::PaneAddress::Device { device, pane }) => {
+            (super::device_target(device), pane.to_owned())
+        }
         _ => (node.to_owned(), pane_id.to_owned()),
     }
 }

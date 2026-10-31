@@ -161,7 +161,7 @@ impl ScreenUploads {
         if pane.is_empty() {
             return Handled::Answer(vec![refused(&request_id, "no_pane")]);
         }
-        if hide_node_link::address::is_pane_of(&pane, &self.node) {
+        if hide_node_link::address::is_pane_of(pane, &self.node) {
             return self.commit_here(event, &request_id, pane, &stages, clipboard);
         }
         self.send_on(&request_id, text, &stages).await
@@ -349,11 +349,7 @@ mod tests {
     }
 
     fn uploads(folder: &Path) -> ScreenUploads {
-        ScreenUploads::new(
-            Arc::new(Attachments::new(folder)),
-            1,
-            "screen-node",
-        )
+        ScreenUploads::new(Arc::new(Attachments::new(folder)), 1, "screen-node")
     }
 
     async fn upload(uploads: &mut ScreenUploads, id: &str, bytes: &[u8], clipboard: bool) {

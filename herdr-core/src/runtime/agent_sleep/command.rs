@@ -6,8 +6,8 @@
 use serde_json::{Value, json};
 
 use super::super::Runtime;
-use super::letters::Stage;
 use super::SleepRefused;
+use super::letters::Stage;
 use crate::delivery::Actor;
 use crate::model::AgentActionRefusal;
 use crate::workspace_control::{Caller, Context, Query};

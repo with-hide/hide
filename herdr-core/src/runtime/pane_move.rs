@@ -1,7 +1,7 @@
 //! Existing-terminal relocation. Reservations cover both tabs, a saved intent
 //! precedes every external effect, and recovery only reads authoritative state.
-use crate::address::{Kind, Scoped};
 use super::*;
+use crate::address::{Kind, Scoped};
 use crate::engine::{Engine, SharedEngine, Wait, Zoom};
 use crate::sidebar::SessionSnapshotPayload;
 use crate::split_tree::Edge;
@@ -1618,7 +1618,8 @@ fn confirms(payload: &SessionSnapshotPayload, intent: &Intent, local: bool) -> b
             }
         }
     } else {
-        layout.panes.len() == 1 && raw(Kind::Tab, &intent.request.source.tab_id).as_deref() != Some(tab)
+        layout.panes.len() == 1
+            && raw(Kind::Tab, &intent.request.source.tab_id).as_deref() != Some(tab)
     }
 }
 

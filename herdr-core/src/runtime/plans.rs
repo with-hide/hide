@@ -184,7 +184,9 @@ impl Runtime {
     fn caller_session(&self, device: &str, pane: &str, actor: &Actor) -> Option<SessionIdentity> {
         self.machine_agents(device)
             .iter()
-            .find(|agent| crate::address::same_pane(self.node.as_str(), device, &agent.pane_id, pane))
+            .find(|agent| {
+                crate::address::same_pane(self.node.as_str(), device, &agent.pane_id, pane)
+            })
             .and_then(|agent| row_session(device, agent))
             .or_else(|| {
                 Some(SessionIdentity {
@@ -986,16 +988,14 @@ impl Runtime {
         };
         let row = (!record.ended)
             .then(|| {
-                self.machine_agents(&record.machine)
-                    .iter()
-                    .find(|row| {
-                        crate::address::same_pane(
-                            self.node.as_str(),
-                            &record.machine,
-                            &row.pane_id,
-                            &record.actor.pane_id,
-                        )
-                    })
+                self.machine_agents(&record.machine).iter().find(|row| {
+                    crate::address::same_pane(
+                        self.node.as_str(),
+                        &record.machine,
+                        &row.pane_id,
+                        &record.actor.pane_id,
+                    )
+                })
             })
             .flatten();
         let session = row
@@ -1462,10 +1462,9 @@ impl Runtime {
     /// The plan of the worker in `pane` on `machine`, for a mission node's
     /// card and detail (D-17, D-18).
     pub(super) fn worker_plan(&self, machine: &str, pane: &str) -> Option<PlanView> {
-        let agent = self
-            .machine_agents(machine)
-            .iter()
-            .find(|agent| crate::address::same_pane(self.node.as_str(), machine, &agent.pane_id, pane))?;
+        let agent = self.machine_agents(machine).iter().find(|agent| {
+            crate::address::same_pane(self.node.as_str(), machine, &agent.pane_id, pane)
+        })?;
         let session = row_session(machine, agent)?;
         Some(self.plan_view(self.plans.book.get(&session)?, &agent.pane_id))
     }

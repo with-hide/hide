@@ -2636,8 +2636,9 @@ impl Runtime {
                 .collect::<HashSet<_>>()
         });
         if let Some(live_pane_ids) = live_pane_ids.as_ref() {
-            let keep =
-                |pane_id: &str| crate::address::is_device_scoped(pane_id) || live_pane_ids.contains(pane_id);
+            let keep = |pane_id: &str| {
+                crate::address::is_device_scoped(pane_id) || live_pane_ids.contains(pane_id)
+            };
             self.retain_terminal_pane_state(keep);
             // Metadata belongs to the session's panes, not its selection.
             // Prune even when the selected creation still has no layout.
@@ -3703,7 +3704,8 @@ impl Runtime {
             .map(str::to_owned)
             .collect::<HashSet<_>>();
         self.snapshot.terminal.panes.retain(|pane| {
-            crate::address::is_device_scoped(&pane.pane_id) || session_pane_ids.contains(&pane.pane_id)
+            crate::address::is_device_scoped(&pane.pane_id)
+                || session_pane_ids.contains(&pane.pane_id)
         });
         for pane_id in &pane_ids {
             self.ensure_terminal_pane(pane_id);

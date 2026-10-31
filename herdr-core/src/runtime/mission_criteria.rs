@@ -71,10 +71,11 @@ impl Runtime {
             .filter(|workspace| workspace.device_id == machine)
             .flat_map(|workspace| &workspace.checkouts)
             .find(|checkout| {
-                checkout
-                    .tabs
-                    .iter()
-                    .any(|tab| tab.panes.iter().any(|row| crate::address::same_pane(self.node.as_str(), machine, &row.id, pane)))
+                checkout.tabs.iter().any(|tab| {
+                    tab.panes.iter().any(|row| {
+                        crate::address::same_pane(self.node.as_str(), machine, &row.id, pane)
+                    })
+                })
             })
     }
 

@@ -1441,7 +1441,9 @@ fn publish_replica(
                 session.pane_hook_tokens = hook_tokens
                     .unwrap_or_default()
                     .into_iter()
-                    .map(|(pane, tokens)| (crate::address::scoped_pane_id(target_id, &pane), tokens))
+                    .map(|(pane, tokens)| {
+                        (crate::address::scoped_pane_id(target_id, &pane), tokens)
+                    })
                     .collect();
                 (Ok(session), excluded)
             }

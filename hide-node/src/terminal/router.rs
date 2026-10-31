@@ -21,11 +21,11 @@ use std::collections::{BTreeSet, HashMap, HashSet};
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::{Duration, Instant};
 
+use hide_node_link::address::{PaneAddress, scoped_pane_id};
 use hide_node_link::terminal::{
     GridSize, KeyTarget, PaneTerminalState, ReportSink, TerminalControl, TerminalNode,
     TerminalReport, TerminalRoutes,
 };
-use hide_node_link::address::{PaneAddress, scoped_pane_id};
 use serde_json::json;
 
 use super::OutputSink;

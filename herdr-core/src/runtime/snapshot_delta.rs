@@ -116,12 +116,22 @@ impl Runtime {
                 .flat_map(|checkout| checkout.tabs.iter_mut())
                 .flat_map(|tab| tab.panes.iter_mut())
             {
-                stamp(node, &pane.id, &mut pane.device_id.0, &mut pane.device_pane_id.0);
+                stamp(
+                    node,
+                    &pane.id,
+                    &mut pane.device_id.0,
+                    &mut pane.device_pane_id.0,
+                );
             }
         }
         fn stamp_agents(node: &str, agents: &mut [crate::model::SidebarAgentSnapshot]) {
             for agent in agents {
-                stamp(node, &agent.pane_id, &mut agent.device_id.0, &mut agent.device_pane_id.0);
+                stamp(
+                    node,
+                    &agent.pane_id,
+                    &mut agent.device_id.0,
+                    &mut agent.device_pane_id.0,
+                );
             }
         }
         let node = self.node.as_str().to_owned();

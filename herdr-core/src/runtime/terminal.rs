@@ -1332,7 +1332,8 @@ impl Runtime {
             .selected_pane_id
             .clone()
             .filter(|pane_id| {
-                !crate::address::is_device_pane(pane_id) && self.layout_holding_pane(pane_id).is_some()
+                !crate::address::is_device_pane(pane_id)
+                    && self.layout_holding_pane(pane_id).is_some()
             });
         let drawn = || {
             let checkout_id = self.snapshot.navigator.focused_checkout_id.as_deref()?;

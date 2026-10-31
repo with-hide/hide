@@ -1086,13 +1086,9 @@ impl Runtime {
             DeviceCommand::Remove { device_id } => {
                 // A file tab's unsaved draft lives in the shell, which
                 // Settings' Remove asks to store first; this command cannot.
-                if self
-                    .snapshot
-                    .editor
-                    .tabs
-                    .iter()
-                    .any(|tab| crate::address::device_of(&tab.checkout_id) == Some(device_id.as_str()))
-                {
+                if self.snapshot.editor.tabs.iter().any(|tab| {
+                    crate::address::device_of(&tab.checkout_id) == Some(device_id.as_str())
+                }) {
                     return Err("device_files_open".into());
                 }
                 self.remove_device(&device_id).map_err(refused)?;

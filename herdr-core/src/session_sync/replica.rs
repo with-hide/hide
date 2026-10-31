@@ -462,7 +462,11 @@ impl SessionReplica {
                 frames.push(frame);
             }
             pane_layouts.push(RemotePaneLayoutSnapshot {
-                workspace_id: crate::address::scoped_id(target_id, crate::address::Kind::Workspace, &layout.workspace_id),
+                workspace_id: crate::address::scoped_id(
+                    target_id,
+                    crate::address::Kind::Workspace,
+                    &layout.workspace_id,
+                ),
                 tab_id: crate::address::scoped_tab_id(target_id, &layout.tab_id),
                 focused_pane_id: crate::address::scoped_pane_id(target_id, &layout.focused_pane_id),
                 zoomed: layout.zoomed,
@@ -480,8 +484,16 @@ impl SessionReplica {
             .workspaces
             .iter()
             .map(|workspace| {
-                let workspace_id = crate::address::scoped_id(target_id, crate::address::Kind::Workspace, &workspace.workspace_id);
-                let checkout_id = crate::address::scoped_id(target_id, crate::address::Kind::Checkout, &workspace.workspace_id);
+                let workspace_id = crate::address::scoped_id(
+                    target_id,
+                    crate::address::Kind::Workspace,
+                    &workspace.workspace_id,
+                );
+                let checkout_id = crate::address::scoped_id(
+                    target_id,
+                    crate::address::Kind::Checkout,
+                    &workspace.workspace_id,
+                );
                 let workspace_panes = state
                     .panes
                     .iter()
@@ -600,7 +612,13 @@ impl SessionReplica {
                                     .filter(|pane| pane.tab_id == tab.tab_id)
                                     .filter_map(|pane| {
                                         pane.foreground_process.clone().map(|name| {
-                                            (crate::address::scoped_pane_id(target_id, &pane.pane_id), name)
+                                            (
+                                                crate::address::scoped_pane_id(
+                                                    target_id,
+                                                    &pane.pane_id,
+                                                ),
+                                                name,
+                                            )
                                         })
                                     })
                                     .collect(),
@@ -630,8 +648,11 @@ impl SessionReplica {
                 // The Herdr half of the strip in Herdr's order; the runtime
                 // places the device's file tabs among them (`place_device_strips`).
                 let strip = StripTabSnapshot::from_herdr_tabs(&tabs);
-                let active_tab_id = Some(crate::address::scoped_tab_id(target_id, &workspace.active_tab_id))
-                    .filter(|active| tabs.iter().any(|tab| tab.id.as_ref() == Some(active)));
+                let active_tab_id = Some(crate::address::scoped_tab_id(
+                    target_id,
+                    &workspace.active_tab_id,
+                ))
+                .filter(|active| tabs.iter().any(|tab| tab.id.as_ref() == Some(active)));
                 WorkspaceSnapshot {
                     agent_presence: Default::default(),
                     agent_scope: Default::default(),
@@ -711,7 +732,8 @@ impl SessionReplica {
             .collect::<Vec<_>>();
         for agent in &mut agents {
             let source_pane_id = agent.pane_id.clone();
-            agent.id = crate::address::scoped_id(target_id, crate::address::Kind::Agent, &source_pane_id);
+            agent.id =
+                crate::address::scoped_id(target_id, crate::address::Kind::Agent, &source_pane_id);
             agent.pane_id = crate::address::scoped_pane_id(target_id, &source_pane_id);
             // A declaration without a machine stays within this device. A
             // machine-qualified declaration is resolved after every device's
@@ -743,7 +765,11 @@ impl SessionReplica {
             .iter()
             .map(|workspace| {
                 (
-                    crate::address::scoped_id(target_id, crate::address::Kind::Checkout, &workspace.workspace_id),
+                    crate::address::scoped_id(
+                        target_id,
+                        crate::address::Kind::Checkout,
+                        &workspace.workspace_id,
+                    ),
                     crate::address::scoped_tab_id(target_id, &workspace.active_tab_id),
                 )
             })
@@ -753,11 +779,22 @@ impl SessionReplica {
             .focused_pane_id
             .as_deref()
             .and_then(|pane_id| state.panes.iter().find(|pane| pane.pane_id == pane_id));
-        let focused_workspace_id =
-            focused.map(|pane| crate::address::scoped_id(target_id, crate::address::Kind::Workspace, &pane.workspace_id));
-        let focused_checkout_id =
-            focused.map(|pane| crate::address::scoped_id(target_id, crate::address::Kind::Checkout, &pane.workspace_id));
-        let focused_tab_id = focused.map(|pane| crate::address::scoped_tab_id(target_id, &pane.tab_id));
+        let focused_workspace_id = focused.map(|pane| {
+            crate::address::scoped_id(
+                target_id,
+                crate::address::Kind::Workspace,
+                &pane.workspace_id,
+            )
+        });
+        let focused_checkout_id = focused.map(|pane| {
+            crate::address::scoped_id(
+                target_id,
+                crate::address::Kind::Checkout,
+                &pane.workspace_id,
+            )
+        });
+        let focused_tab_id =
+            focused.map(|pane| crate::address::scoped_tab_id(target_id, &pane.tab_id));
 
         Ok((
             RemoteSessionSnapshot {
@@ -779,7 +816,9 @@ impl SessionReplica {
                     panes: issue_tokens
                         .panes
                         .into_iter()
-                        .map(|(pane, token)| (crate::address::scoped_pane_id(target_id, &pane), token))
+                        .map(|(pane, token)| {
+                            (crate::address::scoped_pane_id(target_id, &pane), token)
+                        })
                         .collect(),
                     workspaces: issue_tokens.workspaces,
                 },

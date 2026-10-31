@@ -27,11 +27,11 @@ use axum::extract::ws::{Message, WebSocket};
 use futures_util::{SinkExt, StreamExt};
 use hide_node::ssh::RemoteHost;
 use hide_node::terminal::OutputSink;
+use hide_node_link::address::is_pane_of;
 use hide_node_link::terminal::{
     TerminalDown, TerminalLine, TerminalNode, TerminalOutput, TerminalUp, decode_base64,
     encode_base64,
 };
-use hide_node_link::address::is_pane_of;
 use serde_json::json;
 
 use crate::owned_task::AbortOnDrop;

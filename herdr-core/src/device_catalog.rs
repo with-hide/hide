@@ -138,7 +138,10 @@ pub(crate) fn checkout_id(target: &str, path: &str) -> String {
     crate::address::scoped_id(
         target,
         crate::address::Kind::Checkout,
-        &format!("{:016x}", crate::workspace::fnv1a(path.trim_end_matches('/').as_bytes())),
+        &format!(
+            "{:016x}",
+            crate::workspace::fnv1a(path.trim_end_matches('/').as_bytes())
+        ),
     )
 }
 
