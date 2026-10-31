@@ -385,14 +385,17 @@ mod windows_job {
     use windows_sys::Win32::Foundation::HANDLE;
     use windows_sys::Win32::System::JobObjects::{
         AssignProcessToJobObject, CreateJobObjectW, JOB_OBJECT_LIMIT_BREAKAWAY_OK,
-        JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE, JOBOBJECT_EXTENDED_LIMIT_INFORMATION,
+        JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE, JOB_OBJECT_LIMIT_SILENT_BREAKAWAY_OK,
+        JOBOBJECT_EXTENDED_LIMIT_INFORMATION,
         JobObjectExtendedLimitInformation, SetInformationJobObject,
     };
     use windows_sys::Win32::System::Threading::GetCurrentProcess;
 
     /// Puts this process in a new kill-on-close job, which lets a process
-    /// leave it when `setup` says `breakaway`; held until this process
-    /// exits, which closes the job and ends what is in it.
+    /// leave it when `setup` says `breakaway`, and leaves every child out of
+    /// it unasked when it says `silent` too, as libuv's job for Node and
+    /// Electron does; held until this process exits, which closes the job
+    /// and ends what is in it.
     pub(super) fn enter(setup: &str) -> Option<HANDLE> {
         if !setup.contains("job") {
             return None;
@@ -405,6 +408,11 @@ mod windows_job {
             limits.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE
                 | if setup.contains("breakaway") {
                     JOB_OBJECT_LIMIT_BREAKAWAY_OK
+                } else {
+                    0
+                }
+                | if setup.contains("silent") {
+                    JOB_OBJECT_LIMIT_SILENT_BREAKAWAY_OK
                 } else {
                     0
                 };
@@ -519,6 +527,22 @@ fn a_resident_child_outlives_what_ends_its_starter() {
     assert_eq!(field(&line, "in_job"), field(&line, "outer_job"), "{line}");
     // Nothing more ends it: it still runs once its starter is gone.
     assert!(resident.is_running(), "the resident ended with its starter");
+}
+
+/// The job the desktop app's daemon runs in: Electron starts it with
+/// Node's `child_process.spawn`, whose libuv job ends its processes when the
+/// app closes it and lets each leave, silently. A resident started there
+/// leaves it and outlives the app (the holder restart lane starts its node
+/// the same way, docs/TESTING.md, The holder restart lane).
+#[cfg(windows)]
+#[test]
+fn a_resident_child_outlives_the_job_electron_starts_its_daemon_in() {
+    let (mut starter, line) = run_starter("job breakaway silent exit");
+    assert!(line.starts_with("STARTED "), "{line}");
+    let resident = Started::new(field(&line, "pid").parse().unwrap());
+    starter.0.wait().unwrap();
+    assert_eq!(field(&line, "in_job"), field(&line, "outer_job"), "{line}");
+    assert!(resident.is_running(), "the resident ended with the app's job");
 }
 
 #[cfg(windows)]
