@@ -39,6 +39,10 @@
 # issue #1288), `os contract (macos)` for a change to `hide-platform` or
 # `hide-herdr-client`, `vt (macos)` for a change to hide-vt's Zig build, and `package`'s macOS job for a change to what goes into
 # a package, the one job that starts the packaged app such a change builds.
+# `vt`, `omp SDK` and `compile (macos)`, which need no screen, keychain or
+# login session, run on the operator's Mac mini instead when the repository
+# variable HIDE_MACOS_CI_RUNNER names it, except for a fork's pull request
+# (`plan`'s `self-hosted-macos` output; docs/BUILD.md, The Mac mini CI runner).
 # Core and daemon changes add no macOS job: main's push run runs `desktop e2e`
 # for them (#1147, which broke a desktop spec from herdr-core alone, is the
 # accepted risk), and `nightly.yml` the macOS web `@platform` tests, the macOS
@@ -118,6 +122,15 @@ jobs:
       lanes: ${{ steps.plan.outputs.lanes }}
       full: ${{ steps.plan.outputs.full }}
       rust-packages: ${{ steps.plan.outputs.rust-packages }}
+      # Where `vt`, `omp SDK contract` and `compile (macos)` run their macOS
+      # job: the repository variable HIDE_MACOS_CI_RUNNER, a JSON `runs-on`
+      # value naming the Mac mini's CI runner (docs/BUILD.md, The CI runner
+      # on the Mac mini), or empty for GitHub's hosted runner, which
+      # each of those workflows names as its default. A pull request from
+      # another repository never gets the variable, so a fork's code never
+      # reaches the self-hosted runner; unsetting the variable turns the
+      # runner off for every run.
+      self-hosted-macos: ${{ (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && vars.HIDE_MACOS_CI_RUNNER || '' }}
     steps:
       - uses: actions/checkout@v7
         with:
@@ -677,6 +690,7 @@ jobs:
       HIDE_ISSUES_APP_KEY: ${{ secrets.HIDE_ISSUES_APP_KEY }}
     with:
       systems: '["linux","macos","windows"]'
+      macos-runner: ${{ needs.plan.outputs.self-hosted-macos }}
     permissions:
       contents: read
 
@@ -691,6 +705,7 @@ jobs:
     uses: ./.github/workflows/omp-contract.yml
     with:
       systems: '["linux","macos","windows"]'
+      macos-runner: ${{ needs.plan.outputs.self-hosted-macos }}
     permissions:
       contents: read
 
@@ -807,6 +822,7 @@ jobs:
       # A pull request's package reports a version no release uses.
       version: 0.0.0-ci.${{ github.run_number }}
       include-macos: true
+      macos-compile-runner: ${{ needs.plan.outputs.self-hosted-macos }}
       web-typechecked: ${{ contains(fromJSON(needs.plan.outputs.lanes), 'checks') }}
       # A pull request checks the package, not the optimizer; main's push run
       # and the nightly build what ships and save the release dependency set.

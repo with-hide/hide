@@ -522,6 +522,7 @@ The organization runs 20 jobs at once and five of them on macOS, so a pull reque
 | the remote mailbox lane on macOS | never | The nightly's `remote mailbox (macOS)` job; a pull request runs the lane on Linux, and the Mac-only parts of the fixture (codesign of the staged binaries, the system's `sshd`, the macOS Herdr asset) are checked there |
 | the performance lane | never | The nightly's `performance (macOS)` job; a pull request's performance claim is still a matched local comparison ([PERFORMANCE_TESTING.md](PERFORMANCE_TESTING.md#the-nightly-performance-lane)) |
 
+When `HIDE_MACOS_CI_RUNNER` is set, `vt (macos)`, `omp SDK (macos)` and `compile (macos)` run on the operator's Mac mini instead and take none of those five ([BUILD.md](BUILD.md#the-mac-mini-ci-runner)); the jobs above that start the app stay on them.
 A change to `herdr-core` or `hided` alone, outside `hided/build.rs` and `hided/src/cli.rs`, therefore starts no macOS lane.
 The remote mailbox lane includes `hided/tests/it/device_bootstrap.rs`: through the system `ssh` it installs the real helper and pin into a private account with no Herdr server, checks terminal startup after the kit, and removes the helper and ends the link before asking the surviving server for its session.
 Its second journey checks that a compatible running server connects its terminal services before the automatic kit pass.
