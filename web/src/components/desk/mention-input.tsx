@@ -23,7 +23,7 @@ const TOKEN = "deskToken";
 function readNodes(nodes: NodeListOf<ChildNode> | ChildNode[], out: string[]) {
   for (const node of Array.from(nodes)) {
     if (node.nodeType === Node.TEXT_NODE) {
-      out.push((node.nodeValue ?? "").replace(/ /g, " "));
+      out.push((node.nodeValue ?? "").replace(/\u00a0/g, " "));
     } else if (node instanceof HTMLElement) {
       const token = node.dataset[TOKEN];
       if (token !== undefined) out.push(token);
