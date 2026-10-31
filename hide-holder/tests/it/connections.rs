@@ -14,7 +14,7 @@ use hide_holder_protocol::{
 use hide_platform::ipc::LocalStream;
 
 use crate::support::{
-    HANG_LIMIT, Holder, Home, current_version, print_ok, shell, source, start_ready,
+    HANG_LIMIT, Holder, Home, current_version, print_ok, shell, source, start_ready, wait_until,
 };
 
 fn shell_holder(home: &Home) -> Holder {
@@ -178,9 +178,11 @@ fn a_connection_that_opens_while_the_pane_ends_is_told_it_ended() {
     let mut late = silent_stream(&holder);
     let mut holding = holder.open();
     holding.send(ClientMessage::Terminate).unwrap();
-    assert_eq!(holding.wait_closed().reason, CloseReason::Terminated);
-    // The pane has ended; the connection that was still opening says its
-    // hello only now.
+    // The pane has begun to end; the connection that was still opening says
+    // its hello only now, within its hello's bound.
+    wait_until("the pane's end", || {
+        holder.log_text().contains("\"holder.ending\"")
+    });
     write_client(&mut late, &hello()).unwrap();
     late.set_deadline(std::time::Instant::now() + HANG_LIMIT);
     match read_holder(&mut late).unwrap() {
@@ -189,5 +191,6 @@ fn a_connection_that_opens_while_the_pane_ends_is_told_it_ended() {
         }
         other => panic!("{other:?}"),
     }
+    assert_eq!(holding.wait_closed().reason, CloseReason::Terminated);
     holder.wait_gone();
 }

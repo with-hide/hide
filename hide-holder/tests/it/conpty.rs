@@ -11,18 +11,13 @@ use hide_kit::holders::Source;
 
 use crate::support::{Home, Start, current_version, print_ok, shell, source, start, start_ready};
 
-/// Whether a process holds `file` in use: a running program's file cannot be
-/// opened by anyone who shares nothing.
+/// Whether a process runs `file`: Windows refuses to open a running
+/// program's file for writing, though it lets anyone read it
+/// (`hide_platform::fs::in_use`). Nothing is written.
 fn held(file: &Path) -> bool {
-    use std::os::windows::fs::OpenOptionsExt;
-    const SHARING_VIOLATION: i32 = 32;
-    match std::fs::OpenOptions::new()
-        .read(true)
-        .share_mode(0)
-        .open(file)
-    {
+    match std::fs::OpenOptions::new().write(true).open(file) {
         Ok(_) => false,
-        Err(error) if error.raw_os_error() == Some(SHARING_VIOLATION) => true,
+        Err(error) if hide_platform::fs::in_use::held_by_another(&error) => true,
         Err(error) => panic!("{} could not be asked: {error}", file.display()),
     }
 }

@@ -564,6 +564,8 @@ impl Holder {
         let mut ending = Closed::new(reason, format!("the pane is ending: {why}"));
         ending.exit_code = exit_code;
         *self.ending.lock().unwrap_or_else(PoisonError::into_inner) = Some(ending);
+        self.log
+            .event("holder.ending", &[("reason", reason.name().into())]);
         self.closer.close();
         let mut status = ExitCode::SUCCESS;
         let mut closed = match self.session.end(TREE_END_LIMIT) {

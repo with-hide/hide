@@ -166,8 +166,8 @@ fn a_program_that_exits_on_its_own_takes_what_it_left_with_it() {
     let home = Home::new();
     let early: OsString = "1".into();
     let (holder, pids) = stubborn_pane(&home, &[(EXIT_EARLY, &early)]);
-    // The program may exit before a connection is made; what is left of
-    // its tree is ended either way.
+    // The program may exit before a connection is made, or while one opens,
+    // which is then told why; what is left of its tree is ended either way.
     let left: Vec<Running> = pids_in(&pids, 2)
         .into_iter()
         .filter_map(Running::of)
@@ -178,8 +178,13 @@ fn a_program_that_exits_on_its_own_takes_what_it_left_with_it() {
             assert_eq!(closed.reason, CloseReason::ProgramExited, "{closed:?}");
             assert_eq!(closed.exit_code, Some(0), "{closed:?}");
         }
+        Err(hide_holder_protocol::OpenError::Refused(closed)) => {
+            assert_eq!(closed.reason, CloseReason::ProgramExited, "{closed:?}");
+            assert_eq!(closed.exit_code, Some(0), "{closed:?}");
+        }
+        // Past the end the socket is gone.
         Err(error) => assert!(
-            !holder.process.is_running() || matches!(error, hide_holder_protocol::OpenError::Io(_)),
+            matches!(error, hide_holder_protocol::OpenError::Io(_)),
             "{error}"
         ),
     }
