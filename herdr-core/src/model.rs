@@ -8170,10 +8170,16 @@ mod wire_enum_tests {
             AskSubject::MissionDecision {
                 line: "line".into(),
             },
+            AskSubject::InputUnconfirmed {
+                input: crate::delivery::typed::InputKind::Brief,
+                spent: false,
+            },
         ];
         for variant in &subjects {
             match variant {
-                AskSubject::PlanReview { .. } | AskSubject::MissionDecision { .. } => {}
+                AskSubject::PlanReview { .. }
+                | AskSubject::MissionDecision { .. }
+                | AskSubject::InputUnconfirmed { .. } => {}
             }
         }
         let causes = subjects

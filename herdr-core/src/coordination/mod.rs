@@ -3085,6 +3085,132 @@ mod tests {
     /// retry never types it twice, and becomes the child's first letter when
     /// the child binds: delivered and confirmed under the spawn's intent,
     /// from the parent, so the ledger and a later wake carry it.
+    /// Each typing of a brief is reserved before it is typed, at most three,
+    /// only by the spawn's parent or Hide's own input identity; the agent's
+    /// record ends it whichever typing it records, and a late record or a
+    /// late typing changes nothing more (`delivery::typed`, engineering #11).
+    #[test]
+    fn a_briefs_typings_are_capped_and_its_record_ends_them_once() {
+        let mut ledger = Ledger::default();
+        let parent = record("parent", "native-parent", None);
+        let actor = parent.actor.clone();
+        let parent_id = register(&mut ledger, parent, &actor);
+        let mut spawn_command = command("mission-1:api");
+        if let Command::Spawn { brief, .. } = &mut spawn_command {
+            *brief = Some("Node api: add the call.".into());
+        }
+        let spawn = apply(
+            &mut ledger,
+            &actor,
+            &Mutation::Reserve {
+                parent: parent_id,
+                command: spawn_command,
+            },
+            1,
+        )
+        .unwrap()["id"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        let typing = |ledger: &mut Ledger, caller: &Actor, now: u64| {
+            apply(
+                ledger,
+                caller,
+                &Mutation::BriefTyping { id: spawn.clone() },
+                now,
+            )
+        };
+        assert_eq!(
+            typing(&mut ledger, &actor, 2).unwrap_err(),
+            "spawn_incomplete",
+            "nothing is typed before the agent was started"
+        );
+        for mutation in [
+            Mutation::Advance {
+                seed_tab: None,
+                id: spawn.clone(),
+                path: Some("/fixture/topic".into()),
+                pane: Some("worker-pane".into()),
+                terminal: None,
+                shell: None,
+                child: None,
+            },
+            Mutation::Typed { id: spawn.clone() },
+        ] {
+            apply(&mut ledger, &actor, &mutation, 2).unwrap();
+        }
+        let input = Actor::hide(crate::delivery::typed::INPUT_ROLE, "node");
+        let stranger = record("stranger", "native-stranger", None).actor;
+        assert_eq!(
+            typing(&mut ledger, &stranger, 3).unwrap_err(),
+            "parent_authority_required"
+        );
+        let first = typing(&mut ledger, &actor, 3).unwrap();
+        assert_eq!(first["brief_input"]["attempts"], 1);
+        assert_eq!(first["brief_input"]["typed_at_unix_ms"], 3);
+        typing(&mut ledger, &input, 4).unwrap();
+        typing(&mut ledger, &input, 5).unwrap();
+        assert_eq!(
+            typing(&mut ledger, &input, 6).unwrap_err(),
+            "brief_attempts_spent",
+            "a fourth typing is refused"
+        );
+        // Only Hide's own identity reports the record or the notice.
+        for mutation in [
+            Mutation::BriefConfirmed { id: spawn.clone() },
+            Mutation::BriefNoticed {
+                id: spawn.clone(),
+                attempt: 1,
+            },
+        ] {
+            assert_eq!(
+                apply(&mut ledger, &actor, &mutation, 7).unwrap_err(),
+                "caller_identity_conflict"
+            );
+        }
+        let noticed = apply(
+            &mut ledger,
+            &input,
+            &Mutation::BriefNoticed {
+                id: spawn.clone(),
+                attempt: 3,
+            },
+            7,
+        )
+        .unwrap();
+        assert_eq!(noticed["brief_input"]["noticed"], 3);
+        // A notice of an earlier typing that lands late moves nothing back.
+        let late = apply(
+            &mut ledger,
+            &input,
+            &Mutation::BriefNoticed {
+                id: spawn.clone(),
+                attempt: 1,
+            },
+            8,
+        )
+        .unwrap();
+        assert_eq!(late["brief_input"]["noticed"], 3);
+        assert_eq!(late["brief_input"]["noticed_at_unix_ms"], 7);
+        let confirmed = apply(
+            &mut ledger,
+            &input,
+            &Mutation::BriefConfirmed { id: spawn.clone() },
+            9,
+        )
+        .unwrap();
+        assert_eq!(confirmed["brief_input"]["confirmed_at_unix_ms"], 9);
+        // The record of an earlier typing arriving later keeps the first.
+        let again = apply(
+            &mut ledger,
+            &input,
+            &Mutation::BriefConfirmed { id: spawn.clone() },
+            10,
+        )
+        .unwrap();
+        assert_eq!(again["brief_input"]["confirmed_at_unix_ms"], 9);
+    }
+
     #[test]
     fn a_spawns_brief_is_one_delivered_letter_under_its_intent() {
         let mut ledger = Ledger::default();

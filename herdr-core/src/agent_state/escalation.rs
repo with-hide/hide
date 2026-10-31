@@ -442,6 +442,31 @@ mod tests {
         row
     }
 
+    /// A delegated child whose brief or letter Hide typed and never saw it
+    /// record, laid on its row once its parent had the grace to clear the
+    /// screen, rises to its root as an answer the operator owes, worded by
+    /// its subject; an ordinary child does not (`delivery::typed`).
+    #[test]
+    fn a_delegated_child_that_never_took_its_input_rises_as_an_answer() {
+        let mut row = child();
+        assert_eq!(of(&row, None, &BTreeMap::new()), None);
+        row.ask_subject = Some(crate::model::AskSubject::InputUnconfirmed {
+            input: crate::delivery::typed::InputKind::Brief,
+            spent: false,
+        });
+        row.laid_since_unix_ms = Some(42);
+        let raised = of(&row, None, &BTreeMap::new()).expect("it rises");
+        assert_eq!(raised.cause, Cause::InputUnconfirmed);
+        assert_eq!(raised.since_unix_ms, Some(42));
+        assert_eq!(Cause::InputUnconfirmed.verb(), Some(Verb::Answer));
+        row.activity = "working".into();
+        assert_eq!(
+            of(&row, None, &BTreeMap::new()),
+            None,
+            "a working child took it"
+        );
+    }
+
     /// Herdr keeps Grok `working` while it waits for a plan approval or an
     /// answer, and what Grok waits for is read from its current state, so a
     /// delegated Grok child rises as blocked all the same.

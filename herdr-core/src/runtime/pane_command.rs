@@ -241,7 +241,7 @@ mod tests {
     }
 
     fn read(
-        runtime: &Runtime,
+        runtime: &mut Runtime,
         context: &Context,
         command: PaneCommand,
     ) -> Result<(String, String), String> {
@@ -268,11 +268,11 @@ mod tests {
     fn an_agent_is_found_by_its_name_registration_or_pane_and_answers_with_its_pane() {
         let (mut runtime, context, _root, _herdr) = fixture(false);
         assert_eq!(
-            read(&runtime, &context, agent("reader")),
+            read(&mut runtime, &context, agent("reader")),
             Ok(("recipient".into(), "recipient".into()))
         );
         assert_eq!(
-            read(&runtime, &context, agent("recipient")),
+            read(&mut runtime, &context, agent("recipient")),
             Ok(("recipient".into(), "recipient".into()))
         );
         let actor = runtime.delivery_observations["recipient"].actor.clone();
@@ -297,27 +297,27 @@ mod tests {
         runtime.delivery_ledger = Ok(Arc::new(ledger));
         for key in ["agent-7", "reviewer"] {
             assert_eq!(
-                read(&runtime, &context, agent(key)),
+                read(&mut runtime, &context, agent(key)),
                 Ok(("recipient".into(), "recipient".into())),
                 "{key}"
             );
         }
         assert_eq!(
-            read(&runtime, &context, agent("nobody")),
+            read(&mut runtime, &context, agent("nobody")),
             Err("agent_unavailable".into())
         );
     }
 
     #[test]
     fn two_agents_of_one_name_are_ambiguous_rather_than_either() {
-        let (runtime, context, _root, _herdr) = fixture(true);
+        let (mut runtime, context, _root, _herdr) = fixture(true);
         assert_eq!(
-            read(&runtime, &context, agent("writer")),
+            read(&mut runtime, &context, agent("writer")),
             Err("target_ambiguous".into())
         );
         // Each is still reached by its pane.
         assert_eq!(
-            read(&runtime, &context, agent("third")).map(|(pane, _)| pane),
+            read(&mut runtime, &context, agent("third")).map(|(pane, _)| pane),
             Ok("third".into())
         );
     }
@@ -333,11 +333,11 @@ mod tests {
             lines: 10,
         };
         assert_eq!(
-            read(&runtime, &context, pane("w7:p3")),
+            read(&mut runtime, &context, pane("w7:p3")),
             Ok(("w7:p3".into(), "w7:p3".into()))
         );
         assert_eq!(
-            read(&runtime, &context, pane("remote:studio:pane:w7:p3")).err(),
+            read(&mut runtime, &context, pane("remote:studio:pane:w7:p3")).err(),
             Some("engine_unavailable".into()),
             "the device's engine, not this machine's"
         );
@@ -347,7 +347,7 @@ mod tests {
         .unwrap();
         runtime.observe_delivery("studio", &payload, None, None);
         assert_eq!(
-            read(&runtime, &context, agent("far")).err(),
+            read(&mut runtime, &context, agent("far")).err(),
             Some("engine_unavailable".into())
         );
     }
@@ -386,7 +386,7 @@ mod tests {
 
     #[test]
     fn a_caller_whose_checkout_moved_or_that_is_no_pane_is_refused() {
-        let (runtime, context, _root, _herdr) = fixture(false);
+        let (mut runtime, context, _root, _herdr) = fixture(false);
         let moved = Context {
             checkout_id: "another".into(),
             ..context.clone()

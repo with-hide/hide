@@ -313,6 +313,7 @@ fn row_facts(facts: &SessionFacts) -> RowFacts {
         operator_request: facts.operator_request.clone(),
         other_request: facts.other_request.clone(),
         last_reply_at_unix_ms: facts.last_reply_at_unix_ms,
+        prompt_digests: facts.prompt_digests.iter().cloned().collect(),
         created_prs: facts
             .created_prs
             .iter()

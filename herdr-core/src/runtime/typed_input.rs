@@ -40,6 +40,9 @@ pub(crate) struct InputWork {
     pub notice: Option<Notice>,
     /// The brief to type again, once someone answered the agent's screen.
     pub retype: Option<String>,
+    /// The agent's session file records the brief among its user messages:
+    /// the store is told, and nothing else is done for it.
+    pub recorded: bool,
 }
 
 /// An input shown to the operator: the pane whose row shows it, since when,
@@ -115,36 +118,6 @@ impl Runtime {
         }));
     }
 
-    /// The briefs a session read of `pane_id` found among the user messages
-    /// it recorded, as digests (`labels::facts::SessionFacts::prompt_digests`):
-    /// a brief still waiting there is confirmed.
-    pub(crate) fn confirm_briefs_by_session(&self, pane_id: &str, digests: &[String]) {
-        if digests.is_empty() {
-            return;
-        }
-        let Ok(ledger) = self.delivery_ledger.as_ref() else {
-            return;
-        };
-        for spawn in ledger.spawns.iter().filter(|spawn| {
-            spawn
-                .brief_input
-                .as_ref()
-                .is_some_and(|input| input.confirmed_at_unix_ms.is_none())
-                && self.spawn_pane_id(spawn).as_deref() == Some(pane_id)
-                && self.spawn_observation(spawn).is_some()
-        }) {
-            let Some(brief) = spawn.brief.as_deref() else {
-                continue;
-            };
-            if digests
-                .iter()
-                .any(|digest| hide_agent_hooks::delivery::matches_prompt_digest(brief, digest))
-            {
-                self.post_brief_confirmed(&spawn.id, "session");
-            }
-        }
-    }
-
     /// The unconfirmed inputs the doorbell has work for now: a notice owed,
     /// or a brief to type again. Bounded by the spawns and open letters the
     /// ledger keeps.
@@ -154,13 +127,38 @@ impl Runtime {
         };
         let mut work = Vec::new();
         for spawn in &ledger.spawns {
-            let (Some(input), Some(brief)) = (spawn.brief_input.as_ref(), spawn.brief.as_ref())
-            else {
+            let (Some(input), Some(brief)) = (
+                spawn
+                    .brief_input
+                    .as_ref()
+                    .filter(|input| input.confirmed_at_unix_ms.is_none() && input.attempts > 0),
+                spawn.brief.as_ref(),
+            ) else {
                 continue;
             };
             let Some(observation) = self.spawn_observation(spawn) else {
                 continue;
             };
+            // An agent whose prompt hook reports no digest records the brief
+            // in its session file, which the label worker reads on each of
+            // its state changes.
+            if self
+                .row_facts_of(&observation.actor.pane_id)
+                .is_some_and(|facts| {
+                    facts.prompt_digests.iter().any(|digest| {
+                        hide_agent_hooks::delivery::matches_prompt_digest(brief, digest)
+                    })
+                })
+            {
+                work.push(InputWork {
+                    key: InputKey::Spawn(spawn.id.clone()),
+                    observation: observation.clone(),
+                    notice: None,
+                    retype: None,
+                    recorded: true,
+                });
+                continue;
+            }
             if !matches!(
                 typed::standing(input, Some(observation), now),
                 Standing::Unconfirmed { .. }
@@ -189,6 +187,7 @@ impl Runtime {
                     observation: observation.clone(),
                     notice,
                     retype,
+                    recorded: false,
                 });
             }
         }
@@ -229,9 +228,29 @@ impl Runtime {
                     target,
                 }),
                 retype: None,
+                recorded: false,
             });
         }
         work
+    }
+
+    /// The label worker's facts on the row of `pane_id`, on this machine or
+    /// a device, laid only while the pane's session proves them.
+    fn row_facts_of(&self, pane_id: &str) -> Option<&crate::request_view::RowFacts> {
+        self.snapshot
+            .navigator
+            .agents
+            .iter()
+            .chain(
+                self.snapshot
+                    .status
+                    .remote
+                    .iter()
+                    .filter_map(|remote| remote.session.as_ref())
+                    .flat_map(|session| session.agents.iter()),
+            )
+            .find(|agent| agent.pane_id == pane_id)
+            .and_then(|agent| agent.row_facts.as_ref())
     }
 
     /// The observed pane of the registration `parent` names, the agent told
@@ -344,5 +363,257 @@ fn subject(input: InputKind, typed_input: &TypedInput) -> AskSubject {
     AskSubject::InputUnconfirmed {
         input,
         spent: typed_input.attempts >= typed::INPUT_ATTEMPTS,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use serde_json::json;
+
+    use super::*;
+    use crate::coordination::{AgentRecord, Command};
+    use crate::delivery::Actor;
+    use crate::delivery::ledger::Ledger;
+    use crate::delivery::typed::{PARENT_GRACE_MS, RECORD_WAIT_MS};
+    use crate::node::TEST_NODE;
+
+    const BRIEF: &str = "Node api: add the call.\nReport by letter.";
+
+    /// A parent in pane `sender` that spawned a Codex into pane `child` with a
+    /// brief, typed once at `typed_at`; the Codex has no session yet, as
+    /// before its first turn. Returns the runtime and the spawn's id.
+    fn spawned(handoff: bool, typed_at: u64) -> (tempfile::TempDir, Runtime, String) {
+        let root = tempfile::tempdir().unwrap();
+        let (runtime, _, _, _) = crate::runtime::delivery::tests::fixture(root.path());
+        let mut runtime = Arc::try_unwrap(runtime).ok().unwrap().into_inner().unwrap();
+        let parent_session = crate::engine::tokens::session_digest("parent-native");
+        let payload: crate::sidebar::SessionSnapshotPayload = serde_json::from_value(json!({
+        "panes": [
+            {"pane_id": "sender", "terminal_id": "term-sender"},
+            {"pane_id": "child", "terminal_id": "term-child"},
+        ],
+        "agents": [
+            {"id": "sender", "pane_id": "sender", "agent": "codex", "agent_status": "working",
+             "state_change_seq": 1, "lineage_session": parent_session},
+            {"id": "child", "pane_id": "child", "agent": "codex", "agent_status": "idle",
+             "state_change_seq": 2},
+        ]}))
+        .unwrap();
+        runtime.observe_delivery(TEST_NODE, &payload, None, None);
+        let child = runtime.delivery_observations.get_mut("child").unwrap();
+        child.status_changed_at_unix_ms = 0;
+        child.last_input_at_unix_ms = 0;
+        let parent = Actor {
+            pane_id: "sender".into(),
+            name: "sender".into(),
+            kind: "codex".into(),
+            device_id: TEST_NODE.into(),
+            session: parent_session,
+        };
+        let mut ledger = Ledger::default();
+        let apply = |ledger: &mut Ledger, mutation: Mutation, now: u64| {
+            crate::coordination::apply(ledger, &parent, &mutation, now).unwrap()
+        };
+        let parent_id = apply(
+            &mut ledger,
+            Mutation::Register {
+                record: AgentRecord {
+                    id: String::new(),
+                    name: Some("lead".into()),
+                    machine: TEST_NODE.into(),
+                    host_scope: "fixture-scope".into(),
+                    native_machine: "fixture-machine".into(),
+                    session: "parent-native".into(),
+                    instance: "term-sender".into(),
+                    pane: "sender".into(),
+                    parent: None,
+                    origin: None,
+                    project: None,
+                    actor: parent.clone(),
+                    ended: false,
+                    terminal_id: None,
+                    forked: false,
+                },
+                check: false,
+            },
+            1,
+        )["id"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        let spawn = apply(
+            &mut ledger,
+            Mutation::Reserve {
+                parent: parent_id.clone(),
+                command: Command::Spawn {
+                    parent: (!handoff).then(|| parent_id.clone()),
+                    machine: None,
+                    name: "worker".into(),
+                    intent: "task-1".into(),
+                    kind: "codex".into(),
+                    repo: "/fixture".into(),
+                    branch: "topic".into(),
+                    path: None,
+                    args: Vec::new(),
+                    launch: Default::default(),
+                    task: None,
+                    brief: Some(BRIEF.into()),
+                    beside: false,
+                    mission: None,
+                    plan_node: None,
+                    plan: None,
+                },
+            },
+            1,
+        )["id"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        for mutation in [
+            Mutation::Advance {
+                seed_tab: None,
+                id: spawn.clone(),
+                path: Some("/fixture/topic".into()),
+                pane: Some("child".into()),
+                terminal: Some("term-child".into()),
+                shell: None,
+                child: None,
+            },
+            Mutation::Typed { id: spawn.clone() },
+        ] {
+            apply(&mut ledger, mutation, 1);
+        }
+        apply(
+            &mut ledger,
+            Mutation::BriefTyping { id: spawn.clone() },
+            typed_at,
+        );
+        apply(
+            &mut ledger,
+            Mutation::Briefed { id: spawn.clone() },
+            typed_at,
+        );
+        runtime.publish_delivery(Arc::new(ledger), false);
+        (root, runtime, spawn)
+    }
+
+    fn input_of(runtime: &Runtime, spawn: &str) -> TypedInput {
+        let ledger = runtime.delivery_ledger.as_ref().unwrap();
+        ledger
+            .spawns
+            .iter()
+            .find(|record| record.id == spawn)
+            .unwrap()
+            .brief_input
+            .clone()
+            .unwrap()
+    }
+
+    /// A brief the child never recorded owes its parent one notice naming
+    /// the child's pane once the child rested past the record wait; it is
+    /// typed again only after input reached the pane and went quiet, and the
+    /// operator's row shows it only after the parent's grace.
+    #[test]
+    fn an_unrecorded_brief_tells_the_parent_then_waits_for_its_screen_to_be_answered() {
+        let (_root, mut runtime, spawn) = spawned(false, 1_000);
+        assert!(
+            runtime
+                .typed_input_work(1_000 + RECORD_WAIT_MS - 1)
+                .is_empty()
+        );
+        let at = 1_000 + RECORD_WAIT_MS;
+        let work = runtime.typed_input_work(at);
+        assert_eq!(work.len(), 1);
+        assert_eq!(work[0].key, InputKey::Spawn(spawn.clone()));
+        let notice = work[0].notice.as_ref().expect("the parent is told");
+        assert_eq!(notice.target.actor.pane_id, "sender");
+        assert_eq!(notice.intent, format!("input-unconfirmed:{spawn}:1"));
+        assert!(notice.body.starts_with(
+            "worker did not take its brief: read its screen with `hide pane read child`."
+        ));
+        assert_eq!(work[0].retype, None, "nobody answered the screen");
+        assert!(
+            runtime.input_asks(at).is_empty(),
+            "the parent clears it first"
+        );
+
+        // Someone answered the screen through Hide.
+        runtime.note_delivery_key_at("child", at + 1_000);
+        let quiet = at + 1_000 + crate::delivery::INPUT_QUIET_MS;
+        assert_eq!(runtime.typed_input_work(quiet - 1)[0].retype, None);
+        assert_eq!(
+            runtime.typed_input_work(quiet)[0].retype.as_deref(),
+            Some(BRIEF)
+        );
+
+        // Told, the parent has its grace before the operator sees the row.
+        let mut ledger = (**runtime.delivery_ledger.as_ref().unwrap()).clone();
+        let input = Actor::hide(typed::INPUT_ROLE, TEST_NODE);
+        crate::coordination::apply(
+            &mut ledger,
+            &input,
+            &Mutation::BriefNoticed {
+                id: spawn.clone(),
+                attempt: 1,
+            },
+            at,
+        )
+        .unwrap();
+        runtime.publish_delivery(Arc::new(ledger), false);
+        assert!(
+            runtime.typed_input_work(at).is_empty(),
+            "one notice per typing"
+        );
+        assert!(runtime.typed_input_work(quiet)[0].notice.is_none());
+        assert!(runtime.input_asks(at + PARENT_GRACE_MS - 1).is_empty());
+        let shown = runtime.input_asks(at + PARENT_GRACE_MS);
+        assert_eq!(
+            shown,
+            vec![(
+                "child".to_owned(),
+                1_000,
+                AskSubject::InputUnconfirmed {
+                    input: InputKind::Brief,
+                    spent: false
+                },
+            )]
+        );
+        assert_eq!(input_of(&runtime, &spawn).attempts, 1);
+    }
+
+    /// A handed-off child has no parent to clear its screen: its row shows
+    /// the unrecorded brief as soon as it is unconfirmed.
+    #[test]
+    fn a_handed_off_childs_unrecorded_brief_reaches_the_operator_at_once() {
+        let (_root, runtime, _) = spawned(true, 1_000);
+        let at = 1_000 + RECORD_WAIT_MS;
+        assert_eq!(runtime.input_asks(at).len(), 1);
+    }
+
+    /// An agent whose session file records the brief among its user
+    /// messages confirms it: the work says so and owes no notice.
+    #[test]
+    fn a_brief_in_the_agents_session_file_is_its_record() {
+        let (_root, mut runtime, spawn) = spawned(false, 1_000);
+        let mut row = crate::sidebar::project_agents(
+            serde_json::from_value(json!({"agents": [
+                {"pane_id": "child", "agent": "codex", "agent_status": "idle", "state_change_seq": 2}
+            ]}))
+            .unwrap(),
+        )
+        .agents
+        .remove(0);
+        row.row_facts = Some(crate::request_view::RowFacts {
+            prompt_digests: vec![hide_agent_hooks::delivery::prompt_digest(BRIEF)],
+            ..Default::default()
+        });
+        runtime.snapshot.navigator.agents.push(row);
+        let work = runtime.typed_input_work(1_000 + RECORD_WAIT_MS);
+        assert_eq!(work.len(), 1);
+        assert_eq!(work[0].key, InputKey::Spawn(spawn));
+        assert!(work[0].recorded);
+        assert!(work[0].notice.is_none());
     }
 }
