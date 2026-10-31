@@ -769,16 +769,20 @@ fn a_session_whose_leader_exited_still_ends_what_it_left() {
     }
 }
 
-/// A program this process has just written stays busy while a child another
-/// thread forked meanwhile still holds the writer's descriptor, until that
-/// child runs its own program; a start waits that out rather than failing
-/// (`ETXTBSY` on Linux), as when a node copies a holder into its version
-/// folder while it starts another.
-#[cfg(unix)]
+/// On Linux a program file stays busy while any process holds it open for
+/// writing, which a child another thread forked does from its fork until it
+/// runs its own program; a start waits that out rather than failing with
+/// `ETXTBSY`, as when a node copies a holder into its version folder while it
+/// starts another. Here a process keeps the writer's descriptor past its own
+/// start, for less than the start's retries last. macOS runs a program file
+/// open for writing, so there is nothing to wait out there.
+#[cfg(target_os = "linux")]
 #[test]
-fn a_start_waits_out_a_program_a_forked_child_still_holds_open() {
+fn a_start_waits_out_a_program_another_process_holds_open_for_writing() {
+    use std::os::fd::AsRawFd;
     use std::os::unix::fs::PermissionsExt;
     use std::os::unix::process::CommandExt;
+    const HOLD: Duration = Duration::from_millis(100);
     let dir = tempfile::tempdir().unwrap();
     let program = dir.path().join("resident");
     let mut file = std::fs::File::create(&program).unwrap();
@@ -786,20 +790,25 @@ fn a_start_waits_out_a_program_a_forked_child_still_holds_open() {
         .unwrap();
     file.set_permissions(std::fs::Permissions::from_mode(0o755))
         .unwrap();
-    // Forked while the file is open for writing, it holds the descriptor
-    // for 300 ms before it runs its program.
-    let mut forked = Command::new("/bin/sh");
-    forked.args(["-c", "exit 0"]);
-    // SAFETY: `usleep` is async-signal-safe and touches no memory.
+    let written = file.as_raw_fd();
+    let mut holder = Command::new("/bin/sh");
+    holder.args(["-c", &format!("exec sleep {}", HOLD.as_secs_f64())]);
+    // SAFETY: `fcntl` is async-signal-safe; it clears close-on-exec on the
+    // child's copy only, so the sleep holds the file open for writing.
     unsafe {
-        forked.pre_exec(|| {
-            libc::usleep(300_000);
+        holder.pre_exec(move || {
+            if libc::fcntl(written, libc::F_SETFD, 0) == -1 {
+                return Err(std::io::Error::last_os_error());
+            }
             Ok(())
         });
     }
-    let mut forked = Owned(forked.spawn().unwrap());
+    let held_from = Instant::now();
+    let mut holder = Owned(holder.spawn().unwrap());
     drop(file);
     let (resident, report) = start_reporting(&resident_command_of(&program));
+    // The start ran only once nothing held the file for writing.
+    assert!(held_from.elapsed() >= HOLD, "{report}");
+    assert!(holder.0.try_wait().unwrap().is_some(), "{report}");
     assert!(resident.is_running(), "{report}");
-    forked.0.wait().unwrap();
 }

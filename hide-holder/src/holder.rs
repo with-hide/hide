@@ -36,7 +36,9 @@ use crate::log::Log;
 /// unconfirmed.
 const TREE_END_LIMIT: Duration = Duration::from_secs(5);
 
-/// How long the PTY's close and the drain of its last output may take.
+/// How long the PTY's close and the drain of its last output may take, and,
+/// after it, how long the connections still opening are given before each
+/// is closed: one bound for all of them, never one per connection.
 const DRAIN_LIMIT: Duration = Duration::from_secs(5);
 
 /// How long a closing connection is given to take its last messages.
@@ -545,15 +547,15 @@ impl Holder {
     }
 
     /// Closes a connection that opened while the pane ends with what ends
-    /// it, so no connection is dropped without a reason.
-    fn turn_away(&self, stream: &LocalStream) {
+    /// it, so no connection is dropped without a reason, by `deadline`.
+    fn turn_away(&self, stream: &LocalStream, deadline: Instant) {
         let closed = self
             .ending
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
             .clone()
             .unwrap_or_else(|| Closed::new(CloseReason::HolderFailed, "the pane is ending"));
-        refuse(stream, closed, FLUSH_LIMIT, &self.log);
+        refuse(stream, closed, deadline, &self.log);
     }
 
     /// Ends the pane: its session first, then the PTY while its last output
@@ -607,13 +609,15 @@ impl Holder {
             self.log.event("holder.listener_close_unconfirmed", &[]);
         }
         // Each opening connection reads its hello within its bound, then
-        // closes itself or is queued; the queued ones are closed here.
-        if !self.opening.wait_idle(Instant::now() + DRAIN_LIMIT) {
+        // closes itself or is queued; the queued ones are closed here, all
+        // within the one bound.
+        let deadline = Instant::now() + DRAIN_LIMIT;
+        if !self.opening.wait_idle(deadline) {
             self.log.event("holder.opening_unconfirmed", &[]);
         }
         while let Ok(event) = self.events.try_recv() {
             if let Event::Opened { stream, .. } = event {
-                self.turn_away(&stream);
+                self.turn_away(&stream, deadline);
             }
         }
         if hide_platform::ipc::is_endpoint(&self.socket).unwrap_or(false) {
@@ -649,7 +653,7 @@ impl Holder {
                 .recv_timeout(deadline.saturating_duration_since(Instant::now()))
             {
                 Ok(Event::PtyClosed) => pty_closed = true,
-                Ok(Event::Opened { stream, .. }) => self.turn_away(&stream),
+                Ok(Event::Opened { stream, .. }) => self.turn_away(&stream, deadline),
                 Ok(_) => {}
                 Err(RecvTimeoutError::Timeout | RecvTimeoutError::Disconnected) => break,
             }
@@ -900,7 +904,7 @@ impl AcceptSide {
                         CloseReason::OpeningFull,
                         format!("{MAX_OPENING} connections were opening already"),
                     ),
-                    REFUSE_LIMIT,
+                    Instant::now() + REFUSE_LIMIT,
                     &self.log,
                 );
                 continue;
@@ -917,10 +921,10 @@ impl AcceptSide {
     }
 }
 
-/// Closes a connection that does not hold the pane with why, within
-/// `limit`: a handle of its own, since the one that read the hello may be
-/// past its deadline, and a handle past its deadline writes nothing.
-fn refuse(stream: &LocalStream, closed: Closed, limit: Duration, log: &Log) {
+/// Closes a connection that does not hold the pane with why, by `deadline`:
+/// a handle of its own, since the one that read the hello may be past its
+/// deadline, and a handle past its deadline writes nothing.
+fn refuse(stream: &LocalStream, closed: Closed, deadline: Instant, log: &Log) {
     log.event(
         "holder.connection_refused",
         &[
@@ -929,7 +933,7 @@ fn refuse(stream: &LocalStream, closed: Closed, limit: Duration, log: &Log) {
         ],
     );
     let mut writer = stream.duplicate();
-    writer.set_deadline(Instant::now() + limit);
+    writer.set_deadline(deadline);
     if let Err(error) = write_holder(&mut writer, &HolderMessage::Closed(closed)) {
         log.event(
             "holder.refusal_unsent",
@@ -948,21 +952,21 @@ fn open_connection(
     bounded.set_deadline(Instant::now() + HELLO_LIMIT);
     if !stream.peer_is_this_account().unwrap_or(false) {
         let closed = Closed::new(CloseReason::HelloInvalid, "the peer is not this account");
-        refuse(&stream, closed, HELLO_LIMIT, log);
+        refuse(&stream, closed, Instant::now() + HELLO_LIMIT, log);
         return;
     }
     let hello = match read_hello(&mut bounded) {
         Ok(hello) => hello,
         Err(error) => {
             let closed = Closed::new(hello_reason(&error), error.to_string());
-            refuse(&stream, closed, HELLO_LIMIT, log);
+            refuse(&stream, closed, Instant::now() + HELLO_LIMIT, log);
             return;
         }
     };
     let (version, sends) = match agree(&hello, &SENDS) {
         Ok(agreed) => agreed,
         Err(closed) => {
-            refuse(&stream, closed, HELLO_LIMIT, log);
+            refuse(&stream, closed, Instant::now() + HELLO_LIMIT, log);
             return;
         }
     };
@@ -971,7 +975,7 @@ fn open_connection(
         .unwrap_or_else(PoisonError::into_inner)
         .clone();
     if let Some(closed) = ended {
-        refuse(&stream, closed, HELLO_LIMIT, log);
+        refuse(&stream, closed, Instant::now() + HELLO_LIMIT, log);
         return;
     }
     // Queued once the pane has begun to end, it is closed by the end; a
@@ -987,7 +991,7 @@ fn open_connection(
             .unwrap_or_else(PoisonError::into_inner)
             .clone()
             .unwrap_or_else(|| Closed::new(CloseReason::HolderFailed, "the holder has ended"));
-        refuse(&stream, closed, HELLO_LIMIT, log);
+        refuse(&stream, closed, Instant::now() + HELLO_LIMIT, log);
     }
 }
 

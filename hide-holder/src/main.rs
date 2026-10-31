@@ -54,11 +54,13 @@ fn parse(mut arguments: impl Iterator<Item = std::ffi::OsString>) -> Result<Conf
     };
     while let Some(argument) = arguments.next() {
         match argument.to_str() {
-            Some("--socket") => socket = Some(PathBuf::from(value("--socket", &mut arguments)?)),
+            Some("--socket") => {
+                socket = Some(absolute("--socket", value("--socket", &mut arguments)?)?)
+            }
             Some("--rows") => rows = Some(number(value("--rows", &mut arguments)?)?),
             Some("--cols") => cols = Some(number(value("--cols", &mut arguments)?)?),
-            Some("--cwd") => cwd = Some(PathBuf::from(value("--cwd", &mut arguments)?)),
-            Some("--log") => log = Some(PathBuf::from(value("--log", &mut arguments)?)),
+            Some("--cwd") => cwd = Some(absolute("--cwd", value("--cwd", &mut arguments)?)?),
+            Some("--log") => log = Some(absolute("--log", value("--log", &mut arguments)?)?),
             Some("--id") => {
                 id = value("--id", &mut arguments)?
                     .into_string()
@@ -84,6 +86,17 @@ fn parse(mut arguments: impl Iterator<Item = std::ffi::OsString>) -> Result<Conf
         id,
         program,
     })
+}
+
+/// A path the holder is given, which must not depend on the folder it works
+/// in: it leaves the one it was started from for its version folder.
+fn absolute(name: &str, value: std::ffi::OsString) -> Result<PathBuf, String> {
+    let path = PathBuf::from(value);
+    if path.is_absolute() {
+        Ok(path)
+    } else {
+        Err(format!("{name} {} is not an absolute path", path.display()))
+    }
 }
 
 fn number(value: std::ffi::OsString) -> Result<u16, String> {
@@ -219,4 +232,38 @@ fn leave_start_folder() -> Result<(), String> {
         .ok_or_else(|| format!("{} is in no folder", program.display()))?;
     std::env::set_current_dir(folder)
         .map_err(|error| format!("{} could not be worked in: {error}", folder.display()))
+}
+
+#[cfg(test)]
+mod tests {
+    use std::ffi::OsString;
+
+    use super::parse;
+
+    fn arguments(socket: &str, cwd: &str, log: &str) -> Vec<OsString> {
+        [
+            "--socket", socket, "--rows", "24", "--cols", "80", "--cwd", cwd, "--log", log, "--",
+            "sh",
+        ]
+        .into_iter()
+        .map(OsString::from)
+        .collect()
+    }
+
+    #[test]
+    fn a_relative_socket_cwd_or_log_is_refused() {
+        let root = if cfg!(windows) { "C:\\h" } else { "/h" };
+        let at = |name: &str| format!("{root}/{name}");
+        assert!(parse(arguments(&at("p.s"), &at("w"), &at("p.log")).into_iter()).is_ok());
+        for (socket, cwd, log, named) in [
+            ("p.s".to_owned(), at("w"), at("p.log"), "--socket"),
+            (at("p.s"), "w".to_owned(), at("p.log"), "--cwd"),
+            (at("p.s"), at("w"), "p.log".to_owned(), "--log"),
+        ] {
+            let refused = parse(arguments(&socket, &cwd, &log).into_iter())
+                .err()
+                .unwrap_or_else(|| panic!("a relative {named} was taken"));
+            assert!(refused.starts_with(named), "{refused}");
+        }
+    }
 }
