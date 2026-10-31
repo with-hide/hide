@@ -3109,9 +3109,10 @@ pub(crate) mod tests {
     #[test]
     fn a_node_forgets_no_cause_it_raised() {
         let one = |key: &str| {
-            apply_plan(&mission(), &plan(vec![node(key, NodeKind::Change, &[])]), 2).unwrap().nodes
-                [0]
-            .clone()
+            apply_plan(&mission(), &plan(vec![node(key, NodeKind::Change, &[])]), 2)
+                .unwrap()
+                .nodes[0]
+                .clone()
         };
         let mut node = one("a");
         for index in 0..HANDLED_LIMIT + 4 {

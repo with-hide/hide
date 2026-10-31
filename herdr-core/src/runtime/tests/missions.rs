@@ -4892,7 +4892,14 @@ fn the_operator_opens_a_closed_mission_again_from_the_map() {
     runtime.drive_mission_health(crate::runtime::unix_milliseconds());
     assert_eq!(mission_status(&runtime), MissionStatus::Running);
     assert!(
-        runtime.missions.book.get("mission-1").unwrap().nodes.iter().all(|node| node.attention.is_none())
+        runtime
+            .missions
+            .book
+            .get("mission-1")
+            .unwrap()
+            .nodes
+            .iter()
+            .all(|node| node.attention.is_none())
     );
     let wakes = &runtime.missions.book.get("mission-1").unwrap().wakes;
     assert!(
@@ -4920,8 +4927,14 @@ fn a_full_wake_queue_keeps_what_waits_and_a_numbered_act_is_written_once() {
     let mission = runtime.missions.book.get_mut("mission-1").unwrap();
     for _ in 0..PENDING_WAKE_LIMIT {
         assert!(
-            crate::runtime::missions::record_wake(mission, "a".into(), None, WakeEvent::Merged, None)
-                .is_some()
+            crate::runtime::missions::record_wake(
+                mission,
+                "a".into(),
+                None,
+                WakeEvent::Merged,
+                None
+            )
+            .is_some()
         );
     }
     assert!(
@@ -4956,5 +4969,8 @@ fn a_full_wake_queue_keeps_what_waits_and_a_numbered_act_is_written_once() {
     runtime.record_mission_events("mission-1", vec![other]);
     let logged = &runtime.missions.events["mission-1"].events;
     let count = |kind| logged.iter().filter(|event| event.kind == kind).count();
-    assert_eq!((count(EventKind::HideClosed), count(EventKind::Raised)), (1, 1));
+    assert_eq!(
+        (count(EventKind::HideClosed), count(EventKind::Raised)),
+        (1, 1)
+    );
 }

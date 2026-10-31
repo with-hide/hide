@@ -765,7 +765,9 @@ impl Runtime {
         // wake is refused and logged (engineering #15).
         // A pull request the node no longer holds wakes no one again.
         let held = mission.nodes[at].prs.clone();
-        mission.nodes[at].woken.retain(|woken| held.contains(&woken.pr));
+        mission.nodes[at]
+            .woken
+            .retain(|woken| held.contains(&woken.pr));
         let node = &mission.nodes[at];
         let known = node
             .woken
@@ -797,7 +799,8 @@ impl Runtime {
             return false;
         }
         let node = &mut mission.nodes[at];
-        node.woken.retain(|woken| !(woken.pr == pr && woken.why == why));
+        node.woken
+            .retain(|woken| !(woken.pr == pr && woken.why == why));
         node.woken.push(Woken { pr, why, head });
         let mark = HideMark {
             action: HideAction::Woke,

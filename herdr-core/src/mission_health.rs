@@ -993,7 +993,12 @@ mod tests {
             [Act::Attach { node: 0, pr: 9 }]
         );
         let follow_facts = facts(Some(&follow), asleep());
-        assert!(!cleanup_due(&m, &m.nodes[0], &follow_facts.nodes[0], &follow_facts));
+        assert!(!cleanup_due(
+            &m,
+            &m.nodes[0],
+            &follow_facts.nodes[0],
+            &follow_facts
+        ));
     }
 
     /// B19: a refused close stands over the next evaluations and the close
@@ -1025,7 +1030,10 @@ mod tests {
         m.nodes[0].note_handled(resumed);
         let running = || facts(None, vec![worker(WorkerLife::Running)]);
         assert!(evaluate(&m, &running()).is_empty());
-        assert_ne!(m.nodes[0].criteria[0].state, crate::mission_criteria::CriterionState::Pass);
+        assert_ne!(
+            m.nodes[0].criteria[0].state,
+            crate::mission_criteria::CriterionState::Pass
+        );
         m.nodes[0].criteria[0].state = crate::mission_criteria::CriterionState::Pass;
         assert_eq!(evaluate(&m, &running()), [Act::Done { node: 0 }]);
     }
