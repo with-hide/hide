@@ -8,7 +8,7 @@ use std::sync::mpsc;
 use std::thread;
 use std::time::{Duration, Instant};
 
-use hide_platform::ipc::{LocalListener, LocalStream, is_endpoint};
+use hide_platform::ipc::{LocalListener, LocalStream, is_endpoint, remove_leftover};
 use tempfile::TempDir;
 
 /// A folder and an endpoint path inside it. Kept short: a Unix socket path
@@ -245,6 +245,41 @@ fn what_a_killed_listener_left_behind_is_replaced() {
     let mut client = LocalStream::connect(&path).unwrap();
     assert_eq!(read_line(&mut client), "new\n");
     server.join().unwrap();
+}
+
+#[test]
+fn what_a_killed_listener_left_behind_is_removed_and_a_live_one_is_refused() {
+    let (folder, path) = endpoint();
+    let mut holder = spawn_role("listen", &path);
+    assert_eq!(
+        remove_leftover(&path).unwrap_err().kind(),
+        std::io::ErrorKind::AddrInUse,
+        "a live listener's endpoint was taken"
+    );
+    assert!(path.exists(), "a refused removal removed the endpoint");
+    holder.child.kill().unwrap();
+    holder.child.wait().unwrap();
+    // A Windows pipe goes with the process; its marker file stays.
+    assert!(path.exists(), "a killed listener left nothing to remove");
+
+    assert!(remove_leftover(&path).unwrap());
+    let left: Vec<_> = std::fs::read_dir(folder.path())
+        .unwrap()
+        .map(|entry| entry.unwrap().file_name())
+        .collect();
+    assert!(left.is_empty(), "left behind: {left:?}");
+    assert!(
+        !remove_leftover(&path).unwrap(),
+        "nothing was there the second time"
+    );
+}
+
+#[test]
+fn removing_a_leftover_keeps_what_is_not_an_endpoint() {
+    let (_folder, path) = endpoint();
+    std::fs::create_dir(&path).unwrap();
+    assert!(remove_leftover(&path).is_err());
+    assert!(path.is_dir(), "the folder must still be there");
 }
 
 #[test]

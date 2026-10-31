@@ -467,6 +467,21 @@ pub fn is_endpoint(path: &Path) -> io::Result<bool> {
     fs::symlink_metadata(path).map(|metadata| sys::is_leftover_kind(&metadata))
 }
 
+/// Removes what a listener that ended without its drop (a process killed
+/// outright) left at `path`: the endpoint (a socket on Unix, the marker file
+/// on Windows) and its `<path>.lock`. Answers whether an endpoint was there.
+/// `AddrInUse` while a listener lives at the path, which is told by its lock
+/// as [`LocalListener::bind`] tells it, and an error for anything at the path
+/// a listener does not leave, which is never removed.
+pub fn remove_leftover(path: &Path) -> io::Result<bool> {
+    let presence = Presence::claim(path)?;
+    let there = fs::symlink_metadata(path).is_ok();
+    clear_leftover(path)?;
+    // Dropped while the endpoint is gone: the lock file goes with it.
+    drop(presence);
+    Ok(there)
+}
+
 /// An exclusive lock on `<endpoint>.lock`, held by a listener from before it
 /// binds until it is dropped.
 ///
