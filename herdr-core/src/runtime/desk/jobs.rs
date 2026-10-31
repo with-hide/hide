@@ -445,6 +445,17 @@ const MAX_WATCH_REFUSALS: u8 = 3;
 
 /// The newest conversation lines whose session chips follow the rows.
 const FOLLOWED_CHIPS: usize = 64;
+/// The lineage roots the `@` menu lists, and the rows it lists with their
+/// descendants (D-84).
+const MENTION_PARENTS: usize = 50;
+const MENTION_SESSIONS: usize = 200;
+
+/// The pane a row was spawned from, when the `@` menu lists it too.
+fn mention_parent<'a>(row: &'a SidebarAgentSnapshot, listed: &HashSet<&str>) -> Option<&'a str> {
+    row.lineage_parent_pane_id
+        .as_deref()
+        .filter(|parent| listed.contains(parent))
+}
 
 fn has_chips(item: &crate::model::DeskItem) -> bool {
     match item {
@@ -986,23 +997,72 @@ fn desk_job_mission(
 }
 
 impl Runtime {
-    /// The `@` menu: the sessions in the sidebar's order, then the
-    /// projects (B18).
+    /// The `@` menu: the sessions in the sidebar's order, each with the
+    /// parent it folds under and the project and branch of its second line
+    /// (D-84), then the projects (B18). The first `MENTION_PARENTS` lineage
+    /// roots are listed with their descendants, `MENTION_SESSIONS` rows at
+    /// most; a row whose parent fell past the cap goes with it.
     pub(super) fn desk_mentions(&self) -> crate::model::DeskMentionsSnapshot {
         use crate::model::{DeskMentionProject, DeskMentionSession};
-        const SESSIONS: usize = 50;
-        let sessions = self
+        let rows = &self.snapshot.navigator.agents;
+        let listed: HashSet<&str> = rows.iter().map(|row| row.pane_id.as_str()).collect();
+        let roots: HashSet<&str> = rows
+            .iter()
+            .filter(|row| mention_parent(row, &listed).is_none())
+            .take(MENTION_PARENTS)
+            .map(|row| row.pane_id.as_str())
+            .collect();
+        let mut kept: Vec<&SidebarAgentSnapshot> = rows
+            .iter()
+            .filter(|row| {
+                let root = row
+                    .lineage_path_pane_ids
+                    .first()
+                    .map_or(row.pane_id.as_str(), String::as_str);
+                roots.contains(root)
+            })
+            .take(MENTION_SESSIONS)
+            .collect();
+        loop {
+            let ids: HashSet<&str> = kept.iter().map(|row| row.pane_id.as_str()).collect();
+            let before = kept.len();
+            kept.retain(|row| {
+                mention_parent(row, &listed).is_none_or(|parent| ids.contains(parent))
+            });
+            if kept.len() == before {
+                break;
+            }
+        }
+        let branches: HashMap<&str, Option<&str>> = self
             .snapshot
             .navigator
-            .agents
+            .workspaces
             .iter()
-            .take(SESSIONS)
+            .flat_map(|workspace| &workspace.checkouts)
+            .flat_map(|checkout| {
+                checkout
+                    .tabs
+                    .iter()
+                    .flat_map(|tab| &tab.panes)
+                    .map(move |pane| (pane.id.as_str(), checkout.branch.as_deref()))
+            })
+            .collect();
+        let sessions = kept
+            .into_iter()
             .map(|row| DeskMentionSession {
                 id: row.pane_id.clone(),
                 name: row.identity_label.clone(),
                 agent_kind: row.agent_kind.clone(),
                 mark: row.mark,
                 detail: row.detail.clone(),
+                parent: mention_parent(row, &listed).map(str::to_owned),
+                project: row.workspace_label.clone(),
+                branch: branches
+                    .get(row.pane_id.as_str())
+                    .copied()
+                    .flatten()
+                    .map(str::to_owned),
+                last_prompt_at_unix_ms: row.last_prompt_at_unix_ms,
             })
             .collect();
         let with_rows: HashSet<&str> = self.agent_rows().map(|row| row.pane_id.as_str()).collect();
@@ -2091,6 +2151,91 @@ mod tests {
             named,
             [("/work/repo-home", "repo"), ("/work/notes", "notes")]
         );
+    }
+
+    /// A row on pane `pane` under `parent`, whose lineage starts at `path`.
+    fn lineage_row(pane: &str, parent: Option<&str>, path: &[&str]) -> SidebarAgentSnapshot {
+        let mut row = row(pane, "working");
+        row.identity_label = pane.to_uppercase();
+        row.workspace_label = "repo".into();
+        row.lineage_parent_pane_id = parent.map(str::to_owned);
+        row.lineage_path_pane_ids = path.iter().map(|one| (*one).to_owned()).collect();
+        row
+    }
+
+    #[test]
+    fn the_at_menu_folds_a_session_under_its_parent_with_its_project_and_branch() {
+        use crate::runtime::tests::{checkout, pane, workspace};
+        let root = tempfile::tempdir().unwrap();
+        let mut runtime = desk(root.path(), 2, &[]);
+        let mut fix = checkout(
+            "w-repo",
+            "c-fix",
+            "/work/repo-fix",
+            Some(pane("p2", "/work/repo-fix")),
+        );
+        fix.branch = Some("fix-menu".into());
+        let home = checkout(
+            "w-repo",
+            "c-home",
+            "/work/repo",
+            Some(pane("p1", "/work/repo")),
+        );
+        runtime.snapshot.navigator.workspaces =
+            vec![workspace("w-repo", "repo", "/work/repo", vec![fix, home])];
+        runtime.snapshot.navigator.agents = vec![
+            lineage_row("p1", None, &[]),
+            lineage_row("p2", Some("p1"), &["p1"]),
+            // Its parent is no row of the list, so it stands as a root.
+            lineage_row("p3", Some("gone"), &[]),
+        ];
+
+        let sessions = runtime.desk_mentions().sessions;
+        let read: Vec<_> = sessions
+            .iter()
+            .map(|one| {
+                (
+                    one.id.as_str(),
+                    one.parent.as_deref(),
+                    one.project.as_str(),
+                    one.branch.as_deref(),
+                )
+            })
+            .collect();
+        assert_eq!(
+            read,
+            [
+                ("p1", None, "repo", None),
+                ("p2", Some("p1"), "repo", Some("fix-menu")),
+                ("p3", None, "repo", None),
+            ]
+        );
+    }
+
+    #[test]
+    fn the_at_menu_lists_the_first_fifty_parents_with_their_children() {
+        let root = tempfile::tempdir().unwrap();
+        let mut runtime = desk(root.path(), 2, &[]);
+        let mut rows: Vec<_> = (0..=MENTION_PARENTS)
+            .map(|index| lineage_row(&format!("r{index}"), None, &[]))
+            .collect();
+        rows.push(lineage_row("first-child", Some("r0"), &["r0"]));
+        rows.push(lineage_row(
+            "late-child",
+            Some(&format!("r{MENTION_PARENTS}")),
+            &[&format!("r{MENTION_PARENTS}")],
+        ));
+        runtime.snapshot.navigator.agents = rows;
+
+        let sessions = runtime.desk_mentions().sessions;
+        let ids: HashSet<&str> = sessions.iter().map(|one| one.id.as_str()).collect();
+        assert_eq!(
+            sessions.iter().filter(|one| one.parent.is_none()).count(),
+            MENTION_PARENTS
+        );
+        assert!(ids.contains("first-child"));
+        assert!(!ids.contains("late-child"));
+        assert!(!ids.contains(format!("r{MENTION_PARENTS}").as_str()));
     }
 
     #[test]

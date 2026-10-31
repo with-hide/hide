@@ -1,4 +1,4 @@
-import { ArrowLeftRightIcon, ChevronRightIcon, CopyIcon, CornerDownLeftIcon, FilePenIcon, MailIcon, ShieldIcon, SlidersHorizontalIcon, SquareTerminalIcon, TerminalIcon } from "lucide-react";
+import { ArrowLeftRightIcon, ChevronRightIcon, CopyIcon, CornerDownLeftIcon, FilePenIcon, HouseIcon, MailIcon, ShieldIcon, SlidersHorizontalIcon, SquareTerminalIcon, TerminalIcon } from "lucide-react";
 import { useMemo, type ReactNode } from "react";
 import { Trans } from "react-i18next";
 import type { DeskAgent, DeskItem, DeskJob, DeskMention, DeskNoticeKind, DeskSessionRef, DeskSteps } from "../../desk";
@@ -26,14 +26,22 @@ import { DeskJobCard, SessionChip, type DeskJobCardActions } from "./desk-job-ca
  * holds `@session(<id> <name>)`.
  */
 export function MentionText({ text, mentions, token = namedMention, onMention }: { text: string; mentions: readonly DeskMention[]; token?: (mention: DeskMention) => string; onMention?: (mention: DeskMention) => void }) {
+  return <>{mentionParts(text, mentions, token).map((part, index) => (typeof part === "string" ? part : <DeskMentionChip key={index} mention={part} onPress={onMention ? () => onMention(part) : undefined} />))}</>;
+}
+
+/**
+ * One mention as Desk draws it wherever it stands, in the composer, the
+ * operator's message and a thread alike (D-85): a session leads with its
+ * status and agent marks once Hide knows them, a project with ⌂.
+ */
+export function DeskMentionChip({ mention, onPress }: { mention: DeskMention; onPress?: () => void }) {
   const { t } = useInterfaceTranslation();
-  return <>{mentionParts(text, mentions, token).map((part, index) => {
-    if (typeof part === "string") return part;
-    const lead = part.kind === "session" && part.agent_kind ? <><StatusMark mark={part.mark ?? null} /><AgentMark kind={part.agent_kind} /></> : undefined;
-    return onMention
-      ? <MentionChip key={index} kind={part.kind} name={part.name} lead={lead} label={t("desk.mention.open", { name: part.name })} onPress={() => onMention(part)} />
-      : <MentionChip key={index} kind={part.kind} name={part.name} lead={lead} />;
-  })}</>;
+  const lead = mention.kind === "project"
+    ? <HouseIcon aria-hidden="true" className="size-(--size-icon-sm)" />
+    : mention.agent_kind ? <><StatusMark mark={mention.mark ?? null} /><AgentMark kind={mention.agent_kind} /></> : undefined;
+  return onPress
+    ? <MentionChip kind={mention.kind} name={mention.name} lead={lead} label={t("desk.mention.open", { name: mention.name })} onPress={onPress} />
+    : <MentionChip kind={mention.kind} name={mention.name} lead={lead} />;
 }
 
 /** The operator's own words, the one thing drawn as a bubble (B7, D-75). */
