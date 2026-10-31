@@ -169,9 +169,7 @@ impl Runtime {
                     let raw = if local {
                         pane_id.as_str()
                     } else {
-                        pane_id
-                            .strip_prefix(&format!("remote:{device}:pane:"))
-                            .unwrap_or("")
+                        crate::address::pane_of(pane_id.as_str(), device.as_str()).unwrap_or("")
                     };
                     let remaining = deadline.saturating_duration_since(Instant::now());
                     if remaining.is_zero() {

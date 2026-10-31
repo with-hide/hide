@@ -262,7 +262,7 @@ export function PrDelegateDialog({ actions, workspace, pr, intent, onClose }: { 
   useEffect(() => {
     if (started?.phase !== "ready") return;
     if (started.agent_phase) useUiStore.getState().setWatchedTask(started.id);
-    if (started.pane_id) followStartedPane(started.pane_id);
+    if (started.pane_id) followStartedPane(started.pane_id, started.device_id);
     onClose();
   }, [started, onClose]);
   const submit = () => {

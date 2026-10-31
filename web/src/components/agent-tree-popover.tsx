@@ -8,7 +8,6 @@ import { deviceConnected, localDeviceId } from "../devices";
 import { useInterfaceTranslation } from "../i18n/client";
 import { relationState } from "../lineage";
 import { cn } from "../lib/utils";
-import { remoteTargetOfPane } from "../remote";
 import type { AgentRow, RaisedAsk } from "../snapshot";
 import { statusText } from "../agentStatus";
 import { machineName } from "../screenMachine";
@@ -303,8 +302,8 @@ function TreeItem({
   const { t } = useInterfaceTranslation();
   const rest = useShellStore((state) => state.rest);
   const child = line.agent;
-  const parentDevice = parent.device_id ?? remoteTargetOfPane(rest, parent.pane_id) ?? localDeviceId(rest);
-  const device = child.device_id ?? remoteTargetOfPane(rest, child.pane_id) ?? localDeviceId(rest);
+  const parentDevice = parent.device_id;
+  const device = child.device_id;
   const deviceLabel = machineName(rest?.navigator?.devices, device, t);
   const unavailable = !deviceConnected(rest, device);
   // A child on a device that is not connected draws no mark and says so on its line (status-marks B16).
@@ -315,7 +314,7 @@ function TreeItem({
       ? device
       : ask.open_pane_id === parent.pane_id
         ? parentDevice
-        : remoteTargetOfPane(rest, ask.open_pane_id) ?? localDeviceId(rest);
+        : ask.open_device_id ?? localDeviceId(rest);
   const askUnavailable = !deviceConnected(rest, askDevice);
   const branch = child.state.branch_badge;
   // The same second line a tree row draws: a block's cause, a waiting ring's 대기 line, a sleep or unknown state (status-marks B29, B31).

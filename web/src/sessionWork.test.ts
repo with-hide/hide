@@ -43,8 +43,8 @@ it("resolves the live pane by device, provider and native session together", () 
   const workspace = { device_id: "local", path: "/repo", checkouts: [], agent_scope: { members: agents.map((row) => ({ pane_id: row.pane_id, checkout_id: "c" })) } };
   const projects = [{ workspace, agents, device: null }] as unknown as BoardProject[];
   const session = { device_id: "local", agent: "claude", session_id: "shared" };
-  expect(sessionPlace(projects, session, null, null)?.agent?.pane_id).toBe("right");
-  expect(sessionPlace(projects, { ...session, agent: "opencode" }, null, null)).toBeNull();
+  expect(sessionPlace(projects, session, null)?.agent?.pane_id).toBe("right");
+  expect(sessionPlace(projects, { ...session, agent: "opencode" }, null)).toBeNull();
 });
 
 it("finds a History hit in the line a repeat was merged into (B23)", () => {

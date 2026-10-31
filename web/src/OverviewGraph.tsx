@@ -21,7 +21,7 @@ import { checkoutChip, GRAPH_CHOICES_DEFAULTS, graphActivity, graphProjectIdOf, 
 import { projectDropPlaces, useGraphTheme, useOverviewGraphLayout, type RememberedPlaces } from "./overviewGraphLayout";
 import { ClusterGraphNode, GlowGraphNode, GraphLine, GraphStateCounts, hasGraphLine, launchWords, LineGraphEdge, OperatorGraphNode, ProjectGraphNode, SessionGraphNode, TeamGraphNode, type ClusterNode, type ExchangeBadge, type GlowNode, type LineEdge, type OperatorNode, type ProjectNode, type SessionNode, type TeamNode } from "./overviewGraphNodes";
 import type { BoardProject } from "./projectBoard";
-import { sessionOfAgentOn } from "./sessionWork";
+import { sessionOfAgent } from "./sessionWork";
 import type { GraphScope, OverviewGraphChoices, WorkSession } from "./snapshot";
 import { useShellStore } from "./store";
 import { useUiStore } from "./ui";
@@ -80,7 +80,7 @@ function WorkGraph({ projects, deviceId, actions, onOpenRecord, projectId, initi
     const store = useShellStore.getState();
     const pane = store.focusedPaneId;
     if (!pane || !store.rest || frontDeviceId(store.rest) !== deviceId) return null;
-    const row = projects.flatMap((project) => project.agents).find((row) => row.pane_id === pane && (row.device_id ?? deviceId) === deviceId);
+    const row = projects.flatMap((project) => project.agents).find((row) => row.pane_id === pane && row.device_id === deviceId);
     const proof = store.rest.overview_graph?.sessions.find((row) => row.pane_id === pane && row.device_id === deviceId);
     return row?.session_id && proof ? { id: graphSessionId(deviceId, pane, proof.session_digest), native: row.session_id } : null;
   });
@@ -491,7 +491,7 @@ function exchange(pair: Communication, self: string) {
 
 function SessionPreview({ row, model, actions, openRecord, close, choose }: { row: GraphAgent; model: OverviewGraphModel; actions: Actions; openRecord: (session: WorkSession) => void; close: () => void; choose: (id: string, target: HTMLElement) => void }) {
   const { t } = useInterfaceTranslation();
-  const session = sessionOfAgentOn(row.agent, row.deviceId);
+  const session = sessionOfAgent(row.agent);
   const team = overviewGraphTeam(row, model);
   const rows = new Map(model.allAgents.map((one) => [one.id, one]));
   const talks = model.communication.filter((pair) => pair.source === row.id || pair.target === row.id).map((pair) => exchange(pair, row.id)).filter((talk) => rows.has(talk.other));

@@ -7,8 +7,8 @@ import { statusText } from "./agentStatus";
 import { useInterfaceTranslation } from "./i18n/client";
 import { cn } from "./lib/utils";
 import { agentsByPane, allAgents } from "./paneAgents";
-import { sessionOfAgentOn } from "./sessionWork";
-import { localDeviceId, type AgentRow, type LabelEnd, type PaneHeader, type PaneTurnRequest, type RequestSender } from "./snapshot";
+import { sessionOfAgent } from "./sessionWork";
+import { type AgentRow, type LabelEnd, type PaneHeader, type PaneTurnRequest, type RequestSender } from "./snapshot";
 import { useShellStore } from "./store";
 
 /** The handlers a turn card's trigger wears. */
@@ -41,7 +41,6 @@ export function PaneTurnCard({ paneId, actions, trigger }: { paneId: string; act
   const content = useRef<HTMLDivElement>(null);
   const agent = agentsByPane(useShellStore((state) => allAgents(state.agents, state.rest?.status?.remote))).get(paneId);
   const header = useShellStore((state) => state.rest?.terminal?.headers?.[paneId]);
-  const localId = useShellStore((state) => localDeviceId(state.rest));
   const open = !dismissed && (pinned || focused);
   const close = () => {
     setPinned(false);
@@ -84,7 +83,7 @@ export function PaneTurnCard({ paneId, actions, trigger }: { paneId: string; act
       else setPinned(true);
     },
   };
-  const session = agent ? sessionOfAgentOn(agent, localId) : null;
+  const session = agent ? sessionOfAgent(agent) : null;
   return (
     <Popover open={open && agent !== undefined} onOpenChange={(next) => (next ? undefined : dismiss())} modal={false}>
       <PopoverAnchor asChild>

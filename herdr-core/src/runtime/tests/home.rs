@@ -303,7 +303,7 @@ fn a_device_home_start_makes_home_then_starts_the_agent_with_its_folders() {
     assert_eq!(operation.path.as_deref(), Some(home_path.as_str()));
     assert_eq!(
         operation.pane_id.as_deref(),
-        Some(super::super::operations::remote_pane_id(DEVICE, "w4:p1").as_str())
+        Some(crate::address::scoped_pane_id(DEVICE, "w4:p1").as_str())
     );
 
     let mut names: Vec<String> = std::fs::read_dir(&home)
@@ -718,7 +718,7 @@ fn a_device_checkout_start_opens_its_tab_on_that_device() {
     assert_eq!(operation.device_id.as_deref(), Some(DEVICE));
     assert_eq!(
         operation.pane_id.as_deref(),
-        Some(super::super::operations::remote_pane_id(DEVICE, "w9:p2").as_str())
+        Some(crate::address::scoped_pane_id(DEVICE, "w9:p2").as_str())
     );
     let created = herdr
         .calls()

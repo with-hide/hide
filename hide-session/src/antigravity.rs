@@ -12,7 +12,7 @@ use anyhow::{Result, anyhow};
 use rusqlite::{Connection, OptionalExtension};
 use serde_json::Value;
 
-use crate::native_file::Header;
+use crate::source::facts::Header;
 use crate::{ConversationEvent, DiscoveryBudget, EventKind, LineResult, ReadRefusal, SessionError};
 
 /// agy's own folder under the home folder.

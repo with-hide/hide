@@ -23,11 +23,11 @@ const browserCanvas = vi.hoisted(() => {
 });
 afterAll(() => browserCanvas.restore());
 
-function checkout(id: string, path: string, pane: string, isWorktree: boolean): Checkout {
+function checkout(id: string, path: string, pane: string, isWorktree: boolean, device = "local"): Checkout {
   return {
     agent_scope: emptyScope(), id, workspace_id: "project:example", label: id, path, branch: id, purpose: null,
     is_worktree: isWorktree, exists: true, has_panes: true, pull_request: null, active_tab_id: `tab:${id}`, strip: [], next_tab_label: "2",
-    tabs: [{ id: `tab:${id}`, label: "1", panes: [{ id: pane }] }], worktree: null,
+    tabs: [{ id: `tab:${id}`, label: "1", panes: [{ id: pane, device_id: device }] }], worktree: null,
   } as unknown as Checkout;
 }
 function project(device: string, checkouts: Checkout[]): Workspace {
@@ -51,7 +51,7 @@ function remoteRest(listed: boolean): SnapshotRest {
   return {
     navigator: { devices: [{ id: "local", kind: "local" }, { id: "mini", kind: "remote" }], focused_device_id: "local", workspaces: [project("local", [main])] },
     focused: { pane_id: "pane-main" },
-    status: { remote: [{ target_id: "mini", state: "connected", session: { agents: [], workspaces: listed ? [project("mini", [checkout("checkout:mini", "/home/me/example-next", pane, true)])] : [] } }] },
+    status: { remote: [{ target_id: "mini", state: "connected", session: { agents: [], workspaces: listed ? [project("mini", [checkout("checkout:mini", "/home/me/example-next", pane, true, "mini")])] : [] } }] },
   } as unknown as SnapshotRest;
 }
 
@@ -134,7 +134,7 @@ describe("a created worktree's follow", () => {
     expect((events[0]!.payload as { request_id?: string }).request_id).toBeUndefined();
     expect(useUiStore.getState().opening).toBeNull();
 
-    await act(async () => followStartedPane("remote:mini:pane:p9"));
+    await act(async () => followStartedPane("remote:mini:pane:p9", "mini"));
     expect(useUiStore.getState().focusWhenListed).toBe("remote:mini:pane:p9");
     await act(async () => useShellStore.setState({ rest: remoteRest(true) }));
     expect(useUiStore.getState().focusWhenListed).toBeNull();

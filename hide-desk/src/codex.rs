@@ -4,13 +4,16 @@
 //! configuration and rules Hide writes there before every start.
 //!
 //! Codex's read-only sandbox blocks loopback, so a `hide` command run inside
-//! it never reaches hided. Codex runs a command its rules `allow` outside the
-//! sandbox and without asking, so the rules name exactly the `hide` commands
-//! Desk runs without a card ([`crate::permission::HIDE_WITHOUT_CARD`]); every
-//! other command still runs in the sandbox or asks, and reaches Hide as a
-//! permission request. A rule matches the start of a command only, which is
-//! why a Desk spawn's words for the agent's own CLI are refused by the core
-//! rather than asked for here.
+//! it never reaches hided. Codex reads its rules once per session, so a rule
+//! that let a command out of the sandbox without asking would keep the
+//! Settings › Desk › 권한 table of the session's start and skip Hide's
+//! decision. The rules therefore allow nothing: a command that needs more
+//! than the sandbox, a `hide` command included, asks to run outside it, and
+//! that request reaches Hide, which answers it from the table as it is then
+//! ([`crate::permission`]). Desk's instructions tell the agent to ask so for
+//! each `hide` command; one run in the sandbox first fails there, and Codex
+//! then asks. The file is still written before every start, so rules an
+//! older Hide wrote there are gone.
 //!
 //! The sign-in stays the operator's own (PRD Desk D-81): the home's
 //! `auth.json` is a link to the operator's, made again before every start,
@@ -24,8 +27,6 @@
 
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
-
-use crate::permission::HIDE_WITHOUT_CARD;
 
 /// Desk's Codex configuration. Commands run with Desk's own `PATH`, not the
 /// login shell's or a snapshot of it, so the `hide` Desk put first is the
@@ -45,31 +46,24 @@ include_instructions = false
 enabled = false
 ";
 
-/// The rules file Desk's Codex reads.
-fn rules() -> String {
-    let mut text = String::from(
-        "# Written by Hide for Desk's Codex before every start; edits are replaced.\n\
-         # The hide commands Desk runs without a card run outside the sandbox.\n",
-    );
-    for words in HIDE_WITHOUT_CARD {
-        let pattern = std::iter::once("hide")
-            .chain(words.iter().copied())
-            .map(|word| format!("\"{word}\""))
-            .collect::<Vec<_>>()
-            .join(", ");
-        text.push_str(&format!(
-            "prefix_rule(pattern = [{pattern}], decision = \"allow\")\n"
-        ));
-    }
-    text
-}
+/// The rules file Desk's Codex reads: no rule, so nothing leaves the
+/// sandbox without a request Hide answers.
+const RULES: &str = "\
+# Written by Hide for Desk's Codex before every start; edits are replaced.
+# No command runs outside the sandbox without asking: Hide answers each
+# request from Settings > Desk > Permissions.
+";
 
 /// The files Desk writes into `home` before Codex starts: path, body and
 /// whether it is a program.
 pub fn files(home: &Path) -> Vec<(PathBuf, String, bool)> {
     vec![
         (home.join("config.toml"), CONFIG.to_owned(), false),
-        (home.join("rules").join("hide-desk.rules"), rules(), false),
+        (
+            home.join("rules").join("hide-desk.rules"),
+            RULES.to_owned(),
+            false,
+        ),
     ]
 }
 
@@ -98,23 +92,18 @@ mod tests {
     use super::*;
 
     #[test]
-    fn every_hide_command_desk_frees_is_a_rule_and_nothing_else_is() {
-        let rules = rules();
-        let lines: Vec<&str> = rules
-            .lines()
-            .filter(|line| line.starts_with("prefix_rule"))
-            .collect();
-        assert_eq!(lines.len(), HIDE_WITHOUT_CARD.len());
-        assert!(lines.contains(
-            &"prefix_rule(pattern = [\"hide\", \"agent\", \"list\"], decision = \"allow\")"
-        ));
+    fn desk_s_codex_rules_let_no_command_out_of_the_sandbox_on_their_own() {
+        let written = files(Path::new("/state/desk/codex"));
+        let (_, rules, _) = written
+            .iter()
+            .find(|(path, ..)| path.ends_with("rules/hide-desk.rules"))
+            .expect("the rules file is written");
         assert!(
-            lines
-                .iter()
-                .all(|line| line.ends_with("decision = \"allow\")"))
+            rules
+                .lines()
+                .all(|line| line.is_empty() || line.starts_with('#')),
+            "{rules}"
         );
-        assert!(!rules.contains("[\"hide\", \"stop\"]"));
-        assert!(!rules.contains("\"archive\""));
     }
 
     #[test]

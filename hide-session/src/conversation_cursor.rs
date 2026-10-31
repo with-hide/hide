@@ -1,14 +1,16 @@
+use crate::source::FileIdentity;
+use crate::source::frame::{Frame, Framer};
 use crate::turns::native::TOOL_MARK_LIMIT;
 use crate::turns::wake::{Record, starts_work, stops_work};
 use crate::turns::{
     NATIVE_ID_LIMIT_BYTES, StopOutcome, ToolTurnMark, TurnMark, TurnMode, WakeMark,
 };
 use crate::{
-    Agent, AppendedBytes, ParsedSession, Result, SESSION_LINE_LIMIT_BYTES, SessionCursor,
-    SessionError, SkipReason, parse_events_followed,
+    Agent, ParsedSession, Result, SESSION_LINE_LIMIT_BYTES, SessionError, SkipReason,
+    parse_record_followed,
 };
+use std::borrow::Cow;
 use std::fs::File;
-use std::io::{Read, Seek, SeekFrom};
 use std::path::Path;
 
 /// Search-only durable progress, including a skipped oversized tool record.
@@ -35,28 +37,23 @@ impl ConversationCheckpoint {
     /// A node-proven JSONL turn boundary. Keep the current file identity so
     /// replacement cannot turn the saved byte offset into another turn.
     pub(crate) fn for_turn(path: &Path, offset: u64) -> Result<Self> {
-        let mut file = crate::open_session_file(path)
-            .map_err(|error| SessionError::io("open", path, error))?;
+        let file =
+            crate::source::open(path).map_err(|error| SessionError::io("open", path, error))?;
         let metadata = file
             .metadata()
             .map_err(|error| SessionError::io("metadata", path, error))?;
         if offset >= metadata.len() {
             return Err(SessionError::Checkpoint("turn_offset_invalid".into()));
         }
-        if offset > 0 {
-            file.seek(SeekFrom::Start(offset - 1))
-                .map_err(|error| SessionError::io("seek", path, error))?;
-            let mut before = [0];
-            file.read_exact(&mut before)
-                .map_err(|error| SessionError::io("read", path, error))?;
-            if before[0] != b'\n' {
-                return Err(SessionError::Checkpoint("turn_offset_invalid".into()));
-            }
+        if !crate::source::window::record_starts_at(&file, offset)
+            .map_err(|error| SessionError::io("read", path, error))?
+        {
+            return Err(SessionError::Checkpoint("turn_offset_invalid".into()));
         }
         Ok(crate::CursorCheckpoint {
             offset,
             identity: Some(
-                crate::FileIdentity::from_file(&file)
+                FileIdentity::of(&file)
                     .map_err(|error| SessionError::io("identity", path, error))?,
             ),
             pending: Vec::new(),
@@ -71,7 +68,7 @@ impl ConversationCheckpoint {
         Self {
             cursor: crate::CursorCheckpoint {
                 offset,
-                identity: last.map(|last| crate::FileIdentity {
+                identity: last.map(|last| FileIdentity {
                     first: created,
                     second: last,
                     high: 0,
@@ -153,10 +150,13 @@ pub fn read_conversation(
 }
 
 /// Incrementally reads conversation events without retaining unrelated records.
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct ConversationCursor {
-    cursor: SessionCursor,
-    discarded_bytes: u64,
+    /// Where the file is read on from, holding a record a read cut without
+    /// its newline (`source::frame`).
+    framer: Framer,
+    /// The file the position is in; `None` reads from the start.
+    identity: Option<FileIdentity>,
     has_more: bool,
     classifier: Option<Box<LargeRecord>>,
     read_bytes: u64,
@@ -165,16 +165,45 @@ pub struct ConversationCursor {
     creating: Vec<String>,
 }
 
+impl Default for ConversationCursor {
+    fn default() -> Self {
+        Self {
+            framer: Framer::new(SESSION_LINE_LIMIT_BYTES, 0),
+            identity: None,
+            has_more: false,
+            classifier: None,
+            read_bytes: 0,
+            native: None,
+            human_anchors: Vec::new(),
+            creating: Vec::new(),
+        }
+    }
+}
+
 impl ConversationCursor {
     pub fn new() -> Self {
         Self::default()
     }
 
+    /// The position a durable checkpoint keeps: the start of a record held
+    /// without its newline (its bytes are read again, never kept), or past
+    /// every byte read.
+    fn position(&self) -> crate::CursorCheckpoint {
+        crate::CursorCheckpoint {
+            offset: self.framer.settled(),
+            identity: self.identity,
+            pending: Vec::new(),
+        }
+    }
+
     /// Search owns a separate durable cursor; no Memory checkpoint is shared.
     pub fn checkpoint(&self) -> ConversationCheckpoint {
         ConversationCheckpoint {
-            cursor: self.cursor.checkpoint(),
-            discarded_bytes: self.discarded_bytes,
+            cursor: self.position(),
+            discarded_bytes: self
+                .framer
+                .passing_from()
+                .map_or(0, |start| self.framer.offset() - start),
             has_more: self.has_more,
             classifier: self.classifier.clone(),
             native: self.native.clone(),
@@ -199,7 +228,7 @@ impl ConversationCursor {
                 ..ConversationCheckpoint::default()
             });
         }
-        let mut cursor = self.cursor.checkpoint();
+        let mut cursor = self.position();
         cursor.offset = offset.min(cursor.offset);
         Ok(ConversationCheckpoint {
             cursor,
@@ -212,20 +241,36 @@ impl ConversationCursor {
     }
 
     pub fn restore(checkpoint: ConversationCheckpoint) -> Self {
-        let mut cursor = SessionCursor::restore(checkpoint.cursor);
+        // Old checkpoints included raw torn-line bytes after the stored
+        // offset. Rewind once, discard those bytes, and reread them from the
+        // provider-owned session file. New checkpoints have no `pending`
+        // field and therefore restore at their exact offset.
+        let mut offset = checkpoint
+            .cursor
+            .offset
+            .saturating_sub(checkpoint.cursor.pending.len() as u64);
         let (discarded_bytes, classifier) = match checkpoint.classifier {
             // Older scans lack native ids, wake metadata or context boundaries.
             // They cannot certify the discarded record. Reread that record
             // from its start rather than refuse it on every later read.
             Some(scan) if !scan.native_ids || !scan.wake_aware || !scan.context_aware => {
-                cursor.offset = cursor.offset.saturating_sub(checkpoint.discarded_bytes);
+                offset = offset.saturating_sub(checkpoint.discarded_bytes);
                 (0, None)
             }
             classifier => (checkpoint.discarded_bytes, classifier),
         };
+        let framer = if discarded_bytes > 0 {
+            Framer::passing(
+                SESSION_LINE_LIMIT_BYTES,
+                offset.saturating_sub(discarded_bytes),
+                offset,
+            )
+        } else {
+            Framer::new(SESSION_LINE_LIMIT_BYTES, offset)
+        };
         Self {
-            cursor,
-            discarded_bytes,
+            framer,
+            identity: checkpoint.cursor.identity,
             has_more: false,
             classifier,
             read_bytes: 0,
@@ -236,8 +281,8 @@ impl ConversationCursor {
     }
 
     pub fn reset(&mut self) {
-        self.cursor.reset();
-        self.discarded_bytes = 0;
+        self.framer = Framer::new(SESSION_LINE_LIMIT_BYTES, 0);
+        self.identity = None;
         self.has_more = false;
         self.classifier = None;
         self.native = None;
@@ -293,8 +338,8 @@ impl ConversationCursor {
         budget: u64,
     ) -> Result<ParsedSession> {
         self.read_bytes = 0;
-        let file = crate::open_session_file(path)
-            .map_err(|error| SessionError::io("open", path, error))?;
+        let file =
+            crate::source::open(path).map_err(|error| SessionError::io("open", path, error))?;
         self.read_file_with_budget(agent, path, &file, budget)
     }
 
@@ -312,7 +357,7 @@ impl ConversationCursor {
         self.read_bytes = 0;
         let mut plan_hold = None;
         let title = match agent {
-            Agent::Omp => Some(read_current_title(
+            Agent::Omp => Some(crate::source::facts::omp_title(
                 path,
                 file,
                 budget,
@@ -325,132 +370,77 @@ impl ConversationCursor {
             }
             _ => None,
         };
-        let remaining = budget.saturating_sub(self.read_bytes);
+        let remaining = budget
+            .saturating_sub(self.read_bytes)
+            .min(crate::SESSION_INCREMENT_READ_LIMIT_BYTES);
         let mut appended_read_bytes = 0;
-        let appended_result = read_appended_file(
-            &mut self.cursor,
+        let appended = crate::source::window::read_appended(
             path,
             file,
+            self.identity,
+            self.framer.offset(),
             remaining,
             &mut appended_read_bytes,
         );
         self.read_bytes += appended_read_bytes;
-        let AppendedBytes {
+        let crate::source::window::Appended {
             contents: appended,
             start_offset,
             identity,
             rescan_reason,
             has_more,
-        } = appended_result?;
-        if rescan_reason.is_some() {
-            self.discarded_bytes = 0;
-            self.classifier = None;
-            self.creating.clear();
-        }
-        let mut offset = start_offset;
-        let mut pending = self.cursor.pending.clone();
-        let mut discarded_bytes = self.discarded_bytes;
+        } = appended?;
+        // Commit only a successful poll: a relevant capacity failure cannot
+        // silently consume a Human turn or publish a partial result.
+        let mut framer = self.framer.clone();
         let mut classifier = self.classifier.clone();
+        let mut creating = self.creating.clone();
+        if rescan_reason.is_some() || start_offset != framer.offset() {
+            framer.rewind(start_offset);
+        }
+        if rescan_reason.is_some() {
+            classifier = None;
+            creating.clear();
+        }
         let mut parsed = ParsedSession {
             rescan_reason,
             ..ParsedSession::default()
         };
-        let mut found = crate::links::LinkAccumulator::resuming(self.creating.clone());
-        let mut consumed = 0;
-        let window_start = start_offset.saturating_sub(self.cursor.pending.len() as u64);
-        for fragment in records(&appended) {
-            consumed += fragment.len();
-            let line_start = offset.saturating_sub(pending.len() as u64 + discarded_bytes);
-            offset += fragment.len() as u64;
-            let complete = fragment.last() == Some(&b'\n');
-            if discarded_bytes > 0 {
-                discarded_bytes += fragment.len() as u64;
-                if let Some(classifier) = classifier.as_mut() {
-                    classifier.feed(fragment);
-                }
-            } else {
-                let retained = fragment.len().min(SESSION_LINE_LIMIT_BYTES - pending.len());
-                pending.extend_from_slice(&fragment[..retained]);
-                if retained < fragment.len() {
-                    // Continue a bounded structural scan across chunks. Only
-                    // JSON discriminators survive a checkpoint, never bodies.
-                    let mut scan = LargeRecord {
-                        native_ids: true,
-                        grok: (agent == Agent::Grok).then(Default::default),
-                        wake_aware: true,
-                        context_aware: true,
-                        ..LargeRecord::default()
-                    };
-                    scan.feed(&pending);
-                    scan.feed(&fragment[retained..]);
-                    classifier = Some(Box::new(scan));
-                    discarded_bytes = pending.len() as u64 + (fragment.len() - retained) as u64;
-                    pending.clear();
-                }
-            }
-            if !complete {
-                continue;
-            }
-            if discarded_bytes > 0 {
-                let scan = classifier.take();
-                discarded_bytes = 0;
-                if agent == Agent::Grok {
-                    // The record still counts, without its bodies.
-                    if let Some(line) = scan
-                        .filter(|scan| !scan.invalid)
-                        .and_then(|scan| scan.grok)
-                        .and_then(|grok| grok.reduced())
-                    {
-                        parsed.skipped(SkipReason::BodyCapacity);
-                        pending = line.into_bytes();
-                    } else {
-                        let (reason, turn) = LargeRecord::unreadable();
-                        parsed.skipped(reason);
-                        if let Ok(Some(mark)) = turn {
-                            parsed.turn_marks.push((line_start, mark));
-                        }
-                        continue;
-                    }
-                } else {
-                    let wake = LargeRecord::wake_mark(scan.as_deref(), agent);
-                    if let Some(event) = scan.as_deref().and_then(|scan| scan.context_reset(agent))
-                    {
-                        parsed.events.push(event);
-                        parsed.event_offsets.push(line_start);
-                    }
-                    let (reason, turn) =
-                        scan.map_or_else(LargeRecord::unreadable, |scan| (*scan).discard(agent));
-                    parsed.skipped(reason);
-                    match turn {
-                        Ok(Some(mark)) => parsed.turn_marks.push((line_start, mark)),
-                        Ok(None) => {}
-                        Err(reason) => parsed.skipped(reason),
-                    }
-                    if let Some(mark) = wake {
-                        parsed.turn_marks.push((line_start, mark));
-                    }
-                    continue;
-                }
-            }
-            let text = String::from_utf8_lossy(&pending);
-            let mut line = parse_events_followed(
-                agent,
-                &text,
-                line_start,
-                &mut found,
-                Some(&appended[consumed..]),
-            );
+        let mut found = crate::links::LinkAccumulator::resuming(creating);
+        let window_start = start_offset.saturating_sub(framer.pending().len() as u64);
+        let mut at = 0;
+        while let Some(frame) = framer.next(&appended, &mut at) {
+            let (line_start, text) = match frame {
+                Frame::Record { start, bytes } => (start, String::from_utf8_lossy(bytes)),
+                Frame::Over {
+                    start,
+                    first,
+                    kept,
+                    bytes,
+                    ended,
+                } => match pass_over(
+                    agent,
+                    &mut classifier,
+                    (first, kept, bytes, ended),
+                    start,
+                    &mut parsed,
+                ) {
+                    Some(line) => (start, Cow::Owned(line)),
+                    None => continue,
+                },
+            };
+            let mut line =
+                parse_record_followed(agent, &text, line_start, &mut found, Some(&appended[at..]));
             if line.held_command && has_more && line_start <= window_start {
                 // A command that opens a full window cannot wait for a reply
                 // beyond it: holding would stall the reader, so it is decided
                 // on what the window shows, as a whole-file reader does.
-                line = parse_events_followed(agent, &text, line_start, &mut found, None);
+                line = parse_record_followed(agent, &text, line_start, &mut found, None);
             }
             if line.held_command {
                 // A command whose reply is not written yet: read it again
                 // with the poll that holds the reply, so neither is lost.
-                offset = line_start;
-                pending.clear();
+                framer.rewind(line_start);
                 break;
             }
             parsed.events.extend(line.events);
@@ -468,7 +458,6 @@ impl ConversationCursor {
             parsed.pr_sightings.extend(line.pr_sightings);
             parsed.turn_marks.extend(line.turn_marks);
             parsed.tool_steps.extend(line.tool_steps);
-            pending.clear();
         }
         let creating = found.creating().to_vec();
         parsed.links = found.finish();
@@ -478,12 +467,8 @@ impl ConversationCursor {
             parsed.title = Some(title);
             parsed.custom_title = Some(custom_title);
         }
-        // Commit only a successful poll: a relevant capacity failure cannot
-        // silently consume a Human turn or publish a partial result.
-        self.cursor.offset = offset;
-        self.cursor.identity = Some(identity);
-        self.cursor.pending = pending;
-        self.discarded_bytes = discarded_bytes;
+        self.framer = framer;
+        self.identity = Some(identity);
         self.classifier = classifier;
         self.has_more = has_more;
         self.creating = creating;
@@ -491,20 +476,75 @@ impl ConversationCursor {
     }
 }
 
-/// `bytes` cut after each newline, as `split_inclusive` cuts them, with the
-/// newlines found by `memchr`: a transcript is read a line at a time, and a
-/// byte-at-a-time search was most of what reading a long one cost.
-fn records(bytes: &[u8]) -> impl Iterator<Item = &[u8]> {
-    let mut rest = bytes;
-    std::iter::from_fn(move || {
-        if rest.is_empty() {
-            return None;
+/// One piece of a record over the line cap ([`Frame::Over`]): a bounded
+/// structural scan continues across pieces and chunks, keeping only JSON
+/// discriminators, never bodies; once the piece holds the record's newline
+/// the record settles into `parsed`, and a Grok record that still reads
+/// without its bodies comes back to be parsed as a record. Every reader
+/// that cuts records (the cursor, a whole text) settles one this way.
+pub(crate) fn pass_over(
+    agent: Agent,
+    scan: &mut Option<Box<LargeRecord>>,
+    (first, kept, bytes, ended): (bool, &[u8], &[u8], bool),
+    line_start: u64,
+    parsed: &mut ParsedSession,
+) -> Option<String> {
+    if first {
+        let mut started = LargeRecord::of(agent);
+        started.feed(kept);
+        started.feed(bytes);
+        *scan = Some(Box::new(started));
+    } else if let Some(scan) = scan.as_mut() {
+        scan.feed(bytes);
+    }
+    if !ended {
+        return None;
+    }
+    over_record(agent, scan.take(), line_start, parsed)
+}
+
+/// What a record over the line cap leaves once its scan has seen all of it:
+/// its marks and reasons go into `parsed`, and a Grok record that still
+/// reads without its bodies comes back to be parsed as a record.
+fn over_record(
+    agent: Agent,
+    scan: Option<Box<LargeRecord>>,
+    line_start: u64,
+    parsed: &mut ParsedSession,
+) -> Option<String> {
+    if agent == Agent::Grok {
+        // The record still counts, without its bodies.
+        if let Some(line) = scan
+            .filter(|scan| !scan.invalid)
+            .and_then(|scan| scan.grok)
+            .and_then(|grok| grok.reduced())
+        {
+            parsed.skipped(SkipReason::BodyCapacity);
+            return Some(line);
         }
-        let end = memchr::memchr(b'\n', rest).map_or(rest.len(), |at| at + 1);
-        let (record, after) = rest.split_at(end);
-        rest = after;
-        Some(record)
-    })
+        let (reason, turn) = LargeRecord::unreadable();
+        parsed.skipped(reason);
+        if let Ok(Some(mark)) = turn {
+            parsed.turn_marks.push((line_start, mark));
+        }
+        return None;
+    }
+    let wake = LargeRecord::wake_mark(scan.as_deref(), agent);
+    if let Some(event) = scan.as_deref().and_then(|scan| scan.context_reset(agent)) {
+        parsed.events.push(event);
+        parsed.event_offsets.push(line_start);
+    }
+    let (reason, turn) = scan.map_or_else(LargeRecord::unreadable, |scan| (*scan).discard(agent));
+    parsed.skipped(reason);
+    match turn {
+        Ok(Some(mark)) => parsed.turn_marks.push((line_start, mark)),
+        Ok(None) => {}
+        Err(reason) => parsed.skipped(reason),
+    }
+    if let Some(mark) = wake {
+        parsed.turn_marks.push((line_start, mark));
+    }
+    None
 }
 
 /// Grok's current title and plan wait live beside its conversation, each
@@ -524,73 +564,6 @@ fn read_grok_state(
         });
     }
     Ok((summary.title, hold))
-}
-
-/// Refresh the physical first line through the same descriptor without
-/// changing event offsets. Every byte read, including a block's tail after
-/// the newline, is charged against this poll's existing allowance.
-fn read_current_title(
-    path: &Path,
-    file: &File,
-    budget: u64,
-    read_bytes: &mut u64,
-) -> Result<(String, String)> {
-    let mut file = file
-        .try_clone()
-        .map_err(|e| SessionError::io("clone", path, e))?;
-    file.seek(SeekFrom::Start(0))
-        .map_err(|e| SessionError::io("seek", path, e))?;
-    let mut prefix = Vec::new();
-    loop {
-        let allowance = budget
-            .min(crate::SESSION_INCREMENT_READ_LIMIT_BYTES)
-            .saturating_sub(*read_bytes);
-        if allowance == 0 {
-            return Err(SessionError::Capacity {
-                resource: "title_read_bytes",
-                limit: budget,
-            });
-        }
-        let mut block = [0_u8; 256];
-        let limit = block
-            .len()
-            .min(allowance as usize)
-            .min(SESSION_LINE_LIMIT_BYTES + 1 - prefix.len());
-        let n = file
-            .read(&mut block[..limit])
-            .map_err(|e| SessionError::io("read", path, e))?;
-        *read_bytes += n as u64;
-        let newline = block[..n]
-            .iter()
-            .position(|byte| *byte == b'\n')
-            .map(|index| prefix.len() + index);
-        prefix.extend_from_slice(&block[..n]);
-        if let Some(end) = newline {
-            if end + 1 > SESSION_LINE_LIMIT_BYTES {
-                return Err(SessionError::Capacity {
-                    resource: "line_bytes",
-                    limit: SESSION_LINE_LIMIT_BYTES as u64,
-                });
-            }
-            let value = serde_json::from_slice(&prefix[..end]).map_err(|_| {
-                SessionError::Checkpoint("label_session_metadata_unconfirmed".to_owned())
-            })?;
-            return crate::native_file::title_snapshot(&value).ok_or_else(|| {
-                SessionError::Checkpoint("label_session_metadata_unconfirmed".to_owned())
-            });
-        }
-        if prefix.len() > SESSION_LINE_LIMIT_BYTES {
-            return Err(SessionError::Capacity {
-                resource: "line_bytes",
-                limit: SESSION_LINE_LIMIT_BYTES as u64,
-            });
-        }
-        if n == 0 {
-            return Err(SessionError::Checkpoint(
-                "label_session_metadata_unconfirmed".to_owned(),
-            ));
-        }
-    }
 }
 
 #[cfg(test)]
@@ -625,58 +598,13 @@ mod tests {
     }
 }
 
-// Reads through an already-open descriptor so path replacement cannot race a
-// blocking open.
-fn read_appended_file(
-    cursor: &mut SessionCursor,
-    path: &Path,
-    file: &File,
-    budget: u64,
-    read_bytes: &mut u64,
-) -> Result<AppendedBytes> {
-    let mut file = file
-        .try_clone()
-        .map_err(|e| SessionError::io("clone", path, e))?;
-    let metadata = file
-        .metadata()
-        .map_err(|e| SessionError::io("stat", path, e))?;
-    let identity = crate::FileIdentity::from_file(&file)
-        .map_err(|error| SessionError::io("identity", path, error))?;
-    let rescan_reason = match cursor.identity {
-        Some(old) if old != identity => Some(crate::RescanReason::Replaced),
-        Some(_) if metadata.len() < cursor.offset => Some(crate::RescanReason::Truncated),
-        _ => None,
-    };
-    if cursor.identity.is_none() || rescan_reason.is_some() {
-        cursor.offset = 0;
-        cursor.pending.clear();
-    }
-    file.seek(SeekFrom::Start(cursor.offset))
-        .map_err(|e| SessionError::io("seek", path, e))?;
-    let start = cursor.offset;
-    let mut contents = Vec::new();
-    let read = file
-        .take(budget.min(crate::SESSION_INCREMENT_READ_LIMIT_BYTES))
-        .read_to_end(&mut contents);
-    // Failed parsing or a partial I/O failure still spent this poll's bytes.
-    *read_bytes = contents.len() as u64;
-    read.map_err(|e| SessionError::io("read", path, e))?;
-    Ok(AppendedBytes {
-        has_more: start + (contents.len() as u64) < metadata.len(),
-        contents,
-        start_offset: start,
-        identity,
-        rescan_reason,
-    })
-}
-
 // A bounded lexical/structural scan of an oversized provider envelope.
 // Key order and tool-output contents cannot decide whether a record is text.
 // The normal serde parser remains responsible for retained conversation JSON.
 // Only discriminators and the bounded native ids a turn mark needs are kept,
 // so a discarded record still answers or asks its call.
 #[derive(Clone, Debug, Default, PartialEq, serde::Serialize, serde::Deserialize)]
-struct LargeRecord {
+pub(crate) struct LargeRecord {
     frames: Vec<JsonFrame>,
     token: Option<JsonString>,
     root_kind: String,
@@ -806,6 +734,17 @@ fn bounded(id: Option<String>) -> std::result::Result<Option<String>, SkipReason
     }
 }
 impl LargeRecord {
+    /// A scan of `agent`'s record that keeps what every reader of it needs.
+    fn of(agent: Agent) -> Self {
+        Self {
+            native_ids: true,
+            grok: (agent == Agent::Grok).then(Default::default),
+            wake_aware: true,
+            context_aware: true,
+            ..Self::default()
+        }
+    }
+
     fn value_scope(&self) -> Scope {
         match self.frames.last() {
             None => Scope::Root,

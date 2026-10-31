@@ -723,7 +723,7 @@ fn codex_thread_name(home: &Path, request: &LabelTranscriptRequest, path: &Path)
     };
     let index = home.join(".codex/session_index.jsonl");
     let tail = crate::read_tail(&index, CODEX_INDEX_TAIL_BYTES).ok()?;
-    tail.lines().rev().find_map(|line| {
+    tail.records_newest_first().find_map(|line| {
         let entry = serde_json::from_str::<serde_json::Value>(line).ok()?;
         (entry.get("id")?.as_str()? == id)
             .then(|| {

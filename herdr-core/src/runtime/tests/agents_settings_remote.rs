@@ -1084,7 +1084,7 @@ fn usage_activity_hints_are_accepted_without_persisting_ui_state() {
 fn remote_pane_focus_uses_its_existing_request_outcome() {
     let target_id = "mini";
     let source_pane_id = "w1:p2";
-    let projected_pane_id = remote_pane_id_prefix(target_id) + source_pane_id;
+    let projected_pane_id = crate::address::scoped_pane_id(target_id, source_pane_id);
     let projected_workspace_id = "remote:mini:workspace:w1";
     let projected_checkout_id = "remote:mini:checkout:w1";
     let projected_tab_id = "remote:mini:tab:w1:t1";
@@ -1918,7 +1918,7 @@ fn read_record_is_scoped_by_pane_id_namespace_across_servers() {
             .expect("remote payload");
         let mut agents = project_agents(payload).agents;
         for agent in &mut agents {
-            agent.pane_id = remote_pane_id_prefix(target_id) + &agent.pane_id;
+            agent.pane_id = crate::address::scoped_pane_id(target_id, &agent.pane_id);
             agent.id = agent.pane_id.clone();
         }
         // The pane tree arrives freshly projected with no read axis
@@ -1961,7 +1961,8 @@ fn read_record_is_scoped_by_pane_id_namespace_across_servers() {
             focused_workspace_id: None,
             focused_checkout_id: None,
             focused_tab_id: None,
-            focused_pane_id: focused.map(|pane_id| remote_pane_id_prefix(target_id) + pane_id),
+            focused_pane_id: focused
+                .map(|pane_id| crate::address::scoped_pane_id(target_id, pane_id)),
             pane_layouts: Vec::new(),
             pane_hook_tokens: Default::default(),
             issue_tokens: Default::default(),

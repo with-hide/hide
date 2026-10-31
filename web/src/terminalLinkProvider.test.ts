@@ -35,7 +35,7 @@ describe("paneContext", () => {
     status: {
       remote: [{
         target_id: "mac",
-        session: { workspaces: [{ id: "w-mac", device_id: "mac", checkouts: [{ id: "c-mac", path: "/m/proj", tabs: [{ panes: [{ id: pane, cwd: "/m/proj/sub" }] }] }] }] },
+        session: { agents: [], workspaces: [{ id: "w-mac", device_id: "mac", checkouts: [{ id: "c-mac", path: "/m/proj", tabs: [{ panes: [{ id: pane, device_id: "mac", cwd: "/m/proj/sub" }] }] }] }] },
       }],
     },
   } as unknown as SnapshotRest;

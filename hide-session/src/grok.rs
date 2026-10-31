@@ -10,7 +10,6 @@
 //! bundled user guide, `17-sessions.md` and `19-plan-mode.md`.
 
 use std::fs::File;
-use std::io::Read;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Result, anyhow};
@@ -80,7 +79,7 @@ fn sibling(path: &Path, name: &str, limit: u64, read_bytes: &mut u64) -> Result<
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
         Err(_) => return Err(anyhow!("label_session_metadata_read_failed")),
     }
-    let file: File = match crate::open_session_file(&file_path) {
+    let file: File = match crate::source::open(&file_path) {
         Ok(file) => file,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
         Err(_) => return Err(anyhow!("label_session_metadata_read_failed")),
@@ -88,9 +87,7 @@ fn sibling(path: &Path, name: &str, limit: u64, read_bytes: &mut u64) -> Result<
     if hide_platform::fs::identity::link_count(&file).ok() != Some(1) {
         return Err(anyhow!("label_session_linked"));
     }
-    let mut bytes = Vec::new();
-    file.take(limit + 1)
-        .read_to_end(&mut bytes)
+    let bytes = crate::source::window::read_up_to(&file, limit)
         .map_err(|_| anyhow!("label_session_metadata_read_failed"))?;
     *read_bytes += bytes.len() as u64;
     Ok(Some(bytes))
@@ -99,7 +96,7 @@ fn sibling(path: &Path, name: &str, limit: u64, read_bytes: &mut u64) -> Result<
 /// Native identity, cwd and title from `summary.json`. A subagent child,
 /// a headless run or a hidden session is no pane's root conversation.
 pub(crate) fn summary(path: &Path, read_bytes: &mut u64) -> Result<Summary> {
-    let limit = crate::SESSION_LINE_LIMIT_BYTES as u64;
+    let limit = crate::source::facts::NAMING_RECORD_LIMIT_BYTES as u64;
     let bytes = sibling(path, SUMMARY, limit, read_bytes)?
         .ok_or_else(|| anyhow!("label_session_metadata_unconfirmed"))?;
     if bytes.len() as u64 > limit {
@@ -619,13 +616,6 @@ impl LargeLine {
         }
         serde_json::to_string(&record).ok()
     }
-}
-
-/// [`LargeLine`] over a line already in memory.
-pub(crate) fn reduced_line(line: &str) -> Option<String> {
-    let mut scan = LargeLine::default();
-    scan.feed(line.as_bytes()).ok()?;
-    scan.reduced()
 }
 
 #[cfg(test)]

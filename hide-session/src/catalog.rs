@@ -1,7 +1,7 @@
 use crate::file_cache;
 use crate::{
     Agent, ConversationCheckpoint, ConversationCursor, ConversationEvent, EventKind, ParsedSession,
-    SESSION_LINE_LIMIT_BYTES, SESSION_READ_LIMIT_BYTES, SessionError, parse_events, read_bounded,
+    SESSION_READ_LIMIT_BYTES, SessionError, parse_events, read_bounded,
 };
 use hide_project::ProjectIdentity;
 use serde::{Deserialize, Serialize};
@@ -10,8 +10,7 @@ use sha2::{Digest, Sha256};
 use std::collections::HashSet;
 use std::error::Error;
 use std::fmt::{Display, Formatter};
-use std::fs::{self, File};
-use std::io::BufReader;
+use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -427,39 +426,20 @@ fn collect_grok(
 fn session_cwd(agent: Agent, path: &Path) -> Result<Option<PathBuf>, String> {
     match agent {
         Agent::Grok | Agent::Pi | Agent::Omp | Agent::Antigravity => {
-            Ok(crate::native_file::header(agent, path)
+            Ok(crate::source::facts::header(agent, path)
                 .ok()
                 .map(|header| header.cwd))
         }
-        Agent::Codex => crate::codex_session_cwd(path)
+        Agent::Codex => crate::source::facts::codex_cwd(path)
             .map(|cwd| cwd.map(PathBuf::from))
             .map_err(|error| error.to_string()),
-        Agent::Claude => Ok(claude_session_cwd(path)),
+        Agent::Claude => Ok(crate::source::open(path).ok().and_then(|file| {
+            crate::source::facts::claude(file, crate::source::facts::Wanted::Cwd)
+                .ok()?
+                .cwd
+        })),
         Agent::OpenCode | Agent::Cursor => Ok(None),
     }
-}
-
-/// The first cwd a Claude Code record names, within its first 128 records.
-fn claude_session_cwd(path: &Path) -> Option<PathBuf> {
-    let file = File::open(path).ok()?;
-    let mut reader = BufReader::new(std::io::Read::take(file, SESSION_READ_LIMIT_BYTES));
-    for _ in 0..128 {
-        let line = match crate::read_head_record(&mut reader, SESSION_LINE_LIMIT_BYTES) {
-            Ok(Some(crate::HeadRecord::Complete(line) | crate::HeadRecord::Unfinished(line))) => {
-                line
-            }
-            Ok(Some(crate::HeadRecord::Passed)) => continue,
-            Ok(None) => break,
-            Err(_) => return None,
-        };
-        let Ok(value) = serde_json::from_slice::<Value>(&line) else {
-            continue;
-        };
-        if let Some(cwd) = value.get("cwd").and_then(Value::as_str) {
-            return Some(PathBuf::from(cwd));
-        }
-    }
-    None
 }
 
 /// A session of an agent other than Claude Code and Codex
@@ -668,7 +648,7 @@ fn pi_header_time(agent: Agent, contents: &str) -> Option<u64> {
         return None;
     }
     let mut remaining = contents.len() as u64;
-    crate::native_file::header_from_reader(agent, &mut contents.as_bytes(), &mut remaining)
+    crate::source::facts::native_header(agent, contents.as_bytes(), &mut remaining)
         .ok()?
         .opened_at_unix_ms
 }
@@ -749,7 +729,7 @@ fn session_id(agent: Agent, path: &Path) -> String {
     if agent.requires_native_file_proof() {
         // project_sessions already rejected invalid metadata, never synthesize
         // an identity from Pi's lossy pathname.
-        return crate::native_file::header(agent, path)
+        return crate::source::facts::header(agent, path)
             .map(|header| header.id)
             .unwrap_or_default();
     }
@@ -762,7 +742,7 @@ fn session_id(agent: Agent, path: &Path) -> String {
     }
     // The listing reached this file because its `session_meta` named its
     // cwd within the cap; a file rewritten since keeps the path's id.
-    let explicit = crate::codex_session_meta(path)
+    let explicit = crate::source::facts::codex_meta(path)
         .ok()
         .flatten()
         .and_then(|value| {
@@ -949,13 +929,6 @@ mod tests {
     }
 
     #[test]
-    fn bounded_line_reader_refuses_before_allocating_past_the_limit() {
-        let mut reader = BufReader::new(std::io::Cursor::new(b"123456789\nnext\n"));
-        let error = crate::read_bounded_line(&mut reader, 8).unwrap_err();
-        assert_eq!(error.kind(), std::io::ErrorKind::InvalidData);
-    }
-
-    #[test]
     fn a_claude_transcript_keeps_its_facts_until_its_stamp_moves() {
         let root = tempdir().unwrap();
         let home = root.path().join("home");
@@ -1072,7 +1045,7 @@ mod tests {
         fs::create_dir_all(&project_root).unwrap();
         let project = hide_project::resolve(&project_root, "local").unwrap();
         let cwd = serde_json::to_string(&project_root).unwrap();
-        let screenshot = "A".repeat(2 * SESSION_LINE_LIMIT_BYTES);
+        let screenshot = "A".repeat(2 * crate::SESSION_LINE_LIMIT_BYTES);
         fs::write(
             home.join(".claude/projects/p/claude-screenshot.jsonl"),
             format!(
@@ -1080,22 +1053,43 @@ mod tests {
             ),
         )
         .unwrap();
+        // A session_meta past the record cap but within the naming cap is
+        // read; one past the naming cap is refused for its size.
+        let meta = |id: &str, instructions: &str| {
+            format!(
+                "{{\"type\":\"session_meta\",\"payload\":{{\"id\":\"{id}\",\"cwd\":{cwd},\"instructions\":\"{instructions}\"}}}}\n"
+            )
+        };
+        fs::write(
+            home.join(".codex/sessions/2026/09/21/rollout-long-meta.jsonl"),
+            meta("codex-long", &screenshot),
+        )
+        .unwrap();
+        let naming = crate::source::facts::NAMING_RECORD_LIMIT_BYTES;
         fs::write(
             home.join(".codex/sessions/2026/09/21/rollout-huge-meta.jsonl"),
-            format!("{{\"type\":\"session_meta\",\"payload\":{{\"id\":\"codex-huge\",\"cwd\":{cwd},\"instructions\":\"{screenshot}\"}}}}\n"),
+            meta("codex-huge", &"A".repeat(naming + 1)),
         )
         .unwrap();
 
         let listed = SessionCatalog::new(&home, "local")
             .project_sessions(&project)
             .unwrap();
-        assert_eq!(listed.sessions.len(), 1);
-        assert_eq!(listed.sessions[0].agent, Agent::Claude);
+        let mut agents = listed
+            .sessions
+            .iter()
+            .map(|session| (session.agent.as_str(), session.id.as_str()))
+            .collect::<Vec<_>>();
+        agents.sort();
+        assert_eq!(
+            agents,
+            [("claude", "claude-screenshot"), ("codex", "codex-long")]
+        );
         assert_eq!(
             listed.refusals,
             vec![SessionStoreRefusal {
                 agent: Agent::Codex,
-                reason: format!("session_capacity:line_bytes:{SESSION_LINE_LIMIT_BYTES}"),
+                reason: format!("session_capacity:line_bytes:{naming}"),
             }]
         );
     }

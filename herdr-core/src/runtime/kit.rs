@@ -1514,7 +1514,7 @@ impl Runtime {
             .flat_map(|checkout| checkout.tabs.iter())
             .flat_map(|tab| tab.panes.iter());
         for pane in panes {
-            let local_pane = !crate::agent_hooks::is_remote_pane(&pane.id);
+            let local_pane = !crate::address::is_device_scoped(&pane.id);
             if (device_id == self.node.as_str()) != local_pane {
                 continue;
             }
@@ -1694,16 +1694,8 @@ impl Runtime {
 
     /// [`Self::codex_daemon`] for the machine a pane id belongs to.
     pub(super) fn codex_daemon_for_pane(&self, pane_id: &str) -> crate::codex_launch::CodexDaemon {
-        self.codex_daemon(self.device_of_pane(pane_id))
-    }
-
-    /// The machine a core pane id belongs to: the device a `remote:` id
-    /// names, else this one.
-    pub(super) fn device_of_pane<'a>(&'a self, pane_id: &'a str) -> &'a str {
-        pane_id
-            .strip_prefix("remote:")
-            .and_then(|rest| rest.split_once(":pane:"))
-            .map_or(self.node.as_str(), |(device, _)| device)
+        let device = crate::address::pane_device(pane_id).unwrap_or(self.node.as_str());
+        self.codex_daemon(device)
     }
 
     pub(super) fn kit_state(&self, device_id: &str) -> KitSnapshot {

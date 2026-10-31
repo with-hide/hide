@@ -70,6 +70,8 @@ export type RaisedAsk = {
   title: string;
   agent_kind: string;
   open_pane_id: string;
+  /** The device that pane is on; absent for the core's own machine. A device that is not connected publishes no rows to look it up in. */
+  open_device_id?: string;
   since_unix_ms: number | null;
   unreceived_by?: string;
   path: string[];
@@ -129,8 +131,10 @@ export type AgentRow = {
   agent_kind: string;
   /** The checkout that physically owns this pane. */
   checkout_label?: string | null;
-  /** Presentation-only device facts attached by `allAgents`. */
-  device_id?: string;
+  /** The machine the row's pane is on and the id that machine gives the pane (`w9J:p52`), published by the core on every row. */
+  device_id: string;
+  device_pane_id: string;
+  /** Presentation-only device name attached by `allAgents`. */
   device_label?: string;
   mark: RowMark;
   group: string;
@@ -729,6 +733,9 @@ export type CheckoutAgentSummary = {
 export type MarkCounts = { turn: number; going: number; done: number; unread: number };
 
 export type PaneRow = {
+  /** The machine the pane is on and the id that machine gives it, published by the core on every row. */
+  device_id: string;
+  device_pane_id: string;
   terminal_id?: string | null;
   failed_terminal_id?: string;
   ports?: number[];
@@ -1180,6 +1187,8 @@ export type EditorTabKind = "file" | "diff" | "session";
 /** One editor tab the core holds. Its id is the strip entry's `source_id`. */
 export type EditorTabSnapshot = {
   id: string;
+  /** The machine the tab's checkout is on, published by the core. */
+  device_id: string;
   workspace_id: string;
   checkout_id: string;
   path: string;
@@ -2657,7 +2666,18 @@ export type DeskAgentId = "claude" | "codex" | "grok" | "opencode" | "pi" | "omp
 /** `desk_agent_state`; `off` is a chosen agent Settings › Agents has since switched off. */
 export type DeskAgentState = "checking" | "ready" | "preparing" | "install_failed" | "node_missing" | "cli_missing" | "no_ask_mode" | "off";
 export type DeskHostState = "idle" | "starting" | "ready" | "thinking" | "stopped";
-export type DeskApprovalState = "waiting" | "allowed" | "rejected" | "closed";
+export type DeskApprovalState = "waiting" | "allowed" | "allowed_conversation" | "rejected" | "closed";
+/** A Settings › Desk › 권한 row (D-82): `desk_permission_row`. */
+export type DeskPermissionRow = "hide" | "read" | "shell" | "edit";
+/** `desk_permission_answer`: 바로 or 묻기. */
+export type DeskPermissionAnswer = "run" | "ask";
+export type DeskPermissions = Record<DeskPermissionRow, DeskPermissionAnswer>;
+/** `desk_irreversible`: what always asks, whatever the rows say. */
+export type DeskIrreversible = "end_working_session" | "force_push" | "delete_remote" | "delete_outside" | "overwrite_outside" | "unreadable";
+/** A card's answer as `desk_approval` sends it (D-83): 한 번 허용, 이 대화에서 계속 허용, 거절. */
+export type DeskApprovalAnswer = "once" | "conversation" | "reject";
+/** Why a card asks, irreversible kinds first: `desk_approval_ask`. */
+export type DeskApprovalAsk = { kind: "irreversible"; value: DeskIrreversible } | { kind: "row"; value: DeskPermissionRow };
 export type DeskNotice = "blocked" | "preparing" | "host_stopped" | "resume_failed" | "login_needed" | "install_failed" | "no_ask_mode" | "turn_failed";
 export type DeskLocation = "desk" | "worktree" | "checkout";
 export type DeskChoice = { id: string; label: string };
@@ -2675,6 +2695,8 @@ export type DeskAgent = {
   signed_in: boolean | null;
   /** The agent's own sign-in command, for the `login_needed` notice. */
   login_command: string;
+  /** The rows of Settings › Desk › 권한 the agent runs without asking, whatever they say (D-82): its own setup lets those run before Hide hears of them. */
+  always_runs: DeskPermissionRow[];
   /** What the agent's last session offered; empty until one opened. */
   models: DeskChoice[];
   efforts: DeskChoice[];
@@ -2687,7 +2709,12 @@ export type DeskItem =
   | { kind: "reply"; id: number; agent: DeskAgentId; text: string; at_ms: number; state: "done" | "stopped"; thought_ms: number | null; steps: DeskSteps; mentions: DeskSessionChip[] }
   | { kind: "switch"; id: number; from: DeskAgentId | null; to: DeskAgentId; carried: "all" | "trimmed" | "none" }
   | { kind: "model"; id: number; model: string | null; effort: string | null }
-  | { kind: "approval"; id: number; card: "command" | "edit" | "other"; command: string; folder: string | null; reason: string | null; state: DeskApprovalState }
+  /**
+   * A call Hide asked the operator about (D-83). `subject` is the session an
+   * archive ends or the path a deletion reaches; `refusal` is the line the
+   * operator sent with 거절.
+   */
+  | { kind: "approval"; id: number; card: "command" | "edit" | "read" | "other"; command: string; folder: string | null; reason: string | null; state: DeskApprovalState; asks: DeskApprovalAsk[]; subject: string | null; refusal: string | null }
   /** `detail` is the install's last line, the sign-in command for `login_needed`, or the blocked call. */
   | { kind: "notice"; id: number; notice: DeskNotice; agent: DeskAgentId | null; detail: string | null }
   /** A letter Desk sent a running session (B16): handed work when `letter_kind` is `request`; no state, no place. `read` once its runtime took it in; `mark` is the recipient row's now, for its chip. */
@@ -2769,7 +2796,7 @@ export type DeskSection = {
   conversation: { generation: number; items: DeskItem[]; dropped: number };
   approvals_waiting: number;
   /** `enabled` is Settings › Desk's switch, off by default (D-76): off, no entry to Desk is drawn. */
-  settings: { enabled: boolean; default_agent: DeskAgentId | null; location: DeskLocation; cap: number };
+  settings: { enabled: boolean; default_agent: DeskAgentId | null; location: DeskLocation; cap: number; permissions: DeskPermissions };
   /** The lane's pin and the tabs kept in its 보기 column, oldest first, at most 16 (B31, B32). */
   lane: { pinned: boolean; kept: DeskKeptTab[] };
 };
@@ -3237,31 +3264,6 @@ export type SnapshotRest = {
  */
 export function localDeviceId(rest: SnapshotRest | null): string {
   return rest?.navigator?.devices?.find((device) => device.kind !== "remote")?.id ?? "";
-}
-
-/**
- * Every device row named by the device it runs on. The core publishes a
- * device's agents inside that device's status, where the row does not say
- * whose it is, but a session's ledger row is kept under the device id, so
- * every reader that names a row's session (a pane head, a task row, a reveal)
- * has to find the id on the row. This is the one place that sets it; rows
- * already carrying it, and statuses with no agents, are returned as they are
- * so `share` keeps their identity.
- */
-export function stampDeviceAgents(rest: SnapshotRest): SnapshotRest {
-  const remote = rest.status?.remote;
-  if (!remote?.some((status) => status.session?.agents?.some((agent) => agent.device_id !== status.target_id))) return rest;
-  return {
-    ...rest,
-    status: {
-      ...rest.status!,
-      remote: remote.map((status) => {
-        const session = status.session;
-        if (!session?.agents?.some((agent) => agent.device_id !== status.target_id)) return status;
-        return { ...status, session: { ...session, agents: session.agents.map((agent) => (agent.device_id === status.target_id ? agent : { ...agent, device_id: status.target_id })) } };
-      }),
-    },
-  };
 }
 
 export function focusedRemoteDevice(rest: SnapshotRest | null): Device | null {

@@ -59,6 +59,9 @@ pub const HIDE_BUILD_ORDER_OVERRIDE: &str = "HIDE_BUILD_ORDER_OVERRIDE";
 /// The file that declares a HOME a test fixture's, beside every test-only
 /// key's other conditions ([`fixture_home`]).
 pub const FIXTURE_HOME_MARKER: &str = hide_kit::layout::FIXTURE_HOME_MARKER;
+/// Development only: whether this daemon's node runs pane holders
+/// ([`hide_node::terminal::holder::SWITCH`] owns the contract).
+pub const HIDE_DEV_PANE_HOLDER: &str = hide_node::terminal::holder::SWITCH;
 
 pub const REGISTRY: &[EnvKey] = &[
     EnvKey {
@@ -216,6 +219,12 @@ pub const REGISTRY: &[EnvKey] = &[
         required: false,
         format: "absolute path of a folder holding stand-in `gh`, `launchctl` and `pmset`; read only when HOME is a fixture HOME (under /tmp, carrying .hide-e2e-device-home, and not the account's own)",
         absent_behavior: "A core move's checks on the machine taking the core run the account's `gh`, /bin/launchctl and /usr/bin/pmset; a fixture HOME names stand-ins, so a test passes or fails each check without the machine's own GitHub login, session and power settings, and a fixture HOME without it is refused rather than reaching the account's launchd",
+    },
+    EnvKey {
+        key: HIDE_DEV_PANE_HOLDER,
+        required: false,
+        format: "`1` (the node runs a pane holder for each pane it starts) or `0`; any other value fails the daemon's check with the values it takes",
+        absent_behavior: "Off: every pane opens through Herdr's terminal sessions and no pane holder is started, adopted or read; a device's node logs a diagnostic and stays on Herdr even when it is `1`",
     },
     EnvKey {
         key: HOME,
@@ -560,6 +569,14 @@ fn resolve(mut read: impl FnMut(&str) -> Option<String>) -> (Env, Vec<EnvError>)
         Some(value) => Some(PathBuf::from(value)),
         None => None,
     };
+    if let Some(value) = read(HIDE_DEV_PANE_HOLDER)
+        && hide_node::terminal::holder::Switch::parse(Some(std::ffi::OsStr::new(&value))).is_err()
+    {
+        errors.push(EnvError {
+            key: HIDE_DEV_PANE_HOLDER,
+            kind: "invalid",
+        });
+    }
     let search_path = read(PATH).filter(|value| !value.is_empty());
     let env = Env {
         home,
@@ -706,6 +723,12 @@ pub fn fixture_core_stop_hangs() -> bool {
         && hide_platform::host::home_dir().is_ok_and(|home| fixture_home(&home))
 }
 
+/// Whether this daemon's node runs pane holders ([`HIDE_DEV_PANE_HOLDER`]);
+/// a value it does not take is an error naming the values it does.
+pub(crate) fn pane_holder_switch() -> Result<hide_node::terminal::holder::Switch, String> {
+    hide_node::terminal::holder::Switch::parse(std::env::var_os(HIDE_DEV_PANE_HOLDER).as_deref())
+}
+
 /// Public ingestion token embedded by build.rs; runtime cannot replace it.
 pub(crate) fn product_analytics_token() -> Option<String> {
     let token = env!("HIDE_POSTHOG_PROJECT_TOKEN");
@@ -747,6 +770,7 @@ mod tests {
         (HERDR_PANE_ID, ""),
         (HIDE_HOST_HELPER_ROOT, "relative"),
         (HIDE_TAILSCALE_BIN, "relative"),
+        (HIDE_DEV_PANE_HOLDER, "yes"),
     ];
 
     #[test]

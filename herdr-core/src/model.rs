@@ -1480,6 +1480,23 @@ pub enum AskSubject {
     },
 }
 
+/// A published value the core derives from other fields of its row before
+/// every snapshot (`Runtime::stamp_row_addresses`). Equality ignores it,
+/// because the fields it is derived from are compared already: a freshly
+/// projected row, not yet stamped, is the same row as the stamped one it
+/// replaces, so no comparison reads a stamp as a change.
+#[derive(Clone, Debug, Default, Serialize)]
+#[serde(transparent)]
+pub struct Derived<T>(pub T);
+
+impl<T> PartialEq for Derived<T> {
+    fn eq(&self, _: &Self) -> bool {
+        true
+    }
+}
+
+impl<T> Eq for Derived<T> {}
+
 /// An agent's state on four independent lifecycle axes, plus the values the shell draws
 /// from them.
 ///
@@ -1491,6 +1508,13 @@ pub enum AskSubject {
 /// rule 4).
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct SidebarAgentSnapshot {
+    /// The machine the row's pane is on (the core's own node id, or a
+    /// device's) and the id that machine gives the pane (`w1:p2`), read from
+    /// `pane_id` by the one address owner (`crate::address`) before every
+    /// snapshot (`Runtime::stamp_row_addresses`), so no reader splits the
+    /// pane id itself.
+    pub device_id: Derived<String>,
+    pub device_pane_id: Derived<String>,
     /// Display provenance only; independent of hook health and GitHub reads.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub record_connection: Option<crate::labels::record::RecordConnection>,
@@ -2646,6 +2670,10 @@ pub struct TabSnapshot {
 
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct PaneSnapshot {
+    /// The machine the pane is on and the id that machine gives it, as on
+    /// an agent row ([`SidebarAgentSnapshot::device_id`]).
+    pub device_id: Derived<String>,
+    pub device_pane_id: Derived<String>,
     /// Exact creation descriptor used only for start reconciliation, never a title.
     #[serde(skip_serializing)]
     pub start_claim: Option<String>,
@@ -3138,6 +3166,9 @@ pub struct EditorOpeningSnapshot {
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct EditorTabSnapshot {
     pub id: String,
+    /// The machine the tab's checkout is on, read from `checkout_id` by the
+    /// one address owner before every snapshot (`stamp_row_addresses`).
+    pub device_id: Derived<String>,
     pub workspace_id: String,
     pub checkout_id: String,
     pub path: String,
@@ -9954,16 +9985,44 @@ mod wire_enum_tests {
             &[
                 DeskCardKind::Command,
                 DeskCardKind::Edit,
+                DeskCardKind::Read,
                 DeskCardKind::Other,
             ],
         );
         checked.insert("desk_card_kind");
+        {
+            use hide_desk::permission::{Answer, Ask, Irreversible, Row};
+            assert_wire(
+                &contract,
+                "desk_permission_row",
+                &[Row::Hide, Row::Read, Row::Shell, Row::Edit],
+            );
+            checked.insert("desk_permission_row");
+            assert_wire(
+                &contract,
+                "desk_permission_answer",
+                &[Answer::Run, Answer::Ask],
+            );
+            checked.insert("desk_permission_answer");
+            assert_wire(&contract, "desk_irreversible", &Irreversible::ALL);
+            checked.insert("desk_irreversible");
+            let kinds: Vec<serde_json::Value> = [
+                Ask::Irreversible(Irreversible::ForcePush),
+                Ask::Row(Row::Shell),
+            ]
+            .iter()
+            .map(|ask| serde_json::to_value(ask).unwrap()["kind"].clone())
+            .collect();
+            assert_wire(&contract, "desk_approval_ask", &kinds);
+            checked.insert("desk_approval_ask");
+        }
         assert_wire(
             &contract,
             "desk_approval_state",
             &[
                 DeskApprovalState::Waiting,
                 DeskApprovalState::Allowed,
+                DeskApprovalState::AllowedConversation,
                 DeskApprovalState::Rejected,
                 DeskApprovalState::Closed,
             ],

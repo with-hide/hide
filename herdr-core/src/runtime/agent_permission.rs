@@ -47,7 +47,8 @@ impl Runtime {
 
     /// [`Self::agent_permission`] for the machine a pane id belongs to.
     pub(crate) fn agent_permission_for_pane(&self, pane_id: &str, kind: &str) -> AgentPermission {
-        self.agent_permission(self.device_of_pane(pane_id), kind)
+        let device = crate::address::pane_device(pane_id).unwrap_or(self.node.as_str());
+        self.agent_permission(device, kind)
     }
 
     /// Records one agent's choice on one machine, saving only one that is

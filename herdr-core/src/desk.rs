@@ -399,6 +399,29 @@ mod tests {
     }
 
     #[test]
+    fn the_permission_table_comes_back_after_a_restart_and_an_older_store_runs_every_row() {
+        use hide_desk::permission::{Answer, Table};
+        let mut stored = Stored::default();
+        stored.settings.permissions = Table {
+            shell: Answer::Ask,
+            edit: Answer::Ask,
+            ..Table::default()
+        };
+        let restored = decode(&encode(&stored).unwrap()).unwrap();
+        assert_eq!(restored.settings.permissions, stored.settings.permissions);
+        // A store written before Settings › Desk › 권한 existed.
+        let mut older: serde_json::Value =
+            serde_json::from_slice(&encode(&stored).unwrap()).unwrap();
+        older["settings"]
+            .as_object_mut()
+            .unwrap()
+            .remove("permissions")
+            .expect("the table is stored with the settings");
+        let restored = decode(&serde_json::to_vec(&older).unwrap()).unwrap();
+        assert_eq!(restored.settings.permissions, Table::default());
+    }
+
+    #[test]
     fn the_lane_comes_back_after_a_restart_within_its_cap() {
         let tab = |index: usize| crate::model::DeskKeptTab::Mission {
             mission: format!("mission-{index}"),

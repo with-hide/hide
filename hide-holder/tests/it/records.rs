@@ -21,8 +21,8 @@ use hide_platform::ipc::LocalListener;
 
 use crate::role::GO;
 use crate::support::{
-    Holder, Home, PIDS_FILE, ROLE, Running, current_version, pids_in, role_program, shell, source,
-    start_with, wait_until,
+    Holder, Home, PIDS_FILE, ROLE, Running, current_version, node_theme, pids_in, role_program,
+    shell, source, start_with, wait_until,
 };
 
 static EVENTS: Mutex<Vec<serde_json::Value>> = Mutex::new(Vec::new());
@@ -63,6 +63,7 @@ impl Folder {
             cwd: self.home.path().to_owned(),
             env,
             size: Size { rows: 24, cols: 80 },
+            theme: node_theme(),
         }
     }
 
