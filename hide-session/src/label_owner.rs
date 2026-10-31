@@ -159,8 +159,7 @@ fn confirm_metadata(
     }
     let physical =
         FileIdentity::of(&file).map_err(|_| anyhow!("label_session_identity_unavailable"))?;
-    let native_id;
-    if agent.requires_native_file_proof() {
+    let native_id = if agent.requires_native_file_proof() {
         let mut remaining = SESSION_INCREMENT_READ_LIMIT_BYTES;
         let header = if matches!(agent, Agent::Grok | Agent::Antigravity) {
             facts::header(agent, path)?
@@ -189,9 +188,9 @@ fn confirm_metadata(
         {
             return Err(anyhow!("label_session_default_directory_required"));
         }
-        native_id = Some(header.id);
+        Some(header.id)
     } else {
-        native_id = match agent {
+        match agent {
             Agent::Codex => facts::codex_meta_of(&file)
                 .map_err(|error| match error {
                     // Said as a lookup of a Pi or omp header over the cap says it.
@@ -205,8 +204,8 @@ fn confirm_metadata(
                     .id
             }
             _ => None,
-        };
-    }
+        }
+    };
     let id = native_id.ok_or_else(|| anyhow!("label_session_metadata_unconfirmed"))?;
     if !valid_native_id(&id) {
         return Err(anyhow!("label_session_id_invalid"));

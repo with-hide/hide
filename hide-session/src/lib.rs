@@ -1174,12 +1174,12 @@ pub(crate) fn parse_events_followed(
 ) -> ParsedSession {
     match agent {
         Agent::Claude => parse_lines_at(
-            agent,
             contents,
             base_offset,
             parse_claude_line,
             links::claude_line,
             Turns {
+                agent,
                 parser: Some(turns::native::claude),
                 wake: agent
                     .reports_wake_devices()
@@ -1192,12 +1192,12 @@ pub(crate) fn parse_events_followed(
             following,
         ),
         Agent::Codex => parse_lines_at(
-            agent,
             contents,
             base_offset,
             |item, _| parse_codex_line(item),
             links::codex_line,
             Turns {
+                agent,
                 parser: Some(turns::native::codex),
                 wake: None,
                 tools: Some(tools::codex as tools::Parser),
@@ -1208,12 +1208,12 @@ pub(crate) fn parse_events_followed(
             following,
         ),
         Agent::Grok => parse_lines_at(
-            agent,
             contents,
             base_offset,
             |item, _| grok::parse_line(item),
             links::grok_line,
             Turns {
+                agent,
                 parser: Some(grok::turn),
                 wake: None,
                 tools: Some(tools::grok as tools::Parser),
@@ -1224,12 +1224,12 @@ pub(crate) fn parse_events_followed(
             following,
         ),
         Agent::Pi => parse_lines_at(
-            agent,
             contents,
             base_offset,
             |item, _| native_file::parse_line(Agent::Pi, item),
             links::pi_line,
             Turns {
+                agent,
                 parser: None,
                 wake: None,
                 tools: Some(tools::pi as tools::Parser),
@@ -1240,12 +1240,12 @@ pub(crate) fn parse_events_followed(
             following,
         ),
         Agent::Omp => parse_lines_at(
-            agent,
             contents,
             base_offset,
             |item, _| native_file::parse_line(Agent::Omp, item),
             links::pi_line,
             Turns {
+                agent,
                 parser: Some(turns::native::omp),
                 wake: None,
                 tools: Some(tools::pi as tools::Parser),
@@ -1256,12 +1256,12 @@ pub(crate) fn parse_events_followed(
             following,
         ),
         Agent::Antigravity => parse_lines_at(
-            agent,
             contents,
             base_offset,
             |item, _| antigravity::parse_line(item),
             links::antigravity_line,
             Turns {
+                agent,
                 parser: None,
                 wake: None,
                 tools: None,
@@ -1278,6 +1278,8 @@ pub(crate) fn parse_events_followed(
 /// How a format's records mark turns, and how it reads a record longer
 /// than the line cap.
 struct Turns {
+    /// The format, which reads a record longer than the line cap.
+    agent: Agent,
     parser: Option<turns::native::Parser>,
     /// Reads the records that start or end background work the agent waits
     /// on; only a format that declares it can prove one
@@ -1295,7 +1297,6 @@ struct Turns {
 /// the link reader (`links`), so a chunk yields its events and its link facts
 /// from the same pass.
 fn parse_lines_at(
-    agent: Agent,
     contents: &str,
     base_offset: u64,
     mut extract: impl FnMut(&Value, &dyn Fn() -> CommandReply) -> LineResult,
@@ -1305,6 +1306,7 @@ fn parse_lines_at(
     following: Option<&[u8]>,
 ) -> ParsedSession {
     let Turns {
+        agent,
         parser: turn,
         wake,
         tools,
