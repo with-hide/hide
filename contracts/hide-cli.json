@@ -67,6 +67,7 @@
                 "Runtime": {
                     "enum": [
                         "running",
+                        "asleep",
                         "ended"
                     ],
                     "type": "string"
@@ -431,6 +432,7 @@
                 "Runtime": {
                     "enum": [
                         "running",
+                        "asleep",
                         "ended"
                     ],
                     "type": "string"

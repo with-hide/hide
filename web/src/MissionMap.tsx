@@ -327,6 +327,7 @@ function Graph({ mission, selected, onSelect, events, end, actions }: { mission:
 const LOOK_CARD: Record<NodeLook, string> = {
   waiting: "border-dashed border-mission-waiting bg-transparent",
   working: "border-mission-working ring-2 ring-mission-working/20",
+  asleep: "border-border",
   review: "border-mission-review ring-2 ring-mission-review/20",
   hold: "border-mission-hold ring-2 ring-mission-hold/20",
   failed: "border-mission-failed",

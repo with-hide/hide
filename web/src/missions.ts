@@ -128,6 +128,8 @@ export const STAGE_STEPS = 4;
  * state in the same four shapes, a node that waits on another dashed.
  */
 export function nodeMark(node: MissionNode, worker: RowMark | null): RowMark {
+  // A working node whose worker Hide put to sleep is not at work, row or none.
+  if (workerAsleep(node)) return "asleep";
   if (worker && (node.status === "working" || node.status === "review")) return worker;
   if (node.blocked) return "waiting";
   switch (node.status) {
@@ -272,9 +274,9 @@ export function missionToneOf(status: Mission["status"], deciding: boolean): Cel
   }
 }
 
-/** The nodes a worker is at now, working or in review, in order (B9, B10). */
+/** The nodes a worker is at now, working or in review, in order (B9, B10); one whose worker sleeps is not. */
 export function liveNodes(mission: Mission): MissionNode[] {
-  return orderedNodes(mission).filter((node) => node.status === "working" || node.status === "review");
+  return orderedNodes(mission).filter((node) => (node.status === "working" || node.status === "review") && !workerAsleep(node));
 }
 
 /** The running popover's last line (B10): the nodes done, and those still ahead of any worker. */
@@ -368,7 +370,17 @@ export function missionResults(mission: Mission): { node: MissionNode; result: N
  * request merges or its branch reaches main. Being outside is a node's kind,
  * not a state: its card keeps the dotted border and `↗` in every look (B19).
  */
-export type NodeLook = "waiting" | "working" | "review" | "hold" | "failed" | "done" | "external" | "cancelled" | "dropped";
+export type NodeLook = "waiting" | "working" | "asleep" | "review" | "hold" | "failed" | "done" | "external" | "cancelled" | "dropped";
+
+/**
+ * A node the Conductor still records as working whose worker Hide put to
+ * sleep, read from the core's one answer of an agent's life
+ * (`agent_runtime`, as `hide agent show` gives it): nothing works it until
+ * a letter wakes it. A node in review keeps its look, its checkers at work.
+ */
+export function workerAsleep(node: MissionNode): boolean {
+  return node.status === "working" && node.agent_runtime === "asleep";
+}
 
 export function nodeLook(mission: Mission, node: MissionNode): NodeLook {
   if (node.status === "dropped") return "dropped";
@@ -377,7 +389,8 @@ export function nodeLook(mission: Mission, node: MissionNode): NodeLook {
     if (node.status === "failed") return "failed";
     return mission.status === "cancelled" ? "cancelled" : "external";
   }
-  return nodeTone(mission, node);
+  const tone = nodeTone(mission, node);
+  return tone === "working" && workerAsleep(node) ? "asleep" : tone;
 }
 
 /** A finished change is in main: its pull request merged or its commit found or recorded there; an outside node is done only once it reached main (B17, B19). */

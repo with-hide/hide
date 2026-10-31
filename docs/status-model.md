@@ -53,6 +53,7 @@ The hold is the card's, not the agent's: it decides only what the hooks give, an
 
 A Conductor and its workers are ordinary agents: a Conductor's row, its workers' rows and their delegated tabs read and group as any agent's do, and a mission adds no attention state, group, badge or notification (PRD software-factory-conductor D-14).
 The mission's own states (`planning`, `running`, `merge_wait`, `done`, `cancelled`) and each node's live only in the mission record and are drawn only on the map and the row's mission chip ([UI_BEHAVIOR.md: A mission's map](UI_BEHAVIOR.md#a-missions-map)).
+A node carries its worker's life as `hide agent show` gives it (`agent_runtime`, from `coordination::life`), so a node the Conductor still records as working whose worker Hide put to sleep is drawn asleep, never at work, on its card, the head, the pane chip and the summary's `지금`.
 A decision the Conductor waits on reaches the operator through the Conductor's own row: the core lays it there as a question, as it lays a plan waiting for review (below), with `ask_subject` `{cause: "mission_decision", line}` carrying the decision's one line (needs-you-cleanup D-12).
 The row then stands in Needs You, its line reads `판단 · <line>` (`mission.askDecision`) and its row and mission chips keep the mission's progress with a `!` in the decision colour; a decision answered from the map or in the Conductor's pane, cleared by the Conductor, or ended with the mission is lifted from the row at once, and a new one replaces the line.
 A wake the core sends the Conductor for a pull request change is a letter from `hide:conductor`, delivered and read like any other ([delivery.md: Missions](delivery.md#missions)).
@@ -452,6 +453,7 @@ A changed child session clears all four tokens, while an absent session proves n
 Ending registration leaves the tokens until the child pane changes or disappears.
 A registration ends by itself when the host's authoritative pane topology stops reporting its pane, as a read record is dropped, and never from an incomplete or stale read ([delivery.md](delivery.md#agent-registration-and-spawning)).
 `hide agent list` then reports it `ended` and `disconnected`, and its name is free on that host.
+An agent Hide put to sleep is not ended: its registration stays, and `hide agent list`, `hide agent show` and `hide ps` all report it `asleep`, `hide agent list` with `disconnected`, until it wakes and runs again ([delivery.md](delivery.md#agent-registration-and-spawning)).
 A relationship is accepted only when both panes still report the recorded session digests; without both digests the child is a root until a complete declaration is written.
 A changed parent session cannot adopt the previous session's children, and an absent parent agent retains the existing orphan presentation.
 A missing or unknown remote machine identity leaves the child a root until its matching device connects.

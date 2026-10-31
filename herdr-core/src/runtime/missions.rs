@@ -146,6 +146,10 @@ pub struct NodeView {
     pub delivery: Option<Delivery>,
     pub worker: Option<Worker>,
     pub agent_id: Option<String>,
+    /// The worker's life as `hide agent show` gives it (`coordination::life`):
+    /// a sleeping worker's card reads asleep, not working. None with no
+    /// registration.
+    pub agent_runtime: Option<crate::delivery::answer::Runtime>,
     /// The worker's pane, which the node's status mark and `터미널로 이동`
     /// follow, on `machine`.
     pub pane_id: Option<String>,
@@ -279,6 +283,8 @@ struct ViewsMadeFrom {
     /// The earliest time a worker still being made stops counting against
     /// its mission's cap (`MISSION_RESERVATION_HOLD_MS`).
     until: u64,
+    /// The missions' workers Hide holds asleep, which their cards read.
+    sleeping: crate::coordination::Sleeping,
     made: bool,
 }
 
@@ -1731,7 +1737,8 @@ impl Runtime {
         let mission = self.missions.book.get(id)?;
         let ledger = self.delivery_state().ok();
         let agents = worker_records(ledger.as_deref(), std::iter::once(mission));
-        Some(self.view_mission(mission, &agents, ledger.as_deref()))
+        let sleeping = self.sleeping_registrations(agents.values().copied());
+        Some(self.view_mission(mission, &agents, &sleeping, ledger.as_deref()))
     }
 
     /// The mission's device does not answer, so its map shows the last
@@ -1750,6 +1757,7 @@ impl Runtime {
         &self,
         mission: &Mission,
         agents: &HashMap<&str, &crate::coordination::AgentRecord>,
+        sleeping: &crate::coordination::Sleeping,
         ledger: Option<&crate::delivery::ledger::Ledger>,
     ) -> MissionView {
         let on_core = mission.device_id == self.node.as_str();
@@ -1801,6 +1809,7 @@ impl Runtime {
                     delivery: node.delivery,
                     worker: node.worker.clone(),
                     agent_id: node.agent_id.clone(),
+                    agent_runtime: record.map(|record| crate::coordination::life(record, sleeping)),
                     pane_id: record.map(|record| record.pane.clone()),
                     machine: record.map(|record| record.machine.clone()),
                     pr: node.pr,
@@ -1924,11 +1933,13 @@ impl Runtime {
     /// it say now; the snapshot sends them again only when they moved.
     ///
     /// It runs on every snapshot read, under the lock. With no mission it
-    /// does nothing; otherwise it compares two counters, one ledger pointer
-    /// and two bits per mission, and makes views again only when one moved
-    /// or a worker being made stops counting. A closed mission's view is
-    /// made again only when the book, its pull requests or its device's
-    /// answer moved: its Conductor's presence and its workers' count no
+    /// does nothing; otherwise it compares two counters, one ledger pointer,
+    /// two bits per mission and the workers asleep, and makes views again
+    /// only when one moved or a worker being made stops counting. While any
+    /// agent sleeps, reading the workers asleep looks each mission's worker
+    /// registrations up in the ledger. A closed mission's view is made again
+    /// only when the book, its pull requests, its device's answer or a
+    /// worker's sleep moved: its Conductor's presence and its workers' count no
     /// longer show, and a worker pane that moves after the close is followed
     /// on the next of those.
     pub(super) fn refresh_missions(&mut self) {
@@ -1973,6 +1984,13 @@ impl Runtime {
             .iter()
             .map(|mission| self.delivery_unreadable(&mission.conductor.actor).is_some())
             .collect();
+        // A worker falls asleep or wakes with no other input moving, so which
+        // workers sleep is an input of its own, a closed mission's as much as
+        // an open one's; with no sleep record the workers are never looked up
+        // (the records are read lazily).
+        let sleeping = self.sleeping_registrations(std::iter::once(()).flat_map(|()| {
+            worker_records(ledger.as_deref(), self.missions.book.missions.iter()).into_values()
+        }));
         let before = &self.missions.views;
         let same_ledger = match (&before.ledger, &ledger) {
             (Some(weak), Some(ledger)) => std::ptr::eq(weak.as_ptr(), Arc::as_ptr(ledger)),
@@ -1983,7 +2001,8 @@ impl Runtime {
             && before.book_edit == self.missions.book_edit
             && before.plans_edit == self.plans.edit
             && before.github_edit == self.missions.github_edit
-            && before.stale == stale;
+            && before.stale == stale
+            && before.sleeping == sleeping;
         if closed_kept
             && same_ledger
             && before.present == present
@@ -2018,7 +2037,7 @@ impl Runtime {
                     .flatten();
                 match kept {
                     Some(view) => view.clone(),
-                    None => self.view_mission(mission, &agents, ledger.as_deref()),
+                    None => self.view_mission(mission, &agents, &sleeping, ledger.as_deref()),
                 }
             })
             .collect();
@@ -2040,6 +2059,7 @@ impl Runtime {
             stale,
             unreadable,
             until,
+            sleeping,
             made: true,
         };
     }
