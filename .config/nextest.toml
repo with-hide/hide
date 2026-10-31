@@ -65,5 +65,5 @@ success-output = "final"
 # holder and how often it ran; the pull request's evidence reads those lines
 # from passing runs too (docs/TESTING.md, The pane holder).
 [[profile.ci.overrides]]
-filter = 'binary_id(hide-holder::it) & (test(/^memory::/) | test(/^idle::/))'
+filter = 'binary_id(hide-holder::it) & (test(/^memory::/) | test(/^idle::/) | test(/^meaning::a_color_question/))'
 success-output = "final"
