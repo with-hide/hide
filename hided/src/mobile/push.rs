@@ -855,6 +855,7 @@ mod tests {
             ("draft", false),
             ("bell_exhausted", false),
             ("child_blocked", false),
+            ("input_unconfirmed", false),
             ("undelivered", true),
             ("observer_unconfirmed", true),
         ] {

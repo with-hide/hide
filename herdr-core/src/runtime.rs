@@ -95,6 +95,7 @@ mod terminal;
 mod terminal_input;
 mod tree_close;
 mod tree_reopen;
+pub(crate) mod typed_input;
 mod unreadable_letters;
 mod unseen_views;
 pub(crate) mod usage_ledger;

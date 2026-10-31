@@ -121,6 +121,12 @@ pub(crate) struct SessionFacts {
     /// reply text, because nothing clears it when a new request starts.
     #[serde(default)]
     pub(crate) last_reply_at_unix_ms: Option<u64>,
+    /// The canonical digests (`hide_agent_hooks::delivery::prompt_digest`)
+    /// of the newest user messages, newest last: the agent's own record of
+    /// the input it took, which confirms a brief Hide typed into an agent
+    /// whose prompt hook reports no digest (`delivery::typed`).
+    #[serde(default, skip_serializing_if = "VecDeque::is_empty")]
+    pub(crate) prompt_digests: VecDeque<String>,
     #[serde(default)]
     pub(crate) sightings: Vec<PrSighting>,
     /// The pull requests the session made, judged once against GitHub's
@@ -284,6 +290,7 @@ impl SessionFacts {
         // Rebuild both from the reread rather than retaining a removed prompt.
         self.operator_request = None;
         self.other_request = None;
+        self.prompt_digests.clear();
     }
 
     /// What a row draws from these facts, to tell whether a read moved it.
@@ -321,6 +328,11 @@ impl SessionFacts {
                 requester
             }
         };
+        if self.prompt_digests.len() >= MAX_PROMPT_DIGESTS {
+            self.prompt_digests.pop_front();
+        }
+        self.prompt_digests
+            .push_back(hide_agent_hooks::delivery::prompt_digest(&event.text));
         let (text, cut) = capped(&event.text);
         let request = Request {
             text,
@@ -428,6 +440,10 @@ fn judge(event: &LabelEvent, input: &mut InputView<'_>, log: &LogTarget<'_>) -> 
     }
     Requester::Agent
 }
+
+/// User messages whose digests a session's facts keep: enough for the brief
+/// and the few prompts around it while Hide waits for its record.
+const MAX_PROMPT_DIGESTS: usize = 8;
 
 fn is_request(event: &LabelEvent) -> bool {
     !event.text.trim().is_empty() || event.images > 0

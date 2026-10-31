@@ -1468,6 +1468,16 @@ pub enum AskSubject {
     /// The mission this Conductor conducts waits on the operator's decision,
     /// whose one line it carries (needs-you-cleanup D-12).
     MissionDecision { line: String },
+    /// Hide typed a brief or a letter's bell into the agent and the agent
+    /// has not recorded it, and no parent cleared it (`delivery::typed`).
+    /// `held` says the agent's composer was read still showing the text, so
+    /// it was not taken; without it the input is only not confirmed.
+    /// `spent` says Hide stopped typing it again.
+    InputUnconfirmed {
+        input: crate::delivery::typed::InputKind,
+        spent: bool,
+        held: bool,
+    },
 }
 
 /// An agent's state on four independent lifecycle axes, plus the values the shell draws
@@ -8167,10 +8177,17 @@ mod wire_enum_tests {
             AskSubject::MissionDecision {
                 line: "line".into(),
             },
+            AskSubject::InputUnconfirmed {
+                input: crate::delivery::typed::InputKind::Brief,
+                spent: false,
+                held: false,
+            },
         ];
         for variant in &subjects {
             match variant {
-                AskSubject::PlanReview { .. } | AskSubject::MissionDecision { .. } => {}
+                AskSubject::PlanReview { .. }
+                | AskSubject::MissionDecision { .. }
+                | AskSubject::InputUnconfirmed { .. } => {}
             }
         }
         let causes = subjects

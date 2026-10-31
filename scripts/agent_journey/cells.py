@@ -166,6 +166,22 @@ def spawn_verdict(answer):
     return PASS, "registered, running, connected, native session " + str(view["session"])
 
 
+def brief_verdict(spawn):
+    """The spawn's brief, confirmed by the agent's own record (its prompt hook
+    or the person's message in its session file) at the first typing
+    (docs/delivery.md, Input an agent did not take). `spawn` is the spawn's
+    record in the candidate's delivery ledger, or None."""
+    if not isinstance(spawn, dict):
+        return FAIL, "the candidate's ledger holds no record of the spawn"
+    typed = spawn.get("brief_input") or {}
+    attempts, at, confirmed = typed.get("attempts"), typed.get("typed_at_unix_ms"), typed.get("confirmed_at_unix_ms")
+    if confirmed is None:
+        return FAIL, f"the agent never recorded its brief (typed {attempts or 0} time(s))"
+    if attempts != 1:
+        return FAIL, f"the brief was recorded only after {attempts} typings"
+    return PASS, f"brief recorded by the agent {max(0, confirmed - at) / 1000:.1f} s after its one typing"
+
+
 def answer_of(events, token, after=0):
     """(prompt_at, answer_at) in Unix ms for the first assistant message from
     `after` on that carries `token`, the prompt being the last message the

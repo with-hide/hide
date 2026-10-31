@@ -679,7 +679,7 @@ def main(argv=None):
                                          else {"args": [], "env": ci.route_names(rows[key]["herdr_kind"], fixture_bin,
                                                                                  agent.get("fake_env"))}),
                                   composer_judge=composer_judge,
-                                  model=rows[key]["model_flag"] and models.get(key))
+                                  model=rows[key]["model_flag"] and models.get(key), brief_start=not fixture_bin)
                 for step in STEPS:
                     journey.step(step, *((card,) if step == memory.CELL else ()))
                     if watch and agent.get("private_home", {}).get("enabled") and step == "start":
