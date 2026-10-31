@@ -233,6 +233,12 @@ describe("the Project tool", () => {
     expect(preview?.textContent?.replace("Last 7 days", "")).not.toMatch(/\d/);
     expect(week?.textContent).toContain("No work this week");
     expect(container.querySelector("[data-week-cost]")).toBeNull();
+    // A week whose only news is pull requests a person merged or opened is not empty: its counts are the project's own.
+    await render(snapshot(status()), null, node({ projects: [cost({ micro_usd: 0, week: { ...cost().week, merged_prs: 2, open_prs: 1 } })] }));
+    expect(container.querySelector('[data-project-week="empty"]')).toBeNull();
+    expect(container.querySelector('[data-week-figure="merged"]')?.textContent).toBe("Merged PRs21 open");
+    await render(snapshot(status()), null, node({ projects: [cost({ micro_usd: 0 })] }));
+    expect(container.querySelector('[data-project-week="empty"]')).not.toBeNull();
     await press('[data-week-start="p"]');
     expect(useStartPanel.getState()).toMatchObject({ isOpen: true, preset: { projectId: "p" } });
     await act(async () => useStartPanel.getState().close());
@@ -259,9 +265,10 @@ describe("the Project tool", () => {
     useShellStore.setState({ linkSummaries: { filling: false, projects: { p: { work: [work("s-a", "Retry invoice emails"), work("s-b", "Claude Code"), work("s-c", "Old goal", "Renamed by hand")] } } } });
     const tasks = [task("a", { kind: "working" }, { sessions_total: 5 }), task("b", { kind: "none" }), task("c", { kind: "none" })];
     await render(snapshot(status()), null, node({ projects: [cost({ tasks, tasks_total: 3 })] }));
-    const names = [...container.querySelectorAll("[data-costly-task] button")].map((row) => row.getAttribute("aria-label"));
+    const names = [...container.querySelectorAll("[data-costly-task] button")].map((row) => row.getAttribute("aria-label")?.split(" · ")[0]);
     expect(names).toEqual(["Retry invoice emails", "Claude Code session", "Renamed by hand"]);
     expect(container.querySelector('[data-costly-task="a"]')?.textContent).toContain("+4");
+    expect(container.querySelector('[data-costly-task="a"] button')?.getAttribute("aria-label")).toBe("Retry invoice emails · +4 sessions");
   });
 
   it("opens the 작업 비용 table on 결과 없음 from the week's line, and on the costly task from its row (B22, B25)", async () => {

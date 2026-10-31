@@ -358,8 +358,9 @@ function Week({ project, actions }: { project: Workspace; actions: Actions }) {
     );
   }
   const cost = read.cost;
-  // A week with no task and no mission draws its shape faint under what fills it, never a 0 or a $0.00 (B21).
-  if (!cost || (cost.tasks_total === 0 && cost.micro_usd === 0 && cost.week.missions === 0)) return <WeekPreview project={project} actions={actions} />;
+  // A week with no task, no cost, no mission and no pull request draws its shape faint under what fills it, never a 0 or a $0.00 (B21);
+  // the pull request counts are the project's own, so a week a person merged in is not empty.
+  if (!cost || (cost.tasks_total === 0 && cost.micro_usd === 0 && cost.week.missions === 0 && cost.week.merged_prs === 0 && cost.week.open_prs === 0)) return <WeekPreview project={project} actions={actions} />;
   const week = cost.week;
   const total = cost.micro_usd > 0 ? `${costPrefix(cost)} ${usd(cost.micro_usd, language)}` : usd(0, language);
   const heights = dayHeights(cost.days);
@@ -389,7 +390,7 @@ function Week({ project, actions }: { project: Workspace; actions: Actions }) {
           {cost.unpriced_agents.length > 0 ? <span className="truncate text-micro text-muted-foreground" data-week-unpriced={cost.unpriced_agents.length}>{t("projectTool.cost.unpriced", { agents: cost.unpriced_agents.map((agent) => agentProductName(agent)).join(", ") })}</span> : null}
         </div>
         {week.no_result_tasks > 0 ? (
-          <Button variant="text" size="inline" className="mx-xs flex min-w-0 items-center gap-xs text-caption text-muted-foreground" onClick={() => openTable("none")} data-week-no-result={week.no_result_tasks}>
+          <Button variant="text" size="inline" className="mx-xs mt-xs flex min-w-0 items-center gap-xs text-caption text-muted-foreground" onClick={() => openTable("none")} data-week-no-result={week.no_result_tasks}>
             <span className="truncate">{t("projectTool.week.noResult")}</span>
             <span className="shrink-0 tabular-nums text-warning">{t("projectTool.week.noResultValue", { count: week.no_result_tasks, cost: `${week.no_result_unpriced ? "≥ " : ""}${usd(week.no_result_micro_usd, language)}` })}</span>
             <span className="min-w-0 flex-1" />
@@ -484,7 +485,7 @@ function WeekPreview({ project, actions }: { project: Workspace; actions: Action
           </span>
         ))}
       </div>
-      <div className="absolute inset-0 flex flex-col items-center justify-center gap-xs bg-radial from-card from-30% via-card/70 to-transparent px-md text-center">
+      <div className="absolute inset-0 flex flex-col items-center justify-center gap-xs bg-radial from-card from-60% to-transparent px-md text-center">
         <p className="text-body font-semibold text-foreground">{t("projectTool.week.emptyTitle")}</p>
         <p className="text-caption text-muted-foreground">{t("projectTool.week.emptyBody")}</p>
         <Button size="sm" variant="secondary" className="mt-xxs" onClick={() => actions.openStartPanel(project.id)} data-week-start={project.id}>{t("projectTool.week.start")}</Button>
@@ -519,11 +520,11 @@ function CostlyRow({ task, name, projectId, onPress }: { task: TaskCost; name: s
   const children = Math.max(0, task.sessions_total - 1);
   return (
     <li className="relative min-w-0 rounded-xs" data-costly-task={task.id}>
-      <RowOverlayButton aria-label={name} onClick={onPress} />
+      <RowOverlayButton aria-label={children > 0 ? `${name} · ${t("projectTool.task.childrenHint", { count: children })}` : name} onClick={onPress} />
       <span className="pointer-events-none relative flex min-w-0 items-center gap-xs px-xs py-xs">
         <span className="flex w-(--size-task-column) shrink-0 items-center overflow-hidden" data-costly-result="true"><TaskResultMark task={task} projectId={projectId} numbered /></span>
         <span className="min-w-0 flex-1 truncate text-caption text-foreground" title={name}>{name}</span>
-        {children > 0 ? <span className="shrink-0 text-micro tabular-nums text-muted-foreground" title={t("projectTool.task.childrenHint", { count: children })}>{t("projectTool.task.children", { count: children })}</span> : null}
+        {children > 0 ? <span aria-hidden="true" className="shrink-0 text-micro tabular-nums text-muted-foreground">{t("projectTool.task.children", { count: children })}</span> : null}
         <span className="shrink-0 text-right font-mono text-micro tabular-nums text-foreground">{task.unpriced ? "≥ " : ""}{usd(task.micro_usd, language)}</span>
         <span className="min-w-(--size-control) shrink-0 whitespace-nowrap text-right text-micro tabular-nums text-muted-foreground">{durationWords(language, task.elapsed_ms)}</span>
       </span>
@@ -539,9 +540,9 @@ export function TaskResultMark({ task, projectId, numbered = false }: { task: Ta
   const openState = useShellStore((s) => result.kind === "pr" && result.state === "open"
     ? catalogWorkspaces(s.rest).find((row) => row.id === projectId)?.pull_requests?.find((row) => row.number === result.number)?.state ?? null
     : null);
-  if (task.kind === "mission" && task.mission) return <span className="shrink-0 text-micro text-muted-foreground" data-task-result="mission">{t("projectTool.task.missionPrs", { count: task.mission.prs, merged: task.mission.merged })}</span>;
+  if (task.kind === "mission" && task.mission) return <span className="min-w-0 truncate text-micro text-muted-foreground" data-task-result="mission">{t("projectTool.task.missionPrs", { count: task.mission.prs, merged: task.mission.merged })}</span>;
   if (result.kind === "pr" && result.number != null) return <PrMark state={result.state === "merged" ? "merged" : result.state === "closed" ? "closed" : (openState ?? "pending")} number={result.number} compact={!numbered} className={numbered ? "text-micro" : undefined} />;
-  return <span className={cn("shrink-0 text-micro", result.kind === "working" ? "text-agent-working" : result.kind === "none" ? "text-warning" : "text-muted-foreground")} data-task-result={result.kind}>{t(`projectTool.task.result.${result.kind}`)}</span>;
+  return <span className={cn("min-w-0 truncate text-micro", result.kind === "working" ? "text-agent-working" : result.kind === "none" ? "text-warning" : "text-muted-foreground")} data-task-result={result.kind}>{t(`projectTool.task.result.${result.kind}`)}</span>;
 }
 
 /** Hide AI 제안 N (B26): one row under a rule at the column's end, opening the Hide AI tool's 제안 tab; none while Hide AI is off or has nothing. */
