@@ -446,46 +446,61 @@ A successful `agent.prompt` proves only that the text reached the pane, so a spa
 
 Typed input with no record is unconfirmed once the agent rested for `RECORD_WAIT_MS` (15 s) since the typing or since its last state change, whichever is later.
 That bound caps the wait for a record and judges no screen: a prompt hook records at the submission itself and a session read lands within seconds of the agent's next state change, and an agent that works on the input owes no record until it rests again.
-The judgment reads only the record, the pane's Herdr state and the input Hide routed to the pane; it holds no per-question screen pattern.
+An agent can write its session after the state change the label worker read on, so before the verdict the core asks this machine's session-sync thread for one fresh read of that pane's session (`Runtime::take_session_rereads`, `labels::Worker::read_again`) and waits `REREAD_WAIT_MS` (5 s) for it; a record that read finds ends the input with no notice.
+The judgment reads only the record, the pane's Herdr state, the input Hide routed to the pane and, at rest, the agent's composer; it holds no per-question screen pattern.
+
+Unconfirmed is not proof of loss.
+When the agent's record source is not available, its input cannot be confirmed at all: an agent that records in its prompt hook whose hooks Herdr reads as Not connected (`hooks_not_connected`), or an agent that records in its session whose session Hide has not read (`session_unread`).
+Such input is never typed again, since the agent may have taken it, and the parent is told it cannot be confirmed rather than that it was lost.
 
 1. The parent hears first.
    For a spawn's brief the notice goes to the spawn's parent, for a letter to its sender when that is an agent, as a `progress` letter with `--now` from the code-owned identity `hide:input`, under the intent `input-unconfirmed:<id>:<attempt>`, so a retry of the notice converges.
-   Its first line is the one the operator reads in a wake summary: `<agent> did not take its brief: read its screen with hide pane read <pane>.`; the rest says to clear a harmless screen with `hide pane send <pane> <keys> [--enter]`, that Hide types the input again once the agent is ready, and that a trust, permission or login question is the operator's, never to be accepted for them.
+   Its first line is the one the operator reads in a wake summary: `<agent> has not confirmed its brief: read its screen with hide pane read <pane>.`, or `<agent> cannot confirm its brief (its hooks are not connected): ...` when the source is not available.
+   The rest says to clear a harmless screen with `hide pane send <pane> <keys> [--enter]`, that Hide types the input again once the agent is ready (or, without a source, that it does not), and that a trust, permission or login question is the operator's, never to be accepted for them.
    A notice that cannot be sent is logged `input.notice_unsent` and tried again after two minutes.
 2. The operator sees it when no parent can clear it.
-   The child's row is laid an ask (`AskSubject::InputUnconfirmed { input: brief | letter, spent }`) and rises in Needs You as the seventh escalation cause, `input_unconfirmed`, verb Answer ([status-model.md](status-model.md)), at once for a handed-off child, a letter with no agent sender or a parent no longer observed, and otherwise after the parent's grace of two minutes (`PARENT_GRACE_MS`) or once the typings are spent.
-   The row reads `질문 · 브리프 못 받음` (`편지 못 받음` for a letter, `· 재시도 다 씀` once spent) in the interface language, and the phone words it the same way.
-3. The input is typed again only after someone answered the screen.
-   Typing again into an unanswered screen could pick one of its choices, so a brief is typed again only when input Hide routed to the pane (the operator's keys, a phone reply, or a parent's `hide pane send`) came after the last typing, has been quiet for the quiet period, the agent rests as `idle` or `done`, and the composer reads empty right before the typing (`composer::forced_clear`); a held retype is logged `input.retype_held` with its reason.
-   A typing is reserved in the ledger (`SpawnRecord.brief_input.attempts`) before it is typed, so a crash between the reservation and the typing still counts, and there are at most three (`INPUT_ATTEMPTS`): past them the input waits in Needs You with `spent`.
+   The child's row is laid an ask (`AskSubject::InputUnconfirmed { input: brief | letter, spent, held }`) and rises in Needs You as the seventh escalation cause, `input_unconfirmed`, verb Answer ([status-model.md](status-model.md)), at once for a handed-off child, a letter with no agent sender or a parent no longer observed, and otherwise after the parent's grace of two minutes (`PARENT_GRACE_MS`) or once the typings are spent.
+   The row reads `질문 · 브리프 확인 안 됨` (`편지 확인 안 됨` for a letter, `· 재시도 다 씀` once spent) in the interface language, and `브리프 못 받음` only when a composer read saw the brief still sitting there (`held`); the phone words it the same way.
+3. A brief still in the composer gets its Enter; otherwise it is typed again only after someone answered the screen.
+   At rest (`idle` or `done`, quiet for the quiet period) the doorbell reads the agent's composer once Herdr reports the same agent ready (`delivery::composer::shows`).
+   When it shows exactly the brief and nothing else (`Composer::holds`, which compares a one-line composer by the brief's first line), the submission was lost, and Hide presses Enter (`input.entered`); text and Enter on a choice screen could pick an option, which a composer showing the brief rules out.
+   When it is empty, the brief is typed again only if input Hide routed to the pane (the operator's keys, a phone reply, or a parent's `hide pane send`) came after the last typing (`input.retyped`); anything else in the composer holds (`composer_not_empty`), and a held retype is logged `input.retype_held` with its reason.
+   `hide pane send` counts as routed input only once Herdr accepted its write, so a refused or timed-out send never allows a retype.
+   Either action spends a typing, reserved in the ledger (`SpawnRecord.brief_input.attempts`) before it is sent, so a crash between the reservation and the key still counts, and there are at most three (`INPUT_ATTEMPTS`): past them the input waits in Needs You with `spent`.
    A letter's bell keeps its own three bells, and a bell is never rung twice in one pane episode (its Herdr state, state sequence, routed input and session), so it too rings again only after the screen moved.
 4. The record ends it, whichever typing it records.
    `BriefConfirmed` sets the confirmation once and refuses later typings with `brief_confirmed`, so a record that arrives late, after the input was typed again, never causes another copy (engineering principle 11), and the notice owed for a typing is sent once (`noticed`).
 
-The state lives in the delivery ledger beside what it describes, with no second store: a spawn keeps `brief_input`, a letter `bell_typed_at_unix_ms` and `input_noticed`.
+The state lives in the delivery ledger beside what it describes, with no second store: a spawn keeps `brief_input`, a letter `bell_typed_at_unix_ms` and `input_noticed`; which input a composer read saw held and which fresh session read was asked are the core's memory of this run only.
 The decision runs on the doorbell thread and the core's delivery work, outside the engine boundary; Herdr is reached only through the engine, and nothing is read or sent under the runtime lock.
 A forced letter (`--force`) is judged the same way once its bell is typed.
 
+omp 18.7.0 loses a submission typed right after it starts: Herdr reads it ready before its session is up, and in 2 of 3 local runs the brief stayed in its composer, unsubmitted.
+So a spawn waits until Herdr detects an omp child's native session, the identity a registration waits for, before typing its brief (`AgentId::brief_after_session`, `brief.session_unseen` when it never comes), and the composer Enter above catches any submission still lost.
+
 Residuals.
-An agent whose hooks were declined (Codex's "skip" on its hooks review) never records a prompt hook, so its brief stays unconfirmed: the parent and then the operator hear of it, and Hide types it again only after new input reaches the pane, at most three times.
+An agent whose hooks were declined (Codex's "skip" on its hooks review) never records a prompt hook while Herdr still reads its integration connected, so its brief stays unconfirmed: the parent and then the operator hear of it, and Hide types it again only after new input reaches the pane, at most three times.
 An answer typed through a client other than Hide (Herdr's own CLI, another terminal attached to the pane) is not input Hide routed, so it does not allow a retype; the operator's keys in Hide and `hide pane send` do.
 The [external-input race](#safe-intake-and-manual-fallback) every bell has applies to a retype too.
 
-How soon each agent records a brief, measured 2026-10-31 on macOS at the pinned CLIs with the journey's isolated setup (private Herdr and `hided`, private HOME, the fake model held 20 s on the brief's turn so the take and the answer are apart), in seconds after the typing:
+How soon each agent records a brief, in seconds after the typing.
+The local runs were measured 2026-10-31 on macOS at the pinned CLIs with the journey's isolated setup (private Herdr and `hided`, private HOME, the fake model held 20 s on the brief's turn so the take and the answer are apart).
+The CI runs are the agent journey's fake-model lane (`agent-journey.yml`, run 41195283433), whose `start` cell spawns with `--brief` and requires the brief recorded after one typing ([VERIFICATION.md](VERIFICATION.md)):
 
-| Agent (CLI) | Record | Record after | Agent rested after |
-| --- | --- | --- | --- |
-| Claude Code 2.1.302 | prompt hook | 2.7 | 21.7 |
-| Codex 0.163.0 | prompt hook | 0.0 | 20.3 |
-| Grok 1.0.52 | prompt hook | 4.2 | 22.3 |
-| Pi 1.0.4 | session file | 1.0 | 20.6 |
-| omp 18.7.0 | session file | 1.6 (1 run of 3) | the other 2: the brief stayed in omp's composer, unsubmitted |
-| OpenCode 2.0.29 | session file | not measured | its server answered HTTP 500 under the local sandbox ([VERIFICATION.md](VERIFICATION.md)) |
-| Antigravity 1.4.8 | session file | not measured | not measured locally ([VERIFICATION.md](VERIFICATION.md)) |
+| Agent | Record | Local macOS | Rested after (local) | CI Linux | CI macOS | CI Windows |
+| --- | --- | --- | --- | --- | --- | --- |
+| Claude Code | prompt hook | 2.7 | 21.7 | 0.5 | 0.6 | 0.9 |
+| Codex | prompt hook | 0.0 | 20.3 | 0.5 | 0.7 | 2.0 |
+| Grok | prompt hook | 4.2 | 22.3 | 0.4 | 0.4 | 1.2 |
+| Pi | session file | 1.0 | 20.6 | 1.5 | 0.7 | 1.4 |
+| omp | session file | 25.6 to 28.3 (3 runs of 3 with the session wait; before it, 1 of 3 at 1.6) | 25.6 to 26.9 | 1.7 | 1.9 | 1.6 |
+| OpenCode 2 | session file | not run locally ([VERIFICATION.md](VERIFICATION.md)) | | 1.8 | 1.7 | 1.6 |
+| Antigravity | session file | not run locally ([VERIFICATION.md](VERIFICATION.md)) | | 1.0 | 0.9 | took the first typing, record seen only after the notice |
 
-Every agent measured records at the take, well inside `RECORD_WAIT_MS`, so none needs a wait of its own.
-The two omp runs whose brief stayed in the composer are input the agent did not take: the parent was told 15 to 23 s after the typing and the retype was held by the composer read (`composer_not_empty`); Enter in the pane (the operator's key) submits it and the session record ends it.
-The Codex 0.163.0 start with another program's entries at the front of `hooks.json` reproduced the incident in the same setup: without this change the brief went to the hooks review and nothing followed; with it the parent was told, and after its screen was answered through `hide pane send` the brief was typed again and the prompt hook confirmed it.
+Every agent records at the take or, omp locally, at most 1.4 s after it rests from the brief's turn, well inside `RECORD_WAIT_MS`, so none needs a wait of its own: a working agent owes no record.
+On Windows, Antigravity took the brief but the session read that would have seen it ran before its session write; the parent was told at about 16 s and the brief was typed a second time at about 31 s.
+The fresh session read before the verdict closes that: the record it finds ends the input before any notice or retype.
+The Codex 0.163.0 start with another program's entries at the front of `hooks.json` reproduced the incident in the local setup: without this change the brief went to the hooks review and nothing followed; with it the parent was told, and after its screen was answered through `hide pane send` the brief was typed again and the prompt hook confirmed it.
 
 ## Persistence, clocks and limits
 
@@ -672,7 +687,7 @@ Asking again while the archive runs answers the same success and closes nothing 
 The brief is the child's first prompt: once Herdr reports the started agent ready for input (up to 30 s, `BRIEF_READY_WAIT`), the spawn submits it through `agent.prompt`, the one submission path the doorbell uses too, and only then waits for the child's session, so an agent that reports its session at its first turn (Codex, OpenCode 2) reports it on that turn and binds at once instead of waiting.
 When the child binds, the same text is recorded as a letter under the spawn's intent, kind `request`, delivered and hook-confirmed, so `hide inbox`, the ledger and a later wake carry what the child was started on, and a letter the parent sends under that intent afterwards is this one.
 The brief is part of the intent like `args` (another brief under the same intent is `intent_conflict`), the ledger marks it submitted (`briefed`) so the same command again never submits it twice, a blank brief or one past a letter's body limit (16 KiB) is `invalid_brief` before anything is made, and an agent that takes no input within the wait, or a submission Herdr refuses, is `brief_not_submitted` with nothing typed, where the same command submits it on the next try without starting the agent again.
-A brief Herdr took is not yet a brief the agent took: the child's own record confirms it, and one the agent never recorded reaches the parent, then the operator, and is typed again only after its screen was answered ([Input an agent did not take](#input-an-agent-did-not-take)).
+A brief Herdr took is not yet a brief the agent took: the child's own record confirms it, and one the agent has not recorded reaches the parent, then the operator, gets the Enter it lost when it still sits in the composer, and is otherwise typed again only after its screen was answered ([Input an agent did not take](#input-an-agent-did-not-take)).
 The CLI reads `--brief-file` itself, in the caller's account, and refuses a file it cannot read, a blank one or one past the limit before the daemon is asked; `--brief` and `--brief-file` together are refused the same way.
 `--model` and `--effort` are the agent's launch choice: the start passes them in the kind's own spelling, and every wake, fork and reopen Hide makes of the agent starts it with them again (`docs/ARCHITECTURE.md`, Agent start), while native arguments after `--` apply to this start only.
 A choice the kind does not take is refused `invalid_launch_choice` before anything is created, and the choice is part of the intent, so the same intent with another choice is an `intent_conflict`.
@@ -831,7 +846,7 @@ The daemon admits the caller's pane and checkout on the core's owner thread (`Ru
 - They reach every pane of the machine they name, as Herdr's commands did: a bare pane id is a pane of the caller's machine, as `hide ps` lists it, and `remote:<device>:pane:<id>` a device's; an agent is named as a letter's target is, by its name, registration id or pane, and two agents of one name are `target_ambiguous`.
 - A read prints the pane's last 120 lines unwrapped and without styling (`recent_unwrapped`), at most 2,000 (`lines_out_of_range` past it); `--json` prints the answer line `{"ok":true,"value":{"pane","text","truncated"}}` instead.
 - `hide pane send` types at most 16 KiB (`text_too_long`) and presses Enter only with `--enter`.
-  Typing into an agent's pane is input, not a letter: it has no reply, retry or record; it counts as input routed to the pane (`pane_send`), so Hide's draft guard holds a bell behind it and a brief the agent did not take may be typed again after it ([Input an agent did not take](#input-an-agent-did-not-take)).
+  Typing into an agent's pane is input, not a letter: it has no reply, retry or record; once Herdr accepted the write it counts as input routed to the pane (`pane_send`), so Hide's draft guard holds a bell behind it and a brief the agent has not confirmed may be typed again after it ([Input an agent did not take](#input-an-agent-did-not-take)).
 - `hide pane open --beside` splits the caller's pane to its right, unfocused, in the caller's checkout, waits up to 10 s for the new shell to hold its terminal alone, as an agent start does, types the command as one line of at most 1,000 bytes (`command_too_long`, under the shortest terminal line a supported system keeps whole) and answers the new pane's id; `--focus` then focuses it.
   One word after `--` is the command line as written, so `-- 'npm run dev | tee log'` keeps its shell syntax; several are one argument each, and the CLI quotes every word a shell would expand for its own machine's shell (a POSIX shell, PowerShell on Windows, `install::command_line_for_shell`), so `-- sh -c 'echo a b'` keeps its three arguments.
   On Windows that is PowerShell, Herdr's default shell; with another `default_shell`, such as cmd.exe or Git Bash, pass the command as one word ([INSTALL.md](INSTALL.md#what-each-system-supports)).
