@@ -204,8 +204,21 @@ impl Runtime {
         if events.is_empty() {
             return;
         }
-        let events: Vec<Arc<MissionEvent>> = events.into_iter().map(Arc::new).collect();
         let log = self.missions.events.entry(mission.to_owned()).or_default();
+        // An act numbered before a restart that lost the book is done again
+        // under the same number; the history already holds it.
+        let events: Vec<Arc<MissionEvent>> = events
+            .into_iter()
+            .filter(|event| {
+                event.id.is_none_or(|id| {
+                    !log.events.iter().any(|logged| logged.id == Some(id))
+                })
+            })
+            .map(Arc::new)
+            .collect();
+        if events.is_empty() {
+            return;
+        }
         let before = log.dropped;
         for event in &events {
             log.push(Arc::clone(event));

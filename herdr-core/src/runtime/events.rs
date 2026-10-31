@@ -1756,6 +1756,9 @@ pub(super) enum Event {
     MissionAnswer(MissionAnswerPayload),
     MissionEnd(MissionEndPayload),
     MissionAttention(super::mission_health::MissionAttentionPayload),
+    /// `mission_reopen`: the operator opens a closed mission again (PRD
+    /// mission-node-simple B18).
+    MissionReopen(MissionEndPayload),
     IssueDetailRequest(IssueDetailRequestPayload),
     GithubSearch(GithubSearchPayload),
     WorktreeNameSuggest(WorktreeNameSuggestPayload),
@@ -2103,6 +2106,7 @@ pub(super) fn validate_event(event: EventEnvelope) -> Result<Event, EventValidat
             super::mission_health::MissionAttentionPayload,
             MissionAttention
         ),
+        "mission_reopen" => decode!(MissionEndPayload, MissionReopen),
         "issue_detail_request" => decode!(IssueDetailRequestPayload, IssueDetailRequest),
         "github_search" => decode!(GithubSearchPayload, GithubSearch),
         "worktree_name_suggest" => decode!(WorktreeNameSuggestPayload, WorktreeNameSuggest),
@@ -4127,6 +4131,7 @@ impl Runtime {
             ),
             Event::MissionEnd(payload) => self.mission_end_event(&payload.mission),
             Event::MissionAttention(payload) => self.mission_attention_event(payload),
+            Event::MissionReopen(payload) => self.mission_reopen_event(&payload.mission),
             Event::IssueDetailRequest(payload) => self.request_issue_detail(payload),
             Event::GithubSearch(payload) => self.request_github_search(payload),
             Event::WorktreeNameSuggest(payload) => self.suggest_worktree_name(payload),

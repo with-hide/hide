@@ -1784,3 +1784,21 @@ fn a_project_the_poll_is_not_watching_reads_as_stale_until_its_next_read() {
         "an already stale project publishes nothing"
     );
 }
+
+/// PRD mission-node-simple D-09, B23: a mission's ask to read its project
+/// again inside the thirty seconds waits and is asked once they pass,
+/// rather than being dropped.
+#[test]
+fn a_missions_early_ask_to_read_again_is_kept_until_the_thirty_seconds_pass() {
+    let mut runtime = runtime();
+    let answered = Instant::now();
+    answered_project(&mut runtime, "/tmp/a", answered);
+    let due = (runtime.node.as_str().to_owned(), "/tmp/a".to_owned());
+    runtime.missions.reads_due.insert(due.clone());
+    runtime.drain_mission_reads(answered + Duration::from_secs(1));
+    assert_eq!(generation_of(&runtime, "/tmp/a"), 0);
+    assert!(runtime.missions.reads_due.contains(&due));
+    runtime.drain_mission_reads(answered + Duration::from_secs(30));
+    assert_eq!(generation_of(&runtime, "/tmp/a"), 1);
+    assert!(runtime.missions.reads_due.is_empty());
+}

@@ -1736,11 +1736,13 @@ pub(super) fn retire_attempt(
         &retire.branch,
         own,
         None,
+        &|| true,
     );
     let (retired, outcome, reason) = match &result {
         Ok(Retirement::Removed) => (Retired::Done, "removed", None),
         Ok(Retirement::Gone) => (Retired::Done, "gone", None),
         Ok(Retirement::Kept(kept)) => (Retired::Kept, "kept", Some(kept.words().to_owned())),
+        Ok(Retirement::Withdrawn) => (Retired::Kept, "withdrawn", None),
         Err(reason) => (Retired::Failed, "failed", Some(reason.clone())),
     };
     // A refusal that repeats is written once, not on every check.

@@ -314,6 +314,10 @@ pub(crate) struct MissionRuntime {
     /// node. Memory only: a restart tries a node whose fate was not saved
     /// again.
     pub(super) cleaning: std::collections::HashSet<(String, String)>,
+    /// The projects, by device and path, a worker's letter or a Conductor's
+    /// node change asked to read again (D-09, B23), kept until that read is
+    /// asked. Memory only: a restart reads every project anew.
+    pub(super) reads_due: std::collections::BTreeSet<(String, String)>,
 }
 
 #[derive(Default)]
@@ -438,6 +442,10 @@ fn wake_body(mission: &Mission, wake: &PendingWake) -> String {
             },
             mission.id
         ),
+        WakeEvent::Reopened => format!(
+            "The operator opened mission {} \"{}\" again from the map.\nRead `hide mission show {}` and `hide inbox`, and go on with what is left.",
+            mission.id, mission.title, mission.id
+        ),
         WakeEvent::Fix => {
             let what = match wake.why {
                 Some(crate::missions::FixReason::CiFailed) => "failed its CI",
@@ -522,14 +530,14 @@ const PR_ACT: &str =
     "move a stacked PR above it onto the change, answer the review, or check the new commit";
 
 /// Records one wake for `mission`'s Conductor and returns its letter's
-/// intent; past `PENDING_WAKE_LIMIT` the oldest are dropped, and logged.
+/// intent; none when `PENDING_WAKE_LIMIT` letters already wait.
 pub(super) fn record_wake(
     mission: &mut Mission,
     node: String,
     pr: Option<u32>,
     event: WakeEvent,
     head: Option<String>,
-) -> String {
+) -> Option<String> {
     mission.wake_seq += 1;
     let wake = PendingWake {
         seq: mission.wake_seq,
@@ -545,20 +553,22 @@ pub(super) fn record_wake(
     push_wake(mission, wake)
 }
 
-/// Records `wake` for its recipient and returns its letter's intent; past
-/// `PENDING_WAKE_LIMIT` the oldest are dropped, and logged.
-pub(super) fn push_wake(mission: &mut Mission, wake: PendingWake) -> String {
+/// Records `wake` for its recipient and returns its letter's intent. With
+/// `PENDING_WAKE_LIMIT` letters waiting the new one is refused and logged,
+/// and every one waiting keeps its place (engineering #15): what it was
+/// about stays on the map, and a raise reaches the operator on its own.
+pub(super) fn push_wake(mission: &mut Mission, wake: PendingWake) -> Option<String> {
+    if mission.wakes.len() >= PENDING_WAKE_LIMIT {
+        crate::diagnostic!(json!({
+            "component": "missions", "kind": "mission.wake_refused_full",
+            "mission": mission.id, "node": wake.node, "event": wake.event.as_str(),
+            "cap": PENDING_WAKE_LIMIT,
+        }));
+        return None;
+    }
     let intent = wake_intent(mission, &wake);
     mission.wakes.push(wake);
-    if mission.wakes.len() > PENDING_WAKE_LIMIT {
-        let dropped = mission.wakes.len() - PENDING_WAKE_LIMIT;
-        mission.wakes.drain(..dropped);
-        crate::diagnostic!(json!({
-            "component": "missions", "kind": "mission.wake_dropped",
-            "mission": mission.id, "count": dropped, "cap": PENDING_WAKE_LIMIT,
-        }));
-    }
-    intent
+    Some(intent)
 }
 
 /// The letter intent of one recorded wake to the mission's Conductor now:
@@ -614,7 +624,7 @@ impl Runtime {
 
     /// Follows mission `id`'s outside nodes and waiting branches now, for a
     /// command that changed what is followed.
-    fn follow_mission_outside(&mut self, id: &str) -> bool {
+    pub(super) fn follow_mission_outside(&mut self, id: &str) -> bool {
         let Some(mission) = self.missions.book.get(id) else {
             return false;
         };
@@ -880,6 +890,7 @@ impl Runtime {
                     closed_at_unix_ms: None,
                     wakes: Vec::new(),
                     wake_seq: 0,
+                    event_seq: 0,
                     end_asked_at_unix_ms: None,
                     attention_seq: 0,
                 };
@@ -1122,7 +1133,16 @@ impl Runtime {
                 if target.conductor.actor.same_identity(&actor) {
                     return Ok((json!({"mission": self.mission_view_of(&mission)}), false));
                 }
-                if self.conductor_present(&target.conductor.actor) {
+                // A Conductor still there that left a raise it was asked
+                // first for ten minutes, so it reached the operator, may be
+                // taken over (PRD mission-node-simple B15).
+                let unanswered = target.nodes.iter().any(|node| {
+                    node.attention.as_ref().is_some_and(|attention| {
+                        attention.operator_at_unix_ms.is_some()
+                            && !attention.reason.operator_first()
+                    })
+                });
+                if !unanswered && self.conductor_present(&target.conductor.actor) {
                     // The current Conductor is named so the second session
                     // can tell the operator who holds it (B45).
                     return Err(crate::coordination::refusal(
@@ -1735,7 +1755,7 @@ impl Runtime {
                 reopened.push(mission.id.clone());
             }
             for (node, pr, event, head) in events {
-                recorded.push(record_wake(mission, node, Some(pr), event, head));
+                recorded.extend(record_wake(mission, node, Some(pr), event, head));
             }
         }
         for (id, events) in ended {

@@ -94,11 +94,15 @@ pub(crate) fn evaluate(mission: &Mission, facts: &Facts) -> Vec<Act> {
         let fact = &facts.nodes[at];
         if runs {
             node_acts(mission, at, node, fact, facts, &mut acts);
+        } else if mission.status == MissionStatus::Done
+            && let Some(pulls) = facts.pulls
+        {
+            // A follow-up pull request of a closed mission's node opens the
+            // mission again with it (B8).
+            attach_acts(mission, at, node, pulls, &mut acts);
         }
         // A done node's worktree is cleaned after its mission closed too.
-        if runs || mission.status == MissionStatus::Done {
-            cleanup_acts(at, node, fact, facts, &mut acts);
-        }
+        cleanup_acts(mission, at, node, fact, facts, &mut acts);
     }
     // A node Hide finishes in this pass has nothing left to raise.
     let done: Vec<usize> = acts
@@ -156,25 +160,9 @@ fn node_acts(
         }
         return;
     };
-    // A follow-up pull request of the node's own branch joins it (B8); the
-    // node is judged again with it held, never finished past it.
-    let mut attached = false;
-    if let Some(branch) = node.branch.as_deref() {
-        for pull in &pulls.pull_requests {
-            if pull.head_branch == branch
-                && pull.head_branch != pull.base_branch
-                && !pull.cross_repository
-                && !pull.badge.is_settled()
-                && !held_by_any(mission, pull.number)
-            {
-                attached = true;
-                acts.push(Act::Attach {
-                    node: at,
-                    pr: pull.number,
-                });
-            }
-        }
-    }
+    // The node is judged again with a follow-up held, never finished past
+    // it.
+    let attached = attach_acts(mission, at, node, pulls, acts);
     // A pull request the worker opened that no node holds, on a branch
     // that is not the node's (B9).
     for &number in &fact.own_prs {
@@ -287,6 +275,33 @@ fn node_acts(
     }
 }
 
+/// Attaches each follow-up pull request of the node's own branch (B8);
+/// whether one joins.
+fn attach_acts(
+    mission: &Mission,
+    at: usize,
+    node: &MissionNode,
+    pulls: &GithubProjectSnapshot,
+    acts: &mut Vec<Act>,
+) -> bool {
+    if node.status == NodeStatus::Dropped {
+        return false;
+    }
+    let Some(branch) = node.branch.as_deref() else {
+        return false;
+    };
+    let before = acts.len();
+    for pull in &pulls.pull_requests {
+        if joins(mission, pull, branch) {
+            acts.push(Act::Attach {
+                node: at,
+                pr: pull.number,
+            });
+        }
+    }
+    acts.len() > before
+}
+
 /// Raises `reason` for the node unless the same cause was raised before.
 fn raise(
     acts: &mut Vec<Act>,
@@ -327,34 +342,20 @@ fn pr_less_done(mission: &Mission, node: &MissionNode, fact: &NodeFacts) -> bool
 /// A done node's merged worktree is cleaned, or the operator asked first
 /// (B20); one tried once is not tried again.
 fn cleanup_acts(
+    mission: &Mission,
     at: usize,
     node: &MissionNode,
     fact: &NodeFacts,
     facts: &Facts,
     acts: &mut Vec<Act>,
 ) {
-    // A worker still running may be mid-turn or on the operator's screen;
-    // its worktree waits until it sleeps or ends.
-    if node.status != NodeStatus::Done
-        || fact.worker == Some(WorkerLife::Running)
-        || node.worktree.is_some()
-        || node.agent_id.is_none()
-        || node.branch.is_none()
-        || node.prs.is_empty()
-        || node.attention.is_some()
-    {
-        return;
-    }
-    let Some(pulls) = facts.pulls else {
-        return;
-    };
-    let merged = node.prs.iter().any(|number| {
-        find(pulls, *number).is_some_and(|pull| pull.badge == PullRequestBadge::Merged)
-    }) && node
-        .prs
+    // A follow-up pull request this pass attaches makes the node work
+    // again: its worktree is the follow-up's (B8).
+    if acts
         .iter()
-        .all(|number| find(pulls, *number).is_some_and(|pull| pull.badge.is_settled()));
-    if !merged {
+        .any(|act| matches!(act, Act::Attach { node, .. } if *node == at))
+        || !cleanup_due(mission, node, fact, facts)
+    {
         return;
     }
     match facts.cleanup {
@@ -372,18 +373,81 @@ fn cleanup_acts(
     }
 }
 
+/// Whether `node`'s worktree may be removed now (B20), asked when a
+/// cleanup is chosen and again right before it closes a pane or removes
+/// the folder: the node is done with every pull request it holds settled
+/// and one merged, nothing waits on it, its worker does not run, no open
+/// pull request of its branch would take it back to work, and the facts
+/// are fresh.
+pub(crate) fn cleanup_due(
+    mission: &Mission,
+    node: &MissionNode,
+    fact: &NodeFacts,
+    facts: &Facts,
+) -> bool {
+    // A worker still running may be mid-turn or on the operator's screen;
+    // its worktree waits until it sleeps or ends.
+    if facts.device_stale
+        || !matches!(
+            mission.status,
+            MissionStatus::Running | MissionStatus::MergeWait | MissionStatus::Done
+        )
+        || node.status != NodeStatus::Done
+        || fact.worker == Some(WorkerLife::Running)
+        || node.worktree.is_some()
+        || node.agent_id.is_none()
+        || node.prs.is_empty()
+        || node.attention.is_some()
+    {
+        return false;
+    }
+    let (Some(pulls), Some(branch)) = (facts.pulls, node.branch.as_deref()) else {
+        return false;
+    };
+    let merged = node.prs.iter().any(|number| {
+        find(pulls, *number).is_some_and(|pull| pull.badge == PullRequestBadge::Merged)
+    }) && node
+        .prs
+        .iter()
+        .all(|number| find(pulls, *number).is_some_and(|pull| pull.badge.is_settled()));
+    merged && !follow_up(mission, pulls, branch)
+}
+
+/// Whether an open pull request of `branch` that no node holds would join
+/// the node of that branch (B8).
+fn follow_up(mission: &Mission, pulls: &GithubProjectSnapshot, branch: &str) -> bool {
+    pulls
+        .pull_requests
+        .iter()
+        .any(|pull| joins(mission, pull, branch))
+}
+
+/// Whether `pull` is a follow-up of the node on `branch`: of that branch,
+/// from this repository, open, and held by no node (D-10).
+fn joins(mission: &Mission, pull: &PullRequestSnapshot, branch: &str) -> bool {
+    pull.head_branch == branch
+        && pull.head_branch != pull.base_branch
+        && !pull.cross_repository
+        && !pull.badge.is_settled()
+        && !held_by_any(mission, pull.number)
+}
+
 /// Whether the mission closes now (B18): it has nodes, each done or
 /// dropped once this evaluation's own acts land, and nothing waits on any.
 fn closes(mission: &Mission, acts: &[Act]) -> bool {
     // The close waits for the pass after every other act landed: a done
     // that the gate refuses or a follow-up pull request that opens a node
     // again would make it refused.
+    // A refused close is tried again; it is what settles that raise.
     !mission.nodes.is_empty()
         && acts.iter().all(|act| matches!(act, Act::Cleanup { .. }))
-        && mission
-            .nodes
-            .iter()
-            .all(|node| node.status.finished() && node.attention.is_none())
+        && mission.nodes.iter().all(|node| {
+            node.status.finished()
+                && node
+                    .attention
+                    .as_ref()
+                    .is_none_or(|attention| attention.reason == AttentionReason::CloseRefused)
+        })
 }
 
 /// Whether the cause behind `attention` still stands (B2): what the
@@ -396,9 +460,15 @@ fn still_holds(
     fact: &NodeFacts,
     facts: &Facts,
 ) -> bool {
+    // A refused close waits on the close itself, which only the next
+    // close settles (B19).
     if node.status.finished()
-        && attention.reason != AttentionReason::WorktreeDirty
-        && attention.reason != AttentionReason::CleanupAsk
+        && !matches!(
+            attention.reason,
+            AttentionReason::WorktreeDirty
+                | AttentionReason::CleanupAsk
+                | AttentionReason::CloseRefused
+        )
     {
         return false;
     }
@@ -892,5 +962,66 @@ mod tests {
         let mut draft = open;
         draft.is_draft = true;
         assert!(!waits_on_others(&draft));
+    }
+
+    /// B8, B20: an open follow-up pull request of a done node's branch
+    /// takes the node back to work in the same pass, and its worktree is
+    /// not cleaned there, also once the mission closed.
+    #[test]
+    fn a_follow_up_pull_request_keeps_a_done_nodes_worktree() {
+        let mut m = running(&["a"]);
+        m.nodes[0].status = NodeStatus::Done;
+        m.nodes[0].prs = vec![7];
+        let merged = listed(vec![pull(7, "feat/a", PullRequestBadge::Merged)]);
+        let asleep = || vec![worker(WorkerLife::Asleep)];
+        assert!(evaluate(&m, &facts(Some(&merged), asleep())).contains(&Act::Cleanup { node: 0 }));
+        let follow = listed(vec![
+            pull(7, "feat/a", PullRequestBadge::Merged),
+            pull(9, "feat/a", PullRequestBadge::Open),
+        ]);
+        let acts = evaluate(&m, &facts(Some(&follow), asleep()));
+        assert!(acts.contains(&Act::Attach { node: 0, pr: 9 }), "{acts:?}");
+        assert!(!acts.contains(&Act::Cleanup { node: 0 }), "{acts:?}");
+        m.status = MissionStatus::Done;
+        assert_eq!(
+            evaluate(&m, &facts(Some(&follow), asleep())),
+            [Act::Attach { node: 0, pr: 9 }]
+        );
+        let follow_facts = facts(Some(&follow), asleep());
+        assert!(!cleanup_due(&m, &m.nodes[0], &follow_facts.nodes[0], &follow_facts));
+    }
+
+    /// B19: a refused close stands over the next evaluations and the close
+    /// is tried again, which is what settles it.
+    #[test]
+    fn a_refused_close_stands_and_the_close_is_tried_again() {
+        let mut m = running(&["a"]);
+        m.nodes[0].status = NodeStatus::Done;
+        m.nodes[0].prs = vec![7];
+        m.nodes[0].attention = Some(attention(AttentionReason::CloseRefused, None));
+        let pulls = listed(vec![pull(7, "feat/a", PullRequestBadge::Merged)]);
+        for _ in 0..2 {
+            assert_eq!(
+                evaluate(&m, &facts(Some(&pulls), vec![worker(WorkerLife::Asleep)])),
+                [Act::Close]
+            );
+        }
+    }
+
+    /// B7, B16: a node without a pull request that a person took back to
+    /// work is not finished again on the lines it was taken back on, and is
+    /// once a line is recorded again.
+    #[test]
+    fn a_resumed_node_without_a_pull_request_finishes_on_a_line_recorded_again() {
+        let mut m = running(&["r"]);
+        m.nodes[0].kind = NodeKind::Research;
+        m.nodes[0].delivery = None;
+        let resumed = m.nodes[0].resumed_cause();
+        m.nodes[0].note_handled(resumed);
+        let running = || facts(None, vec![worker(WorkerLife::Running)]);
+        assert!(evaluate(&m, &running()).is_empty());
+        assert_ne!(m.nodes[0].criteria[0].state, crate::mission_criteria::CriterionState::Pass);
+        m.nodes[0].criteria[0].state = crate::mission_criteria::CriterionState::Pass;
+        assert_eq!(evaluate(&m, &running()), [Act::Done { node: 0 }]);
     }
 }

@@ -5099,6 +5099,9 @@ pub(crate) enum Retirement {
     Gone,
     /// The worktree stays, for what it holds.
     Kept(Kept),
+    /// Its caller no longer wanted it removed when asked again right
+    /// before a pane closed or the folder went; nothing was touched since.
+    Withdrawn,
 }
 
 impl Retirement {
@@ -5107,6 +5110,7 @@ impl Retirement {
             Self::Removed => "removed",
             Self::Gone => "gone",
             Self::Kept(_) => "kept",
+            Self::Withdrawn => "withdrawn",
         }
     }
 }
@@ -5156,6 +5160,7 @@ pub(crate) fn retire_worktree(
     branch: &str,
     own: &[String],
     merged: Option<&[String]>,
+    wanted: &dyn Fn() -> bool,
 ) -> Result<Retirement, String> {
     const NODE_TIMEOUT: Duration = Duration::from_secs(60);
     let git = |root: &str, command: GitCommand| -> Result<String, String> {
@@ -5183,6 +5188,11 @@ pub(crate) fn retire_worktree(
         .iter()
         .filter(|agent| panes.contains(&agent.pane_id))
         .partition(|agent| own.contains(&agent.pane_id));
+    // Asked right before each effect: what the caller decided on may have
+    // moved while the facts were read.
+    if !wanted() {
+        return Ok(Retirement::Withdrawn);
+    }
     // The finished agent ends first, whatever else keeps the worktree.
     let mine = mine
         .into_iter()
@@ -5230,6 +5240,9 @@ pub(crate) fn retire_worktree(
         if !carried {
             return Ok(Retirement::Kept(Kept::Unmerged));
         }
+    }
+    if !wanted() {
+        return Ok(Retirement::Withdrawn);
     }
     close_checkout_panes(
         engine,

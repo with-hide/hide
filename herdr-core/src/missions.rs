@@ -466,6 +466,8 @@ pub enum WakeEvent {
     Resolved,
     /// Hide closed the mission with every node finished (B18).
     Closed,
+    /// The operator opened the closed mission again from the map (B18).
+    Reopened,
     /// A sleeping worker's pull request needs it; `why` says what (B10).
     Fix,
 }
@@ -484,6 +486,7 @@ impl WakeEvent {
             Self::Resolved => "resolved",
             Self::Closed => "closed",
             Self::Fix => "fix",
+            Self::Reopened => "reopened",
         }
     }
 }
@@ -652,10 +655,14 @@ pub struct MissionNode {
     pub worktree: Option<WorktreeFate>,
 }
 
-/// Causes a node remembers as raised; past this the oldest is forgotten.
-pub const HANDLED_LIMIT: usize = 32;
-/// Worker wakes a node remembers; past this the oldest is forgotten.
-pub const WOKEN_LIMIT: usize = 16;
+/// Causes a node remembers as raised; past this a new one is not
+/// remembered, and none is forgotten.
+pub const HANDLED_LIMIT: usize = 128;
+/// Worker wakes a node remembers, one per pull request and reason; past
+/// this a new one is refused.
+pub const WOKEN_LIMIT: usize = 32;
+/// The start of a node's resume mark (`MissionNode::resumed_cause`).
+const RESUMED: &str = "resumed:";
 
 impl MissionNode {
     /// The node's current pull request: the last one it holds.
@@ -675,22 +682,45 @@ impl MissionNode {
 
     /// Notes `cause` raised once, forgetting the oldest past the limit.
     /// The mark a person leaves by taking the node back to work from done
-    /// or dropped: Hide does not finish it again on the pull requests it
-    /// holds now, only once it holds another.
+    /// or dropped: Hide does not finish it again on the facts it was taken
+    /// back on, only once it holds another pull request or a line is
+    /// recorded again (B7, B16).
     pub(crate) fn resumed_cause(&self) -> String {
         let prs: Vec<String> = self.prs.iter().map(u32::to_string).collect();
-        format!("resumed:{}", prs.join(","))
+        let lines: Vec<String> = self
+            .criteria
+            .iter()
+            .map(|line| {
+                format!(
+                    "{}={:?}@{}",
+                    line.key,
+                    line.state,
+                    line.by.as_ref().map_or(0, |by| by.at_unix_ms)
+                )
+            })
+            .collect();
+        format!("{RESUMED}{}|{}", prs.join(","), lines.join(","))
     }
 
+    /// Remembers `cause` as raised. A newer resume mark replaces the older
+    /// one, which no fact can name again; past `HANDLED_LIMIT` nothing is
+    /// forgotten: the cause is not remembered and that is logged
+    /// (engineering #15), so a raise may come twice but none is lost.
     pub(crate) fn note_handled(&mut self, cause: String) {
         if self.handled.contains(&cause) {
             return;
         }
-        self.handled.push(cause);
-        if self.handled.len() > HANDLED_LIMIT {
-            let over = self.handled.len() - HANDLED_LIMIT;
-            self.handled.drain(..over);
+        if cause.starts_with(RESUMED) {
+            self.handled.retain(|held| !held.starts_with(RESUMED));
         }
+        if self.handled.len() >= HANDLED_LIMIT {
+            crate::diagnostic!(serde_json::json!({
+                "component": "missions", "kind": "mission.handled_full",
+                "node": self.key, "cap": HANDLED_LIMIT,
+            }));
+            return;
+        }
+        self.handled.push(cause);
     }
 }
 
@@ -810,6 +840,10 @@ pub struct Mission {
     /// How many wakes this mission has had; the next one's `seq`.
     #[serde(default)]
     pub wake_seq: u64,
+    /// How many of Hide's own acts have been numbered for the history; the
+    /// next one's `MissionEvent::id`.
+    #[serde(default)]
+    pub event_seq: u64,
     /// When the operator asked the Conductor to end the mission (`미션
     /// 종료`), until it closes; a second press asks nothing more.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -2252,12 +2286,6 @@ fn convert_before_simple(value: &mut serde_json::Value) -> Result<(), String> {
             .get("attention_seq")
             .and_then(serde_json::Value::as_u64)
             .unwrap_or(0);
-        // A closed or cancelled mission asks no one: what failed in it
-        // ended there.
-        let open = matches!(
-            mission.get("status").and_then(serde_json::Value::as_str),
-            Some("planning" | "running" | "merge_wait")
-        );
         let Some(nodes) = mission
             .get_mut("nodes")
             .and_then(serde_json::Value::as_array_mut)
@@ -2275,14 +2303,15 @@ fn convert_before_simple(value: &mut serde_json::Value) -> Result<(), String> {
                 .to_owned();
             let next = match status.as_str() {
                 "planned" | "waiting" => "planned",
-                "failed" if !open => "dropped",
                 "working" | "review" | "held" | "failed" => "working",
                 "done" => "done",
                 "dropped" => "dropped",
                 other => return Err(format!("has a node status {other} it does not know")),
             };
             node.insert("status".into(), next.into());
-            if status == "failed" && open {
+            // In a closed mission too: the failure is the operator's to
+            // read, and the mission's Needs You carries it once it asks.
+            if status == "failed" {
                 seq += 1;
                 let attention = Attention {
                     reason: AttentionReason::ConductorFailed,
@@ -2402,8 +2431,13 @@ impl MissionStore {
             Ok(None) => Restored::Fresh,
             Ok(Some(bytes)) => match decode(&bytes) {
                 Ok(Decoded { book, from }) => {
-                    if from != SCHEMA_VERSION {
-                        self.keep_before_conversion(&bytes, from);
+                    // With no copy kept the converted book is not written
+                    // over the old one: it is read as unreadable, which
+                    // keeps the file as it is.
+                    if from != SCHEMA_VERSION
+                        && let Err(reason) = self.keep_before_conversion(&bytes, from)
+                    {
+                        return Restored::Unreadable(reason);
                     }
                     Restored::Read(book)
                 }
@@ -2415,9 +2449,9 @@ impl MissionStore {
 
     /// The copy a downgrade is restored from; an existing copy is the
     /// earliest one and is kept.
-    fn keep_before_conversion(&self, bytes: &[u8], from: u32) {
+    fn keep_before_conversion(&self, bytes: &[u8], from: u32) -> Result<(), String> {
         let Some(directory) = self.path.parent() else {
-            return;
+            return Err("has no folder to keep its copy before conversion in".to_owned());
         };
         let backup = if from == SCHEMA_BEFORE_CRITERIA {
             hide_kit::layout::missions_before_criteria(directory)
@@ -2434,6 +2468,9 @@ impl MissionStore {
             "written": outcome.as_ref().ok(),
             "message": outcome.as_ref().err().map(ToString::to_string),
         }));
+        outcome
+            .map(|_| ())
+            .map_err(|error| format!("could not keep its copy before conversion: {error}"))
     }
 
     pub(crate) fn save(&self, book: &MissionBook) {
@@ -2498,6 +2535,7 @@ pub(crate) mod tests {
             closed_at_unix_ms: None,
             wakes: Vec::new(),
             wake_seq: 0,
+            event_seq: 0,
             end_asked_at_unix_ms: None,
             attention_seq: 0,
         }
@@ -3000,6 +3038,73 @@ pub(crate) mod tests {
         let saved = encode(&Arc::new(book.clone())).unwrap();
         let again = decode(&saved).unwrap();
         assert_eq!((again.from, again.book), (SCHEMA_VERSION, book));
+    }
+
+    /// PRD mission-node-simple D-16, B26: a failed node of a closed
+    /// mission keeps its meaning too, in progress with the operator asked.
+    #[test]
+    fn a_closed_missions_failed_node_reads_as_in_progress_with_the_operator_asked() {
+        let mut stored = serde_json::to_value(mission()).unwrap();
+        stored["status"] = serde_json::json!("done");
+        stored["updated_at_unix_ms"] = serde_json::json!(50);
+        stored["nodes"] = serde_json::json!([{"key": "f", "title": "f", "kind": "change",
+            "status": "failed", "delivery": "pr", "pr": null, "pr_seen": null}]);
+        let book = serde_json::json!({"schema_version": 2, "next": 1, "missions": [stored]});
+        let read = decode(&serde_json::to_vec(&book).unwrap()).unwrap().book;
+        let node = &read.missions[0].nodes[0];
+        assert_eq!(node.status, NodeStatus::Working);
+        assert_eq!(
+            node.attention.as_ref().map(|attention| attention.reason),
+            Some(AttentionReason::ConductorFailed)
+        );
+    }
+
+    /// PRD mission-node-simple B26: an old book whose copy cannot be kept
+    /// is not read as converted, so nothing writes the new schema over it.
+    #[cfg(unix)]
+    #[test]
+    fn an_old_book_whose_copy_cannot_be_kept_is_left_as_it_is() {
+        use std::os::unix::fs::PermissionsExt;
+        let bytes = serde_json::to_vec(
+            &serde_json::json!({"schema_version": 2, "next": 1, "missions": []}),
+        )
+        .unwrap();
+        let folder = tempfile::tempdir().unwrap();
+        let path = folder.path().join("missions.json");
+        std::fs::write(&path, &bytes).unwrap();
+        std::fs::set_permissions(folder.path(), std::fs::Permissions::from_mode(0o500)).unwrap();
+        // An account that writes past permissions cannot fail the copy.
+        if std::fs::write(folder.path().join("probe"), b"").is_ok() {
+            std::fs::set_permissions(folder.path(), std::fs::Permissions::from_mode(0o700))
+                .unwrap();
+            return;
+        }
+        let restored = MissionStore::new(path.clone()).restore();
+        std::fs::set_permissions(folder.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
+        assert!(matches!(restored, Restored::Unreadable(_)));
+        assert_eq!(std::fs::read(&path).unwrap(), bytes);
+    }
+
+    /// B14, B27: a cause raised once is never forgotten; past the cap a new
+    /// one is not remembered, and a newer resume mark replaces the older.
+    #[test]
+    fn a_node_forgets_no_cause_it_raised() {
+        let one = |key: &str| {
+            apply_plan(&mission(), &plan(vec![node(key, NodeKind::Change, &[])]), 2).unwrap().nodes
+                [0]
+            .clone()
+        };
+        let mut node = one("a");
+        for index in 0..HANDLED_LIMIT + 4 {
+            node.note_handled(format!("cause:{index}"));
+        }
+        assert_eq!(node.handled.len(), HANDLED_LIMIT);
+        assert_eq!(node.handled[0], "cause:0");
+        let mut node = one("b");
+        node.note_handled(node.resumed_cause());
+        node.prs = vec![7];
+        node.note_handled(node.resumed_cause());
+        assert_eq!(node.handled, vec![node.resumed_cause()]);
     }
 
     /// A mission created before verification strength keeps the checkers

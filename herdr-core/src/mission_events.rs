@@ -119,6 +119,12 @@ pub struct MissionEvent {
     pub reason: Option<AttentionReason>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub action: Option<OperatorAction>,
+    /// Hide's own act's number in its mission (`Mission::event_seq`),
+    /// given before the book is saved: after a restart on a book that
+    /// missed the act, the act done again carries the same number and is
+    /// not written twice.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub id: Option<u64>,
 }
 
 impl MissionEvent {
@@ -139,6 +145,7 @@ impl MissionEvent {
             why: None,
             reason: None,
             action: None,
+            id: None,
         }
     }
 
@@ -254,7 +261,8 @@ fn decode(bytes: &[u8]) -> Result<EventLog, String> {
 /// A node's move written before nodes took three states (PRD
 /// mission-node-simple D-16) reads as the state it is now: in review, held
 /// or failed is in progress, waiting is not started. The history keeps the
-/// line it was written with.
+/// line it was written with, and a failure keeps its meaning as the
+/// Conductor's recorded failure.
 fn simple_statuses(value: &mut serde_json::Value) {
     let Some(events) = value
         .get_mut("events")
@@ -266,12 +274,18 @@ fn simple_statuses(value: &mut serde_json::Value) {
         let Some(status) = event.get_mut("status") else {
             continue;
         };
+        let failed = status.as_str() == Some("failed");
         let next = match status.as_str() {
             Some("review" | "held" | "failed") => "working",
             Some("waiting") => "planned",
             _ => continue,
         };
         *status = next.into();
+        if failed && let Some(event) = event.as_object_mut() {
+            event
+                .entry("reason")
+                .or_insert_with(|| AttentionReason::ConductorFailed.as_str().into());
+        }
     }
 }
 

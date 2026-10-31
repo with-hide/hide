@@ -897,7 +897,8 @@ A Conductor's mission (PRD software-factory-conductor) is a record the core keep
 Only a pane-bound credential can ask, refused `agent_pane_required` otherwise, and a pane conducts at most one open mission (`mission_already_conducting`).
 A mission belongs to the repository Project of the checkout it was created in (`mission_project_unknown`); asked before the machine's projects are first read, it is refused `mission_projects_loading`, and a retry a few seconds later goes through.
 Every other pane is refused `mission_not_conductor`, and a closed or cancelled mission refuses changes (`mission_closed`, `mission_cancelled`).
-`hide mission take <id>` makes the caller the Conductor only once the previous one is gone; while it is there the answer is `mission_conducted` with its name.
+`hide mission take <id>` makes the caller the Conductor once the previous one is gone, or while it is still there once a raise it was asked first stood ten minutes and reached the operator (PRD mission-node-simple B15); otherwise the answer is `mission_conducted` with its name.
+The operator opens a closed mission again from the map's `다시 열기` with `mission_reopen`, naming the mission, as `hide mission reopen` would, and the Conductor gets one letter saying so; a cancelled mission, one whose Conductor conducts another open one, and one already open change nothing and go to the log (`mission.reopen_refused`).
 A take hands the mission's workers to the caller's registration before it answers, and a take whose handover cannot be queued is refused with that reason and can be asked again: each worker's start, its child record (its parent, or its origin when it was started without one) and the watch on it become the new Conductor's, so the same intent asked again answers the worker it already has, and the worker's reports and warnings reach the new Conductor.
 A new Conductor with no registration at the take is handed them when it registers to start its first worker, in the same reserve.
 The Conductor's own conversation resumed in another pane of the same device, by 이어받기, Reopen closed, a wake or the operator's own resume, takes the mission without a `take` once that pane is seen running it while the Conductor's pane is gone: the core moves the mission's Conductor to that pane, hands it the workers as a take does, and sends the waiting wakes with a `resumed` one of its own, since a resumed conversation gets no prompt and would otherwise sit idle (`mission.conductor_resumed`); a handover that cannot be queued leaves the mission as it was (`mission.conductor_resume_failed`), and the next sight of the pane tries again (PRD mission-tool D-11, B14).
@@ -950,7 +951,7 @@ Its intent is `mission:<id>:<node>:<number>:<event>:<head>:<n>:<conductor>`, wit
 On a mission closed as `done`, a new head or a review asking for changes reopens it, unless its Conductor conducts another open mission then, which gets the letter and leaves the mission done; its merge is the end it waited for and wakes no one.
 A `merge_wait` mission closes as `done` on the GitHub read that finds every pull request of its stack merged or closed, whether or not its Conductor is there, and a close `--as merge_wait` of a stack that is already so, or of a mission with no pull request, is `done` at once; a dropped node is out of the stack.
 The intent carries the first 12 characters of the head, which `n` already makes unique, so it stays under the 256-byte intent limit.
-A mission keeps at most 32 unsent wakes, dropping the oldest as `mission.wake_dropped`; one thread sends them, at most 256 at once, so the lock never waits on a delivery.
+A mission keeps at most 32 unsent wakes; a new one past it is refused and logged as `mission.wake_refused_full`, and the ones waiting keep their place, so what a refused wake was about stays on the map and a raise still reaches the operator after its ten minutes; one thread sends them, at most 256 at once, so the lock never waits on a delivery.
 A change that would make the saved record larger than a start reads back is refused `mission_full`, as a full book is.
 Deleting a Conductor's session from the archive deletes its missions with it.
 
@@ -960,34 +961,35 @@ A node is done, attached to a pull request or woken for a worker only when the f
 The decision is `herdr-core/src/mission_health.rs`, a pure function over the mission and the facts beside it that does no I/O, and `herdr-core/src/runtime/mission_health.rs` gathers those facts under the runtime lock and applies what it answers.
 Nothing in it is a new watch loop (D-08).
 The coordinator's tick compares the book's change count, the GitHub answers' count, the ledger it last read, the workers asleep, each Conductor's presence and each device's answer with what the last evaluation read, and evaluates the missions only when one of them moved; a tick with nothing moved does nothing.
-A report or progress letter from a mission worker, and a Conductor's change to a node, also ask the mission project's pull requests again, inside the read's own thirty seconds (D-09, B23); a project on another device is read by that device's own poll.
+A report or progress letter from a mission worker, and a Conductor's change to a node, also ask the mission project's pull requests again (D-09, B23): the ask is kept per project until the last read is thirty seconds old, then the read is asked, so an ask that comes while a read is out or just answered is asked when that time passes rather than dropped; a project on another device is asked the same way through the read this machine makes of that device's repositories.
 The ten minutes before a raise reaches the operator are counted in the existing minute decision.
-Only a mission that runs or waits for merges is judged; a done mission's merged worktrees are still cleaned.
+Only a mission that runs or waits for merges is judged; a done mission's merged worktrees are still cleaned, and a follow-up pull request of a done mission's node opens the mission again with it.
 
 What it does by itself, each through the gate a Conductor's own command meets:
 
 - **Done.**
-  A node at work is set `done` when every pull request it holds that is not closed is merged (scope `merge`), or merged or open, out of draft, with green or no checks and approved (scope `pr`), and its lines pass the same gate as `--status done` (`gate_node_done`; a refusal is logged as `mission.hide_done_refused` and changes nothing).
+  A node at work is set `done` when every pull request it holds that is not closed is merged (scope `merge`), or merged or open, out of draft, with green or no checks and approved (scope `pr`), and its lines pass the same gate as `--status done` (`gate_node_done`; a refusal is logged as `mission.hide_done_refused`, leaves the node at work, and for a node with pull requests is raised as `merged_unproven`).
   GitHub's list must hold every pull request the node names; one it does not hold is not known, and nothing rests on a guess.
-  A node a person took back to work from done or dropped (the Conductor's `--status working` or the operator's `다시 진행`) is not set done again on the pull requests it holds then; it is once it holds another.
+  A node a person took back to work from done or dropped (the Conductor's `--status working` or the operator's `다시 진행`) is not set done again on the facts it was taken back on, the pull requests it held and each line's state and record time; it is once it holds another pull request or a line is recorded again.
   A `research` or `verify` node, and a `direct` change, with no pull request is set `done` when it has at least one line and every line passes or was skipped; a `pr` change with no pull request yet is never finished on its lines, and neither is an outside node or a node of a mission from before finish lines.
 - **Attach.**
-  An open pull request whose head is the node's own branch, not a fork's and not into its own branch, and that no node or outside node holds, joins the node as its current one; the node is judged again with it held, never finished past it, and a done node it joins works again.
+  An open pull request whose head is the node's own branch, not a fork's and not into its own branch, and that no node or outside node holds, joins the node as its current one; the node is judged again with it held, never finished past it, a done node it joins works again, and a closed mission it joins opens again; a node a follow-up joins in an evaluation has its worktree kept in that evaluation.
 - **Wake a worker.**
   A node's worker that is asleep is woken with a `request` letter from `hide:conductor`, naming the pull request and what it needs, when that open pull request's checks failed, it conflicts with its base or a review asked for changes.
-  The node remembers each wake by pull request, reason and head commit (at most 16), so the same fact wakes once and a new commit with the same failure wakes again.
+  The node remembers each wake by pull request and reason at its newest head commit (at most 32, none forgotten: a new one past it is refused and logged), so the same fact wakes once and a new commit with the same failure wakes again.
   A mission keeps at most 16 worker wakes waiting; a wake past it is refused, logged as `mission.worker_wake_refused`, and tried again at the next evaluation.
   A worker's wake needs the worker in its pane or asleep; with neither it waits in the record.
   A wake whose letter the ledger refuses leaves the record and is raised to the Conductor as `wake_refused`.
 - **Close the mission.**
   When every node is `done` or `dropped` and nothing waits on anyone, in an evaluation that has nothing else to do but clean worktrees, Hide closes a running mission through the close gate as a Conductor's `hide mission close --as merge_wait` would: `merge_wait` while a pull request or branch is not in main, `done` otherwise (see [Finish lines](#finish-lines)).
   Its report, when the Conductor gave none, lists each node with its status, pull requests and lines met, and the Conductor gets one `progress` letter saying Hide closed it; `hide mission reopen` and a pull request change open it again as before.
-  A gate that refuses is raised as `close_refused` on the first node the refusal's detail names, else the last node.
+  A gate that refuses is raised as `close_refused` on the first node the refusal's detail names, else the last node; the raise stands and the close is tried again at each evaluation, and the close that passes settles it.
 - **Clean a worktree.**
   A done node whose worker sleeps or ended, and whose worktree is on a branch with every pull request it holds settled and one of them merged is cleaned once, by Settings › Conductor's `끝난 worktree 정리` (`worktree_cleanup`, `auto` by default).
   `auto` closes the node's own panes and removes the worktree off the lock on a thread of its own (at most two at a time, on the mission's device), with the branch kept; `ask` raises `cleanup_ask` to the operator first, and its `정리` does the same removal.
   The removal is the one `worktree_control::retire_worktree`, which memory promotion's failed attempts use too: it keeps the worktree when it is the Project's own folder, another agent works in it, a program runs in one of its panes, it holds uncommitted changes, or its head has a commit no merged pull request carried.
   Only the last two hold the operator's work, and they are raised to the Conductor as `worktree_dirty`; the others leave the worktree and say nothing.
+  The cleanup is bound to the node's finish it was decided on, its finish time and the pull requests it held: right before the node's panes close and again right before the folder is removed, it asks under the lock whether that finish still stands with every condition above on the facts of that moment, and a follow-up pull request, a person's resume, a device that stopped answering, or a daemon that ended in between withdraws it with nothing touched (`withdrawn` in `mission.worktree_cleanup`), so the node's next finish is cleaned on its own facts.
   A removal that fails leaves the worktree and goes to the log only (`mission.worktree_cleanup`), and a node's worktree is tried once.
   The node keeps what became of it (removed, kept, failed, left).
 
@@ -1006,9 +1008,10 @@ What it raises, each as the node's one attention (B2):
 | `conductor_failed` | a mission from before schema 3 held the node `failed` |
 
 A node carries one attention at a time, with the time it was raised and the cause it was raised for (reason, pull request, worker); another cause waits for the first to go.
-A cause is raised once: the node keeps the causes it raised (at most 32, the oldest forgotten), so one the Conductor, the operator or its own fact settled is not raised again, and the same fact arriving twice or the daemon starting again raises and records nothing twice (B27).
+A cause is raised once: the node keeps the causes it raised (at most 128, none forgotten: past it a new cause is raised but not remembered, logged as `mission.handled_full`), so one the Conductor, the operator or its own fact settled is not raised again, and the same fact arriving twice or the daemon starting again raises and records nothing twice (B27).
+Hide numbers each of its own acts in the mission (`event_seq`) before the book is saved, and the history writes a number once, so an act a restart redoes on a book that missed it is not written twice.
 A mission holds at most 16 attentions; a new one past it is refused, logged as `mission.attention_refused`, and the ones already raised stay (B28).
-An attention goes by itself when its fact stops holding: its lines are met, its worker is not ended or is a different one, a pull request of the node is open or merged again, the unplanned pull request is settled or a node holds it, a woken worker runs, or the node finished; `worktree_dirty`, `cleanup_ask`, `conductor_failed` and `close_refused` stay until a person settles them.
+An attention goes by itself when its fact stops holding: its lines are met, its worker is not ended or is a different one, a pull request of the node is open or merged again, the unplanned pull request is settled or a node holds it, a woken worker runs, or the node finished; `worktree_dirty`, `cleanup_ask` and `conductor_failed` stay until a person settles them, and `close_refused` until a person settles it or the close passes.
 A Conductor's `--status` on the node settles it too.
 While GitHub's list is stale or was never read, nothing that rests on a pull request is decided, and a node with no pull request is still judged by its lines (B24); while the mission's device does not answer, nothing at all is (B29).
 
@@ -1044,7 +1047,8 @@ A mission worker whose open pull request waits on CI, a review or the merge, wit
 A mission on another device is judged the same way from that device's pull request answers; the removal runs through that device's node.
 
 The book is schema 3 (D-16, B26).
-A schema 2 book is moved as it is read and the file it came from is copied once to `missions.v2.json` beside it before anything saves schema 3 (a copy already there is kept, one that cannot be written does not stop the move, `missions.converted` in the log): `review` and `held` are `working`, `waiting` is `planned`, `failed` is `working` with `conductor_failed` raised to the operator, and a node's one `pr` is a list with that pull request in it; a schema 1 book is moved through both and copied to `missions.v1.json`.
+A schema 2 book is moved as it is read and the file it came from is copied once to `missions.v2.json` beside it before anything saves schema 3 (a copy already there is kept, `missions.converted` in the log); when the copy cannot be written the book is read as unreadable, so nothing writes schema 3 over the old file: `review` and `held` are `working`, `waiting` is `planned`, `failed` is `working` with `conductor_failed` raised to the operator, in a closed mission too, and a node's one `pr` is a list with that pull request in it; a schema 1 book is moved through both and copied to `missions.v1.json`.
+A history event written as `failed` reads as `working` with `conductor_failed` as its reason, so its failure is kept without the line it was written with.
 The event files read their old node statuses the same way, and a book of a newer schema stays unread.
 
 ### Finish lines
