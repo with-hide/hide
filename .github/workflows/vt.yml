@@ -104,7 +104,10 @@ jobs:
           HIDE_HOLDER_CONPTY: ${{ steps.conpty.outputs.folder }}
         run: |
           bash scripts/verify-cargo.sh nextest --profile ci -p hide-holder -p hide-holder-protocol
-          bash scripts/verify-cargo.sh clippy -p hide-holder -p hide-holder-protocol --all-targets -- -D warnings
+          # --no-deps: the holder's own crates only, not the workspace
+          # crates its tests build (hide-kit and what it links), whose lints
+          # are their own lanes'.
+          bash scripts/verify-cargo.sh clippy -p hide-holder -p hide-holder-protocol --all-targets --no-deps -- -D warnings
       - name: Build with the network denied
         # The build runs Zig with package fetching off, so a reachable network
         # proves nothing: each wrapper first shows that it denies the network,
