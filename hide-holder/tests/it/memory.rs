@@ -1,18 +1,21 @@
 //! What a flood leaves a holder holding (PRD engine-bundle-2-pane-holder
-//! B15, D-17): once its screen has been still for a second, a holder gives
-//! the allocator's freed pages back. Run beside a holder that keeps what it
-//! freed (`HIDE_HOLDER_TEST_KEEP_FREED`, debug builds only), it prints both
-//! on every system and holds the return to having saved something on macOS,
-//! the one system where a flood leaves the allocator holding much. The bound itself, 6 MiB after a flood, is a release holder's
-//! and is judged by the measurement (docs/PERFORMANCE_TESTING.md, The pane
-//! holder's path): a debug holder's own allocations move its figure by
-//! megabytes from run to run.
+//! B15, D-17): once a connection's screen has been still for a second, its
+//! writer gives the allocator's freed pages back (logged after a flood's
+//! output, `holder.memory_returned`), and the holder is then
+//! charged no more than its budget, 6 MiB: 4 MiB idle and the parser's 2 MiB
+//! scrollback, the bound decided for the bundle
+//! (docs/PERFORMANCE_TESTING.md, The pane holder's path), in every build on
+//! Linux and Windows; on macOS a debug holder sits around the bound, and the
+//! release measurement judges it there.
 
 use std::ffi::OsString;
-use std::time::Duration;
 
 use crate::role::{FLOOD_BYTES, GO};
-use crate::support::{Connection, Home, ROLE, current_version, role_program, source, start_ready};
+use crate::support::{Home, ROLE, current_version, role_program, source, start_ready};
+
+/// The budget a holder keeps within once still after a flood: 4 MiB idle
+/// and 2 MiB of scrollback.
+const BUDGET: u64 = 6 * 1024 * 1024;
 
 /// The flood: well past the 2 MiB scrollback, so the parser's pages are
 /// full; smaller on Windows, whose ConPTY carries about 0.8 MB a second on a
@@ -79,70 +82,43 @@ fn charged(pid: u32) -> u64 {
     }
 }
 
-/// Lets the holder's screen stay still past its one-second wait, with room
-/// for a loaded runner, taking what it sends meanwhile: a writer blocked on a
-/// full connection never reaches that wait.
-fn still(connection: &mut Connection) {
-    let until = std::time::Instant::now() + Duration::from_millis(2500);
-    while std::time::Instant::now() < until {
-        connection.drain();
-        std::thread::park_timeout(Duration::from_millis(20));
-    }
-}
-
-/// Floods one holder and answers what it was charged before and after, once
-/// its screen was still.
-fn flooded(home: &Home, name: &str, keep_freed: bool) -> (u64, u64) {
+#[test]
+fn a_flooded_holder_keeps_within_its_budget_once_it_gave_freed_pages_back() {
+    let home = Home::new();
     let folder = home.prepare(current_version(), &source());
-    let go = home.path().join(format!("go-{name}"));
+    let go = home.path().join("go");
     let role: OsString = "flood_when_told".into();
     let go_value: OsString = go.clone().into();
     let bytes: OsString = FLOOD.into();
-    let keep: OsString = "1".into();
-    let mut variables = vec![(ROLE, &role), (GO, &go_value), (FLOOD_BYTES, &bytes)];
-    if keep_freed {
-        variables.push(("HIDE_HOLDER_TEST_KEEP_FREED", &keep));
-    }
     let holder = start_ready(
         &folder.program,
-        &home.socket(name),
+        &home.socket("p"),
         &role_program("flood_when_told"),
-        &variables,
+        &[(ROLE, &role), (GO, &go_value), (FLOOD_BYTES, &bytes)],
     );
     drop(folder);
     let mut connection = holder.open();
-    still(&mut connection);
-    let before = charged(holder.process.pid);
+    // The first return, after the first screen, then the flood's: the
+    // writer that sent its fragments gives back what it freed.
+    holder.wait_logged("holder.memory_returned", 1, &mut connection);
     std::fs::write(&go, b"").unwrap();
     connection.wait_for_text("FLOOD DONE");
-    still(&mut connection);
-    let after = charged(holder.process.pid);
-    assert!(holder.process.is_running());
-    (before, after)
-}
-
-#[test]
-fn a_holder_gives_back_what_a_flood_freed_once_its_screen_is_still() {
-    let home = Home::new();
-    let (kept_before, kept_after) = flooded(&home, "kept", true);
-    let (before, after) = flooded(&home, "given", false);
+    holder.wait_logged("holder.memory_returned", 2, &mut connection);
+    let charged = charged(holder.process.pid);
     let mib = |bytes: u64| bytes as f64 / 1048576.0;
-    eprintln!(
-        "after a {FLOOD}-byte flood: kept {:.2} -> {:.2} MiB, given back {:.2} -> {:.2} MiB",
-        mib(kept_before),
-        mib(kept_after),
-        mib(before),
-        mib(after)
-    );
-    // macOS's allocator keeps what a flood freed and gives it back (7.0
-    // against 5.4 MiB on a runner); glibc's leaves almost nothing to give
-    // (2.96 against 2.95 MiB), and Windows' heap gains nothing from
-    // `HeapCompact` (3.81 against 4.20 MiB), so there it is printed only.
-    #[cfg(target_os = "macos")]
-    assert!(
-        after < kept_after,
-        "giving freed pages back saved nothing: {:.2} MiB against {:.2}",
-        mib(after),
-        mib(kept_after)
-    );
+    eprintln!("after a {FLOOD}-byte flood and a return, the holder is charged {:.2} MiB", mib(charged));
+    // A debug holder on macOS reads 5.5 to 6.6 MiB here, from 2.4 MiB
+    // before the flood, around the bound a release holder keeps (5.91 MiB
+    // at most over 40 measured rounds): there the measurement judges it and
+    // this prints it. Linux's (2.95 MiB) and Windows' (4.20 MiB) are held to
+    // it in every build.
+    if !(cfg!(target_os = "macos") && cfg!(debug_assertions)) {
+        assert!(
+            charged <= BUDGET,
+            "{:.2} MiB is over the {:.0} MiB budget",
+            mib(charged),
+            mib(BUDGET)
+        );
+    }
+    assert!(holder.process.is_running());
 }

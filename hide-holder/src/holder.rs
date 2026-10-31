@@ -20,6 +20,7 @@
 //! fragments and never a queue, and no connection means no drawing at all
 //! (PRD engine-bundle-2-pane-holder D-7, D-9).
 
+use std::cell::Cell;
 use std::collections::VecDeque;
 use std::io::{Read, Write as _};
 use std::path::PathBuf;
@@ -70,6 +71,12 @@ const MIN_FRAGMENT_INTERVAL: Duration = Duration::from_millis(16);
 /// the next fragment ([`hide_platform::memory::return_freed`]).
 const RETURN_FREED_AFTER: Duration = Duration::from_secs(1);
 
+/// The program output, past what a screen or two of a redraw takes, after
+/// which a connection's next return of freed pages is logged; a
+/// connection's first return is logged too, and every other return is not,
+/// so a pane that redraws a line every second or two does not fill its log.
+const LOGGED_RETURN_BYTES: u64 = 1024 * 1024;
+
 /// The most answer bytes waiting for the program to take them; past it an
 /// answer is dropped and logged, and the program's output goes on being read
 /// (PRD engine-bundle-2-pane-holder D-9, D-17).
@@ -91,11 +98,6 @@ const REFUSE_LIMIT: Duration = Duration::from_millis(250);
 /// PTY writer's thread at the first input, so a test sees what a panic does.
 /// A release holder never reads it, and the pane's program never gets it.
 const PANIC_ON_INPUT: &str = "HIDE_HOLDER_TEST_PANIC_ON_INPUT";
-
-/// Debug builds only: a holder started with this variable set never gives
-/// freed pages back, so a test can measure what the return saves. A release
-/// holder never reads it, and the pane's program never gets it.
-const KEEP_FREED: &str = "HIDE_HOLDER_TEST_KEEP_FREED";
 
 /// How much one read of the PTY takes.
 const READ_CHUNK: usize = 64 * 1024;
@@ -250,9 +252,6 @@ pub struct Holder {
     opening: Arc<Opening>,
     /// The pane's record, which the holder writes why the pane ended into.
     record: Option<Claim>,
-    /// Whether a connection's writer gives freed pages back once its screen
-    /// is still (`KEEP_FREED`).
-    return_freed: bool,
 }
 
 impl Holder {
@@ -284,8 +283,6 @@ impl Holder {
         command.env_remove(hide_platform::process::LENT_KEY);
         let panic_on_input = cfg!(debug_assertions) && std::env::var_os(PANIC_ON_INPUT).is_some();
         command.env_remove(PANIC_ON_INPUT);
-        let return_freed = !(cfg!(debug_assertions) && std::env::var_os(KEEP_FREED).is_some());
-        command.env_remove(KEEP_FREED);
         #[cfg(unix)]
         let spawned = pair.slave.spawn_command(command);
         #[cfg(windows)]
@@ -422,7 +419,6 @@ impl Holder {
             ending,
             opening,
             record,
-            return_freed,
         })
     }
 
@@ -585,7 +581,8 @@ impl Holder {
                 epochs: self.epochs.clone(),
                 events: self.sender.clone(),
                 log: self.log.clone(),
-                return_freed: self.return_freed,
+                returned: Cell::new(false),
+                fed: Cell::new(0),
             };
             let shutdown = stream.shutdown_handle();
             move || writer.serve(writer_stream, &shutdown, &written_tx)
@@ -1092,7 +1089,11 @@ struct ScreenWriter {
     epochs: Arc<AtomicU64>,
     events: Sender<Event>,
     log: Log,
-    return_freed: bool,
+    /// Whether this connection's writer has given freed pages back yet, and
+    /// the pane's output fed (`Pane::fed`) when it last did: which returns
+    /// are logged (`LOGGED_RETURN_BYTES`).
+    returned: Cell<bool>,
+    fed: Cell<u64>,
 }
 
 enum Job {
@@ -1249,11 +1250,22 @@ impl ScreenWriter {
     }
 
     fn return_freed(&self) {
-        if !self.return_freed {
-            return;
-        }
         match hide_platform::memory::return_freed() {
-            Ok(()) => {}
+            Ok(()) => {
+                let fed = self.pane.as_ref().map_or(0, |pane| {
+                    pane.lock().unwrap_or_else(PoisonError::into_inner).fed()
+                });
+                let output = fed.saturating_sub(self.fed.replace(fed));
+                if !self.returned.replace(true) || output >= LOGGED_RETURN_BYTES {
+                    self.log.event(
+                        "holder.memory_returned",
+                        &[
+                            ("generation", self.generation.into()),
+                            ("output_bytes", output.into()),
+                        ],
+                    );
+                }
+            }
             // A C library with no such call (musl, which no build of this
             // repository targets) keeps what it freed.
             Err(error) if error.kind() == std::io::ErrorKind::Unsupported => {}

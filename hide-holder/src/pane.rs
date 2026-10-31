@@ -59,6 +59,8 @@ pub struct Pane {
     sync_since: Option<Instant>,
     /// The next capture reads every row: the colors or the size changed.
     everything: bool,
+    /// Every byte of output the parser was fed, since the pane began.
+    fed: u64,
 }
 
 impl Pane {
@@ -99,6 +101,7 @@ impl Pane {
             shaped: false,
             sync_since: None,
             everything: true,
+            fed: 0,
         };
         let theme = theme.cloned().unwrap_or(Theme {
             foreground: None,
@@ -118,7 +121,13 @@ impl Pane {
         self.feed_at(bytes, answers, Instant::now());
     }
 
+    /// Every byte of output fed since the pane began.
+    pub fn fed(&self) -> u64 {
+        self.fed
+    }
+
     fn feed_at(&mut self, bytes: &[u8], answers: &mut Vec<u8>, now: Instant) {
+        self.fed += bytes.len() as u64;
         self.marks.clear();
         self.scanner.scan(bytes, &mut self.marks);
         let mut start = 0;
@@ -698,6 +707,47 @@ mod tests {
             panic!("not a text");
         };
         assert_eq!((text.as_str(), truncated), ("two", true));
+    }
+
+    /// The rows a read gives as line numbers, in order: each row of
+    /// [`numbered`] is its number.
+    fn numbers(pane: &Pane) -> Vec<u64> {
+        let Answer::Text { text, truncated } = pane.read(u16::MAX).unwrap() else {
+            panic!("not a text");
+        };
+        // Every row the parser holds, uncut, so a row missing is one the
+        // scrollback dropped.
+        assert!(!truncated && text.len() < MAX_READ_BYTES);
+        text.lines().map(|line| line.trim().parse().unwrap()).collect()
+    }
+
+    fn numbered(pane: &mut Pane, from: u64, to: u64) {
+        let lines: String = (from..to).map(|row| format!("{row}\r\n")).collect();
+        answers(pane, &[lines.as_bytes()]);
+    }
+
+    #[test]
+    fn a_full_scrollback_drops_its_oldest_rows_first_and_keeps_its_size() {
+        // 20 000 rows of 120 columns are far past the 2 MiB budget.
+        let mut pane = Pane::new(Size { rows: 40, cols: 120 }, None).unwrap();
+        numbered(&mut pane, 0, 20_000);
+        let first = numbers(&pane);
+        numbered(&mut pane, 20_000, 40_000);
+        let second = numbers(&pane);
+        for kept in [&first, &second] {
+            // The newest rows, every one of them, in order: what was dropped
+            // is the oldest.
+            assert!(kept[0] > 0, "no row was dropped");
+            assert!(
+                kept.windows(2).all(|pair| pair[1] == pair[0] + 1),
+                "the rows kept are not the newest in order"
+            );
+        }
+        assert_eq!(*first.last().unwrap(), 19_999);
+        assert_eq!(*second.last().unwrap(), 39_999);
+        // Twice the rows fed, no more held than the budget held before: it
+        // is dropped by whole pages, so the count moves by a few rows.
+        assert!(second.len() < first.len() * 11 / 10, "{} rows, then {}", first.len(), second.len());
     }
 
     #[test]

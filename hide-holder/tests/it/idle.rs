@@ -1,9 +1,9 @@
 //! An idle holder does not wake (PRD engine-bundle-2-pane-holder B21): with
 //! its program waiting for input, attached or not, the holder runs nothing,
 //! by what the kernel counts for it, once the one return of freed pages a
-//! second after its last fragment is behind it. The local measurement watches 60 s
-//! (docs/PERFORMANCE_TESTING.md, The pane holder's path); this is the short
-//! form every system's CI runs.
+//! second after its last fragment is behind it (`holder.memory_returned` in
+//! its log). The local measurement watches 60 s (docs/PERFORMANCE_TESTING.md,
+//! The pane holder's path); this is the short form every system's CI runs.
 
 use std::time::{Duration, Instant};
 
@@ -70,6 +70,10 @@ fn runs(pid: u32) -> u64 {
     }
 }
 
+/// How long the holder must have run nothing for the work an event started
+/// to be over.
+const QUIET: Duration = Duration::from_millis(200);
+
 /// Lets `length` pass.
 fn settle(length: Duration) {
     let until = Instant::now() + length;
@@ -78,6 +82,26 @@ fn settle(length: Duration) {
             break;
         }
         std::thread::park_timeout(left);
+    }
+}
+
+/// Waits until the holder has run nothing for `QUIET`: the end of the work
+/// an event started, as the kernel's count shows it. A holder that never
+/// goes quiet fails here, as one that wakes on a timer fails the watch.
+fn quiet(pid: u32) {
+    let started = Instant::now();
+    let mut last = runs(pid);
+    loop {
+        settle(QUIET);
+        let now = runs(pid);
+        if now == last {
+            return;
+        }
+        last = now;
+        assert!(
+            started.elapsed() < Duration::from_secs(30),
+            "the holder never went quiet"
+        );
     }
 }
 
@@ -102,11 +126,14 @@ fn an_idle_holder_does_not_wake_attached_or_not() {
     // What the line drew has gone out, and a second later the writer gave
     // back what drawing it freed, once (`RETURN_FREED_AFTER`); the holder
     // waits on its program and its connection now, with no bound.
-    settle(Duration::from_millis(2500));
+    holder.wait_logged("holder.memory_returned", 1, &mut connection);
+    quiet(holder.process.pid);
     let attached = watched(holder.process.pid);
+    // Let go of: the holder closes the connection and its writer ends.
     connection.send(ClientMessage::Release).unwrap();
+    connection.wait_closed();
     drop(connection);
-    settle(Duration::from_millis(500));
+    quiet(holder.process.pid);
     let alone = watched(holder.process.pid);
     eprintln!("the idle holder ran {attached} attached and {alone} alone over {WATCHED:?} each");
     assert_eq!(attached, 0, "the holder woke while attached and idle");
