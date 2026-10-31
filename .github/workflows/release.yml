@@ -73,6 +73,9 @@ jobs:
       - uses: ./.github/actions/vt-cache
         with:
           save: false
+      - name: Install the web, desktop and holder test packages
+        # The pane holder's screen tests draw on an xterm from this install.
+        run: bash scripts/verify-web.sh install
       - name: Test the workspace
         run: bash scripts/verify-cargo.sh test
       - name: Typecheck, lint, unit test and build the web shell and the desktop app

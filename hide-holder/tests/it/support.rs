@@ -530,13 +530,13 @@ fn unhex(text: &str) -> Vec<u8> {
 }
 
 /// Draws each terminal, `(cols, rows, what)`, on an xterm of its own: the
-/// headless xterm in `tests/xterm`, which `scripts/verify-web.sh install`
-/// installs, run by Node.
+/// headless xterm in `tests/xterm`, which `scripts/verify-web.sh install
+/// holder` (or the whole install) installs, run by Node.
 pub fn draw(terminals: &[(u16, u16, Vec<Draw>)]) -> Vec<Shown> {
     let package = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/xterm");
     assert!(
         package.join("node_modules/@xterm/headless").is_dir(),
-        "the test xterm is not installed in {}: run scripts/verify-web.sh install",
+        "the test xterm is not installed in {}: run `bash scripts/verify-web.sh install holder`",
         package.display()
     );
     let input = serde_json::json!({
