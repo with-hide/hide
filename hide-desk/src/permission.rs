@@ -1,17 +1,21 @@
 //! What Hide answers when the Desk agent asks to run something (PRD Desk
-//! D-18, D-52, D-53, D-60).
+//! D-82, D-83, D-60).
 //!
-//! The agent always runs in its ask mode, so every action its own rules do
-//! not already treat as a read reaches Hide as `session/request_permission`.
-//! Hide reads what the action would run, from the request and from the tool
-//! call the agent announced under the same id, and decides here:
-//! a read and a `hide` command Desk may run on its own run without asking,
-//! every other command and every change to files waits for the operator's
-//! card, and an action Hide cannot read does not run at all. No answer ever
-//! picks an option that would let the agent stop asking.
+//! The agent always runs in its ask mode, so what it runs reaches Hide as
+//! `session/request_permission` ([`read_request`]). Hide sorts the action
+//! into a row of Settings › Desk › 권한 and names what it plainly does that
+//! cannot be undone ([`classify`]); the core answers it from the operator's
+//! [`Table`], what the operator allowed for the rest of the conversation and
+//! its own facts about sessions and projects ([`decide`]). A row set to 바로
+//! runs, a row set to 묻기 and anything irreversible wait for the
+//! operator's card, and an action Hide cannot read does not run at all
+//! ([`readable`]). No answer ever picks an option that would let the agent
+//! stop asking: an allowance lives in Hide, never in the agent.
 
+use std::collections::BTreeSet;
 use std::path::Path;
 
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::adapter::AdapterId;
@@ -25,13 +29,14 @@ pub enum Action {
         folder: Option<String>,
         reason: Option<String>,
     },
-    /// A change to these files.
+    /// A change to these files; `delete` when the change removes them.
     Edit {
         paths: Vec<String>,
+        delete: bool,
         reason: Option<String>,
     },
-    /// Reading or searching files.
-    Read,
+    /// Reading or searching files: what is read, as the agent names it.
+    Read { what: String },
     /// Something else the agent names, such as a web fetch or a tool of
     /// its own.
     Other {
@@ -84,9 +89,99 @@ impl Request {
     }
 }
 
+/// The action Hide may answer, or `None` when it does not run at all
+/// (D-60): Hide cannot tell what would run, or the request offers no
+/// allowance for this one call.
+pub fn readable(request: &Request) -> Option<&Action> {
+    request.allow_once()?;
+    request.action.as_ref()
+}
+
+/// A row of Settings › Desk › 권한 (D-82).
+#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Row {
+    /// Any `hide` command, alone or with commands that only read
+    /// (`| jq`, `| head`, `echo`, `2>&1`, `;`, `&&`).
+    Hide,
+    /// Reading and searching files, by the agent's own tools or by a shell
+    /// line of commands that only read.
+    Read,
+    /// Any other shell command, and anything else the agent asks to run.
+    Shell,
+    /// The agent's own changes to files.
+    Edit,
+}
+
+/// What the operator chose for a row: run without a card, or ask.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Answer {
+    #[default]
+    Run,
+    Ask,
+}
+
+/// Settings › Desk › 권한: one answer per row, every row 바로 until the
+/// operator changes it. The same table holds for every agent.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Table {
+    pub hide: Answer,
+    pub read: Answer,
+    pub shell: Answer,
+    pub edit: Answer,
+}
+
+impl Table {
+    pub fn answer(&self, row: Row) -> Answer {
+        match row {
+            Row::Hide => self.hide,
+            Row::Read => self.read,
+            Row::Shell => self.shell,
+            Row::Edit => self.edit,
+        }
+    }
+}
+
+/// What always asks, whatever the table says (D-82's locked row).
+#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Irreversible {
+    /// Archiving or closing a session that works now, or one Hide cannot
+    /// name: its work stops.
+    EndWorkingSession,
+    /// A `git push` that overwrites what the remote holds.
+    ForcePush,
+    /// Deleting a path outside every project Hide knows, the project's own
+    /// folder included, or a path Hide cannot name.
+    DeleteOutside,
+    /// A command whose program Hide cannot read, so it could be any of the
+    /// above.
+    Unreadable,
+}
+
+impl Irreversible {
+    pub const ALL: [Irreversible; 4] = [
+        Irreversible::EndWorkingSession,
+        Irreversible::ForcePush,
+        Irreversible::DeleteOutside,
+        Irreversible::Unreadable,
+    ];
+}
+
+/// What a card asks and what `이 대화에서 계속 허용` keeps allowed: a row set
+/// to 묻기, or one kind of irreversible action (D-83).
+#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
+#[serde(tag = "kind", content = "value", rename_all = "snake_case")]
+pub enum Ask {
+    Irreversible(Irreversible),
+    Row(Row),
+}
+
 /// What the operator sees on an approval card: the whole command (or the
-/// files a change touches), the folder, and the agent's reason when it gave
-/// one.
+/// files a change touches, or what is read), the folder, and the agent's
+/// reason when it gave one.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Card {
     pub kind: CardKind,
@@ -99,125 +194,903 @@ pub struct Card {
 pub enum CardKind {
     Command,
     Edit,
+    Read,
     Other,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub enum Verdict {
-    /// Runs without a card.
-    Allow,
-    /// Waits for the operator's `한 번 허용` or `거절`.
-    Ask(Card),
-    /// Hide cannot tell what would run, or cannot answer with a one-time
-    /// allowance: it does not run (D-60).
-    Refuse,
+/// Where a command runs when the agent does not say, and what a bare
+/// `hide` and `~` name there.
+pub struct Place<'a> {
+    /// The `hide` program Desk's `PATH` finds first, the only one a bare
+    /// `hide` names there.
+    pub hide: &'a Path,
+    /// Desk's working folder, in wire spelling.
+    pub cwd: &'a str,
+    /// The account's home, in wire spelling.
+    pub home: Option<&'a str>,
 }
 
-/// The `hide` commands Desk runs without asking: reading what runs, letters,
-/// watches and starting work, which is what Desk is for, and the CLI's own
-/// help. Every other `hide` command (`hide agent archive`, `hide stop`, ...)
-/// waits for a card (D-38); the Workspace, View, Memory, mission and plan
-/// commands the core refuses Desk (`desk_has_no_checkout`) are not here.
-/// A spawn's words for the agent's own CLI, which could lift its
-/// permissions, are refused by the core (`desk_spawn_args`), since Codex's
-/// rules ([`crate::codex`]) free this list by its start alone.
-pub(crate) const HIDE_WITHOUT_CARD: &[&[&str]] = &[
-    &["guide"],
-    &["contract"],
-    &["status"],
-    &["version"],
-    &["agent", "list"],
-    &["agent", "show"],
-    &["agent", "catalog"],
-    &["agent", "spawn"],
-    &["request", "send"],
-    &["request", "reply"],
-    &["request", "show"],
-    &["request", "ack"],
-    &["request", "cancel"],
-    &["inbox"],
-    &["watch", "start"],
-    &["watch", "list"],
-    &["watch", "stop"],
-    &["watch", "assign"],
-    &["ps"],
-    &["device", "list"],
-];
+/// An action as Hide reads it, before the core's facts and the operator's
+/// table answer it.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct Reading {
+    pub row: Row,
+    pub card: Card,
+    /// The session registrations it archives or closes; `None` for one
+    /// Hide cannot name.
+    pub ends: Vec<Option<String>>,
+    /// The paths it deletes, in wire spelling; `None` for one Hide cannot
+    /// name.
+    pub deletes: Vec<Option<String>>,
+    pub force_push: bool,
+    pub unreadable: bool,
+}
 
-/// Decides a request. `hide` is the `hide` program Desk's `PATH` finds
-/// first, the only one a bare `hide` names there.
-pub fn decide(request: &Request, hide: &Path) -> Verdict {
-    if request.allow_once().is_none() {
-        return Verdict::Refuse;
+/// What only the core knows about the things an action names.
+pub trait Facts {
+    /// Whether the session registration `agent` works now. One the core
+    /// cannot find does not: its own archive refuses what it cannot find.
+    fn working(&self, agent: &str) -> bool;
+    /// Whether `path` (wire spelling) lies below the folder of a project
+    /// Hide knows.
+    fn in_project(&self, path: &str) -> bool;
+}
+
+/// How a request is answered.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct Decision {
+    /// What still waits for the operator, irreversible first; empty when it
+    /// runs.
+    pub asks: Vec<Ask>,
+    /// The working sessions it ends, which an allowance lets the core
+    /// archive without its own confirmation.
+    pub sessions: Vec<String>,
+    /// The first path outside every project it deletes.
+    pub outside: Option<String>,
+}
+
+/// Answers a reading from the table, the asks the operator allowed for the
+/// rest of the conversation, and the core's facts.
+pub fn decide(
+    reading: &Reading,
+    table: &Table,
+    facts: &dyn Facts,
+    allowed: &BTreeSet<Ask>,
+) -> Decision {
+    let sessions: Vec<String> = reading
+        .ends
+        .iter()
+        .flatten()
+        .filter(|agent| facts.working(agent))
+        .cloned()
+        .collect();
+    let unnamed_end = reading.ends.iter().any(Option::is_none);
+    let mut outside_unnamed = false;
+    let mut outside = None;
+    for path in &reading.deletes {
+        match path {
+            None => outside_unnamed = true,
+            Some(path) if !facts.in_project(path) => {
+                outside.get_or_insert_with(|| path.clone());
+            }
+            Some(_) => {}
+        }
     }
-    let Some(action) = &request.action else {
-        return Verdict::Refuse;
-    };
+    let mut asks: Vec<Ask> = Irreversible::ALL
+        .into_iter()
+        .filter(|irreversible| match irreversible {
+            Irreversible::EndWorkingSession => !sessions.is_empty() || unnamed_end,
+            Irreversible::ForcePush => reading.force_push,
+            Irreversible::DeleteOutside => outside.is_some() || outside_unnamed,
+            Irreversible::Unreadable => reading.unreadable,
+        })
+        .map(Ask::Irreversible)
+        .collect();
+    if table.answer(reading.row) == Answer::Ask {
+        asks.push(Ask::Row(reading.row));
+    }
+    asks.retain(|ask| !allowed.contains(ask));
+    Decision {
+        asks,
+        sessions,
+        outside,
+    }
+}
+
+/// Sorts an action into its row and names what it does that cannot be
+/// undone.
+pub fn classify(action: &Action, place: &Place<'_>) -> Reading {
     match action {
-        Action::Read => Verdict::Allow,
         Action::Command {
             command,
             folder,
             reason,
         } => {
-            if hide_without_card(command, hide) {
-                Verdict::Allow
-            } else {
-                Verdict::Ask(Card {
+            let cwd = folder
+                .as_deref()
+                .map(wire_word)
+                .unwrap_or_else(|| place.cwd.to_owned());
+            let mut line = Line::default();
+            read_line(command, Some(cwd), place, 0, &mut line);
+            Reading {
+                row: if line.other {
+                    Row::Shell
+                } else if line.hide {
+                    Row::Hide
+                } else {
+                    Row::Read
+                },
+                card: Card {
                     kind: CardKind::Command,
                     command: command.clone(),
                     folder: folder.clone(),
                     reason: reason.clone(),
-                })
+                },
+                ends: line.ends,
+                deletes: line.deletes,
+                force_push: line.force_push,
+                unreadable: line.unreadable,
             }
         }
-        Action::Edit { paths, reason } => Verdict::Ask(Card {
-            kind: CardKind::Edit,
-            command: paths.join("\n"),
-            folder: None,
-            reason: reason.clone(),
-        }),
-        Action::Other { title, reason } => Verdict::Ask(Card {
-            kind: CardKind::Other,
-            command: title.clone(),
-            folder: None,
-            reason: reason.clone(),
-        }),
+        Action::Edit {
+            paths,
+            delete,
+            reason,
+        } => Reading {
+            row: Row::Edit,
+            card: Card {
+                kind: CardKind::Edit,
+                command: paths.join("\n"),
+                folder: None,
+                reason: reason.clone(),
+            },
+            ends: Vec::new(),
+            deletes: if *delete {
+                paths
+                    .iter()
+                    .map(|path| resolve(path, Some(place.cwd), place.home))
+                    .collect()
+            } else {
+                Vec::new()
+            },
+            force_push: false,
+            unreadable: false,
+        },
+        Action::Read { what } => Reading {
+            row: Row::Read,
+            card: Card {
+                kind: CardKind::Read,
+                command: what.clone(),
+                folder: None,
+                reason: None,
+            },
+            ends: Vec::new(),
+            deletes: Vec::new(),
+            force_push: false,
+            unreadable: false,
+        },
+        Action::Other { title, reason } => Reading {
+            row: Row::Shell,
+            card: Card {
+                kind: CardKind::Other,
+                command: title.clone(),
+                folder: None,
+                reason: reason.clone(),
+            },
+            ends: Vec::new(),
+            deletes: Vec::new(),
+            force_push: false,
+            unreadable: false,
+        },
     }
 }
 
-/// Every simple command of the line is a `hide` command Desk may run on its
-/// own, and the line writes nothing and runs nothing else: no redirection,
-/// no substitution, no assignment.
-fn hide_without_card(line: &str, hide: &Path) -> bool {
-    if line.contains('`') || line.contains("$(") || line.contains("<(") || line.contains(">(") {
-        return false;
+/// What a shell line runs, as far as Hide reads it.
+#[derive(Default)]
+struct Line {
+    /// A `hide` command runs.
+    hide: bool,
+    /// A command runs that neither is `hide` nor only reads, or the line
+    /// writes a file.
+    other: bool,
+    ends: Vec<Option<String>>,
+    deletes: Vec<Option<String>>,
+    force_push: bool,
+    unreadable: bool,
+}
+
+/// How deep a command inside a command (`$(...)`, `bash -c`, `eval`) is
+/// read; one deeper cannot be read.
+const MAX_DEPTH: usize = 4;
+
+/// A redirection to one of these writes no file.
+const SAFE_TARGETS: &[&str] = &["/dev/null", "/dev/stdout", "/dev/stderr"];
+
+/// Words that open or close a shell body before a command's program.
+const KEYWORDS: &[&str] = &[
+    "if", "then", "else", "elif", "do", "while", "until", "!", "time", "{", "}", "fi", "done",
+    "esac",
+];
+
+/// Words that start a line naming no program to run.
+const CONTROL: &[&str] = &["for", "select", "case", "function"];
+
+/// Programs that only read, each with the flags that would make it write
+/// a file or run another program, and how many words it may name besides
+/// its flags when more would name a file it writes.
+struct ReadOnly {
+    name: &'static str,
+    refused: &'static [&'static str],
+    names: Option<usize>,
+}
+
+const fn read_only(name: &'static str) -> ReadOnly {
+    ReadOnly {
+        name,
+        refused: &[],
+        names: None,
     }
-    let parsed = hide_shell::shell_line(line);
-    if !parsed.targets.is_empty() || !parsed.substitutions.is_empty() || parsed.commands.is_empty()
+}
+
+const READ_ONLY: &[ReadOnly] = &[
+    read_only("cat"),
+    read_only("head"),
+    read_only("tail"),
+    read_only("less"),
+    read_only("more"),
+    read_only("ls"),
+    read_only("pwd"),
+    read_only("echo"),
+    read_only("printf"),
+    read_only("true"),
+    read_only("false"),
+    read_only("test"),
+    read_only("["),
+    read_only("[["),
+    read_only("wc"),
+    read_only("cut"),
+    read_only("tr"),
+    read_only("nl"),
+    read_only("jq"),
+    read_only("grep"),
+    read_only("egrep"),
+    read_only("fgrep"),
+    read_only("ag"),
+    read_only("stat"),
+    read_only("file"),
+    read_only("du"),
+    read_only("df"),
+    read_only("which"),
+    read_only("type"),
+    read_only("whoami"),
+    read_only("id"),
+    read_only("basename"),
+    read_only("dirname"),
+    read_only("realpath"),
+    read_only("readlink"),
+    read_only("column"),
+    read_only("diff"),
+    read_only("cmp"),
+    read_only("comm"),
+    read_only("paste"),
+    read_only("fold"),
+    read_only("sha256sum"),
+    read_only("sha1sum"),
+    read_only("shasum"),
+    read_only("md5"),
+    read_only("md5sum"),
+    read_only("cksum"),
+    read_only("od"),
+    read_only("hexdump"),
+    read_only("strings"),
+    read_only("sleep"),
+    read_only("seq"),
+    read_only("tac"),
+    read_only("rev"),
+    read_only("printenv"),
+    read_only("uname"),
+    read_only("ps"),
+    ReadOnly {
+        name: "sort",
+        refused: &["-o", "--output"],
+        names: None,
+    },
+    ReadOnly {
+        name: "uniq",
+        refused: &[],
+        names: Some(1),
+    },
+    ReadOnly {
+        name: "rg",
+        refused: &["--pre"],
+        names: None,
+    },
+    ReadOnly {
+        name: "fd",
+        refused: &["-x", "-X", "--exec", "--exec-batch"],
+        names: None,
+    },
+    ReadOnly {
+        name: "base64",
+        refused: &["-o", "--output"],
+        names: None,
+    },
+    ReadOnly {
+        name: "tree",
+        refused: &["-o"],
+        names: None,
+    },
+    ReadOnly {
+        name: "date",
+        refused: &["-s", "--set"],
+        names: None,
+    },
+    ReadOnly {
+        name: "hostname",
+        refused: &[],
+        names: Some(0),
+    },
+];
+
+/// `git` subcommands that only read, and the flag that would make them
+/// write a file.
+const GIT_READS: &[&str] = &[
+    "status",
+    "log",
+    "diff",
+    "show",
+    "rev-parse",
+    "ls-files",
+    "blame",
+    "describe",
+    "shortlog",
+    "cat-file",
+    "ls-tree",
+    "merge-base",
+    "grep",
+    "reflog",
+];
+const GIT_WRITES_OUTPUT: &str = "--output";
+/// `git branch` flags that only list.
+const GIT_BRANCH_LISTS: &[&str] = &[
+    "-a",
+    "-r",
+    "-v",
+    "-vv",
+    "--all",
+    "--remotes",
+    "--list",
+    "--show-current",
+    "--verbose",
+];
+/// `git push` flags that overwrite what the remote holds; a short flag
+/// group holding `f` and a refspec starting with `+` do too.
+const FORCE_PUSH_FLAGS: &[&str] = &[
+    "--force",
+    "--force-with-lease",
+    "--force-if-includes",
+    "--mirror",
+];
+
+/// Programs that delete the paths they name.
+const DELETERS: &[&str] = &["rm", "rmdir", "unlink", "shred", "srm", "trash", "trash-put"];
+
+/// `hide` commands that end a session registration, which the word after
+/// them names.
+const HIDE_ENDS: &[&[&str]] = &[&["agent", "archive"]];
+/// `herdr` commands that close panes, and with them the sessions in them.
+const HERDR_CLOSES: &[&[&str]] = &[
+    &["pane", "close"],
+    &["tab", "close"],
+    &["workspace", "close"],
+    &["server", "stop"],
+];
+
+/// Programs that run the command after their own options, the options of
+/// theirs that take a value, and whether they themselves are more than a
+/// read.
+struct Wrapper {
+    name: &'static str,
+    valued: &'static [&'static str],
+    acts: bool,
+}
+
+const WRAPPERS: &[Wrapper] = &[
+    Wrapper {
+        name: "sudo",
+        valued: &["-u", "-g", "-h", "-p", "-C", "-D", "-r", "-t", "-U", "-T"],
+        acts: true,
+    },
+    Wrapper {
+        name: "doas",
+        valued: &["-u", "-C"],
+        acts: true,
+    },
+    Wrapper {
+        name: "env",
+        valued: &["-u", "-C", "-P"],
+        acts: false,
+    },
+    Wrapper {
+        name: "command",
+        valued: &[],
+        acts: false,
+    },
+    Wrapper {
+        name: "builtin",
+        valued: &[],
+        acts: false,
+    },
+    Wrapper {
+        name: "exec",
+        valued: &["-a"],
+        acts: false,
+    },
+    Wrapper {
+        name: "nohup",
+        valued: &[],
+        acts: true,
+    },
+    Wrapper {
+        name: "time",
+        valued: &["-f"],
+        acts: false,
+    },
+    Wrapper {
+        name: "nice",
+        valued: &["-n"],
+        acts: false,
+    },
+    Wrapper {
+        name: "timeout",
+        valued: &["-s", "-k", "--signal", "--kill-after"],
+        acts: false,
+    },
+    Wrapper {
+        name: "stdbuf",
+        valued: &["-i", "-o", "-e"],
+        acts: false,
+    },
+    Wrapper {
+        name: "xargs",
+        valued: &["-I", "-L", "-n", "-P", "-s", "-d", "-E", "-a", "-J", "-R", "-S"],
+        acts: false,
+    },
+];
+
+/// Shells whose `-c` runs the script after it.
+const SHELLS: &[&str] = &["bash", "sh", "zsh", "dash", "ksh", "mksh", "fish"];
+
+fn read_line(text: &str, cwd: Option<String>, place: &Place<'_>, depth: usize, line: &mut Line) {
+    if depth > MAX_DEPTH {
+        line.other = true;
+        line.unreadable = true;
+        return;
+    }
+    let parsed = hide_shell::shell_line(text);
+    if parsed.commands.is_empty() && parsed.substitutions.is_empty() {
+        line.other = true;
+        // A quote the text ended inside makes the shell run none of it;
+        // anything but blank lines and comments is read as unknown.
+        line.unreadable |= text
+            .lines()
+            .any(|row| !row.trim().is_empty() && !row.trim_start().starts_with('#'));
+        return;
+    }
+    if parsed
+        .targets
+        .iter()
+        .any(|(_, target)| !SAFE_TARGETS.contains(&target.as_str()))
     {
-        return false;
+        line.other = true;
     }
-    // A heredoc's body is set aside by the reader, so a line holding one
-    // is not read whole here.
-    if line.contains("<<") {
-        return false;
+    let mut cwd = cwd;
+    for words in &parsed.commands {
+        read_command(words, &mut cwd, place, depth, line);
     }
-    parsed.commands.iter().all(|words| {
-        let Some((program, rest)) = words.split_first() else {
-            return false;
-        };
-        let names_hide = program == "hide" || Path::new(program) == hide;
-        names_hide
-            && rest.iter().all(|word| !word.contains('$'))
-            && HIDE_WITHOUT_CARD.iter().any(|allowed| {
-                rest.len() >= allowed.len()
-                    && rest
+    for inner in parsed
+        .substitutions
+        .iter()
+        .map(|(_, text)| text)
+        .chain(&parsed.backquoted)
+    {
+        read_line(inner, cwd.clone(), place, depth + 1, line);
+    }
+}
+
+fn read_command(
+    words: &[String],
+    cwd: &mut Option<String>,
+    place: &Place<'_>,
+    depth: usize,
+    line: &mut Line,
+) {
+    let mut words = words;
+    while let Some((first, rest)) = words.split_first()
+        && KEYWORDS.contains(&first.as_str())
+    {
+        words = rest;
+    }
+    let Some(first) = words.first() else {
+        return;
+    };
+    if CONTROL.contains(&first.as_str()) {
+        return;
+    }
+    let mut assigned = false;
+    while let Some((first, rest)) = words.split_first()
+        && hide_shell::is_assignment(first)
+    {
+        assigned = true;
+        words = rest;
+    }
+    if words.is_empty() {
+        return;
+    }
+    run_program(words, assigned, false, cwd, place, depth, line);
+}
+
+/// One program and its words. `assigned` when variables were set for it,
+/// which could change what a bare name runs; `stdin_names` when more words
+/// come from its input (`xargs`).
+fn run_program(
+    words: &[String],
+    assigned: bool,
+    stdin_names: bool,
+    cwd: &mut Option<String>,
+    place: &Place<'_>,
+    depth: usize,
+    line: &mut Line,
+) {
+    let Some((program, args)) = words.split_first() else {
+        return;
+    };
+    if program.contains(['$', '`', '*', '?']) {
+        line.other = true;
+        line.unreadable = true;
+        return;
+    }
+    if names_hide(program, place.hide) {
+        if assigned {
+            line.other = true;
+        } else {
+            line.hide = true;
+        }
+        for ends in HIDE_ENDS {
+            if args.len() > ends.len() && args.iter().zip(ends.iter()).all(|(word, want)| word == want) {
+                line.ends.push(
+                    args[ends.len()..]
                         .iter()
-                        .zip(allowed.iter())
-                        .all(|(word, want)| word == want)
-            })
+                        .find(|word| !word.starts_with('-'))
+                        .cloned(),
+                );
+            }
+        }
+        return;
+    }
+    let name = program_name(program);
+    if let Some(wrapper) = WRAPPERS.iter().find(|wrapper| wrapper.name == name) {
+        line.other |= wrapper.acts;
+        let mut at = 0;
+        let mut assigned = assigned;
+        while let Some(word) = args.get(at) {
+            if word == "--" {
+                at += 1;
+                break;
+            }
+            if name == "env" && hide_shell::is_assignment(word) {
+                assigned = true;
+            } else if !word.starts_with('-') {
+                break;
+            } else if name == "command" && matches!(word.as_str(), "-v" | "-V") {
+                // `command -v` names what would run and runs nothing.
+                return;
+            } else if name == "env" && word.starts_with("-S") {
+                // `env -S` splits its value into the command line.
+                line.other = true;
+                line.unreadable = true;
+                return;
+            } else if wrapper.valued.contains(&word.as_str()) {
+                at += 1;
+            }
+            at += 1;
+        }
+        if name == "timeout" {
+            // The duration before the command.
+            at += 1;
+        }
+        let inner = args.get(at..).unwrap_or_default();
+        if !inner.is_empty() {
+            run_program(
+                inner,
+                assigned,
+                stdin_names || name == "xargs",
+                cwd,
+                place,
+                depth,
+                line,
+            );
+        }
+        return;
+    }
+    if SHELLS.contains(&name) {
+        let mut runs_script = false;
+        let mut at = 0;
+        while let Some(word) = args.get(at) {
+            if !word.starts_with('-') || word == "--" {
+                break;
+            }
+            runs_script |= !word.starts_with("--") && word.contains('c');
+            at += 1;
+        }
+        match args.get(at).filter(|_| runs_script) {
+            Some(script) => read_line(script, cwd.clone(), place, depth + 1, line),
+            // A script file or the shell's input: a program Hide does not
+            // read, like any other.
+            None => line.other = true,
+        }
+        return;
+    }
+    match name {
+        "eval" => read_line(&args.join(" "), cwd.clone(), place, depth + 1, line),
+        "cd" | "pushd" => {
+            *cwd = match args.iter().find(|word| !word.starts_with('-')) {
+                Some(dir) => resolve(dir, cwd.as_deref(), place.home),
+                None => place.home.map(str::to_owned),
+            };
+        }
+        "popd" => *cwd = None,
+        "git" => git(args, cwd, place, line),
+        "herdr" => {
+            line.other = true;
+            if HERDR_CLOSES.iter().any(|close| {
+                args.windows(close.len())
+                    .any(|window| window.iter().zip(close.iter()).all(|(word, want)| word == want))
+            }) {
+                line.ends.push(None);
+            }
+        }
+        "find" => find(args, cwd, place, depth, line),
+        _ if DELETERS.contains(&name) => {
+            line.other = true;
+            delete_names(args, cwd.as_deref(), place, line);
+            if stdin_names {
+                line.deletes.push(None);
+            }
+        }
+        _ => {
+            let reads = READ_ONLY.iter().find(|entry| entry.name == name).is_some_and(|entry| {
+                !args.iter().any(|word| refused(word, entry.refused))
+                    && entry
+                        .names
+                        .is_none_or(|most| args.iter().filter(|word| !word.starts_with('-')).count() <= most)
+            });
+            line.other |= !reads;
+        }
+    }
+}
+
+fn names_hide(program: &str, hide: &Path) -> bool {
+    program == "hide" || (cfg!(windows) && program == "hide.exe") || Path::new(program) == hide
+}
+
+/// A program's own name, without its folder (and `.exe` on Windows).
+fn program_name(program: &str) -> &str {
+    let name = program.rsplit(['/', '\\']).next().unwrap_or(program);
+    if cfg!(windows) {
+        name.strip_suffix(".exe").unwrap_or(name)
+    } else {
+        name
+    }
+}
+
+/// Whether `word` is one of `flags`: a long flag alone or with `=value`, a
+/// short flag alone or in a group of short flags.
+fn refused(word: &str, flags: &[&str]) -> bool {
+    flags.iter().any(|flag| {
+        if flag.starts_with("--") {
+            word == *flag || word.strip_prefix(flag).is_some_and(|rest| rest.starts_with('='))
+        } else {
+            let letter = flag.trim_start_matches('-');
+            word.starts_with('-') && !word.starts_with("--") && word[1..].contains(letter)
+        }
     })
+}
+
+fn git(args: &[String], cwd: &mut Option<String>, place: &Place<'_>, line: &mut Line) {
+    let mut cwd = cwd.clone();
+    let mut at = 0;
+    while let Some(word) = args.get(at) {
+        match word.as_str() {
+            "-C" => {
+                cwd = args
+                    .get(at + 1)
+                    .and_then(|dir| resolve(dir, cwd.as_deref(), place.home));
+                at += 2;
+            }
+            "-c" | "--git-dir" | "--work-tree" | "--namespace" => at += 2,
+            word if word.starts_with('-') => at += 1,
+            _ => break,
+        }
+    }
+    let Some(sub) = args.get(at) else {
+        return;
+    };
+    let rest = &args[at + 1..];
+    match sub.as_str() {
+        "push" => {
+            line.other = true;
+            line.force_push |= rest.iter().any(|word| {
+                FORCE_PUSH_FLAGS
+                    .iter()
+                    .any(|flag| word == flag || word.strip_prefix(flag).is_some_and(|tail| tail.starts_with('=')))
+                    || (word.starts_with('-') && !word.starts_with("--") && word.contains('f'))
+                    || (word.starts_with('+') && word.len() > 1)
+            });
+        }
+        "clean" => {
+            line.other = true;
+            if rest.iter().any(|word| word == "-n" || word == "--dry-run") {
+                return;
+            }
+            // It deletes what lies below the folders it names, or below
+            // the one it runs in.
+            let names: Vec<&String> = rest.iter().filter(|word| !word.starts_with('-')).collect();
+            if names.is_empty() {
+                line.deletes.push(cwd.as_deref().map(below));
+            } else {
+                for name in names {
+                    line.deletes
+                        .push(resolve(name, cwd.as_deref(), place.home).map(|path| below(&path)));
+                }
+            }
+        }
+        "branch" => {
+            line.other |= !rest.iter().all(|word| GIT_BRANCH_LISTS.contains(&word.as_str()));
+        }
+        sub if GIT_READS.contains(&sub) => {
+            line.other |= rest.iter().any(|word| refused(word, &[GIT_WRITES_OUTPUT]));
+        }
+        _ => line.other = true,
+    }
+}
+
+fn find(
+    args: &[String],
+    cwd: &mut Option<String>,
+    place: &Place<'_>,
+    depth: usize,
+    line: &mut Line,
+) {
+    let roots: Vec<&String> = args
+        .iter()
+        .take_while(|word| !word.starts_with('-') && *word != "(" && *word != "!")
+        .collect();
+    let roots: Vec<String> = if roots.is_empty() {
+        vec![".".to_owned()]
+    } else {
+        roots.into_iter().cloned().collect()
+    };
+    let mut at = 0;
+    while let Some(word) = args.get(at) {
+        match word.as_str() {
+            "-delete" => {
+                line.other = true;
+                for root in &roots {
+                    line.deletes
+                        .push(resolve(root, cwd.as_deref(), place.home).map(|path| below(&path)));
+                }
+            }
+            "-exec" | "-execdir" | "-ok" | "-okdir" => {
+                let end = args[at + 1..]
+                    .iter()
+                    .position(|word| word == ";" || word == "+")
+                    .map_or(args.len(), |offset| at + 1 + offset);
+                let inner = &args[at + 1..end];
+                for root in &roots {
+                    // What `find` hands the command lies below its root.
+                    let found = format!("{}/{{}}", root.trim_end_matches('/'));
+                    let words: Vec<String> = inner
+                        .iter()
+                        .map(|word| if word == "{}" { found.clone() } else { word.clone() })
+                        .collect();
+                    run_program(&words, false, false, &mut cwd.clone(), place, depth, line);
+                }
+                at = end;
+            }
+            "-fprint" | "-fprint0" | "-fprintf" | "-fls" => line.other = true,
+            _ => {}
+        }
+        at += 1;
+    }
+}
+
+fn delete_names(args: &[String], cwd: Option<&str>, place: &Place<'_>, line: &mut Line) {
+    let mut options = true;
+    for word in args {
+        if options && word == "--" {
+            options = false;
+            continue;
+        }
+        if options && word.starts_with('-') && word.len() > 1 {
+            continue;
+        }
+        line.deletes.push(resolve(word, cwd, place.home));
+    }
+}
+
+/// A path standing for what lies below `folder`, which a command that
+/// deletes inside a folder deletes, not the folder itself.
+fn below(folder: &str) -> String {
+    format!("{}/{{}}", folder.trim_end_matches('/'))
+}
+
+/// A word a command names as a path, in wire spelling: absolute, from
+/// `~`, or from the folder the command runs in. `None` when Hide cannot
+/// tell: a variable, a substitution, another account's `~`, or a relative
+/// path in a folder it cannot tell.
+fn resolve(word: &str, cwd: Option<&str>, home: Option<&str>) -> Option<String> {
+    if word.contains(['$', '`']) {
+        return None;
+    }
+    let word = wire_word(word);
+    let joined = if let Some(rest) = word.strip_prefix('~') {
+        if !(rest.is_empty() || rest.starts_with('/')) {
+            return None;
+        }
+        format!("{}{rest}", home?)
+    } else if hide_platform::path::is_wire_absolute(&word) {
+        word
+    } else {
+        format!("{}/{word}", cwd?)
+    };
+    Some(normalize(&joined))
+}
+
+/// A path as a command names it, in wire spelling; on Windows a Git Bash
+/// drive mount (`/c/work`) or a native path (`C:\work`) is read as the
+/// drive's.
+fn wire_word(word: &str) -> String {
+    if cfg!(windows) {
+        if let Some(native) = hide_platform::path::shell_drive_path(word) {
+            return hide_platform::path::to_wire_lossy(Path::new(&native));
+        }
+        if word.contains('\\') {
+            return hide_platform::path::to_wire_lossy(Path::new(word));
+        }
+    }
+    word.to_owned()
+}
+
+/// `.` and `..` taken out by names; a `..` at the root stays there, and a
+/// drive (`C:`) stays first.
+fn normalize(path: &str) -> String {
+    let (root, rest) = if let Some(rest) = path.strip_prefix("//") {
+        ("//", rest)
+    } else if let Some(rest) = path.strip_prefix('/') {
+        ("/", rest)
+    } else {
+        ("", path)
+    };
+    let mut names: Vec<&str> = Vec::new();
+    let mut fixed = 0;
+    for (index, name) in rest.split('/').enumerate() {
+        match name {
+            "" | "." => {}
+            ".." => {
+                if names.len() > fixed {
+                    names.pop();
+                }
+            }
+            name => {
+                if index == 0 && root.is_empty() && name.ends_with(':') {
+                    fixed = 1;
+                }
+                names.push(name);
+            }
+        }
+    }
+    format!("{root}{}", names.join("/"))
 }
 
 /// Reads `session/request_permission` params. `announced` is the last
@@ -318,8 +1191,25 @@ fn tool_action(call: &Value, announced: Option<&Value>) -> Option<Action> {
                 .collect()
         })
         .unwrap_or_default();
+    let raw_path = || {
+        raw.and_then(|raw| {
+            text(raw.get("file_path"))
+                .or_else(|| text(raw.get("path")))
+                .or_else(|| text(raw.get("notebook_path")))
+        })
+    };
     match kind.as_str() {
-        "read" | "search" => Some(Action::Read),
+        "read" | "search" => {
+            let what = if paths.is_empty() {
+                raw_path()
+                    .or_else(|| raw.and_then(|raw| text(raw.get("pattern"))))
+                    .or_else(|| text(field(call, announced, "title")))
+                    .unwrap_or_default()
+            } else {
+                paths.join("\n")
+            };
+            Some(Action::Read { what })
+        }
         "execute" => {
             let command = command_text(raw.and_then(|raw| raw.get("command")))?;
             let folder = text(raw.and_then(|raw| raw.get("cwd")));
@@ -332,15 +1222,15 @@ fn tool_action(call: &Value, announced: Option<&Value>) -> Option<Action> {
         "edit" | "delete" | "move" => {
             let mut paths = paths;
             if paths.is_empty()
-                && let Some(path) = raw.and_then(|raw| {
-                    text(raw.get("file_path"))
-                        .or_else(|| text(raw.get("path")))
-                        .or_else(|| text(raw.get("notebook_path")))
-                })
+                && let Some(path) = raw_path()
             {
                 paths.push(path);
             }
-            (!paths.is_empty()).then_some(Action::Edit { paths, reason })
+            (!paths.is_empty()).then_some(Action::Edit {
+                paths,
+                delete: kind == "delete",
+                reason,
+            })
         }
         _ => {
             // A title that only names a generic kind ("Run command") says
@@ -375,7 +1265,7 @@ pub enum Step {
 /// What an announced tool call (`tool_call`, merged with its updates) did.
 pub fn step(call: &Value) -> Step {
     match tool_action(call, None) {
-        Some(Action::Read) => Step::Files,
+        Some(Action::Read { .. }) => Step::Files,
         Some(Action::Command { command, .. }) => hide_step(&command),
         _ => Step::Other,
     }
@@ -436,7 +1326,11 @@ fn pi_action(call: &Value) -> Option<Action> {
     let tool = text(message.get("tool"))?;
     let input = message.get("input").cloned().unwrap_or(Value::Null);
     match tool.as_str() {
-        "read" | "grep" | "find" | "ls" => Some(Action::Read),
+        "read" | "grep" | "find" | "ls" => Some(Action::Read {
+            what: text(input.get("path"))
+                .or_else(|| text(input.get("pattern")))
+                .unwrap_or(tool),
+        }),
         "bash" => Some(Action::Command {
             command: text(input.get("command"))?,
             folder: text(input.get("cwd")),
@@ -444,6 +1338,7 @@ fn pi_action(call: &Value) -> Option<Action> {
         }),
         "edit" | "write" => Some(Action::Edit {
             paths: vec![text(input.get("path"))?],
+            delete: false,
             reason: None,
         }),
         _ => Some(Action::Other {
@@ -454,195 +1349,4 @@ fn pi_action(call: &Value) -> Option<Action> {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use serde_json::json;
-
-    const HIDE: &str = "/Applications/hide.app/Contents/Resources/hide";
-
-    #[test]
-    fn a_turns_tool_calls_count_as_sessions_read_letters_and_starts() {
-        let run =
-            |command: &str| step(&json!({"kind": "execute", "rawInput": {"command": command}}));
-        assert_eq!(run("hide agent show agent-3"), Step::Sessions);
-        assert_eq!(run("hide ps && hide agent list"), Step::Sessions);
-        assert_eq!(
-            run("hide request send agent-3 --intent k --body hi"),
-            Step::Letter
-        );
-        assert_eq!(run("hide agent spawn --name a --intent k"), Step::Start);
-        assert_eq!(run("hide agent archive agent-3"), Step::Other);
-        assert_eq!(run("ls -la"), Step::Other);
-        assert_eq!(
-            step(&json!({"kind": "read", "locations": [{"path": "/a"}]})),
-            Step::Files
-        );
-    }
-
-    fn options() -> Value {
-        json!([
-            {"optionId": "allow-once", "name": "Yes", "kind": "allow_once"},
-            {"optionId": "allow-always", "name": "Always", "kind": "allow_always"},
-            {"optionId": "reject", "name": "No", "kind": "reject_once"}
-        ])
-    }
-
-    fn claude_bash(command: &str) -> Request {
-        read_request(
-            AdapterId::Claude,
-            &json!({"toolCall": {"toolCallId": "t1", "kind": "execute", "title": command,
-                "rawInput": {"command": command, "description": "Why it runs"}},
-                "options": options()}),
-            None,
-        )
-    }
-
-    fn verdict(command: &str) -> Verdict {
-        decide(&claude_bash(command), Path::new(HIDE))
-    }
-
-    #[test]
-    fn a_hide_command_desk_uses_runs_without_a_card() {
-        for line in [
-            "hide agent list",
-            "hide ps --json",
-            "hide request send record-now --intent desk-1 --body 'check the dark capture'",
-            "hide agent spawn --name mention --intent desk-2 --kind claude --repo /r --branch desk/mention",
-            &format!("{HIDE} inbox"),
-            "hide guide && hide agent list",
-        ] {
-            assert_eq!(verdict(line), Verdict::Allow, "{line}");
-        }
-    }
-
-    #[test]
-    fn archive_stop_and_any_other_hide_command_ask_first() {
-        for line in [
-            "hide agent archive agent-3",
-            "hide stop",
-            "hide agent end agent-3",
-        ] {
-            assert!(matches!(verdict(line), Verdict::Ask(_)), "{line}");
-        }
-    }
-
-    #[test]
-    fn a_hide_command_joined_to_anything_else_asks() {
-        for line in [
-            "hide agent list | jq .",
-            "hide agent list > agents.json",
-            "hide agent list; rm -rf build",
-            "hide request send a --intent i --body \"$(cat notes.md)\"",
-            "hide request send a --intent i --body `cat notes.md`",
-            "FOO=1 hide agent list",
-            "hide request send a --intent i --body $SECRET",
-            "/tmp/hide agent list",
-            "hide request send a --intent i --body-file - <<EOF\nhi\nEOF",
-            "hide agent list\nrm -rf build",
-            "(hide agent list; rm -rf build)",
-            "hide() { rm -rf build; }; hide agent list",
-            "hide mission show mission-1",
-        ] {
-            assert!(matches!(verdict(line), Verdict::Ask(_)), "{line}");
-        }
-    }
-
-    #[test]
-    fn a_shell_read_from_claude_still_asks() {
-        // Claude's own read-only commands are held by Desk's ask rule and
-        // reach Hide; only Codex's sandboxed reads pass on the agent's side.
-        let Verdict::Ask(card) = verdict("ls -la") else {
-            panic!("ls asks")
-        };
-        assert_eq!(card.command, "ls -la");
-        assert_eq!(card.reason.as_deref(), Some("Why it runs"));
-    }
-
-    #[test]
-    fn a_read_runs_and_an_edit_asks_with_its_files() {
-        let read = read_request(
-            AdapterId::Claude,
-            &json!({"toolCall": {"toolCallId": "t2", "kind": "read", "title": "Read"},
-                "options": options()}),
-            None,
-        );
-        assert_eq!(decide(&read, Path::new(HIDE)), Verdict::Allow);
-        let edit = read_request(
-            AdapterId::Claude,
-            &json!({"toolCall": {"toolCallId": "t3", "kind": "edit", "title": "Edit",
-                "rawInput": {"file_path": "/r/web/src/PaneHeader.tsx"}},
-                "options": options()}),
-            None,
-        );
-        let Verdict::Ask(card) = decide(&edit, Path::new(HIDE)) else {
-            panic!("an edit asks")
-        };
-        assert_eq!(card.kind, CardKind::Edit);
-        assert_eq!(card.command, "/r/web/src/PaneHeader.tsx");
-    }
-
-    #[test]
-    fn codex_s_request_is_read_with_the_call_it_announced() {
-        // codex-acp 2.3 sent the request with only the id and the kind.
-        let announced = json!({"sessionUpdate": "tool_call", "toolCallId": "exec-1",
-            "kind": "execute", "title": "touch x",
-            "rawInput": {"command": ["/bin/zsh", "-lc", "touch x"], "cwd": "/r"}});
-        let request = read_request(
-            AdapterId::Codex,
-            &json!({"toolCall": {"toolCallId": "exec-1", "kind": "execute", "status": "pending"},
-                "options": [{"optionId": "allow_once", "kind": "allow_once"},
-                            {"optionId": "cancel", "kind": "reject_once"}]}),
-            Some(&announced),
-        );
-        let Verdict::Ask(card) = decide(&request, Path::new(HIDE)) else {
-            panic!("asks")
-        };
-        assert_eq!(card.command, "touch x");
-        assert_eq!(card.folder.as_deref(), Some("/r"));
-        assert_eq!(request.reject(), Some("cancel"));
-    }
-
-    #[test]
-    fn a_request_hide_cannot_read_does_not_run() {
-        let bare = read_request(
-            AdapterId::Codex,
-            &json!({"toolCall": {"toolCallId": "exec-2", "kind": "execute"}, "options": options()}),
-            None,
-        );
-        assert_eq!(bare.action, None);
-        assert_eq!(decide(&bare, Path::new(HIDE)), Verdict::Refuse);
-        let no_once = read_request(
-            AdapterId::Claude,
-            &json!({"toolCall": {"toolCallId": "t", "kind": "read"},
-                "options": [{"optionId": "always", "kind": "allow_always"}]}),
-            None,
-        );
-        assert_eq!(decide(&no_once, Path::new(HIDE)), Verdict::Refuse);
-    }
-
-    #[test]
-    fn pi_s_confirm_from_desk_s_extension_is_read_and_another_is_not() {
-        let confirm = |title: &str, message: &str| {
-            read_request(
-                AdapterId::Pi,
-                &json!({"toolCall": {"toolCallId": "pi-ui-1", "kind": "other", "title": title,
-                    "rawInput": {"method": "confirm", "title": title, "message": message}},
-                    "options": [{"optionId": "yes", "kind": "allow_once"},
-                                {"optionId": "no", "kind": "reject_once"}]}),
-                None,
-            )
-        };
-        let bash = confirm(
-            crate::adapter::PI_CONFIRM_TITLE,
-            r#"{"hide_desk":1,"tool":"bash","input":{"command":"hide agent list"}}"#,
-        );
-        assert_eq!(decide(&bash, Path::new(HIDE)), Verdict::Allow);
-        let write = confirm(
-            crate::adapter::PI_CONFIRM_TITLE,
-            r#"{"hide_desk":1,"tool":"write","input":{"path":"notes.md","content":"x"}}"#,
-        );
-        assert!(matches!(decide(&write, Path::new(HIDE)), Verdict::Ask(_)));
-        let other = confirm("Delete branch?", "yes or no");
-        assert_eq!(decide(&other, Path::new(HIDE)), Verdict::Refuse);
-    }
-}
+mod tests;

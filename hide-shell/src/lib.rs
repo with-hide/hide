@@ -31,6 +31,9 @@ pub struct ShellLine {
     pub substitutions: Vec<(bool, String)>,
     /// The line holds an `||`: a command that runs only when another failed.
     pub fallback: bool,
+    /// The text of each `` `...` `` command substitution read outside single
+    /// quotes, which the shell runs as a line of its own.
+    pub backquoted: Vec<String>,
 }
 
 pub fn shell_line(text: &str) -> ShellLine {
@@ -58,6 +61,7 @@ struct Lexer {
     substitutions: Vec<(bool, String)>,
     /// The current command's substitutions, which take its state when it ends.
     pending_substitutions: Vec<String>,
+    backquoted: Vec<String>,
     conditional: Vec<bool>,
     /// An `||` has been read.
     fallback: bool,
@@ -96,6 +100,7 @@ impl Lexer {
             unclosed: false,
             substitutions: Vec::new(),
             pending_substitutions: Vec::new(),
+            backquoted: Vec::new(),
             conditional: Vec::new(),
             fallback: false,
             and_or: false,
@@ -203,6 +208,7 @@ impl Lexer {
                 conditional: Vec::new(),
                 substitutions: Vec::new(),
                 fallback: false,
+                backquoted: Vec::new(),
             };
         }
         ShellLine {
@@ -211,6 +217,7 @@ impl Lexer {
             conditional: self.conditional,
             substitutions: self.substitutions,
             fallback: self.fallback,
+            backquoted: self.backquoted,
         }
     }
 
@@ -342,23 +349,33 @@ impl Lexer {
         self.unclosed = true;
     }
 
-    /// `` `...` ``, copied into the word as written.
+    /// `` `...` ``, copied into the word as written; its text, with the
+    /// backslash before `` ` ``, `\\` and `$` removed as the shell removes it,
+    /// is kept in `backquoted`.
     fn backtick(&mut self) {
         self.in_word = true;
         self.word.push('`');
         self.at += 1;
+        let mut text = String::new();
         while let Some(c) = self.peek(0) {
             self.at += 1;
             self.word.push(c);
             match c {
-                '`' => return,
+                '`' => {
+                    self.backquoted.push(text);
+                    return;
+                }
                 '\\' => {
                     if let Some(escaped) = self.peek(0) {
                         self.word.push(escaped);
                         self.at += 1;
+                        if !matches!(escaped, '`' | '\\' | '$') {
+                            text.push('\\');
+                        }
+                        text.push(escaped);
                     }
                 }
-                _ => {}
+                other => text.push(other),
             }
         }
         self.unclosed = true;
@@ -620,4 +637,17 @@ pub fn is_prefix(word: &str, compound: bool) -> bool {
                 word,
                 "if" | "then" | "elif" | "else" | "while" | "until" | "do" | "{" | "!"
             ))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_backquoted_command_is_kept_and_a_single_quoted_backtick_is_not() {
+        let line = shell_line("echo `rm -rf \\`x\\` build` \"$(date) `whoami`\" 'say `hi`'");
+        assert_eq!(line.backquoted, ["rm -rf `x` build", "whoami"]);
+        assert_eq!(line.substitutions, [(false, "date".to_owned())]);
+        assert!(shell_line("echo `unclosed").backquoted.is_empty());
+    }
 }

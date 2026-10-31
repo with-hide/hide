@@ -6,17 +6,21 @@
 //! account's Node. None reads the operator's automatic approvals:
 //! - Claude starts with no settings sources (the operator's allow rules,
 //!   default mode and hooks are not read; the sign-in lives in the system
-//!   keychain, not in settings), bypass refused, every Bash call held by an
-//!   ask rule, and the session put in `default` mode before any prompt.
-//! - Codex starts its session in `read-only`, where its sandbox lets reads
-//!   run and asks before every write, network use or command outside it,
-//!   with Desk's own `CODEX_HOME` ([`crate::codex`]): none of the operator's
-//!   Codex setup or sign-in, and the `hide` commands Desk frees allowed out
-//!   of the sandbox.
+//!   keychain, not in settings), bypass refused, every Bash call, read and
+//!   search held by an ask rule, and the session put in `default` mode
+//!   before any prompt.
+//! - Codex starts its session in `read-only`, where its sandbox lets a
+//!   command that changes nothing run and asks before every write, network
+//!   use or command outside it, with Desk's own `CODEX_HOME`
+//!   ([`crate::codex`]): none of the operator's Codex setup or sign-in, and
+//!   no rule that lets a command out of the sandbox without asking.
 //! - Pi asks for nothing on its own, so Desk loads its own extension
 //!   (`pi_desk.js`) into the Pi process the adapter starts: every tool call
-//!   that is not a read waits for Hide. The extension writes a marker naming
-//!   its process when it loads, which is Hide's proof the gate is there.
+//!   waits for Hide. The extension writes a marker naming its process when
+//!   it loads, which is Hide's proof the gate is there.
+//!
+//! Hide answers each request from Settings › Desk › 권한
+//! ([`crate::permission`]).
 
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
@@ -138,21 +142,27 @@ impl AdapterId {
         }
     }
 
-    /// `_meta` for `session/new` and `session/load`. Claude's own plan mode
-    /// is denied: entering it needs no permission and leaves the ask mode,
-    /// which ends the session as one that cannot ask (D-53), and leaving it
-    /// offers modes that ask less.
+    /// `_meta` for `session/new` and `session/load`. Bash, reads and
+    /// searches always ask, so each reaches Hide's table (D-82); edits ask
+    /// in `default` mode on their own. Claude's own plan mode is denied:
+    /// entering it needs no permission and leaves the ask mode, which ends
+    /// the session as one that cannot ask (D-53), and leaving it offers
+    /// modes that ask less.
     pub fn session_meta(self) -> Option<Value> {
         match self {
             Self::Claude => Some(json!({"claudeCode": {"options": {
                 "settingSources": [],
                 "allowDangerouslySkipPermissions": false,
-                "settings": {"permissions": {"ask": ["Bash"], "deny": ["EnterPlanMode"]}},
+                "settings": {"permissions": {"ask": CLAUDE_ASKS, "deny": ["EnterPlanMode"]}},
             }}})),
             Self::Codex | Self::Pi => None,
         }
     }
 }
+
+/// The Claude tools held by an ask rule: what Claude would otherwise run
+/// without asking in `default` mode.
+const CLAUDE_ASKS: [&str; 4] = ["Bash", "Read", "Glob", "Grep"];
 
 /// Where the pieces of one Desk process live.
 pub struct Paths<'a> {
@@ -301,12 +311,15 @@ mod tests {
     }
 
     #[test]
-    fn claude_starts_without_the_operator_s_settings_and_with_bash_held() {
+    fn claude_starts_without_the_operator_s_settings_and_with_bash_and_reads_held() {
         let meta = AdapterId::Claude.session_meta().unwrap();
         let options = &meta["claudeCode"]["options"];
         assert_eq!(options["settingSources"], json!([]));
         assert_eq!(options["allowDangerouslySkipPermissions"], json!(false));
-        assert_eq!(options["settings"]["permissions"]["ask"], json!(["Bash"]));
+        assert_eq!(
+            options["settings"]["permissions"]["ask"],
+            json!(["Bash", "Read", "Glob", "Grep"])
+        );
         assert_eq!(
             options["settings"]["permissions"]["deny"],
             json!(["EnterPlanMode"])
