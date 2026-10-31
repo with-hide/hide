@@ -76,6 +76,11 @@ pub const RECONCILE_WORKERS: usize = 8;
 /// panes it finds.
 pub const RECONCILE_BUDGET: Duration = Duration::from_secs(30);
 
+/// How long the lock of a holder known to have ended is waited out before
+/// its socket is removed: Windows releases a dead process's file locks a
+/// moment after the process ends.
+const LOCK_RELEASE: Duration = Duration::from_secs(2);
+
 /// How long a connection to a holder may take to be answered.
 const CONNECT_LIMIT: Duration = Duration::from_secs(2);
 
@@ -445,10 +450,10 @@ impl Panes {
     /// of its pane. Its log stays: the next holder writes on after it, and
     /// its lines name their own incarnation.
     fn clear_earlier(&self, existing: &PaneRecord, path: &Path) -> Result<(), StartRefusal> {
-        let _ = hide_platform::ipc::remove_leftover(&layout::holder_socket(
-            &self.state_dir,
-            &existing.pane,
-        ));
+        let _ = hide_platform::ipc::remove_leftover(
+            &layout::holder_socket(&self.state_dir, &existing.pane),
+            LOCK_RELEASE,
+        );
         std::fs::remove_file(path).map_err(|error| {
             StartRefusal::Failed(format!("the earlier record could not be removed: {error}"))
         })?;
@@ -802,7 +807,7 @@ impl Panes {
 
     fn remove_pane_files(&self, pane: &str) {
         let socket = layout::holder_socket(&self.state_dir, pane);
-        let _ = hide_platform::ipc::remove_leftover(&socket);
+        let _ = hide_platform::ipc::remove_leftover(&socket, LOCK_RELEASE);
         let log = layout::holder_log(&self.state_dir, pane);
         let _ = std::fs::remove_file(&log);
         let mut aside = log.into_os_string();
@@ -1021,7 +1026,8 @@ impl Panes {
             Judgment::Unsupported(current.clone())
         } else if current.phase == Phase::Ended {
             self.end_unconfirmed_start(current);
-            self.remove_stale_socket(&pane);
+            let gone = current.holder.is_none_or(|holder| !holder.runs());
+            self.remove_stale_socket(&pane, if gone { LOCK_RELEASE } else { Duration::ZERO });
             Judgment::Ended(current.clone())
         } else if current.boot.is_some() && self.boot.is_some() && current.boot != self.boot {
             // Nothing a record of another boot names runs in this one; its
@@ -1033,7 +1039,8 @@ impl Panes {
                     "the record is from an earlier boot of the machine",
                 ),
             );
-            self.remove_stale_socket(&pane);
+            // No process of another boot holds a lock in this one.
+            self.remove_stale_socket(&pane, Duration::ZERO);
             ended
         } else {
             match current.holder {
@@ -1139,7 +1146,7 @@ impl Panes {
             end.detail = format!("{}; it said it left {said_left:?}", end.detail);
         }
         end_leftovers(current, &mut end);
-        self.remove_stale_socket(&current.pane);
+        self.remove_stale_socket(&current.pane, LOCK_RELEASE);
         if end.left.is_empty() {
             self.end_record(current, end)
         } else {
@@ -1227,10 +1234,11 @@ impl Panes {
         }
     }
 
-    /// Removes the pane's socket when no listener holds it.
-    fn remove_stale_socket(&self, pane: &str) {
+    /// Removes the pane's socket when no listener holds it, waiting up to
+    /// `wait` for the lock of a holder known to have ended.
+    fn remove_stale_socket(&self, pane: &str, wait: Duration) {
         let socket = layout::holder_socket(&self.state_dir, pane);
-        if let Ok(true) = hide_platform::ipc::remove_leftover(&socket) {
+        if let Ok(true) = hide_platform::ipc::remove_leftover(&socket, wait) {
             self.emit("pane_holder.stale_socket_removed", json!({ "pane": pane }));
         }
     }
@@ -1400,7 +1408,7 @@ impl Panes {
             {
                 continue;
             }
-            match hide_platform::ipc::remove_leftover(&path) {
+            match hide_platform::ipc::remove_leftover(&path, Duration::ZERO) {
                 Ok(_) => kept.push(Orphan {
                     pane: Some(pane),
                     holder: None,
@@ -1680,7 +1688,7 @@ fn unreachable(error: &std::io::Error, socket: &Path) -> bool {
         std::io::ErrorKind::NotFound => true,
         std::io::ErrorKind::ConnectionRefused => {
             // macOS refuses a live listener whose queue is full the same way.
-            hide_platform::ipc::remove_leftover(socket).is_ok()
+            hide_platform::ipc::remove_leftover(socket, Duration::ZERO).is_ok()
         }
         _ => false,
     }

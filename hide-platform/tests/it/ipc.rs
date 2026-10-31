@@ -252,7 +252,7 @@ fn what_a_killed_listener_left_behind_is_removed_and_a_live_one_is_refused() {
     let (folder, path) = endpoint();
     let mut holder = spawn_role("listen", &path);
     assert_eq!(
-        remove_leftover(&path).unwrap_err().kind(),
+        remove_leftover(&path, Duration::ZERO).unwrap_err().kind(),
         std::io::ErrorKind::AddrInUse,
         "a live listener's endpoint was taken"
     );
@@ -262,14 +262,14 @@ fn what_a_killed_listener_left_behind_is_removed_and_a_live_one_is_refused() {
     // A Windows pipe goes with the process; its marker file stays.
     assert!(path.exists(), "a killed listener left nothing to remove");
 
-    assert!(remove_leftover(&path).unwrap());
+    assert!(remove_leftover(&path, Duration::ZERO).unwrap());
     let left: Vec<_> = std::fs::read_dir(folder.path())
         .unwrap()
         .map(|entry| entry.unwrap().file_name())
         .collect();
     assert!(left.is_empty(), "left behind: {left:?}");
     assert!(
-        !remove_leftover(&path).unwrap(),
+        !remove_leftover(&path, Duration::ZERO).unwrap(),
         "nothing was there the second time"
     );
 }
@@ -278,7 +278,7 @@ fn what_a_killed_listener_left_behind_is_removed_and_a_live_one_is_refused() {
 fn removing_a_leftover_keeps_what_is_not_an_endpoint() {
     let (_folder, path) = endpoint();
     std::fs::create_dir(&path).unwrap();
-    assert!(remove_leftover(&path).is_err());
+    assert!(remove_leftover(&path, Duration::ZERO).is_err());
     assert!(path.is_dir(), "the folder must still be there");
 }
 

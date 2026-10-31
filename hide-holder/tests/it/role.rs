@@ -39,7 +39,8 @@ fn record(pid: u32) {
         .create(true)
         .open(path)
         .unwrap();
-    writeln!(file, "{pid}").unwrap();
+    // One write, so lines that panes write at once never interleave.
+    file.write_all(format!("{pid}\n").as_bytes()).unwrap();
 }
 
 fn command(role: &str) -> Command {
