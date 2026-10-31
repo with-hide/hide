@@ -267,7 +267,6 @@ impl Runtime {
             DeskEvent::NewConversation => self.desk_new_conversation(),
             DeskEvent::Restart => self.desk_restart(),
             DeskEvent::Select(payload) => self.desk_select(payload),
-            DeskEvent::Install(payload) if !payload.agent.offered() => refused("agent_not_offered"),
             DeskEvent::Install(payload) => {
                 self.order(Order::Install(payload.agent));
                 false
@@ -524,9 +523,6 @@ impl Runtime {
     }
 
     fn desk_select(&mut self, payload: SelectPayload) -> bool {
-        if payload.agent.is_some_and(|agent| !agent.offered()) {
-            return refused("agent_not_offered");
-        }
         let selection = self.desk.stored.selection.clone();
         if let Some(agent) = payload.agent
             && Some(agent) != selection.agent
@@ -600,13 +596,6 @@ impl Runtime {
     }
 
     fn desk_settings(&mut self, payload: SettingsPayload) -> bool {
-        if payload
-            .default_agent
-            .flatten()
-            .is_some_and(|agent| !agent.offered())
-        {
-            return refused("agent_not_offered");
-        }
         let settings = &mut self.desk.stored.settings;
         let before = *settings;
         if let Some(enabled) = payload.enabled {
@@ -1331,19 +1320,26 @@ mod tests {
     }
 
     #[test]
-    fn codex_cannot_be_chosen_while_desk_does_not_offer_it() {
+    fn codex_is_chosen_installed_and_made_the_default_like_any_agent() {
         let root = tempfile::tempdir().unwrap();
         let (mut runtime, received) = runtime(root.path());
-        for (kind, payload) in [
-            ("desk_select", json!({"agent": "codex"})),
-            ("desk_install", json!({"agent": "codex"})),
-            ("desk_settings_set", json!({"default_agent": "codex"})),
-        ] {
-            assert!(!event(&mut runtime, kind, payload), "{kind}");
-        }
-        assert_eq!(runtime.desk.stored.selection.agent, None);
-        assert_eq!(runtime.desk.stored.settings.default_agent, None);
-        assert!(received.try_iter().next().is_none());
+        event(&mut runtime, "desk_select", json!({"agent": "codex"}));
+        event(&mut runtime, "desk_install", json!({"agent": "codex"}));
+        event(
+            &mut runtime,
+            "desk_settings_set",
+            json!({"default_agent": "codex"}),
+        );
+        assert_eq!(runtime.desk.stored.selection.agent, Some(AdapterId::Codex));
+        assert_eq!(
+            runtime.desk.stored.settings.default_agent,
+            Some(AdapterId::Codex)
+        );
+        assert!(
+            received
+                .try_iter()
+                .any(|order| matches!(order, Order::Install(AdapterId::Codex)))
+        );
     }
 
     #[test]

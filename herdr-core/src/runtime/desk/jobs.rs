@@ -24,6 +24,9 @@ impl Runtime {
     /// others wait before it, and answers with its place; any other command
     /// runs as it is. A spawn under a parent is refused: it would skip
     /// Desk's places, and its asks would rise to Desk, which no screen shows.
+    /// A spawn with words for the agent's own CLI is refused
+    /// `desk_spawn_args`: they can lift the agent's permissions, and Codex's
+    /// rules free a `hide agent spawn` by its start without seeing them.
     pub(in crate::runtime) fn desk_spawn_admission(
         &mut self,
         actor: &Actor,
@@ -33,13 +36,22 @@ impl Runtime {
             return Ok(None);
         }
         let Command::Agents {
-            command: spawn @ AgentCommand::Spawn { parent, intent, .. },
+            command:
+                spawn @ AgentCommand::Spawn {
+                    parent,
+                    intent,
+                    args,
+                    ..
+                },
         } = command
         else {
             return Ok(None);
         };
         if parent.is_some() {
             return Err("invalid_request".into());
+        }
+        if !args.is_empty() {
+            return Err("desk_spawn_args".into());
         }
         if let Some(position) = self.desk_queue_position(intent) {
             return Ok(Some(queued_answer(intent, position)));
@@ -1724,6 +1736,20 @@ mod tests {
         }
         let answer = runtime.desk_spawn_admission(&actor, &Command::Agents { command: spawn });
         assert_eq!(answer, Err("invalid_request".into()));
+        assert!(runtime.desk.stored.queue.is_empty());
+    }
+
+    #[test]
+    fn a_spawn_of_desk_s_with_words_for_the_agent_s_cli_is_refused_and_queues_nothing() {
+        let root = tempfile::tempdir().unwrap();
+        let mut runtime = desk(root.path(), 2, &["a", "b"]);
+        let actor = runtime.desk_actor();
+        let mut spawn = spawn_command("c", None);
+        if let AgentCommand::Spawn { args, .. } = &mut spawn {
+            *args = vec!["--dangerously-bypass-approvals-and-sandbox".into()];
+        }
+        let answer = runtime.desk_spawn_admission(&actor, &Command::Agents { command: spawn });
+        assert_eq!(answer, Err("desk_spawn_args".into()));
         assert!(runtime.desk.stored.queue.is_empty());
     }
 

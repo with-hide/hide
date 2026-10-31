@@ -1,8 +1,9 @@
 //! A Desk process end to end against a stand-in ACP agent: this test binary
 //! run again in the agent's role. It proves what a caller of the host relies
 //! on: the session opens in its ask mode, a turn's reply and its permission
-//! request arrive, a refused ask mode keeps the session unused, and ending
-//! the host leaves nothing it started running.
+//! request arrive, a refused ask mode keeps the session unused, a command
+//! the agent runs finds Desk's own `hide` first, and ending the host leaves
+//! nothing it started running.
 
 use std::ffi::OsString;
 use std::io::{BufRead, BufReader, Write};
@@ -13,7 +14,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use hide_desk::AdapterId;
-use hide_desk::adapter::Launch;
+use hide_desk::adapter::{self, Launch, Paths};
 use hide_desk::host::Host;
 use hide_desk::rpc::{Incoming, Sink};
 use hide_desk::session::{self, OpenError};
@@ -31,6 +32,11 @@ fn stand_in_agent() {
     let Ok(role) = std::env::var(ROLE) else {
         return;
     };
+    if role == "hide" {
+        let at = std::env::current_exe().unwrap();
+        println!("HIDE-AT {}", at.display());
+        return;
+    }
     if role == "sleeper" {
         println!("SLEEPING");
         std::thread::sleep(Duration::from_secs(120));
@@ -65,9 +71,30 @@ fn stand_in_agent() {
                 let text = message["params"]["prompt"][0]["text"]
                     .as_str()
                     .unwrap_or_default();
+                if text == "which hide" {
+                    // As the agent's shell runs `hide`: found on the PATH
+                    // the Desk process was started with.
+                    let output = Command::new("hide")
+                        .args(STAND_IN)
+                        .arg("--nocapture")
+                        .env(ROLE, "hide")
+                        .output()
+                        .unwrap();
+                    let found = String::from_utf8_lossy(&output.stdout)
+                        .lines()
+                        .find_map(|line| line.strip_prefix("HIDE-AT ").map(str::to_owned))
+                        .unwrap_or_default();
+                    send(
+                        json!({"jsonrpc": "2.0", "method": "session/update", "params": {
+                        "sessionId": "s1", "update": {"sessionUpdate": "agent_message_chunk",
+                        "content": {"type": "text", "text": found}}}}),
+                    );
+                    send(json!({"jsonrpc": "2.0", "id": id, "result": {"stopReason": "end_turn"}}));
+                    continue;
+                }
                 if text == "start a sleeper" {
                     let child = Command::new(std::env::current_exe().unwrap())
-                        .args(["--exact", "host::stand_in_agent", "-q", "--test-threads=1"])
+                        .args(STAND_IN)
                         .env(ROLE, "sleeper")
                         .stdout(Stdio::null())
                         .spawn()
@@ -115,13 +142,13 @@ fn stand_in_agent() {
     drop(sleeper);
 }
 
+/// The arguments that run this binary as the stand-in agent alone.
+const STAND_IN: [&str; 4] = ["--exact", "host::stand_in_agent", "-q", "--test-threads=1"];
+
 fn launch(role: &str, cwd: &Path) -> Launch {
     Launch {
         program: std::env::current_exe().unwrap(),
-        args: ["--exact", "host::stand_in_agent", "-q", "--test-threads=1"]
-            .into_iter()
-            .map(OsString::from)
-            .collect(),
+        args: STAND_IN.into_iter().map(OsString::from).collect(),
         env: vec![(ROLE.into(), role.into())],
         cwd: cwd.to_owned(),
         files: Vec::new(),
@@ -130,12 +157,25 @@ fn launch(role: &str, cwd: &Path) -> Launch {
 }
 
 fn start(role: &str, cwd: &Path) -> (Host, Receiver<Incoming>) {
+    start_launch(&launch(role, cwd))
+}
+
+fn start_launch(launch: &Launch) -> (Host, Receiver<Incoming>) {
     let (sender, received) = mpsc::channel();
     let sender = Mutex::new(sender);
     let sink: Sink = Arc::new(move |incoming| {
         let _ = sender.lock().unwrap().send(incoming);
     });
-    (Host::start(&launch(role, cwd), sink).unwrap(), received)
+    (Host::start(launch, sink).unwrap(), received)
+}
+
+/// A copy of this binary named `hide` in `folder`, which answers where it is.
+fn hide_in(folder: &Path) -> std::path::PathBuf {
+    std::fs::create_dir_all(folder).unwrap();
+    let name = if cfg!(windows) { "hide.exe" } else { "hide" };
+    let program = folder.join(name);
+    std::fs::copy(std::env::current_exe().unwrap(), &program).unwrap();
+    program
 }
 
 fn next(received: &Receiver<Incoming>) -> Incoming {
@@ -205,6 +245,50 @@ fn a_session_whose_ask_mode_is_refused_is_not_used() {
     assert!(
         matches!(opened, Err(OpenError::AskModeUnconfirmed(_))),
         "{opened:?}"
+    );
+    host.end().unwrap();
+}
+
+/// Desk's Codex runs its commands with the Desk process's `PATH` (its login
+/// shell is off), so the `hide` beside hided must come before any `hide` on
+/// the account's own `PATH`, such as an older installed one.
+#[test]
+fn a_command_desk_s_codex_runs_finds_desk_s_own_hide_before_the_account_s() {
+    let root = tempfile::tempdir().unwrap();
+    let desk = root.path().join("desk");
+    let desk_hide = hide_in(&root.path().join("app"));
+    let account = root.path().join("account-bin");
+    hide_in(&account);
+    let codex_home = desk.join("codex");
+    let mut launch = adapter::launch(
+        AdapterId::Codex,
+        &Paths {
+            package: &root.path().join("adapter"),
+            node: &std::env::current_exe().unwrap(),
+            hide_dir: desk_hide.parent().unwrap(),
+            search: Some(&account.clone().into_os_string()),
+            desk: &desk,
+            capability: &root.path().join("desk.json"),
+            codex_home: &codex_home,
+            own_cli: None,
+        },
+        "n1",
+    );
+    launch.args = STAND_IN.into_iter().map(OsString::from).collect();
+    launch.env.push((ROLE.into(), "agent".into()));
+    let (host, received) = start_launch(&launch);
+    // Desk's Codex configuration and rules are in its own home before it runs.
+    assert!(codex_home.join("config.toml").is_file());
+    assert!(codex_home.join("rules").join("hide-desk.rules").is_file());
+    let connection = host.connection().clone();
+    session::open(&connection, AdapterId::Codex, &desk, None, &|| Ok(())).unwrap();
+
+    session::prompt(&connection, "s1", "which hide", 1).unwrap();
+    let found = text(next(&received));
+    assert_eq!(
+        std::fs::canonicalize(&found).unwrap(),
+        std::fs::canonicalize(&desk_hide).unwrap(),
+        "{found}"
     );
     host.end().unwrap();
 }

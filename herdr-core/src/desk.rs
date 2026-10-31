@@ -57,6 +57,8 @@ pub struct DeskPlaces {
     pub adapters: PathBuf,
     /// Desk's own folder (`hide_kit::layout::desk_dir`).
     pub desk: PathBuf,
+    /// Desk's own `CODEX_HOME` (`hide_kit::layout::desk_codex_home`).
+    pub codex_home: PathBuf,
     /// The folder of the `hide` program the Desk agent runs.
     pub hide_dir: PathBuf,
 }

@@ -114,7 +114,6 @@ const AGENT_STATE: Record<DeskAgent["state"], MessageKey> = {
   login_needed: "desk.agentState.login_needed",
   not_installed: "desk.agentState.not_installed",
   no_ask_mode: "desk.agentState.no_ask_mode",
-  not_offered: "desk.agentState.not_offered",
 };
 
 /** One of the bar's three menus: its trigger names the value, and pressing it opens the choices. */
@@ -169,7 +168,7 @@ export function DeskAgentBar({ agents, selection, open = null, onAgent, onModel,
                 <span className={cn("text-micro", one.state === "ready" || one.state === "preparing" || one.state === "checking" ? "text-muted-foreground" : "text-warning")}>{t(AGENT_STATE[one.state])}</span>
               </DropdownMenuRadioItem>
             );
-            return pickable ? item : <Hint key={one.id} label={t(one.state === "not_offered" ? "desk.agentState.notOfferedHint" : "desk.agentState.noAskModeHint")} side="left"><span>{item}</span></Hint>;
+            return pickable ? item : <Hint key={one.id} label={t("desk.agentState.noAskModeHint")} side="left"><span>{item}</span></Hint>;
           })}
         </DropdownMenuRadioGroup>
         <DropdownMenuSeparator />

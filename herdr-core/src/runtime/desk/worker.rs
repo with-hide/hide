@@ -274,9 +274,6 @@ impl Worker {
             .into_iter()
             .filter(|adapter| !self.installing.contains(adapter))
             .map(|adapter| {
-                if !adapter.offered() {
-                    return (adapter, DeskAgentState::NotOffered, None);
-                }
                 if let Err(error) = &node_state {
                     return install_state(adapter, error);
                 }
@@ -295,7 +292,7 @@ impl Worker {
     }
 
     fn install(&mut self, adapter: AdapterId) {
-        if self.installing.contains(&adapter) || !adapter.offered() {
+        if self.installing.contains(&adapter) {
             return;
         }
         let (Some(node), Some(npm)) = (programs::find_cli("node"), programs::find_cli("npm"))
@@ -428,6 +425,7 @@ impl Worker {
                 search: search.as_ref(),
                 desk: &places.desk,
                 capability: &credential.reference,
+                codex_home: &places.codex_home,
                 own_cli: own_cli.as_deref(),
             },
             &credential.nonce,
