@@ -1,11 +1,25 @@
 import tailwindcss from "@tailwindcss/vite";
 import react from "@vitejs/plugin-react";
+import type { Plugin } from "vite";
 import { defineConfig } from "vitest/config";
+import { WEBGL_ADDON_MODULE, fixWebglAtlasSlots } from "./src/webglAtlasSlots";
 
 const hided = process.env.HIDED_ORIGIN ?? "http://127.0.0.1:9876";
 
+// Rewrites the WebGL addon as it is bundled; src/webglAtlasSlots.ts says why.
+const webglAtlasSlots: Plugin = {
+  name: "hide-webgl-atlas-slots",
+  enforce: "pre",
+  transform(code, id) {
+    return WEBGL_ADDON_MODULE.test(id.split("?")[0]!) ? { code: fixWebglAtlasSlots(code), map: null } : null;
+  },
+};
+
 export default defineConfig({
-  plugins: [react(), tailwindcss()],
+  plugins: [webglAtlasSlots, react(), tailwindcss()],
+  // The dev server's prebundle would hand the addon to esbuild past the
+  // plugin above; the addon is one self-contained module, so it needs none.
+  optimizeDeps: { exclude: ["@xterm/addon-webgl"] },
   build: {
     rollupOptions: {
       // The desktop shell and the phone app (PRD mobile-companion D-16): hided
