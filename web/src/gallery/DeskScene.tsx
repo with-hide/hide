@@ -18,12 +18,14 @@ import { DeskChatColumn, DeskChatHead, DeskRail, DeskRoom, DeskViewColumn, LaneC
 import { DeskMentionMenu } from "../components/desk/desk-mention-menu";
 import { DeskOutputs, EveryOutput } from "../components/desk/desk-outputs";
 import { DeskSettingsTab } from "../components/desk/desk-settings";
+import { SessionCard, SessionChip, SessionChipProvider } from "../components/desk/session-chip";
 import { ThreadList } from "../components/desk/thread-list";
 import { ThreadHead, ThreadView, type ThreadConductor } from "../components/desk/thread-view";
 import { SessionRow } from "../components/session-row";
 import { StatusMark } from "../components/status-mark";
 import { TooltipProvider } from "../components/ui/tooltip";
-import { askingCount, outputKindOf, threadLines, unseenOutputs, type DeskAgent, type DeskItem, type DeskJob, type DeskOutput, type DeskSelection, type DeskSessionRef, type ThreadReadFailure } from "../desk";
+import { askingCount, outputKindOf, threadLines, unseenOutputs, type DeskAgent, type DeskItem, type DeskJob, type DeskMention, type DeskOutput, type DeskSelection, type DeskSessionRef, type ThreadReadFailure } from "../desk";
+import { mentionTree } from "../deskComposer";
 import { useInterfaceTranslation } from "../i18n/client";
 import { requireInterfaceLanguage } from "../i18n/locale";
 import { useFollowInterfaceLanguage } from "../i18n/translator";
@@ -33,7 +35,7 @@ import { useShellStore } from "../store";
 import type { SnapshotRest } from "../snapshot";
 import { missionFixture } from "./MissionScene";
 import {
-  AGENTS, AGENTS_PREPARING, cardSceneItems, conductorThread, deskJob, ENTERED_SESSIONS, everyStateJobs, GALLERY_DONE_THREAD, galleryThread, handoffItems, MENTIONS, MENU_PROJECTS, MENU_SESSIONS,
+  AGENTS, AGENTS_PREPARING, cardSceneItems, CHIP_PROJECT, CHIP_SESSION, CHIP_TEXT, chipItems, chipsScene, conductorThread, deskJob, enteredSessions, everyStateJobs, GALLERY_DONE_THREAD, galleryThread, handoffItems, MENTIONS, MENU_PROJECTS, menuSessions,
   mentionItems, missionItems, OUTPUTS, PICTURES, RECORD_THREAD, SESSION_VIEWS, SESSIONS, stateItems, statusItems, storyJobs, switchedItems, WORKER_THREAD,
 } from "./deskSceneData";
 
@@ -50,14 +52,18 @@ export const DESK_SCENES = [
   { state: "every-output", label: "▣ 모든 결과물, 칸 머리 📌 (B31, B32)" },
   { state: "agent", label: "에이전트 고르기 · 바꿈 (B4, B8, B9, B44)" },
   { state: "agent-preparing", label: "Desk를 켠 직후 · 어댑터 받는 중 (B44, D-80)" },
-  { state: "mention", label: "@ 메뉴 (B16, B18)" },
+  { state: "mention", label: "@ 메뉴: 부모만, 물어보는 자식은 펼침 (B18, B48)" },
+  { state: "mention-open", label: "@ 메뉴: ▾ 하위 펼침 (B48)" },
+  { state: "mention-search", label: "@리뷰: 부모 먼저, 그다음 하위 세션 (B48)" },
   { state: "mention-project", label: "@ 프로젝트에서 ⇥ (B18)" },
+  { state: "composer-chips", label: "입력창 칩 · 보낸 말 칩 (B49)" },
   { state: "parts", label: "스레드 속 Hide 부품 (B26)" },
   { state: "pane", label: "터미널로 ⌘J, 나도 참여 중 (B35, B36)" },
   { state: "mission", label: "미션: 지도 + 워커 스레드 (B34)" },
   { state: "outputs", label: "결과물 기준 (B30)" },
   { state: "chat-states", label: "채팅 상태: 승인 답, 알림 줄, 생각 중 · 중단 (B5-B8, B11, B13-B15)" },
   { state: "thread-states", label: "스레드 읽기 실패 · 읽는 중 · 빈 · 연결 안 됨 (B23, B27)" },
+  { state: "chips", label: "답 속 칩 전부 · 흐린 칩 · 칩 상세 카드 (B50, D-86)" },
   { state: "settings", label: "Settings › Desk (B4, B19, B21)" },
   { state: "settings-off", label: "Settings › Desk 꺼짐, 기본값 (D-76, B41)" },
 ] as const;
@@ -105,11 +111,11 @@ function ChatHead() {
 }
 
 /** Desk's composer with its bar in the box's foot, as a scene sets them. */
-function ChatComposer({ agents = AGENTS, selection, menuOpen = null, value = "", answering = false, mention = null }: { agents?: DeskAgent[]; selection: DeskSelection; menuOpen?: "agent" | null; value?: string; answering?: boolean; mention?: ReactNode }) {
+function ChatComposer({ agents = AGENTS, selection, menuOpen = null, value = "", mentions = [], answering = false, mention = null }: { agents?: DeskAgent[]; selection: DeskSelection; menuOpen?: "agent" | null; value?: string; mentions?: DeskMention[]; answering?: boolean; mention?: ReactNode }) {
   const { t } = useInterfaceTranslation();
   const [text, setText] = useState(value);
   return (
-    <DeskComposer value={text} label={t("desk.composer.label")} placeholder={t("desk.composer.placeholder")} answering={answering} focused={mention !== null} menu={mention} menuOpen={mention !== null} onChange={setText} onSend={noop} onStop={noop} onAttach={noop} onRemoveAttachment={noop}>
+    <DeskComposer value={text} draft={{ text, mentions }} label={t("desk.composer.label")} placeholder={t("desk.composer.placeholder")} answering={answering} focused={mention !== null} menu={mention} menuOpen={mention !== null} onChange={setText} onSend={noop} onStop={noop} onAttach={noop} onRemoveAttachment={noop}>
       <DeskAgentBar agents={agents} selection={selection} open={menuOpen} onAgent={noop} onModel={noop} onEffort={noop} onAgentSettings={noop} />
     </DeskComposer>
   );
@@ -263,12 +269,21 @@ export function DeskScene({ params }: { params: URLSearchParams }) {
       body = <DeskRoom pinned={false} rail={rail(false, false)} chat={chat([], <ChatComposer agents={AGENTS_PREPARING} selection={CLAUDE} menuOpen="agent" />)} />;
       break;
     case "mention":
+    case "mention-open":
+    case "mention-search":
     case "mention-project": {
-      const entered = state === "mention-project" ? { project: MENU_PROJECTS[0]!, sessions: ENTERED_SESSIONS } : null;
-      const menu = <DeskMentionMenu sessions={MENU_SESSIONS} projects={MENU_PROJECTS} entered={entered} active="session:agent-record-now" onActive={noop} onSession={noop} onProject={noop} onBack={noop} />;
-      body = <DeskRoom pinned={false} rail={rail(false, false)} chat={chat(mentionItems(now), <ChatComposer selection={CLAUDE} value={state === "mention-project" ? "@herdr-ide " : "@re"} mention={menu} />)} />;
+      const query = state === "mention-search" ? "리뷰" : "";
+      const section = { sessions: menuSessions(now), projects: MENU_PROJECTS };
+      const tree = mentionTree(section, query, state === "mention-open" ? { "agent-holder": true } : {});
+      const entered = state === "mention-project" ? { project: MENU_PROJECTS[0]!, sessions: enteredSessions(now) } : null;
+      const active = state === "mention-project" ? "session:agent-record-now" : `session:${(state === "mention-open" ? tree.rows[2] : tree.rows[0] ?? tree.found[0])!.session.id}`;
+      const menu = <DeskMentionMenu tree={tree} searching={query !== ""} entered={entered} active={active} onActive={noop} onSession={noop} onProject={noop} onFold={noop} onBack={noop} />;
+      body = <DeskRoom pinned={false} rail={rail(false, false)} chat={chat(mentionItems(now), <ChatComposer selection={CLAUDE} value={state === "mention-project" ? "@herdr-ide " : `@${query}`} mention={menu} />)} />;
       break;
     }
+    case "composer-chips":
+      body = <DeskRoom pinned={false} rail={rail(false, false)} chat={chat(chipItems(now), <ChatComposer selection={CLAUDE} value={CHIP_TEXT} mentions={[CHIP_SESSION, CHIP_PROJECT]} />)} />;
+      break;
     case "parts": {
       const thread = conductorThread(jobs);
       body = <DeskRoom pinned rail={rail(true, false)} chat={chat(missionItems(now), <ChatComposer selection={CLAUDE} />, { selectedJob: "conductor" })}
@@ -313,6 +328,25 @@ export function DeskScene({ params }: { params: URLSearchParams }) {
           {column("empty", <ThreadColumn job={fresh} updates={[]} />)}
           {column("disconnected", <ThreadColumn job={off} updates={RECORD_THREAD} outputs={[]} />)}
         </div>
+      );
+      break;
+    }
+    case "chips": {
+      // Every session the answer names is a chip, the 17th on too; m349 is no longer listed, so it is dimmed with no status.
+      const scene = chipsScene(now);
+      const open = scene.facts.get(scene.open)!;
+      const source = { facts: (session: DeskSessionRef) => (session.pane_id ? scene.facts.get(session.pane_id) ?? null : null), onOpen: noop };
+      body = (
+        <SessionChipProvider source={source}>
+          <DeskRoom pinned={false} rail={rail(false, false)} chat={chat(scene.items, <ChatComposer selection={CLAUDE} />)} />
+          <aside className="flex shrink-0 flex-col gap-xs border-l border-border p-lg" data-desk-scene-chip-card="open">
+            <h3 className="text-micro text-muted-foreground">칩에 마우스를 올리면</h3>
+            <span><SessionChip session={{ name: open.card!.title, mark: open.mark, agent_kind: open.agent_kind, pane_id: scene.open }} onPress={noop} className="ring-1 ring-mention-session" /></span>
+            <div className="w-(--size-pr-popover) max-w-full rounded-sm border border-border bg-popover text-popover-foreground shadow-lg">
+              <SessionCard job={open.card!} since={open.since} parent={open.parent} onOpen={noop} onParent={noop} />
+            </div>
+          </aside>
+        </SessionChipProvider>
       );
       break;
     }

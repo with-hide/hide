@@ -1,5 +1,5 @@
 import { ArrowUpIcon, ChevronDownIcon, ImageIcon, LoaderCircleIcon, PaperclipIcon, SquareIcon, XIcon } from "lucide-react";
-import type { KeyboardEvent, ReactNode } from "react";
+import type { KeyboardEvent, ReactNode, Ref } from "react";
 import type { DeskAgent, DeskAgentId, DeskAgentWord, DeskChoice, DeskSelection } from "../../desk";
 import { agentPickable, deskAgentWord } from "../../desk";
 import { useInterfaceTranslation } from "../../i18n/client";
@@ -11,6 +11,8 @@ import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel,
 import { Popover, PopoverAnchor, PopoverContent } from "../ui/popover";
 import { Textarea } from "../ui/textarea";
 import { Hint } from "../ui/tooltip";
+import type { DeskDraft } from "../../ui";
+import { MentionInput, type MentionInputHandle } from "./mention-input";
 
 /** A file the operator attached: an image or a dropped file, sent as its path (D-62, B29). */
 export type ComposerAttachment = { id: string; name: string; image: boolean };
@@ -21,9 +23,14 @@ export type ComposerAttachment = { id: string; name: string; image: boolean };
  * becomes stop while Desk answers. `menu` is the `@` menu, opened above the
  * box while `menuOpen`; `children` sits in the box's foot between 📎 and
  * send (Desk's bar). 📎 shows only where attaching is taken (`onAttach`).
+ * With `draft`, the box is Desk's, where picked mentions stand as chips
+ * (D-85) and `value` is the draft's text; without, it is a plain text box.
  */
-export function DeskComposer({ value, label, placeholder, attachments = [], answering = false, focused = false, held = false, notice = null, menu = null, menuOpen = false, onChange, onKeyDown, onSend, onStop, onAttach, onRemoveAttachment, onMenuOpenChange, children }: {
+export function DeskComposer({ value, draft, inputRef, label, placeholder, attachments = [], answering = false, focused = false, held = false, notice = null, menu = null, menuOpen = false, onChange, onCaret, onKeyDown, onSend, onStop, onAttach, onRemoveAttachment, onMenuOpenChange, children }: {
   value: string;
+  /** Desk's draft: its mentions are drawn as chips in the box. */
+  draft?: DeskDraft;
+  inputRef?: Ref<MentionInputHandle>;
   label: string;
   placeholder: string;
   attachments?: readonly ComposerAttachment[];
@@ -37,9 +44,12 @@ export function DeskComposer({ value, label, placeholder, attachments = [], answ
   notice?: string | null;
   menu?: ReactNode;
   menuOpen?: boolean;
-  onChange: (value: string) => void;
+  /** The words changed, and where the caret stands in them. */
+  onChange: (value: string, caret: number) => void;
+  /** The caret moved in the chip box without the words changing. */
+  onCaret?: (caret: number) => void;
   /** The box's keys before it takes them, such as the `@` menu's moves; one it prevents is not sent. */
-  onKeyDown?: (event: KeyboardEvent<HTMLTextAreaElement>) => void;
+  onKeyDown?: (event: KeyboardEvent<HTMLElement>) => void;
   onSend: () => void;
   onStop?: () => void;
   onAttach?: () => void;
@@ -50,6 +60,13 @@ export function DeskComposer({ value, label, placeholder, attachments = [], answ
   const { t } = useInterfaceTranslation();
   const empty = value.trim() === "" && attachments.length === 0;
   const blocked = empty || held;
+  const keyDown = (event: KeyboardEvent<HTMLElement>) => {
+    onKeyDown?.(event);
+    // Enter sends and Shift+Enter starts a line; a key that ends an IME composition only commits it, and the `@` menu takes its own Enter.
+    if (event.defaultPrevented || event.key !== "Enter" || event.shiftKey || event.nativeEvent.isComposing || answering || menuOpen) return;
+    event.preventDefault();
+    if (!blocked) onSend();
+  };
   return (
     <div className="flex min-w-0 flex-col gap-xs" data-desk-composer={answering ? "answering" : "idle"}>
       <Popover open={menuOpen} onOpenChange={onMenuOpenChange}>
@@ -66,13 +83,11 @@ export function DeskComposer({ value, label, placeholder, attachments = [], answ
                 ))}
               </ul>
             ) : null}
-            <Textarea bare rows={1} value={value} aria-label={label} placeholder={placeholder} className="max-h-(--size-search-sheet-h) min-h-(--size-control-sm) py-xxs" autoFocus={focused} onChange={(event) => onChange(event.target.value)} data-desk-composer-input="true" onKeyDown={(event) => {
-              onKeyDown?.(event);
-              // Enter sends and Shift+Enter starts a line; a key that ends an IME composition only commits it, and the `@` menu takes its own Enter.
-              if (event.defaultPrevented || event.key !== "Enter" || event.shiftKey || event.nativeEvent.isComposing || answering || menuOpen) return;
-              event.preventDefault();
-              if (!blocked) onSend();
-            }} />
+            {draft ? (
+              <MentionInput ref={inputRef} draft={draft} label={label} placeholder={placeholder} autoFocus={focused} className="max-h-(--size-search-sheet-h) min-h-(--size-control-sm)" onChange={onChange} onCaret={onCaret} onKeyDown={keyDown} />
+            ) : (
+              <Textarea bare rows={1} value={value} aria-label={label} placeholder={placeholder} className="max-h-(--size-search-sheet-h) min-h-(--size-control-sm) py-xxs" autoFocus={focused} onChange={(event) => onChange(event.target.value, event.target.selectionStart)} data-desk-composer-input="true" onKeyDown={keyDown} />
+            )}
             <div className="flex min-w-0 items-center gap-xs">
               {onAttach ? (
                 <Hint label={t("desk.composer.attach")}>

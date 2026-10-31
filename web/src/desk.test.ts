@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { agentPickable, askedOnce, askingCount, deskAgentWord, markedMention, mentionParts, outputKindOf, threadGroups, threadLines, threadTurns, unseenOutputs, type AcpSessionUpdate, type DeskAgent, type DeskJob } from "./desk";
+import { agentPickable, askedOnce, askingCount, deskAgentWord, markedMention, mentionParts, outputKindOf, sessionFacts, threadGroups, threadLines, threadTurns, unseenOutputs, type AcpSessionUpdate, type DeskAgent, type DeskJob } from "./desk";
+import type { AgentRow } from "./snapshot";
 
 const job = (id: string, state: DeskJob["state"], extra: Partial<DeskJob> = {}): DeskJob => ({
   id, agent_id: null, pane_id: `pane-${id}`, title: id, agent_kind: "claude", project: { workspace_id: "w", label: "w" }, location: { kind: "checkout", label: "w" },
@@ -163,5 +164,26 @@ describe("an agent in Desk's bar (D-79, D-81, B44)", () => {
     expect(agentPickable(agent("off", true))).toBe(false);
     expect(agentPickable(agent("ready", false))).toBe(true);
     expect(agentPickable(agent("preparing", null))).toBe(true);
+  });
+});
+
+describe("a chip's session (D-86, B50)", () => {
+  const row = (pane: string, label: string, extra: Partial<AgentRow> = {}) => ({ pane_id: pane, identity_label: label, mark: "going", agent_kind: "codex", last_prompt_at_unix_ms: 1_000, ...extra }) as AgentRow;
+  const rows = new Map([row("w1:p1", "agent-journey", { lineage_parent_pane_id: "w1:p0" }), row("w1:p0", "agent-14586", { mark: "turn", agent_kind: "claude" })].map((one) => [one.pane_id, one]));
+  const cards = [job("named", "working", { pane_id: "w1:p1", title: "agent-journey" })];
+
+  it("reads a listed session's mark, card, time and parent from its row", () => {
+    const facts = sessionFacts(rows, cards, { name: "agent-journey", mark: null, agent_kind: null, pane_id: "w1:p1" });
+    expect(facts).toEqual({ listed: true, mark: "going", agent_kind: "codex", card: cards[0], since: 1_000, parent: { name: "agent-14586", mark: "turn", agent_kind: "claude", pane_id: "w1:p0" } });
+  });
+
+  it("reads a session the sidebar no longer lists as gone, with no mark and no card", () => {
+    expect(sessionFacts(rows, cards, { name: "m349", mark: "done", agent_kind: "claude", pane_id: "w1:gone" })).toEqual({ listed: false, mark: null, agent_kind: null, card: null, since: null, parent: null });
+  });
+
+  it("finds a session named only by its name, and leaves one no row carries to its own values", () => {
+    expect(sessionFacts(rows, cards, { name: "agent-14586", mark: null, agent_kind: null })?.card).toBeNull();
+    expect(sessionFacts(rows, cards, { name: "agent-14586", mark: null, agent_kind: null })?.listed).toBe(true);
+    expect(sessionFacts(rows, cards, { name: "nobody", mark: null, agent_kind: null })).toBeNull();
   });
 });

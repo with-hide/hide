@@ -59,7 +59,8 @@ These already draw a thing Hide shows in several places; use them instead of dra
 | A plan's steps | `PlanChecklist` (`plan-checklist.tsx`) |
 | A letter | `letter-mark.tsx`: `LetterTag` at the head of a letter's line, `RowLetterMark` on a sidebar row, `PaneLetterButton` in a pane header |
 | A mission a session conducts | `MissionChip` (`mission-chip.tsx`), reading the store; `MissionChipView` draws one from values a caller holds |
-| An `@name` in a line of words | `MentionChip` (`mention-chip.tsx`), `kind` `session` or `project` |
+| An `@name` in a line of words | `MentionChip` (`mention-chip.tsx`), `kind` `session` or `project`; `lead` (a session's status and agent marks, a project's ⌂) replaces `@` on the same colour, and Desk draws it through `DeskMentionChip` in its messages, threads and the composer's chips |
+| A session named in a Desk line (a reply, a letter, a thread), with its card on hover | `SessionChip` (`components/desk/session-chip.tsx`), fed by `SessionChipProvider`; `SessionCard` is the card alone |
 | An agent's runtime logo | `agent-logo.tsx` |
 | Time since something | `Elapsed`, `useElapsed` (`elapsed.tsx`) |
 | A row's second line that must keep its leading word | `RowLineText` |

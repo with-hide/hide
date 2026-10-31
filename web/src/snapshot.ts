@@ -2734,9 +2734,12 @@ export type DeskJob = {
   /** The panes of a Conductor's workers. */
   workers: string[];
 };
-/** The `desk_mentions` section, the `@` menu: recent sessions, then projects with their running sessions' panes. */
+/**
+ * The `desk_mentions` section, the `@` menu: recent sessions, then projects with their running sessions' panes.
+ * A session's `parent` is the pane it was spawned from, always one listed too (D-84); `project` and `branch` are its second line's.
+ */
 export type DeskMentions = {
-  sessions: { id: string; name: string; agent_kind: string; mark: RowMark; detail: string | null }[];
+  sessions: { id: string; name: string; agent_kind: string; mark: RowMark; detail: string | null; parent: string | null; project: string; branch: string | null; last_prompt_at_unix_ms: number | null }[];
   projects: { id: string; name: string; sessions: string[] }[];
 };
 
@@ -2759,6 +2762,8 @@ export type DeskJobsSection = {
   jobs: DeskJob[];
   /** The workers of the missions Desk's jobs conduct, as cards of their own: listed under their Conductor and opened from a mission map's node, never drawn in the chat (B28, B34). */
   workers: DeskJob[];
+  /** The other sessions the newest lines of the conversation name, as cards read from their sidebar rows: a chip's hover card and the thread it opens (D-86); never drawn in the chat or listed in Threads. */
+  named: DeskJob[];
 };
 
 /** The `desk_live` section: the reply being written, `null` between turns. */

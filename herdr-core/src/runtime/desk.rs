@@ -742,6 +742,8 @@ impl Runtime {
                 steps: turn.steps,
                 mentions,
             });
+            // The sessions it names get their cards (D-86).
+            self.compose_desk_jobs();
         }
         self.compose_desk_live();
     }
