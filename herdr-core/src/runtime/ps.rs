@@ -30,15 +30,10 @@ pub(crate) struct PsRows {
     ledger: Arc<Ledger>,
 }
 
-/// A pane id as the navigator spells it, as its machine and Herdr's own id.
+/// A pane id as the navigator spells it, as its machine and its own id.
 fn split_pane(node: &str, scoped: &str) -> (String, String) {
-    scoped
-        .strip_prefix("remote:")
-        .and_then(|rest| rest.split_once(":pane:"))
-        .map_or_else(
-            || (node.to_owned(), scoped.to_owned()),
-            |(machine, pane)| (machine.to_owned(), pane.to_owned()),
-        )
+    let (machine, pane) = crate::address::split_pane(node, scoped);
+    (machine.to_owned(), pane.to_owned())
 }
 
 impl Runtime {

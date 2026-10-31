@@ -912,7 +912,7 @@ impl Runtime {
         &self,
         pane_id: &str,
     ) -> Result<crate::find::pane::PaneApiRoute, String> {
-        if !pane_id.starts_with("remote:") {
+        if !crate::address::is_device_scoped(pane_id) {
             return self
                 .live
                 .as_ref()
@@ -1481,7 +1481,7 @@ impl Runtime {
             .iter()
             .filter(|(_, state)| state.state != "released")
             .map(|(pane_id, _)| pane_id)
-            .filter(|pane_id| !pane_id.starts_with("remote:"))
+            .filter(|pane_id| !crate::address::is_device_scoped(pane_id))
             .filter(|pane_id| placed.contains(*pane_id) && !attached.contains(*pane_id))
             .cloned()
             .collect::<Vec<_>>();
@@ -1817,7 +1817,7 @@ impl Runtime {
     /// machine's panes in a layout or named by a creation, or a connected
     /// device's pane.
     fn pane_still_terminal(&self, pane: &str) -> bool {
-        if pane.starts_with("remote:") {
+        if crate::address::is_device_scoped(pane) {
             return self
                 .snapshot
                 .terminal

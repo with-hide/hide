@@ -1837,7 +1837,7 @@ impl Runtime {
         {
             // A remote pane's answer is fixed and was decided where it was
             // projected; the local hook state says nothing about it.
-            if crate::agent_hooks::is_remote_pane(&pane.id) {
+            if crate::address::is_device_scoped(&pane.id) {
                 continue;
             }
             let tokens = self
@@ -1895,7 +1895,7 @@ impl Runtime {
                 .flat_map(|workspace| workspace.checkouts.iter())
                 .flat_map(|checkout| checkout.tabs.iter())
                 .flat_map(|tab| tab.panes.iter())
-                .filter(|pane| !crate::agent_hooks::is_remote_pane(&pane.id))
+                .filter(|pane| !crate::address::is_device_scoped(&pane.id))
                 .map(|pane| (pane.id.as_str(), pane.children.as_ref())),
             &previous_badges,
         );
@@ -1974,7 +1974,7 @@ impl Runtime {
         let mut beside = None;
         for agent in &self.snapshot.navigator.agents {
             if !agent.delegated
-                || crate::agent_hooks::is_remote_pane(&agent.pane_id)
+                || crate::address::is_device_scoped(&agent.pane_id)
                 || self.manually_placed_pane(&agent.pane_id)
                 || beside
                     .get_or_insert_with(|| self.beside_spawned_panes())
@@ -2935,7 +2935,7 @@ impl Runtime {
         // created tab is and a split as a split Hide asked for is, so its
         // checkout holds it before Herdr's layout lists it
         // (`created_pane_place`). A device's pane is drawn by that device.
-        if !crate::agent_hooks::is_remote_pane(source_pane_id) {
+        if !crate::address::is_device_scoped(source_pane_id) {
             match (tab_id, checkout_path.as_deref(), source_workspace_id) {
                 (Some(tab_id), Some(path), Some(workspace_id)) => {
                     self.draw_created_tab(super::drawn_ahead::ProvisionalTab {

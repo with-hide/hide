@@ -8,15 +8,6 @@ use crate::workspace_control::{Caller, Context};
 
 use super::Runtime;
 
-/// A pane id as the core spells it: a device's as
-/// `remote:<device>:pane:<id>`, this machine's bare.
-fn split_scoped<'a>(node: &'a str, scoped: &'a str) -> (&'a str, &'a str) {
-    scoped
-        .strip_prefix("remote:")
-        .and_then(|rest| rest.split_once(":pane:"))
-        .unwrap_or((node, scoped))
-}
-
 impl Runtime {
     /// Admits `command` for the pane-bound `caller` on `device` whose
     /// checkout is `expected`, and resolves what it acts on. A bare pane id
@@ -42,12 +33,8 @@ impl Runtime {
         // A pane named in full stays on the machine it names; a bare one is
         // the caller's.
         let target = |pane: &str| -> (String, String) {
-            if pane.starts_with("remote:") {
-                let (machine, raw) = split_scoped(node, pane);
-                (machine.to_owned(), raw.to_owned())
-            } else {
-                (device.to_owned(), pane.to_owned())
-            }
+            let (machine, raw) = crate::address::split_pane(device, pane);
+            (machine.to_owned(), raw.to_owned())
         };
         let engine_of = |machine: &str| self.delivery_engine(machine).ok_or("engine_unavailable");
         let (machine, step) = match command {
@@ -86,7 +73,7 @@ impl Runtime {
                 )
             }
             PaneCommand::Open { command, focus } => {
-                let (_, raw) = split_scoped(node, caller_pane);
+                let (_, raw) = crate::address::split_pane(node, caller_pane);
                 (
                     device.to_owned(),
                     Step::Open {

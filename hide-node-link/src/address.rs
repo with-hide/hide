@@ -291,6 +291,17 @@ pub fn same_pane(node: &str, device: &str, a: &str, b: &str) -> bool {
         )
 }
 
+/// The machine a pane id is on and the id that machine's Herdr gives it: a
+/// device's pane splits into its device and own id, and any other id is a
+/// pane of `machine` (the core's own node, or the caller's machine for a
+/// bare id a caller typed).
+pub fn split_pane<'a>(machine: &'a str, id: &'a str) -> (&'a str, &'a str) {
+    match PaneAddress::parse(id) {
+        Ok(PaneAddress::Device { device, pane }) => (device, pane),
+        _ => (machine, id),
+    }
+}
+
 /// The device a pane id names, when it is not the core's own node's.
 pub fn pane_device(id: &str) -> Option<&str> {
     PaneAddress::parse(id).ok().and_then(PaneAddress::device)
@@ -396,6 +407,8 @@ mod tests {
         assert!(!same_pane("core", "core", "remote:mini:pane:w1:p1", "w1:p1"));
         assert_eq!(pane_device("remote:mini:pane:w1:p1"), Some("mini"));
         assert_eq!(pane_device("w1:p1"), None);
+        assert_eq!(split_pane("mini", "w1:p1"), ("mini", "w1:p1"));
+        assert_eq!(split_pane("core", "remote:mini:pane:w1:p1"), ("mini", "w1:p1"));
         assert_eq!(pane_device("remote:mini:tab:w1:t1"), None);
     }
 

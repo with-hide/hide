@@ -144,11 +144,11 @@ impl Runtime {
         );
         if let Some(live) = live_panes {
             self.prune_resolved_sessions(|pane| {
-                !pane.starts_with("remote:") && !live.contains(pane)
+                !crate::address::is_device_scoped(pane) && !live.contains(pane)
             });
             let verbs = &mut self.snapshot.ui_state.request_verbs;
             changed |= request_view::prune_verbs(verbs, |pane| {
-                !pane.starts_with("remote:")
+                !crate::address::is_device_scoped(pane)
                     && !live.contains(pane)
                     && !agents.iter().any(|row| row.pane_id == pane)
             });

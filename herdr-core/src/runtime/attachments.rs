@@ -327,7 +327,7 @@ impl Runtime {
             }
         };
         let awaiting_terminal = remote.is_none()
-            && !payload.pane_id.starts_with("remote:")
+            && !crate::address::is_device_scoped(&payload.pane_id)
             && !self.terminal_controlling(&payload.pane_id);
         if awaiting_terminal {
             operation.deadline_at_unix_ms = Some(operation.started_at_unix_ms.saturating_add(
@@ -352,7 +352,7 @@ impl Runtime {
             cancelled: Arc::new(AtomicBool::new(false)),
         };
         let valid = self.attachment_target_valid(&pending)
-            && (!pending.pane_id.starts_with("remote:") || pending.remote.is_some());
+            && (!crate::address::is_device_scoped(&pending.pane_id) || pending.remote.is_some());
         if valid && pending.awaiting_terminal {
             crate::diagnostic!(serde_json::json!({
                 "kind": "terminal.attachment.awaiting_terminal",

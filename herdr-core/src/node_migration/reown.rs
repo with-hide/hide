@@ -67,7 +67,7 @@ impl OwnerChange {
         if let Some(raw) = id.strip_prefix(&target) {
             return Some(raw.to_owned());
         }
-        if id.starts_with("remote:") || id.is_empty() {
+        if crate::address::is_device_scoped(id) || id.is_empty() {
             return None;
         }
         Some(format!("remote:{}:{kind}:{id}", self.old_owner_as))

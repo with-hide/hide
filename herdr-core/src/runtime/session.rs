@@ -2637,7 +2637,7 @@ impl Runtime {
         });
         if let Some(live_pane_ids) = live_pane_ids.as_ref() {
             let keep =
-                |pane_id: &str| pane_id.starts_with("remote:") || live_pane_ids.contains(pane_id);
+                |pane_id: &str| crate::address::is_device_scoped(pane_id) || live_pane_ids.contains(pane_id);
             self.retain_terminal_pane_state(keep);
             // Metadata belongs to the session's panes, not its selection.
             // Prune even when the selected creation still has no layout.
@@ -2723,7 +2723,7 @@ impl Runtime {
                     .pane_id
                     .clone()
                     .or_else(|| self.snapshot.ui_state.selected_pane_id.clone())
-                    .filter(|pane_id| !pane_id.starts_with("remote:"));
+                    .filter(|pane_id| !crate::address::is_device_scoped(pane_id));
                 let selected_still_exists = selected_pane_id.as_deref().is_some_and(|pane_id| {
                     payload
                         .layouts
@@ -3703,7 +3703,7 @@ impl Runtime {
             .map(str::to_owned)
             .collect::<HashSet<_>>();
         self.snapshot.terminal.panes.retain(|pane| {
-            pane.pane_id.starts_with("remote:") || session_pane_ids.contains(&pane.pane_id)
+            crate::address::is_device_scoped(&pane.pane_id) || session_pane_ids.contains(&pane.pane_id)
         });
         for pane_id in &pane_ids {
             self.ensure_terminal_pane(pane_id);
