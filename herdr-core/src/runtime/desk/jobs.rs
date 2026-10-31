@@ -947,10 +947,12 @@ impl Runtime {
     }
 
     /// The sessions the followed conversation names (a reply's chips, a
-    /// letter's line) that no card of `shown` is, each a card of its own read
-    /// from its sidebar row (D-86), so a chip's hover card and its thread
-    /// read the same facts as Desk's own. A session the sidebar no longer
-    /// lists has none: its chip is dimmed. The sidebar's rows bound them.
+    /// letter's line, the operator's `@` chips) and the one whose thread the
+    /// lane holds, that no card of `shown` is, each a card of its own read
+    /// from its sidebar row (D-86, D-87), so a chip's hover card and the
+    /// thread any press opens read the same facts as Desk's own. A session
+    /// the sidebar no longer lists has none: its chip is dimmed. The
+    /// sidebar's rows bound them.
     fn desk_named(
         &self,
         shown: &[&crate::model::DeskJobSnapshot],
@@ -977,6 +979,11 @@ impl Runtime {
                 DeskItem::Reply { mentions, .. } => {
                     mentions.iter().map(|chip| chip.pane_id.as_str()).collect()
                 }
+                DeskItem::User { mentions, .. } => mentions
+                    .iter()
+                    .filter(|mention| mention.kind == crate::model::DeskMentionKind::Session)
+                    .map(|mention| mention.id.as_str())
+                    .collect(),
                 _ => continue,
             };
             for pane in panes {
@@ -987,6 +994,21 @@ impl Runtime {
                     named.push(self.desk_row_card(row, index));
                 }
             }
+        }
+        // The session whose thread the lane holds, wherever it was pressed
+        // (a thread's own parts included), so its head reads its row (D-87).
+        let open = self
+            .snapshot
+            .session_thread
+            .as_deref()
+            .filter(|thread| thread.state != crate::model::ThreadState::Closed)
+            .and_then(|thread| thread.pane_id.as_deref());
+        if let Some(pane) = open
+            && !carded.contains(pane)
+            && seen.insert(pane)
+            && let Some(row) = index.rows.get(pane)
+        {
+            named.push(self.desk_row_card(row, index));
         }
         named
     }
@@ -2187,6 +2209,39 @@ mod tests {
         assert_eq!(asking.state, DeskJobState::Asking);
         assert_eq!(asking.mark, Some(row("p7", "blocked").mark));
         assert!(section.jobs.is_empty() && section.workers.is_empty());
+    }
+
+    #[test]
+    fn a_session_no_job_is_has_a_card_while_its_thread_is_open_and_none_after() {
+        let root = tempfile::tempdir().unwrap();
+        let mut runtime = desk(root.path(), 2, &[]);
+        runtime.start_test_desk();
+        runtime.snapshot.navigator.agents = vec![row("p9", "working")];
+        let named = |runtime: &Runtime| {
+            runtime
+                .snapshot
+                .desk_jobs
+                .as_ref()
+                .unwrap()
+                .named
+                .iter()
+                .map(|card| card.pane_id.clone().unwrap())
+                .collect::<Vec<_>>()
+        };
+        runtime.compose_desk_jobs();
+        assert!(named(&runtime).is_empty());
+
+        assert!(
+            runtime.open_session_thread(crate::runtime::session_thread::ThreadOpenPayload {
+                pane_id: "p9".into(),
+            })
+        );
+        assert_eq!(named(&runtime), ["p9"]);
+        let section = runtime.snapshot.desk_jobs.as_ref().unwrap();
+        assert!(section.jobs.is_empty() && section.workers.is_empty());
+
+        assert!(runtime.close_session_thread());
+        assert!(named(&runtime).is_empty());
     }
 
     #[test]

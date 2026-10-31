@@ -163,4 +163,28 @@ describe("Desk's room", () => {
     await press("[data-mention-chip='project']");
     expect(sent("focus_checkout")).toEqual([expect.objectContaining({ workspace_id: "w-repo", checkout_id: "c-home" })]);
   });
+
+  it("opens a session that is no job of Desk's as a thread in the lane and stays in Desk (D-87, B51)", async () => {
+    // `fixer` runs in the sidebar but Desk did not start it: it has no card until its thread opens.
+    const row = { pane_id: "w1:p2", identity_label: "fixer", agent_kind: "claude", mark: "going" } as never;
+    const card = { id: "pane:w1:p2", pane_id: "w1:p2", title: "fixer", agent_kind: "claude", project: { workspace_id: "w-repo", label: "repo" }, location: { kind: "checkout", label: "main" },
+      state: "working", queue_position: null, now: "고치는 중", plan: null, question: null, summary: null, pull_requests: [], outputs: [], joined: false, reason: null, failure: null, ask: null,
+      mark: "going", mark_read: false, machine: null, disconnected: false, changed_at_unix_ms: 0, read: false, mission: null, workers: [], agent_id: null } as const;
+    await act(async () => useUiStore.getState().setScreen({ kind: "desk" }));
+    await render(desk([{ kind: "user", id: 1, text: "@session(w1:p2 fixer) 어디까지 왔어?", at_ms: 0, mentions: [fixer] }]));
+    await act(async () => useShellStore.setState({ agents: [row] }));
+
+    await press("[data-mention-chip='session']");
+    expect(useUiStore.getState().deskLane.tool).toEqual({ kind: "thread", job: "pane:w1:p2", conductor: null });
+    expect(sent("session_thread_open")).toEqual([{ pane_id: "w1:p2" }]);
+    expect(useUiStore.getState().screen).toEqual({ kind: "desk" });
+    expect(document.body.querySelector("[data-desk-thread-pending]")).not.toBeNull();
+
+    // The core sends the session's card with the open thread; the thread's head reads it and the Threads list does not list it.
+    await act(async () => useShellStore.setState({ deskJobs: { jobs: [], workers: [], named: [card] } }));
+    expect(document.body.querySelector("[data-desk-thread-pending]")).toBeNull();
+    expect(document.body.querySelector("[data-desk-thread-head]")?.textContent).toContain("fixer");
+    expect(sent("session_thread_open")).toHaveLength(1);
+    expect(sent("session_thread_close")).toHaveLength(0);
+  });
 });

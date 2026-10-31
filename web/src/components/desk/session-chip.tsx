@@ -76,10 +76,12 @@ export function SessionChip({ session, onPress, card: carded = true, className }
   const agent = facts?.listed ? facts.agent_kind : gone ? null : session.agent_kind;
   const lead = agent === null ? null : <><StatusMark mark={mark} /><AgentMark kind={agent} /></>;
   const look = cn("inline-flex max-w-full min-w-0 items-center gap-xxs rounded-xs bg-secondary px-xxs align-middle text-foreground", gone && "opacity-(--opacity-dimmed)", className);
-  const chip = !onPress ? (
+  // A session no longer listed has nothing left to open.
+  const press = gone ? undefined : onPress;
+  const chip = !press ? (
     <span className={look} aria-label={gone ? t("desk.chip.gone", { name: session.name }) : undefined} data-desk-session-chip={session.name} data-desk-session-gone={gone ? "true" : undefined}>{lead}<span className="truncate">{session.name}</span></span>
   ) : (
-    <Button variant="text" size="inline" className={cn(look, "hover:bg-accent hover:text-foreground")} aria-label={gone ? t("desk.chip.gone", { name: session.name }) : t("desk.mention.open", { name: session.name })} data-desk-session-chip={session.name} data-desk-session-gone={gone ? "true" : undefined} onClick={onPress}>
+    <Button variant="text" size="inline" className={cn(look, "hover:bg-accent hover:text-foreground")} aria-label={gone ? t("desk.chip.gone", { name: session.name }) : t("desk.mention.open", { name: session.name })} data-desk-session-chip={session.name} data-desk-session-gone={gone ? "true" : undefined} onClick={press}>
       {lead}
       <span className="truncate">{session.name}</span>
     </Button>

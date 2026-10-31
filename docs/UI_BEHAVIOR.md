@@ -966,7 +966,7 @@ The composer keeps what the operator is writing while they go elsewhere, and cle
 A message the agent could not take because it is not signed in leaves the conversation again, and its words go back in the box under the line with the sign-in command (B6).
 `@` opens the menu on the word the caret ends; a picked session or project is written `@name` and sent as its `@session(<pane> <name>)` or `@project(<path> <name>)` token, a project named by its primary checkout's path (the folder's own for a project with none), which Desk's agent hands to `--repo` and pressing its chip opens; one the operator deleted is not sent.
 `다시 시도` on a notice sends the operator's last message again.
-Pressing a card, a session chip or `답하기` opens that session's thread in Desk's lane (see Desk's lane); a letter's line opens the session's own tab.
+Pressing a card, any session chip (a reply's, the operator's `@`, a letter's line, one inside a thread) or `답하기` opens that session's thread in Desk's lane, whether Desk started it or not, and Desk stays in front; only the thread's `터미널로` and ⌘J go to its tab (see Desk's lane, D-87, B51).
 A card's change sends only the `desk_jobs` section; the conversation is sent again only when it, the agents or the room's settings change.
 
 The selector lists Claude, Codex and Pi with each one's state:
@@ -1006,7 +1006,7 @@ Work Desk hands to a session that already runs is a letter, and every letter Des
 The session is a chip: its agent and the mark its sidebar row shows now, drawn with `StatusMark`.
 A reply that names a session writes it as `@session(<pane> <name>)`, as Desk's instructions ask, and draws it as the same chip, every one it names: no count caps them, since the reply's own 256 KiB cap already bounds how many a reply can hold, and the screen's cost grows with the reply's length (D-86, B50).
 The newest 64 lines' chips follow their rows; an older line's chip shows no mark.
-A chip whose session the sidebar no longer lists is dimmed with no status mark, and pressing it still opens what Hide can find of it.
+A chip whose session the sidebar no longer lists is dimmed with no status mark and cannot be pressed: there is nothing left to open.
 A chip in the chat or a thread is one shared part (`SessionChip` in `web/src/components/desk/session-chip.tsx`), read from the sidebar's rows and Desk's cards; a reply's chips are drawn inside its Markdown, each in a React root of its own, so the part's source is carried to them (`useSessionChipBridge`) and a row's change redraws only the chips, never the reply.
 Under the pointer or focus a listed session's chip shows its card: its status, agent, name, its state's words and its row's time; `⌂` its project and branch; what it does now; its plan `n/m`, its pull request and how many outputs it has; its parent as a chip; and `스레드 열기 ›`.
 Every fact on it is one its sidebar row already carries, through the session's card; nothing asks an AI or runs git for it, and a fact the session lacks is left out.
@@ -1033,7 +1033,8 @@ Its state comes from the ledger and the row the sidebar draws for it, never from
 Starting, working and asking jobs take Desk's places; the rest do not.
 
 A mission's workers are no jobs of Desk's, but their threads open in Desk's lane too: the `desk_jobs` section sends them as cards of their own in `workers`, each a spawn whose pane is a worker of a job's mission, whoever started it (64 at most).
-The other sessions the newest 64 lines name (a reply's chips, a letter's line) are no jobs either: the section sends each one the sidebar lists as a card of its own in `named`, built from its row as a job's card reads its row (its project and branch from the checkout its pane is in), so a chip's card and the thread it opens show the same facts; the sidebar's rows bound them, and none is drawn in the chat or listed in Threads.
+The other sessions the newest 64 lines name (a reply's chips, a letter's line, the operator's `@` chips), and the one whose thread the lane holds, are no jobs either: the section sends each one the sidebar lists as a card of its own in `named`, built from its row as a job's card reads its row (its project and branch from the checkout its pane is in), so a chip's card and the thread it opens show the same facts; the sidebar's rows bound them, and none is drawn in the chat or listed in Threads.
+The lane keys such a thread by its session (`pane:<pane>`, the id its card carries), not by a job: it opens the thread by that pane from the first frame and draws its head once the card arrives with it, so no session becomes a job, takes a place under the cap or joins the Threads list.
 
 ### Desk's lane
 

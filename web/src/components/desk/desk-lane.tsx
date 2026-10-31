@@ -86,7 +86,7 @@ export function LaneHeadControls({ edge, expanded = false, pinned, onExpand, onP
  * pin beside ✕, and ✕. Filled while pinned, the pin docks the lane beside
  * the chat; unpinned, the lane floats over it.
  */
-export function LaneColumnHead({ children, expanded = false, pinned, onExpand, onPin, onClose }: { children: ReactNode; expanded?: boolean; pinned: boolean; onExpand: () => void; onPin: () => void; onClose: () => void }) {
+export function LaneColumnHead({ children, expanded = false, pinned, onExpand, onPin, onClose }: { children: ReactNode; expanded?: boolean; pinned: boolean; onExpand?: () => void; onPin: () => void; onClose: () => void }) {
   return (
     <div className="flex h-(--size-tab-strip) shrink-0 items-center gap-xxs border-b border-border pl-md pr-xs text-caption" data-lane-header="true">
       <span className="flex min-w-0 flex-1 items-center gap-xs">{children}</span>

@@ -49,6 +49,16 @@ export function laneCards(section: DeskJobsSection | null | undefined): DeskJob[
   return [...section.jobs, ...section.workers, ...section.named];
 }
 
+/** The lane's key for the thread of a session that is no job of Desk's (D-87): the id its card carries once the core sends it. */
+export function sessionThreadId(paneId: string): string {
+  return `pane:${paneId}`;
+}
+
+/** The pane a lane thread key names when it is no job's id. */
+export function threadKeyPane(id: string): string | null {
+  return id.startsWith("pane:") ? id.slice("pane:".length) : null;
+}
+
 /** The card of the session a chip names: by its pane when the chip knows it, else by its name. */
 export function cardOfSession(cards: readonly DeskJob[], session: DeskSessionRef): DeskJob | null {
   return cards.find((card) => (session.pane_id ? card.pane_id === session.pane_id : card.title === session.name)) ?? null;
