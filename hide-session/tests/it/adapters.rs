@@ -1347,6 +1347,42 @@ mod omp {
     }
 
     #[test]
+    fn a_first_message_with_a_pasted_screenshot_still_gives_its_turn() {
+        let native = Native::new();
+        paste_screenshot(
+            &native.path,
+            |record| record["message"]["role"] == "user",
+            |record| {
+                record["message"]["content"]
+                    .as_array_mut()
+                    .unwrap()
+                    .push(json!({"type": "image", "data": screenshot(), "mimeType": "image/png"}));
+            },
+        );
+        assert_read_past_the_screenshot(native.home.path(), native.request.clone());
+    }
+
+    /// The header is the one record that names the session, in a fixed
+    /// place, and holds its id, cwd and title; nothing is pasted into it, so
+    /// one over the record cap is refused for its size, not passed over.
+    #[test]
+    fn a_header_holds_no_paste_so_one_over_the_record_cap_is_refused() {
+        let native = Native::new();
+        paste_screenshot(
+            &native.path,
+            |record| record["type"] == "session",
+            |record| record["title"] = json!(screenshot()),
+        );
+        assert_eq!(
+            native.read().unwrap_err(),
+            hide_session::ReadRefusal::Refused(format!(
+                "session_capacity:line_bytes:{}",
+                hide_session::SESSION_LINE_LIMIT_BYTES
+            ))
+        );
+    }
+
+    #[test]
     fn physical_title_changes_at_eof_clear_stale_names_without_replaying_events() {
         let mut native = Native::new();
         let first = native.read().unwrap();
@@ -1903,6 +1939,46 @@ mod grok {
 
     fn user_turn(answer: &LabelTranscript) -> Option<hide_session::turns::UserTurnFact> {
         answer.turns.as_ref().unwrap().user_turn()
+    }
+
+    /// Grok writes a pasted image inline in the prompt's record.
+    #[test]
+    fn a_first_prompt_with_a_pasted_screenshot_still_gives_its_turn() {
+        let native = Native::new();
+        paste_screenshot(
+            &native.path,
+            |record| record["params"]["update"]["sessionUpdate"] == "user_message_chunk",
+            |record| {
+                record["params"]["update"]["content"] =
+                    json!({"type": "image", "data": screenshot(), "mimeType": "image/png"});
+            },
+        );
+        assert_read_past_the_screenshot(native.home.path(), native.request.clone());
+    }
+
+    /// `summary.json` and `plan_mode.json` are whole files of a few fields
+    /// Grok rewrites, not records a prompt goes into; one over its cap is
+    /// refused for its size.
+    #[test]
+    fn summary_files_hold_no_paste_so_one_over_its_cap_is_refused() {
+        let refused = hide_session::ReadRefusal::Refused(format!(
+            "session_capacity:line_bytes:{}",
+            hide_session::SESSION_LINE_LIMIT_BYTES
+        ));
+        let native = Native::new();
+        native.summary(|summary| summary["generated_title"] = json!(screenshot()));
+        assert_eq!(native.read().unwrap_err(), refused);
+
+        let native = Native::new();
+        let refused =
+            hide_session::ReadRefusal::Refused("label_session_metadata_line_capacity".into());
+        fs::write(
+            native.folder().join("plan_mode.json"),
+            json!({"state": "Active", "awaiting_plan_approval": true, "pad": " ".repeat(4 * 1024)})
+                .to_string(),
+        )
+        .unwrap();
+        assert_eq!(native.read().unwrap_err(), refused);
     }
 
     #[test]
@@ -2604,6 +2680,42 @@ mod pi {
     }
 
     #[test]
+    fn a_first_message_with_a_pasted_screenshot_is_read_past() {
+        let native = Native::new();
+        paste_screenshot(
+            &native.path,
+            |record| record["message"]["role"] == "user",
+            |record| {
+                record["message"]["content"]
+                    .as_array_mut()
+                    .unwrap()
+                    .push(json!({"type": "image", "data": screenshot(), "mimeType": "image/png"}));
+            },
+        );
+        assert_read_past_the_screenshot(native.home.path(), native.request.clone());
+    }
+
+    /// The header is the one record that names the session, in a fixed
+    /// place, and holds its id and cwd; nothing is pasted into it, so
+    /// one over the record cap is refused for its size, not passed over.
+    #[test]
+    fn a_header_holds_no_paste_so_one_over_the_record_cap_is_refused() {
+        let native = Native::new();
+        paste_screenshot(
+            &native.path,
+            |record| record["type"] == "session",
+            |record| record["name"] = json!(screenshot()),
+        );
+        assert_eq!(
+            native.read().unwrap_err(),
+            hide_session::ReadRefusal::Refused(format!(
+                "session_capacity:line_bytes:{}",
+                hide_session::SESSION_LINE_LIMIT_BYTES
+            ))
+        );
+    }
+
+    #[test]
     fn native_history_has_the_shared_conversation_facts_and_only_recorded_capabilities() {
         let native = Native::new();
         let transcript = native.read().unwrap();
@@ -3097,7 +3209,10 @@ mod pi {
         let error = native.read().unwrap_err();
         assert_eq!(
             error,
-            hide_session::ReadRefusal::Refused("session_capacity".into())
+            hide_session::ReadRefusal::Refused(format!(
+                "session_capacity:discovery_read_bytes:{}",
+                hide_session::SESSION_INCREMENT_READ_LIMIT_BYTES
+            ))
         );
     }
 
@@ -4899,6 +5014,22 @@ mod antigravity {
         }
     }
 
+    /// agy reports no turns; the reply after a request over the record cap
+    /// is still read.
+    #[test]
+    fn a_first_request_over_the_record_cap_is_read_past() {
+        let native = Native::new();
+        paste_screenshot(
+            &hide_session::antigravity::transcript(native.home.path(), AGY_ID),
+            |record| record["type"] == "USER_INPUT",
+            |record| {
+                record["content"] =
+                    serde_json::json!(format!("<USER_REQUEST>\n{}\n</USER_REQUEST>", screenshot()));
+            },
+        );
+        assert_read_past_the_screenshot(native.home.path(), native.request.clone());
+    }
+
     #[test]
     fn native_history_has_the_shared_conversation_facts() {
         let native = Native::new();
@@ -5190,4 +5321,163 @@ fn a_turn_hands_on_only_the_tool_calls_it_left_failed() {
         ["git push"],
         "the turn still open carries its failure"
     );
+}
+
+/// What a pasted screenshot adds to a record: more than one record's cap
+/// and one read's budget, as the 1.83 MB first message of a Conductor whose
+/// letters were held did.
+fn screenshot() -> String {
+    "A".repeat(2 * hide_session::SESSION_INCREMENT_READ_LIMIT_BYTES as usize)
+}
+
+/// Rewrites the session file at `path` so the first record `pick` chooses
+/// carries what `paste` puts in it; every other line stays as written.
+fn paste_screenshot(
+    path: &Path,
+    pick: impl Fn(&serde_json::Value) -> bool,
+    paste: impl FnOnce(&mut serde_json::Value),
+) {
+    let mut paste = Some(paste);
+    let mut rewritten = String::new();
+    for line in std::fs::read_to_string(path).unwrap().lines() {
+        let mut record: serde_json::Value = serde_json::from_str(line).unwrap();
+        match paste.take_if(|_| pick(&record)) {
+            Some(paste) => {
+                paste(&mut record);
+                rewritten.push_str(&record.to_string());
+            }
+            None => rewritten.push_str(line),
+        }
+        rewritten.push('\n');
+    }
+    assert!(paste.is_none(), "the session holds the picked record");
+    std::fs::write(path, rewritten).unwrap();
+}
+
+/// Reads until nothing is left, handing each read's checkpoint, subagents,
+/// turns and tools to the next, as the label worker does. A refused read
+/// fails the test with its reason.
+fn read_through(
+    home: &Path,
+    mut request: LabelTranscriptRequest,
+) -> (Vec<(LabelEventKind, String)>, LabelTranscript) {
+    let mut events = Vec::new();
+    loop {
+        let answer = read(home, &request).unwrap();
+        events.extend(
+            answer
+                .events
+                .iter()
+                .map(|event| (event.kind, event.text.clone())),
+        );
+        if !answer.has_more {
+            return (events, answer);
+        }
+        request.checkpoint = Some(answer.checkpoint.clone());
+        request.subagents = answer.subagents.clone();
+        request.turns = answer.turns.clone();
+        request.tools = answer.tools.clone();
+    }
+}
+
+/// The fixture conversation read past its pasted screenshot: the reply after
+/// it is read, and an agent whose read reports turns gives the doorbell a
+/// finished turn (`Turn::Read(Waiting::Nothing)`), not an unread one.
+fn assert_read_past_the_screenshot(home: &Path, request: LabelTranscriptRequest) {
+    let agent = request.agent;
+    let (events, last) = read_through(home, request);
+    assert!(
+        events
+            .iter()
+            .any(|(kind, text)| *kind == LabelEventKind::Assistant
+                && text.starts_with("PR을 열었습니다")),
+        "{agent:?} reads the reply after the screenshot"
+    );
+    if agent.reports_turns() {
+        assert_eq!(
+            last.turns.as_ref().and_then(|turns| turns.waiting()),
+            Some(Waiting::Nothing),
+            "{agent:?} settles its turn"
+        );
+    }
+}
+
+/// A Claude Code session that opens with a pasted screenshot, after the
+/// records Claude Code writes before the first message: the session id is
+/// on that message's record and the ones after it.
+#[test]
+fn a_claude_session_opening_with_a_pasted_screenshot_reads_its_turn() {
+    let home = home(Agent::Claude);
+    let path = home
+        .path()
+        .join(".claude/projects/-work-app/a1b2c3d4-0000-4000-8000-000000000001.jsonl");
+    let fixture = std::fs::read_to_string(&path).unwrap();
+    std::fs::write(
+        &path,
+        format!(
+            "{}\n{fixture}",
+            serde_json::json!({"type": "permission-mode", "permissionMode": "default",
+                "sessionId": "a1b2c3d4-0000-4000-8000-000000000001"})
+        ),
+    )
+    .unwrap();
+    paste_screenshot(
+        &path,
+        |record| record["type"] == "user",
+        |record| {
+            let text = record["message"]["content"].take();
+            record["message"]["content"] = serde_json::json!([
+                {"type": "text", "text": text},
+                {"type": "image", "source": {"type": "base64", "media_type": "image/png",
+                    "data": screenshot()}}]);
+        },
+    );
+    assert_read_past_the_screenshot(home.path(), request(Agent::Claude));
+}
+
+#[test]
+fn a_codex_session_opening_with_a_pasted_screenshot_reads_its_turn() {
+    let home = home(Agent::Codex);
+    let path = home.path().join(
+        ".codex/sessions/2026/10/03/rollout-2026-10-03T01-00-00-0199a000-0000-7000-8000-000000000002.jsonl",
+    );
+    paste_screenshot(
+        &path,
+        |record| {
+            record["payload"]["role"] == "user"
+                && record["payload"]["content"][0]["text"]
+                    .as_str()
+                    .is_some_and(|text| text.starts_with("요청 보기"))
+        },
+        |record| {
+            record["payload"]["content"]
+                .as_array_mut()
+                .unwrap()
+                .push(serde_json::json!({"type": "input_image",
+                    "image_url": format!("data:image/png;base64,{}", screenshot())}));
+        },
+    );
+    assert_read_past_the_screenshot(home.path(), request(Agent::Codex));
+}
+
+/// OpenCode keeps a message's parts as database rows: the pasted image is a
+/// row of the first message over the row cap.
+#[test]
+fn an_opencode_session_opening_with_a_pasted_screenshot_reads_its_turn() {
+    let home = home(Agent::OpenCode);
+    rusqlite::Connection::open(home.path().join(".local/share/opencode/opencode.db"))
+        .unwrap()
+        .execute(
+            "INSERT INTO part VALUES ('prt_screenshot', 'msg_01', ?1, ?2, ?2, ?3)",
+            rusqlite::params![
+                request(Agent::OpenCode).reference_value,
+                START + 1,
+                serde_json::json!({"type": "file", "mime": "image/png",
+                    "filename": "screenshot.png",
+                    "url": format!("data:image/png;base64,{}", screenshot())})
+                .to_string()
+            ],
+        )
+        .unwrap();
+    assert_read_past_the_screenshot(home.path(), request(Agent::OpenCode));
 }
