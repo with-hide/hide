@@ -201,7 +201,9 @@ pub(crate) struct Head<R> {
     ended: bool,
 }
 
-const HEAD_BLOCK_BYTES: usize = 64 * 1024;
+/// The block a head scan reads at a time: a buffered reader's, so a fact
+/// on the first records costs one small read.
+const HEAD_BLOCK_BYTES: usize = 8 * 1024;
 
 impl<R: Read> Head<R> {
     pub(crate) fn new(reader: R, limit: usize) -> Self {
