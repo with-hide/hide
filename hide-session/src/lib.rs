@@ -1172,6 +1172,7 @@ pub(crate) fn parse_events_followed(
 ) -> ParsedSession {
     match agent {
         Agent::Claude => parse_lines_at(
+            agent,
             contents,
             base_offset,
             parse_claude_line,
@@ -1184,12 +1185,12 @@ pub(crate) fn parse_events_followed(
                 tools: Some(tools::claude as tools::Parser),
                 human_starts_turn: true,
                 replies: true,
-                large: None,
             },
             found,
             following,
         ),
         Agent::Codex => parse_lines_at(
+            agent,
             contents,
             base_offset,
             |item, _| parse_codex_line(item),
@@ -1200,12 +1201,12 @@ pub(crate) fn parse_events_followed(
                 tools: Some(tools::codex as tools::Parser),
                 human_starts_turn: false,
                 replies: false,
-                large: None,
             },
             found,
             following,
         ),
         Agent::Grok => parse_lines_at(
+            agent,
             contents,
             base_offset,
             |item, _| grok::parse_line(item),
@@ -1216,12 +1217,12 @@ pub(crate) fn parse_events_followed(
                 tools: Some(tools::grok as tools::Parser),
                 human_starts_turn: true,
                 replies: false,
-                large: Some(grok::reduced_line),
             },
             found,
             following,
         ),
         Agent::Pi => parse_lines_at(
+            agent,
             contents,
             base_offset,
             |item, _| native_file::parse_line(Agent::Pi, item),
@@ -1232,12 +1233,12 @@ pub(crate) fn parse_events_followed(
                 tools: Some(tools::pi as tools::Parser),
                 human_starts_turn: false,
                 replies: false,
-                large: None,
             },
             found,
             following,
         ),
         Agent::Omp => parse_lines_at(
+            agent,
             contents,
             base_offset,
             |item, _| native_file::parse_line(Agent::Omp, item),
@@ -1248,12 +1249,12 @@ pub(crate) fn parse_events_followed(
                 tools: Some(tools::pi as tools::Parser),
                 human_starts_turn: true,
                 replies: false,
-                large: None,
             },
             found,
             following,
         ),
         Agent::Antigravity => parse_lines_at(
+            agent,
             contents,
             base_offset,
             |item, _| antigravity::parse_line(item),
@@ -1264,7 +1265,6 @@ pub(crate) fn parse_events_followed(
                 tools: None,
                 human_starts_turn: false,
                 replies: false,
-                large: None,
             },
             found,
             following,
@@ -1287,13 +1287,13 @@ struct Turns {
     /// The parser marks each of the agent's records ([`turns::TurnMark::Reply`]),
     /// so a person's message starts a turn that knows it was not answered.
     replies: bool,
-    large: Option<fn(&str) -> Option<String>>,
 }
 
 /// Each record is parsed once and read by both the conversation parser and
 /// the link reader (`links`), so a chunk yields its events and its link facts
 /// from the same pass.
 fn parse_lines_at(
+    agent: Agent,
     contents: &str,
     base_offset: u64,
     mut extract: impl FnMut(&Value, &dyn Fn() -> CommandReply) -> LineResult,
@@ -1308,7 +1308,6 @@ fn parse_lines_at(
         tools,
         human_starts_turn,
         replies,
-        large,
     } = turns;
     let mut parsed = ParsedSession::default();
     let mut relative_offset = 0_u64;
@@ -1317,16 +1316,17 @@ fn parse_lines_at(
         relative_offset = relative_offset.saturating_add(raw_line.len() as u64);
         let reduced;
         let raw_line = if raw_line.len() > SESSION_LINE_LIMIT_BYTES {
-            match large.and_then(|reduce| reduce(raw_line)) {
+            match conversation_cursor::held_over_record(
+                agent,
+                raw_line.as_bytes(),
+                line_offset,
+                &mut parsed,
+            ) {
                 Some(line) => {
-                    parsed.skipped(SkipReason::BodyCapacity);
                     reduced = line;
                     reduced.as_str()
                 }
-                None => {
-                    parsed.skipped(SkipReason::NonConversationCapacity);
-                    continue;
-                }
+                None => continue,
             }
         } else {
             raw_line

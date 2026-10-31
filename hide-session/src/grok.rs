@@ -621,13 +621,6 @@ impl LargeLine {
     }
 }
 
-/// [`LargeLine`] over a line already in memory.
-pub(crate) fn reduced_line(line: &str) -> Option<String> {
-    let mut scan = LargeLine::default();
-    scan.feed(line.as_bytes()).ok()?;
-    scan.reduced()
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

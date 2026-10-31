@@ -429,13 +429,7 @@ impl ConversationCursor {
                         // A bounded structural scan continues across
                         // chunks. Only JSON discriminators survive a
                         // checkpoint, never bodies.
-                        let mut scan = LargeRecord {
-                            native_ids: true,
-                            grok: (agent == Agent::Grok).then(Default::default),
-                            wake_aware: true,
-                            context_aware: true,
-                            ..LargeRecord::default()
-                        };
+                        let mut scan = LargeRecord::of(agent);
                         scan.feed(kept);
                         scan.feed(bytes);
                         classifier = Some(Box::new(scan));
@@ -496,6 +490,20 @@ impl ConversationCursor {
         self.creating = creating;
         Ok(parsed)
     }
+}
+
+/// A record over the line cap that a reader of whole text holds (a page, a
+/// whole file): scanned and settled exactly as the cursor settles one it
+/// streams, so the same record reads the same whichever reader meets it.
+pub(crate) fn held_over_record(
+    agent: Agent,
+    record: &[u8],
+    line_start: u64,
+    parsed: &mut ParsedSession,
+) -> Option<String> {
+    let mut scan = LargeRecord::of(agent);
+    scan.feed(record);
+    over_record(agent, Some(Box::new(scan)), line_start, parsed)
 }
 
 /// What a record over the line cap leaves once its scan has seen all of it:
@@ -746,6 +754,17 @@ fn bounded(id: Option<String>) -> std::result::Result<Option<String>, SkipReason
     }
 }
 impl LargeRecord {
+    /// A scan of `agent`'s record that keeps what every reader of it needs.
+    fn of(agent: Agent) -> Self {
+        Self {
+            native_ids: true,
+            grok: (agent == Agent::Grok).then(Default::default),
+            wake_aware: true,
+            context_aware: true,
+            ..Self::default()
+        }
+    }
+
     fn value_scope(&self) -> Scope {
         match self.frames.last() {
             None => Scope::Root,
