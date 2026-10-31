@@ -315,6 +315,16 @@ pub struct DeskMentionSession {
     pub agent_kind: String,
     pub mark: crate::agent_state::RowMark,
     pub detail: Option<String>,
+    /// The pane of the session it was spawned from, always one the menu
+    /// lists too, so the menu folds it under that parent (D-84).
+    pub parent: Option<String>,
+    /// The project its pane sits in, as the sidebar names it.
+    pub project: String,
+    /// The branch of the checkout its pane sits in; none for a folder or a
+    /// pane the navigator has not placed.
+    pub branch: Option<String>,
+    /// Its latest request, the time the sidebar row shows.
+    pub last_prompt_at_unix_ms: Option<u64>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
