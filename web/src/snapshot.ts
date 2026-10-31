@@ -2727,9 +2727,12 @@ export type DeskJob = {
   /** The panes of a Conductor's workers. */
   workers: string[];
 };
-/** The `desk_mentions` section, the `@` menu: recent sessions, then projects with their running sessions' panes. */
+/**
+ * The `desk_mentions` section, the `@` menu: recent sessions, then projects with their running sessions' panes.
+ * A session's `parent` is the pane it was spawned from, always one listed too (D-84); `project` and `branch` are its second line's.
+ */
 export type DeskMentions = {
-  sessions: { id: string; name: string; agent_kind: string; mark: RowMark; detail: string | null }[];
+  sessions: { id: string; name: string; agent_kind: string; mark: RowMark; detail: string | null; parent: string | null; project: string; branch: string | null; last_prompt_at_unix_ms: number | null }[];
   projects: { id: string; name: string; sessions: string[] }[];
 };
 

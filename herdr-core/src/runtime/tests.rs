@@ -662,7 +662,7 @@ fn working_payload() -> SessionSnapshotPayload {
     .expect("session payload")
 }
 
-fn pane(id: &str, cwd: &str) -> PaneSnapshot {
+pub(super) fn pane(id: &str, cwd: &str) -> PaneSnapshot {
     PaneSnapshot {
         start_claim: None,
         terminal_id: None,
