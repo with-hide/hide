@@ -5,7 +5,7 @@ import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vites
 import { createActions } from "./actions";
 import { TooltipProvider } from "./components/ui/tooltip";
 import type { DeskAgent, DeskItem, DeskJob } from "./desk";
-import { DeskScreen, DeskSidebarEntry } from "./DeskScreen";
+import { DeskScreen, DeskSettingsPage, DeskSidebarEntry } from "./DeskScreen";
 import { clientI18n } from "./i18n/translator";
 import type { DeskMentions, DeskSection, SnapshotRest } from "./snapshot";
 import { useShellStore } from "./store";
@@ -33,7 +33,7 @@ const rest = {
   },
 } as unknown as SnapshotRest;
 
-const claude = (state: DeskAgent["state"], signedIn: boolean | null): DeskAgent => ({ id: "claude", label: "Claude Code", state, detail: null, signed_in: signedIn, login_command: "claude /login", models: [], efforts: [] });
+const claude = (state: DeskAgent["state"], signedIn: boolean | null): DeskAgent => ({ id: "claude", label: "Claude Code", state, detail: null, signed_in: signedIn, always_runs: [], login_command: "claude /login", models: [], efforts: [] });
 
 const desk = (items: DeskItem[], state: DeskAgent["state"] = "ready", signedIn: boolean | null = true): DeskSection => ({
   selection: { agent: "claude", model: null, effort: null },
@@ -41,7 +41,7 @@ const desk = (items: DeskItem[], state: DeskAgent["state"] = "ready", signedIn: 
   host: { state: "ready", detail: null },
   conversation: { generation: 1, items, dropped: 0 },
   approvals_waiting: 0,
-  settings: { enabled: true, default_agent: "claude", location: "worktree", cap: 8 },
+  settings: { enabled: true, default_agent: "claude", location: "worktree", cap: 8, permissions: { hide: "run", read: "run", shell: "run", edit: "run" } },
   lane: { pinned: false, kept: [] },
 });
 
@@ -210,6 +210,95 @@ describe("Desk's room", () => {
     await render(desk([{ kind: "user", id: 1, text: "@project(/work/repo-home repo) fix the build", at_ms: 0, mentions: [repo] }]));
     await press("[data-mention-chip='project']");
     expect(sent("focus_checkout")).toEqual([expect.objectContaining({ workspace_id: "w-repo", checkout_id: "c-home" })]);
+  });
+
+  describe("permissions (D-82, D-83, B46, B47)", () => {
+    const archive: DeskItem = {
+      kind: "approval", id: 7, card: "command", command: "hide agent archive agent-18285", folder: "~/repo", reason: null, state: "waiting",
+      asks: [{ kind: "irreversible", value: "end_working_session" }], subject: "project panel results", refusal: null,
+    };
+    const answers = () => [...document.body.querySelectorAll<HTMLElement>("[data-desk-approval-answer]")].map((button) => button.textContent);
+    const refusal = () => document.body.querySelector<HTMLInputElement>("[data-desk-approval-refusal]");
+    const type = async (value: string) => {
+      const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!;
+      await act(async () => { setter.call(refusal()!, value); refusal()!.dispatchEvent(new Event("input", { bubbles: true })); });
+    };
+    const key = (name: string, composing = false) => act(async () => { refusal()!.dispatchEvent(new KeyboardEvent("keydown", { key: name, bubbles: true, isComposing: composing })); });
+
+    it("asks about a working session's archive with three answers and no 'always', and says what it ends", async () => {
+      await render(desk([archive]));
+      expect(document.body.querySelector("[data-desk-item='approval']")?.textContent).toContain("Asking because this can't be undone");
+      expect(document.body.querySelector("[data-desk-approval-why='end_working_session']")?.textContent).toBe("Archives a session that is working·project panel results");
+      expect(answers()).toEqual(["Reject…", "Allow in this conversation", "Allow once"]);
+      await press("[data-desk-approval-answer='conversation']");
+      await press("[data-desk-approval-answer='once']");
+      expect(sent("desk_approval")).toEqual([{ id: 7, answer: "conversation" }, { id: 7, answer: "once" }]);
+    });
+
+    it("sends a refusal's line to Desk on Enter, never mid-composition, and refuses plainly when the line is empty", async () => {
+      await render(desk([archive]));
+      await press("[data-desk-approval-answer='reject']");
+      expect(sent("desk_approval")).toEqual([]);
+      expect(answers()).toEqual(["Reject without a reason", "Reject and send"]);
+      await type("wait until it ends, then archive it");
+      await key("Enter", true);
+      expect(sent("desk_approval")).toEqual([]);
+      await key("Enter");
+      expect(sent("desk_approval")).toEqual([{ id: 7, answer: "reject", text: "wait until it ends, then archive it" }]);
+
+      // Without a reason the typed words stay behind.
+      await press("[data-desk-approval-answer='reject_plain']");
+      // Blank words are a plain refusal too.
+      await type("   ");
+      await press("[data-desk-approval-answer='reject_send']");
+      expect(sent("desk_approval").slice(1)).toEqual([{ id: 7, answer: "reject" }, { id: 7, answer: "reject" }]);
+
+      // Escape takes the line back to the three answers.
+      await key("Escape");
+      expect(refusal()).toBeNull();
+      expect(answers()).toEqual(["Reject…", "Allow in this conversation", "Allow once"]);
+    });
+
+    it("folds an answered card to how it was answered", async () => {
+      await render(desk([{ ...archive, state: "allowed_conversation" }, { ...archive, id: 8, state: "rejected", refusal: "wait for it" }, { ...archive, id: 9, state: "rejected" }]));
+      const folded = [...document.body.querySelectorAll("[data-desk-approval-answered]")].map((line) => line.textContent);
+      expect(folded).toEqual([
+        "Allowed in this conversation·hide agent archive agent-18285",
+        "Rejected · your line went to Desk·hide agent archive agent-18285",
+        "Rejected·hide agent archive agent-18285",
+      ]);
+      expect(document.body.querySelector("[data-desk-approval-answer]")).toBeNull();
+    });
+
+    it("sets each row to run or ask as one whole table and keeps the irreversible row locked to always ask", async () => {
+      const actions = createActions((event) => { events.push(event); return true; });
+      await act(async () => {
+        useShellStore.setState({ connection: "live", rest, desk: desk([]) });
+        root.render(<TooltipProvider><DeskSettingsPage actions={actions} /></TooltipProvider>);
+      });
+      const chosen = () => Object.fromEntries([...document.body.querySelectorAll<HTMLElement>("[data-desk-permission]")].map((row) => [
+        row.dataset.deskPermission, row.querySelector("[data-state='on']")?.textContent ?? row.querySelector("[data-desk-permission-locked]")?.textContent,
+      ]));
+      expect(chosen()).toEqual({ hide: "Run", read: "Run", shell: "Run", edit: "Run", irreversible: "Always ask" });
+      expect(document.body.querySelector("[data-desk-permission='irreversible'] button")).toBeNull();
+
+      await press("[data-desk-permission='edit'] [data-desk-permission-answer='ask']");
+      expect(sent("desk_settings_set")).toEqual([{ enabled: true, default_agent: "claude", location: "worktree", cap: 8, permissions: { hide: "run", read: "run", shell: "run", edit: "ask" } }]);
+      // The chosen answer pressed again changes nothing.
+      await press("[data-desk-permission='hide'] [data-desk-permission-answer='run']");
+      expect(sent("desk_settings_set")).toHaveLength(1);
+    });
+  });
+
+  it("names, dimmed on a row, the agents whose own setup runs it without asking (D-82)", async () => {
+    const codex: DeskAgent = { ...claude("ready", true), id: "codex", label: "Codex", always_runs: ["read"], login_command: "codex login" };
+    const actions = createActions(() => true);
+    await act(async () => {
+      useShellStore.setState({ connection: "live", rest, desk: { ...desk([]), agents: [claude("ready", true), codex] } });
+      root.render(<TooltipProvider><DeskSettingsPage actions={actions} /></TooltipProvider>);
+    });
+    const unasked = [...document.body.querySelectorAll<HTMLElement>("[data-desk-permission-unasked]")].map((note) => [note.closest<HTMLElement>("[data-desk-permission]")?.dataset.deskPermission, note.textContent]);
+    expect(unasked).toEqual([["read", "Always runs in Codex"]]);
   });
 
   it("opens a session that is no job of Desk's as a thread in the lane and stays in Desk (D-87, B51)", async () => {

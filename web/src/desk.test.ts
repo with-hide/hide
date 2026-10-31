@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { agentPickable, askedOnce, askingCount, deskAgentWord, markedMention, mentionParts, outputKindOf, sessionFacts, threadGroups, threadLines, threadTurns, unseenOutputs, type AcpSessionUpdate, type DeskAgent, type DeskJob } from "./desk";
+import { agentPickable, agentsRunningUnasked, askedOnce, askingCount, deskAgentWord, markedMention, mentionParts, outputKindOf, sessionFacts, threadGroups, threadLines, threadTurns, unseenOutputs, type AcpSessionUpdate, type DeskAgent, type DeskJob } from "./desk";
 import type { AgentRow } from "./snapshot";
 
 const job = (id: string, state: DeskJob["state"], extra: Partial<DeskJob> = {}): DeskJob => ({
@@ -144,8 +144,18 @@ describe("an asking thread's question (D-75)", () => {
   });
 });
 
+describe("the agents a permission row cannot hold (D-82)", () => {
+  const agent = (id: DeskAgent["id"], label: string, state: DeskAgent["state"], always_runs: DeskAgent["always_runs"]): DeskAgent => ({ id, label, state, detail: null, signed_in: true, always_runs, login_command: "", models: [], efforts: [] });
+
+  it("names each choosable agent whose own setup runs the row unasked, in the list's order", () => {
+    const agents = [agent("claude", "Claude Code", "ready", []), agent("codex", "Codex", "ready", ["read"]), agent("omp", "omp", "cli_missing", ["read"]), agent("grok", "Grok", "no_ask_mode", ["read"]), agent("agy", "Antigravity", "off", ["read"])];
+    expect(agentsRunningUnasked(agents, "read")).toEqual(["Codex", "omp"]);
+    expect(agentsRunningUnasked(agents, "shell")).toEqual([]);
+  });
+});
+
 describe("an agent in Desk's bar (D-79, D-81, B44)", () => {
-  const agent = (state: DeskAgent["state"], signed_in: boolean | null): DeskAgent => ({ id: "codex", label: "Codex", state, detail: null, signed_in, login_command: "codex login", models: [], efforts: [] });
+  const agent = (state: DeskAgent["state"], signed_in: boolean | null): DeskAgent => ({ id: "codex", label: "Codex", state, detail: null, signed_in, always_runs: ["read"], login_command: "codex login", models: [], efforts: [] });
 
   it("says a ready agent's sign-in as Settings reads it, and nothing while that is unread", () => {
     expect(deskAgentWord(agent("ready", true))).toBe("signed_in");

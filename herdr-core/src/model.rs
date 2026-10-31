@@ -9943,16 +9943,44 @@ mod wire_enum_tests {
             &[
                 DeskCardKind::Command,
                 DeskCardKind::Edit,
+                DeskCardKind::Read,
                 DeskCardKind::Other,
             ],
         );
         checked.insert("desk_card_kind");
+        {
+            use hide_desk::permission::{Answer, Ask, Irreversible, Row};
+            assert_wire(
+                &contract,
+                "desk_permission_row",
+                &[Row::Hide, Row::Read, Row::Shell, Row::Edit],
+            );
+            checked.insert("desk_permission_row");
+            assert_wire(
+                &contract,
+                "desk_permission_answer",
+                &[Answer::Run, Answer::Ask],
+            );
+            checked.insert("desk_permission_answer");
+            assert_wire(&contract, "desk_irreversible", &Irreversible::ALL);
+            checked.insert("desk_irreversible");
+            let kinds: Vec<serde_json::Value> = [
+                Ask::Irreversible(Irreversible::ForcePush),
+                Ask::Row(Row::Shell),
+            ]
+            .iter()
+            .map(|ask| serde_json::to_value(ask).unwrap()["kind"].clone())
+            .collect();
+            assert_wire(&contract, "desk_approval_ask", &kinds);
+            checked.insert("desk_approval_ask");
+        }
         assert_wire(
             &contract,
             "desk_approval_state",
             &[
                 DeskApprovalState::Waiting,
                 DeskApprovalState::Allowed,
+                DeskApprovalState::AllowedConversation,
                 DeskApprovalState::Rejected,
                 DeskApprovalState::Closed,
             ],

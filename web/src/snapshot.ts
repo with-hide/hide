@@ -2657,7 +2657,18 @@ export type DeskAgentId = "claude" | "codex" | "grok" | "opencode" | "pi" | "omp
 /** `desk_agent_state`; `off` is a chosen agent Settings › Agents has since switched off. */
 export type DeskAgentState = "checking" | "ready" | "preparing" | "install_failed" | "node_missing" | "cli_missing" | "no_ask_mode" | "off";
 export type DeskHostState = "idle" | "starting" | "ready" | "thinking" | "stopped";
-export type DeskApprovalState = "waiting" | "allowed" | "rejected" | "closed";
+export type DeskApprovalState = "waiting" | "allowed" | "allowed_conversation" | "rejected" | "closed";
+/** A Settings › Desk › 권한 row (D-82): `desk_permission_row`. */
+export type DeskPermissionRow = "hide" | "read" | "shell" | "edit";
+/** `desk_permission_answer`: 바로 or 묻기. */
+export type DeskPermissionAnswer = "run" | "ask";
+export type DeskPermissions = Record<DeskPermissionRow, DeskPermissionAnswer>;
+/** `desk_irreversible`: what always asks, whatever the rows say. */
+export type DeskIrreversible = "end_working_session" | "force_push" | "delete_remote" | "delete_outside" | "overwrite_outside" | "unreadable";
+/** A card's answer as `desk_approval` sends it (D-83): 한 번 허용, 이 대화에서 계속 허용, 거절. */
+export type DeskApprovalAnswer = "once" | "conversation" | "reject";
+/** Why a card asks, irreversible kinds first: `desk_approval_ask`. */
+export type DeskApprovalAsk = { kind: "irreversible"; value: DeskIrreversible } | { kind: "row"; value: DeskPermissionRow };
 export type DeskNotice = "blocked" | "preparing" | "host_stopped" | "resume_failed" | "login_needed" | "install_failed" | "no_ask_mode" | "turn_failed";
 export type DeskLocation = "desk" | "worktree" | "checkout";
 export type DeskChoice = { id: string; label: string };
@@ -2675,6 +2686,8 @@ export type DeskAgent = {
   signed_in: boolean | null;
   /** The agent's own sign-in command, for the `login_needed` notice. */
   login_command: string;
+  /** The rows of Settings › Desk › 권한 the agent runs without asking, whatever they say (D-82): its own setup lets those run before Hide hears of them. */
+  always_runs: DeskPermissionRow[];
   /** What the agent's last session offered; empty until one opened. */
   models: DeskChoice[];
   efforts: DeskChoice[];
@@ -2687,7 +2700,12 @@ export type DeskItem =
   | { kind: "reply"; id: number; agent: DeskAgentId; text: string; at_ms: number; state: "done" | "stopped"; thought_ms: number | null; steps: DeskSteps; mentions: DeskSessionChip[] }
   | { kind: "switch"; id: number; from: DeskAgentId | null; to: DeskAgentId; carried: "all" | "trimmed" | "none" }
   | { kind: "model"; id: number; model: string | null; effort: string | null }
-  | { kind: "approval"; id: number; card: "command" | "edit" | "other"; command: string; folder: string | null; reason: string | null; state: DeskApprovalState }
+  /**
+   * A call Hide asked the operator about (D-83). `subject` is the session an
+   * archive ends or the path a deletion reaches; `refusal` is the line the
+   * operator sent with 거절.
+   */
+  | { kind: "approval"; id: number; card: "command" | "edit" | "read" | "other"; command: string; folder: string | null; reason: string | null; state: DeskApprovalState; asks: DeskApprovalAsk[]; subject: string | null; refusal: string | null }
   /** `detail` is the install's last line, the sign-in command for `login_needed`, or the blocked call. */
   | { kind: "notice"; id: number; notice: DeskNotice; agent: DeskAgentId | null; detail: string | null }
   /** A letter Desk sent a running session (B16): handed work when `letter_kind` is `request`; no state, no place. `read` once its runtime took it in; `mark` is the recipient row's now, for its chip. */
@@ -2769,7 +2787,7 @@ export type DeskSection = {
   conversation: { generation: number; items: DeskItem[]; dropped: number };
   approvals_waiting: number;
   /** `enabled` is Settings › Desk's switch, off by default (D-76): off, no entry to Desk is drawn. */
-  settings: { enabled: boolean; default_agent: DeskAgentId | null; location: DeskLocation; cap: number };
+  settings: { enabled: boolean; default_agent: DeskAgentId | null; location: DeskLocation; cap: number; permissions: DeskPermissions };
   /** The lane's pin and the tabs kept in its 보기 column, oldest first, at most 16 (B31, B32). */
   lane: { pinned: boolean; kept: DeskKeptTab[] };
 };

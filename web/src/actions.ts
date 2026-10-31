@@ -58,8 +58,10 @@ import {
   type AgentRow,
   type Checkout,
   type DeskAgentId,
+  type DeskApprovalAnswer,
   type DeskLocation,
   type DeskMention,
+  type DeskPermissions,
   type EditorDocumentSnapshot,
   type EditorTabSnapshot,
   type ForkPlacement,
@@ -2239,9 +2241,9 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
       dispatch({ schema_version: 2, kind: "desk_stop", payload: {} });
     },
 
-    /** `한 번 허용` or `거절` on an approval card (B14). */
-    deskApproval(id: number, allow: boolean) {
-      dispatch({ schema_version: 2, kind: "desk_approval", payload: { id, allow } });
+    /** `한 번 허용`, `이 대화에서 계속 허용` or `거절…` on an approval card (D-83); a refusal's line goes to Desk, a blank one is a plain refusal. */
+    deskApproval(id: number, answer: DeskApprovalAnswer, text?: string) {
+      dispatch({ schema_version: 2, kind: "desk_approval", payload: text ? { id, answer, text } : { id, answer } });
     },
 
     /** `＋ 새 대화` (B10). */
@@ -2265,7 +2267,7 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
     },
 
     /** Settings › Desk (B4, B19, B21). */
-    deskSettings(settings: { enabled: boolean; default_agent: DeskAgentId | null; location: DeskLocation; cap: number }) {
+    deskSettings(settings: { enabled: boolean; default_agent: DeskAgentId | null; location: DeskLocation; cap: number; permissions: DeskPermissions }) {
       dispatch({ schema_version: 2, kind: "desk_settings_set", payload: settings });
     },
 
