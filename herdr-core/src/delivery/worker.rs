@@ -827,8 +827,14 @@ fn apply(ledger: &mut Ledger, request: &Request, now: u64) -> Result<(Value, boo
             ..
         } => {
             let observed = target.as_ref().ok_or("agent_pane_required")?;
-            let working_since =
-                (observed.status == "working").then_some(observed.entered_working_at_unix_ms);
+            // The core's turn says whether and since when it works; a turn
+            // not yet laid for Herdr's current state hands nothing over.
+            let working_since = observed
+                .projected_turn()
+                .filter(|projected| {
+                    projected.turn.activity == crate::agent_state::AgentActivity::Working
+                })
+                .map(|projected| projected.working_since(observed));
             let intake = mailbox::gap_pull(ledger, actor, *point, working_since, now)?;
             // The handover is counted before the answer leaves, so a receipt
             // that never comes cannot make the same letter ride every tool;
@@ -1465,6 +1471,7 @@ mod tests {
             thread: None,
             host_scope: Some("fixture".into()),
             turn: crate::delivery::doorbell::Turn::Unread,
+            projected: None,
             unreadable: None,
         };
         for expected in [100, 200] {
@@ -1508,7 +1515,7 @@ mod tests {
             {"id":"sender","pane_id":"sender","agent":"codex","agent_status":"working","state_change_seq":1,"lineage_session":"sender-session"},
             {"id":"recipient","pane_id":"recipient","agent":"codex","agent_status":"idle","state_change_seq":1,"lineage_session":native,"agent_session":reference},
         ]})).unwrap();
-        runtime.observe_delivery(crate::node::TEST_NODE, &payload, None, None);
+        runtime.observe_delivery_laid(crate::node::TEST_NODE, &payload, None, None);
     }
 
     #[test]
@@ -1600,7 +1607,7 @@ mod tests {
             } else {
                 let empty: SessionSnapshotPayload =
                     serde_json::from_value(json!({"agents":[]})).unwrap();
-                guard.observe_delivery(crate::node::TEST_NODE, &empty, None, None);
+                guard.observe_delivery_laid(crate::node::TEST_NODE, &empty, None, None);
             }
             let work = guard.delivery_watch_work();
             drop(guard);
@@ -1641,7 +1648,7 @@ mod tests {
             let payload: SessionSnapshotPayload =
                 serde_json::from_value(json!({ "agents": agents })).unwrap();
             let mut guard = runtime.lock().unwrap();
-            guard.observe_delivery(crate::node::TEST_NODE, &payload, None, None);
+            guard.observe_delivery_laid(crate::node::TEST_NODE, &payload, None, None);
             if archived {
                 crate::runtime::delivery::tests::archive_holding(
                     &mut guard,
@@ -1701,7 +1708,7 @@ mod tests {
             .unwrap();
             let mut guard = runtime.lock().unwrap();
             guard.publish_delivery(Arc::new(ledger.clone()), false);
-            guard.observe_delivery(crate::node::TEST_NODE, &payload, None, None);
+            guard.observe_delivery_laid(crate::node::TEST_NODE, &payload, None, None);
             show_agents(&mut guard, payload);
             let work = guard.delivery_watch_work();
             drop(guard);
@@ -1847,10 +1854,12 @@ mod tests {
             let changed: SessionSnapshotPayload = serde_json::from_value(json!({"agents": if replacement {
                 vec![sender.clone(), json!({"id":"recipient","pane_id":"recipient","agent":"codex","agent_status":"working","state_change_seq":1,"lineage_session":"replacement-session"})]
             } else { vec![sender.clone()] }})).unwrap();
-            runtime
-                .lock()
-                .unwrap()
-                .observe_delivery(crate::node::TEST_NODE, &changed, None, None);
+            runtime.lock().unwrap().observe_delivery_laid(
+                crate::node::TEST_NODE,
+                &changed,
+                None,
+                None,
+            );
             let (worker, client) = Worker::spawn(
                 Arc::downgrade(&runtime),
                 ChangeNotifier::noop(),
@@ -1893,10 +1902,12 @@ mod tests {
             let present: SessionSnapshotPayload = serde_json::from_value(json!({"agents":[sender.clone(),
                 {"id":"recipient","pane_id":"recipient","agent":"codex","agent_status":"working","state_change_seq":1,"lineage_session":"recipient-session"}
             ]})).unwrap();
-            runtime
-                .lock()
-                .unwrap()
-                .observe_delivery(crate::node::TEST_NODE, &present, None, None);
+            runtime.lock().unwrap().observe_delivery_laid(
+                crate::node::TEST_NODE,
+                &present,
+                None,
+                None,
+            );
             let first = client
                 .submit(
                     Effect::Command {
@@ -1910,10 +1921,12 @@ mod tests {
                 .unwrap();
             let absent: SessionSnapshotPayload =
                 serde_json::from_value(json!({"agents":[sender]})).unwrap();
-            runtime
-                .lock()
-                .unwrap()
-                .observe_delivery(crate::node::TEST_NODE, &absent, None, None);
+            runtime.lock().unwrap().observe_delivery_laid(
+                crate::node::TEST_NODE,
+                &absent,
+                None,
+                None,
+            );
             let replay = client
                 .submit(
                     Effect::Command {

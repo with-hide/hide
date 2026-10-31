@@ -289,6 +289,10 @@ Activity, completion and approval are judged in one order: the agent's hook firs
 2. The session file, for the waits no hook reports: a plan waiting for approval (below), with the hook's `working` standing in for Herdr's `working` when the session has a hook turn.
 3. Herdr's `agent_status` and `completion_seq`, only for a session whose hook has reported no turn: `working` is Working, `idle` and `done` are stopped, `done` or `idle` with a `completion_seq` reports a completion, and any other value reads as unknown rather than idle.
 
+These ranks are decided once, in `agent_state::turn_projection` (activity, an approval prompt, a question or plan approval of the agent's own), and every consumer reads that answer: the row's axes, the letter doorbell and the tool-letter handover ([delivery.md](delivery.md#safe-intake-and-manual-fallback)), and agent sleep through the row.
+A row the turn shows at rest is not by that a pane safe to type into: Herdr's blocked prompt and readiness, Hide's input clocks and the composer read stay the doorbell's own gate.
+Regression owner: `runtime::tests::turn_authority`, which crosses the hook, Herdr and the session read and asserts both the row and the letter's hold.
+
 An agent-list transport failure makes the retained telemetry unconfirmed while the topology stream remains connected.
 Until a successful agent list or bootstrap snapshot confirms it again, the agent keeps its identity and task title but has Unknown activity, no completion or current demand, and requires a status check before closing.
 An identical successful list restores the confirmed state; a topology event alone does not confirm the entire agent list.

@@ -36,7 +36,7 @@ fn observe(runtime: &mut Runtime, panes: &[(&str, &str)]) {
             .map(|(pane, session)| delivery_agent(registration_of(pane), pane, "claude", session))
             .collect(),
     );
-    runtime.observe_delivery(&node, &payload, Some("scope"), None);
+    runtime.observe_delivery_laid(&node, &payload, Some("scope"), None);
 }
 
 /// Every agent registered as `hide agent spawn --parent` leaves it, with the
@@ -398,7 +398,7 @@ fn one_reopen_brings_a_closed_tree_back_with_its_registrations_and_parents() {
         .collect::<Vec<_>>();
     // Herdr lists each reopened agent under the name it was started with.
     let node = runtime.node.as_str().to_owned();
-    runtime.observe_delivery(
+    runtime.observe_delivery_laid(
         &node,
         &delivery_panes(
             resumed_view
@@ -455,7 +455,7 @@ fn one_reopen_brings_a_closed_tree_back_with_its_registrations_and_parents() {
     assert_eq!(parent_pane(&runtime, "w5:p5").as_deref(), Some("w1:p14"));
 
     // Once the ledger shows the move, nothing is held any more.
-    runtime.observe_delivery(
+    runtime.observe_delivery_laid(
         &node,
         &delivery_panes(
             resumed_view

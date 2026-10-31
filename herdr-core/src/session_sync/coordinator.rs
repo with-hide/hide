@@ -1434,6 +1434,8 @@ fn publish_replica(
                     |pane| pane.starts_with(&prefix),
                 )
         });
+        // The doorbell reads the turn the core decides from these facts.
+        let turns = crate::runtime::delivery::delivery_turns(&payload);
         let projection = match held_state.as_ref() {
             Some(state) => SessionReplica::project_remote_state(state, target_id, payload),
             None => replica.project_remote(target_id, payload),
@@ -1469,6 +1471,7 @@ fn publish_replica(
                 if !guard.remote_coordinator_is_current(target_id, &context.engine) {
                     return false;
                 }
+                guard.lay_delivery_turns(target_id, turns);
                 guard.ingest_remote_session(target_id, fetched)
             }
             Err(_) => return false,

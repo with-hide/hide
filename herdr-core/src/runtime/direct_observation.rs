@@ -344,7 +344,7 @@ mod tests {
         let (runtime, _, _, _) = crate::runtime::delivery::tests::fixture(root);
         {
             let mut guard = runtime.lock().unwrap();
-            guard.observe_delivery(
+            guard.observe_delivery_laid(
                 crate::node::TEST_NODE,
                 &lifecycle("terminal-recipient"),
                 Some("fixture-server"),
@@ -399,7 +399,7 @@ mod tests {
         let runtime = setup(root.path(), &herdr);
         {
             let mut guard = runtime.lock().unwrap();
-            guard.observe_delivery(
+            guard.observe_delivery_laid(
                 crate::node::TEST_NODE,
                 &lifecycle_for_kind("terminal-recipient", "opencode"),
                 Some("fixture-server"),
@@ -549,7 +549,7 @@ mod tests {
             outcome: DirectOutcome::Submitted,
             reason: None,
         };
-        runtime.lock().unwrap().observe_delivery(
+        runtime.lock().unwrap().observe_delivery_laid(
             crate::node::TEST_NODE,
             &lifecycle("replacement-terminal"),
             Some("fixture-server"),

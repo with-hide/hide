@@ -1695,7 +1695,7 @@ fn a_parents_request_stays_the_childs_work_when_the_parents_screen_title_changes
          "lineage_session":crate::engine::tokens::session_digest("worker-native")},
     ]}))
     .unwrap();
-    runtime.observe_delivery(crate::node::TEST_NODE, &payload, Some("scope"), None);
+    runtime.observe_delivery_laid(crate::node::TEST_NODE, &payload, Some("scope"), None);
     let actor = |pane: &str| -> Actor { runtime.delivery_observations[pane].actor.clone() };
     let (lead, worker) = (actor("lead"), actor("worker"));
     let registered = |id: &str, name: Option<&str>, parent: Option<&str>, actor: &Actor| {

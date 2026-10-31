@@ -2183,10 +2183,12 @@ mod tests {
                     "state_change_seq":1,"lineage_session":child_actor.session},
             ]}))
             .unwrap();
-            runtime
-                .lock()
-                .unwrap()
-                .observe_delivery(crate::node::TEST_NODE, &payload, None, None);
+            runtime.lock().unwrap().observe_delivery_laid(
+                crate::node::TEST_NODE,
+                &payload,
+                None,
+                None,
+            );
             let now = std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .unwrap()

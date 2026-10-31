@@ -24,6 +24,10 @@ pub(crate) struct Observation {
     /// post-tool event can name it. A freshness TTL alone proves no identity.
     pub observed_since_unix_ms: u64,
     pub terminal_id: Option<String>,
+    /// Herdr's own `agent_status`, read only as a gate on input: whether
+    /// Herdr knows the agent's state, holds it at its blocked prompt (where
+    /// `agent.prompt` refuses), and the clocks of a draft and of the quiet
+    /// period. Whether the agent works or waits is `projected`, never this.
     pub status: String,
     /// Keep identity and input clocks while a read is delayed, but admit no bell.
     pub telemetry_stale: bool,
@@ -56,6 +60,11 @@ pub(crate) struct Observation {
     pub thread: Option<super::session_thread::ThreadReference>,
     pub host_scope: Option<String>,
     pub turn: Turn,
+    /// The turn the core decides for the agent (`agent_state::turn_projection`),
+    /// laid where the hook's and the session read's facts are laid
+    /// (`lay_delivery_turns`). It stands only for the Herdr state it was laid
+    /// under ([`Self::projected_turn`]).
+    pub projected: Option<ProjectedTurn>,
     /// Why the session the pane runs cannot be read, while its turn is
     /// [`Turn::Unread`] because the last read refused for a reason reading
     /// again cannot clear (the reader's code). Letters wait on it, so their
@@ -63,7 +72,64 @@ pub(crate) struct Observation {
     pub unreadable: Option<String>,
 }
 
+/// The core's turn for an agent, as laid on its observation.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct ProjectedTurn {
+    /// Herdr's `state_change_seq` of the agent the turn was decided from.
+    pub seq: Option<u64>,
+    pub turn: crate::agent_state::TurnProjection,
+    /// When the core's activity last changed on this pane; `None` while it
+    /// is the one first laid, whose start Herdr's own clocks say.
+    pub changed_at_unix_ms: Option<u64>,
+}
+
+impl ProjectedTurn {
+    /// Since when the agent works, for the wait a letter makes mid-turn.
+    pub(crate) fn working_since(&self, observation: &Observation) -> u64 {
+        self.changed_at_unix_ms
+            .unwrap_or(observation.entered_working_at_unix_ms)
+    }
+
+    /// The last change of the pane's state, Herdr's or the core's turn, which
+    /// the quiet period counts from.
+    pub(crate) fn changed_at(&self, observation: &Observation) -> u64 {
+        observation
+            .status_changed_at_unix_ms
+            .max(self.changed_at_unix_ms.unwrap_or(0))
+    }
+}
+
+/// Each agent's turn as the core decides it, by the agent's pane id in
+/// `payload`, which must already carry the hook's and the session read's
+/// facts.
+pub(crate) fn delivery_turns(
+    payload: &SessionSnapshotPayload,
+) -> Vec<(String, Option<u64>, crate::agent_state::TurnProjection)> {
+    payload
+        .agents
+        .iter()
+        .filter_map(|agent| {
+            let pane = agent.pane_id.as_deref()?;
+            Some((
+                pane.to_owned(),
+                agent.state_change_seq,
+                crate::agent_state::turn_projection(agent),
+            ))
+        })
+        .collect()
+}
+
 impl Observation {
+    /// The core's turn for the Herdr state the pane is observed in: none
+    /// while the read is stale or while the turn was decided for an older
+    /// state, since the hook's and the session read's facts for the new
+    /// state are laid after it is observed.
+    pub(crate) fn projected_turn(&self) -> Option<&ProjectedTurn> {
+        self.projected
+            .as_ref()
+            .filter(|projected| !self.telemetry_stale && projected.seq == self.state_change_seq)
+    }
+
     /// The name the agent answers to, apart from where it sits: an agent
     /// Herdr gave no name is called by its pane id (`actor.name` restates
     /// the pane), and a pane id is per machine, so it is no name that a
@@ -184,7 +250,7 @@ impl Runtime {
             let turn = match session_kind {
                 Some(kind) if kind.reports_turns() => labels
                     .and_then(|labels| labels.waiting(agent))
-                    .map_or(Turn::Unread, Turn::Read),
+                    .map_or(Turn::Unread, |_| Turn::Read),
                 _ => Turn::NotReported,
             };
             let unreadable = (turn == Turn::Unread)
@@ -251,6 +317,7 @@ impl Runtime {
                     .filter(|scope| scope.len() <= 4096)
                     .map(str::to_owned),
                 turn,
+                projected: previous.and_then(|old| old.projected),
                 unreadable,
             };
             self.delivery_observations
@@ -278,6 +345,62 @@ impl Runtime {
         self.settle_dormant_registrations();
         self.follow_resumed_conductors(device);
         self.follow_session_thread(device, payload);
+    }
+
+    /// Observes `payload` and lays the turn the session ingest lays from it,
+    /// for a test whose agents carry no hook facts.
+    #[cfg(test)]
+    pub(crate) fn observe_delivery_laid(
+        &mut self,
+        device: &str,
+        payload: &SessionSnapshotPayload,
+        host_scope: Option<&str>,
+        labels: Option<&LabelOverlay>,
+    ) {
+        self.observe_delivery(device, payload, host_scope, labels);
+        let mut laid = payload.clone();
+        if let Some(labels) = labels {
+            labels.apply(&mut laid);
+        }
+        self.lay_delivery_turns(device, delivery_turns(&laid));
+    }
+
+    /// Lays the core's turn on each observed pane of `device`, from agents
+    /// that carry the hook's and the session read's facts (`delivery_turns`).
+    /// Runs where those facts are laid: the local session's ingest and a
+    /// device's coordinator, so a hook event's republish moves it too.
+    pub(crate) fn lay_delivery_turns(
+        &mut self,
+        device: &str,
+        turns: impl IntoIterator<Item = (String, Option<u64>, crate::agent_state::TurnProjection)>,
+    ) {
+        let now = unix_milliseconds();
+        let local = device == self.node.as_str();
+        for (pane, seq, turn) in turns {
+            // A device's panes in the local payload carry no hook facts of
+            // their own; the device's coordinator lays them.
+            let key = if local {
+                if super::is_remote_scoped_pane_id(&pane) {
+                    continue;
+                }
+                pane
+            } else {
+                crate::session_sync::remote_pane_id(device, &pane)
+            };
+            let Some(observation) = self.delivery_observations.get_mut(&key) else {
+                continue;
+            };
+            let changed_at_unix_ms = match observation.projected {
+                Some(old) if old.turn.activity == turn.activity => old.changed_at_unix_ms,
+                Some(_) => Some(now),
+                None => None,
+            };
+            observation.projected = Some(ProjectedTurn {
+                seq,
+                turn,
+                changed_at_unix_ms,
+            });
+        }
     }
 
     /// Continue a registration only when this host still reports its terminal
@@ -1959,7 +2082,9 @@ pub(crate) mod tests {
     use crate::handle::ChangeNotifier;
     use crate::model::{CoreOptions, SCHEMA_VERSION};
     use crate::sidebar::SessionSnapshotPayload;
+    use hide_node_link::panes::HookTurn;
     use hide_node_link::terminal::TerminalReport;
+    use hide_session::turns::Waiting;
     use serde_json::json;
     use std::path::PathBuf;
     use std::sync::{Arc, Mutex};
@@ -2067,7 +2192,7 @@ pub(crate) mod tests {
             {"id":"sender","pane_id":"sender","agent":"codex","agent_status":"working","state_change_seq":1,"lineage_session":"sender-session"},
             {"id":"recipient","pane_id":"recipient","agent":"codex","agent_status":"working","state_change_seq":1,"lineage_session":"recipient-session"},
         ]})).unwrap();
-        runtime.observe_delivery(crate::node::TEST_NODE, &payload, None, None);
+        runtime.observe_delivery_laid(crate::node::TEST_NODE, &payload, None, None);
         runtime.snapshot.status.herdr.state = "connected".into();
         let panes = ["sender", "recipient"]
             .into_iter()
@@ -2214,7 +2339,7 @@ pub(crate) mod tests {
             {"id":"recipient","pane_id":"recipient","agent":"codex","agent_status":"idle","state_change_seq":2,
              "lineage_session":crate::engine::tokens::session_digest(native)},
         ]})).unwrap();
-        runtime.observe_delivery(crate::node::TEST_NODE, &payload, None, None);
+        runtime.observe_delivery_laid(crate::node::TEST_NODE, &payload, None, None);
         let observation = runtime.delivery_observations.get_mut("recipient").unwrap();
         read_nothing_waits(observation);
         observation.status_changed_at_unix_ms = 0;
@@ -2275,11 +2400,11 @@ pub(crate) mod tests {
     /// Herdr, with no key typed since.
     pub(crate) fn observe_working_since(runtime: &mut Runtime, pane: &str, since: u64) {
         let observation = runtime.delivery_observations.get_mut(pane).unwrap();
-        observation.status = "working".into();
         observation.entered_working_at_unix_ms = since;
         observation.status_changed_at_unix_ms = since;
         observation.last_input_at_unix_ms = since - 1;
         observation.last_submit_at_unix_ms = since - 1;
+        observation.herdr("working");
     }
 
     /// The pane as the core observes it after a turn a prompt hook of its
@@ -2297,8 +2422,8 @@ pub(crate) mod tests {
     /// The pane's turn ends at `at`: Herdr reports it idle from then on.
     pub(crate) fn end_turn(runtime: &mut Runtime, pane: &str, at: u64) {
         let observation = runtime.delivery_observations.get_mut(pane).unwrap();
-        observation.status = "idle".into();
         observation.status_changed_at_unix_ms = at;
+        observation.herdr("idle");
     }
 
     /// A prompt hook of the pane's own session reaching the core now.
@@ -2322,7 +2447,7 @@ pub(crate) mod tests {
             {"id":"sender","pane_id":"sender","agent":"codex","agent_status":"working","state_change_seq":1,"lineage_session":"sender-session"},
             {"id":"recipient","pane_id":"recipient","agent":"codex","agent_status":status,"state_change_seq":sequence,"lineage_session":"recipient-session"},
         ]})).unwrap();
-        runtime.observe_delivery(crate::node::TEST_NODE, &payload, None, None);
+        runtime.observe_delivery_laid(crate::node::TEST_NODE, &payload, None, None);
         read_nothing_waits(runtime.delivery_observations.get_mut("recipient").unwrap());
     }
 
@@ -2331,16 +2456,64 @@ pub(crate) mod tests {
     /// what the read says is tested on its own
     /// (`the_session_read_decides_the_turn_for_the_current_state_only`).
     pub(crate) fn read_nothing_waits(observation: &mut Observation) {
-        observation.turn = Turn::Read(hide_session::turns::Waiting::Nothing);
+        observation.reads(Waiting::Nothing);
     }
 
-    /// What the recipient's session read says, as a doorbell test sets it.
-    pub(crate) fn recipient_turn(runtime: &mut Runtime, turn: Turn) {
-        runtime
-            .delivery_observations
-            .get_mut("recipient")
-            .unwrap()
-            .turn = turn;
+    /// What the recipient's session read says, as a doorbell test sets it:
+    /// `None` for a state no read settled.
+    pub(crate) fn recipient_reads(runtime: &mut Runtime, wait: Option<Waiting>) {
+        let observation = runtime.delivery_observations.get_mut("recipient").unwrap();
+        match wait {
+            Some(wait) => observation.reads(wait),
+            None => observation.turn = Turn::Unread,
+        }
+    }
+
+    impl Observation {
+        /// The pane with the turn the session ingest lays on it: the core's
+        /// projection of an agent in the pane's Herdr state, with `hook` the
+        /// turn its session's hook reported and `wait` what its session read
+        /// says for that state, laid first, so Herdr's clocks say when it
+        /// began.
+        pub(crate) fn laid(mut self, hook: Option<HookTurn>, wait: Option<Waiting>) -> Self {
+            let mut agent: crate::sidebar::SessionAgentPayload = serde_json::from_value(json!({
+                "pane_id": self.actor.pane_id,
+                "agent": self.actor.kind,
+                "agent_status": self.status,
+                "state_change_seq": self.state_change_seq,
+            }))
+            .unwrap();
+            agent.hook = hook;
+            agent.facts = wait.map(|wait| crate::request_view::RowFacts {
+                awaiting_operator: matches!(wait, Waiting::Question | Waiting::PlanApproval),
+                user_turn: (wait == Waiting::Question).then_some(
+                    hide_session::turns::UserTurnFact {
+                        kind: hide_session::turns::UserTurnKind::Question,
+                        content: None,
+                    },
+                ),
+                ..Default::default()
+            });
+            let turn = crate::agent_state::turn_projection(&agent);
+            self.projected = Some(ProjectedTurn {
+                seq: self.state_change_seq,
+                turn,
+                changed_at_unix_ms: None,
+            });
+            self
+        }
+
+        /// Herdr reports `status` and the ingest lays the turn again.
+        pub(crate) fn herdr(&mut self, status: &str) {
+            self.status = status.into();
+            *self = self.clone().laid(None, None);
+        }
+
+        /// The session read settled the state and says `wait`.
+        pub(crate) fn reads(&mut self, wait: Waiting) {
+            self.turn = Turn::Read;
+            *self = self.clone().laid(None, Some(wait));
+        }
     }
 
     /// The three facts the bell reads, per pane, optionally set to zero so a
@@ -2386,7 +2559,7 @@ pub(crate) mod tests {
             ]}))
             .unwrap();
             payload.agents[0].telemetry_stale = true;
-            guard.observe_delivery(crate::node::TEST_NODE, &payload, None, None);
+            guard.observe_delivery_laid(crate::node::TEST_NODE, &payload, None, None);
             assert_eq!(clocks(&mut guard, "recipient", false), before);
             let work = guard.delivery_watch_work();
             assert_eq!(work.len(), 1);
@@ -2408,7 +2581,7 @@ pub(crate) mod tests {
             let during = clocks(&mut guard, "recipient", false);
             assert!(during.0 > 0);
             payload.agents[0].telemetry_stale = false;
-            guard.observe_delivery(crate::node::TEST_NODE, &payload, None, None);
+            guard.observe_delivery_laid(crate::node::TEST_NODE, &payload, None, None);
             read_nothing_waits(guard.delivery_observations.get_mut("recipient").unwrap());
             assert_eq!(clocks(&mut guard, "recipient", false), during);
             assert_eq!(
@@ -2735,7 +2908,6 @@ pub(crate) mod tests {
     #[test]
     fn the_session_read_decides_the_turn_for_the_current_state_only() {
         use crate::delivery::doorbell::Turn;
-        use hide_session::turns::Waiting;
         let root = tempfile::tempdir().unwrap();
         let (runtime, _, _, _) = fixture(root.path());
         let mut guard = runtime.lock().unwrap();
@@ -2747,51 +2919,57 @@ pub(crate) mod tests {
                  "agent_session":{"kind":"id","value":native}},
             ]}))
             .unwrap();
-            guard.observe_delivery(crate::node::TEST_NODE, &payload, None, labels);
-            guard.delivery_observations["recipient"].turn
+            guard.observe_delivery_laid(crate::node::TEST_NODE, &payload, None, labels);
+            let observation = &guard.delivery_observations["recipient"];
+            (
+                observation.turn,
+                observation
+                    .projected_turn()
+                    .is_some_and(|projected| projected.turn.operator_wait),
+            )
         };
         assert_eq!(
             observe(&mut guard, "codex", 2, "recipient-native", Some(&overlay)),
-            Turn::Read(Waiting::PlanApproval)
+            (Turn::Read, true)
         );
         assert_eq!(
             observe(&mut guard, "codex", 3, "recipient-native", Some(&overlay)),
-            Turn::Unread,
+            (Turn::Unread, false),
             "a newer state than the read"
         );
         assert_eq!(
             observe(&mut guard, "codex", 2, "another-native", Some(&overlay)),
-            Turn::Unread,
+            (Turn::Unread, false),
             "another session in the pane"
         );
         assert_eq!(
             observe(&mut guard, "codex", 2, "recipient-native", None),
-            Turn::Unread
+            (Turn::Unread, false)
         );
         assert_eq!(
             observe(&mut guard, "claude", 2, "recipient-native", None),
-            Turn::Unread,
+            (Turn::Unread, false),
             "a supported question reader must finish before the bell rings"
         );
         assert_eq!(
             observe(&mut guard, "opencode", 2, "recipient-native", None),
-            Turn::Unread,
+            (Turn::Unread, false),
             "OpenCode's question reader finishes before a bell too"
         );
         assert_eq!(
             observe(&mut guard, "grok", 2, "recipient-native", None),
-            Turn::Unread,
+            (Turn::Unread, false),
             "Grok's question and plan reader finishes before a bell too"
         );
         assert_eq!(
             observe(&mut guard, "cursor", 2, "recipient-native", None),
-            Turn::NotReported
+            (Turn::NotReported, false)
         );
         // Adapter D-08/B5: every spelling of one agent reads the same turn.
         for kind in [" Codex", "CODEX", "cOdEx"] {
             assert_eq!(
                 observe(&mut guard, kind, 2, "recipient-native", Some(&overlay)),
-                Turn::Read(Waiting::PlanApproval),
+                (Turn::Read, true),
                 "the normalized kind as the bell target and session reader read it"
             );
         }
@@ -2820,12 +2998,16 @@ pub(crate) mod tests {
                  "agent_session":{"kind":"id","value":"recipient-native"}},
             ]}))
             .unwrap();
-            guard.observe_delivery(crate::node::TEST_NODE, &payload, None, Some(&overlay));
+            guard.observe_delivery_laid(crate::node::TEST_NODE, &payload, None, Some(&overlay));
             let long_ago = unix_milliseconds().saturating_sub(10 * 60_000);
             let observation = guard.delivery_observations.get_mut("recipient").unwrap();
             observation.last_input_at_unix_ms = long_ago;
             observation.last_submit_at_unix_ms = long_ago;
             observation.status_changed_at_unix_ms = long_ago;
+            // The turn changed from the fixture's work with Herdr's state.
+            if let Some(projected) = observation.projected.as_mut() {
+                projected.changed_at_unix_ms = Some(long_ago);
+            }
             guard
                 .delivery_bell_verdict(&target.actor, WAITED, unix_milliseconds())
                 .err()
@@ -2873,7 +3055,7 @@ pub(crate) mod tests {
         let replaced: SessionSnapshotPayload = serde_json::from_value(json!({"agents":[
             {"id":"recipient","pane_id":"recipient","agent":"codex","agent_status":"idle","state_change_seq":2,"lineage_session":"replacement-session"},
         ]})).unwrap();
-        guard.observe_delivery(crate::node::TEST_NODE, &replaced, None, None);
+        guard.observe_delivery_laid(crate::node::TEST_NODE, &replaced, None, None);
         assert_eq!(
             guard
                 .delivery_bell_verdict(&target.actor, WAITED, now)
@@ -2881,7 +3063,7 @@ pub(crate) mod tests {
             Some(Hold::Session)
         );
         let empty: SessionSnapshotPayload = serde_json::from_value(json!({"agents":[]})).unwrap();
-        guard.observe_delivery(crate::node::TEST_NODE, &empty, None, None);
+        guard.observe_delivery_laid(crate::node::TEST_NODE, &empty, None, None);
         assert_eq!(
             guard
                 .delivery_bell_verdict(&target.actor, WAITED, now)
@@ -2994,7 +3176,7 @@ pub(crate) mod tests {
             {"id":"sender","pane_id":"sender","agent":"codex","agent_status":"working","state_change_seq":1,"lineage_session":"sender-session"},
             {"id":"recipient","pane_id":"recipient","agent":"codex","agent_status":"idle","state_change_seq":2,"lineage_session":own},
         ]})).unwrap();
-        guard.observe_delivery(crate::node::TEST_NODE, &payload, None, None);
+        guard.observe_delivery_laid(crate::node::TEST_NODE, &payload, None, None);
         let context = authority(&target.actor).context;
         clocks(&mut guard, "recipient", true);
         guard
@@ -3125,7 +3307,7 @@ pub(crate) mod tests {
                  "agent_session":{"kind":"id","value":native}},
             ]}))
             .unwrap();
-            guard.observe_delivery(crate::node::TEST_NODE, &payload, None, Some(labels));
+            guard.observe_delivery_laid(crate::node::TEST_NODE, &payload, None, Some(labels));
         };
         observe(&mut guard, "recipient-native", &refused);
         let recipient = guard.delivery_observations["recipient"].actor.clone();
@@ -3208,7 +3390,7 @@ pub(crate) mod tests {
             {"id":"sender","pane_id":"sender","agent":"codex","agent_status":"working","state_change_seq":1,"lineage_session":"sender-session"},
             {"id":"recipient","pane_id":"recipient","agent":"opencode","agent_status":"working","state_change_seq":2,"lineage_session":own},
         ]})).unwrap();
-        guard.observe_delivery(crate::node::TEST_NODE, &payload, None, None);
+        guard.observe_delivery_laid(crate::node::TEST_NODE, &payload, None, None);
         let recipient = guard.delivery_observations["recipient"].actor.clone();
         let send = |intent: &str, now: bool| Command::Send {
             target: "recipient".into(),
@@ -3363,14 +3545,14 @@ pub(crate) mod tests {
                     unreachable_since_unix_ms: None,
                 });
             let payload: SessionSnapshotPayload = serde_json::from_value(json!({"agents":[{"id":"remote-sender","pane_id":"sender","agent":"claude","agent_status":"working","state_change_seq":1,"lineage_session":"remote-session"}]})).unwrap();
-            guard.observe_delivery("device", &payload, Some("fixture-device"), None);
+            guard.observe_delivery_laid("device", &payload, Some("fixture-device"), None);
             // The core's recipient has a name of its own, which is how a
             // device's agent reaches a pane on another machine.
             let core: SessionSnapshotPayload = serde_json::from_value(json!({"agents":[
                 {"id":"sender","pane_id":"sender","agent":"codex","agent_status":"working","state_change_seq":1,"lineage_session":"sender-session"},
                 {"id":"recipient-agent","pane_id":"recipient","agent":"codex","agent_status":"working","state_change_seq":1,"lineage_session":"recipient-session"},
             ]})).unwrap();
-            guard.observe_delivery(crate::node::TEST_NODE, &core, None, None);
+            guard.observe_delivery_laid(crate::node::TEST_NODE, &core, None, None);
             context = guard
                 .workspace_control_query("device", caller, Query::Info)
                 .unwrap()
@@ -3441,7 +3623,7 @@ pub(crate) mod tests {
             {"id":"w1:p5","pane_id":"w1:p5","agent":"codex","agent_status":"working","state_change_seq":1,"lineage_session":"core-unnamed-session"},
             {"id":"w1:p6","pane_id":"w1:p6","agent":"codex","agent_status":"working","state_change_seq":1,"lineage_session":"core-unnamed-only-session"},
         ]})).unwrap();
-        guard.observe_delivery(crate::node::TEST_NODE, &local, None, None);
+        guard.observe_delivery_laid(crate::node::TEST_NODE, &local, None, None);
         let mut remote = guard.snapshot.navigator.workspaces[0].clone();
         remote.device_id = "device".into();
         remote.id = "remote-workspace".into();
@@ -3472,7 +3654,7 @@ pub(crate) mod tests {
             {"id":"w1:p5","pane_id":"w1:p5","agent":"claude","agent_status":"working","state_change_seq":1,"lineage_session":"device-unnamed-session"},
             {"id":"w1:p7","pane_id":"w1:p7","agent":"claude","agent_status":"working","state_change_seq":1,"lineage_session":"device-unnamed-only-session"},
         ]})).unwrap();
-        guard.observe_delivery("device", &device, Some("fixture-device"), None);
+        guard.observe_delivery_laid("device", &device, Some("fixture-device"), None);
         ("sender".to_owned(), "remote:device:pane:sender".to_owned())
     }
 
@@ -3786,7 +3968,7 @@ pub(crate) mod tests {
              "lineage_session":crate::engine::tokens::session_digest("child-native")},
         ]}))
         .unwrap();
-        runtime.observe_delivery(crate::node::TEST_NODE, &payload, Some("scope"), None);
+        runtime.observe_delivery_laid(crate::node::TEST_NODE, &payload, Some("scope"), None);
         let mut ledger = (*runtime.delivery_state().unwrap()).clone();
         for (id, pane) in [("agent-1", "lead"), ("agent-2", "child")] {
             ledger.agents.push(crate::coordination::AgentRecord {
@@ -3860,7 +4042,7 @@ pub(crate) mod tests {
                     "lineage_session":crate::engine::tokens::session_digest("child-native")}
             ]}))
             .unwrap();
-            guard.observe_delivery(crate::node::TEST_NODE, &payload, Some("scope"), None);
+            guard.observe_delivery_laid(crate::node::TEST_NODE, &payload, Some("scope"), None);
             assert!(!guard.delivery_registrations_gone().contains_key("agent-2"));
         }
         client
@@ -3903,7 +4085,7 @@ pub(crate) mod tests {
                 "agents":[{"id":"child","pane_id":"moved-child","agent":"codex",
                     "agent_status":"working","lineage_session":crate::engine::tokens::session_digest(session)}]
             })).unwrap();
-            guard.observe_delivery(crate::node::TEST_NODE, &payload, Some(scope), None);
+            guard.observe_delivery_laid(crate::node::TEST_NODE, &payload, Some(scope), None);
             assert!(
                 !guard
                     .delivery_registration_rebinds()
@@ -3942,7 +4124,7 @@ pub(crate) mod tests {
                     "lineage_session":crate::engine::tokens::session_digest("child-native")}]
             })).unwrap();
             // This is the Remote coordinator's actual calling convention.
-            guard.observe_delivery("device", &payload, None, None);
+            guard.observe_delivery_laid("device", &payload, None, None);
             assert!(!guard.delivery_registrations_gone().contains_key("agent-2"));
             // Until the store moves the registration, the watch on it still
             // names the old pane, which a watch tick must not read as gone.
@@ -3987,7 +4169,7 @@ pub(crate) mod tests {
         )
         .unwrap();
         registered_pair(&mut runtime.lock().unwrap());
-        runtime.lock().unwrap().observe_delivery(
+        runtime.lock().unwrap().observe_delivery_laid(
             crate::node::TEST_NODE,
             &only_lead(),
             Some("scope"),
@@ -4062,7 +4244,7 @@ pub(crate) mod tests {
             )
             .unwrap();
             guard.delivery_ledger = Ok(Arc::new(ledger));
-            guard.observe_delivery(crate::node::TEST_NODE, &only_lead(), Some("scope"), None);
+            guard.observe_delivery_laid(crate::node::TEST_NODE, &only_lead(), Some("scope"), None);
             (lead, child, sent.id)
         };
         client
@@ -4132,7 +4314,7 @@ pub(crate) mod tests {
         ledger.next_id += 1;
         guard.delivery_ledger = Ok(Arc::new(ledger));
         // The snapshot lists only the lead.
-        guard.observe_delivery(crate::node::TEST_NODE, &only_lead(), Some("scope"), None);
+        guard.observe_delivery_laid(crate::node::TEST_NODE, &only_lead(), Some("scope"), None);
         assert_eq!(
             guard
                 .delivery_registrations_gone()
@@ -4167,7 +4349,7 @@ pub(crate) mod tests {
             let store = crate::composer_store::ComposerStore::new(path.to_owned());
             let marks = store.restore(unix_milliseconds());
             guard.install_composer_store(store, marks);
-            guard.observe_delivery(crate::node::TEST_NODE, payload, None, None);
+            guard.observe_delivery_laid(crate::node::TEST_NODE, payload, None, None);
         }
         runtime
     }
@@ -4252,7 +4434,7 @@ pub(crate) mod tests {
         .unwrap();
         let runtime = started_with_store(&root.path().join("two"), &marks, &working);
         // The turn that started while the daemon was away took the draft.
-        runtime.lock().unwrap().observe_delivery(
+        runtime.lock().unwrap().observe_delivery_laid(
             crate::node::TEST_NODE,
             &idle_recipient(),
             None,
@@ -4299,7 +4481,7 @@ pub(crate) mod tests {
                 {"id":"recipient","pane_id":"recipient","agent":"codex","agent_status":"working","state_change_seq":1,
                     "lineage_session":crate::engine::tokens::session_digest("reader-session")},
             ]})).unwrap();
-            guard.observe_delivery(crate::node::TEST_NODE, &payload, None, None);
+            guard.observe_delivery_laid(crate::node::TEST_NODE, &payload, None, None);
         }
         let context = authority(&sender).context;
         let run = |pane: &str, command: Command| {

@@ -2507,6 +2507,8 @@ impl Runtime {
                 .lay(payload, str::to_owned, |pane| {
                     !is_remote_scoped_pane_id(pane)
                 });
+            let node = self.node.clone();
+            self.lay_delivery_turns(node.as_str(), super::delivery::delivery_turns(payload));
             self.settle_agent_sleep(payload);
             // A session without a catalog reads its paths here, before the
             // clamps read the session's cwds.
