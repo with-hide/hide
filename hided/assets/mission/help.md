@@ -165,29 +165,48 @@ Every worker's brief, change or verify, says in its first line what the node is,
   Start every reviewer and verifier yourself, as a worker of the mission, so the cap counts it; tell a worker not to start agents of its own.
   Then bind it to its line: `hide mission node <key> --reviewer <agent-N>` (or `--verifier`), which Hide refuses for the node's own worker (`mission_checker_is_worker`) or an agent it does not know (`mission_checker_unknown`).
   End a finished worker with `hide agent end <id>` to free its place, and start the next node then.
-- When a node is done, failed or dropped, its pull request merges or closes, or the mission closes, Hide puts that node's worker and checkers to sleep once they rest and are off the operator's screen (never you); a sleeping worker still counts against the cap until you end it, and `hide agent list` and `hide ps` show it `asleep` until it wakes.
+- When a node is done or dropped, every pull request it holds merges or closes, or the mission closes, Hide puts that node's worker and checkers to sleep once they rest and are off the operator's screen (never you); a sleeping worker still counts against the cap until you end it, and `hide agent list` and `hide ps` show it `asleep` until it wakes.
   A `request` or `block` letter wakes it again with its conversation, so send a reworked node's worker its new work as a letter; `hide agent sleep <id>` puts a resting worker to sleep yourself.
 - When a `hide mission` command answers `mission_unavailable`, Hide could not read its mission record: start no worker and tell the operator, since nothing then counts your workers against the cap.
 - When the usage `hide agent catalog` reports is close to a limit, start nothing new, say why with `hide mission delay --line <why>`, and tell the operator in conversation if it holds for long. Clear it when you go on.
 
 ## 4. While it runs
 
+- A node is `planned` (the plan sets it), `working`, `done` or `dropped`; `--status` takes `working`, `done` or `dropped` and refuses any other value (`mission_status_refused`, which names the three).
+  Writing code, CI, review and the merge wait are all `working`; what waits on you or the operator is the node's raise (below), not a status.
 - Keep each node's line current: `--line` says what it does now, its conclusion or its check's result; `--pr`, `--base-pr` and `--branch` name what it made.
+  `--pr <n>` adds a pull request to the node as its current one, keeping those it holds; `--no-pr` lets go of every one.
   When a `direct` change reaches main, record its commit with `--commit <sha>`; when a `verify` node ends, record `--verdict pass|fail` and `--checks <passed>/<total>`.
   Hide refuses them on any other kind of node, and the map shows them as the node's result.
-- Hide wakes you with a letter when one of the mission's pull requests merges, gets a review asking for changes, or gets a new commit, and when an outside node is in main or failed.
+- Hide wakes you with a letter when one of the mission's pull requests merges, gets a review asking for changes, or gets a new commit, and when an outside node is in main.
   When a lower pull request of a stack changes, bring the change into the one above it with a merge, never a rebase.
 - Never force push and never rebase; the repository's own rules (merge commands, checks before a merge) come first.
-- A node that fails: change the method yourself (retry, another worker, another order, split or join nodes), count it with `--attempts`, and leave the reason in `--change`.
+- A node whose approach fails: change the method yourself (retry, another worker, another order, split or join nodes), count it with `--attempts`, and leave the reason in `--change`.
   The same problem unsolved after two attempts goes to the operator with what you tried and what you need decided.
 - Ask at once, without attempts, when the goal, the finish line or the scope would change, or when only a person can act (a login that expired, an approval a branch rule needs, a permission refused).
   If `gh` stops being signed in, the account changes, or GitHub refuses a permission, stop all GitHub work and ask.
 - When you need the operator, ask in conversation and put the question on the map: `hide mission decide --line <what to decide>`; clear it with `--clear` once answered.
-  When the answer is one of a few choices, give each with `--option` (at most 5, one line each), mark the one you would take with `--recommend <its number, from 1>`, say in one line why it matters with `--why`, and name the node it stopped with `--node`, which you also set `--status held`.
+  When the answer is one of a few choices, give each with `--option` (at most 5, one line each), mark the one you would take with `--recommend <its number, from 1>`, say in one line why it matters with `--why`, and name the node it stopped with `--node`; the node stays `working` and the map shows the decision on it.
   The operator can then answer on the map: the answer arrives in this conversation as their own message, `[판단 답] <your question> → <their answer>` (worded in their language), and you act on it as if they had typed it, then clear the decision.
   Changing the question with another `decide --line` drops an answer you have not received yet, so ask again only when the question really changed.
-- An upstream node that failed or was dropped holds everything after it; the map shows it blocked. Replan before anything after it starts.
-  A failed node keeps the mission from closing as done or merge_wait until you drop it.
+- An upstream node that was dropped holds everything after it; the map shows it blocked. Replan before anything after it starts.
+  To give a node up, drop it with its reason in `--change`, or ask the operator with `hide mission decide --node`.
+
+### What Hide does by itself
+
+Hide looks at the mission whenever a fact it rests on arrives (a GitHub read, a worker falling asleep or ending, a `record`, a node finishing, you leaving) and does what is certain by itself; each shows on the node as Hide's own line in `hide mission show` and in the map's history.
+
+- A node at work whose pull requests are all merged (scope `merge`), or all merged or green and approved (scope `pr`), and whose lines all pass, is set `done`; a `research`, `verify` or `direct` node with no pull request is set `done` when its lines all pass.
+- A new pull request opened from the node's own branch (not a fork) is added to the node; a done node it joins works again.
+- A sleeping worker whose pull request fails CI, conflicts with its base or gets a review asking for changes is woken with a `request` letter naming it, once per pull request, reason and commit.
+- When every node is done or dropped and nothing waits on anyone, Hide closes the mission (`merge_wait` while a pull request or branch is not in main, `done` otherwise), with a report of each node's result, and tells you; `hide mission reopen` opens it again.
+- A done node's merged worktree with nothing uncommitted is removed with its panes, the branch kept, when Settings › Conductor `끝난 worktree 정리` is `auto` (the default); with `ask`, the operator is asked first.
+
+What is not certain is raised on the node to you first, with a letter naming the node and why: a pull request merged while a line is missing or failed, a worker that ended with the node not done, a pull request closed without its merge with no other open, a pull request the worker opened that no node holds, a worktree that holds uncommitted work, a worker Hide could not wake, and a close Hide could not make.
+Settle it by recording the line, skipping it with its reason, attaching the pull request with `--pr`, setting the node's status or dropping it; that takes the raise off the operator's turn too.
+A raise you have not settled in ten minutes, or any raise while no Conductor holds the mission, reaches the operator, who can settle it from the map; you then get a letter saying what they did.
+The same cause is raised once.
+CI, review and merge waits call no one, and a worker waiting on them is not warned for being quiet.
 
 ### Finish lines
 
@@ -243,7 +262,7 @@ For each node, the evidence of its lines goes with its pull request or branch.
 
 A `pr`-scope mission that leaves a stack waiting for the operator's merge closes `--as merge_wait` after the report and stays open quietly; when the operator merges the lower pull request, move the one above and check it; once every pull request of the stack is merged, and every `direct` change's `--branch` is in main, Hide closes the mission as done itself, with or without you there.
 Hide reads a branch in main from git, with no GitHub needed; in a repository with no remote, main is the branch its main worktree has out. A `direct` change that names no branch keeps the mission waiting and shows unread, so name each one's branch before the close.
-A waiting mission closes itself only as your close would be allowed: a node a defect sent back to work, or one you set failed, keeps it waiting, and so does a branch you changed, one with new commits past main, or one Hide could not read this time (shown unread), until Hide reads it in main again; a reopened mission reads its branches again. A `direct` change's branch is read from the moment its node is done, so the map shows it in main while the mission still runs, and a close `--as merge_wait` with every branch already in main is done at once.
+A waiting mission closes itself only as your close would be allowed: a node a defect sent back to work keeps it waiting, and so does a branch you changed, one with new commits past main, or one Hide could not read this time (shown unread), until Hide reads it in main again; a reopened mission reads its branches again. A `direct` change's branch is read from the moment its node is done, so the map shows it in main while the mission still runs, and a close `--as merge_wait` with every branch already in main is done at once.
 A further instruction to a done mission opens it again (`hide mission reopen`), and so does a new commit or a review asking for changes on one of its pull requests; its merge does not.
 You conduct one open mission at a time: while another is open, a done one stays done, `reopen` is refused `mission_already_conducting`, and a letter about it is news to take up after the open one.
 

@@ -51,7 +51,7 @@ pub enum LandingAction {
 
 /// A change that reaches main as its branch, with no pull request.
 pub(super) fn lands_by_branch(node: &MissionNode) -> bool {
-    node.kind == NodeKind::Change && node.delivery == Some(Delivery::Direct) && node.pr.is_none()
+    node.kind == NodeKind::Change && node.delivery == Some(Delivery::Direct) && node.prs.is_empty()
 }
 
 /// A done direct change whose branch Hide reads for main: while its mission
@@ -74,14 +74,28 @@ enum PullState {
     Unread,
 }
 
+/// The node's pull requests taken together (D-10): open while any is open,
+/// unread while any GitHub never answered, merged once each is settled and
+/// one is merged, and closed only when every one closed without its merge.
 fn pull_state(node: &MissionNode) -> Option<PullState> {
-    node.pr?;
-    Some(match &node.pr_seen {
-        Some(seen) if seen.merged => PullState::Merged,
-        Some(seen) if seen.closed => PullState::Closed,
-        Some(_) => PullState::Open,
-        None => PullState::Unread,
-    })
+    let states: Vec<PullState> = node
+        .prs
+        .iter()
+        .map(|number| match node.seen(*number) {
+            Some(seen) if seen.merged => PullState::Merged,
+            Some(seen) if seen.closed => PullState::Closed,
+            Some(_) => PullState::Open,
+            None => PullState::Unread,
+        })
+        .collect();
+    [
+        PullState::Open,
+        PullState::Unread,
+        PullState::Merged,
+        PullState::Closed,
+    ]
+    .into_iter()
+    .find(|state| states.contains(state))
 }
 
 /// The commit Hide read in main for the branch the node names now, while
@@ -154,12 +168,12 @@ pub(super) fn node_landing(
 /// Whether a mission waiting on its merges must still wait on `node` (B18,
 /// B41): its pull request until GitHub answers it merged or closed, a
 /// direct change until its branch is read in main. This holds for a node in
-/// any state but failed or dropped, apart from what the map shows for it
+/// any state but dropped, apart from what the map shows for it
 /// (`node_landing`, done nodes only): a mission from before criteria is
 /// closed without the gate that refuses unfinished nodes (`close_held`), so
 /// its unfinished pull request still keeps it waiting here.
 fn holds_close(node: &MissionNode) -> bool {
-    if matches!(node.status, NodeStatus::Failed | NodeStatus::Dropped) {
+    if node.status == NodeStatus::Dropped {
         return false;
     }
     match pull_state(node) {

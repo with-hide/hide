@@ -63,6 +63,10 @@ impl Runtime {
         }
         // Letter wakes move with the ledger and the records, not the minute.
         let woke = self.drive_letter_wakes();
+        // A mission is looked at when a fact it rests on moved (PRD
+        // mission-node-simple D-08), which costs a few comparisons when none
+        // did.
+        let woke = self.drive_mission_health(now_unix_ms) | woke;
         if now_unix_ms < self.agent_sleep_next_decision_unix_ms {
             return woke;
         }
@@ -73,6 +77,9 @@ impl Runtime {
         let changed =
             self.expire_dormant_confirmation(now_unix_ms) | self.fail_unstarted_wakes(now_unix_ms);
         let changed = self.decide_agent_sleep(None, now_unix_ms) | changed | woke;
+        // A raise that waited ten minutes on its Conductor reaches the
+        // operator (D-05).
+        let changed = self.raise_to_operator(now_unix_ms) | changed;
         self.sleep_finished_mission_agents(now_unix_ms) | changed
     }
 

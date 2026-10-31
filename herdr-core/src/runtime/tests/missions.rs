@@ -1315,7 +1315,7 @@ fn a_merge_wait_mission_closes_when_its_whole_stack_is_merged() {
 }
 
 /// A waiting mission stands only behind the pull requests still in its
-/// stack: a node that failed is out of it, a pull request closed without
+/// stack: a dropped node is out of it, a pull request closed without
 /// its merge leaves nothing to wait on, and a mission with none closes at
 /// once.
 #[test]
@@ -1341,7 +1341,7 @@ fn a_merge_wait_mission_waits_only_on_the_pull_requests_left_in_its_stack() {
     command(&mut runtime, "sender", json!({"op": "start"})).unwrap();
     for (node, pr, status) in [
         ("api", 7, "done"),
-        ("screen", 8, "failed"),
+        ("screen", 8, "dropped"),
         ("docs", 9, "done"),
     ] {
         without_gate(&mut runtime);
@@ -1386,7 +1386,7 @@ fn a_merge_wait_mission_waits_only_on_the_pull_requests_left_in_its_stack() {
     assert_eq!(
         status(&runtime, "mission-1"),
         MissionStatus::Done,
-        "the failed node's open pull request is not waited on"
+        "the dropped node's open pull request is not waited on"
     );
 
     command(
@@ -1680,7 +1680,7 @@ fn each_change_is_one_event_and_the_same_change_again_is_none() {
     command(
         &mut runtime,
         "sender",
-        node(json!({"status": "failed", "line": "CI failed"})),
+        node(json!({"status": "dropped", "line": "CI failed"})),
     )
     .unwrap();
     command(
@@ -2669,7 +2669,7 @@ fn an_outside_node_is_done_once_its_pull_request_or_branch_is_in_main() {
         node,
         &github(vec![pull(1232, "a1", PullRequestBadge::Open, None)], false),
     );
-    assert_eq!(node_view(&runtime, "parser").status, NodeStatus::Waiting);
+    assert_eq!(node_view(&runtime, "parser").status, NodeStatus::Working);
     let refused = command(
         &mut runtime,
         "sender",
@@ -2710,7 +2710,7 @@ fn an_outside_node_is_done_once_its_pull_request_or_branch_is_in_main() {
         )],
     );
     let read = node_view(&runtime, "lib");
-    assert_eq!((read.status, read.unread), (NodeStatus::Waiting, true));
+    assert_eq!((read.status, read.unread), (NodeStatus::Working, true));
     runtime.ingest_outside(&place, vec![(lib(), Found::InMain(Some(HEAD.into())))]);
     let read = node_view(&runtime, "lib");
     assert_eq!((read.status, read.unread), (NodeStatus::Done, false));
@@ -2725,11 +2725,11 @@ fn an_outside_node_is_done_once_its_pull_request_or_branch_is_in_main() {
     );
 }
 
-/// PRD mission-map-git-criteria B20: an outside pull request closed
-/// without a merge fails, the node waiting on it reads blocked, and the
-/// mission cannot close as done until the node is dropped.
+/// PRD mission-node-simple D-15: an outside pull request closed without a
+/// merge keeps its node in progress with the Conductor asked to look, and
+/// the mission cannot close as done until the node is dropped.
 #[test]
-fn an_outside_pull_request_closed_without_a_merge_blocks_the_nodes_after_it() {
+fn an_outside_pull_request_closed_without_a_merge_asks_the_conductor() {
     use crate::missions::WakeEvent;
     let fixture = conducting();
     let mut runtime = fixture.runtime.lock().unwrap();
@@ -2748,17 +2748,20 @@ fn an_outside_pull_request_closed_without_a_merge_blocks_the_nodes_after_it() {
             false,
         ),
     );
-    assert_eq!(node_view(&runtime, "parser").status, NodeStatus::Failed);
+    let parser = node_view(&runtime, "parser");
+    assert_eq!(parser.status, NodeStatus::Working);
+    let attention = parser.attention.expect("the closed pull request is raised");
     assert_eq!(
-        node_view(&runtime, "fix").blocked,
-        Some(crate::missions::Blocked::UpstreamFailed)
+        (attention.reason, attention.pr),
+        (crate::missions::AttentionReason::PrClosed, Some(1232))
     );
+    assert_eq!(node_view(&runtime, "fix").blocked, None);
     let last = runtime.missions.book.missions[0]
         .wakes
         .last()
         .cloned()
         .unwrap();
-    assert_eq!(last.event, WakeEvent::OutsideFailed);
+    assert_eq!(last.event, WakeEvent::Attention);
     let refused = command(
         &mut runtime,
         "sender",
@@ -2943,10 +2946,9 @@ fn a_check_holds_only_on_its_folders_current_commit_and_its_command() {
 }
 
 /// Review finding 5: a pull request's CI gets one rerun per head however
-/// many runs GitHub reports, and a spent rerun sends a node in review back
-/// to its worker.
+/// many runs GitHub reports; the node stays in progress throughout.
 #[test]
-fn a_failed_ci_rerun_sends_the_node_back_to_work_and_reads_no_more_runs_on_that_head() {
+fn a_failed_ci_rerun_reads_no_more_runs_on_that_head() {
     use crate::mission_criteria::CriterionState;
     let fixture = conducting();
     let mut runtime = fixture.runtime.lock().unwrap();
@@ -2955,7 +2957,7 @@ fn a_failed_ci_rerun_sends_the_node_back_to_work_and_reads_no_more_runs_on_that_
     command(
         &mut runtime,
         "sender",
-        json!({"op": "node", "node": "fix", "patch": {"status": "review"}}),
+        json!({"op": "node", "node": "fix", "patch": {"status": "working"}}),
     )
     .unwrap();
     let read = |runtime: &mut Runtime, checks| {
@@ -2967,12 +2969,12 @@ fn a_failed_ci_rerun_sends_the_node_back_to_work_and_reads_no_more_runs_on_that_
     };
     read(&mut runtime, PullRequestChecks::Failed);
     assert_eq!(line_state(&runtime, "ci"), CriterionState::Fail);
-    assert_eq!(node_view(&runtime, "fix").status, NodeStatus::Review);
+    assert_eq!(node_view(&runtime, "fix").status, NodeStatus::Working);
     // The rerun runs and passes: the line passes with its rerun counted.
     read(&mut runtime, PullRequestChecks::Pending);
     read(&mut runtime, PullRequestChecks::Passing);
     assert_eq!(line_state(&runtime, "ci"), CriterionState::Pass);
-    assert_eq!(node_view(&runtime, "fix").status, NodeStatus::Review);
+    assert_eq!(node_view(&runtime, "fix").status, NodeStatus::Working);
     // Another run on the same head fails: there is no second rerun.
     read(&mut runtime, PullRequestChecks::Pending);
     read(&mut runtime, PullRequestChecks::Failed);
@@ -3142,20 +3144,12 @@ fn a_mission_waiting_on_its_pull_requests_keeps_waiting_while_a_node_is_back_at_
     runtime.github = merged.clone();
     runtime.note_mission_pulls(crate::node::TEST_NODE, &merged);
     assert_eq!(mission_status(&runtime), MissionStatus::MergeWait);
-    command(
-        &mut runtime,
-        "sender",
-        json!({"op": "node", "node": "fix", "patch": {"status": "failed"}}),
-    )
-    .unwrap();
-    runtime.note_mission_pulls(crate::node::TEST_NODE, &merged);
-    assert_eq!(mission_status(&runtime), MissionStatus::MergeWait);
 }
 
 /// Re-review finding 1: the same rule holds the close a waiting mission
 /// makes on its branches in main.
 #[test]
-fn a_mission_waiting_on_its_branches_keeps_waiting_while_a_node_is_back_at_work_or_failed() {
+fn a_mission_waiting_on_its_branches_keeps_waiting_while_a_node_is_back_at_work() {
     use crate::runtime::mission_outside::Found;
     let fixture = conducting();
     let mut runtime = fixture.runtime.lock().unwrap();
@@ -3164,14 +3158,6 @@ fn a_mission_waiting_on_its_branches_keeps_waiting_while_a_node_is_back_at_work_
         &mut runtime,
         "sender",
         json!({"op": "defect", "node": "b", "found_by": "a", "line": "b drops a field"}),
-    )
-    .unwrap();
-    land(&mut runtime, "a", Found::InMain(Some(HEAD.into())));
-    assert_eq!(mission_status(&runtime), MissionStatus::MergeWait);
-    command(
-        &mut runtime,
-        "sender",
-        json!({"op": "node", "node": "b", "patch": {"status": "failed"}}),
     )
     .unwrap();
     land(&mut runtime, "a", Found::InMain(Some(HEAD.into())));
@@ -3636,7 +3622,7 @@ fn a_plan_of_more_outside_branches_than_one_read_takes_is_read_whole_when_admitt
             if node_view(&runtime, "last").status == NodeStatus::Done {
                 for index in 0..32 {
                     let node = node_view(&runtime, &format!("e{index}"));
-                    assert_eq!((node.status, node.unread), (NodeStatus::Waiting, true));
+                    assert_eq!((node.status, node.unread), (NodeStatus::Working, true));
                 }
                 assert!(
                     runtime
@@ -3770,7 +3756,7 @@ fn a_node_followed_while_a_read_is_out_is_read_once_that_read_answers() {
             let runtime = fixture.runtime.lock().unwrap();
             if node_view(&runtime, "last").status == NodeStatus::Done {
                 let first = node_view(&runtime, "first");
-                assert_eq!((first.status, first.unread), (NodeStatus::Waiting, true));
+                assert_eq!((first.status, first.unread), (NodeStatus::Working, true));
                 assert!(
                     runtime
                         .missions
@@ -3973,13 +3959,17 @@ struct LandingCase {
 
 const SHA: &str = "4f1c9a27be03aa00bb11cc22dd33ee44ff556677";
 
-fn seen(merged: bool, closed: bool) -> Option<crate::missions::PrSeen> {
-    Some(crate::missions::PrSeen {
+/// What GitHub last answered of `node`'s current pull request.
+fn see(node: &mut crate::missions::MissionNode, merged: bool, closed: bool) {
+    let number = node.current_pr().expect("the node holds a pull request");
+    node.pr_seen.retain(|seen| seen.number != number);
+    node.pr_seen.push(crate::missions::PrSeen {
+        number,
         head: Some("head".into()),
         merged,
         closed,
         changes_requested: false,
-    })
+    });
 }
 
 fn node_mut<'a>(
@@ -4003,8 +3993,8 @@ fn direct_in_main(mission: &mut crate::missions::Mission) {
 
 /// Both pull requests merged and the branch in main: nothing waits.
 fn all_landed(mission: &mut crate::missions::Mission) {
-    node_mut(mission, "pr").pr_seen = seen(true, false);
-    node_mut(mission, "first").pr_seen = seen(true, false);
+    see(node_mut(mission, "pr"), true, false);
+    see(node_mut(mission, "first"), true, false);
     direct_in_main(mission);
 }
 
@@ -4047,9 +4037,9 @@ fn landing_case(case: &LandingCase, status: MissionStatus) -> Fixture {
             node.status = NodeStatus::Done;
             node.finished_at_unix_ms = Some(1);
         }
-        node_mut(mission, "pr").pr = Some(11);
+        node_mut(mission, "pr").prs = vec![11];
         node_mut(mission, "pr").base_pr = Some(10);
-        node_mut(mission, "first").pr = Some(10);
+        node_mut(mission, "first").prs = vec![10];
         node_mut(mission, "direct").branch = Some("feat/direct".into());
         mission.exempt = case.exempt;
         mission.status = status;
@@ -4093,8 +4083,8 @@ fn a_missions_landing_decides_its_close_and_its_published_actions_from_one_rule(
             name: "merge_wait, pull requests open and the branch not in main, by merge order",
             status: MissionStatus::MergeWait,
             set: |mission| {
-                node_mut(mission, "pr").pr_seen = seen(false, false);
-                node_mut(mission, "first").pr_seen = seen(false, false);
+                see(node_mut(mission, "pr"), false, false);
+                see(node_mut(mission, "first"), false, false);
             },
             direct_unread: false,
             landing: [
@@ -4114,7 +4104,7 @@ fn a_missions_landing_decides_its_close_and_its_published_actions_from_one_rule(
             status: MissionStatus::MergeWait,
             set: |mission| {
                 all_landed(mission);
-                node_mut(mission, "pr").pr_seen = seen(false, true);
+                see(node_mut(mission, "pr"), false, true);
             },
             direct_unread: false,
             landing: [
@@ -4134,7 +4124,7 @@ fn a_missions_landing_decides_its_close_and_its_published_actions_from_one_rule(
             status: MissionStatus::MergeWait,
             set: |mission| {
                 all_landed(mission);
-                node_mut(mission, "pr").pr_seen = None;
+                node_mut(mission, "pr").pr_seen.clear();
             },
             direct_unread: false,
             landing: [
@@ -4237,11 +4227,11 @@ fn a_missions_landing_decides_its_close_and_its_published_actions_from_one_rule(
             explicit: None,
         },
         LandingCase {
-            name: "merge_wait, a failed node keeps it waiting and has no landing",
+            name: "merge_wait, a node back at work keeps it waiting and has no landing",
             status: MissionStatus::MergeWait,
             set: |mission| {
                 all_landed(mission);
-                node_mut(mission, "direct").status = NodeStatus::Failed;
+                node_mut(mission, "direct").status = NodeStatus::Working;
             },
             direct_unread: false,
             landing: [
@@ -4263,7 +4253,7 @@ fn a_missions_landing_decides_its_close_and_its_published_actions_from_one_rule(
                 all_landed(mission);
                 let pr = node_mut(mission, "pr");
                 pr.status = NodeStatus::Dropped;
-                pr.pr_seen = seen(false, false);
+                see(pr, false, false);
             },
             direct_unread: false,
             landing: [
@@ -4283,7 +4273,7 @@ fn a_missions_landing_decides_its_close_and_its_published_actions_from_one_rule(
             status: MissionStatus::Running,
             set: |mission| {
                 all_landed(mission);
-                node_mut(mission, "pr").pr_seen = seen(false, false);
+                see(node_mut(mission, "pr"), false, false);
                 node_mut(mission, "direct").in_main = None;
             },
             direct_unread: false,
@@ -4303,8 +4293,8 @@ fn a_missions_landing_decides_its_close_and_its_published_actions_from_one_rule(
             name: "cancelled, nothing is left and what landed stays proven",
             status: MissionStatus::Cancelled,
             set: |mission| {
-                node_mut(mission, "pr").pr_seen = seen(false, false);
-                node_mut(mission, "first").pr_seen = seen(true, false);
+                see(node_mut(mission, "pr"), false, false);
+                see(node_mut(mission, "first"), true, false);
             },
             direct_unread: false,
             landing: [
@@ -4322,7 +4312,7 @@ fn a_missions_landing_decides_its_close_and_its_published_actions_from_one_rule(
         LandingCase {
             name: "done, an open pull request is still left and a branch no longer read",
             status: MissionStatus::Done,
-            set: |mission| node_mut(mission, "pr").pr_seen = seen(false, false),
+            set: |mission| see(node_mut(mission, "pr"), false, false),
             direct_unread: false,
             landing: [
                 ("pr", left_merge.clone()),
@@ -4337,13 +4327,13 @@ fn a_missions_landing_decides_its_close_and_its_published_actions_from_one_rule(
             explicit: None,
         },
         LandingCase {
-            name: "exempt merge_wait, a pull request still in review keeps it waiting (#1939 review 1)",
+            name: "exempt merge_wait, an open pull request at work keeps it waiting (#1939 review 1)",
             status: MissionStatus::MergeWait,
             set: |mission| {
                 all_landed(mission);
                 let pr = node_mut(mission, "pr");
-                pr.status = NodeStatus::Review;
-                pr.pr_seen = seen(false, false);
+                pr.status = NodeStatus::Working;
+                see(pr, false, false);
             },
             direct_unread: false,
             landing: [
@@ -4365,7 +4355,7 @@ fn a_missions_landing_decides_its_close_and_its_published_actions_from_one_rule(
                 all_landed(mission);
                 let pr = node_mut(mission, "pr");
                 pr.status = NodeStatus::Working;
-                pr.pr_seen = None;
+                pr.pr_seen.clear();
             },
             direct_unread: false,
             landing: [
@@ -4487,4 +4477,169 @@ fn a_missions_landing_decides_its_close_and_its_published_actions_from_one_rule(
             );
         }
     }
+}
+
+/// PRD mission-node-simple B6, B18: a pull request merged with every line
+/// met finishes its node with Hide's mark, and the last node finished
+/// closes the mission with the Conductor told.
+#[test]
+fn hide_finishes_a_merged_node_and_closes_the_mission_after_its_last_node() {
+    use crate::missions::{HideAction, WakeEvent};
+    let fixture = conducting();
+    let mut runtime = fixture.runtime.lock().unwrap();
+    running_criteria_mission(&mut runtime);
+    met_fix(&mut runtime);
+    let now = crate::runtime::unix_milliseconds();
+    runtime.drive_mission_health(now);
+    assert_eq!(node_view(&runtime, "fix").status, NodeStatus::Working);
+
+    let merged = github(vec![pull(7, HEAD, PullRequestBadge::Merged, None)], false);
+    runtime.github = merged.clone();
+    runtime.note_mission_pulls(crate::node::TEST_NODE, &merged);
+    runtime.drive_mission_health(now);
+    let fix = node_view(&runtime, "fix");
+    assert_eq!(fix.status, NodeStatus::Done);
+    assert_eq!(fix.hide.map(|mark| mark.action), Some(HideAction::Done));
+    assert_eq!(
+        mission_status(&runtime),
+        MissionStatus::Running,
+        "docs is open"
+    );
+
+    command(
+        &mut runtime,
+        "sender",
+        json!({"op": "node", "node": "docs", "patch": {"status": "dropped"}}),
+    )
+    .unwrap();
+    runtime.drive_mission_health(now);
+    assert_ne!(mission_status(&runtime), MissionStatus::Running);
+    let mission = runtime.missions.book.get("mission-1").unwrap();
+    assert!(
+        mission
+            .wakes
+            .iter()
+            .any(|wake| wake.event == WakeEvent::Closed),
+        "{:?}",
+        mission.wakes
+    );
+}
+
+/// PRD mission-node-simple B6, B13, B14: a merge with a line unmet is
+/// raised to the Conductor once, with its letter waiting, and is not raised
+/// again after the Conductor settles it.
+#[test]
+fn a_merge_with_a_line_unmet_is_raised_to_the_conductor_once() {
+    use crate::missions::{AttentionReason, WakeEvent};
+    let fixture = conducting();
+    let mut runtime = fixture.runtime.lock().unwrap();
+    running_criteria_mission(&mut runtime);
+    command(
+        &mut runtime,
+        "sender",
+        json!({"op": "node", "node": "fix", "patch": {"status": "working", "agent_id": "agent-2", "pr": 7}}),
+    )
+    .unwrap();
+    let merged = github(vec![pull(7, HEAD, PullRequestBadge::Merged, None)], false);
+    runtime.github = merged.clone();
+    runtime.note_mission_pulls(crate::node::TEST_NODE, &merged);
+    let now = crate::runtime::unix_milliseconds();
+    runtime.drive_mission_health(now);
+    let fix = node_view(&runtime, "fix");
+    assert_eq!(fix.status, NodeStatus::Working);
+    let attention = fix.attention.expect("the merge is raised");
+    assert_eq!(
+        (attention.reason, attention.pr, attention.to),
+        (
+            AttentionReason::MergedUnproven,
+            Some(7),
+            crate::runtime::missions::AttentionTo::Conductor
+        )
+    );
+    let raised = |runtime: &Runtime| {
+        runtime
+            .missions
+            .book
+            .get("mission-1")
+            .unwrap()
+            .wakes
+            .iter()
+            .filter(|wake| wake.event == WakeEvent::Attention)
+            .count()
+    };
+    assert_eq!(raised(&runtime), 1);
+    // The Conductor drops the node: the mark goes and nothing is raised again.
+    command(
+        &mut runtime,
+        "sender",
+        json!({"op": "node", "node": "fix", "patch": {"status": "dropped"}}),
+    )
+    .unwrap();
+    runtime.drive_mission_health(now);
+    assert!(node_view(&runtime, "fix").attention.is_none());
+    command(
+        &mut runtime,
+        "sender",
+        json!({"op": "node", "node": "fix", "patch": {"status": "working"}}),
+    )
+    .unwrap();
+    runtime.drive_mission_health(now);
+    assert!(node_view(&runtime, "fix").attention.is_none());
+    assert_eq!(raised(&runtime), 1);
+}
+
+/// PRD mission-node-simple B5: a node that waits on the operator with no
+/// Needs You row to lay it on, neither the Conductor nor its worker, is
+/// told by notice once; one with a row standing is not.
+#[test]
+fn a_raise_with_no_row_to_lay_it_on_is_told_to_the_operator_once() {
+    use crate::delivery::worker::HumanNoticeKind;
+    use crate::missions::AttentionReason;
+    let fixture = conducting();
+    let mut runtime = fixture.runtime.lock().unwrap();
+    running(&mut runtime);
+    let now = crate::runtime::unix_milliseconds();
+    let mission = runtime.missions.book.get_mut("mission-1").unwrap();
+    assert!(
+        !crate::runtime::mission_health::raise(
+            mission,
+            "fix",
+            AttentionReason::PrClosed,
+            Some(7),
+            now
+        )
+        .is_empty()
+    );
+    runtime.save_missions();
+    // Past ten minutes the raise reaches the operator, laid on the
+    // Conductor's row while it is there.
+    runtime.raise_to_operator(now + 10 * 60 * 1000);
+    assert_eq!(
+        node_view(&runtime, "fix")
+            .attention
+            .map(|attention| attention.to),
+        Some(crate::runtime::missions::AttentionTo::Operator)
+    );
+    assert!(runtime.claim_mission_notices().is_empty());
+
+    runtime.delivery_observations.remove("sender");
+    let notices = runtime.claim_mission_notices();
+    assert_eq!(
+        notices
+            .iter()
+            .map(|notice| (notice.kind, notice.id.as_str(), notice.about.as_str()))
+            .collect::<Vec<_>>(),
+        [(HumanNoticeKind::MissionAttention, "mission-1", "Fix it")]
+    );
+    assert!(runtime.claim_mission_notices().is_empty(), "told once");
+    let stored = runtime.missions.book.get("mission-1").unwrap();
+    assert!(
+        stored
+            .node("fix")
+            .unwrap()
+            .attention
+            .as_ref()
+            .unwrap()
+            .notified
+    );
 }

@@ -152,10 +152,7 @@ struct Base {
 }
 
 fn settled(status: NodeStatus) -> bool {
-    matches!(
-        status,
-        NodeStatus::Done | NodeStatus::Failed | NodeStatus::Dropped
-    )
+    status.finished()
 }
 
 fn found_of(badge: PullRequestBadge) -> Found {
@@ -481,7 +478,8 @@ impl Runtime {
     }
 
     /// Moves each node to what was found: an outside node open or unread
-    /// waits, in main is done and closed is failed; a direct change in main
+    /// is in progress, in main is done and closed is raised to the
+    /// Conductor; a direct change in main
     /// keeps the commit Hide read there, open or unread keeps none, and a
     /// mission that was waiting only on such branches is done. A node a
     /// replan changed or settled since the ask is left as it is.
@@ -570,9 +568,30 @@ impl Runtime {
                 continue;
             };
             let (status, wake) = match found {
-                Found::Open | Found::Unread(_) => (NodeStatus::Waiting, None),
+                Found::Open | Found::Unread(_) => (NodeStatus::Working, None),
                 Found::InMain(_) => (NodeStatus::Done, Some(WakeEvent::OutsideDone)),
-                Found::Closed => (NodeStatus::Failed, Some(WakeEvent::OutsideFailed)),
+                // Closed without its merge, it stays in progress with the
+                // Conductor asked to look (PRD mission-node-simple D-04,
+                // B12); the raise is its letter.
+                Found::Closed => {
+                    let pr = match external {
+                        External::Pr(number) => Some(*number),
+                        External::Branch(_) => None,
+                    };
+                    let raised = super::mission_health::raise(
+                        mission,
+                        &ask.node,
+                        crate::missions::AttentionReason::PrClosed,
+                        pr,
+                        now,
+                    );
+                    if !raised.is_empty() {
+                        mission.updated_at_unix_ms = now;
+                        self.record_mission_events(&ask.mission, raised);
+                        changed = true;
+                    }
+                    continue;
+                }
             };
             let node = &mission.nodes[at];
             if node.status == status {

@@ -55,14 +55,15 @@ pub struct HumanNotice {
     pub id: String,
     pub actor: Actor,
     pub kind: HumanNoticeKind,
-    /// The agent that has not confirmed or received the letter.
+    /// The agent that has not confirmed or received the letter; the
+    /// mission's title for a mission notice.
     pub recipient: String,
     /// The watched agent an unconfirmed warning is about; empty for an
-    /// undelivered letter.
+    /// undelivered letter; the node's title for a mission notice.
     pub about: String,
 }
 
-/// Which of the two approved human causes a notice is. A phone words it in
+/// Which of the approved human causes a notice is. A phone words it in
 /// its own language from this code; Herdr's own notification has no
 /// translating screen, so it shows `english_title` and `english_body`, whose
 /// tail names the command an agent or a person runs.
@@ -71,6 +72,9 @@ pub struct HumanNotice {
 pub enum HumanNoticeKind {
     ObserverUnconfirmed,
     LetterUndelivered,
+    /// A mission node waits on the operator and no Needs You row stands to
+    /// lay it on (PRD mission-node-simple B5): `id` is the mission's.
+    MissionAttention,
 }
 
 impl HumanNoticeKind {
@@ -79,6 +83,7 @@ impl HumanNoticeKind {
         match self {
             Self::ObserverUnconfirmed => "observer_unconfirmed",
             Self::LetterUndelivered => "letter_undelivered",
+            Self::MissionAttention => "mission_attention",
         }
     }
 }
@@ -88,6 +93,7 @@ impl HumanNotice {
         match self.kind {
             HumanNoticeKind::ObserverUnconfirmed => "Hide: observer has not confirmed a warning",
             HumanNoticeKind::LetterUndelivered => "Hide: letter undelivered",
+            HumanNoticeKind::MissionAttention => "Hide: a mission needs you",
         }
     }
 
@@ -100,6 +106,10 @@ impl HumanNotice {
             HumanNoticeKind::LetterUndelivered => format!(
                 "{} did not receive {} within 60 minutes. Inspect it with hide request show {}.",
                 self.recipient, self.id, self.id
+            ),
+            HumanNoticeKind::MissionAttention => format!(
+                "{}: {} needs a look. Open it with hide mission show --mission {}.",
+                self.recipient, self.about, self.id
             ),
         }
     }
@@ -123,16 +133,39 @@ impl HumanNotice {
 
 pub struct PreparedHuman {
     client: Client,
+    /// Mission notices the core already claimed in its book, under its lock.
+    missions: Vec<HumanNotice>,
 }
 
 impl PreparedHuman {
-    pub(crate) fn new(client: Client) -> Self {
-        Self { client }
+    pub(crate) fn new(client: Client, missions: Vec<HumanNotice>) -> Self {
+        Self { client, missions }
     }
 
+    /// The ledger's notices, then the mission notices. A mission notice is
+    /// already consumed in the book, so a failed ledger claim still hands it
+    /// over rather than lose it.
     pub fn run(self, timeout: Duration) -> Result<Vec<HumanNotice>, String> {
-        let value = self.client.submit(Effect::HumanClaim, timeout)?;
-        serde_json::from_value(value).map_err(|_| "ledger_unavailable".into())
+        let claimed = self
+            .client
+            .submit(Effect::HumanClaim, timeout)
+            .and_then(|value| {
+                serde_json::from_value::<Vec<HumanNotice>>(value)
+                    .map_err(|_| "ledger_unavailable".to_owned())
+            });
+        match claimed {
+            Ok(mut notices) => {
+                notices.extend(self.missions);
+                Ok(notices)
+            }
+            Err(code) if self.missions.is_empty() => Err(code),
+            Err(code) => {
+                crate::diagnostic!(
+                    json!({"component":"delivery","kind":"human.claim_failed","code":code})
+                );
+                Ok(self.missions)
+            }
+        }
     }
 }
 
@@ -333,6 +366,10 @@ pub(crate) struct WatchWork {
     pub asking: bool,
     /// The target's own row says Herdr holds it at a blocked prompt.
     pub blocked: bool,
+    /// The target is a mission worker waiting on its pull request's CI,
+    /// review or merge (PRD mission-node-simple D-06): it reads as active
+    /// now, so its quiet is counted from when the wait ends.
+    pub waits: bool,
 }
 
 /// The node whose files hold a watched session's conversation, through its
@@ -344,6 +381,16 @@ pub(crate) struct ActivitySource {
 }
 
 fn read_activity(work: WatchWork) -> watch::Reading {
+    let waits = work.waits;
+    let mut reading = read_session_activity(work);
+    if waits && reading.status_available && !reading.gone {
+        reading.session_modified_at_unix_ms = Some(now());
+        reading.failure = None;
+    }
+    reading
+}
+
+fn read_session_activity(work: WatchWork) -> watch::Reading {
     let mut reading = watch::Reading {
         id: work.id,
         status: work.status,
@@ -1484,6 +1531,7 @@ mod tests {
                     inactivity_ms: None,
                     asking: false,
                     blocked: false,
+                    waits: false,
                 })
                 .collect();
             let readings: Vec<_> = group_targets(work)
