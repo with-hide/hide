@@ -1135,6 +1135,8 @@ pub struct Runtime {
     hide_started: crate::coordination::started::HideStarted,
     delivery_client: Option<crate::delivery::worker::Client>,
     delivery_observations: HashMap<String, delivery::Observation>,
+    /// Counts `observe_delivery` passes; fences each observation's laid turn.
+    delivery_observe_generation: u64,
     /// View openers waiting for their document, Sends under way, and the
     /// feedback worker (PRD view-opener-feedback).
     view_feedback: view_feedback::FeedbackRuntime,
@@ -2277,6 +2279,7 @@ impl Runtime {
             delivery_ledger,
             delivery_client: None,
             delivery_observations: HashMap::new(),
+            delivery_observe_generation: 0,
             view_feedback: view_feedback::FeedbackRuntime::default(),
             view_sessions: view_sessions::ViewSessions::default(),
             composer_marks: Vec::new(),

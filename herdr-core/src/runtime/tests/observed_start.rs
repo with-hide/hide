@@ -75,7 +75,7 @@ fn starting() -> Starting {
                 "agent_session":{"source":"herdr:codex","agent":"codex","kind":"id","value":"sender-native"}}],
             "panes":[{"pane_id":"sender","terminal_id":"terminal-sender"}]}))
         .unwrap();
-        guard.observe_delivery(
+        guard.observe_delivery_laid(
             crate::node::TEST_NODE,
             &payload,
             Some("fixture-server"),

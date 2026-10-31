@@ -1292,7 +1292,7 @@ mod tests {
             "panes": [{"pane_id": "w1:p1", "terminal_id": terminal}],
         }))
         .unwrap();
-        runtime.observe_delivery(crate::node::TEST_NODE, &payload, None, None);
+        runtime.observe_delivery_laid(crate::node::TEST_NODE, &payload, None, None);
     }
 
     fn cursor(position: u64) -> Value {
@@ -1460,7 +1460,7 @@ mod tests {
             "panes": [{"pane_id": "w1:p1", "terminal_id": "t1"}],
         }))
         .unwrap();
-        runtime.observe_delivery("mini", &payload, None, None);
+        runtime.observe_delivery_laid("mini", &payload, None, None);
         runtime.open_session_thread(ThreadOpenPayload {
             pane_id: "remote:mini:pane:w1:p1".to_owned(),
         });
@@ -1592,7 +1592,7 @@ mod tests {
         // Herdr's next read has no such pane.
         let payload: SessionSnapshotPayload =
             serde_json::from_value(json!({"agents": [], "panes": []})).unwrap();
-        runtime.observe_delivery(crate::node::TEST_NODE, &payload, None, None);
+        runtime.observe_delivery_laid(crate::node::TEST_NODE, &payload, None, None);
         assert_eq!(thread(&runtime).pane, ThreadPane::Gone);
         send(&mut runtime);
         assert_eq!(herdr.requests().len(), 1, "a closed pane is not asked");
@@ -1735,7 +1735,7 @@ mod tests {
             "panes": [{"pane_id": "w1:p1", "terminal_id": "t1"}],
         }))
         .unwrap();
-        runtime.observe_delivery("mini", &payload, None, None);
+        runtime.observe_delivery_laid("mini", &payload, None, None);
         let pane = "remote:mini:pane:w1:p1";
         runtime.open_session_thread(ThreadOpenPayload {
             pane_id: pane.to_owned(),

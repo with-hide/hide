@@ -138,6 +138,8 @@ mod terminal;
 mod tree_close;
 #[path = "tests/tree_reopen.rs"]
 mod tree_reopen;
+#[path = "tests/turn_authority.rs"]
+mod turn_authority;
 mod ui_state_focus;
 mod unseen_views;
 #[path = "tests/usage_limit.rs"]

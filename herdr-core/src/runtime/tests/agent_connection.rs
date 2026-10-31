@@ -1307,7 +1307,7 @@ fn a_session_hide_cannot_read_marks_its_pane_until_a_read_lands() {
                 )
             }),
         );
-        runtime.observe_delivery(crate::node::TEST_NODE, &payload, None, Some(&labels));
+        runtime.observe_delivery_laid(crate::node::TEST_NODE, &payload, None, Some(&labels));
         feed(runtime, &panes);
     };
     observe(&mut runtime, true);

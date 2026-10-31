@@ -2314,6 +2314,7 @@ impl Runtime {
     }
     /// Keeps the labels the local coordinator published for every later
     /// local projection; see [`crate::labels::overlay::LabelOverlay`].
+    #[cfg(test)]
     pub(crate) fn set_label_overlay(&mut self, overlay: crate::labels::overlay::LabelOverlay) {
         self.label_overlay = overlay;
     }
@@ -2324,7 +2325,12 @@ impl Runtime {
         fetched: Result<SessionSnapshotPayload, SessionFetchError>,
         precomputed: Option<session_sync::PrecomputedCatalog>,
     ) -> bool {
-        self.ingest_session_with_focus_check(fetched, precomputed, SessionFocusCheck::Unchecked)
+        self.ingest_session_with_focus_check(
+            fetched,
+            precomputed,
+            SessionFocusCheck::Unchecked,
+            None,
+        )
     }
 
     /// Ingests a session update whose focus is Herdr's own stream's, and
@@ -2337,15 +2343,36 @@ impl Runtime {
     /// focus (and the zoom of the pane it names) stays Hide's until
     /// [`Self::finish_pane_focus_readback`] hears the answer. At most one
     /// read is outstanding.
+    #[cfg(test)]
     pub(crate) fn ingest_session_awaiting_focus_readback(
         &mut self,
         fetched: Result<SessionSnapshotPayload, SessionFetchError>,
         precomputed: Option<session_sync::PrecomputedCatalog>,
     ) -> (bool, Option<PendingPaneFocusControl>) {
+        self.ingest_observed_session(fetched, precomputed, None, None)
+    }
+
+    /// [`Self::ingest_session_awaiting_focus_readback`] for the sync pass
+    /// that observed `payload` for delivery as `pass`, installing `overlay`,
+    /// the label overlay that pass read: the token, the overlay and the
+    /// payload arrive together, so this ingest alone lays the turns that
+    /// pass's observations wait on (`lay_delivery_turns`), and an ingest of
+    /// anything else lays none.
+    pub(crate) fn ingest_observed_session(
+        &mut self,
+        fetched: Result<SessionSnapshotPayload, SessionFetchError>,
+        precomputed: Option<session_sync::PrecomputedCatalog>,
+        pass: Option<super::delivery::ObservedPass>,
+        overlay: Option<crate::labels::overlay::LabelOverlay>,
+    ) -> (bool, Option<PendingPaneFocusControl>) {
+        if let Some(overlay) = overlay {
+            self.label_overlay = overlay;
+        }
         let changed = self.ingest_session_with_focus_check(
             fetched,
             precomputed,
             SessionFocusCheck::Readback(None),
+            pass,
         );
         (changed, self.begin_pane_focus_readback())
     }
@@ -2472,9 +2499,10 @@ impl Runtime {
         fetched: Result<SessionSnapshotPayload, SessionFetchError>,
         precomputed: Option<session_sync::PrecomputedCatalog>,
         focus_check: SessionFocusCheck,
+        pass: Option<super::delivery::ObservedPass>,
     ) -> bool {
         self.ingesting_session = true;
-        let changed = self.apply_session_update(fetched, precomputed, focus_check);
+        let changed = self.apply_session_update(fetched, precomputed, focus_check, pass);
         self.ingesting_session = false;
         // A close waiting in a tab's line starts from the session just
         // applied, never from the one it replaced.
@@ -2486,6 +2514,7 @@ impl Runtime {
         fetched: Result<SessionSnapshotPayload, SessionFetchError>,
         precomputed: Option<session_sync::PrecomputedCatalog>,
         focus_check: SessionFocusCheck,
+        pass: Option<super::delivery::ObservedPass>,
     ) -> bool {
         // Sleeping agents Herdr no longer lists are drawn from their records
         // before anything below reads the agents (PRD agent-sleep B10).
@@ -2507,6 +2536,15 @@ impl Runtime {
                 .lay(payload, str::to_owned, |pane| {
                     !crate::address::is_device_pane(pane)
                 });
+            // Only the pass that observed this payload lays its turns.
+            if let Some(pass) = pass {
+                let node = self.node.clone();
+                self.lay_delivery_turns(
+                    node.as_str(),
+                    pass,
+                    super::delivery::delivery_turns(payload),
+                );
+            }
             self.settle_agent_sleep(payload);
             // A session without a catalog reads its paths here, before the
             // clamps read the session's cwds.

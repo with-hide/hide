@@ -539,7 +539,7 @@ fn with_registrations(runtime: &mut Runtime) -> String {
         )
     };
     let both = observed(&[("lead", "w1:p1"), ("reviewer", "w1:p2")]);
-    runtime.observe_delivery(&node, &both, Some("scope"), None);
+    runtime.observe_delivery_laid(&node, &both, Some("scope"), None);
     let mut ledger = crate::delivery::ledger::Ledger::default();
     for (id, name, pane, parent) in [
         ("agent-1", "lead", "w1:p1", None),
@@ -566,7 +566,7 @@ fn with_registrations(runtime: &mut Runtime) -> String {
     ledger.next_id = 3;
     ledger.validate().unwrap();
     runtime.delivery_ledger = Ok(Arc::new(ledger));
-    runtime.observe_delivery(&node, &both, Some("scope"), None);
+    runtime.observe_delivery_laid(&node, &both, Some("scope"), None);
     node
 }
 
@@ -593,7 +593,7 @@ fn an_archived_childs_registration_is_held_and_passes_to_the_pane_it_resumes_in(
     leave(&mut runtime, &["w1:p1", "w1:p2", "w1:p4"]);
     leave(&mut runtime, &["w1:p1"]);
     leave(&mut runtime, &[]);
-    runtime.observe_delivery(&node, &delivery_panes(Vec::new()), Some("scope"), None);
+    runtime.observe_delivery_laid(&node, &delivery_panes(Vec::new()), Some("scope"), None);
     let gone = runtime.delivery_registrations_gone();
     assert!(
         !gone.contains_key("agent-1") && !gone.contains_key("agent-2"),
@@ -633,7 +633,7 @@ fn an_archived_childs_registration_is_held_and_passes_to_the_pane_it_resumes_in(
         delivery_agent("lead", "w1:p1", "claude", &session_of("w1:p1")),
         delivery_agent("reviewer", "w1:p8", "claude", &session_of("w1:p2")),
     ]);
-    runtime.observe_delivery(&node, &observed, Some("scope"), None);
+    runtime.observe_delivery_laid(&node, &observed, Some("scope"), None);
     runtime.advance_session_archive();
 
     let (_, held) = record(&runtime).unwrap();
@@ -719,7 +719,7 @@ fn a_partial_close_keeps_what_closed_and_lists_it_once_the_root_is_gone() {
     // its pane, so the record stays in the root's record.
     let node = runtime.node.as_str().to_owned();
     runtime.delivery_ledger = Ok(Arc::new(crate::delivery::ledger::Ledger::default()));
-    runtime.observe_delivery(
+    runtime.observe_delivery_laid(
         &node,
         &super::agent_sleep::delivery_panes(Vec::new()),
         Some("scope"),
@@ -737,7 +737,7 @@ fn a_partial_close_keeps_what_closed_and_lists_it_once_the_root_is_gone() {
     runtime.delivery_panes.remove(&node);
     runtime.advance_session_archive();
     assert!(!runtime.snapshot.navigator.archived_sessions[0].listed);
-    runtime.observe_delivery(
+    runtime.observe_delivery_laid(
         &node,
         &super::agent_sleep::delivery_panes(Vec::new()),
         Some("scope"),
@@ -778,7 +778,7 @@ fn a_status_check_waits_for_a_fresh_read_before_it_calls_a_pane_closed() {
 
     let node = runtime.node.as_str().to_owned();
     runtime.delivery_ledger = Ok(Arc::new(crate::delivery::ledger::Ledger::default()));
-    runtime.observe_delivery(&node, &delivery_panes(Vec::new()), Some("scope"), None);
+    runtime.observe_delivery_laid(&node, &delivery_panes(Vec::new()), Some("scope"), None);
     send(
         &mut runtime,
         "archive_check",
@@ -807,7 +807,7 @@ fn a_status_check_waits_for_a_devices_session_to_load() {
     }
     let node = runtime.node.as_str().to_owned();
     runtime.delivery_ledger = Ok(Arc::new(crate::delivery::ledger::Ledger::default()));
-    runtime.observe_delivery(&node, &delivery_panes(Vec::new()), Some("scope"), None);
+    runtime.observe_delivery_laid(&node, &delivery_panes(Vec::new()), Some("scope"), None);
     runtime.delivery_panes.insert(
         "mini".into(),
         crate::coordination::PaneRead {
@@ -852,7 +852,7 @@ fn a_resumed_childs_registration_is_released_when_its_new_pane_is_gone() {
     leave(&mut runtime, &["w1:p1", "w1:p2", "w1:p4"]);
     leave(&mut runtime, &["w1:p1"]);
     leave(&mut runtime, &[]);
-    runtime.observe_delivery(&node, &delivery_panes(Vec::new()), Some("scope"), None);
+    runtime.observe_delivery_laid(&node, &delivery_panes(Vec::new()), Some("scope"), None);
     let parsed = crate::session_archive::ArchiveId::parse(&record(&runtime).unwrap().0).unwrap();
     {
         let held = runtime

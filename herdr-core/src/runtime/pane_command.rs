@@ -220,7 +220,7 @@ mod tests {
         }
         let payload: SessionSnapshotPayload =
             serde_json::from_value(json!({ "agents": agents })).unwrap();
-        runtime.observe_delivery(NODE, &payload, None, None);
+        runtime.observe_delivery_laid(NODE, &payload, None, None);
         let herdr = crate::fake_herdr::FakeHerdr::start_with_errors("pane-command", respond);
         runtime.live = Some(crate::live::LiveContext {
             socket_path: herdr.socket_path().to_path_buf(),
@@ -386,7 +386,7 @@ mod tests {
             {"id":"far","pane_id":"w2:p1","agent":"codex","agent_status":"idle","state_change_seq":1,"lineage_session":"far-session"},
         ]}))
         .unwrap();
-        runtime.observe_delivery("studio", &payload, None, None);
+        runtime.observe_delivery_laid("studio", &payload, None, None);
         assert_eq!(
             read(&runtime, &context, agent("far")).err(),
             Some("engine_unavailable".into())

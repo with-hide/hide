@@ -430,7 +430,7 @@ fn a_conductors_conversation_resumed_in_another_pane_conducts_its_mission() {
              "state_change_seq": 1, "lineage_session": format!("{pane}-lineage")},
         ]}))
         .unwrap();
-        runtime.observe_delivery(crate::node::TEST_NODE, &payload, None, None);
+        runtime.observe_delivery_laid(crate::node::TEST_NODE, &payload, None, None);
         runtime.refresh_missions();
     };
     seen(&mut runtime, "stranger", "another-session");
@@ -1809,7 +1809,7 @@ fn an_answer_held_on_an_unreadable_conductor_session_says_why() {
                     "session_capacity:line_bytes:262144".to_owned(),
                 )
             }));
-        runtime.observe_delivery(crate::node::TEST_NODE, &payload, None, Some(&labels));
+        runtime.observe_delivery_laid(crate::node::TEST_NODE, &payload, None, Some(&labels));
         runtime.refresh_missions();
         runtime.snapshot.missions.items[0].answer_failed
     };
@@ -2180,7 +2180,7 @@ fn with_worker_and_reviewer(runtime: &mut Runtime) {
         {"id":"reviewer","pane_id":"reviewer","agent":"codex","agent_status":"working","state_change_seq":1,"lineage_session":"reviewer-session"},
     ]}))
     .unwrap();
-    runtime.observe_delivery(crate::node::TEST_NODE, &payload, None, None);
+    runtime.observe_delivery_laid(crate::node::TEST_NODE, &payload, None, None);
     let panes = &mut runtime.snapshot.navigator.workspaces[0].checkouts[0].tabs[0].panes;
     let mut reviewer = panes[1].clone();
     reviewer.id = "reviewer".into();

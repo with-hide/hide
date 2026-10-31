@@ -1695,7 +1695,7 @@ fn a_parents_request_stays_the_childs_work_when_the_parents_screen_title_changes
          "lineage_session":crate::engine::tokens::session_digest("worker-native")},
     ]}))
     .unwrap();
-    runtime.observe_delivery(crate::node::TEST_NODE, &payload, Some("scope"), None);
+    runtime.observe_delivery_laid(crate::node::TEST_NODE, &payload, Some("scope"), None);
     let actor = |pane: &str| -> Actor { runtime.delivery_observations[pane].actor.clone() };
     let (lead, worker) = (actor("lead"), actor("worker"));
     let registered = |id: &str, name: Option<&str>, parent: Option<&str>, actor: &Actor| {
@@ -2049,8 +2049,8 @@ fn a_device_workers_parent_is_named_by_its_own_devices_pane_not_a_local_one_of_t
          "lineage_session":crate::engine::tokens::session_digest("local-native")},
     ]}))
     .unwrap();
-    runtime.observe_delivery(crate::node::TEST_NODE, &local, Some("scope"), None);
-    runtime.observe_delivery("remote", &both, None, None);
+    let _ = runtime.observe_delivery(crate::node::TEST_NODE, &local, Some("scope"), None);
+    let _ = runtime.observe_delivery("remote", &both, None, None);
     let lead = runtime.delivery_observations[&scoped("lead")].actor.clone();
     let local_lead = runtime.delivery_observations["lead"].actor.clone();
     assert!(!lead.same_identity(&local_lead));
