@@ -801,7 +801,7 @@ test("splits, moves, resizes, focus and closes run from the tab menu, area comma
     const count = (key: string) => stack.sent.get(key) ?? 0;
     // The area commands have no default chord (PRD cmdk-navigation D-05): the
     // three this flow runs are bound in Settings first, on keys free on every system (not Alt+Shift+L, Memory's).
-    await bindChordlessCommand(page, "focus_previous_view_area", "Alt+Shift+KeyJ");
+    await bindChordlessCommand(page, "focus_previous_view_area", "Alt+Shift+KeyZ");
     await bindChordlessCommand(page, "focus_next_view_area", "Alt+Shift+KeyX");
     await bindChordlessCommand(page, "grow_view_area", "Alt+Shift+KeyY");
     await expect.poll(() => shape(page)).toBe("@(a.txt b.txt c.txt >d.txt)");
@@ -822,7 +822,7 @@ test("splits, moves, resizes, focus and closes run from the tab menu, area comma
     await expect(editor(page, 1)).toBeFocused();
 
     // Focus moves between areas from the bound chord, and the keyboard goes along (B20).
-    await page.keyboard.press("Alt+Shift+KeyJ");
+    await page.keyboard.press("Alt+Shift+KeyZ");
     await expect.poll(() => shape(page)).toBe("@(a.txt b.txt >c.txt) | (>d.txt)");
     await expect(editor(page, 0)).toBeFocused();
     expect(count("view_layout.focus_area")).toBe(1);
