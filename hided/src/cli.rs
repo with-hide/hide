@@ -2497,13 +2497,6 @@ fn status(state_dir: &Path, idle_secs: u64) -> Result<(), String> {
     }
 }
 
-/// Answers the folder the desktop host runs this package's daemon, CLI and
-/// Herdr from, as one JSON line. A Windows package's is a copy outside its
-/// install folder (PRD auto-update D-10), made here once per build, and the
-/// copies of other builds nothing runs from are removed; what could not be
-/// removed is reported to stderr as records the host logs (D-11). Elsewhere
-/// it is the package's own resources folder. A `hide` outside a package has
-/// no runtime to prepare.
 const DESK_USAGE: &str = "usage: hide desk login codex [codex login options]";
 
 /// Signs Desk's own Codex in: `codex login`, run by the Codex in Desk's
@@ -2534,6 +2527,13 @@ fn desk_login(home: &Path, state_dir: &Path, options: &[String]) -> Result<(), S
     }
 }
 
+/// Answers the folder the desktop host runs this package's daemon, CLI and
+/// Herdr from, as one JSON line. A Windows package's is a copy outside its
+/// install folder (PRD auto-update D-10), made here once per build, and the
+/// copies of other builds nothing runs from are removed; what could not be
+/// removed is reported to stderr as records the host logs (D-11). Elsewhere
+/// it is the package's own resources folder. A `hide` outside a package has
+/// no runtime to prepare.
 fn runtime_prepare(home: &Path) -> Result<(), String> {
     let package = std::env::current_exe()
         .and_then(|path| path.canonicalize())
