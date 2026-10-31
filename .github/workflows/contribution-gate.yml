@@ -1,8 +1,8 @@
 name: contribution gate
 
 # Closes a pull request whose author is neither a maintainer (write access) nor
-# listed in .github/APPROVED_CONTRIBUTORS, and an issue that did not come through
-# the bug form or runs past its length limit. A maintainer who reopens either
+# listed in .github/APPROVED_CONTRIBUTORS, and an issue that runs past its length
+# limit. A maintainer who reopens either
 # keeps it open. CONTRIBUTING.md owns the policy and its reasons.
 #
 # pull_request_target runs this file from main with a write token, so it must
@@ -33,7 +33,6 @@ jobs:
             const item = pull ?? context.payload.issue;
             const author = item.user.login;
             const MARKER = '<!-- hide:contribution-gate -->';
-            const BUG_FORM = /^- \[x\] I reproduced this bug /im;
             const ISSUE_LIMIT = 8000;
             // Dependency updates come from these apps, and only they.
             const BOTS = new Set(['dependabot[bot]', 'github-actions[bot]']);
@@ -72,18 +71,14 @@ jobs:
               reason = [
                 'hide does not accept pull requests from people who are not listed in `.github/APPROVED_CONTRIBUTORS`, so this one was closed automatically.',
                 '',
-                'If you hit a bug you can reproduce, report it with the bug form; a report does not reserve the work or permit a pull request.',
+                'Report a bug or ask for a feature with the issue forms; an issue does not reserve the work or permit a pull request.',
                 `Ideas, behavior changes and proposals belong in [Discussions](${discussions}).`,
               ];
             } else {
               const body = item.body ?? '';
-              if (BUG_FORM.test(body) && body.length <= ISSUE_LIMIT) return core.info('issue came through the bug form');
+              if (body.length <= ISSUE_LIMIT) return core.info('issue is within its length limit');
               reason = [
-                body.length > ISSUE_LIMIT
-                  ? `This issue is longer than ${ISSUE_LIMIT} characters, so it was closed automatically. Keep a report to one screen: what happened, what you expected, the steps, and the versions.`
-                  : 'Issues are only for bugs reported through the bug form, so this one was closed automatically.',
-                '',
-                `Ideas, feature requests and questions belong in [Discussions](${discussions}).`,
+                `This issue is longer than ${ISSUE_LIMIT} characters, so it was closed automatically. Keep it to one screen in your own words, using the bug or feature request form.`,
               ];
             }
             const message = [

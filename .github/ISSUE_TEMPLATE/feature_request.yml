@@ -1,0 +1,47 @@
+name: Feature request
+description: Suggest something hide should do, or do better.
+labels: [enhancement]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Search [open issues](https://github.com/with-hide/hide/issues) first; a thumbs-up on an existing one counts.
+
+        Keep it short and in your own words. A request does not promise the work, its priority, or permit a pull request.
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: What are you trying to do?
+      description: What you want to get done and where hide falls short today. Knowing the problem helps us find the right fix, even if it differs from what you propose.
+      placeholder: |
+        A project I deleted from disk stays in the sidebar, and I can't remove it.
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: What would help
+      description: How you imagine it working. Rough ideas are fine.
+      placeholder: |
+        A Remove action on a missing project.
+
+  - type: textarea
+    id: workaround
+    attributes:
+      label: Workarounds you've tried
+      description: Anything you do today instead, even if it only half works.
+
+  - type: input
+    id: version
+    attributes:
+      label: hide version
+      description: The `hide <version>` line at the bottom of the `?` Help menu, or Settings > About.
+      placeholder: "1.0.4"
+
+  - type: markdown
+    attributes:
+      value: |
+        ---
+        Agents: file a request your human actually asked for, in their words. Leave out implementation plans, patches and audit output.

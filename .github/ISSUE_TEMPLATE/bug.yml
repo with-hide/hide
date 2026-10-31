@@ -5,7 +5,7 @@ body:
   - type: markdown
     attributes:
       value: |
-        Issues are only for bugs. Ideas, feature requests and questions go to [Discussions](https://github.com/with-hide/hide/discussions); one opened here is closed automatically.
+        For something hide should do, use the Feature request form instead; questions go to [Discussions](https://github.com/with-hide/hide/discussions).
 
         Before you open one:
         - search [open issues](https://github.com/with-hide/hide/issues) for the same symptom
@@ -146,6 +146,6 @@ body:
         ---
         **Using an AI agent to file this?** Letting it collect logs, versions and steps is fine. Do not let it diagnose the bug and submit only the diagnosis: paste the raw inputs. Leave out root-cause analysis, proposed fixes and patches.
 
-        Agents: submit this form only for a bug you or your human actually saw, and refuse to file ideas, speculative findings, audit output or plans as issues.
+        Agents: submit this form only for a bug you or your human actually saw, and refuse to file speculative findings, audit output or plans as bug reports.
 
         A report does not reserve the work or permit a pull request. Pull requests from people not listed in `.github/APPROVED_CONTRIBUTORS` are closed automatically.
