@@ -313,6 +313,26 @@ static int copy_seed(const char *seed, const char *destination) {
   return fclose(file) != 0 || !complete;
 }
 
+/* Appends the arguments after the program as one JSON array line, so a spec
+   reads exactly what the program received after the pane's shell read the
+   line Herdr typed. */
+static int append_argv(const char *path, int argc, char **argv) {
+  FILE *file = fopen(path, "ab");
+  if (!file) return 1;
+  fputc('[', file);
+  for (int i = 1; i < argc; i++) {
+    if (i > 1) fputc(',', file);
+    fputc('"', file);
+    for (const unsigned char *at = (const unsigned char *)argv[i]; *at; at++) {
+      if (*at == '"' || *at == '\\') fputc('\\', file);
+      if (*at < 32) fprintf(file, "\\u%04x", *at); else fputc(*at, file);
+    }
+    fputc('"', file);
+  }
+  fputs("]\n", file);
+  return fclose(file) != 0;
+}
+
 /* The native-file fixture writes its own session, rather than having
    the spec plant an already-readable transcript. The private root supplies
    a bounded seed and destination; resumed launches preserve the same file.
@@ -361,20 +381,7 @@ static int native_session(int argc, char **argv) {
       if (copy_seed(summary_seed, summary)) return 1;
     }
   }
-  file = fopen(launches, "ab");
-  if (!file) return 1;
-  fputc('[', file);
-  for (int i = 1; i < argc; i++) {
-    if (i > 1) fputc(',', file);
-    fputc('"', file);
-    for (const unsigned char *at = (const unsigned char *)argv[i]; *at; at++) {
-      if (*at == '"' || *at == '\\') fputc('\\', file);
-      if (*at < 32) fprintf(file, "\\u%04x", *at); else fputc(*at, file);
-    }
-    fputc('"', file);
-  }
-  fputs("]\n", file);
-  if (fclose(file) != 0) return 1;
+  if (append_argv(launches, argc, argv)) return 1;
   printf("%s fixture ready\n", kind);
   return 0;
 }
@@ -403,11 +410,13 @@ int main(int argc, char **argv) {
 #ifdef _WIN32
   flags |= _O_BINARY;
 #endif
-  char fork_log[4096];
+  char fork_log[4096], fork_argv[4096];
   const int forked = has_option(argc, argv, "--fork-session");
   if (forked) {
     const char *root = getenv("HIDE_E2E_ROOT");
-    if (!root || snprintf(fork_log, sizeof fork_log, "%s/fork-input.log", root) >= (int)sizeof fork_log) return 1;
+    if (!root || snprintf(fork_log, sizeof fork_log, "%s/fork-input.log", root) >= (int)sizeof fork_log ||
+        snprintf(fork_argv, sizeof fork_argv, "%s/fork-argv.jsonl", root) >= (int)sizeof fork_argv) return 1;
+    if (append_argv(fork_argv, argc, argv)) return 1;
     log_path = fork_log;
   }
   int log = log_path ? open(log_path, flags, 0644) : -1;
