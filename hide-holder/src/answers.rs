@@ -9,7 +9,8 @@
 //! | OSC 10, 11, 12 and OSC 4 colors, `CSI ? 996 n` | libghostty, from the theme the node sent ([`crate::pane`]) |
 //! | XTGETTCAP | libghostty, less what this path does not carry ([`UNSUPPORTED`]) |
 //! | XTWINOPS 18t, the text area in cells | the holder ([`Scanner`]) |
-//! | XTWINOPS 14t, 16t; mode 2048 size reports | nobody: the cell's pixel size is not known, and libghostty answers none without it |
+//! | XTWINOPS 14t, 16t | nobody: the cell's pixel size is not known, and libghostty answers neither without it |
+//! | mode 2048 size reports (`CSI 48 ; ... t`) | nobody: libghostty's carry pixels it does not know, so the holder drops them ([`keeps`]) |
 //! | `CSI ? 997 n` appearance changes | the holder, on a theme whose appearance changed while mode 2031 is on |
 //! | ENQ, OSC 52 reads, 21t title | nobody |
 //!
@@ -156,8 +157,12 @@ fn csi_mark(params: &[u8], last: u8) -> Option<Mark> {
 
 /// Whether libghostty's `answer` is one this path keeps: an XTGETTCAP
 /// answer naming a capability in [`UNSUPPORTED`] is dropped, as one
-/// libghostty does not know is.
+/// libghostty does not know is, and so is an in-band size report, whose
+/// pixels nobody knows.
 pub fn keeps(answer: &[u8]) -> bool {
+    if answer.starts_with(b"\x1b[48;") && answer.ends_with(b"t") {
+        return false;
+    }
     let Some(rest) = answer.strip_prefix(b"\x1bP1+r") else {
         return true;
     };
@@ -234,5 +239,7 @@ mod tests {
         assert!(!keeps(b"\x1bP1+r536574756C63=x\x1b\\"));
         assert!(keeps(b"\x1bP1+r5463=5C45\x1b\\"));
         assert!(keeps(b"\x1b[?62;22c"));
+        assert!(!keeps(b"\x1b[48;30;100;30;100t"));
+        assert!(keeps(b"\x1b[8;30;100t"));
     }
 }

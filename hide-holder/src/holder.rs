@@ -711,7 +711,9 @@ impl Holder {
         }
         // The terminal has the size now, whatever the parser answers.
         self.size = size;
-        let resized = self.pane().resize(size);
+        let mut answers = Vec::new();
+        let resized = self.pane().resize(size, &mut answers);
+        self.answers.send(answers);
         self.screen_changed();
         if let Err(error) = resized {
             self.resize_failed(

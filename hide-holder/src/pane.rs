@@ -149,11 +149,13 @@ impl Pane {
             .take(&self.terminal, &self.defaults, self.shaped, everything)
     }
 
-    pub fn resize(&mut self, size: Size) -> Result<(), hide_vt::Error> {
+    /// Resizes the parser; answers what it says of the new size, which with
+    /// no pixel size known is nothing (D-9).
+    pub fn resize(&mut self, size: Size, answers: &mut Vec<u8>) -> Result<(), hide_vt::Error> {
         self.everything = true;
-        // The cell's pixel size is not known, so no pixel question is
-        // answered (D-9).
-        self.terminal.resize(size.cols, size.rows, 0, 0)
+        let resized = self.terminal.resize(size.cols, size.rows, 0, 0);
+        self.take_replies(answers);
+        resized
     }
 
     /// Takes the node's theme: the colors questions are answered with until
@@ -186,6 +188,7 @@ impl Pane {
         self.defaults.theme_fg = rgb(theme.foreground);
         self.defaults.theme_bg = rgb(theme.background);
         self.everything = true;
+        self.take_replies(answers);
         let changed = self.appearance != theme.appearance;
         self.appearance = theme.appearance;
         if changed && self.terminal.mode_get(hide_vt::MODE_COLOR_SCHEME_REPORT)? {
@@ -405,4 +408,243 @@ fn mods(modifiers: Modifiers) -> u16 {
         }
     }
     mods
+}
+
+#[cfg(test)]
+mod tests {
+    use hide_holder_protocol::Rgb;
+
+    use super::*;
+
+    fn pane() -> Pane {
+        Pane::new(Size { rows: 24, cols: 80 }).unwrap()
+    }
+
+    fn answers(pane: &mut Pane, chunks: &[&[u8]]) -> String {
+        let mut answers = Vec::new();
+        for chunk in chunks {
+            pane.feed(chunk, &mut answers);
+        }
+        String::from_utf8(answers).unwrap()
+    }
+
+    fn theme(pane: &mut Pane, appearance: Appearance) -> String {
+        let mut answers = Vec::new();
+        pane.theme(
+            &Theme {
+                foreground: Some(Rgb {
+                    r: 0x10,
+                    g: 0x20,
+                    b: 0x30,
+                }),
+                background: Some(Rgb { r: 1, g: 2, b: 3 }),
+                cursor: None,
+                palette: vec![(1, Rgb { r: 9, g: 9, b: 9 })],
+                appearance,
+            },
+            &mut answers,
+        )
+        .unwrap();
+        String::from_utf8(answers).unwrap()
+    }
+
+    #[test]
+    fn each_question_is_answered_once_in_the_order_asked() {
+        let mut pane = pane();
+        let asked = answers(
+            &mut pane,
+            &[
+                b"\x1b[6n\x1b[c\x1b[>c\x1b[=c\x1b[18t\x1b[14t\x1b[16t\x1b]10;?\x07\x1b]4;1;?\x07\
+                \x1bP+q544E;4D73;5463;536574756C63;66756C6C6B6264\x1b\\\x1b[>q\x1b[?2004$p\x05",
+            ],
+        );
+        assert_eq!(
+            asked,
+            "\x1b[1;1R\x1b[?62;22c\x1b[>1;0;0c\x1bP!|00000000\x1b\\\x1b[8;24;80t\
+             \x1b]4;1;rgb:cccc/6666/6666\x07\x1bP1+r544E=787465726D2D323536636F6C6F72\x1b\\\
+             \x1bP1+r5463\x1b\\\x1bP>|libghostty\x1b\\\x1b[?2004;2$y"
+        );
+    }
+
+    #[test]
+    fn a_question_split_across_reads_is_answered_once() {
+        let mut pane = pane();
+        assert_eq!(
+            answers(&mut pane, &[b"\x1b[", b"6n\x1b[1", b"8", b"t"]),
+            "\x1b[1;1R\x1b[8;24;80t"
+        );
+    }
+
+    #[test]
+    fn pixel_questions_go_unanswered_while_the_cell_size_is_unknown() {
+        let mut pane = pane();
+        assert_eq!(answers(&mut pane, &[b"\x1b[14t\x1b[16t\x1b[?2048h"]), "");
+        let mut resized = Vec::new();
+        pane.resize(
+            Size {
+                rows: 30,
+                cols: 100,
+            },
+            &mut resized,
+        )
+        .unwrap();
+        assert!(resized.is_empty(), "{resized:?}");
+        assert_eq!(answers(&mut pane, &[b"\x1b[18t"]), "\x1b[8;30;100t");
+    }
+
+    #[test]
+    fn a_theme_answers_colors_until_the_program_sets_its_own_and_after_it_resets_them() {
+        let mut pane = pane();
+        assert_eq!(answers(&mut pane, &[b"\x1b]10;?\x07\x1b]11;?\x07"]), "");
+        theme(&mut pane, Appearance::Dark);
+        let asked = b"\x1b]10;?\x07\x1b]11;?\x1b\\\x1b]4;1;?\x07";
+        let themed = "\x1b]10;rgb:1010/2020/3030\x07\x1b]11;rgb:0101/0202/0303\x1b\\\
+                      \x1b]4;1;rgb:0909/0909/0909\x07";
+        assert_eq!(answers(&mut pane, &[asked]), themed);
+        answers(&mut pane, &[b"\x1b]10;#abcdef\x07\x1b]4;1;#123456\x07"]);
+        let own = "\x1b]10;rgb:abab/cdcd/efef\x07\x1b]11;rgb:0101/0202/0303\x1b\\\
+                   \x1b]4;1;rgb:1212/3434/5656\x07";
+        assert_eq!(answers(&mut pane, &[asked]), own);
+        // A theme that changes later does not override the program's own.
+        theme(&mut pane, Appearance::Dark);
+        assert_eq!(answers(&mut pane, &[asked]), own);
+        answers(&mut pane, &[b"\x1b]110\x07\x1b]104;1\x07"]);
+        assert_eq!(answers(&mut pane, &[asked]), themed);
+    }
+
+    #[test]
+    fn an_appearance_change_is_told_only_to_a_program_that_asked() {
+        let mut pane = pane();
+        assert_eq!(theme(&mut pane, Appearance::Dark), "");
+        assert_eq!(answers(&mut pane, &[b"\x1b[?996n"]), "\x1b[?997;1n");
+        answers(&mut pane, &[b"\x1b[?2031h"]);
+        assert_eq!(theme(&mut pane, Appearance::Light), "\x1b[?997;2n");
+        assert_eq!(theme(&mut pane, Appearance::Light), "");
+    }
+
+    #[test]
+    fn a_paste_is_wrapped_only_in_bracketed_paste_mode() {
+        let mut pane = pane();
+        assert_eq!(pane.paste(b"a\nb\x1bc").unwrap(), b"a\rb c");
+        answers(&mut pane, &[b"\x1b[?2004h"]);
+        assert_eq!(
+            pane.paste(b"a\nb\x1bc").unwrap(),
+            b"\x1b[200~a\nb c\x1b[201~"
+        );
+    }
+
+    fn press(col: u16, row: u16) -> Mouse {
+        Mouse {
+            action: MouseAction::Press,
+            button: Some(MouseButton::Left),
+            col,
+            row,
+            modifiers: Modifiers::default(),
+        }
+    }
+
+    fn wheel(lines: i16) -> Scroll {
+        Scroll {
+            lines,
+            cell: Some((1, 2)),
+            modifiers: Modifiers::default(),
+        }
+    }
+
+    #[test]
+    fn a_mouse_event_follows_the_programs_mouse_mode_or_is_dropped() {
+        let mut pane = pane();
+        assert_eq!(pane.mouse(&press(3, 4)).unwrap(), None);
+        answers(&mut pane, &[b"\x1b[?1000h\x1b[?1006h"]);
+        assert_eq!(
+            pane.mouse(&press(3, 4)).unwrap().as_deref(),
+            Some(&b"\x1b[<0;4;5M"[..])
+        );
+        // Pixels the holder does not know.
+        answers(&mut pane, &[b"\x1b[?1016h"]);
+        assert_eq!(pane.mouse(&press(3, 4)).unwrap(), None);
+    }
+
+    fn wheel_input(pane: &mut Pane, lines: i16) -> Option<Vec<u8>> {
+        match pane.scroll(&wheel(lines)).unwrap() {
+            Wheel::Input(bytes) => Some(bytes),
+            Wheel::Moved | Wheel::Still => None,
+        }
+    }
+
+    #[test]
+    fn a_wheel_is_routed_as_herdr_routes_it() {
+        let mut pane = pane();
+        answers(&mut pane, &[b"\x1b[?1000h\x1b[?1006h"]);
+        assert_eq!(
+            wheel_input(&mut pane, 3).as_deref(),
+            Some(&b"\x1b[<64;2;3M"[..])
+        );
+        answers(&mut pane, &[b"\x1b[?1000l\x1b[?1049h\x1b[?1007h"]);
+        assert_eq!(wheel_input(&mut pane, 1).as_deref(), Some(&b"\x1b[A"[..]));
+        assert_eq!(wheel_input(&mut pane, -1).as_deref(), Some(&b"\x1b[B"[..]));
+        answers(&mut pane, &[b"\x1b[?1h"]);
+        assert_eq!(wheel_input(&mut pane, 1).as_deref(), Some(&b"\x1bOA"[..]));
+        answers(&mut pane, &[b"\x1b[?1049l"]);
+        assert!(matches!(pane.scroll(&wheel(3)).unwrap(), Wheel::Still));
+        let lines: String = (0..60).map(|row| format!("row {row}\r\n")).collect();
+        answers(&mut pane, &[lines.as_bytes()]);
+        assert!(matches!(pane.scroll(&wheel(3)).unwrap(), Wheel::Moved));
+        assert!(pane.to_bottom());
+        assert!(!pane.to_bottom());
+    }
+
+    #[test]
+    fn a_read_gives_the_recent_rows_joined_and_says_when_rows_were_left_out() {
+        let mut pane = pane();
+        let lines: String = (0..30).map(|row| format!("row {row}\r\n")).collect();
+        answers(
+            &mut pane,
+            &[lines.as_bytes(), b"a long line ", &[b'x'; 100]],
+        );
+        let Answer::Text { text, truncated } = pane.read(3).unwrap() else {
+            panic!("not a text");
+        };
+        assert!(truncated);
+        // Rows, not lines: the long line takes the last two.
+        assert_eq!(text, format!("row 29\na long line {}", "x".repeat(100)));
+        let Answer::Text { text, truncated } = pane.read(2000).unwrap() else {
+            panic!("not a text");
+        };
+        assert!(!truncated, "{text}");
+        assert!(text.starts_with("row 0\n"), "{text}");
+    }
+
+    #[test]
+    fn a_read_past_its_byte_bound_keeps_the_newest_text() {
+        // Each cell carries a letter and four combining marks, nine bytes,
+        // so 512 rows of 512 hold far more than the bound.
+        let mut pane = Pane::new(Size {
+            rows: 512,
+            cols: 512,
+        })
+        .unwrap();
+        let cell = "e\u{301}\u{302}\u{303}\u{304}";
+        let mut screen = String::new();
+        for row in 0..512 {
+            screen.push_str(&format!("\x1b[{};1H", row + 1));
+            screen.push_str(&cell.repeat(500));
+            screen.push_str(&format!("{row:>12}"));
+        }
+        answers(&mut pane, &[screen.as_bytes()]);
+        let Answer::Text { text, truncated } = pane.read(512).unwrap() else {
+            panic!("not a text");
+        };
+        assert!(truncated);
+        assert!(text.len() <= MAX_READ_BYTES, "{}", text.len());
+        assert!(text.len() > MAX_READ_BYTES - 16, "{}", text.len());
+        assert!(
+            text.ends_with(&format!("{:>12}", 511)),
+            "the newest row was cut"
+        );
+        assert!(
+            !text.contains(&format!("{:>12}\n", 0)),
+            "the oldest row was kept"
+        );
+    }
 }

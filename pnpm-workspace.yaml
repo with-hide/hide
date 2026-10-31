@@ -1,6 +1,8 @@
 packages:
   - web
   - desktop
+  # The pane holder's screen tests draw its fragments on an xterm of their own.
+  - hide-holder/tests/xterm
 
 # Build scripts run only for these packages; pnpm 10 reads this at the
 # workspace root, not from a member package.json. `electron` needs none: it

@@ -29,6 +29,8 @@ pub const CONPTY_VARIABLE: &str = "HIDE_HOLDER_CONPTY";
 pub const ROLE: &str = "HIDE_HOLDER_TEST_ROLE";
 /// Where a role writes the pids it started.
 pub const PIDS_FILE: &str = "HIDE_HOLDER_TEST_PIDS";
+/// The folder the `script` role plays its steps from.
+pub const SCRIPT: &str = "HIDE_HOLDER_TEST_SCRIPT";
 
 /// A private HOME for one test.
 pub struct Home {
@@ -294,7 +296,7 @@ impl Drop for Holder {
 }
 
 #[allow(clippy::disallowed_methods)] // a polling helper bounded by a deadline
-pub fn wait_until(what: &str, done: impl Fn() -> bool) {
+pub fn wait_until(what: &str, mut done: impl FnMut() -> bool) {
     let started = Instant::now();
     while !done() {
         assert!(started.elapsed() < HANG_LIMIT, "{what} never happened");
@@ -431,4 +433,238 @@ pub fn pids_in(path: &Path, count: usize) -> Vec<u32> {
 
 pub fn current_version() -> u16 {
     PROTOCOL_VERSION
+}
+
+/// The steps the `script` role plays, in a folder of the test's HOME.
+pub struct Script {
+    pub folder: PathBuf,
+    /// Every step's bytes, in order.
+    pub steps: Vec<Vec<u8>>,
+}
+
+impl Script {
+    pub fn new(home: &Home, steps: Vec<Vec<u8>>) -> Self {
+        let folder = home.path().join("script");
+        std::fs::create_dir_all(&folder).unwrap();
+        for (index, step) in steps.iter().enumerate() {
+            std::fs::write(folder.join(format!("step-{index}")), step).unwrap();
+        }
+        Self { folder, steps }
+    }
+
+    /// Lets the role play step `step`.
+    pub fn go(&self, step: usize) {
+        std::fs::write(self.folder.join(format!("go-{step}")), b"").unwrap();
+    }
+
+    /// What the program was sent, as it came.
+    pub fn heard(&self) -> Vec<u8> {
+        std::fs::read(self.folder.join("heard")).unwrap_or_default()
+    }
+
+    /// Waits until the program was sent `expected`, and nothing else.
+    pub fn wait_heard(&self, expected: &[u8]) {
+        let started = Instant::now();
+        loop {
+            let heard = self.heard();
+            if heard.len() >= expected.len() {
+                assert_eq!(
+                    String::from_utf8_lossy(&heard),
+                    String::from_utf8_lossy(expected),
+                    "the program was sent something else"
+                );
+                return;
+            }
+            assert!(
+                started.elapsed() < HANG_LIMIT,
+                "the program was sent {:?}, not yet {:?}",
+                String::from_utf8_lossy(&heard),
+                String::from_utf8_lossy(expected)
+            );
+            thread::sleep(Duration::from_millis(10));
+        }
+    }
+
+    /// Starts a holder whose program plays this script.
+    pub fn start(&self, home: &Home) -> Holder {
+        let folder = home.prepare(current_version(), &source());
+        let role: OsString = "script".into();
+        let script: OsString = self.folder.clone().into();
+        start_ready(
+            &folder.program,
+            &home.socket("p"),
+            &role_program("script"),
+            &[(ROLE, &role), (SCRIPT, &script)],
+        )
+    }
+}
+
+/// One thing a terminal is given to draw.
+pub enum Draw {
+    Bytes(Vec<u8>),
+    Resize { cols: u16, rows: u16 },
+}
+
+/// What an xterm shows once it drew everything.
+#[derive(Debug, PartialEq, Eq)]
+pub struct Shown {
+    pub lines: Vec<String>,
+    pub cursor: (u64, u64),
+    pub cursor_visible: bool,
+    pub cursor_shape: (String, Option<bool>),
+    pub buffer: String,
+    /// What the terminal answered or reported while it drew.
+    pub data: Vec<u8>,
+    pub mouse: String,
+}
+
+fn hex(bytes: &[u8]) -> String {
+    bytes.iter().map(|byte| format!("{byte:02x}")).collect()
+}
+
+fn unhex(text: &str) -> Vec<u8> {
+    (0..text.len())
+        .step_by(2)
+        .map(|at| u8::from_str_radix(&text[at..at + 2], 16).unwrap())
+        .collect()
+}
+
+/// Draws each terminal, `(cols, rows, what)`, on an xterm of its own: the
+/// headless xterm in `tests/xterm`, which `scripts/verify-web.sh install`
+/// installs, run by Node.
+pub fn draw(terminals: &[(u16, u16, Vec<Draw>)]) -> Vec<Shown> {
+    let package = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/xterm");
+    assert!(
+        package.join("node_modules/@xterm/headless").is_dir(),
+        "the test xterm is not installed in {}: run scripts/verify-web.sh install",
+        package.display()
+    );
+    let input = serde_json::json!({
+        "terminals": terminals.iter().map(|(cols, rows, steps)| serde_json::json!({
+            "cols": cols,
+            "rows": rows,
+            "steps": steps.iter().map(|step| match step {
+                Draw::Bytes(bytes) => serde_json::json!({ "write": hex(bytes) }),
+                Draw::Resize { cols, rows } => serde_json::json!({ "resize": [cols, rows] }),
+            }).collect::<Vec<_>>(),
+        })).collect::<Vec<_>>(),
+    });
+    let mut node = std::process::Command::new("node")
+        .arg(package.join("draw.mjs"))
+        .current_dir(&package)
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .spawn()
+        .unwrap_or_else(|error| panic!("node, which draws the test xterm, did not start: {error}"));
+    {
+        use std::io::Write;
+        let mut stdin = node.stdin.take().unwrap();
+        stdin.write_all(input.to_string().as_bytes()).unwrap();
+    }
+    let output = node.wait_with_output().unwrap();
+    assert!(
+        output.status.success(),
+        "the test xterm failed: {:?}",
+        output.status
+    );
+    let answer: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    answer["screens"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|screen| Shown {
+            lines: screen["lines"]
+                .as_array()
+                .unwrap()
+                .iter()
+                // A fragment writes every cell, blank ones as spaces, where a
+                // program leaves them unwritten: the same to the eye.
+                .map(|line| line.as_str().unwrap().trim_end().to_owned())
+                .collect(),
+            cursor: (screen["x"].as_u64().unwrap(), screen["y"].as_u64().unwrap()),
+            cursor_visible: screen["cursorVisible"].as_bool().unwrap(),
+            cursor_shape: (
+                screen["cursorStyle"].as_str().unwrap().to_owned(),
+                screen["cursorBlink"].as_bool(),
+            ),
+            buffer: screen["buffer"].as_str().unwrap().to_owned(),
+            data: unhex(screen["data"].as_str().unwrap()),
+            mouse: screen["mouse"].as_str().unwrap().to_owned(),
+        })
+        .collect()
+}
+
+/// The fragments drawn in order on a terminal that first drew `prior` at
+/// `size`: each fragment's size is the terminal's before its bytes.
+pub fn fragments_after(
+    prior: &[u8],
+    size: (u16, u16),
+    fragments: &[Fragment],
+) -> (u16, u16, Vec<Draw>) {
+    let mut steps = vec![Draw::Bytes(prior.to_vec())];
+    let mut current = size;
+    for fragment in fragments {
+        let wanted = (fragment.size.cols, fragment.size.rows);
+        if wanted != current {
+            steps.push(Draw::Resize {
+                cols: wanted.0,
+                rows: wanted.1,
+            });
+            current = wanted;
+        }
+        steps.push(Draw::Bytes(fragment.bytes.clone()));
+    }
+    (size.0, size.1, steps)
+}
+
+impl Connection {
+    /// Waits for the fragment that draws `marker`, the last thing a script
+    /// step writes, so it shows everything the step wrote; answers how many
+    /// fragments came by then.
+    pub fn wait_for_drawn(&mut self, marker: &str) -> usize {
+        let started = Instant::now();
+        loop {
+            if let Some(index) = self
+                .fragments
+                .iter()
+                .position(|fragment| contains(&fragment.bytes, marker.as_bytes()))
+            {
+                return index + 1;
+            }
+            assert!(
+                self.closed.is_none(),
+                "closed ({:?}) before {marker:?} was drawn",
+                self.closed
+            );
+            assert!(started.elapsed() < HANG_LIMIT, "{marker:?} was never drawn");
+            self.take(Duration::from_millis(50));
+        }
+    }
+
+    /// Asks for the screen whole and waits for it: the fragments up to and
+    /// including the full one that answered.
+    pub fn redraw(&mut self) -> usize {
+        let before = self.fragments.len();
+        self.send(ClientMessage::Redraw).unwrap();
+        let started = Instant::now();
+        loop {
+            if let Some(index) = self.fragments[before..]
+                .iter()
+                .position(|fragment| fragment.full)
+            {
+                return before + index + 1;
+            }
+            assert!(
+                self.closed.is_none(),
+                "closed ({:?}) before a full screen came",
+                self.closed
+            );
+            assert!(started.elapsed() < HANG_LIMIT, "no full screen came");
+            self.take(Duration::from_millis(50));
+        }
+    }
+}
+
+pub fn contains(bytes: &[u8], wanted: &[u8]) -> bool {
+    bytes.windows(wanted.len()).any(|window| window == wanted)
 }

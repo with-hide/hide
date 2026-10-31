@@ -31,3 +31,6 @@ tempfile = "=3.27.0"
 
 [target.'cfg(unix)'.dev-dependencies]
 libc = "=0.2.190"
+
+[target.'cfg(windows)'.dev-dependencies]
+windows-sys = { version = "=0.61.2", features = ["Win32_System_Console"] }

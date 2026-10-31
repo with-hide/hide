@@ -338,4 +338,43 @@ mod tests {
             "\x1b[0;4:3;53;39;49m"
         );
     }
+
+    #[test]
+    fn a_screen_past_the_fragment_bound_is_split_between_rows() {
+        // Every cell changes color, so each one carries a full style.
+        let size = hide_holder_protocol::Size {
+            rows: 512,
+            cols: 512,
+        };
+        let mut pane = crate::pane::Pane::new(size).unwrap();
+        let mut screen = String::new();
+        for row in 0..size.rows {
+            screen.push_str(&format!("\x1b[{};1H", row + 1));
+            for col in 0..size.cols {
+                let shade = (row ^ col) % 2 * 200;
+                screen.push_str(&format!("\x1b[38;2;{shade};1;2;48;2;3;{shade};4mx"));
+            }
+        }
+        pane.feed(screen.as_bytes(), &mut Vec::new());
+        let encoded = Encoder::default().encode(pane.take(true).unwrap(), true);
+
+        assert!(encoded.full);
+        assert!(encoded.pieces.len() > 1, "{}", encoded.pieces.len());
+        assert!(encoded.pieces[0].starts_with(SYNC_START));
+        assert!(encoded.pieces.last().unwrap().ends_with(SYNC_END));
+        // A later piece starts at the start of a row after the last one's.
+        let mut last_row = 0;
+        for piece in &encoded.pieces[1..] {
+            let row: u16 = std::str::from_utf8(&piece[2..piece.len().min(12)])
+                .unwrap()
+                .split_once(";1H")
+                .and_then(|(row, _)| row.parse().ok())
+                .unwrap_or_else(|| panic!("{:?}", &piece[..12]));
+            assert!(row > last_row, "row {row} after row {last_row}");
+            last_row = row;
+        }
+        for piece in &encoded.pieces {
+            assert!(piece.len() <= MAX_FRAGMENT, "{}", piece.len());
+        }
+    }
 }
