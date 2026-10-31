@@ -1,9 +1,12 @@
-//! One official Herdr terminal session: the `herdr terminal session` child
-//! this node starts for a pane, its reader and its writer. Control is
-//! writable; observe is concurrent and read-only. Dropping a session tells
-//! Herdr it is released and ends only this client process (D-20).
+//! One pane's terminal session as the service holds it: the transport it
+//! was opened over, its reader and its writer. Two transports exist: the
+//! pinned Herdr's official `herdr terminal session` client, whose NDJSON
+//! lines [`Transport::lines`] reads and writes, and a pane's holder
+//! (`super::holder`), whose frames its own reader and writer speak. Control
+//! is writable; observe is concurrent and read-only. Dropping a session
+//! releases it and ends only what its transport started (D-20).
 
-use std::io::{BufRead, BufReader, Read, Write};
+use std::io::{self, BufRead, BufReader, Lines, Read, Write};
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
@@ -12,16 +15,191 @@ use std::sync::{Arc, Condvar, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
 
+use hide_node_link::terminal::GridSize;
 use hide_platform::process::OwnedChild;
 use serde_json::json;
 
 use super::protocol::{self, Mode, SessionEvent};
 
 /// Opens a pane's session; the node's own Herdr in production, a stand-in
-/// in tests.
+/// in tests, and beside it a pane's holder when the node runs them
+/// (`super::holder::PaneAttacher`).
 pub trait Attacher: Send + Sync {
+    /// Opens the pane's Herdr terminal session at `rows` by `cols`.
     fn open(&self, pane_id: &str, mode: Mode, rows: u16, cols: u16)
     -> Result<SessionParts, String>;
+
+    /// Opens the pane's session over the transport it is held by. `size` is
+    /// `None` only for a pane [`Attacher::keeps_own_size`] says keeps its
+    /// own, which is attached at the size it has.
+    fn open_transport(
+        &self,
+        pane_id: &str,
+        mode: Mode,
+        size: Option<GridSize>,
+    ) -> Result<Transport, OpenFailure> {
+        let Some(size) = size else {
+            return Err(OpenFailure::retried(format!(
+                "Pane {pane_id} has no reported terminal size, so it cannot be attached"
+            )));
+        };
+        self.open(pane_id, mode, size.rows, size.cols)
+            .map(|parts| Transport::lines(parts, mode))
+            .map_err(OpenFailure::retried)
+    }
+
+    /// Whether the pane keeps its own size and attaches at it with no size
+    /// from a view. A Herdr pane does not: Herdr sizes its PTY from the
+    /// attach, so a guessed size would cost a frame at the wrong grid.
+    fn keeps_own_size(&self, _pane_id: &str) -> bool {
+        false
+    }
+}
+
+/// Why a session could not be opened, and whether trying again can help.
+#[derive(Debug)]
+pub struct OpenFailure {
+    /// The `exit_category` the pane's state reports.
+    pub category: &'static str,
+    pub message: String,
+    /// Whether the service tries again on its own; a pane that is over, or
+    /// held by a holder this build cannot speak to, is not tried again.
+    pub retried: bool,
+}
+
+impl OpenFailure {
+    pub fn retried(message: String) -> Self {
+        Self {
+            category: "spawn_failed",
+            message,
+            retried: true,
+        }
+    }
+}
+
+/// Reads a session's events, one at a time, until it closes. The stream's
+/// end and a read failure are the session closing, with the reason.
+pub trait SessionEvents: Send {
+    fn next_event(&mut self) -> SessionEvent;
+}
+
+/// Writes a session's input in its transport's form. Each call writes and
+/// flushes what it was given, so it has reached the transport when it
+/// returns.
+pub trait SessionWriter: Send {
+    fn input(&mut self, bytes: &[u8]) -> io::Result<()>;
+    fn resize(&mut self, size: GridSize) -> io::Result<()>;
+    /// A wheel of `lines` rows, positive up, never zero, over the zero-based
+    /// cell when the screen said which.
+    fn scroll(
+        &mut self,
+        lines: i32,
+        column: Option<u16>,
+        row: Option<u16>,
+        modifiers: u8,
+    ) -> io::Result<()>;
+    /// Lets go of the session; the pane runs on.
+    fn release(&mut self) -> io::Result<()>;
+    /// Answers once everything written before has reached the transport.
+    fn flush(&mut self) -> io::Result<()>;
+}
+
+/// An opened session as the service holds it.
+pub struct Transport {
+    pub events: Box<dyn SessionEvents>,
+    /// The writer of a control session; `None` for a read-only one.
+    pub writer: Option<Box<dyn SessionWriter>>,
+    /// What stays open for the session's whole life and is never written:
+    /// an observer's stdin, whose end closing ends its child.
+    pub kept: Option<Box<dyn Send>>,
+    pub cleanup: Cleanup,
+    /// The pane's size as the transport found it, when it says.
+    pub size: Option<GridSize>,
+}
+
+impl Transport {
+    /// A Herdr session's NDJSON lines: its reader's lines are its events,
+    /// and in control mode its writer takes the input, resize, scroll and
+    /// release lines; an observer's writer is kept, never written.
+    pub fn lines(parts: SessionParts, mode: Mode) -> Self {
+        let SessionParts {
+            reader,
+            writer,
+            cleanup,
+        } = parts;
+        let (writer, kept) = match mode {
+            Mode::Control => (writer, None),
+            Mode::Observe => (None, writer),
+        };
+        Self {
+            events: Box::new(LineEvents(BufReader::new(reader).lines())),
+            writer: writer.map(|stdin| Box::new(LineWriter(stdin)) as Box<dyn SessionWriter>),
+            kept: kept.map(|stdin| Box::new(stdin) as Box<dyn Send>),
+            cleanup,
+            size: None,
+        }
+    }
+}
+
+/// A Herdr session's NDJSON lines as events.
+struct LineEvents(Lines<BufReader<Box<dyn Read + Send>>>);
+
+impl SessionEvents for LineEvents {
+    fn next_event(&mut self) -> SessionEvent {
+        match self.0.next() {
+            None => SessionEvent::Closed { reason: None },
+            Some(Ok(line)) => {
+                protocol::parse_line(&line).unwrap_or_else(|message| SessionEvent::Closed {
+                    reason: Some(message),
+                })
+            }
+            Some(Err(error)) => SessionEvent::Closed {
+                reason: Some(format!("terminal session stream failed: {error}")),
+            },
+        }
+    }
+}
+
+/// A Herdr control session's stdin, written as NDJSON lines.
+struct LineWriter(Box<dyn Write + Send>);
+
+impl LineWriter {
+    fn line(&mut self, line: &str) -> io::Result<()> {
+        self.0.write_all(line.as_bytes())?;
+        self.0.flush()
+    }
+}
+
+impl SessionWriter for LineWriter {
+    fn input(&mut self, bytes: &[u8]) -> io::Result<()> {
+        self.line(&protocol::input_line(bytes))
+    }
+
+    fn resize(&mut self, size: GridSize) -> io::Result<()> {
+        let line = protocol::resize_line(size.rows, size.cols).map_err(io::Error::other)?;
+        self.line(&line)
+    }
+
+    fn scroll(
+        &mut self,
+        lines: i32,
+        column: Option<u16>,
+        row: Option<u16>,
+        modifiers: u8,
+    ) -> io::Result<()> {
+        match protocol::scroll_line(lines, column, row, modifiers) {
+            Some(line) => self.line(&line),
+            None => Ok(()),
+        }
+    }
+
+    fn release(&mut self) -> io::Result<()> {
+        self.line(&protocol::release_line())
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        self.0.flush()
+    }
 }
 
 /// The attach children a service started and has not reaped yet, each
@@ -216,31 +394,34 @@ pub(super) enum WriterCommand {
         row: Option<u16>,
         modifiers: u8,
     },
-    Line {
-        line: String,
-        /// What it counts against [`MAX_UNWRITTEN_INPUT_BYTES`].
-        cost: usize,
+    /// Bytes for the pane, counted against [`MAX_UNWRITTEN_INPUT_BYTES`] by
+    /// their length.
+    Input {
+        bytes: Vec<u8>,
         written: Option<Written>,
     },
+    Resize(GridSize),
+    /// Writes nothing; tells `written` once what was sent before it was
+    /// written.
+    Barrier(Written),
     Release {
         acknowledged: Sender<()>,
     },
 }
 
 impl WriterCommand {
-    fn line(line: String, cost: usize) -> Self {
-        Self::Line {
-            line,
-            cost,
+    fn input(bytes: &[u8]) -> Self {
+        Self::Input {
+            bytes: bytes.to_vec(),
             written: None,
         }
     }
 
     fn cost(&self) -> usize {
         match self {
-            Self::Scroll { .. } => CONTROL_LINE_COST,
-            Self::Line { cost, .. } => *cost,
-            Self::Release { .. } => 0,
+            Self::Scroll { .. } | Self::Resize(_) => CONTROL_LINE_COST,
+            Self::Input { bytes, .. } => bytes.len(),
+            Self::Barrier(_) | Self::Release { .. } => 0,
         }
     }
 
@@ -248,12 +429,13 @@ impl WriterCommand {
     /// itself, so a paste's [`Written`] is told nothing: it would run under
     /// the service's lock, which its own callback takes.
     fn refused(self, refusal: WriteRefused) -> Result<(), WriteRefused> {
-        if let Self::Line {
-            written: Some(written),
-            ..
-        } = self
-        {
-            written.disarm();
+        match self {
+            Self::Input {
+                written: Some(written),
+                ..
+            }
+            | Self::Barrier(written) => written.disarm(),
+            _ => {}
         }
         Err(refusal)
     }
@@ -297,8 +479,9 @@ pub(super) struct Session {
     pub(super) mode: Mode,
     writer: Option<Sender<WriterCommand>>,
     unwritten: Arc<Unwritten>,
-    /// An observer's kept stdin, closed with the session.
-    _observer_stdin: Option<Box<dyn Write + Send>>,
+    /// What the transport keeps open for the session's life (an observer's
+    /// stdin), closed with the session.
+    _kept: Option<Box<dyn Send>>,
     cleanup: Cleanup,
     /// Its child counted live until the reaper has seen it exit.
     child: Option<ChildHold>,
@@ -306,37 +489,36 @@ pub(super) struct Session {
 }
 
 impl Session {
-    /// Starts the writer for `parts` and returns the session and its reader,
-    /// which the caller starts once the session is installed. A writer that
-    /// fails says so through `on_write_failure`.
+    /// Starts the writer for `transport` and returns the session and its
+    /// events, which the caller starts reading once the session is
+    /// installed. A writer that fails says so through `on_write_failure`.
     pub(super) fn start(
         pane_id: &str,
         generation: u64,
         mode: Mode,
-        parts: SessionParts,
+        transport: Transport,
         on_write_failure: Box<dyn Fn(String) + Send>,
-    ) -> Result<(Self, Box<dyn Read + Send>), String> {
-        let SessionParts {
-            reader,
+    ) -> Result<(Self, Box<dyn SessionEvents>), String> {
+        let Transport {
+            events,
             writer,
+            kept,
             cleanup,
-        } = parts;
+            size: _,
+        } = transport;
         let unwritten = Arc::new(Unwritten::default());
-        let (writer, observer_stdin) = match (mode, writer) {
-            (Mode::Control, Some(stdin)) => (
-                Some(spawn_writer(
-                    pane_id,
-                    stdin,
-                    Arc::clone(&unwritten),
-                    on_write_failure,
-                )?),
-                None,
-            ),
+        let writer = match (mode, writer) {
+            (Mode::Control, Some(writer)) => Some(spawn_session_writer(
+                pane_id,
+                writer,
+                Arc::clone(&unwritten),
+                on_write_failure,
+            )?),
             (Mode::Control, None) => {
                 run_cleanup(cleanup, pane_id);
                 return Err("terminal control stream has no writer".to_owned());
             }
-            (Mode::Observe, stdin) => (None, stdin),
+            (Mode::Observe, _) => None,
         };
         Ok((
             Self {
@@ -344,12 +526,12 @@ impl Session {
                 mode,
                 writer,
                 unwritten,
-                _observer_stdin: observer_stdin,
+                _kept: kept,
                 cleanup,
                 child: None,
                 pane_id: pane_id.to_owned(),
             },
-            reader,
+            events,
         ))
     }
 
@@ -389,18 +571,14 @@ impl Session {
     }
 
     pub(super) fn write(&self, bytes: &[u8]) -> Result<(), WriteRefused> {
-        self.send(WriterCommand::line(
-            protocol::input_line(bytes),
-            bytes.len(),
-        ))
+        self.send(WriterCommand::input(bytes))
     }
 
     /// [`Session::write`], telling `written` once the bytes reached the
     /// session's pipe or could not; an `Err` answer tells it nothing.
     pub(super) fn write_then(&self, bytes: &[u8], written: Written) -> Result<(), WriteRefused> {
-        self.send(WriterCommand::Line {
-            line: protocol::input_line(bytes),
-            cost: bytes.len(),
+        self.send(WriterCommand::Input {
+            bytes: bytes.to_vec(),
             written: Some(written),
         })
     }
@@ -408,16 +586,16 @@ impl Session {
     /// A side-channel write may start after earlier controller writes have
     /// reached the pipe. This barrier emits no terminal protocol or input.
     pub(super) fn after_writes(&self, written: Written) -> Result<(), WriteRefused> {
-        self.send(WriterCommand::Line {
-            line: String::new(),
-            cost: 0,
-            written: Some(written),
-        })
+        self.send(WriterCommand::Barrier(written))
     }
 
     pub(super) fn resize(&self, rows: u16, cols: u16) -> Result<(), WriteRefused> {
-        let line = protocol::resize_line(rows, cols).map_err(WriteRefused::Failed)?;
-        self.send(WriterCommand::line(line, CONTROL_LINE_COST))
+        if rows == 0 || cols == 0 {
+            return Err(WriteRefused::Failed(
+                "terminal dimensions must be positive".to_owned(),
+            ));
+        }
+        self.send(WriterCommand::Resize(GridSize { rows, cols }))
     }
 
     pub(super) fn scroll(
@@ -436,9 +614,20 @@ impl Session {
     }
 }
 
+/// Starts the writer thread for a Herdr session's stdin.
+#[cfg(test)]
 fn spawn_writer(
     pane_id: &str,
-    mut stdin: Box<dyn Write + Send>,
+    stdin: Box<dyn Write + Send>,
+    unwritten: Arc<Unwritten>,
+    on_failure: Box<dyn Fn(String) + Send>,
+) -> Result<Sender<WriterCommand>, String> {
+    spawn_session_writer(pane_id, Box::new(LineWriter(stdin)), unwritten, on_failure)
+}
+
+fn spawn_session_writer(
+    pane_id: &str,
+    mut writer: Box<dyn SessionWriter>,
     unwritten: Arc<Unwritten>,
     on_failure: Box<dyn Fn(String) + Send>,
 ) -> Result<Sender<WriterCommand>, String> {
@@ -458,7 +647,7 @@ fn spawn_writer(
                 // What this turn writes leaves the backlog once it is written
                 // or has failed.
                 let mut cost = command.cost();
-                let (line, acknowledgement, written) = match command {
+                let (result, acknowledgement, written) = match command {
                     WriterCommand::Scroll {
                         mut lines,
                         mut column,
@@ -495,33 +684,32 @@ fn spawn_writer(
                                 }
                             }
                         }
-                        match protocol::scroll_line(lines, column, row, modifiers) {
-                            Some(line) => (line, None, None),
-                            None => {
-                                unwritten.bytes.fetch_sub(cost, Ordering::AcqRel);
-                                if disconnected {
-                                    return;
-                                }
-                                continue;
+                        if lines == 0 {
+                            unwritten.bytes.fetch_sub(cost, Ordering::AcqRel);
+                            if disconnected {
+                                return;
                             }
+                            continue;
                         }
+                        (writer.scroll(lines, column, row, modifiers), None, None)
                     }
-                    WriterCommand::Line { line, written, .. } => (line, None, written),
+                    WriterCommand::Input { bytes, written } => {
+                        (writer.input(&bytes), None, written)
+                    }
+                    WriterCommand::Resize(size) => (writer.resize(size), None, None),
+                    WriterCommand::Barrier(written) => (writer.flush(), None, Some(written)),
                     WriterCommand::Release { acknowledged } => {
-                        (protocol::release_line(), Some(acknowledged), None)
+                        (writer.release(), Some(acknowledged), None)
                     }
                 };
-                let result = stdin
-                    .write_all(line.as_bytes())
-                    .and_then(|()| stdin.flush());
                 unwritten.bytes.fetch_sub(cost, Ordering::AcqRel);
                 if let Some(written) = written {
                     written.finish(result.is_ok());
                 }
                 if let Some(acknowledgement) = acknowledgement {
-                    // A release is the session letting go; a child that
-                    // already left has nothing to be told and no failure
-                    // to report.
+                    // A release is the session letting go; a transport that
+                    // already left has nothing to be told and no failure to
+                    // report.
                     let _ = acknowledgement.send(());
                     return;
                 }
@@ -535,33 +723,24 @@ fn spawn_writer(
     Ok(sender)
 }
 
-/// Reads `reader` until the session ends, handing each event to `on_event`,
-/// which answers whether to keep reading. The stream's end, a malformed line
-/// and a read failure are each the session closing, with the reason.
+/// Reads `events` until the session ends, handing each event to `on_event`,
+/// which answers whether to keep reading. The stream's end, a malformed
+/// message and a read failure are each the session closing, with the reason.
 pub(super) fn spawn_reader(
     pane_id: &str,
     mode: Mode,
-    reader: Box<dyn Read + Send>,
+    mut events: Box<dyn SessionEvents>,
     mut on_event: impl FnMut(SessionEvent) -> bool + Send + 'static,
 ) -> Result<(), String> {
     thread::Builder::new()
         .name(format!("hide-node-terminal-{}-{pane_id}", mode.as_str()))
         .spawn(move || {
-            let mut lines = BufReader::new(reader).lines();
             loop {
-                let event = match lines.next() {
-                    None => SessionEvent::Closed { reason: None },
-                    Some(Ok(line)) => match protocol::parse_line(&line) {
-                        Ok(event) => event,
-                        Err(message) => SessionEvent::Closed {
-                            reason: Some(message),
-                        },
-                    },
-                    Some(Err(error)) => SessionEvent::Closed {
-                        reason: Some(format!("terminal session stream failed: {error}")),
-                    },
-                };
-                let closed = matches!(event, SessionEvent::Closed { .. });
+                let event = events.next_event();
+                let closed = matches!(
+                    event,
+                    SessionEvent::Closed { .. } | SessionEvent::Ended { .. }
+                );
                 if !on_event(event) || closed {
                     return;
                 }
@@ -750,9 +929,7 @@ mod tests {
         writer.send(wheel(3, 24)).unwrap();
         received.recv_timeout(Duration::from_secs(1)).unwrap();
         writer.send(wheel(2, 25)).unwrap();
-        writer
-            .send(WriterCommand::line(protocol::input_line(b"x"), 1))
-            .unwrap();
+        writer.send(WriterCommand::input(b"x")).unwrap();
         let scroll = received.recv_timeout(Duration::from_secs(1)).unwrap();
         let input = received.recv_timeout(Duration::from_secs(1)).unwrap();
         assert_eq!(scroll[0]["type"], "terminal.scroll");
@@ -793,14 +970,17 @@ mod tests {
             "fixture:p1",
             1,
             Mode::Control,
-            SessionParts {
-                reader: Box::new(std::io::empty()),
-                writer: Some(Box::new(Stalled {
-                    go: Arc::clone(&go),
-                    taken: Arc::clone(&taken),
-                })),
-                cleanup: Cleanup::None,
-            },
+            Transport::lines(
+                SessionParts {
+                    reader: Box::new(std::io::empty()),
+                    writer: Some(Box::new(Stalled {
+                        go: Arc::clone(&go),
+                        taken: Arc::clone(&taken),
+                    })),
+                    cleanup: Cleanup::None,
+                },
+                Mode::Control,
+            ),
             Box::new(|_| {}),
         )
         .unwrap();
@@ -880,14 +1060,17 @@ mod tests {
             "fixture:p1",
             1,
             Mode::Control,
-            SessionParts {
-                reader: Box::new(std::io::empty()),
-                writer: Some(Box::new(Stalled {
-                    go: Arc::clone(&go),
-                    taken: Arc::default(),
-                })),
-                cleanup: Cleanup::None,
-            },
+            Transport::lines(
+                SessionParts {
+                    reader: Box::new(std::io::empty()),
+                    writer: Some(Box::new(Stalled {
+                        go: Arc::clone(&go),
+                        taken: Arc::default(),
+                    })),
+                    cleanup: Cleanup::None,
+                },
+                Mode::Control,
+            ),
             Box::new(|_| {}),
         )
         .unwrap();
@@ -907,11 +1090,14 @@ mod tests {
             "fixture:p1",
             1,
             Mode::Observe,
-            SessionParts {
-                reader: Box::new(std::io::empty()),
-                writer: None,
-                cleanup: Cleanup::None,
-            },
+            Transport::lines(
+                SessionParts {
+                    reader: Box::new(std::io::empty()),
+                    writer: None,
+                    cleanup: Cleanup::None,
+                },
+                Mode::Observe,
+            ),
             Box::new(|_| {}),
         )
         .unwrap();
@@ -940,10 +1126,8 @@ mod tests {
             }),
         )
         .unwrap();
-        writer
-            .send(WriterCommand::line(protocol::input_line(b"x"), 1))
-            .unwrap();
-        let _ = writer.send(WriterCommand::line(protocol::input_line(b"y"), 1));
+        writer.send(WriterCommand::input(b"x")).unwrap();
+        let _ = writer.send(WriterCommand::input(b"y"));
         failures
             .recv_timeout(Duration::from_secs(1))
             .expect("the failure is reported");

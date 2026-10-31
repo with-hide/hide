@@ -725,15 +725,23 @@ impl CoreHandle {
         let reports: Arc<dyn ReportSink> = Arc::new(reports);
         let hub = TerminalHub::new();
         let outputs = crate::relay::ScreenOutputs::new(Arc::clone(&hub));
+        let holders = local_holders(&options, Arc::clone(&reports))?;
+        let attacher = match &holders {
+            Some(holders) => holders.attacher(local_attacher(&options)),
+            None => local_attacher(&options),
+        };
         let local = Arc::new(
             Service::start(
-                local_attacher(&options),
+                attacher,
                 Arc::clone(&outputs) as Arc<dyn OutputSink>,
                 Arc::clone(&reports),
                 RetryPolicy::Automatic,
             )
             .map_err(|error| format!("terminal service failed to start: {error}"))?,
         );
+        if let Some(holders) = holders {
+            Arc::new(holders).recover_in_background(Arc::clone(&local));
+        }
         let terminals = Arc::new(Router::new(
             Arc::clone(&local) as Arc<dyn hide_node_link::terminal::TerminalNode>,
             Arc::clone(&outputs) as Arc<dyn OutputSink>,
@@ -1092,6 +1100,34 @@ impl Drop for CoreHandle {
     fn drop(&mut self) {
         self.shutdown();
     }
+}
+
+/// This machine's pane holders, when the development switch
+/// (`hide_node::terminal::holder::SWITCH`) is on: the state folder's records,
+/// the holder beside this program, and on Windows the ConPTY runtime beside
+/// the configured Herdr. Off, or unset, there are none and every pane opens
+/// through Herdr.
+fn local_holders(
+    options: &CoreOptions,
+    reports: Arc<dyn ReportSink>,
+) -> Result<Option<hide_node::terminal::holder::Holders>, String> {
+    use hide_node::terminal::holder::{Holders, Switch};
+    let switch = Switch::from_env()?;
+    if switch == Switch::Off {
+        return Ok(None);
+    }
+    let home = match options.home.as_ref() {
+        Some(home) => std::path::PathBuf::from(home),
+        None => hide_platform::host::home_dir()
+            .map_err(|error| format!("pane holders need a home folder: {error}"))?,
+    };
+    let state_dir = std::path::Path::new(&options.app_state_path)
+        .parent()
+        .ok_or("the app state path has no folder")?
+        .to_path_buf();
+    let source =
+        Holders::local_source(options.herdr_bin_path.as_deref().map(std::path::Path::new))?;
+    Holders::open(switch, &home, &state_dir, source, reports)
 }
 
 /// This machine's Herdr, through the official `herdr terminal session`

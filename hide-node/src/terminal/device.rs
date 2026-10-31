@@ -509,6 +509,8 @@ impl hide_host::serve::Terminals for NodeTerminals {
             }),
             None => Arc::new(UplinkOutputs(Arc::clone(&self.uplink))),
         };
+        // Holders run only on the local node in this bundle.
+        super::holder::device_switch();
         let started = Service::start(
             (self.attacher)(herdr_socket),
             outputs,
