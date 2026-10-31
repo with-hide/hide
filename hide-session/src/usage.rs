@@ -10,6 +10,7 @@ use std::time::{Duration, Instant};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
+use crate::source::frame::{Frame, Framer};
 use crate::{Agent, SESSION_INCREMENT_READ_LIMIT_BYTES, SESSION_LINE_LIMIT_BYTES};
 
 mod grok;
@@ -315,9 +316,7 @@ pub fn read(
         return Err(Refusal::Unsupported);
     }
     let mut file = checked_file(home, agent, path)?;
-    let identity =
-        hide_platform::fs::identity::file_id_of(&file).map_err(|_| Refusal::Unreadable)?;
-    let identity = format!("{}:{}", identity.volume(), identity.index());
+    let identity = crate::source::file::incarnation(&file).map_err(|_| Refusal::Unreadable)?;
     let size = file.metadata().map_err(|_| Refusal::Unreadable)?.len();
     let summary = if agent == Agent::Grok {
         Some(grok::summary(home, path)?)
@@ -390,35 +389,50 @@ pub fn read(
         skipped: BTreeMap::new(),
     };
     let mut yielded = false;
-    for (index, fragment) in bytes.split_inclusive(|b| *b == b'\n').enumerate() {
-        // Grok's one native prompt may carry at most 128 model events.
-        if index > 0 && (started.elapsed() >= STEP_TIME || step.events.len() > STEP_EVENTS - 128) {
+    let start = step.checkpoint.offset;
+    let mut framer = if step.checkpoint.discarding {
+        Framer::passing(SESSION_LINE_LIMIT_BYTES, start, start)
+    } else {
+        Framer::new(SESSION_LINE_LIMIT_BYTES, start)
+    };
+    let mut at = 0;
+    let mut records = 0;
+    loop {
+        // Grok's one native prompt may carry at most 128 model events; a
+        // step yields between records.
+        if records > 0
+            && framer.passing_from().is_none()
+            && (started.elapsed() >= STEP_TIME || step.events.len() > STEP_EVENTS - 128)
+        {
             yielded = true;
             break;
         }
-        let complete = fragment.last() == Some(&b'\n');
-        if step.checkpoint.discarding || fragment.len() > SESSION_LINE_LIMIT_BYTES {
-            if !step.checkpoint.discarding {
-                *step.skipped.entry("record_capacity".into()).or_default() += 1;
+        match framer.next(&bytes, &mut at) {
+            None => break,
+            Some(Frame::Over { first, .. }) => {
+                if first {
+                    *step.skipped.entry("record_capacity".into()).or_default() += 1;
+                }
             }
-            step.checkpoint.offset += fragment.len() as u64;
-            step.checkpoint.discarding = !complete;
-        } else if complete {
-            let parsed = if let Some(summary) = &summary {
-                grok::parse(fragment, summary)
-            } else {
-                records::parse(agent, fragment, &mut step.checkpoint.context)
-                    .map(|event| event.into_iter().collect())
-            };
-            match parsed {
-                Ok(events) => step.events.extend(events),
-                Err(reason) => *step.skipped.entry(reason.into()).or_default() += 1,
+            Some(Frame::Record { bytes: record, .. }) => {
+                let parsed = if let Some(summary) = &summary {
+                    grok::parse(record, summary)
+                } else {
+                    records::parse(agent, record, &mut step.checkpoint.context)
+                        .map(|event| event.into_iter().collect())
+                };
+                match parsed {
+                    Ok(events) => step.events.extend(events),
+                    Err(reason) => *step.skipped.entry(reason.into()).or_default() += 1,
+                }
             }
-            step.checkpoint.offset += fragment.len() as u64;
-        } else {
-            break;
         }
+        records += 1;
     }
+    // A record the read cut without its newline is read again whole by the
+    // next step; one being passed over goes on being passed over.
+    step.checkpoint.offset = framer.settled();
+    step.checkpoint.discarding = framer.passing_from().is_some();
     let (current, read) = witness(&mut file, step.checkpoint.offset)?;
     step.read_bytes += read;
     step.checkpoint.witness = Some(current);
