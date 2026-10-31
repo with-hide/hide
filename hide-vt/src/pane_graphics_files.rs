@@ -3,7 +3,8 @@
 // Copyright 2025 herdr contributors. Licensed under the Apache License,
 // Version 2.0; see NOTICE at the repository root.
 // Changed by Hide: the log target and the runtime folder names under /var/tmp
-// and $XDG_RUNTIME_DIR no longer carry Herdr's name. See hide-vt/PATCHES.md.
+// and $XDG_RUNTIME_DIR no longer carry Herdr's name, and a generation folder's
+// name carries a per-process sequence. See hide-vt/PATCHES.md.
 
 #[cfg(unix)]
 use std::fs::OpenOptions;
@@ -415,11 +416,15 @@ fn create_generation(base: &Path) -> io::Result<Generation> {
         }
         validate_directory(base)?;
         remove_stale_generations(base);
+        // The clock alone repeats: macOS reads it in microseconds, so two
+        // stores made in one microsecond would ask for the same folder.
+        static NEXT_GENERATION: AtomicU64 = AtomicU64::new(1);
         let nonce = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap_or_default()
             .as_nanos();
-        let root = base.join(format!("server-{}-{nonce}", std::process::id()));
+        let sequence = NEXT_GENERATION.fetch_add(1, Ordering::Relaxed);
+        let root = base.join(format!("server-{}-{nonce}-{sequence}", std::process::id()));
         fs::create_dir(&root)?;
         fs::set_permissions(&root, fs::Permissions::from_mode(DIRECTORY_MODE))?;
         let source = root.join("source");
