@@ -349,33 +349,68 @@ impl LaunchDialect {
     /// Cursor CLI 2026.10.14 lists (read 2026-10-18; their efforts are not
     /// declared yet). OpenCode 2.0.29's lists no model option, so it takes
     /// neither.
+    ///
+    /// `full_access` is the option that starts the agent without asking
+    /// before each tool call, which Settings › Agents adds to every start and
+    /// restart Hide makes unless the operator chose otherwise for the agent
+    /// on that machine. Every dialect declares it, an empty one as
+    /// `NotAsked`, so a new dialect cannot leave it out; each flag was read
+    /// from the CLI's `--help` on 2026-11-01 (Claude Code 2.1.316, Codex
+    /// 0.166.0, Cursor CLI 2026.10.14, agy 1.4.12, OpenCode 2.0.29, Grok
+    /// 1.0.70, omp 18.7.0), and the `agent CLIs` lane reads it again from the
+    /// pinned version's help on every system.
     pub const fn options(self) -> LaunchOptions {
         match self {
             Self::Antigravity => LaunchOptions {
                 model: &["--model", "{}"],
                 effort: &[],
                 efforts: &[],
+                full_access: FullAccess::Flag(&["--dangerously-skip-permissions"]),
             },
             Self::Claude => LaunchOptions {
                 model: &["--model", "{}"],
                 effort: &["--effort", "{}"],
                 efforts: &["low", "medium", "high", "xhigh", "max"],
+                full_access: FullAccess::Flag(&["--dangerously-skip-permissions"]),
             },
             // `-m` is the short form; every agent spells a model `--model`.
             Self::Codex => LaunchOptions {
                 model: &["--model", "{}"],
                 effort: &["-c", "model_reasoning_effort={}"],
                 efforts: &["minimal", "low", "medium", "high", "xhigh"],
+                full_access: FullAccess::Flag(&["--dangerously-bypass-approvals-and-sandbox"]),
             },
-            Self::Grok | Self::Pi | Self::Omp | Self::Cursor => LaunchOptions {
+            Self::Grok => LaunchOptions {
                 model: &["--model", "{}"],
                 effort: &[],
                 efforts: &[],
+                full_access: FullAccess::Flag(&["--always-approve"]),
+            },
+            // Pi 1.0.4 asks before no tool call; its `--approve` trusts
+            // project-local files and is not a permission switch.
+            Self::Pi => LaunchOptions {
+                model: &["--model", "{}"],
+                effort: &[],
+                efforts: &[],
+                full_access: FullAccess::NotAsked,
+            },
+            Self::Omp => LaunchOptions {
+                model: &["--model", "{}"],
+                effort: &[],
+                efforts: &[],
+                full_access: FullAccess::Flag(&["--auto-approve"]),
+            },
+            Self::Cursor => LaunchOptions {
+                model: &["--model", "{}"],
+                effort: &[],
+                efforts: &[],
+                full_access: FullAccess::Flag(&["--force"]),
             },
             Self::OpenCode => LaunchOptions {
                 model: &[],
                 effort: &[],
                 efforts: &[],
+                full_access: FullAccess::Flag(&["--auto"]),
             },
         }
     }
@@ -489,6 +524,26 @@ pub struct LaunchOptions {
     pub model: &'static [&'static str],
     pub effort: &'static [&'static str],
     pub efforts: &'static [&'static str],
+    pub full_access: FullAccess,
+}
+
+/// How a CLI is started without asking before each tool call.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum FullAccess {
+    /// The arguments that turn its questions off, as its `--help` names them.
+    Flag(&'static [&'static str]),
+    /// The CLI asks no permission question, so there is nothing to turn off.
+    NotAsked,
+}
+
+impl FullAccess {
+    /// The arguments a full-access start adds; none for `NotAsked`.
+    pub const fn arguments(self) -> &'static [&'static str] {
+        match self {
+            Self::Flag(arguments) => arguments,
+            Self::NotAsked => &[],
+        }
+    }
 }
 
 /// The one check of a model name, wherever a start or a restart takes one.

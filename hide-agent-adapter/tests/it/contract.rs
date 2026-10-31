@@ -605,6 +605,44 @@ fn a_launch_choice_reaches_each_agent_only_as_its_declared_options_take_it() {
     );
 }
 
+/// Each started agent's full-access option, as its CLI's `--help` named it on
+/// 2026-11-01 (Claude Code 2.1.316, Codex 0.166.0, Grok 1.0.70, OpenCode
+/// 2.0.29, omp 18.7.0, agy 1.4.12); Pi 1.0.4 asks no permission question.
+/// The `agent CLIs` lane finds each again in the pinned CLI's help.
+#[test]
+fn every_started_agent_declares_how_it_starts_without_permission_questions() {
+    use hide_agent_adapter::FullAccess;
+    let expected: &[(&str, FullAccess)] = &[
+        (
+            "claude-code",
+            FullAccess::Flag(&["--dangerously-skip-permissions"]),
+        ),
+        (
+            "codex",
+            FullAccess::Flag(&["--dangerously-bypass-approvals-and-sandbox"]),
+        ),
+        ("grok", FullAccess::Flag(&["--always-approve"])),
+        ("opencode", FullAccess::Flag(&["--auto"])),
+        ("pi", FullAccess::NotAsked),
+        ("omp", FullAccess::Flag(&["--auto-approve"])),
+        (
+            "antigravity",
+            FullAccess::Flag(&["--dangerously-skip-permissions"]),
+        ),
+    ];
+    let started: Vec<_> = ADAPTERS
+        .iter()
+        .filter_map(|row| Some((row.id, row.start?.options().full_access)))
+        .collect();
+    assert_eq!(started, expected);
+    for (id, access) in started {
+        assert!(
+            access.arguments().iter().all(|flag| flag.starts_with("--")),
+            "{id}: a full-access argument is an option"
+        );
+    }
+}
+
 // B31 removes new support while the typed historical descriptor stays available.
 #[test]
 fn cursor_is_retired_from_active_support_and_launches() {

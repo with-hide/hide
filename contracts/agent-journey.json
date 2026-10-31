@@ -11,6 +11,9 @@
       "--model",
       "{}"
     ],
+    "full_access_flag": [
+      "--dangerously-skip-permissions"
+    ],
     "untitled": "Claude",
     "cells": {
       "start": true,
@@ -61,6 +64,9 @@
       "--model",
       "{}"
     ],
+    "full_access_flag": [
+      "--dangerously-bypass-approvals-and-sandbox"
+    ],
     "untitled": "Codex",
     "cells": {
       "start": true,
@@ -110,6 +116,9 @@
       "--model",
       "{}"
     ],
+    "full_access_flag": [
+      "--always-approve"
+    ],
     "untitled": "grok",
     "cells": {
       "start": true,
@@ -155,6 +164,9 @@
     ],
     "prompt_flag": "--prompt",
     "model_flag": [],
+    "full_access_flag": [
+      "--auto"
+    ],
     "untitled": "OpenCode",
     "cells": {
       "start": true,
@@ -206,6 +218,7 @@
       "--model",
       "{}"
     ],
+    "full_access_flag": [],
     "untitled": "pi",
     "cells": {
       "start": true,
@@ -257,6 +270,9 @@
       "--model",
       "{}"
     ],
+    "full_access_flag": [
+      "--auto-approve"
+    ],
     "untitled": "omp",
     "cells": {
       "start": true,
@@ -306,6 +322,9 @@
     "model_flag": [
       "--model",
       "{}"
+    ],
+    "full_access_flag": [
+      "--dangerously-skip-permissions"
     ],
     "untitled": "Antigravity",
     "cells": {
