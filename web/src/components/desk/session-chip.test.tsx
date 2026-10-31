@@ -54,7 +54,8 @@ it("shows a session's card with its place, line, plan, pull request, outputs and
   const parent: DeskSessionRef = { name: "agent-14586", mark: "turn", agent_kind: "claude", pane_id: "w1:p0" };
   const host = await render(<SessionCard job={card} since={null} parent={parent} onOpen={() => opened.push("thread")} onParent={(session) => opened.push(session.name)} />);
   const words = host.textContent ?? "";
-  for (const fact of ["agent-journey", "herdr-ide · journey-agy", "Linux e2e 결과 기다리는 중", "3/5", "#1921", "agent-14586"]) expect(words).toContain(fact);
+  for (const fact of ["agent-journey", "herdr-ide · journey-agy", "Linux e2e 결과 기다리는 중", "3/5", "agent-14586"]) expect(words).toContain(fact);
+  expect(host.querySelector("[data-desk-session-card-pr]")?.getAttribute("data-desk-session-card-pr")).toBe("1921");
   expect(host.querySelector("[data-desk-session-card-outputs]")?.getAttribute("data-desk-session-card-outputs")).toBe("2");
   await act(async () => host.querySelector<HTMLElement>("[data-desk-session-card-open]")!.click());
   await act(async () => host.querySelector<HTMLElement>('[data-desk-session-card-parent] [data-desk-session-chip]')!.click());
