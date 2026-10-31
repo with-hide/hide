@@ -1,4 +1,4 @@
-import { CheckIcon, ChevronDownIcon, ChevronLeftIcon, ChevronRightIcon, CircleAlertIcon, FilePenIcon, FileSearchIcon, GlobeIcon, MailIcon, PinIcon, PlusIcon, SquareTerminalIcon, WrenchIcon, XIcon } from "lucide-react";
+import { CheckIcon, ChevronDownIcon, ChevronLeftIcon, ChevronRightIcon, CircleAlertIcon, FilePenIcon, FileSearchIcon, GlobeIcon, MailIcon, PlusIcon, SquareTerminalIcon, WrenchIcon } from "lucide-react";
 import { useLayoutEffect, useRef, useState, type ComponentPropsWithRef, type ReactNode } from "react";
 import { Trans } from "react-i18next";
 import type { AcpContentBlock, AcpPlanEntry, AcpToolKind, DeskJob, DeskMention, DeskOutput, DeskSessionRef, ThreadHidePart, ThreadLine, ThreadReadFailure, ThreadTurn } from "../../desk";
@@ -10,11 +10,13 @@ import { PlanChecklist } from "../plan-checklist";
 import { PrMark } from "../pr-mark";
 import { StatusMark } from "../status-mark";
 import { Button } from "../ui/button";
+import { Kbd } from "../ui/kbd";
 import { Hint } from "../ui/tooltip";
 import { MentionText } from "./desk-chat";
 import { DeskComposer, type ComposerAttachment } from "./desk-composer";
 import { DeskMissionChip, DeskPlanChip, JobLead, JobLine, jobStateWords, SessionChip } from "./desk-job-card";
 import { DeskOutputs } from "./desk-outputs";
+import { LaneHeadControls } from "./desk-lane";
 
 /** The Conductor a worker's thread sits under (B34): its title, and the way back to its thread. */
 export type ThreadConductor = { title: string; onOpen: () => void };
@@ -26,15 +28,19 @@ export type ThreadConductor = { title: string; onOpen: () => void };
  * second is the sidebar row's second line, with the plan chip and the model
  * at its end. The thread's state is said here once.
  */
-export function ThreadHead({ job, model = null, conductor = null, pinned, onBack, onTerminal, onPin, onClose }: {
+export function ThreadHead({ job, model = null, conductor = null, pinned, expanded = false, terminalChord = "⌘J", onBack, onTerminal, onPin, onExpand, onClose }: {
   job: DeskJob;
   /** The model Hide launched the session with (`threadLaunchModel`); none when the launch chose none. */
   model?: string | null;
   conductor?: ThreadConductor | null;
   pinned: boolean;
+  expanded?: boolean;
+  /** `터미널로`'s chord as this system presses it (`desk_terminal`), shown beside the words. */
+  terminalChord?: string | null;
   onBack: () => void;
   onTerminal: () => void;
   onPin: () => void;
+  onExpand?: () => void;
   onClose: () => void;
 }) {
   const { t } = useInterfaceTranslation();
@@ -54,20 +60,14 @@ export function ThreadHead({ job, model = null, conductor = null, pinned, onBack
           ) : null}
           <span className="min-w-0 truncate text-body font-semibold text-foreground" aria-current="page">{job.title}</span>
         </nav>
-        <Hint label={t("desk.thread.toTerminal")} shortcut="⌘J">
+        <Hint label={t("desk.thread.toTerminal")}>
           <Button variant="ghost" size="sm" className="h-(--size-control-compact) gap-xxs px-xs text-caption font-normal text-subtle-foreground" data-desk-thread-terminal="true" onClick={onTerminal}>
             <SquareTerminalIcon />
             {t("desk.thread.toTerminal")}
+            {terminalChord ? <Kbd aria-hidden="true" data-desk-thread-terminal-chord="true">{terminalChord}</Kbd> : null}
           </Button>
         </Hint>
-        <Hint label={pinned ? t("desk.lane.unpin") : t("desk.lane.pin")}>
-          <Button variant="ghost" size="icon-sm" className={pinned ? "text-foreground" : "text-muted-foreground"} aria-pressed={pinned} data-lane-head-pin={pinned ? "on" : "off"} onClick={onPin}>
-            <PinIcon className={cn(pinned && "fill-current")} />
-          </Button>
-        </Hint>
-        <Hint label={t("desk.lane.close")}>
-          <Button variant="ghost" size="icon-sm" className="text-muted-foreground" onClick={onClose}><XIcon /></Button>
-        </Hint>
+        <LaneHeadControls edge expanded={expanded} pinned={pinned} onExpand={onExpand} onPin={onPin} onClose={onClose} />
       </div>
       <div className="flex min-w-0 items-center gap-xs pl-(--size-control-sm)">
         <JobLine job={job} className="flex-1" />

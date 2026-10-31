@@ -7,6 +7,9 @@ export const BINDINGS_CHANNEL = "hide:bindings";
 /** The core's explicit interface language (a language code or null for the system's), renderer -> main. */
 export const LANGUAGE_CHANNEL = "hide:language";
 
+/** Whether Settings › Desk has Desk on (a boolean), renderer -> main; the menu carries Desk's command only then. */
+export const DESK_CHANNEL = "hide:desk";
+
 /** A file or folder the shell asks the OS file manager to show (a menu's `reveal_external`), renderer -> main. */
 export const REVEAL_CHANNEL = "hide:reveal";
 

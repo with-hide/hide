@@ -184,6 +184,9 @@ pub(crate) struct Stored {
     /// What the core remembers of each job beyond the ledger, by intent.
     #[serde(default)]
     pub marks: Vec<JobMark>,
+    /// The lane's pin and kept tabs (B31, B32).
+    #[serde(default)]
+    pub lane: crate::model::DeskLane,
 }
 
 /// Spawns the queue holds; one past it is refused `desk_queue_full`.
@@ -269,6 +272,12 @@ fn decode(bytes: &[u8]) -> Result<Stored, String> {
     stored.queue.truncate(MAX_QUEUE);
     let excess = stored.marks.len().saturating_sub(MAX_MARKS);
     stored.marks.drain(..excess);
+    let excess = stored
+        .lane
+        .kept
+        .len()
+        .saturating_sub(crate::model::DESK_KEPT_TABS_MAX);
+    stored.lane.kept.drain(..excess);
     stored.choices.truncate(AdapterId::ALL.len());
     for (_, choices) in &mut stored.choices {
         choices.models.truncate(hide_desk::session::MAX_CHOICES);
@@ -377,5 +386,24 @@ mod tests {
         assert!(decode(bytes).is_err());
         let stored = Stored::default();
         assert_eq!(decode(&encode(&stored).unwrap()).unwrap(), stored);
+    }
+
+    #[test]
+    fn the_lane_comes_back_after_a_restart_within_its_cap() {
+        let tab = |index: usize| crate::model::DeskKeptTab::Mission {
+            mission: format!("mission-{index}"),
+            title: "Desk".into(),
+        };
+        let mut stored = Stored::default();
+        stored.lane.pinned = true;
+        stored.lane.kept = (0..crate::model::DESK_KEPT_TABS_MAX + 2).map(tab).collect();
+        let restored = decode(&encode(&stored).unwrap()).unwrap();
+        assert!(restored.lane.pinned);
+        assert_eq!(restored.lane.kept.len(), crate::model::DESK_KEPT_TABS_MAX);
+        assert_eq!(
+            restored.lane.kept[0],
+            tab(2),
+            "the oldest kept tabs go first"
+        );
     }
 }

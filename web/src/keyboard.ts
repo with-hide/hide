@@ -36,6 +36,7 @@ import { coveringLayer, useUiStore, type Cycle } from "./ui";
 import { installWindowFocus } from "./windowFocus";
 import { drawnViews, installKeyboardOwner, keyboardCommandOwner, noteCommandDelivered, subscribeKeyboardOwner } from "./viewFocus";
 import { composingKey } from "./keys";
+import { deskOn } from "./desk";
 
 /**
  * Recent Panels: every surface the shell holds on every connected device and
@@ -131,6 +132,21 @@ export function commitCycle(cycle: Cycle, actions: Actions): boolean {
     actions.focusView(chosen.target.surface.id, true);
     return true;
   }
+  return goToItem(chosen, actions);
+}
+
+/**
+ * Desk switched off while its room is in front (PRD session-docs-and-assistant
+ * B41): back to the panel used before it, which leads Recent Panels since Desk
+ * is never one of them, or All projects when none is left.
+ */
+export function leaveDesk(actions: Actions): void {
+  const rest = useShellStore.getState().rest;
+  const before = recentEntries().map((entry) => panelItem(rest, entry)).find((item) => item !== null);
+  if (!before || !goToItem(before, actions)) useUiStore.getState().setScreen({ kind: "main" });
+}
+
+function goToItem(chosen: CycleItem, actions: Actions): boolean {
   const target = chosen.target;
   switch (target.kind) {
     case "surface":
@@ -318,6 +334,8 @@ export function installKeyboard(actions: Actions): () => void {
         return actions.openFrontProjectMemory();
       case "open_sidebar_prs":
         return actions.openSidebarPrs();
+      case "desk_terminal":
+        return actions.deskTerminal();
       case "toggle_lane_documents":
         return actions.toggleDocuments();
       case "find_in_pane": {
@@ -522,6 +540,8 @@ export function installKeyboard(actions: Actions): () => void {
     const { registry } = hostRegistry(useShellStore.getState().rest?.ui_state, host, system);
     const command = matchHost(event, registry, host);
     if (!command) return;
+    // Desk switched off has no chord (D-76): the key goes on to the page or the terminal.
+    if (command.id === "desk_terminal" && !deskOn(useShellStore.getState().desk)) return;
     event.preventDefault();
     event.stopPropagation();
     run(command.id, event);
@@ -625,13 +645,27 @@ export function installKeyboard(actions: Actions): () => void {
     languageReported = choice;
     bridge?.reportLanguage(choice);
   };
+  // The app menu carries Desk's command only while Desk is on (D-76). The
+  // host starts with it off, so nothing is reported until a snapshot carries
+  // Desk's section: a reload does not take the item away for a moment.
+  let deskReported: boolean | null = null;
+  const reportDesk = () => {
+    const desk = useShellStore.getState().desk;
+    if (!desk) return;
+    const on = deskOn(desk);
+    if (on === deskReported) return;
+    deskReported = on;
+    bridge?.reportDesk?.(on);
+  };
   const unsubscribeBindings = bridge ? useShellStore.subscribe(() => {
     report();
     reportLanguage();
+    reportDesk();
   }) : null;
   if (bridge) {
     report();
     reportLanguage();
+    reportDesk();
   }
 
   window.addEventListener("keydown", onKeyDown, true);

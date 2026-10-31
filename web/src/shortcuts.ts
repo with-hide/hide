@@ -130,6 +130,7 @@ export type CommandId =
   | "toggle_lane_documents"
   | "open_project_memory"
   | "open_sidebar_prs"
+  | "desk_terminal"
   | "keep_open"
   | "find_in_pane"
   | "save_file"
@@ -295,6 +296,7 @@ export const REGISTRY: readonly Command[] = [
   { id: "open_project_memory", title: "Open Project Memory", group: "Panels", browser: { code: "KeyL", meta: true, shift: true }, electron: { code: "KeyL", meta: true, shift: true }, moved: false },
   // In a browser tab Chrome keeps ⇧⌘R (reload), so the PR list moves to ⌥⇧R.
   { id: "open_sidebar_prs", title: "Open PR list", group: "Panels", browser: { code: "KeyR", alt: true, shift: true }, electron: { code: "KeyR", meta: true, shift: true }, moved: true },
+  { id: "desk_terminal", title: "Desk thread ⇄ terminal", group: "Navigate", browser: { code: "KeyJ", alt: true, shift: true }, electron: { code: "KeyJ", meta: true }, moved: true },
   { id: "find_in_pane", title: "Find in pane", group: "Panes", browser: { code: "KeyF", meta: true }, electron: { code: "KeyF", meta: true }, moved: false },
   { id: "save_file", title: "Save file", group: "Panes", browser: { code: "KeyS", meta: true }, electron: { code: "KeyS", meta: true }, moved: false },
   { id: "keep_open", title: "Keep open", group: "Panes", browser: { code: "KeyK", meta: true, shift: true }, electron: { code: "KeyK", meta: true, shift: true }, moved: false },
@@ -422,6 +424,8 @@ const CHROME_RESERVED: Readonly<Record<KeySystem, readonly Chord[]>> = {
     { code: "KeyI", alt: true, shift: true },
     { code: "KeyN", alt: true, shift: true },
     { code: "KeyB", alt: true, shift: true },
+    // DevTools' console, which a page cannot be sure to receive first.
+    { code: "KeyJ", ctrl: true, shift: true },
     { code: "Tab", alt: true },
     { code: "Tab", alt: true, shift: true },
   ],
@@ -504,6 +508,7 @@ export const EDITABLE_PANE_COMMANDS: readonly CommandId[] = [
   ...LANE_TOOL_COMMANDS,
   "open_project_memory",
   "open_sidebar_prs",
+  "desk_terminal",
   "split_right",
   "split_down",
   "toggle_zoom",

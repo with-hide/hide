@@ -1,5 +1,6 @@
 import { ExternalDisplay } from "./ExternalDisplay";
 import { useExternalGrant } from "./externalFiles";
+import { ProjectLanePin } from "./ProjectLanePin";
 import { GlobeIcon, Link2Icon, LoaderCircleIcon, XIcon } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { Actions } from "./actions";
@@ -154,7 +155,7 @@ function ViewTree({ layout, deviceId, path, actions }: { layout: ViewLayoutSnaps
     newTabShortcut: commandLabel("new_tab"),
     tabListLabel: t("documents.view.tabList"),
     actionsLabel: t("documents.view.actions"),
-    close: { label: t("panes.lane.closeDocuments"), onClose: actions.closeDocuments, attributes: { "data-lane-documents-close": "true" } },
+    close: { label: t("panes.lane.closeDocuments"), onClose: actions.closeDocuments, attributes: { "data-lane-documents-close": "true" }, beside: <ProjectLanePin column="view" actions={actions} /> },
     onDraw: (frame) => noteDrawnViews(frame ? { ...frame, workspace } : null),
     onBody: setBody,
   };

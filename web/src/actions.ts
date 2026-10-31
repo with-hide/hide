@@ -84,6 +84,8 @@ import { homeOpening } from "./hideAiOrigin";
 import { agentsByPane, allAgents as allPaneAgents } from "./paneAgents";
 import { archiveWorking } from "./archive";
 import { beginOpening } from "./opening";
+import { deskOn } from "./desk";
+import { afterKeep, openThread as openDeskThread, toggleLane as toggleDeskLane } from "./deskLane";
 import { useShellStore } from "./store";
 import { useUiStore, type MainView, type OverviewPlace, type PendingClose, type PendingViewsClose } from "./ui";
 import { browserClipboard, type Clipboard, type ClipboardContent } from "./clipboard";
@@ -530,6 +532,8 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
    * the keyboard into their active area.
    */
   const toggleLane = () => {
+    // Desk's room has a lane of its own (PRD session-docs-and-assistant B32).
+    if (ui().screen?.kind === "desk") return ui().setDeskLane(toggleDeskLane);
     if (laneUp()) return closeLane();
     const view = workspaceViewOf(rest());
     if (!view) return diagnostic("workspace_view: no Workspace in front");
@@ -2177,9 +2181,40 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
       dispatch({ schema_version: 2, kind: "suggestion_action", payload: { workspace_id: workspaceId, id, action, ...(preview === undefined ? {} : { preview }) } });
     },
 
-    /** Opens Desk's room (PRD Desk 1차 B1). */
+    /** Opens Desk's room (PRD Desk 1차 B1); switched off in Settings › Desk, there is no room to open (D-76). */
     openDesk() {
+      if (!deskOn(useShellStore.getState().desk)) return diagnostic("desk: switched off");
       ui().setScreen({ kind: "desk" });
+    },
+
+    /**
+     * ⌘J and a thread's `터미널로` (PRD session-docs-and-assistant D-42,
+     * B35): from Desk, the Agent tab of the thread in its tool column; from
+     * a Desk thread's Agent tab, back to Desk as it was left, that thread in
+     * its tool column. Anywhere else there is nowhere to go.
+     */
+    deskTerminal() {
+      // A menu item or a host's chord can still ask while Desk is off; it goes nowhere (D-76).
+      if (!deskOn(useShellStore.getState().desk)) return diagnostic("desk terminal: Desk is switched off");
+      const section = useShellStore.getState().deskJobs;
+      const jobs = [...(section?.jobs ?? []), ...(section?.workers ?? [])];
+      const state = ui();
+      if (state.screen?.kind === "desk") {
+        const tool = state.deskLane.up ? state.deskLane.tool : null;
+        const job = tool?.kind === "thread" ? jobs.find((one) => one.id === tool.job) : undefined;
+        if (!job?.pane_id) return diagnostic("desk terminal: no thread in Desk's lane");
+        return this.openAgent(job.pane_id);
+      }
+      const pane = useShellStore.getState().focusedPaneId;
+      const job = pane ? jobs.find((one) => one.pane_id === pane) : undefined;
+      if (!job) return diagnostic("desk terminal: the pane in front is not a Desk thread");
+      this.openDeskThread(job.id);
+    },
+
+    /** Desk as it was left, with `jobId`'s thread in its lane's tool column (B35). */
+    openDeskThread(jobId: string) {
+      ui().setDeskLane((lane) => (lane.up && lane.tool?.kind === "thread" && lane.tool.job === jobId ? lane : openDeskThread(lane, jobId)));
+      this.openDesk();
     },
 
     /** One message to Desk's agent with the sessions and projects it names (B7, B18). */
@@ -2218,7 +2253,7 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
     },
 
     /** Settings › Desk (B4, B19, B21). */
-    deskSettings(settings: { default_agent: DeskAgentId | null; location: DeskLocation; cap: number }) {
+    deskSettings(settings: { enabled: boolean; default_agent: DeskAgentId | null; location: DeskLocation; cap: number }) {
       dispatch({ schema_version: 2, kind: "desk_settings_set", payload: settings });
     },
 
@@ -2235,6 +2270,23 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
     /** The operator saw a job's card, which reads its row as the sidebar does. */
     deskJobRead(id: string) {
       dispatch({ schema_version: 2, kind: "desk_job_read", payload: { id } });
+    },
+
+    /** The operator looked at a job's output in the lane's 보기 column (B31): its View is seen where it was opened. */
+    deskOutputSeen(output: import("./snapshot").DeskOutput) {
+      if (output.seen || !output.device_id || !output.checkout) return;
+      dispatch({ schema_version: 2, kind: "desk_output_seen", payload: { device_id: output.device_id, checkout: output.checkout, id: output.id } });
+    },
+
+    /** The lane's pin (B32): the core keeps it, across a restart. */
+    deskLanePin(pinned: boolean) {
+      dispatch({ schema_version: 2, kind: "desk_lane", payload: { action: "pin", pinned } });
+    },
+
+    /** A tab kept in the 보기 column, or let go (B31); the core keeps them, at most 16. */
+    deskTabKeep(tab: import("./snapshot").DeskKeptTab, keep: boolean) {
+      if (keep) ui().setDeskLane((lane) => afterKeep(lane, tab));
+      dispatch({ schema_version: 2, kind: "desk_lane", payload: { action: keep ? "keep" : "close", tab } });
     },
 
     /** The row whose evidence is open, read again masked (PRD memory-self-improve B7); null when none is. */
@@ -3104,21 +3156,31 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
      * Workspace comes forward.
      */
     openRecordView(view: import("./snapshot").RecordView) {
+      this.openViewAt(view.device_id, view.checkout_path, view.display_id);
+    },
+
+    /**
+     * A View of a checkout, wherever the screen is: in the Workspace on
+     * screen it comes to the front of the documents; anywhere else the
+     * checkout comes forward naming it. A device's View needs its device's
+     * Workspace in front first, so there only the Workspace comes forward.
+     */
+    openViewAt(deviceId: string, checkoutPath: string, displayId: string) {
       const front = frontViewWorkspace();
       const state = ui();
-      if (!state.overviewOpen && state.screen?.kind !== "main" && front?.device_id === view.device_id && front.path === view.checkout_path) {
+      if (!state.overviewOpen && state.screen?.kind !== "main" && state.screen?.kind !== "desk" && front?.device_id === deviceId && front.path === checkoutPath) {
         showDocuments();
-        focusView(view.display_id, true);
+        focusView(displayId, true);
         return;
       }
-      const project = catalogWorkspaces(rest()).find((row) => row.device_id === view.device_id && row.checkouts.some((checkout) => checkout.path === view.checkout_path));
-      const checkout = project?.checkouts.find((row) => row.path === view.checkout_path);
-      if (!project || !checkout) return diagnostic(`record view: ${view.checkout_path} is no longer open on ${view.device_id}`);
+      const project = catalogWorkspaces(rest()).find((row) => row.device_id === deviceId && row.checkouts.some((checkout) => checkout.path === checkoutPath));
+      const checkout = project?.checkouts.find((row) => row.path === checkoutPath);
+      if (!project || !checkout) return diagnostic(`record view: ${checkoutPath} is no longer open on ${deviceId}`);
       const node = localDeviceId(rest());
-      if (view.device_id !== node) return this.openWorkspace(view.device_id, project.id, checkout.id);
+      if (deviceId !== node) return this.openWorkspace(deviceId, project.id, checkout.id);
       beginOpening({ checkoutId: checkout.id, deviceId: node, path: checkout.path, workspaceId: project.id });
-      ui().setViewFocusRequest({ workspace: workspaceKey({ device_id: node, path: checkout.path }), displayId: view.display_id, from: null });
-      dispatch({ schema_version: 2, kind: "focus_checkout", payload: { workspace_id: project.id, checkout_id: checkout.id, display_id: view.display_id, ...(frontDeviceId(rest()) !== node ? { focus_device: true } : {}) } });
+      ui().setViewFocusRequest({ workspace: workspaceKey({ device_id: node, path: checkout.path }), displayId, from: null });
+      dispatch({ schema_version: 2, kind: "focus_checkout", payload: { workspace_id: project.id, checkout_id: checkout.id, display_id: displayId, ...(frontDeviceId(rest()) !== node ? { focus_device: true } : {}) } });
     },
 
     toggleTool,

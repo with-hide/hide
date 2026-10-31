@@ -1,5 +1,6 @@
 import { CheckIcon, ChevronRightIcon, FolderIcon, PlusIcon, SettingsIcon, WaypointsIcon, XIcon } from "lucide-react";
 import { useMemo, type ReactNode } from "react";
+import { ProjectLanePin } from "./ProjectLanePin";
 import type { Actions } from "./actions";
 import { AgentMark } from "./AgentMark";
 import { useElapsed } from "./components/elapsed";
@@ -95,6 +96,7 @@ function Head({ project, page, actions }: { project: Workspace; page: "list" | "
           <SettingsIcon />
         </Button>
       </Hint>
+      <ProjectLanePin column="tool" actions={actions} />
       <Hint label={t("panes.lane.closeTool")}>
         <Button variant="ghost" size="icon-sm" className="text-muted-foreground" aria-label={t("panes.lane.closeTool")} data-lane-tool-close="mission" onClick={() => actions.closeTool()}>
           <XIcon />

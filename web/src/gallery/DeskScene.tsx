@@ -14,9 +14,9 @@ import { DeskAgentBar, DeskComposer, type ComposerAttachment } from "../componen
 import { DeskChat, DeskEmpty, DeskHandedLine, type DeskChatActions } from "../components/desk/desk-chat";
 import { DeskPaneReturn, DeskSidebarRow } from "../components/desk/desk-entry";
 import { DeskJobCard, JobMark, OutputMark } from "../components/desk/desk-job-card";
-import { DeskChatColumn, DeskChatHead, DeskRail, DeskRoom, DeskViewColumn, LaneColumnHead, type ViewTab } from "../components/desk/desk-lane";
+import { DeskChatColumn, DeskChatHead, DeskRail, DeskRoom, DeskViewColumn, LaneColumnHead, LaneHeadControls, type ViewTab } from "../components/desk/desk-lane";
 import { DeskMentionMenu } from "../components/desk/desk-mention-menu";
-import { DeskOutputs } from "../components/desk/desk-outputs";
+import { DeskOutputs, EveryOutput } from "../components/desk/desk-outputs";
 import { DeskSettingsTab } from "../components/desk/desk-settings";
 import { ThreadList } from "../components/desk/thread-list";
 import { ThreadHead, ThreadView, type ThreadConductor } from "../components/desk/thread-view";
@@ -47,6 +47,7 @@ export const DESK_SCENES = [
   { state: "s5", label: "5 스레드가 물을 때 (B20, B25, B29)" },
   { state: "s6", label: "6 Threads 목록, 핀 안 됨 (B28)" },
   { state: "s7", label: "7 결과물이 스레드 옆에 (B30, B31)" },
+  { state: "every-output", label: "▣ 모든 결과물, 칸 머리 📌 (B31, B32)" },
   { state: "agent", label: "에이전트 고르기 · 바꿈 (B4, B8, B9)" },
   { state: "mention", label: "@ 메뉴 (B16, B18)" },
   { state: "mention-project", label: "@ 프로젝트에서 ⇥ (B18)" },
@@ -57,6 +58,7 @@ export const DESK_SCENES = [
   { state: "chat-states", label: "채팅 상태: 승인 답, 알림 줄, 생각 중 · 중단 (B5-B8, B11, B13-B15)" },
   { state: "thread-states", label: "스레드 읽기 실패 · 읽는 중 · 빈 · 연결 안 됨 (B23, B27)" },
   { state: "settings", label: "Settings › Desk (B4, B19, B21)" },
+  { state: "settings-off", label: "Settings › Desk 꺼짐, 기본값 (D-76, B41)" },
 ] as const;
 
 type SceneState = (typeof DESK_SCENES)[number]["state"];
@@ -231,7 +233,9 @@ export function DeskScene({ params }: { params: URLSearchParams }) {
         { kind: "user", id: 1, text: "오늘 herdr-ide에서 돌던 거 어디까지 왔어?", at_ms: now, mentions: [] },
         { kind: "reply", mentions: [], agent: "claude", id: 2, text: "지금 다섯 개가 돌고 있고 둘이 답을 기다려요.", at_ms: now, state: "done", thought_ms: null, steps: { sessions: 0, files: 0, letters: 0, starts: 0, other: 0 } },
       ];
-      const listed = [deskJob(jobs.gallery!, { mark_read: true }), ...pick("record", "conductor", "1a", "1b", "mention", "reel", "release")];
+      // A sleeping and an archived thread are in no group: the foot line counts them.
+      const resting = [deskJob(jobs.mention!, { id: "asleep", title: "문서 정리", state: "sleeping", agent_kind: "codex" }), deskJob(jobs.release!, { id: "archived", title: "로그 정리", state: "archived" })];
+      const listed = [deskJob(jobs.gallery!, { mark_read: true }), ...pick("record", "conductor", "1a", "1b", "mention", "reel", "release"), ...resting];
       body = <DeskRoom pinned={false} rail={rail(true, false)} chat={chat(items, <ChatComposer selection={CLAUDE} />)} tool={threads(false, listed, "record")} />;
       break;
     }
@@ -242,6 +246,13 @@ export function DeskScene({ params }: { params: URLSearchParams }) {
         chat={chat(items, <ChatComposer selection={CLAUDE} />, { jobs: { gallery: done }, selectedJob: "gallery", selectedOutput: OUTPUTS.compareDark.id })}
         view={<DeskViewColumn tabs={[tab("notes", "notes.md", false, <FileTextIcon aria-hidden="true" className="size-(--size-icon-sm)" />), tab("compare", "compare-dark.png", true, <ImageIcon aria-hidden="true" className="size-(--size-icon-sm)" />)]} active="compare" onTab={noop} onKeep={noop} onCloseTab={noop}><PictureView src={PICTURES.dark} label="compare-dark.png" /></DeskViewColumn>}
         tool={<ThreadColumn job={done} model="Opus 5.5" updates={GALLERY_DONE_THREAD.updates} parts={GALLERY_DONE_THREAD.parts} pinned selectedOutput={OUTPUTS.compareDark.id} />} />;
+      break;
+    }
+    case "every-output": {
+      const done = deskJob(jobs.gallery!, { state: "done", ask: null, question: null, summary: "차이 3곳", plan: { done: 5, total: 5 }, outputs: [OUTPUTS.compareLight, OUTPUTS.compareDark, OUTPUTS.notes] });
+      const shown = [done, ...pick("record", "release")];
+      body = <DeskRoom pinned={false} rail={rail(false, true, shown)} chat={chat([{ kind: "job", id: 1, job_id: "gallery" }], <ChatComposer selection={CLAUDE} />, { jobs: { gallery: done } })}
+        view={<DeskViewColumn tabs={[]} active={null} onTab={noop} onKeep={noop} onCloseTab={noop} controls={<LaneHeadControls edge expanded={false} pinned={false} onExpand={noop} onPin={noop} onClose={noop} />}><EveryOutput threads={shown} onOpen={noop} /></DeskViewColumn>} />;
       break;
     }
     case "agent":
@@ -302,8 +313,9 @@ export function DeskScene({ params }: { params: URLSearchParams }) {
       break;
     }
     case "settings":
+    case "settings-off":
       sidebar = null;
-      body = <div className="w-(--size-settings-sheet-w) max-w-full p-xl"><DeskSettingsTab settings={{ default_agent: "claude", location: "desk", cap: 8 }} agents={AGENTS} onChange={noop} /></div>;
+      body = <div className="w-(--size-settings-sheet-w) max-w-full p-xl"><DeskSettingsTab settings={{ enabled: state === "settings", default_agent: "claude", location: "desk", cap: 8 }} agents={AGENTS} onChange={noop} /></div>;
       break;
   }
   return (
@@ -354,7 +366,7 @@ function OutputsCriteria() {
             const kind = outputKindOf(view.kind);
             return (
               <li key={view.label} className={cn("flex min-w-0 items-center gap-xs text-caption", kind ? "text-subtle-foreground" : "text-muted-foreground line-through opacity-(--opacity-dimmed)")} data-desk-view-kept={kind ? "true" : "false"}>
-                <OutputMark output={{ id: view.label, kind: kind ?? "doc", label: view.label, thumb: null, seen: true, pr_state: kind === "pr" ? "merged" : null }} />
+                <OutputMark output={{ id: view.label, kind: kind ?? "doc", label: view.label, thumb: null, seen: true, pr_state: kind === "pr" ? "merged" : null, device_id: null, checkout: null, path: null, url: null }} />
                 <span className="truncate">{view.label}</span>
                 <span className="ml-auto font-mono text-micro text-muted-foreground">{view.kind}</span>
               </li>

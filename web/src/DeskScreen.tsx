@@ -2,16 +2,28 @@
 // the `desk`, `desk_live`, `desk_jobs` and `desk_mentions` sections drawn
 // with the Desk parts, and each press sent as one `desk_*` event. The core
 // decides every state; this screen keeps only what the operator is writing
-// and where the `@` menu is. The lane (Threads, 결과물) is the lane's own.
+// and where the `@` menu is. The lane (B28-B35) is `DeskLaneColumns` below:
+// its pin and kept tabs are the core's, its columns this window's.
 
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent, type RefObject } from "react";
+import { MapIcon } from "lucide-react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent, type ReactNode, type RefObject } from "react";
 import type { Actions } from "./actions";
-import { askingCount, type DeskItem, type DeskJob, type DeskMention } from "./desk";
+import { askingCount, deskOn, unseenOutputs, type DeskItem, type DeskJob, type DeskMention, type DeskOutput, type DeskSessionRef } from "./desk";
+import { activeTab, backFromThread, namesView, closeLane, closeTab, closeTool, closeView, openMission, openThread, outputTab, showTab, showThreads, tabKey, toggleOutputs, toggleThreads, viewTabs } from "./deskLane";
+import { DeskOutputView } from "./DeskOutputView";
+import { MissionMap } from "./MissionMap";
+import { OutputMark } from "./components/desk/desk-job-card";
+import { EveryOutput } from "./components/desk/desk-outputs";
+import { ThreadList } from "./components/desk/thread-list";
+import { ThreadPanel } from "./components/desk/thread-panel";
+import type { DeskKeptTab } from "./snapshot";
+import { commandLabel } from "./shortcutLabels";
+import { leaveDesk } from "./keyboard";
 import { mentionAt, mentionRows, outgoing, pickMention } from "./deskComposer";
 import { DeskChat, DeskEmpty, type DeskChatActions, type DeskNoticeAction } from "./components/desk/desk-chat";
 import { DeskAgentBar, DeskComposer } from "./components/desk/desk-composer";
-import { DeskSidebarRow } from "./components/desk/desk-entry";
-import { DeskChatColumn, DeskChatHead, DeskRoom } from "./components/desk/desk-lane";
+import { DeskPaneReturn, DeskSidebarRow } from "./components/desk/desk-entry";
+import { DeskChatColumn, DeskChatHead, DeskRail, DeskRoom, DeskViewColumn, LaneColumnHead, LaneHeadControls, type ViewTab } from "./components/desk/desk-lane";
 import { DeskMentionMenu, type MentionProject, type MentionSession } from "./components/desk/desk-mention-menu";
 import { DeskSettingsTab } from "./components/desk/desk-settings";
 import { useInterfaceTranslation } from "./i18n/client";
@@ -21,10 +33,11 @@ import { useUiStore } from "./ui";
 import { windowIsActive } from "./viewFocus";
 
 const NO_JOBS: DeskJob[] = [];
+const NO_TABS: DeskKeptTab[] = [];
 
-/** The sidebar's `◆ Desk` row (B1), once hided runs Desk. */
+/** The sidebar's `◆ Desk` row (B1), once hided runs Desk and Settings › Desk switched it on (B41). */
 export function DeskSidebarEntry({ actions }: { actions: Actions }) {
-  const shown = useShellStore((s) => s.desk !== null);
+  const shown = useShellStore((s) => deskOn(s.desk));
   const selected = useUiStore((s) => s.screen?.kind === "desk");
   const asking = useShellStore((s) => askingCount(s.deskJobs?.jobs ?? NO_JOBS));
   if (!shown) return null;
@@ -94,6 +107,11 @@ type MenuPlace = { dismissed: number | null; entered: string | null; active: str
 export function DeskScreen({ actions }: { actions: Actions }) {
   const { t } = useInterfaceTranslation();
   const desk = useShellStore((s) => s.desk);
+  // Switched off while in front, the room goes and the panel before it comes back (B41).
+  const off = desk !== null && !deskOn(desk);
+  useEffect(() => {
+    if (off) leaveDesk(actions);
+  }, [off, actions]);
   const live = useShellStore((s) => s.deskLive);
   const jobs = useShellStore((s) => s.deskJobs?.jobs ?? NO_JOBS);
   const mentions = useShellStore((s) => s.deskMentions);
@@ -233,38 +251,34 @@ export function DeskScreen({ actions }: { actions: Actions }) {
       }
     }
   }, [actions]);
-  const chatActions = useMemo<DeskChatActions>(() => {
-    // The lane shows a thread once it is drawn here; until then a card opens its session's own tab.
-    const openJob = (job: DeskJob) => {
-      if (job.pane_id) actions.openAgent(job.pane_id);
-    };
-    return {
-      onOpen: openJob,
-      onAnswer: openJob,
-      onCancel: (job) => actions.deskJobCancel(job.id),
-      onRequeue: (job) => actions.deskJobRequeue(job.id),
-      onRetry: (job) => actions.deskJobRequeue(job.id),
-      onOutput: (output) => {
-        const job = useShellStore.getState().deskJobs?.jobs.find((one) => one.outputs.some((made) => made.id === output.id));
-        if (job) openJob(job);
-      },
-      onMission: (missionId) => actions.openMission(missionId),
-      onApproval: (id, allow) => actions.deskApproval(id, allow),
-      onNoticeAction,
-      onCopy: (text) => void actions.copyText(text, "desk sign-in command"),
-      onMention: (mention) => {
-        if (mention.kind === "session") return actions.openAgent(mention.id);
-        const rest = useShellStore.getState().rest;
-        const project = catalogWorkspaces(rest).find((row) => row.checkouts.some((checkout) => checkout.path === mention.id));
-        const checkout = project?.checkouts.find((row) => row.path === mention.id);
-        if (project && checkout) actions.openWorkspace(project.device_id, project.id, checkout.id);
-      },
-      onHanded: (paneId) => actions.openAgent(paneId),
-    };
-  }, [actions, onNoticeAction]);
+  const lane = useLaneActions(actions);
+  const chatActions = useMemo<DeskChatActions>(() => ({
+    onOpen: (job) => lane.thread(job),
+    onAnswer: (job) => lane.thread(job, true),
+    onCancel: (job) => actions.deskJobCancel(job.id),
+    onRequeue: (job) => actions.deskJobRequeue(job.id),
+    onRetry: (job) => actions.deskJobRequeue(job.id),
+    onOutput: lane.output,
+    onMission: lane.mission,
+    onApproval: (id, allow) => actions.deskApproval(id, allow),
+    onNoticeAction,
+    onCopy: (text) => void actions.copyText(text, "desk sign-in command"),
+    onMention: (mention) => {
+      if (mention.kind === "session") return lane.session({ name: mention.name, mark: mention.mark ?? null, agent_kind: mention.agent_kind ?? null, pane_id: mention.id });
+      const rest = useShellStore.getState().rest;
+      const project = catalogWorkspaces(rest).find((row) => row.checkouts.some((checkout) => checkout.path === mention.id));
+      const checkout = project?.checkouts.find((row) => row.path === mention.id);
+      if (project && checkout) actions.openWorkspace(project.device_id, project.id, checkout.id);
+    },
+    onHanded: (paneId) => lane.session({ name: "", mark: null, agent_kind: null, pane_id: paneId }),
+  }), [actions, onNoticeAction, lane]);
+  const laneWindow = useUiStore((s) => s.deskLane);
 
   if (!desk) return null;
   const working = jobs.filter((job) => job.state === "working").length;
+  const shownThread = laneWindow.up && laneWindow.tool?.kind === "thread" ? laneWindow.tool.job : null;
+  const shownTab = laneWindow.up && laneWindow.view ? activeTab(desk.lane.kept, laneWindow) : null;
+  const shownOutput = shownTab?.kind === "output" ? shownTab.output.id : null;
   const composer = (
     <DeskComposer
       value={draft.text}
@@ -302,19 +316,246 @@ export function DeskScreen({ actions }: { actions: Actions }) {
   );
   return (
     <div ref={root} className="flex min-h-0 min-w-0 flex-1" data-desk-screen="true" onKeyUp={track} onMouseUp={track}>
-      <DeskRoom
-        pinned={false}
-        rail={null}
+      <DeskLaneColumns
+        actions={actions}
+        lane={lane}
         chat={(
           <DeskChatColumn head={<DeskChatHead onNewConversation={actions.deskNewConversation} />} composer={composer} scrollRef={scroller}>
             {shown.length === 0 && !answering ? (
-              <DeskEmpty working={working} asking={askingCount(jobs)} onExample={(text) => (canSend ? send({ text, mentions: [] }) : setDraft({ text, mentions: [] }))} />
+              <DeskEmpty working={working} asking={askingCount(jobs)} onExample={(text) => (canSend ? send({ text, mentions: [] }) : setDraft({ text, mentions: [] }))} onShowThreads={lane.threads} />
             ) : (
-              <DeskChat items={shown} jobs={byId} agents={desk.agents} live={liveText} thinking={answering && liveText === null} startedAt={turn} {...chatActions} />
+              <DeskChat items={shown} jobs={byId} agents={desk.agents} live={liveText} thinking={answering && liveText === null} startedAt={turn} selectedJob={shownThread} selectedOutput={shownOutput} {...chatActions} />
             )}
           </DeskChatColumn>
         )}
       />
     </div>
   );
+}
+
+const NO_WORKERS: DeskJob[] = [];
+
+/** Every thread Desk shows: its jobs, then the workers of the missions they conduct (B28, B34). */
+function useThreads(): readonly DeskJob[] {
+  const jobs = useShellStore((s) => s.deskJobs?.jobs ?? NO_JOBS);
+  const workers = useShellStore((s) => s.deskJobs?.workers ?? NO_WORKERS);
+  return useMemo(() => (workers.length ? [...jobs, ...workers] : jobs), [jobs, workers]);
+}
+
+function everyThread(): DeskJob[] {
+  const section = useShellStore.getState().deskJobs;
+  return [...(section?.jobs ?? []), ...(section?.workers ?? [])];
+}
+
+/** The output a thread's own line names, as its card lists it when it does: the View's id, or its address or file. */
+function outputOf(job: DeskJob, output: DeskOutput): DeskOutput {
+  return job.outputs.find((made) => made.id === output.id || (output.url !== null && made.url === output.url) || (output.path !== null && namesView(made, output.path))) ?? output;
+}
+
+/** What a press in Desk opens in its lane (B25, B28, B29, B31, B34). */
+type LaneActions = {
+  thread: (job: DeskJob, answer?: boolean) => void;
+  threads: () => void;
+  output: (output: DeskOutput) => void;
+  threadOutput: (job: DeskJob, output: DeskOutput) => void;
+  mission: (missionId: string) => void;
+  session: (session: DeskSessionRef) => void;
+  node: (paneId: string | null, conductor: string | null) => void;
+};
+
+function useLaneActions(actions: Actions): LaneActions {
+  return useMemo(() => {
+    const set = (change: Parameters<ReturnType<typeof useUiStore.getState>["setDeskLane"]>[0]) => useUiStore.getState().setDeskLane(change);
+    const kept = () => useShellStore.getState().desk?.lane.kept ?? NO_TABS;
+    const thread = (job: DeskJob, answer = false) => set((lane) => openThread(lane, job.id, { answer }));
+    const threadOutput = (job: DeskJob, output: DeskOutput) => set((lane) => showTab(lane, kept(), outputTab(job.id, outputOf(job, output))));
+    return {
+      thread,
+      threads: () => set(showThreads),
+      output: (output) => {
+        const job = everyThread().find((one) => one.outputs.some((made) => made.id === output.id));
+        if (job) threadOutput(job, output);
+      },
+      threadOutput,
+      mission: (missionId) => {
+        const conductor = everyThread().find((job) => job.mission?.id === missionId) ?? null;
+        const title = conductor?.mission?.title ?? useShellStore.getState().rest?.missions?.items.find((one) => one.id === missionId)?.title ?? missionId;
+        set((lane) => openMission(lane, kept(), { id: missionId, title }, conductor?.id ?? null));
+      },
+      // A session Desk shows opens as its thread; any other, at its own tab.
+      session: (session) => {
+        const job = everyThread().find((one) => (session.pane_id ? one.pane_id === session.pane_id : one.title === session.name));
+        if (job) return thread(job);
+        const pane = session.pane_id ?? useShellStore.getState().deskMentions?.sessions.find((one) => one.name === session.name)?.id;
+        if (pane) actions.openAgent(pane);
+      },
+      // A mission map's node (B34): the tool column turns to its worker's thread, the path line leading back to the Conductor.
+      node: (paneId, conductor) => {
+        const job = paneId ? everyThread().find((one) => one.pane_id === paneId) : undefined;
+        if (job) set((lane) => openThread(lane, job.id, { conductor }));
+      },
+    };
+  }, [actions]);
+}
+
+/**
+ * Desk's room with its lane (D-64, D-73, D-74, B28-B35): the chat, the 보기
+ * column with the outputs and mission maps as tabs, the tool column with
+ * the Threads list or one thread, and the rail. Escape on an unpinned lane
+ * takes it down as ⌘E does and gives the keyboard back to the composer.
+ */
+function DeskLaneColumns({ actions, lane, chat }: { actions: Actions; lane: LaneActions; chat: ReactNode }) {
+  const { t } = useInterfaceTranslation();
+  const room = useShellStore((s) => s.desk?.lane);
+  const own = useShellStore((s) => s.deskJobs?.jobs ?? NO_JOBS);
+  const threads = useThreads();
+  const place = useUiStore((s) => s.deskLane);
+  const set = useUiStore((s) => s.setDeskLane);
+  const chord = useShellStore((s) => commandLabel("desk_terminal", s.rest?.ui_state)) || null;
+  const [conductors, setConductors] = useState<ReadonlySet<string>>(() => new Set());
+  const kept = room?.kept ?? NO_TABS;
+  const pinned = room?.pinned ?? false;
+  const pin = () => actions.deskLanePin(!pinned);
+  const expand = () => set((now) => ({ ...now, expanded: !now.expanded }));
+  const tabs = viewTabs(kept, place);
+  const active = activeTab(kept, place);
+  const byId = new Map(threads.map((job) => [job.id, job]));
+  // Opening a thread reads it, as reading its card does; a worker is not Desk's job and has no card to read.
+  const openJob = place.up && place.tool?.kind === "thread" ? place.tool.job : null;
+  const unread = openJob !== null && own.some((job) => job.id === openJob && !job.read) ? openJob : null;
+  useEffect(() => {
+    if (unread) actions.deskJobRead(unread);
+  }, [actions, unread]);
+
+  const list = (
+    <>
+      <LaneColumnHead pinned={pinned} expanded={place.expanded} onExpand={expand} onPin={pin} onClose={() => set(closeTool)}>
+        <span className="font-semibold text-foreground">{t("desk.threads.title")}</span>
+      </LaneColumnHead>
+      <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-y-auto">
+        <ThreadList
+          jobs={threads}
+          expanded={conductors}
+          onOpen={(job) => lane.thread(job)}
+          onMission={lane.mission}
+          onOutput={lane.output}
+          onToggle={(id) => setConductors((open) => {
+            const next = new Set(open);
+            if (next.has(id)) next.delete(id);
+            else next.add(id);
+            return next;
+          })}
+        />
+      </div>
+    </>
+  );
+  let tool: ReactNode = null;
+  if (place.up && place.tool) {
+    const shown = place.tool.kind === "thread" ? byId.get(place.tool.job) : undefined;
+    if (shown && place.tool.kind === "thread") {
+      const conductor = place.tool.conductor ? byId.get(place.tool.conductor) : undefined;
+      tool = (
+        <ThreadPanel
+          key={shown.id}
+          job={shown}
+          actions={actions}
+          conductor={conductor ? { title: conductor.title, onOpen: () => set(backFromThread) } : null}
+          pinned={pinned}
+          startedByDesk={own.some((job) => job.id === shown.id)}
+          selectedOutput={active?.kind === "output" && active.job === shown.id ? active.output.id : null}
+          answer={place.answer?.job === shown.id ? place.answer.seq : 0}
+          terminalChord={chord}
+          onBack={() => set(backFromThread)}
+          onPin={pin}
+          onClose={() => set(closeTool)}
+          onTerminal={() => (shown.pane_id ? actions.openAgent(shown.pane_id) : undefined)}
+          onMission={lane.mission}
+          onOutput={(output) => lane.threadOutput(shown, output)}
+          onSession={lane.session}
+        />
+      );
+    } else {
+      // A thread that left Desk (moved out, past the cards' cap) gives its place back to the list.
+      tool = list;
+    }
+  }
+
+  let view: ReactNode = null;
+  if (place.up && place.view) {
+    const viewTabsShown: ViewTab[] = tabs.map(({ tab, preview }) => ({
+      id: tabKey(tab),
+      label: tab.kind === "output" ? tab.output.label : t("desk.lane.missionMap", { title: tab.title }),
+      preview,
+      icon: tab.kind === "output" ? <OutputMark output={tab.output} /> : <MapIcon aria-hidden="true" className="size-(--size-icon-sm) shrink-0 text-muted-foreground" />,
+    }));
+    const tabOf = (key: string) => tabs.find(({ tab }) => tabKey(tab) === key);
+    let body: ReactNode;
+    if (active?.kind === "output") {
+      // The card's value now, so a View seen since shows no dot; a kept tab whose View
+      // closed has no View left to mark, so it reads as seen and asks the core nothing.
+      const output = byId.get(active.job)?.outputs.find((one) => one.id === active.output.id) ?? { ...active.output, seen: true };
+      body = <DeskOutputView key={tabKey(active)} output={output} viewKey={tabKey(active)} actions={actions} />;
+    } else if (active?.kind === "mission") {
+      const conductor = threads.find((job) => job.mission?.id === active.mission)?.id ?? null;
+      body = <MissionMap missionId={active.mission} actions={actions} onNode={(node) => lane.node(node.pane_id ?? null, conductor)} />;
+    } else {
+      body = <EveryOutput threads={threads} onOpen={lane.threadOutput} />;
+    }
+    view = (
+      <DeskViewColumn
+        tabs={viewTabsShown}
+        active={active ? tabKey(active) : null}
+        onTab={(key) => set((now) => ({ ...now, view: true, active: key }))}
+        onKeep={(key) => {
+          const found = tabOf(key);
+          if (found?.preview) actions.deskTabKeep(found.tab, true);
+        }}
+        onCloseTab={(key) => {
+          const found = tabOf(key);
+          if (!found) return;
+          set((now) => closeTab(now, kept, found.tab));
+          if (!found.preview) actions.deskTabKeep(found.tab, false);
+        }}
+        controls={<LaneHeadControls edge={tool === null} expanded={place.expanded} pinned={pinned} onExpand={expand} onPin={pin} onClose={() => set(closeView)} />}
+      >
+        {body}
+      </DeskViewColumn>
+    );
+  }
+
+  const onKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
+    if (event.key !== "Escape" || event.defaultPrevented) return;
+    if (place.expanded) set((now) => ({ ...now, expanded: false }));
+    else if (place.up && !pinned) {
+      set(closeLane);
+      document.querySelector<HTMLTextAreaElement>("[data-desk-screen] [data-desk-chat-column] [data-desk-composer-input]")?.focus();
+    } else return;
+    event.preventDefault();
+    event.stopPropagation();
+  };
+  return (
+    <div className="contents" onKeyDown={onKeyDown}>
+      <DeskRoom
+        chat={chat}
+        view={view}
+        tool={tool}
+        pinned={pinned}
+        expanded={place.expanded}
+        rail={<DeskRail asking={askingCount(threads)} unseen={unseenOutputs(threads)} threads={place.up && place.tool !== null} outputs={place.up && place.view} onThreads={() => set(toggleThreads)} onOutputs={() => set(toggleOutputs)} />}
+      />
+    </div>
+  );
+}
+
+/**
+ * At the head of a Desk thread's Agent tab (D-42, B35, B36): `나도 참여 중`
+ * once the operator typed into it, and `Desk로`, which ⌘J also presses, back
+ * to Desk as it was left with this thread in its lane.
+ */
+export function PaneDeskReturn({ paneId, actions }: { paneId: string; actions: Actions }) {
+  const job = useShellStore((s) => s.deskJobs?.jobs.find((one) => one.pane_id === paneId) ?? s.deskJobs?.workers.find((one) => one.pane_id === paneId) ?? null);
+  const chord = useShellStore((s) => commandLabel("desk_terminal", s.rest?.ui_state)) || null;
+  const on = useShellStore((s) => deskOn(s.desk));
+  if (!job || !on) return null;
+  return <DeskPaneReturn joined={job.joined} chord={chord} onDesk={() => actions.openDeskThread(job.id)} />;
 }

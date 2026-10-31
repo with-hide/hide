@@ -104,7 +104,8 @@ The Project icon is a briefcase and the Explorer icon an open folder, so neither
 The Project icon carries a warning-coloured number counting its project's 할 일, no number at 0, its hint ending in it, such as `할 일 2`; worktrees to remove, memory to move into documents and bots' pull requests are never in it (B38).
 The Hide AI icon carries the same warning-coloured number, the sum of its 제안 and Memory tabs' numbers (see Hide AI: the Hide AI tool), none at 0 or while Hide AI is off, its hint ending in `제안 3 · Memory 1`.
 The Mission icon carries the same warning-coloured number, the front project's open missions with anything in their 내 차례 (a decision, a worker the core raised, a merge or join order, an outside pull request closed unmerged, no Conductor), none at 0, its hint ending in `내 차례 2` (PRD mission-tool B2).
-At the rail's bottom, just above its `…`, the pin is an icon of its own, in the same place whether the lane is up or closed and whichever column it shows: an empty pin while unpinned, a filled pin drawn pressed while pinned, and its hint says what a press does (B15).
+The pin sits in the head of the column at the lane's edge, just before its `✕`: the tool column's head while the tool column shows, the viewing column's (its View area's `✕`, or the 보기 slot's head) while it shows alone, and the front column's while the two stack; a closed lane draws no pin (PRD session-docs-and-assistant B33, D-73, replacing the rail's pin of B15).
+It is an empty pin while unpinned and a filled pin drawn pressed while pinned, and its hint says what a press does.
 The rail's `…` menu holds Expand, which moves both columns together, and with the lane closed the `…` is off (B15).
 A Workspace seen for the first time shows Agent Views alone, its lane closed.
 The Explorer's and Changes' header names its tool, then its scope behind one small icon, a branch for the checkout, in the scope text's colour, and ends with `✕`, which closes the tool column (B14); the icon is decoration.
@@ -117,7 +118,7 @@ An unpinned lane stays up until the operator takes it down: a click on a termina
 ⌘E closes the lane whole, and Escape inside an unpinned lane or on its rail closes it the same way and hands the keyboard to the focused pane, so a tool, an open or a reveal afterwards opens its own column alone and only ⌘E brings both back (operator decision 2026-10-23); Escape first closes a menu, popover or search open in the lane, and Escape in a terminal is the program's.
 Pinned (`Pin · keep it beside the agents`), the lane docks beside Agent Views, which narrow by its width once; unpinned (`Unpin · back over the agents`), Agent Views take their width back and the lane is over them again.
 The pin is the lane's, whatever its columns show, and a pinned lane closed and opened again comes back docked.
-A pinned lane docks in any window where its columns' minimums fit beside 480px of Agent Views, the viewing column giving up its width first and the tool column after, each taking its stored width back as the window widens; in a window too narrow for even that the two columns stack, the one brought to the front last drawn and the other behind it, and a body too narrow for even one column draws the lane over the agents as if unpinned, the rail's pin still filled and saying `Pin · too narrow, drawn over` (B19).
+A pinned lane docks in any window where its columns' minimums fit beside 480px of Agent Views, the viewing column giving up its width first and the tool column after, each taking its stored width back as the window widens; in a window too narrow for even that the two columns stack, the one brought to the front last drawn and the other behind it, and a body too narrow for even one column draws the lane over the agents as if unpinned, the pin still filled and saying `Pin · too narrow, drawn over` (B19).
 Expand gives the lane the whole body between the sidebar and the rail, the tool column keeping its width and the viewing column taking the rest; Expand again or Escape returns to the pin, widths and terminal layout as they were, no terminal resizes meanwhile, and Agent Views under an expanded lane take no pointer or keyboard (B15).
 While the keyboard is in the lane, a document, a page, the 보기 slot or the tool, the Zoom pane chord (⇧⌘↩, Alt+Shift+Enter on Windows and Linux) is Expand and Expand again, so one key fills the window with whatever the operator works in; anywhere else it zooms the focused pane.
 The tool column's `✕`, the pressed tool icon and the tool's chord close the tool column alone, closing no view; the documents' `✕`, drawn once at the right end of the tab bar of the area at the viewing column's top-right corner as a tool's head draws its own, closes the viewing column the same way, every view kept on the documents button (operator decision 2026-10-24); the viewing column also closes with its last document or the slot's `✕` when no documents stood under the slot; and a lane whose last column closes is closed, the keyboard going to the focused pane (B12, B13, B14).
@@ -930,10 +931,16 @@ Core owner: `herdr-core/src/runtime/desk.rs`, `herdr-core/src/model/desk.rs`; th
 Web owners: `web/src/DeskScreen.tsx` (the room, the sidebar row, Settings › Desk), `web/src/deskComposer.ts` (the `@` word and what a send carries), `web/src/components/desk/` (the parts).
 
 The sidebar's `◆ Desk` row, under its head, opens the room in the center with the chat and the composer; Settings › Desk holds the default agent, where tasks run and the cap.
+Desk is off until the operator turns on `Desk 사용` at the top of Settings › Desk (D-76, B41); the switch is the core's, kept with Desk's other settings, and moves every window at once without a restart.
+While it is off there is no `◆ Desk` row, no `Desk로` on a thread's Agent tab, ⌘J (Ctrl+Shift+J, ⌥⇧J or Alt+Shift+J in a browser) is not Hide's and the desktop app's View menu has no `Desk thread ⇄ terminal`, and Desk's agent does not run; the rest of Settings › Desk is dimmed and out of reach, its values kept, as Hide AI's are when it is off.
+The shortcut sheet leaves Desk's row out while Desk is off, and Settings › Shortcuts still lists it, so its binding can be changed and is kept.
+Turning it off ends Desk's agent and its turn, a waiting card closing as a refusal, and leaves the sessions Desk started and its conversation as they are: the sessions stay ordinary sessions in the sidebar.
+A spawn waiting in Desk's queue stays there while Desk is off, started by nothing and removed by nothing, and the queue starts it in order once Desk is on again.
+Turned off while the room is in front, the room goes and the panel used before it comes back, or All projects when none is left (`leaveDesk` in `web/src/keyboard.ts`).
 The composer keeps what the operator is writing while they go elsewhere, and clears it once the conversation shows the message, so a refused send keeps the words.
 `@` opens the menu on the word the caret ends; a picked session or project is written `@name` and sent as its `@session(<pane> <name>)` or `@project(<path> <name>)` token, a project named by its primary checkout's path (the folder's own for a project with none), which Desk's agent hands to `--repo` and pressing its chip opens; one the operator deleted is not sent.
 `다시 시도` on a notice sends the operator's last message again.
-Until the lane draws a thread, pressing a card, a session chip or a letter's line opens that session's own tab.
+Pressing a card, a session chip or `답하기` opens that session's thread in Desk's lane (see Desk's lane); a letter's line opens the session's own tab.
 A card's change sends only the `desk_jobs` section; the conversation is sent again only when it, the agents or the room's settings change.
 
 The selector lists Claude, Codex and Pi with each one's state:
@@ -977,8 +984,8 @@ Where a task works follows Settings › Desk: per task (the default, a new `desk
 
 Each job is a card in the `desk_jobs` section, newest first and at most 64, keyed by its spawn's intent; `pane_id` is its thread's key.
 A card with a row carries the row's own mark, drawn with the sidebar's `StatusMark`, and whether its ask was read; reading the card or its thread in Desk reads the row as the sidebar does, so the two never disagree.
-Its outputs are every View its session opened that is still open (32 at most), each marked seen or not, then its pull requests, each with its PR mark's state.
-A job whose session conducts a mission carries it as a `미션 k/n` chip: the mission's status (`planning`, `running`, `merge_wait`, `done` or `cancelled`), its nodes done out of those not dropped, a tone, and whether it waits on the operator's decision; the card draws no node rows.
+Its outputs are the Views its session opened that are still open and are made to be looked at (32 at most): a page, an image, a video, and a document to read such as Markdown, PDF or HTML, never a diff, source code, a log or a configuration file (B30, `is_output` in `herdr-core/src/runtime/view_sessions.rs`), each marked seen or not, then its pull requests, each with its PR mark's state.
+A job whose session conducts a mission carries it as a `미션 k/n` chip: the mission's status (`planning`, `running`, `merge_wait`, `done` or `cancelled`), its nodes done out of those not dropped, and whether a decision waits on the operator while it is open; the chip takes its colour from those by the rule the sidebar's mission chip follows (`missionToneOf` in `web/src/missions.ts`), so the same mission reads the same everywhere, and the card draws no node rows.
 Its state comes from the ledger and the row the sidebar draws for it, never from a model call:
 
 - `queued` with its place (`대기 중 · n번째`), drawn with the spawn's answer: Desk's places (Settings, 8 at most) are taken; it starts by itself when one frees, and the queue survives a restart. `취소` leaves it `cancelled` and moves the ones behind it up; `다시 맡기기` puts it at the back.
@@ -993,6 +1000,48 @@ Its state comes from the ledger and the row the sidebar draws for it, never from
 - `archived` once `세션 보관` or `hide agent archive` archived it.
 
 Starting, working and asking jobs take Desk's places; the rest do not.
+
+A mission's workers are no jobs of Desk's, but their threads open in Desk's lane too: the `desk_jobs` section sends them as cards of their own in `workers`, each a spawn whose pane is a worker of a job's mission, whoever started it (64 at most).
+
+### Desk's lane
+
+Web owners: `web/src/deskLane.ts` (the window's columns and tabs), `web/src/DeskScreen.tsx` (`DeskLaneColumns`), `web/src/DeskOutputView.tsx` (an output in the 보기 column), `web/src/components/desk/desk-lane.tsx` (the room, the columns' heads, the rail), `web/src/components/lane-pin.tsx` (the pin both lanes draw); core owner: `herdr-core/src/runtime/desk.rs` (`desk_lane`, `desk_output_seen`).
+
+Desk's lane follows the project lane's rules (see The right lane) with its own two columns: the tool column holds the Threads list or one thread, and the 보기 column holds the outputs and mission maps as tabs (D-64).
+The rail at the room's right edge has ☰ Threads, carrying the number of threads asking, none at 0, and ▣ 결과물, with a dot while any thread has an output not seen (B28, B31).
+Each is drawn pressed while its column shows; from a closed lane it opens its column alone, with the lane up it opens it beside the other, and pressed while it shows it closes that column, the last one taking the lane down.
+⌘E closes the lane whole and opens it again with the columns it closed, or the Threads list when it had none.
+
+The Threads list draws each thread as the sidebar's 태스크 row (its mark, agent, title, PR mark, mission chip, time, and the project and state words on a second line) under 내 차례, 작업 중 and 끝남 (B28, D-75).
+A Conductor's row unfolds its workers, indented under it.
+A sleeping or archived thread is in no group: the foot line counts them, `쉬는 중 n · 보관됨 m`, and each count unfolds its rows under it.
+A row, a job card, a session chip or `답하기` opens the thread in the tool column, and `답하기` puts the keyboard in its input box (B29); opening a thread reads it, as reading its card does.
+‹ goes back to the Threads list, or from a worker's thread to its Conductor's.
+
+Pressing an output, in a thread, on a card's chip, or in ▣'s list of every thread's outputs under each thread's mark and title, opens it in the 보기 column as a preview tab, its title in italics, which the next output pressed replaces (B31).
+A double click on the preview tab, or ↵ on it, keeps it as an ordinary tab, which stays when another thread opens.
+The tabs share the 보기 column's width by the View tab strip's rule (`tabStripFit`): the tab in front keeps its title longest, and a title too long for its tab ends in an ellipsis.
+The pin and the kept tabs are the core's (`desk.lane`), kept in Desk's store through a restart, 16 kept tabs at most; a seventeenth is refused as `desk_tabs_full` and the kept ones stay. Which tab is in front and the preview tab are the window's.
+An output is drawn read-only with the viewer its kind has (an image, a video, a PDF, a Markdown or text document), read from the session's device and checkout without making a View, so it never joins that project's Files list (D-65).
+Showing it marks its View seen (`desk_output_seen`), which takes it out of the session's To look at in Needs You, as looking at it in its checkout does.
+`그 자리에서 열기` opens the View itself in its checkout.
+A page is drawn as its last still with its address, not as a live browser: the page's browser belongs to the checkout that opened it, Desk's lane draws no second one, and `그 자리에서 열기` goes to the live page (a follow-up to D-40's live browser in the 보기 column).
+A pull request is drawn as its PR mark and number with `GitHub에서 열기`.
+
+A thread's `미션 k/n` chip opens the mission's map as a tab in the 보기 column and the Conductor's thread beside it in the tool column (B34, D-74).
+Pressing a node turns the tool column to that worker's thread, and its path line goes back to the Conductor's.
+
+The pin is in the head of the column at the lane's edge, just before its `✕`: the tool column's, or the 보기 column's while it shows alone (B32, D-73).
+The lane is as wide as its columns, each at the lane's ideal width, pinned or not, and never leaves the chat less than its minimum: the 보기 column gives up its width first.
+Unpinned, the lane floats over the chat, whose words move left out from under it by the lane's width, so nothing the chat says is hidden; Escape inside it closes it and gives the keyboard to the composer.
+Pinned, the lane docks beside the chat, which narrows by its width, and a pinned lane closed and opened again comes back docked; Escape leaves it.
+A menu, a popover or a hint open in the lane takes Escape first, and Escape in an expanded lane (⤢) returns it to its width.
+
+A thread's head has `터미널로` with ⌘J beside it (B35, D-42).
+Either one opens the thread's Agent tab and gives its pane the keyboard; that pane's head carries `Desk로` with ⌘J while it is a Desk thread, a job or a mission's worker.
+⌘J there, or `Desk로`, comes back to Desk as it was left, with that thread open in the tool column.
+⌘J does nothing elsewhere; the press goes to the diagnostic log.
+In a browser tab the chord is ⌥⇧J, and Alt+Shift+J on Windows and Linux, where Chrome keeps Ctrl+Shift+J for its DevTools console; the desktop app keeps ⌘J and Ctrl+Shift+J, its own developer tools being Ctrl+Shift+I.
 
 ## Hide AI: the Hide AI tool
 
@@ -3462,6 +3511,7 @@ The sheet carries no row or explanation for a command the removed native app alo
 | Toggle Mission tool | none | none | none | none |
 | Open Project Memory | `⇧⌘L` | `Alt+Shift+L` | `⇧⌘L` | `Alt+Shift+L` |
 | Open PR list | `⇧⌘R` | `Alt+Shift+R` | `⌥⇧R` | `Alt+Shift+R` |
+| Desk thread ⇄ terminal | `⌘J` | `Ctrl+Shift+J` | `⌥⇧J` | `Alt+Shift+J` |
 | Toggle documents | none | none | none | none |
 | Toggle Changes tool | `⇧⌘G` | `Alt+Shift+G` | `⇧⌘G` | `Alt+Shift+G` |
 | Toggle Explorer tool | `⇧⌘E` | `Alt+Shift+E` | `⇧⌘E` | `Alt+Shift+E` |

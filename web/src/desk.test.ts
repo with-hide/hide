@@ -26,8 +26,8 @@ describe("the Threads list (B28)", () => {
   });
 
   it("counts the threads asking for ☰ and the outputs not seen for ▣", () => {
-    const seen = { id: "o1", kind: "image" as const, label: "a.png", thumb: null, seen: true, pr_state: null };
-    const unseen = { id: "o2", kind: "doc" as const, label: "b.md", thumb: null, seen: false, pr_state: null };
+    const seen = { id: "o1", kind: "image" as const, label: "a.png", thumb: null, seen: true, pr_state: null, device_id: null, checkout: null, path: null, url: null };
+    const unseen = { id: "o2", kind: "doc" as const, label: "b.md", thumb: null, seen: false, pr_state: null, device_id: null, checkout: null, path: null, url: null };
     const jobs = [job("a", "asking", { outputs: [seen, unseen] }), job("b", "asking"), job("c", "done", { outputs: [unseen] })];
     expect([askingCount(jobs), unseenOutputs(jobs)]).toEqual([2, 2]);
   });

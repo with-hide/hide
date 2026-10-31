@@ -109,7 +109,7 @@ impl Runtime {
     /// Jobs that hold one of Desk's places: starting from the queue, or in
     /// the ledger and starting, working or asking.
     pub(super) fn desk_places_taken(&self) -> usize {
-        places_in(&self.desk_cards())
+        places_in(&self.desk_cards(&self.desk_card_index()))
     }
 
     /// Whether the ledger holds a spawn of Desk's with this intent.
@@ -341,6 +341,11 @@ impl Runtime {
     /// Starts the first waiting job when fewer than the cap's places are
     /// taken.
     fn desk_start_next(&mut self, places: usize) -> bool {
+        // Switched off, the queue keeps its spawns and starts none (D-76);
+        // turning Desk on again starts them in order.
+        if !self.desk.stored.settings.enabled {
+            return false;
+        }
         let Some(handle) = self.desk.handle.clone() else {
             return false;
         };
@@ -504,7 +509,11 @@ struct CardIndex<'a> {
     plans: HashMap<&'a str, &'a crate::plans::PlanView>,
     /// The missions each pane conducts.
     missions: HashMap<&'a str, Vec<&'a crate::runtime::missions::MissionView>>,
-    displays: Vec<&'a crate::view_layout::Display>,
+    /// Every open View that is a 결과물 (B30), with the checkout whose list holds it.
+    displays: Vec<(
+        super::super::workspace_view::WorkspaceKey,
+        &'a crate::view_layout::Display,
+    )>,
 }
 
 impl Runtime {
@@ -547,22 +556,29 @@ impl Runtime {
                 .map(|plan| (plan.pane_id.as_str(), plan))
                 .collect(),
             missions,
-            displays: self.open_displays(),
+            displays: self
+                .every_view_layout()
+                .flat_map(|(key, layout)| {
+                    layout
+                        .displays()
+                        .filter(|display| super::super::view_sessions::is_output(display))
+                        .map(move |display| (key.clone(), display))
+                })
+                .collect(),
         }
     }
 
     /// Desk's jobs as the `desk_jobs` section lists them.
     pub(super) fn desk_jobs(&self) -> Vec<crate::model::DeskJobSnapshot> {
-        let mut cards = self.desk_cards();
+        let mut cards = self.desk_cards(&self.desk_card_index());
         cards.truncate(MAX_CARDS);
         cards
     }
 
     /// Desk's jobs as cards, newest first: the queue's, then the newest
     /// [`MAX_CARDS`] of the ledger's, before the section's cap.
-    fn desk_cards(&self) -> Vec<crate::model::DeskJobSnapshot> {
+    fn desk_cards(&self, index: &CardIndex<'_>) -> Vec<crate::model::DeskJobSnapshot> {
         use crate::model::{AgentStatusCode, DeskJobFailure, DeskJobReason, DeskJobSnapshot};
-        let index = self.desk_card_index();
         let mut cards: Vec<DeskJobSnapshot> = Vec::new();
         let ledger = self.delivery_state().ok();
         let spawns = self.desk_spawns();
@@ -594,7 +610,7 @@ impl Runtime {
                     .find(|agent| &agent.id == child)
                     .cloned()
             });
-            cards.push(self.desk_card(spawn, registration.as_ref(), &index));
+            cards.push(self.desk_card(spawn, registration.as_ref(), index));
         }
         let mut position = 0;
         for job in &self.desk.stored.queue {
@@ -867,17 +883,33 @@ impl Runtime {
                     state: pull.state,
                 })
                 .collect();
-            card.outputs = self
-                .session_displays_among(&row.pane_id, &index.displays)
-                .into_iter()
+            let scope = self.session_scope_of_pane(&row.pane_id);
+            card.outputs = index
+                .displays
+                .iter()
+                .filter(|(_, display)| {
+                    scope.as_ref().is_some_and(|scope| {
+                        display
+                            .openers
+                            .iter()
+                            .any(|opener| opener.of_session(scope))
+                    })
+                })
                 .take(MAX_OUTPUTS)
-                .map(|display| crate::model::DeskJobOutput {
-                    id: display.id.clone(),
-                    kind: output_kind(display),
-                    label: super::super::view_areas::display_label(display),
-                    thumb: None,
-                    seen: display.unseen.is_none(),
-                    pr_state: None,
+                .map(|((device, checkout), display)| {
+                    let page = display.kind == crate::view_layout::DisplayKind::Browser;
+                    crate::model::DeskJobOutput {
+                        id: display.id.clone(),
+                        kind: output_kind(display),
+                        label: super::super::view_areas::display_label(display),
+                        thumb: None,
+                        seen: display.unseen.is_none(),
+                        pr_state: None,
+                        device_id: Some(device.clone()),
+                        checkout: Some(checkout.clone()),
+                        path: (!page && !display.path.is_empty()).then(|| display.path.clone()),
+                        url: display.url.clone().filter(|_| page),
+                    }
                 })
                 .chain(pulls.iter().map(|pull| crate::model::DeskJobOutput {
                     id: pull.url.clone(),
@@ -886,6 +918,10 @@ impl Runtime {
                     thumb: None,
                     seen: true,
                     pr_state: Some(pull.state),
+                    device_id: None,
+                    checkout: None,
+                    path: None,
+                    url: Some(pull.url.clone()),
                 }))
                 .collect();
         }
@@ -918,7 +954,6 @@ fn desk_job_mission(
         .nodes
         .iter()
         .filter(|node| node.status != NodeStatus::Dropped);
-    let any = |status: NodeStatus| mission.nodes.iter().any(|node| node.status == status);
     crate::model::DeskJobMission {
         id: mission.id.clone(),
         title: mission.title.clone(),
@@ -928,16 +963,13 @@ fn desk_job_mission(
             .filter(|node| node.status == NodeStatus::Done)
             .count(),
         total: counted.count(),
-        tone: match mission.status {
-            MissionStatus::Cancelled => "cancelled",
-            MissionStatus::Done => "done",
-            _ if mission.question.is_some() || mission.decision.is_some() => "hold",
-            _ if any(NodeStatus::Failed) => "failed",
-            _ if any(NodeStatus::Review) => "review",
-            _ => "working",
-        }
-        .into(),
-        deciding: mission.question.is_some(),
+        // A decision waits on the operator while the mission is open, as the
+        // sidebar's chip reads it.
+        deciding: mission.decision.is_some()
+            && matches!(
+                mission.status,
+                MissionStatus::Planning | MissionStatus::Running | MissionStatus::MergeWait
+            ),
     }
 }
 
@@ -1157,18 +1189,20 @@ impl Runtime {
                 .any(|spawn| spawn.intent == job.intent && spawn.completed)
         });
         marked |= self.desk.stored.queue.len() != before;
-        // The cards are built once a publish, and again only when a queued
-        // job started.
-        let mut cards = self.desk_cards();
-        let started = self.desk_waiting() > 0 && self.desk_start_next(places_in(&cards));
-        if started {
-            cards = self.desk_cards();
-        }
-        cards.truncate(MAX_CARDS);
+        // The cards and the workers' cards share one index a publish; a
+        // queue that waits counts its places from cards of their own first.
+        let started = self.desk_waiting() > 0 && {
+            let places = places_in(&self.desk_cards(&self.desk_card_index()));
+            self.desk_start_next(places)
+        };
         if marked || started {
             self.save_desk();
         }
-        self.publish_desk_jobs(cards);
+        let index = self.desk_card_index();
+        let mut cards = self.desk_cards(&index);
+        cards.truncate(MAX_CARDS);
+        let workers = self.desk_workers(&cards, &index);
+        self.publish_desk_jobs(cards, workers);
         self.compose_desk_mentions();
         if letters_read || self.desk_chips_moved() {
             self.compose_desk();
@@ -1180,23 +1214,72 @@ impl Runtime {
         if self.desk.worker.is_none() {
             return;
         }
-        let jobs = self.desk_jobs();
-        self.publish_desk_jobs(jobs);
+        let index = self.desk_card_index();
+        let mut jobs = self.desk_cards(&index);
+        jobs.truncate(MAX_CARDS);
+        let workers = self.desk_workers(&jobs, &index);
+        self.publish_desk_jobs(jobs, workers);
+    }
+
+    /// The cards of the workers `jobs` conduct: each worker pane's spawn,
+    /// whoever started it, as Desk's own cards read theirs, at most
+    /// [`MAX_CARDS`].
+    fn desk_workers(
+        &self,
+        jobs: &[crate::model::DeskJobSnapshot],
+        index: &CardIndex<'_>,
+    ) -> Vec<crate::model::DeskJobSnapshot> {
+        let panes: HashSet<&str> = jobs
+            .iter()
+            .flat_map(|job| &job.workers)
+            .map(String::as_str)
+            .collect();
+        if panes.is_empty() {
+            return Vec::new();
+        }
+        let Ok(ledger) = self.delivery_state() else {
+            return Vec::new();
+        };
+        ledger
+            .spawns
+            .iter()
+            .rev()
+            .filter(|spawn| {
+                spawn
+                    .pane
+                    .as_deref()
+                    .is_some_and(|pane| panes.contains(pane))
+            })
+            .take(MAX_CARDS)
+            .map(|spawn| {
+                let registration = spawn
+                    .child
+                    .as_ref()
+                    .and_then(|child| ledger.agents.iter().find(|agent| &agent.id == child));
+                self.desk_card(spawn, registration, index)
+            })
+            .collect()
     }
 
     /// Sends the cards as the `desk_jobs` section when they moved, so a
     /// card's change never resends the conversation.
-    fn publish_desk_jobs(&mut self, jobs: Vec<crate::model::DeskJobSnapshot>) {
+    fn publish_desk_jobs(
+        &mut self,
+        jobs: Vec<crate::model::DeskJobSnapshot>,
+        workers: Vec<crate::model::DeskJobSnapshot>,
+    ) {
         if self
             .snapshot
             .desk_jobs
             .as_ref()
-            .is_some_and(|section| section.jobs == jobs)
+            .is_some_and(|section| section.jobs == jobs && section.workers == workers)
         {
             return;
         }
-        self.snapshot.desk_jobs =
-            Some(std::sync::Arc::new(crate::model::DeskJobsSnapshot { jobs }));
+        self.snapshot.desk_jobs = Some(std::sync::Arc::new(crate::model::DeskJobsSnapshot {
+            jobs,
+            workers,
+        }));
     }
 
     /// The `desk_mentions` section, sent again when the `@` menu moved.
@@ -1672,6 +1755,29 @@ mod tests {
         runtime.desk_watch_answered("intent-a", "p0", Ok(()));
         assert!(watched(&runtime));
         assert!(!runtime.desk.watch_asks.contains_key("intent-a"));
+    }
+
+    #[test]
+    fn a_conductors_workers_are_cards_of_their_own_found_by_their_panes() {
+        let root = tempfile::tempdir().unwrap();
+        let runtime = desk(root.path(), 2, &["conductor", "worker", "other"]);
+        let mut conductor = card(&runtime, "conductor");
+        conductor.workers = vec!["p1".into()];
+        // PRD session-docs-and-assistant B28, B34: the Threads list opens a
+        // Conductor to its workers, each with its own state and pane.
+        let workers = runtime.desk_workers(&[conductor], &runtime.desk_card_index());
+        assert_eq!(
+            workers
+                .iter()
+                .map(|worker| (worker.id.as_str(), worker.pane_id.as_deref()))
+                .collect::<Vec<_>>(),
+            [("intent-worker", Some("p1"))]
+        );
+        assert!(
+            runtime
+                .desk_workers(&[card(&runtime, "other")], &runtime.desk_card_index())
+                .is_empty()
+        );
     }
 
     #[test]

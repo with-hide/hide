@@ -6,13 +6,15 @@ import { createActions } from "./actions";
 import { TooltipProvider } from "./components/ui/tooltip";
 import type { SnapshotRest } from "./snapshot";
 import { useShellStore } from "./store";
+import { ProjectLanePin } from "./ProjectLanePin";
 import { ToolRail } from "./Tools";
 import { useUiStore, type DrawnLane } from "./ui";
 import { emptyScope } from "../test/legacyAgentScope";
 import type { DispatchFn } from "./ws";
 
-// The rail's pin (PRD lane-two-columns B15, B19; UI_BEHAVIOR.md, The right
-// lane): one button at the rail's bottom, above the `…`, whatever the lane draws.
+// The lane's pin (PRD lane-two-columns B15, B19; session-docs-and-assistant
+// D-73, B33; UI_BEHAVIOR.md, The right lane): beside the ✕ of the column at
+// the lane's edge, the tool column's while one is drawn, never on the rail.
 
 function snapshot(pinned: boolean): SnapshotRest {
   return {
@@ -26,7 +28,7 @@ function snapshot(pinned: boolean): SnapshotRest {
   } as unknown as SnapshotRest;
 }
 
-describe("the rail's pin", () => {
+describe("the lane's pin", () => {
   let container: HTMLDivElement;
   let root: Root;
   let saved: ReturnType<typeof useShellStore.getState>;
@@ -50,31 +52,45 @@ describe("the rail's pin", () => {
     vi.unstubAllGlobals();
   });
 
-  async function render(pinned: boolean, mode: DrawnLane["mode"]) {
+  async function render(pinned: boolean, mode: DrawnLane["mode"], tool: DrawnLane["tool"] = "explorer") {
     const actions = createActions((event) => { events.push(event); return true; });
     await act(async () => {
       useShellStore.setState({ connection: "live", rest: snapshot(pinned) });
-      useUiStore.setState({ screen: { kind: "workspace" }, drawnLane: { mode, view: "none", tool: mode === "closed" ? null : "explorer", stacked: false } });
-      root.render(<TooltipProvider><ToolRail actions={actions} /></TooltipProvider>);
+      useUiStore.setState({ screen: { kind: "workspace" }, drawnLane: { mode, view: tool === null ? "documents" : "none", tool, stacked: false } });
+      root.render(
+        <TooltipProvider>
+          <div data-column="view"><ProjectLanePin column="view" actions={actions} /></div>
+          {/* A tool column's head is drawn only while it shows a tool. */}
+          {tool !== null ? <div data-column="tool"><ProjectLanePin column="tool" actions={actions} /></div> : null}
+          <ToolRail actions={actions} />
+        </TooltipProvider>,
+      );
     });
   }
-  const pin = () => container.querySelector<HTMLButtonElement>("[data-lane-pin]");
+  const pins = () => [...container.querySelectorAll<HTMLButtonElement>("[data-lane-pin]")];
 
-  it("says what a press does in each state and sits just above the `…`", async () => {
+  it("says what a press does in each state, in the tool column's head alone", async () => {
     const cases = [[false, "overlay", "off", "false", "Pin · keep it beside the agents"], [true, "docked", "on", "true", "Unpin · back over the agents"], [true, "overlay", "narrow", "true", "Pin · too narrow, drawn over"]] as const;
     for (const [pinned, mode, state, pressed, hint] of cases) {
       await render(pinned, mode);
-      expect(pin()?.getAttribute("data-lane-pin")).toBe(state);
-      expect(pin()?.getAttribute("aria-pressed")).toBe(pressed);
-      expect(pin()?.getAttribute("aria-description")).toBe(hint);
-      expect(pin()?.nextElementSibling?.getAttribute("data-lane-more")).toBe("true");
+      expect(pins()).toHaveLength(1);
+      const pin = pins()[0]!;
+      expect(pin.closest("[data-column]")?.getAttribute("data-column")).toBe("tool");
+      expect(pin.getAttribute("data-lane-pin")).toBe(state);
+      expect(pin.getAttribute("aria-pressed")).toBe(pressed);
+      expect(pin.getAttribute("aria-description")).toBe(hint);
     }
   });
 
-  it("stays on the rail with the lane closed and pins from there", async () => {
-    await render(false, "closed");
-    expect(pin()?.getAttribute("data-lane-pin")).toBe("off");
-    await act(async () => pin()!.click());
+  it("moves to the viewing column's head when no tool column is drawn, and pins from there", async () => {
+    await render(false, "overlay", null);
+    expect(pins().map((pin) => pin.closest("[data-column]")?.getAttribute("data-column"))).toEqual(["view"]);
+    await act(async () => pins()[0]!.click());
     expect(events.filter((event) => event.kind === "workspace_view").map((event) => event.payload)).toEqual([{ pinned: true }]);
+  });
+
+  it("is not on the rail", async () => {
+    await render(false, "closed", null);
+    expect(container.querySelector("[data-lane-rail] [data-lane-pin], nav [data-lane-pin]")).toBeNull();
   });
 });

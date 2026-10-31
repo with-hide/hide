@@ -4,7 +4,7 @@
 // `session_thread`, each on its own revision; the screen draws them as one.
 
 import { threadLines, type AcpSessionUpdate, type DeskOutput, type DeskSessionRef, type ThreadHidePart, type ThreadLine, type ThreadReadFailure } from "./desk";
-import { missionCounts, missionDeciding, missionTone } from "./missions";
+import { missionCounts, missionDeciding } from "./missions";
 import type { AgentRow, MissionsSnapshot, PlansSnapshot, PlanView, SessionThreadHistorySection, SessionThreadSection, SnapshotRest, ThreadPart, ThreadSession, ThreadUpdate } from "./snapshot";
 
 export type ThreadConversation = {
@@ -118,7 +118,7 @@ function hidePart(part: ThreadPart, found: { session: (name: string) => DeskSess
       const mission = part.mission ? (found.missions?.items.find((one) => one.id === part.mission) ?? null) : null;
       if (!mission) return null;
       const { done, total } = missionCounts(mission);
-      return { kind: "mission", mission: { id: mission.id, title: mission.title, status: mission.status, done, total, tone: missionTone(mission), deciding: missionDeciding(mission) } };
+      return { kind: "mission", mission: { id: mission.id, title: mission.title, status: mission.status, done, total, deciding: missionDeciding(mission) } };
     }
   }
 }
@@ -134,5 +134,6 @@ function viewOutput(view: "browser" | "file" | "diff", target: string): DeskOutp
   if (view === "diff") return null;
   const kind = view === "browser" ? "page" : IMAGE.test(target) ? "image" : "doc";
   const label = view === "browser" ? target.replace(/^[a-z]+:\/\//i, "") : (target.split(/[\\/]/).filter(Boolean).at(-1) ?? target);
-  return { id: target, kind, label, thumb: null, seen: true, pr_state: null };
+  // Where the session's call named it: a page's address, or a file as typed, read on this machine (D-65, B31).
+  return { id: target, kind, label, thumb: null, seen: true, pr_state: null, device_id: null, checkout: null, path: view === "browser" ? null : target, url: view === "browser" ? target : null };
 }

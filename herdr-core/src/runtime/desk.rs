@@ -97,6 +97,25 @@ pub(super) enum DeskEvent {
     JobRequeue(JobPayload),
     /// The operator saw an ended job's card.
     JobRead(JobPayload),
+    /// The operator looked at a job's output in the lane's 보기 column (B31).
+    OutputSeen(OutputPayload),
+    /// The lane's pin, or a tab kept or closed in its 보기 column (B31, B32).
+    Lane(LanePayload),
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(tag = "action", rename_all = "snake_case")]
+pub(super) enum LanePayload {
+    Pin { pinned: bool },
+    Keep { tab: crate::model::DeskKeptTab },
+    Close { tab: crate::model::DeskKeptTab },
+}
+
+#[derive(Debug, Deserialize)]
+pub(super) struct OutputPayload {
+    device_id: String,
+    checkout: String,
+    id: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -131,6 +150,7 @@ pub(super) struct InstallPayload {
 
 #[derive(Debug, Deserialize)]
 pub(super) struct SettingsPayload {
+    enabled: Option<bool>,
     /// `null` clears it; absent leaves it.
     #[serde(default, deserialize_with = "present")]
     default_agent: Option<Option<AdapterId>>,
@@ -145,7 +165,7 @@ fn present<'de, D: serde::Deserializer<'de>>(
 }
 
 impl DeskEvent {
-    pub(super) const KINDS: [&'static str; 11] = [
+    pub(super) const KINDS: [&'static str; 13] = [
         "desk_send",
         "desk_stop",
         "desk_approval",
@@ -157,6 +177,8 @@ impl DeskEvent {
         "desk_job_cancel",
         "desk_job_requeue",
         "desk_job_read",
+        "desk_output_seen",
+        "desk_lane",
     ];
 
     pub(super) fn decode(kind: &str, payload: Value) -> Option<Self> {
@@ -175,6 +197,8 @@ impl DeskEvent {
             "desk_job_cancel" => Self::JobCancel(parse(payload)?),
             "desk_job_requeue" => Self::JobRequeue(parse(payload)?),
             "desk_job_read" => Self::JobRead(parse(payload)?),
+            "desk_output_seen" => Self::OutputSeen(parse(payload)?),
+            "desk_lane" => Self::Lane(parse(payload)?),
             _ => return None,
         })
     }
@@ -202,7 +226,10 @@ impl Runtime {
         });
         match worker::start(platform, runtime, notifier) {
             Ok(handle) => {
-                let _ = handle.orders.send(Order::Check);
+                // Desk switched off looks at no agent (D-76).
+                if self.desk.stored.settings.enabled {
+                    let _ = handle.orders.send(Order::Check);
+                }
                 self.desk.worker = Some(handle);
             }
             Err(error) => crate::diagnostic!(json!({
@@ -218,11 +245,21 @@ impl Runtime {
         if self.desk.worker.is_none() {
             return refused("desk_unavailable");
         }
+        // Switched off, only the switch reaches Desk (D-76).
+        if !self.desk.stored.settings.enabled && !matches!(event, DeskEvent::SettingsSet(_)) {
+            return refused("desk_off");
+        }
         // A card's change moves only the cards: the conversation is not sent again.
         let room = !matches!(
             event,
-            DeskEvent::JobCancel(_) | DeskEvent::JobRequeue(_) | DeskEvent::JobRead(_)
+            DeskEvent::JobCancel(_)
+                | DeskEvent::JobRequeue(_)
+                | DeskEvent::JobRead(_)
+                | DeskEvent::OutputSeen(_)
         );
+        // An output seen moves the View's seen state, which the core keeps
+        // with the View, not in Desk's store.
+        let stored = !matches!(event, DeskEvent::OutputSeen(_));
         let changed = match event {
             DeskEvent::Send(payload) => self.desk_send(payload),
             DeskEvent::Stop => self.desk_stop(),
@@ -241,15 +278,51 @@ impl Runtime {
                 self.desk_job_requeue(&payload.id) | self.desk_start_queued()
             }
             DeskEvent::JobRead(payload) => self.desk_job_read(&payload.id),
+            DeskEvent::OutputSeen(payload) => {
+                self.mark_view_seen(&(payload.device_id, payload.checkout), &payload.id)
+            }
+            DeskEvent::Lane(payload) => self.desk_lane(payload),
         };
         if changed {
-            self.save_desk();
+            if stored {
+                self.save_desk();
+            }
             if room {
                 self.compose_desk();
             }
             self.compose_desk_jobs();
         }
         changed
+    }
+
+    /// The lane's pin, or a kept tab (B31, B32). Keeping a kept tab or
+    /// closing one not kept changes nothing; one past the cap is refused.
+    fn desk_lane(&mut self, payload: LanePayload) -> bool {
+        let lane = &mut self.desk.stored.lane;
+        match payload {
+            LanePayload::Pin { pinned } => {
+                let changed = lane.pinned != pinned;
+                lane.pinned = pinned;
+                changed
+            }
+            LanePayload::Keep { tab } => {
+                let key = tab.key();
+                if lane.kept.iter().any(|kept| kept.key() == key) {
+                    return false;
+                }
+                if lane.kept.len() >= crate::model::DESK_KEPT_TABS_MAX {
+                    return refused("desk_tabs_full");
+                }
+                lane.kept.push(tab);
+                true
+            }
+            LanePayload::Close { tab } => {
+                let key = tab.key();
+                let before = lane.kept.len();
+                lane.kept.retain(|kept| kept.key() != key);
+                lane.kept.len() != before
+            }
+        }
     }
 
     /// Whether this daemon runs Desk: its queued spawns start as
@@ -536,6 +609,9 @@ impl Runtime {
         }
         let settings = &mut self.desk.stored.settings;
         let before = *settings;
+        if let Some(enabled) = payload.enabled {
+            settings.enabled = enabled;
+        }
         if let Some(agent) = payload.default_agent {
             settings.default_agent = agent;
         }
@@ -550,6 +626,20 @@ impl Runtime {
         }
         if self.desk.stored.selection.agent.is_none() {
             self.desk.stored.selection.agent = settings.default_agent;
+        }
+        let enabled = self.desk.stored.settings.enabled;
+        if enabled != before.enabled {
+            if enabled {
+                self.order(Order::Check);
+                self.desk_start_queued();
+            } else {
+                // Off ends the process and its turn; the sessions it started
+                // and the conversation stay.
+                if self.desk.turn.is_some() {
+                    self.order(Order::Cancel);
+                }
+                self.end_desk_process();
+            }
         }
         before != self.desk.stored.settings
     }
@@ -962,6 +1052,7 @@ impl Runtime {
             },
             approvals_waiting: desk.approvals.len(),
             settings: desk.stored.settings,
+            lane: desk.stored.lane.clone(),
         }));
     }
 
@@ -990,7 +1081,18 @@ impl Runtime {
     pub(in crate::runtime) fn start_test_desk(&mut self) {
         let (orders, _unread) = std::sync::mpsc::channel();
         self.desk.worker = Some(worker::Handle { orders });
+        self.desk.stored.settings.enabled = true;
         self.compose_desk_sections();
+    }
+
+    /// Lets Desk's queue start a waiting spawn on its own thread, as
+    /// `install_desk` does; `notifier` hears each answer it applies.
+    pub(in crate::runtime) fn hand_test_desk(
+        &mut self,
+        runtime: Weak<Mutex<Runtime>>,
+        notifier: ChangeNotifier,
+    ) {
+        self.desk.handle = Some(jobs::DeskHandle { runtime, notifier });
     }
 
     /// Runs Desk with a session open, so its process's commands reach the
@@ -1042,6 +1144,7 @@ mod tests {
         );
         let (orders, received) = mpsc::channel();
         runtime.desk.worker = Some(worker::Handle { orders });
+        runtime.desk.stored.settings.enabled = true;
         runtime.desk_report(Report::Availability(vec![
             (AdapterId::Claude, DeskAgentState::Ready, None),
             (AdapterId::Pi, DeskAgentState::Ready, None),
@@ -1093,6 +1196,75 @@ mod tests {
             reason: None,
         });
         items(runtime).last().unwrap().id()
+    }
+
+    #[test]
+    fn desk_is_off_by_default_and_only_its_switch_reaches_it_while_off() {
+        assert!(!crate::model::DeskSettings::default().enabled);
+        let root = tempfile::tempdir().unwrap();
+        let (mut runtime, received) = runtime(root.path());
+        runtime.desk.stored.settings.enabled = false;
+        for (kind, payload) in [
+            ("desk_select", json!({"agent": "claude"})),
+            ("desk_send", json!({"text": "start something"})),
+            ("desk_lane", json!({"action": "pin", "pinned": true})),
+        ] {
+            assert!(!event(&mut runtime, kind, payload), "{kind}");
+        }
+        assert!(received.try_iter().next().is_none());
+
+        assert!(event(
+            &mut runtime,
+            "desk_settings_set",
+            json!({"enabled": true})
+        ));
+        assert!(matches!(received.try_recv(), Ok(Order::Check)));
+        assert!(runtime.snapshot.desk.as_ref().unwrap().settings.enabled);
+        assert!(event(
+            &mut runtime,
+            "desk_select",
+            json!({"agent": "claude"})
+        ));
+    }
+
+    #[test]
+    fn switching_desk_off_ends_its_process_and_keeps_its_conversation() {
+        let root = tempfile::tempdir().unwrap();
+        let (mut runtime, received) = runtime(root.path());
+        event(&mut runtime, "desk_select", json!({"agent": "claude"}));
+        assert!(event(
+            &mut runtime,
+            "desk_send",
+            json!({"text": "what runs now?"})
+        ));
+        sent(&received);
+        opened(&mut runtime, AdapterId::Claude);
+        let card = ask(&mut runtime);
+        assert!(runtime.desk_authority("test-node").is_ok());
+        let before = items(&runtime).len();
+
+        assert!(event(
+            &mut runtime,
+            "desk_settings_set",
+            json!({"enabled": false})
+        ));
+        let orders: Vec<Order> = received.try_iter().collect();
+        assert!(orders.iter().any(|order| matches!(order, Order::Cancel)));
+        assert!(orders.iter().any(|order| matches!(order, Order::End)));
+        assert_eq!(
+            runtime.desk_authority("test-node"),
+            Err("desk_not_running".into())
+        );
+        let items = items(&runtime);
+        assert!(items.len() >= before);
+        assert!(
+            items
+                .iter()
+                .any(|item| matches!(item, DeskItem::User { .. }))
+        );
+        assert!(items.iter().any(|item| matches!(item,
+            DeskItem::Approval { id, state: DeskApprovalState::Closed, .. } if *id == card)));
+        assert!(!runtime.snapshot.desk.as_ref().unwrap().settings.enabled);
     }
 
     #[test]
@@ -1315,5 +1487,90 @@ mod tests {
                 .try_iter()
                 .all(|order| !matches!(order, Order::Send(_)))
         );
+    }
+
+    fn kept_output(job: &str, id: &str) -> serde_json::Value {
+        json!({"kind": "output", "job": job, "output": {
+            "id": id, "kind": "image", "label": id, "thumb": null, "seen": true, "pr_state": null,
+            "device_id": "node", "checkout": "/repo", "path": format!("/repo/{id}"), "url": null,
+        }})
+    }
+
+    fn lane(runtime: &Runtime) -> crate::model::DeskLane {
+        runtime.snapshot.desk.as_ref().unwrap().lane.clone()
+    }
+
+    #[test]
+    fn the_lanes_pin_and_kept_tabs_are_kept_in_desks_store() {
+        let root = tempfile::tempdir().unwrap();
+        let (mut runtime, _) = runtime(root.path());
+        // B32: the pin is kept; pressing it again where it is changes nothing.
+        assert!(event(
+            &mut runtime,
+            "desk_lane",
+            json!({"action": "pin", "pinned": true})
+        ));
+        assert!(!event(
+            &mut runtime,
+            "desk_lane",
+            json!({"action": "pin", "pinned": true})
+        ));
+        // B31: a kept tab is kept once, and closing it lets it go.
+        let tab = kept_output("job-1", "compare.png");
+        assert!(event(
+            &mut runtime,
+            "desk_lane",
+            json!({"action": "keep", "tab": tab})
+        ));
+        assert!(!event(
+            &mut runtime,
+            "desk_lane",
+            json!({"action": "keep", "tab": tab})
+        ));
+        let mission = json!({"kind": "mission", "mission": "mission-1", "title": "Desk 1차"});
+        assert!(event(
+            &mut runtime,
+            "desk_lane",
+            json!({"action": "keep", "tab": mission})
+        ));
+        assert_eq!(lane(&runtime).kept.len(), 2);
+        assert!(lane(&runtime).pinned);
+        assert!(event(
+            &mut runtime,
+            "desk_lane",
+            json!({"action": "close", "tab": mission})
+        ));
+        let kept = lane(&runtime);
+        assert_eq!(
+            kept.kept.iter().map(|tab| tab.key()).collect::<Vec<_>>(),
+            ["output:job-1:compare.png"]
+        );
+        assert_eq!(
+            runtime.desk.stored.lane, kept,
+            "the store saves what the room shows"
+        );
+    }
+
+    #[test]
+    fn a_tab_past_the_lanes_cap_is_refused_and_the_kept_ones_stay() {
+        let root = tempfile::tempdir().unwrap();
+        let (mut runtime, _) = runtime(root.path());
+        for index in 0..crate::model::DESK_KEPT_TABS_MAX {
+            let tab = kept_output("job", &format!("{index}.png"));
+            assert!(event(
+                &mut runtime,
+                "desk_lane",
+                json!({"action": "keep", "tab": tab})
+            ));
+        }
+        let past = kept_output("job", "past.png");
+        assert!(!event(
+            &mut runtime,
+            "desk_lane",
+            json!({"action": "keep", "tab": past})
+        ));
+        let kept = lane(&runtime).kept;
+        assert_eq!(kept.len(), crate::model::DESK_KEPT_TABS_MAX);
+        assert_eq!(kept[0].key(), "output:job:0.png");
     }
 }

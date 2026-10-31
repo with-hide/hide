@@ -686,7 +686,7 @@ impl Runtime {
 /// file when `OUTPUT_EXTENSIONS` names its extension. A source file, a log or
 /// a configuration file the agent only opened is not one. Interim until the
 /// agent names its outputs itself (`hide output add`, Desk phase 2).
-fn is_output(display: &Display) -> bool {
+pub(super) fn is_output(display: &Display) -> bool {
     use crate::view_layout::DisplayKind;
     let name = match display.kind {
         DisplayKind::Browser => return true,

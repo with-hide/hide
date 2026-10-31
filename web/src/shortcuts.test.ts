@@ -37,10 +37,11 @@ describe("shortcut registry", () => {
     }
   });
 
-  it("marks exactly the ten moved chords", () => {
+  it("marks exactly the eleven moved chords", () => {
     const moved = REGISTRY.filter((command) => command.moved).map((command) => command.id).sort();
     // Chrome keeps ⇧⌘R (reload) and ⇧⌘B (bookmarks bar), so the PR list and the sidebar lens move to ⌥⇧ in a tab (PRD sidebar-task-lens D-32).
-    expect(moved).toEqual(["add_backlog", "close_pane", "close_tab", "new_tab", "previous_recent_area_tab", "recent_area_tab", "reopen_closed_tab", "settings", "open_sidebar_prs", "toggle_sidebar_lens"].sort());
+    // Chrome keeps Ctrl+Shift+J for its DevTools console on Windows and Linux, so Desk's ⌘J moves to ⌥⇧J in a tab (PRD session-docs-and-assistant B35).
+    expect(moved).toEqual(["add_backlog", "close_pane", "close_tab", "desk_terminal", "new_tab", "previous_recent_area_tab", "recent_area_tab", "reopen_closed_tab", "settings", "open_sidebar_prs", "toggle_sidebar_lens"].sort());
   });
 
   it("adds to the backlog with ⇧⌘M in the desktop app and ⌥⇧M in a browser, where Chrome keeps ⇧⌘M (PRD overview-device-tasks B37)", () => {
@@ -109,6 +110,7 @@ describe("shortcut registry", () => {
       toggle_lane_documents: "",
       open_project_memory: "⇧⌘L",
       open_sidebar_prs: "⇧⌘R",
+      desk_terminal: "⌘J",
       find_in_pane: "⌘F",
       save_file: "⌘S",
       keep_open: "⇧⌘K",
@@ -313,7 +315,7 @@ describe("browser pane chord overrides (S5 B9, B10)", () => {
       [
         "recent_area_tab", "previous_recent_area_tab", "next_tab", "previous_tab", "recent_panel", "previous_recent_panel",
         "close_pane", "split_down", "split_right", "text_larger", "text_reset", "text_smaller", "toggle_device_rail", "overview", "sidebar_projects", "toggle_zoom", "toggle_plan",
-        "toggle_sidebar_lens", "toggle_lane_project", "toggle_lane_memory", "toggle_lane_mission", "toggle_lane_explorer", "toggle_lane_changes", "open_project_memory", "open_sidebar_prs",
+        "toggle_sidebar_lens", "toggle_lane_project", "toggle_lane_memory", "toggle_lane_mission", "toggle_lane_explorer", "toggle_lane_changes", "open_project_memory", "open_sidebar_prs", "desk_terminal",
         "focus_next_agent_area", "focus_previous_agent_area", "grow_agent_area", "shrink_agent_area",
         "focus_next_view_area", "focus_previous_view_area", "grow_view_area", "shrink_view_area",
         "copy_path", "copy_relative_path",
@@ -460,6 +462,7 @@ describe("Windows and Linux (operator decision 2026-10-03)", () => {
       toggle_lane_documents: "",
       open_project_memory: "Alt+Shift+L",
       open_sidebar_prs: "Alt+Shift+R",
+      desk_terminal: "Ctrl+Shift+J",
       find_in_pane: "Ctrl+Shift+F",
       save_file: "Ctrl+Shift+S",
       keep_open: "Alt+Shift+K",
@@ -521,7 +524,8 @@ describe("Windows and Linux (operator decision 2026-10-03)", () => {
   });
 
   it("notes a browser chord as moved only where Chrome keeps the desktop chord on this system", () => {
-    expect(pc.filter((command) => command.moved).map((command) => command.id).sort()).toEqual(["close_tab", "new_tab", "previous_recent_area_tab", "recent_area_tab", "reopen_closed_tab", "toggle_sidebar_lens"]);
+    expect(pc.filter((command) => command.moved).map((command) => command.id).sort()).toEqual(["close_tab", "desk_terminal", "new_tab", "previous_recent_area_tab", "recent_area_tab", "reopen_closed_tab", "toggle_sidebar_lens"]);
+    expect(sheetRows("Navigate", pc, "browser", "pc").find((row) => row.id === "desk_terminal")).toMatchObject({ chord: "Alt+Shift+J", moved: true, movedFrom: "Ctrl+Shift+J" });
     expect(sheetRows("Tabs", pc, "browser", "pc").find((row) => row.id === "new_tab")).toMatchObject({ chord: "Alt+T", moved: true, movedFrom: "Ctrl+Shift+T" });
     // Chrome keeps Alt+Shift+T for its toolbar, and the macOS ⌥⇧T is those keys.
     expect(sheetRows("Tabs", pc, "browser", "pc").find((row) => row.id === "reopen_closed_tab")).toMatchObject({ chord: "Ctrl+Alt+Shift+T", moved: true, movedFrom: "Alt+Shift+T" });

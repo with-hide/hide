@@ -21,6 +21,39 @@ pub struct DeskSnapshot {
     /// Approval cards waiting for the operator.
     pub approvals_waiting: usize,
     pub settings: DeskSettings,
+    pub lane: DeskLane,
+}
+
+/// Desk's lane as the core keeps it across a restart (D-64, B31, B32): its
+/// pin, and the tabs the operator kept in its 보기 column. Which columns
+/// show, the preview tab and the thread in the tool column are the window's.
+#[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
+pub struct DeskLane {
+    pub pinned: bool,
+    /// Oldest first, at most `DESK_KEPT_TABS_MAX`.
+    pub kept: Vec<DeskKeptTab>,
+}
+
+/// Tabs the 보기 column keeps; keeping one more is refused `desk_tabs_full`.
+pub const DESK_KEPT_TABS_MAX: usize = 16;
+
+/// A tab kept in Desk's 보기 column: a job's output as its card listed it
+/// when it was kept, or a mission's map (B34).
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum DeskKeptTab {
+    Output { job: String, output: DeskJobOutput },
+    Mission { mission: String, title: String },
+}
+
+impl DeskKeptTab {
+    /// The tab's identity: one tab per output of a job, one per mission.
+    pub fn key(&self) -> String {
+        match self {
+            Self::Output { job, output } => format!("output:{job}:{}", output.id),
+            Self::Mission { mission, .. } => format!("mission:{mission}"),
+        }
+    }
 }
 
 /// The `desk_jobs` section: the sessions Desk started and the ones waiting
@@ -28,6 +61,11 @@ pub struct DeskSnapshot {
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct DeskJobsSnapshot {
     pub jobs: Vec<DeskJobSnapshot>,
+    /// The workers of the missions Desk's jobs conduct, as cards of their
+    /// own, so the Threads list opens a Conductor to them and a mission map's
+    /// node opens a worker's thread (B28, B34); none is Desk's job, and none
+    /// is drawn in the chat.
+    pub workers: Vec<DeskJobSnapshot>,
 }
 
 /// One session Desk started, or one waiting to start.
@@ -103,7 +141,7 @@ pub struct DeskJobPlan {
     pub total: usize,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct DeskJobOutput {
     pub id: String,
     pub kind: DeskOutputKind,
@@ -113,6 +151,14 @@ pub struct DeskJobOutput {
     /// A pull request's one state, the PR mark's (`PrState::of`), so it
     /// reads the same on a card, in a thread and in 결과물.
     pub pr_state: Option<crate::model::PrState>,
+    /// Where a View's file is read from, so the lane's 보기 column shows it
+    /// with the file viewers without opening a View of its own (B31): the
+    /// device and the checkout whose View list holds it, and the file. A
+    /// page and a pull request carry their address instead.
+    pub device_id: Option<String>,
+    pub checkout: Option<String>,
+    pub path: Option<String>,
+    pub url: Option<String>,
 }
 
 /// A pull request the job's session holds or made, as its PR mark draws it.
@@ -122,7 +168,7 @@ pub struct DeskPullRequest {
     pub state: crate::model::PrState,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum DeskOutputKind {
     Image,
@@ -131,7 +177,9 @@ pub enum DeskOutputKind {
     Pr,
 }
 
-/// The mission a job conducts, as its card's `미션 k/n` chip draws it.
+/// The mission a job conducts, as its card's `미션 k/n` chip draws it; the
+/// chip's colour is the screen's, from `status` and `deciding`, by the rule
+/// every mission chip follows.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct DeskJobMission {
     pub id: String,
@@ -139,7 +187,6 @@ pub struct DeskJobMission {
     pub status: crate::missions::MissionStatus,
     pub done: usize,
     pub total: usize,
-    pub tone: String,
     pub deciding: bool,
 }
 
@@ -611,6 +658,11 @@ pub enum DeskLocation {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct DeskSettings {
+    /// Settings › Desk's switch (D-76): off by default. While off no entry
+    /// to Desk is drawn, its process does not run and every `desk_*` event
+    /// but this setting is refused; its sessions stay ordinary sessions.
+    #[serde(default)]
+    pub enabled: bool,
     /// The agent a new conversation starts with.
     pub default_agent: Option<AdapterId>,
     pub location: DeskLocation,
@@ -621,6 +673,7 @@ pub struct DeskSettings {
 impl Default for DeskSettings {
     fn default() -> Self {
         Self {
+            enabled: false,
             default_agent: None,
             location: DeskLocation::Desk,
             cap: DESK_CAP_DEFAULT,

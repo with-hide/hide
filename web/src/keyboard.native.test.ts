@@ -44,7 +44,7 @@ class PlatformKeyboardEvent extends Event {
 }
 
 const bridge: HostBridge = {
-  kind: "electron", platform: "darwin", onCommand: () => () => {}, reportBindings() {}, reportLanguage() {},
+  kind: "electron", platform: "darwin", onCommand: () => () => {}, reportBindings() {}, reportLanguage() {}, reportDesk() {},
   revealPath() {}, quit() {}, openPractice() {}, pickFolder: async () => null, probePaths: async () => [], openPath() {}, notify() {}, onNotificationOpen: () => () => {}, withdrawNotifications() {}, notificationPermission: async () => "unsupported", onWindowChrome: () => () => undefined, editorAvailable: async () => false, openInEditor: () => undefined, restartHerdr: async () => "unavailable", openNotificationSettings() {}, reportBadge() {},
   updates: { onStatus: () => () => {}, check() {}, restart() {}, setPrerelease() {} },
   browser: {

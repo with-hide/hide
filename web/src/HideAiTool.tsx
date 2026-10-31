@@ -1,5 +1,6 @@
 import { BrainIcon, SettingsIcon, XIcon } from "lucide-react";
 import { useEffect, useState } from "react";
+import { ProjectLanePin } from "./ProjectLanePin";
 import type { Actions } from "./actions";
 import { HideAiExplainer } from "./components/hide-ai-explainer";
 import { Button } from "./components/ui/button";
@@ -77,6 +78,7 @@ function Head({ projectId, project, actions }: { projectId: string; project: Pro
           <SettingsIcon />
         </Button>
       )}
+      <ProjectLanePin column="tool" actions={actions} />
       <Hint label={t("panes.lane.closeTool")}>
         <Button variant="ghost" size="icon-sm" className="text-muted-foreground" aria-label={t("panes.lane.closeTool")} data-lane-tool-close="memory" onClick={() => actions.closeTool()}>
           <XIcon />
