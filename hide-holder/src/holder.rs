@@ -671,6 +671,7 @@ impl Holder {
                 hide_holder_protocol::record::UNWRITTEN_EVENT,
                 &[
                     ("reason", reason.name().into()),
+                    ("incarnation", record.incarnation().into()),
                     ("exit_code", json!(closed.exit_code)),
                     ("left", json!(closed.left)),
                     ("error", error.as_str().into()),

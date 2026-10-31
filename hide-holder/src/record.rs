@@ -11,6 +11,7 @@ use std::path::PathBuf;
 use hide_holder_protocol::record::{self, End, Identity, PaneRecord, Phase};
 
 /// Where the record is and which start this holder is.
+#[derive(Clone)]
 pub struct Claim {
     record: PathBuf,
     lock: PathBuf,
@@ -48,6 +49,11 @@ impl Claim {
             Ok(true)
         })?;
         Ok(claim)
+    }
+
+    /// The start this holder is.
+    pub fn incarnation(&self) -> u64 {
+        self.incarnation
     }
 
     /// Records the pane's program, which leads its terminal session, so what

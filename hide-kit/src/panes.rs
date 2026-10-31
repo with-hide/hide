@@ -31,7 +31,8 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::ffi::OsString;
 use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
-use std::sync::mpsc;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Mutex, PoisonError, mpsc};
 use std::time::{Duration, Instant};
 
 use hide_holder_protocol::record::{
@@ -65,6 +66,15 @@ pub const START_LIMIT: Duration = Duration::from_secs(10);
 /// How long a holder asked to end has to say it ended: its tree's end (5 s),
 /// its terminal's drain (5 s) and its last message.
 pub const CLOSE_LIMIT: Duration = Duration::from_secs(20);
+
+/// How many panes a reconcile judges at once.
+pub const RECONCILE_WORKERS: usize = 8;
+
+/// How long a node's reconcile takes up panes for; the judgments under way
+/// then run to their own bounds, the longest a close's (connect, end and
+/// exit, about 42 s), so a reconcile ends within about 72 s however many
+/// panes it finds.
+pub const RECONCILE_BUDGET: Duration = Duration::from_secs(30);
 
 /// How long a connection to a holder may take to be answered.
 const CONNECT_LIMIT: Duration = Duration::from_secs(2);
@@ -118,6 +128,9 @@ pub enum StartRefusal {
     OtherOwner(Box<PaneRecord>),
     /// The holder could not be started, or said it failed.
     Failed(String),
+    /// An earlier start of the pane is over but these processes of it still
+    /// run, so the pane's id is not free yet.
+    EarlierRuns(Vec<u32>),
 }
 
 impl std::fmt::Display for StartRefusal {
@@ -140,6 +153,10 @@ impl std::fmt::Display for StartRefusal {
                 record.pane
             ),
             Self::Failed(why) => write!(f, "the holder did not start: {why}"),
+            Self::EarlierRuns(left) => write!(
+                f,
+                "an earlier start of the pane is over and {left:?} of it still run"
+            ),
         }
     }
 }
@@ -166,6 +183,12 @@ pub enum Judgment {
     /// What was found could not be written: the record changed meanwhile or
     /// the write failed. The next reconcile judges it again.
     Unsettled(String),
+    /// Its holder was asked to end and still runs, or could not be asked;
+    /// the record stays `closing` and the next reconcile asks again.
+    Closing(PaneRecord, String),
+    /// Not judged within the reconcile's budget; the next reconcile judges
+    /// it.
+    Pending(PaneRecord),
 }
 
 /// A holder no record names, or what one left, and what was done about it.
@@ -189,6 +212,9 @@ pub enum OrphanOutcome {
     StaleSocketRemoved,
     /// Left running, with the reason it could not be judged or ended.
     Kept(String),
+    /// Not taken up within the reconcile's budget; the next reconcile takes
+    /// it up.
+    Pending,
 }
 
 /// What a reconcile found and did.
@@ -198,6 +224,28 @@ pub struct Reconciled {
     pub orphans: Vec<Orphan>,
     /// Records that could not be listed at all.
     pub failed: Option<String>,
+}
+
+impl Reconciled {
+    /// The panes and orphans left for the next reconcile.
+    pub fn pending(&self) -> usize {
+        let panes = self
+            .panes
+            .values()
+            .filter(|judgment| matches!(judgment, Judgment::Pending(_)))
+            .count();
+        let orphans = self
+            .orphans
+            .iter()
+            .filter(|orphan| orphan.outcome == OrphanOutcome::Pending)
+            .count();
+        panes + orphans
+    }
+
+    /// Whether everything found was taken up, so no reconcile need follow.
+    pub fn is_complete(&self) -> bool {
+        self.failed.is_none() && self.pending() == 0
+    }
 }
 
 /// Why a close could not be asked.
@@ -302,7 +350,11 @@ impl Panes {
     }
 
     /// Starts `request`'s pane from `source`'s version folder, or answers
-    /// the pane its id already started.
+    /// the pane its id already started. The pane id is the start's key: a
+    /// pane that lives (starting, running or closing) is answered as it is,
+    /// one that is over (ended, or its holder gone) is settled, cleared and
+    /// started again as a new incarnation, so a caller asks the same start
+    /// again whatever became of the last one.
     pub fn start(
         &self,
         request: &StartRequest,
@@ -318,16 +370,58 @@ impl Panes {
             .map(|name| name.to_string_lossy().into_owned())
             .unwrap_or_default();
         let path = layout::pane_record(&self.state_dir, &request.pane);
-        let reserved = {
-            let _lock = self.lock().map_err(StartRefusal::Failed)?;
+        // One settle of an earlier start that is over but not yet written so,
+        // outside the lock, then one more look.
+        let mut settled = false;
+        let reserved = loop {
+            let lock = self.lock().map_err(StartRefusal::Failed)?;
             match record::read(&path) {
                 Ok(Some(existing)) if existing.owner != self.owner => {
                     return Err(StartRefusal::OtherOwner(Box::new(existing)));
                 }
-                Ok(Some(existing)) if existing.spec == spec => {
-                    return Ok(Started::Existing(existing));
-                }
-                Ok(Some(existing)) => return Err(StartRefusal::Conflict(Box::new(existing))),
+                Ok(Some(existing)) => match self.state_of(&existing) {
+                    Earlier::Lives if existing.spec == spec => {
+                        return Ok(Started::Existing(existing));
+                    }
+                    Earlier::Lives => return Err(StartRefusal::Conflict(Box::new(existing))),
+                    Earlier::Over => {
+                        // Its log stays: the next holder writes on after it,
+                        // and its lines name their own incarnation.
+                        let _ = hide_platform::ipc::remove_leftover(&layout::holder_socket(
+                            &self.state_dir,
+                            &request.pane,
+                        ));
+                        std::fs::remove_file(&path).map_err(|error| {
+                            StartRefusal::Failed(format!(
+                                "the earlier record could not be removed: {error}"
+                            ))
+                        })?;
+                        self.emit(
+                            "pane_holder.start_again",
+                            json!({
+                                "pane": request.pane,
+                                "earlier": existing.incarnation,
+                                "reason": existing.end.as_ref().map(|end| end.reason.name()),
+                            }),
+                        );
+                    }
+                    Earlier::Unsettled if !settled => {
+                        drop(lock);
+                        settled = true;
+                        self.settle_earlier(&existing);
+                        continue;
+                    }
+                    Earlier::Unsettled => {
+                        let left = match existing.end.as_ref().map(|end| end.left.clone()) {
+                            Some(left) if !left.is_empty() => left,
+                            _ => existing
+                                .holder
+                                .map(|holder| vec![holder.pid])
+                                .unwrap_or_default(),
+                        };
+                        return Err(StartRefusal::EarlierRuns(left));
+                    }
+                },
                 Err(error) => return Err(StartRefusal::RecordUnreadable(error)),
                 Ok(None) => {}
             }
@@ -347,8 +441,8 @@ impl Panes {
                 incarnation,
                 phase: Phase::Preparing,
                 protocol: PROTOCOL_VERSION,
-                version_folder,
-                spec,
+                version_folder: version_folder.clone(),
+                spec: spec.clone(),
                 reserved_at_unix_ms: record::now_unix_ms(),
                 boot: self.boot.clone(),
                 holder: None,
@@ -358,11 +452,51 @@ impl Panes {
             record::write(&path, &reserved).map_err(|error| {
                 StartRefusal::Failed(format!("the record could not be written: {error}"))
             })?;
-            reserved
+            break reserved;
         };
         let started = self.start_holder(request, &reservation, &reserved);
         drop(reservation);
         started.map(Started::Started).map_err(StartRefusal::Failed)
+    }
+
+    /// Settles an earlier start that is over but not written so, outside
+    /// the lock: a holder that wrote its end is given its bound to exit, and
+    /// anything else is judged as a reconcile judges it.
+    fn settle_earlier(&self, existing: &PaneRecord) {
+        match existing.holder {
+            Some(holder) if existing.phase == Phase::Ended && holder.runs() => {
+                self.end_unconfirmed_start(existing);
+                wait_gone(holder, START_LIMIT);
+            }
+            _ => {
+                let _ = self.judge(existing);
+            }
+        }
+    }
+
+    /// Whether an earlier start of a pane still holds its id. Read under the
+    /// lock, so it looks only at the record and the processes it names.
+    fn state_of(&self, existing: &PaneRecord) -> Earlier {
+        let runs = existing.holder.is_some_and(|holder| holder.runs());
+        let other_boot =
+            existing.boot.is_some() && self.boot.is_some() && existing.boot != self.boot;
+        match existing.phase {
+            Phase::Ended if runs => Earlier::Unsettled,
+            Phase::Ended => Earlier::Over,
+            _ if other_boot => Earlier::Unsettled,
+            _ if runs => Earlier::Lives,
+            _ if existing.holder.is_some() => Earlier::Unsettled,
+            // Reserved with no holder written in yet: a start under way
+            // within its bound.
+            _ => {
+                let age = record::now_unix_ms().saturating_sub(existing.reserved_at_unix_ms);
+                if existing.phase == Phase::Preparing && Duration::from_millis(age) < START_LIMIT {
+                    Earlier::Lives
+                } else {
+                    Earlier::Unsettled
+                }
+            }
+        }
     }
 
     fn start_holder(
@@ -409,8 +543,7 @@ impl Panes {
             Err(error) => {
                 drop(writer);
                 let reason = format!("{} could not start: {error}", reservation.program.display());
-                self.settle_failed_start(reserved, None, &reason);
-                return Err(reason);
+                return self.settle_failed_start(reserved, None, reason);
             }
         };
         drop(writer);
@@ -447,42 +580,76 @@ impl Panes {
                 if let Some(holder) = holder {
                     wait_gone(holder, START_LIMIT);
                 }
-                self.settle_failed_start(reserved, holder, &reason);
-                Err(reason)
+                self.settle_failed_start(reserved, holder, reason)
             }
             None => {
                 let reason = format!("the holder said nothing within {} s", START_LIMIT.as_secs());
-                self.settle_failed_start(reserved, holder, &reason);
-                Err(reason)
+                self.settle_failed_start(reserved, holder, reason)
             }
         }
     }
 
-    /// After a start that failed: a reservation whose holder is gone, or
-    /// never ran, is removed, so the same start may be asked again; one whose
-    /// holder may still run is ended as `start_unconfirmed`, which that
-    /// holder finds and ends itself on.
-    fn settle_failed_start(&self, reserved: &PaneRecord, holder: Option<Identity>, reason: &str) {
+    /// After a start that did not say it was ready: a holder that wrote
+    /// itself running meanwhile (a late `ready`) is taken as started; a
+    /// reservation whose holder is gone, or never ran, is removed, so the same
+    /// start may be asked again; one whose holder still runs is ended
+    /// `start_unconfirmed` under the lock and its holder ended whole outside
+    /// it.
+    fn settle_failed_start(
+        &self,
+        reserved: &PaneRecord,
+        holder: Option<Identity>,
+        reason: String,
+    ) -> Result<PaneRecord, String> {
         let path = layout::pane_record(&self.state_dir, &reserved.pane);
-        let outcome = (|| -> Result<&'static str, String> {
+        let decided = (|| -> Result<FailedStart, String> {
             let _lock = self.lock()?;
-            let Ok(Some(mut current)) = record::read(&path) else {
-                return Ok("record_gone");
+            let mut current = match record::read(&path) {
+                Ok(Some(current)) => current,
+                Ok(None) => return Ok(FailedStart::Gone),
+                Err(error) => return Err(error.to_string()),
             };
-            if current.incarnation != reserved.incarnation || current.phase == Phase::Ended {
-                return Ok("record_moved_on");
+            if current.incarnation != reserved.incarnation {
+                return Ok(FailedStart::MovedOn);
+            }
+            let written_in = current
+                .holder
+                .is_some_and(|named| holder.is_none_or(|holder| holder == named));
+            let took_place = match current.phase {
+                Phase::Preparing => false,
+                Phase::Running | Phase::Closing => true,
+                Phase::Ended => !matches!(
+                    current.end.as_ref().map(|end| end.reason),
+                    Some(EndReason::StartFailed | EndReason::StartUnconfirmed)
+                ),
+            };
+            if written_in && took_place {
+                return Ok(FailedStart::Started(Box::new(current)));
+            }
+            if current.phase == Phase::Ended {
+                return Ok(FailedStart::MovedOn);
             }
             let holder = current.holder.or(holder);
-            if holder.is_none_or(|holder| !holder.runs()) {
-                std::fs::remove_file(&path).map_err(|error| error.to_string())?;
-                return Ok("removed");
+            match holder.filter(|holder| holder.runs()) {
+                None => {
+                    std::fs::remove_file(&path).map_err(|error| error.to_string())?;
+                    Ok(FailedStart::Removed)
+                }
+                Some(holder) => {
+                    current.holder = Some(holder);
+                    current.phase = Phase::Ended;
+                    current.end = Some(End::new(EndReason::StartUnconfirmed, reason.as_str()));
+                    record::write(&path, &current).map_err(|error| error.to_string())?;
+                    Ok(FailedStart::Unconfirmed(holder))
+                }
             }
-            current.holder = holder;
-            current.phase = Phase::Ended;
-            current.end = Some(End::new(EndReason::StartUnconfirmed, reason));
-            record::write(&path, &current).map_err(|error| error.to_string())?;
-            Ok("start_unconfirmed")
         })();
+        let left = match &decided {
+            // Ended outside the lock: the record no longer reserves its start,
+            // so nothing writes it in meanwhile.
+            Ok(FailedStart::Unconfirmed(holder)) => end_holder_tree(*holder).err(),
+            _ => None,
+        };
         self.emit(
             "pane_holder.start_failed",
             json!({
@@ -490,9 +657,14 @@ impl Panes {
                 "incarnation": reserved.incarnation,
                 "holder": holder.map(|holder| holder.pid),
                 "reason": reason,
-                "record": outcome.as_ref().map_or_else(|error| error.as_str(), |done| *done),
+                "record": decided.as_ref().map_or_else(|error| error.clone(), |done| done.name().to_owned()),
+                "left": left,
             }),
         );
+        match decided {
+            Ok(FailedStart::Started(record)) => Ok(*record),
+            _ => Err(reason),
+        }
     }
 
     /// Asks the pane to end and waits until it has, within [`CLOSE_LIMIT`],
@@ -525,36 +697,34 @@ impl Panes {
             "pane_holder.closing",
             json!({ "pane": pane, "incarnation": current.incarnation, "holder": current.holder.map(|h| h.pid) }),
         );
-        match current.holder {
+        let judgment = match current.holder {
             Some(holder) if holder.runs() => {
                 if let Err(why) = self.terminate(pane, Some(holder)) {
                     return Err(CloseError::Failed(why));
                 }
                 wait_gone(holder, CLOSE_LIMIT);
+                self.after_close(pane, holder, None)
             }
-            _ => {}
-        }
-        // The holder writes its end as it goes; what is settled is the
-        // record as it is now.
-        let current = match self.record(pane) {
-            Ok(Some(after)) if after.phase == Phase::Ended => return Ok(after),
-            Ok(Some(after)) => after,
-            Ok(None) => return Err(CloseError::NoRecord),
-            Err(error) => return Err(CloseError::RecordUnreadable(error)),
+            // The holder is gone: the record says why, or it is settled as a
+            // reconcile settles a lost holder.
+            _ => match self.record(pane) {
+                Ok(Some(after)) => self.judge(&after),
+                Ok(None) => return Err(CloseError::NoRecord),
+                Err(error) => return Err(CloseError::RecordUnreadable(error)),
+            },
         };
-        let mut found = Reconciled::default();
-        self.settle(&current, &mut found);
-        match found.panes.remove(pane) {
-            Some(
-                Judgment::Ended(record)
-                | Judgment::Alive(record)
-                | Judgment::LeftoversLeft(record)
-                | Judgment::Starting(record),
-            ) => Ok(record),
-            _ => self
-                .record(pane)
-                .map_err(CloseError::RecordUnreadable)?
-                .ok_or(CloseError::NoRecord),
+        match judgment {
+            Judgment::Ended(record) => Ok(record),
+            Judgment::LeftoversLeft(record) => Err(CloseError::Failed(format!(
+                "its holder is gone and left {:?} running",
+                record.end.map(|end| end.left).unwrap_or_default()
+            ))),
+            Judgment::Closing(_, why) | Judgment::Unsettled(why) | Judgment::Unreadable(why) => {
+                Err(CloseError::Failed(why))
+            }
+            other => Err(CloseError::Failed(format!(
+                "the pane did not end: {other:?}"
+            ))),
         }
     }
 
@@ -601,13 +771,22 @@ impl Panes {
                 Ok(record) if record.phase == Phase::Ended => ended.push((
                     record.end.as_ref().map_or(0, |end| end.at_unix_ms),
                     pane.clone(),
+                    record.holder,
                 )),
                 _ => live += 1,
             }
         }
         if ended.len() > ENDED_KEPT {
-            ended.sort();
-            for (_, pane) in &ended[..ended.len() - ENDED_KEPT] {
+            ended.sort_by(|left, right| (left.0, &left.1).cmp(&(right.0, &right.1)));
+            for (_, pane, holder) in &ended[..ended.len() - ENDED_KEPT] {
+                // A holder still exiting keeps its record until it is gone.
+                if let Some(holder) = holder.filter(|holder| holder.runs()) {
+                    self.emit(
+                        "pane_holder.ended_kept",
+                        json!({ "pane": pane, "holder": holder.pid, "reason": "holder_runs" }),
+                    );
+                    continue;
+                }
                 self.remove_pane_files(pane);
                 let _ = std::fs::remove_file(layout::pane_record(&self.state_dir, pane));
                 self.emit(
@@ -670,7 +849,15 @@ impl Panes {
     /// Reads every record and every holder this state folder runs, adopts
     /// what a record names, settles what lost holders left, and ends the
     /// holders no record names. See the module documentation.
-    pub fn reconcile(&self) -> Reconciled {
+    ///
+    /// Panes are judged by up to [`RECONCILE_WORKERS`] at once, and none is
+    /// taken up after `budget` has passed: a judgment already under way runs
+    /// to its own bound, and what was not taken up is answered `Pending` (an
+    /// orphan `OrphanOutcome::Pending`) for the next reconcile, which the
+    /// caller asks for while [`Reconciled::is_complete`] says no.
+    pub fn reconcile(&self, budget: Duration) -> Reconciled {
+        let started = Instant::now();
+        let deadline = started + budget;
         let mut found = Reconciled::default();
         let scan = match self.lock().and_then(|_lock| self.scan()) {
             Ok(scan) => scan,
@@ -681,10 +868,11 @@ impl Panes {
             }
         };
         let mut named_panes = BTreeSet::new();
+        let mut readable = Vec::new();
         for (pane, read) in scan {
             named_panes.insert(pane.clone());
             match read {
-                Ok(current) => self.settle(&current, &mut found),
+                Ok(current) => readable.push(current),
                 Err(why) => {
                     self.emit(
                         "pane_holder.record_unreadable",
@@ -696,11 +884,32 @@ impl Panes {
                 }
             }
         }
-        self.end_orphans(&named_panes, &mut found);
+        let judged = bounded(&readable, deadline, |current| self.judge(current));
+        for (current, judgment) in readable.into_iter().zip(judged) {
+            let judgment = judgment.unwrap_or_else(|| Judgment::Pending(current.clone()));
+            found.panes.insert(current.pane, judgment);
+        }
+        let candidates = self.orphan_candidates(&named_panes, &mut found.orphans);
+        let ended = bounded(&candidates, deadline, |candidate| {
+            self.end_orphan(
+                candidate.pane.as_deref(),
+                &candidate.socket,
+                candidate.holder,
+            )
+        });
+        for (candidate, outcome) in candidates.into_iter().zip(ended) {
+            found.orphans.push(Orphan {
+                pane: candidate.pane,
+                holder: candidate.holder,
+                outcome: outcome.unwrap_or(OrphanOutcome::Pending),
+            });
+        }
         self.emit(
             "pane_holder.reconciled",
             json!({
                 "panes": found.panes.len(),
+                "pending": found.pending(),
+                "took_ms": started.elapsed().as_millis() as u64,
                 "orphans": found.orphans.iter().map(|orphan| json!({
                     "pane": orphan.pane,
                     "holder": orphan.holder.map(|h| h.pid),
@@ -712,7 +921,7 @@ impl Panes {
     }
 
     /// Judges one record and does what it calls for.
-    fn settle(&self, current: &PaneRecord, found: &mut Reconciled) {
+    fn judge(&self, current: &PaneRecord) -> Judgment {
         let pane = current.pane.clone();
         let judgment = if current.owner != self.owner {
             Judgment::OtherOwner(current.clone())
@@ -736,23 +945,15 @@ impl Panes {
             ended
         } else {
             match current.holder {
-                Some(holder) if holder.runs() => {
-                    if current.phase == Phase::Closing {
-                        // A close a node asked for and did not see through.
-                        if self.terminate(&pane, Some(holder)).is_ok() {
-                            wait_gone(holder, CLOSE_LIMIT);
-                        }
-                        match self.record(&pane) {
-                            Ok(Some(after)) if after.phase == Phase::Ended => {
-                                Judgment::Ended(after)
-                            }
-                            Ok(Some(after)) => Judgment::Alive(after),
-                            _ => Judgment::Alive(current.clone()),
-                        }
-                    } else {
-                        Judgment::Alive(current.clone())
+                Some(holder) if holder.runs() && current.phase == Phase::Closing => {
+                    // A close a node asked for and did not see through.
+                    let asked = self.terminate(&pane, Some(holder));
+                    if asked.is_ok() {
+                        wait_gone(holder, CLOSE_LIMIT);
                     }
+                    self.after_close(&pane, holder, asked.err())
                 }
+                Some(holder) if holder.runs() => Judgment::Alive(current.clone()),
                 Some(holder) => self.settle_lost(current, holder),
                 None => {
                     let age = record::now_unix_ms().saturating_sub(current.reserved_at_unix_ms);
@@ -781,7 +982,27 @@ impl Panes {
                 }),
             );
         }
-        found.panes.insert(pane, judgment);
+        judgment
+    }
+
+    /// The record of a pane whose holder was asked to end and given its
+    /// bound: ended, lost without writing its end, or still closing.
+    fn after_close(&self, pane: &str, holder: Identity, refused: Option<String>) -> Judgment {
+        match self.record(pane) {
+            Ok(Some(after)) if after.phase == Phase::Ended => Judgment::Ended(after),
+            Ok(Some(after)) if !holder.runs() => self.settle_lost(&after, holder),
+            Ok(Some(after)) => Judgment::Closing(
+                after,
+                refused.unwrap_or_else(|| {
+                    format!(
+                        "it was asked to end and still runs after {} s",
+                        CLOSE_LIMIT.as_secs()
+                    )
+                }),
+            ),
+            Ok(None) => Judgment::Unsettled("the record was removed while it was settled".into()),
+            Err(error) => Judgment::Unreadable(error.to_string()),
+        }
     }
 
     /// A start given up on whose holder still runs, stuck before it read
@@ -817,7 +1038,7 @@ impl Panes {
             Ok(_) => return Judgment::Unsettled("the record changed while it was settled".into()),
             Err(error) => return Judgment::Unsettled(error.to_string()),
         }
-        let mut end = self.logged_end(&current.pane, holder).unwrap_or_else(|| {
+        let mut end = self.logged_end(current, holder).unwrap_or_else(|| {
             End::new(
                 EndReason::HolderLost,
                 "the holder ended without saying why (killed or crashed)",
@@ -849,8 +1070,8 @@ impl Panes {
     }
 
     /// The end the holder logged it could not record, if it did.
-    fn logged_end(&self, pane: &str, holder: Identity) -> Option<End> {
-        let log = layout::holder_log(&self.state_dir, pane);
+    fn logged_end(&self, current: &PaneRecord, holder: Identity) -> Option<End> {
+        let log = layout::holder_log(&self.state_dir, &current.pane);
         let mut aside = log.clone().into_os_string();
         aside.push(".1");
         for file in [log, PathBuf::from(aside)] {
@@ -861,8 +1082,11 @@ impl Panes {
                 let Ok(event) = serde_json::from_str::<serde_json::Value>(line) else {
                     continue;
                 };
+                // The line of this start's holder: a pane started again logs
+                // into the same file.
                 if event["event"] != record::UNWRITTEN_EVENT
                     || event["holder"].as_u64() != Some(u64::from(holder.pid))
+                    || event["incarnation"].as_u64() != Some(current.incarnation)
                 {
                     continue;
                 }
@@ -947,24 +1171,41 @@ impl Panes {
         }
     }
 
-    /// Finds the holders this state folder runs that no record names, by
-    /// the version folders' programs and the sockets in the state folder, and
-    /// ends each it can judge.
-    fn end_orphans(&self, named_panes: &BTreeSet<String>, found: &mut Reconciled) {
+    /// The holders this state folder runs that no record names, found by
+    /// the version folders' programs and the sockets in the state folder;
+    /// what cannot be judged is put in `kept` with its reason, and a socket
+    /// file no process holds is removed. Nothing is ended here.
+    fn orphan_candidates(
+        &self,
+        named_panes: &BTreeSet<String>,
+        kept: &mut Vec<Orphan>,
+    ) -> Vec<Candidate> {
         let panes_dir = layout::holder_panes(&self.state_dir);
+        let mut candidates = Vec::new();
         let mut sockets_seen = BTreeSet::new();
-        for (holder, version) in self.holder_processes(&mut found.orphans) {
+        let mut keep = |pane: Option<String>, holder: Option<Identity>, why: String| {
+            kept.push(Orphan {
+                pane,
+                holder,
+                outcome: OrphanOutcome::Kept(why),
+            });
+        };
+        let (processes, unlisted) = self.holder_processes();
+        for why in unlisted {
+            keep(None, None, why);
+        }
+        for (holder, version) in processes {
             let arguments = match hide_platform::process::arguments(holder.pid) {
                 Ok(arguments) => arguments,
                 Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
                 Err(error) => {
-                    found.orphans.push(Orphan {
-                        pane: None,
-                        holder: Some(holder),
-                        outcome: OrphanOutcome::Kept(format!(
+                    keep(
+                        None,
+                        Some(holder),
+                        format!(
                             "its arguments could not be read, so its state folder is unknown: {error}"
-                        )),
-                    });
+                        ),
+                    );
                     continue;
                 }
             };
@@ -981,13 +1222,13 @@ impl Panes {
                 None | Some(Ok(false)) => continue,
                 Some(Err(error)) if error.kind() == std::io::ErrorKind::NotFound => continue,
                 Some(Err(error)) => {
-                    found.orphans.push(Orphan {
-                        pane: None,
-                        holder: Some(holder),
-                        outcome: OrphanOutcome::Kept(format!(
+                    keep(
+                        None,
+                        Some(holder),
+                        format!(
                             "its socket's folder could not be compared with this state folder's: {error}"
-                        )),
-                    });
+                        ),
+                    );
                     continue;
                 }
             }
@@ -1005,24 +1246,21 @@ impl Panes {
                 continue;
             }
             if version < OLDEST_HOLDER_VERSION {
-                found.orphans.push(Orphan {
+                keep(
                     pane,
-                    holder: Some(holder),
-                    outcome: OrphanOutcome::Kept(format!(
-                        "it speaks version {version}, older than this build speaks to"
-                    )),
-                });
+                    Some(holder),
+                    format!("it speaks version {version}, older than this build speaks to"),
+                );
                 continue;
             }
-            let outcome = self.end_orphan(pane.as_deref(), &socket, Some(holder));
-            found.orphans.push(Orphan {
+            candidates.push(Candidate {
                 pane,
+                socket,
                 holder: Some(holder),
-                outcome,
             });
         }
         let Ok(entries) = std::fs::read_dir(&panes_dir) else {
-            return;
+            return candidates;
         };
         for entry in entries.flatten() {
             let path = entry.path();
@@ -1040,23 +1278,31 @@ impl Panes {
             {
                 continue;
             }
-            let outcome = match hide_platform::ipc::remove_leftover(&path) {
-                Ok(_) => OrphanOutcome::StaleSocketRemoved,
+            match hide_platform::ipc::remove_leftover(&path) {
+                Ok(_) => kept.push(Orphan {
+                    pane: Some(pane),
+                    holder: None,
+                    outcome: OrphanOutcome::StaleSocketRemoved,
+                }),
+                // A listener no process scan found: one reachable only
+                // through its socket.
                 Err(error) if error.kind() == std::io::ErrorKind::AddrInUse => {
-                    // A listener no process scan found: one reachable only
-                    // through its socket.
-                    self.end_orphan(Some(&pane), &path, None)
+                    candidates.push(Candidate {
+                        pane: Some(pane),
+                        socket: path,
+                        holder: None,
+                    });
                 }
-                Err(error) => {
-                    OrphanOutcome::Kept(format!("its socket could not be judged: {error}"))
-                }
-            };
-            found.orphans.push(Orphan {
-                pane: Some(pane),
-                holder: None,
-                outcome,
-            });
+                Err(error) => kept.push(Orphan {
+                    pane: Some(pane),
+                    holder: None,
+                    outcome: OrphanOutcome::Kept(format!(
+                        "its socket could not be judged: {error}"
+                    )),
+                }),
+            }
         }
+        candidates
     }
 
     /// Ends one holder no record names: over its socket when it answers
@@ -1157,14 +1403,19 @@ impl Panes {
     /// Ends a holder no record names, and its pane's tree, by their pids,
     /// once it is sure no record has named it since.
     fn end_by_pids(&self, pane: Option<&str>, holder: Identity) -> OrphanOutcome {
-        let _lock = match self.lock() {
-            Ok(lock) => lock,
-            Err(why) => return OrphanOutcome::Kept(why),
-        };
-        if let Some(pane) = pane
-            && self.names(pane, holder, None) != Named::No
+        // Looked at under the lock and ended outside it: a holder writes
+        // itself only into the reservation of its own incarnation, which no
+        // later start reuses, so no record can come to name it meanwhile.
         {
-            return OrphanOutcome::Kept("a record names it now".to_owned());
+            let _lock = match self.lock() {
+                Ok(lock) => lock,
+                Err(why) => return OrphanOutcome::Kept(why),
+            };
+            if let Some(pane) = pane
+                && self.names(pane, holder, None) != Named::No
+            {
+                return OrphanOutcome::Kept("a record names it now".to_owned());
+            }
         }
         match end_holder_tree(holder) {
             Ok(()) => OrphanOutcome::Ended,
@@ -1192,12 +1443,20 @@ impl Panes {
 
     /// Every holder process run from a version folder under `home`, with
     /// the protocol version its folder names.
-    fn holder_processes(&self, orphans: &mut Vec<Orphan>) -> Vec<(Identity, u16)> {
+    fn holder_processes(&self) -> (Vec<(Identity, u16)>, Vec<String>) {
         let root = layout::holders_root(&self.home);
-        let Ok(entries) = std::fs::read_dir(&root) else {
-            return Vec::new();
-        };
         let mut processes = Vec::new();
+        let mut unlisted = Vec::new();
+        let entries = match std::fs::read_dir(&root) {
+            Ok(entries) => entries,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                return (processes, unlisted);
+            }
+            Err(error) => {
+                unlisted.push(format!("{} could not be listed: {error}", root.display()));
+                return (processes, unlisted);
+            }
+        };
         for entry in entries.flatten() {
             let program = entry.path().join(holders::program_name());
             let Ok(file) = hide_platform::fs::identity::file_id(&program) else {
@@ -1221,21 +1480,92 @@ impl Panes {
                         .filter_map(Identity::of)
                         .map(|holder| (holder, version)),
                 ),
-                Err(error) => orphans.push(Orphan {
-                    pane: None,
-                    holder: None,
-                    outcome: OrphanOutcome::Kept(format!(
-                        "the holders of {name} could not be listed: {error}"
-                    )),
-                }),
+                Err(error) => unlisted.push(format!(
+                    "the holders of {name} could not be listed: {error}"
+                )),
             }
         }
-        processes
+        (processes, unlisted)
     }
 }
 
 /// A record file as read: the record, or why it cannot be.
 type RecordRead = Result<PaneRecord, Unreadable>;
+
+/// A holder, or a socket, no record names, to be ended.
+struct Candidate {
+    pane: Option<String>,
+    socket: PathBuf,
+    holder: Option<Identity>,
+}
+
+/// Runs `work` on each item on up to [`RECONCILE_WORKERS`] threads, taking
+/// up no item once `deadline` has passed; an item not taken up answers
+/// `None`. Every thread ends before this returns.
+fn bounded<T: Sync, R: Send>(
+    items: &[T],
+    deadline: Instant,
+    work: impl Fn(&T) -> R + Sync,
+) -> Vec<Option<R>> {
+    let next = AtomicUsize::new(0);
+    let answers: Vec<Mutex<Option<R>>> = items.iter().map(|_| Mutex::new(None)).collect();
+    std::thread::scope(|scope| {
+        for _ in 0..RECONCILE_WORKERS.min(items.len()) {
+            // A worker that cannot be started leaves its share to the others,
+            // or to the next reconcile.
+            let _ = std::thread::Builder::new()
+                .name("pane-reconcile".to_owned())
+                .spawn_scoped(scope, || {
+                    while Instant::now() < deadline {
+                        let at = next.fetch_add(1, Ordering::Relaxed);
+                        let Some(item) = items.get(at) else {
+                            return;
+                        };
+                        let answer = work(item);
+                        *answers[at].lock().unwrap_or_else(PoisonError::into_inner) = Some(answer);
+                    }
+                });
+        }
+    });
+    answers
+        .into_iter()
+        .map(|answer| answer.into_inner().unwrap_or_else(PoisonError::into_inner))
+        .collect()
+}
+
+/// How an earlier start of a pane stands to a new start of it.
+enum Earlier {
+    /// It holds the pane's id: starting, running or closing.
+    Lives,
+    /// It ended and nothing of it runs: its record goes.
+    Over,
+    /// It is over but not written so, or something it named still runs.
+    Unsettled,
+}
+
+/// What a start that did not say it was ready left in its record.
+enum FailedStart {
+    /// The holder wrote itself running after all.
+    Started(Box<PaneRecord>),
+    Gone,
+    /// Another start, or the holder's own end, holds the record now.
+    MovedOn,
+    Removed,
+    /// Ended `start_unconfirmed` with this holder still running.
+    Unconfirmed(Identity),
+}
+
+impl FailedStart {
+    fn name(&self) -> &'static str {
+        match self {
+            Self::Started(_) => "started_late",
+            Self::Gone => "record_gone",
+            Self::MovedOn => "record_moved_on",
+            Self::Removed => "removed",
+            Self::Unconfirmed(_) => "start_unconfirmed",
+        }
+    }
+}
 
 #[derive(Debug, Eq, PartialEq)]
 enum Named {
@@ -1421,4 +1751,107 @@ fn spec_of(request: &StartRequest) -> String {
         .iter()
         .map(|byte| format!("{byte:02x}"))
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn quiet(_: serde_json::Value) {}
+
+    /// A process standing in for a holder: this test's own child, ended
+    /// through its handle however the test ends.
+    struct StandIn(std::process::Child);
+
+    impl StandIn {
+        fn start() -> Self {
+            #[cfg(unix)]
+            let child = std::process::Command::new("/bin/sleep").arg("60").spawn();
+            #[cfg(windows)]
+            let child = std::process::Command::new(
+                std::env::var_os("ComSpec").unwrap_or_else(|| "cmd.exe".into()),
+            )
+            .args(["/d", "/c", "ping -n 60 127.0.0.1 >NUL"])
+            .spawn();
+            Self(child.unwrap())
+        }
+
+        fn identity(&self) -> Identity {
+            Identity::of(self.0.id()).expect("the stand-in runs")
+        }
+    }
+
+    impl Drop for StandIn {
+        fn drop(&mut self) {
+            let _ = self.0.kill();
+            let _ = self.0.wait();
+        }
+    }
+
+    fn reserved(panes: &Panes, holder: Option<Identity>, phase: Phase) -> PaneRecord {
+        PaneRecord {
+            format: RECORD_FORMAT,
+            pane: "p1".to_owned(),
+            owner: panes.owner().to_owned(),
+            incarnation: 7,
+            phase,
+            protocol: PROTOCOL_VERSION,
+            version_folder: String::new(),
+            spec: String::new(),
+            reserved_at_unix_ms: record::now_unix_ms(),
+            boot: panes.boot.clone(),
+            holder,
+            program: None,
+            end: None,
+        }
+    }
+
+    #[test]
+    fn a_holder_that_wrote_itself_running_after_the_bound_is_taken_as_started() {
+        let home = tempfile::tempdir().unwrap();
+        let panes = Panes::open(home.path(), &home.path().join("s"), quiet).unwrap();
+        let stand_in = StandIn::start();
+        let holder = stand_in.identity();
+        let running = reserved(&panes, Some(holder), Phase::Running);
+        record::write(&layout::pane_record(&panes.state_dir, "p1"), &running).unwrap();
+
+        let answer = panes.settle_failed_start(
+            &reserved(&panes, None, Phase::Preparing),
+            Some(holder),
+            "the holder said nothing".to_owned(),
+        );
+        assert_eq!(
+            answer.as_ref().map(|record| record.phase),
+            Ok(Phase::Running),
+            "{answer:?}"
+        );
+        assert_eq!(panes.record("p1").unwrap(), Some(running));
+        assert!(holder.runs());
+    }
+
+    #[test]
+    fn a_start_given_up_on_is_recorded_and_its_holder_ended() {
+        let home = tempfile::tempdir().unwrap();
+        let panes = Panes::open(home.path(), &home.path().join("s"), quiet).unwrap();
+        let mut stand_in = StandIn::start();
+        let holder = stand_in.identity();
+        let preparing = reserved(&panes, Some(holder), Phase::Preparing);
+        record::write(&layout::pane_record(&panes.state_dir, "p1"), &preparing).unwrap();
+
+        let answer = panes.settle_failed_start(
+            &preparing,
+            Some(holder),
+            "the holder said nothing".to_owned(),
+        );
+        assert!(answer.is_err(), "{answer:?}");
+        let ended = panes.record("p1").unwrap().unwrap();
+        assert_eq!(ended.phase, Phase::Ended);
+        assert_eq!(
+            ended.end.map(|end| end.reason),
+            Some(EndReason::StartUnconfirmed)
+        );
+        // Ended, so its parent can collect it at once.
+        let status = stand_in.0.wait().unwrap();
+        assert!(!status.success(), "{status:?}");
+    }
 }

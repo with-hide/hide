@@ -8,13 +8,14 @@ use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, PoisonError};
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use hide_holder_protocol::record::{self, EndReason, Identity, PaneRecord, Phase, RECORD_FORMAT};
 use hide_holder_protocol::{PROTOCOL_VERSION, Size};
 use hide_kit::layout;
 use hide_kit::panes::{
-    HOLDER_CAP, Judgment, OrphanOutcome, Panes, START_LIMIT, StartRefusal, StartRequest, Started,
+    HOLDER_CAP, Judgment, OrphanOutcome, Panes, RECONCILE_BUDGET, START_LIMIT, StartRefusal,
+    StartRequest, Started,
 };
 use hide_platform::ipc::LocalListener;
 
@@ -273,9 +274,31 @@ fn starts_of_one_pane_at_once_converge_on_one_holder_which_ends_when_closed() {
     assert_eq!(ended.phase, Phase::Ended, "{ended:?}");
     assert_eq!(end_reason(&ended), EndReason::Terminated, "{ended:?}");
     assert!(!holder.runs());
+
+    // The same start asked again once the pane ended starts it again.
+    let again = folder.start(&request);
+    assert!(again.incarnation > ended.incarnation, "{again:?}");
+    let second = again.holder.expect("the holder wrote itself in");
+    assert_ne!(second, holder);
+    assert_eq!(holders_at(folder.home.path(), &socket), vec![second.pid]);
+    folder.panes.close("p1").unwrap();
     folder.panes.forget("p1").unwrap();
     assert!(folder.panes.record("p1").unwrap().is_none());
     assert!(!socket.exists());
+}
+
+#[test]
+fn a_program_that_cannot_start_leaves_why_in_its_record() {
+    let folder = Folder::new();
+    let missing = folder.home.path().join("no-such-program");
+    let request = folder.request("p1", vec![missing.into()], Vec::new());
+    let refused = folder.panes.start(&request, &source());
+    assert!(
+        matches!(refused, Err(StartRefusal::Failed(_))),
+        "{refused:?}"
+    );
+    let ended = folder.record("p1");
+    assert_eq!(end_reason(&ended), EndReason::StartFailed, "{ended:?}");
 }
 
 #[test]
@@ -350,7 +373,7 @@ fn an_end_the_holder_could_not_record_is_taken_from_its_log() {
     drop(lock);
     assert_eq!(folder.record("p1").phase, Phase::Running);
 
-    let found = folder.panes.reconcile();
+    let found = folder.panes.reconcile(RECONCILE_BUDGET);
     let Some(Judgment::Ended(ended)) = found.panes.get("p1") else {
         panic!("{found:?}");
     };
@@ -371,7 +394,7 @@ fn a_holder_no_record_names_is_ended_with_its_whole_tree() {
     );
     let tree = running(pids_in(&folder.pids(), 2));
 
-    let found = folder.panes.reconcile();
+    let found = folder.panes.reconcile(RECONCILE_BUDGET);
     let orphan = found
         .orphans
         .iter()
@@ -402,7 +425,7 @@ fn a_holder_whose_socket_is_gone_is_ended_by_its_pids() {
     let tree = running(pids_in(&folder.pids(), 2));
     std::fs::remove_file(&holder.socket).unwrap();
 
-    let found = folder.panes.reconcile();
+    let found = folder.panes.reconcile(RECONCILE_BUDGET);
     let orphan = found
         .orphans
         .iter()
@@ -446,7 +469,7 @@ fn holders_whose_records_cannot_be_judged_are_left_running() {
     theirs.holder = Some(identity(&elsewhere.process));
     folder.write(&theirs);
 
-    let found = folder.panes.reconcile();
+    let found = folder.panes.reconcile(RECONCILE_BUDGET);
     assert!(
         matches!(found.panes.get("c1"), Some(Judgment::Unreadable(_))),
         "{found:?}"
@@ -481,7 +504,7 @@ fn a_socket_that_does_not_answer_as_a_holder_is_left_alone() {
         listener
     });
 
-    let found = folder.panes.reconcile();
+    let found = folder.panes.reconcile(RECONCILE_BUDGET);
     let orphan = found
         .orphans
         .iter()
@@ -508,7 +531,7 @@ fn a_reservation_takes_the_holder_it_names_and_one_left_past_its_bound_ends() {
     stale.reserved_at_unix_ms -= (START_LIMIT + Duration::from_secs(1)).as_millis() as u64;
     folder.write(&stale);
 
-    let found = folder.panes.reconcile();
+    let found = folder.panes.reconcile(RECONCILE_BUDGET);
     assert!(
         matches!(found.panes.get("r1"), Some(Judgment::Alive(_))),
         "{found:?}"
@@ -551,7 +574,7 @@ fn a_killed_holders_pane_is_settled_by_the_next_reconcile() {
         "what ignores the hangup should outlive the holder"
     );
 
-    let found = folder.panes.reconcile();
+    let found = folder.panes.reconcile(RECONCILE_BUDGET);
     let Some(Judgment::Ended(ended)) = found.panes.get("p1") else {
         panic!("{found:?}");
     };
@@ -585,11 +608,86 @@ fn a_record_of_an_earlier_boot_ends_nothing_it_names() {
     earlier.program = Some(identity(&named.program));
     folder.write(&earlier);
 
-    let found = folder.panes.reconcile();
+    let found = folder.panes.reconcile(RECONCILE_BUDGET);
     let Some(Judgment::Ended(ended)) = found.panes.get("b1") else {
         panic!("{found:?}");
     };
     assert_eq!(end_reason(ended), EndReason::MachineRestarted);
     assert!(named.process.is_running());
     assert!(named.program.is_running());
+}
+
+/// A reconcile takes up no pane past its budget and leaves the rest to the
+/// next one; panes are judged several at once, so many lost holders do not
+/// add up one after another.
+#[test]
+fn a_reconcile_past_its_budget_leaves_the_rest_to_the_next() {
+    const PANES: usize = 8;
+    let folder = Folder::new();
+    let mut holders = Vec::new();
+    for number in 0..PANES {
+        let started = folder.start(&folder.role_request(&format!("p{number}"), "stubborn_tree"));
+        holders.push(started.holder.expect("the holder wrote itself in"));
+    }
+    let tree = running(pids_in(&folder.pids(), 2 * PANES));
+    for holder in &holders {
+        #[cfg(unix)]
+        // SAFETY: a plain call naming a holder this test started, still
+        // running as it was recorded.
+        unsafe {
+            assert!(holder.runs());
+            libc::kill(holder.pid as libc::pid_t, libc::SIGKILL);
+        }
+        #[cfg(windows)]
+        hide_platform::process::terminate(holder.pid).unwrap();
+    }
+    for holder in &holders {
+        wait_until("the holder's end", || !holder.runs());
+    }
+
+    let none = folder.panes.reconcile(Duration::ZERO);
+    assert_eq!(none.pending(), PANES, "{none:?}");
+    assert!(!none.is_complete());
+    #[cfg(unix)]
+    assert!(
+        tree.iter().all(Running::is_running),
+        "nothing is ended past the budget"
+    );
+
+    let started = Instant::now();
+    let found = folder.panes.reconcile(RECONCILE_BUDGET);
+    let took = started.elapsed();
+    eprintln!("reconcile of {PANES} lost panes with hangup-ignoring trees took {took:?}");
+    assert!(found.is_complete(), "{found:?}");
+    for number in 0..PANES {
+        let Some(Judgment::Ended(ended)) = found.panes.get(&format!("p{number}")) else {
+            panic!("{found:?}");
+        };
+        assert_eq!(end_reason(ended), EndReason::HolderLost, "{ended:?}");
+    }
+    for process in &tree {
+        process.wait_gone();
+    }
+}
+
+/// A closing pane whose holder cannot be asked to end stays closing for the
+/// next reconcile, never adopted as alive.
+#[cfg(unix)]
+#[test]
+fn a_close_that_cannot_be_asked_stays_closing() {
+    let folder = Folder::new();
+    let named = folder.orphan("c1", &shell(), &[]);
+    let mut closing = folder.reserved("c1", Phase::Closing);
+    closing.holder = Some(identity(&named.process));
+    closing.program = Some(identity(&named.program));
+    folder.write(&closing);
+    std::fs::remove_file(&named.socket).unwrap();
+
+    let found = folder.panes.reconcile(RECONCILE_BUDGET);
+    assert!(
+        matches!(found.panes.get("c1"), Some(Judgment::Closing(_, _))),
+        "{found:?}"
+    );
+    assert_eq!(folder.record("c1").phase, Phase::Closing);
+    assert!(named.process.is_running());
 }

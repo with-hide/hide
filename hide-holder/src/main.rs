@@ -262,6 +262,9 @@ fn main() -> ExitCode {
         }
         None => None,
     };
+    // The start's own failure goes into the record too, so the node reads
+    // why rather than a holder that ended without a word.
+    let failure = claim.clone();
     match holder::Holder::start(&config, log.clone(), &job, claim) {
         Ok(holder) => {
             report(&format!(
@@ -273,6 +276,27 @@ fn main() -> ExitCode {
         }
         Err(reason) => {
             log.event("holder.start_failed", &[("reason", reason.as_str().into())]);
+            if let Some(claim) = failure {
+                let end = hide_holder_protocol::record::End::new(
+                    hide_holder_protocol::record::EndReason::StartFailed,
+                    reason.as_str(),
+                );
+                if let Err(error) = claim.end(end) {
+                    log.event(
+                        hide_holder_protocol::record::UNWRITTEN_EVENT,
+                        &[
+                            (
+                                "reason",
+                                hide_holder_protocol::record::EndReason::StartFailed
+                                    .name()
+                                    .into(),
+                            ),
+                            ("incarnation", claim.incarnation().into()),
+                            ("error", error.as_str().into()),
+                        ],
+                    );
+                }
+            }
             report(&format!("failed {reason}"));
             ExitCode::FAILURE
         }

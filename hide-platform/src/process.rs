@@ -1303,14 +1303,16 @@ pub fn running(file: &crate::fs::identity::FileId) -> io::Result<Vec<u32>> {
 /// were read, so the answer is never another process's.
 pub fn arguments(pid: u32) -> io::Result<Vec<std::ffi::OsString>> {
     let before = start_time(pid)?;
-    let arguments = sys::arguments(pid)?;
+    let read = sys::arguments(pid);
+    // A process that ended or was replaced meanwhile is reported as gone,
+    // whatever the read answered, never as a refusal or as its words.
     if start_time(pid).ok() != Some(before) || !is_alive(pid) {
         return Err(io::Error::new(
             io::ErrorKind::NotFound,
             format!("process {pid} ended while its arguments were read"),
         ));
     }
-    Ok(arguments)
+    read
 }
 
 /// A Windows command line split into its words the way the C runtime splits
