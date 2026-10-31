@@ -743,7 +743,7 @@ mod tests {
             },
         })
         .unwrap();
-        assert_eq!(take_down(&line, &keys, "device:"), Err("control".into()));
+        assert_eq!(take_down(&line, &keys, "device"), Err("control".into()));
         assert!(lock(&keys.0).is_empty());
     }
 

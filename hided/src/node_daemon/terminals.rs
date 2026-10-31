@@ -570,7 +570,7 @@ mod tests {
     #[test]
     fn keys_for_the_core_s_panes_wait_for_the_relay_in_order_and_none_is_lost_unsaid() {
         let terminals =
-            ScreenTerminals::new("remote:screen:pane:".to_owned(), watch::channel(None).1);
+            ScreenTerminals::new("screen".to_owned(), watch::channel(None).1);
         let first_screen = terminals.unsent.watch(1);
         let second_screen = terminals.unsent.watch(2);
         let key = |text: &str| KeyTarget::Pane(format!("core-pane-{text}"));
@@ -613,7 +613,7 @@ mod tests {
     #[tokio::test]
     async fn a_key_the_relay_took_and_did_not_send_is_told_to_its_screen() {
         let terminals = Arc::new(ScreenTerminals::new(
-            "remote:screen:pane:".to_owned(),
+            "screen".to_owned(),
             watch::channel(None).1,
         ));
         let first_screen = terminals.unsent.watch(7);
@@ -653,7 +653,7 @@ mod tests {
     #[tokio::test]
     async fn a_dropped_redraw_is_never_told_as_an_unsent_key() {
         let terminals = Arc::new(ScreenTerminals::new(
-            "remote:screen:pane:".to_owned(),
+            "screen".to_owned(),
             watch::channel(None).1,
         ));
         let screen = terminals.unsent.watch(1);
@@ -686,7 +686,7 @@ mod tests {
     #[test]
     fn a_burst_of_unsent_keys_is_one_notice_per_screen_with_its_cause() {
         let terminals =
-            ScreenTerminals::new("remote:screen:pane:".to_owned(), watch::channel(None).1);
+            ScreenTerminals::new("screen".to_owned(), watch::channel(None).1);
         let waiting = terminals.unsent.watch(1);
         let linked = terminals.unsent.watch(2);
         let left = terminals.unsent.watch(3);
