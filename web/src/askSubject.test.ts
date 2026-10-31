@@ -22,6 +22,16 @@ describe("a mission decision laid on its Conductor's row (needs-you-cleanup B1, 
   });
 });
 
+describe("a mission node raised to the operator, laid on its Conductor's row (PRD mission-node-simple B14)", () => {
+  it("leads with 확인 필요 and says the node and why, in every language", async () => {
+    const { t: ko } = await createInterfaceI18n("ko");
+    const { t: en } = await createInterfaceI18n("en");
+    const raised = { cause: "mission_attention", node: "device-row-simple", reason: "merged_unproven" } as const;
+    expect(askParts(ko, { verb: "answer", what: null, more: 0, subject: raised })).toEqual({ lead: "확인 필요", text: "device-row-simple · PR 머지됨, 기준 기록이 없거나 실패", tail: null });
+    expect(askParts(en, { verb: "answer", what: null, more: 0, subject: { ...raised, reason: "worker_ended" } })).toEqual({ lead: "Needs a look", text: "device-row-simple · Worker ended with work left", tail: null });
+  });
+});
+
 describe("a brief or a letter the agent has not confirmed, laid on its row", () => {
   it("says which input in plain words, not received only when its composer held it, and when its typings are used up, in every language", async () => {
     const { t: ko } = await createInterfaceI18n("ko");

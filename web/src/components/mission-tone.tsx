@@ -13,20 +13,17 @@ export const TONE_FILL: Record<CellTone, string> = {
   review: "bg-mission-review",
   working: "bg-mission-working",
   hold: "bg-mission-hold",
-  failed: "bg-mission-failed",
   waiting: "bg-muted",
   cancelled: "bg-mission-cancelled",
 };
 
-/** A mission page head cell, as its card looks: an outside node waits as an empty cell. */
+/** A mission page head cell, as its card looks, and a node someone has to look at in the decision colour (PRD mission-node-simple B5): an outside node waits as an empty cell. */
 export const HEAD_FILL: Record<HeadCell, string> = {
   waiting: "bg-muted",
   external: "bg-muted",
   working: "bg-mission-working",
   asleep: "bg-muted",
-  review: "bg-mission-review",
-  hold: "bg-mission-hold",
-  failed: "bg-mission-failed",
+  attention: "bg-mission-hold",
   done: "bg-mission-done",
   cancelled: "bg-mission-cancelled",
 };
@@ -37,7 +34,6 @@ export const TONE_TEXT: Record<CellTone, string> = {
   review: "text-mission-review",
   working: "text-mission-working",
   hold: "text-mission-hold",
-  failed: "text-mission-failed",
   waiting: "text-muted-foreground",
   cancelled: "text-mission-cancelled",
 };

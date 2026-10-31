@@ -18,10 +18,10 @@ import { PILL } from "./MissionMap";
 import { MissionStartGuide } from "./MissionStartGuide";
 import { MissionTakeOver } from "./MissionTakeOver";
 import { groupMissions, CLOSED_SHOWN, missionEntry, projectMissions, shownMission, turnCount, type MissionEntry, type MissionGroup } from "./missionList";
-import { liveNodes, missionCells, missionCounts, type TurnItem } from "./missions";
+import { attentionReasonText, liveNodes, missionCells, missionCounts, type TurnItem } from "./missions";
 import { allAgents, agentsByPane } from "./paneAgents";
 import { frontProject } from "./projectStatus";
-import { CandidateAdd, CandidateRows, CapControl, ConductorError, OtherVendorControl, ScopeControl, StrengthControl, useConductorEdit } from "./settings/ConductorControls";
+import { CandidateAdd, CandidateRows, CapControl, CleanupControl, ConductorError, OtherVendorControl, ScopeControl, StrengthControl, useConductorEdit } from "./settings/ConductorControls";
 import type { Mission, MissionNode, Workspace } from "./snapshot";
 import { useShellStore } from "./store";
 import { useUiStore } from "./ui";
@@ -220,11 +220,11 @@ function OpenRow({ entry, selected, actions }: { entry: MissionEntry; selected: 
   );
 }
 
-const TURN_PILL: Record<TurnItem["kind"], "missionTool.pill.decision" | "missionTool.pill.takeover" | "missionTool.pill.blocked" | "missionTool.pill.closedPr" | "missionTool.pill.merge"> = {
+const TURN_PILL: Record<TurnItem["kind"], "missionTool.pill.decision" | "missionTool.pill.takeover" | "mission.attention" | "missionTool.pill.blocked" | "missionTool.pill.merge"> = {
   decision: "missionTool.pill.decision",
   takeover: "missionTool.pill.takeover",
+  attention: "mission.attention",
   worker_blocked: "missionTool.pill.blocked",
-  outside_closed: "missionTool.pill.closedPr",
   landing: "missionTool.pill.merge",
 };
 
@@ -259,8 +259,8 @@ function RowLine({ mission, turn }: { mission: Mission; turn: TurnItem | null })
       }
       case "worker_blocked":
         return <Line data="worker_blocked">{turn.node.title} · {turn.line ?? t(`mission.turn.cause.${turn.cause}`)}</Line>;
-      case "outside_closed":
-        return <Line data="outside_closed">{turn.node.title} · {t("mission.outside.closed")}</Line>;
+      case "attention":
+        return <Line data="attention">{turn.node.title} · {attentionReasonText(turn.attention.reason, turn.attention.pr, t)}</Line>;
       case "landing":
         return <LandingLine nodes={turn.nodes} join={turn.git} />;
     }
@@ -338,6 +338,7 @@ function DefaultsSummary({ actions }: { actions: Actions }) {
       <Fact label={t("missionTool.cap")} value={t("missionTool.capValue", { count: settings.concurrency })} />
       <Fact label={t("missionTool.scope")} value={t(`mission.scope.${settings.default_scope}`)} />
       <Fact label={t("missionTool.verify")} value={verify} />
+      <Fact label={t("conductor.cleanup")} value={t(`conductor.cleanup.${settings.worktree_cleanup}`)} />
     </section>
   );
 }
@@ -364,6 +365,7 @@ function Defaults({ actions }: { actions: Actions }) {
       <p className="text-muted-foreground" data-mission-defaults-applies="true">{t("missionTool.applies")}</p>
       <Setting label={t("conductor.cap")}><CapControl settings={settings} send={send} /></Setting>
       <Setting label={t("conductor.scope")} stacked><ScopeControl settings={settings} send={send} /></Setting>
+      <Setting label={t("conductor.cleanup")}><CleanupControl settings={settings} send={send} /></Setting>
       <Setting label={t("conductor.strength")} stacked><StrengthControl settings={settings} send={send} /></Setting>
       <Setting label={t("conductor.otherVendor")}><OtherVendorControl settings={settings} send={send} /></Setting>
       <ConductorError error={error} />

@@ -1871,6 +1871,16 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
     endMission(missionId: string) {
       dispatch({ schema_version: 2, kind: "mission_end", payload: { mission: missionId } });
     },
+
+    /**
+     * The operator's choice for a mission node that waits on someone to look,
+     * or 다시 진행 on a done or dropped one (PRD mission-node-simple B15, B16,
+     * B20): the core settles the node, tells the Conductor what changed, and
+     * reopens a closed mission a resumed node belongs to.
+     */
+    settleMissionNode(missionId: string, node: string, action: import("./snapshot").MissionOperatorAction) {
+      dispatch({ schema_version: 2, kind: "mission_attention", payload: { mission: missionId, node, action } });
+    },
     takeOverMission(missionId: string, request?: { requestId: string; confirmOnly: boolean }) {
       const mission = rest()?.missions?.items.find((row) => row.id === missionId);
       if (!mission) return diagnostic(`mission_take: no mission ${missionId}`);

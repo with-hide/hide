@@ -139,7 +139,7 @@ const PR_URL = (number: number) => `https://example.com/${PLACE.project}/pull/${
 const NODE: Omit<MissionNode, "key" | "title" | "status" | "worker"> = {
   kind: "change", depends_on: [], blocked: null, delivery: "pr", agent_id: null, pane_id: null, machine: null,
   pr: null, base_pr: null, branch: null, pr_state: null, pr_url: null, stage: null, attempts: 1,
-  line: null, change: null, review: null, criteria: [], criteria_met: 0, criteria_skipped: 0, external: null, unread: false, reopened: 0, started_at_unix_ms: null, finished_at_unix_ms: null, commit: null, landing: null, verdict: null, checks: null, plan: null,
+  line: null, change: null, review: null, criteria: [], criteria_met: 0, criteria_skipped: 0, external: null, unread: false, reopened: 0, started_at_unix_ms: null, finished_at_unix_ms: null, commit: null, landing: null, verdict: null, checks: null, plan: null, prs: [], attention: null, hide: null, worktree: null,
 };
 
 /** The plan's three nodes, as the record holds them at `stage`. */
@@ -151,7 +151,7 @@ function nodes(model: MissionModel): MissionNode[] {
     {
       ...NODE, key: "config", title: "Read the retry count from settings", status: "done",
       worker: { agent: "codex", model: "gpt-5.5", effort: "medium" },
-      pr: 21, pr_state: "mergeable", landing: { state: "left", action: "merge" }, pr_url: PR_URL(21), branch: "practice/retry-config", stage: 3,
+      pr: 21, prs: [{ number: 21, state: "mergeable", url: PR_URL(21) }], pr_state: "mergeable", landing: { state: "left", action: "merge" }, pr_url: PR_URL(21), branch: "practice/retry-config", stage: 3,
       line: "CI passed · reviewed", review: "Approved by a second agent",
       started_at_unix_ms: at - 9 * minute, finished_at_unix_ms: at - 2 * minute,
     },
@@ -160,7 +160,7 @@ function nodes(model: MissionModel): MissionNode[] {
       worker: { agent: "codex", model: "gpt-5.5", effort: "high", effort_auto: true },
       agent_id: "agent-2", pane_id: WORKER, branch: "practice/retry-backoff",
       ...(answered
-        ? { pr: 22, pr_state: "pending" as const, pr_url: PR_URL(22), stage: 2, line: "Adding the retry docs to the PR", change: "Took in the docs node, on the operator's word" }
+        ? { pr: 22, prs: [{ number: 22, state: "pending" as const, url: PR_URL(22) }], pr_state: "pending" as const, pr_url: PR_URL(22), stage: 2, line: "Adding the retry docs to the PR", change: "Took in the docs node, on the operator's word" }
         : { stage: 1, line: "Adding exponential backoff to retry.ts" }),
       started_at_unix_ms: at - 9 * minute,
     },

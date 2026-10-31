@@ -3,18 +3,20 @@ import { useInterfaceTranslation } from "../i18n/client";
 import { formatDateTime } from "../i18n/format";
 import { requireInterfaceLanguage } from "../i18n/locale";
 import { planNowLine } from "../plans";
-import { cardLine, liveNodes, missionOpen, missionPulls, missionResultCounts, nextNodes, stageWord } from "../missions";
+import { attentionWords, cardLine, missionOpen, missionPulls, missionResultCounts, stageWord, summaryGroups } from "../missions";
 import type { Mission, MissionNode } from "../snapshot";
 import { formatElapsed } from "./elapsed";
 import { MissionPrMark } from "./mission-pr";
 import { Button } from "./ui/button";
 
 // The map's right column while no node is picked (PRD mission-tool D-13,
-// B19): an open mission's 지금 (each node a worker is at, with its line),
-// 다음 (what can start next), its pull requests and the workers at work of
-// the most allowed; a closed one's time and date, its result pull requests,
-// and the workers and checkers it took. Every value is the record's; a row
-// with nothing in it is not drawn. A node named here picks it on the map.
+// B19; PRD mission-node-simple B5): an open mission's nodes by the three
+// groups the map reads, 확인 필요 first (each with who looks), 진행 (each
+// with its line) and 끝, each counted; its pull requests and the workers at
+// work of the most allowed; a closed one's time and date, its result pull
+// requests, and the workers and checkers it took. Every value is the
+// record's; a row with nothing in it is not drawn. A node named here picks it
+// on the map.
 
 export function MissionSummary({ mission, onSelect }: { mission: Mission; onSelect: (key: string) => void }) {
   const { t } = useInterfaceTranslation();
@@ -37,14 +39,26 @@ function Row({ name, field, children }: { name: string; field: string; children:
 
 function OpenRows({ mission, onSelect }: { mission: Mission; onSelect: (key: string) => void }) {
   const { t } = useInterfaceTranslation();
-  const live = liveNodes(mission);
-  const next = nextNodes(mission);
+  const { attention, working, done } = summaryGroups(mission);
   const pulls = missionPulls(mission);
   return (
     <>
-      {live.length > 0 ? (
-        <Row name={t("mission.field.now")} field="now">
-          {live.map((node) => {
+      {attention.length > 0 ? (
+        <Row name={t("mission.summary.attention", { count: attention.length })} field="attention">
+          {attention.map((node) => {
+            const words = attentionWords(node, t);
+            return (
+              <span key={node.key} className="flex min-w-0 flex-col">
+                <NodeName node={node} onSelect={onSelect} />
+                {words ? <span className="truncate text-caption text-mission-hold" title={words.why} data-mission-summary-attention={node.attention?.to}>! {words.who} · {words.why}</span> : null}
+              </span>
+            );
+          })}
+        </Row>
+      ) : null}
+      {working.length > 0 ? (
+        <Row name={t("mission.summary.working", { count: working.length })} field="working">
+          {working.map((node) => {
             const line = cardLine(mission, node, node.plan ? planNowLine(node.plan, t) : null, t)?.text ?? t(stageWord(node));
             return (
               <span key={node.key} className="flex min-w-0 flex-col">
@@ -55,9 +69,11 @@ function OpenRows({ mission, onSelect }: { mission: Mission; onSelect: (key: str
           })}
         </Row>
       ) : null}
-      {next.length > 0 ? (
-        <Row name={t("mission.summary.next")} field="next">
-          {next.map((node) => <NodeName key={node.key} node={node} onSelect={onSelect} />)}
+      {done.length > 0 ? (
+        <Row name={t("mission.summary.done", { count: done.length })} field="done">
+          <span className="flex min-w-0 flex-wrap gap-x-sm gap-y-xxs">
+            {done.map((node) => <NodeName key={node.key} node={node} onSelect={onSelect} />)}
+          </span>
         </Row>
       ) : null}
       {pulls.length > 0 ? <Row name={t("mission.field.pr")} field="pr"><Pulls mission={mission} nodes={pulls} /></Row> : null}
@@ -97,10 +113,10 @@ function NodeName({ node, onSelect }: { node: MissionNode; onSelect: (key: strin
   );
 }
 
-function Pulls({ mission, nodes }: { mission: Mission; nodes: MissionNode[] }) {
+function Pulls({ mission, nodes }: { mission: Mission; nodes: ReturnType<typeof missionPulls> }) {
   return (
     <span className="flex min-w-0 flex-wrap items-center gap-x-sm gap-y-xxs">
-      {nodes.map((node) => <MissionPrMark key={node.key} number={node.pr!} state={node.pr_state} stale={mission.github_stale} title={node.title} data-mission-summary-pr={node.pr!} />)}
+      {nodes.map(({ node, pr }) => <MissionPrMark key={pr.number} number={pr.number} state={pr.state} stale={mission.github_stale} title={node.title} data-mission-summary-pr={pr.number} />)}
     </span>
   );
 }

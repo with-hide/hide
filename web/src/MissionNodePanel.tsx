@@ -15,19 +15,27 @@ import { requireInterfaceLanguage } from "./i18n/locale";
 import { cn } from "./lib/utils";
 import { CheckerRow, lookWord, RunText, useNodeTimes, useRunWords, useWorkerRow } from "./missionParts";
 import {
+  attentionWords,
   cardLine,
   checkerState,
   criteriaTally,
   criterionName,
   criterionNote,
   eventWords,
-  heldQuestion,
+  hideWords,
   kindWord,
+  landingLeft,
+  lineOutrun,
   mainCommit,
+  missionOpen,
   nodeLook,
+  nodeQuestion,
+  nodeResumable,
+  openAttention,
   ownCriteria,
   shortCommit,
 } from "./missions";
+import { AttentionChoices } from "./components/mission-attention";
 import { PlanChecklist } from "./components/plan-checklist";
 import { planNowLine } from "./plans";
 import { sessionOfAgent } from "./sessionWork";
@@ -48,10 +56,12 @@ export function MissionNodePanel({ mission, node, events, end, onSelect, onClose
   const times = useNodeTimes(mission, node, events, end);
   const facts = [
     ...(times?.took ? [t("mission.elapsed.total", { elapsed: times.took })] : []),
-    ...(times?.held ? [t("mission.time.held", { elapsed: times.held })] : []),
     ...(node.attempts >= 2 ? [t("mission.badge.attempts", { count: node.attempts })] : []),
     ...(node.reopened > 0 ? [t("mission.badge.reopened", { count: node.reopened })] : []),
+    ...(node.change && missionOpen(mission) ? [`${t("mission.changed")} · ${node.change}`] : []),
   ];
+  // The worker's life beside its model (B4): asleep or ended, as `hide agent show` says it.
+  const life = node.agent_runtime === "asleep" || node.agent_runtime === "ended" ? t(node.agent_runtime === "asleep" ? "mission.look.asleep" : "mission.worker.ended") : null;
   return (
     <div className="flex min-w-0 flex-col gap-md px-md py-sm text-body" data-mission-detail={node.key}>
       <section className="flex min-w-0 flex-col gap-xxs" data-panel-part="head">
@@ -74,14 +84,22 @@ export function MissionNodePanel({ mission, node, events, end, onSelect, onClose
               <span className="flex min-w-0 items-center gap-xxs"><AgentMark kind={node.worker?.agent} /><RunText run={worker} /></span>
             </>
           ) : null}
+          {life ? (
+            <>
+              <span aria-hidden="true">·</span>
+              <span data-panel-worker-life={node.agent_runtime}>{life}</span>
+            </>
+          ) : null}
         </p>
         {facts.length > 0 ? <p className="text-caption text-muted-foreground tabular-nums" data-panel-facts="true">{facts.join(" · ")}</p> : null}
       </section>
-      <Now mission={mission} node={node} />
+      <Attention mission={mission} node={node} actions={actions} />
+      <Now mission={mission} node={node} events={events} />
       <Made mission={mission} node={node} />
       <Criteria mission={mission} node={node} actions={actions} />
       <Links mission={mission} node={node} onSelect={onSelect} />
       <Ways mission={mission} node={node} actions={actions} />
+      <HideRecord mission={mission} node={node} events={events} />
       <Events node={node} events={events} />
     </div>
   );
@@ -97,16 +115,39 @@ function Part({ title, children, part }: { title: ReactNode; children: ReactNode
 }
 
 /**
- * Where the node is now (B31): the decision's question and choices while it
- * holds the node, its worker's own plan while it works, its checkers while in
- * review, else what it waits on or why it failed; finished work has no now.
+ * What waits on someone to look at the node (PRD mission-node-simple B2,
+ * B15-B17): who looks, why, and the operator's choices for that reason, which
+ * the operator may take before the Conductor does; each settles it with one
+ * event.
  */
-function Now({ mission, node }: { mission: Mission; node: MissionNode }) {
+function Attention({ mission, node, actions }: { mission: Mission; node: MissionNode; actions: Actions }) {
+  const { t } = useInterfaceTranslation();
+  const words = attentionWords(node, t);
+  if (!words || !node.attention || !openAttention(mission, node)) return null;
+  return (
+    <Part title={t("mission.attention")} part="attention">
+      <p className="min-w-0 break-words border-l-2 border-mission-hold pl-sm" data-panel-attention={node.attention.reason} data-panel-attention-to={node.attention.to}>
+        <span className="font-semibold text-mission-hold">! {words.who}</span>
+        <span className="text-muted-foreground"> · </span>
+        {words.why}
+      </p>
+      <AttentionChoices key={`${node.key}-${node.attention.since_unix_ms}`} mission={mission} node={node} attention={node.attention} actions={actions} />
+    </Part>
+  );
+}
+
+/**
+ * Where the node is now (B4, B31): the decision's question and choices while
+ * it names the node, its worker's own plan while it works, its checkers at
+ * work, else the Conductor's line, dimmed once Hide's facts moved past it, or
+ * what it waits on; finished work has no now.
+ */
+function Now({ mission, node, events }: { mission: Mission; node: MissionNode; events: MissionEvent[] | null }) {
   const { t } = useInterfaceTranslation();
   const look = nodeLook(mission, node);
   if (look === "done" || look === "cancelled" || look === "dropped") return null;
-  const question = heldQuestion(mission, node);
-  if (look === "hold" && question) {
+  const question = nodeQuestion(mission, node);
+  if (question) {
     const options = mission.question?.options ?? [];
     return (
       <Part title={t("mission.field.now")} part="now">
@@ -124,7 +165,7 @@ function Now({ mission, node }: { mission: Mission; node: MissionNode }) {
       </Part>
     );
   }
-  if (look === "working" && node.plan) {
+  if ((look === "working" || look === "asleep") && node.plan) {
     return (
       <Part title={t("mission.field.now")} part="now">
         {planNowLine(node.plan, t) ? <p className="min-w-0 break-words">{planNowLine(node.plan, t)}</p> : null}
@@ -132,12 +173,18 @@ function Now({ mission, node }: { mission: Mission; node: MissionNode }) {
       </Part>
     );
   }
-  const checks = look === "review" ? node.criteria.filter((line) => (line.kind === "review" || line.kind === "verify") && (line.checkers?.length ?? 0) > 0) : [];
+  const checks = node.criteria.filter((line) => (line.kind === "review" || line.kind === "verify") && line.state === "open" && (line.checkers?.length ?? 0) > 0);
   const line = cardLine(mission, node, null, t);
   if (!line && checks.length === 0) return null;
+  // The Conductor's line is its own word; once Hide's facts moved past it, it stays readable but dimmed (B4).
+  const behind = line !== null && line.text === node.line && lineOutrun(node, events);
   return (
     <Part title={t("mission.field.now")} part="now">
-      {line ? <p className={cn("min-w-0 break-words", line.attention && "text-mission-failed")}>{line.text}</p> : null}
+      {line ? (
+        <p className={cn("min-w-0 break-words", line.attention && "text-mission-failed", behind && "text-muted-foreground opacity-(--opacity-dimmed)")} title={behind ? t("mission.line.behind") : undefined} data-panel-line-behind={behind || undefined}>
+          {line.text}
+        </p>
+      ) : null}
       {checks.map((check) => (
         <div key={check.key} className="flex min-w-0 flex-col gap-xxs text-caption" data-panel-checkers={check.kind}>
           {(check.checkers ?? []).map((checker, index) => <CheckerRow key={index} mission={mission} kind={check.kind as "review" | "verify"} checker={checker} />)}
@@ -156,13 +203,14 @@ function Made({ mission, node }: { mission: Mission; node: MissionNode }) {
   const { t } = useInterfaceTranslation();
   const ci = node.criteria.find((line) => line.kind === "ci");
   const rows: [string, ReactNode][] = [];
-  const pr = node.pr ?? (node.external && "pr" in node.external ? node.external.pr : null);
+  const outside = node.external && "pr" in node.external ? [{ number: node.external.pr, state: node.pr_state, url: node.pr_url }] : [];
+  const prs = node.prs.length > 0 ? node.prs : outside;
   const branch = node.branch ?? (node.external && "branch" in node.external ? node.external.branch : null);
-  if (pr != null) {
+  if (prs.length > 0) {
     rows.push([
       t("mission.field.pr"),
-      <span key="pr" className="flex min-w-0 flex-wrap items-center gap-xs">
-        <MissionPrMark number={pr} state={node.pr_state} stale={mission.github_stale} />
+      <span key="pr" className="flex min-w-0 flex-wrap items-center gap-xs" data-panel-prs={prs.map((pr) => pr.number).join(" ")}>
+        {prs.map((pr) => <MissionPrMark key={pr.number} number={pr.number} state={pr.state} stale={mission.github_stale} />)}
         {node.base_pr != null ? <span className="text-caption text-muted-foreground" data-panel-base={node.base_pr}>{t("mission.panel.base", { number: String(node.base_pr) })}</span> : null}
       </span>,
     ]);
@@ -178,7 +226,10 @@ function Made({ mission, node }: { mission: Mission; node: MissionNode }) {
     ]);
   }
   const commit = mainCommit(node);
+  // What a finished change still waits on before main, as the core decides it (B27): the card leaves it to the panel (D-07).
+  const left = landingLeft(node);
   if (commit) rows.push(["main", <span key="commit" className="font-mono text-caption" title={commit} data-panel-commit={commit}>{t("mission.result.main", { commit: shortCommit(commit) })}</span>]);
+  else if (left) rows.push(["main", <span key="left" className="font-semibold text-mission-hold" data-panel-landing={left}>{t(left === "merge" ? "mission.landing.merge" : "mission.landing.join")}</span>]);
   if (node.kind === "research" && node.status === "done" && node.line) rows.push([t("mission.result.conclusion"), <span key="c" className="break-words" data-panel-conclusion="true">{node.line}</span>]);
   if (node.kind === "verify" && node.verdict) {
     rows.push([
@@ -189,6 +240,8 @@ function Made({ mission, node }: { mission: Mission; node: MissionNode }) {
       </span>,
     ]);
   }
+  // What became of a done node's worktree (B20); a removal that failed is the log's, not the screen's (B21).
+  if (node.worktree && node.worktree !== "failed") rows.push([t("mission.panel.worktree"), <span key="worktree" data-panel-worktree={node.worktree}>{t(`mission.worktree.${node.worktree}`)}</span>]);
   if (rows.length === 0) return null;
   return (
     <Part title={t("mission.panel.result")} part="result">
@@ -373,6 +426,7 @@ function Ways({ mission, node, actions }: { mission: Mission; node: MissionNode;
   if (node.kind === "external") return null;
   return (
     <div className="flex flex-wrap gap-xs" data-panel-part="ways">
+      {nodeResumable(mission, node) ? <ResumeNode mission={mission} node={node} actions={actions} /> : null}
       {node.pr != null ? (
         <Button variant="secondary" size="sm" disabled={!node.pr_url} onClick={() => node.pr_url && actions.openSessionPullRequest({ workspace_id: mission.workspace_id, url: node.pr_url, number: node.pr! })} data-node-pr-card="true">{t("mission.prCard")}</Button>
       ) : null}
@@ -381,6 +435,52 @@ function Ways({ mission, node, actions }: { mission: Mission; node: MissionNode;
     </div>
   );
 }
+
+/** 다시 진행 on a done or dropped node (B16): one event, and the button stays off until the node moves, so a second press sends nothing. */
+function ResumeNode({ mission, node, actions }: { mission: Mission; node: MissionNode; actions: Actions }) {
+  const { t } = useInterfaceTranslation();
+  const [sent, setSent] = useState(false);
+  return (
+    <Button size="sm" variant="secondary" disabled={sent} onClick={() => { setSent(true); actions.settleMissionNode(mission.id, node.key, "resume"); }} data-node-resume="true">
+      {t("mission.operator.resume")}
+    </Button>
+  );
+}
+
+/** What Hide did to the node and what it raised, newest last, from its events, else the last mark the record keeps (B3, B4). */
+function HideRecord({ mission, node, events }: { mission: Mission; node: MissionNode; events: MissionEvent[] | null }) {
+  const { t, i18n } = useInterfaceTranslation();
+  const language = requireInterfaceLanguage(i18n.language);
+  const own = events?.filter((event) => event.node === node.key && HIDE_KINDS.has(event.kind)) ?? [];
+  const mark = hideWords(mission, node, t);
+  if (own.length === 0 && !mark) return null;
+  const time = (at: number) => formatDateTime(language, at, { month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit" });
+  return (
+    <Part title={t("mission.hide.title")} part="hide">
+      {own.length > 0 ? (
+        <ol className="grid grid-cols-[auto_minmax(0,1fr)] gap-x-md gap-y-xxs text-caption" data-panel-hide-events={own.length}>
+          {own.map((event, index) => {
+            const words = eventWords(event, t);
+            return (
+              <li key={index} className="contents" data-panel-hide-event={event.kind}>
+                <span className="text-muted-foreground tabular-nums">{time(event.at_unix_ms)}</span>
+                <span className="min-w-0 break-words">
+                  <span className="font-semibold">{words.what}</span>
+                  {words.line ? <span className="text-muted-foreground"> · {words.line}</span> : null}
+                </span>
+              </li>
+            );
+          })}
+        </ol>
+      ) : (
+        <p className="min-w-0 break-words text-caption" data-panel-hide-mark={node.hide?.action}>{t("mission.hide.mark", { what: mark ?? "" })}</p>
+      )}
+    </Part>
+  );
+}
+
+/** The events Hide's record lists: what Hide did, what it raised and what the operator settled (D-15). */
+const HIDE_KINDS: ReadonlySet<MissionEvent["kind"]> = new Set(["hide", "hide_closed", "raised", "raised_to_operator", "resolved"]);
 
 /** The node's events in order, folded under their count (B31). */
 function Events({ node, events }: { node: MissionNode; events: MissionEvent[] | null }) {

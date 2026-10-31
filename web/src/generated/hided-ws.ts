@@ -785,7 +785,7 @@ export interface AgentNotice {
      */
     detail?: string | null;
     /**
-     * A question the core asks on the row for the agent, which the window words in the interface language in place of detail: `plan_review` is a proposed plan of `steps` steps waiting for the operator's review, `mission_decision` is the decision `line` the Conductor's mission waits on, `input_unconfirmed` is a spawn's brief or a letter (`input`) Hide typed that the agent has not recorded, `held` when its composer was read still showing the text (not received rather than not confirmed), `spent` once its typings are used up (ask_subject_cause in snapshot-wire-enums.json). A window that does not know the cause draws detail.
+     * A question the core asks on the row for the agent, which the window words in the interface language in place of detail: `plan_review` is a proposed plan of `steps` steps waiting for the operator's review, `mission_decision` is the decision `line` the Conductor's mission waits on, `mission_attention` is a node (its title `node`) of the mission waiting on the operator to look and why (`reason`, mission_attention_reason in snapshot-wire-enums.json), `input_unconfirmed` is a spawn's brief or a letter (`input`) Hide typed that the agent has not recorded, `held` when its composer was read still showing the text (not received rather than not confirmed), `spent` once its typings are used up (ask_subject_cause in snapshot-wire-enums.json). A window that does not know the cause draws detail.
      */
     subject?:
       | null
@@ -796,6 +796,20 @@ export interface AgentNotice {
       | {
           cause: "mission_decision";
           line: string;
+        }
+      | {
+          cause: "mission_attention";
+          node: string;
+          reason:
+            | "merged_unproven"
+            | "worker_ended"
+            | "pr_closed"
+            | "unplanned_pr"
+            | "worktree_dirty"
+            | "cleanup_ask"
+            | "conductor_failed"
+            | "wake_refused"
+            | "close_refused";
         }
       | {
           cause: "input_unconfirmed";

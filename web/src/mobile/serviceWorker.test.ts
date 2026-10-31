@@ -71,6 +71,17 @@ it("words a mission decision as 판단 and its line, and an unknown cause as the
   expect(phone.shown.map(({ body }) => body)).toEqual(["판단 · Skip the check line? · project", "질문 · Skip the check line? · project", "질문 · Plain sentence · project"]);
 });
 
+it("words a mission node raised to the operator as 확인 필요, its title and why (PRD mission-node-simple B14)", async () => {
+  const phone = phoneWorker();
+  const raised = { cause: "mission_attention", node: "device-row-simple", reason: "worker_ended" };
+  await phone.words({ needs_you: "내 차례", done: "읽을 것", status_question: "질문", subject_mission_attention: "확인 필요", subject_mission_attention_worker_ended: "일꾼 끝남, 일 남음" });
+  await phone.push({ title: "task", state: "needs_you", status_code: "question", detail: "device-row-simple", subject: raised, place: "project" });
+  // Words cached by a page from before the cause keep the row's own word and sentence.
+  await phone.words({ needs_you: "내 차례", done: "읽을 것", status_question: "질문" });
+  await phone.push({ title: "task", state: "needs_you", status_code: "question", detail: "device-row-simple", subject: raised, place: "project" });
+  expect(phone.shown.map(({ body }) => body)).toEqual(["확인 필요 · device-row-simple · 일꾼 끝남, 일 남음 · project", "질문 · device-row-simple · project"]);
+});
+
 it("words an unconfirmed brief by which input it was and whether its composer held it", async () => {
   const phone = phoneWorker();
   await phone.words({ needs_you: "내 차례", done: "읽을 것", status_idle: "대기", subject_input_unconfirmed_brief: "브리프 확인 안 됨", subject_input_unconfirmed_letter: "편지 확인 안 됨", subject_input_unconfirmed_brief_held: "브리프 못 받음", subject_input_unconfirmed_letter_held: "편지 못 받음" });

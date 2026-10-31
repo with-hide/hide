@@ -200,9 +200,9 @@ export type UserTurnFact = {
   content: { text: string; choices: string[]; truncated: boolean } | null;
 };
 
-export const ASK_SUBJECT_CAUSES = ["plan_review", "mission_decision", "input_unconfirmed"] as const;
-/** A question the core asks on a row for the agent (`AskSubject`), which every surface words in the interface language: a plan waiting for review, or the decision a Conductor's mission waits on, or a brief or letter Hide typed that the agent never took. */
-export type AskSubject = { cause: "plan_review"; steps: number } | { cause: "mission_decision"; line: string } | { cause: "input_unconfirmed"; input: "brief" | "letter"; spent: boolean; held: boolean };
+export const ASK_SUBJECT_CAUSES = ["plan_review", "mission_decision", "mission_attention", "input_unconfirmed"] as const;
+/** A question the core asks on a row for the agent (`AskSubject`), which every surface words in the interface language: a plan waiting for review, the decision a Conductor's mission waits on, a mission node waiting on the operator to look (its title and why), or a brief or letter Hide typed that the agent never took. */
+export type AskSubject = { cause: "plan_review"; steps: number } | { cause: "mission_decision"; line: string } | { cause: "mission_attention"; node: string; reason: MissionAttentionReason } | { cause: "input_unconfirmed"; input: "brief" | "letter"; spent: boolean; held: boolean };
 
 /** How the label read a turn's end (`LabelEnd`). */
 export type LabelEnd = "working" | "question" | "blocked" | "done" | "waiting" | "unfinished" | "limited";
@@ -1316,10 +1316,32 @@ export type MissionNodeKind = "change" | "research" | "verify" | "external";
 export type MissionDelivery = "pr" | "direct";
 /** A registered agent's life (`hide agent show`'s `runtime`): running, put to sleep by Hide, or ended. */
 export type AgentRuntime = "running" | "asleep" | "ended";
-/** A node's state as its Conductor records it (`mission_node_status`). */
-export type MissionNodeStatus = "planned" | "working" | "waiting" | "review" | "held" | "done" | "failed" | "dropped";
+/** A node's state (`mission_node_status`): not started, in progress (code, CI, review and the merge alike), done, or dropped (PRD mission-node-simple D-01). */
+export type MissionNodeStatus = "planned" | "working" | "done" | "dropped";
 /** Why a node waits on an earlier one (`mission_blocked`, D-46). */
-export type MissionBlocked = "upstream_failed" | "upstream_dropped";
+export type MissionBlocked = "upstream_dropped";
+
+/** Why a node waits on someone to look (`mission_attention_reason`, PRD mission-node-simple D-04). */
+export const MISSION_ATTENTION_REASONS = ["merged_unproven", "worker_ended", "pr_closed", "unplanned_pr", "worktree_dirty", "cleanup_ask", "conductor_failed", "wake_refused", "close_refused"] as const;
+export type MissionAttentionReason = typeof MISSION_ATTENTION_REASONS[number];
+/** Who a raised node waits on (`mission_attention_to`, D-05). */
+export type MissionAttentionTo = "conductor" | "operator";
+/** The `!` a node carries (`AttentionView`): why, the pull request it is about, who looks and since when. */
+export type MissionAttention = { reason: MissionAttentionReason; pr: number | null; to: MissionAttentionTo; since_unix_ms: number };
+/** What Hide itself did to a node (`mission_hide_action`, D-03). */
+export type MissionHideAction = "done" | "attached" | "woke" | "cleaned";
+/** Why Hide woke a worker (`mission_fix_reason`, D-13). */
+export type MissionFixReason = "ci_failed" | "conflict" | "changes_requested";
+/** What Hide did to a node last (`HideMark`, D-07, D-15). */
+export type MissionHideMark = { action: MissionHideAction; pr?: number; why?: MissionFixReason; at_unix_ms: number };
+/** What became of a done node's worktree (`mission_worktree_fate`, D-14). */
+export type MissionWorktreeFate = "removed" | "kept" | "failed" | "left";
+/** How a done node's worktree is cleaned (`mission_worktree_cleanup`, D-14). */
+export type MissionWorktreeCleanup = "auto" | "ask";
+/** What the operator chose for a node that waits on them (`mission_operator_action`, B15, B16). */
+export type MissionOperatorAction = "done" | "drop" | "attach" | "leave" | "cleanup" | "resume";
+/** One of a node's pull requests (`NodePrView`), the current one last. */
+export type MissionNodePr = { number: number; state: PrState | null; url: string | null };
 
 /** A verify node's verdict (`mission_verdict`, PRD mission-plan-visibility B33). */
 export type MissionVerdict = "pass" | "fail";
@@ -1342,7 +1364,7 @@ export type MissionCriterionKind = "own" | "check" | "ci" | "review" | "verify" 
 /** A finish line's state as it stands now (`mission_criterion_state`); a check passed on an older commit reads open (B7). */
 export type MissionCriterionState = "open" | "pass" | "fail" | "skipped";
 /** Who recorded a line (`mission_recorded_role`, D-23). */
-export type MissionRecordedRole = "worker" | "checker" | "conductor" | "hide";
+export type MissionRecordedRole = "worker" | "checker" | "conductor" | "hide" | "operator";
 /** How several checkers decide (`mission_check_rule`, D-07). */
 export type MissionCheckRule = "all" | "majority";
 
@@ -1395,7 +1417,7 @@ export type MissionAnswer = { key: number; text: string; option: number | null; 
 export type MissionAnswerFailure = "conductor_gone" | "device_disconnected" | "send_failed" | "session_unreadable";
 
 /** What a mission event records (`mission_event_kind`, B31). */
-export type MissionEventKind = "planned" | "replanned" | "node" | "retried" | "pr_opened" | "pr_merged" | "landed" | "asked" | "answered" | "answer_undelivered" | "answer_unconfirmed" | "reported" | "cancelled" | "skipped" | "reopened" | "strength";
+export type MissionEventKind = "planned" | "replanned" | "node" | "retried" | "pr_opened" | "pr_merged" | "landed" | "asked" | "answered" | "answer_undelivered" | "answer_unconfirmed" | "reported" | "cancelled" | "skipped" | "reopened" | "strength" | "hide" | "hide_closed" | "raised" | "raised_to_operator" | "resolved";
 
 /** One event of a mission (`MissionEvent`, D-15): only the fields its kind carries are present. */
 export type MissionEvent = {
@@ -1412,6 +1434,13 @@ export type MissionEvent = {
   criterion?: string;
   /** For `strength`, the verification strength the plan changed to. */
   strength?: MissionStrength;
+  /** For `hide`, what Hide did, and for a wake why. */
+  hide?: MissionHideAction;
+  why?: MissionFixReason;
+  /** For `raised` and `raised_to_operator`, why. */
+  reason?: MissionAttentionReason;
+  /** For `resolved`, what the operator chose. */
+  action?: MissionOperatorAction;
 };
 
 /** The events of the mission open in the 보기 slot (`MissionEventsSnapshot`, D-22): `dropped` past the 500 kept (B21). */
@@ -1436,7 +1465,10 @@ export type MissionNode = {
   /** The worker's pane on `machine`, which its status mark and 터미널로 이동 follow. */
   pane_id: string | null;
   machine: string | null;
+  /** The current pull request, the last of `prs`. */
   pr: number | null;
+  /** Every pull request the node holds, the current one last (PRD mission-node-simple D-10). */
+  prs: MissionNodePr[];
   base_pr: number | null;
   branch: string | null;
   pr_state: PrState | null;
@@ -1467,6 +1499,12 @@ export type MissionNode = {
   checks: { passed: number; total: number } | null;
   /** The worker's own plan (PRD hide-plan D-17, D-18). */
   plan?: PlanView | null;
+  /** What waits on someone to look, and who (PRD mission-node-simple D-02). */
+  attention: MissionAttention | null;
+  /** What Hide itself did to the node last (D-07, D-15). */
+  hide: MissionHideMark | null;
+  /** What became of the done node's worktree (D-14). */
+  worktree: MissionWorktreeFate | null;
 };
 
 /** One mission as the map draws it (`MissionView`). */
@@ -1580,7 +1618,7 @@ export type PlansSnapshot = { items: PlanView[] };
 
 /** Settings › Conductor (D-31): the cap, the default scope, the worker candidates, a new mission's verification strength and whether its checkers come from another company. */
 export type ConductorCandidate = { agent: string; model?: string | null; effort?: string | null; purpose: string };
-export type ConductorSettings = { concurrency: number; default_scope: MissionScope; candidates: ConductorCandidate[]; default_strength: MissionStrength; other_vendor: boolean };
+export type ConductorSettings = { concurrency: number; default_scope: MissionScope; candidates: ConductorCandidate[]; default_strength: MissionStrength; other_vendor: boolean; worktree_cleanup: MissionWorktreeCleanup };
 
 /** The 보기 slot: what it opened, oldest first and the one it shows last, and whether the lane draws it. */
 export type DetailSlot = { items: DetailItem[]; shown: boolean };
