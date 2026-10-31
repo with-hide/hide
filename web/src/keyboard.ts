@@ -645,10 +645,14 @@ export function installKeyboard(actions: Actions): () => void {
     languageReported = choice;
     bridge?.reportLanguage(choice);
   };
-  // The app menu carries Desk's command only while Desk is on (D-76).
+  // The app menu carries Desk's command only while Desk is on (D-76). The
+  // host starts with it off, so nothing is reported until a snapshot carries
+  // Desk's section: a reload does not take the item away for a moment.
   let deskReported: boolean | null = null;
   const reportDesk = () => {
-    const on = deskOn(useShellStore.getState().desk);
+    const desk = useShellStore.getState().desk;
+    if (!desk) return;
+    const on = deskOn(desk);
     if (on === deskReported) return;
     deskReported = on;
     bridge?.reportDesk(on);
