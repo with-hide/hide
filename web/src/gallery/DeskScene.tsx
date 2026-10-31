@@ -11,7 +11,7 @@ import { useLayoutEffect, useMemo, useState, type ReactNode } from "react";
 import { createActions } from "../actions";
 import { AgentMark } from "../AgentMark";
 import { DeskAgentBar, DeskComposer, type ComposerAttachment } from "../components/desk/desk-composer";
-import { DeskChat, DeskEmpty, DeskHandedLine, type DeskChatActions } from "../components/desk/desk-chat";
+import { DeskApprovalCard, DeskChat, DeskEmpty, DeskHandedLine, type DeskChatActions } from "../components/desk/desk-chat";
 import { DeskPaneReturn, DeskSidebarRow } from "../components/desk/desk-entry";
 import { DeskJobCard, JobMark, OutputMark } from "../components/desk/desk-job-card";
 import { DeskChatColumn, DeskChatHead, DeskRail, DeskRoom, DeskViewColumn, LaneColumnHead, LaneHeadControls, type ViewTab } from "../components/desk/desk-lane";
@@ -33,7 +33,7 @@ import { useShellStore } from "../store";
 import type { SnapshotRest } from "../snapshot";
 import { missionFixture } from "./MissionScene";
 import {
-  AGENTS, AGENTS_PREPARING, cardSceneItems, conductorThread, deskJob, ENTERED_SESSIONS, everyStateJobs, GALLERY_DONE_THREAD, galleryThread, handoffItems, MENTIONS, MENU_PROJECTS, MENU_SESSIONS,
+  AGENTS, AGENTS_PREPARING, cardSceneItems, conductorThread, deskJob, ENTERED_SESSIONS, everyStateJobs, GALLERY_DONE_THREAD, galleryThread, handoffItems, IRREVERSIBLE_CARD, MENTIONS, MENU_PROJECTS, MENU_SESSIONS,
   mentionItems, missionItems, OUTPUTS, PICTURES, RECORD_THREAD, SESSION_VIEWS, SESSIONS, stateItems, statusItems, storyJobs, switchedItems, WORKER_THREAD,
 } from "./deskSceneData";
 
@@ -55,9 +55,9 @@ export const DESK_SCENES = [
   { state: "pane", label: "터미널로 ⌘J, 나도 참여 중 (B35, B36)" },
   { state: "mission", label: "미션: 지도 + 워커 스레드 (B34)" },
   { state: "outputs", label: "결과물 기준 (B30)" },
-  { state: "chat-states", label: "채팅 상태: 승인 답, 알림 줄, 생각 중 · 중단 (B5-B8, B11, B13-B15)" },
+  { state: "chat-states", label: "채팅 상태: 승인 답 (이 대화에서 계속 허용, 한 줄과 거절), 알림 줄, 생각 중 · 중단 (B5-B8, B11, B13-B15, B47)" },
   { state: "thread-states", label: "스레드 읽기 실패 · 읽는 중 · 빈 · 연결 안 됨 (B23, B27)" },
-  { state: "settings", label: "Settings › Desk (B4, B19, B21)" },
+  { state: "settings", label: "Settings › Desk, 권한의 파일 수정을 묻기로 (B4, B19, B21, B46)" },
   { state: "settings-off", label: "Settings › Desk 꺼짐, 기본값 (D-76, B41)" },
 ] as const;
 
@@ -315,7 +315,8 @@ export function DeskScene({ params }: { params: URLSearchParams }) {
     case "settings":
     case "settings-off":
       sidebar = null;
-      body = <div className="w-(--size-settings-sheet-w) max-w-full p-xl"><DeskSettingsTab settings={{ enabled: state === "settings", default_agent: "claude", location: "desk", cap: 8 }} agents={AGENTS} onChange={noop} /></div>;
+      // On, one row set to 묻기 so both answers show; off is every default, 바로 on each row.
+      body = <div className="w-(--size-settings-sheet-w) max-w-full p-xl"><DeskSettingsTab settings={{ enabled: state === "settings", default_agent: "claude", location: "desk", cap: 8, permissions: { hide: "run", read: "run", shell: "run", edit: state === "settings" ? "ask" : "run" } }} agents={AGENTS} onChange={noop} /></div>;
       break;
   }
   return (
@@ -348,6 +349,8 @@ function CardStates() {
         <DeskHandedLine session={SESSIONS.recordNow} handed line="갤러리 숫자 줄인 거 다크에서도 확인해줘" read onOpen={noop} />
         <h3 className="pt-sm text-micro text-muted-foreground">에이전트 바꿈 · 막힘 · Desk 자신의 승인 (로고 없는 유일한 ! 카드) · 답한 승인</h3>
         <DeskChat items={cardSceneItems()} jobs={{}} agents={AGENTS} {...CHAT_ACTIONS} />
+        <h3 className="pt-sm text-micro text-muted-foreground">거절… 을 누르면 (한 줄은 Desk에게, 비우면 그냥 거절)</h3>
+        <DeskApprovalCard item={{ ...IRREVERSIBLE_CARD, id: 56 }} onAnswer={noop} defaultRefusal="대신 끝날 때까지 기다렸다가 보관해줘" />
       </div>
     </div>
   );

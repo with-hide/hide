@@ -269,7 +269,7 @@ export function DeskScreen({ actions }: { actions: Actions }) {
     onRetry: (job) => actions.deskJobRequeue(job.id),
     onOutput: lane.output,
     onMission: lane.mission,
-    onApproval: (id, allow) => actions.deskApproval(id, allow),
+    onApproval: (id, answer, text) => actions.deskApproval(id, answer, text),
     onNoticeAction,
     onCopy: (text) => void actions.copyText(text, "desk sign-in command"),
     onMention: (mention) => {

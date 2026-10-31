@@ -8,9 +8,9 @@
 // The fields no section carries (marked `wire gap` below) are a thread's
 // own, which the threads node reads from the session record.
 
-import type { DeskAgent, DeskAskKind, DeskItem, DeskJob, DeskMention as WireMention, DeskMission, DeskNotice, DeskOutput, DeskOutputKind, DeskSection, DeskSessionChip, PlanView, PrState, RowMark } from "./snapshot";
+import type { DeskAgent, DeskAskKind, DeskIrreversible, DeskItem, DeskJob, DeskMention as WireMention, DeskMission, DeskNotice, DeskOutput, DeskOutputKind, DeskSection, DeskSessionChip, PlanView, PrState, RowMark } from "./snapshot";
 
-export type { DeskAgent, DeskAgentId, DeskAgentState, DeskApprovalState, DeskChoice, DeskItem, DeskJob, DeskJobFailure, DeskJobState, DeskLive, DeskLocation, DeskMission, DeskOutput, DeskOutputKind, DeskSteps } from "./snapshot";
+export type { DeskAgent, DeskAgentId, DeskAgentState, DeskApprovalAnswer, DeskApprovalState, DeskChoice, DeskIrreversible, DeskItem, DeskJob, DeskJobFailure, DeskJobState, DeskLive, DeskLocation, DeskMission, DeskOutput, DeskOutputKind, DeskPermissionAnswer, DeskPermissionRow, DeskPermissions, DeskSteps } from "./snapshot";
 
 export type DeskSelection = DeskSection["selection"];
 
@@ -41,6 +41,31 @@ export type DeskSessionRef = { name: string; mark: RowMark | null; agent_kind: s
 /** The session a handed line names, from the line's own mark and agent. */
 export function handedSession(item: Extract<DeskItem, { kind: "handed" }>): DeskSessionRef {
   return { name: item.name, mark: item.mark, agent_kind: item.agent_kind };
+}
+
+export type DeskApproval = Extract<DeskItem, { kind: "approval" }>;
+
+/**
+ * The longest line `거절…` takes, in UTF-16 units: three bytes each at most
+ * outside the astral planes, so it stays under the core's 2048-byte refusal
+ * cap (`MAX_REFUSAL_BYTES`) and the core never drops a line typed whole.
+ */
+export const DESK_REFUSAL_MAX = 600;
+
+/**
+ * The irreversible kinds a card asks about, in the core's order, each with
+ * what it is about: the core names one subject, the first kind's that has
+ * one (an archived session's title, a deleted path outside every project).
+ */
+export function approvalIrreversible(item: DeskApproval): { kind: DeskIrreversible; subject: string | null }[] {
+  let subject = item.subject;
+  return item.asks.flatMap((ask) => {
+    if (ask.kind !== "irreversible") return [];
+    const takes = ask.value === "end_working_session" || ask.value === "delete_outside";
+    const own = takes ? subject : null;
+    if (takes) subject = null;
+    return [{ kind: ask.value, subject: own }];
+  });
 }
 
 /** One View of a session, before Desk keeps only its outputs (B30). */

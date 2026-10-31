@@ -207,13 +207,20 @@ export function missionItems(now: number): DeskItem[] {
   ];
 }
 
+/** A card for an irreversible kind (D-83): archiving a session that is still working, as the mockup's. */
+export const IRREVERSIBLE_CARD: Extract<DeskItem, { kind: "approval" }> = {
+  kind: "approval", id: 55, card: "command", command: "hide agent archive agent-18285", folder: "~/projects/herdr-ide", reason: null, state: "waiting",
+  asks: [{ kind: "irreversible", value: "end_working_session" }], subject: "프로젝트 패널 결과 구현", refusal: null,
+};
+
 /** The lines of the card scene that change no state, and Desk's own approval card asked and answered. */
 export function cardSceneItems(): DeskItem[] {
   return [
     { kind: "switch", id: 51, from: "claude", to: "codex", carried: "all" },
     { kind: "notice", id: 52, notice: "blocked", agent: "claude", detail: null },
-    { kind: "approval", id: 53, card: "command", command: "git worktree add ../desk-mention -b desk/mention-button", folder: "~/projects/herdr-ide", reason: "PR로 낼 일이라 새 worktree에서 하려고 해요.", state: "waiting" },
-    { kind: "approval", id: 54, card: "command", command: "git worktree add ../desk-mention -b desk/mention-button", folder: "~/projects/herdr-ide", reason: null, state: "allowed" },
+    { kind: "approval", id: 53, card: "command", command: "git worktree add ../desk-mention -b desk/mention-button", folder: "~/projects/herdr-ide", reason: "PR로 낼 일이라 새 worktree에서 하려고 해요.", state: "waiting", asks: [{ kind: "row", value: "shell" }], subject: null, refusal: null },
+    { kind: "approval", id: 54, card: "command", command: "git worktree add ../desk-mention -b desk/mention-button", folder: "~/projects/herdr-ide", reason: null, state: "allowed", asks: [{ kind: "row", value: "shell" }], subject: null, refusal: null },
+    IRREVERSIBLE_CARD,
   ];
 }
 
@@ -221,9 +228,12 @@ export function cardSceneItems(): DeskItem[] {
 export function stateItems(now: number): DeskItem[] {
   return [
     { kind: "user", id: 61, text: "mention 버튼 브랜치 정리하고 테스트 다시 돌려줘", at_ms: at(now, 9), mentions: [] },
-    { kind: "approval", id: 62, card: "edit", command: "edit web/src/PaneHeader.tsx", folder: "~/projects/herdr-ide", reason: "hover 조건을 고쳐야 해요", state: "allowed" },
-    { kind: "approval", id: 63, card: "command", command: "rm -rf web/dist", folder: "~/projects/herdr-ide", reason: "빌드 결과를 지우고 새로 만들게요", state: "rejected" },
-    { kind: "approval", id: 64, card: "command", command: "pnpm --dir web test", folder: "~/projects/herdr-ide", reason: "테스트를 돌려 볼게요", state: "closed" },
+    { kind: "approval", id: 62, card: "edit", command: "edit web/src/PaneHeader.tsx", folder: "~/projects/herdr-ide", reason: "hover 조건을 고쳐야 해요", state: "allowed", asks: [{ kind: "row", value: "edit" }], subject: null, refusal: null },
+    { kind: "approval", id: 63, card: "command", command: "rm -rf web/dist", folder: "~/projects/herdr-ide", reason: "빌드 결과를 지우고 새로 만들게요", state: "rejected", asks: [{ kind: "row", value: "shell" }], subject: null, refusal: null },
+    { kind: "approval", id: 64, card: "command", command: "pnpm --dir web test", folder: "~/projects/herdr-ide", reason: "테스트를 돌려 볼게요", state: "closed", asks: [{ kind: "row", value: "shell" }], subject: null, refusal: null },
+    { ...IRREVERSIBLE_CARD, id: 91, state: "allowed_conversation" },
+    { ...IRREVERSIBLE_CARD, id: 92, command: "hide agent archive agent-18301", state: "rejected", refusal: "대신 끝날 때까지 기다렸다가 보관해줘" },
+    { kind: "user", id: 93, text: "대신 끝날 때까지 기다렸다가 보관해줘", at_ms: at(now, 2), mentions: [] },
     { kind: "model", id: 65, model: "sonnet", effort: "low" },
     { kind: "switch", id: 66, from: "claude", to: "codex", carried: "trimmed" },
     { kind: "switch", id: 67, from: "codex", to: "claude", carried: "none" },
