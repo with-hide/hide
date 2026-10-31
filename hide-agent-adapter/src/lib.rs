@@ -358,33 +358,45 @@ impl LaunchDialect {
     /// from the CLI's `--help` on 2026-11-01 (Claude Code 2.1.316, Codex
     /// 0.166.0, Cursor CLI 2026.10.14, agy 1.4.12, OpenCode 2.0.29, Grok
     /// 1.0.70, omp 18.7.0), and the `agent CLIs` lane reads it again from the
-    /// pinned version's help on every system.
+    /// pinned version's help on every system. Claude Code 2.1.316 stops a
+    /// start with that flag at a one-time "Bypass Permissions mode" warning
+    /// whose preselected answer exits, so its start also carries the setting
+    /// that skips only that warning, as `--settings` JSON: nothing is written
+    /// to its own files, and a brief typed at the start reaches the prompt.
     pub const fn options(self) -> LaunchOptions {
         match self {
             Self::Antigravity => LaunchOptions {
                 model: &["--model", "{}"],
                 effort: &[],
                 efforts: &[],
-                full_access: FullAccess::Flag(&["--dangerously-skip-permissions"]),
+                full_access: FullAccess::Options(&[&["--dangerously-skip-permissions"]]),
             },
             Self::Claude => LaunchOptions {
                 model: &["--model", "{}"],
                 effort: &["--effort", "{}"],
                 efforts: &["low", "medium", "high", "xhigh", "max"],
-                full_access: FullAccess::Flag(&["--dangerously-skip-permissions"]),
+                full_access: FullAccess::Options(&[
+                    &["--dangerously-skip-permissions"],
+                    &[
+                        "--settings",
+                        r#"{"skipDangerousModePermissionPrompt":true}"#,
+                    ],
+                ]),
             },
             // `-m` is the short form; every agent spells a model `--model`.
             Self::Codex => LaunchOptions {
                 model: &["--model", "{}"],
                 effort: &["-c", "model_reasoning_effort={}"],
                 efforts: &["minimal", "low", "medium", "high", "xhigh"],
-                full_access: FullAccess::Flag(&["--dangerously-bypass-approvals-and-sandbox"]),
+                full_access: FullAccess::Options(&[&[
+                    "--dangerously-bypass-approvals-and-sandbox",
+                ]]),
             },
             Self::Grok => LaunchOptions {
                 model: &["--model", "{}"],
                 effort: &[],
                 efforts: &[],
-                full_access: FullAccess::Flag(&["--always-approve"]),
+                full_access: FullAccess::Options(&[&["--always-approve"]]),
             },
             // Pi 1.0.4 asks before no tool call; its `--approve` trusts
             // project-local files and is not a permission switch.
@@ -398,19 +410,19 @@ impl LaunchDialect {
                 model: &["--model", "{}"],
                 effort: &[],
                 efforts: &[],
-                full_access: FullAccess::Flag(&["--auto-approve"]),
+                full_access: FullAccess::Options(&[&["--auto-approve"]]),
             },
             Self::Cursor => LaunchOptions {
                 model: &["--model", "{}"],
                 effort: &[],
                 efforts: &[],
-                full_access: FullAccess::Flag(&["--force"]),
+                full_access: FullAccess::Options(&[&["--force"]]),
             },
             Self::OpenCode => LaunchOptions {
                 model: &[],
                 effort: &[],
                 efforts: &[],
-                full_access: FullAccess::Flag(&["--auto"]),
+                full_access: FullAccess::Options(&[&["--auto"]]),
             },
         }
     }
@@ -530,19 +542,37 @@ pub struct LaunchOptions {
 /// How a CLI is started without asking before each tool call.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum FullAccess {
-    /// The arguments that turn its questions off, as its `--help` names them.
-    Flag(&'static [&'static str]),
+    /// The options that turn its questions off, each as its words with the
+    /// option's name first: the flag its `--help` names, then any option the
+    /// CLI needs so that it does not stop to confirm that flag.
+    Options(&'static [&'static [&'static str]]),
     /// The CLI asks no permission question, so there is nothing to turn off.
     NotAsked,
 }
 
 impl FullAccess {
-    /// The arguments a full-access start adds; none for `NotAsked`.
-    pub const fn arguments(self) -> &'static [&'static str] {
+    /// Each option a full-access start adds, as its words; none for `NotAsked`.
+    pub const fn options(self) -> &'static [&'static [&'static str]] {
         match self {
-            Self::Flag(arguments) => arguments,
+            Self::Options(options) => options,
             Self::NotAsked => &[],
         }
+    }
+
+    /// The words a full-access start adds, in order.
+    pub fn arguments(self) -> Vec<&'static str> {
+        self.options()
+            .iter()
+            .flat_map(|option| option.iter().copied())
+            .collect()
+    }
+
+    /// Each option's name, which the CLI's `--help` lists.
+    pub fn names(self) -> Vec<&'static str> {
+        self.options()
+            .iter()
+            .filter_map(|option| option.first().copied())
+            .collect()
     }
 }
 

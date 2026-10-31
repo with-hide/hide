@@ -433,6 +433,14 @@ export type FixtureLabel = {
   toolOutputs?: string[];
 };
 
+/**
+ * What every start and restart Hide makes of Claude carries by default (Settings > Agents, 전부 허용):
+ * its full-access flag and the setting that skips the warning Claude Code stops that flag at. Hide
+ * passes these as argv; `CLAUDE_FULL_ACCESS_LINE` is them as a process listing joins them.
+ */
+export const CLAUDE_FULL_ACCESS = ["--dangerously-skip-permissions", "--settings", '{"skipDangerousModePermissionPrompt":true}'];
+export const CLAUDE_FULL_ACCESS_LINE = CLAUDE_FULL_ACCESS.join(" ");
+
 /** Where the fixture's Claude transcripts live: the fixture HOME's, which
  * `startHided` links into the daemon's HOME. */
 export function claudeProjects(fixture: Pick<HerdrFixture, "root">): string {

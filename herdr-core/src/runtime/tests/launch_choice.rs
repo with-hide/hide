@@ -33,7 +33,7 @@ fn choice(model: &str, effort: &str) -> LaunchChoice {
 fn full_access(kind: &str) -> &'static [&'static str] {
     match kind {
         "codex" => &["--dangerously-bypass-approvals-and-sandbox"],
-        _ => &["--dangerously-skip-permissions"],
+        _ => &crate::agent_permission::CLAUDE_FULL_ACCESS,
     }
 }
 
@@ -662,7 +662,7 @@ fn a_wake_follows_the_permission_saved_now_and_adds_nothing_for_ask() {
         ),
         (
             json!({"mode": "full"}),
-            vec!["--dangerously-skip-permissions"],
+            crate::agent_permission::CLAUDE_FULL_ACCESS.to_vec(),
         ),
     ] {
         let (mut runtime, folder) = started("claude", Some(&choice("sonnet", "high")));

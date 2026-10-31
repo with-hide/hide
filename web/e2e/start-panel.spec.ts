@@ -97,7 +97,7 @@ test("⌘K Start an agent… starts an agent in the checkout in front with the c
       .poll(
         () => {
           const info = spawnSync(herdr.bin, ["pane", "process-info", "--pane", pane], { env: herdr.env, encoding: "utf8", timeout: 10_000 }).stdout;
-          return info.includes("--dangerously-skip-permissions") && info.includes("--model") && info.includes("opus") && info.includes("첫 지시 확인용 문장");
+          return info.includes("--dangerously-skip-permissions") && info.includes("skipDangerousModePermissionPrompt") && info.includes("--model") && info.includes("opus") && info.includes("첫 지시 확인용 문장");
         },
         { timeout: 30_000 },
       )

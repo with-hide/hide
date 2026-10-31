@@ -7,7 +7,7 @@
 
 import { expect, test } from "@playwright/test";
 import path from "node:path";
-import { claudeProjects, setFixtureSession, startHerdr, writeFixtureTranscript } from "./herdr-fixture";
+import { CLAUDE_FULL_ACCESS_LINE, claudeProjects, setFixtureSession, startHerdr, writeFixtureTranscript } from "./herdr-fixture";
 import { startHided, type Daemon } from "./hided-fixture";
 import { countSent, screenshot } from "./wire";
 import { chord } from "./chords";
@@ -92,7 +92,7 @@ test("an agent slept from the pane menu keeps its row and wakes in the same pane
     // Herdr's schema makes argv optional and nullable; a process reported without
     // it must not end the poll before the resumed agent is reported.
     await expect.poll(() => processInfo().foreground_processes.map((process) => process.argv?.join(" ")), { timeout: 30_000 }).toContain(
-      `claude --resume ${SESSION} --dangerously-skip-permissions`,
+      `claude --resume ${SESSION} ${CLAUDE_FULL_ACCESS_LINE}`,
     );
     await expect(pane.locator("[data-pane-sleep]")).toHaveCount(0, { timeout: 30_000 });
     await expect(row.locator('[data-agent-status="sleeping"]')).toHaveCount(0);

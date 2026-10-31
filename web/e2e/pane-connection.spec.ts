@@ -12,7 +12,7 @@ import { expect, test, type Page } from "@playwright/test";
 import fs from "node:fs";
 import path from "node:path";
 import { agentRunner, type AgentRun, type HideAnswer } from "./agent-pane";
-import { claudeProjects, liveHandoff, setFixtureLifecycle, setFixtureSession, startHerdr, writeFixtureTranscript, type HerdrFixture } from "./herdr-fixture";
+import { CLAUDE_FULL_ACCESS_LINE, claudeProjects, liveHandoff, setFixtureLifecycle, setFixtureSession, startHerdr, writeFixtureTranscript, type HerdrFixture } from "./herdr-fixture";
 import { startHided, type Daemon } from "./hided-fixture";
 import { fixtureExecutable } from "./platform-fixture";
 import { snapshotWorking } from "./subagent-counts";
@@ -48,7 +48,7 @@ function installHook(home: string): void {
 /** Runs the real helper for one of the agent's hook events, the way the agent would run it in `pane`: its input names the session. */
 /** Whether the pane's foreground now runs the same conversation again; the agent runner execs as `.../claude`. */
 /** The reopen continues the conversation with the default 전부 허용 option, which every restart Hide makes carries. */
-const RESUME = `--resume ${SESSION} --dangerously-skip-permissions`;
+const RESUME = `--resume ${SESSION} ${CLAUDE_FULL_ACCESS_LINE}`;
 const resumed = (herdr: HerdrFixture, pane: string): boolean =>
   processArgv(herdr, pane).some((argv) => argv === `claude ${RESUME}` || argv.endsWith(`/claude ${RESUME}`) || argv.endsWith(`\\claude.exe ${RESUME}`));
 

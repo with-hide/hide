@@ -5,7 +5,7 @@ import { expect, test, type Page } from "@playwright/test";
 import { execFileSync, spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
-import { declareParent, herdrHasFocus, labelAgent, setFixtureLifecycle, setFixtureSession, spawnAgent, startHerdr, type HerdrFixture } from "./herdr-fixture";
+import { CLAUDE_FULL_ACCESS_LINE, declareParent, herdrHasFocus, labelAgent, setFixtureLifecycle, setFixtureSession, spawnAgent, startHerdr, type HerdrFixture } from "./herdr-fixture";
 import { startHided, type Daemon } from "./hided-fixture";
 import { openTaskFolds, screenshot, showTasks } from "./wire";
 
@@ -27,7 +27,7 @@ function resumedIn(herdr: HerdrFixture, session: string): string | null {
     const read = spawnSync(herdr.bin, ["pane", "process-info", "--pane", pane], { env: herdr.env, encoding: "utf8", timeout: 10_000 });
     if (read.status !== 0) continue;
     const info = JSON.parse(read.stdout) as ProcessInfo;
-    if (info.result.process_info.foreground_processes.some((process) => process.argv?.join(" ") === `claude --resume ${session} --dangerously-skip-permissions`)) return pane;
+    if (info.result.process_info.foreground_processes.some((process) => process.argv?.join(" ") === `claude --resume ${session} ${CLAUDE_FULL_ACCESS_LINE}`)) return pane;
   }
   return null;
 }

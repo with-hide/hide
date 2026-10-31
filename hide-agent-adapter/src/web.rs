@@ -22,7 +22,7 @@ pub struct WebAdapter {
     /// The arguments a start adds for full access (Settings › Agents, 권한):
     /// empty for an agent that asks no permission question, absent for one
     /// Hide does not start.
-    pub full_access: Option<&'static [&'static str]>,
+    pub full_access: Option<Vec<&'static str>>,
     /// What Settings calls the agent's hook piece: a hook entry, a plugin
     /// file or an extension file; absent for an agent Hide writes no hook for.
     pub hook_kind: Option<HookKind>,

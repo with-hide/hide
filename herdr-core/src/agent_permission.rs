@@ -81,12 +81,9 @@ impl AgentPermission {
 /// prompt. None for a kind Hide does not start.
 pub(crate) fn arguments(kind: &str, permission: &AgentPermission) -> Vec<String> {
     match permission {
-        AgentPermission::Full => hide_agent_adapter::adapter(kind)
-            .and_then(|row| row.start)
-            .map(|start| start.options().full_access.arguments())
-            .unwrap_or_default()
+        AgentPermission::Full => full_access(kind)
             .iter()
-            .map(|flag| (*flag).to_owned())
+            .flat_map(|option| option.iter().map(|word| (*word).to_owned()))
             .collect(),
         AgentPermission::Ask => Vec::new(),
         AgentPermission::Custom { options, .. } => options.clone(),
@@ -104,6 +101,14 @@ pub(crate) fn every_agent_asks() -> AgentPermissions {
         .collect()
 }
 
+/// Each option a full-access start of a `kind` agent adds, as its words with
+/// the option's name first; none for a kind Hide does not start.
+pub(crate) fn full_access(kind: &str) -> &'static [&'static [&'static str]] {
+    hide_agent_adapter::adapter(kind)
+        .and_then(|row| row.start)
+        .map_or(&[], |start| start.options().full_access.options())
+}
+
 /// `kind`'s choice in a machine's `permissions`.
 pub(crate) fn of(permissions: &AgentPermissions, kind: &str) -> AgentPermission {
     hide_agent_adapter::adapter(kind)
@@ -111,6 +116,16 @@ pub(crate) fn of(permissions: &AgentPermissions, kind: &str) -> AgentPermission 
         .cloned()
         .unwrap_or_default()
 }
+
+/// Claude Code's full-access words as 2.1.316 needs them (its help, and its
+/// warning seen in an empty HOME on 2026-11-01): what tests expect a start to
+/// carry, written here once rather than read from the adapter.
+#[cfg(test)]
+pub(crate) const CLAUDE_FULL_ACCESS: [&str; 3] = [
+    "--dangerously-skip-permissions",
+    "--settings",
+    r#"{"skipDangerousModePermissionPrompt":true}"#,
+];
 
 #[cfg(test)]
 mod tests {
@@ -124,7 +139,7 @@ mod tests {
     fn full_access_adds_each_agents_own_option_and_ask_adds_nothing() {
         // Each CLI's `--help`, read 2026-11-01.
         for (kind, expected) in [
-            ("claude", words(&["--dangerously-skip-permissions"])),
+            ("claude", words(&CLAUDE_FULL_ACCESS)),
             (
                 "codex",
                 words(&["--dangerously-bypass-approvals-and-sandbox"]),

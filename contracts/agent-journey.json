@@ -12,7 +12,8 @@
       "{}"
     ],
     "full_access_flag": [
-      "--dangerously-skip-permissions"
+      "--dangerously-skip-permissions",
+      "--settings"
     ],
     "untitled": "Claude",
     "cells": {

@@ -353,7 +353,7 @@ it("shows each installed agent's permission with the command Hide runs, full acc
   const set = [agent("claude-code"), agent("codex"), agent("opencode"), agent("pi")];
   const { q, text, unmount } = await mount(state([device("local", { kit: kit(set) })]));
   // The flag each CLI's --help names (read 2026-11-01), after its program.
-  expect(q('[data-agent-permission-command="local:claude-code"]')?.textContent).toBe("claude --dangerously-skip-permissions");
+  expect(q('[data-agent-permission-command="local:claude-code"]')?.textContent).toBe(`claude --dangerously-skip-permissions --settings '{"skipDangerousModePermissionPrompt":true}'`);
   expect(q('[data-agent-permission-command="local:codex"]')?.textContent).toBe("codex --dangerously-bypass-approvals-and-sandbox");
   expect(q('[data-agent-permission-command="local:opencode"]')?.textContent).toBe("opencode --auto");
   expect(q('[data-agent-permission-select="local:claude-code"]')?.textContent).toContain("Allow everything");

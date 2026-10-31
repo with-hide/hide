@@ -1859,11 +1859,23 @@ mod tests {
             LoadDisposition::Unrecognized(vec![UnrecognizedField::AgentPermissions])
         );
         let asks = |permissions: &crate::agent_permission::AgentPermissions| {
-            ["claude-code", "codex", "grok", "opencode", "omp", "antigravity", "pi"]
-                .into_iter()
-                .all(|agent| permissions.get(agent) == Some(&AgentPermission::Ask))
+            [
+                "claude-code",
+                "codex",
+                "grok",
+                "opencode",
+                "omp",
+                "antigravity",
+                "pi",
+            ]
+            .into_iter()
+            .all(|agent| permissions.get(agent) == Some(&AgentPermission::Ask))
         };
-        assert!(asks(&state.agent_permissions), "{:?}", state.agent_permissions);
+        assert!(
+            asks(&state.agent_permissions),
+            "{:?}",
+            state.agent_permissions
+        );
         assert_eq!(
             state.device_agent_permissions.keys().collect::<Vec<_>>(),
             ["mini"]

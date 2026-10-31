@@ -4582,30 +4582,30 @@ mod tests {
                 "--",
                 true,
                 Some("fixture-model"),
-                Some("--dangerously-skip-permissions"),
+                &crate::agent_permission::CLAUDE_FULL_ACCESS[..],
             ),
             (
                 "codex",
                 "--",
                 true,
                 Some("fixture-model"),
-                Some("--dangerously-bypass-approvals-and-sandbox"),
+                &["--dangerously-bypass-approvals-and-sandbox"],
             ),
             (
                 "grok",
                 "--",
                 false,
                 Some("fixture-model"),
-                Some("--always-approve"),
+                &["--always-approve"],
             ),
-            ("opencode", "--prompt", false, None, Some("--auto")),
-            ("pi", "--", false, Some("fixture-model"), None),
+            ("opencode", "--prompt", false, None, &["--auto"]),
+            ("pi", "--", false, Some("fixture-model"), &[]),
             (
                 "omp",
                 "--",
                 true,
                 Some("fixture-model"),
-                Some("--auto-approve"),
+                &["--auto-approve"],
             ),
         ] {
             let server = server(vec![
@@ -4647,7 +4647,7 @@ mod tests {
                 ["pane.process_info", "agent.start"],
                 "{kind}"
             );
-            let mut expected: Vec<&str> = full_access.into_iter().collect();
+            let mut expected: Vec<&str> = full_access.to_vec();
             expected.extend(model.into_iter().flat_map(|m| ["--model", m]));
             if extra_roots {
                 expected.extend(["--add-dir", "/work/my app"]);

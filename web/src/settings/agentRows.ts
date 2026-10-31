@@ -208,9 +208,18 @@ export function permissionOffer(agentId: string): PermissionOffer | null {
   return { program: adapter.program, fullAccess: [...adapter.full_access], asks: adapter.full_access.length > 0 };
 }
 
-/** The options a start adds after the program for this choice, as the row shows them. */
+/** One argument as a shell reads it back: bare when it is plain, single-quoted otherwise. */
+function shellWord(word: string): string {
+  return /^[A-Za-z0-9_@%+=:,./-]+$/.test(word) ? word : `'${word.replaceAll("'", `'\\''`)}'`;
+}
+
+/**
+ * The options a start adds after the program for this choice, as the row shows them: full access
+ * quoted as a shell would need it (Claude's carries a JSON value), so the line is what runs and
+ * reads back the same when typed into 직접 입력.
+ */
 export function permissionOptions(offer: PermissionOffer, permission: { mode: string; text?: string }): string {
-  if (permission.mode === "full") return offer.fullAccess.join(" ");
+  if (permission.mode === "full") return offer.fullAccess.map(shellWord).join(" ");
   if (permission.mode === "custom") return permission.text ?? "";
   return "";
 }

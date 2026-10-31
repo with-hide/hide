@@ -71,7 +71,9 @@
     "can_pick_model": true,
     "program": "claude",
     "full_access": [
-      "--dangerously-skip-permissions"
+      "--dangerously-skip-permissions",
+      "--settings",
+      "{\"skipDangerousModePermissionPrompt\":true}"
     ],
     "hook_kind": "hook"
   },

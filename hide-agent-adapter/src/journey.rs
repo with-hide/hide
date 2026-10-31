@@ -19,10 +19,10 @@ pub struct JourneyAdapter {
     /// How the start command takes a model, `{}` replaced by the value;
     /// empty when the agent takes none.
     pub model_flag: &'static [&'static str],
-    /// The arguments a full-access start adds, which the `agent CLIs` lane
-    /// finds in each pinned CLI's `--help`; empty when the agent asks no
-    /// permission question or Hide starts none.
-    pub full_access_flag: &'static [&'static str],
+    /// The name of each option a full-access start adds, which the `agent
+    /// CLIs` lane finds in each pinned CLI's `--help`; empty when the agent
+    /// asks no permission question or Hide starts none.
+    pub full_access_flag: Vec<&'static str>,
     /// The name a row shows for the agent while it has no task title, which
     /// the `title` cell must see replaced (`sidebar::provider_name`).
     pub untitled: &'static str,
@@ -254,7 +254,7 @@ pub fn journey_contract() -> impl Iterator<Item = JourneyAdapter> {
             model_flag: row.start.map_or(&[], |start| start.options().model),
             full_access_flag: row
                 .start
-                .map_or(&[], |start| start.options().full_access.arguments()),
+                .map_or_else(Vec::new, |start| start.options().full_access.names()),
             untitled: row.sidebar_label.unwrap_or(row.herdr.name),
             cells,
             request_budget: row.start.map(|start| turns * requests_per_turn(start)),

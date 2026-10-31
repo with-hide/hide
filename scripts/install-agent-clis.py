@@ -14,7 +14,8 @@ a row that names why it needs them (`install_scripts`). A CLI that answers
 another version than the table's fails the install, so a vendor release moves
 the pin in a pull request before a lane measures it. So does a CLI whose
 `--help` lists no full-access option its adapter declares
-(contracts/agent-journey.json, `full_access_flag`): Settings › Agents adds it
+(contracts/agent-journey.json, `full_access_flag`, each option's name):
+Settings › Agents adds it
 to every start Hide makes, and a CLI that does not know it would refuse to
 start.
 """

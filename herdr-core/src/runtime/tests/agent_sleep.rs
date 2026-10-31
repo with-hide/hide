@@ -677,7 +677,7 @@ fn durable_dormant_journey_in(kind: &'static str, interference: &'static str, op
             // No saved 권한: each CLI's full-access option (its help,
             // read 2026-11-01) goes before the choice.
             let access: &[&str] = match kind {
-                "claude" => &["--dangerously-skip-permissions"],
+                "claude" => &crate::agent_permission::CLAUDE_FULL_ACCESS,
                 "codex" => &["--dangerously-bypass-approvals-and-sandbox"],
                 "opencode" => &["--auto"],
                 "omp" => &["--auto-approve"],

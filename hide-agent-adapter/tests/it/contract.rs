@@ -608,26 +608,34 @@ fn a_launch_choice_reaches_each_agent_only_as_its_declared_options_take_it() {
 /// Each started agent's full-access option, as its CLI's `--help` named it on
 /// 2026-11-01 (Claude Code 2.1.316, Codex 0.166.0, Grok 1.0.70, OpenCode
 /// 2.0.29, omp 18.7.0, agy 1.4.12); Pi 1.0.4 asks no permission question.
-/// The `agent CLIs` lane finds each again in the pinned CLI's help.
+/// Claude Code also takes the setting that skips the warning it stops a
+/// bypass start at (seen on 2.1.316 in an empty HOME, 2026-11-01). The
+/// `agent CLIs` lane finds each option's name again in the pinned CLI's help.
 #[test]
 fn every_started_agent_declares_how_it_starts_without_permission_questions() {
     use hide_agent_adapter::FullAccess;
     let expected: &[(&str, FullAccess)] = &[
         (
             "claude-code",
-            FullAccess::Flag(&["--dangerously-skip-permissions"]),
+            FullAccess::Options(&[
+                &["--dangerously-skip-permissions"],
+                &[
+                    "--settings",
+                    r#"{"skipDangerousModePermissionPrompt":true}"#,
+                ],
+            ]),
         ),
         (
             "codex",
-            FullAccess::Flag(&["--dangerously-bypass-approvals-and-sandbox"]),
+            FullAccess::Options(&[&["--dangerously-bypass-approvals-and-sandbox"]]),
         ),
-        ("grok", FullAccess::Flag(&["--always-approve"])),
-        ("opencode", FullAccess::Flag(&["--auto"])),
+        ("grok", FullAccess::Options(&[&["--always-approve"]])),
+        ("opencode", FullAccess::Options(&[&["--auto"]])),
         ("pi", FullAccess::NotAsked),
-        ("omp", FullAccess::Flag(&["--auto-approve"])),
+        ("omp", FullAccess::Options(&[&["--auto-approve"]])),
         (
             "antigravity",
-            FullAccess::Flag(&["--dangerously-skip-permissions"]),
+            FullAccess::Options(&[&["--dangerously-skip-permissions"]]),
         ),
     ];
     let started: Vec<_> = ADAPTERS
@@ -637,8 +645,8 @@ fn every_started_agent_declares_how_it_starts_without_permission_questions() {
     assert_eq!(started, expected);
     for (id, access) in started {
         assert!(
-            access.arguments().iter().all(|flag| flag.starts_with("--")),
-            "{id}: a full-access argument is an option"
+            access.names().iter().all(|name| name.starts_with("--")),
+            "{id}: each full-access option starts with its name"
         );
     }
 }
