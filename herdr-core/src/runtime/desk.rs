@@ -631,6 +631,7 @@ impl Runtime {
         if enabled != before.enabled {
             if enabled {
                 self.order(Order::Check);
+                self.desk_start_queued();
             } else {
                 // Off ends the process and its turn; the sessions it started
                 // and the conversation stay.
@@ -1082,6 +1083,16 @@ impl Runtime {
         self.desk.worker = Some(worker::Handle { orders });
         self.desk.stored.settings.enabled = true;
         self.compose_desk_sections();
+    }
+
+    /// Lets Desk's queue start a waiting spawn on its own thread, as
+    /// `install_desk` does; `notifier` hears each answer it applies.
+    pub(in crate::runtime) fn hand_test_desk(
+        &mut self,
+        runtime: Weak<Mutex<Runtime>>,
+        notifier: ChangeNotifier,
+    ) {
+        self.desk.handle = Some(jobs::DeskHandle { runtime, notifier });
     }
 
     /// Runs Desk with a session open, so its process's commands reach the

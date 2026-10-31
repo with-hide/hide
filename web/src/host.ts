@@ -156,6 +156,8 @@ export type HostBridge = {
   reportBindings(bindings: Record<string, string>): void;
   /** Hands the host the core's explicit interface language (`ui_state.interface_language`, null for the system's) once a snapshot confirms it; the app menu and status page are drawn in it. */
   reportLanguage(language: string | null): void;
+  /** Hands the host whether Settings › Desk has Desk on (D-76): the app menu carries Desk's command only then. */
+  reportDesk(on: boolean): void;
   /** Shows a file or folder of this computer, named in the wire spelling, in the OS file manager, selected in its parent folder; nothing is opened. */
   revealPath(path: string): void;
   /** The native folder picker, modal to the window; the chosen folder in the wire spelling, or null when the operator cancelled. */

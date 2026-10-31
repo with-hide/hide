@@ -84,6 +84,7 @@ import { homeOpening } from "./hideAiOrigin";
 import { agentsByPane, allAgents as allPaneAgents } from "./paneAgents";
 import { archiveWorking } from "./archive";
 import { beginOpening } from "./opening";
+import { deskOn } from "./desk";
 import { afterKeep, openThread as openDeskThread, toggleLane as toggleDeskLane } from "./deskLane";
 import { useShellStore } from "./store";
 import { useUiStore, type MainView, type OverviewPlace, type PendingClose, type PendingViewsClose } from "./ui";
@@ -2180,8 +2181,9 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
       dispatch({ schema_version: 2, kind: "suggestion_action", payload: { workspace_id: workspaceId, id, action, ...(preview === undefined ? {} : { preview }) } });
     },
 
-    /** Opens Desk's room (PRD Desk 1차 B1). */
+    /** Opens Desk's room (PRD Desk 1차 B1); switched off in Settings › Desk, there is no room to open (D-76). */
     openDesk() {
+      if (!deskOn(useShellStore.getState().desk)) return diagnostic("desk: switched off");
       ui().setScreen({ kind: "desk" });
     },
 
@@ -2192,6 +2194,8 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
      * its tool column. Anywhere else there is nowhere to go.
      */
     deskTerminal() {
+      // A menu item or a host's chord can still ask while Desk is off; it goes nowhere (D-76).
+      if (!deskOn(useShellStore.getState().desk)) return diagnostic("desk terminal: Desk is switched off");
       const section = useShellStore.getState().deskJobs;
       const jobs = [...(section?.jobs ?? []), ...(section?.workers ?? [])];
       const state = ui();

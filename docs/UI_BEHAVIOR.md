@@ -932,8 +932,10 @@ Web owners: `web/src/DeskScreen.tsx` (the room, the sidebar row, Settings › De
 
 The sidebar's `◆ Desk` row, under its head, opens the room in the center with the chat and the composer; Settings › Desk holds the default agent, where tasks run and the cap.
 Desk is off until the operator turns on `Desk 사용` at the top of Settings › Desk (D-76, B41); the switch is the core's, kept with Desk's other settings, and moves every window at once without a restart.
-While it is off there is no `◆ Desk` row, no `Desk로` on a thread's Agent tab, ⌘J (Ctrl+Shift+J, ⌥⇧J or Alt+Shift+J in a browser) is not Hide's and is not listed in the shortcut sheet, and Desk's agent does not run; the rest of Settings › Desk is dimmed and out of reach, its values kept, as Hide AI's are when it is off.
+While it is off there is no `◆ Desk` row, no `Desk로` on a thread's Agent tab, ⌘J (Ctrl+Shift+J, ⌥⇧J or Alt+Shift+J in a browser) is not Hide's and the desktop app's View menu has no `Desk thread ⇄ terminal`, and Desk's agent does not run; the rest of Settings › Desk is dimmed and out of reach, its values kept, as Hide AI's are when it is off.
+The shortcut sheet leaves Desk's row out while Desk is off, and Settings › Shortcuts still lists it, so its binding can be changed and is kept.
 Turning it off ends Desk's agent and its turn, a waiting card closing as a refusal, and leaves the sessions Desk started and its conversation as they are: the sessions stay ordinary sessions in the sidebar.
+A spawn waiting in Desk's queue stays there while Desk is off, started by nothing and removed by nothing, and the queue starts it in order once Desk is on again.
 Turned off while the room is in front, the room goes and the panel used before it comes back, or All projects when none is left (`leaveDesk` in `web/src/keyboard.ts`).
 The composer keeps what the operator is writing while they go elsewhere, and clears it once the conversation shows the message, so a refused send keeps the words.
 `@` opens the menu on the word the caret ends; a picked session or project is written `@name` and sent as its `@session(<pane> <name>)` or `@project(<path> <name>)` token, a project named by its primary checkout's path (the folder's own for a project with none), which Desk's agent hands to `--repo` and pressing its chip opens; one the operator deleted is not sent.

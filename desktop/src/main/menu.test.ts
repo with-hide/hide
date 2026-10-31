@@ -40,6 +40,16 @@ describe("the app menu (B9)", () => {
     }
   });
 
+  it("carries Desk's command and its chord only while Desk is on, on every system (D-76)", () => {
+    for (const system of ["mac", "pc"] as const) {
+      const ids = (desk?: boolean) => menuTemplate({ appName: "hide", send: () => undefined, developer: false, system, t: english, desk }).flatMap((menu) => (Array.isArray(menu.submenu) ? menu.submenu : [])).map((item) => item.id);
+      expect(ids()).not.toContain("desk_terminal");
+      expect(ids(false)).not.toContain("desk_terminal");
+      const on = menuTemplate({ appName: "hide", send: () => undefined, developer: false, system, t: english, desk: true }).flatMap((menu) => (Array.isArray(menu.submenu) ? menu.submenu : [])).find((item) => item.id === "desk_terminal");
+      expect(on?.accelerator).toBe(system === "mac" ? "Command+J" : "Control+Shift+J");
+    }
+  });
+
   it("shows each item with its electron chord and sends its id when clicked", () => {
     const sent: string[] = [];
     const template = menuTemplate({ appName: "hide", send: (id) => sent.push(id), developer: false, system: "mac", t: english });

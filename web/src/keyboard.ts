@@ -645,13 +645,23 @@ export function installKeyboard(actions: Actions): () => void {
     languageReported = choice;
     bridge?.reportLanguage(choice);
   };
+  // The app menu carries Desk's command only while Desk is on (D-76).
+  let deskReported: boolean | null = null;
+  const reportDesk = () => {
+    const on = deskOn(useShellStore.getState().desk);
+    if (on === deskReported) return;
+    deskReported = on;
+    bridge?.reportDesk(on);
+  };
   const unsubscribeBindings = bridge ? useShellStore.subscribe(() => {
     report();
     reportLanguage();
+    reportDesk();
   }) : null;
   if (bridge) {
     report();
     reportLanguage();
+    reportDesk();
   }
 
   window.addEventListener("keydown", onKeyDown, true);

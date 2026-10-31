@@ -341,6 +341,11 @@ impl Runtime {
     /// Starts the first waiting job when fewer than the cap's places are
     /// taken.
     fn desk_start_next(&mut self, places: usize) -> bool {
+        // Switched off, the queue keeps its spawns and starts none (D-76);
+        // turning Desk on again starts them in order.
+        if !self.desk.stored.settings.enabled {
+            return false;
+        }
         let Some(handle) = self.desk.handle.clone() else {
             return false;
         };
