@@ -1108,11 +1108,17 @@ test("refresh focus: a page that loads itself again never takes the keyboard fro
   const refresh = `${origin}/refresh.html`;
   expect(await openFromCli(refresh, ["--wait"])).toMatchObject({ ok: true });
   await expect.poll(async () => (await viewOf(refresh)).visible).toBe(true);
-  // The window takes the keyboard, then the terminal takes it in the window.
+  // The window takes the keyboard (through the page, the only way the
+  // fixture makes it key), then the terminal takes it back, natively and in
+  // the shell, so its area holds the keyboard before the page loads again.
   await focusPage(app, { url: refresh });
+  const keyboardOnPage = page.locator("[data-keyboard-area=true] [data-view-tab-bar]");
+  await expect(keyboardOnPage).toHaveCount(1);
+  // Playwright's click reaches the shell's renderer, not the native responder.
   await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]!.webContents.focus());
+  await page.locator('[data-pane-view][data-focused="true"] .xterm-screen').click();
   const terminal = page.locator('[data-pane-view][data-focused="true"] .xterm-helper-textarea');
-  await terminal.focus();
+  await expect(keyboardOnPage).toHaveCount(0);
   const holds = () => app!.evaluate(({ BrowserWindow }, url) => {
     const window = BrowserWindow.getAllWindows().find((candidate) => candidate.getParentWindow() === null)!;
     const child = window.contentView.children.find((view) => (view as { webContents?: Electron.WebContents }).webContents?.getURL() === url) as unknown as { webContents: Electron.WebContents } | undefined;
@@ -1123,7 +1129,7 @@ test("refresh focus: a page that loads itself again never takes the keyboard fro
   await expect.poll(returned, { message: "three of the page's loads took the keyboard and gave it back", timeout: 15_000 }).toBeGreaterThanOrEqual(3);
   await expect.poll(holds).toEqual({ window: true, shell: true, page: false });
   expect(await terminal.evaluate((element) => element === document.activeElement), "the terminal keeps the shell's keyboard").toBe(true);
-  await expect(page.locator("[data-keyboard-area=true] [data-view-tab-bar]"), "the page's area never became the keyboard's").toHaveCount(0);
+  await expect(keyboardOnPage, "the page's area never became the keyboard's").toHaveCount(0);
 });
 
 test("expand: Zoom pane in a focused page expands the lane and back while the page keeps the keyboard", { tag: NEEDS_FOCUS }, async () => {
