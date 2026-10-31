@@ -247,11 +247,34 @@ mod sys {
     /// does not have is refused by `sigaction` and passed over.
     const LAST_SIGNAL: libc::c_int = 64;
 
+    /// How often, and how far apart, a start is tried while its program is
+    /// busy (`ETXTBSY`): a program this process has just written (a holder
+    /// copied into its version folder) stays busy while a child another
+    /// thread forked meanwhile still holds the writer's descriptor, which
+    /// close-on-exec closes only once that child runs its own program.
+    const BUSY_TRIES: u32 = 20;
+    const BUSY_PAUSE: std::time::Duration = std::time::Duration::from_millis(10);
+
     pub(super) fn own_job() -> io::Result<Option<super::JobLimits>> {
         Ok(None)
     }
 
     pub(super) fn start(resident: &ResidentCommand, lent: &[Lent<'_>]) -> io::Result<Resident> {
+        let mut tries = 1;
+        loop {
+            match start_once(resident, lent) {
+                // A failed start leaves nothing running, so it is tried
+                // again whole.
+                Err(error) if error.raw_os_error() == Some(libc::ETXTBSY) && tries < BUSY_TRIES => {
+                    tries += 1;
+                    super::super::pause(BUSY_PAUSE);
+                }
+                started => return started,
+            }
+        }
+    }
+
+    fn start_once(resident: &ResidentCommand, lent: &[Lent<'_>]) -> io::Result<Resident> {
         let count = lent.len();
         let mut sources = [-1 as RawFd; MAX_LENT];
         for (slot, handle) in sources.iter_mut().zip(lent) {

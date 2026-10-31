@@ -119,7 +119,12 @@ fn role_command(role: &str) -> Command {
 
 /// The `resident` role, as a resident start runs it.
 fn resident_command() -> ResidentCommand {
-    let mut command = ResidentCommand::new(std::env::current_exe().unwrap());
+    resident_command_of(&std::env::current_exe().unwrap())
+}
+
+/// The `resident` role, run from `program`, a copy of this test binary.
+fn resident_command_of(program: &Path) -> ResidentCommand {
+    let mut command = ResidentCommand::new(program);
     command
         .args([
             "--exact",
@@ -173,13 +178,16 @@ fn wait_until(what: &str, done: impl Fn() -> bool) {
 /// Starts the `resident` role as a resident child of this process and reads
 /// its report.
 fn start_reporting_resident() -> (Started, String) {
+    start_reporting(&resident_command())
+}
+
+fn start_reporting(command: &ResidentCommand) -> (Started, String) {
     let (reader, writer) = std::io::pipe().unwrap();
-    let command = resident_command();
     #[cfg(unix)]
     let lent = [std::os::fd::AsFd::as_fd(&writer)];
     #[cfg(windows)]
     let lent = [std::os::windows::io::AsHandle::as_handle(&writer)];
-    let pid = start_resident(&command, &lent).unwrap().pid;
+    let pid = start_resident(command, &lent).unwrap().pid;
     let started = Started::new(pid);
     drop(writer);
     let report = line_after(reader, "RESIDENT ");
@@ -759,4 +767,39 @@ fn a_session_whose_leader_exited_still_ends_what_it_left() {
             "member {pid} outlived its session's end"
         );
     }
+}
+
+/// A program this process has just written stays busy while a child another
+/// thread forked meanwhile still holds the writer's descriptor, until that
+/// child runs its own program; a start waits that out rather than failing
+/// (`ETXTBSY` on Linux), as when a node copies a holder into its version
+/// folder while it starts another.
+#[cfg(unix)]
+#[test]
+fn a_start_waits_out_a_program_a_forked_child_still_holds_open() {
+    use std::os::unix::fs::PermissionsExt;
+    use std::os::unix::process::CommandExt;
+    let dir = tempfile::tempdir().unwrap();
+    let program = dir.path().join("resident");
+    let mut file = std::fs::File::create(&program).unwrap();
+    file.write_all(&std::fs::read(std::env::current_exe().unwrap()).unwrap())
+        .unwrap();
+    file.set_permissions(std::fs::Permissions::from_mode(0o755))
+        .unwrap();
+    // Forked while the file is open for writing, it holds the descriptor
+    // for 300 ms before it runs its program.
+    let mut forked = Command::new("/bin/sh");
+    forked.args(["-c", "exit 0"]);
+    // SAFETY: `usleep` is async-signal-safe and touches no memory.
+    unsafe {
+        forked.pre_exec(|| {
+            libc::usleep(300_000);
+            Ok(())
+        });
+    }
+    let mut forked = Owned(forked.spawn().unwrap());
+    drop(file);
+    let (resident, report) = start_reporting(&resident_command_of(&program));
+    assert!(resident.is_running(), "{report}");
+    forked.0.wait().unwrap();
 }
