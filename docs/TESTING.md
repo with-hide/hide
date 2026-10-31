@@ -577,6 +577,26 @@ A record of a protocol older than that names a running process and a version fol
 The tests link hide-vt, so they run in the `vt` lane, whose Zig inputs and caches are ready there, with the workspace dependency set restored, Node 22 and the xterm installed, and on Windows with `HIDE_HOLDER_CONPTY` naming the pinned ConPTY runtime the lane fetches with `scripts/fetch-herdr-runtime.ps1`; the `rust` lane, which tests the workspace on Linux, installs the xterm too, and the resident start and the session end themselves are `hide-platform` contracts, which run in the `os contract` lane without Zig.
 Run them locally with `bash scripts/verify-web.sh install holder` once and then `bash scripts/verify-cargo.sh nextest -p hide-holder -p hide-holder-protocol`; on Windows set `HIDE_HOLDER_CONPTY` to the `conpty` folder beside the pinned `herdr.exe` first.
 
+### The holder restart lane
+
+The holder restart lane (`.github/workflows/holder-restart.yml`, `scripts/holder-restart-check.py`) proves that a node can end and a new one take a pane back while a real agent CLI runs in it (PRD engine-bundle-2-pane-holder B8, D-21).
+It runs each supported agent's CLI, at the version `contracts/agent-clis.json` pins and `scripts/install-agent-clis.py` installs, on Linux, macOS and Windows: seven agents on three systems, 21 cells.
+It is not a second journey: it takes the journey's fake model, its per-agent configuration (`agent_journey.fake_lane`), its launchers (`agent_journey.ci`) and its trust settings, and checks only the restart.
+The node is hide-node's `holder_node` example, which builds its terminal service and holders through `Holders::start_local`, the daemon's own assembly ([ARCHITECTURE.md](ARCHITECTURE.md#the-nodes-holder-panes)), and speaks JSON lines to the script; nothing else of the daemon runs, and Herdr is never started.
+
+Each cell starts a node with `HIDE_DEV_PANE_HOLDER=1` in a private home and state folder, starts the CLI in a holder with its first prompt, and waits until the fake model's log says it answered that turn's token and the holder's read shows the answer, never a fixed time.
+It then waits until the pane has drawn nothing for 500 ms, records the holder's and the program's pid and start time, kills the node alone outright and starts a new one on the same state folder.
+The new node must attach the pane again and draw a full frame; that frame, drawn on a fresh xterm and on one that drew another screen first (`hide-holder/tests/xterm/draw.mjs`), must show the holder's screen as its own read gives it, a path apart from the frame encoder, compared by logical line.
+A frame that came after the full one means the screen moved between the two, and the cell kills the node and tries again, up to five times; a mismatch with no later frame within a second is a failure.
+The holder and the program must be the same processes, by pid and start time, and the program must still run; a process of the CLI's tree that ended across the restart fails the cell only when something still running descends from it, since a CLI's short helpers (omp's `gh`, OpenCode's `git.exe` on Windows) end of their own accord.
+Last, a second prompt with another token goes in through the new node, and the cell passes when the fake model answers it and the CLI draws the answer.
+
+A cell that does not run, for a missing CLI, a refused start or a step past its bound, fails, and the lane fails unless all 21 pass; `report.json` and `report.md` name each cell's system, CLI version, pin, result, reason and how long each half took, and the workflow uploads them as `holder-restart-<system>`.
+Only what the cell started is ended: the pane through its own terminate, then the node, by pid and start time.
+On Windows the node is started through `scripts/holder-restart-spawn.mjs`, Node's `child_process.spawn`, because a holder leaves the node's job and the runner step's job forbids that while the libuv job Node and Electron make allows it; this is the job the app's daemon runs in, reproduced rather than the app itself.
+The pull request run plans the lane when the holder, the node's holder side, the example, the parser, the lane's own files or the journey files it reuses change, and the nightly run always runs it; `scripts/ci-plan.py` holds those paths.
+Run it locally with the CLIs installed and the holder built: `bash scripts/verify-cargo.sh build -p hide-holder -p hide-node --example holder_node`, copy `hide-holder` and `holder_node` from `target/debug` to a folder of their own, then `python3 scripts/holder-restart-check.py --bin <that folder> --run-dir agents/runs/<slug>`, adding `--agents claude-code,codex` for some agents and on Windows `--herdr-bin` naming the pinned `herdr.exe`, whose folder has the ConPTY runtime.
+
 ### OMP SDK boundary
 
 `hide-ai/tests/it/omp_sdk.rs` runs against each supported official npm SDK on Bun 1.3.14.

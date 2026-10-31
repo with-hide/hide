@@ -11,8 +11,9 @@ answered by the agent journey's fake model with no key. For each agent:
    receives that turn's token and the CLI draws its answer;
 2. the node alone is killed outright;
 3. a new node starts on the same state folder and attaches the pane again;
-   the holder and every process of the CLI's tree are the same processes
-   (pid and start time);
+   the holder and the CLI are the same processes (pid and start time), and
+   a process of its tree that ended is only a helper nothing running
+   descends from;
 4. the new node's first full frame, drawn on a fresh xterm and on one that
    drew another screen first, is the holder's screen at that moment, as the
    holder's own read (a path apart from its frame encoder) gives it, judged
