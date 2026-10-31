@@ -718,7 +718,9 @@ mod tests {
         // Every row the parser holds, uncut, so a row missing is one the
         // scrollback dropped.
         assert!(!truncated && text.len() < MAX_READ_BYTES);
-        text.lines().map(|line| line.trim().parse().unwrap()).collect()
+        text.lines()
+            .map(|line| line.trim().parse().unwrap())
+            .collect()
     }
 
     fn numbered(pane: &mut Pane, from: u64, to: u64) {
@@ -729,7 +731,14 @@ mod tests {
     #[test]
     fn a_full_scrollback_drops_its_oldest_rows_first_and_keeps_its_size() {
         // 20 000 rows of 120 columns are far past the 2 MiB budget.
-        let mut pane = Pane::new(Size { rows: 40, cols: 120 }, None).unwrap();
+        let mut pane = Pane::new(
+            Size {
+                rows: 40,
+                cols: 120,
+            },
+            None,
+        )
+        .unwrap();
         numbered(&mut pane, 0, 20_000);
         let first = numbers(&pane);
         numbered(&mut pane, 20_000, 40_000);
@@ -747,7 +756,12 @@ mod tests {
         assert_eq!(*second.last().unwrap(), 39_999);
         // Twice the rows fed, no more held than the budget held before: it
         // is dropped by whole pages, so the count moves by a few rows.
-        assert!(second.len() < first.len() * 11 / 10, "{} rows, then {}", first.len(), second.len());
+        assert!(
+            second.len() < first.len() * 11 / 10,
+            "{} rows, then {}",
+            first.len(),
+            second.len()
+        );
     }
 
     #[test]

@@ -106,7 +106,10 @@ fn a_flooded_holder_keeps_within_its_budget_once_it_gave_freed_pages_back() {
     holder.wait_logged("holder.memory_returned", 2, &mut connection);
     let charged = charged(holder.process.pid);
     let mib = |bytes: u64| bytes as f64 / 1048576.0;
-    eprintln!("after a {FLOOD}-byte flood and a return, the holder is charged {:.2} MiB", mib(charged));
+    eprintln!(
+        "after a {FLOOD}-byte flood and a return, the holder is charged {:.2} MiB",
+        mib(charged)
+    );
     // A debug holder on macOS reads 5.5 to 6.6 MiB here, from 2.4 MiB
     // before the flood, around the bound a release holder keeps (5.91 MiB
     // at most over 40 measured rounds): there the measurement judges it and

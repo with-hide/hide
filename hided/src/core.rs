@@ -1118,7 +1118,9 @@ fn local_terminals(
         }
     };
     Holders::start_local(
-        folders.as_ref().map(|(home, state_dir)| HolderFolders { home, state_dir }),
+        folders
+            .as_ref()
+            .map(|(home, state_dir)| HolderFolders { home, state_dir }),
         options.herdr_bin_path.as_deref().map(std::path::Path::new),
         local_attacher(options),
         outputs,
