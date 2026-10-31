@@ -16,3 +16,19 @@ hide-vt links libghostty-vt, which its build downloads from that Herdr release
 0005, 0006 and 0007 applied) and does not copy into this repository.
 Copyright (c) 2024 Mitchell Hashimoto, Ghostty contributors.
 Licensed under the MIT License.
+
+vendor/portable-pty/ is portable-pty 0.9.0, part of wezterm
+(https://github.com/wezterm/wezterm), as Herdr release v0.9.5 vendors it
+with its patches 0001 to 0004 applied.
+Copyright (c) 2018 Wez Furlong.
+Licensed under the MIT License (vendor/portable-pty/LICENSE.md).
+Hide changed it: each file says what changed, and
+vendor/portable-pty/PATCHES.md lists every change.
+
+The Windows pane holder runs Microsoft's ConPTY runtime
+(Microsoft.Windows.Console.ConPTY 1.24.260710001: conpty.dll and
+OpenConsole.exe), the one the pinned Herdr release ships beside herdr.exe,
+unchanged and checked against its sha256 before it is loaded; it is not
+copied into this repository.
+Copyright (c) Microsoft Corporation.
+Licensed under the MIT License.

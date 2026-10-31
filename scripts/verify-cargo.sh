@@ -64,16 +64,16 @@ prepare_vt_inputs() {
     }
 }
 
-# Whether scoped cargo arguments select hide-vt: the whole workspace or the
-# crate by name.
+# Whether scoped cargo arguments select hide-vt: the whole workspace, the
+# crate by name, or the pane holder, the one crate that links it.
 selects_vt() {
     local argument previous=
     for argument in "$@"; do
         case "$argument" in
-            --workspace|--all|-phide-vt|--package=hide-vt) return 0 ;;
+            --workspace|--all|-phide-vt|--package=hide-vt|-phide-holder|--package=hide-holder) return 0 ;;
         esac
         case "$previous:$argument" in
-            -p:hide-vt|--package:hide-vt) return 0 ;;
+            -p:hide-vt|--package:hide-vt|-p:hide-holder|--package:hide-holder) return 0 ;;
         esac
         previous=$argument
     done
