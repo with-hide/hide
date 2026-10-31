@@ -22,7 +22,7 @@ impl Runtime {
     /// checkout is `expected`, and resolves what it acts on. A bare pane id
     /// is a pane of the caller's own machine, as Herdr numbered it there.
     pub(crate) fn prepare_pane_command(
-        &mut self,
+        &self,
         device: &str,
         caller: &str,
         expected: &Context,
@@ -38,8 +38,7 @@ impl Runtime {
         if context != *expected {
             return Err("caller_context_changed".into());
         }
-        let node = self.node.as_str().to_owned();
-        let node = node.as_str();
+        let node = self.node.as_str();
         // A pane named in full stays on the machine it names; a bare one is
         // the caller's.
         let target = |pane: &str| -> (String, String) {
@@ -50,9 +49,11 @@ impl Runtime {
                 (device.to_owned(), pane.to_owned())
             }
         };
-        // A pane `hide pane send` types into: input, like a key the operator
-        // typed there, for the draft guard and for typed input waiting on
-        // someone to answer the agent's screen (`delivery::typed`).
+        let engine_of = |machine: &str| self.delivery_engine(machine).ok_or("engine_unavailable");
+        // The observed pane a send types into: input routed to it, like a key
+        // the operator typed there, once the write completed (`Prepared::run`),
+        // for the draft guard and for typed input waiting on someone to answer
+        // the agent's screen (`delivery::typed`).
         let mut sent = None;
         let (machine, step) = match command {
             PaneCommand::Read { pane, lines } => {
@@ -114,11 +115,12 @@ impl Runtime {
                 },
             ),
         };
-        let engine = self.delivery_engine(&machine).ok_or("engine_unavailable")?;
-        if let Some(pane) = sent {
-            self.note_delivery_key(&pane, "pane_send");
-        }
-        Ok(Prepared { engine, step })
+        Ok(Prepared {
+            engine: engine_of(&machine)?,
+            step,
+            noted: sent,
+            runtime: std::sync::Weak::new(),
+        })
     }
 
     /// The live agent `key` names for a caller on `device`, as a letter's
@@ -206,6 +208,23 @@ mod tests {
         tempfile::TempDir,
         crate::fake_herdr::FakeHerdr,
     ) {
+        fixture_answering(twin, |method, _| {
+            panic!("admission calls no Herdr method, got {method}")
+        })
+    }
+
+    /// The fixture, its Herdr answering with `respond`.
+    fn fixture_answering(
+        twin: bool,
+        respond: impl FnMut(&str, &serde_json::Value) -> Result<serde_json::Value, (String, String)>
+        + Send
+        + 'static,
+    ) -> (
+        Runtime,
+        Context,
+        tempfile::TempDir,
+        crate::fake_herdr::FakeHerdr,
+    ) {
         let root = tempfile::tempdir().unwrap();
         let (runtime, _, _, _) = crate::runtime::delivery::tests::fixture(root.path());
         let mut runtime = Arc::try_unwrap(runtime)
@@ -223,9 +242,7 @@ mod tests {
         let payload: SessionSnapshotPayload =
             serde_json::from_value(json!({ "agents": agents })).unwrap();
         runtime.observe_delivery(NODE, &payload, None, None);
-        let herdr = crate::fake_herdr::FakeHerdr::start_with_errors("pane-command", |method, _| {
-            panic!("admission calls no Herdr method, got {method}")
-        });
+        let herdr = crate::fake_herdr::FakeHerdr::start_with_errors("pane-command", respond);
         runtime.live = Some(crate::live::LiveContext {
             socket_path: herdr.socket_path().to_path_buf(),
             runtime: std::sync::Weak::new(),
@@ -241,7 +258,7 @@ mod tests {
     }
 
     fn read(
-        runtime: &mut Runtime,
+        runtime: &Runtime,
         context: &Context,
         command: PaneCommand,
     ) -> Result<(String, String), String> {
@@ -261,6 +278,51 @@ mod tests {
         }
     }
 
+    /// A send counts as input routed to the agent's pane, the answer that
+    /// lets typed input be typed again (`delivery::typed`), only once its
+    /// text reached the pane: a refused write arms nothing.
+    #[test]
+    fn a_send_counts_as_input_only_once_its_text_reached_the_pane() {
+        use std::sync::atomic::{AtomicBool, Ordering};
+        let refuse = Arc::new(AtomicBool::new(true));
+        let refusing = refuse.clone();
+        let (runtime, context, _root, _herdr) =
+            fixture_answering(false, move |method, _| match method {
+                "pane.send_text" if refusing.load(Ordering::SeqCst) => {
+                    Err(("pane_not_found".into(), "gone".into()))
+                }
+                "pane.send_text" => Ok(json!({"type": "ok"})),
+                other => panic!("a send calls only pane.send_text, got {other}"),
+            });
+        let runtime = Arc::new(std::sync::Mutex::new(runtime));
+        let send = || {
+            let mut prepared = runtime
+                .lock()
+                .unwrap()
+                .prepare_pane_command(
+                    NODE,
+                    "sender",
+                    &context,
+                    PaneCommand::Send {
+                        pane: "recipient".into(),
+                        text: "y".into(),
+                        enter: false,
+                    },
+                )
+                .unwrap();
+            prepared.runtime = Arc::downgrade(&runtime);
+            prepared
+        };
+        let input =
+            || runtime.lock().unwrap().delivery_observations["recipient"].last_input_at_unix_ms;
+        let before = input();
+        assert_eq!(send().run(), Err("pane_unavailable".into()));
+        assert_eq!(input(), before, "a refused write is no input");
+        refuse.store(false, Ordering::SeqCst);
+        assert!(send().run().is_ok());
+        assert!(input() > before, "a completed write is input");
+    }
+
     /// PRD engine-bundle-1 D-5, B2: an agent is named as a letter's target
     /// is, by its name, its registration id or its pane, and the answer names
     /// its pane as `hide pane send` takes it.
@@ -268,11 +330,11 @@ mod tests {
     fn an_agent_is_found_by_its_name_registration_or_pane_and_answers_with_its_pane() {
         let (mut runtime, context, _root, _herdr) = fixture(false);
         assert_eq!(
-            read(&mut runtime, &context, agent("reader")),
+            read(&runtime, &context, agent("reader")),
             Ok(("recipient".into(), "recipient".into()))
         );
         assert_eq!(
-            read(&mut runtime, &context, agent("recipient")),
+            read(&runtime, &context, agent("recipient")),
             Ok(("recipient".into(), "recipient".into()))
         );
         let actor = runtime.delivery_observations["recipient"].actor.clone();
@@ -297,27 +359,27 @@ mod tests {
         runtime.delivery_ledger = Ok(Arc::new(ledger));
         for key in ["agent-7", "reviewer"] {
             assert_eq!(
-                read(&mut runtime, &context, agent(key)),
+                read(&runtime, &context, agent(key)),
                 Ok(("recipient".into(), "recipient".into())),
                 "{key}"
             );
         }
         assert_eq!(
-            read(&mut runtime, &context, agent("nobody")),
+            read(&runtime, &context, agent("nobody")),
             Err("agent_unavailable".into())
         );
     }
 
     #[test]
     fn two_agents_of_one_name_are_ambiguous_rather_than_either() {
-        let (mut runtime, context, _root, _herdr) = fixture(true);
+        let (runtime, context, _root, _herdr) = fixture(true);
         assert_eq!(
-            read(&mut runtime, &context, agent("writer")),
+            read(&runtime, &context, agent("writer")),
             Err("target_ambiguous".into())
         );
         // Each is still reached by its pane.
         assert_eq!(
-            read(&mut runtime, &context, agent("third")).map(|(pane, _)| pane),
+            read(&runtime, &context, agent("third")).map(|(pane, _)| pane),
             Ok("third".into())
         );
     }
@@ -333,11 +395,11 @@ mod tests {
             lines: 10,
         };
         assert_eq!(
-            read(&mut runtime, &context, pane("w7:p3")),
+            read(&runtime, &context, pane("w7:p3")),
             Ok(("w7:p3".into(), "w7:p3".into()))
         );
         assert_eq!(
-            read(&mut runtime, &context, pane("remote:studio:pane:w7:p3")).err(),
+            read(&runtime, &context, pane("remote:studio:pane:w7:p3")).err(),
             Some("engine_unavailable".into()),
             "the device's engine, not this machine's"
         );
@@ -347,7 +409,7 @@ mod tests {
         .unwrap();
         runtime.observe_delivery("studio", &payload, None, None);
         assert_eq!(
-            read(&mut runtime, &context, agent("far")).err(),
+            read(&runtime, &context, agent("far")).err(),
             Some("engine_unavailable".into())
         );
     }
@@ -386,7 +448,7 @@ mod tests {
 
     #[test]
     fn a_caller_whose_checkout_moved_or_that_is_no_pane_is_refused() {
-        let (mut runtime, context, _root, _herdr) = fixture(false);
+        let (runtime, context, _root, _herdr) = fixture(false);
         let moved = Context {
             checkout_id: "another".into(),
             ..context.clone()
