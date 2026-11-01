@@ -146,7 +146,8 @@ test("a switch installs and takes out Hide's own entries, and a hook the operato
     // One plain line names no piece; which piece and its state are its hover.
     await expect(problem).toContainText("Disconnected from Hide", { timeout: 60_000 });
     await expect(problem).toHaveAttribute("title", /Hook: Removed/);
-    await expect(problem).not.toContainText("Hook");
+    // Visible text only: the hidden description Reinstall points at carries the piece for a screen reader.
+    await expect(problem).not.toContainText("Hook", { useInnerText: true });
     await expect(list.locator("[data-agent-problem]")).toHaveCount(1);
     await screenshot(page, "agents-problem");
     expect(read(claude)).not.toContain("hide-subagents@");
