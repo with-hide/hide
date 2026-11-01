@@ -967,3 +967,93 @@ impl<'g> Engine for OwnEngine<'g> {
         unsupported("a worktree", LAYOUT_PR)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use std::sync::atomic::{AtomicBool, Ordering};
+
+    use hide_node_link::holders::HolderProcesses;
+
+    use super::*;
+
+    /// Holders that start every pane until told to refuse, as a node whose
+    /// holder program cannot start refuses.
+    #[derive(Default)]
+    struct Holders {
+        refuse: AtomicBool,
+    }
+
+    impl PaneHolders for Holders {
+        fn start(&self, start: &HolderStart) -> Result<(), HolderError> {
+            if self.refuse.load(Ordering::Acquire) {
+                return Err(HolderError::Refused {
+                    code: "holder_start_failed",
+                    message: format!("pane {}: the holder program is missing", start.pane),
+                });
+            }
+            Ok(())
+        }
+        fn terminate(&self, _: &str) -> Result<(), HolderError> {
+            Ok(())
+        }
+        fn read(&self, _: &str, _: u16) -> Result<(String, bool), HolderError> {
+            Ok((String::new(), false))
+        }
+        fn processes(&self, _: &str) -> Result<HolderProcesses, HolderError> {
+            Err(HolderError::Unreachable("not asked".to_owned()))
+        }
+        fn input(&self, _: &str, _: Vec<u8>) -> Result<(), HolderError> {
+            Ok(())
+        }
+    }
+
+    const WAIT: Wait = Wait::Each(Duration::from_secs(1));
+
+    fn refused_for_the_holder<T: std::fmt::Debug>(answer: Answer<T>) {
+        match answer {
+            Err(EngineError::Refused { code, message }) => {
+                assert_eq!(code, "holder_start_failed");
+                assert!(
+                    message.contains("the holder program is missing"),
+                    "the refusal carries the holder's reason: {message}"
+                );
+            }
+            other => panic!("expected the holder's refusal, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn a_pane_whose_holder_cannot_start_is_refused_with_its_reason_and_leaves_nothing() {
+        let holders = Arc::new(Holders::default());
+        let engine = OwnEngine::new(Arc::clone(&holders) as Arc<dyn PaneHolders>);
+
+        holders.refuse.store(true, Ordering::Release);
+        refused_for_the_holder(engine.create_workspace(WAIT, "/w", "w", true, Env::new()));
+        assert!(engine.pane_folders(WAIT).unwrap().is_empty());
+        assert_eq!(engine.focused_workspace(WAIT).unwrap(), None);
+
+        holders.refuse.store(false, Ordering::Release);
+        let (workspace, _, pane) = engine
+            .create_workspace(WAIT, "/w", "w", true, Env::new())
+            .unwrap();
+        holders.refuse.store(true, Ordering::Release);
+        refused_for_the_holder(engine.split_beside(WAIT, &pane, Some("/w"), Env::new()));
+        refused_for_the_holder(engine.launch_tab(
+            WAIT,
+            &workspace,
+            None,
+            "t",
+            false,
+            "/w",
+            Env::new(),
+            &["sh".to_owned()],
+        ));
+        let panes: Vec<String> = engine
+            .pane_folders(WAIT)
+            .unwrap()
+            .into_iter()
+            .map(|(id, _)| id)
+            .collect();
+        assert_eq!(panes, vec![pane]);
+    }
+}
