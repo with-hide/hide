@@ -1,9 +1,9 @@
 /* global document, getComputedStyle */
 // Where the first-run wizard's parts are on screen, measured in the page for the
-// design review command (scripts/design-review.mjs), which judges them against
-// the rules a baseline states. Expected values come from the baseline, never
-// from these measurements. Plain JavaScript because that command is a Node
-// script, not a Playwright spec.
+// private design review tooling, kept outside this checkout, which judges them
+// against the rules a baseline states. Expected values come from the baseline,
+// never from these measurements. Plain JavaScript because that tooling is a
+// Node script, not a Playwright spec.
 
 export async function measure(page, selector = "[data-first-run]") {
   return page.evaluate((selector) => {

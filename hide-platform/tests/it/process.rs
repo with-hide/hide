@@ -18,10 +18,9 @@ use hide_platform::fs::identity::{canonical, file_id};
 use hide_platform::process::GuardedSpawnError;
 use hide_platform::process::{
     CaptureFailureKind, GroupEnd, MAX_CAPTURE_BYTES, OWNER_LAUNCH_KEYS, OwnedChild, OwnerWatch,
-    RUN_OUTPUT_CAP, RunFailure, arguments, boot_id, cwd_of, descendants, descends_from, detach,
-    group_members, image_of, is_alive, kill_tree, measure_tree, name_of, parent_of,
-    restrict_to_login_environment, run_to_end, run_to_end_tied, running, set_output_aside,
-    start_time, terminate, terminate_group,
+    RUN_OUTPUT_CAP, RunFailure, boot_id, cwd_of, descendants, descends_from, detach, group_members,
+    image_of, is_alive, kill_tree, measure_tree, name_of, parent_of, restrict_to_login_environment,
+    run_to_end, run_to_end_tied, running, set_output_aside, start_time, terminate, terminate_group,
 };
 
 const ROLE: &str = "HIDE_PLATFORM_PROC_ROLE";
@@ -2161,44 +2160,6 @@ fn the_image_of_a_process_is_the_file_it_started_from_wherever_that_file_goes() 
     child.kill().unwrap();
     child.wait().unwrap();
     assert_eq!(image_of(pid).unwrap_err().kind(), ErrorKind::NotFound);
-}
-
-/// What tells a pane's holder from another state folder's: the words a
-/// process was started with read back as they were given, quoting and all,
-/// and none once the process is gone.
-#[test]
-fn the_words_a_process_was_started_with_read_back_as_given() {
-    let _serial = serial();
-    let words = [
-        "two words",
-        "quote\"inside",
-        "back\\slash",
-        "trailing\\",
-        "\\\\\"mixed",
-        "\u{d55c}\u{ae00} word",
-        "",
-        "\ttab",
-    ];
-    let mut child = role_command("sleep").args(words).spawn().unwrap();
-    ready_number(child.stdout.take().unwrap());
-    let pid = child.id();
-    let read = arguments(pid).unwrap();
-    let expected: Vec<std::ffi::OsString> = [
-        "--exact",
-        "process::child_role",
-        "--nocapture",
-        "--test-threads=1",
-    ]
-    .into_iter()
-    .chain(words)
-    .map(std::ffi::OsString::from)
-    .collect();
-    assert!(!read[0].is_empty(), "{read:?}");
-    assert_eq!(read[1..], expected[..]);
-
-    child.kill().unwrap();
-    child.wait().unwrap();
-    assert_eq!(arguments(pid).unwrap_err().kind(), ErrorKind::NotFound);
 }
 
 /// What tells a record from an earlier boot: the same id for as long as the

@@ -223,6 +223,37 @@ pub(crate) fn plan_children(
         .count()
 }
 
+/// Refuses a spawn whose mission has its cap of workers, or whose main's
+/// plans have `PLAN_DELEGATE_LIMIT` children, counted with the reservations
+/// under the same ledger write, so two starts at once never share the last
+/// place (D-29, plan B5); a plan child asleep holds no place.
+fn spawn_cap(
+    ledger: &Ledger,
+    mission: Option<&crate::runtime::missions::MissionAdmission>,
+    plan: Option<&PlanAdmission>,
+    now: u64,
+) -> Result<(), String> {
+    if let Some(admission) = mission
+        && mission_workers(ledger, &admission.mission, now) >= usize::from(admission.cap)
+    {
+        return Err(refusal("mission_cap_reached", &admission.cap.to_string()));
+    }
+    if let Some(admission) = plan
+        && plan_children(
+            ledger,
+            &admission.link.parent_session,
+            &admission.asleep,
+            now,
+        ) >= crate::plans::PLAN_DELEGATE_LIMIT
+    {
+        return Err(refusal(
+            "plan_delegate_full",
+            &crate::plans::PLAN_DELEGATE_LIMIT.to_string(),
+        ));
+    }
+    Ok(())
+}
+
 /// How long a spawn waits for its agent to take input before the brief is
 /// submitted: the TUI of a started agent takes seconds to draw its prompt,
 /// and a trust question at startup holds it longer.
@@ -1253,42 +1284,22 @@ pub(crate) fn apply(
             if let Some(admission) = mission {
                 adopt_mission_workers(ledger, &admission.mission, parent)?;
             }
-            // A mission's start asked again after it stopped holding its place
-            // takes one again under the cap, or waits, so a start that comes
-            // back late never runs one worker past it (engineering #15).
-            if let Some(admission) = mission
-                && let Some(record) = ledger
-                    .spawns
-                    .iter()
-                    .find(|record| &record.parent == parent && &record.intent == intent)
-                && record.mission.as_deref() == Some(admission.mission.as_str())
+            // A mission's or plan step's start asked again after it stopped
+            // holding its place takes one again under its cap, or waits, so a
+            // start that comes back late never runs one past it (engineering
+            // #15).
+            if let Some(record) = ledger
+                .spawns
+                .iter()
+                .find(|record| &record.parent == parent && &record.intent == intent)
                 && record.child.is_none()
                 && !record.completed
                 && now.saturating_sub(record.reserved_at_unix_ms) >= MISSION_RESERVATION_HOLD_MS
-                && mission_workers(ledger, &admission.mission, now) >= usize::from(admission.cap)
             {
-                return Err(refusal("mission_cap_reached", &admission.cap.to_string()));
-            }
-            // So does a plan step's start under its main's cap.
-            if let Some(admission) = plan
-                && let Some(record) = ledger
-                    .spawns
-                    .iter()
-                    .find(|record| &record.parent == parent && &record.intent == intent)
-                && record.child.is_none()
-                && !record.completed
-                && now.saturating_sub(record.reserved_at_unix_ms) >= MISSION_RESERVATION_HOLD_MS
-                && plan_children(
-                    ledger,
-                    &admission.link.parent_session,
-                    &admission.asleep,
-                    now,
-                ) >= crate::plans::PLAN_DELEGATE_LIMIT
-            {
-                return Err(refusal(
-                    "plan_delegate_full",
-                    &crate::plans::PLAN_DELEGATE_LIMIT.to_string(),
-                ));
+                let mission = mission.as_deref().filter(|admission| {
+                    record.mission.as_deref() == Some(admission.mission.as_str())
+                });
+                spawn_cap(ledger, mission, plan.as_deref(), now)?;
             }
             if let Some(record) = ledger
                 .spawns
@@ -1327,29 +1338,10 @@ pub(crate) fn apply(
                 }
                 return Ok(json!(record));
             }
-            // A new worker past its mission's cap waits for one to end; the
-            // same intent asked again above still answers the spawn it made.
-            if let Some(admission) = mission
-                && mission_workers(ledger, &admission.mission, now) >= usize::from(admission.cap)
-            {
-                return Err(refusal("mission_cap_reached", &admission.cap.to_string()));
-            }
-            // A plan's new child past its main's cap waits for one to end or
-            // sleep, counted with the reservations under this one write, so
-            // two starts at once never share the last place (B5).
-            if let Some(admission) = plan
-                && plan_children(
-                    ledger,
-                    &admission.link.parent_session,
-                    &admission.asleep,
-                    now,
-                ) >= crate::plans::PLAN_DELEGATE_LIMIT
-            {
-                return Err(refusal(
-                    "plan_delegate_full",
-                    &crate::plans::PLAN_DELEGATE_LIMIT.to_string(),
-                ));
-            }
+            // A new worker past its mission's cap, or a plan's new child past
+            // its main's, waits; the same intent asked again above still
+            // answers the spawn it made.
+            spawn_cap(ledger, mission.as_deref(), plan.as_deref(), now)?;
             if ledger.spawns.len() >= SPAWN_LIMIT {
                 return Err("capacity".into());
             }

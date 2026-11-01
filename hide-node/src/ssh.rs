@@ -23,6 +23,7 @@ use hide_herdr_client::{ApiConnector, ApiError, ApiStream};
 
 pub mod askpass;
 mod device;
+mod gate;
 pub mod host;
 pub mod hosts;
 pub mod openssh;

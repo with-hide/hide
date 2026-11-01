@@ -84,6 +84,15 @@ pub struct Letter {
     pub bell_line: Option<String>,
     #[serde(default)]
     pub bell_turn: Option<BellTurn>,
+    /// A prompt hook of the recipient's own session asked with the bell
+    /// line's digest and was handed the letter's body to print. No bell is
+    /// typed for it again, whether or not the hook's confirmation arrived
+    /// (`delivery::doorbell`): the next bell's batch for the same recipient,
+    /// a tool or turn-end hook or `hide inbox` brings it instead, and at its
+    /// deadline it ends delivered without a receipt. An older build drops the
+    /// field at its next save.
+    #[serde(default)]
+    pub handed: bool,
     /// Where the letter's wait for intake began: on its recipient machine's
     /// clock while the ledger keeps one (`Ledger::node_clocks`), on the wall
     /// clock otherwise; null is its creation on the wall clock.
@@ -234,9 +243,10 @@ impl Letter {
 
     pub(crate) fn intake_confirmed(&self) -> bool {
         // Only legacy Delivered proves a hook confirmation. A legacy Ack
-        // may have preceded intake, so its missing receipt remains unknown.
+        // may have preceded intake, so its missing receipt remains unknown,
+        // as does a handed letter's that ended without one.
         self.hook_confirmed
-            .unwrap_or(self.state == State::Delivered)
+            .unwrap_or(self.state == State::Delivered && !self.handed)
     }
 
     pub(crate) fn awaiting_intake(&self) -> bool {
@@ -288,7 +298,8 @@ impl Letter {
         Some(super::typed::TypedInput {
             attempts: self.attempts(),
             typed_at_unix_ms: self.bell_typed_at_unix_ms?,
-            confirmed_at_unix_ms: (self.state != State::Pending).then_some(0),
+            // A bell its recipient took is recorded, confirmed or not.
+            confirmed_at_unix_ms: (self.state != State::Pending || self.handed).then_some(0),
             noticed: self.input_noticed,
             noticed_at_unix_ms: self.input_noticed_at_unix_ms,
         })
@@ -315,6 +326,9 @@ impl Letter {
         }
         if self.state != State::Pending || !self.within_deadline(clocks, now) {
             return Err("letter_not_pending".into());
+        }
+        if self.handed {
+            return Err("letter_handed".into());
         }
         if self.attempts() >= 3 {
             return Err("doorbell_attempt_limit".into());
@@ -470,13 +484,25 @@ impl Ledger {
     pub fn expire_awake(&mut self, now: u64, asleep: &Asleep, woken: &Woken) -> bool {
         let mut changed = self.cleanup(now);
         let clocks = &self.node_clocks;
+        let mut reports = Vec::new();
         for letter in &mut self.letters {
             if !letter.intake_overdue(clocks, now)
                 || Sleeper::pausing(asleep, woken, letter).is_some()
             {
                 continue;
             }
-            if letter.state == State::Pending {
+            if letter.state == State::Pending && letter.handed {
+                // A hook printed it into its recipient's session: it ends as
+                // a confirmation would, without the receipt.
+                letter.state = State::Delivered;
+                letter.hook_confirmed = None;
+                if !letter.open() {
+                    letter.finished_at_unix_ms = Some(now);
+                }
+                if letter.kind == "report" {
+                    reports.push((letter.sender.clone(), letter.recipient.clone()));
+                }
+            } else if letter.state == State::Pending {
                 letter.state = State::Undelivered;
                 letter.waiting_answer = false;
                 letter.finished_at_unix_ms = Some(now);
@@ -492,7 +518,17 @@ impl Ledger {
             }
             changed = true;
         }
+        for (sender, recipient) in reports {
+            self.end_report_watch(&sender, &recipient);
+        }
         changed
+    }
+
+    /// Ends the watch `recipient` keeps on `sender`, whose report it took.
+    pub(crate) fn end_report_watch(&mut self, sender: &Actor, recipient: &Actor) {
+        self.watches.retain(|watch| {
+            !(sender.same_identity(&watch.target) && recipient.same_identity(&watch.parent))
+        });
     }
 
     /// Takes the time each recipient in `woke` slept out of the waits of

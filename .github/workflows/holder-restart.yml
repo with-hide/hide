@@ -139,14 +139,6 @@ jobs:
           if [[ -n "$AGENTS" ]]; then options+=(--agents "$AGENTS"); fi
           if [[ "$RUNNER_OS" == Windows ]]; then options+=(--herdr-bin "$HERDR_BIN"); fi
           "$PYTHON" scripts/holder-restart-check.py --bin "$RUNNER_TEMP/holder-bin" --run-dir "$RUN_DIR" "${options[@]}"
-      - name: Time a color question on both paths
-        if: ${{ !cancelled() }}
-        timeout-minutes: 10
-        env:
-          HERDR_BIN: ${{ steps.herdr.outputs.bin }}
-        run: |
-          "$PYTHON" scripts/holder-color-probe.py --bin "$RUNNER_TEMP/holder-bin" --herdr "$HERDR_BIN" \
-            --run-dir "$RUN_DIR" --count 20
       - name: The cells
         timeout-minutes: 1
         if: ${{ !cancelled() }}
@@ -161,5 +153,4 @@ jobs:
             ${{ env.RUN_DIR }}/report.*
             ${{ env.RUN_DIR }}/*.jsonl
             ${{ env.RUN_DIR }}/*.log
-            ${{ env.RUN_DIR }}/color-probe.json
           if-no-files-found: warn

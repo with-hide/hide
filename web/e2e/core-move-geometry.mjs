@@ -1,10 +1,10 @@
 /* global document, getComputedStyle */
 // Where the core move's screens put their parts, measured in the page for the
-// design review command (scripts/design-review.mjs), which judges them against
+// private design review tooling, kept outside this checkout, which judges them against
 // the rules a baseline states: the Devices rows and their menus, the move
 // dialog, the strip above the window and the device rail. Expected values come
 // from the baseline, never from these measurements. Plain JavaScript because
-// that command is a Node script, not a Playwright spec.
+// that tooling is a Node script, not a Playwright spec.
 
 const SCENE = "[data-gallery-scene^=\"core-move\"]";
 

@@ -310,9 +310,6 @@ impl Runtime {
             }
         }
         for letter in &ledger.letters {
-            let Some(input) = letter.typed_input() else {
-                continue;
-            };
             let Some(observation) = self
                 .delivery_observations
                 .get(&letter.recipient.pane_id)
@@ -320,6 +317,12 @@ impl Runtime {
             else {
                 continue;
             };
+            let Some(input) = letter.typed_input() else {
+                continue;
+            };
+            if self.bell_line_recorded(letter) {
+                continue;
+            }
             let standing = typed::standing(&input, Some(observation), now);
             self.note_verdict(&mut verdicts, &letter.id, input.attempts, standing);
             match standing {
@@ -529,6 +532,37 @@ impl Runtime {
 
     /// The label worker's facts on the row of `pane_id`, on this machine or
     /// a device, laid only while the pane's session proves them.
+    /// Whether the recipient's session file records `letter`'s last bell line
+    /// in a person message written after that bell was typed. It proves the
+    /// line was submitted, not that the letter's body was shown: the bell
+    /// owes no "not taken" notice and no ask, and takes nothing in, so the
+    /// next bell, whose prompt hook prints the body, still rings. An older
+    /// message with the same line, such as an earlier letter's from the same
+    /// sender, is not this bell's.
+    fn bell_line_recorded(&self, letter: &crate::delivery::ledger::Letter) -> bool {
+        let (Some(line), Some(typed_at)) =
+            (letter.bell_line.as_deref(), letter.bell_typed_at_unix_ms)
+        else {
+            return false;
+        };
+        let digest = hide_agent_hooks::delivery::prompt_digest(line);
+        self.row_facts_of(&letter.recipient.pane_id)
+            .is_some_and(|facts| {
+                facts
+                    .operator_request
+                    .iter()
+                    .chain(&facts.other_request)
+                    .any(|request| {
+                        !request.cut
+                            && request
+                                .at_unix_ms
+                                .saturating_add(crate::labels::facts::CLOCK_SLACK_MS)
+                                >= typed_at
+                            && hide_agent_hooks::delivery::prompt_digest(&request.text) == digest
+                    })
+            })
+    }
+
     fn row_facts_of(&self, pane_id: &str) -> Option<&crate::request_view::RowFacts> {
         self.snapshot
             .navigator
@@ -617,6 +651,9 @@ impl Runtime {
             else {
                 continue;
             };
+            if self.bell_line_recorded(letter) {
+                continue;
+            }
             let Standing::Unconfirmed { since } =
                 self.input_standing(&letter.id, &input, Some(observation), now)
             else {
@@ -844,6 +881,38 @@ pub(crate) mod tests {
         );
         runtime.publish_delivery(Arc::new(ledger), false);
         (root, runtime, spawn)
+    }
+
+    /// The agent row of `pane` whose session file's newest message from
+    /// another party is `text`, written at `at`.
+    pub(crate) fn record_request(
+        runtime: &mut Runtime,
+        pane: &str,
+        kind: &str,
+        text: &str,
+        at: u64,
+    ) {
+        let mut row = crate::sidebar::project_agents(
+            serde_json::from_value(json!({"agents": [
+                {"pane_id": pane, "agent": kind, "agent_status": "idle", "state_change_seq": 2}
+            ]}))
+            .unwrap(),
+        )
+        .agents
+        .remove(0);
+        row.row_facts = Some(crate::request_view::RowFacts {
+            other_request: Some(crate::labels::facts::Request {
+                text: text.into(),
+                offset: Some(1),
+                cut: false,
+                images: 0,
+                at_unix_ms: at,
+                requester: crate::labels::facts::Requester::Named("sender".into()),
+                first: false,
+            }),
+            ..Default::default()
+        });
+        runtime.snapshot.navigator.agents.push(row);
     }
 
     fn input_of(runtime: &Runtime, spawn: &str) -> TypedInput {

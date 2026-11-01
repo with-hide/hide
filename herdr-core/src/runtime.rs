@@ -44,6 +44,7 @@ pub(crate) mod group_starts;
 mod guardrails;
 mod herdr_profiles;
 mod herdr_takeover;
+mod hide_notes;
 mod home;
 mod hosts;
 mod inbound;

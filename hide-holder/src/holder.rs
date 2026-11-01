@@ -923,8 +923,8 @@ impl Holder {
     }
 
     /// Writes why the pane ended into its record. One it cannot write is
-    /// logged with the end it meant to write, so the next node reads the end
-    /// from the log rather than taking the holder for one that was killed.
+    /// logged with the end it meant to write, and the next node settles the
+    /// pane as one whose holder was lost.
     fn write_end(&self, closed: &Closed) {
         let Some(record) = &self.record else { return };
         let reason = hide_holder_protocol::record::EndReason::of_close(closed.reason);
@@ -933,7 +933,7 @@ impl Holder {
         end.left = closed.left.clone();
         if let Err(error) = record.end(end) {
             self.log.event(
-                hide_holder_protocol::record::UNWRITTEN_EVENT,
+                crate::record::UNWRITTEN_EVENT,
                 &[
                     ("reason", reason.name().into()),
                     ("incarnation", record.incarnation().into()),

@@ -3,14 +3,14 @@
 # hide-vt links libghostty-vt, which Zig builds from inputs
 # `scripts/prepare-vt-inputs.py` downloads and checks against
 # `hide-vt/build-inputs.json`. Each leg prepares those inputs, builds the crate
-# from empty Zig caches and again from kept ones, measuring both, runs its
-# tests and Clippy, runs the pane holder's tests and Clippy (the holder links
-# hide-vt), builds it with the network denied (macOS and Linux), and shows
-# that a missing Zig, another Zig version and a download of other bytes each
-# stop the build with its reason. docs/BUILD.md, "The terminal parser and
-# Zig", owns the reasons; `pr.yml` runs this lane for a change to hide-vt, the
-# holder or their scripts, and every full plan runs it, which is how main's
-# entries in the vt cache are saved.
+# from empty Zig caches and again from kept ones, recording the caches'
+# sizes, runs its tests and Clippy, runs the pane holder's tests and Clippy
+# (the holder links hide-vt), builds it with the network denied (macOS and
+# Linux), and shows that a missing Zig, another Zig version and a download of
+# other bytes each stop the build with its reason. docs/BUILD.md, "The
+# terminal parser and Zig", owns the reasons; `pr.yml` runs this lane for a
+# change to hide-vt, the holder or their scripts, and every full plan runs it,
+# which is how main's entries in the vt cache are saved.
 name: vt
 
 on:
@@ -62,12 +62,12 @@ jobs:
       - name: Prepare the build inputs
         # A download only when the restored entry is missing.
         timeout-minutes: 10
-        run: python3 scripts/measure-build.py prepare -- python3 scripts/prepare-vt-inputs.py | tail -n 1 | tee -a "$RUNNER_TEMP/vt-measure.jsonl"
+        run: python3 scripts/prepare-vt-inputs.py
       - name: Build hide-vt from empty Zig caches
         timeout-minutes: 15
         run: |
           cold="$RUNNER_TEMP/vt-zig-cold"
-          HIDE_VT_ZIG_CACHE="$cold" python3 scripts/measure-build.py first-build -- bash scripts/verify-cargo.sh build -p hide-vt | tail -n 1 | tee -a "$RUNNER_TEMP/vt-measure.jsonl"
+          HIDE_VT_ZIG_CACHE="$cold" bash scripts/verify-cargo.sh build -p hide-vt
           echo "{\"measure\": \"zig-cache-mib\", \"value\": $(du -sm "$cold" | cut -f1)}" | tee -a "$RUNNER_TEMP/vt-measure.jsonl"
           rm -rf "$cold"
       - name: Build hide-vt from the kept Zig caches
@@ -77,7 +77,7 @@ jobs:
         run: |
           bash scripts/verify-cargo.sh build -p hide-vt
           touch hide-vt/build.rs
-          python3 scripts/measure-build.py cached-build -- bash scripts/verify-cargo.sh build -p hide-vt | tail -n 1 | tee -a "$RUNNER_TEMP/vt-measure.jsonl"
+          bash scripts/verify-cargo.sh build -p hide-vt
           echo "{\"measure\": \"inputs-mib\", \"value\": $(du -sm "$HIDE_BUILD_CACHE/vt" | cut -f1)}" | tee -a "$RUNNER_TEMP/vt-measure.jsonl"
           echo "{\"measure\": \"kept-zig-cache-mib\", \"value\": $(du -sm "$HIDE_VT_ZIG_CACHE" | cut -f1)}" | tee -a "$RUNNER_TEMP/vt-measure.jsonl"
       - name: Install cargo-nextest

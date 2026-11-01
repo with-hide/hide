@@ -333,6 +333,31 @@ pub enum InputPermitError {
 
 pub type InputPermitReply = Box<dyn FnOnce(Result<(), InputPermitError>) + Send>;
 
+/// How long a node holds an input permit that waits behind its creation
+/// holder, and so how long its caller waits for the answer.
+pub const INPUT_PERMIT_MAX_WAIT: std::time::Duration = std::time::Duration::from_secs(35);
+
+/// Asks `terminals` for room for `bytes` of input to `pane` and waits for
+/// the answer; one that does not come within [`INPUT_PERMIT_MAX_WAIT`] is
+/// `Unavailable`.
+pub fn wait_for_input_permit(
+    terminals: &dyn TerminalNode,
+    pane: &str,
+    bytes: usize,
+) -> Result<(), InputPermitError> {
+    let (reply, result) = std::sync::mpsc::channel();
+    terminals.input_permit(
+        pane,
+        bytes,
+        Box::new(move |outcome| {
+            let _ = reply.send(outcome);
+        }),
+    );
+    result
+        .recv_timeout(INPUT_PERMIT_MAX_WAIT)
+        .unwrap_or(Err(InputPermitError::Unavailable))
+}
+
 /// A node's terminals, as a screen and the core reach them. Every method
 /// returns at once: work that waits runs on the node's own threads.
 pub trait TerminalNode: Send + Sync {

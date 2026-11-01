@@ -22,7 +22,7 @@
 //! `OwnedChild` start made, which a holder cannot break away from on
 //! Windows, and devices carry no holder yet ([`device_switch`]).
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, PoisonError};
@@ -37,8 +37,7 @@ use hide_holder_protocol::{
 };
 use hide_kit::holders::{FOLDERS_CAP, Pruned, Source};
 use hide_kit::panes::{
-    CloseError, Judgment, OrphanOutcome, Panes, RECONCILE_BUDGET, StartRefusal, StartRequest,
-    Started,
+    CloseError, Judgment, Panes, RECONCILE_BUDGET, StartRefusal, StartRequest, Started,
 };
 use hide_node_link::terminal::{
     GridSize, MAX_ATTACHED_PANES, PaneTerminalState, ReportSink, TerminalControl, TerminalNode,
@@ -64,6 +63,8 @@ use super::session::{
 ///   terminal sessions and starts, adopts and reads no pane holder; the app
 ///   and the daemon behave as they always have. Nobody but a developer of
 ///   the next engine sets it: the app shows no holder pane in this bundle.
+/// - Removal: deleted in bundle 4, the switch release, once the new engine
+///   is the default (docs/ARCHITECTURE.md, The pane holder).
 pub const SWITCH: &str = "HIDE_DEV_PANE_HOLDER";
 
 /// Whether [`SWITCH`] is on.
@@ -669,8 +670,8 @@ impl Holders {
         )
     }
 
-    /// What a node does when it starts: reconciles the records with the
-    /// holders that run until everything found is taken up (or
+    /// What a node does when it starts: reconciles the records, and the
+    /// holders they name, until everything found is taken up (or
     /// [`RECONCILE_ROUNDS`] have run), asks the service to attach every holder
     /// that runs, by name, at the size each has, and reports each pane that
     /// ended while no node was there with the reason its record names. The
@@ -681,7 +682,6 @@ impl Holders {
     pub fn recover(&self, service: &Service) -> Recovered {
         let mut recovered = Recovered::default();
         let mut judged: BTreeMap<String, Judgment> = BTreeMap::new();
-        let mut kept_orphans: BTreeSet<(String, String)> = BTreeSet::new();
         let mut failed = None;
         for round in 1..=RECONCILE_ROUNDS {
             let reconciled = self.panes.reconcile(RECONCILE_BUDGET);
@@ -696,11 +696,6 @@ impl Holders {
                 });
                 if !settled && !(waits && judged.contains_key(&pane)) {
                     judged.insert(pane, judgment);
-                }
-            }
-            for orphan in reconciled.orphans {
-                if let OrphanOutcome::Kept(why) = orphan.outcome {
-                    kept_orphans.insert((orphan.pane.unwrap_or_default(), why));
                 }
             }
             failed = reconciled.failed;
@@ -741,7 +736,6 @@ impl Holders {
                 other => recovered.unjudged.push((pane, format!("{other:?}"))),
             }
         }
-        recovered.unjudged.extend(kept_orphans);
         if let Some(failed) = failed {
             recovered.unjudged.push((String::new(), failed));
         }
@@ -786,9 +780,9 @@ impl Holders {
 
     /// [`Holders::recover`] and then [`Holders::prune_folders`] on a thread
     /// of its own, so a node's start does not wait on its holders. The
-    /// folders are pruned after the holders are found again: the holders the
-    /// reconcile ended no record names, and the ones that died, leave their
-    /// folders unused, and this start removes them.
+    /// folders are pruned after the holders are found again: the holders
+    /// that died, which the reconcile settled, leave their folders unused,
+    /// and this start removes them.
     pub fn recover_in_background(self: Arc<Self>, service: Arc<Service>) {
         if let Err(error) = thread::Builder::new()
             .name("hide-node-pane-holder-recover".into())

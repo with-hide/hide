@@ -357,7 +357,7 @@ def pull_request_macos(result, entries, root=ROOT):
 # Paths no `pr.yml` lane reads: `policy` alone. Its script suite and the
 # repository invariants are what reads them.
 POLICY_ONLY = (
-    "agents/*", "site/*", "plugins/*", "tools/*", "spikes/*",
+    "agents/*", "site/*", "spikes/*",
     ".gitignore", "web/.gitignore", "desktop/.gitignore",
     # hide's own license and copyright notice; no build or package reads them.
     "LICENSE", "NOTICE",
@@ -366,24 +366,23 @@ POLICY_ONLY = (
     ".github/ISSUE_TEMPLATE/*", ".github/DISCUSSION_TEMPLATE/*", ".github/APPROVED_CONTRIBUTORS",
     "scripts/tests/*",
     # Scripts only `policy`, another workflow or nobody runs.
-    "scripts/check-agent-asset-committed.sh", "scripts/check-capability-readers-off-lock.sh",
+    "scripts/check-capability-readers-off-lock.sh",
     "scripts/check-harness-ignore-anchor.sh", "scripts/check-herdr-pin-single-source.sh",
-    "scripts/check-core-touches-no-machine.py", "scripts/check-engine-boundary.py",
+    "scripts/check-core-touches-no-machine.py", "scripts/check-engine-boundary.py", "scripts/rust_scan.py",
     "scripts/check-ai-prompt-language.py", "scripts/check-pr-screenshots.py",
     "scripts/check-no-workstation-identity.*", "scripts/check-worktree-removal-boundary.sh",
-    "scripts/check-hide-full.sh", "scripts/check-hide-screens.mjs", "scripts/check-typed-live-remote.sh",
+    "scripts/check-typed-live-remote.sh",
     "scripts/check-release-assets.mjs", "scripts/release-draft.mjs", "scripts/premerge-check.py",
     "scripts/merge-order.py", "scripts/pull_requests.py",
-    "scripts/pen-*.mjs", "scripts/design-review.mjs", "scripts/web-shell-measure/*",
+    "scripts/web-shell-measure/*",
     # The pane holder's measurement, run by hand on macOS (docs/PERFORMANCE_TESTING.md).
     "scripts/holder-perf.py",
-    # The design contract's generators, their token map and its checks:
+    # The design contract's token generator and its checks:
     # `design-contract.yml` runs the checks on every pull request, and what
-    # the generators write (`web/src/tokens.css`, the Pen files) is committed
-    # and planned as its own path.
-    "scripts/gen-tokens.mjs", "scripts/gen-pen.mjs", "scripts/gen-screens.mjs", "scripts/pen-token-map.json",
-    "scripts/check-design-contract.mjs", "scripts/check-pen.mjs", "scripts/check-pen-gallery.mjs",
-    "scripts/check-web-tokens.mjs", "scripts/check-agent-logos.mjs", "scripts/check-hide-design-enforcement.mjs",
+    # the generator writes (`web/src/tokens.css`) is committed and planned as
+    # its own path.
+    "scripts/gen-tokens.mjs", "scripts/check-design-contract.mjs",
+    "scripts/check-web-tokens.mjs", "scripts/check-agent-logos.mjs",
 )
 
 # Paths whose readers are a known set of lanes. `web/e2e` helpers are imported
@@ -452,7 +451,6 @@ NAMED_LANES = (
     # The vt lane's own scripts; `prepare-vt-inputs.py`, which every Rust lane
     # runs through `verify-cargo.sh`, plans every lane.
     ("scripts/check-vt-build-refusals.sh", {"vt"}),
-    ("scripts/measure-build.py", {"vt"}),
     ("scripts/agent_live_check/*", LIVE_CHECK_LANES | HOLDER_RESTART_LANES),
     ("scripts/agent-live-check.py", LIVE_CHECK_LANES),
     ("web/e2e/shims/claude-shim.c", WEB_E2E_LANES | JOURNEY_LANES),
@@ -469,7 +467,6 @@ NAMED_LANES = (
     ("scripts/agent_journey/opencode_service.py", JOURNEY_LANES | HOLDER_RESTART_LANES),
     ("scripts/holder-restart-check.py", HOLDER_RESTART_LANES),
     ("scripts/holder_owned.py", HOLDER_RESTART_LANES),
-    ("scripts/holder-color-probe.*", HOLDER_RESTART_LANES),
     ("scripts/holder-restart-spawn.mjs", HOLDER_RESTART_LANES),
     ("scripts/agent_journey/*", JOURNEY_LANES),
     ("scripts/agent-journey-check.py", JOURNEY_LANES),
