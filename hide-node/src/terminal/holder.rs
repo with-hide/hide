@@ -37,8 +37,7 @@ use hide_holder_protocol::{
 };
 use hide_kit::holders::{FOLDERS_CAP, Pruned, Source};
 use hide_kit::panes::{
-    CloseError, Judgment, Panes, RECONCILE_BUDGET, StartRefusal, StartRequest, Started,
-    holder_pane,
+    CloseError, Judgment, Panes, RECONCILE_BUDGET, StartRefusal, StartRequest, Started, holder_pane,
 };
 use hide_node_link::terminal::{
     GridSize, MAX_ATTACHED_PANES, PaneTerminalState, ReportSink, TerminalControl, TerminalNode,
