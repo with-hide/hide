@@ -107,7 +107,11 @@ pub(crate) fn evaluate(mission: &Mission, facts: &Facts) -> Vec<Act> {
         })
         .collect();
     acts.retain(|act| !matches!(act, Act::Raise { node, .. } if done.contains(node)));
-    if mission.status == MissionStatus::Running && closes(mission, &acts) {
+    // A close is judged on GitHub's facts of the pull requests the nodes
+    // hold: while that answer is stale or was never read the close waits,
+    // raising nothing, and is judged again once a read comes back.
+    let known = facts.pulls.is_some() || mission.nodes.iter().all(|node| node.prs.is_empty());
+    if mission.status == MissionStatus::Running && known && closes(mission, &acts) {
         acts.push(Act::Close);
     }
     acts
@@ -585,6 +589,9 @@ mod tests {
         m.nodes[0].status = NodeStatus::Done;
         let acts = evaluate(&m, &facts(Some(&pulls), vec![worker(WorkerLife::Asleep)]));
         assert_eq!(acts, [Act::Close]);
+        // With GitHub's answer stale the close waits rather than being
+        // refused on a pull request it cannot see.
+        assert!(evaluate(&m, &facts(None, vec![worker(WorkerLife::Asleep)])).is_empty());
         // A person took it back to work: Hide does not finish it again on
         // the same pull request.
         m.nodes[0].status = NodeStatus::Working;

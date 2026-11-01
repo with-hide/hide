@@ -422,12 +422,12 @@ function WorkGraph({ projects, deviceId, actions, onOpenRecord, projectId, initi
     {model.agents.length > 0 && layout.phase === "failed" && mode === "graph" ? <div className="og-notice" role="status"><span>{t("overviewGraph.failed")}</span><Button variant="outline" size="sm" onClick={() => setRetry((value) => value + 1)}>{t("overviewGraph.retry")}</Button></div> : null}
     {model.agents.length === 0 ? <div className="og-empty"><p>{t(model.allAgents.length > 0 ? "overviewGraph.filteredEmpty" : "overviewGraph.empty")}</p>{model.allAgents.length > 0 ? <Button variant="outline" size="sm" onClick={() => actions.changeOverviewGraph({ kind: "focus", focus: "all", include_resting: true })}>{t("overviewGraph.resetFilters")}</Button> : null}<Button variant="outline" size="sm" onClick={() => actions.openStartPanel(projectId ?? undefined)}>{t("overviewGraph.newAgent")}</Button></div> : null}
     {/* A mission no row carries waits on the operator with no session drawn too (PRD mission-node-simple B14). */}
-    {model.agents.length === 0 ? <OverviewMissionAsks deviceId={deviceId} actions={actions} /> : null}
+    {model.agents.length === 0 ? <OverviewMissionAsks deviceId={scopedDevice} projectId={projectId} actions={actions} /> : null}
     {model.agents.length > 0 ? <div className="og-stage">
       <div className="og-canvas">{!showList ? <ReactFlow zIndexMode="manual" colorMode={theme} nodes={nodes} edges={edges} nodeTypes={NODE_TYPES} edgeTypes={EDGE_TYPES} nodesDraggable onNodeDragStart={dragStart} onNodeDrag={dragging} onNodeDragStop={dragStop} nodesConnectable={false} nodesFocusable={false} edgesFocusable={false} elementsSelectable={false} deleteKeyCode={null} selectionKeyCode={null} multiSelectionKeyCode={null} panOnDrag panOnScroll zoomOnScroll defaultViewport={{ x: 24, y: 24, zoom: 1 }} minZoom={0.05} maxZoom={2} onPaneClick={() => { close(); setHighlightedSession(null); }} ariaLabelConfig={{ "node.a11yDescription.default": t("overviewGraph.nodeHelp"), "node.a11yDescription.keyboardDisabled": t("overviewGraph.nodeHelp") }}>
         <div className="og-zoom nopan nodrag"><Hint label={t("overviewGraph.zoomOut")}><Button variant="ghost" size="icon-sm" onClick={() => void zoomOut({ duration: 0 })}><MinusIcon /></Button></Hint><Hint label={t("overviewGraph.zoomIn")}><Button variant="ghost" size="icon-sm" onClick={() => void zoomIn({ duration: 0 })}><PlusIcon /></Button></Hint><Hint label={t("overviewGraph.fit")}><Button variant="ghost" size="icon-sm" onClick={fitOperator}><MaximizeIcon /></Button></Hint><Hint label={t("overviewGraph.currentPane")}><Button variant="ghost" size="icon-sm" disabled={!current} onClick={() => { if (current) { setHighlightedSession(current.id); if (orbs.has(current.id)) { const point = positionOf(current.id); void flow.setCenter(point.x, point.y, { zoom: 1, duration: 0 }); } else centerProject(current.projectId); } }}><LocateFixedIcon /></Button></Hint><Hint label={t("overviewGraph.resetLayout")}><Button variant="ghost" size="icon-sm" onClick={resetLayout}><RotateCcwIcon /></Button></Hint></div>
       </ReactFlow> : <SessionList key={`${focus}:${includeResting}`} rows={model.agents} selected={activeSession} choose={chooseSession} />}</div>
-      {agent ? <SessionPreview row={agent} model={model} actions={actions} openRecord={openRecord} close={close} choose={chooseSession} /> : <ProjectColumn deviceId={deviceId} model={model} query={query} setQuery={setQuery} hidden={hiddenProjects} toggle={toggleProject} point={setPointedProject} locate={(summary) => summary.admitted ? centerProject(summary.id) : useUiStore.getState().setOverview({ projectId: summary.project.workspace.id })} choose={chooseSession} show={showFound} actions={actions} />}
+      {agent ? <SessionPreview row={agent} model={model} actions={actions} openRecord={openRecord} close={close} choose={chooseSession} /> : <ProjectColumn deviceId={scopedDevice} projectId={projectId} model={model} query={query} setQuery={setQuery} hidden={hiddenProjects} toggle={toggleProject} point={setPointedProject} locate={(summary) => summary.admitted ? centerProject(summary.id) : useUiStore.getState().setOverview({ projectId: summary.project.workspace.id })} choose={chooseSession} show={showFound} actions={actions} />}
     </div> : null}
   </div>;
 }
@@ -448,7 +448,7 @@ function askingPane(row: GraphAgent, model: OverviewGraphModel): string {
 
 /** With nothing chosen, the side column lists the projects with their states, then what waits on the operator.
  * Its search finds projects by name and sessions by their own words; a found session is shown on the map. */
-function ProjectColumn({ deviceId, model, query, setQuery, hidden, toggle, point, locate, choose, show, actions }: { deviceId: string; model: OverviewGraphModel; query: string; setQuery: (value: string) => void; hidden: ReadonlySet<string>; toggle: (id: string) => void; point: (id: string | null) => void; locate: (summary: ProjectSummary) => void; choose: (id: string, target: HTMLElement) => void; show: (id: string, target: HTMLElement) => void; actions: Actions }) {
+function ProjectColumn({ deviceId, projectId, model, query, setQuery, hidden, toggle, point, locate, choose, show, actions }: { deviceId: string; projectId: string | null; model: OverviewGraphModel; query: string; setQuery: (value: string) => void; hidden: ReadonlySet<string>; toggle: (id: string) => void; point: (id: string | null) => void; locate: (summary: ProjectSummary) => void; choose: (id: string, target: HTMLElement) => void; show: (id: string, target: HTMLElement) => void; actions: Actions }) {
   const { t } = useInterfaceTranslation();
   const needle = query.trim().toLocaleLowerCase();
   const summaries = model.summaries.filter((summary) => summary.project.workspace.label.toLocaleLowerCase().includes(needle)).sort((a, b) => a.project.workspace.label.localeCompare(b.project.workspace.label, undefined, { numeric: true }) || a.id.localeCompare(b.id));
@@ -458,8 +458,9 @@ function ProjectColumn({ deviceId, model, query, setQuery, hidden, toggle, point
   const takeFirst = (target: HTMLElement) => { if (found[0]) show(found[0].id, target); else { const first = summaries.find((summary) => !hidden.has(summary.id)); if (first) locate(first); } };
   // Every root whose turn it is, drawn, folded or hidden, so the list agrees with the projects' My turn counts.
   const waiting = model.allAgents.filter((row) => model.roots.has(row.id) && graphActivity(row.agent) === "turn");
-  // A mission no row carries waits here too, first, as the device's Needs You counts it (PRD mission-node-simple B14).
-  const missions = useMissionAsks(deviceId);
+  // A mission no row carries waits here too, first, as the device's Needs You counts it (PRD mission-node-simple B14);
+  // a map narrowed to one project lists that project's missions only.
+  const missions = useMissionAsks(deviceId, projectId);
   return <aside className="og-navigator" aria-label={t("overviewGraph.projects")} data-graph-projects="true">
     <Input aria-label={t("overviewGraph.find")} placeholder={t("overviewGraph.find")} value={query} onChange={(event) => setQuery(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter" && !composingKey(event)) { event.preventDefault(); takeFirst(event.currentTarget); } }} />
     {needle && !summaries.length && !found.length ? <p className="og-no-match">{t("overviewGraph.noMatch")}</p> : null}
@@ -501,9 +502,9 @@ function OverviewMissionAsk({ ask, actions }: { ask: MissionAsk; actions: Action
 }
 
 /** The missions waiting on the operator when the map draws no session: the same items the project column lists beside its sessions. */
-function OverviewMissionAsks({ deviceId, actions }: { deviceId: string; actions: Actions }) {
+function OverviewMissionAsks({ deviceId, projectId, actions }: { deviceId: string; projectId: string | null; actions: Actions }) {
   const { t } = useInterfaceTranslation();
-  const missions = useMissionAsks(deviceId);
+  const missions = useMissionAsks(deviceId, projectId);
   if (missions.length === 0) return null;
   return <section className="og-waiting og-waiting-alone" aria-label={t("overviewGraph.waiting")} data-graph-mission-asks="true">
     <h3>{t("overviewGraph.waiting")} <span>{missions.length}</span></h3>
