@@ -522,6 +522,47 @@ mod tests {
         );
     }
 
+    /// The record Claude Code 2.1.316 wrote for a brief Hide pasted, read by
+    /// Hide's own reader, gives the digest of the brief Hide typed: the fact
+    /// the core confirms the brief by (`Runtime::typed_input_work`).
+    #[test]
+    fn claude_codes_record_of_a_pasted_brief_has_the_digest_of_the_brief_hide_typed() {
+        let fixture: serde_json::Value = serde_json::from_str(include_str!(
+            "../../tests/fixtures/claude-pasted-brief-session.json"
+        ))
+        .unwrap();
+        let home = tempfile::tempdir().unwrap();
+        let session = fixture["record"]["sessionId"].as_str().unwrap();
+        let path = home
+            .path()
+            .join(hide_session::CLAUDE_SESSIONS)
+            .join("-work")
+            .join(format!("{session}.jsonl"));
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(&path, format!("{}\n", fixture["record"])).unwrap();
+        let read = hide_session::label_transcript::read(
+            home.path(),
+            &hide_session::label_transcript::LabelTranscriptRequest {
+                agent: hide_session::Agent::Claude,
+                reference_kind: "path".into(),
+                reference_value: path.to_str().unwrap().into(),
+                cwd: Some("/work".into()),
+                checkpoint: None,
+                subagents: Default::default(),
+                turns: None,
+                tools: None,
+            },
+        )
+        .unwrap();
+        let mut facts = SessionFacts::default();
+        fold(&mut facts, &read.events, &[], &mut None);
+        let typed = fixture["typed"].as_str().unwrap();
+        assert_eq!(
+            Vec::from(facts.prompt_digests),
+            [hide_agent_hooks::delivery::prompt_digest(typed)]
+        );
+    }
+
     #[test]
     fn a_submit_just_before_a_message_makes_it_the_operators_and_anything_else_is_an_agents() {
         let mut facts = SessionFacts::default();
