@@ -324,10 +324,21 @@ pub(crate) struct MissionRuntime {
     /// node change asked to read again (D-09, B23), kept until that read is
     /// asked. Memory only: a restart reads every project anew.
     pub(super) reads_due: std::collections::BTreeSet<(String, String)>,
-    /// The ledger (held weakly) and the book's edit the last launch proof
-    /// read (`record_node_launches`), so an agent pass in which neither nor
-    /// a pane's launch record moved reads nothing.
-    launch_proof_made: Option<(std::sync::Weak<crate::delivery::ledger::Ledger>, u64)>,
+    /// Counts the writes to the pane launch records (`ui_state.pane_launches`),
+    /// every one of which goes through `runtime/agent_choice.rs`.
+    pub(super) launches_edit: u64,
+    /// What the last launch proof read (`record_node_launches`), so an agent
+    /// pass in which none of it moved reads nothing.
+    launch_proof_made: Option<LaunchProofMade>,
+}
+
+/// The inputs of a launch proof: the ledger (held weakly, so it is never
+/// kept alive by this and its address is never another ledger's), the
+/// book's edit and the launch records' edit.
+struct LaunchProofMade {
+    ledger: std::sync::Weak<crate::delivery::ledger::Ledger>,
+    book_edit: u64,
+    launches_edit: u64,
 }
 
 #[derive(Default)]
@@ -816,27 +827,34 @@ impl Runtime {
         self.missions.github_edit = self.missions.github_edit.wrapping_add(1);
     }
 
-    /// Records on each node of an open mission whose worker's launch is not
-    /// yet kept the launch its pane now proves for that worker
-    /// (`proven_launch`), so the map still names what ran once the pane is
-    /// gone. It runs on the agent pass that settles the pane launch records,
-    /// looks again only when a launch record, the ledger or the book moved
-    /// since it last looked, compares in memory only, and saves through the
-    /// book's save thread when one moved.
-    pub(super) fn record_node_launches(&mut self, launches_moved: bool) {
+    /// Records on each node whose worker's launch is not yet kept the launch
+    /// its pane now proves for that worker (`proven_launch`), so the map
+    /// still names what ran once the pane is gone. A closed mission's nodes
+    /// are proven too, so a mission that closed before its worker's proof
+    /// landed (a session reported late, a close on the same pass) still gets
+    /// it while the pane's record stands. It runs on the agent pass that
+    /// settles the pane launch records, right after the settle, and looks
+    /// again only when a launch record (any write, a wake's or a resume's
+    /// included), the ledger or the book moved since it last looked; it
+    /// compares in memory only and saves through the book's save thread
+    /// when one moved.
+    pub(super) fn record_node_launches(&mut self) {
         let ledger = self.delivery_state().ok();
-        let same = |made: &(std::sync::Weak<crate::delivery::ledger::Ledger>, u64)| {
-            made.1 == self.missions.book_edit
+        let inputs = (self.missions.book_edit, self.missions.launches_edit);
+        let same = |made: &LaunchProofMade| {
+            (made.book_edit, made.launches_edit) == inputs
                 && ledger
                     .as_ref()
-                    .is_some_and(|ledger| std::ptr::eq(made.0.as_ptr(), Arc::as_ptr(ledger)))
+                    .is_some_and(|ledger| std::ptr::eq(made.ledger.as_ptr(), Arc::as_ptr(ledger)))
         };
-        if !launches_moved && self.missions.launch_proof_made.as_ref().is_some_and(same) {
+        if self.missions.launch_proof_made.as_ref().is_some_and(same) {
             return;
         }
-        self.missions.launch_proof_made = ledger
-            .as_ref()
-            .map(|ledger| (Arc::downgrade(ledger), self.missions.book_edit));
+        self.missions.launch_proof_made = ledger.as_ref().map(|ledger| LaunchProofMade {
+            ledger: Arc::downgrade(ledger),
+            book_edit: inputs.0,
+            launches_edit: inputs.1,
+        });
         let waiting = |node: &crate::missions::MissionNode| {
             node.agent_id.as_deref().is_some_and(|id| {
                 node.launched
@@ -844,27 +862,22 @@ impl Runtime {
                     .is_none_or(|launch| launch.agent_id != id)
             })
         };
-        let open = || {
-            self.missions
-                .book
-                .missions
-                .iter()
-                .filter(|mission| mission.status.open())
-        };
-        if !open().flat_map(|mission| &mission.nodes).any(waiting) {
+        let missions = &self.missions.book.missions;
+        if !missions
+            .iter()
+            .flat_map(|mission| &mission.nodes)
+            .any(waiting)
+        {
             return;
         }
         let Some(ledger) = ledger else {
             return;
         };
-        let records = worker_records(Some(&ledger), open());
+        let records = worker_records(Some(&ledger), missions.iter());
         let launches = &self.snapshot.ui_state.pane_launches;
         let node_id = self.node.as_str();
         let mut proven = Vec::new();
-        for (index, mission) in self.missions.book.missions.iter().enumerate() {
-            if !mission.status.open() {
-                continue;
-            }
+        for (index, mission) in missions.iter().enumerate() {
             for (at, node) in mission.nodes.iter().enumerate() {
                 if !waiting(node) {
                     continue;
@@ -893,7 +906,7 @@ impl Runtime {
         }
         self.save_missions();
         if let Some(made) = &mut self.missions.launch_proof_made {
-            made.1 = self.missions.book_edit;
+            made.book_edit = self.missions.book_edit;
         }
     }
 

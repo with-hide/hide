@@ -204,6 +204,21 @@ impl Runtime {
         choice: &hide_agent_adapter::LaunchChoice,
         session: Option<&str>,
     ) -> bool {
+        let moved = self.write_pane_launch(pane_id, kind, name, choice, session);
+        if moved {
+            self.missions.launches_edit = self.missions.launches_edit.wrapping_add(1);
+        }
+        moved
+    }
+
+    fn write_pane_launch(
+        &mut self,
+        pane_id: &str,
+        kind: &str,
+        name: &str,
+        choice: &hide_agent_adapter::LaunchChoice,
+        session: Option<&str>,
+    ) -> bool {
         let launches = &mut self.snapshot.ui_state.pane_launches;
         if choice.is_default() {
             launches.remove(pane_id).is_some()
@@ -246,6 +261,7 @@ impl Runtime {
         let count = launches.len();
         launches.retain(|pane_id, _| !crate::address::is_pane_of(pane_id, device));
         if launches.len() != count {
+            self.missions.launches_edit = self.missions.launches_edit.wrapping_add(1);
             self.persist_ui_state();
         }
     }
@@ -258,18 +274,19 @@ impl Runtime {
         scope: crate::agent_state::ReadRecordScope<'_>,
         live_pane_ids: Option<&HashSet<String>>,
     ) {
-        let moved = settle_pane_launches(
+        if settle_pane_launches(
             &mut self.snapshot.ui_state.pane_launches,
             agents,
             live_pane_ids,
             scope,
-        );
-        if moved {
+        ) {
+            self.missions.launches_edit = self.missions.launches_edit.wrapping_add(1);
             self.persist_ui_state();
         }
-        // A worker's launch is proven once its record names the worker's
-        // conversation, which a settle fills in, or once the worker binds.
-        self.record_node_launches(moved);
+        // A mission worker's launch is proven once its record names the
+        // worker's conversation (a settle, a wake or a resume writes it) and
+        // the worker is bound to its node.
+        self.record_node_launches();
     }
 
     /// Remembers the kind and model a start named, so every start surface

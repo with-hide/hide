@@ -961,74 +961,104 @@ fn a_mission_node_reads_its_workers_sleep() {
 }
 
 /// What a node's worker was launched with is kept on the node for that
-/// worker (the map's model and agent mark): proven only by the pane's launch
-/// record naming the worker's own conversation, still named once the pane's
-/// record is gone, and never taken from a later session in the same pane or
-/// from the same pane id on another machine.
+/// worker (the map's model and agent mark), along the paths that write the
+/// pane's launch record: a spawn records it before the agent shows a session
+/// and the agent pass fills the session in; a wake or a resume writes it with
+/// the session already in, with nothing else moving. It is still named once
+/// the pane's record is gone, is proven for a mission that closed first, and
+/// is never taken from a later session in the same pane or from the same
+/// pane id on another machine.
 #[test]
 fn a_node_keeps_the_launch_its_workers_own_session_was_started_with() {
-    use crate::missions::NodeLaunch;
+    use crate::missions::{MissionStatus, NodeLaunch};
+    const NAME: &str = "fix-worker";
     let mut runtime = mission_runtime();
     let launched = |runtime: &mut Runtime| {
         runtime.refresh_missions();
         runtime.snapshot.missions.items[0].nodes[0].launched.clone()
     };
-    let pane_launch = |session: String| crate::model::PaneLaunch {
-        kind: "claude".into(),
-        name: format!("{WORKER}-agent"),
-        choice: hide_agent_adapter::LaunchChoice {
-            model: Some("opus".into()),
-            effort: Some("high".into()),
-        },
-        session: Some(session),
-    };
-    let opus = Some(NodeLaunch {
-        agent_id: "agent-2".into(),
-        agent: "claude".into(),
+    let opus = hide_agent_adapter::LaunchChoice {
         model: Some("opus".into()),
         effort: Some("high".into()),
-    });
-    // No launch record yet: nothing is proven.
-    assert_eq!(launched(&mut runtime), None);
-    // The pane's record names the worker's conversation; the next agent pass proves it.
-    runtime
-        .snapshot
-        .ui_state
-        .pane_launches
-        .insert(WORKER.into(), pane_launch(native(WORKER)));
-    show(&mut runtime, session("w-order:t1", Some("idle")));
-    assert_eq!(launched(&mut runtime), opus);
+    };
+    let kept = |agent_id: &str| {
+        Some(NodeLaunch {
+            agent_id: agent_id.into(),
+            agent: "claude".into(),
+            model: Some("opus".into()),
+            effort: Some("high".into()),
+        })
+    };
+    // The worker's row as Herdr lists it under the spawn's name, before and
+    // after its first turn reports the session.
+    let named = |session_shown: bool| {
+        let mut payload = session("w-order:t1", Some("idle"));
+        let row = payload
+            .agents
+            .iter_mut()
+            .find(|agent| agent.pane_id.as_deref() == Some(WORKER))
+            .unwrap();
+        row.name = Some(NAME.into());
+        if !session_shown {
+            row.agent_session = None;
+            row.lineage_session = None;
+        }
+        payload
+    };
+
+    // The spawn keeps the choice before any session: nothing is proven.
+    runtime.record_pane_launch(WORKER, "claude", NAME, &opus, None);
+    show(&mut runtime, named(false));
     assert_eq!(
-        runtime.missions.book.missions[0].nodes[0].launched, opus,
+        runtime.snapshot.ui_state.pane_launches[WORKER].session,
+        None
+    );
+    assert_eq!(launched(&mut runtime), None);
+    // The first turn reports the session; the same pass fills it in and proves it.
+    show(&mut runtime, named(true));
+    assert_eq!(launched(&mut runtime), kept("agent-2"));
+    assert_eq!(
+        runtime.missions.book.missions[0].nodes[0].launched,
+        kept("agent-2"),
         "kept in the book, which is saved"
     );
-    // The worker's pane closes and its record goes: the node still names what ran.
+    // The pane's record goes: the node still names what ran.
     runtime.snapshot.ui_state.pane_launches.remove(WORKER);
     show(&mut runtime, session("w-order:t1", None));
-    assert_eq!(launched(&mut runtime), opus);
+    assert_eq!(launched(&mut runtime), kept("agent-2"));
 
-    // A later session in the same pane is another registration: the record
-    // names the earlier conversation, so nothing is proven for it, and the
-    // earlier worker's launch is not shown for it.
+    // A later session in the same pane is another registration, bound to the
+    // node after the mission closed. Its resume writes the pane's record with
+    // its session in, the only thing that moves: the next pass proves it.
+    let later = native("w-order:t2:later");
     let mut ledger = (*runtime.delivery_state().unwrap()).clone();
-    let mut later = registration("agent-4", WORKER, Some("agent-1"));
-    later.session = native("w-order:t2:later");
-    ledger.agents.push(later);
-    // The same pane id on another machine, with the worker's very conversation id.
+    let mut resumed = registration("agent-4", WORKER, Some("agent-1"));
+    resumed.session = later.clone();
+    ledger.agents.push(resumed);
+    // The same pane id on another machine, in that very conversation.
     let mut elsewhere = registration("agent-5", WORKER, Some("agent-1"));
     elsewhere.machine = "mini".into();
+    elsewhere.session = later.clone();
     ledger.agents.push(elsewhere);
     ledger.next_id = 6;
     runtime.publish_delivery(Arc::new(ledger), true);
-    runtime
-        .snapshot
-        .ui_state
-        .pane_launches
-        .insert(WORKER.into(), pane_launch(native(WORKER)));
-    for worker in ["agent-4", "agent-5"] {
-        runtime.missions.book.missions[0].nodes[0].agent_id = Some(worker.into());
-        runtime.save_missions();
-        runtime.record_node_launches(true);
-        assert_eq!(launched(&mut runtime), None, "{worker}");
-    }
+    runtime.missions.book.missions[0].status = MissionStatus::Done;
+    runtime.missions.book.missions[0].nodes[0].agent_id = Some("agent-4".into());
+    runtime.save_missions();
+    show(&mut runtime, session("w-order:t1", None));
+    assert_eq!(
+        launched(&mut runtime),
+        None,
+        "the earlier worker's launch is not the later one's"
+    );
+    runtime.put_pane_launch(WORKER, "claude", NAME, &opus, Some(&later));
+    show(&mut runtime, session("w-order:t1", None));
+    assert_eq!(launched(&mut runtime), kept("agent-4"));
+
+    // The other machine's registration names the same pane id and session,
+    // yet its pane is another: nothing is proven for it.
+    runtime.missions.book.missions[0].nodes[0].agent_id = Some("agent-5".into());
+    runtime.save_missions();
+    show(&mut runtime, session("w-order:t1", None));
+    assert_eq!(launched(&mut runtime), None);
 }
