@@ -20,6 +20,10 @@ on:
         description: The systems to run, as a JSON array of `linux`, `macos` and `windows`.
         type: string
         required: true
+      macos-runner:
+        description: The macOS job's `runs-on` as JSON (docs/BUILD.md, The Mac mini CI runner); empty for GitHub's macos-15.
+        type: string
+        default: ''
     # The development issues App's key (docs/TESTING.md, Flaky tests). A run
     # without it, such as a fork's, files no issue and passes as before.
     secrets:
@@ -32,7 +36,7 @@ permissions:
 jobs:
   build:
     name: vt (${{ matrix.system }})
-    runs-on: ${{ fromJSON('{"linux":"ubuntu-latest","macos":"macos-15","windows":"windows-latest"}')[matrix.system] }}
+    runs-on: ${{ matrix.system == 'macos' && fromJSON(inputs.macos-runner || '"macos-15"') || fromJSON('{"linux":"ubuntu-latest","windows":"windows-latest"}')[matrix.system] }}
     timeout-minutes: 30
     strategy:
       fail-fast: false
