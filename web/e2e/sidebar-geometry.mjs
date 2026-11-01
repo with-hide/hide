@@ -1,9 +1,9 @@
 /* global document, CSS, DOMRect, Node, getComputedStyle */
 // Where the sidebar's rows and their parts are on screen, measured in the
-// page. The e2e specs assert on these (through wire.ts), and the design review
-// command (scripts/design-review.mjs) reads them against a baseline's rules,
-// so both judge one geometry. Plain JavaScript because that command is a Node
-// script, not a Playwright spec.
+// page. The e2e specs assert on these (through wire.ts), and the private design
+// review tooling, kept outside this checkout, reads them against a baseline's
+// rules, so both judge one geometry. Plain JavaScript because that tooling is
+// a Node script, not a Playwright spec.
 
 /** Every row the sidebar lists draw, by a stable key. */
 const ROWS = [
