@@ -1,4 +1,4 @@
-use super::worktree_command::{RemovalRefused, RemovalStart};
+use super::worktree_command::{RemovalConsent, RemovalRefused, RemovalStart};
 use super::*;
 use crate::model::GithubReadOutcome;
 
@@ -2141,12 +2141,7 @@ impl Runtime {
     pub(super) fn start_git_worktree_removal(
         &mut self,
         mut payload: RemoveWorktreePayload,
-        consent: Option<
-            &dyn Fn(
-                &crate::model::WorktreeSnapshot,
-                &mut RemoveWorktreePayload,
-            ) -> Result<(), RemovalRefused>,
-        >,
+        consent: Option<&RemovalConsent<'_>>,
     ) -> Result<RemovalStart, RemovalRefused> {
         if let Some(removal) = self.snapshot.worktree_removal.as_ref()
             && matches!(removal.phase.as_str(), "checking" | "closing" | "removing")

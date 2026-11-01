@@ -17,6 +17,11 @@ pub(crate) enum RemovalStart {
     Running(u64),
 }
 
+/// A command's own consent: it judges the listed row under the lock and
+/// fills the payload's choices, or refuses before anything is recorded.
+pub(crate) type RemovalConsent<'a> =
+    dyn Fn(&WorktreeSnapshot, &mut RemoveWorktreePayload) -> Result<(), RemovalRefused> + 'a;
+
 /// Why a removal could not start: the error kind the dialog shows and its
 /// sentence, which a command answers as `kind` with `_` for `.`.
 #[derive(Clone, Debug, Eq, PartialEq)]

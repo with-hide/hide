@@ -418,10 +418,11 @@ impl CoreHandle {
     }
 
     /// `hide workspace remove`: starts the removal on the owner thread,
-    /// then reads its record there until it ends. The wait runs on the
-    /// caller's blocking task and holds no lock between reads; a removal
-    /// that outlasts it keeps running, and the same command waits for it
-    /// again.
+    /// then reads its record there again on each change the core announces,
+    /// until it ends. The wait runs on the caller's blocking task, which is
+    /// inside the daemon's runtime, and holds no lock between reads; a
+    /// removal that outlasts it keeps running, and the same command waits
+    /// for it again.
     pub fn worktree_remove(
         &self,
         device: &str,
@@ -429,8 +430,11 @@ impl CoreHandle {
         expected: &Context,
         command: herdr_core::worktree_command::WorktreeRemove,
     ) -> Result<serde_json::Value, String> {
-        const POLL: std::time::Duration = std::time::Duration::from_millis(200);
         let unavailable = || "worktree_remove_worker_unavailable".to_owned();
+        // Subscribed before the start, so the change that ends the removal
+        // cannot land between a read and the wait for the next one.
+        let mut changes = self.notify.subscribe();
+        let runtime = tokio::runtime::Handle::try_current().map_err(|_| unavailable())?;
         let (reply, result) = mpsc::channel();
         self.commands
             .send(Command::WorktreeRemove {
@@ -451,10 +455,12 @@ impl CoreHandle {
             if let Some(answer) = result.recv().map_err(|_| unavailable())? {
                 return answer;
             }
-            if std::time::Instant::now() >= deadline {
-                return Err("worktree_remove_pending".to_owned());
+            let remaining = deadline.saturating_duration_since(std::time::Instant::now());
+            match runtime.block_on(tokio::time::timeout(remaining, changes.recv())) {
+                Err(_) => return Err("worktree_remove_pending".to_owned()),
+                Ok(Ok(()) | Err(broadcast::error::RecvError::Lagged(_))) => {}
+                Ok(Err(broadcast::error::RecvError::Closed)) => return Err(unavailable()),
             }
-            std::thread::sleep(POLL);
         }
     }
 
