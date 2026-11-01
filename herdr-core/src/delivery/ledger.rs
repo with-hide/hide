@@ -84,12 +84,13 @@ pub struct Letter {
     pub bell_line: Option<String>,
     #[serde(default)]
     pub bell_turn: Option<BellTurn>,
-    /// The recipient's own session took one of the letter's bells: its prompt
-    /// hook asked with the bell line's digest, or its session file records
-    /// that line. No bell is typed for it again, whether or not the hook's
-    /// confirmation arrived (`delivery::doorbell`): the next bell's batch for
-    /// the same recipient, a tool or turn-end hook or `hide inbox` brings it
-    /// instead. An older build drops the field at its next save.
+    /// A prompt hook of the recipient's own session asked with the bell
+    /// line's digest and was handed the letter's body to print. No bell is
+    /// typed for it again, whether or not the hook's confirmation arrived
+    /// (`delivery::doorbell`): the next bell's batch for the same recipient,
+    /// a tool or turn-end hook or `hide inbox` brings it instead, and at its
+    /// deadline it ends delivered without a receipt. An older build drops the
+    /// field at its next save.
     #[serde(default)]
     pub handed: bool,
     /// Where the letter's wait for intake began: on its recipient machine's
@@ -246,25 +247,6 @@ impl Letter {
         // as does a handed letter's that ended without one.
         self.hook_confirmed
             .unwrap_or(self.state == State::Delivered && !self.handed)
-    }
-
-    /// Ends the wait for intake of a pending letter no receipt took in. One a
-    /// hook handed into its recipient's session ends delivered without a
-    /// receipt (`hook_confirmed` null), which its sender reads as probably
-    /// received, and still waits for an answer; any other is undelivered and
-    /// its sender waits for nothing.
-    fn end_unconfirmed(&mut self, now: u64) {
-        if self.handed {
-            self.state = State::Delivered;
-            self.hook_confirmed = None;
-            if !self.open() {
-                self.finished_at_unix_ms = Some(now);
-            }
-        } else {
-            self.state = State::Undelivered;
-            self.waiting_answer = false;
-            self.finished_at_unix_ms = Some(now);
-        }
     }
 
     pub(crate) fn awaiting_intake(&self) -> bool {
@@ -502,14 +484,28 @@ impl Ledger {
     pub fn expire_awake(&mut self, now: u64, asleep: &Asleep, woken: &Woken) -> bool {
         let mut changed = self.cleanup(now);
         let clocks = &self.node_clocks;
+        let mut reports = Vec::new();
         for letter in &mut self.letters {
             if !letter.intake_overdue(clocks, now)
                 || Sleeper::pausing(asleep, woken, letter).is_some()
             {
                 continue;
             }
-            if letter.state == State::Pending {
-                letter.end_unconfirmed(now);
+            if letter.state == State::Pending && letter.handed {
+                // A hook printed it into its recipient's session: it ends as
+                // a confirmation would, without the receipt.
+                letter.state = State::Delivered;
+                letter.hook_confirmed = None;
+                if !letter.open() {
+                    letter.finished_at_unix_ms = Some(now);
+                }
+                if letter.kind == "report" {
+                    reports.push((letter.sender.clone(), letter.recipient.clone()));
+                }
+            } else if letter.state == State::Pending {
+                letter.state = State::Undelivered;
+                letter.waiting_answer = false;
+                letter.finished_at_unix_ms = Some(now);
             } else {
                 // Acknowledged without a receipt by a build before the
                 // acknowledgement was the receipt. Its intake is no longer
@@ -522,7 +518,17 @@ impl Ledger {
             }
             changed = true;
         }
+        for (sender, recipient) in reports {
+            self.end_report_watch(&sender, &recipient);
+        }
         changed
+    }
+
+    /// Ends the watch `recipient` keeps on `sender`, whose report it took.
+    pub(crate) fn end_report_watch(&mut self, sender: &Actor, recipient: &Actor) {
+        self.watches.retain(|watch| {
+            !(sender.same_identity(&watch.target) && recipient.same_identity(&watch.parent))
+        });
     }
 
     /// Takes the time each recipient in `woke` slept out of the waits of
@@ -566,7 +572,9 @@ impl Ledger {
             if letter.state != State::Pending || !failed.contains_key(&letter.id) {
                 continue;
             }
-            letter.end_unconfirmed(now);
+            letter.state = State::Undelivered;
+            letter.waiting_answer = false;
+            letter.finished_at_unix_ms = Some(now);
             changed = true;
         }
         changed

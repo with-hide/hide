@@ -42,10 +42,10 @@ pub(crate) struct InputWork {
     /// brief, it gets its Enter; empty, the brief is typed again once
     /// someone answered the screen.
     pub resubmit: Option<Resubmit>,
-    /// The agent recorded the brief or the letter's bell (`"session"`: among
-    /// its session's person messages; `"turn"`: by starting a turn after its
-    /// typing, `AgentId::turn_takes_brief`): the store is told, and nothing
-    /// else is done for it.
+    /// The agent recorded the brief (`"session"`: among its session's
+    /// person messages; `"turn"`: by starting a turn after its typing,
+    /// `AgentId::turn_takes_brief`): the store is told, and nothing else is
+    /// done for it.
     pub recorded: Option<&'static str>,
 }
 
@@ -307,32 +307,12 @@ impl Runtime {
             else {
                 continue;
             };
-            // A bell line the recipient's session file records is a bell it
-            // took, even when its prompt hook never reached the core or the
-            // doorbell could not tell the bell was typed.
-            if letter.state == crate::delivery::ledger::State::Pending
-                && !letter.handed
-                && letter.bell_line.as_deref().is_some_and(|line| {
-                    self.row_facts_of(&letter.recipient.pane_id)
-                        .is_some_and(|facts| {
-                            facts.prompt_digests.iter().any(|digest| {
-                                hide_agent_hooks::delivery::matches_prompt_digest(line, digest)
-                            })
-                        })
-                })
-            {
-                work.push(InputWork {
-                    key: InputKey::Letter(letter.id.clone()),
-                    observation: observation.clone(),
-                    notice: None,
-                    resubmit: None,
-                    recorded: Some("session"),
-                });
-                continue;
-            }
             let Some(input) = letter.typed_input() else {
                 continue;
             };
+            if self.bell_line_recorded(letter) {
+                continue;
+            }
             let standing = typed::standing(&input, Some(observation), now);
             self.note_verdict(&mut verdicts, &letter.id, input.attempts, standing);
             match standing {
@@ -542,6 +522,37 @@ impl Runtime {
 
     /// The label worker's facts on the row of `pane_id`, on this machine or
     /// a device, laid only while the pane's session proves them.
+    /// Whether the recipient's session file records `letter`'s last bell line
+    /// in a person message written after that bell was typed. It proves the
+    /// line was submitted, not that the letter's body was shown: the bell
+    /// owes no "not taken" notice and no ask, and takes nothing in, so the
+    /// next bell, whose prompt hook prints the body, still rings. An older
+    /// message with the same line, such as an earlier letter's from the same
+    /// sender, is not this bell's.
+    fn bell_line_recorded(&self, letter: &crate::delivery::ledger::Letter) -> bool {
+        let (Some(line), Some(typed_at)) =
+            (letter.bell_line.as_deref(), letter.bell_typed_at_unix_ms)
+        else {
+            return false;
+        };
+        let digest = hide_agent_hooks::delivery::prompt_digest(line);
+        self.row_facts_of(&letter.recipient.pane_id)
+            .is_some_and(|facts| {
+                facts
+                    .operator_request
+                    .iter()
+                    .chain(&facts.other_request)
+                    .any(|request| {
+                        !request.cut
+                            && request
+                                .at_unix_ms
+                                .saturating_add(crate::labels::facts::CLOCK_SLACK_MS)
+                                >= typed_at
+                            && hide_agent_hooks::delivery::prompt_digest(&request.text) == digest
+                    })
+            })
+    }
+
     fn row_facts_of(&self, pane_id: &str) -> Option<&crate::request_view::RowFacts> {
         self.snapshot
             .navigator
@@ -630,6 +641,9 @@ impl Runtime {
             else {
                 continue;
             };
+            if self.bell_line_recorded(letter) {
+                continue;
+            }
             let Standing::Unconfirmed { since } =
                 self.input_standing(&letter.id, &input, Some(observation), now)
             else {
@@ -859,9 +873,15 @@ pub(crate) mod tests {
         (root, runtime, spawn)
     }
 
-    /// The agent row of `pane` with `prompts` among its session file's
-    /// person messages, as the label worker reads them.
-    pub(crate) fn record_prompts(runtime: &mut Runtime, pane: &str, kind: &str, prompts: &[&str]) {
+    /// The agent row of `pane` whose session file's newest message from
+    /// another party is `text`, written at `at`.
+    pub(crate) fn record_request(
+        runtime: &mut Runtime,
+        pane: &str,
+        kind: &str,
+        text: &str,
+        at: u64,
+    ) {
         let mut row = crate::sidebar::project_agents(
             serde_json::from_value(json!({"agents": [
                 {"pane_id": pane, "agent": kind, "agent_status": "idle", "state_change_seq": 2}
@@ -871,10 +891,15 @@ pub(crate) mod tests {
         .agents
         .remove(0);
         row.row_facts = Some(crate::request_view::RowFacts {
-            prompt_digests: prompts
-                .iter()
-                .map(|prompt| hide_agent_hooks::delivery::prompt_digest(prompt))
-                .collect(),
+            other_request: Some(crate::labels::facts::Request {
+                text: text.into(),
+                offset: Some(1),
+                cut: false,
+                images: 0,
+                at_unix_ms: at,
+                requester: crate::labels::facts::Requester::Named("sender".into()),
+                first: false,
+            }),
             ..Default::default()
         });
         runtime.snapshot.navigator.agents.push(row);

@@ -411,9 +411,6 @@ pub fn apply(
                         digest: digest.to_owned(),
                     }
                 });
-                // The batch a bell's turn claims is taken: its gaps hand it
-                // over, and no bell is typed for it again.
-                letter.handed |= letter.bell_turn.is_some() && letter.state == State::Pending;
             }
             Ok(json!(Intake::default()))
         }
@@ -488,9 +485,7 @@ fn record_intake(letter: &mut Letter, now: u64) -> Option<(Actor, Actor)> {
 
 fn end_report_watches(ledger: &mut Ledger, report: Option<(Actor, Actor)>) {
     if let Some((sender, recipient)) = report {
-        ledger.watches.retain(|watch| {
-            !(sender.same_identity(&watch.target) && recipient.same_identity(&watch.parent))
-        });
+        ledger.end_report_watch(&sender, &recipient);
     }
 }
 
@@ -1450,6 +1445,61 @@ mod tests {
         )
         .unwrap();
         assert_eq!(state(&ledger, &first), (State::Delivered, Some(true), true));
+    }
+
+    /// A handed letter whose recipient's wake failed is undelivered, as any
+    /// letter there is: the wake's failure, not a missing receipt, ends it.
+    #[test]
+    fn a_handed_letter_whose_wake_failed_is_undelivered() {
+        let mut ledger = Ledger::default();
+        let recipient = actor("recipient");
+        let id = pending_for(&mut ledger, &recipient, 1).remove(0);
+        ring(&mut ledger, 0, LINE);
+        pull_for(&mut ledger, &recipient, LINE);
+        assert!(ledger.letters[0].handed);
+        let failed = std::collections::BTreeMap::from([(id, "wake_failed".to_owned())]);
+        assert!(ledger.fail_woken(&failed, 100));
+        assert_eq!(ledger.letters[0].state, State::Undelivered);
+    }
+
+    /// A report a prompt hook handed over ends its parent's watch at its
+    /// deadline, as a confirmation would; one no hook handed ends
+    /// undelivered and leaves the watch.
+    #[test]
+    fn a_handed_report_ends_its_watch_at_the_deadline_and_an_unhanded_one_does_not() {
+        for handed in [true, false] {
+            let mut ledger = Ledger::default();
+            let parent = actor("parent");
+            let child = actor("child");
+            super::super::watch::start(&mut ledger, &parent, &child, 0).unwrap();
+            let report = send(
+                &mut ledger,
+                &child,
+                &parent,
+                "done",
+                "body-0",
+                "report",
+                None,
+                1,
+            )
+            .unwrap()
+            .id;
+            let line = "🦉 child 보고: body-0";
+            ring(&mut ledger, 0, line);
+            if handed {
+                assert_eq!(pull_for(&mut ledger, &parent, line).ids, [report.as_str()]);
+            }
+            assert!(ledger.expire(super::super::DELIVERY_EXPIRY_MS + 1_000));
+            let state = ledger.letters[0].state;
+            assert_eq!(
+                (state, ledger.watches.is_empty()),
+                if handed {
+                    (State::Delivered, true)
+                } else {
+                    (State::Undelivered, false)
+                }
+            );
+        }
     }
 
     #[test]

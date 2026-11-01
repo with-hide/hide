@@ -762,10 +762,7 @@ impl Doorbell {
                 InputKey::Spawn(id) | InputKey::Letter(id) => id.clone(),
             };
             if let Some(by) = item.recorded {
-                match &item.key {
-                    InputKey::Spawn(_) => record_brief(owner, &id, by),
-                    InputKey::Letter(_) => record_bell(owner, &id, &item.observation.actor),
-                }
+                record_brief(owner, &id, by);
                 continue;
             }
             // The composer first: a brief it still shows gets its Enter, and
@@ -962,28 +959,6 @@ fn record_brief(owner: &Mutex<Runtime>, id: &str, by: &str) {
     crate::diagnostic!(
         json!({"component":"delivery","kind":"input.confirmed","spawn":id,
         "by":by,"code":result.err()})
-    );
-}
-
-/// Tells the store that letter `id`'s bell is in its recipient's session
-/// file, so no bell is typed for it again.
-fn record_bell(owner: &Mutex<Runtime>, id: &str, recipient: &crate::delivery::Actor) {
-    let result = owner
-        .lock()
-        .map_err(|_| "delivery_unavailable".to_owned())
-        .and_then(|guard| guard.hide_delivery(super::typed::INPUT_ROLE))
-        .and_then(|(client, _, _)| {
-            client.submit(
-                Effect::BellRecorded {
-                    id: id.to_owned(),
-                    recipient: recipient.clone(),
-                },
-                PROMPT_TIMEOUT,
-            )
-        });
-    crate::diagnostic!(
-        json!({"component":"delivery","kind":"input.confirmed","letter_id":id,
-        "by":"session","code":result.err()})
     );
 }
 
@@ -2147,40 +2122,61 @@ mod tests {
         assert_eq!(operator["context"], "");
     }
 
-    /// A bell line its recipient's session file records is a bell taken,
-    /// even when its prompt hook never reached the core (letter-19699,
-    /// 2026-11-01): the pane is not belled again and the sender is told
-    /// nothing.
+    /// A bell line its recipient's session file records after that bell was
+    /// typed proves only that the line was submitted (letter-19699,
+    /// 2026-11-01): its sender is told nothing, and the letter is not taken
+    /// in or marked handed, so the next bell, whose hook prints the body,
+    /// still rings. The same line recorded before the bell, such as an
+    /// earlier letter's, is not this bell's record and the sender is told.
     #[test]
-    fn a_bell_the_session_file_records_is_never_typed_again() {
-        let bell = Bell::start(json!({}));
-        bell.runtime
-            .lock()
-            .unwrap()
-            .install_delivery_client(bell.client.clone());
-        let mut doorbell = Doorbell::default();
-        let start = now();
-        bell.pass(&mut doorbell, start);
-        assert_eq!(bell.typed().len(), 1);
-        let line = bell.line().unwrap();
-        crate::runtime::typed_input::tests::record_prompts(
-            &mut bell.runtime.lock().unwrap(),
-            "recipient",
-            "codex",
-            &[&line],
-        );
-        passes_after_the_turn(&bell, &mut doorbell, start);
-        assert_eq!(bell.typed().len(), 1, "no second bell");
-        assert!(input_notices(&bell).is_empty(), "no sender is told");
-        let guard = bell.runtime.lock().unwrap();
-        let ledger = guard.delivery_state().unwrap();
-        let letter = ledger
-            .letters
-            .iter()
-            .find(|letter| letter.id == bell.letter)
-            .unwrap();
-        assert!(letter.handed);
-        assert_eq!(letter.state, State::Pending, "only a hook takes it in");
+    fn a_bell_line_the_session_file_records_after_the_bell_owes_no_notice_and_takes_nothing() {
+        for (after_the_bell, told) in [(true, false), (false, true)] {
+            let bell = Bell::start(json!({}));
+            bell.runtime
+                .lock()
+                .unwrap()
+                .install_delivery_client(bell.client.clone());
+            let mut doorbell = Doorbell::default();
+            let start = now();
+            bell.pass(&mut doorbell, start);
+            assert_eq!(bell.typed().len(), 1);
+            let (line, typed_at) = {
+                let guard = bell.runtime.lock().unwrap();
+                let ledger = guard.delivery_state().unwrap();
+                let letter = ledger
+                    .letters
+                    .iter()
+                    .find(|letter| letter.id == bell.letter)
+                    .unwrap();
+                (
+                    letter.bell_line.clone().unwrap(),
+                    letter.bell_typed_at_unix_ms.unwrap(),
+                )
+            };
+            let at = if after_the_bell {
+                typed_at + 1_000
+            } else {
+                typed_at - 60_000
+            };
+            crate::runtime::typed_input::tests::record_request(
+                &mut bell.runtime.lock().unwrap(),
+                "recipient",
+                "codex",
+                &line,
+                at,
+            );
+            passes_after_the_turn(&bell, &mut doorbell, start);
+            assert_eq!(!input_notices(&bell).is_empty(), told, "{after_the_bell}");
+            let guard = bell.runtime.lock().unwrap();
+            let ledger = guard.delivery_state().unwrap();
+            let letter = ledger
+                .letters
+                .iter()
+                .find(|letter| letter.id == bell.letter)
+                .unwrap();
+            assert!(!letter.handed, "the session file shows no body");
+            assert_eq!(letter.state, State::Pending);
+        }
     }
 
     /// PRD letters-to-busy-agents D-01, D-04, D-05, D-10: a working pane is

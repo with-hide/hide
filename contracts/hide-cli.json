@@ -1231,7 +1231,7 @@
                         },
                         "handed": {
                             "default": false,
-                            "description": "The recipient's own session took one of the letter's bells: its prompt hook asked with the bell line's digest, or its session file records that line. No bell is typed for it again, whether or not the hook's confirmation arrived (`delivery::doorbell`): the next bell's batch for the same recipient, a tool or turn-end hook or `hide inbox` brings it instead. An older build drops the field at its next save.",
+                            "description": "A prompt hook of the recipient's own session asked with the bell line's digest and was handed the letter's body to print. No bell is typed for it again, whether or not the hook's confirmation arrived (`delivery::doorbell`): the next bell's batch for the same recipient, a tool or turn-end hook or `hide inbox` brings it instead, and at its deadline it ends delivered without a receipt. An older build drops the field at its next save.",
                             "type": "boolean"
                         },
                         "hook_confirmed": {
@@ -1616,7 +1616,7 @@
                 },
                 "handed": {
                     "default": false,
-                    "description": "The recipient's own session took one of the letter's bells: its prompt hook asked with the bell line's digest, or its session file records that line. No bell is typed for it again, whether or not the hook's confirmation arrived (`delivery::doorbell`): the next bell's batch for the same recipient, a tool or turn-end hook or `hide inbox` brings it instead. An older build drops the field at its next save.",
+                    "description": "A prompt hook of the recipient's own session asked with the bell line's digest and was handed the letter's body to print. No bell is typed for it again, whether or not the hook's confirmation arrived (`delivery::doorbell`): the next bell's batch for the same recipient, a tool or turn-end hook or `hide inbox` brings it instead, and at its deadline it ends delivered without a receipt. An older build drops the field at its next save.",
                     "type": "boolean"
                 },
                 "hook_confirmed": {
@@ -4953,7 +4953,7 @@
             "rest": null
         }
     ],
-    "digest": "sha256:1c9c41997153e3e50554dc9cad36d8683a266f5f666f57a24f2b3e2da11b0d9f",
+    "digest": "sha256:dc83c81debd83d3052593c07dcf1eb4f8f5516feea754eadf70f320a79cea864",
     "envelopes": {
         "agent": {
             "answer": "value",
