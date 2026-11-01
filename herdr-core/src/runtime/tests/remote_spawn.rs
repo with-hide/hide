@@ -708,7 +708,7 @@ fn a_spawn_whose_session_comes_late_keeps_its_choice_and_binds_it_on_arrival() {
             Vec::new(),
         )
         .expect_err("the agent has not reported its session");
-    assert_eq!(error, "native_identity_unavailable");
+    assert_eq!(split_refusal(&error).0, "native_identity_unavailable");
     let pane_id = "remote:mini:pane:w2:p1";
     let kept = spawner
         .runtime
@@ -922,7 +922,17 @@ fn a_spawn_that_stopped_after_its_pane_resumes_without_the_device_checks() {
     let error = spawner
         .spawn(Some("here"), Some(DEVICE), "resume")
         .expect_err("the agent never reported its session");
-    assert_eq!(error, "native_identity_unavailable");
+    // The refusal names the spawn and the pane it made, as the caller
+    // reads and answers the pane by them, and asking again names the same.
+    let (code, detail) = split_refusal(&error);
+    assert_eq!(code, "native_identity_unavailable");
+    let named: serde_json::Value = serde_json::from_str(detail.unwrap()).unwrap();
+    assert_eq!(named["id"], spawner.ledger().spawns[0].id.as_str());
+    assert_eq!(named["pane"], "remote:mini:pane:w2:p1");
+    let again = spawner
+        .spawn(Some("here"), Some(DEVICE), "resume")
+        .expect_err("still no session");
+    assert_eq!(again, error);
     let before = spawner.herdr.methods();
     assert_eq!(count(&before, "worktree.create"), 1);
     assert_eq!(count(&before, "agent.start"), 1);
@@ -957,23 +967,35 @@ fn the_same_intent_types_its_start_once_more_only_after_herdr_lets_the_name_go()
     let ask = || spawner.spawn(Some("here"), Some(DEVICE), "unseen");
     let starts = || count(&spawner.herdr.methods(), "agent.start");
     assert_eq!(
-        ask().expect_err("never showed"),
+        split_refusal(&ask().expect_err("never showed")).0,
         "native_identity_unavailable"
     );
     assert_eq!(starts(), 1);
     // Herdr still holds the name: the agent may yet show, and nothing is
     // typed over it.
-    assert_eq!(ask().expect_err("held"), "native_identity_unavailable");
+    assert_eq!(
+        split_refusal(&ask().expect_err("held")).0,
+        "native_identity_unavailable"
+    );
     assert_eq!(starts(), 1);
     // Herdr's deadline passed and the shell is at rest: typed once more.
     spawner.held.store(false, Ordering::SeqCst);
-    assert_eq!(ask().expect_err("resent"), "native_identity_unavailable");
+    assert_eq!(
+        split_refusal(&ask().expect_err("resent")).0,
+        "native_identity_unavailable"
+    );
     assert_eq!(starts(), 2);
     assert_eq!(spawner.ledger().spawns[0].typed, 2);
     // The second start never showed either: that is the answer.
     spawner.held.store(false, Ordering::SeqCst);
-    assert_eq!(ask().expect_err("not started"), "agent_not_started");
-    assert_eq!(ask().expect_err("not started"), "agent_not_started");
+    assert_eq!(
+        split_refusal(&ask().expect_err("not started")).0,
+        "agent_not_started"
+    );
+    assert_eq!(
+        split_refusal(&ask().expect_err("not started")).0,
+        "agent_not_started"
+    );
     let methods = spawner.herdr.methods();
     assert_eq!(count(&methods, "agent.start"), 2, "{methods:?}");
     assert_eq!(count(&methods, "worktree.create"), 1, "{methods:?}");
@@ -1188,7 +1210,7 @@ fn a_child_that_reports_its_session_late_is_bound_by_the_core_and_its_intent_ans
     *spawner.session.lock().unwrap() = None;
     let ask = || spawner.spawn(Some("here"), Some(DEVICE), "late");
     assert_eq!(
-        ask().expect_err("no session yet"),
+        split_refusal(&ask().expect_err("no session yet")).0,
         "native_identity_unavailable"
     );
     let ledger = spawner.published();
@@ -1256,7 +1278,7 @@ fn a_retry_that_binds_first_and_the_cores_settle_converge_on_one_child() {
     *spawner.session.lock().unwrap() = None;
     let ask = || spawner.spawn(Some("here"), Some(DEVICE), "race");
     assert_eq!(
-        ask().expect_err("no session yet"),
+        split_refusal(&ask().expect_err("no session yet")).0,
         "native_identity_unavailable"
     );
     *spawner.session.lock().unwrap() = Some("device-child-session".into());
@@ -1281,9 +1303,12 @@ fn a_late_child_whose_session_cannot_be_kept_ends_its_wait_and_its_pane_closes()
     let spawner = spawner();
     *spawner.session.lock().unwrap() = None;
     assert_eq!(
-        spawner
-            .spawn(Some("here"), Some(DEVICE), "late-too-long")
-            .expect_err("no session yet"),
+        split_refusal(
+            &spawner
+                .spawn(Some("here"), Some(DEVICE), "late-too-long")
+                .expect_err("no session yet")
+        )
+        .0,
         "native_identity_unavailable"
     );
     let mut writer = spawner.writer();

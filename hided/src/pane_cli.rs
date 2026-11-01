@@ -9,7 +9,7 @@ use serde_json::json;
 
 use crate::env::Env;
 
-pub const USAGE: &str = "hide pane read <pane> [--lines <n>] [--json]\nhide pane send <pane> [<text>] [--key <name>]... [--enter] [--paste]\n  keys: esc enter tab shift-tab up down left right backspace ctrl-c\nhide pane open --beside [--focus] -- <command>\nhide agent read <agent> [--lines <n>] [--json]\nhide workspace purpose <text>";
+pub const USAGE: &str = "hide pane read <pane> [--lines <n>] [--json]\nhide pane send <pane> [<text>] [--key <name>]... [--enter] [--paste]\nhide pane open --beside [--focus] -- <command>\nhide agent read <agent> [--lines <n>] [--json]\nhide workspace purpose <text>";
 
 /// One parsed command, and whether its read is printed as the answer line.
 #[derive(Debug, Eq, PartialEq)]
@@ -124,15 +124,18 @@ fn send(args: &[String]) -> Result<PaneCli, String> {
         match arg.as_str() {
             "--key" => {
                 let name = rest.next().ok_or_else(|| USAGE.to_owned())?;
-                keys.push(
-                    PaneKey::parse(name).ok_or_else(|| {
-                        format!("unknown key for hide pane send: {name}\n{USAGE}")
-                    })?,
-                );
+                keys.push(PaneKey::parse(name).ok_or_else(|| {
+                    let known: Vec<&str> = PaneKey::ALL.into_iter().map(PaneKey::name).collect();
+                    format!(
+                        "unknown key for hide pane send: {name} (keys: {})\n{USAGE}",
+                        known.join(" ")
+                    )
+                })?);
             }
             "--enter" if !enter => enter = true,
             "--paste" if !paste => paste = true,
             flag if flag.starts_with("--") => return Err(USAGE.to_owned()),
+            _ if arg.trim().is_empty() => return Err(USAGE.to_owned()),
             _ if text.is_none() => text = Some(arg.clone()),
             _ => return Err(USAGE.to_owned()),
         }

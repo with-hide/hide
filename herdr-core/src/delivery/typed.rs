@@ -178,14 +178,19 @@ pub(crate) fn notice_body(
         (InputKind::Letter, Some(id)) => format!("your letter {id}"),
         (InputKind::Letter, None) => "your letter".to_owned(),
     };
-    let trust = "A trust, permission or login question is the operator's to answer: never accept it \
-                 for them, tell them instead.";
+    // The operator's decision (2026-11-01): an agent may answer another's
+    // screen, approvals included; Hide does not judge consent, and the
+    // operator sets how much agents approve in Settings > Agents.
+    let trust = "Answering a trust or approval screen for it is your call: Hide does not check \
+                 consent, and the operator sets how much agents may approve in Settings > Agents. \
+                 Leave a login to the operator.";
     match source {
         Ok(()) => format!(
             "{agent} has not confirmed {what}: read its screen with `hide pane read {pane}`.\n\
-             Something on its screen may have taken the typed text. Clear a harmless screen (an \
-             update notice, \"press Enter to continue\") with `hide pane send {pane} <keys> \
-             [--enter]`; Hide types it again once the agent is ready.\n{trust}"
+             Something on its screen may have taken the typed text; `hide agent show` names what \
+             it waits on. Answer the screen with `hide pane send {pane} --key <name>` (esc, enter, \
+             up, down, tab, ...) or with text and `--enter`; Hide types it again once the agent \
+             is ready.\n{trust}"
         ),
         Err(reason) => {
             let why = if reason == HOOKS_NOT_CONNECTED {

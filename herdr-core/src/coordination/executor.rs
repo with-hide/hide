@@ -60,6 +60,166 @@ fn registrations(
     let sleeping = runtime.sleeping_registrations(&ledger.agents);
     Ok((ledger, sleeping))
 }
+/// `hide agent show <key>`, read only: a registration by its id (or the
+/// caller's own, `here`) with its state, or a spawn by its id or the caller's
+/// intent, answered by its child's registration once it has one and by the
+/// spawn and its pane's state until then. Nothing is written or asked of an
+/// engine; the facts are copied under the runtime's lock and joined after.
+fn show(client: &Client, actor: &Actor, key: &str) -> Result<Value, String> {
+    let runtime = client.runtime.upgrade().ok_or("delivery_unavailable")?;
+    let runtime = runtime.lock().map_err(|_| "delivery_unavailable")?;
+    let shown = Shown::read(&runtime, actor, key)?;
+    drop(runtime);
+    Ok(shown.answer(&actor.device_id))
+}
+
+/// What `hide agent show` found, with the facts it copied under the
+/// runtime's lock.
+pub(crate) struct Shown {
+    ledger: Arc<crate::delivery::ledger::Ledger>,
+    sleeping: super::Sleeping,
+    found: Found,
+}
+
+enum Found {
+    Agent(Box<AgentRecord>, crate::runtime::agent_show::StateFacts),
+    Spawn(Box<super::SpawnRecord>, crate::runtime::agent_show::StateFacts),
+}
+
+impl Shown {
+    /// Finds `key` for `actor` under the runtime's lock, reading only.
+    pub(crate) fn read(
+        runtime: &crate::runtime::Runtime,
+        actor: &Actor,
+        key: &str,
+    ) -> Result<Self, String> {
+        use crate::runtime::agent_show::spawns_of;
+        let ledger = runtime.delivery_state()?;
+        let sleeping = runtime.sleeping_registrations(&ledger.agents);
+        let registered = |record: &AgentRecord| {
+            let facts =
+                runtime.agent_state_facts(&record.actor, &spawns_of(&ledger, Some(&record.id)));
+            Found::Agent(Box::new(record.clone()), facts)
+        };
+        let found = if key == super::HERE {
+            registered(super::here(&ledger, actor)?)
+        } else if let Some(record) = ledger.agents.iter().find(|record| record.id == key) {
+            registered(record)
+        } else {
+            let caller = super::live_self(&ledger, actor)
+                .next()
+                .map(|record| record.id.clone());
+            let spawn = ledger
+                .spawns
+                .iter()
+                .find(|spawn| spawn.id == key)
+                .or_else(|| {
+                    let caller = caller.as_deref()?;
+                    ledger
+                        .spawns
+                        .iter()
+                        .find(|spawn| spawn.parent == caller && spawn.intent == key)
+                })
+                .ok_or("agent_unavailable")?;
+            match spawn
+                .child
+                .as_deref()
+                .and_then(|child| ledger.agents.iter().find(|record| record.id == child))
+            {
+                Some(record) => registered(record),
+                None => Found::Spawn(Box::new(spawn.clone()), runtime.spawn_state_facts(spawn)),
+            }
+        };
+        Ok(Self {
+            ledger,
+            sleeping,
+            found,
+        })
+    }
+
+    /// The answer, for a caller on `device`.
+    pub(crate) fn answer(self, device: &str) -> Value {
+        match self.found {
+            Found::Agent(record, facts) => {
+                let life = super::life(&record, &self.sleeping);
+                json!(crate::delivery::answer::AgentShow {
+                    agent: super::agent_view(&record, &self.ledger, &self.sleeping),
+                    state: facts.state(Some(life), record.parent.as_deref()),
+                })
+            }
+            Found::Spawn(spawn, facts) => {
+                let parent =
+                    (spawn.mode == super::SpawnMode::Delegation).then_some(spawn.parent.as_str());
+                json!(crate::delivery::answer::SpawnShow {
+                    spawn: spawn_ref(&spawn, device),
+                    state: facts.state(None, parent),
+                })
+            }
+        }
+    }
+}
+
+/// A spawn that stopped partway with its pane made names that spawn and
+/// pane in its refusal, so the caller can read the pane, answer its screen
+/// and ask `hide agent show <spawn id>` without a registration
+/// (`super::split_refusal` takes the detail off again).
+fn incomplete_spawn(client: &Client, actor: &Actor, command: &Command, code: String) -> String {
+    let Command::Spawn { parent, intent, .. } = command else {
+        return code;
+    };
+    if !super::INCOMPLETE_SPAWN.contains(&code.as_str()) {
+        return code;
+    }
+    let Ok(ledger) = state(client) else {
+        return code;
+    };
+    let parent = match parent.as_deref() {
+        None | Some(super::HERE) => super::live_self(&ledger, actor)
+            .next()
+            .map(|record| record.id.clone()),
+        Some(parent) => Some(parent.to_owned()),
+    };
+    let found = parent.and_then(|parent| {
+        ledger
+            .spawns
+            .iter()
+            .find(|spawn| spawn.parent == parent && spawn.intent == *intent && spawn.pane.is_some())
+    });
+    match found {
+        Some(spawn) => {
+            let spawn = spawn_ref(spawn, &actor.device_id);
+            super::refusal(
+                &code,
+                &json!({"id": spawn.id, "pane": spawn.pane}).to_string(),
+            )
+        }
+        None => code,
+    }
+}
+
+/// A spawn as an answer names it: its pane as `hide pane send` takes it from
+/// a caller on `device`, bare on the caller's own machine.
+pub(crate) fn spawn_ref(
+    spawn: &super::SpawnRecord,
+    device: &str,
+) -> crate::delivery::answer::SpawnRef {
+    crate::delivery::answer::SpawnRef {
+        id: spawn.id.clone(),
+        intent: spawn.intent.clone(),
+        name: spawn.name.clone(),
+        kind: spawn.kind.clone(),
+        machine: spawn.machine.clone(),
+        pane: spawn
+            .pane
+            .as_ref()
+            .map(|pane| match spawn.machine.as_deref() {
+                Some(machine) if machine != device => crate::address::scoped_pane_id(machine, pane),
+                _ => pane.clone(),
+            }),
+        child: spawn.child.clone(),
+    }
+}
+
 fn mutate(
     client: &Client,
     authority: &Authority,
@@ -301,19 +461,7 @@ pub(crate) fn run(
                     .collect(),
             }))
         }
-        Command::Show { id } if id == super::HERE => {
-            let (ledger, sleeping) = registrations(&client)?;
-            Ok(view(super::here(&ledger, &actor)?, &ledger, &sleeping))
-        }
-        Command::Show { id } => {
-            let (ledger, sleeping) = registrations(&client)?;
-            let record = ledger
-                .agents
-                .iter()
-                .find(|record| record.id == id)
-                .ok_or("agent_unavailable")?;
-            Ok(view(record, &ledger, &sleeping))
-        }
+        Command::Show { id } => show(&client, &actor, &id),
         Command::End {
             id,
             actor: asserted,
@@ -404,7 +552,8 @@ pub(crate) fn run(
             }
             Ok(value)
         }
-        command @ Command::Spawn { .. } => spawn(&client, &authority, &actor, command),
+        command @ Command::Spawn { .. } => spawn(&client, &authority, &actor, command.clone())
+            .map_err(|code| incomplete_spawn(&client, &actor, &command, code)),
     }
 }
 /// A registration is always on the caller's own machine, which its pane

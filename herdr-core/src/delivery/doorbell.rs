@@ -1999,7 +1999,7 @@ mod tests {
                 && first_line.contains("hide pane read recipient"),
             "{first_line}"
         );
-        assert!(notice.body.contains("operator's to answer"));
+        assert!(notice.body.contains("Hide does not check consent"));
         bell.pass(&mut doorbell, late + 1_000);
         assert_eq!(notices(&bell).len(), 1, "a later pass tells nothing more");
         assert_eq!(bell.typed().len(), 1, "nothing is typed again unasked");

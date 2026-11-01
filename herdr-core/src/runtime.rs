@@ -11,6 +11,7 @@ mod agent_close;
 mod agent_groups;
 mod agent_hook_status;
 mod agent_permission;
+pub(crate) mod agent_show;
 mod agent_sleep;
 mod agents;
 mod attachments;

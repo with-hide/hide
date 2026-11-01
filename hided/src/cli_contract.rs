@@ -213,12 +213,18 @@ pub const COMMANDS: &[Spec] = &[
         &[switch("--json")],
         &["agent_list"],
     ),
-    spec(
-        &["agent", "show"],
-        AGENT_ID,
-        &[switch("--json")],
-        &["agent"],
-    ),
+    // A registration by its id with its agent's state, or a spawn by its id
+    // or the caller's intent: its child's registration once it has one, the
+    // spawn and its pane's state until then. It reads only.
+    Spec {
+        words: &["agent", "show"],
+        arguments: AGENT_ID,
+        repeats: None,
+        options: &[switch("--json")],
+        rest: None,
+        answers: &["agent_show", "spawn_show"],
+        refusals: &["agent_unavailable"],
+    },
     // The caller's own registration, by its attested pane, device and
     // session; only a pane-bound credential can ask.
     Spec {
@@ -227,7 +233,7 @@ pub const COMMANDS: &[Spec] = &[
         repeats: None,
         options: &[switch("--json")],
         rest: None,
-        answers: &["agent"],
+        answers: &["agent_show"],
         refusals: &[
             "agent_pane_required",
             "caller_identity_conflict",
@@ -473,10 +479,43 @@ pub const COMMANDS: &[Spec] = &[
             },
         ],
         repeats: None,
-        options: &[switch("--enter")],
+        // The text may be left out for a send of keys alone; `--key` repeats,
+        // each pressed in order after the text, then Enter.
+        options: &[
+            optional(
+                "--key",
+                OneOf(&[
+                    "esc",
+                    "enter",
+                    "tab",
+                    "shift-tab",
+                    "up",
+                    "down",
+                    "left",
+                    "right",
+                    "backspace",
+                    "ctrl-c",
+                ]),
+            ),
+            switch("--enter"),
+            switch("--paste"),
+        ],
         rest: None,
         answers: &["pane_sent"],
-        refusals: &["pane_required", "text_too_long", "pane_unavailable"],
+        refusals: &[
+            "pane_required",
+            "nothing_to_send",
+            "text_empty",
+            "text_invalid",
+            "text_too_long",
+            "too_many_keys",
+            "paste_unsupported",
+            "pane_unavailable",
+            "pane_asleep",
+            "composer_not_empty",
+            "keys_not_sent",
+            "send_unconfirmed",
+        ],
     },
     Spec {
         words: &["pane", "open"],

@@ -1442,6 +1442,11 @@ fn refusal_answer(reason: String, next_action: &'static str) -> (String, String)
             code.to_owned(),
             format!("{next_action}; {name} conducts it now"),
         ),
+        // A spawn that stopped partway names its spawn and pane as a field
+        // of the answer (`refused_spawn`), not in the sentence.
+        (code, Some(_)) if herdr_core::coordination::INCOMPLETE_SPAWN.contains(&code) => {
+            (code.to_owned(), next_action.to_owned())
+        }
         // Only an unknown machine's detail lists the devices to name.
         (code @ "machine_unknown", Some("")) => (
             code.to_owned(),
@@ -1457,6 +1462,17 @@ fn refusal_answer(reason: String, next_action: &'static str) -> (String, String)
         // a mission's (PRD mission-map-git-criteria B1, B9, B10).
         (code, Some(detail)) => (code.to_owned(), format!("{next_action} ({detail})")),
         (_, None) => (reason, next_action.to_owned()),
+    }
+}
+
+/// The spawn and pane a refusal of a spawn that stopped partway names, as
+/// the answer's `spawn` field: `{"id","pane"}`.
+fn refused_spawn(reason: &str) -> Option<Value> {
+    match herdr_core::coordination::split_refusal(reason) {
+        (code, Some(detail)) if herdr_core::coordination::INCOMPLETE_SPAWN.contains(&code) => {
+            serde_json::from_str(detail).ok()
+        }
+        _ => None,
     }
 }
 
@@ -2029,8 +2045,13 @@ async fn scoped_client_loop(
                                 json!({"type":"workspace_result","request_id":request_id,"ok":true,"result":result})
                             }
                             Ok(Err((reason, next_action))) => {
+                                let spawn = refused_spawn(&reason);
                                 let (reason, next_action) = refusal_answer(reason, next_action);
-                                json!({"type":"workspace_result","request_id":request_id,"ok":false,"reason":reason,"next_action":next_action})
+                                let mut answer = json!({"type":"workspace_result","request_id":request_id,"ok":false,"reason":reason,"next_action":next_action});
+                                if let Some(spawn) = spawn {
+                                    answer["spawn"] = spawn;
+                                }
+                                answer
                             }
                             Err(_) => {
                                 json!({"type":"workspace_result","request_id":request_id,"ok":false,"reason":"query_unavailable","next_action":"Retry after reconnecting Hide"})
@@ -4827,6 +4848,25 @@ mod tests {
         assert!(key(&too_long, "pane_id").is_err());
         assert!(key(&too_long, "pending_request").is_err());
         assert!(view(&too_long).is_err());
+    }
+
+    /// A spawn that stopped partway answers its code and its own next step,
+    /// with the spawn and pane as a field the caller reads, not a sentence.
+    #[test]
+    fn a_spawn_that_stopped_partway_names_its_spawn_and_pane_as_a_field() {
+        let reason =
+            "native_identity_unavailable\u{1f}{\"id\":\"spawn-4\",\"pane\":\"w3:p2\"}".to_owned();
+        assert_eq!(
+            refused_spawn(&reason),
+            Some(json!({"id": "spawn-4", "pane": "w3:p2"}))
+        );
+        let next = delivery_next_action("native_identity_unavailable");
+        assert_eq!(
+            refusal_answer(reason, next),
+            ("native_identity_unavailable".to_owned(), next.to_owned())
+        );
+        assert_eq!(refused_spawn("native_identity_unavailable"), None);
+        assert_eq!(refused_spawn("machine_unknown\u{1f}mini"), None);
     }
 
     /// A refusal that lists the devices the caller could have named answers

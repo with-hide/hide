@@ -55,12 +55,26 @@ pub fn split_refusal(refusal: &str) -> (&str, Option<&str>) {
             | "plan_file_missing"
             | "plan_file_unconfirmed"
             | "plan_report_missing"
-            | "plan_delegate_full"),
+            | "plan_delegate_full"
+            | "native_identity_unavailable"
+            | "brief_not_submitted"
+            | "agent_not_started"
+            | "pane_busy"),
             detail,
         )) => (code, Some(detail)),
         _ => (refusal, None),
     }
 }
+
+/// The refusals of a spawn that stopped partway after it made its pane,
+/// whose detail names the spawn and the pane as JSON `{"id","pane"}`
+/// (`executor::incomplete_spawn`).
+pub const INCOMPLETE_SPAWN: [&str; 4] = [
+    "native_identity_unavailable",
+    "brief_not_submitted",
+    "agent_not_started",
+    "pane_busy",
+];
 
 pub(crate) const AGENT_LIMIT: usize = 2048;
 pub(crate) const SPAWN_LIMIT: usize = 4096;
@@ -716,6 +730,15 @@ pub fn resolve_actor<'a>(ledger: &'a Ledger, key: &str) -> Option<&'a Actor> {
 /// caller that names a pane resolves it against its own machine's panes.
 pub(crate) fn resolve_registered<'a>(ledger: &'a Ledger, key: &str) -> Option<&'a Actor> {
     registered_record(ledger, key).map(|record| &record.actor)
+}
+
+/// The id of the live registration `actor` is, if any.
+pub(crate) fn registered_id(ledger: &Ledger, actor: &Actor) -> Option<String> {
+    ledger
+        .agents
+        .iter()
+        .find(|record| !record.ended && record.actor.same_identity(actor))
+        .map(|record| record.id.clone())
 }
 
 /// The live registration [`resolve_registered`] finds, whole.
