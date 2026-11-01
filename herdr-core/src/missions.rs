@@ -1355,11 +1355,7 @@ pub(crate) fn apply_plan(
                 with_check && input.kind == NodeKind::Change,
                 same_check,
             );
-            if node.external != input.external {
-                // What Hide saw of one branch proves nothing about another.
-                node.branch_ahead = None;
-                node.external.clone_from(&input.external);
-            }
+            node.external.clone_from(&input.external);
             node.issues.clone_from(&input.issues);
             node.paths.clone_from(&input.paths);
             if input.change.is_some() {

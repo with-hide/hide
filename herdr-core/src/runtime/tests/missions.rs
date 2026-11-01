@@ -2697,12 +2697,15 @@ fn an_outside_node_is_done_once_its_pull_request_or_branch_is_in_main() {
     );
 
     let place = (node.to_owned(), PROJECT.to_owned());
+    let round = runtime.missions.outside.round_of("mission-1", "lib");
     let lib = || Ask {
         mission: "mission-1".into(),
         node: "lib".into(),
         watch: Watch::Outside {
             external: External::Branch("feat/lib".into()),
             ahead: None,
+            reopens: 0,
+            round,
         },
     };
     runtime.ingest_outside(
@@ -3315,8 +3318,9 @@ fn git_in(root: &std::path::Path, args: &[&str]) -> String {
 
 /// Review finding 14: in a repository with no remote, a git mission's main
 /// is the branch the repository's main worktree has out. An outside branch
-/// merged there is done, a waiting mission's own branch keeps it waiting
-/// until it is merged too, and the commit found is the one in main.
+/// whose own commit Hide read is done once merged there, a waiting
+/// mission's own branch keeps it waiting until it is merged too, and the
+/// commit found is the one in main.
 #[test]
 fn a_git_mission_in_a_repository_with_no_remote_follows_its_branches_into_main() {
     use crate::missions::WakeEvent;
@@ -3338,7 +3342,6 @@ fn a_git_mission_in_a_repository_with_no_remote_follows_its_branches_into_main()
         git_in(&repo, &["commit", "-q", "--allow-empty", "-m", branch]);
     }
     git_in(&repo, &["checkout", "-q", "trunk"]);
-    git_in(&repo, &["merge", "-q", "--no-ff", "-m", "lib", "feat/lib"]);
     let listed = hide_host::worktrees::read(
         &repo,
         &Default::default(),
@@ -3397,6 +3400,11 @@ fn a_git_mission_in_a_repository_with_no_remote_follows_its_branches_into_main()
     let device = crate::node::TEST_NODE;
     let status = |runtime: &Runtime| runtime.missions.book.get("mission-1").unwrap().status;
 
+    // Hide reads the library branch's own commit before main takes it.
+    runtime.read_outside_through(device, &root, &host);
+    let lib = node_view(&runtime, "lib");
+    assert_eq!((lib.status, lib.unread), (NodeStatus::Waiting, false));
+    git_in(&repo, &["merge", "-q", "--no-ff", "-m", "lib", "feat/lib"]);
     runtime.read_outside_through(device, &root, &host);
     let lib = node_view(&runtime, "lib");
     assert_eq!((lib.status, lib.unread), (NodeStatus::Done, false));
@@ -3444,13 +3452,30 @@ fn a_git_mission_in_a_repository_with_no_remote_follows_its_branches_into_main()
     );
 }
 
+/// GitHub's answer for the project at `root`: one pull request it merged
+/// into `trunk` from the branch at `head`.
+fn merged_into_trunk(root: &str, head: &str) -> GithubSnapshot {
+    let mut merged = pull(9, head, PullRequestBadge::Merged, None);
+    merged.base_branch = "trunk".into();
+    GithubSnapshot {
+        projects: vec![GithubProjectSnapshot {
+            pull_requests_read: true,
+            root_path: root.into(),
+            pull_requests: vec![merged],
+            ..Default::default()
+        }],
+    }
+}
+
 /// mission-23: an outside branch is in main once work of its own reached
 /// main, never because it was cut from main. In a repository with no
 /// remote, a branch with no commit of its own waits, and keeps waiting
-/// while main moves on; after a commit that main then takes by a
-/// fast-forward it is done. A branch named after its real merge is done on
-/// the first read, and so is one GitHub squash-merged, whose commits main
-/// never holds.
+/// while main moves on; once Hide read a commit of its own on it, that
+/// commit reaching main by a fast-forward makes it done, across a restart
+/// between the two. A branch GitHub squash-merged is done though main never
+/// holds its commits; one merged before the mission named it, with no pull
+/// request to show for it, waits and says how to finish it, as does one
+/// whose commits Hide saw were replaced by a force push.
 #[test]
 fn an_outside_branch_is_in_main_only_once_its_own_work_reached_main() {
     let folder = tempfile::tempdir().unwrap();
@@ -3464,15 +3489,16 @@ fn an_outside_branch_is_in_main_only_once_its_own_work_reached_main() {
         &["branch", "feat/cut"],
         &["branch", "feat/old"],
         &["branch", "feat/squashed"],
+        &["branch", "feat/forced"],
     ] {
         git_in(&repo, args);
     }
-    for branch in ["feat/old", "feat/squashed"] {
+    for branch in ["feat/old", "feat/squashed", "feat/forced"] {
         git_in(&repo, &["checkout", "-q", branch]);
         git_in(&repo, &["commit", "-q", "--allow-empty", "-m", branch]);
     }
     git_in(&repo, &["checkout", "-q", "trunk"]);
-    // Merged for real before the mission names it.
+    // Merged for real before the mission names it, with no pull request.
     git_in(&repo, &["merge", "-q", "--no-ff", "-m", "old", "feat/old"]);
     let root = hide_platform::path::to_wire(&repo).unwrap();
 
@@ -3492,6 +3518,7 @@ fn an_outside_branch_is_in_main_only_once_its_own_work_reached_main() {
             outside("cut", "feat/cut"),
             outside("old", "feat/old"),
             outside("squashed", "feat/squashed"),
+            outside("forced", "feat/forced"),
         ]}}),
     )
     .unwrap();
@@ -3506,16 +3533,7 @@ fn an_outside_branch_is_in_main_only_once_its_own_work_reached_main() {
             ..Default::default()
         });
     let squashed = git_in(&repo, &["rev-parse", "feat/squashed"]);
-    let mut merged = pull(9, &squashed, PullRequestBadge::Merged, None);
-    merged.base_branch = "trunk".into();
-    runtime.github = GithubSnapshot {
-        projects: vec![GithubProjectSnapshot {
-            pull_requests_read: true,
-            root_path: root.clone(),
-            pull_requests: vec![merged],
-            ..Default::default()
-        }],
-    };
+    runtime.github = merged_into_trunk(&root, &squashed);
     let host = Host(hide_host::serve::Env::standalone(Some(repo.clone())));
     let device = crate::node::TEST_NODE;
     let status = |runtime: &Runtime, key: &str| {
@@ -3523,14 +3541,17 @@ fn an_outside_branch_is_in_main_only_once_its_own_work_reached_main() {
         assert!(!read.unread, "{key} was read");
         read.status
     };
-
     let line = |runtime: &Runtime, key: &str| node_view(runtime, key).line.unwrap_or_default();
+
     runtime.read_outside_through(device, &root, &host);
     assert_eq!(status(&runtime, "cut"), NodeStatus::Waiting);
-    // The Conductor reads why it waits in the node's line.
-    assert!(line(&runtime, "cut").contains("no commit of its own"));
-    assert_eq!(status(&runtime, "old"), NodeStatus::Done);
+    // The Conductor reads why it waits, and what finishes it, in the line.
+    assert!(line(&runtime, "cut").contains("has not seen a commit of its own"));
+    assert_eq!(status(&runtime, "old"), NodeStatus::Waiting);
+    assert!(line(&runtime, "old").contains("name its pull request instead, or drop the node"));
     assert_eq!(status(&runtime, "squashed"), NodeStatus::Done);
+    assert_eq!(status(&runtime, "forced"), NodeStatus::Waiting);
+    assert!(line(&runtime, "forced").contains("commits main does not have"));
 
     // Main moving on leaves the cut branch behind it, still with nothing
     // of its own.
@@ -3541,14 +3562,123 @@ fn an_outside_branch_is_in_main_only_once_its_own_work_reached_main() {
     git_in(&repo, &["checkout", "-q", "feat/cut"]);
     git_in(&repo, &["rebase", "-q", "trunk"]);
     git_in(&repo, &["commit", "-q", "--allow-empty", "-m", "the work"]);
+    // The forced branch's commit is thrown away for main's head.
+    git_in(&repo, &["branch", "-f", "feat/forced", "trunk"]);
     runtime.read_outside_through(device, &root, &host);
     assert_eq!(status(&runtime, "cut"), NodeStatus::Waiting);
     assert!(line(&runtime, "cut").contains("commits main does not have"));
+    assert_eq!(status(&runtime, "forced"), NodeStatus::Waiting);
+    assert!(line(&runtime, "forced").contains("were replaced"));
 
+    // A restart reads the book back and forgets every read.
+    let stored: crate::missions::MissionBook =
+        serde_json::from_value(serde_json::to_value(&runtime.missions.book).unwrap()).unwrap();
+    runtime.missions.book = stored;
+    runtime.missions.outside = Default::default();
     git_in(&repo, &["checkout", "-q", "trunk"]);
     git_in(&repo, &["merge", "-q", "--ff-only", "feat/cut"]);
     runtime.read_outside_through(device, &root, &host);
     assert_eq!(status(&runtime, "cut"), NodeStatus::Done);
+    assert!(line(&runtime, "cut").contains("In main"));
+}
+
+/// Review of #1961: what Hide saw of an outside branch belongs to one
+/// round of its node. An answer asked before the node named another branch
+/// and then the first again is dropped, so it cannot bring back what the
+/// replan dropped; a node put back to work after it was done starts with
+/// nothing seen, and so does a reopened mission's.
+#[test]
+fn an_outside_branch_answer_from_an_earlier_round_proves_nothing() {
+    use crate::missions::External;
+    use crate::runtime::mission_outside::{Ask, Found, Watch};
+    let fixture = conducting();
+    let mut runtime = fixture.runtime.lock().unwrap();
+    command(
+        &mut runtime,
+        "sender",
+        json!({"op": "create", "title": "Fix the bug"}),
+    )
+    .unwrap();
+    let plan = |branch: &str| {
+        json!({"op": "plan", "plan": {"nodes": [
+            {"key": "lib", "title": "lib", "kind": "external", "external": {"branch": branch}},
+        ]}})
+    };
+    command(&mut runtime, "sender", plan("feat/a")).unwrap();
+    command(&mut runtime, "sender", json!({"op": "start"})).unwrap();
+    let place = (crate::node::TEST_NODE.to_owned(), PROJECT.to_owned());
+    let ask = |runtime: &Runtime| Ask {
+        mission: "mission-1".into(),
+        node: "lib".into(),
+        watch: Watch::Outside {
+            external: External::Branch("feat/a".into()),
+            ahead: None,
+            reopens: runtime.missions.outside.reopens_of("mission-1"),
+            round: runtime.missions.outside.round_of("mission-1", "lib"),
+        },
+    };
+    let seen = |runtime: &Runtime| {
+        runtime.missions.book.missions[0].nodes[0]
+            .branch_ahead
+            .clone()
+    };
+    let late = ask(&runtime);
+
+    command(&mut runtime, "sender", plan("feat/b")).unwrap();
+    command(&mut runtime, "sender", plan("feat/a")).unwrap();
+    runtime.ingest_outside(&place, vec![(late, Found::Ahead("a".repeat(40)))]);
+    assert_eq!(seen(&runtime), None);
+    assert_eq!(node_view(&runtime, "lib").line, None);
+
+    // An answer of this round is taken.
+    let current = ask(&runtime);
+    runtime.ingest_outside(&place, vec![(current, Found::Ahead("b".repeat(40)))]);
+    assert_eq!(seen(&runtime), Some("b".repeat(40)));
+    let current = ask(&runtime);
+    runtime.ingest_outside(&place, vec![(current, Found::InMain(Some("b".repeat(40))))]);
+    assert_eq!(node_view(&runtime, "lib").status, NodeStatus::Done);
+
+    // Back to work after it was done: a new round, nothing seen, and an
+    // answer asked before it is dropped.
+    let late = ask(&runtime);
+    command(
+        &mut runtime,
+        "sender",
+        json!({"op": "node", "node": "lib", "patch": {"status": "waiting"}}),
+    )
+    .unwrap();
+    assert_eq!(seen(&runtime), None);
+    runtime.ingest_outside(&place, vec![(late, Found::Ahead("c".repeat(40)))]);
+    assert_eq!(seen(&runtime), None);
+
+    let current = ask(&runtime);
+
+    runtime.ingest_outside(&place, vec![(current, Found::Ahead("d".repeat(40)))]);
+    assert_eq!(seen(&runtime), Some("d".repeat(40)));
+    let late = ask(&runtime);
+    let current = ask(&runtime);
+    runtime.ingest_outside(&place, vec![(current, Found::InMain(Some("d".repeat(40))))]);
+    command(
+        &mut runtime,
+        "sender",
+        json!({"op": "close", "end": "merge_wait"}),
+    )
+    .unwrap();
+    command(
+        &mut runtime,
+        "sender",
+        json!({"op": "reopen", "mission": "mission-1"}),
+    )
+    .unwrap();
+    assert_eq!(seen(&runtime), None);
+    command(
+        &mut runtime,
+        "sender",
+        json!({"op": "node", "node": "lib", "patch": {"status": "waiting"}}),
+    )
+    .unwrap();
+    runtime.ingest_outside(&place, vec![(late, Found::Ahead("e".repeat(40)))]);
+    assert_eq!(seen(&runtime), None);
 }
 
 /// verify-screen's finding on #1729: a direct change already in main is
@@ -3680,7 +3810,7 @@ fn a_plan_of_more_outside_branches_than_one_read_takes_is_read_whole_when_admitt
         &["config", "user.email", "fixture@example.invalid"],
         &["config", "commit.gpgsign", "false"],
         &["commit", "-q", "--allow-empty", "-m", "seed"],
-        // A branch whose own work is in main.
+        // A branch whose own work is in main through a pull request.
         &["checkout", "-q", "-b", "landed"],
         &["commit", "-q", "--allow-empty", "-m", "landed"],
         &["checkout", "-q", "trunk"],
@@ -3717,6 +3847,9 @@ fn a_plan_of_more_outside_branches_than_one_read_takes_is_read_whole_when_admitt
         )
         .unwrap();
         runtime.missions.book.missions[0].project = root.clone();
+        // GitHub merged the landed branch's pull request: its own work is
+        // in main however Hide first reads it.
+        runtime.github = merged_into_trunk(&root, &git_in(&repo, &["rev-parse", "landed"]));
         runtime
             .worktree_catalog
             .projects
@@ -3818,7 +3951,7 @@ fn a_node_followed_while_a_read_is_out_is_read_once_that_read_answers() {
         &["config", "user.email", "fixture@example.invalid"],
         &["config", "commit.gpgsign", "false"],
         &["commit", "-q", "--allow-empty", "-m", "seed"],
-        // A branch whose own work is in main.
+        // A branch whose own work is in main through a pull request.
         &["checkout", "-q", "-b", "landed"],
         &["commit", "-q", "--allow-empty", "-m", "landed"],
         &["checkout", "-q", "trunk"],
@@ -3854,6 +3987,9 @@ fn a_node_followed_while_a_read_is_out_is_read_once_that_read_answers() {
         )
         .unwrap();
         runtime.missions.book.missions[0].project = root.clone();
+        // GitHub merged the landed branch's pull request: its own work is
+        // in main however Hide first reads it.
+        runtime.github = merged_into_trunk(&root, &git_in(&repo, &["rev-parse", "landed"]));
         runtime
             .worktree_catalog
             .projects

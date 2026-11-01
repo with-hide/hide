@@ -181,12 +181,6 @@ pub enum GitCommand {
         base: String,
         head: String,
     },
-    /// How many commits of `head`'s first-parent line `base` does not
-    /// have: `head~<n>` is then the first commit of that line `base` holds.
-    CountFirstParent {
-        base: String,
-        head: String,
-    },
     /// Every path in the index, each ended by a NUL.
     ListFiles,
     /// Last commit touching this repository-relative file, Unix seconds.
@@ -251,13 +245,6 @@ impl GitCommand {
             ]),
             Self::CountCommits { base, head } => owned(&[
                 "rev-list",
-                "--count",
-                &format!("{}..{}", revision_name(base)?, revision_name(head)?),
-                "--",
-            ]),
-            Self::CountFirstParent { base, head } => owned(&[
-                "rev-list",
-                "--first-parent",
                 "--count",
                 &format!("{}..{}", revision_name(base)?, revision_name(head)?),
                 "--",
@@ -457,14 +444,6 @@ mod tests {
             GitCommand::CountCommits {
                 base: "--all".into(),
                 head: "HEAD".into()
-            }
-            .args()
-            .is_err()
-        );
-        assert!(
-            GitCommand::CountFirstParent {
-                base: "HEAD".into(),
-                head: "--all".into()
             }
             .args()
             .is_err()

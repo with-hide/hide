@@ -279,11 +279,7 @@ use crate::error::HostError;
 /// ACP session updates, newest, before a page or forward from one
 /// (`Call::SessionThread`; PRD session-docs-and-assistant B25). A helper on
 /// 65 would refuse it, so it is refused at Hello and upgraded.
-/// 67: a node counts a branch's first-parent line
-/// (`git::GitCommand::CountFirstParent`), which tells a mission's outside
-/// branch merged into main from one only cut from it. A helper on 66 would
-/// refuse the command, so it is refused at Hello and upgraded.
-pub const PROTOCOL_VERSION: u32 = 67;
+pub const PROTOCOL_VERSION: u32 = 66;
 
 /// What agy's index held in a checkout before Hide typed `/fork`
 /// ([`Call::AntigravityForkMark`]).

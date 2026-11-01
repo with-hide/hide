@@ -28,7 +28,6 @@ pub fn run(root: &Path, command: &GitCommand) -> HostResult<String> {
         | GitCommand::CommonDir
         | GitCommand::RefCommit { .. }
         | GitCommand::CountCommits { .. }
-        | GitCommand::CountFirstParent { .. }
         | GitCommand::HasLocalBranch { .. }
         | GitCommand::FetchBranch { .. } => crate::worktrees::git(root, &args)
             .map(|output| output.trim().to_owned())

@@ -2,9 +2,10 @@
 //! branch outside the mission that its nodes wait on, which Hide follows to
 //! main. A merged pull request, or a branch whose own work reached main, is
 //! done and wakes the Conductor to start what waited; a branch only cut
-//! from main is in main without any work of its own, and waits; a pull request closed without a merge
-//! failed, which blocks the nodes after it. One Hide cannot read stays
-//! waiting, shown as unread, with the reason in the diagnostic log.
+//! from main is in main without any work of its own, and waits. A pull
+//! request closed without a merge failed, which blocks the nodes after it.
+//! One Hide cannot read stays waiting, shown as unread, with the reason in
+//! the diagnostic log.
 //!
 //! The same read follows each done direct change's branch to main while its
 //! mission runs or waits (B17, B18): the view shows it there as soon as it
@@ -14,16 +15,18 @@
 //! A pull request the project's list holds is settled from it under the
 //! lock. Any other, and every branch, is read off the lock: one `gh pr view`
 //! for the pull request, and for the branch its commit against the default
-//! branch as this checkout and its last fetch have it, or the head of a pull
-//! request GitHub merged (`outside_branch` says when an outside branch's
-//! commit in main is its own work). Each project has at most one read out, of at most
+//! branch as this checkout and its last fetch have it, each resolved to one
+//! commit once per read, or the head of a pull request GitHub merged
+//! (`outside_branch` says when an outside branch's commit in main is its
+//! own work). Each project has at most one read out, of at most
 //! `READ_LIMIT` nodes. A read starts on a plan, a start, a reopen, a close
 //! or node change of a waiting mission, a direct change finishing while its
 //! mission runs, a GitHub read, a fetch answer or a change in the local
 //! worktrees, and goes on at once with the nodes it left out
 //! until every node followed then was read once (a pass): `n` followed
 //! nodes take `ceil(n / READ_LIMIT)` reads back to back, each node one `gh
-//! pr view` or at most ten git calls, every call bounded by
+//! pr view` or at most six git calls after the read's two that resolve the
+//! default branch, every call bounded by
 //! `NODE_TIMEOUT`. A trigger that comes while the project's read is out
 //! starts another pass once the one out ends; an answer, read or unread,
 //! starts none.
@@ -36,7 +39,9 @@ use hide_node_link::protocol::Call;
 use serde_json::json;
 
 use super::Runtime;
-use crate::missions::{External, MissionBook, MissionStatus, NodeKind, NodeStatus, WakeEvent};
+use crate::missions::{
+    External, MissionBook, MissionNode, MissionStatus, NodeKind, NodeStatus, WakeEvent,
+};
 use crate::model::{GithubProjectSnapshot, PullRequestBadge};
 use crate::node_access::NodeLink;
 
@@ -67,6 +72,11 @@ pub(crate) struct Outside {
     /// branch read asked before a reopen proves nothing after it; memory
     /// only, as a read out does not outlive a restart.
     reopens: BTreeMap<String, u64>,
+    /// How often each outside node began a new round while this core runs:
+    /// another branch, or back to work after it settled. An answer asked in
+    /// an earlier round proves nothing, even for the same branch again;
+    /// memory only, for the same reason as `reopens`.
+    rounds: BTreeMap<(String, String), u64>,
 }
 
 impl Outside {
@@ -88,6 +98,49 @@ impl Outside {
             && !self.pending.contains(&place)
     }
 
+    /// Starts a new round for each outside node of `mission` that `after`
+    /// names with another branch or puts back to work after it settled:
+    /// what Hide saw of the branch is dropped, and an answer asked before is
+    /// dropped when it comes back. Forgets the missions `book` no longer
+    /// holds, so the map stays within the book's own cap.
+    pub(super) fn begin_rounds(
+        &mut self,
+        mission: &str,
+        before: &[MissionNode],
+        after: &mut [MissionNode],
+        book: &MissionBook,
+    ) {
+        for node in after
+            .iter_mut()
+            .filter(|node| node.kind == NodeKind::External)
+        {
+            let new_round = before
+                .iter()
+                .find(|old| old.key == node.key)
+                .is_none_or(|old| {
+                    old.external != node.external || (settled(old.status) && !settled(node.status))
+                });
+            if !new_round {
+                continue;
+            }
+            node.branch_ahead = None;
+            self.rounds.retain(|(id, _), _| {
+                book.missions.iter().any(|kept| kept.id == *id) || id == mission
+            });
+            *self
+                .rounds
+                .entry((mission.to_owned(), node.key.clone()))
+                .or_default() += 1;
+        }
+    }
+
+    pub(super) fn round_of(&self, mission: &str, node: &str) -> u64 {
+        self.rounds
+            .get(&(mission.to_owned(), node.to_owned()))
+            .copied()
+            .unwrap_or(0)
+    }
+
     pub(super) fn reopens_of(&self, mission: &str) -> u64 {
         self.reopens.get(mission).copied().unwrap_or(0)
     }
@@ -106,6 +159,13 @@ pub(crate) enum Found {
     /// A branch with commits main lacks, at this head: open, with work of
     /// its own.
     Ahead(String),
+    /// A branch whose head main holds, though no work Hide saw on it is in
+    /// main: none seen yet (`replaced` false: cut from main, or merged
+    /// before the node named it), or what was seen was replaced (a rebase or
+    /// a force push). It waits.
+    NoOwnWork {
+        replaced: bool,
+    },
     InMain(Option<String>),
     Closed,
     Unread(String),
@@ -115,10 +175,14 @@ pub(crate) enum Found {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) enum Watch {
     /// An outside node, to main, with the branch head Hide last read ahead
-    /// of main (`MissionNode::branch_ahead`).
+    /// of main (`MissionNode::branch_ahead`), asked after the mission's
+    /// `reopens`-th reopen and in the node's `round`: an answer that comes
+    /// back after either moved on proves nothing.
     Outside {
         external: External,
         ahead: Option<String>,
+        reopens: u64,
+        round: u64,
     },
     /// A direct change's branch, as the node names it, to main, asked after
     /// the mission's `reopens`-th reopen and for the node's finish at
@@ -160,16 +224,20 @@ struct Base {
     merged_heads: Option<BTreeSet<String>>,
 }
 
-/// An outside branch's line for what a read found; none when it could not
-/// be read, which the node's unread mark and the log say.
+/// An outside branch's line for what a read found, in plain words: why it
+/// waits and how a Conductor finishes it; none when it could not be read,
+/// which the node's unread mark and the log say.
 fn branch_line(found: &Found) -> Option<&'static str> {
     match found {
-        Found::Open => Some(
-            "Waiting: the branch has no commit of its own yet. If it will land as a pull request, name the pull request instead.",
+        Found::NoOwnWork { replaced: false } => Some(
+            "Waiting: main already holds this branch's head, and Hide has not seen a commit of its own on it. A branch just cut from main waits for its own commits. If it was merged before this node was added, Hide cannot tell that from git alone: name its pull request instead, or drop the node.",
+        ),
+        Found::NoOwnWork { replaced: true } => Some(
+            "Waiting: the commits Hide saw on this branch were replaced (a rebase or a force push), and main holds its new head but not them. If it reached main through a pull request, name the pull request instead; otherwise drop the node.",
         ),
         Found::Ahead(_) => Some("Waiting: the branch has commits main does not have yet."),
         Found::InMain(_) => Some("In main: the branch's own work reached main."),
-        Found::Closed | Found::Unread(_) => None,
+        Found::Open | Found::Closed | Found::Unread(_) => None,
     }
 }
 
@@ -254,6 +322,8 @@ fn outside_asks(
                 watch: Watch::Outside {
                     external,
                     ahead: node.branch_ahead.clone(),
+                    reopens: outside.reopens_of(&mission.id),
+                    round: outside.round_of(&mission.id, &node.key),
                 },
             };
             match pull {
@@ -397,10 +467,7 @@ impl Runtime {
             self.listed_pulls(device, project),
         );
         let (github, base) = self.outside_places(device, project);
-        answers.extend(asks.into_iter().map(|ask| {
-            let found = read_one(link, project, &github, &base, &ask.watch);
-            (ask, found)
-        }));
+        answers.extend(read_all(link, project, &github, &base, asks));
         self.ingest_outside(&(device.to_owned(), project.to_owned()), answers)
     }
 
@@ -467,14 +534,7 @@ impl Runtime {
         let answered = place.clone();
         let started = self.spawn_issue_worker(
             "mission-outside",
-            move || {
-                asks.into_iter()
-                    .map(|ask| {
-                        let found = read_one(link.as_ref(), &root, &github, &base, &ask.watch);
-                        (ask, found)
-                    })
-                    .collect::<Vec<_>>()
-            },
+            move || read_all(link.as_ref(), &root, &github, &base, asks),
             move |runtime, answers| runtime.ingest_outside(&answered, answers),
         );
         if let Err(reason) = started {
@@ -528,12 +588,24 @@ impl Runtime {
                 continue;
             };
             let current = match &ask.watch {
-                Watch::Outside { external, .. } => mission.nodes.iter().position(|node| {
-                    node.key == ask.node
-                        && node.kind == NodeKind::External
-                        && node.external.as_ref() == Some(external)
-                        && !settled(node.status)
-                }),
+                Watch::Outside {
+                    external,
+                    reopens,
+                    round,
+                    ..
+                } => mission
+                    .nodes
+                    .iter()
+                    .position(|node| {
+                        node.key == ask.node
+                            && node.kind == NodeKind::External
+                            && node.external.as_ref() == Some(external)
+                            && !settled(node.status)
+                    })
+                    .filter(|_| {
+                        self.missions.outside.reopens_of(&ask.mission) == *reopens
+                            && self.missions.outside.round_of(&ask.mission, &ask.node) == *round
+                    }),
                 Watch::Landing {
                     branch,
                     reopens,
@@ -614,7 +686,9 @@ impl Runtime {
                 }
             }
             let (status, wake) = match found {
-                Found::Open | Found::Ahead(_) | Found::Unread(_) => (NodeStatus::Waiting, None),
+                Found::Open | Found::Ahead(_) | Found::NoOwnWork { .. } | Found::Unread(_) => {
+                    (NodeStatus::Waiting, None)
+                }
                 Found::InMain(_) => (NodeStatus::Done, Some(WakeEvent::OutsideDone)),
                 Found::Closed => (NodeStatus::Failed, Some(WakeEvent::OutsideFailed)),
             };
@@ -661,14 +735,22 @@ impl Runtime {
 /// Runs one fixed git command in the project on its node.
 type Git<'a> = dyn Fn(GitCommand) -> Result<String, String> + 'a;
 
-/// One node's answer, on the read's worker.
-fn read_one(
+/// The default branch as one read compares every branch with: its commit
+/// locally and as last fetched, each resolved once so every node of the
+/// read is judged against the same commits.
+struct Main {
+    name: String,
+    commit: String,
+}
+
+/// The answers to `asks`, on the read's worker.
+fn read_all(
     node: &dyn NodeLink,
     root: &str,
     github: &Result<crate::github::Where, String>,
     base: &Base,
-    watch: &Watch,
-) -> Found {
+    asks: Vec<Ask>,
+) -> Vec<(Ask, Found)> {
     let git = |command: GitCommand| -> Result<String, String> {
         crate::node_access::call_as::<String>(
             node,
@@ -680,6 +762,62 @@ fn read_one(
         )
         .map_err(|error| error.to_string())
     };
+    let reads_branch = asks.iter().any(|ask| {
+        !matches!(
+            ask.watch,
+            Watch::Outside {
+                external: External::Pr(_),
+                ..
+            }
+        )
+    });
+    let mains = if reads_branch {
+        resolve_mains(&git, base)
+    } else {
+        Ok(Vec::new())
+    };
+    asks.into_iter()
+        .map(|ask| {
+            let found = read_one(node, &git, github, base, &mains, &ask.watch);
+            (ask, found)
+        })
+        .collect()
+}
+
+/// The default branch's commit locally and as last fetched; a repository
+/// with no remote has no `origin/<main>`, and only both missing leaves
+/// nothing to compare with.
+fn resolve_mains(git: &Git, base: &Base) -> Result<Vec<Main>, String> {
+    let main = base
+        .branch
+        .as_deref()
+        .ok_or("The project's default branch is not known yet")?;
+    let mains: Vec<Main> = [main.to_owned(), format!("origin/{main}")]
+        .into_iter()
+        .filter_map(|name| {
+            let commit = git(GitCommand::RefCommit { name: name.clone() }).ok()?;
+            Some(Main {
+                name,
+                commit: commit.trim().to_owned(),
+            })
+        })
+        .collect();
+    if mains.is_empty() {
+        return Err(format!("Neither {main} nor origin/{main} could be read"));
+    }
+    Ok(mains)
+}
+
+/// One node's answer.
+fn read_one(
+    node: &dyn NodeLink,
+    git: &Git,
+    github: &Result<crate::github::Where, String>,
+    base: &Base,
+    mains: &Result<Vec<Main>, String>,
+    watch: &Watch,
+) -> Found {
+    let mains = || mains.as_deref().map_err(Clone::clone);
     let answer = match watch {
         Watch::Outside {
             external: External::Pr(number),
@@ -694,40 +832,28 @@ fn read_one(
         Watch::Outside {
             external: External::Branch(name),
             ahead,
-        } => outside_branch(&git, base, name, ahead.as_deref()),
+            ..
+        } => mains().and_then(|mains| outside_branch(git, base, mains, name, ahead.as_deref())),
         Watch::Landing {
             branch: Some(name), ..
-        } => read_branch(&git, base, name).map(|read| {
+        } => mains().and_then(|mains| {
+            let head = branch_head(git, name)?;
             // A done direct change's branch is its worker's finished work,
             // so its commit in main is enough.
-            if read.holding.is_empty() && !merged_pull(base, &read.head) {
-                Found::Open
+            Ok(if held(git, mains, &head)? || merged_pull(base, &head) {
+                Found::InMain(Some(head))
             } else {
-                Found::InMain(Some(read.head))
-            }
+                Found::Open
+            })
         }),
         Watch::Landing { branch: None, .. } => Err("The node names no branch".to_owned()),
     };
     answer.unwrap_or_else(Found::Unread)
 }
 
-/// A branch as one read found it against the default branch.
-struct BranchRead {
-    /// Its commit, as this checkout or its last fetch has it.
-    head: String,
-    /// The default branch, locally and as last fetched, as far as they
-    /// could be read.
-    mains: Vec<String>,
-    /// Those of `mains` that hold `head`.
-    holding: Vec<String>,
-}
-
-fn read_branch(git: &Git, base: &Base, branch: &str) -> Result<BranchRead, String> {
-    let main = base
-        .branch
-        .as_deref()
-        .ok_or("The project's default branch is not known yet")?;
-    let head = git(GitCommand::RefCommit {
+/// The commit of `branch`, as this checkout or its last fetch has it.
+fn branch_head(git: &Git, branch: &str) -> Result<String, String> {
+    git(GitCommand::RefCommit {
         name: branch.to_owned(),
     })
     .or_else(|_| {
@@ -735,32 +861,33 @@ fn read_branch(git: &Git, base: &Base, branch: &str) -> Result<BranchRead, Strin
             name: format!("origin/{branch}"),
         })
     })
-    .map_err(|_| format!("The branch {branch} is not in this repository or its last fetch"))?
-    .trim()
-    .to_owned();
-    let mut mains = Vec::new();
-    let mut holding = Vec::new();
-    for name in [main.to_owned(), format!("origin/{main}")] {
-        // A repository with no remote has no `origin/<main>`; only both
-        // missing leaves nothing to compare with.
+    .map(|head| head.trim().to_owned())
+    .map_err(|_| format!("The branch {branch} is not in this repository or its last fetch"))
+}
+
+/// Whether one of `mains` holds `commit`.
+fn held(git: &Git, mains: &[Main], commit: &str) -> Result<bool, String> {
+    let mut known = false;
+    for main in mains {
         if let Ok(count) = git(GitCommand::CountCommits {
-            base: name.clone(),
-            head: head.clone(),
+            base: main.commit.clone(),
+            head: commit.to_owned(),
         }) {
             if count.trim() == "0" {
-                holding.push(name.clone());
+                return Ok(true);
             }
-            mains.push(name);
+            known = true;
         }
     }
-    if mains.is_empty() {
-        return Err(format!("Neither {main} nor origin/{main} could be read"));
+    if known {
+        Ok(false)
+    } else {
+        let names: Vec<&str> = mains.iter().map(|main| main.name.as_str()).collect();
+        Err(format!(
+            "{commit} could not be compared with {}",
+            names.join(" or ")
+        ))
     }
-    Ok(BranchRead {
-        head,
-        mains,
-        holding,
-    })
 }
 
 /// Whether `head` is the head of a pull request GitHub merged into the
@@ -774,65 +901,35 @@ fn merged_pull(base: &Base, head: &str) -> bool {
 /// Whether an outside branch's own work reached main, with its commit
 /// then (B19). A branch cut from main points at a commit main holds before
 /// it has a commit of its own, so main holding its head is not enough. It
-/// is done when a pull request GitHub merged names its head; or main holds
-/// its head and either a head Hide read ahead of main before (`ahead`, its
-/// own work) is in main now, or every main that holds the head took it in
-/// through a merge commit, off main's first-parent line, which is how a
-/// branch named after its real merge is told from one just cut. A head on
-/// that line is where the branch was cut, or one main was fast-forwarded to
-/// before Hide read it ahead, which git cannot tell apart; it waits.
+/// is done when a pull request GitHub merged names its head, or when a head
+/// Hide read ahead of main before (`ahead`, its own work) is in main now.
+/// Git keeps no record of where a branch began, so a branch merged before
+/// the node named it, with no pull request GitHub merged, waits like a
+/// branch just cut; its line says how to finish it.
 fn outside_branch(
     git: &Git,
     base: &Base,
+    mains: &[Main],
     branch: &str,
     ahead: Option<&str>,
 ) -> Result<Found, String> {
-    let read = read_branch(git, base, branch)?;
-    let head = read.head;
+    let head = branch_head(git, branch)?;
     if merged_pull(base, &head) {
         return Ok(Found::InMain(Some(head)));
     }
-    if read.holding.is_empty() {
+    if !held(git, mains, &head)? {
         return Ok(Found::Ahead(head));
     }
-    let seen_land = ahead.is_some_and(|ahead| {
-        ahead == head
-            || read.mains.iter().any(|main| {
-                // A commit gone from the repository is held by no main.
-                git(GitCommand::CountCommits {
-                    base: main.clone(),
-                    head: ahead.to_owned(),
-                })
-                .is_ok_and(|count| count.trim() == "0")
-            })
-    });
-    if seen_land {
-        return Ok(Found::InMain(Some(head)));
-    }
-    for main in &read.holding {
-        if on_first_parent_line(git, main, &head)? {
-            return Ok(Found::Open);
-        }
-    }
-    Ok(Found::InMain(Some(head)))
-}
-
-/// Whether `commit`, which `main` holds, is on `main`'s first-parent line:
-/// `main~n` is the first commit of that line `commit` holds, which is
-/// `commit` itself only when it is on the line.
-fn on_first_parent_line(git: &Git, main: &str, commit: &str) -> Result<bool, String> {
-    let count = git(GitCommand::CountFirstParent {
-        base: commit.to_owned(),
-        head: main.to_owned(),
-    })?;
-    let count: u64 = count
-        .trim()
-        .parse()
-        .map_err(|_| format!("git counted {count:?} commits on {main}"))?;
-    let at = git(GitCommand::RefCommit {
-        name: format!("{main}~{count}"),
-    })?;
-    Ok(at.trim() == commit)
+    let Some(ahead) = ahead else {
+        return Ok(Found::NoOwnWork { replaced: false });
+    };
+    // A commit gone from the repository is held by no main.
+    let landed = ahead == head || held(git, mains, ahead).unwrap_or(false);
+    Ok(if landed {
+        Found::InMain(Some(head))
+    } else {
+        Found::NoOwnWork { replaced: true }
+    })
 }
 
 #[cfg(test)]
@@ -851,6 +948,8 @@ mod tests {
                 watch: Watch::Outside {
                     external: External::Branch(format!("b{index}")),
                     ahead: None,
+                    reopens: 0,
+                    round: 0,
                 },
             })
             .collect();
