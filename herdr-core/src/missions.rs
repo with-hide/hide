@@ -380,6 +380,16 @@ pub struct MissionNode {
     /// while the node stays done.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub in_main: Option<Landed>,
+    /// An outside branch's head when Hide last read it with commits main
+    /// lacks: work of its own, which makes the node done once main holds
+    /// it. A branch only cut from main has none (B19).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub branch_ahead: Option<String>,
+    /// An outside node's round, from its mission's `round_seq`: a new one
+    /// each time it names another branch or goes back to work after it
+    /// settled, so a read asked in an earlier round is dropped.
+    #[serde(default, skip_serializing_if = "is_zero_u64")]
+    pub round: u64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub verdict: Option<Verdict>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -399,6 +409,10 @@ pub struct Conductor {
 }
 
 fn is_zero(value: &u8) -> bool {
+    *value == 0
+}
+
+fn is_zero_u64(value: &u64) -> bool {
     *value == 0
 }
 
@@ -502,6 +516,10 @@ pub struct Mission {
     /// How many wakes this mission has had; the next one's `seq`.
     #[serde(default)]
     pub wake_seq: u64,
+    /// The last round given to one of its outside nodes
+    /// (`MissionNode::round`), never given again.
+    #[serde(default, skip_serializing_if = "is_zero_u64")]
+    pub round_seq: u64,
     /// When the operator asked the Conductor to end the mission (`미션
     /// 종료`), until it closes; a second press asks nothing more.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1334,6 +1352,8 @@ pub(crate) fn apply_plan(
                 commit: None,
                 folder: None,
                 in_main: None,
+                branch_ahead: None,
+                round: 0,
                 verdict: None,
                 checks: None,
             });
@@ -2063,6 +2083,7 @@ mod tests {
             closed_at_unix_ms: None,
             wakes: Vec::new(),
             wake_seq: 0,
+            round_seq: 0,
             end_asked_at_unix_ms: None,
         }
     }
