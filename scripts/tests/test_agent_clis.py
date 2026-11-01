@@ -120,17 +120,17 @@ class Install(unittest.TestCase):
 
     def test_every_started_agent_has_its_full_access_flag_in_the_contract(self):
         flags = install.full_access_flags()
-        self.assertEqual(flags["codex"], ["--dangerously-bypass-approvals-and-sandbox"])
+        self.assertEqual(flags["codex"], ["-c"])
         self.assertEqual(flags["pi"], [])
 
     def test_a_cli_whose_help_lists_its_full_access_flag_installs(self):
-        self.assertEqual(self.install_codex("      --dangerously-bypass-approvals-and-sandbox\n"), 0)
+        self.assertEqual(self.install_codex("  -c, --config <key=value>\n"), 0)
 
     def test_a_cli_whose_help_lacks_its_full_access_flag_fails_the_install(self):
         # A longer option that starts with the flag is not the flag.
         with self.assertRaises(SystemExit) as stopped:
-            self.install_codex("      --dangerously-bypass-approvals-and-sandbox-later\n")
-        self.assertIn("--help lists no --dangerously-bypass-approvals-and-sandbox", str(stopped.exception))
+            self.install_codex("      -config <key=value>\n")
+        self.assertIn("--help lists no -c", str(stopped.exception))
 
     def install_agy(self, url, payload, sha512):
         """agy() on this runner, the row naming `url` and `sha512` and the download answering `payload`."""

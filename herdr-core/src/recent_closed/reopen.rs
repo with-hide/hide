@@ -1061,12 +1061,10 @@ mod tests {
             &mut notices,
         );
         let choice = [
-            "--dangerously-bypass-approvals-and-sandbox",
-            "--model",
-            "gpt-6-luna",
-            "-c",
-            "model_reasoning_effort=low",
-        ];
+            &crate::agent_permission::CODEX_FULL_ACCESS[..],
+            &["--model", "gpt-6-luna", "-c", "model_reasoning_effort=low"],
+        ]
+        .concat();
         assert_eq!(
             *starts.lock().unwrap(),
             [

@@ -386,7 +386,7 @@ it("puts each installed agent's permission in its row's 권한 column, full acce
   const menu = await openMenu(q('[data-agent-permission-select="local:claude-code"]')!);
   expect(menu).toEqual(["Allow everythingclaude --dangerously-skip-permissions", "Ask every timeclaude", "Custom…"]);
   await act(async () => { document.activeElement?.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })); });
-  expect((await openMenu(q('[data-agent-permission-select="local:codex"]')!))[0]).toBe("Allow everythingcodex --dangerously-bypass-approvals-and-sandbox");
+  expect((await openMenu(q('[data-agent-permission-select="local:codex"]')!))[0]).toBe("Allow everythingcodex -c approval_policy=never -c sandbox_mode=danger-full-access");
   await act(async () => { document.activeElement?.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })); });
   expect((await openMenu(q('[data-agent-permission-select="local:opencode"]')!))[0]).toBe("Allow everythingopencode --auto");
   await act(async () => { document.activeElement?.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })); });

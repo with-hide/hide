@@ -32,7 +32,7 @@ fn choice(model: &str, effort: &str) -> LaunchChoice {
 /// what a restart adds when the machine saved no 권한 for the agent.
 fn full_access(kind: &str) -> &'static [&'static str] {
     match kind {
-        "codex" => &["--dangerously-bypass-approvals-and-sandbox"],
+        "codex" => &crate::agent_permission::CODEX_FULL_ACCESS,
         _ => &crate::agent_permission::CLAUDE_FULL_ACCESS,
     }
 }

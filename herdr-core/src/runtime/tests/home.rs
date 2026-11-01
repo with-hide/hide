@@ -349,12 +349,15 @@ fn a_device_home_start_makes_home_then_starts_the_agent_with_its_folders() {
         .find(|(method, _)| method == "agent.start")
         .map(|(_, params)| params.clone())
         .expect("agent.start");
-    let mut expected = vec![
-        "--no-daemon".to_owned(),
-        "--dangerously-bypass-approvals-and-sandbox".to_owned(),
-        "--model".to_owned(),
-        "gpt-6-astra".to_owned(),
-    ];
+    let mut expected: Vec<String> = [
+        &["--no-daemon"][..],
+        &crate::agent_permission::CODEX_FULL_ACCESS,
+        &["--model", "gpt-6-astra"],
+    ]
+    .concat()
+    .into_iter()
+    .map(str::to_owned)
+    .collect();
     let mut folders = machine.projects.clone();
     folders.sort();
     for folder in folders {

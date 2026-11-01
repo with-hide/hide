@@ -1608,11 +1608,16 @@ fn resuming_starts_the_providers_resume_and_refuses_what_cannot_resume() {
             .as_ref()
             .map(|launch| launch.args.clone()),
         // No saved 권한: the resume starts with full access.
-        Some(vec![
-            "resume".to_owned(),
-            "019a-session".to_owned(),
-            "--dangerously-bypass-approvals-and-sandbox".to_owned()
-        ])
+        Some(
+            [
+                &["resume", "019a-session"][..],
+                &crate::agent_permission::CODEX_FULL_ACCESS
+            ]
+            .concat()
+            .into_iter()
+            .map(str::to_owned)
+            .collect()
+        )
     );
 
     // Pi asks no permission question; omp's full access is `--auto-approve`.

@@ -1842,8 +1842,12 @@ fn made_by_spawn<'a>(
 /// A spawn's arguments behind the permission choice of the machine it
 /// starts on (`agent_permission`). A full-access option the spawn's own
 /// native arguments already name is not given twice, with its value if it
-/// has one: a CLI may refuse an option given twice (clap does for Codex's),
-/// and the operator who wrote it meant theirs. Typed options go as typed.
+/// has one: a CLI may refuse an option given twice (Grok 1.0.70 refuses
+/// `--always-approve` twice), and the operator who wrote it meant theirs.
+/// Codex's `-c` overrides are the exception: Codex accepts them repeated and
+/// the later one wins (0.166.0, 2026-11-01), so Hide's go first and a
+/// spawn's own `-c`, an effort or its own approval policy, never stands in
+/// for them. Typed options go as typed.
 fn with_permission(
     kind: &str,
     permissions: &crate::agent_permission::AgentPermissions,
@@ -1860,7 +1864,11 @@ fn with_permission(
             };
             crate::agent_permission::full_access(kind)
                 .iter()
-                .filter(|option| option.first().is_none_or(|name| !named(name)))
+                .filter(|option| {
+                    option
+                        .first()
+                        .is_none_or(|name| overridden_later(kind, name) || !named(name))
+                })
                 .flat_map(|option| option.iter().map(|word| (*word).to_owned()))
                 .collect()
         }
@@ -1868,6 +1876,14 @@ fn with_permission(
     };
     start.extend(args);
     start
+}
+
+/// Whether `kind`'s CLI takes a full-access option named `name` again with
+/// the later one winning: Codex's `-c` configuration override.
+fn overridden_later(kind: &str, name: &str) -> bool {
+    name == "-c"
+        && hide_agent_adapter::adapter(kind).and_then(|row| row.start)
+            == Some(hide_agent_adapter::LaunchDialect::Codex)
 }
 
 #[cfg(test)]
@@ -1895,6 +1911,24 @@ mod tests {
             start(&["--", "--settings"]),
             [&full[..], &["--", "--settings"]].concat()
         );
+    }
+
+    #[test]
+    fn a_codex_spawn_with_its_own_override_still_starts_with_full_access_first() {
+        let full = crate::agent_permission::CODEX_FULL_ACCESS;
+        let start = |native: &[&str]| {
+            super::with_permission(
+                "codex",
+                &Default::default(),
+                native.iter().map(|arg| (*arg).to_owned()).collect(),
+            )
+        };
+        // An effort is a `-c` too; it does not stand in for full access.
+        let effort = ["-c", "model_reasoning_effort=low", "--", "go"];
+        assert_eq!(start(&effort), [&full[..], &effort[..]].concat());
+        // The spawn's own policy comes after Hide's, where Codex lets it win.
+        let own = ["-c", "approval_policy=on-request"];
+        assert_eq!(start(&own), [&full[..], &own[..]].concat());
     }
 
     #[test]
