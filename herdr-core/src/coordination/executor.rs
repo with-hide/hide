@@ -1847,7 +1847,10 @@ fn made_by_spawn<'a>(
 /// Codex's `-c` overrides are the exception: Codex accepts them repeated and
 /// the later one wins (0.166.0, 2026-11-01), so Hide's go first and a
 /// spawn's own `-c`, an effort or its own approval policy, never stands in
-/// for them. Typed options go as typed.
+/// for them. A spawn's own Claude Code `--settings` replaces Hide's warning
+/// setting rather than joining it, because Claude Code 2.1.316 keeps only the
+/// last `--settings` it is given (measured 2026-11-01), so such a spawn stops
+/// at the bypass warning. Typed options go as typed.
 fn with_permission(
     kind: &str,
     permissions: &crate::agent_permission::AgentPermissions,
