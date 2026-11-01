@@ -293,6 +293,7 @@ fn mission(
             worker: None,
             agent_id: Some(worker.into()),
             agent_runtime: None,
+            launched: None,
             pane_id: None,
             machine: None,
             pr: None,

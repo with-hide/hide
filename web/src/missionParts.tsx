@@ -115,7 +115,10 @@ export type RunLabel = { text: string; words: string; mark: string | null; from:
 export function useRunWords(mission: Mission, paneId: string | null | undefined, machine: string | null | undefined, plan: MissionWorker | null | undefined): RunLabel | null {
   const { t } = useInterfaceTranslation();
   const launch = useShellStore((s) => launchSession(s.rest, mission, paneId, machine));
-  const run = runWords(launch, plan, { auto: t("mission.auto"), defaultModel: t("conductor.defaultModel") });
+  return runLabel(runWords(launch, plan, { auto: t("mission.auto"), defaultModel: t("conductor.defaultModel") }), t);
+}
+
+function runLabel(run: ReturnType<typeof runWords>, t: TFunction<"translation">): RunLabel | null {
   if (!run) return null;
   return run.planned
     ? { text: t("mission.planned", { words: run.words }), words: run.words, mark: t("mission.plannedMark"), from: "plan" }
@@ -124,18 +127,20 @@ export function useRunWords(mission: Mission, paneId: string | null | undefined,
 
 /**
  * A node's worker as its card and its panel's head draw it (operator,
- * 2026-11-01): the agent and the model and effort its pane was proven
- * launched with; the plan's, marked planned, only while the node has not
- * finished, so finished work never shows the plan as what ran. Neither
- * known, nothing.
+ * 2026-11-01): the agent, model and effort the core kept on the node for its
+ * current worker (`launched`, proven by that worker's own conversation, so
+ * it outlives the pane and is never another session's); without it, the
+ * plan's, marked planned, while the node has not finished; otherwise
+ * nothing, so finished work never shows the plan as what ran.
  */
-export function useNodeRun(mission: Mission, node: MissionNode): { run: RunLabel; agent: string | null } | null {
-  const row = useWorkerRow(node);
+export function useNodeRun(node: MissionNode): { run: RunLabel; agent: string | null } | null {
+  const { t } = useInterfaceTranslation();
+  const launched = node.launched ?? null;
   const planned = node.status !== "done" && node.status !== "dropped";
-  const run = useRunWords(mission, node.pane_id, node.machine, planned ? node.worker : null);
+  const launch = launched ? { launch_model: launched.model ?? null, launch_effort: launched.effort ?? null } : null;
+  const run = runLabel(runWords(launch, planned ? node.worker : null, { auto: t("mission.auto"), defaultModel: t("conductor.defaultModel") }), t);
   if (!run) return null;
-  // The mark is the launched agent's own when the launch speaks, never the plan's.
-  return { run, agent: run.from === "launch" ? (row?.agent_kind ?? null) : (node.worker?.agent ?? null) };
+  return { run, agent: run.from === "launch" ? launched!.agent : (node.worker?.agent ?? null) };
 }
 
 /** A run's words, which truncate, before its planned mark, which never does, so a planned model never reads as launched. */
