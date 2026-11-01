@@ -4912,7 +4912,11 @@ fn hide_finishes_a_merged_node_and_closes_the_mission_after_its_last_node() {
     assert!(
         mission.nodes.iter().all(|node| node.attention.is_none()),
         "{:?}",
-        mission.nodes.iter().map(|node| &node.attention).collect::<Vec<_>>()
+        mission
+            .nodes
+            .iter()
+            .map(|node| &node.attention)
+            .collect::<Vec<_>>()
     );
     runtime.github = merged.clone();
     runtime.note_mission_pulls(crate::node::TEST_NODE, &merged);
