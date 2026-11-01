@@ -464,7 +464,10 @@ it("draws each card as its mark, its title, its pull requests, its worker's mode
     // A branch gives its room to the worker's words, which a pull request mark never does: the words stay whole and the branch truncates after them.
     expect(row("on-branch")).toEqual(["run:plan", "?"]);
     expect([card(map, "on-branch").querySelector("[data-run-words]")?.textContent, card(map, "on-branch").querySelector("[data-node-result-yields] [data-node-branch]")?.textContent]).toEqual(["opus·xhigh", "feat/engine-own-layout"]);
-    expect(card(map, "core").querySelector("[data-node-result-yields]")).toBeNull();
+    // Only a branch yields, its own or an outside node's; pull request marks and an outside pull request keep their room, and the words then take what is left.
+    expect(["on-branch", "branch", "core", "outside"].map((key) => card(map, key).querySelector("[data-node-result-yields]") !== null)).toEqual([true, true, false, false]);
+    expect(["on-branch", "core"].map((key) => card(map, key).querySelector("[data-node-run]")?.className.split(" ").includes("flex-1"))).toEqual([false, true]);
+    expect(card(map, "on-branch").querySelector("[data-node-result-yields]")?.className.split(" ")).toEqual(expect.arrayContaining(["flex-1", "justify-end"]));
     // Outside is the node's kind: a dotted border and ↗ in every state; one closed unmerged waits on the Conductor (B12).
     expect(["outside", "closed-out", "merged-out"].map((key) => [card(map, key).className.includes("border-dotted"), card(map, key).querySelector("[data-node-outside]")?.textContent])).toEqual([[true, `↗${"#"}1232`], [true, `↗${"#"}1605`], [true, `↗${"#"}1702`]]);
     expect(card(map, "closed-out").querySelector("[data-node-attention-tag]")?.getAttribute("data-node-attention-tag")).toBe("pr_closed");
