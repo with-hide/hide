@@ -21,6 +21,10 @@ use serde_json::json;
 use std::time::Duration;
 
 /// How long a facts read may take; a discard gets the long bound of a change.
+/// How often a running Memory promotion's agent, and a 제안 line's followed
+/// attempt, is checked on the coordinator's tick; a pull request is followed
+/// on each GitHub answer instead.
+pub(super) const TRACK_INTERVAL_MS: u64 = 60_000;
 const READ_TIMEOUT: Duration = Duration::from_secs(30);
 const CHANGE_TIMEOUT: Duration = Duration::from_secs(120);
 

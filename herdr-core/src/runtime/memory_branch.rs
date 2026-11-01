@@ -1064,4 +1064,113 @@ mod tests {
         assert_eq!(promotion.state, PromotionState::Failed);
         assert!(read.merged.is_empty());
     }
+
+    #[test]
+    fn a_ready_batch_settles_merged_or_dismissed_and_keeps_the_tip_it_was_read_at() {
+        let folder = tempfile::tempdir().unwrap();
+        let mut store = MemoryStore::open(&folder.path().join("memory.sqlite3")).unwrap();
+        let ready_check = |store: &mut MemoryStore, project: &str, agent: &str| {
+            store
+                .ensure_project(
+                    project,
+                    Path::new(&format!("/checkouts/{project}")),
+                    "test-node",
+                )
+                .unwrap();
+            seed(store, project, "Devices lists ssh config Hosts");
+            let started = running(Some(agent), 1_000);
+            let branch = started.branch.clone().unwrap();
+            store
+                .set_promotion_batch(project, &branch, &[(1, started.clone())])
+                .unwrap();
+            let ready = Promotion {
+                state: PromotionState::Ready,
+                ..started
+            };
+            store.set_promotion(project, 1, &ready).unwrap();
+            BatchCheck {
+                branch,
+                tip: Some("abc123".into()),
+                ..check(project, vec![(1, ready)])
+            }
+        };
+        let place = |check: &BatchCheck| BranchPlace {
+            node: check.node.clone(),
+            project_id: check.project_id.clone(),
+            root: check.root.clone(),
+            branch: check.branch.clone(),
+            base: "main".into(),
+        };
+        let state =
+            |store: &MemoryStore, project: &str| store.promotions(project).unwrap()[0].1.state;
+
+        // Its commit reached the base: the cards merge, and the agent and
+        // worktree retire as a merged pull request's do.
+        let merged = ready_check(&mut store, "p", "agent-1");
+        let mut read = BatchesRead::default();
+        let facts = BranchFacts {
+            merged: Some(true),
+            ..empty_branch()
+        };
+        assert!(
+            read_ready(
+                &merged,
+                &place(&merged),
+                facts,
+                &mut store,
+                2_000,
+                &mut read
+            )
+            .unwrap()
+        );
+        assert_eq!(state(&store, "p"), PromotionState::Merged);
+        assert_eq!(read.merged.len(), 1);
+        assert_eq!(read.merged[0].0.branch, merged.branch);
+        assert_eq!(read.merged[0].1, ["agent-1"]);
+        assert!(read.facts.is_empty());
+
+        // Gone without reaching the base: the cards are dismissed, nothing retires.
+        let discarded = ready_check(&mut store, "q", "agent-2");
+        let mut read = BatchesRead::default();
+        let facts = BranchFacts {
+            exists: false,
+            ..empty_branch()
+        };
+        assert!(
+            read_ready(
+                &discarded,
+                &place(&discarded),
+                facts,
+                &mut store,
+                2_000,
+                &mut read
+            )
+            .unwrap()
+        );
+        assert_eq!(state(&store, "q"), PromotionState::Dismissed);
+        assert!(read.merged.is_empty());
+
+        // Still ready with a new commit: the cards wait for the operator,
+        // and the batch keeps the commit it was read at.
+        let moved = ready_check(&mut store, "r", "agent-3");
+        let mut read = BatchesRead::default();
+        let facts = BranchFacts {
+            tip: Some("def456".into()),
+            ahead: 1,
+            ..empty_branch()
+        };
+        assert!(!read_ready(&moved, &place(&moved), facts, &mut store, 2_000, &mut read).unwrap());
+        assert_eq!(state(&store, "r"), PromotionState::Ready);
+        assert_eq!(read.facts.len(), 1);
+        assert_eq!(read.facts[0].1.tip, "def456");
+        assert_eq!(
+            store
+                .promotion_batch_branch("r", &moved.branch)
+                .unwrap()
+                .unwrap()
+                .tip
+                .as_deref(),
+            Some("def456")
+        );
+    }
 }

@@ -10,6 +10,7 @@
 //! agent and its pull request to the card's end state; Hide never writes the
 //! repository itself.
 
+use super::branch_decision::TRACK_INTERVAL_MS;
 use super::*;
 use crate::delivery::HIDE_MEMORY_ROLE;
 use crate::model::{
@@ -21,10 +22,6 @@ use crate::node::NodeId;
 use hide_memory::{MemoryLifecycle, MemoryStore, Promotion, PromotionState};
 use serde_json::json;
 
-/// How often a running promotion's agent, and a 제안 line's followed
-/// attempt, is checked on the coordinator's tick; a pull request is followed
-/// on each GitHub answer instead.
-pub(super) const TRACK_INTERVAL_MS: u64 = 60_000;
 /// How long a promotion may stay running with no agent: past it the start
 /// was cut short (Hide quit between writing the state and the spawn). It
 /// outlasts the spawn's own answer, which takes up to two starts, each held

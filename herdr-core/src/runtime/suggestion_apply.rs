@@ -13,11 +13,11 @@
 //! Spawning and GitHub writes run on a worker thread; under the lock this
 //! module only reads the catalog and the ledger and hands moves over.
 
-use super::branch_decision::{self, ReadyReading};
+use super::branch_decision::{self, ReadyReading, TRACK_INTERVAL_MS};
 use super::memory_promotion::{
     CatalogVerdict, HideSpawn, HomeAttempt, HomePull, PromotionStart, START_GRACE_MS,
-    START_SLACK_MS, TRACK_INTERVAL_MS, UNSEEN, base36, catalog_verdict, never_started,
-    spawn_hide_agent, spawn_hide_agent_when_free,
+    START_SLACK_MS, UNSEEN, base36, catalog_verdict, never_started, spawn_hide_agent,
+    spawn_hide_agent_when_free,
 };
 use super::*;
 use crate::model::{PullRequestBadge, PullRequestChecks, PullRequestSnapshot};
