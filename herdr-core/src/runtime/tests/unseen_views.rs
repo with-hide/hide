@@ -722,6 +722,48 @@ fn pane_views(runtime: &Runtime, pane: &str) -> Vec<crate::model::OpenedViewSnap
         .unwrap_or_default()
 }
 
+/// The same file in two areas is one row of the opener's `N views`; while
+/// the tab the operator has not looked at is the second, the row wears its
+/// 볼 것 mark and names that tab, so pressing the row brings it forward.
+#[test]
+fn a_row_for_a_file_in_two_tabs_names_the_tab_still_to_look_at() {
+    let (_root, runtime) = fixture(false);
+    let mut guard = runtime.lock().unwrap();
+    keyboard(&mut guard, Some("sender"));
+    let first = open(&mut guard, "recipient", "src/a.ts");
+    let other = open(&mut guard, "recipient", "src/b.ts");
+    let second_area = guard
+        .change_view_layout(&key(), |layout, stamp| {
+            let area = layout.active_area().id.clone();
+            layout
+                .split(&other, &area, crate::view_layout::Edge::Right, stamp)
+                .map(|area| (area, true))
+        })
+        .unwrap();
+    look_at(&mut guard, &first);
+    keyboard(&mut guard, Some("recipient"));
+    assert!(!unseen(&guard, &first));
+    keyboard(&mut guard, Some("sender"));
+    let again = guard
+        .change_view_layout(&key(), |layout, stamp| {
+            let display = layout.new_display("src/a.ts", DisplayKind::File, None, false);
+            let id = display.id.clone();
+            layout.insert(&second_area, display, stamp)?;
+            Ok((id, true))
+        })
+        .unwrap();
+    let action = Action::OpenFile {
+        path: "src/a.ts".into(),
+    };
+    guard.stamp_control_opener(&key(), "recipient", &action, &again);
+    guard.sync_workspace_view();
+    assert!(unseen(&guard, &again));
+    let rows = pane_views(&guard, "recipient");
+    let row = rows.iter().find(|row| row.path == "src/a.ts").unwrap();
+    assert_eq!(rows.iter().filter(|row| row.path == "src/a.ts").count(), 1);
+    assert_eq!((row.view_id.as_str(), row.unseen), (again.as_str(), true));
+}
+
 /// Outside files carry no path, so only their grant tells them apart: each
 /// is a row of its own in the opener's `N views`, and the one not looked at
 /// keeps its 볼 것 mark there (UI_BEHAVIOR, View openers and comments).

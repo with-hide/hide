@@ -1668,11 +1668,18 @@ impl Runtime {
                 .and_then(|views| views.display(&display.id))
                 .is_some_and(|stored| stored.unseen.is_some());
             // Two tabs showing the same thing are one row, which is unseen
-            // while either is: the row is how the operator reaches it.
+            // while either is and then presses the unseen one: the row is how
+            // the operator reaches it, and only that tab coming forward sees it.
             match shown.iter().position(|(row_pane, row_shown)| {
                 *row_pane == pane && *row_shown == display.shown()
             }) {
-                Some(index) => opened[index].unseen |= unseen,
+                Some(index) => {
+                    let row = &mut opened[index];
+                    if unseen && !row.unseen {
+                        row.view_id = display.id.clone();
+                        row.unseen = true;
+                    }
+                }
                 None => {
                     shown.push((pane.clone(), display.shown()));
                     opened.push(OpenedViewSnapshot {
