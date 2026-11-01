@@ -390,7 +390,7 @@ const line = (key: string, kind: MissionCriterion["kind"], extra: Partial<Missio
 const checker = (agent: string, state: MissionCriterion["state"] = "open", agent_id?: string) => ({ worker: { agent, model: null, effort: "high" }, state, ...(agent_id ? { agent_id } : {}) });
 const card = (map: { q: (selector: string) => HTMLElement | null }, key: string) => map.q(`[data-mission-node="${key}"]`)!;
 
-it("draws each card as its mark, its title, its pull requests and `!` with who looks, Hide's mark when Hide changed it, and nothing the panel carries (PRD mission-node-simple B1-B3, D-07)", async () => {
+it("draws each card as its mark, its title, its pull requests, its worker's model and effort and `!` with who looks, Hide's mark when Hide changed it, and nothing else the panel carries (PRD mission-node-simple B1-B3, D-07)", async () => {
   const nodes = [
     node("core", { title: "제안 core: 기록·공책·점수·반영", status: "working", pr: 1704, prs: [{ number: 1703, state: "merged", url: null }, { number: 1704, state: "mergeable", url: null }], criteria: [line("c1", "own", { state: "pass" }), line("ci", "ci")], criteria_met: 1, criteria_skipped: 0, worker: { agent: "claude", model: "opus", effort: "high", effort_auto: false }, line: "replay 19/31", reopened: 1, change: "split in two" }),
     node("raised", { status: "working", pr: 1840, pr_state: "merged", attention: { reason: "merged_unproven", pr: 1840, to: "operator", since_unix_ms: 1, on_row: false, item: true } }),
@@ -402,10 +402,11 @@ it("draws each card as its mark, its title, its pull requests and `!` with who l
     node("merged-out", { kind: "external", delivery: null, external: { pr: 1702 }, status: "done", landing: { state: "landed", proof: { by: "outside" } } }),
     node("next", { depends_on: ["core", "outside"] }),
     node("sleeping", { status: "working", agent_id: "agent-2", agent_runtime: "asleep" }),
+    node("launched", { status: "working", pane_id: "w1:p9", machine: "mac", pr: 1910, pr_state: "pending", worker: { agent: "claude", model: "opus", effort: "medium", effort_auto: false }, attention: { reason: "worker_ended", pr: null, to: "conductor", since_unix_ms: 1, on_row: false, item: false } }),
   ];
-  const map = await mount({ items: [mission({ nodes })] });
+  const map = await mount({ items: [mission({ nodes })] }, [], [{ device_id: "mac", pane_id: "w1:p9", session_digest: "w", launch_model: "Opus 5.5", launch_effort: "high" }]);
   try {
-    expect(Object.fromEntries(nodes.map((n) => [n.key, card(map, n.key).dataset.nodeLook]))).toEqual({ core: "working", raised: "working", asked: "working", api: "done", branch: "done", outside: "external", "closed-out": "external", "merged-out": "done", next: "waiting", sleeping: "working" });
+    expect(Object.fromEntries(nodes.map((n) => [n.key, card(map, n.key).dataset.nodeLook]))).toEqual({ core: "working", raised: "working", asked: "working", api: "done", branch: "done", outside: "external", "closed-out": "external", "merged-out": "done", next: "waiting", sleeping: "working", launched: "working" });
     // One of three shapes, its word on hover and first in the card's name.
     expect(["next", "core", "api"].map((key) => card(map, key).querySelector("[data-node-mark]")?.getAttribute("aria-label"))).toEqual(["Waiting", "In progress", "Done"]);
     // A worker Hide put to sleep leaves its node in progress, the same ring; only its words name the sleep (B1).
@@ -413,9 +414,18 @@ it("draws each card as its mark, its title, its pull requests and `!` with who l
     expect(card(map, "sleeping").querySelector("[data-node-mark] svg")?.getAttribute("class")).toContain("animate-spin");
     // Every pull request the node holds is its own PR mark, in the order it got them (D-10).
     expect([...card(map, "core").querySelectorAll<HTMLElement>("[data-node-pr]")].map((mark) => mark.dataset.nodePr)).toEqual(["1703", "1704"]);
-    // Who works it, its times, its finish lines, its line and its badges are the panel's (D-07).
-    expect(card(map, "core").querySelector("[data-node-worker], [data-node-criteria], [data-node-line], [data-node-stage], [data-node-time], [data-node-reopened], [data-node-changed], [data-node-landing]")).toBeNull();
-    expect(card(map, "core").getAttribute("aria-label")).toBe(`제안 core: 기록·공책·점수·반영 · In progress · PR ${"#"}1703 · PR ${"#"}1704`);
+    // The worker's model and effort follow the marks as the panel's head words them: the pane's launch, else the plan's marked planned.
+    const row = (key: string) => [...card(map, key).querySelectorAll<HTMLElement>("[data-node-row] > *")].map((part) => (part.dataset.run ? `run:${part.dataset.run}` : part.dataset.nodeAttentionTag ? "!" : part.querySelector("[data-node-pr]") ? "marks" : "?"));
+    expect(row("core")).toEqual(["marks", "run:plan"]);
+    expect([card(map, "core").querySelector("[data-run-words]")?.textContent, card(map, "core").querySelector("[data-run-planned]")?.textContent]).toEqual(["opus·high", "(planned)"]);
+    expect(row("launched")).toEqual(["marks", "run:launch", "!"]);
+    expect(card(map, "launched").querySelector("[data-run]")?.textContent).toBe("Opus 5.5·high");
+    // A node with no worker, or none Hide knows a run for, names no model.
+    expect(["asked", "next", "outside"].map((key) => card(map, key).querySelector("[data-run]"))).toEqual([null, null, null]);
+    // Its times, its finish lines, its line and its badges are the panel's (D-07).
+    expect(card(map, "core").querySelector("[data-node-criteria], [data-node-line], [data-node-stage], [data-node-time], [data-node-reopened], [data-node-changed], [data-node-landing]")).toBeNull();
+    expect(card(map, "core").getAttribute("aria-label")).toBe(`제안 core: 기록·공책·점수·반영 · In progress · PR ${"#"}1703 · PR ${"#"}1704 · opus·high (planned)`);
+    expect(card(map, "launched").getAttribute("aria-label")).toMatch(new RegExp(`^Node launched · In progress · PR ${"#"}1910 · Opus 5\\.5·high · Needs a look · Conductor · `));
     // `! 나` or `! Conductor` in the decision colour's border, its reason on hover and in the name (B2).
     expect([card(map, "raised").querySelector("[data-node-attention-tag]")?.textContent, card(map, "asked").querySelector("[data-node-attention-tag]")?.textContent]).toEqual(["! You", "! Conductor"]);
     expect(card(map, "raised").dataset.nodeAttention).toBe("operator");
