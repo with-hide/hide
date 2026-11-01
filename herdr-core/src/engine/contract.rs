@@ -357,7 +357,7 @@ fn the_own_engine_meets_the_engine_contract() {
     use std::path::PathBuf;
     use std::sync::Arc;
 
-    use hide_node::terminal::engine_panes::LocalPanes;
+    use hide_node::terminal::engine_panes::{LocalPanes, PaneShell};
     use hide_node::terminal::holder::{HolderFolders, Holders};
     use hide_node::terminal::{Attacher, Mode, OutputSink, ReportSink, SessionParts};
 
@@ -427,7 +427,7 @@ fn the_own_engine_meets_the_engine_contract() {
     let panes = Arc::new(LocalPanes::new(
         Arc::clone(&holders),
         Arc::clone(&terminals.service),
-        shell,
+        PaneShell::Fixed(shell),
     ));
     let engine = super::own::OwnEngine::new(panes);
     let folder = hide_platform::path::to_wire(&folder).unwrap();

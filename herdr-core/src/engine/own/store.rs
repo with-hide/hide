@@ -117,8 +117,16 @@ pub(super) struct SavedPane {
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub(super) struct SavedAgent {
+    /// The agent definition's id.
     pub(super) kind: String,
-    pub(super) session: String,
+    /// The name the engine started it under, if it did.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(super) name: Option<String>,
+    /// Its session, an id or a session file's path, once known; an agent
+    /// with none resumes its folder's last conversation when its definition
+    /// says how.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(super) session: Option<String>,
 }
 
 /// What reading the saved session found.

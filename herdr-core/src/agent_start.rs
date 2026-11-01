@@ -140,7 +140,7 @@ pub(crate) const NAME_RELEASE_WAIT: Duration = Duration::from_secs(10);
 pub(crate) const SHELL_STARTING: &str = "shell_starting";
 /// The pane token the integration's first prompt reports
 /// (`hide_host::shell_integration::PROMPT_TOKEN`).
-const PROMPT_TOKEN: &str = "hide_prompt";
+pub(crate) const PROMPT_TOKEN: &str = "hide_prompt";
 /// The most of a screen line a refusal carries.
 const SCREEN_LINE_CHARS: usize = 120;
 
@@ -434,18 +434,14 @@ fn start_within(
     let deadline = started + wait;
     let name_deadline = started + name_release_wait;
     let pane_id = start.launch().pane_id.as_str();
-    let shell = Shell {
+    let shell = Shell::new(
         engine,
         node,
         correlation_id,
         pane_id,
-        line: start.line(),
-        awaits_mark: std::cell::Cell::new(matches!(shell_start, ShellStart::Integrated { .. })),
-        program: match shell_start {
-            ShellStart::Integrated { program } => Some(program),
-            ShellStart::Plain => None,
-        },
-    };
+        start.line(),
+        shell_start,
+    );
     let mut settled = false;
     let mut busy = 0_u32;
     loop {
@@ -532,6 +528,46 @@ enum Waiting {
     Prompt,
     /// The shell's line editor, while the terminal keeps only this many bytes.
     LineEditor(usize),
+}
+
+/// Returns once `pane`'s shell has finished starting as `shell` says and
+/// would take a line of `line` bytes whole, within [`SHELL_WAIT`]: the wait
+/// every start into a shell takes, which a resume the core's own engine
+/// types after a restore takes too, so a shell is judged ready in one place.
+pub(crate) fn wait_for_shell(
+    engine: &dyn Engine,
+    node: Option<&dyn NodeLink>,
+    correlation_id: &str,
+    pane: &str,
+    shell: ShellStart,
+    line: usize,
+) -> Result<(), StartError> {
+    let started = Instant::now();
+    Shell::new(engine, node, correlation_id, pane, line, shell).wait(started, started + SHELL_WAIT)
+}
+
+impl<'a> Shell<'a> {
+    fn new(
+        engine: &'a dyn Engine,
+        node: Option<&'a dyn NodeLink>,
+        correlation_id: &'a str,
+        pane_id: &'a str,
+        line: usize,
+        shell: ShellStart,
+    ) -> Self {
+        Self {
+            engine,
+            node,
+            correlation_id,
+            pane_id,
+            line,
+            awaits_mark: std::cell::Cell::new(matches!(shell, ShellStart::Integrated { .. })),
+            program: match shell {
+                ShellStart::Integrated { program } => Some(program),
+                ShellStart::Plain => None,
+            },
+        }
+    }
 }
 
 impl Shell<'_> {

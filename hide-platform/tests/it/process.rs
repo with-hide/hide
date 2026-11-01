@@ -18,9 +18,10 @@ use hide_platform::fs::identity::{canonical, file_id};
 use hide_platform::process::GuardedSpawnError;
 use hide_platform::process::{
     CaptureFailureKind, GroupEnd, MAX_CAPTURE_BYTES, OWNER_LAUNCH_KEYS, OwnedChild, OwnerWatch,
-    RUN_OUTPUT_CAP, RunFailure, boot_id, cwd_of, descendants, descends_from, detach, group_members,
-    image_of, is_alive, kill_tree, measure_tree, name_of, parent_of, restrict_to_login_environment,
-    run_to_end, run_to_end_tied, running, set_output_aside, start_time, terminate, terminate_group,
+    RUN_OUTPUT_CAP, RunFailure, argv_of, boot_id, cwd_of, descendants, descends_from, detach,
+    group_members, image_of, is_alive, kill_tree, measure_tree, name_of, parent_of,
+    restrict_to_login_environment, run_to_end, run_to_end_tied, running, set_output_aside,
+    start_time, terminate, terminate_group,
 };
 
 const ROLE: &str = "HIDE_PLATFORM_PROC_ROLE";
@@ -2437,6 +2438,53 @@ fn the_working_directory_is_the_kernels_answer_or_unsupported() {
     }
     child.kill().unwrap();
     child.wait().unwrap();
+}
+
+#[test]
+fn the_arguments_are_the_ones_the_process_started_with_or_unsupported() {
+    let _serial = serial();
+    let program = std::env::current_exe().unwrap();
+    let mut child = role_command("sleep")
+        .arg("a word with spaces")
+        .spawn()
+        .unwrap();
+    let pid = child.id();
+    ready_number(child.stdout.take().unwrap());
+    match argv_of(pid) {
+        Ok(argv) => {
+            if cfg!(windows) {
+                panic!("Windows keeps no command line another process can read");
+            }
+            assert_eq!(
+                argv,
+                [
+                    program.to_str().unwrap(),
+                    "--exact",
+                    "process::child_role",
+                    "--nocapture",
+                    "--test-threads=1",
+                    "a word with spaces",
+                ],
+            );
+        }
+        Err(error) => {
+            if !cfg!(windows) {
+                panic!("only Windows cannot answer: {error}");
+            }
+            assert_eq!(error.kind(), ErrorKind::Unsupported);
+        }
+    }
+    child.kill().unwrap();
+    child.wait().unwrap();
+    drop(child);
+    if !cfg!(windows) {
+        assert!(gone_within(pid, Duration::from_secs(5)));
+        assert_eq!(
+            argv_of(pid).unwrap_err().kind(),
+            ErrorKind::NotFound,
+            "no process, no arguments"
+        );
+    }
 }
 
 #[test]

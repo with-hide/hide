@@ -157,3 +157,44 @@ fn processes_name_the_shell_and_the_foreground_or_say_it_is_not_known() {
             .unwrap();
     }
 }
+
+/// A styled read (Herdr's `ansi` format, of the rows on screen and of the
+/// last rows) keeps the color the program wrote as an escape sequence, and
+/// the plain read of the same rows does not; a styled read past its rows is
+/// refused as a plain one is.
+#[test]
+fn a_styled_read_keeps_the_color_the_program_wrote_and_a_plain_read_does_not() {
+    let home = Home::new();
+    let script = Script::new(&home, vec![b"\x1b[31mred-word\x1b[0m plain\r\n".to_vec()]);
+    let holder = script.start(&home);
+    wait_until("the colored line", || {
+        holder.read(5).0.contains("red-word plain")
+    });
+    let (plain, _) = holder.read(5);
+    assert!(!plain.contains('\x1b'), "{plain:?}");
+    for question in [Ask::Rows { lines: 5 }, Ask::Screen] {
+        let text = match ask(
+            &holder.socket,
+            question.clone(),
+            PROTOCOL_VERSION,
+            Instant::now() + HANG_LIMIT,
+        ) {
+            Ok(Answer::Text { text, .. }) => text,
+            other => panic!("{question:?} was answered {other:?}"),
+        };
+        let word = text
+            .find("red-word")
+            .unwrap_or_else(|| panic!("{question:?} read {text:?}"));
+        let before = &text[..word];
+        assert!(
+            before.contains("\x1b[31m") || before.contains("\x1b[38;5;1m"),
+            "{question:?} lost the color: {text:?}"
+        );
+    }
+    for lines in [0, MAX_READ_LINES + 1] {
+        assert_eq!(
+            refusal(&holder, Ask::Rows { lines }),
+            CloseReason::AskInvalid
+        );
+    }
+}

@@ -9,9 +9,12 @@
 //! The pane's parsed terminal and everything read from it or written for
 //! it: the program's output and the answers to its questions, the screen a
 //! fragment draws, input that means something (PRD
-//! engine-bundle-2-pane-holder D-8), the theme, and its recent text (D-18).
-//! One lock holds it; nothing here blocks.
+//! engine-bundle-2-pane-holder D-8), the theme, its recent text (D-18), and
+//! what its program says of itself for the pane's facts (PRD
+//! engine-bundle-3-core-owns D-18, D-21). One lock holds it; nothing here
+//! blocks.
 
+use std::path::PathBuf;
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::{Duration, Instant};
 
@@ -22,6 +25,7 @@ use hide_holder_protocol::{
 use hide_vt::{ActiveScreen, DefaultColor, RgbColor, Terminal};
 
 use crate::answers::{self, Mark, Scanner};
+use crate::osc::{OscState, parse_reported_cwd};
 use crate::screen::{Capture, Defaults, Frame};
 
 /// The parser's scrollback budget, libghostty's approximate bytes (PRD
@@ -61,6 +65,28 @@ pub struct Pane {
     everything: bool,
     /// Every byte of output the parser was fed, since the pane began.
     fed: u64,
+    /// The title, progress and prompt marks the program sent.
+    osc: OscState,
+    /// The last whole folder the shell reported.
+    cwd: Option<PathBuf>,
+    /// The bells the program rang since the pane began.
+    bells: u64,
+}
+
+/// What the pane's facts are made from, read under the pane's lock.
+#[derive(Debug)]
+pub struct Observed {
+    pub cwd: Option<String>,
+    pub title: Option<String>,
+    pub bells: u64,
+    pub prompts: u64,
+    pub bracketed_paste: bool,
+    /// The screen's last rows as the screen rules read them: as many as it
+    /// has rows, as Herdr reads an agent's screen; empty when not asked.
+    pub screen: String,
+    /// The title and progress the screen rules read.
+    pub rules_title: String,
+    pub progress: String,
 }
 
 impl Pane {
@@ -102,6 +128,9 @@ impl Pane {
             sync_since: None,
             everything: true,
             fed: 0,
+            osc: OscState::default(),
+            cwd: None,
+            bells: 0,
         };
         let theme = theme.cloned().unwrap_or(Theme {
             foreground: None,
@@ -128,6 +157,7 @@ impl Pane {
 
     fn feed_at(&mut self, bytes: &[u8], answers: &mut Vec<u8>, now: Instant) {
         self.fed += bytes.len() as u64;
+        self.osc.observe(bytes);
         self.marks.clear();
         self.scanner.scan(bytes, &mut self.marks);
         let mut start = 0;
@@ -151,6 +181,7 @@ impl Pane {
         }
         self.terminal.write(&bytes[start..]);
         self.take_replies(answers);
+        self.take_reports();
         let synchronized = self
             .terminal
             .mode_get(hide_vt::MODE_SYNCHRONIZED_OUTPUT)
@@ -162,6 +193,55 @@ impl Pane {
             (true, None) => Some(now),
             (false, _) => None,
         };
+    }
+
+    /// Takes what the parser collected of the output for the facts: the
+    /// bells, the last whole folder the shell reported (a relative one
+    /// names no folder), and the clipboard writes, which no node is sent
+    /// and which would otherwise grow with every one.
+    fn take_reports(&mut self) {
+        self.bells = self
+            .bells
+            .saturating_add(u64::from(self.terminal.take_bell_count()));
+        if let Some(cwd) = self
+            .terminal
+            .take_pwd_changes()
+            .into_iter()
+            .filter_map(|value| parse_reported_cwd(&value))
+            .rfind(|path| path.is_absolute())
+        {
+            self.cwd = Some(cwd);
+        }
+        let _ = self.terminal.take_clipboard_writes();
+    }
+
+    /// What the pane's facts are made from now; the screen's text only when
+    /// `screen` asks for it, since only screen rules read it.
+    pub fn observe(&self, screen: bool) -> Result<Observed, hide_vt::Error> {
+        let screen = if screen {
+            self.recent_text(usize::from(self.terminal.rows()?))?.0
+        } else {
+            String::new()
+        };
+        Ok(Observed {
+            cwd: self
+                .cwd
+                .as_ref()
+                .map(|cwd| cwd.to_string_lossy().into_owned()),
+            title: self.osc.title().map(str::to_owned),
+            bells: self.bells,
+            prompts: self.osc.prompts(),
+            bracketed_paste: self.terminal.mode_get(hide_vt::MODE_BRACKETED_PASTE)?,
+            screen,
+            rules_title: self.osc.rules_title().to_owned(),
+            progress: self.osc.progress().to_owned(),
+        })
+    }
+
+    /// Drops the title and progress the screen rules read: the pane's agent
+    /// changed.
+    pub fn clear_retained(&mut self) {
+        self.osc.clear_retained();
     }
 
     fn take_replies(&mut self, answers: &mut Vec<u8>) {
@@ -375,13 +455,48 @@ impl Pane {
     /// screen's scroll position is not touched: rows are read by their place
     /// in the whole screen.
     pub fn read(&self, lines: u16) -> Result<Answer, hide_vt::Error> {
-        let lines = usize::from(lines);
+        let (text, truncated) = self.recent_text(usize::from(lines))?;
+        Ok(Answer::Text { text, truncated })
+    }
+
+    /// The rows the screen shows now, wherever the screen connection
+    /// scrolled it, with their styling as escape sequences (Herdr's
+    /// `visible_ansi`), cut as a read is. The scroll position is not
+    /// touched.
+    pub fn read_screen(&self) -> Result<Answer, hide_vt::Error> {
+        let rows = self.terminal.rows()?;
+        let cols = self.terminal.cols()?;
+        if rows == 0 || cols == 0 {
+            return Ok(styled(String::new(), false));
+        }
+        let text =
+            self.terminal
+                .read_ansi_viewport((0, 0), (cols - 1, u32::from(rows - 1)), false)?;
+        Ok(styled(text, false))
+    }
+
+    /// The rows [`Pane::read`] reads, as the terminal drew them, soft wraps
+    /// kept, with their styling as escape sequences (Herdr's
+    /// `recent_ansi_snapshot`), cut as a read is.
+    pub fn read_rows(&self, lines: u16) -> Result<Answer, hide_vt::Error> {
+        let cols = self.terminal.cols()?;
+        let Some((start, end)) = self.recent_range(usize::from(lines))? else {
+            return Ok(styled(String::new(), false));
+        };
+        let text = self.terminal.read_ansi_screen(
+            (0, start as u32),
+            (cols.saturating_sub(1), end as u32),
+            false,
+            false,
+        )?;
+        Ok(styled(text, start > 0))
+    }
+
+    /// [`Pane::read`]'s text, and whether rows were left out.
+    fn recent_text(&self, lines: usize) -> Result<(String, bool), hide_vt::Error> {
         let cols = self.terminal.cols()?;
         let Some((start, end)) = self.recent_range(lines)? else {
-            return Ok(Answer::Text {
-                text: String::new(),
-                truncated: false,
-            });
+            return Ok((String::new(), false));
         };
         let mut text = self.terminal.read_text_screen(
             (0, start as u32),
@@ -399,7 +514,7 @@ impl Pane {
             text.drain(..cut);
             truncated = true;
         }
-        Ok(Answer::Text { text, truncated })
+        Ok((text, truncated))
     }
 
     /// Herdr's `ghostty_recent_read_range`: on the alternate screen its last
@@ -438,6 +553,20 @@ impl Pane {
         let end = content.map_or(last, |row| row.max(cursor_row));
         Ok(Some(((end + 1).saturating_sub(lines), end)))
     }
+}
+
+/// A styled read cut to [`MAX_READ_BYTES`] from the oldest side, at a row's
+/// start, so no escape sequence is cut in two.
+fn styled(mut text: String, mut truncated: bool) -> Answer {
+    if text.len() > MAX_READ_BYTES {
+        let cut = text.len() - MAX_READ_BYTES;
+        let cut = text[cut..]
+            .find('\n')
+            .map_or(text.len(), |newline| cut + newline + 1);
+        text.drain(..cut);
+        truncated = true;
+    }
+    Answer::Text { text, truncated }
 }
 
 fn mods(modifiers: Modifiers) -> u16 {

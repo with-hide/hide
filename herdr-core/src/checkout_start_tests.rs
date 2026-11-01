@@ -54,6 +54,8 @@ struct State {
     refuse_binding_save: bool,
     respawn_at_inspection: Option<usize>,
     refuse_unzoom: bool,
+    /// The node has no Herdr server, so it names no pane's shell.
+    no_herdr: bool,
 }
 
 impl State {
@@ -74,6 +76,7 @@ impl State {
             refuse_binding_save: false,
             respawn_at_inspection: None,
             refuse_unzoom: false,
+            no_herdr: false,
         }
     }
 
@@ -171,6 +174,10 @@ impl State {
                     "pane":self.pane_info("w1:p3","w1:t1"), "target_layout":self.geometry("w1:t1"),
                     "closed_tab_id":"w1:t2","focused_pane_id":"w1:p1"}})
             }
+            "tab.close" => {
+                self.layouts.remove(params["tab_id"].as_str().unwrap());
+                json!({"type":"ok"})
+            }
             other => panic!("unexpected start request {other}"),
         }
     }
@@ -184,6 +191,12 @@ impl NodeLink for IdentityNode {
         };
         let mut state = self.0.lock().unwrap();
         state.inspections.push(pane_id.clone());
+        if state.no_herdr {
+            return Err(LinkError::Refused(hide_node_link::HostError::new(
+                hide_node_link::ErrorCode::Unsupported,
+                "This node has no Herdr server",
+            )));
+        }
         if pane_id == "w1:p3"
             && state.respawn_at_inspection
                 == Some(
@@ -446,6 +459,34 @@ fn respawn_after_discovery_cannot_become_the_first_binding_with_or_without_an_ac
             assert_eq!(fixture.mutations(), ["layout.apply"]);
         }
     }
+}
+
+/// A node that can name no pane's shell (the core's own engine until pane
+/// identity lands) fails the start for certain, and the tab the start made
+/// goes with it in the same event.
+#[test]
+fn a_start_no_node_can_confirm_fails_and_closes_the_tab_it_made() {
+    let fixture = Fixture::new();
+    fixture.state.lock().unwrap().no_herdr = true;
+    let error = fixture
+        .run(&fixture.request(false), Some(&launch()), None)
+        .unwrap_err();
+    assert!(!error.is_ambiguous(), "{error:?}");
+    assert_eq!(error.message(), "agent_start.terminal_unchecked");
+    let state = fixture.state.lock().unwrap();
+    assert_eq!(
+        state
+            .calls
+            .iter()
+            .filter(|method| matches!(method.as_str(), "layout.apply" | "tab.close"))
+            .collect::<Vec<_>>(),
+        ["layout.apply", "tab.close"]
+    );
+    assert!(
+        !state.layouts.contains_key("w1:t2"),
+        "the tab it made stays"
+    );
+    assert!(state.layouts.contains_key("w1:t1"));
 }
 
 #[test]

@@ -18,10 +18,17 @@ fn shell(variable: &str) -> PathBuf {
     )
 }
 
+/// Where a shell runs: in a Herdr pane, whose binary is a script that
+/// records the marks reported, or outside one, on the core's own engine.
+#[derive(Clone, Copy, PartialEq)]
+enum Pane {
+    Herdr,
+    Own,
+}
+
 /// A shell started with `args` and `env` from the integration, reading
 /// `commands` on its input. Answers what the user's files, the mark and the
 /// commands wrote, in order, then the marks reported.
-#[allow(clippy::disallowed_methods)] // env_clear: the shell starts with only what the integration gives it (Unix only)
 fn run(
     bin: &Path,
     args: &[&str],
@@ -29,6 +36,19 @@ fn run(
     env: &BTreeMap<String, String>,
     commands: &str,
 ) -> (String, String) {
+    run_in(Pane::Herdr, bin, args, home, env, commands).0
+}
+
+/// [`run`] in `pane`, with what the shell wrote to its output.
+#[allow(clippy::disallowed_methods)] // env_clear: the shell starts with only what the integration gives it (Unix only)
+fn run_in(
+    pane: Pane,
+    bin: &Path,
+    args: &[&str],
+    home: &Path,
+    env: &BTreeMap<String, String>,
+    commands: &str,
+) -> ((String, String), String) {
     let mark = home.join("mark.sh");
     std::fs::write(
         &mark,
@@ -36,18 +56,23 @@ fn run(
     )
     .unwrap();
     std::fs::set_permissions(&mark, std::os::unix::fs::PermissionsExt::from_mode(0o755)).unwrap();
-    let mut child = Command::new(bin)
+    let mut command = Command::new(bin);
+    command
         .args(args)
         .env_clear()
         .env("HOME", home)
         .env("PATH", "/usr/bin:/bin")
-        .env("TERM", "dumb")
-        .env("HERDR_BIN_PATH", &mark)
-        .env("HERDR_PANE_ID", "w1:p1")
+        .env("TERM", "dumb");
+    if pane == Pane::Herdr {
+        command
+            .env("HERDR_BIN_PATH", &mark)
+            .env("HERDR_PANE_ID", "w1:p1");
+    }
+    let mut child = command
         .envs(env)
         .current_dir(home)
         .stdin(Stdio::piped())
-        .stdout(Stdio::null())
+        .stdout(Stdio::piped())
         .stderr(Stdio::null())
         .spawn()
         .unwrap();
@@ -57,14 +82,21 @@ fn run(
         .unwrap()
         .write_all(commands.as_bytes())
         .unwrap();
-    assert!(child.wait().unwrap().success());
+    let output = child.wait_with_output().unwrap();
+    assert!(output.status.success());
     let read = |name: &str| {
         let text = std::fs::read_to_string(home.join(name)).unwrap_or_default();
         let _ = std::fs::remove_file(home.join(name));
         text.replace(&home.display().to_string(), "~")
     };
-    (read("log"), read("mark"))
+    (
+        (read("log"), read("mark")),
+        String::from_utf8_lossy(&output.stdout).into_owned(),
+    )
 }
+
+/// The prompt mark a shell outside Herdr writes on its screen.
+const SCREEN_MARK: &str = "\u{1b}]133;A\u{7}";
 
 const MARK: &str = "pane report-metadata w1:p1 --source hide:shell --token hide_prompt=1\n";
 
@@ -231,4 +263,79 @@ fn fish_marks_after_its_configuration() {
     );
     assert_eq!(log, "config\nmark\nafter\n");
     assert_eq!(mark, MARK);
+}
+
+/// Outside a Herdr pane, on the core's own engine, each shell marks its first
+/// prompt on its screen once, after the user's files, and reports nothing to
+/// Herdr; in a Herdr pane it writes no screen mark.
+#[test]
+#[ignore = "needs zsh, bash and fish: set HIDE_TEST_ZSH_BIN, HIDE_TEST_BASH_BIN and HIDE_TEST_FISH_BIN and run with --ignored"]
+fn outside_herdr_each_shell_marks_its_first_prompt_on_its_screen_once() {
+    let home = tempfile::tempdir().unwrap();
+    let home = home.path().canonicalize().unwrap();
+    let launches = [
+        "HIDE_TEST_ZSH_BIN",
+        "HIDE_TEST_BASH_BIN",
+        "HIDE_TEST_FISH_BIN",
+    ]
+    .map(|variable| {
+        let bin = shell(variable);
+        let launch = install(&home.join("hide"), &user(&bin, None))
+            .unwrap()
+            .unwrap();
+        (bin, launch)
+    });
+    for (bin, launch) in &launches {
+        let mut args: Vec<&str> = launch.command[1..].iter().map(String::as_str).collect();
+        args.push("-i");
+        let after = "echo after >> \"$HOME/log\"\nexit\n";
+        let ((log, reported), screen) = run_in(Pane::Own, bin, &args, &home, &launch.env, after);
+        assert_eq!(reported, "", "{bin:?} reports nothing outside Herdr");
+        assert_eq!(log, "after\n", "{bin:?}");
+        assert_eq!(
+            screen.matches(SCREEN_MARK).count(),
+            1,
+            "{bin:?}: {screen:?}"
+        );
+        let ((_, reported), screen) = run_in(Pane::Herdr, bin, &args, &home, &launch.env, after);
+        assert_eq!(reported, MARK, "{bin:?}");
+        assert!(!screen.contains(SCREEN_MARK), "{bin:?}: {screen:?}");
+    }
+}
+
+/// Outside Herdr each shell says its folder on its screen (OSC 7) as it
+/// starts and after a `cd`, a `%` in a name spelled `%25`, for the pane's
+/// holder; in a Herdr pane, which reads the folder from the process, it says
+/// nothing of it.
+#[test]
+#[ignore = "needs zsh, bash and fish: set HIDE_TEST_ZSH_BIN, HIDE_TEST_BASH_BIN and HIDE_TEST_FISH_BIN and run with --ignored"]
+fn outside_herdr_each_shell_says_its_folder_on_its_screen() {
+    let home = tempfile::tempdir().unwrap();
+    let home = home.path().canonicalize().unwrap();
+    std::fs::create_dir(home.join("a b%c")).unwrap();
+    let said = |folder: String| format!("\u{1b}]7;file://{folder}\u{7}");
+    for variable in [
+        "HIDE_TEST_ZSH_BIN",
+        "HIDE_TEST_BASH_BIN",
+        "HIDE_TEST_FISH_BIN",
+    ] {
+        let bin = shell(variable);
+        let launch = install(&home.join("hide"), &user(&bin, None))
+            .unwrap()
+            .unwrap();
+        let mut args: Vec<&str> = launch.command[1..].iter().map(String::as_str).collect();
+        args.push("-i");
+        let after = "cd 'a b%c'\necho after >> \"$HOME/log\"\nexit\n";
+        let (_, screen) = run_in(Pane::Own, &bin, &args, &home, &launch.env, after);
+        assert!(
+            screen.contains(&said(home.display().to_string())),
+            "{variable}: {screen:?}"
+        );
+        assert!(
+            screen.contains(&said(format!("{}/a b%25c", home.display()))),
+            "{variable}: {screen:?}"
+        );
+        let (_, screen) = run_in(Pane::Herdr, &bin, &args, &home, &launch.env, after);
+        assert!(!screen.contains("\u{1b}]7;"), "{variable}: {screen:?}");
+    }
 }

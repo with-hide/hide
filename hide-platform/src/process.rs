@@ -23,6 +23,8 @@
 //!   does not exist is `false` or `NotFound`, never a default. A start time is
 //!   an opaque number whose only use is to compare with itself, to tell a pid
 //!   from a later process that reused it.
+//! - [`argv_of`] gives the arguments a process was started with on macOS and
+//!   Linux, and says `Unsupported` on Windows.
 //! - [`image_of`] names the file a process was started from, and that file
 //!   stays its answer when the file is renamed, deleted or replaced at its
 //!   path; [`running`] names every process this account can see that runs
@@ -1280,6 +1282,18 @@ pub fn cwd_of(pid: u32) -> io::Result<PathBuf> {
 /// its first 15 bytes. `NotFound` when the process is gone.
 pub fn name_of(pid: u32) -> io::Result<String> {
     sys::name_of(pid)
+}
+
+/// The arguments `pid` was started with, its program first, as the system
+/// keeps them: the kernel's copy of the start's arguments on macOS
+/// (`KERN_PROCARGS2`), `/proc/<pid>/cmdline` on Linux, where a program that
+/// rewrote its arguments reads as it rewrote them and a process that has
+/// ended but not been reaped has none. `NotFound` when the process is gone,
+/// `PermissionDenied` when the system will not say (another account's
+/// process on macOS), `Unsupported` on Windows, which keeps a process's
+/// command line only inside the process.
+pub fn argv_of(pid: u32) -> io::Result<Vec<String>> {
+    sys::argv_of(pid)
 }
 
 /// The processes in process group `group`, zombies included, as one look at
@@ -3721,6 +3735,80 @@ mod sys {
     }
 
     #[cfg(target_os = "macos")]
+    pub(super) fn argv_of(pid: u32) -> io::Result<Vec<String>> {
+        let target = libc::c_int::try_from(pid)
+            .map_err(|_| io::Error::new(io::ErrorKind::NotFound, "no such process"))?;
+        let mut name = [libc::CTL_KERN, libc::KERN_ARGMAX];
+        let mut most: libc::c_int = 0;
+        let mut size = std::mem::size_of::<libc::c_int>();
+        // SAFETY: the name is two ints and the buffer is one int, read only
+        // after `sysctl` succeeds.
+        let read = unsafe {
+            libc::sysctl(
+                name.as_mut_ptr(),
+                name.len() as libc::c_uint,
+                (&mut most as *mut libc::c_int).cast(),
+                &mut size,
+                std::ptr::null_mut(),
+                0,
+            )
+        };
+        if read != 0 || most <= 0 {
+            return Err(io::Error::last_os_error());
+        }
+        let mut buffer = vec![0u8; most as usize];
+        let mut size = buffer.len();
+        let mut name = [libc::CTL_KERN, libc::KERN_PROCARGS2, target];
+        // SAFETY: the name is three ints and the buffer is valid for `size`
+        // bytes, of which `sysctl` says how many it filled.
+        let read = unsafe {
+            libc::sysctl(
+                name.as_mut_ptr(),
+                name.len() as libc::c_uint,
+                buffer.as_mut_ptr().cast(),
+                &mut size,
+                std::ptr::null_mut(),
+                0,
+            )
+        };
+        if read != 0 {
+            let error = io::Error::last_os_error();
+            // The kernel answers EINVAL both for a process that is gone and
+            // for one it will not describe; the process table tells them
+            // apart.
+            return Err(match error.raw_os_error() {
+                Some(libc::ESRCH) => io::ErrorKind::NotFound.into(),
+                Some(libc::EINVAL) | Some(libc::EPERM) => match mac::bsd_info(pid) {
+                    Ok(_) => io::ErrorKind::PermissionDenied.into(),
+                    Err(missing) => missing,
+                },
+                _ => error,
+            });
+        }
+        buffer.truncate(size);
+        // The layout `KERN_PROCARGS2` fills: the argument count, the path
+        // the program was executed by, NUL padding, then the arguments one
+        // NUL-terminated string each, then the environment.
+        let count = buffer
+            .get(..4)
+            .map(|bytes| i32::from_ne_bytes(bytes.try_into().unwrap()))
+            .filter(|count| *count >= 0)
+            .ok_or_else(|| io::Error::other("the kernel's arguments carry no count"))?;
+        let rest = &buffer[4..];
+        let path_end = rest
+            .iter()
+            .position(|&byte| byte == 0)
+            .unwrap_or(rest.len());
+        let mut strings = rest[path_end..]
+            .split(|&byte| byte == 0)
+            .skip_while(|part| part.is_empty());
+        Ok((0..count)
+            .map_while(|_| strings.next())
+            .map(|part| String::from_utf8_lossy(part).into_owned())
+            .collect())
+    }
+
+    #[cfg(target_os = "macos")]
     pub(super) fn cwd_of(pid: u32) -> io::Result<PathBuf> {
         use std::os::unix::ffi::OsStringExt;
 
@@ -3977,6 +4065,25 @@ mod sys {
     pub(super) fn name_of(pid: u32) -> io::Result<String> {
         let name = linux::read(pid, "comm")?;
         Ok(name.strip_suffix('\n').unwrap_or(&name).to_owned())
+    }
+
+    #[cfg(target_os = "linux")]
+    pub(super) fn argv_of(pid: u32) -> io::Result<Vec<String>> {
+        let bytes = std::fs::read(format!("/proc/{pid}/cmdline")).map_err(|error| {
+            if error.raw_os_error() == Some(libc::ESRCH) {
+                io::ErrorKind::NotFound.into()
+            } else {
+                error
+            }
+        })?;
+        let bytes = bytes.strip_suffix(&[0]).unwrap_or(&bytes);
+        if bytes.is_empty() {
+            return Ok(Vec::new());
+        }
+        Ok(bytes
+            .split(|&byte| byte == 0)
+            .map(|part| String::from_utf8_lossy(part).into_owned())
+            .collect())
     }
 
     #[cfg(target_os = "linux")]
@@ -5729,6 +5836,13 @@ mod sys {
         Err(io::Error::new(
             io::ErrorKind::Unsupported,
             "Windows reports no working directory for another process",
+        ))
+    }
+
+    pub(super) fn argv_of(_: u32) -> io::Result<Vec<String>> {
+        Err(io::Error::new(
+            io::ErrorKind::Unsupported,
+            "Windows keeps a process's command line only inside the process",
         ))
     }
 

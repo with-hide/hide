@@ -21,6 +21,7 @@ hide-node-link = { path = "../hide-node-link" }
 hide-memory = { path = "../hide-memory" }
 hide-platform = { path = "../hide-platform" }
 hide-project = { path = "../hide-project" }
+hide-screen-rules = { path = "../hide-screen-rules" }
 hide-session = { path = "../hide-session" }
 base64 = "=0.23.1"
 cap-std = "=4.0.3"

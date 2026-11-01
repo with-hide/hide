@@ -5,8 +5,10 @@
 //! converges when asked again; a node killed outright finds its holders
 //! again when the next one starts, attaches 64 and keeps the rest running,
 //! and reports the pane that ended meanwhile; a takeover ends the first
-//! node's session for good; and the node speaks to a holder of the oldest
-//! version it supports and leaves an older one running.
+//! node's session for good; the node speaks to a holder of the oldest
+//! version it supports and leaves an older one running; and it tells the
+//! engine every pane's facts, read by the rules its holder can read (PRD
+//! engine-bundle-3-core-owns D-18, D-21).
 //!
 //! The node is `hide_node::terminal::Service` with `holder::Holders`, as the
 //! daemon builds it, in this test process, or in the `node` role when the
@@ -31,6 +33,10 @@ use hide_node::terminal::protocol::SessionEvent;
 use hide_node::terminal::{
     Attacher, Mode, OutputSink, ReportSink, RetryPolicy, Service, SessionParts,
 };
+use hide_node_link::holders::{
+    HolderError, NO_RULES_FOR_HOLDER, PaneFacts, PaneFactsSink, RuleSet, ScreenRead, ScreenRules,
+    ScreenState, UNSUPPORTED_HOLDER, WATCH_LOST,
+};
 use hide_node_link::terminal::{
     GridSize, KeyTarget, TerminalControl, TerminalNode, TerminalReport,
 };
@@ -38,8 +44,8 @@ use hide_node_link::terminal::{
 use crate::fixture_v1;
 use crate::role::GO;
 use crate::support::{
-    HANG_LIMIT, Home, PIDS_FILE, ROLE, Running, node_theme, print_ok, role_program, shell, source,
-    wait_until,
+    HANG_LIMIT, Home, PIDS_FILE, ROLE, Running, SCRIPT, Script, node_theme, print_ok, role_program,
+    shell, source, wait_until,
 };
 
 /// The variables the `node` role reads.
@@ -252,6 +258,66 @@ impl Reports {
                 _ => None,
             })
             .collect()
+    }
+}
+
+/// The facts a node told the engine's sink, in order.
+#[derive(Default)]
+struct Told {
+    facts: Mutex<Vec<(String, PaneFacts)>>,
+    changed: Condvar,
+}
+
+impl Told {
+    fn sink(self: &Arc<Self>) -> PaneFactsSink {
+        let told = Arc::clone(self);
+        Arc::new(move |pane: &str, facts: &PaneFacts| {
+            told.facts
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .push((pane.to_owned(), facts.clone()));
+            told.changed.notify_all();
+        })
+    }
+
+    /// Waits until the last facts told of `pane` are ones for which
+    /// `matches` holds, and answers them.
+    fn wait(&self, pane: &str, what: &str, matches: impl Fn(&PaneFacts) -> bool) -> PaneFacts {
+        let deadline = Instant::now() + HANG_LIMIT;
+        let mut told = self.facts.lock().unwrap_or_else(PoisonError::into_inner);
+        loop {
+            let last = told
+                .iter()
+                .rev()
+                .find(|(named, _)| named == pane)
+                .map(|(_, facts)| facts.clone());
+            if let Some(facts) = last.filter(|facts| matches(facts)) {
+                return facts;
+            }
+            let left = deadline.saturating_duration_since(Instant::now());
+            assert!(
+                !left.is_zero(),
+                "pane {pane} was never told {what}; it was told {:?}",
+                told.iter()
+                    .filter(|(named, _)| named == pane)
+                    .collect::<Vec<_>>()
+            );
+            told = self
+                .changed
+                .wait_timeout(told, left)
+                .unwrap_or_else(PoisonError::into_inner)
+                .0;
+        }
+    }
+
+    /// How many facts were told of `pane`.
+    fn count(&self, pane: &str) -> usize {
+        self.facts
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .iter()
+            .filter(|(named, _)| named == pane)
+            .count()
     }
 }
 
@@ -655,6 +721,8 @@ fn a_node_killed_outright_finds_its_holders_again_and_attaches_sixty_four() {
 
     let recovered_at = Instant::now();
     let next = Node::start(Switch::On, folder.home.path(), &folder.state);
+    let told = Arc::new(Told::default());
+    next.holders().watch_facts(told.sink());
     let recovered = next.holders().recover(&next.service);
     assert!(recovered.complete, "{recovered:?}");
     let mut expected: Vec<String> = panes.iter().filter(|pane| *pane != ENDS).cloned().collect();
@@ -662,6 +730,9 @@ fn a_node_killed_outright_finds_its_holders_again_and_attaches_sixty_four() {
     let kept = expected.split_off(hide_node_link::terminal::MAX_ATTACHED_PANES);
     assert_eq!(recovered.attached, expected);
     assert_eq!(recovered.kept, kept);
+    // The pane past the attach cap, whose screen nobody holds, is followed
+    // as the others are.
+    told.wait(&kept[0], "its facts", |_| true);
     assert_eq!(
         recovered.ended,
         vec![(ENDS.to_owned(), Some(EndReason::ProgramExited))]
@@ -862,9 +933,20 @@ fn a_node_works_a_holder_of_the_oldest_version_it_supports() {
     fixture_record(&folder, "f1", 1, fixture.0.id(), "v1-fixture");
 
     let node = Node::start(Switch::On, folder.home.path(), &folder.state);
+    let told = Arc::new(Told::default());
+    node.holders().watch_facts(told.sink());
     let recovered = node.holders().recover(&node.service);
     assert_eq!(recovered.attached, vec!["f1".to_owned()], "{recovered:?}");
     node.screens.wait_full("f1", fixture_v1::SCREEN_TEXT);
+    // A version 1 holder built before watches refuses the watch opening,
+    // the one opening a node tries that such a holder does not know, and
+    // the engine is told once that the pane's facts are not followed.
+    told.wait("f1", "unsupported", |facts| {
+        facts.screen
+            == ScreenRead::Unknown {
+                reason: UNSUPPORTED_HOLDER.to_owned(),
+            }
+    });
 
     node.type_into("f1", b"abc");
     wait_until("the input", || logged().contains("input 616263"));
@@ -889,9 +971,13 @@ fn a_node_works_a_holder_of_the_oldest_version_it_supports() {
     let logged = logged();
     assert!(logged.contains("terminate"), "{logged}");
     assert!(
-        !logged.contains("unknown"),
+        logged
+            .lines()
+            .filter(|line| line.starts_with("unknown"))
+            .all(|line| line == "unknown 0x19"),
         "the node sent what version 1 does not know:\n{logged}"
     );
+    assert_eq!(told.count("f1"), 1, "the pane was told more than once");
     // Every hello offers the oldest version a node speaks to.
     assert!(
         logged
@@ -900,6 +986,121 @@ fn a_node_works_a_holder_of_the_oldest_version_it_supports() {
             .all(|line| line.starts_with("hello 1 ")),
         "{logged}"
     );
+}
+
+/// D-18, D-21: a node tells the engine a pane's facts from the moment it
+/// starts, gives its holder the first rule set its evaluator reads, says
+/// when none does, takes the rules away, and tells a sink set later the last
+/// facts at once.
+#[test]
+fn a_node_tells_its_panes_facts_read_by_the_rules_its_holder_reads() {
+    let folder = Folder::new();
+    let node = Node::start(Switch::On, folder.home.path(), &folder.state);
+    let told = Arc::new(Told::default());
+    node.holders().watch_facts(told.sink());
+    let script = Script::new(&folder.home, vec![b"\x1b]2;job\x07busy\r\n".to_vec()]);
+    node.start_pane(&request(
+        folder.home.path(),
+        "w1",
+        role_program("script"),
+        vec![
+            (ROLE.into(), "script".into()),
+            (SCRIPT.into(), script.folder.clone().into()),
+        ],
+    ));
+    told.wait("w1", "the title", |facts| {
+        facts.title.as_deref() == Some("job") && facts.screen == ScreenRead::NoRules
+    });
+
+    let set = |min_engine_version: u32, manifest: &str| RuleSet {
+        source: "built-in".to_owned(),
+        version: "1".to_owned(),
+        min_engine_version,
+        manifest: manifest.to_owned(),
+    };
+    let newer = set(
+        hide_screen_rules::ENGINE_VERSION + 1,
+        r#"{"version":"2","min_engine_version":99,"rules":[]}"#,
+    );
+    let busy = set(
+        1,
+        r#"{"version":"1","min_engine_version":1,"rules":[{"id":"busy","state":"working","contains":["busy"]}]}"#,
+    );
+    let rules = |sets: Vec<RuleSet>| ScreenRules {
+        agent: "test".to_owned(),
+        sets,
+    };
+    node.holders()
+        .set_rules("w1", Some(rules(vec![newer.clone(), busy])))
+        .unwrap();
+    told.wait("w1", "the screen read by the set that fits", |facts| {
+        facts.screen
+            == ScreenRead::Read {
+                state: ScreenState::Working,
+                rule: Some("busy".to_owned()),
+            }
+    });
+    node.holders()
+        .set_rules("w1", Some(rules(vec![newer])))
+        .unwrap();
+    told.wait("w1", "no rules for its holder", |facts| {
+        facts.screen
+            == ScreenRead::Unknown {
+                reason: NO_RULES_FOR_HOLDER.to_owned(),
+            }
+    });
+    node.holders().set_rules("w1", None).unwrap();
+    let last = told.wait("w1", "no rules", |facts| {
+        facts.screen == ScreenRead::NoRules
+    });
+    assert!(matches!(
+        node.holders().set_rules("unknown", None),
+        Err(HolderError::NoPane(_))
+    ));
+
+    let later = Arc::new(Told::default());
+    node.holders().watch_facts(later.sink());
+    assert_eq!(later.wait("w1", "the last facts", |_| true), last);
+    node.holders().terminate(&node.service, "w1").unwrap();
+}
+
+/// B19: a pane whose watch ends some other way than with the pane (here
+/// another watch takes it) is told once that its facts are no longer
+/// followed, with why, and keeps what it last showed.
+#[test]
+fn a_pane_whose_watch_another_took_reads_unknown_with_why() {
+    let folder = Folder::new();
+    let node = Node::start(Switch::On, folder.home.path(), &folder.state);
+    let told = Arc::new(Told::default());
+    node.holders().watch_facts(told.sink());
+    let script = Script::new(&folder.home, vec![b"\x1b]2;job\x07busy\r\n".to_vec()]);
+    node.start_pane(&request(
+        folder.home.path(),
+        "l1",
+        role_program("script"),
+        vec![
+            (ROLE.into(), "script".into()),
+            (SCRIPT.into(), script.folder.clone().into()),
+        ],
+    ));
+    told.wait("l1", "the title", |facts| {
+        facts.title.as_deref() == Some("job")
+    });
+
+    let (_other, _) = hide_holder_protocol::watch(
+        &layout::holder_socket(&folder.state, "l1"),
+        vec![hide_holder_protocol::Capability::Facts],
+        Instant::now() + HANG_LIMIT,
+    )
+    .unwrap();
+    let lost = told.wait("l1", "its watch lost", |facts| {
+        facts.screen
+            == ScreenRead::Unknown {
+                reason: WATCH_LOST.to_owned(),
+            }
+    });
+    assert_eq!(lost.title.as_deref(), Some("job"));
+    node.holders().terminate(&node.service, "l1").unwrap();
 }
 
 /// B10: a holder older than the oldest version a node speaks to is reported

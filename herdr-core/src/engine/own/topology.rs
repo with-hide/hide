@@ -12,9 +12,13 @@
 //! it moves, so a letter, a mission or a parent that names it still finds it.
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::time::Instant;
 
+use hide_agent_adapter::definition::Catalog;
+use hide_node_link::holders::PaneFacts;
 use serde_json::Value;
 
+use super::agents::{self, PaneAgent, PaneLive, Status};
 use super::ids;
 use super::layout::{
     contains, first_leaf, lay_out, remove_leaf, resized, set_nearest_split_ratio, split_leaf_at,
@@ -24,14 +28,18 @@ use super::store::{
     FORMAT, Saved, SavedAgent, SavedDirection, SavedNode, SavedPane, SavedTab, SavedWorkspace,
     SavedWorktree,
 };
-use crate::engine::{EngineError, PaneJoinResult};
+use crate::engine::{EngineError, PaneJoinResult, PaneSessionKind};
 use crate::live::PaneResizeDirection;
 use crate::model::{PaneLayoutDirection, PaneLayoutNodeSnapshot};
 use crate::recent_closed::{ClosedLayout, ClosedLayoutNode, ClosedSplitDirection};
 use crate::session_sync::{
-    ProjectedPane, ProjectedTab, ProjectedWorkspace, ProjectedWorktree, ProjectionState,
+    ProjectedAgent, ProjectedPane, ProjectedTab, ProjectedWorkspace, ProjectedWorktree,
+    ProjectionState,
 };
-use crate::sidebar::{SessionLayoutPayload, SessionLayoutRect, SessionTabFocus, SessionTabMoves};
+use crate::sidebar::{
+    SessionAgentSessionPayload, SessionLayoutPayload, SessionLayoutRect, SessionTabFocus,
+    SessionTabMoves,
+};
 
 /// The area a tab is laid out in for its session's rects. The core reads a
 /// tab's tree back from them (`live::project_layout`) and draws it at the
@@ -60,6 +68,10 @@ pub(super) struct Topology {
     /// core answers the tab moves it asked for from these, never from a
     /// wait ([`Topology::note_shown`]).
     shown: Shown,
+    /// The engine's count of agent state changes, kept in memory only: a
+    /// sequence is compared only with one this engine gave, as Herdr's is
+    /// with its own server's.
+    agent_seq: u64,
 }
 
 /// The shown tab's moves and the last of them, kept in memory only: a new
@@ -108,14 +120,10 @@ pub(super) struct Pane {
     pub(super) env: BTreeMap<String, String>,
     /// The agent the pane runs and its session, saved for a restore.
     pub(super) agent: Option<PaneAgent>,
+    /// What its holder last said of it.
+    pub(super) live: PaneLive,
     /// Why no holder runs the pane, once a restore could not start one.
     pub(super) failed: Option<String>,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(super) struct PaneAgent {
-    pub(super) kind: String,
-    pub(super) session: String,
 }
 
 impl Pane {
@@ -189,7 +197,7 @@ pub(super) struct Planned {
     pub(super) kept: BTreeSet<String>,
 }
 
-fn refused(code: &str, message: String) -> EngineError {
+pub(super) fn refused(code: &str, message: String) -> EngineError {
     EngineError::Refused {
         code: code.to_owned(),
         message,
@@ -983,8 +991,10 @@ impl Topology {
         workspace.tabs[tab].layout(&workspace.id)
     }
 
-    /// The whole session, as a snapshot of Herdr's would project it.
-    pub(super) fn state(&self) -> Result<ProjectionState, EngineError> {
+    /// The whole session, as a snapshot of Herdr's would project it, its
+    /// agents named by `catalog`'s definitions.
+    pub(super) fn state(&self, catalog: &Catalog) -> Result<ProjectionState, EngineError> {
+        let now = Instant::now();
         let mut state = ProjectionState {
             tab_focus: self.shown.last.clone(),
             tab_moves: Some(self.shown.moves.clone()),
@@ -1030,20 +1040,43 @@ impl Topology {
                             tab.id
                         ))
                     })?;
+                    let listed = pane.agent.as_ref().filter(|agent| agent.listed(now));
+                    let title = pane.live.facts.title.clone();
                     state.panes.push(ProjectedPane {
                         terminal_id: pane_id.clone(),
                         restore_error: pane.failed.clone(),
-                        foreground_process: None,
-                        agent_status: "unknown".to_owned(),
+                        foreground_process: pane
+                            .live
+                            .facts
+                            .foreground
+                            .as_ref()
+                            .map(|program| program.name.clone()),
+                        agent_status: listed
+                            .map_or(Status::Unknown, |agent| agent.live.status)
+                            .as_str()
+                            .to_owned(),
                         workspace_id: workspace.id.clone(),
                         tab_id: tab.id.clone(),
                         cwd: Some(pane.cwd.clone()),
                         tokens: pane.tokens.clone(),
                         label: pane.label.clone(),
-                        terminal_title: None,
-                        terminal_title_stripped: None,
-                        pane_id,
+                        terminal_title_stripped: title
+                            .as_deref()
+                            .and_then(super::shell_line::stripped_title),
+                        terminal_title: title,
+                        pane_id: pane_id.clone(),
                     });
+                    if let Some(agent) = listed {
+                        state.agents.push(projected_agent(
+                            &workspace.id,
+                            &tab.id,
+                            &pane_id,
+                            pane,
+                            agent,
+                            catalog,
+                            now,
+                        ));
+                    }
                 }
                 state.layouts.push(tab.layout(&workspace.id)?);
             }
@@ -1093,6 +1126,7 @@ impl Topology {
                                     tokens: pane.tokens.clone(),
                                     agent: pane.agent.as_ref().map(|agent| SavedAgent {
                                         kind: agent.kind.clone(),
+                                        name: agent.name.clone(),
                                         session: agent.session.clone(),
                                     }),
                                 })
@@ -1121,6 +1155,7 @@ impl Topology {
             focused_workspace: saved.focused_workspace,
             workspace_numbers: saved.workspace_numbers,
             shown: Shown::default(),
+            agent_seq: 0,
         };
         for workspace in saved.workspaces {
             if ids::workspace_number(&workspace.id).is_none() || !seen.insert(workspace.id.clone())
@@ -1150,7 +1185,9 @@ impl Topology {
                             tokens: pane.tokens,
                             agent: pane.agent.map(|agent| PaneAgent {
                                 kind: agent.kind,
+                                name: agent.name,
                                 session: agent.session,
+                                ..PaneAgent::default()
                             }),
                             ..Pane::default()
                         },
@@ -1516,6 +1553,176 @@ impl Tab {
     }
 }
 
+/// What the engine says of the agent a pane runs, as Herdr's agent list
+/// says it: its parent and lineage are read from the pane's tokens the
+/// spawner wrote, as for a Herdr agent.
+fn projected_agent(
+    workspace: &str,
+    tab: &str,
+    pane_id: &str,
+    pane: &Pane,
+    agent: &PaneAgent,
+    catalog: &Catalog,
+    now: Instant,
+) -> ProjectedAgent {
+    use crate::engine::tokens::{
+        CHILD_SESSION_TOKEN, PARENT_MACHINE_TOKEN, PARENT_PANE_TOKEN, PARENT_SESSION_TOKEN,
+        lineage_parent, session_digest, session_holds,
+    };
+    let token = |name: &str| pane.tokens.get(name).and_then(Value::as_str);
+    let own_session = agent.session.as_deref().and_then(session_digest);
+    let child_holds = session_holds(
+        lineage_parent(token(CHILD_SESSION_TOKEN)).as_deref(),
+        own_session.as_deref(),
+    );
+    let declared = |name: &str| child_holds.then(|| lineage_parent(token(name))).flatten();
+    ProjectedAgent {
+        pane_id: pane_id.to_owned(),
+        terminal_id: pane_id.to_owned(),
+        name: agent.name.clone(),
+        workspace_id: workspace.to_owned(),
+        tab_id: tab.to_owned(),
+        cwd: Some(pane.cwd.clone()),
+        agent: Some(
+            agents::definition(catalog, &agent.kind)
+                .map_or_else(|| agent.kind.clone(), agents::kind_name),
+        ),
+        agent_status: Some(agent.live.status.as_str().to_owned()),
+        agent_session: agent
+            .session
+            .as_ref()
+            .map(|session| SessionAgentSessionPayload {
+                kind: match agents::session_kind(session) {
+                    PaneSessionKind::Id => "id",
+                    PaneSessionKind::Path => "path",
+                }
+                .to_owned(),
+                value: session.clone(),
+            }),
+        spawned_from_pane_id: declared(PARENT_PANE_TOKEN),
+        spawned_from_machine_id: declared(PARENT_MACHINE_TOKEN),
+        declared_parent_session: declared(PARENT_SESSION_TOKEN),
+        lineage_session: own_session,
+        state_change_seq: agent.live.seq,
+        completion_seq: agent.live.completion,
+        launch_pending: agent.starting(now),
+        tokens: pane.tokens.clone(),
+    }
+}
+
+/// The pane an agent target names: an agent's name, or a pane id.
+fn target_matches(pane_id: &str, pane: &Pane, target: &str) -> bool {
+    pane_id == target
+        || pane
+            .agent
+            .as_ref()
+            .and_then(|agent| agent.name.as_deref())
+            .is_some_and(|name| name == target)
+}
+
+impl Topology {
+    /// Lays a pane's holder's `facts` on it ([`agents::apply`]); a pane the
+    /// engine does not hold is refused.
+    pub(super) fn apply_facts(
+        &mut self,
+        pane: &str,
+        facts: &PaneFacts,
+        catalog: &Catalog,
+    ) -> Result<agents::Applied, EngineError> {
+        let mut seq = self.agent_seq;
+        let held = self.pane_mut(pane)?;
+        let applied = agents::apply(
+            catalog,
+            &mut held.cwd,
+            &mut held.agent,
+            &mut held.live,
+            facts,
+            &mut seq,
+        );
+        self.agent_seq = seq;
+        Ok(applied)
+    }
+
+    /// The pane an agent target names, and its agent while it runs or
+    /// starts: refused `agent_not_found` otherwise, as Herdr refuses it.
+    pub(super) fn agent(&self, target: &str) -> Result<(String, &Pane, &PaneAgent), EngineError> {
+        let now = Instant::now();
+        self.panes()
+            .filter(|(id, pane)| target_matches(id, pane, target))
+            .find_map(|(id, pane)| {
+                pane.agent
+                    .as_ref()
+                    .filter(|agent| agent.listed(now))
+                    .map(|agent| (id.to_owned(), pane, agent))
+            })
+            .ok_or_else(|| {
+                refused(
+                    "agent_not_found",
+                    format!("no agent named {target} runs on the core's own engine"),
+                )
+            })
+    }
+
+    /// Whether another pane than `pane` runs or starts an agent named
+    /// `name`.
+    pub(super) fn name_taken(&self, name: &str, pane: &str) -> bool {
+        let now = Instant::now();
+        self.panes().any(|(id, held)| {
+            id != pane
+                && held
+                    .agent
+                    .as_ref()
+                    .is_some_and(|agent| agent.listed(now) && agent.name.as_deref() == Some(name))
+        })
+    }
+
+    /// Records that the engine typed `agent`'s start into `pane`.
+    pub(super) fn start_agent(&mut self, pane: &str, agent: PaneAgent) -> Result<(), EngineError> {
+        self.pane_mut(pane)?.agent = Some(agent);
+        Ok(())
+    }
+
+    /// Records the session the `kind` agent in `pane` runs: on the agent the
+    /// pane runs, or on a new record of it when the pane's agent has not
+    /// shown yet (a start's report can come first). Whether anything moved.
+    pub(super) fn set_agent_session(
+        &mut self,
+        pane: &str,
+        kind: &str,
+        session: &str,
+    ) -> Result<bool, EngineError> {
+        let held = self.pane_mut(pane)?;
+        match held.agent.as_mut() {
+            Some(agent) if agent.kind == kind => {
+                let changed = agent.session.as_deref() != Some(session);
+                agent.session = Some(session.to_owned());
+                Ok(changed)
+            }
+            _ => {
+                held.agent = Some(PaneAgent {
+                    kind: kind.to_owned(),
+                    session: Some(session.to_owned()),
+                    ..PaneAgent::default()
+                });
+                Ok(true)
+            }
+        }
+    }
+
+    /// The panes that run or start an agent, with its kind.
+    pub(super) fn agent_kinds(&self) -> Vec<(String, String)> {
+        let now = Instant::now();
+        self.panes()
+            .filter_map(|(id, pane)| {
+                pane.agent
+                    .as_ref()
+                    .filter(|agent| agent.listed(now))
+                    .map(|agent| (id.to_owned(), agent.kind.clone()))
+            })
+            .collect()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1528,7 +1735,7 @@ mod tests {
 
     fn pane_ids(topology: &Topology) -> Vec<String> {
         topology
-            .state()
+            .state(&Catalog::read(Vec::new()))
             .unwrap()
             .panes
             .into_iter()
@@ -1597,7 +1804,13 @@ mod tests {
                 workspace: Some(first.workspace.clone())
             }
         );
-        assert!(topology.state().unwrap().workspaces.is_empty());
+        assert!(
+            topology
+                .state(&Catalog::read(Vec::new()))
+                .unwrap()
+                .workspaces
+                .is_empty()
+        );
         assert_eq!(topology.focused_workspace(), None);
     }
 
@@ -1618,13 +1831,21 @@ mod tests {
             .unwrap();
         assert_eq!(pane_ids(&topology), [first.pane.clone(), beside.clone()]);
         assert_eq!(
-            topology.state().unwrap().focused_pane_id.as_deref(),
+            topology
+                .state(&Catalog::read(Vec::new()))
+                .unwrap()
+                .focused_pane_id
+                .as_deref(),
             Some(beside.as_str())
         );
 
         assert_eq!(topology.remove_pane(&beside).unwrap(), Closed::default());
         assert_eq!(
-            topology.state().unwrap().focused_pane_id.as_deref(),
+            topology
+                .state(&Catalog::read(Vec::new()))
+                .unwrap()
+                .focused_pane_id
+                .as_deref(),
             Some(first.pane.as_str())
         );
         let next = topology.reserve_pane(&first.workspace).unwrap();
@@ -1848,7 +2069,10 @@ mod tests {
             .unwrap();
         let saved = serde_json::to_string(&topology.to_saved()).unwrap();
         let mut read = Topology::from_saved(serde_json::from_str(&saved).unwrap()).unwrap();
-        assert_eq!(read.state().unwrap(), topology.state().unwrap());
+        assert_eq!(
+            read.state(&Catalog::read(Vec::new())).unwrap(),
+            topology.state(&Catalog::read(Vec::new())).unwrap()
+        );
         assert_eq!(read.reserve_pane(&first.workspace).unwrap(), "w1:p4");
         assert_eq!(read.reserve_workspace().workspace, "w2");
     }

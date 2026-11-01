@@ -17,3 +17,4 @@ mod records;
 mod role;
 mod screen;
 mod support;
+mod watch;

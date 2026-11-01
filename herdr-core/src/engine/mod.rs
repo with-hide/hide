@@ -180,6 +180,11 @@ pub(crate) trait Engine: Send + Sync {
     /// session again ([`Changes::Pulled`]). Asked once per watcher; a later
     /// call replaces the earlier `wake`.
     fn changes(&self, wake: Wake) -> Changes;
+    /// The agent definitions the operator's folder holds now, read by the
+    /// core: what an engine that starts and reads agents itself starts,
+    /// recognizes and reads them by. Herdr knows its own agents and ignores
+    /// it.
+    fn set_agent_definitions(&self, _catalog: Arc<hide_agent_adapter::definition::Catalog>) {}
 
     // The session as a whole.
 
@@ -612,6 +617,7 @@ impl EngineHandle {
         node: Arc<dyn hide_node_link::NodeLink>,
         state_dir: std::path::PathBuf,
         home: std::path::PathBuf,
+        definitions: hide_agent_adapter::definition::Catalog,
     ) -> Result<Self, String> {
         let scope = hide_kit::layout::engine_dir(&state_dir);
         let engine = own::OwnEngine::open(
@@ -620,6 +626,7 @@ impl EngineHandle {
                 state_dir,
                 home,
                 node,
+                definitions: Arc::new(definitions),
             },
         )?;
         Ok(Self {

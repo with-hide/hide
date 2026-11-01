@@ -18,6 +18,8 @@ path = "src/main.rs"
 [dependencies]
 hide-holder-protocol = { path = "../hide-holder-protocol" }
 hide-platform = { path = "../hide-platform" }
+# The screen rules a watch reads the pane's screen by.
+hide-screen-rules = { path = "../hide-screen-rules" }
 hide-vt = { path = "../hide-vt" }
 # vendor/portable-pty through the workspace's `[patch.crates-io]`.
 portable-pty = "0.9.0"
@@ -31,6 +33,8 @@ hide-kit = { path = "../hide-kit" }
 hide-node = { path = "../hide-node" }
 hide-node-link = { path = "../hide-node-link" }
 tempfile = "=3.27.0"
+# The claude-code agent definition's screen rules, read in a test.
+toml = "=1.1.4"
 
 [target.'cfg(unix)'.dev-dependencies]
 libc = "=0.2.190"

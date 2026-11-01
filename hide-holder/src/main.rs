@@ -32,11 +32,14 @@
 mod answers;
 mod ask;
 mod encode;
+mod foreground;
 mod holder;
 mod log;
+mod osc;
 mod pane;
 mod record;
 mod screen;
+mod watch;
 
 use std::io::Write;
 use std::path::PathBuf;

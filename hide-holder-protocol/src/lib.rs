@@ -46,6 +46,18 @@
 //! question, the pane's recent text or its processes, and is answered once
 //! and closed; it never takes the holder over and leaves the screen
 //! connection and its scroll position as they were (D-11, D-18).
+//!
+//! A connection whose first message is a watch ([`Opening::Watch`]) follows
+//! the pane's facts (PRD engine-bundle-3-core-owns D-18, D-21): it takes
+//! nothing over and needs no screen, the holder answers [`Watching`] with the
+//! version both speak and the version of its screen rule evaluator, and,
+//! when the node accepts [`Capability::Facts`], sends the pane's [`Facts`]
+//! whole each time any of them changed. On it a node gives the holder the
+//! screen rules to read its screen by ([`WatchMessage::Rules`]). A holder
+//! keeps one watch at a time; a newer one replaces the older, which is
+//! closed [`CloseReason::TakenOver`]. A holder built before watches closes
+//! the opening [`CloseReason::HelloInvalid`], which a node reads as a holder
+//! that does not send facts.
 
 use std::io::{self, Read, Write};
 use std::time::Duration;
@@ -104,6 +116,21 @@ pub const MAX_DETAIL: usize = 4 * 1024;
 /// The most pids a [`Closed`] names.
 pub const MAX_LEFT: usize = 256;
 
+/// The most bytes of a [`Facts`]'s folder.
+pub const MAX_CWD: usize = 4 * 1024;
+/// The most characters of a [`Facts`]'s title, Herdr's bound on a title it
+/// keeps; four bytes a character at most.
+pub const MAX_TITLE_CHARS: usize = 256;
+const MAX_TITLE: usize = MAX_TITLE_CHARS * 4;
+/// The most arguments a [`Program`] carries, and their bytes in all, Herdr's
+/// bounds on a resume's arguments.
+pub const MAX_ARGS: usize = 64;
+pub const MAX_ARGV_BYTES: usize = 8 * 1024;
+/// The most bytes of a rule's id a [`ScreenRead`] names.
+pub const MAX_RULE_ID: usize = 256;
+/// The most bytes of a rule set a node gives a holder.
+pub const MAX_RULES: usize = 1024 * 1024;
+
 /// The largest terminal a holder keeps: rows, columns, and cells.
 pub const MAX_ROWS: u16 = 1024;
 pub const MAX_COLS: u16 = 1024;
@@ -128,11 +155,18 @@ mod kind {
     pub const THEME: u8 = 0x14;
     /// A first message, like [`HELLO`].
     pub const ASK: u8 = 0x18;
+    /// A first message, like [`HELLO`]: a connection that follows the facts.
+    pub const WATCH: u8 = 0x19;
+    /// A watch's rule set, from a node.
+    pub const RULES: u8 = 0x1a;
     pub const WELCOME: u8 = 0x81;
     pub const CLOSED: u8 = 0x83;
+    /// The answer to a watch.
+    pub const WATCHING: u8 = 0x84;
     pub const FRAGMENT: u8 = 0x90;
     pub const ANSWER: u8 = 0x91;
     pub const NOTICE: u8 = 0x92;
+    pub const FACTS: u8 = 0x93;
 }
 
 /// Something one side can do that the other must accept before it is used.
@@ -144,6 +178,8 @@ pub enum Capability {
     /// one built before they existed does not, is sent none, and the holder
     /// logs what it would have said.
     Notices,
+    /// The holder sends the pane's [`Facts`] on a watch connection.
+    Facts,
     /// A capability this build does not know, kept by name so a side can
     /// answer with the ones it does.
     Other(String),
@@ -154,6 +190,7 @@ impl Capability {
         match self {
             Self::Screen => "screen",
             Self::Notices => "notices",
+            Self::Facts => "facts",
             Self::Other(name) => name,
         }
     }
@@ -162,6 +199,7 @@ impl Capability {
         match name {
             "screen" => Self::Screen,
             "notices" => Self::Notices,
+            "facts" => Self::Facts,
             other => Self::Other(other.to_owned()),
         }
     }
@@ -222,6 +260,79 @@ pub struct Welcome {
     pub size: Size,
     /// What the holder will send, out of what the node accepts.
     pub sends: Vec<Capability>,
+}
+
+/// The holder's answer to a watch: the version both speak, the version of
+/// its screen rule evaluator (a rule set whose `min_engine_version` is
+/// higher is one it cannot read), and what it will send of what the node
+/// accepts.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Watching {
+    pub version: u16,
+    pub rules_engine: u32,
+    pub sends: Vec<Capability>,
+}
+
+/// What a holder says of its pane now, whole each time any of it changed.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Facts {
+    /// The folder the shell last reported (OSC 7, or OSC 9;9), as reported.
+    pub cwd: Option<String>,
+    /// The terminal's title (OSC 0 or 2), none when unset or emptied.
+    pub title: Option<String>,
+    /// The bells the program rang, and the prompts its shell marked
+    /// (OSC 133;A), since the holder started.
+    pub bells: u64,
+    pub prompts: u64,
+    /// Whether the program has bracketed paste on (mode 2004).
+    pub bracketed_paste: bool,
+    /// The program in the terminal's foreground other than the pane's own.
+    pub foreground: Option<Program>,
+    pub screen: ScreenRead,
+}
+
+/// A program in a pane's foreground.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Program {
+    pub pid: u32,
+    /// Its name as an agent's `executables` names it: a runtime's script.
+    pub name: String,
+    /// Its arguments, the program first; empty where the system keeps none.
+    pub argv: Vec<String>,
+}
+
+/// A state the screen rules read.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ScreenState {
+    Idle,
+    Working,
+    Blocked,
+    Unknown,
+}
+
+/// What the screen rules read, or why they read nothing.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub enum ScreenRead {
+    /// The holder was given no rules.
+    #[default]
+    NoRules,
+    /// The state the rules read and the rule that last moved it.
+    Read {
+        state: ScreenState,
+        rule: Option<String>,
+    },
+    /// The rules cannot be read, and why.
+    Unknown { reason: String },
+}
+
+/// What a node sends on a watch connection.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum WatchMessage {
+    /// The rule set to read the screen by, as `hide_screen_rules::Manifest`
+    /// serializes to JSON, in place of any before it; none takes them away.
+    Rules(Option<String>),
+    /// Lets go of the watch.
+    Release,
 }
 
 /// Why a holder closed a connection.
@@ -642,6 +753,16 @@ pub enum Ask {
     Read { lines: u16 },
     /// The pane's shell and the processes in its terminal's foreground.
     Processes,
+    /// The rows the screen shows now, wherever it is scrolled to, with
+    /// their styling as escape sequences (Herdr's `visible` read in its
+    /// `ansi` format). A holder built before styled reads refuses it
+    /// `hello_invalid`.
+    Screen,
+    /// The last `lines` rows of the screen and its scrollback as the
+    /// terminal drew them, soft wraps kept, with their styling as escape
+    /// sequences (Herdr's `recent` read in its `ansi` format), at most
+    /// [`MAX_READ_LINES`]; the rows are the ones [`Ask::Read`] reads.
+    Rows { lines: u16 },
 }
 
 /// Why a holder does not know a pane's foreground.
@@ -716,6 +837,9 @@ pub enum ClientMessage {
 pub enum Opening {
     Hello(Hello),
     Ask(Ask),
+    /// A connection that follows the pane's facts, with the versions the
+    /// node speaks and what it accepts.
+    Watch(Hello),
 }
 
 /// What a holder sends.
@@ -725,6 +849,8 @@ pub enum HolderMessage {
     Fragment(Fragment),
     Answer(Answer),
     Notice(Notice),
+    Watching(Watching),
+    Facts(Facts),
     Closed(Closed),
 }
 
@@ -1021,6 +1147,13 @@ pub fn write_opening(writer: &mut impl Write, opening: &Opening) -> io::Result<(
             write_frame(writer, kind::HELLO, &payload)
         }
         Opening::Ask(ask) => write_ask(writer, ask, PROTOCOL_VERSION),
+        Opening::Watch(hello) => {
+            let mut payload = MAGIC.to_vec();
+            payload.extend_from_slice(&hello.versions.0.to_le_bytes());
+            payload.extend_from_slice(&hello.versions.1.to_le_bytes());
+            put_capabilities(&mut payload, &hello.accepts);
+            write_frame(writer, kind::WATCH, &payload)
+        }
     }
 }
 
@@ -1037,6 +1170,11 @@ pub fn write_ask(writer: &mut impl Write, ask: &Ask, version: u16) -> io::Result
             payload.extend_from_slice(&lines.to_le_bytes());
         }
         Ask::Processes => payload.push(2),
+        Ask::Screen => payload.push(3),
+        Ask::Rows { lines } => {
+            payload.push(4);
+            payload.extend_from_slice(&lines.to_le_bytes());
+        }
     }
     write_frame(writer, kind::ASK, &payload)
 }
@@ -1046,9 +1184,9 @@ pub fn write_ask(writer: &mut impl Write, ask: &Ask, version: u16) -> io::Result
 /// it asks; [`Ask::check`] says whether the holder answers it.
 pub fn read_opening(reader: &mut impl Read) -> Result<Opening, FrameError> {
     let (kind, payload) = read_frame(reader, MAX_HELLO)?;
-    if kind != kind::HELLO && kind != kind::ASK {
+    if kind != kind::HELLO && kind != kind::ASK && kind != kind::WATCH {
         return Err(FrameError::Malformed(format!(
-            "the first message is of kind {kind:#04x}, not a hello or an ask"
+            "the first message is of kind {kind:#04x}, not a hello, an ask or a watch"
         )));
     }
     let mut payload = Payload(&payload);
@@ -1057,7 +1195,7 @@ pub fn read_opening(reader: &mut impl Read) -> Result<Opening, FrameError> {
             "the first message is not a node's".to_owned(),
         ));
     }
-    let opening = if kind == kind::HELLO {
+    let opening = if kind == kind::HELLO || kind == kind::WATCH {
         let versions = (payload.u16()?, payload.u16()?);
         let accepts = payload.capabilities()?;
         if versions.0 > versions.1 {
@@ -1066,7 +1204,12 @@ pub fn read_opening(reader: &mut impl Read) -> Result<Opening, FrameError> {
                 versions.0, versions.1
             )));
         }
-        Opening::Hello(Hello { versions, accepts })
+        let hello = Hello { versions, accepts };
+        if kind == kind::HELLO {
+            Opening::Hello(hello)
+        } else {
+            Opening::Watch(hello)
+        }
     } else {
         let version = payload.u16()?;
         if version != PROTOCOL_VERSION {
@@ -1079,6 +1222,10 @@ pub fn read_opening(reader: &mut impl Read) -> Result<Opening, FrameError> {
                 lines: payload.u16()?,
             }),
             2 => Opening::Ask(Ask::Processes),
+            3 => Opening::Ask(Ask::Screen),
+            4 => Opening::Ask(Ask::Rows {
+                lines: payload.u16()?,
+            }),
             other => {
                 return Err(FrameError::Malformed(format!("an unknown ask {other}")));
             }
@@ -1093,10 +1240,14 @@ impl Ask {
     /// it.
     pub fn check(&self) -> Result<(), Closed> {
         match self {
-            Self::Read { lines } if *lines == 0 || *lines > MAX_READ_LINES => Err(Closed::new(
-                CloseReason::AskInvalid,
-                format!("{lines} rows asked for, not 1 to {MAX_READ_LINES}"),
-            )),
+            Self::Read { lines } | Self::Rows { lines }
+                if *lines == 0 || *lines > MAX_READ_LINES =>
+            {
+                Err(Closed::new(
+                    CloseReason::AskInvalid,
+                    format!("{lines} rows asked for, not 1 to {MAX_READ_LINES}"),
+                ))
+            }
             _ => Ok(()),
         }
     }
@@ -1149,7 +1300,7 @@ pub fn read_client(reader: &mut impl Read) -> Result<ClientMessage, FrameError> 
         kind::REDRAW => ClientMessage::Redraw,
         kind::RELEASE => ClientMessage::Release,
         kind::TERMINATE => ClientMessage::Terminate,
-        kind::HELLO | kind::ASK => {
+        kind::HELLO | kind::ASK | kind::WATCH => {
             return Err(FrameError::Malformed(
                 "a second first message on one connection".to_owned(),
             ));
@@ -1240,6 +1391,17 @@ pub fn write_holder(writer: &mut impl Write, message: &HolderMessage) -> io::Res
             truncate(&mut detail, MAX_DETAIL);
             put_text(&mut payload, &detail);
             write_frame(writer, kind::NOTICE, &payload)
+        }
+        HolderMessage::Watching(watching) => {
+            let mut payload = watching.version.to_le_bytes().to_vec();
+            payload.extend_from_slice(&watching.rules_engine.to_le_bytes());
+            put_capabilities(&mut payload, &watching.sends);
+            write_frame(writer, kind::WATCHING, &payload)
+        }
+        HolderMessage::Facts(facts) => {
+            let mut payload = Vec::new();
+            facts.put(&mut payload);
+            write_frame(writer, kind::FACTS, &payload)
         }
         HolderMessage::Closed(closed) => {
             let mut payload = closed.reason.code().to_le_bytes().to_vec();
@@ -1360,6 +1522,17 @@ pub fn read_holder(reader: &mut impl Read) -> Result<HolderMessage, FrameError> 
                 detail,
             })
         }
+        kind::WATCHING => {
+            let version = payload.u16()?;
+            let rules_engine = payload.u32()?;
+            let sends = payload.capabilities()?;
+            HolderMessage::Watching(Watching {
+                version,
+                rules_engine,
+                sends,
+            })
+        }
+        kind::FACTS => HolderMessage::Facts(Facts::take(&mut payload)?),
         kind::CLOSED => {
             let code = payload.u16()?;
             let reason = CloseReason::from_code(code)
@@ -1496,11 +1669,13 @@ pub fn open(
         }
         HolderMessage::Welcome(welcome) => Ok((stream, welcome)),
         HolderMessage::Closed(closed) => Err(refused(closed)),
-        HolderMessage::Fragment(_) | HolderMessage::Answer(_) | HolderMessage::Notice(_) => {
-            Err(OpenError::Protocol(FrameError::Malformed(
-                "a screen, an answer or a notice before the welcome".to_owned(),
-            )))
-        }
+        HolderMessage::Fragment(_)
+        | HolderMessage::Answer(_)
+        | HolderMessage::Notice(_)
+        | HolderMessage::Watching(_)
+        | HolderMessage::Facts(_) => Err(OpenError::Protocol(FrameError::Malformed(
+            "a screen, an answer, a notice or facts before the welcome".to_owned(),
+        ))),
     }
 }
 
@@ -1523,11 +1698,249 @@ pub fn ask(
     match read_holder(&mut stream)? {
         HolderMessage::Answer(answer) => Ok(answer),
         HolderMessage::Closed(closed) => Err(refused(closed)),
-        HolderMessage::Welcome(_) | HolderMessage::Fragment(_) | HolderMessage::Notice(_) => {
-            Err(OpenError::Protocol(FrameError::Malformed(
-                "an ask answered with a screen or a notice".to_owned(),
-            )))
+        HolderMessage::Welcome(_)
+        | HolderMessage::Fragment(_)
+        | HolderMessage::Notice(_)
+        | HolderMessage::Watching(_)
+        | HolderMessage::Facts(_) => Err(OpenError::Protocol(FrameError::Malformed(
+            "an ask answered with a screen, a notice or facts".to_owned(),
+        ))),
+    }
+}
+
+/// Opens a watch of the holder at `path`: connects, says the watch with
+/// `accepts`, and reads the holder's answer, all by `deadline`. A holder
+/// built before watches refuses it [`CloseReason::HelloInvalid`]
+/// ([`OpenError::Refused`]). The stream it answers has no deadline of its
+/// own.
+pub fn watch(
+    path: &std::path::Path,
+    accepts: Vec<Capability>,
+    deadline: std::time::Instant,
+) -> Result<(hide_platform::ipc::LocalStream, Watching), OpenError> {
+    let stream =
+        hide_platform::ipc::LocalStream::connect_until(path, deadline).map_err(OpenError::Io)?;
+    let mut bounded = stream.duplicate();
+    stream.clear_deadline();
+    write_opening(&mut bounded, &Opening::Watch(Hello::current(accepts))).map_err(OpenError::Io)?;
+    match read_holder(&mut bounded)? {
+        HolderMessage::Watching(watching) if watching.version < OLDEST_HOLDER_VERSION => {
+            Err(OpenError::Unsupported {
+                version: watching.version,
+            })
         }
+        HolderMessage::Watching(watching) => Ok((stream, watching)),
+        HolderMessage::Closed(closed) => Err(refused(closed)),
+        HolderMessage::Welcome(_)
+        | HolderMessage::Fragment(_)
+        | HolderMessage::Answer(_)
+        | HolderMessage::Notice(_)
+        | HolderMessage::Facts(_) => Err(OpenError::Protocol(FrameError::Malformed(
+            "a watch answered with something other than watching".to_owned(),
+        ))),
+    }
+}
+
+/// Writes one message a node sends on a watch connection.
+pub fn write_watch(writer: &mut impl Write, message: &WatchMessage) -> io::Result<()> {
+    match message {
+        WatchMessage::Rules(rules) => {
+            let mut payload = Vec::new();
+            match rules {
+                Some(rules) => {
+                    if rules.len() > MAX_RULES {
+                        return Err(too_long("rule set", rules.len(), MAX_RULES));
+                    }
+                    payload.push(1);
+                    payload.extend_from_slice(rules.as_bytes());
+                }
+                None => payload.push(0),
+            }
+            write_frame(writer, kind::RULES, &payload)
+        }
+        WatchMessage::Release => write_frame(writer, kind::RELEASE, &[]),
+    }
+}
+
+/// Reads one message a node sends on a watch connection.
+pub fn read_watch(reader: &mut impl Read) -> Result<WatchMessage, FrameError> {
+    let (kind, payload) = read_frame(reader, MAX_RULES + 64)?;
+    let mut payload = Payload(&payload);
+    let message = match kind {
+        kind::RULES => match payload.u8()? {
+            0 => WatchMessage::Rules(None),
+            _ => {
+                let rules = payload.rest_bounded("rule set", MAX_RULES)?;
+                WatchMessage::Rules(Some(
+                    String::from_utf8(rules)
+                        .map_err(|_| FrameError::Malformed("a rule set is not UTF-8".to_owned()))?,
+                ))
+            }
+        },
+        kind::RELEASE => WatchMessage::Release,
+        other => {
+            return Err(FrameError::Malformed(format!(
+                "a message of kind {other:#04x} a node may not send on a watch"
+            )));
+        }
+    };
+    payload.end()?;
+    Ok(message)
+}
+
+/// A text cut to at most `bound` bytes on a character boundary.
+fn bounded(text: &str, bound: usize) -> String {
+    let mut text = text.to_owned();
+    truncate(&mut text, bound);
+    text
+}
+
+fn put_optional_text(payload: &mut Vec<u8>, text: Option<&str>, bound: usize) {
+    match text {
+        Some(text) => {
+            payload.push(1);
+            put_text(payload, &bounded(text, bound));
+        }
+        None => payload.push(0),
+    }
+}
+
+impl Payload<'_> {
+    fn optional_text(&mut self, bound: usize) -> Result<Option<String>, FrameError> {
+        Ok(match self.u8()? {
+            0 => None,
+            _ => Some(self.text(bound)?),
+        })
+    }
+}
+
+impl ScreenState {
+    fn code(self) -> u8 {
+        match self {
+            Self::Idle => 0,
+            Self::Working => 1,
+            Self::Blocked => 2,
+            Self::Unknown => 3,
+        }
+    }
+
+    fn from_code(code: u8) -> Result<Self, FrameError> {
+        Ok(match code {
+            0 => Self::Idle,
+            1 => Self::Working,
+            2 => Self::Blocked,
+            3 => Self::Unknown,
+            other => {
+                return Err(FrameError::Malformed(format!(
+                    "an unknown screen state {other}"
+                )));
+            }
+        })
+    }
+}
+
+impl Facts {
+    /// Writes the facts, each part cut to its bound: a title to
+    /// [`MAX_TITLE_CHARS`] characters, a program's arguments to the first
+    /// [`MAX_ARGS`] that fit in [`MAX_ARGV_BYTES`].
+    fn put(&self, payload: &mut Vec<u8>) {
+        put_optional_text(payload, self.cwd.as_deref(), MAX_CWD);
+        let title = self
+            .title
+            .as_deref()
+            .map(|title| title.chars().take(MAX_TITLE_CHARS).collect::<String>());
+        put_optional_text(payload, title.as_deref(), MAX_TITLE);
+        payload.extend_from_slice(&self.bells.to_le_bytes());
+        payload.extend_from_slice(&self.prompts.to_le_bytes());
+        payload.push(u8::from(self.bracketed_paste));
+        match &self.foreground {
+            Some(program) => {
+                payload.push(1);
+                payload.extend_from_slice(&program.pid.to_le_bytes());
+                put_text(payload, &bounded(&program.name, MAX_PROCESS_NAME));
+                let mut total = 0;
+                let args: Vec<&String> = program
+                    .argv
+                    .iter()
+                    .take(MAX_ARGS)
+                    .take_while(|arg| {
+                        total += arg.len();
+                        total <= MAX_ARGV_BYTES
+                    })
+                    .collect();
+                payload.extend_from_slice(&(args.len() as u16).to_le_bytes());
+                for arg in args {
+                    put_text(payload, arg);
+                }
+            }
+            None => payload.push(0),
+        }
+        match &self.screen {
+            ScreenRead::NoRules => payload.push(0),
+            ScreenRead::Read { state, rule } => {
+                payload.push(1);
+                payload.push(state.code());
+                put_optional_text(payload, rule.as_deref(), MAX_RULE_ID);
+            }
+            ScreenRead::Unknown { reason } => {
+                payload.push(2);
+                put_text(payload, &bounded(reason, MAX_DETAIL));
+            }
+        }
+    }
+
+    fn take(payload: &mut Payload<'_>) -> Result<Self, FrameError> {
+        let cwd = payload.optional_text(MAX_CWD)?;
+        let title = payload.optional_text(MAX_TITLE)?;
+        let bells = payload.u64()?;
+        let prompts = payload.u64()?;
+        let bracketed_paste = payload.u8()? != 0;
+        let foreground = match payload.u8()? {
+            0 => None,
+            _ => {
+                let pid = payload.u32()?;
+                let name = payload.text(MAX_PROCESS_NAME)?;
+                let count = payload.u16()? as usize;
+                if count > MAX_ARGS {
+                    return Err(FrameError::Malformed(format!(
+                        "{count} arguments are past the bound"
+                    )));
+                }
+                let argv: Vec<String> = (0..count)
+                    .map(|_| payload.text(MAX_ARGV_BYTES))
+                    .collect::<Result<_, _>>()?;
+                if argv.iter().map(String::len).sum::<usize>() > MAX_ARGV_BYTES {
+                    return Err(FrameError::Malformed(
+                        "a program's arguments are past their bound".to_owned(),
+                    ));
+                }
+                Some(Program { pid, name, argv })
+            }
+        };
+        let screen = match payload.u8()? {
+            0 => ScreenRead::NoRules,
+            1 => ScreenRead::Read {
+                state: ScreenState::from_code(payload.u8()?)?,
+                rule: payload.optional_text(MAX_RULE_ID)?,
+            },
+            2 => ScreenRead::Unknown {
+                reason: payload.text(MAX_DETAIL)?,
+            },
+            other => {
+                return Err(FrameError::Malformed(format!(
+                    "an unknown screen read {other}"
+                )));
+            }
+        };
+        Ok(Self {
+            cwd,
+            title,
+            bells,
+            prompts,
+            bracketed_paste,
+            foreground,
+            screen,
+        })
     }
 }
 
@@ -1562,8 +1975,20 @@ mod tests {
             ])),
             Opening::Ask(Ask::Read { lines: 2000 }),
             Opening::Ask(Ask::Processes),
+            Opening::Ask(Ask::Screen),
+            Opening::Ask(Ask::Rows { lines: 2000 }),
+            Opening::Watch(Hello::current(vec![Capability::Facts])),
         ] {
             assert_eq!(round_opening(opening.clone()), opening);
+        }
+        for message in [
+            WatchMessage::Rules(Some("{\"version\":\"1\"}".to_owned())),
+            WatchMessage::Rules(None),
+            WatchMessage::Release,
+        ] {
+            let mut bytes = Vec::new();
+            write_watch(&mut bytes, &message).unwrap();
+            assert_eq!(read_watch(&mut &bytes[..]).unwrap(), message);
         }
         for message in [
             ClientMessage::Input(b"echo \x1b[A\r".to_vec()),
@@ -1660,6 +2085,34 @@ mod tests {
             HolderMessage::Notice(Notice::new(NoticeReason::AnswersResumed, 12, 96, "")),
             // A newer holder's reason reads as itself, not as a broken frame.
             HolderMessage::Notice(Notice::new(NoticeReason::Other(77), 0, 0, "later")),
+            HolderMessage::Watching(Watching {
+                version: 1,
+                rules_engine: 3,
+                sends: vec![Capability::Facts],
+            }),
+            HolderMessage::Facts(Facts::default()),
+            HolderMessage::Facts(Facts {
+                cwd: Some("file:///Users/me/a%20b".to_owned()),
+                title: Some("⠋ task".to_owned()),
+                bells: 2,
+                prompts: 1,
+                bracketed_paste: true,
+                foreground: Some(Program {
+                    pid: 42,
+                    name: "gemini".to_owned(),
+                    argv: vec!["node".to_owned(), "/opt/gemini.js".to_owned()],
+                }),
+                screen: ScreenRead::Read {
+                    state: ScreenState::Working,
+                    rule: Some("osc_title_working".to_owned()),
+                },
+            }),
+            HolderMessage::Facts(Facts {
+                screen: ScreenRead::Unknown {
+                    reason: "rule x could not be compiled".to_owned(),
+                },
+                ..Facts::default()
+            }),
             HolderMessage::Closed(closed),
         ] {
             assert_eq!(round_holder(message.clone()), message);
@@ -1746,10 +2199,35 @@ mod tests {
             .check()
             .is_ok()
         );
+        assert!(Ask::Screen.check().is_ok());
+        assert!(
+            Ask::Rows {
+                lines: MAX_READ_LINES
+            }
+            .check()
+            .is_ok()
+        );
         for lines in [0, MAX_READ_LINES + 1] {
             let refused = Ask::Read { lines }.check().unwrap_err();
             assert_eq!(refused.reason, CloseReason::AskInvalid);
+            let refused = Ask::Rows { lines }.check().unwrap_err();
+            assert_eq!(refused.reason, CloseReason::AskInvalid);
         }
+    }
+
+    /// A holder built before an ask was added reads it as a first message
+    /// it does not know, which it closes `hello_invalid`.
+    #[test]
+    fn an_ask_this_holder_does_not_know_is_not_read() {
+        let mut payload = MAGIC.to_vec();
+        payload.extend_from_slice(&PROTOCOL_VERSION.to_le_bytes());
+        payload.push(5);
+        let mut bytes = Vec::new();
+        write_frame(&mut bytes, kind::ASK, &payload).unwrap();
+        assert!(matches!(
+            read_opening(&mut &bytes[..]),
+            Err(FrameError::Malformed(_))
+        ));
     }
 
     #[test]
@@ -1822,6 +2300,48 @@ mod tests {
                 Err(FrameError::Malformed(_))
             ));
         }
+    }
+
+    #[test]
+    fn facts_past_their_bounds_are_cut_on_the_way_out_and_refused_on_the_way_in() {
+        let facts = Facts {
+            title: Some("t".repeat(MAX_TITLE_CHARS + 10)),
+            foreground: Some(Program {
+                pid: 1,
+                name: "x".to_owned(),
+                argv: (0..MAX_ARGS + 5).map(|i| format!("{i:0>200}")).collect(),
+            }),
+            ..Facts::default()
+        };
+        let HolderMessage::Facts(read) = round_holder(HolderMessage::Facts(facts)) else {
+            panic!("not facts");
+        };
+        assert_eq!(read.title.unwrap().chars().count(), MAX_TITLE_CHARS);
+        let argv = read.foreground.unwrap().argv;
+        assert_eq!(argv.len(), MAX_ARGV_BYTES / 200, "the arguments that fit");
+        assert!(argv.iter().map(String::len).sum::<usize>() <= MAX_ARGV_BYTES);
+
+        let rules = WatchMessage::Rules(Some("x".repeat(MAX_RULES + 1)));
+        assert!(write_watch(&mut Vec::new(), &rules).is_err());
+        let mut forged = Vec::new();
+        let mut payload = vec![1];
+        payload.extend(std::iter::repeat_n(b'x', MAX_RULES + 1));
+        write_frame(&mut forged, kind::RULES, &payload).unwrap();
+        assert!(read_watch(&mut &forged[..]).is_err());
+        // A screen message is no watch message, and a watch is no message
+        // after a hello.
+        let mut input = Vec::new();
+        write_client(&mut input, &ClientMessage::Input(b"x".to_vec())).unwrap();
+        assert!(matches!(
+            read_watch(&mut &input[..]),
+            Err(FrameError::Malformed(_))
+        ));
+        let mut watch = Vec::new();
+        write_opening(&mut watch, &Opening::Watch(Hello::current(Vec::new()))).unwrap();
+        assert!(matches!(
+            read_client(&mut &watch[..]),
+            Err(FrameError::Malformed(_))
+        ));
     }
 
     #[test]

@@ -22,9 +22,12 @@
 //! with `--herdr-socket` the node's Herdr sessions go to that server through
 //! the pinned client, as hided's do. `echo` is a pane program for the
 //! measurements: on a raw terminal it writes each byte it reads to `<log>`
-//! and draws it on the first row (`echo.rs`).
+//! and draws it on the first row (`echo.rs`). `rules` gives a pane an agent
+//! definition's built-in screen rules and `facts` and `wait_screen` read
+//! what its holder reported (`facts.rs`).
 
 mod echo;
+mod facts;
 mod perf;
 mod screens;
 
@@ -118,6 +121,7 @@ pub struct Node {
     pub terminals: LocalTerminals,
     pub screens: Arc<Screens>,
     pub reports: Arc<Reports>,
+    pub facts: Arc<facts::Facts>,
     pub state: PathBuf,
 }
 
@@ -150,10 +154,18 @@ fn node(options: &Options) -> Result<(), String> {
         Arc::clone(&screens) as Arc<dyn OutputSink>,
         Arc::clone(&reports) as Arc<dyn ReportSink>,
     )?;
+    let facts = facts::Facts::new();
+    if let Some(holders) = terminals.holders.as_deref() {
+        let told = Arc::clone(&facts);
+        holders.watch_facts(Arc::new(move |pane: &str, pane_facts: &_| {
+            told.told(pane, pane_facts);
+        }));
+    }
     let node = Node {
         terminals,
         screens,
         reports,
+        facts,
         state: options.state.clone(),
     };
     let stdin = std::io::stdin();
@@ -303,6 +315,20 @@ fn answer(node: &Node, request: &Value) -> Result<Option<Value>, String> {
         "states" => {
             let pane = text(request, "pane")?;
             json!({"states": node.reports.states(&pane)})
+        }
+        "rules" => {
+            let pane = text(request, "pane")?;
+            let rules = facts::rules(&text(request, "agent")?)?;
+            node.holders()?
+                .set_rules(&pane, Some(rules))
+                .map_err(|why| format!("the rules were not given: {why}"))?;
+            json!({})
+        }
+        "facts" => node.facts.summary(&text(request, "pane")?),
+        "wait_screen" => {
+            let pane = text(request, "pane")?;
+            let state = text(request, "state")?;
+            json!({"read": node.facts.wait_screen(&pane, &state, wait_limit(request))})
         }
         "terminate" => {
             let pane = text(request, "pane")?;

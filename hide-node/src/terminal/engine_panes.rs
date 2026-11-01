@@ -1,8 +1,9 @@
 //! This machine's pane holders as the core's own engine asks them (PRD
 //! engine-bundle-3-core-owns D-3, D-5): [`LocalPanes`] answers
 //! [`PaneHolders`] over [`Holders`] and the terminal service whose screens
-//! they attach to. A pane started with no program runs this machine's
-//! interactive shell ([`interactive_shell`]).
+//! they attach to. A pane started with no program runs the account's shell
+//! with Hide's shell integration ([`PaneShell::Account`]), as a tab Hide
+//! opens does, so it says its folder and marks its prompt on its screen.
 //!
 //! Only a daemon with the development switch on builds one, beside the
 //! holders [`Holders::start_local`] opened; with it off nothing here runs.
@@ -11,11 +12,13 @@ use std::ffi::OsString;
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use hide_holder_protocol::{Answer, Appearance, Foreground, OpenError, Size, Theme};
+use hide_host::shell_integration::{ShellLaunch, ShellReadiness, UserShell};
+
+use hide_holder_protocol::{Answer, Appearance, CloseReason, Foreground, OpenError, Size, Theme};
 use hide_kit::panes::{CloseError, StartRefusal, StartRequest, Started};
 use hide_node_link::holders::{
     HolderError, HolderForeground, HolderProcesses, HolderRecovery, HolderStart, PaneEnded,
-    PaneHolders,
+    PaneFactsSink, PaneHolders, ScreenRules, StyledRead, UNSUPPORTED_HOLDER,
 };
 use hide_node_link::terminal::{KeyTarget, TerminalNode};
 
@@ -26,14 +29,48 @@ use super::holder::Holders;
 pub struct LocalPanes {
     holders: Arc<Holders>,
     service: Arc<Service>,
-    shell: Vec<OsString>,
+    shell: PaneShell,
+}
+
+/// How a pane started with no program runs this machine's shell.
+pub enum PaneShell {
+    /// The account's shell with Hide's shell integration, prepared for each
+    /// pane as the node prepares it for a tab Hide opens
+    /// (`hide_host::shell_integration::prepare`): a pane on the core's own
+    /// engine has no Herdr to read its folder from its process, so its shell
+    /// says it on the screen.
+    Account { home: PathBuf, user: UserShell },
+    /// This command line, with no integration (the engine contract's).
+    Fixed(Vec<OsString>),
+}
+
+impl PaneShell {
+    fn launch(&self) -> Result<ShellLaunch, HolderError> {
+        match self {
+            Self::Fixed(command) => Ok(ShellLaunch {
+                command: command
+                    .iter()
+                    .map(|word| word.to_string_lossy().into_owned())
+                    .collect(),
+                readiness: ShellReadiness::Plain,
+                env: Default::default(),
+            }),
+            Self::Account { home, user } => {
+                let executable = std::env::current_exe().ok();
+                hide_host::shell_integration::prepare(Some(home), user, executable.as_deref())
+                    .map_err(|error| HolderError::Refused {
+                        code: "shell_unavailable",
+                        message: format!("the account's shell could not be prepared: {error}"),
+                    })
+            }
+        }
+    }
 }
 
 impl LocalPanes {
     /// The panes of `holders`, attached to `service`; a pane started with no
-    /// program runs `shell`, which a daemon reads once with
-    /// [`interactive_shell`].
-    pub fn new(holders: Arc<Holders>, service: Arc<Service>, shell: Vec<OsString>) -> Self {
+    /// program runs `shell`.
+    pub fn new(holders: Arc<Holders>, service: Arc<Service>, shell: PaneShell) -> Self {
         Self {
             holders,
             service,
@@ -48,6 +85,7 @@ impl PaneHolders for LocalPanes {
             code: "invalid_size",
             message: why,
         })?;
+        let mut env: Vec<(OsString, OsString)> = Vec::new();
         let program = match (&start.program, &start.notice) {
             (Some(_), Some(_)) => {
                 return Err(HolderError::Refused {
@@ -64,8 +102,20 @@ impl PaneHolders for LocalPanes {
                     message: "the pane's program is empty".to_owned(),
                 });
             }
-            (None, None) => self.shell.clone(),
-            (None, Some(notice)) => shell_after_notice(&self.shell, notice),
+            (None, notice) => {
+                let launch = self.shell.launch()?;
+                env.extend(
+                    launch
+                        .env
+                        .into_iter()
+                        .map(|(name, value)| (OsString::from(name), OsString::from(value))),
+                );
+                let shell: Vec<OsString> = launch.command.into_iter().map(OsString::from).collect();
+                match notice {
+                    None => shell,
+                    Some(notice) => shell_after_notice(&shell, notice),
+                }
+            }
         };
         let cwd =
             hide_platform::path::from_wire(&start.cwd).map_err(|error| HolderError::Refused {
@@ -76,10 +126,15 @@ impl PaneHolders for LocalPanes {
             pane: start.pane.clone(),
             program,
             cwd,
-            env: start
-                .env
-                .iter()
-                .map(|(name, value)| (OsString::from(name), OsString::from(value)))
+            // The shell's own variables, then the caller's.
+            env: env
+                .into_iter()
+                .chain(
+                    start
+                        .env
+                        .iter()
+                        .map(|(name, value)| (OsString::from(name), OsString::from(value))),
+                )
                 .collect(),
             size,
             // The screen's colors reach a holder by a theme message once a
@@ -105,6 +160,13 @@ impl PaneHolders for LocalPanes {
         }
     }
 
+    fn shell_launch(&self) -> Option<ShellLaunch> {
+        self.shell
+            .launch()
+            .ok()
+            .filter(|launch| launch.readiness == ShellReadiness::Integrated)
+    }
+
     fn terminate(&self, pane: &str) -> Result<(), HolderError> {
         match self.holders.terminate(&self.service, pane) {
             Ok(_) => Ok(()),
@@ -124,6 +186,31 @@ impl PaneHolders for LocalPanes {
             Answer::Processes { .. } => Err(HolderError::Unreachable(format!(
                 "pane {pane}'s holder answered a read with its processes"
             ))),
+        }
+    }
+
+    fn read_styled(&self, pane: &str, read: StyledRead) -> Result<(String, bool), HolderError> {
+        let rows = match read {
+            StyledRead::Screen => None,
+            StyledRead::Rows(lines) => Some(lines),
+        };
+        match self.holders.read_styled(pane, rows) {
+            Ok(Answer::Text { text, truncated }) => Ok((text, truncated)),
+            Ok(Answer::Processes { .. }) => Err(HolderError::Unreachable(format!(
+                "pane {pane}'s holder answered a styled read with its processes"
+            ))),
+            // A holder built before styled reads reads the ask as a first
+            // message it does not know.
+            Err(OpenError::Refused(closed)) if closed.reason == CloseReason::HelloInvalid => {
+                Err(HolderError::Refused {
+                    code: UNSUPPORTED_HOLDER,
+                    message: format!(
+                        "pane {pane}'s holder was built before styled reads: {}",
+                        closed.detail
+                    ),
+                })
+            }
+            Err(error) => Err(ask_error(error)),
         }
     }
 
@@ -158,6 +245,14 @@ impl PaneHolders for LocalPanes {
         self.holders.watch_ends(ended);
     }
 
+    fn watch_facts(&self, sink: PaneFactsSink) {
+        self.holders.watch_facts(sink);
+    }
+
+    fn set_rules(&self, pane: &str, rules: Option<ScreenRules>) -> Result<(), HolderError> {
+        self.holders.set_rules(pane, rules)
+    }
+
     fn recovered(&self, timeout: std::time::Duration) -> Result<HolderRecovery, HolderError> {
         self.holders
             .recovered(timeout)
@@ -178,17 +273,27 @@ impl PaneHolders for LocalPanes {
 fn shell_after_notice(shell: &[OsString], notice: &str) -> Vec<OsString> {
     let line: String = notice.chars().filter(|c| !c.is_control()).collect();
     if cfg!(windows) {
-        let program = shell
-            .first()
-            .cloned()
-            .unwrap_or_else(|| OsString::from("powershell.exe"));
-        return vec![
-            program,
-            OsString::from("-NoLogo"),
-            OsString::from("-NoExit"),
-            OsString::from("-Command"),
-            OsString::from(format!("Write-Host '{}'", line.replace('\'', "''"))),
-        ];
+        let write = format!("Write-Host '{}'", line.replace('\'', "''"));
+        let mut program = shell.to_vec();
+        // A shell started with a command of its own (the integration's)
+        // writes the line first, in that same command.
+        match program
+            .iter()
+            .position(|word| word.eq_ignore_ascii_case("-Command"))
+            .filter(|at| at + 1 < program.len())
+        {
+            Some(at) => {
+                let command = format!("{write}; {}", program[at + 1].to_string_lossy());
+                program[at + 1] = OsString::from(command);
+            }
+            None => program.extend(
+                ["-NoLogo", "-NoExit", "-Command"]
+                    .map(OsString::from)
+                    .into_iter()
+                    .chain([OsString::from(write)]),
+            ),
+        }
+        return program;
     }
     let mut program = vec![
         OsString::from("/bin/sh"),
@@ -223,33 +328,5 @@ fn ask_error(error: OpenError) -> HolderError {
             HolderError::NoPane(error.to_string())
         }
         error => HolderError::Unreachable(error.to_string()),
-    }
-}
-
-/// The interactive shell a pane of this machine starts when it is given no
-/// program, as Herdr chooses one with no shell configured: on macOS and
-/// Linux the account's `$SHELL`, else `/bin/sh`, as a login shell on macOS
-/// only; on Windows the first `pwsh.exe` on an absolute `PATH` folder, else
-/// `powershell.exe`.
-pub fn interactive_shell() -> Vec<OsString> {
-    if cfg!(windows) {
-        let pwsh = std::env::var_os("PATH")
-            .into_iter()
-            .flat_map(|path| std::env::split_paths(&path).collect::<Vec<_>>())
-            .filter(|folder| folder.is_absolute())
-            .map(|folder| folder.join("pwsh.exe"))
-            .find(|candidate| candidate.is_file());
-        return vec![
-            pwsh.map(PathBuf::into_os_string)
-                .unwrap_or_else(|| OsString::from("powershell.exe")),
-        ];
-    }
-    let shell = std::env::var_os("SHELL")
-        .filter(|shell| !shell.to_string_lossy().trim().is_empty())
-        .unwrap_or_else(|| OsString::from("/bin/sh"));
-    if cfg!(target_os = "macos") {
-        vec![shell, OsString::from("-l")]
-    } else {
-        vec![shell]
     }
 }
