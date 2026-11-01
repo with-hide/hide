@@ -198,7 +198,7 @@ A cold build on an Apple M-series Mac took 46 s with a peak of 1.07 GB in the Zi
 `scripts/verify-cargo.sh` prepares the inputs before every mode that can build hide-vt (`test`, `lint`, and a scoped mode naming `--workspace`, `-p hide-vt` or `-p hide-holder`), which does nothing when they are ready.
 When the preparation fails, as it does without a network the first time, the command stops before cargo with the reason and the command to run where ziglang.org, github.com, codeberg.org and deps.files.ghostty.org are reachable.
 `release` and `cli` build no hide-vt, so the app's packaging needs no Zig; nothing in the app or a device kit carries libghostty-vt until the pane holder ships.
-The Mac mini's release jobs build only those binaries, so the runner has no Zig installed; when the holder ships, the same preparation installs it under the runner account's cache.
+The Mac mini's release jobs build only those binaries and prepare no Zig; its verify job `vt (macos)` builds hide-vt and prepares the inputs, Zig included, in each job's own hide-vt input folder ([The Mac mini CI runner](#the-mac-mini-ci-runner)), and when the holder ships the release jobs take the same preparation.
 
 In CI, `.github/actions/vt-cache` restores the prepared folder, keyed by the pin file, system and architecture, and Zig's caches, keyed by the pin file, `hide-vt/build.rs` (which fixes the target mapping and the `ReleaseFast` optimize mode), system and architecture.
 Both live under the runner's temporary folder at fixed paths, because Zig's C-header cache keys include the compiler's installation path, and outside `target/`, which the workspace set's rust-cache entry holds.
