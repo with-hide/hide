@@ -1347,38 +1347,52 @@ fn spawn(
             let prepared = crate::delivery::ladder::prepare(&target);
             // Saved before it is sent, so a send a crash interrupts is
             // counted and never repeated blindly (engineering #11).
-            reserved = serde_json::from_value(
-                mutate(
-                    client,
-                    authority,
-                    actor,
-                    Mutation::BriefTyping {
-                        id: reserved.id.clone(),
-                    },
-                )
-                .map_err(|code| {
-                    if code == "brief_attempts_spent" {
-                        brief_refused(&reserved.id, pane, "brief.attempts_spent", code)
-                    } else {
-                        code
+            let reservation = mutate(
+                client,
+                authority,
+                actor,
+                Mutation::BriefTyping {
+                    id: reserved.id.clone(),
+                },
+            );
+            let sent = match reservation {
+                // An earlier attempt's send may have arrived and its outcome
+                // was never saved: this spawn answers as that one would
+                // have, sent and unconfirmed, and the agent's own record
+                // decides (`hide agent show` says which).
+                Err(code) if code == "brief_send_lost" => {
+                    crate::diagnostic!(json!({
+                        "component": "spawn", "kind": "brief.send_unconfirmed",
+                        "spawn": reserved.id, "pane_id": pane,
+                    }));
+                    SendRoute::Lost
+                }
+                Err(code) if code == "brief_attempts_spent" => {
+                    return Err(brief_refused(
+                        &reserved.id,
+                        pane,
+                        "brief.attempts_spent",
+                        code,
+                    ));
+                }
+                Err(code) => return Err(code),
+                Ok(value) => {
+                    reserved = serde_json::from_value(value).map_err(|_| "spawn_unavailable")?;
+                    match send_brief(engine.as_ref(), (&target, prepared), &reserved.id, &brief) {
+                        Ok(sent) => sent,
+                        Err(code) => {
+                            // Nothing was sent: the brief may be typed again.
+                            mutate(
+                                client,
+                                authority,
+                                actor,
+                                Mutation::BriefUnsent {
+                                    id: reserved.id.clone(),
+                                },
+                            )?;
+                            return Err(code);
+                        }
                     }
-                })?,
-            )
-            .map_err(|_| "spawn_unavailable")?;
-            let sent = match send_brief(engine.as_ref(), (&target, prepared), &reserved.id, &brief)
-            {
-                Ok(sent) => sent,
-                Err(code) => {
-                    // Nothing was sent: the brief may be typed again.
-                    mutate(
-                        client,
-                        authority,
-                        actor,
-                        Mutation::BriefUnsent {
-                            id: reserved.id.clone(),
-                        },
-                    )?;
-                    return Err(code);
                 }
             };
             reserved = serde_json::from_value(mutate(

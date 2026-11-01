@@ -475,6 +475,7 @@ A rung that answers that it sent nothing (no such program, an unknown thread, a 
 Each send is logged `input.rung` with the rung's name and Hide's pane id; the text never reaches a log.
 Only a typed input is ever sent again, and only once someone answered the agent's screen: a launched brief is held by the agent's start, a channel keeps the input until the agent takes it, and a lost send may have arrived, so `BriefTyping` itself refuses a brief whose route is `launch` (`brief_launched`) or `lost` (`brief_send_lost`), whoever asks.
 The reservation itself saves the route as `lost` before anything is sent, and the send's outcome corrects it after (`Briefed` with the route, or `BriefUnsent` back to `typed` when Herdr refused and nothing was sent), so an outcome whose save never lands leaves the brief counted as possibly sent rather than free to be sent twice.
+A spawn asked again over such a brief sends nothing and answers as the lost send would have: sent and unconfirmed, logged `brief.send_unconfirmed`, with the agent's own record deciding and `hide agent show` saying which.
 A mission's answer to its Conductor is the operator's own words and takes the typed rung alone (`ladder::typed_only`), the same typing and the same reading of Herdr's errors as every other input.
 
 The ladder addresses only the session Herdr names for the pane: the hook facts of that session (`HookFacts::reported_session`, matched by Herdr's lineage), never another session the pane's hooks reported, such as a nested run, and never the newest one in its place.
