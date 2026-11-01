@@ -1,3 +1,5 @@
+import { CheckIcon } from "lucide-react";
+import type { ReactNode } from "react";
 import type { CellTone, HeadCell } from "../missions";
 import { cn } from "../lib/utils";
 
@@ -70,6 +72,20 @@ export function ProgressCells<T extends string = CellTone>({ tones, fill, size, 
       {cells.map((cell, index) => (
         <span key={index} className={cn("rounded-full", fills[cell.tone])} style={{ flexGrow: cell.count, flexBasis: 0 }} />
       ))}
+    </span>
+  );
+}
+
+/**
+ * A work page's state pill (PRD mission-map-git-criteria D-02): a mission's
+ * map head and a plan's map head and popover head draw their state in it, a
+ * finished one with a check.
+ */
+export function WorkPill({ tone, done, children, ...rest }: { tone: string; done?: boolean; children: ReactNode } & Record<`data-${string}`, string>) {
+  return (
+    <span className={cn("flex shrink-0 items-center gap-xxs rounded-full px-sm text-caption font-semibold", tone)} {...rest}>
+      {done ? <CheckIcon aria-hidden="true" className="size-(--size-icon-sm)" /> : null}
+      {children}
     </span>
   );
 }

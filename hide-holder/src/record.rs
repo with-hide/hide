@@ -133,6 +133,11 @@ impl Claim {
     }
 }
 
+/// The holder's log event that says it ended but could not write its record,
+/// with the end it meant to write and the `error`. It is for a person reading
+/// the log: a node finds such a holder gone and settles its pane as lost.
+pub const UNWRITTEN_EVENT: &str = "holder.record_unwritten";
+
 /// What a change answers when the record is not this start's.
 const NOT_MINE: &str = "the record no longer reserves this start";
 

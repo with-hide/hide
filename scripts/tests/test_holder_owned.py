@@ -1,7 +1,7 @@
 """The holder checks end what they started on every path (scripts/holder_owned.py).
 
-The restart lane, the holder measurement and the color probe put each node,
-holder and server they start in an `Owned`, and end it by pid and start time
+The restart lane and the holder measurement put each node, holder and
+server they start in an `Owned`, and end it by pid and start time
 however the run ends. These run the lane's own node client
 (`holder-restart-check.py`'s `Node` and `clean`) against a stand-in node
 that starts a stand-in holder as the real one does: in a session of its own,

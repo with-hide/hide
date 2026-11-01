@@ -44,9 +44,6 @@ pub(super) const INPUT_LIMIT_BYTES: usize = 16 * 1024;
 const READ_TIMEOUT: Duration = Duration::from_secs(20);
 const ACTIVITY_TIMEOUT: Duration = Duration::from_secs(5);
 const SEND_TIMEOUT: Duration = Duration::from_secs(5);
-/// How long an input waits behind the pane node's creation holder, as the
-/// phone's reply does.
-const PERMIT_TIMEOUT: Duration = Duration::from_secs(35);
 const UNREACHABLE_RETRY_MS: u64 = 5_000;
 const BUSY_RETRY_MS: u64 = 500;
 const ACTIVITY_EVERY_MS: u64 = 1_000;
@@ -1010,18 +1007,10 @@ fn wait_permit(
     pane: &str,
     bytes: usize,
 ) -> Result<(), &'static str> {
-    let (reply, result) = std::sync::mpsc::channel();
-    terminals.input_permit(
-        pane,
-        bytes,
-        Box::new(move |outcome| {
-            let _ = reply.send(outcome);
-        }),
-    );
-    match result.recv_timeout(PERMIT_TIMEOUT) {
-        Ok(Ok(())) => Ok(()),
-        Ok(Err(hide_node_link::terminal::InputPermitError::Asleep)) => Err("asleep"),
-        Ok(Err(_)) | Err(_) => Err("input_refused"),
+    match hide_node_link::terminal::wait_for_input_permit(terminals, pane, bytes) {
+        Ok(()) => Ok(()),
+        Err(hide_node_link::terminal::InputPermitError::Asleep) => Err("asleep"),
+        Err(_) => Err("input_refused"),
     }
 }
 

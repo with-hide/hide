@@ -1,4 +1,4 @@
-import { CheckIcon, CogIcon, GitBranchIcon } from "lucide-react";
+import { CogIcon, GitBranchIcon } from "lucide-react";
 import { useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent, type MouseEvent, type ReactNode } from "react";
 import type { Actions } from "./actions";
 import { DependencyGraphView, type EdgeLook, type OverlayEdge } from "./DependencyGraph";
@@ -11,7 +11,7 @@ import { MissionPrMark } from "./components/mission-pr";
 import { PullList, ResultTiles } from "./components/mission-results";
 import { satelliteLines, Satellites } from "./components/mission-satellites";
 import { MissionSummary } from "./components/mission-summary";
-import { HEAD_FILL, ProgressCells } from "./components/mission-tone";
+import { HEAD_FILL, ProgressCells, WorkPill } from "./components/mission-tone";
 import { Button } from "./components/ui/button";
 import { Hint } from "./components/ui/tooltip";
 import { useInterfaceTranslation } from "./i18n/client";
@@ -209,10 +209,9 @@ function Head({ mission, actions }: { mission: Mission; actions: Actions }) {
   const pill = PILL[mission.status];
   return (
     <div className="flex min-w-0 flex-wrap items-center gap-x-md gap-y-xs px-md py-sm text-body" data-mission-summary="true">
-      <span className={cn("flex shrink-0 items-center gap-xxs rounded-full px-sm text-caption font-semibold", pill.tone)} data-mission-pill={mission.status}>
-        {mission.status === "done" ? <CheckIcon aria-hidden="true" className="size-(--size-icon-sm)" /> : null}
+      <WorkPill tone={pill.tone} done={mission.status === "done"} data-mission-pill={mission.status}>
         {t(pill.key)}
-      </span>
+      </WorkPill>
       {time ? <span className="shrink-0 text-caption text-muted-foreground" data-mission-stat="time">{time}</span> : null}
       {mission.nodes.length > 0 ? (
         <>

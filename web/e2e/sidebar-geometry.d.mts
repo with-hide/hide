@@ -1,5 +1,5 @@
 // Types for sidebar-geometry.mjs, which stays plain JavaScript because the
-// design review command (scripts/design-review.mjs) imports it from Node.
+// private design review tooling, kept outside this checkout, imports it from Node.
 import type { Page } from "@playwright/test";
 
 export type RowBox = { x: number; y: number; width: number; height: number };
