@@ -533,7 +533,8 @@ pub enum DeskItem {
         /// The agent the notice is about.
         agent: Option<AdapterId>,
         /// What the notice names: the install's last line, the sign-in
-        /// command for `login_needed`, the call that was blocked.
+        /// command for `login_needed`, the call that was blocked, the
+        /// agent's own reason for `turn_failed` when it gave one.
         detail: Option<String>,
     },
 }
@@ -691,7 +692,8 @@ pub enum DeskNotice {
     InstallFailed,
     /// The agent could not be put in its ask mode, so it was not used.
     NoAskMode,
-    /// The turn failed; the detail is the agent's error.
+    /// The turn failed; the detail is the agent's own one-line reason, when
+    /// it gave one.
     TurnFailed,
 }
 

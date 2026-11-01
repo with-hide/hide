@@ -147,6 +147,14 @@ describe("Desk's room", () => {
     expect(sent("desk_send")).toEqual([{ text: "@project(/work/repo-home repo) fix the build", mentions: [repo] }]);
   });
 
+  it("names the agent's own reason on a failed turn when it gave one", async () => {
+    const notice = () => document.body.querySelector<HTMLElement>("[data-desk-notice='turn_failed']")!.textContent!;
+    await render(desk([{ kind: "notice", id: 1, notice: "turn_failed", agent: "claude", detail: "Rate limit reached" }]));
+    expect(notice()).toContain("· Rate limit reached");
+    await show(desk([{ kind: "notice", id: 1, notice: "turn_failed", agent: "claude", detail: null }]));
+    expect(notice()).not.toContain("·");
+  });
+
   it("sends an example line at once, and only writes it in the box while the agent cannot take it", async () => {
     await render(desk([]));
     const example = document.body.querySelector<HTMLElement>("[data-desk-example]")!.textContent!;

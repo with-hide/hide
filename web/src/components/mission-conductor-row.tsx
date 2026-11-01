@@ -6,7 +6,7 @@ import { AgentMark } from "../AgentMark";
 import { useInterfaceTranslation } from "../i18n/client";
 import { cn } from "../lib/utils";
 import { RunText, useRunWords } from "../missionParts";
-import { conductorState, type ConductorState } from "../missions";
+import { conductorState, conductorUnanswered, type ConductorState } from "../missions";
 import { allAgents, agentsByPane } from "../paneAgents";
 import type { Mission } from "../snapshot";
 import { useShellStore } from "../store";
@@ -16,8 +16,10 @@ import { Button } from "./ui/button";
 // B13): its agent's mark, `Conductor`, the model its pane was launched with,
 // its state, and `터미널로 ›`, which brings its pane forward with the keyboard
 // in it, on whichever device it runs. An open mission no Conductor holds
-// shows `Conductor 없음` and `이어받기` instead. No record button: the task
-// row and the Overview open the record.
+// shows `Conductor 없음` and `이어받기` instead, and a Conductor that let a
+// raise reach the operator unanswered keeps its row with `이어받기` beside
+// `터미널로` (PRD mission-node-simple B15). No record button: the task row
+// and the Overview open the record.
 
 const STATE_WORD: Record<Exclude<ConductorState, "gone" | "unknown">, MessageKey> = {
   working: "mission.conductor.state.working",
@@ -67,6 +69,7 @@ export function ConductorRow({ mission, actions }: { mission: Mission; actions: 
       >
         {terminal}
       </Button>
+      {conductorUnanswered(mission) ? <MissionTakeOver mission={mission} actions={actions} /> : null}
     </div>
   );
 }

@@ -17,7 +17,7 @@ use serde_json::json;
 
 use crate::engine::{Engine, EngineError, Readiness, Wait};
 use crate::runtime::Runtime;
-use crate::runtime::delivery::Observation;
+use crate::runtime::delivery::{Observation, ProjectedTurn};
 use crate::runtime::mission_events::SendFailure;
 
 use super::ledger::{Ledger, Letter, State};
@@ -225,22 +225,8 @@ pub(crate) fn judge(observation: &Observation, patience: Patience, now: u64) -> 
     if observation.actor.require_native_identity().is_err() {
         return Err(Hold::Session);
     }
-    // Herdr confirms the state it reports by its sequence, and names no
-    // state of an agent it does not know.
-    match (observation.status.as_str(), observation.state_change_seq) {
-        ("working", None) => return Err(Hold::Working),
-        ("idle" | "done" | "working" | "blocked", Some(_)) => {}
-        _ => return Err(Hold::Status),
-    }
-    let projected = observation.projected_turn().ok_or(Hold::Unprojected)?;
-    let turn = projected.turn;
-    if turn.prompt {
-        return Err(Hold::Blocked);
-    }
-    if turn.operator_wait {
-        return Err(Hold::AwaitingOperator);
-    }
-    match turn.activity {
+    let projected = unheld_turn(observation)?;
+    match projected.turn.activity {
         AgentActivity::Stopped => {}
         AgentActivity::Working
             if !super::mailbox::tool_letters(&observation.actor.kind)
@@ -249,17 +235,7 @@ pub(crate) fn judge(observation: &Observation, patience: Patience, now: u64) -> 
         AgentActivity::Working => return Err(Hold::Working),
         AgentActivity::Unknown => return Err(Hold::Status),
     }
-    // Herdr holds the pane at a prompt the turn does not show (a hook that
-    // reported the turn outranks it on the screen), and refuses input there.
-    if observation.status == "blocked" {
-        return Err(Hold::NotReady);
-    }
-    // A kind that takes letters at its tools is rung only at rest, and Herdr
-    // reads its own screens that take keys as work (Grok's plan review), so
-    // a turn the core reads as ended does not ring it while Herdr says so.
-    if observation.status == "working" && super::mailbox::tool_letters(&observation.actor.kind) {
-        return Err(Hold::Working);
-    }
+    takes_keys(observation)?;
     if observation.turn == Turn::Unread && !patience.forced {
         return Err(Hold::SessionUnread);
     }
@@ -273,6 +249,46 @@ pub(crate) fn judge(observation: &Observation, patience: Patience, now: u64) -> 
         || now.saturating_sub(projected.changed_at(observation)) < QUIET_MS
     {
         return Err(Hold::Quiet);
+    }
+    Ok(())
+}
+
+/// The core's turn for a pane whose state Herdr knows, with no approval
+/// prompt and no question or plan approval of the agent's own waiting: the
+/// first half of the gate before Hide types into a pane, which the bell and
+/// a typed input's composer read share (`typed::composer_readable`).
+pub(crate) fn unheld_turn(observation: &Observation) -> Result<&ProjectedTurn, Hold> {
+    // Herdr confirms the state it reports by its sequence, and names no
+    // state of an agent it does not know.
+    match (observation.status.as_str(), observation.state_change_seq) {
+        ("working", None) => return Err(Hold::Working),
+        ("idle" | "done" | "working" | "blocked", Some(_)) => {}
+        _ => return Err(Hold::Status),
+    }
+    let projected = observation.projected_turn().ok_or(Hold::Unprojected)?;
+    if projected.turn.prompt {
+        return Err(Hold::Blocked);
+    }
+    if projected.turn.operator_wait {
+        return Err(Hold::AwaitingOperator);
+    }
+    Ok(projected)
+}
+
+/// Whether Herdr lets keys into a pane whose turn allows typing: the second
+/// half of that gate, apart from the turn.
+pub(crate) fn takes_keys(observation: &Observation) -> Result<(), Hold> {
+    // Herdr holds the pane at a prompt the turn does not show (a hook that
+    // reported the turn outranks it on the screen), and refuses input there.
+    if observation.status == "blocked" {
+        return Err(Hold::NotReady);
+    }
+    // A kind that takes letters at its tools is typed into only at rest, and
+    // Herdr reads its own screens that take keys as work (Grok's plan
+    // review), so a turn the core reads as ended is not typed into while
+    // Herdr says so.
+    if observation.status == "working" && super::mailbox::tool_letters(&observation.actor.kind) {
+        return Err(Hold::Working);
     }
     Ok(())
 }

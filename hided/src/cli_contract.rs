@@ -1027,7 +1027,7 @@ pub const COMMANDS: &[Spec] = &[
         arguments: ID,
         repeats: None,
         needs_one_of: &[],
-        options: &[],
+        options: &[optional("--handover", Text)],
         rest: None,
         answers: &["mission"],
         refusals: &[

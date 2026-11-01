@@ -163,7 +163,12 @@ pub struct NodeView {
     /// follow, on `machine`.
     pub pane_id: Option<String>,
     pub machine: Option<String>,
+    /// The current pull request, the last of `prs`, with its state and
+    /// address.
     pub pr: Option<u32>,
+    /// Every pull request the node holds, the current one last (PRD
+    /// mission-node-simple D-10): the card draws one PR mark each.
+    pub prs: Vec<NodePrView>,
     pub base_pr: Option<u32>,
     pub branch: Option<String>,
     pub pr_state: Option<PrState>,
@@ -201,6 +206,45 @@ pub struct NodeView {
     /// The worker's own plan (PRD hide-plan D-17, D-18): the value its pane's
     /// chip and map draw, for the card's fourth line and the node's detail.
     pub plan: Option<crate::plans::PlanView>,
+    /// What waits on someone to look, and who (PRD mission-node-simple D-02).
+    pub attention: Option<AttentionView>,
+    /// What Hide itself did to the node last (D-07, D-15).
+    pub hide: Option<crate::missions::HideMark>,
+}
+
+/// One of a node's pull requests as its card draws it.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct NodePrView {
+    pub number: u32,
+    pub state: Option<PrState>,
+    pub url: Option<String>,
+}
+
+/// Who a node waits on (D-02, D-05).
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AttentionTo {
+    Conductor,
+    Operator,
+}
+
+/// The `!` a node's card carries and the line its hover says.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct AttentionView {
+    pub reason: crate::missions::AttentionReason,
+    pub pr: Option<u32>,
+    pub to: AttentionTo,
+    /// When it reached whom it waits on now.
+    pub since_unix_ms: u64,
+    /// Waiting on the operator, a Needs You row carries it: its Conductor's
+    /// or its worker's. Without one the mission itself is the Needs You
+    /// item (PRD mission-node-simple D-19, B14).
+    pub on_row: bool,
+    /// The mission itself is a Needs You item for it: it waits on the
+    /// operator with no row to carry it, in a mission that still asks and
+    /// on a node not dropped. The one rule the count and the list read
+    /// (`publish_mission_asks`), never worked out again by the screen.
+    pub item: bool,
 }
 
 /// A spawn admitted as one of a mission's workers: its cap is checked in
@@ -218,6 +262,7 @@ struct Wake {
     target: super::delivery::Observation,
     intent: String,
     body: String,
+    kind: &'static str,
 }
 
 #[derive(Default)]
@@ -236,7 +281,7 @@ pub(crate) struct MissionRuntime {
     /// it.
     pub(crate) book_edit: u64,
     /// Counts the GitHub answers and the pull request lists replaced since.
-    github_edit: u64,
+    pub(super) github_edit: u64,
     /// What the published missions were made from, so a snapshot read whose
     /// inputs did not move makes nothing (docs/PERFORMANCE_TESTING.md).
     views: ViewsMadeFrom,
@@ -270,6 +315,12 @@ pub(crate) struct MissionRuntime {
     /// The agents a finish asks to put to sleep, in the order they finished
     /// (D-19). Memory only: a restart leaves them to the hours rule.
     pub(super) sleep_marks: Vec<super::agent_sleep::missions::SleepMark>,
+    /// What the last health evaluation read (PRD mission-node-simple D-08).
+    pub(super) health_made: super::mission_health::HealthMadeFrom,
+    /// The projects, by device and path, a worker's letter or a Conductor's
+    /// node change asked to read again (D-09, B23), kept until that read is
+    /// asked. Memory only: a restart reads every project anew.
+    pub(super) reads_due: std::collections::BTreeSet<(String, String)>,
 }
 
 #[derive(Default)]
@@ -293,11 +344,15 @@ struct ViewsMadeFrom {
     until: u64,
     /// The missions' workers Hide holds asleep, which their cards read.
     sleeping: crate::coordination::Sleeping,
+    /// The rows carrying a core question, which decide whether a node's
+    /// attention is on a row (`on_row`).
+    laid: Vec<String>,
     made: bool,
 }
 
-fn seen_of(pull: &crate::model::PullRequestSnapshot) -> PrSeen {
+pub(super) fn seen_of(pull: &crate::model::PullRequestSnapshot) -> PrSeen {
     PrSeen {
+        number: pull.number,
         head: pull.head_oid.clone(),
         merged: pull.badge == PullRequestBadge::Merged,
         changes_requested: pull.review == Some(ReviewDecision::ChangesRequested),
@@ -310,21 +365,165 @@ fn seen_of(pull: &crate::model::PullRequestSnapshot) -> PrSeen {
 fn refresh_seen(mission: &mut Mission, project: &crate::model::GithubProjectSnapshot) -> bool {
     let mut moved = false;
     for node in &mut mission.nodes {
-        let Some(number) = node.pr else { continue };
-        let Some(pull) = project
-            .pull_requests
-            .iter()
-            .find(|pull| pull.number == number)
-        else {
-            continue;
-        };
-        let seen = seen_of(pull);
-        if node.pr_seen.as_ref() != Some(&seen) {
-            node.pr_seen = Some(seen);
-            moved = true;
+        for number in node.prs.clone() {
+            let Some(pull) = project
+                .pull_requests
+                .iter()
+                .find(|pull| pull.number == number)
+            else {
+                continue;
+            };
+            moved |= note_seen(node, seen_of(pull));
         }
     }
     moved
+}
+
+/// The letter one recorded wake sends.
+fn wake_body(mission: &Mission, wake: &PendingWake) -> String {
+    let pr = wake
+        .pr
+        .map_or_else(|| "The PR".to_owned(), |number| format!("PR #{number}"));
+    let node = mission.nodes.iter().find(|node| node.key == wake.node);
+    let outside = || match node.and_then(|node| node.external.as_ref()) {
+        Some(External::Branch(branch)) => format!("Branch {branch}"),
+        _ => pr.clone(),
+    };
+    let news = |what: String, act: &str| {
+        format!(
+            "{what} (mission {} \"{}\", node {}).\nRead the mission with `hide mission show {}` and act on it: {act}.",
+            mission.id, mission.title, wake.node, mission.id
+        )
+    };
+    match wake.event {
+        WakeEvent::Merged => news(format!("{pr} was merged"), PR_ACT),
+        WakeEvent::ChangesRequested => {
+            news(format!("{pr} received a review asking for changes"), PR_ACT)
+        }
+        WakeEvent::NewHead => news(format!("{pr} has a new commit"), PR_ACT),
+        WakeEvent::OutsideDone => news(
+            format!("{} is in main", outside()),
+            "start the nodes that waited on it",
+        ),
+        WakeEvent::OutsideFailed => news(
+            format!("{} was closed without a merge", outside()),
+            "replan the nodes it blocks, or ask the operator",
+        ),
+        WakeEvent::Resumed => format!(
+            "You conduct mission {} \"{}\" again: your pane had closed, and the operator brought your conversation back.\nRead `hide mission show {}` and `hide inbox`, check each worker's state, and go on from there.",
+            mission.id, mission.title, mission.id
+        ),
+        WakeEvent::EndAsked => format!(
+            "The operator asked from the map to end mission {} \"{}\".\nTreat it as the operator saying \"cancel\" and follow that item of `hide mission help`: ask about the open pull requests with `hide mission decide`, end the workers, then `hide mission close --as cancelled`.",
+            mission.id, mission.title
+        ),
+        WakeEvent::Attention => {
+            let (what, act) = attention_words(wake.reason, &pr);
+            news(format!("Node {} needs you to look: {what}", wake.node), act)
+        }
+        WakeEvent::Resolved => {
+            let how = match wake.action {
+                Some(crate::missions::OperatorAction::Done) => {
+                    "marked it done past the lines left open"
+                }
+                Some(crate::missions::OperatorAction::Drop) => "dropped it from the mission",
+                Some(crate::missions::OperatorAction::Attach) => "attached the pull request to it",
+                Some(crate::missions::OperatorAction::Leave) => "left it as it is",
+                Some(crate::missions::OperatorAction::Resume) => "set it to work again",
+                None => "settled it",
+            };
+            format!(
+                "The operator settled what waited on node {} of mission {} \"{}\": they {how}.\nRead `hide mission show {}` and go on from there.",
+                wake.node, mission.id, mission.title, mission.id
+            )
+        }
+        WakeEvent::Closed => format!(
+            "Hide closed mission {} \"{}\": every node is done or dropped ({}).\nRead `hide mission show {}`; `hide mission reopen` opens it again.",
+            mission.id,
+            mission.title,
+            match mission.status {
+                MissionStatus::MergeWait => "waiting for the operator's merges",
+                _ => "done",
+            },
+            mission.id
+        ),
+        WakeEvent::Reopened => format!(
+            "The operator opened mission {} \"{}\" again from the map.\nRead `hide mission show {}` and `hide inbox`, and go on with what is left.",
+            mission.id, mission.title, mission.id
+        ),
+        WakeEvent::Fix => {
+            let what = match wake.why {
+                Some(crate::missions::FixReason::CiFailed) => "failed its CI",
+                Some(crate::missions::FixReason::Conflict) => "conflicts with its base branch",
+                Some(crate::missions::FixReason::ChangesRequested) => {
+                    "received a review asking for changes"
+                }
+                None => "needs your work",
+            };
+            format!(
+                "{pr} {what} (mission {} \"{}\", node {}).\nFix it on your branch and push, then report to your Conductor as before.",
+                mission.id, mission.title, wake.node
+            )
+        }
+    }
+}
+
+/// What a raise tells the Conductor, and what it asks of it.
+fn attention_words(
+    reason: Option<crate::missions::AttentionReason>,
+    pr: &str,
+) -> (String, &'static str) {
+    use crate::missions::AttentionReason as Reason;
+    match reason {
+        Some(Reason::MergedUnproven) => (
+            format!("{pr} is merged but a finish line is missing or failed"),
+            "record the lines with `hide mission record`, skip one with its reason, or set the node",
+        ),
+        Some(Reason::WorkerEnded) => (
+            "its worker ended with work left".to_owned(),
+            "start a worker again, set the node, or drop it",
+        ),
+        Some(Reason::PrClosed) => (
+            format!("{pr} was closed without a merge"),
+            "replan the node or the nodes it blocks, or ask the operator",
+        ),
+        Some(Reason::UnplannedPr) => (
+            format!("its worker opened {pr}, which no node holds"),
+            "attach it with `hide mission node --pr`, or leave it",
+        ),
+        Some(Reason::WakeRefused) => (
+            format!("Hide could not wake its sleeping worker about {pr}"),
+            "wake or start the worker yourself",
+        ),
+        Some(Reason::CloseRefused) => (
+            "Hide could not close the mission with every node finished".to_owned(),
+            "check the node's lines and close the mission",
+        ),
+        Some(Reason::ConductorFailed) | None => (
+            "the operator is asked to look".to_owned(),
+            "nothing unless the operator asks",
+        ),
+    }
+}
+
+/// Keeps `seen` as what GitHub last said of its pull request; whether it
+/// moved.
+pub(super) fn note_seen(node: &mut MissionNode, seen: PrSeen) -> bool {
+    match node
+        .pr_seen
+        .iter_mut()
+        .find(|held| held.number == seen.number)
+    {
+        Some(held) if *held == seen => false,
+        Some(held) => {
+            *held = seen;
+            true
+        }
+        None => {
+            node.pr_seen.push(seen);
+            true
+        }
+    }
 }
 
 /// What a Conductor woken about a pull request of its own does.
@@ -332,14 +531,15 @@ const PR_ACT: &str =
     "move a stacked PR above it onto the change, answer the review, or check the new commit";
 
 /// Records one wake for `mission`'s Conductor and returns its letter's
-/// intent; past `PENDING_WAKE_LIMIT` the oldest are dropped, and logged.
+/// intent; none when `PENDING_WAKE_LIMIT` letters already wait.
 pub(super) fn record_wake(
     mission: &mut Mission,
     node: String,
     pr: Option<u32>,
     event: WakeEvent,
     head: Option<String>,
-) -> String {
+    key: Option<String>,
+) -> Option<String> {
     mission.wake_seq += 1;
     let wake = PendingWake {
         seq: mission.wake_seq,
@@ -347,45 +547,111 @@ pub(super) fn record_wake(
         pr,
         event,
         head,
+        to: None,
+        reason: None,
+        why: None,
+        action: None,
+        key,
     };
-    let intent = wake_intent(mission, &wake);
-    mission.wakes.push(wake);
-    if mission.wakes.len() > PENDING_WAKE_LIMIT {
-        let dropped = mission.wakes.len() - PENDING_WAKE_LIMIT;
-        mission.wakes.drain(..dropped);
-        crate::diagnostic!(json!({
-            "component": "missions", "kind": "mission.wake_dropped",
-            "mission": mission.id, "count": dropped, "cap": PENDING_WAKE_LIMIT,
-        }));
-    }
-    intent
+    push_wake(mission, wake)
 }
 
-/// The letter intent of one recorded wake to the mission's Conductor now:
-/// the same wake re-sent after a restart is the same letter (engineering
-/// #11), two wakes are two, and a Conductor that took the mission over gets
-/// its own letter rather than the one its predecessor was sent, since one
-/// intent reaches one recipient.
-fn wake_intent(mission: &Mission, wake: &PendingWake) -> String {
+/// Records `wake` for its recipient and returns its letter's intent. With
+/// `PENDING_WAKE_LIMIT` letters waiting for the Conductor a new one for it
+/// is refused and logged, and every one waiting keeps its place
+/// (engineering #15): what it was about stays on the map, and a raise
+/// reaches the operator on its own. A worker's wake is capped apart
+/// (`WORKER_WAKE_LIMIT`), so a Conductor that is gone never starves it. A
+/// wake with no key of its own gets one from what it is about.
+pub(super) fn push_wake(mission: &mut Mission, mut wake: PendingWake) -> Option<String> {
+    let waiting = mission
+        .wakes
+        .iter()
+        .filter(|waiting| waiting.to.is_some() == wake.to.is_some())
+        .count();
+    if wake.to.is_none() && waiting >= PENDING_WAKE_LIMIT {
+        crate::diagnostic!(json!({
+            "component": "missions", "kind": "mission.wake_refused_full",
+            "mission": mission.id, "node": wake.node, "event": wake.event.as_str(),
+            "cap": PENDING_WAKE_LIMIT,
+        }));
+        return None;
+    }
+    if wake.key.is_none() {
+        wake.key = Some(wake_key(&wake));
+    }
+    let intent = wake_intent(mission, &wake);
+    mission.wakes.push(wake);
+    Some(intent)
+}
+
+/// The key of a wake from what it is about (B27): a pull request's news by
+/// its head, an outside node's by its outcome, so the same fact read again
+/// is the same letter. A wake no fact names, the operator's or a
+/// Conductor's coming back, is its own by when it was made.
+fn wake_key(wake: &PendingWake) -> String {
+    let head = wake
+        .head
+        .as_deref()
+        .map_or("-", |head| head.get(..12).unwrap_or(head));
+    let pr = wake
+        .pr
+        .map_or_else(|| "-".to_owned(), |number| number.to_string());
+    let fact = format!("{}:{}:{pr}:{head}", wake.event.as_str(), wake.node);
+    match wake.event {
+        WakeEvent::Merged
+        | WakeEvent::ChangesRequested
+        | WakeEvent::NewHead
+        | WakeEvent::OutsideDone
+        | WakeEvent::OutsideFailed => fact,
+        _ => format!(
+            "{fact}:{}:{}",
+            wake.action
+                .map_or("-", crate::missions::OperatorAction::as_str),
+            super::unix_milliseconds()
+        ),
+    }
+}
+
+/// The letter intent of one recorded wake to its recipient now: the
+/// mission, the wake's key and the recipient. The same facts evaluated
+/// again after a restart or a lost save make the same letter, which the
+/// letters keep once (engineering #11); a Conductor that took the mission
+/// over gets its own letter, since one intent reaches one recipient. A
+/// wake recorded before keys names its `seq`; a key too long for an intent
+/// is hashed.
+pub(super) fn wake_intent(mission: &Mission, wake: &PendingWake) -> String {
     let conductor = &mission.conductor;
-    format!(
-        "mission:{}:{}:{}:{}:{}:{}:{}",
-        mission.id,
-        wake.node,
-        wake.pr
-            .map_or_else(|| "-".to_owned(), |number| number.to_string()),
-        wake.event.as_str(),
-        // `seq` makes the intent unique; a short head keeps it readable
-        // and under the intent's length limit.
-        wake.head
-            .as_deref()
-            .map_or("-", |head| head.get(..12).unwrap_or(head)),
-        wake.seq,
+    let recipient = wake.to.as_deref().unwrap_or_else(|| {
         conductor
             .agent_id
             .as_deref()
             .unwrap_or(&conductor.actor.pane_id)
-    )
+    });
+    let Some(key) = wake.key.as_deref() else {
+        return format!(
+            "mission:{}:{}:{}:{}:{}:{}:{recipient}",
+            mission.id,
+            wake.node,
+            wake.pr
+                .map_or_else(|| "-".to_owned(), |number| number.to_string()),
+            wake.event.as_str(),
+            wake.head
+                .as_deref()
+                .map_or("-", |head| head.get(..12).unwrap_or(head)),
+            wake.seq,
+        );
+    };
+    let intent = format!("mission:{}:{key}:{recipient}", mission.id);
+    if crate::delivery::valid_key(&intent) {
+        return intent;
+    }
+    let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
+    for byte in key.bytes() {
+        hash ^= u64::from(byte);
+        hash = hash.wrapping_mul(0x0100_0000_01b3);
+    }
+    format!("mission:{}:{hash:016x}:{recipient}", mission.id)
 }
 
 impl Runtime {
@@ -414,7 +680,7 @@ impl Runtime {
 
     /// Follows mission `id`'s outside nodes and waiting branches now, for a
     /// command that changed what is followed.
-    fn follow_mission_outside(&mut self, id: &str) -> bool {
+    pub(super) fn follow_mission_outside(&mut self, id: &str) -> bool {
         let Some(mission) = self.missions.book.get(id) else {
             return false;
         };
@@ -432,6 +698,23 @@ impl Runtime {
         report: Option<String>,
         by: &str,
         now: u64,
+    ) -> Result<bool, String> {
+        self.close_mission_with(id, end, report, by, now, None, |_| Vec::new())
+    }
+
+    /// `close_mission`, with what the closer adds to the closed mission
+    /// (`also`, which returns its events) in the same save, and the events
+    /// keyed by `key` when an evaluation closes it (B27).
+    #[allow(clippy::too_many_arguments)]
+    pub(super) fn close_mission_with(
+        &mut self,
+        id: &str,
+        end: MissionEnd,
+        report: Option<String>,
+        by: &str,
+        now: u64,
+        key: Option<&str>,
+        also: impl FnOnce(&mut Mission) -> Vec<crate::mission_events::MissionEvent>,
     ) -> Result<bool, String> {
         let current = self.missions.book.get(id).ok_or("mission_unknown")?;
         if current.status != MissionStatus::Cancelled {
@@ -461,6 +744,7 @@ impl Runtime {
             super::mission_events::end_decision(target, now)
         };
         target.closed_at_unix_ms = Some(now);
+        target.reopened_on = None;
         target.updated_at_unix_ms = now;
         if status == MissionStatus::Cancelled {
             // A cancelled mission wakes no one (D-51).
@@ -469,6 +753,10 @@ impl Runtime {
         let changed = *target != before;
         let mut events = super::mission_events::close_events(&before, target, now);
         events.extend(ended);
+        events.extend(also(target));
+        if let Some(key) = key {
+            super::mission_health::key_events(key, &mut events);
+        }
         if !target.status.open() {
             self.missions.answers_held.remove(id);
         }
@@ -477,7 +765,6 @@ impl Runtime {
             "mission": id, "end": status, "by": by,
         }));
         let place = (target.device_id.clone(), target.project.clone());
-        self.save_missions();
         self.record_mission_events(id, events);
         // A mission now waiting for its branches reads them at once.
         if status == MissionStatus::MergeWait {
@@ -506,13 +793,13 @@ impl Runtime {
         };
         mission.status = MissionStatus::Done;
         mission.closed_at_unix_ms = Some(now);
+        mission.reopened_on = None;
         mission.updated_at_unix_ms = now;
         let events = super::mission_events::end_decision(mission, now);
         crate::diagnostic!(json!({
             "component": "missions", "kind": "mission.closed_by_branches", "mission": id,
         }));
         self.missions.answers_held.remove(id);
-        self.save_missions();
         self.record_mission_events(id, events);
         true
     }
@@ -524,14 +811,27 @@ impl Runtime {
 
     pub(super) fn save_missions(&mut self) {
         self.missions.book_edit = self.missions.book_edit.wrapping_add(1);
+        // A reopened mission is held open until a node moves (B18); the
+        // move is seen here, where every change is saved, so a node that
+        // went back to work and finished again has moved even though it
+        // looks as it did.
+        for mission in &mut self.missions.book.missions {
+            if mission
+                .reopened_on
+                .as_ref()
+                .is_some_and(|marks| *marks != mission.node_marks())
+            {
+                mission.reopened_on = None;
+            }
+        }
         self.note_mission_finishes();
         // A book that could not be read is kept as it is on disk: the empty
         // one in memory is not the operator's missions.
         if self.missions.unreadable.is_some() {
             return;
         }
-        if let Some(store) = &self.missions.store {
-            store.save(&self.missions.book);
+        if let Some(store) = &self.missions.event_store {
+            store.save_book(Arc::new(self.missions.book.clone()));
         }
     }
 
@@ -548,7 +848,7 @@ impl Runtime {
         // it pays for the copy a refusal puts back.
         let before = command.mutates().then(|| self.missions.book.clone());
         let taken = match &command {
-            MissionCommand::Take { mission } => Some(mission.clone()),
+            MissionCommand::Take { mission, .. } => Some(mission.clone()),
             _ => None,
         };
         let answer = self.apply_mission_command(device, caller, expected, command)?;
@@ -682,6 +982,9 @@ impl Runtime {
                     wake_seq: 0,
                     round_seq: 0,
                     end_asked_at_unix_ms: None,
+                    attention_seq: 0,
+                    reopened_on: None,
+                    handover: None,
                 };
                 crate::diagnostic!(json!({
                     "component": "missions", "kind": "mission.created",
@@ -720,7 +1023,6 @@ impl Runtime {
                     now,
                 );
                 *self.missions.book.get_mut(&id).ok_or("mission_unknown")? = next;
-                self.save_missions();
                 self.record_mission_events(&id, events);
                 // The plan's outside nodes are read now, not at the next
                 // GitHub read or fetch.
@@ -735,6 +1037,18 @@ impl Runtime {
                 node,
                 patch,
             } => {
+                // A plan sets `planned`; the Conductor moves a node to work,
+                // done or dropped (PRD mission-node-simple D-16, B25).
+                if let Some(status) = patch.status
+                    && !NodeStatus::SET_BY_CONDUCTOR.contains(&status)
+                {
+                    return Err(crate::coordination::refusal(
+                        "mission_status_refused",
+                        &NodeStatus::SET_BY_CONDUCTOR
+                            .map(NodeStatus::as_str)
+                            .join(", "),
+                    ));
+                }
                 let id = self.conducted_mission(&actor, mission.as_deref(), true)?;
                 let current = self.missions.book.get(&id).ok_or("mission_unknown")?;
                 let index = current
@@ -764,16 +1078,33 @@ impl Runtime {
                 // Done is held against the node as this command leaves it:
                 // a done set now, or a done node given another pull request
                 // or worker (B9).
-                let subject_moved = next.pr != bound.pr || next.agent_id != bound.agent_id;
+                let subject_moved = next.prs != bound.prs || next.agent_id != bound.agent_id;
                 if patch.status == Some(NodeStatus::Done) || subject_moved {
                     self.gate_node_done(current, &next)?;
                 }
                 // A pull request named now starts its wakes from what GitHub
                 // says of it now, so its first change after this one wakes.
-                if next.pr != current.nodes[index].pr
-                    && let Some(number) = next.pr
-                {
-                    next.pr_seen = self.pull_seen(&current.device_id, &current.project, number);
+                for number in next.prs.clone() {
+                    if !current.nodes[index].prs.contains(&number)
+                        && let Some(seen) =
+                            self.pull_seen(&current.device_id, &current.project, number)
+                    {
+                        next.pr_seen.retain(|held| held.number != number);
+                        next.pr_seen.push(seen);
+                    }
+                }
+                // The Conductor moving the node settles what waited on it
+                // (B17); a cause it settles is not raised again.
+                if patch.status.is_some() {
+                    super::mission_health::settle(&id, &mut next, "conductor");
+                }
+                // Taken back to work from a finish, it is not finished again
+                // by Hide on the pull requests it holds now.
+                // The mark names the pull requests it held when it was taken
+                // back, so one named in the same command finishes it again.
+                if current.nodes[index].status.finished() && next.status == NodeStatus::Working {
+                    next.resumed = Some(current.nodes[index].resumed_cause());
+                    next.back_to_work();
                 }
                 let reads = reads_branch(current.status, &next);
                 let target = self.missions.book.get_mut(&id).ok_or("mission_unknown")?;
@@ -785,18 +1116,22 @@ impl Runtime {
                 let changed = target.nodes[index] != next;
                 let events = super::mission_events::node_events(&target.nodes[index], &next, now);
                 target.nodes[index] = next;
+                super::mission_health::prune_attention_wakes(target);
                 // A waiting mission's node named another branch or finished
                 // again, or a direct change finished or moved to another
                 // branch while its mission runs: its branches are read now.
                 let follow = target.status == MissionStatus::MergeWait || reads;
                 if changed {
                     target.updated_at_unix_ms = now;
-                    self.save_missions();
                     self.record_mission_events(&id, events);
                     if follow {
                         self.follow_mission_outside(&id);
                     }
                 }
+                // What the Conductor just did may follow a pull request it
+                // pushed: its project is read again within the read's own
+                // spacing (D-09, B23).
+                self.ask_mission_pulls(&id);
                 Ok((json!({"mission": self.mission_view_of(&id)}), changed))
             }
             MissionCommand::Start { mission } => {
@@ -889,7 +1224,7 @@ impl Runtime {
                 let id = self.conducted_mission(&actor, mission.as_deref(), true)?;
                 self.add_mission_defect(&actor, &id, &node, (found_by, line), now)
             }
-            MissionCommand::Take { mission } => {
+            MissionCommand::Take { mission, handover } => {
                 let target = self.missions.book.get(&mission).ok_or("mission_unknown")?;
                 if target.status == MissionStatus::Cancelled {
                     return Err("mission_cancelled".into());
@@ -900,7 +1235,16 @@ impl Runtime {
                 if target.conductor.actor.same_identity(&actor) {
                     return Ok((json!({"mission": self.mission_view_of(&mission)}), false));
                 }
-                if self.conductor_present(&target.conductor.actor) {
+                // A Conductor still there is taken over only with the
+                // operator's handover made on it, by the session it was
+                // made for, once (PRD mission-node-simple B15).
+                let handed = target.handover.as_ref().is_some_and(|made| {
+                    handover.as_deref() == Some(made.token.as_str())
+                        && made.from.same_identity(&target.conductor.actor)
+                        && now.saturating_sub(made.at_unix_ms) < crate::missions::HANDOVER_TTL_MS
+                });
+                let present = self.conductor_present(&target.conductor.actor);
+                if !handed && present {
                     // The current Conductor is named so the second session
                     // can tell the operator who holds it (B45).
                     return Err(crate::coordination::refusal(
@@ -918,10 +1262,16 @@ impl Runtime {
                     .get_mut(&mission)
                     .ok_or("mission_unknown")?;
                 target.conductor = conductor;
+                target.handover = None;
+                // What reached the operator because the Conductor taken
+                // over did not answer goes to the new one first (B15).
+                if present {
+                    super::mission_health::ask_new_conductor(target, now);
+                }
                 target.updated_at_unix_ms = now;
                 crate::diagnostic!(json!({
                     "component": "missions", "kind": "mission.taken",
-                    "mission": mission, "pane": pane,
+                    "mission": mission, "pane": pane, "handed": handed,
                 }));
                 self.save_missions();
                 Ok((json!({"mission": self.mission_view_of(&mission)}), true))
@@ -1017,7 +1367,7 @@ impl Runtime {
         Ok(mission.id.clone())
     }
 
-    fn reopen_mission(&mut self, id: &str, now: u64) -> Result<bool, String> {
+    pub(super) fn reopen_mission(&mut self, id: &str, now: u64) -> Result<bool, String> {
         let target = self.missions.book.get(id).ok_or("mission_unknown")?;
         match target.status {
             MissionStatus::Cancelled => return Err("mission_cancelled".into()),
@@ -1040,6 +1390,7 @@ impl Runtime {
         let target = self.missions.book.get_mut(id).ok_or("mission_unknown")?;
         target.status = MissionStatus::Running;
         target.closed_at_unix_ms = None;
+        target.reopened_on = Some(target.node_marks());
         for node in &mut target.nodes {
             node.in_main = None;
             node.branch_ahead = None;
@@ -1135,6 +1486,20 @@ impl Runtime {
 
     /// What GitHub last said of pull request `number` of `project` on
     /// `device`, as a node remembers it; none before a read holds it.
+    /// `mission`'s project as GitHub last answered for its device, stale
+    /// or not.
+    pub(super) fn mission_project_pulls(
+        &self,
+        mission: &Mission,
+    ) -> Option<&crate::model::GithubProjectSnapshot> {
+        let github = if mission.device_id == self.node.as_str() {
+            Some(&self.github)
+        } else {
+            self.device_github.get(&mission.device_id)
+        };
+        github?.project(&mission.project)
+    }
+
     fn pull_seen(&self, device: &str, project: &str, number: u32) -> Option<PrSeen> {
         let github = if device == self.node.as_str() {
             Some(&self.github)
@@ -1218,7 +1583,7 @@ impl Runtime {
                 continue;
             }
             if let Some(mission) = self.missions.book.get_mut(&id) {
-                record_wake(mission, String::new(), None, WakeEvent::Resumed, None);
+                record_wake(mission, String::new(), None, WakeEvent::Resumed, None, None);
             }
             crate::diagnostic!(json!({
                 "component": "missions", "kind": "mission.conductor_resumed",
@@ -1391,52 +1756,79 @@ impl Runtime {
                 }
                 mission.updated_at_unix_ms = now;
                 let id = mission.id.clone();
-                self.record_mission_events(&id, moved);
+                self.stage_mission_events(&id, moved);
             }
             let mission = &self.missions.book.missions[index];
             let mut events = Vec::new();
             let mut merged = Vec::new();
             let mut seen_updates = Vec::new();
             for (node_index, node) in mission.nodes.iter().enumerate() {
-                let Some(number) = node.pr else { continue };
-                let Some(pull) = project
-                    .pull_requests
-                    .iter()
-                    .find(|pull| pull.number == number)
-                else {
-                    continue;
-                };
-                let now_seen = seen_of(pull);
-                match &node.pr_seen {
-                    // The first answer about a pull request is where its
-                    // wakes start from; it reports nothing of its own.
-                    None => {}
-                    Some(before) => {
-                        if now_seen.merged && !before.merged {
-                            merged.push(super::mission_events::merged_event(node, number, now));
-                            events.push((node.key.clone(), number, WakeEvent::Merged, None));
-                        } else if !now_seen.merged {
-                            if now_seen.changes_requested && !before.changes_requested {
+                for &number in &node.prs {
+                    let Some(pull) = project
+                        .pull_requests
+                        .iter()
+                        .find(|pull| pull.number == number)
+                    else {
+                        continue;
+                    };
+                    let now_seen = seen_of(pull);
+                    match node.seen(number) {
+                        // The first answer about a pull request is where its
+                        // wakes start from; it reports nothing of its own.
+                        None => {}
+                        Some(before) => {
+                            if now_seen.merged && !before.merged {
+                                // Keyed by the fact, so a read again after a
+                                // lost save writes it once (B27).
+                                let mut event =
+                                    super::mission_events::merged_event(node, number, now);
+                                event.id =
+                                    Some(format!("{}@{}:merged:{number}", node.key, node.round));
+                                merged.push(event);
                                 events.push((
                                     node.key.clone(),
                                     number,
-                                    WakeEvent::ChangesRequested,
-                                    now_seen.head.clone(),
+                                    WakeEvent::Merged,
+                                    None,
+                                    None,
                                 ));
-                            }
-                            if now_seen.head.is_some() && now_seen.head != before.head {
-                                events.push((
-                                    node.key.clone(),
-                                    number,
-                                    WakeEvent::NewHead,
-                                    now_seen.head.clone(),
-                                ));
+                            } else if !now_seen.merged {
+                                if now_seen.changes_requested && !before.changes_requested {
+                                    // Changes asked for again on one head are
+                                    // news again: GitHub's time of the pull
+                                    // request tells the asks apart.
+                                    let key = format!(
+                                        "changes_requested:{}:{number}:{}:{}",
+                                        node.key,
+                                        now_seen
+                                            .head
+                                            .as_deref()
+                                            .map_or("-", |head| head.get(..12).unwrap_or(head)),
+                                        pull.updated_at_unix_ms.unwrap_or_default()
+                                    );
+                                    events.push((
+                                        node.key.clone(),
+                                        number,
+                                        WakeEvent::ChangesRequested,
+                                        now_seen.head.clone(),
+                                        Some(key),
+                                    ));
+                                }
+                                if now_seen.head.is_some() && now_seen.head != before.head {
+                                    events.push((
+                                        node.key.clone(),
+                                        number,
+                                        WakeEvent::NewHead,
+                                        now_seen.head.clone(),
+                                        None,
+                                    ));
+                                }
                             }
                         }
                     }
-                }
-                if node.pr_seen.as_ref() != Some(&now_seen) {
-                    seen_updates.push((node_index, now_seen));
+                    if node.seen(number) != Some(&now_seen) {
+                        seen_updates.push((node_index, now_seen));
+                    }
                 }
             }
             // With nothing new from GitHub, the last answers still decide a
@@ -1451,13 +1843,13 @@ impl Runtime {
             }
             changed = true;
             let id = mission.id.clone();
-            self.record_mission_events(&id, merged);
+            self.stage_mission_events(&id, merged);
             let mission = &self.missions.book.missions[index];
             let done = mission.status == MissionStatus::Done;
             // A done mission's merge is the end it was waiting for, not work
             // for its Conductor (B41).
             if done {
-                events.retain(|(_, _, event, _)| *event != WakeEvent::Merged);
+                events.retain(|(_, _, event, _, _)| *event != WakeEvent::Merged);
             }
             // A Conductor conducts one open mission at a time, so a change
             // to a done one while it conducts another wakes it with the
@@ -1471,7 +1863,7 @@ impl Runtime {
                     .is_none();
             let mission = &mut self.missions.book.missions[index];
             for (node_index, seen) in seen_updates {
-                mission.nodes[node_index].pr_seen = Some(seen);
+                note_seen(&mut mission.nodes[node_index], seen);
             }
             // A mission waiting on the operator's merges is done once every
             // pull request of its stack is merged, whether or not a Conductor
@@ -1483,6 +1875,7 @@ impl Runtime {
             if closes {
                 mission.status = MissionStatus::Done;
                 mission.closed_at_unix_ms = Some(now);
+                mission.reopened_on = None;
                 mission.updated_at_unix_ms = now;
                 ended.push((
                     mission.id.clone(),
@@ -1498,13 +1891,13 @@ impl Runtime {
             if reopen {
                 reopened.push(mission.id.clone());
             }
-            for (node, pr, event, head) in events {
-                recorded.push(record_wake(mission, node, Some(pr), event, head));
+            for (node, pr, event, head, key) in events {
+                recorded.extend(record_wake(mission, node, Some(pr), event, head, key));
             }
         }
         for (id, events) in ended {
             self.missions.answers_held.remove(&id);
-            self.record_mission_events(&id, events);
+            self.stage_mission_events(&id, events);
         }
         for id in reopened {
             // Two done missions of one Conductor changed in one read: the
@@ -1515,6 +1908,7 @@ impl Runtime {
                 }));
             }
         }
+        // One save keeps every change of this read with its events (B27).
         if changed {
             self.save_missions();
         }
@@ -1530,21 +1924,27 @@ impl Runtime {
     /// one queue's worth, leaving out those this sending already tried.
     fn ready_wakes(&self, tried: &[String]) -> Vec<Wake> {
         let mut out = Vec::new();
+        let ledger = self.delivery_state().ok();
         for mission in &self.missions.book.missions {
             if mission.status == MissionStatus::Cancelled || mission.wakes.is_empty() {
                 continue;
             }
-            let Some(target) = self
+            // No Conductor to wake: its wakes wait for the next one, and the
+            // change is in what it reads with `hide mission show` (B44).
+            let conductor = self
                 .delivery_observations
                 .get(&mission.conductor.actor.pane_id)
-                .filter(|observation| observation.actor.same_identity(&mission.conductor.actor))
-            else {
-                // No Conductor to wake: the wakes wait for the next one, and
-                // the change is in what it reads with `hide mission show`
-                // (B44).
-                continue;
-            };
+                .filter(|observation| observation.actor.same_identity(&mission.conductor.actor));
             for wake in &mission.wakes {
+                let target = match &wake.to {
+                    None => conductor.cloned(),
+                    Some(agent) => ledger
+                        .as_deref()
+                        .and_then(|ledger| self.worker_target(ledger, agent)),
+                };
+                let Some(target) = target else {
+                    continue;
+                };
                 let intent = wake_intent(mission, wake);
                 if tried.contains(&intent) {
                     continue;
@@ -1552,57 +1952,42 @@ impl Runtime {
                 if out.len() >= WAKE_QUEUE_LIMIT {
                     return out;
                 }
-                let pr = wake
-                    .pr
-                    .map_or_else(|| "The PR".to_owned(), |number| format!("PR #{number}"));
-                let outside = || match mission
-                    .nodes
-                    .iter()
-                    .find(|node| node.key == wake.node)
-                    .and_then(|node| node.external.as_ref())
-                {
-                    Some(External::Branch(branch)) => format!("Branch {branch}"),
-                    _ => pr.clone(),
-                };
-                let news = |what: String, act: &str| {
-                    format!(
-                        "{what} (mission {} \"{}\", node {}).\nRead the mission with `hide mission show {}` and act on it: {act}.",
-                        mission.id, mission.title, wake.node, mission.id
-                    )
-                };
-                let body = match wake.event {
-                    WakeEvent::Merged => news(format!("{pr} was merged"), PR_ACT),
-                    WakeEvent::ChangesRequested => {
-                        news(format!("{pr} received a review asking for changes"), PR_ACT)
-                    }
-                    WakeEvent::NewHead => news(format!("{pr} has a new commit"), PR_ACT),
-                    WakeEvent::OutsideDone => news(
-                        format!("{} is in main", outside()),
-                        "start the nodes that waited on it",
-                    ),
-                    WakeEvent::OutsideFailed => news(
-                        format!("{} was closed without a merge", outside()),
-                        "replan the nodes it blocks, or ask the operator",
-                    ),
-                    WakeEvent::Resumed => format!(
-                        "You conduct mission {} \"{}\" again: your pane had closed, and the operator brought your conversation back.\nRead `hide mission show {}` and `hide inbox`, check each worker's state, and go on from there.",
-                        mission.id, mission.title, mission.id
-                    ),
-                    WakeEvent::EndAsked => format!(
-                        "The operator asked from the map to end mission {} \"{}\".\nTreat it as the operator saying \"cancel\" and follow that item of `hide mission help`: ask about the open pull requests with `hide mission decide`, end the workers, then `hide mission close --as cancelled`.",
-                        mission.id, mission.title
-                    ),
-                };
                 out.push(Wake {
                     mission: mission.id.clone(),
                     seq: wake.seq,
-                    target: target.clone(),
+                    target,
                     intent,
-                    body,
+                    body: wake_body(mission, wake),
+                    // A worker's letter asks it to act, so a sleeping one is
+                    // woken by it (D-13); the Conductor's needs no answer.
+                    kind: if wake.to.is_some() {
+                        "request"
+                    } else {
+                        "progress"
+                    },
                 });
             }
         }
         out
+    }
+
+    /// Where a letter to the worker registration `agent` goes now: its pane
+    /// while it runs there, or the agent asleep, which a request wakes. None
+    /// while neither holds; its wake then waits.
+    fn worker_target(
+        &self,
+        ledger: &crate::delivery::ledger::Ledger,
+        agent: &str,
+    ) -> Option<super::delivery::Observation> {
+        let record = ledger
+            .agents
+            .iter()
+            .find(|record| record.id == agent && !record.ended)?;
+        self.delivery_observations
+            .get(&record.actor.pane_id)
+            .filter(|observation| observation.actor.same_identity(&record.actor))
+            .cloned()
+            .or_else(|| self.sleeping_target(ledger, Some(&record.actor), &record.actor.pane_id))
     }
 
     /// Sends the recorded wakes whose Conductor is there, from one thread
@@ -1656,6 +2041,7 @@ impl Runtime {
                 let mut tried = Vec::new();
                 loop {
                     let mut sent = Vec::new();
+                    let mut refused = Vec::new();
                     for wake in batch.drain(..) {
                         tried.push(wake.intent.clone());
                         let prepared = crate::delivery::worker::Prepared::new(
@@ -1670,19 +2056,25 @@ impl Runtime {
                                 target: wake.target.actor.pane_id.clone(),
                                 intent: wake.intent.clone(),
                                 body: wake.body,
-                                // Hide reads no answer, so the letter waits
-                                // for none.
-                                kind: "progress".into(),
+                                kind: wake.kind.into(),
                                 now: false,
                                 force: false,
                             },
                         );
+                        let worker = wake.kind == "request";
                         match prepared.run(WAKE_CALL) {
                             Ok(_) => sent.push((wake.mission, wake.seq)),
-                            Err(code) => crate::diagnostic!(json!({
-                                "component": "missions", "kind": "mission.wake_failed",
-                                "intent": wake.intent, "code": code,
-                            })),
+                            Err(code) => {
+                                crate::diagnostic!(json!({
+                                    "component": "missions", "kind": "mission.wake_failed",
+                                    "intent": wake.intent, "code": code,
+                                }));
+                                // A worker's letter refused is raised to the
+                                // Conductor rather than tried again (B10).
+                                if worker {
+                                    refused.push((wake.mission, wake.seq));
+                                }
+                            }
                         }
                     }
                     let Some(runtime) = context.runtime.upgrade() else {
@@ -1690,6 +2082,7 @@ impl Runtime {
                     };
                     let mut guard = runtime.lock().unwrap_or_else(|poison| poison.into_inner());
                     guard.mission_wakes_sent(&sent);
+                    guard.mission_wakes_refused(&refused);
                     if guard.missions.rewake {
                         guard.missions.rewake = false;
                         batch = guard.ready_wakes(&tried);
@@ -1782,14 +2175,29 @@ impl Runtime {
             .iter()
             .map(|node| {
                 let record = node.agent_id.as_deref().and_then(|id| agents.get(id));
-                let pull = node.pr.and_then(|number| {
+                let pull_of = |number: u32| {
                     github?
                         .pull_requests
                         .iter()
                         .find(|pull| pull.number == number)
-                });
+                };
+                let pull = node.current_pr().and_then(pull_of);
                 let pr_state = pull
                     .map(|pull| PrState::of(pull.badge, pull.is_draft, pull.checks, pull.review));
+                let prs = node
+                    .prs
+                    .iter()
+                    .map(|&number| {
+                        let pull = pull_of(number);
+                        NodePrView {
+                            number,
+                            state: pull.map(|pull| {
+                                PrState::of(pull.badge, pull.is_draft, pull.checks, pull.review)
+                            }),
+                            url: pull.map(|pull| pull.url.clone()),
+                        }
+                    })
+                    .collect();
                 let mut criteria: Vec<Criterion> = if node.criteria.is_empty() {
                     Vec::new()
                 } else {
@@ -1820,7 +2228,8 @@ impl Runtime {
                     agent_runtime: record.map(|record| crate::coordination::life(record, sleeping)),
                     pane_id: record.map(|record| record.pane.clone()),
                     machine: record.map(|record| record.machine.clone()),
-                    pr: node.pr,
+                    pr: node.current_pr(),
+                    prs,
                     base_pr: node.base_pr,
                     branch: node.branch.clone(),
                     pr_state,
@@ -1847,6 +2256,31 @@ impl Runtime {
                     verdict: node.verdict,
                     checks: node.checks,
                     plan: record.and_then(|record| self.worker_plan(&record.machine, &record.pane)),
+                    attention: node.attention.as_ref().map(|attention| {
+                        let operator = attention.operator_at_unix_ms.is_some();
+                        let on_row =
+                            operator && self.mission_attention_has_row(ledger, mission, node);
+                        AttentionView {
+                            reason: attention.reason,
+                            pr: attention.pr,
+                            to: if operator {
+                                AttentionTo::Operator
+                            } else {
+                                AttentionTo::Conductor
+                            },
+                            since_unix_ms: attention
+                                .operator_at_unix_ms
+                                .unwrap_or(attention.since_unix_ms),
+                            on_row,
+                            // A cancelled mission and a dropped node keep
+                            // their record but ask nothing now.
+                            item: operator
+                                && !on_row
+                                && mission.status.asks()
+                                && node.status != NodeStatus::Dropped,
+                        }
+                    }),
+                    hide: node.hide.clone(),
                 }
             })
             .collect();
@@ -2011,6 +2445,7 @@ impl Runtime {
         let sleeping = self.sleeping_registrations(std::iter::once(()).flat_map(|()| {
             worker_records(ledger.as_deref(), self.missions.book.missions.iter()).into_values()
         }));
+        let laid = self.laid_panes();
         let before = &self.missions.views;
         let same_ledger = match (&before.ledger, &ledger) {
             (Some(weak), Some(ledger)) => std::ptr::eq(weak.as_ptr(), Arc::as_ptr(ledger)),
@@ -2022,7 +2457,8 @@ impl Runtime {
             && before.plans_edit == self.plans.edit
             && before.github_edit == self.missions.github_edit
             && before.stale == stale
-            && before.sleeping == sleeping;
+            && before.sleeping == sleeping
+            && before.laid == laid;
         if closed_kept
             && same_ledger
             && before.present == present
@@ -2032,12 +2468,16 @@ impl Runtime {
         {
             return;
         }
+        // A closed mission whose node waits on the operator is drawn again
+        // with the rows, which decide where it shows in Needs You (B14).
+        let kept_closed =
+            |mission: &Mission| closed_kept && !mission.status.open() && !operator_waits(mission);
         let made: Vec<&Mission> = self
             .missions
             .book
             .missions
             .iter()
-            .filter(|mission| !closed_kept || mission.status.open())
+            .filter(|mission| !kept_closed(mission))
             .collect();
         let agents = worker_records(ledger.as_deref(), made.iter().copied());
         let items = self
@@ -2046,7 +2486,7 @@ impl Runtime {
             .missions
             .iter()
             .map(|mission| {
-                let kept = (closed_kept && !mission.status.open())
+                let kept = kept_closed(mission)
                     .then(|| {
                         self.snapshot
                             .missions
@@ -2080,9 +2520,53 @@ impl Runtime {
             unreadable,
             until,
             sleeping,
+            laid,
             made: true,
         };
     }
+}
+
+impl Runtime {
+    /// Lays each device's missions that are their own Needs You item (no
+    /// Conductor or worker row carries what waits on the operator, B14) on
+    /// that device's scope, oldest first, so its Needs You number counts
+    /// them; run after the mission views, which decide `on_row`.
+    pub(super) fn publish_mission_asks(&mut self) -> bool {
+        let mut waiting: std::collections::BTreeMap<String, Vec<(u64, String)>> =
+            std::collections::BTreeMap::new();
+        for mission in &self.snapshot.missions.items {
+            let oldest = mission
+                .nodes
+                .iter()
+                .filter_map(|node| node.attention.as_ref())
+                .filter(|attention| attention.item)
+                .map(|attention| attention.since_unix_ms)
+                .min();
+            if let Some(since) = oldest {
+                waiting
+                    .entry(mission.device_id.clone())
+                    .or_default()
+                    .push((since, mission.id.clone()));
+            }
+        }
+        let asks = waiting
+            .into_iter()
+            .map(|(device, mut missions)| {
+                missions.sort();
+                (device, missions.into_iter().map(|(_, id)| id).collect())
+            })
+            .collect();
+        self.agent_scope_cache.note_mission_asks(asks) && self.refresh_agent_scopes()
+    }
+}
+
+/// Whether a node of `mission` waits on the operator.
+fn operator_waits(mission: &Mission) -> bool {
+    mission.nodes.iter().any(|node| {
+        node.attention
+            .as_ref()
+            .is_some_and(|attention| attention.operator_at_unix_ms.is_some())
+    })
 }
 
 /// The registrations of the workers `missions` name, read in one pass.
@@ -2126,7 +2610,6 @@ fn node_stage(node: &MissionNode, pr_state: Option<PrState>) -> Option<u8> {
     match (node.delivery, node.status) {
         (_, NodeStatus::Planned) => None,
         (Some(Delivery::Direct), NodeStatus::Done) => Some(4),
-        (Some(Delivery::Direct), NodeStatus::Review) => Some(3),
         (Some(Delivery::Direct), _) if node.branch.is_some() => Some(2),
         _ => Some(1),
     }

@@ -999,18 +999,23 @@ impl Mobile {
                     pane_id: notice.actor.pane_id.clone(),
                 },
                 // A delivery notice names the agent that has not answered,
-                // and the phone words the cause from its state key.
+                // and the phone words the cause from its state key. A
+                // mission notice is the mission's turn for the operator: its
+                // title, then the node that waits.
                 title: notice.recipient.clone(),
                 status_code: None,
-                detail: None,
+                detail: (notice.kind == HumanNoticeKind::MissionAttention)
+                    .then(|| notice.about.clone()),
                 subject: None,
                 state: match notice.kind {
                     HumanNoticeKind::ObserverUnconfirmed => push::NoticeState::ObserverUnconfirmed,
                     HumanNoticeKind::LetterUndelivered => push::NoticeState::LetterUndelivered,
+                    HumanNoticeKind::MissionAttention => push::NoticeState::NeedsYou,
                 },
                 place: match notice.kind {
                     HumanNoticeKind::ObserverUnconfirmed => notice.about.clone(),
                     HumanNoticeKind::LetterUndelivered => notice.id.clone(),
+                    HumanNoticeKind::MissionAttention => String::new(),
                 },
             },
             &BTreeSet::new(),

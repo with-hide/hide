@@ -11,7 +11,10 @@
 //!
 //! Asking the shell is a subprocess with a deadline, so the answer is kept
 //! until a startup file changes (below). A caller on a hot path asks only
-//! after a first read has warmed it.
+//! after a first read has warmed it. The same ask reads the environment the
+//! shell exports ([`login_shell_environment`]), for a caller that starts an
+//! agent the way the operator's terminal would ([`account_environment`]), so
+//! no caller starts the shell a second time for it.
 //!
 //! This is the one place the crate keeps anything between calls: the login
 //! shell's answer is a fact about the account, not about a caller, so every
@@ -82,11 +85,15 @@ fn startup_stamps(home: &Path) -> StartupStamps {
         .collect()
 }
 
+/// The variables an environment holds, each `(name, value)`.
+pub type Environment = Arc<[(OsString, OsString)]>;
+
 /// What the login shell answered, with the startup files it was read under
 /// and when it was asked.
 struct ShellAnswer {
     stamps: StartupStamps,
     path: Option<OsString>,
+    environment: Option<Environment>,
     asked: Instant,
 }
 
@@ -125,6 +132,25 @@ pub fn login_shell_path(
     login_shell: Option<&Path>,
     stop: &AtomicBool,
 ) -> Option<OsString> {
+    asked(home, login_shell, stop)?.path
+}
+
+/// Every variable the account's login shell exports
+/// ([`host::LoginShell::environment`]), from the same ask, kept and asked
+/// again as [`login_shell_path`] is. `None` when there is no shell to ask or
+/// it did not list them; why is logged.
+pub fn login_shell_environment(
+    home: &Path,
+    login_shell: Option<&Path>,
+    stop: &AtomicBool,
+) -> Option<Environment> {
+    asked(home, login_shell, stop)?.environment
+}
+
+/// What the login shell last answered for `home`, asked as
+/// [`login_shell_path`] says; `None` when there is no shell or the owner
+/// stopped the ask.
+fn asked(home: &Path, login_shell: Option<&Path>, stop: &AtomicBool) -> Option<Answered> {
     static SLOTS: Mutex<Vec<Arc<Slot>>> = Mutex::new(Vec::new());
     let shell = login_shell?;
     let slot = {
@@ -154,30 +180,53 @@ pub fn login_shell_path(
         && known.stamps == stamps
         && (known.path.is_some() || known.asked.elapsed() < UNREAD_RETRY)
     {
-        return known.path.clone();
+        return Some(Answered {
+            path: known.path.clone(),
+            environment: known.environment.clone(),
+        });
     }
     let asked = Instant::now();
-    let path = match crate::host::login_shell_path(shell, home, LOGIN_SHELL_DEADLINE, stop) {
-        Ok(path) => Some(path),
-        // The owner is going away (Hide quitting, a device's
-        // connection closed): nothing failed, and nothing is remembered.
-        Err(error) if error.kind() == std::io::ErrorKind::Interrupted => return None,
-        Err(error) => {
-            eprintln!(
-                "platform.login_shell_unread shell={} kind={:?} elapsed_ms={}",
-                shell.display(),
-                error.kind(),
-                asked.elapsed().as_millis()
-            );
-            None
-        }
-    };
+    let (path, environment) =
+        match crate::host::login_shell(shell, home, LOGIN_SHELL_DEADLINE, stop) {
+            Ok(read) => {
+                let environment = match read.environment {
+                    Ok(variables) => Some(Environment::from(variables)),
+                    Err(why) => {
+                        eprintln!(
+                            "platform.login_shell_environment_unread shell={} why={why}",
+                            shell.display()
+                        );
+                        None
+                    }
+                };
+                (Some(read.path), environment)
+            }
+            // The owner is going away (Hide quitting, a device's
+            // connection closed): nothing failed, and nothing is remembered.
+            Err(error) if error.kind() == std::io::ErrorKind::Interrupted => return None,
+            Err(error) => {
+                eprintln!(
+                    "platform.login_shell_unread shell={} kind={:?} elapsed_ms={}",
+                    shell.display(),
+                    error.kind(),
+                    asked.elapsed().as_millis()
+                );
+                (None, None)
+            }
+        };
     *answer = Some(ShellAnswer {
         stamps,
         path: path.clone(),
+        environment: environment.clone(),
         asked,
     });
-    path
+    Some(Answered { path, environment })
+}
+
+/// One ask's answer, as a caller takes it.
+struct Answered {
+    path: Option<OsString>,
+    environment: Option<Environment>,
 }
 
 /// How long an answer that could not be read (the login shell's `PATH`) is
@@ -225,6 +274,34 @@ pub fn account_path() -> Option<OsString> {
         host::default_shell().ok()
     };
     search_path(&home, shell.as_deref(), &NEVER)
+}
+
+/// The environment a new terminal of the account this process runs as
+/// starts with, which is what an agent the operator starts there has: on
+/// macOS and Linux every variable its login shell exports
+/// ([`login_shell_environment`], from the ask [`account_path`] makes), and
+/// on Windows the environment the system builds for the account's sign-in
+/// ([`host::account_environment`]). Never this process's own: a daemon the
+/// Dock started lacks what the startup files export, and one a terminal
+/// started carries that terminal's session. `None` when it could not be
+/// read; why is logged.
+pub fn account_environment() -> Option<Environment> {
+    static NEVER: AtomicBool = AtomicBool::new(false);
+    if cfg!(windows) {
+        return match host::account_environment() {
+            Ok(variables) => Some(Environment::from(variables)),
+            Err(error) => {
+                eprintln!(
+                    "platform.account_environment_unread kind={:?} error={error}",
+                    error.kind()
+                );
+                None
+            }
+        };
+    }
+    let home = host::home_dir().ok()?;
+    let shell = host::default_shell().ok();
+    login_shell_environment(&home, shell.as_deref(), &NEVER)
 }
 
 /// The program `name` on [`account_path`].

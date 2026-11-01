@@ -87,7 +87,8 @@ STORES = {
         4,
         "the core's per-mission event logs beside missions.json, which a core move "
         "copies; its folder is made, each log written, and an ended mission's log "
-        "deleted or swept",
+        "deleted or swept; the same writer then writes missions.json itself, after "
+        "the logs it goes with",
     ),
     "herdr-core/src/latest_file.rs": (
         6,

@@ -108,8 +108,6 @@ fn cycle<N: Node>(nodes: &[N]) -> Option<&str> {
 pub(crate) enum Step {
     /// Go on to the nodes it waits on.
     Continue,
-    /// Leave the nodes it waits on out of this walk.
-    Skip,
     /// End the walk.
     Stop,
 }
@@ -133,7 +131,6 @@ pub(crate) fn walk_upstream<'a, N: Node>(
         };
         match visit(upstream) {
             Step::Continue => stack.extend(upstream.depends_on().iter().map(String::as_str)),
-            Step::Skip => {}
             Step::Stop => return,
         }
     }
@@ -245,7 +242,7 @@ mod tests {
     }
 
     #[test]
-    fn the_walk_visits_each_upstream_node_once_and_skips_below_a_skipped_one() {
+    fn the_walk_visits_each_upstream_node_once_until_told_to_stop() {
         let nodes = [
             n("root", &[]),
             n("left", &["root"]),
@@ -255,14 +252,16 @@ mod tests {
         let mut seen = Vec::new();
         walk_upstream(&nodes, &nodes[3], |node| {
             seen.push(node.key().to_owned());
-            if node.key() == "left" {
-                Step::Skip
-            } else {
-                Step::Continue
-            }
+            Step::Continue
         });
         seen.sort();
         assert_eq!(seen, ["left", "right", "root"]);
+        let mut first = Vec::new();
+        walk_upstream(&nodes, &nodes[3], |node| {
+            first.push(node.key().to_owned());
+            Step::Stop
+        });
+        assert_eq!(first.len(), 1);
     }
 
     #[test]
