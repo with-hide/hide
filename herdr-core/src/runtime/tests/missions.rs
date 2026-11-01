@@ -4894,12 +4894,28 @@ fn hide_finishes_a_merged_node_and_closes_the_mission_after_its_last_node() {
         "docs is open"
     );
 
+    // GitHub's answer goes stale before the last node finishes: the close
+    // waits, raising nothing and refusing nothing, until a read comes back.
+    let stale = github(vec![pull(7, HEAD, PullRequestBadge::Merged, None)], true);
+    runtime.github = stale.clone();
+    runtime.note_mission_pulls(crate::node::TEST_NODE, &stale);
     command(
         &mut runtime,
         "sender",
         json!({"op": "node", "node": "docs", "patch": {"status": "dropped"}}),
     )
     .unwrap();
+    runtime.drive_mission_health(now);
+    runtime.drive_mission_health(now);
+    assert_eq!(mission_status(&runtime), MissionStatus::Running);
+    let mission = runtime.missions.book.get("mission-1").unwrap();
+    assert!(
+        mission.nodes.iter().all(|node| node.attention.is_none()),
+        "{:?}",
+        mission.nodes.iter().map(|node| &node.attention).collect::<Vec<_>>()
+    );
+    runtime.github = merged.clone();
+    runtime.note_mission_pulls(crate::node::TEST_NODE, &merged);
     runtime.drive_mission_health(now);
     assert_ne!(mission_status(&runtime), MissionStatus::Running);
     let mission = runtime.missions.book.get("mission-1").unwrap();

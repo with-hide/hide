@@ -92,8 +92,8 @@ impl MissionStatus {
     }
 
     /// Whether a node's attention still reaches someone: an open mission's,
-    /// and a done one's, whose merged worktrees Hide cleans after the close
-    /// (B20); a cancelled mission asks nothing.
+    /// and a done one's, so a raise it still holds keeps reaching the
+    /// operator after the close; a cancelled mission asks nothing.
     pub(crate) fn asks(self) -> bool {
         self.open() || self == Self::Done
     }

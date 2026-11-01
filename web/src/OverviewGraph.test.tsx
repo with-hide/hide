@@ -8,7 +8,7 @@ import { legacyAgentRow } from "../test/legacyAgentRow";
 import { createActions } from "./actions";
 import { TooltipProvider } from "./components/ui/tooltip";
 import { initializeInterfaceI18n } from "./i18n/instance";
-import { withMissionAsk } from "./gallery/MissionScene";
+import { missionFixture, withMissionAsk } from "./gallery/MissionScene";
 import { OverviewGraph } from "./OverviewGraph";
 import type { BoardProject } from "./projectBoard";
 import { GRAPH_CHOICES_DEFAULTS } from "./overviewGraphModel";
@@ -137,6 +137,42 @@ it("lists a mission waiting on the operator when no session is drawn", async () 
     // The filter's counts say they are the map's sessions.
     expect(container.querySelector(".og-filter-scope")?.textContent).toBe("Sessions on the map");
   } finally { await act(async () => root.unmount()); }
+});
+
+// Review 6 P2-1 of PRD mission-node-simple: a map narrowed to one project
+// lists and counts that project's missions only, on an empty map and beside
+// drawn sessions; the whole map keeps every one the device's scope names.
+it("lists only the chosen project's missions waiting on the operator, on an empty and a drawn map", async () => {
+  vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+  initializeInterfaceI18n("en");
+  const { mission } = missionFixture("no-conductor", Date.UTC(2026, 10, 1));
+  const missions = [{ ...mission, id: "mission-a", title: "알파 미션", workspace_id: "alpha" }, { ...mission, id: "mission-b", title: "베타 미션", workspace_id: "beta" }];
+  const board = (id: string, label: string, agents: ReturnType<typeof legacyAgentRow>[]): BoardProject => {
+    const row: Checkout = { id: `${id}-main`, workspace_id: id, label: "main", path: `/fixture/${id}`, branch: "main", purpose: null, is_worktree: false, exists: true, has_panes: agents.length > 0, pull_request: null, tabs: [], active_tab_id: null, next_tab_label: "Tab 1", strip: [], agent_scope: emptyScope() };
+    return { agents, device: null, workspace: { id, label, device_id: "local", path: `/fixture/${id}`, registered: true, temporary: false, pinned: false, checkouts: [row], inactive_checkouts: { expanded: false, checkout_ids: [] }, agent_scope: { ...emptyScope(), members: agents.map((agent) => ({ pane_id: agent.pane_id, project_id: id, checkout_id: row.id })) } } };
+  };
+  const shown = async (drawn: boolean, projectId: string | null) => {
+    const agents = drawn ? [legacyAgentRow({ id: "w", pane_id: "w", identity_label: "작업", agent_kind: "claude", session_id: "native-w", group: "working", activity: "working" }), legacyAgentRow({ id: "v", pane_id: "v", identity_label: "다른 작업", agent_kind: "claude", session_id: "native-v", group: "working", activity: "working" })] : [];
+    const projects = [board("alpha", "알파", agents.slice(0, 1)), board("beta", "베타", agents.slice(1))];
+    const scope = { ...emptyScope(), mission_asks: ["mission-a", "mission-b"] };
+    const rest = { navigator: { devices: [{ id: "local", kind: "local", agent_scope: scope }], workspaces: projects.map((project) => project.workspace), focused_device_id: "local" }, status: { remote: [] }, missions: { items: missions, failed: false }, overview_graph: { available: true, limit: 2000, retained_count: 0, truncated: false, retention_ms: 86400000, letters: [], sessions: agents.map((agent) => ({ device_id: "local", pane_id: agent.pane_id, session_digest: `digest-${agent.pane_id}` })) } } as unknown as SnapshotRest;
+    useShellStore.setState({ rest, agents, focusedPaneId: null, connection: "live", linkSummaries: null });
+    useUiStore.getState().setOverview({ projectId, panel: null });
+    const container = document.createElement("div");
+    document.body.append(container);
+    const root = createRoot(container);
+    await act(async () => root.render(<TooltipProvider><OverviewGraph projects={projects} deviceId="local" actions={createActions(() => true)} /></TooltipProvider>));
+    const listed = [...container.querySelectorAll<HTMLElement>("[data-graph-mission-ask]")].map((item) => item.dataset.graphMissionAsk);
+    const count = container.querySelector(drawn ? '[data-graph-projects] .og-waiting h3 span' : "[data-graph-mission-asks] h3 span")?.textContent ?? null;
+    await act(async () => root.unmount());
+    container.remove();
+    return { listed, count };
+  };
+  for (const drawn of [false, true]) {
+    expect(await shown(drawn, null), `whole map, drawn ${drawn}`).toEqual({ listed: ["mission-a", "mission-b"], count: "2" });
+    expect(await shown(drawn, "alpha"), `project A, drawn ${drawn}`).toEqual({ listed: ["mission-a"], count: "1" });
+    expect(await shown(drawn, "beta"), `project B, drawn ${drawn}`).toEqual({ listed: ["mission-b"], count: "1" });
+  }
 });
 
 // PRD overview-main-map B11-B16: the side column lists projects with their

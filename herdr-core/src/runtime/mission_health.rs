@@ -456,8 +456,8 @@ impl Runtime {
             if !mission.status.asks() || self.mission_stale(mission) {
                 continue;
             }
-            // A closed mission's Conductor has finished with it: what its
-            // worktree check raises goes to the operator at once.
+            // A closed mission's Conductor has finished with it: a raise the
+            // mission still holds goes to the operator at once.
             let present = mission.status.open() && self.conductor_present(&mission.conductor.actor);
             let mission = &mut self.missions.book.missions[index];
             let asked = conductor_identity(&mission.conductor);

@@ -1020,6 +1020,7 @@ What it does by itself, each through the gate a Conductor's own command meets:
 - **Close the mission.**
   When every node is `done` or `dropped` and nothing waits on anyone, in an evaluation that has nothing else to do, Hide closes a running mission through the close gate as a Conductor's `hide mission close --as merge_wait` would: `merge_wait` while a pull request or branch is not in main, `done` otherwise (see [Finish lines](#finish-lines)).
   Its report, when the Conductor gave none, lists each node with its status, pull requests and lines met, and the Conductor gets one `progress` letter saying Hide closed it; `hide mission reopen` and a pull request change open it again as before.
+  While GitHub's answer about the pull requests the nodes hold is stale or was never read, the close waits and raises nothing; it is judged again once a read comes back.
   A gate that refuses is raised as `close_refused` on the first node the refusal's detail names, else the last node; the raise stands and the close is tried again at each evaluation, and the close that passes settles it.
 - **Delete nothing.**
   The mission deletes no file (D-14, B20, B21): a done node's worktree, its build cache and its panes stay, and the mission never removes or asks about a worktree, nor holds its close for one with uncommitted changes or unmerged commits.
