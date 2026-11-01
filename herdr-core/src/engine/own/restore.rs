@@ -345,17 +345,15 @@ impl OwnEngine<'static> {
                         // An agent is resumed only in its own folder: its
                         // conversation belongs to it.
                         let notice = match (moved, plan) {
-                            (Some(moved), Some(Plan::Resume(resume))) => Some(format!(
-                                "{moved} {} was not resumed there.",
-                                resume.shown
-                            )),
+                            (Some(moved), Some(Plan::Resume(resume))) => {
+                                Some(format!("{moved} {} was not resumed there.", resume.shown))
+                            }
                             (Some(moved), Some(Plan::Shell(why))) => Some(format!("{moved} {why}")),
                             (moved @ Some(_), None) => moved,
                             (None, Some(Plan::Shell(why))) => Some(why.clone()),
                             (None, _) => None,
                         };
-                        let resumable = notice.is_none()
-                            && matches!(plan, Some(Plan::Resume(_)));
+                        let resumable = notice.is_none() && matches!(plan, Some(Plan::Resume(_)));
                         match self.start_pane(
                             &restart.pane,
                             None,
@@ -464,13 +462,21 @@ impl OwnEngine<'static> {
         {
             let catalog = self.shared.definitions.get();
             let mut topology = self.topology();
-            if resume.name.as_deref().is_some_and(|name| topology.name_taken(name, &resume.pane)) {
+            if resume
+                .name
+                .as_deref()
+                .is_some_and(|name| topology.name_taken(name, &resume.pane))
+            {
                 return Err("another pane runs an agent under its name".to_owned());
             }
             topology
                 .start_agent(
                     &resume.pane,
-                    PaneAgent::started(&resume.kind, resume.name.as_deref(), resume.session.clone()),
+                    PaneAgent::started(
+                        &resume.kind,
+                        resume.name.as_deref(),
+                        resume.session.clone(),
+                    ),
                 )
                 .map_err(|error| error.to_string())?;
             drop(topology);

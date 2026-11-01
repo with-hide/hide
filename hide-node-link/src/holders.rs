@@ -140,7 +140,10 @@ pub enum ScreenRead {
     /// The state of the highest-priority rule that matched the screen, or
     /// the last such state when the latest match says the screen proves
     /// nothing; `Unknown` when no rule matched.
-    Read { state: ScreenState, rule: Option<String> },
+    Read {
+        state: ScreenState,
+        rule: Option<String>,
+    },
     /// The rules cannot be evaluated on this pane, under a stable code:
     /// [`UNSUPPORTED_HOLDER`], [`NO_RULES_FOR_HOLDER`], or the holder's own
     /// refusal of the rules it was given.

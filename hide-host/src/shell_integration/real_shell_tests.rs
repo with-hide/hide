@@ -273,7 +273,12 @@ fn fish_marks_after_its_configuration() {
 fn outside_herdr_each_shell_marks_its_first_prompt_on_its_screen_once() {
     let home = tempfile::tempdir().unwrap();
     let home = home.path().canonicalize().unwrap();
-    let launches = ["HIDE_TEST_ZSH_BIN", "HIDE_TEST_BASH_BIN", "HIDE_TEST_FISH_BIN"].map(|variable| {
+    let launches = [
+        "HIDE_TEST_ZSH_BIN",
+        "HIDE_TEST_BASH_BIN",
+        "HIDE_TEST_FISH_BIN",
+    ]
+    .map(|variable| {
         let bin = shell(variable);
         let launch = install(&home.join("hide"), &user(&bin, None))
             .unwrap()
@@ -287,7 +292,11 @@ fn outside_herdr_each_shell_marks_its_first_prompt_on_its_screen_once() {
         let ((log, reported), screen) = run_in(Pane::Own, bin, &args, &home, &launch.env, after);
         assert_eq!(reported, "", "{bin:?} reports nothing outside Herdr");
         assert_eq!(log, "after\n", "{bin:?}");
-        assert_eq!(screen.matches(SCREEN_MARK).count(), 1, "{bin:?}: {screen:?}");
+        assert_eq!(
+            screen.matches(SCREEN_MARK).count(),
+            1,
+            "{bin:?}: {screen:?}"
+        );
         let ((_, reported), screen) = run_in(Pane::Herdr, bin, &args, &home, &launch.env, after);
         assert_eq!(reported, MARK, "{bin:?}");
         assert!(!screen.contains(SCREEN_MARK), "{bin:?}: {screen:?}");

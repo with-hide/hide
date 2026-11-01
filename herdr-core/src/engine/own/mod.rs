@@ -36,7 +36,8 @@ use super::keys::PaneKey;
 use super::{
     AgentLaunch, AgentState, Answer, Changes, CreatedWorktree, DeliveryAgent, Engine, EngineError,
     Env, EventStream, Gate, Notified, OpenedWorktree, PaneJoinResult, PanePlace, PaneProcessGroup,
-    PaneProof, PaneSession, PaneSessionKind, PaneText, PreparedStart, Readiness, ServerPong, StartedAgent, Wait, Wake, Zoom,
+    PaneProof, PaneSession, PaneSessionKind, PaneText, PreparedStart, Readiness, ServerPong,
+    StartedAgent, Wait, Wake, Zoom,
 };
 use crate::model::PaneLayoutDirection;
 use crate::recent_closed::{ClosedLayout, ClosedLayoutNode, ClosedSplitDirection};
@@ -436,7 +437,12 @@ impl OwnEngine<'_> {
     }
 
     /// Gives `pane`'s holder the screen rules of the agent `kind`, or none.
-    fn give_rules(&self, pane: &str, kind: Option<&str>, catalog: &hide_agent_adapter::definition::Catalog) {
+    fn give_rules(
+        &self,
+        pane: &str,
+        kind: Option<&str>,
+        catalog: &hide_agent_adapter::definition::Catalog,
+    ) {
         let rules = kind
             .and_then(|kind| agents::definition(catalog, kind))
             .and_then(agents::screen_rules);
@@ -1308,10 +1314,11 @@ impl<'g> Engine for OwnEngine<'g> {
     ) -> Answer<()> {
         self.check()?;
         let catalog = self.shared.definitions.get();
-        let definition = agents::definition(&catalog, kind).ok_or_else(|| EngineError::Refused {
-            code: "unknown_agent".to_owned(),
-            message: format!("no agent definition names {kind}"),
-        })?;
+        let definition =
+            agents::definition(&catalog, kind).ok_or_else(|| EngineError::Refused {
+                code: "unknown_agent".to_owned(),
+                message: format!("no agent definition names {kind}"),
+            })?;
         if self
             .topology()
             .set_agent_session(pane, &definition.id, session)?
@@ -1487,7 +1494,10 @@ impl<'g> Engine for OwnEngine<'g> {
         let pane = launch.pane_id.as_str();
         let catalog = self.shared.definitions.get();
         let definition = agents::definition(&catalog, &launch.kind).ok_or_else(|| {
-            refused("unknown_agent", format!("no agent definition names {}", launch.kind))
+            refused(
+                "unknown_agent",
+                format!("no agent definition names {}", launch.kind),
+            )
         })?;
         let args = crate::codex_launch::start_arguments(
             &definition.id,
@@ -1589,7 +1599,10 @@ impl<'g> Engine for OwnEngine<'g> {
     fn prompt_agent(&self, _wait: Wait, target: &str, text: &str) -> Answer<()> {
         self.check()?;
         if text.is_empty() {
-            return Err(refused("empty_agent_prompt", "agent prompt must not be empty".to_owned()));
+            return Err(refused(
+                "empty_agent_prompt",
+                "agent prompt must not be empty".to_owned(),
+            ));
         }
         let (pane, paste) = {
             let topology = self.topology();
@@ -1680,8 +1693,8 @@ mod tests {
         ends: Mutex<Option<hide_node_link::holders::PaneEnded>>,
         facts: Mutex<Option<hide_node_link::holders::PaneFactsSink>>,
         /// The rules given to each pane, by agent id, in order.
-        rules: (Mutex<Vec<(String, Option<String>)>>, Condvar),
-        typed: Mutex<Vec<(String, Vec<u8>)>>,
+        rules: (Mutex<Given>, Condvar),
+        typed: (Mutex<Typed>, Condvar),
         /// What every pane's terminal holds; `None` answers unreachable.
         processes: Mutex<Option<HolderProcesses>>,
     }
@@ -1704,22 +1717,34 @@ mod tests {
 
         /// Says `facts` of `pane` as its holder would.
         fn say(&self, pane: &str, facts: &PaneFacts) {
-            let sink = self.facts.lock().unwrap().clone().expect("the engine watches facts");
+            let sink = self
+                .facts
+                .lock()
+                .unwrap()
+                .clone()
+                .expect("the engine watches facts");
             sink(pane, facts);
         }
 
         fn typed(&self, pane: &str) -> String {
-            self.typed
-                .lock()
-                .unwrap()
-                .iter()
-                .filter(|(typed, _)| typed == pane)
-                .map(|(_, bytes)| String::from_utf8_lossy(bytes).into_owned())
-                .collect()
+            typed_into(&self.typed.0.lock().unwrap(), pane)
+        }
+
+        /// Waits for something to be typed into `pane`, and answers it.
+        fn wait_typed(&self, pane: &str) -> String {
+            let typed = self.typed.0.lock().unwrap();
+            let (typed, _) = self
+                .typed
+                .1
+                .wait_timeout_while(typed, Duration::from_secs(10), |typed| {
+                    typed_into(typed, pane).is_empty()
+                })
+                .unwrap();
+            typed_into(&typed, pane)
         }
 
         /// Waits for the rules worker to have given `count` rule sets.
-        fn rules_given(&self, count: usize) -> Vec<(String, Option<String>)> {
+        fn rules_given(&self, count: usize) -> Given {
             let given = self.rules.0.lock().unwrap();
             let (given, _) = self
                 .rules
@@ -1770,7 +1795,8 @@ mod tests {
                 .ok_or_else(|| HolderError::Unreachable("not asked".to_owned()))
         }
         fn input(&self, pane: &str, bytes: Vec<u8>) -> Result<(), HolderError> {
-            self.typed.lock().unwrap().push((pane.to_owned(), bytes));
+            self.typed.0.lock().unwrap().push((pane.to_owned(), bytes));
+            self.typed.1.notify_all();
             Ok(())
         }
         fn watch_ends(&self, ended: hide_node_link::holders::PaneEnded) {
@@ -2299,16 +2325,19 @@ mod tests {
         }
     }
 
-    /// Waits for the restore's resumes to type into `pane`.
-    fn typed_into(holders: &Holders, pane: &str) -> String {
-        let deadline = std::time::Instant::now() + Duration::from_secs(10);
-        loop {
-            let typed = holders.typed(pane);
-            if !typed.is_empty() || std::time::Instant::now() >= deadline {
-                return typed;
-            }
-            std::thread::sleep(Duration::from_millis(20));
-        }
+    /// The rules given to each pane, by agent id, in order.
+    type Given = Vec<(String, Option<String>)>;
+
+    /// Every pane's typed bytes, in order.
+    type Typed = Vec<(String, Vec<u8>)>;
+
+    /// What was typed into `pane`, in order.
+    fn typed_into(typed: &[(String, Vec<u8>)], pane: &str) -> String {
+        typed
+            .iter()
+            .filter(|(into, _)| into == pane)
+            .map(|(_, bytes)| String::from_utf8_lossy(bytes).into_owned())
+            .collect()
     }
 
     /// D-19, B17, B18: a start types its definition's line into the idle
@@ -2381,12 +2410,18 @@ mod tests {
         let shown = session.panes.iter().find(|p| p.pane_id == pane).unwrap();
         assert_eq!(shown.cwd.as_deref(), Some("/w/sub"));
         assert_eq!(shown.terminal_title.as_deref(), Some("✳ Fix the tests"));
-        assert_eq!(shown.terminal_title_stripped.as_deref(), Some("Fix the tests"));
+        assert_eq!(
+            shown.terminal_title_stripped.as_deref(),
+            Some("Fix the tests")
+        );
         assert_eq!(shown.agent_status, "working");
         assert_eq!(shown.foreground_process.as_deref(), Some("gemini"));
         assert_eq!(session.agents[0].agent.as_deref(), Some("gemini"));
         assert_eq!(
-            engine.pane_token(WAIT, &pane, "hide_prompt").unwrap().as_deref(),
+            engine
+                .pane_token(WAIT, &pane, "hide_prompt")
+                .unwrap()
+                .as_deref(),
             Some("1")
         );
         assert_eq!(
@@ -2432,7 +2467,10 @@ mod tests {
             Err(EngineError::Refused { code, .. }) => code,
             other => panic!("expected a refusal, got {other:?}"),
         };
-        assert_eq!(refused(engine.prompt_agent(WAIT, "worker", "hi")), "agent_not_ready");
+        assert_eq!(
+            refused(engine.prompt_agent(WAIT, "worker", "hi")),
+            "agent_not_ready"
+        );
         holders.say(
             &pane,
             &PaneFacts {
@@ -2442,12 +2480,17 @@ mod tests {
         );
         engine.prompt_agent(WAIT, "worker", "a\nb").unwrap();
         assert!(
-            holders.typed(&pane).ends_with("\u{1b}[200~a\nb\u{1b}[201~\r"),
+            holders
+                .typed(&pane)
+                .ends_with("\u{1b}[200~a\nb\u{1b}[201~\r"),
             "{:?}",
             holders.typed(&pane)
         );
         holders.say(&pane, &running("codex", ScreenState::Blocked));
-        assert_eq!(refused(engine.prompt_agent(WAIT, "worker", "hi")), "agent_blocked");
+        assert_eq!(
+            refused(engine.prompt_agent(WAIT, "worker", "hi")),
+            "agent_blocked"
+        );
     }
 
     /// D-7, B13: after a reboot each agent pane resumes its conversation
@@ -2463,21 +2506,34 @@ mod tests {
         }
         let first_holders = Holders::found(HolderRecovery::default());
         first_holders.idle_shell(41, "zsh");
-        let first =
-            OwnEngine::open(Arc::clone(&first_holders) as Arc<dyn PaneHolders>, place.clone())
-                .unwrap();
+        let first = OwnEngine::open(
+            Arc::clone(&first_holders) as Arc<dyn PaneHolders>,
+            place.clone(),
+        )
+        .unwrap();
         let (_, _, claude) = first
             .create_workspace(WAIT, &wire(&folder), "w", true, Env::new())
             .unwrap();
         let split = |at: &str| {
             first
-                .split_pane_at(WAIT, at, ClosedSplitDirection::Right, &wire(&folder), 0.5, Env::new())
+                .split_pane_at(
+                    WAIT,
+                    at,
+                    ClosedSplitDirection::Right,
+                    &wire(&folder),
+                    0.5,
+                    Env::new(),
+                )
                 .unwrap()
         };
         let twin = split(&claude);
         let gemini = split(&twin);
-        first.report_agent_session(WAIT, &claude, "claude", "s-1", 1).unwrap();
-        first.report_agent_session(WAIT, &twin, "claude-code", "s-1", 1).unwrap();
+        first
+            .report_agent_session(WAIT, &claude, "claude", "s-1", 1)
+            .unwrap();
+        first
+            .report_agent_session(WAIT, &twin, "claude-code", "s-1", 1)
+            .unwrap();
         let start = first
             .prepare_start(launch(&gemini, "reader", "gemini", &[]))
             .unwrap();
@@ -2494,14 +2550,16 @@ mod tests {
         });
         next.restored().unwrap();
 
-        let resumed = typed_into(&holders, &claude);
+        let resumed = holders.wait_typed(&claude);
         assert!(
             resumed.starts_with("claude --resume s-1 || printf 'hide: %s ended with exit code"),
             "{resumed:?}"
         );
         assert!(resumed.ends_with("\"$?\"\r"), "{resumed:?}");
         assert!(
-            typed_into(&holders, &gemini).starts_with("gemini --resume latest || printf"),
+            holders
+                .wait_typed(&gemini)
+                .starts_with("gemini --resume latest || printf"),
             "the last conversation of an agent whose session is not known"
         );
         assert_eq!(holders.typed(&twin), "", "one conversation, one pane");
@@ -2511,7 +2569,10 @@ mod tests {
             .find(|start| start.pane == twin)
             .and_then(|start| start.notice)
             .unwrap_or_default();
-        assert!(notice.contains("Claude Code's conversation is open in another pane"), "{notice}");
+        assert!(
+            notice.contains("Claude Code's conversation is open in another pane"),
+            "{notice}"
+        );
         let reader = next.delivery_agent(WAIT, "reader").unwrap();
         assert_eq!(reader.pane_id, gemini, "the resumed agent keeps its name");
     }

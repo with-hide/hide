@@ -88,7 +88,10 @@ pub(super) fn kind_name(definition: &Definition) -> String {
     std::iter::once(&definition.id)
         .chain(&definition.aliases)
         .find_map(|name| hide_agent_adapter::adapter(name))
-        .map_or_else(|| definition.id.clone(), |adapter| adapter.herdr.name.to_owned())
+        .map_or_else(
+            || definition.id.clone(),
+            |adapter| adapter.herdr.name.to_owned(),
+        )
 }
 
 /// The rule sets for `definition`'s screen, the operator's first and then
@@ -144,7 +147,10 @@ pub(super) fn screen_rules(definition: &Definition) -> Option<ScreenRules> {
 
 /// The words a start of `definition` types: its program, its `[start]`
 /// arguments, then the caller's.
-pub(super) fn start_argv(definition: &Definition, args: Vec<String>) -> Result<Vec<String>, String> {
+pub(super) fn start_argv(
+    definition: &Definition,
+    args: Vec<String>,
+) -> Result<Vec<String>, String> {
     let program = definition
         .executables
         .first()
@@ -544,7 +550,10 @@ mod tests {
             foreground: program("cli"),
             ..PaneFacts::default()
         });
-        assert!(pane.agent.is_none(), "an unnamed program is no agent of its own");
+        assert!(
+            pane.agent.is_none(),
+            "an unnamed program is no agent of its own"
+        );
         pane.facts(PaneFacts {
             foreground: Some(ForegroundProgram {
                 pid: 8,
@@ -602,11 +611,14 @@ mod tests {
         });
         assert!(applied.changed);
         assert_eq!(pane.cwd, "/work/sub");
-        assert!(!pane.facts(PaneFacts {
-            cwd: Some("/work/sub".to_owned()),
-            ..PaneFacts::default()
-        })
-        .changed);
+        assert!(
+            !pane
+                .facts(PaneFacts {
+                    cwd: Some("/work/sub".to_owned()),
+                    ..PaneFacts::default()
+                })
+                .changed
+        );
     }
 
     #[test]
@@ -627,10 +639,12 @@ mod tests {
             ["gemini", "--resume", "latest"]
         );
         let codex = definition(&catalog, "codex").unwrap();
-        let argv: Vec<String> = ["codex", "--model", "x", "resume", "s-1", "--", "resume", "s-2"]
-            .iter()
-            .map(|word| (*word).to_owned())
-            .collect();
+        let argv: Vec<String> = [
+            "codex", "--model", "x", "resume", "s-1", "--", "resume", "s-2",
+        ]
+        .iter()
+        .map(|word| (*word).to_owned())
+        .collect();
         assert_eq!(resumed_in(codex, &argv).as_deref(), Some("s-1"));
         assert_eq!(resumed_in(codex, &argv[..3]), None);
     }

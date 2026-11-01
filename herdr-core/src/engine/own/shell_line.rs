@@ -182,7 +182,9 @@ fn powershell_parts(program: &str, args: &[String]) -> (String, String) {
         )
     };
     (
-        format!("(Get-Command {program} -ErrorAction SilentlyContinue).CommandType -eq 'ExternalScript'"),
+        format!(
+            "(Get-Command {program} -ErrorAction SilentlyContinue).CommandType -eq 'ExternalScript'"
+        ),
         process,
     )
 }
@@ -207,9 +209,7 @@ pub(super) fn check_resume(argv: &[String]) -> Result<(), String> {
         return Err("the resume names no program".to_owned());
     };
     if argv.len() > MAX_RESUME_ARGS {
-        return Err(format!(
-            "the resume has more than {MAX_RESUME_ARGS} words"
-        ));
+        return Err(format!("the resume has more than {MAX_RESUME_ARGS} words"));
     }
     if argv.iter().map(String::len).sum::<usize>() > MAX_RESUME_ARGV_BYTES {
         return Err(format!(
@@ -239,7 +239,10 @@ const CLAUDE_ACTIVITY_GLYPHS: &str = "·✢✳✶✻✽◐◓◑◒";
 /// A terminal title without the one activity glyph an agent puts before it,
 /// as Herdr strips it; `None` for an empty title.
 pub(super) fn stripped_title(title: &str) -> Option<String> {
-    let title = title.strip_prefix("Administrator: ").unwrap_or(title).trim();
+    let title = title
+        .strip_prefix("Administrator: ")
+        .unwrap_or(title)
+        .trim();
     let first = title.chars().next()?;
     let after_first = &title[first.len_utf8()..];
     let recognized =
@@ -281,7 +284,10 @@ mod tests {
             command(&argv, Shell::PowerShell).unwrap(),
             "if((Get-Command pi -ErrorAction SilentlyContinue).CommandType -eq 'ExternalScript'){& pi '' 'two words' 'a''b' '$HOME' 'semi;colon' '@options'}else{Start-Process -FilePath pi -ArgumentList '\"\" \"two words\" a''b $HOME semi;colon @options' -NoNewWindow -Wait}"
         );
-        assert_eq!(command(&words(&["claude"]), Shell::PowerShell).unwrap(), "& claude");
+        assert_eq!(
+            command(&words(&["claude"]), Shell::PowerShell).unwrap(),
+            "& claude"
+        );
     }
 
     #[test]
@@ -299,15 +305,22 @@ mod tests {
 
     #[test]
     fn a_resume_line_says_how_the_agent_ended_only_when_it_failed() {
-        let line = resume_command(&words(&["claude", "--resume", "abc"]), "Claude Code", Shell::Posix)
-            .unwrap();
+        let line = resume_command(
+            &words(&["claude", "--resume", "abc"]),
+            "Claude Code",
+            Shell::Posix,
+        )
+        .unwrap();
         assert_eq!(
             line,
             "claude --resume abc || printf 'hide: %s ended with exit code %s after its resume; this pane is a shell now.\\n' 'Claude Code' \"$?\""
         );
-        let line =
-            resume_command(&words(&["claude", "--resume", "abc"]), "it's", Shell::PowerShell)
-                .unwrap();
+        let line = resume_command(
+            &words(&["claude", "--resume", "abc"]),
+            "it's",
+            Shell::PowerShell,
+        )
+        .unwrap();
         assert_eq!(
             line,
             "if((Get-Command claude -ErrorAction SilentlyContinue).CommandType -eq 'ExternalScript'){& claude '--resume' abc; $hideExit = $LASTEXITCODE}else{$hideExit = (Start-Process -FilePath claude -ArgumentList '--resume abc' -NoNewWindow -Wait -PassThru).ExitCode}; if ($hideExit) { Write-Host ('hide: its ended with exit code ' + $hideExit + ' after its resume; this pane is a shell now.') }"

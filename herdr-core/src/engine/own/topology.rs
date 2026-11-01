@@ -1588,14 +1588,17 @@ fn projected_agent(
                 .map_or_else(|| agent.kind.clone(), agents::kind_name),
         ),
         agent_status: Some(agent.live.status.as_str().to_owned()),
-        agent_session: agent.session.as_ref().map(|session| SessionAgentSessionPayload {
-            kind: match agents::session_kind(session) {
-                PaneSessionKind::Id => "id",
-                PaneSessionKind::Path => "path",
-            }
-            .to_owned(),
-            value: session.clone(),
-        }),
+        agent_session: agent
+            .session
+            .as_ref()
+            .map(|session| SessionAgentSessionPayload {
+                kind: match agents::session_kind(session) {
+                    PaneSessionKind::Id => "id",
+                    PaneSessionKind::Path => "path",
+                }
+                .to_owned(),
+                value: session.clone(),
+            }),
         spawned_from_pane_id: declared(PARENT_PANE_TOKEN),
         spawned_from_machine_id: declared(PARENT_MACHINE_TOKEN),
         declared_parent_session: declared(PARENT_SESSION_TOKEN),
@@ -1666,9 +1669,10 @@ impl Topology {
         let now = Instant::now();
         self.panes().any(|(id, held)| {
             id != pane
-                && held.agent.as_ref().is_some_and(|agent| {
-                    agent.listed(now) && agent.name.as_deref() == Some(name)
-                })
+                && held
+                    .agent
+                    .as_ref()
+                    .is_some_and(|agent| agent.listed(now) && agent.name.as_deref() == Some(name))
         })
     }
 
@@ -1800,7 +1804,13 @@ mod tests {
                 workspace: Some(first.workspace.clone())
             }
         );
-        assert!(topology.state(&Catalog::read(Vec::new())).unwrap().workspaces.is_empty());
+        assert!(
+            topology
+                .state(&Catalog::read(Vec::new()))
+                .unwrap()
+                .workspaces
+                .is_empty()
+        );
         assert_eq!(topology.focused_workspace(), None);
     }
 
@@ -1821,13 +1831,21 @@ mod tests {
             .unwrap();
         assert_eq!(pane_ids(&topology), [first.pane.clone(), beside.clone()]);
         assert_eq!(
-            topology.state(&Catalog::read(Vec::new())).unwrap().focused_pane_id.as_deref(),
+            topology
+                .state(&Catalog::read(Vec::new()))
+                .unwrap()
+                .focused_pane_id
+                .as_deref(),
             Some(beside.as_str())
         );
 
         assert_eq!(topology.remove_pane(&beside).unwrap(), Closed::default());
         assert_eq!(
-            topology.state(&Catalog::read(Vec::new())).unwrap().focused_pane_id.as_deref(),
+            topology
+                .state(&Catalog::read(Vec::new()))
+                .unwrap()
+                .focused_pane_id
+                .as_deref(),
             Some(first.pane.as_str())
         );
         let next = topology.reserve_pane(&first.workspace).unwrap();
@@ -2051,7 +2069,10 @@ mod tests {
             .unwrap();
         let saved = serde_json::to_string(&topology.to_saved()).unwrap();
         let mut read = Topology::from_saved(serde_json::from_str(&saved).unwrap()).unwrap();
-        assert_eq!(read.state(&Catalog::read(Vec::new())).unwrap(), topology.state(&Catalog::read(Vec::new())).unwrap());
+        assert_eq!(
+            read.state(&Catalog::read(Vec::new())).unwrap(),
+            topology.state(&Catalog::read(Vec::new())).unwrap()
+        );
         assert_eq!(read.reserve_pane(&first.workspace).unwrap(), "w1:p4");
         assert_eq!(read.reserve_workspace().workspace, "w2");
     }
