@@ -16,6 +16,7 @@ members = [
     "hide-platform",
     "hide-project",
     "hide-session",
+    "hide-screen-rules",
     "hide-shell",
     "hide-vt",
     "hided",

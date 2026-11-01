@@ -249,6 +249,14 @@ pub fn desk_adapters(home: &Path) -> PathBuf {
     hide_home(home).join("desk-adapters")
 }
 
+/// The operator's own agent definition files (`<id>.toml`), read after the
+/// built-in ones (PRD engine-bundle-3-core-owns D-17,
+/// `hide_agent_adapter::definition`). Account-wide: one machine's agents are
+/// the same for every state folder.
+pub fn agent_definitions(home: &Path) -> PathBuf {
+    hide_home(home).join("agents")
+}
+
 /// The Hide global instruction every session started in a Hide pane receives
 /// at its start, in every Project (PRD memory-self-improve D-23, D-29): Hide's
 /// own file, which the operator may edit and the core writes for a fix the

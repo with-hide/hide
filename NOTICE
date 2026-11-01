@@ -18,6 +18,15 @@ Copyright 2025 herdr contributors.
 Licensed under the Apache License, Version 2.0.
 Hide changed them: each file says what it took and what changed.
 
+hide-screen-rules/ is derived from Herdr's src/detect/manifest.rs and
+src/detect/manifest_update.rs, and its tests from src/detect/manifest/tests.rs
+(https://github.com/herdrdev/herdr, release v0.9.5, commit 2ecf19a); the
+[screen] rules of hide-agent-adapter/agents/*.toml are Herdr's
+src/detect/manifests/*.toml from the same release.
+Copyright 2025 herdr contributors.
+Licensed under the Apache License, Version 2.0.
+Hide changed them: each file says what it took and what changed.
+
 herdr-core/src/engine/own/ids.rs is derived from Herdr's src/workspace.rs
 (https://github.com/herdrdev/herdr, release v0.9.5, commit 2ecf19a).
 Copyright 2025 herdr contributors.

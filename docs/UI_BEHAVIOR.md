@@ -1861,6 +1861,7 @@ A finished plan has no band, its pill saying `끝남`; a plan whose session is g
 While a plan runs, the pane's second row shows the current step and its line, `<단계> · <line>`, in the progress place; while it waits for review the row is the ask band, `Plan review · N steps` (`계획 검토 · N단계` in Korean) worded by the shell from the subject the core sends, and the sidebar's second line says the same ([status-model.md](status-model.md#a-plan-waiting-for-review-is-a-question)).
 The session record has a `계획` section with the count, `끝남` once finished, and the checklist, kept after the session ends; while its pane works or asks, a running plan moves into the record's `지금` block ([The session record](#the-session-record)) and the section is not drawn.
 Settings › Agents lists the three skills Hide installs, `hide`, `hide-conductor` (waypoints) and `hide-plan` (list-checks), each with one line on what it is for and the help it points at; they come and go with each agent's switch.
+With the development switch `HIDE_DEV_PANE_HOLDER=1` on, the core's machine also has an `에이전트 파일` group under its agents when a file in `~/.hide/agents` was left out: one row per file, its name with `· 불러오지 않음` and the reason in one dimmed line under it, read again each time the page opens ([ARCHITECTURE.md: Agent definition files](ARCHITECTURE.md#agent-definition-files)); with every file read, or the switch off, there is no group.
 
 ### The session record
 

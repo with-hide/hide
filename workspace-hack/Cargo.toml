@@ -30,6 +30,8 @@ hyper-util = { version = "0.1", features = ["client-legacy", "http1", "server", 
 libc = { version = "0.2", features = ["extra_traits"] }
 memchr = { version = "2" }
 once_cell = { version = "1" }
+regex-automata = { version = "0.4", default-features = false, features = ["dfa-onepass", "dfa-search", "hybrid", "meta", "nfa", "perf", "std", "unicode"] }
+regex-syntax = { version = "0.8" }
 rusqlite = { version = "0.32", default-features = false, features = ["bundled", "hooks", "limits"] }
 schemars = { version = "0.8", features = ["preserve_order"] }
 serde = { version = "1", features = ["alloc", "derive", "rc"] }
@@ -39,8 +41,12 @@ simd-adler32 = { version = "0.3" }
 smallvec = { version = "1", default-features = false, features = ["const_new"] }
 subtle = { version = "2" }
 tokio = { version = "1", features = ["fs", "io-util", "macros", "net", "process", "rt-multi-thread", "signal", "sync", "time"] }
+toml_datetime = { version = "1", features = ["serde"] }
+toml_parser = { version = "1" }
+toml_writer = { version = "1" }
 tracing = { version = "0.1", default-features = false, features = ["log", "std"] }
 typenum = { version = "1", default-features = false, features = ["const-generics"] }
+winnow = { version = "1" }
 
 [build-dependencies]
 hashbrown = { version = "0.17" }
@@ -53,7 +59,11 @@ serde_core = { version = "1", features = ["alloc", "rc"] }
 serde_json = { version = "1", features = ["alloc", "float_roundtrip", "preserve_order", "raw_value"] }
 syn-7b89eefb6aaa9bf3 = { package = "syn", version = "3", features = ["extra-traits", "full"] }
 syn-f595c2ba2a3f28df = { package = "syn", version = "2", features = ["extra-traits"] }
+toml_datetime = { version = "1", features = ["serde"] }
+toml_parser = { version = "1" }
+toml_writer = { version = "1" }
 typenum = { version = "1", default-features = false, features = ["const-generics"] }
+winnow = { version = "1" }
 
 [target.aarch64-apple-darwin.dependencies]
 errno = { version = "0.3" }

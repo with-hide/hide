@@ -772,6 +772,24 @@ impl Core {
         lock_recover(&self.runtime).agent_catalog(device, machine, timed_out)
     }
 
+    /// A read of the operator's agent definition folder in `home`, made off
+    /// the lock by the daemon with the development switch on (PRD
+    /// engine-bundle-3-core-owns D-17); the first one turns the definitions
+    /// on for this core. A change announces like a dispatch.
+    pub fn set_agent_definitions(
+        &self,
+        home: std::path::PathBuf,
+        read: Result<hide_agent_adapter::definition::Catalog, String>,
+    ) {
+        if !check_owner_thread(self, "agent.definitions") {
+            return;
+        }
+        let changed = lock_recover(&self.runtime).settle_agent_definitions(home, read);
+        if changed {
+            notify_change(self);
+        }
+    }
+
     /// `hide device` for a caller on `device`: a registration or removal
     /// changes the snapshot the shell draws, so it announces like a dispatch.
     pub fn device_command(

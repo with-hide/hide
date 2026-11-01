@@ -25,7 +25,8 @@ platforms = [
 # would otherwise compile tokio, hyper and schemars for nothing. The terminal
 # parser stays off it for the same reason: the vt lane builds it alone. The
 # pane holder that links it, and the protocol it speaks, stay off it too: a
-# holder runs for as long as its pane and carries its few dependencies only.
+# holder runs for as long as its pane and carries its few dependencies only,
+# the screen rules it will evaluate among them.
 # Their own dependencies still count toward everyone else's features.
 [final-excludes]
-workspace-members = ["hide-platform", "hide-herdr-client", "hide-vt", "hide-holder", "hide-holder-protocol"]
+workspace-members = ["hide-platform", "hide-herdr-client", "hide-vt", "hide-holder", "hide-holder-protocol", "hide-screen-rules"]

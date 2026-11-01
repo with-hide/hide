@@ -371,6 +371,7 @@ POLICY_ONLY = (
     "scripts/check-harness-ignore-anchor.sh", "scripts/check-herdr-pin-single-source.sh",
     "scripts/check-core-touches-no-machine.py", "scripts/check-engine-boundary.py", "scripts/rust_scan.py",
     "scripts/check-ai-prompt-language.py", "scripts/check-pr-screenshots.py",
+    "scripts/check-agent-screen-rules.py",
     "scripts/check-no-workstation-identity.*", "scripts/check-worktree-removal-boundary.sh",
     "scripts/check-typed-live-remote.sh",
     "scripts/check-release-assets.mjs", "scripts/release-draft.mjs", "scripts/premerge-check.py",

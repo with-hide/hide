@@ -77,7 +77,12 @@ impl Runtime {
             self.ask_ai_catalog_read();
         }
         let kit = self.kit_states.get(machine);
-        let items: Vec<Value> = hide_agent_adapter::ADAPTERS
+        // With the development switch on, the core's own machine also lists
+        // every agent definition: where each came from and which screen
+        // rules it reads (PRD engine-bundle-3-core-owns B21). Off, there is
+        // no state and the answer is the seven agents as before (B1).
+        let definitions = self.agent_definitions.as_ref().filter(|_| on_core);
+        let mut items: Vec<Value> = hide_agent_adapter::ADAPTERS
             .iter()
             .filter_map(|adapter| Some((adapter, adapter.start?)))
             .map(|(adapter, dialect)| {
@@ -135,15 +140,74 @@ impl Runtime {
                 })
             })
             .collect();
+        let Some(definitions) = definitions else {
+            return Ok(json!({
+                "machine": machine,
+                // A machine whose kit has not reported yet cannot say which
+                // agents it has; `installed` is then null on every row.
+                "installed_known": kit.is_some(),
+                // A read of the model lists is on its way; the answer after it
+                // lands names the models.
+                "models_read_pending": pending,
+                "items": items,
+            }));
+        };
+        for item in &mut items {
+            let id = item["id"].as_str().unwrap_or_default().to_owned();
+            let definition = definitions
+                .catalog
+                .definitions
+                .iter()
+                .find(|definition| definition.id == id);
+            if let (Some(row), Some(definition)) = (item.as_object_mut(), definition) {
+                row.extend(definition_fields(definition, true));
+            }
+        }
+        let started: Vec<&str> = hide_agent_adapter::ADAPTERS
+            .iter()
+            .filter(|adapter| adapter.start.is_some())
+            .map(|adapter| adapter.id)
+            .collect();
+        for definition in &definitions.catalog.definitions {
+            if started.contains(&definition.id.as_str()) {
+                continue;
+            }
+            // Hide's own features and a spawn come with the agents node of
+            // the same bundle; until then such an agent is listed only.
+            let mut row = json!({
+                "agent": definition.id,
+                "id": definition.id,
+                "label": definition.name,
+                "installed": Value::Null,
+                "enabled": Value::Null,
+                "takes_model": false,
+                "models": Value::Null,
+                "models_unavailable_reason": Value::Null,
+                "cli_default_model": Value::Null,
+                "efforts": [],
+                "signed_in": Value::Null,
+                "weekly_used_percent": Value::Null,
+                "weekly_resets_at_ms": Value::Null,
+                "past_usage_limit": false,
+            });
+            if let Some(row) = row.as_object_mut() {
+                row.extend(definition_fields(definition, false));
+            }
+            items.push(row);
+        }
         Ok(json!({
             "machine": machine,
-            // A machine whose kit has not reported yet cannot say which
-            // agents it has; `installed` is then null on every row.
             "installed_known": kit.is_some(),
-            // A read of the model lists is on its way; the answer after it
-            // lands names the models.
             "models_read_pending": pending,
             "items": items,
+            // Each of the operator's files left out, with why in one line.
+            "definitions_rejected": definitions
+                .catalog
+                .rejected
+                .iter()
+                .map(|rejected| json!({ "file": rejected.file, "reason": rejected.reason }))
+                .collect::<Vec<_>>(),
+            "definitions_unreadable": definitions.unreadable(),
         }))
     }
 
@@ -173,4 +237,33 @@ impl Runtime {
             .iter()
             .find(|provider| provider.agent == id)
     }
+}
+
+/// Where a catalog row's definition came from, and the screen rules it reads
+/// with their source and version (`built-in`, or the operator's file under
+/// `~/.hide/agents`).
+fn definition_fields(
+    definition: &hide_agent_adapter::definition::Definition,
+    spawn: bool,
+) -> serde_json::Map<String, Value> {
+    use hide_agent_adapter::definition::Source;
+    let source = |source: &Source| match source {
+        Source::Builtin => json!({ "kind": "built-in", "file": Value::Null }),
+        Source::User(file) => json!({ "kind": "user", "file": format!("~/.hide/agents/{file}") }),
+    };
+    let mut fields = serde_json::Map::new();
+    fields.insert("source".into(), source(&definition.source));
+    fields.insert("based_on".into(), json!(definition.based_on));
+    fields.insert(
+        "hooks".into(),
+        json!(format!("{:?}", definition.hooks).to_lowercase()),
+    );
+    fields.insert(
+        "screen".into(),
+        definition.screen.as_ref().map_or(Value::Null, |screen| {
+            json!({ "source": source(&screen.source), "version": screen.rules.version().as_str() })
+        }),
+    );
+    fields.insert("spawn".into(), json!(spawn));
+    fields
 }

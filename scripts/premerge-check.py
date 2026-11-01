@@ -50,6 +50,7 @@ CHECKS = (
     ("core touches no machine", ".", ["python3", "scripts/check-core-touches-no-machine.py"]),
     ("engine boundary", ".", ["python3", "scripts/check-engine-boundary.py"]),
     ("ai prompt language", ".", ["python3", "scripts/check-ai-prompt-language.py"]),
+    ("agent screen rules", ".", ["python3", "scripts/check-agent-screen-rules.py"]),
 )
 
 # A check that runs this long has stalled; the answer is undecided, not a pass.

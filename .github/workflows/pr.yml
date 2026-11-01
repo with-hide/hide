@@ -197,6 +197,7 @@ jobs:
           python3 scripts/check-core-touches-no-machine.py
           python3 scripts/check-engine-boundary.py
           python3 scripts/check-ai-prompt-language.py
+          python3 scripts/check-agent-screen-rules.py
 
       # Reads the pull request's body, which no merge result carries, so it is
       # the one policy check `premerge-check.py` does not repeat.

@@ -53,10 +53,9 @@ impl std::error::Error for HomeUnresolved {}
 impl AgentAdapter {
     /// The agent's folder in [`HomeScope::Install`] for an account whose
     /// home is known, which always has an answer: the declared folder
-    /// ([`HerdrIntegration::folder`](crate::HerdrIntegration)) under it.
+    /// ([`AgentAdapter::folder`](crate::AgentAdapter)) under it.
     pub fn install_home(&self, account_home: &Path) -> PathBuf {
-        self.herdr
-            .folder
+        self.folder
             .iter()
             .fold(account_home.to_path_buf(), |path, part| path.join(part))
     }
@@ -210,7 +209,6 @@ mod tests {
                 continue;
             }
             let declared = adapter
-                .herdr
                 .folder
                 .iter()
                 .fold(home.clone(), |path, part| path.join(part));
