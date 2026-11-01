@@ -345,6 +345,8 @@ const ATTENTION_CARD = "border-mission-hold ring-2 ring-mission-hold/20";
  * effort as the panel's head draws them on the left, its pull requests'
  * marks or a direct change's result at the right end, and after them `! 나`
  * or `! Conductor` when it waits on someone to look, its reason on hover.
+ * The marks keep their room before the worker's words; a branch gives its
+ * room to the words, since a pull request replaces it and the panel holds it.
  * Its times, its finish lines and the Conductor's line are the panel's. The
  * other agents checking it stand beside it as satellites tethered to its
  * right side. Pressing it picks it (B30).
@@ -359,6 +361,7 @@ function NodeCard({ mission, node, selected, dimmed, onSelect, actions }: { miss
   const word = markWord(node, look, t);
   const worker = useNodeRun(node);
   const run = worker?.run ?? null;
+  const yields = resultYields(node);
   const card = (
     <button
       type="button"
@@ -397,13 +400,13 @@ function NodeCard({ mission, node, selected, dimmed, onSelect, actions }: { miss
       </span>
       {result || run || attention ? (
         <span className="flex min-w-0 items-center gap-x-xs text-caption text-muted-foreground" data-node-row="true">
-          {/* The worker's agent mark and model on the left take only the room the marks leave, so they truncate away before a mark is pushed out; with no run the empty span still holds the marks at the right. */}
-          <span className="flex min-w-0 flex-1 items-center gap-xxs overflow-hidden" data-node-run={run?.from}>
+          {/* The worker's agent mark and model on the left take only the room the marks leave, so they truncate away before a mark is pushed out; with no run the empty span still holds the marks at the right. A branch is the exception: the words keep their width and the branch truncates in what is left. */}
+          <span className={cn("flex min-w-0 items-center gap-xxs overflow-hidden", !yields && "flex-1")} data-node-run={run?.from}>
             {worker?.agent ? <AgentMark kind={worker.agent} /> : null}
             {run ? <RunText run={run} /> : null}
           </span>
           {/* The marks keep one line at the right end; the ones past the card's width leave it rather than overlap, and `!` keeps its place after them (B30). */}
-          {result ? <span className="flex h-lh min-w-0 flex-wrap items-center gap-x-xs overflow-hidden">{result}</span> : null}
+          {result ? <span className={cn("flex h-lh min-w-0 items-center gap-x-xs overflow-hidden", yields ? "flex-1 justify-end" : "flex-wrap")} data-node-result-yields={yields || undefined}>{result}</span> : null}
           {attention ? (
             <Hint label={attention.why}>
               <span className="shrink-0 font-semibold text-mission-hold" data-node-attention-tag={node.attention!.reason}>! {attention.who}</span>
@@ -436,6 +439,12 @@ function HideMark({ words }: { words: string }) {
       </span>
     </Hint>
   );
+}
+
+/** Whether the card's result is a branch, which truncates to leave the worker's words whole; a pull request mark or a commit keeps its room. */
+function resultYields(node: MissionNode): boolean {
+  if (node.kind === "external" && node.external) return !("pr" in node.external);
+  return node.prs.length === 0 && nodeResult(node)?.kind === "branch";
 }
 
 /** What a card names as its result (B1): every pull request's mark in the order the node got them, else a direct change's commit on main or its branch. */
