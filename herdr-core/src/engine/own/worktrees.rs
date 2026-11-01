@@ -36,6 +36,23 @@ fn git(cwd: &Path, arguments: &[&str]) -> Answer<String> {
     })
 }
 
+/// A path Git prints on one line, without the line's end.
+fn git_path(cwd: &Path, arguments: &[&str]) -> Answer<PathBuf> {
+    let printed = git(cwd, arguments)?;
+    let path = printed.trim_end_matches(['\r', '\n']);
+    if path.is_empty() {
+        return Err(refused(
+            "git_failed",
+            format!(
+                "git {} in {} printed no path",
+                arguments.join(" "),
+                cwd.display()
+            ),
+        ));
+    }
+    Ok(PathBuf::from(path))
+}
+
 fn native(path: &str) -> Answer<PathBuf> {
     hide_platform::path::from_wire(path)
         .map_err(|error| EngineError::Request(format!("{path} is not a folder path: {error}")))
@@ -72,11 +89,11 @@ pub(super) fn path_slug(branch: &str) -> String {
 /// The repository a checkout at `path` belongs to, and the checkout's own
 /// top folder, in the binding's terms.
 fn binding(path: &Path) -> Answer<Bound> {
-    let common = PathBuf::from(git(
+    let common = git_path(
         path,
         &["rev-parse", "--path-format=absolute", "--git-common-dir"],
-    )?);
-    let top = PathBuf::from(git(path, &["rev-parse", "--show-toplevel"])?);
+    )?;
+    let top = git_path(path, &["rev-parse", "--show-toplevel"])?;
     // A repository's shared folder is its main checkout's `.git`.
     let root = match common.file_name() {
         Some(name) if name == ".git" => {

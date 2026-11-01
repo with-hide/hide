@@ -1616,4 +1616,118 @@ mod tests {
             "no holder was asked to end"
         );
     }
+
+    fn run_git(dir: &std::path::Path, arguments: &[&str]) {
+        let output = std::process::Command::new("git")
+            .current_dir(dir)
+            .args(arguments)
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "git {arguments:?}: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+
+    fn same_folder(left: &str, right: &std::path::Path) -> bool {
+        std::fs::canonicalize(left).ok() == std::fs::canonicalize(right).ok()
+    }
+
+    /// D-28 and B8: a worktree the engine makes goes under Hide's own
+    /// folder and opens in a workspace bound to it; a checkout under Herdr's
+    /// folder opens where it is, once; removing a worktree removes its
+    /// checkout and its workspace.
+    #[test]
+    fn a_new_worktree_goes_under_hides_folder_and_a_herdr_one_opens_where_it_is() {
+        let root = tempfile::tempdir().unwrap();
+        let place = place(root.path());
+        let repo = place.home.join("repo");
+        std::fs::create_dir_all(&place.home).unwrap();
+        run_git(&place.home, &["init", "-q", "repo"]);
+        run_git(
+            &repo,
+            &[
+                "-c",
+                "user.email=t@t",
+                "-c",
+                "user.name=t",
+                "commit",
+                "-q",
+                "--allow-empty",
+                "-m",
+                "init",
+            ],
+        );
+        let herdr_place = place.home.join(".herdr/worktrees/repo/old");
+        run_git(
+            &repo,
+            &[
+                "worktree",
+                "add",
+                "-q",
+                "-b",
+                "old",
+                &herdr_place.to_string_lossy(),
+            ],
+        );
+        let engine =
+            OwnEngine::open(Holders::found(HolderRecovery::default()), place.clone()).unwrap();
+
+        let made = engine
+            .create_worktree(WAIT, &wire(&repo), "feat/Layout", None, None, None, true)
+            .expect("a worktree is made");
+        let expected = hide_kit::layout::engine_worktree(&place.home, "repo", "feat-layout");
+        assert!(
+            same_folder(&made.path, &expected),
+            "{} is not {}",
+            made.path,
+            expected.display()
+        );
+        let session = engine.session(WAIT).unwrap();
+        let bound = session
+            .workspaces
+            .iter()
+            .find(|workspace| workspace.workspace_id == made.workspace_id)
+            .and_then(|workspace| workspace.worktree.clone())
+            .expect("the workspace is bound to its worktree");
+        assert!(bound.is_linked_worktree);
+        assert_eq!(bound.repo_name, "repo");
+        assert!(same_folder(&bound.repo_root, &repo));
+
+        let opened = engine
+            .open_worktree(WAIT, &wire(&herdr_place), &wire(&repo), false)
+            .expect("Herdr's worktree opens");
+        assert!(!opened.already_open);
+        let session = engine.session(WAIT).unwrap();
+        let in_place = session
+            .workspaces
+            .iter()
+            .find(|workspace| workspace.workspace_id == opened.workspace_id)
+            .and_then(|workspace| workspace.worktree.clone())
+            .expect("the workspace is bound to Herdr's checkout");
+        assert!(
+            same_folder(&in_place.checkout_path, &herdr_place),
+            "opened where it is"
+        );
+        let again = engine
+            .open_worktree(WAIT, &wire(&herdr_place), &wire(&repo), false)
+            .unwrap();
+        assert!(again.already_open);
+        assert_eq!(again.workspace_id, opened.workspace_id);
+
+        engine
+            .remove_worktree(WAIT, &made.workspace_id)
+            .expect("the worktree is removed");
+        assert!(!expected.exists(), "its checkout is gone");
+        assert!(
+            engine
+                .session(WAIT)
+                .unwrap()
+                .workspaces
+                .iter()
+                .all(|workspace| workspace.workspace_id != made.workspace_id)
+        );
+        assert!(herdr_place.exists(), "Herdr's checkout stays where it is");
+    }
 }
