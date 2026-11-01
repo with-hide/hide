@@ -29,7 +29,7 @@ use std::cmp::Ordering;
 use std::fmt;
 
 use regex::Regex;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 /// The version of this evaluator: the regions and matchers it knows. A rule
 /// set whose `min_engine_version` is higher was written for a newer one.
@@ -54,7 +54,7 @@ const TOP_NON_EMPTY_LINES_ENGINE_VERSION: u32 = 3;
 const MAX_TOP_REGION_LINE_COUNT: usize = u16::MAX as usize;
 
 /// An agent state a rule can name.
-#[derive(Debug, Deserialize, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Deserialize, Serialize, Clone, Copy, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum State {
     Idle,
@@ -110,6 +110,12 @@ impl fmt::Display for Version {
     }
 }
 
+impl Serialize for Version {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.serialize_str(&self.0)
+    }
+}
+
 impl<'de> Deserialize<'de> for Version {
     fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
         let value = String::deserialize(deserializer)?;
@@ -159,8 +165,10 @@ impl PartialEq for Version {
 
 impl Eq for Version {}
 
-/// A rule set as written: an agent definition's `[screen]` table.
-#[derive(Debug, Deserialize, Clone)]
+/// A rule set as written: an agent definition's `[screen]` table. It
+/// serializes to what it reads back, so a rule set can be handed to another
+/// process (a pane's holder) and compiled there.
+#[derive(Debug, Deserialize, Serialize, Clone)]
 #[serde(deny_unknown_fields)]
 pub struct Manifest {
     pub version: Version,
@@ -172,7 +180,7 @@ pub struct Manifest {
     pub rules: Vec<Rule>,
 }
 
-#[derive(Debug, Deserialize, Clone)]
+#[derive(Debug, Deserialize, Serialize, Clone)]
 #[serde(deny_unknown_fields)]
 pub struct Rule {
     pub id: String,
@@ -203,7 +211,7 @@ pub struct Rule {
     line_regex: Vec<String>,
 }
 
-#[derive(Debug, Deserialize, Clone)]
+#[derive(Debug, Deserialize, Serialize, Clone)]
 #[serde(deny_unknown_fields)]
 struct Gate {
     #[serde(default)]
@@ -310,6 +318,11 @@ impl Rules {
 
     pub fn rules(&self) -> &[Rule] {
         &self.manifest.rules
+    }
+
+    /// The rule set as it was written, to hand to another process.
+    pub fn manifest(&self) -> &Manifest {
+        &self.manifest
     }
 
     /// The highest-priority rule that matches, or `None` when none does.

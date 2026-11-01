@@ -54,6 +54,10 @@ use super::session::{
     Attacher, Cleanup, OpenFailure, SessionEvents, SessionParts, SessionWriter, Transport,
 };
 
+mod watch;
+
+use watch::Watches;
+
 /// The development switch that lets a node run pane holders.
 ///
 /// - Requirement: optional; it is read once, when a node's terminal service
@@ -391,9 +395,15 @@ impl HolderEvents {
                     message: message(&closed),
                 }
             }
-            Ok(HolderMessage::Welcome(_) | HolderMessage::Answer(_)) => SessionEvent::Ended {
+            Ok(
+                HolderMessage::Welcome(_)
+                | HolderMessage::Answer(_)
+                | HolderMessage::Watching(_)
+                | HolderMessage::Facts(_),
+            ) => SessionEvent::Ended {
                 category: "protocol_error",
-                message: "The pane's holder sent a welcome or an answer on its screen".to_owned(),
+                message: "The pane's holder sent a welcome, an answer or facts on its screen"
+                    .to_owned(),
             },
             Err(error) => SessionEvent::Ended {
                 category: "transport_eof",
@@ -497,6 +507,8 @@ pub struct Holders {
     state_dir: PathBuf,
     known: Arc<Known>,
     ends: Arc<Ends>,
+    /// Each holder pane's facts, on a watch of its own (`watch`).
+    watches: Arc<Watches>,
     reports: Arc<dyn ReportSink>,
     /// What the last [`Holders::recover`] found, for the core's restore to
     /// wait on ([`Holders::recovered`]).
@@ -535,6 +547,7 @@ impl Holders {
             state_dir: folders.state_dir.to_owned(),
             known: Arc::default(),
             ends: Arc::default(),
+            watches: Arc::default(),
             reports,
             recovery: (Mutex::new(None), Condvar::new()),
         })
@@ -643,10 +656,9 @@ impl Holders {
             self.report_ended(&request.pane, record);
             return Ok(started);
         }
-        self.known.insert(
-            &request.pane,
-            hide_kit::layout::holder_socket(&self.state_dir, &holder),
-        );
+        let socket = hide_kit::layout::holder_socket(&self.state_dir, &holder);
+        self.known.insert(&request.pane, socket.clone());
+        self.watches.watch(&request.pane, socket);
         service.control(TerminalControl::Attach {
             pane: request.pane.clone(),
             size: Some(GridSize {
@@ -670,6 +682,7 @@ impl Holders {
         let closed = self.panes.close(&holder_pane(pane));
         if closed.is_ok() || matches!(closed, Err(CloseError::NoRecord)) {
             self.known.remove(pane);
+            self.watches.forget(pane);
             service.control(TerminalControl::Forget {
                 pane: pane.to_owned(),
             });
@@ -686,6 +699,18 @@ impl Holders {
     /// the screen connection and its scroll position as they are.
     pub fn read(&self, pane: &str, lines: u16) -> Result<Answer, OpenError> {
         self.ask(pane, Ask::Read { lines })
+    }
+
+    /// The rows the pane's screen shows now, or its last `lines` rows, with
+    /// their styling as escape sequences, as [`Holders::read`] asks.
+    pub fn read_styled(&self, pane: &str, rows: Option<u16>) -> Result<Answer, OpenError> {
+        self.ask(
+            pane,
+            match rows {
+                None => Ask::Screen,
+                Some(lines) => Ask::Rows { lines },
+            },
+        )
     }
 
     /// The pane's shell and the processes in its terminal's foreground, as
@@ -779,6 +804,7 @@ impl Holders {
                             record.protocol
                         ),
                     );
+                    self.watches.unsupported(&pane);
                     recovered.unsupported.push(pane);
                 }
                 Judgment::Pending(_) | Judgment::Starting(_) => waiting.push(pane),
@@ -810,10 +836,11 @@ impl Holders {
             }));
         }
         for (pane, holder) in alive {
-            self.known.insert(
-                &pane,
-                hide_kit::layout::holder_socket(&self.state_dir, &holder),
-            );
+            let socket = hide_kit::layout::holder_socket(&self.state_dir, &holder);
+            self.known.insert(&pane, socket.clone());
+            // Every pane that runs is followed, attached or kept past the
+            // attach cap alike.
+            self.watches.watch(&pane, socket);
             // No size: a holder keeps its own, and the screen that comes back
             // is the one it holds at this moment.
             service.control(TerminalControl::Attach {
@@ -869,6 +896,23 @@ impl Holders {
     /// while this node holds its screen, from now on.
     pub fn watch_ends(&self, ended: hide_node_link::holders::PaneEnded) {
         *self.ends.0.lock().unwrap_or_else(PoisonError::into_inner) = Some(ended);
+    }
+
+    /// Tells `sink` each holder pane's facts from now on, and at once the
+    /// last facts of every pane heard from before it.
+    pub fn watch_facts(&self, sink: hide_node_link::holders::PaneFactsSink) {
+        self.watches.set_sink(sink);
+    }
+
+    /// Keeps `rules` for `pane` and gives its holder the first set its
+    /// evaluator reads, now when its watch is open and again on each watch
+    /// opened later.
+    pub fn set_rules(
+        &self,
+        pane: &str,
+        rules: Option<hide_node_link::holders::ScreenRules>,
+    ) -> Result<(), hide_node_link::holders::HolderError> {
+        self.watches.set_rules(pane, rules)
     }
 
     /// How many of the state folder's panes may still run

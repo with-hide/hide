@@ -11,11 +11,11 @@ use std::ffi::OsString;
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use hide_holder_protocol::{Answer, Appearance, Foreground, OpenError, Size, Theme};
+use hide_holder_protocol::{Answer, Appearance, CloseReason, Foreground, OpenError, Size, Theme};
 use hide_kit::panes::{CloseError, StartRefusal, StartRequest, Started};
 use hide_node_link::holders::{
     HolderError, HolderForeground, HolderProcesses, HolderRecovery, HolderStart, PaneEnded,
-    PaneHolders,
+    PaneFactsSink, PaneHolders, ScreenRules, StyledRead, UNSUPPORTED_HOLDER,
 };
 use hide_node_link::terminal::{KeyTarget, TerminalNode};
 
@@ -127,6 +127,31 @@ impl PaneHolders for LocalPanes {
         }
     }
 
+    fn read_styled(&self, pane: &str, read: StyledRead) -> Result<(String, bool), HolderError> {
+        let rows = match read {
+            StyledRead::Screen => None,
+            StyledRead::Rows(lines) => Some(lines),
+        };
+        match self.holders.read_styled(pane, rows) {
+            Ok(Answer::Text { text, truncated }) => Ok((text, truncated)),
+            Ok(Answer::Processes { .. }) => Err(HolderError::Unreachable(format!(
+                "pane {pane}'s holder answered a styled read with its processes"
+            ))),
+            // A holder built before styled reads reads the ask as a first
+            // message it does not know.
+            Err(OpenError::Refused(closed)) if closed.reason == CloseReason::HelloInvalid => {
+                Err(HolderError::Refused {
+                    code: UNSUPPORTED_HOLDER,
+                    message: format!(
+                        "pane {pane}'s holder was built before styled reads: {}",
+                        closed.detail
+                    ),
+                })
+            }
+            Err(error) => Err(ask_error(error)),
+        }
+    }
+
     fn processes(&self, pane: &str) -> Result<HolderProcesses, HolderError> {
         match self.holders.processes(pane).map_err(ask_error)? {
             Answer::Processes { shell, foreground } => Ok(HolderProcesses {
@@ -156,6 +181,14 @@ impl PaneHolders for LocalPanes {
 
     fn watch_ends(&self, ended: PaneEnded) {
         self.holders.watch_ends(ended);
+    }
+
+    fn watch_facts(&self, sink: PaneFactsSink) {
+        self.holders.watch_facts(sink);
+    }
+
+    fn set_rules(&self, pane: &str, rules: Option<ScreenRules>) -> Result<(), HolderError> {
+        self.holders.set_rules(pane, rules)
     }
 
     fn recovered(&self, timeout: std::time::Duration) -> Result<HolderRecovery, HolderError> {

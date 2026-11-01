@@ -2,14 +2,17 @@
 //! its program waiting for input, attached or not, the holder runs nothing,
 //! by what the kernel counts for it, once the one return of freed pages a
 //! second after its last fragment is behind it (`holder.memory_returned` in
-//! its log). The local measurement watches 60 s (docs/PERFORMANCE_TESTING.md,
+//! its log). Attached means a screen connection and a watch whose rules read
+//! the screen (PRD engine-bundle-3-core-owns D-18): the facts are read only
+//! when the program's output marks them changed, so an idle pane's watch
+//! sends nothing and wakes nothing either. The local measurement watches 60 s (docs/PERFORMANCE_TESTING.md,
 //! The pane holder's path); this is the short form every system's CI runs.
 
 use std::collections::BTreeMap;
 use std::time::{Duration, Instant};
 
-use crate::support::{Home, current_version, print_ok, shell, source, start_ready};
-use hide_holder_protocol::ClientMessage;
+use crate::support::{HANG_LIMIT, Home, current_version, print_ok, shell, source, start_ready};
+use hide_holder_protocol::{Capability, ClientMessage, HolderMessage, WatchMessage};
 
 /// How long the holder is watched in each state; a periodic timer of up to
 /// this length shows as a count above zero.
@@ -161,20 +164,61 @@ fn an_idle_holder_does_not_wake_attached_or_not() {
     let holder = start_ready(&folder.program, &home.socket("p"), &shell(), &[]);
     drop(folder);
     let mut connection = holder.open();
+    let (mut watch, _) = hide_holder_protocol::watch(
+        &holder.socket,
+        vec![Capability::Facts],
+        Instant::now() + HANG_LIMIT,
+    )
+    .unwrap();
+    hide_holder_protocol::write_watch(
+        &mut watch,
+        &WatchMessage::Rules(Some(
+            r#"{"version":"1","min_engine_version":1,"rules":[{"id":"ok","state":"idle","contains":["hide-ok"]}]}"#
+                .to_owned(),
+        )),
+    )
+    .unwrap();
     connection
         .send(ClientMessage::Input(print_ok().to_vec()))
         .unwrap();
     connection.wait_for_text("hide-ok");
+    // The watch reads the line by its rule; what else it sent waits unread
+    // in its stream, a few small messages.
+    watch.set_deadline(Instant::now() + HANG_LIMIT);
+    loop {
+        match hide_holder_protocol::read_holder(&mut watch).unwrap() {
+            HolderMessage::Facts(facts)
+                if facts.screen
+                    == (hide_holder_protocol::ScreenRead::Read {
+                        state: hide_holder_protocol::ScreenState::Idle,
+                        rule: Some("ok".to_owned()),
+                    }) =>
+            {
+                break;
+            }
+            HolderMessage::Facts(_) => {}
+            other => panic!("the watch was sent {other:?}"),
+        }
+    }
     // What the line drew has gone out, and a second later the writer gave
     // back what drawing it freed, once (`RETURN_FREED_AFTER`); the holder
     // waits on its program and its connection now, with no bound.
     holder.wait_logged("holder.memory_returned", 1, &mut connection);
     quiet(holder.process.pid);
     let attached = watched(holder.process.pid);
-    // Let go of: the holder closes the connection and its writer ends.
+    // Let go of: the holder closes the connection and its writer ends, and
+    // the watch's once its stream ends.
     connection.send(ClientMessage::Release).unwrap();
     connection.wait_closed();
     drop(connection);
+    hide_holder_protocol::write_watch(&mut watch, &WatchMessage::Release).unwrap();
+    watch.set_deadline(Instant::now() + HANG_LIMIT);
+    while let Ok(message) = hide_holder_protocol::read_holder(&mut watch) {
+        if matches!(message, HolderMessage::Closed(_)) {
+            break;
+        }
+    }
+    drop(watch);
     quiet(holder.process.pid);
     let alone = watched(holder.process.pid);
     eprintln!("the idle holder ran {attached} attached and {alone} alone over {WATCHED:?} each");

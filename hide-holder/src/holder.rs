@@ -9,16 +9,18 @@
 //! one writer of input and answers, in the order they came, behind bounded
 //! queues), the program's waiter, the listener, one short-lived thread per
 //! opening connection that reads its first message within its bound and
-//! answers an ask, and a reader and a screen writer per accepted connection.
-//! Every decision is made on the thread that runs [`Holder::run`], from one
-//! event queue.
+//! answers an ask, a reader and a screen writer per accepted connection, and
+//! a reader and a facts writer for the one watch that follows the pane
+//! ([`crate::watch`]). Every decision is made on the thread that runs
+//! [`Holder::run`], from one event queue.
 //!
 //! The screen is pulled, not pushed: the PTY reader only marks it changed,
 //! and the connection's writer draws the screen as it is when it can write,
 //! at most once per [`MIN_FRAGMENT_INTERVAL`], as a fragment of what changed
 //! since the last one it wrote. A slow node therefore gets fewer, larger
 //! fragments and never a queue, and no connection means no drawing at all
-//! (PRD engine-bundle-2-pane-holder D-7, D-9).
+//! (PRD engine-bundle-2-pane-holder D-7, D-9). A watch's facts are pulled
+//! the same way.
 
 use std::cell::Cell;
 use std::collections::VecDeque;
@@ -27,14 +29,14 @@ use std::path::PathBuf;
 use std::process::ExitCode;
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
-use std::sync::{Arc, Condvar, Mutex, PoisonError};
+use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError};
 use std::thread;
 use std::time::{Duration, Instant};
 
 use hide_holder_protocol::{
-    Answer, Ask, Capability, ClientMessage, CloseReason, Closed, Fragment, FrameError, HELLO_LIMIT,
-    HolderMessage, Notice, NoticeReason, Opening as FirstMessage, Size, Unknown, Welcome, agree,
-    read_client, read_opening, write_holder,
+    Ask, Capability, ClientMessage, CloseReason, Closed, Fragment, FrameError, HELLO_LIMIT, Hello,
+    HolderMessage, Notice, NoticeReason, Opening as FirstMessage, Size, Unknown, Watching, Welcome,
+    agree, read_client, read_opening, write_holder,
 };
 use hide_platform::ipc::{ListenerCloser, LocalListener, LocalStream, ShutdownHandle};
 use hide_platform::process::{Session, SessionEnd};
@@ -46,6 +48,7 @@ use crate::encode::Encoder;
 use crate::log::Log;
 use crate::pane::{Pane, Wheel};
 use crate::record::Claim;
+use crate::watch::{FactsWriter, SharedRules, Wake, WatchConnection, WatchReader};
 
 /// How long ending the pane's session may take before it is reported as
 /// unconfirmed.
@@ -114,6 +117,9 @@ const READ_CHUNK: usize = 64 * 1024;
 /// What this holder can send.
 const SENDS: [Capability; 2] = [Capability::Screen, Capability::Notices];
 
+/// What this holder sends on a watch.
+const WATCH_SENDS: [Capability; 1] = [Capability::Facts];
+
 enum Event {
     /// A connection whose hello was accepted.
     Opened {
@@ -135,10 +141,16 @@ enum Event {
         generation: u64,
         error: String,
     },
-    /// An ask wants the terminal's foreground process group, which only
-    /// the PTY knows.
-    Foreground {
-        reply: Sender<Result<u32, Unknown>>,
+    /// A watch whose opening was accepted.
+    Watch {
+        stream: LocalStream,
+        version: u16,
+        sends: Vec<Capability>,
+    },
+    /// A watch's node let go (`None`), or its stream ended or failed.
+    WatchGone {
+        generation: u64,
+        error: Option<FrameError>,
     },
     /// The PTY refused input a connection sent; later input from that
     /// connection is dropped, and another connection's is tried again.
@@ -261,7 +273,7 @@ pub struct Holder {
     listener_gone: Receiver<()>,
     closer: ListenerCloser,
     session: Session,
-    master: Option<Box<dyn MasterPty + Send>>,
+    master: PtyMaster,
     program: u32,
     size: Size,
     pane: Arc<Mutex<Pane>>,
@@ -277,6 +289,12 @@ pub struct Holder {
     answers: Answers,
     current: Option<Connection>,
     generation: u64,
+    /// The watch that follows the pane, its writer, which the PTY reader
+    /// marks changed, and the rules it reads the screen by.
+    watch: Option<WatchConnection>,
+    watch_generation: u64,
+    watch_wake: Arc<Mutex<Option<Arc<Wake>>>>,
+    rules: SharedRules,
     pty_closed: bool,
     /// Set once the pane ends: what a connection that opens from then on is
     /// closed with.
@@ -347,6 +365,7 @@ impl Holder {
         let writer = master
             .take_writer()
             .map_err(|error| format!("the PTY's input: {error}"))?;
+        let master = PtyMaster(Arc::new(Mutex::new(Some(master))));
         let pane = Pane::new(size, config.theme.as_ref())?;
         let listener = LocalListener::bind(&config.socket).map_err(|error| {
             format!(
@@ -365,6 +384,7 @@ impl Holder {
         let (sender, events) = mpsc::channel();
         let pane = Arc::new(Mutex::new(pane));
         let outbox: Arc<Mutex<Option<Arc<Outbox>>>> = Arc::new(Mutex::new(None));
+        let watch_wake: Arc<Mutex<Option<Arc<Wake>>>> = Arc::new(Mutex::new(None));
         let (writes, writes_rx) = mpsc::channel::<PtyWrite>();
         let input_queued = Arc::new(AtomicUsize::new(0));
         let answers = Answers {
@@ -377,10 +397,13 @@ impl Holder {
 
         spawn_named("pty-reader", {
             let pane = pane.clone();
-            let outbox = outbox.clone();
+            let marks = Marks {
+                outbox: outbox.clone(),
+                watch: watch_wake.clone(),
+            };
             let sender = sender.clone();
             let answers = answers.clone();
-            move || read_pty(reader, &pane, &outbox, &answers, &sender)
+            move || read_pty(reader, &pane, &marks, &answers, &sender)
         });
         spawn_named("pty-writer", {
             let input_queued = input_queued.clone();
@@ -417,6 +440,7 @@ impl Holder {
             log: log.clone(),
             pane: pane.clone(),
             shell: program,
+            master: master.clone(),
         };
         let (gone, listener_gone) = mpsc::channel();
         spawn_named("listener", move || {
@@ -440,7 +464,7 @@ impl Holder {
             listener_gone,
             closer,
             session,
-            master: Some(master),
+            master,
             program,
             size,
             pane,
@@ -453,6 +477,10 @@ impl Holder {
             answers,
             current: None,
             generation: 0,
+            watch: None,
+            watch_generation: 0,
+            watch_wake,
+            rules: SharedRules::default(),
             pty_closed: false,
             ending,
             opening,
@@ -534,8 +562,29 @@ impl Holder {
                         ));
                     }
                 }
-                Event::Foreground { reply } => {
-                    let _ = reply.send(self.foreground());
+                Event::Watch {
+                    stream,
+                    version,
+                    sends,
+                } => self.watch(stream, version, sends),
+                Event::WatchGone { generation, error } => {
+                    if self.watch.as_ref().map(|watch| watch.generation) == Some(generation) {
+                        let closed = match error {
+                            None => Closed::new(CloseReason::Released, "released"),
+                            Some(error) => {
+                                self.log.event(
+                                    "holder.watch_lost",
+                                    &[
+                                        ("generation", generation.into()),
+                                        ("reason", error.close_reason().name().into()),
+                                        ("error", error.to_string().into()),
+                                    ],
+                                );
+                                Closed::new(error.close_reason(), error.to_string())
+                            }
+                        };
+                        self.close_watch(closed);
+                    }
                 }
                 Event::InputFailed { generation, error } => {
                     self.log.event(
@@ -651,6 +700,123 @@ impl Holder {
         *self.outbox.lock().unwrap_or_else(PoisonError::into_inner) = outbox;
     }
 
+    /// The opened watch follows the pane from now on: the one it replaces is
+    /// told it was taken over, and its reader's late rules change nothing.
+    /// Its first facts are sent whatever they are, and its node's first rule
+    /// set is read as soon as it arrives.
+    fn watch(&mut self, stream: LocalStream, version: u16, sends: Vec<Capability>) {
+        self.watch_generation += 1;
+        let generation = self.watch_generation;
+        if let Some(previous) = self.watch.take() {
+            self.publish_watch(None);
+            self.log.event(
+                "holder.watch_replaced",
+                &[
+                    ("from", previous.generation.into()),
+                    ("to", generation.into()),
+                ],
+            );
+            previous.close(
+                Closed::new(
+                    CloseReason::TakenOver,
+                    format!("watch {generation} took the pane's facts over"),
+                ),
+                FLUSH_LIMIT,
+            );
+        }
+        self.rules
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .owner = generation;
+        let wake = Arc::new(Wake::default());
+        wake.send(HolderMessage::Watching(Watching {
+            version,
+            rules_engine: hide_screen_rules::ENGINE_VERSION,
+            sends,
+        }));
+        let writer_stream = stream.duplicate();
+        if writer_stream.set_write_timeout(Some(WRITE_LIMIT)).is_err() {
+            self.log
+                .event("holder.write_bound_unset", &[("watch", generation.into())]);
+        }
+        // In this order, so no change falls between them: the PTY reader
+        // marks this watch changed from here on, and its first facts are
+        // owed.
+        self.publish_watch(Some(wake.clone()));
+        wake.owe();
+        let (written_tx, written) = mpsc::channel();
+        let shutdown = stream.shutdown_handle();
+        spawn_named("watch-writer", {
+            let master = self.master.clone();
+            let writer = FactsWriter {
+                generation,
+                wake: wake.clone(),
+                pane: self.pane.clone(),
+                rules: self.rules.clone(),
+                shell: self.program,
+                group: Box::new(move || master.group()),
+                log: self.log.clone(),
+            };
+            let shutdown = stream.shutdown_handle();
+            move || writer.serve(writer_stream, &shutdown, &written_tx)
+        });
+        spawn_named("watch-reader", {
+            let reader = WatchReader {
+                generation,
+                wake: wake.clone(),
+                pane: self.pane.clone(),
+                rules: self.rules.clone(),
+                log: self.log.clone(),
+            };
+            let sender = self.sender.clone();
+            move || {
+                reader.serve(stream, |ended| {
+                    let _ = sender.send(Event::WatchGone {
+                        generation,
+                        error: ended.err(),
+                    });
+                });
+            }
+        });
+        self.watch = Some(WatchConnection {
+            generation,
+            wake,
+            shutdown,
+            written,
+        });
+        self.log
+            .event("holder.watch_opened", &[("generation", generation.into())]);
+    }
+
+    fn publish_watch(&self, wake: Option<Arc<Wake>>) {
+        *self
+            .watch_wake
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner) = wake;
+    }
+
+    fn close_watch(&mut self, closed: Closed) {
+        if let Some(watch) = self.watch.take() {
+            self.publish_watch(None);
+            self.log.event(
+                "holder.watch_closed",
+                &[
+                    ("generation", watch.generation.into()),
+                    ("reason", closed.reason.name().into()),
+                ],
+            );
+            watch.close(closed, FLUSH_LIMIT);
+        }
+    }
+
+    /// What the pane's facts read may have changed by something other than
+    /// the program's output.
+    fn facts_changed(&self) {
+        if let Some(watch) = &self.watch {
+            watch.wake.changed();
+        }
+    }
+
     fn close_current(&mut self, closed: Closed) {
         if let Some(connection) = self.current.take() {
             self.publish(None);
@@ -759,23 +925,6 @@ impl Holder {
         self.screen_changed();
     }
 
-    /// The terminal's foreground process group, for an ask.
-    fn foreground(&self) -> Result<u32, Unknown> {
-        #[cfg(unix)]
-        {
-            let group = self
-                .master
-                .as_ref()
-                .and_then(|master| master.process_group_leader());
-            match group {
-                Some(group) if group > 0 => Ok(group as u32),
-                _ => Err(Unknown::NoGroup),
-            }
-        }
-        #[cfg(windows)]
-        Err(Unknown::NotOnThisSystem)
-    }
-
     fn resize(&mut self, size: hide_holder_protocol::Size) {
         let size = match Size::checked(size.rows, size.cols) {
             Ok(size) => size,
@@ -784,14 +933,17 @@ impl Holder {
                 return;
             }
         };
-        if let Some(master) = &self.master
-            && let Err(error) = master.resize(PtySize {
-                rows: size.rows,
-                cols: size.cols,
-                pixel_width: 0,
-                pixel_height: 0,
-            })
-        {
+        let refused = self.master.lock().as_ref().and_then(|master| {
+            master
+                .resize(PtySize {
+                    rows: size.rows,
+                    cols: size.cols,
+                    pixel_width: 0,
+                    pixel_height: 0,
+                })
+                .err()
+        });
+        if let Some(error) = refused {
             self.resize_failed(
                 "pty",
                 format!(
@@ -807,6 +959,7 @@ impl Holder {
         let resized = self.pane().resize(size, &mut answers);
         self.answers.send(answers);
         self.screen_changed();
+        self.facts_changed();
         if let Err(error) = resized {
             self.resize_failed(
                 "parser",
@@ -889,6 +1042,10 @@ impl Holder {
             self.publish(None);
             connection.close(closed.clone());
         }
+        if let Some(watch) = self.watch.take() {
+            self.publish_watch(None);
+            watch.close(closed.clone(), FLUSH_LIMIT);
+        }
         if self.listener_gone.recv_timeout(DRAIN_LIMIT).is_err() {
             self.log.event("holder.listener_close_unconfirmed", &[]);
         }
@@ -900,7 +1057,7 @@ impl Holder {
             self.log.event("holder.opening_unconfirmed", &[]);
         }
         while let Ok(event) = self.events.try_recv() {
-            if let Event::Opened { stream, .. } = event {
+            if let Event::Opened { stream, .. } | Event::Watch { stream, .. } = event {
                 self.turn_away(&stream, deadline);
             }
         }
@@ -949,7 +1106,7 @@ impl Holder {
     /// its output until the end, since a console closing with output nobody
     /// reads can wait for ever; answers whether both finished in time.
     fn close_pty(&mut self) -> bool {
-        let Some(master) = self.master.take() else {
+        let Some(master) = self.master.lock().take() else {
             return true;
         };
         let (closed_tx, closed) = mpsc::channel();
@@ -965,7 +1122,9 @@ impl Holder {
                 .recv_timeout(deadline.saturating_duration_since(Instant::now()))
             {
                 Ok(Event::PtyClosed) => pty_closed = true,
-                Ok(Event::Opened { stream, .. }) => self.turn_away(&stream, deadline),
+                Ok(Event::Opened { stream, .. } | Event::Watch { stream, .. }) => {
+                    self.turn_away(&stream, deadline);
+                }
                 Ok(_) => {}
                 Err(RecvTimeoutError::Timeout | RecvTimeoutError::Disconnected) => break,
             }
@@ -1117,12 +1276,71 @@ impl Answers {
     }
 }
 
+/// The writers the PTY reader marks changed: the screen of the connection
+/// that holds the pane, and the watch's facts.
+struct Marks {
+    outbox: Arc<Mutex<Option<Arc<Outbox>>>>,
+    watch: Arc<Mutex<Option<Arc<Wake>>>>,
+}
+
+impl Marks {
+    fn changed(&self) {
+        let outbox = self
+            .outbox
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone();
+        if let Some(outbox) = outbox {
+            outbox.changed();
+        }
+        let watch = self
+            .watch
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone();
+        if let Some(watch) = watch {
+            watch.changed();
+        }
+    }
+}
+
+/// The PTY's controlling side: the loop resizes and closes it, and an ask
+/// and a watch's writer read the terminal's foreground group from it.
+#[derive(Clone)]
+struct PtyMaster(Arc<Mutex<Option<Box<dyn MasterPty + Send>>>>);
+
+impl PtyMaster {
+    fn lock(&self) -> MutexGuard<'_, Option<Box<dyn MasterPty + Send>>> {
+        self.0.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
+    /// The terminal's foreground process group, or why it is not known.
+    fn group(&self) -> Result<u32, Unknown> {
+        #[cfg(unix)]
+        {
+            let group = self
+                .lock()
+                .as_ref()
+                .and_then(|master| master.process_group_leader());
+            match group {
+                Some(group) if group > 0 => Ok(group as u32),
+                _ => Err(Unknown::NoGroup),
+            }
+        }
+        #[cfg(windows)]
+        {
+            let _ = self;
+            Err(Unknown::NotOnThisSystem)
+        }
+    }
+}
+
 /// Reads the PTY until it ends, whether or not a node is connected, so the
 /// program never waits on a reader and its questions are answered.
 fn read_pty(
     mut reader: Box<dyn Read + Send>,
     pane: &Mutex<Pane>,
-    outbox: &Mutex<Option<Arc<Outbox>>>,
+    marks: &Marks,
     answers: &Answers,
     events: &Sender<Event>,
 ) {
@@ -1140,13 +1358,7 @@ fn read_pty(
             .unwrap_or_else(PoisonError::into_inner)
             .feed(&buffer[..count], &mut answered);
         answers.send(std::mem::take(&mut answered));
-        let current = outbox
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .clone();
-        if let Some(current) = current {
-            current.changed();
-        }
+        marks.changed();
     }
     let _ = events.send(Event::PtyClosed);
 }
@@ -1430,6 +1642,7 @@ struct AcceptSide {
     log: Log,
     pane: Arc<Mutex<Pane>>,
     shell: u32,
+    master: PtyMaster,
 }
 
 /// How many connections are reading their hello, which the pane's end waits
@@ -1512,6 +1725,7 @@ impl AcceptSide {
                 log: self.log.clone(),
                 pane: self.pane.clone(),
                 shell: self.shell,
+                master: self.master.clone(),
             };
             let opening = self.opening.clone();
             spawn_named("connection-opening", move || {
@@ -1550,6 +1764,7 @@ struct Asked {
     log: Log,
     pane: Arc<Mutex<Pane>>,
     shell: u32,
+    master: PtyMaster,
 }
 
 impl Asked {
@@ -1572,6 +1787,7 @@ impl Asked {
         let hello = match read_opening(&mut bounded) {
             Ok(FirstMessage::Hello(hello)) => hello,
             Ok(FirstMessage::Ask(ask)) => return self.answer(&stream, ask),
+            Ok(FirstMessage::Watch(hello)) => return self.watch(stream, &hello),
             Err(error) => {
                 let closed = Closed::new(hello_reason(&error), error.to_string());
                 refuse(&stream, closed, Instant::now() + HELLO_LIMIT, log);
@@ -1604,6 +1820,39 @@ impl Asked {
         }
     }
 
+    /// Hands an accepted watch to the holder's loop, which replaces any watch
+    /// before it; a watch that does not take facts has nothing to follow.
+    fn watch(&self, stream: LocalStream, hello: &Hello) {
+        let log = &self.log;
+        let (version, sends) = match agree(hello, &WATCH_SENDS) {
+            Ok(agreed) => agreed,
+            Err(closed) => {
+                refuse(&stream, closed, Instant::now() + HELLO_LIMIT, log);
+                return;
+            }
+        };
+        if !sends.contains(&Capability::Facts) {
+            let closed = Closed::new(CloseReason::HelloInvalid, "a watch takes facts");
+            refuse(&stream, closed, Instant::now() + HELLO_LIMIT, log);
+            return;
+        }
+        if let Some(closed) = self.ended() {
+            refuse(&stream, closed, Instant::now() + HELLO_LIMIT, log);
+            return;
+        }
+        let opened = Event::Watch {
+            stream,
+            version,
+            sends,
+        };
+        if let Err(mpsc::SendError(Event::Watch { stream, .. })) = self.sender.send(opened) {
+            let closed = self
+                .ended()
+                .unwrap_or_else(|| Closed::new(CloseReason::HolderFailed, "the holder has ended"));
+            refuse(&stream, closed, Instant::now() + HELLO_LIMIT, log);
+        }
+    }
+
     /// Answers one ask and closes; the connection that holds the pane, and
     /// the screen's scroll position, stay as they were (D-11, D-18).
     fn answer(&self, stream: &LocalStream, ask: Ask) {
@@ -1623,7 +1872,23 @@ impl Asked {
                 .unwrap_or_else(PoisonError::into_inner)
                 .read(lines)
                 .map_err(|error| format!("the screen could not be read: {error}")),
-            Ask::Processes => self.processes(deadline),
+            Ask::Screen => self
+                .pane
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .read_screen()
+                .map_err(|error| format!("the screen could not be read: {error}")),
+            Ask::Rows { lines } => self
+                .pane
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .read_rows(lines)
+                .map_err(|error| format!("the screen could not be read: {error}")),
+            Ask::Processes => Ok(crate::ask::processes(
+                self.shell,
+                self.master.group(),
+                &self.log,
+            )),
         };
         match answer {
             Ok(answer) => {
@@ -1643,17 +1908,6 @@ impl Asked {
                 &self.log,
             ),
         }
-    }
-
-    fn processes(&self, deadline: Instant) -> Result<Answer, String> {
-        let (reply, group) = mpsc::channel();
-        self.sender
-            .send(Event::Foreground { reply })
-            .map_err(|_| "the holder has ended".to_owned())?;
-        let group = group
-            .recv_timeout(deadline.saturating_duration_since(Instant::now()))
-            .map_err(|_| "the pane's terminal did not say its foreground".to_owned())?;
-        Ok(crate::ask::processes(self.shell, group, &self.log))
     }
 }
 

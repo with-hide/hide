@@ -69,6 +69,129 @@ pub struct HolderForeground {
     pub members: Vec<(u32, String)>,
 }
 
+/// What a pane's holder says of its pane now (PRD engine-bundle-3-core-owns
+/// D-18, D-21), whole each time any of it changed, so a watcher that missed
+/// one is put right by the next. The holder sends it on a connection of its
+/// own that takes nothing over and needs no screen, so a pane no screen
+/// shows is followed as one that is shown.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct PaneFacts {
+    /// The folder the pane's shell last reported (OSC 7, or OSC 9;9 from
+    /// Windows PowerShell's prompt), in the wire spelling; `None` until it
+    /// reported one.
+    pub cwd: Option<String>,
+    /// The terminal's title (OSC 0 or 2), `None` when none was set or the
+    /// last one was empty.
+    pub title: Option<String>,
+    /// The bells the program rang since the holder started.
+    pub bells: u64,
+    /// The prompts the shell marked (OSC 133;A) since the holder started:
+    /// Hide's shell integration marks its first one once the user's own
+    /// startup files are done.
+    pub prompts: u64,
+    /// Whether the program has bracketed paste on (mode 2004), so a text
+    /// typed for it as one paste is wrapped as Herdr's `agent.prompt` wraps
+    /// it.
+    pub bracketed_paste: bool,
+    /// The program in the terminal's foreground other than the pane's own
+    /// program, `None` while the pane's program holds the terminal or the
+    /// system cannot say.
+    pub foreground: Option<ForegroundProgram>,
+    /// What the pane's screen rules read on its screen.
+    pub screen: ScreenRead,
+}
+
+/// The program in a pane's foreground, as an agent definition's
+/// `executables` recognize it.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ForegroundProgram {
+    pub pid: u32,
+    /// The program's name without its folder or `.exe`; for a runtime that
+    /// runs a script (node, bun, deno, python), the script's name without
+    /// its folder or extension, as Herdr recognizes a wrapped agent.
+    pub name: String,
+    /// Its arguments, the program first, where the system says them
+    /// (macOS and Linux); empty where it does not. At most
+    /// [`MAX_FOREGROUND_ARGS`] of at most [`MAX_FOREGROUND_ARGV_BYTES`] in
+    /// all, as Herdr bounds a resume's arguments.
+    pub argv: Vec<String>,
+}
+
+/// The most arguments a [`ForegroundProgram`] carries.
+pub const MAX_FOREGROUND_ARGS: usize = 64;
+/// The most bytes a [`ForegroundProgram`]'s arguments carry in all.
+pub const MAX_FOREGROUND_ARGV_BYTES: usize = 8 * 1024;
+
+/// A state a pane's screen rules can read.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ScreenState {
+    Idle,
+    Working,
+    Blocked,
+    Unknown,
+}
+
+/// What a pane's screen rules read, or why they read nothing.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub enum ScreenRead {
+    /// The pane was given no rules.
+    #[default]
+    NoRules,
+    /// The state of the highest-priority rule that matched the screen, or
+    /// the last such state when the latest match says the screen proves
+    /// nothing; `Unknown` when no rule matched.
+    Read { state: ScreenState, rule: Option<String> },
+    /// The rules cannot be evaluated on this pane, under a stable code:
+    /// [`UNSUPPORTED_HOLDER`], [`NO_RULES_FOR_HOLDER`], or the holder's own
+    /// refusal of the rules it was given.
+    Unknown { reason: String },
+}
+
+/// The pane's holder was built before pane facts: its screen is read by no
+/// rules, and its folder, title and foreground are not followed.
+pub const UNSUPPORTED_HOLDER: &str = "unsupported_holder";
+/// Every rule set for the pane's agent needs a newer evaluator than its
+/// holder has.
+pub const NO_RULES_FOR_HOLDER: &str = "no_rules_for_holder";
+
+/// One agent's screen rule sets for a pane, highest priority first (the
+/// operator's file, then the built-in one, PRD D-20): the node sends its
+/// holder the first one the holder's evaluator can run (its
+/// `min_engine_version` at most the holder's); when none fits, the pane's
+/// screen reads [`NO_RULES_FOR_HOLDER`].
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ScreenRules {
+    /// The agent definition's id, for the logs.
+    pub agent: String,
+    pub sets: Vec<RuleSet>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct RuleSet {
+    /// Where it came from, for the logs: `built-in` or the operator's file.
+    pub source: String,
+    pub version: String,
+    pub min_engine_version: u32,
+    /// The rule set as `hide_screen_rules::Manifest` serializes to JSON.
+    pub manifest: String,
+}
+
+/// A read of a pane's screen with its styling kept, as escape sequences
+/// ([`PaneHolders::read_styled`]), as Herdr's `pane.read --format ansi`
+/// answers it.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum StyledRead {
+    /// The rows the screen shows now (Herdr's `visible` source), which an
+    /// agent's composer is judged on.
+    Screen,
+    /// The last rows of the screen and its scrollback as the terminal drew
+    /// them, soft wraps kept (Herdr's `recent` source), at most this many.
+    Rows(u16),
+}
+
+/// Told each pane's id and its facts ([`PaneHolders::watch_facts`]).
+pub type PaneFactsSink = std::sync::Arc<dyn Fn(&str, &PaneFacts) + Send + Sync>;
+
 /// Why a holder call did not do what was asked. A caller branches on the
 /// kind and shows the message.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -106,6 +229,10 @@ pub trait PaneHolders: Send + Sync {
     /// The pane's last `lines` rows as text, soft wraps joined, and whether
     /// rows were left out.
     fn read(&self, pane: &str, lines: u16) -> Result<(String, bool), HolderError>;
+    /// The pane's screen or last rows with their styling, and whether rows
+    /// were left out; a holder built before styled reads is refused
+    /// [`UNSUPPORTED_HOLDER`].
+    fn read_styled(&self, pane: &str, read: StyledRead) -> Result<(String, bool), HolderError>;
     /// The pane's program and its terminal's foreground processes.
     fn processes(&self, pane: &str) -> Result<HolderProcesses, HolderError>;
     /// Types `bytes` into the pane as they are, through the connection that
@@ -120,4 +247,13 @@ pub trait PaneHolders: Send + Sync {
     /// as Herdr closes a pane whose program ends. A pane ended by
     /// [`PaneHolders::terminate`] is not told.
     fn watch_ends(&self, ended: PaneEnded);
+    /// Tells `sink`, from now on, each pane's facts whenever they change,
+    /// for every pane the node starts or found running, whether or not a
+    /// screen shows it; a pane whose holder does not send facts is told once
+    /// with [`ScreenRead::Unknown`] and [`UNSUPPORTED_HOLDER`].
+    fn watch_facts(&self, sink: PaneFactsSink);
+    /// Gives the pane's holder `rules` to read its screen by, in place of
+    /// any it had, or none; kept by the node and given again to a holder it
+    /// reaches anew.
+    fn set_rules(&self, pane: &str, rules: Option<ScreenRules>) -> Result<(), HolderError>;
 }
