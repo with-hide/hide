@@ -25,7 +25,7 @@
 use std::collections::BTreeMap;
 use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex, PoisonError};
+use std::sync::{Arc, Condvar, Mutex, PoisonError};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -37,8 +37,10 @@ use hide_holder_protocol::{
 };
 use hide_kit::holders::{FOLDERS_CAP, Pruned, Source};
 use hide_kit::panes::{
-    CloseError, Judgment, Panes, RECONCILE_BUDGET, StartRefusal, StartRequest, Started, holder_pane,
+    CloseError, Judgment, Panes, RECONCILE_BUDGET, StartRefusal, StartRequest, Started, core_pane,
+    holder_pane,
 };
+use hide_node_link::holders::HolderRecovery;
 use hide_node_link::terminal::{
     GridSize, MAX_ATTACHED_PANES, PaneTerminalState, ReportSink, TerminalControl, TerminalNode,
     TerminalReport,
@@ -457,6 +459,9 @@ pub struct Holders {
     state_dir: PathBuf,
     known: Arc<Known>,
     reports: Arc<dyn ReportSink>,
+    /// What the last [`Holders::recover`] found, for the core's restore to
+    /// wait on ([`Holders::recovered`]).
+    recovery: (Mutex<Option<HolderRecovery>>, Condvar),
 }
 
 /// What [`Holders::start_local`] starts: the node's terminal service, and its
@@ -491,6 +496,7 @@ impl Holders {
             state_dir: folders.state_dir.to_owned(),
             known: Arc::default(),
             reports,
+            recovery: (Mutex::new(None), Condvar::new()),
         })
     }
 
@@ -710,11 +716,14 @@ impl Holders {
         }
         let mut alive = Vec::new();
         let mut waiting = Vec::new();
-        for (pane, judgment) in judged {
+        // A record is named by its holder id; the service, the reports and
+        // the core name the pane by its own id.
+        for (holder, judgment) in judged {
+            let pane = core_pane(&holder);
             match judgment {
-                Judgment::Alive(_) => alive.push(pane),
+                Judgment::Alive(_) => alive.push((pane, holder)),
                 Judgment::Ended(record) => {
-                    self.report_ended(&record.pane, &record);
+                    self.report_ended(&pane, &record);
                     recovered
                         .ended
                         .push((pane, record.end.as_ref().map(|end| end.reason)));
@@ -738,6 +747,19 @@ impl Holders {
         if let Some(failed) = failed {
             recovered.unjudged.push((String::new(), failed));
         }
+        let present = alive
+            .iter()
+            .map(|(pane, _)| pane.clone())
+            .chain(recovered.unsupported.iter().cloned())
+            .chain(waiting.iter().cloned())
+            .chain(
+                recovered
+                    .unjudged
+                    .iter()
+                    .map(|(pane, _)| pane.clone())
+                    .filter(|pane| !pane.is_empty()),
+            )
+            .collect();
         if !waiting.is_empty() {
             crate::diagnostic!(json!({
                 "component": "pane_holder",
@@ -746,10 +768,10 @@ impl Holders {
                 "panes": waiting,
             }));
         }
-        for pane in alive {
+        for (pane, holder) in alive {
             self.known.insert(
                 &pane,
-                hide_kit::layout::holder_socket(&self.state_dir, &pane),
+                hide_kit::layout::holder_socket(&self.state_dir, &holder),
             );
             // No size: a holder keeps its own, and the screen that comes back
             // is the one it holds at this moment.
@@ -774,7 +796,35 @@ impl Holders {
             "unjudged": recovered.unjudged.len(),
             "complete": recovered.complete,
         }));
+        let (found, settled) = &self.recovery;
+        *found.lock().unwrap_or_else(PoisonError::into_inner) = Some(HolderRecovery {
+            ended: recovered
+                .ended
+                .iter()
+                .map(|(pane, _)| pane.clone())
+                .collect(),
+            present,
+        });
+        settled.notify_all();
         recovered
+    }
+
+    /// What the last [`Holders::recover`] found, waiting up to `timeout` for
+    /// the first one to finish; `None` when none finished by then.
+    pub fn recovered(&self, timeout: Duration) -> Option<HolderRecovery> {
+        let (found, settled) = &self.recovery;
+        let found = found.lock().unwrap_or_else(PoisonError::into_inner);
+        let (found, _) = settled
+            .wait_timeout_while(found, timeout, |found| found.is_none())
+            .unwrap_or_else(PoisonError::into_inner);
+        found.clone()
+    }
+
+    /// How many of the state folder's panes may still run
+    /// (`hide_kit::panes::Panes::live`): a daemon of the core's own engine
+    /// lives while there is one (PRD engine-bundle-3-core-owns D-10).
+    pub fn live_panes(&self) -> Result<usize, String> {
+        self.panes.live()
     }
 
     /// [`Holders::recover`] and then [`Holders::prune_folders`] on a thread

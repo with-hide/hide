@@ -26,6 +26,21 @@ pub struct HolderStart {
     /// The size the pane starts at, before any screen draws it.
     pub rows: u16,
     pub cols: u16,
+    /// One line the pane shows before its shell's first output, such as why
+    /// a restored pane opened somewhere else; only a pane started with no
+    /// program takes one.
+    pub notice: Option<String>,
+}
+
+/// What a node found of its panes' holders when it started (PRD
+/// engine-bundle-3-core-owns D-7), under the core's pane ids: the panes whose
+/// holders ended while no node ran (their program exited, or the machine
+/// restarted), and every other pane it holds a record of, whose holder runs
+/// or may still run and is never started a second time.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct HolderRecovery {
+    pub ended: Vec<String>,
+    pub present: Vec<String>,
 }
 
 /// The processes a pane's terminal holds: its program, which is the shell
@@ -86,4 +101,8 @@ pub trait PaneHolders: Send + Sync {
     /// Types `bytes` into the pane as they are, through the connection that
     /// holds its screen, in order with every other key typed there.
     fn input(&self, pane: &str, bytes: Vec<u8>) -> Result<(), HolderError>;
+    /// What the node's start found of its holders, once it has looked at
+    /// every record, waiting at most `timeout` for it: refused
+    /// `recovery_unfinished` when it has not finished by then.
+    fn recovered(&self, timeout: std::time::Duration) -> Result<HolderRecovery, HolderError>;
 }

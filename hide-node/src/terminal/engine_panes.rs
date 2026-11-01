@@ -14,7 +14,7 @@ use std::sync::Arc;
 use hide_holder_protocol::{Answer, Appearance, Foreground, OpenError, Size, Theme};
 use hide_kit::panes::{CloseError, StartRefusal, StartRequest, Started};
 use hide_node_link::holders::{
-    HolderError, HolderForeground, HolderProcesses, HolderStart, PaneHolders,
+    HolderError, HolderForeground, HolderProcesses, HolderRecovery, HolderStart, PaneHolders,
 };
 use hide_node_link::terminal::{KeyTarget, TerminalNode};
 
@@ -47,15 +47,24 @@ impl PaneHolders for LocalPanes {
             code: "invalid_size",
             message: why,
         })?;
-        let program = match &start.program {
-            Some(program) if !program.is_empty() => program.iter().map(OsString::from).collect(),
-            Some(_) => {
+        let program = match (&start.program, &start.notice) {
+            (Some(_), Some(_)) => {
+                return Err(HolderError::Refused {
+                    code: "invalid_program",
+                    message: "only a shell pane shows a notice before it starts".to_owned(),
+                });
+            }
+            (Some(program), None) if !program.is_empty() => {
+                program.iter().map(OsString::from).collect()
+            }
+            (Some(_), None) => {
                 return Err(HolderError::Refused {
                     code: "invalid_program",
                     message: "the pane's program is empty".to_owned(),
                 });
             }
-            None => self.shell.clone(),
+            (None, None) => self.shell.clone(),
+            (None, Some(notice)) => shell_after_notice(&self.shell, notice),
         };
         let cwd =
             hide_platform::path::from_wire(&start.cwd).map_err(|error| HolderError::Refused {
@@ -143,6 +152,48 @@ impl PaneHolders for LocalPanes {
             .key(KeyTarget::Pane(pane.to_owned()), bytes, super::unix_ms());
         Ok(())
     }
+
+    fn recovered(&self, timeout: std::time::Duration) -> Result<HolderRecovery, HolderError> {
+        self.holders
+            .recovered(timeout)
+            .ok_or_else(|| HolderError::Refused {
+                code: "recovery_unfinished",
+                message: format!(
+                    "the node had not looked at every pane's record within {} s",
+                    timeout.as_secs()
+                ),
+            })
+    }
+}
+
+/// `shell` started so that it first prints `notice` as a line of its own:
+/// on macOS and Linux a POSIX `sh` prints it and replaces itself with the
+/// shell, so the pane's program is the shell; on Windows PowerShell writes it
+/// and stays open.
+fn shell_after_notice(shell: &[OsString], notice: &str) -> Vec<OsString> {
+    let line: String = notice.chars().filter(|c| !c.is_control()).collect();
+    if cfg!(windows) {
+        let program = shell
+            .first()
+            .cloned()
+            .unwrap_or_else(|| OsString::from("powershell.exe"));
+        return vec![
+            program,
+            OsString::from("-NoLogo"),
+            OsString::from("-NoExit"),
+            OsString::from("-Command"),
+            OsString::from(format!("Write-Host '{}'", line.replace('\'', "''"))),
+        ];
+    }
+    let mut program = vec![
+        OsString::from("/bin/sh"),
+        OsString::from("-c"),
+        OsString::from("printf '%s\\n' \"$1\"; shift; exec \"$@\""),
+        OsString::from("hide-notice"),
+        OsString::from(line),
+    ];
+    program.extend(shell.iter().cloned());
+    program
 }
 
 fn start_refusal(refusal: StartRefusal) -> HolderError {
