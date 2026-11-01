@@ -330,6 +330,12 @@ impl Holder {
             .map_err(|error| format!("the PTY could not be opened: {error}"))?;
         let mut command = CommandBuilder::from_argv(config.program.clone());
         command.cwd(&config.cwd);
+        // The terminal the program writes to is the holder's, an xterm with
+        // 256 colors and true color, which it says as a Herdr pane does,
+        // whatever the environment it was started from held (an app opened
+        // from the Dock has no TERM).
+        command.env("TERM", "xterm-256color");
+        command.env("COLORTERM", "truecolor");
         command.env_remove(hide_platform::process::LENT_KEY);
         let panic_on_input = cfg!(debug_assertions) && std::env::var_os(PANIC_ON_INPUT).is_some();
         command.env_remove(PANIC_ON_INPUT);
