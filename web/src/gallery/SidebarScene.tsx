@@ -13,7 +13,7 @@ import { TitleRow } from "../TitleRow";
 import { SettingsGate } from "../SettingsSheet";
 import { useShellStore } from "../store";
 import { OVERVIEW_ENTRY, useUiStore } from "../ui";
-import { missionFixture } from "./MissionScene";
+import { withMissionAsk } from "./MissionScene";
 import { applyEvent, OFFLINE_DEVICE, REFERENCE_FOLDS, sidebarScene, sidebarStatusAxisScene, type SceneContent, type SceneDevices, type SceneFolds, type SceneFront } from "./sceneData";
 
 /** What one scene document shows; every value comes from its query string. */
@@ -71,7 +71,7 @@ export function SidebarScene({ theme, width, scale, content, devices, front, rai
     const sized = width === null ? scene.rest : { ...scene.rest, ui_state: { ...scene.rest.ui_state, sidebar_width: width } };
     const shown = { ...sized, ui_state: { ...sized.ui_state, device_rail_visible: rail === "shown" } };
     // `mission-ask`: a mission waits on the operator with no session row to carry it, so Needs You lists the mission itself.
-    const rest = state === "mission-ask" ? { ...shown, missions: missionFixture("no-conductor", Date.now()).rest.missions } : shown;
+    const rest = state === "mission-ask" ? withMissionAsk(shown, "local", Date.now()) : shown;
     useShellStore.setState({ rest, agents: scene.agents, connection: "live", ...(axis ? { focusedPaneId: "a1" } : {}) });
   }, [scene, width, rail, axis, state]);
 

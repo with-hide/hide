@@ -24,8 +24,7 @@ import { cn } from "./lib/utils";
 import { agentNumber, sidebarAgentNumbers } from "./numbering";
 import { checkoutAgentRows, type BoardRow } from "./projectBoard";
 import { FoldLane, SidebarAgentRow, type AgentRowMenu, type SidebarTreeSlot } from "./components/sidebar-agent-row";
-import { SidebarMissionRow } from "./components/sidebar-mission-row";
-import { missionAsks } from "./missions";
+import { SidebarMissionRow, useMissionAsks } from "./components/sidebar-mission-row";
 import { TreeRails } from "./components/agent-tree";
 import { sidebarTreeLines } from "./sidebarTree";
 import { moveSidebarKey, sidebarNamedGroups, sidebarTabGroups, type SidebarCollection, type SidebarTabGroup } from "./sidebarTabs";
@@ -435,8 +434,7 @@ function ProjectList({ actions }: { actions: Actions }) {
   const catalogText = useShellStore((s) => catalogLineOf(s.rest, t)?.text ?? null);
   const catalogLine = catalogState && catalogText ? { state: catalogState, text: catalogText } : null;
   const raisedOpen = useUiStore((s) => s.raisedOpen);
-  const missionItems = useShellStore((s) => (s.rest?.missions?.failed ? null : s.rest?.missions?.items) ?? null);
-  const asks = useMemo(() => (missionItems && frontId ? missionAsks(missionItems, frontId) : []), [missionItems, frontId]);
+  const asks = useMissionAsks(frontId);
   const rows = useMemo(
     () => projectRows(workspaces, { inactive_projects: inactiveFold, no_agent_projects: noAgentsFold }, listedAgents, frontScope, raisedOpen, asks),
     [workspaces, inactiveFold, noAgentsFold, listedAgents, frontScope, raisedOpen, asks],

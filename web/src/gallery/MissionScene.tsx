@@ -273,6 +273,20 @@ export function missionFixture(shown: string, now: number): { mission: Mission; 
   return { mission, rest };
 }
 
+/**
+ * `rest` with the no-Conductor mission waiting on the operator, counted on
+ * `deviceId`'s scope as the core counts a mission no row carries (PRD
+ * mission-node-simple B14): named in `mission_asks` and in its Needs You number.
+ */
+export function withMissionAsk(rest: SnapshotRest, deviceId: string, now: number): SnapshotRest {
+  const { mission, rest: fixture } = missionFixture("no-conductor", now);
+  const devices = rest.navigator?.devices?.map((device) => device.id !== deviceId ? device : {
+    ...device,
+    agent_scope: { ...device.agent_scope, mission_asks: [mission.id], overview_needs_you: device.agent_scope.overview_needs_you + 1, groups: { ...device.agent_scope.groups, needs_you: device.agent_scope.groups.needs_you + 1 } },
+  });
+  return { ...rest, missions: fixture.missions, navigator: { ...rest.navigator!, devices: devices ?? [] } };
+}
+
 export function MissionScene({ params }: { params: URLSearchParams }) {
   useFollowInterfaceLanguage(requireInterfaceLanguage(params.get("lang") ?? "ko"));
   const theme = params.get("theme") === "light" ? "light" : "dark";

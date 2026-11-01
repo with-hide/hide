@@ -8,6 +8,7 @@ import { markWords, rowAccessibleName } from "./agentRow";
 import { AgentRecordTitle } from "./components/agent-record-title";
 import { askWhat } from "./components/agent-tree";
 import { RevisitStar, starred } from "./components/revisit-mark";
+import { MissionAskChoices, MissionAskLine, useMissionAsks } from "./components/sidebar-mission-row";
 import { Button } from "./components/ui/button";
 import { useEscapeLayer, useReturnFocus } from "./components/ui/layer";
 import { between, cloud, communicationLines, exchangeLines, lineageLines, projectAccent, teamOutline, turnLines, type Area, type Orb } from "./overviewGraphLines";
@@ -423,7 +424,7 @@ function WorkGraph({ projects, deviceId, actions, onOpenRecord, projectId, initi
       <div className="og-canvas">{!showList ? <ReactFlow zIndexMode="manual" colorMode={theme} nodes={nodes} edges={edges} nodeTypes={NODE_TYPES} edgeTypes={EDGE_TYPES} nodesDraggable onNodeDragStart={dragStart} onNodeDrag={dragging} onNodeDragStop={dragStop} nodesConnectable={false} nodesFocusable={false} edgesFocusable={false} elementsSelectable={false} deleteKeyCode={null} selectionKeyCode={null} multiSelectionKeyCode={null} panOnDrag panOnScroll zoomOnScroll defaultViewport={{ x: 24, y: 24, zoom: 1 }} minZoom={0.05} maxZoom={2} onPaneClick={() => { close(); setHighlightedSession(null); }} ariaLabelConfig={{ "node.a11yDescription.default": t("overviewGraph.nodeHelp"), "node.a11yDescription.keyboardDisabled": t("overviewGraph.nodeHelp") }}>
         <div className="og-zoom nopan nodrag"><Hint label={t("overviewGraph.zoomOut")}><Button variant="ghost" size="icon-sm" onClick={() => void zoomOut({ duration: 0 })}><MinusIcon /></Button></Hint><Hint label={t("overviewGraph.zoomIn")}><Button variant="ghost" size="icon-sm" onClick={() => void zoomIn({ duration: 0 })}><PlusIcon /></Button></Hint><Hint label={t("overviewGraph.fit")}><Button variant="ghost" size="icon-sm" onClick={fitOperator}><MaximizeIcon /></Button></Hint><Hint label={t("overviewGraph.currentPane")}><Button variant="ghost" size="icon-sm" disabled={!current} onClick={() => { if (current) { setHighlightedSession(current.id); if (orbs.has(current.id)) { const point = positionOf(current.id); void flow.setCenter(point.x, point.y, { zoom: 1, duration: 0 }); } else centerProject(current.projectId); } }}><LocateFixedIcon /></Button></Hint><Hint label={t("overviewGraph.resetLayout")}><Button variant="ghost" size="icon-sm" onClick={resetLayout}><RotateCcwIcon /></Button></Hint></div>
       </ReactFlow> : <SessionList key={`${focus}:${includeResting}`} rows={model.agents} selected={activeSession} choose={chooseSession} />}</div>
-      {agent ? <SessionPreview row={agent} model={model} actions={actions} openRecord={openRecord} close={close} choose={chooseSession} /> : <ProjectColumn model={model} query={query} setQuery={setQuery} hidden={hiddenProjects} toggle={toggleProject} point={setPointedProject} locate={(summary) => summary.admitted ? centerProject(summary.id) : useUiStore.getState().setOverview({ projectId: summary.project.workspace.id })} choose={chooseSession} show={showFound} actions={actions} />}
+      {agent ? <SessionPreview row={agent} model={model} actions={actions} openRecord={openRecord} close={close} choose={chooseSession} /> : <ProjectColumn deviceId={deviceId} model={model} query={query} setQuery={setQuery} hidden={hiddenProjects} toggle={toggleProject} point={setPointedProject} locate={(summary) => summary.admitted ? centerProject(summary.id) : useUiStore.getState().setOverview({ projectId: summary.project.workspace.id })} choose={chooseSession} show={showFound} actions={actions} />}
     </div> : null}
   </div>;
 }
@@ -444,7 +445,7 @@ function askingPane(row: GraphAgent, model: OverviewGraphModel): string {
 
 /** With nothing chosen, the side column lists the projects with their states, then what waits on the operator.
  * Its search finds projects by name and sessions by their own words; a found session is shown on the map. */
-function ProjectColumn({ model, query, setQuery, hidden, toggle, point, locate, choose, show, actions }: { model: OverviewGraphModel; query: string; setQuery: (value: string) => void; hidden: ReadonlySet<string>; toggle: (id: string) => void; point: (id: string | null) => void; locate: (summary: ProjectSummary) => void; choose: (id: string, target: HTMLElement) => void; show: (id: string, target: HTMLElement) => void; actions: Actions }) {
+function ProjectColumn({ deviceId, model, query, setQuery, hidden, toggle, point, locate, choose, show, actions }: { deviceId: string; model: OverviewGraphModel; query: string; setQuery: (value: string) => void; hidden: ReadonlySet<string>; toggle: (id: string) => void; point: (id: string | null) => void; locate: (summary: ProjectSummary) => void; choose: (id: string, target: HTMLElement) => void; show: (id: string, target: HTMLElement) => void; actions: Actions }) {
   const { t } = useInterfaceTranslation();
   const needle = query.trim().toLocaleLowerCase();
   const summaries = model.summaries.filter((summary) => summary.project.workspace.label.toLocaleLowerCase().includes(needle)).sort((a, b) => a.project.workspace.label.localeCompare(b.project.workspace.label, undefined, { numeric: true }) || a.id.localeCompare(b.id));
@@ -454,6 +455,8 @@ function ProjectColumn({ model, query, setQuery, hidden, toggle, point, locate, 
   const takeFirst = (target: HTMLElement) => { if (found[0]) show(found[0].id, target); else { const first = summaries.find((summary) => !hidden.has(summary.id)); if (first) locate(first); } };
   // Every root whose turn it is, drawn, folded or hidden, so the list agrees with the projects' My turn counts.
   const waiting = model.allAgents.filter((row) => model.roots.has(row.id) && graphActivity(row.agent) === "turn");
+  // A mission no row carries waits here too, first, as the device's Needs You counts it (PRD mission-node-simple B14).
+  const missions = useMissionAsks(deviceId);
   return <aside className="og-navigator" aria-label={t("overviewGraph.projects")} data-graph-projects="true">
     <Input aria-label={t("overviewGraph.find")} placeholder={t("overviewGraph.find")} value={query} onChange={(event) => setQuery(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter" && !composingKey(event)) { event.preventDefault(); takeFirst(event.currentTarget); } }} />
     {needle && !summaries.length && !found.length ? <p className="og-no-match">{t("overviewGraph.noMatch")}</p> : null}
@@ -472,8 +475,13 @@ function ProjectColumn({ model, query, setQuery, hidden, toggle, point, locate, 
       {found.slice(0, FOUND_LIMIT).map((row) => <button key={row.id} type="button" data-graph-found-session={row.agent.pane_id} aria-label={[rowAccessibleName(t, row.agent, row.device), row.project.label, row.checkout.branch ?? row.checkout.label].join(", ")} onClick={(event) => show(row.id, event.currentTarget)}><StatusMark mark={row.agent.mark} /><AgentMark kind={row.agent.agent_kind} /><span><AgentRecordTitle agent={row.agent} /></span><small>{row.project.label}</small>{hidden.has(row.projectId) ? <small className="og-hidden-mark">{t("overviewGraph.hiddenProject")}</small> : null}</button>)}
       {found.length > FOUND_LIMIT ? <p className="og-no-match">{t("overviewGraph.moreFound", { count: found.length - FOUND_LIMIT })}</p> : null}
     </section> : null}
-    {waiting.length > 0 ? <section className="og-waiting" aria-label={t("overviewGraph.waiting")}>
-      <h3>{t("overviewGraph.waiting")} <span>{waiting.length}</span></h3>
+    {waiting.length + missions.length > 0 ? <section className="og-waiting" aria-label={t("overviewGraph.waiting")}>
+      <h3>{t("overviewGraph.waiting")} <span>{waiting.length + missions.length}</span></h3>
+      {missions.map((ask) => <div key={`mission:${ask.mission.id}`} className="og-ask" data-graph-mission-ask={ask.mission.id}>
+        <Button variant="text" size="inline" className="og-ask-who flex justify-start font-normal" aria-label={[ask.mission.title, t("mission.attention"), ask.node.title].join(", ")} onClick={() => actions.openMission(ask.mission.id)}><StatusMark mark="turn" /><span>{ask.mission.title}</span></Button>
+        <p><MissionAskLine ask={ask} /></p>
+        <MissionAskChoices ask={ask} actions={actions} />
+      </div>)}
       {waiting.map((row) => <div key={row.id} className="og-ask" data-graph-ask={row.agent.pane_id}>
         <button type="button" className="og-ask-who" aria-label={rowAccessibleName(t, row.agent, row.device)} onClick={(event) => choose(row.id, event.currentTarget)}><AgentMark kind={row.agent.agent_kind} /><span><AgentRecordTitle agent={row.agent} /></span><small>{row.project.label}</small>{hidden.has(row.projectId) ? <small className="og-hidden-mark">{t("overviewGraph.hiddenProject")}</small> : null}</button>
         <p>{row.agent.state.ask ? askWhat(t, row.agent.state.ask.verb, row.agent.state.ask.what, row.agent.state.ask.subject) : <GraphLine agent={row.agent} />}</p>

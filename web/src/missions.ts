@@ -712,11 +712,18 @@ export function openAttention(mission: Mission, node: MissionNode): MissionAtten
  */
 export type MissionAsk = { mission: Mission; node: MissionNode; attention: MissionAttention; more: number };
 
-/** The missions on `deviceId` that are their own Needs You item, oldest first, as the core marks them (`on_row`). */
-export function missionAsks(missions: readonly Mission[], deviceId: string): MissionAsk[] {
-  const asks: MissionAsk[] = [];
-  for (const mission of missions) {
-    if (mission.device_id !== deviceId) continue;
+/**
+ * The missions a device's scope names as its own Needs You items
+ * (`agent_scope.mission_asks`, oldest first), each with its oldest node that
+ * waits on the operator and no row carries (`on_row`). The scope counts the
+ * same missions in its Needs You number, so a list drawn from this agrees
+ * with the Overview and the device rail.
+ */
+export function missionAsks(missions: readonly Mission[], ids: readonly string[]): MissionAsk[] {
+  const byId = new Map(missions.map((mission) => [mission.id, mission]));
+  return ids.flatMap((id) => {
+    const mission = byId.get(id);
+    if (!mission) return [];
     const waiting = mission.nodes
       .flatMap((node) => {
         const attention = openAttention(mission, node);
@@ -724,9 +731,8 @@ export function missionAsks(missions: readonly Mission[], deviceId: string): Mis
       })
       .sort((a, b) => a.attention.since_unix_ms - b.attention.since_unix_ms);
     const first = waiting[0];
-    if (first) asks.push({ mission, node: first.node, attention: first.attention, more: waiting.length - 1 });
-  }
-  return asks.sort((a, b) => a.attention.since_unix_ms - b.attention.since_unix_ms);
+    return first ? [{ mission, node: first.node, attention: first.attention, more: waiting.length - 1 }] : [];
+  });
 }
 
 /** A node's `!` with who looks and why: `! 나 · <reason>`, as the card's hover and accessible name say it. */

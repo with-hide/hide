@@ -4656,6 +4656,74 @@ fn a_raise_with_no_row_to_lay_it_on_is_told_to_the_operator_once() {
     );
 }
 
+/// PRD mission-node-simple B14, letter 19419: a mission whose node waits on
+/// the operator with no row to carry it is counted in its device's Needs You
+/// number, the one the Overview, the device rail and the sidebar read, and
+/// named on that scope; while the Conductor's row carries it, it is not.
+#[test]
+fn a_mission_no_row_carries_is_counted_in_its_devices_needs_you() {
+    use crate::missions::AttentionReason;
+    let fixture = conducting();
+    let mut runtime = fixture.runtime.lock().unwrap();
+    running(&mut runtime);
+    let now = crate::runtime::unix_milliseconds();
+    let mission = runtime.missions.book.get_mut("mission-1").unwrap();
+    assert!(
+        !crate::runtime::mission_health::raise(
+            mission,
+            "fix",
+            AttentionReason::PrClosed,
+            Some(7),
+            now
+        )
+        .is_empty()
+    );
+    runtime.save_missions();
+    runtime.raise_to_operator(now + 10 * 60 * 1000);
+    let device = runtime
+        .snapshot
+        .missions
+        .items
+        .first()
+        .map(|mission| mission.device_id.clone())
+        .unwrap_or_else(|| crate::node::TEST_NODE.to_owned());
+    let counted = |runtime: &mut Runtime| {
+        runtime.snapshot_delta_payload(0);
+        let scope = &runtime.snapshot.navigator.agent_scope;
+        let device = runtime
+            .snapshot
+            .navigator
+            .devices
+            .iter()
+            .find(|row| row.id == device)
+            .map(|row| {
+                (
+                    row.agent_scope.mission_asks.clone(),
+                    row.agent_scope.overview_needs_you,
+                    row.agent_scope.groups.needs_you,
+                )
+            });
+        (
+            scope.mission_asks.clone(),
+            scope.overview_needs_you,
+            scope.groups.needs_you,
+            device,
+        )
+    };
+    let (asks, overview, needs_you, on_device) = counted(&mut runtime);
+    assert!(asks.is_empty(), "the Conductor's row carries it: {asks:?}");
+    runtime.delivery_observations.remove("sender");
+    let (asks, after_overview, after_needs_you, after_device) = counted(&mut runtime);
+    assert_eq!(asks, ["mission-1"]);
+    assert_eq!(after_overview, overview + 1);
+    assert_eq!(after_needs_you, needs_you + 1);
+    let (before, after) = (on_device.unwrap(), after_device.unwrap());
+    assert_eq!(after.0, ["mission-1"]);
+    assert_eq!((after.1, after.2), (before.1 + 1, before.2 + 1));
+    // Counted once however often it is published.
+    assert_eq!(counted(&mut runtime).1, after_overview);
+}
+
 /// The fix node of `running_criteria_mission`, its pull request 7 merged
 /// with no line recorded: raised to the Conductor as `merged_unproven`.
 fn merged_unproven(runtime: &mut Runtime, now: u64) {

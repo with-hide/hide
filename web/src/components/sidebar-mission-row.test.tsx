@@ -33,7 +33,7 @@ it("offers take over and the cause's choice on the mission's own Needs You item,
   await clientI18n.changeLanguage("ko");
   const { mission, rest } = missionFixture("no-conductor", Date.UTC(2026, 10, 1));
   useShellStore.setState({ rest, connection: "live" });
-  const [ask] = missionAsks([mission], "local");
+  const [ask] = missionAsks([mission], [mission.id]);
   expect(ask).toBeDefined();
   const sent: unknown[] = [];
   const actions = createActions((event) => sent.push(event));

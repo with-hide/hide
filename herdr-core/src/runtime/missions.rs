@@ -2497,6 +2497,40 @@ impl Runtime {
     }
 }
 
+impl Runtime {
+    /// Lays each device's missions that are their own Needs You item (no
+    /// Conductor or worker row carries what waits on the operator, B14) on
+    /// that device's scope, oldest first, so its Needs You number counts
+    /// them; run after the mission views, which decide `on_row`.
+    pub(super) fn publish_mission_asks(&mut self) -> bool {
+        let mut waiting: std::collections::BTreeMap<String, Vec<(u64, String)>> =
+            std::collections::BTreeMap::new();
+        for mission in &self.snapshot.missions.items {
+            let oldest = mission
+                .nodes
+                .iter()
+                .filter_map(|node| node.attention.as_ref())
+                .filter(|attention| attention.to == AttentionTo::Operator && !attention.on_row)
+                .map(|attention| attention.since_unix_ms)
+                .min();
+            if let Some(since) = oldest {
+                waiting
+                    .entry(mission.device_id.clone())
+                    .or_default()
+                    .push((since, mission.id.clone()));
+            }
+        }
+        let asks = waiting
+            .into_iter()
+            .map(|(device, mut missions)| {
+                missions.sort();
+                (device, missions.into_iter().map(|(_, id)| id).collect())
+            })
+            .collect();
+        self.agent_scope_cache.note_mission_asks(asks) && self.refresh_agent_scopes()
+    }
+}
+
 /// Whether a node of `mission` waits on the operator.
 fn operator_waits(mission: &Mission) -> bool {
     mission.nodes.iter().any(|node| {

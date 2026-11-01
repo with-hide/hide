@@ -512,16 +512,14 @@ describe("a node that waits on someone, and what Hide did (PRD mission-node-simp
     expect(attentionWords(node("n"), t)).toBeNull();
   });
 
-  it("makes a mission its own Needs You item only while no row carries what waits on the operator, its oldest node first (PRD mission-node-simple D-19, B14)", () => {
+  it("draws the missions the device scope names as Needs You items, in its order, each with its oldest node no row carries (PRD mission-node-simple D-19, B14)", () => {
     const waiting = (since: number, onRow: boolean): MissionAttention => ({ ...raised("operator", "pr_closed", 7), since_unix_ms: since, on_row: onRow });
-    const orphan = mission("a", { nodes: [node("late", { status: "working", attention: waiting(30, false) }), node("early", { status: "working", attention: waiting(20, false) })] });
-    const carried = mission("b", { nodes: [node("n", { status: "working", attention: waiting(10, true) })] });
-    const conductors = mission("c", { nodes: [node("n", { status: "working", attention: raised("conductor") })] });
-    const elsewhere = mission("d", { device_id: "mini", nodes: [node("n", { status: "working", attention: waiting(5, false) })] });
-    const cancelled = mission("e", { status: "cancelled", nodes: [node("n", { status: "working", attention: waiting(5, false) })] });
-    const asks = missionAsks([orphan, carried, conductors, elsewhere, cancelled], "mac");
-    expect(asks.map((ask) => [ask.mission.id, ask.node.key, ask.more])).toEqual([["a", "early", 1]]);
-    expect(missionAsks([elsewhere], "mini").map((ask) => ask.mission.id)).toEqual(["d"]);
+    const orphan = mission("a", { nodes: [node("late", { status: "working", attention: waiting(30, false) }), node("carried", { status: "working", attention: waiting(5, true) }), node("early", { status: "working", attention: waiting(20, false) })] });
+    const other = mission("b", { nodes: [node("n", { status: "working", attention: waiting(40, false) })] });
+    const unnamed = mission("c", { nodes: [node("n", { status: "working", attention: waiting(1, false) })] });
+    const asks = missionAsks([orphan, other, unnamed], ["b", "a"]);
+    expect(asks.map((ask) => [ask.mission.id, ask.node.key, ask.more])).toEqual([["b", "n", 0], ["a", "early", 1]]);
+    expect(missionAsks([orphan], [])).toEqual([]);
   });
 
   it("offers the choices each reason takes", () => {
