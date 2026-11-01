@@ -193,15 +193,22 @@ fn a_program_that_exits_on_its_own_takes_what_it_left_with_it() {
     let go = home.path().join("go");
     let early: OsString = go.clone().into();
     let (holder, pids) = stubborn_pane(&home, &[(EXIT_EARLY, &early)]);
-    let left: Vec<Running> = pids_in(&pids, 2)
-        .into_iter()
-        .filter_map(Running::of)
+    let recorded = pids_in(&pids, 2);
+    // The program records itself first and its child next; on Windows the
+    // child starts grandchildren at once, so more may follow.
+    let first: Vec<u32> = std::fs::read_to_string(&pids)
+        .unwrap()
+        .split_whitespace()
+        .filter_map(|pid| pid.parse().ok())
+        .take(2)
         .collect();
-    assert_eq!(
-        left.len(),
-        2,
-        "the program and its child run before it exits"
-    );
+    for pid in &first {
+        assert!(
+            Running::of(*pid).is_some(),
+            "process {pid} of the program and its child ended before the program was told to exit"
+        );
+    }
+    let left: Vec<Running> = recorded.into_iter().filter_map(Running::of).collect();
     std::fs::write(&go, b"go").unwrap();
     // The program may exit before a connection is made, or while one opens,
     // which is then told why; what is left of its tree is ended either way.
