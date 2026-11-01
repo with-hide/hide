@@ -4,10 +4,11 @@
 //! starts with the saved layout, so a screen draws its tabs at once, and a
 //! thread of its own then waits for the node to say which holders it found
 //! ([`PaneHolders::recovered`]): a pane whose holder runs is taken as it is,
-//! the same pane and the same process; a saved pane whose holder ended (a
-//! reboot) or never ran gets a new shell under its own id in its saved
-//! folder, or in the home folder with a line saying why when that folder is
-//! gone; a holder the saved session does not place (the daemon died before
+//! the same pane and the same process; a saved pane whose program exited or
+//! that a node ended closes, as a pane whose program exits closes; a saved
+//! pane whose holder ended under it (a reboot) or never ran gets a new shell
+//! under its own id in its saved folder, or in the home folder with a line
+//! saying why when that folder is gone; a holder the saved session does not place (the daemon died before
 //! it saved, or the save could not be read) is gathered into a new tab of
 //! the workspace its id names, so no running shell is lost or ended. Every
 //! id counter is then taken past every id the records hold, so a new pane
@@ -22,10 +23,12 @@ use std::sync::Mutex;
 use std::time::Duration;
 
 use hide_node_link::holders::HolderRecovery;
+use hide_node_link::protocol::Call;
 
 use super::store::{self, Read};
 use super::topology::{Pane, Topology};
 use super::{Env, OwnEngine};
+use crate::node_access::call_as;
 
 /// How long the restore waits for the node to finish judging its records.
 /// A node judges each record in a few rounds of a bounded budget, so this
@@ -36,6 +39,10 @@ const RECOVERY_WAIT: Duration = Duration::from_secs(120);
 /// How long a call that makes a pane waits for the restore: the node's
 /// recovery and the restarts after it, [`STARTS_AT_ONCE`] at a time.
 pub(super) const BOUND: Duration = Duration::from_secs(180);
+
+/// How long the restore waits for the node to say whether a saved pane's
+/// folder is still there.
+const FOLDER_WAIT: Duration = Duration::from_secs(10);
 
 /// How many holders a restore starts at once, so a large session coming
 /// back after a reboot does not start every shell together.
@@ -105,15 +112,25 @@ impl OwnEngine<'static> {
     fn adopt(&self, saved: &BTreeSet<String>, recovery: &HolderRecovery) {
         let present: BTreeSet<&str> = recovery.present.iter().map(String::as_str).collect();
         let home = self.home().ok();
-        let (restarts, orphans) = {
+        let (finished, restarts, orphans) = {
             let mut topology = self.topology();
             topology.count_past(
                 recovery
                     .present
                     .iter()
                     .chain(&recovery.ended)
+                    .chain(&recovery.closed)
                     .map(String::as_str),
             );
+            // A saved pane whose program exited, or that a node ended, while
+            // no daemon ran is finished: it closes, its tab and workspace
+            // with it when it was their last, and no new shell takes it.
+            let finished: Vec<String> = recovery
+                .closed
+                .iter()
+                .filter(|id| saved.contains(*id) && topology.remove_pane(id).is_ok())
+                .cloned()
+                .collect();
             let placed: BTreeSet<String> = topology.panes().map(|(id, _)| id.to_owned()).collect();
             let restarts: Vec<Restart> = topology
                 .panes()
@@ -129,7 +146,7 @@ impl OwnEngine<'static> {
                 .filter(|id| !placed.contains(*id))
                 .cloned()
                 .collect();
-            (restarts, orphans)
+            (finished, restarts, orphans)
         };
         let failures = self.start_restarts(&restarts, home.as_deref());
         let closed: Vec<String> = {
@@ -172,6 +189,7 @@ impl OwnEngine<'static> {
             "component": "own_engine",
             "kind": "engine.restored",
             "adopted": present.len().saturating_sub(orphans.len()),
+            "closed": finished,
             "started": restarts.len(),
             "gathered": orphans.len(),
         }));
@@ -224,20 +242,41 @@ impl OwnEngine<'static> {
     }
 
     /// Where a saved pane whose folder was `cwd` starts again: there, or in
-    /// `home` with a line saying why when the node finds no folder there. A
-    /// node that cannot answer reads as a folder that is gone
-    /// (`node_access::is_directory`), so the shell opens where it can.
+    /// `home` with a line saying why when the node says no folder is there.
+    /// A node that cannot answer is not read as a folder that is gone: the
+    /// shell starts in its folder, and a start that fails there marks the
+    /// pane with why.
     fn start_folder(&self, cwd: &str, home: Option<&Path>) -> (String, Option<String>) {
-        let exists = self
+        let found = self
             .node()
-            .is_ok_and(|node| crate::node_access::is_directory(node.as_ref(), cwd));
-        match home.and_then(|home| hide_platform::path::to_wire(home).ok()) {
-            Some(home_cwd) if !exists => (
+            .map_err(|error| error.to_string())
+            .and_then(|node| {
+                call_as::<Option<String>>(
+                    node.as_ref(),
+                    Call::Directory {
+                        path: cwd.to_owned(),
+                    },
+                    FOLDER_WAIT,
+                )
+                .map_err(|error| error.to_string())
+            });
+        let home_cwd = home.and_then(|home| hide_platform::path::to_wire(home).ok());
+        match (found, home_cwd) {
+            (Ok(None), Some(home_cwd)) => (
                 home_cwd,
                 Some(format!(
                     "hide: the folder {cwd} is gone, so this shell opened in your home folder."
                 )),
             ),
+            (Err(why), _) => {
+                crate::diagnostic!(serde_json::json!({
+                    "component": "own_engine",
+                    "kind": "engine.restore_folder_unread",
+                    "cwd": cwd,
+                    "message": why,
+                }));
+                (cwd.to_owned(), None)
+            }
             _ => (cwd.to_owned(), None),
         }
     }

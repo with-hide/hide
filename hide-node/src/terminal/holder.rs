@@ -838,12 +838,16 @@ impl Holders {
             "complete": recovered.complete,
         }));
         let (found, settled) = &self.recovery;
+        let (closed, ended) = recovered
+            .ended
+            .iter()
+            .partition::<Vec<_>, _>(|(_, reason)| finished(*reason));
+        let panes = |ended: Vec<&(String, Option<EndReason>)>| {
+            ended.into_iter().map(|(pane, _)| pane.clone()).collect()
+        };
         *found.lock().unwrap_or_else(PoisonError::into_inner) = Some(HolderRecovery {
-            ended: recovered
-                .ended
-                .iter()
-                .map(|(pane, _)| pane.clone())
-                .collect(),
+            closed: panes(closed),
+            ended: panes(ended),
             present,
         });
         settled.notify_all();
@@ -987,9 +991,39 @@ impl Holders {
     }
 }
 
+/// Whether a pane that ended with `reason` is finished, so it closes rather
+/// than taking a new shell: its program exited or a node ended it, its
+/// leftovers ended or not. A pane whose holder ended under it (the machine
+/// restarted, the holder was lost or failed) or whose start never finished
+/// is not, nor one whose record names no reason.
+fn finished(reason: Option<EndReason>) -> bool {
+    matches!(
+        reason,
+        Some(EndReason::ProgramExited | EndReason::Terminated | EndReason::TreeEndUnconfirmed)
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_pane_its_program_or_a_node_ended_is_finished_and_one_its_holder_lost_is_not() {
+        for (reason, closes) in [
+            (Some(EndReason::ProgramExited), true),
+            (Some(EndReason::Terminated), true),
+            (Some(EndReason::TreeEndUnconfirmed), true),
+            (Some(EndReason::HolderFailed), false),
+            (Some(EndReason::HolderLost), false),
+            (Some(EndReason::MachineRestarted), false),
+            (Some(EndReason::StartFailed), false),
+            (Some(EndReason::StartUnconfirmed), false),
+            (Some(EndReason::StartInterrupted), false),
+            (None, false),
+        ] {
+            assert_eq!(finished(reason), closes, "{reason:?}");
+        }
+    }
 
     #[test]
     fn the_switch_is_off_unless_set_to_one_and_refuses_other_values_naming_what_it_takes() {

@@ -37,13 +37,19 @@ pub struct HolderStart {
 pub type PaneEnded = std::sync::Arc<dyn Fn(&str) + Send + Sync>;
 
 /// What a node found of its panes' holders when it started (PRD
-/// engine-bundle-3-core-owns D-7), under the core's pane ids: the panes whose
-/// holders ended while no node ran (their program exited, or the machine
-/// restarted), and every other pane it holds a record of, whose holder runs
-/// or may still run and is never started a second time.
+/// engine-bundle-3-core-owns D-7), under the core's pane ids, every pane it
+/// holds a record of in exactly one list.
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct HolderRecovery {
+    /// Panes that finished while no node ran: their program exited or a node
+    /// ended them, so they close, as a pane whose program exits closes.
+    pub closed: Vec<String>,
+    /// Panes whose holders ended under them while no node ran (the machine
+    /// restarted, the holder was lost or failed, a start never finished),
+    /// so a saved layout opens a new shell in their place.
     pub ended: Vec<String>,
+    /// Panes whose holders run or may still run, never started a second
+    /// time.
     pub present: Vec<String>,
 }
 

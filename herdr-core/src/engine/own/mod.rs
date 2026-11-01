@@ -1516,9 +1516,11 @@ mod tests {
     /// out under the same ids around the holders that ran on, starting none
     /// of them again; a pane whose holder ended gets a new shell under its
     /// id, in the home folder with a line saying why when its folder is
-    /// gone; a running holder the save did not place is gathered into a new
-    /// tab of its workspace; and a new pane takes an id past every one the
-    /// records hold.
+    /// gone; a pane whose program exited while no daemon ran closes, with
+    /// the tab it was the last pane of, and no shell takes it again; a
+    /// running holder the save did not place is gathered into a new tab of
+    /// its workspace; and a new pane takes an id past every one the records
+    /// hold.
     #[test]
     fn a_daemon_opened_again_lays_its_session_out_around_the_panes_that_ran_on() {
         let root = tempfile::tempdir().unwrap();
@@ -1542,12 +1544,16 @@ mod tests {
                 Env::new(),
             )
             .unwrap();
+        let (exited_tab, exited) = first
+            .create_tab(WAIT, &workspace, &wire(&kept), "exited", false, Env::new())
+            .unwrap();
         let before = first.session_payload(WAIT).unwrap();
         drop(first);
         std::fs::remove_dir(&gone).unwrap();
 
         // The node of the next daemon found the first pane's holder running,
-        // the second's ended, and one more the save never placed.
+        // the second's ended under it, the third's program exited, and one
+        // more the save never placed.
         let unplaced = format!("{workspace}:p7");
         let holders = Arc::new(Holders::default());
         let next =
@@ -1558,6 +1564,7 @@ mod tests {
             "the saved layout is there before the node answers"
         );
         holders.hand(HolderRecovery {
+            closed: vec![exited.clone()],
             ended: vec![ended.clone()],
             present: vec![running.clone(), unplaced.clone()],
         });
@@ -1593,6 +1600,18 @@ mod tests {
             .expect("the unplaced holder's tab");
         assert_eq!(gathered.workspace_id, workspace);
         assert_eq!(layout_of(&session, &gathered.tab_id), [unplaced]);
+        assert!(
+            started.iter().all(|start| start.pane != exited),
+            "no shell takes the pane whose program exited"
+        );
+        assert!(
+            session
+                .tabs
+                .iter()
+                .all(|candidate| candidate.tab_id != exited_tab),
+            "its tab closed with its last pane"
+        );
+        assert!(session.panes.iter().all(|pane| pane.pane_id != exited));
     }
 
     /// D-6 and B15: a save that cannot be read is kept in the backups, and
@@ -1608,6 +1627,7 @@ mod tests {
         std::fs::write(&path, "{ not a session").unwrap();
 
         let holders = Holders::found(HolderRecovery {
+            closed: Vec::new(),
             ended: Vec::new(),
             present: vec!["w2:p1".to_owned(), "w2:p3".to_owned()],
         });
