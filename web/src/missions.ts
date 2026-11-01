@@ -732,6 +732,11 @@ export function missionAsks(missions: readonly Mission[], ids: readonly string[]
   });
 }
 
+/** The asks of the missions of project `projectId` (a workspace id), or every ask when no project is chosen. */
+export function projectAsks(asks: readonly MissionAsk[], projectId: string | null): MissionAsk[] {
+  return projectId === null ? [...asks] : asks.filter((ask) => ask.mission.workspace_id === projectId);
+}
+
 /** A node's `!` with who looks and why: `! 나 · <reason>`, as the card's hover and accessible name say it. */
 export function attentionWords(node: MissionNode, t: TFunction<"translation">): { who: string; why: string } | null {
   const attention = node.attention;

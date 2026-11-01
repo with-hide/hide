@@ -4,7 +4,7 @@ import { deviceScope } from "../agentScope";
 import { useInterfaceTranslation } from "../i18n/client";
 import { MissionTakeOver } from "../MissionTakeOver";
 import { cn } from "../lib/utils";
-import { missionAsks, type MissionAsk } from "../missions";
+import { missionAsks, projectAsks, type MissionAsk } from "../missions";
 import { useShellStore } from "../store";
 import { AskLine } from "./agent-tree";
 import { AttentionChoices } from "./mission-attention";
@@ -14,11 +14,14 @@ import { FoldLane } from "./sidebar-agent-row";
 import { SessionRowBody } from "./session-row";
 import { StatusMark } from "./status-mark";
 
-/** The missions `deviceId`'s scope names as its own Needs You items, the ones its Needs You number counts. */
-export function useMissionAsks(deviceId: string | null | undefined): MissionAsk[] {
+/**
+ * The missions `deviceId`'s scope names as its own Needs You items, the ones
+ * its Needs You number counts; with `projectId`, only that project's.
+ */
+export function useMissionAsks(deviceId: string | null | undefined, projectId: string | null = null): MissionAsk[] {
   const ids = useShellStore((s) => (deviceId ? deviceScope(s.rest, deviceId)?.mission_asks : undefined));
   const missions = useShellStore((s) => (s.rest?.missions?.failed ? null : s.rest?.missions?.items) ?? null);
-  return useMemo(() => (missions && ids ? missionAsks(missions, ids) : []), [missions, ids]);
+  return useMemo(() => (missions && ids ? projectAsks(missionAsks(missions, ids), projectId) : []), [missions, ids, projectId]);
 }
 
 /** The line a carried ask reads, for the mission's oldest waiting node: `확인 필요 · <node> · <why>`, `외 N건`. */
