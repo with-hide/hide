@@ -14,8 +14,8 @@ import { ToggleGroup, ToggleGroupItem } from "../components/ui/toggle-group";
 import { Hint } from "../components/ui/tooltip";
 import { useInterfaceTranslation } from "../i18n/client";
 import { cn } from "../lib/utils";
-import { CANDIDATE_LIMIT, CAP_CHOICES, DEFAULT_CONDUCTOR, STRENGTHS, WORKTREE_CLEANUPS, addCandidate, candidateAgent, effortsOf, replaceCandidate } from "../conductorSettings";
-import type { BackgroundAi, ConductorCandidate, ConductorSettings, MissionScope, MissionStrength, MissionWorktreeCleanup } from "../snapshot";
+import { CANDIDATE_LIMIT, CAP_CHOICES, DEFAULT_CONDUCTOR, STRENGTHS, addCandidate, candidateAgent, effortsOf, replaceCandidate } from "../conductorSettings";
+import type { BackgroundAi, ConductorCandidate, ConductorSettings, MissionScope, MissionStrength } from "../snapshot";
 import type { CoreError } from "../coreError";
 import { useShellStore } from "../store";
 import { coreErrorText } from "../coreError";
@@ -96,14 +96,10 @@ export function StrengthControl({ settings, send }: Pick<ConductorEdit, "setting
   );
 }
 
-/** Whether Hide removes a done node's merged, clean worktree by itself or asks first (PRD mission-node-simple D-14, B20). */
-export function CleanupControl({ settings, send }: Pick<ConductorEdit, "settings" | "send">) {
+/** Whether Hide deletes a done node's build cache, its code, worktree and panes left as they are (PRD mission-node-simple D-14, B20). */
+export function BuildCacheControl({ settings, send }: Pick<ConductorEdit, "settings" | "send">) {
   const { t } = useInterfaceTranslation();
-  return (
-    <ToggleGroup type="single" value={settings.worktree_cleanup} onValueChange={(value) => value && value !== settings.worktree_cleanup && send({ worktree_cleanup: value as MissionWorktreeCleanup })} aria-label={t("conductor.cleanup")} data-conductor-cleanup={settings.worktree_cleanup}>
-      {WORKTREE_CLEANUPS.map((cleanup) => <ToggleGroupItem key={cleanup} value={cleanup} data-conductor-cleanup-option={cleanup}>{t(`conductor.cleanup.${cleanup}`)}</ToggleGroupItem>)}
-    </ToggleGroup>
-  );
+  return <Switch checked={settings.build_cache_cleanup} aria-label={t("conductor.buildCache")} onCheckedChange={(build_cache_cleanup) => send({ build_cache_cleanup })} data-conductor-build-cache={String(settings.build_cache_cleanup)} />;
 }
 
 /** Whether a checker comes from another company than the node's worker. */

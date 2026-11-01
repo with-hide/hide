@@ -192,12 +192,6 @@ pub enum AttentionReason {
     PrClosed,
     /// The worker opened a pull request no node holds (B9).
     UnplannedPr,
-    /// A done node's worktree holds uncommitted changes or commits no merged
-    /// pull request has (B21).
-    WorktreeDirty,
-    /// A done node's merged, clean worktree waits for the operator's yes,
-    /// with cleanup set to ask (B20).
-    CleanupAsk,
     /// The Conductor recorded the node failed before this change (B26).
     ConductorFailed,
     /// A sleeping worker's wake for its pull request was refused (B10).
@@ -207,10 +201,10 @@ pub enum AttentionReason {
 }
 
 impl AttentionReason {
-    /// A reason only the operator can settle goes to them at once (B20,
-    /// B26); the others ask the Conductor first (D-05).
+    /// A reason only the operator can settle goes to them at once (B26);
+    /// the others ask the Conductor first (D-05).
     pub fn operator_first(self) -> bool {
-        matches!(self, Self::CleanupAsk | Self::ConductorFailed)
+        matches!(self, Self::ConductorFailed)
     }
 
     pub fn as_str(self) -> &'static str {
@@ -219,8 +213,6 @@ impl AttentionReason {
             Self::WorkerEnded => "worker_ended",
             Self::PrClosed => "pr_closed",
             Self::UnplannedPr => "unplanned_pr",
-            Self::WorktreeDirty => "worktree_dirty",
-            Self::CleanupAsk => "cleanup_ask",
             Self::ConductorFailed => "conductor_failed",
             Self::WakeRefused => "wake_refused",
             Self::CloseRefused => "close_refused",
@@ -310,8 +302,8 @@ pub enum HideAction {
     Attached,
     /// Woke the sleeping worker about its pull request.
     Woke,
-    /// Removed the done node's merged, clean worktree.
-    Cleaned,
+    /// Deleted the done node's build cache (B20); `bytes` says how much.
+    CacheCleared,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -321,31 +313,10 @@ pub struct HideMark {
     pub pr: Option<u32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub why: Option<FixReason>,
+    /// What a `CacheCleared` freed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bytes: Option<u64>,
     pub at_unix_ms: u64,
-}
-
-/// What became of a done node's worktree (D-14): tried once.
-#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(rename_all = "snake_case")]
-pub enum WorktreeFate {
-    /// Removed; the branch stays.
-    Removed,
-    /// Kept for what it holds, and raised.
-    Kept,
-    /// The removal failed; the worktree stays and the log says why.
-    Failed,
-    /// The operator chose to keep it.
-    Left,
-}
-
-/// How a done node's worktree is cleaned (D-14): removed by Hide when it is
-/// merged and clean, or raised to the operator first.
-#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(rename_all = "snake_case")]
-pub enum WorktreeCleanup {
-    #[default]
-    Auto,
-    Ask,
 }
 
 /// What the operator chose for a node that waits on them (B15, B16).
@@ -360,8 +331,6 @@ pub enum OperatorAction {
     Attach,
     /// 그대로 두기.
     Leave,
-    /// 정리: remove the worktree now.
-    Cleanup,
     /// 다시 진행: the node works again.
     Resume,
 }
@@ -373,7 +342,6 @@ impl OperatorAction {
             Self::Drop => "drop",
             Self::Attach => "attach",
             Self::Leave => "leave",
-            Self::Cleanup => "cleanup",
             Self::Resume => "resume",
         }
     }
@@ -657,11 +625,6 @@ pub struct MissionNode {
     /// list never loses it (B16).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub resumed: Option<String>,
-    /// The operator chose `정리` for this finish's worktree (B20): kept
-    /// until the cleanup ran or the node goes back to work, so a cleanup
-    /// that waited for room or was withdrawn is started again.
-    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
-    pub cleanup_accepted: bool,
     /// How often the node went back to work from a finish: the keys of
     /// Hide's acts on it name it, so an act of a later round is its own
     /// (`MissionEvent::id`, B27).
@@ -673,8 +636,10 @@ pub struct MissionNode {
     /// The wakes Hide sent the sleeping worker (B10); at most `WOKEN_LIMIT`.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub woken: Vec<Woken>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub worktree: Option<WorktreeFate>,
+    /// Hide deleted the done node's build cache for this finish, or found
+    /// none (D-14, B20); the next finish deletes it again.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub cache_cleared: bool,
 }
 
 /// Causes a node remembers as raised; past this a new cause is refused
@@ -749,14 +714,12 @@ impl MissionNode {
         true
     }
 
-    /// The node goes back to work from a finish: what that finish decided
-    /// of its worktree goes with it, so its next finish is asked again
-    /// (B20).
+    /// The node goes back to work from a finish: a new round for the keys
+    /// of Hide's acts, and its next finish deletes the build cache again
+    /// (B20, B27).
     pub(crate) fn back_to_work(&mut self) {
         self.round = self.round.saturating_add(1);
-        self.cleanup_accepted = false;
-        let ask = cause_key(AttentionReason::CleanupAsk, None, None);
-        self.handled.retain(|cause| *cause != ask);
+        self.cache_cleared = false;
     }
 }
 
@@ -1006,9 +969,36 @@ pub struct ConductorSettings {
     /// Prefer a checker of another company than the node's worker.
     #[serde(default = "default_other_vendor")]
     pub other_vendor: bool,
-    /// `끝난 worktree 정리` (PRD mission-node-simple D-14).
-    #[serde(default)]
-    pub worktree_cleanup: WorktreeCleanup,
+    /// `끝난 작업의 빌드 캐시 자동 삭제` (PRD mission-node-simple D-14). A
+    /// setting stored as the earlier `worktree_cleanup` reads `auto` as on
+    /// and `ask` as off.
+    #[serde(
+        default = "default_build_cache_cleanup",
+        alias = "worktree_cleanup",
+        deserialize_with = "build_cache_cleanup"
+    )]
+    pub build_cache_cleanup: bool,
+}
+
+fn default_build_cache_cleanup() -> bool {
+    true
+}
+
+fn build_cache_cleanup<'de, D: serde::Deserializer<'de>>(value: D) -> Result<bool, D::Error> {
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum Stored {
+        On(bool),
+        Earlier(String),
+    }
+    match Stored::deserialize(value)? {
+        Stored::On(on) => Ok(on),
+        Stored::Earlier(earlier) => match earlier.as_str() {
+            "auto" => Ok(true),
+            "ask" => Ok(false),
+            other => Err(serde::de::Error::unknown_variant(other, &["auto", "ask"])),
+        },
+    }
 }
 
 impl Default for ConductorSettings {
@@ -1019,7 +1009,7 @@ impl Default for ConductorSettings {
             candidates: Vec::new(),
             default_strength: Strength::Normal,
             other_vendor: default_other_vendor(),
-            worktree_cleanup: WorktreeCleanup::Auto,
+            build_cache_cleanup: true,
         }
     }
 }
@@ -1781,11 +1771,10 @@ pub(crate) fn apply_plan(
                 attention: None,
                 handled: Vec::new(),
                 resumed: None,
-                cleanup_accepted: false,
                 round: 0,
                 hide: None,
                 woken: Vec::new(),
-                worktree: None,
+                cache_cleared: false,
             });
             node.title.clone_from(&input.title);
             node.kind = input.kind;
@@ -3205,14 +3194,11 @@ pub(crate) mod tests {
         assert!(node.resumed_on_these_facts());
         node.prs = vec![7];
         assert!(!node.resumed_on_these_facts());
-        // Back to work, the finish's cleanup ask can be asked again.
-        let ask = cause_key(AttentionReason::CleanupAsk, None, None);
+        // Back to work, the next finish deletes the build cache again.
         let mut node = one("b");
-        assert!(node.note_handled(ask.clone()));
-        node.cleanup_accepted = true;
+        node.cache_cleared = true;
         node.back_to_work();
-        assert!(!node.handled.contains(&ask));
-        assert!(!node.cleanup_accepted);
+        assert_eq!((node.cache_cleared, node.round), (false, 1));
     }
 
     /// A mission created before verification strength keeps the checkers
@@ -3261,5 +3247,29 @@ pub(crate) mod tests {
             purpose: "screens".into(),
         };
         assert!(settings.validate().is_ok());
+    }
+
+    /// The build cache setting starts on; one stored as the earlier
+    /// worktree setting keeps its meaning, and is written back in the new
+    /// form.
+    #[test]
+    fn the_build_cache_setting_starts_on_and_reads_the_earlier_worktree_setting() {
+        let read = |stored: serde_json::Value| {
+            serde_json::from_value::<ConductorSettings>(stored).map(|s| s.build_cache_cleanup)
+        };
+        assert!(read(serde_json::json!({})).unwrap());
+        assert!(read(serde_json::json!({"worktree_cleanup": "auto"})).unwrap());
+        assert!(!read(serde_json::json!({"worktree_cleanup": "ask"})).unwrap());
+        assert!(!read(serde_json::json!({"build_cache_cleanup": false})).unwrap());
+        assert!(read(serde_json::json!({"worktree_cleanup": "never"})).is_err());
+        let written = serde_json::to_value(
+            serde_json::from_value::<ConductorSettings>(
+                serde_json::json!({"worktree_cleanup": "ask"}),
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(written["build_cache_cleanup"], serde_json::json!(false));
+        assert!(written.get("worktree_cleanup").is_none());
     }
 }

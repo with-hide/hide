@@ -115,6 +115,9 @@ pub struct MissionEvent {
     pub hide: Option<HideAction>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub why: Option<FixReason>,
+    /// For a `hide` event that deleted a build cache, what it freed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bytes: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reason: Option<AttentionReason>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -145,6 +148,7 @@ impl MissionEvent {
             strength: None,
             hide: None,
             why: None,
+            bytes: None,
             reason: None,
             action: None,
             id: None,

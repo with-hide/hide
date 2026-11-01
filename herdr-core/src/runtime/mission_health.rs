@@ -22,7 +22,7 @@ use crate::mission_health::{Act, Facts, NodeFacts, WorkerLife, evaluate};
 use crate::missions::{
     Attention, AttentionReason, FixReason, HideAction, HideMark, Mission, MissionEnd, MissionNode,
     MissionStatus, NodePatch, NodeStatus, OperatorAction, PendingWake, WOKEN_LIMIT, WakeEvent,
-    Woken, WorktreeFate,
+    Woken,
 };
 
 /// Raises one mission holds at once; a new one past it is refused and
@@ -37,11 +37,12 @@ pub(super) const WORKER_WAKE_LIMIT: usize = 16;
 /// How long a raise waits on the Conductor before it reaches the operator
 /// (D-05).
 pub(super) const RAISE_TO_OPERATOR_MS: u64 = 10 * 60_000;
-/// Cleanups running at once, each on its own worker.
 /// Mission notices one delivery pass claims (B5); the human notices of the
 /// ledger keep their own cap.
 const MISSION_NOTICE_LIMIT: usize = 8;
-const CLEANUP_LIMIT: usize = 2;
+/// Build caches deleted at once, each on its own worker; past it a node
+/// waits for the next evaluation.
+const CACHE_CLEAR_LIMIT: usize = 2;
 
 /// What the last evaluation read, so a tick with nothing moved does
 /// nothing.
@@ -320,39 +321,12 @@ fn short(head: Option<&str>) -> &str {
     head.map_or("-", |head| head.get(..12).unwrap_or(head))
 }
 
-/// What a node's cleanup was decided on: its finish and the pull
-/// requests it held then.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub(super) struct CleanupTicket {
-    finished_at_unix_ms: Option<u64>,
-    prs: Vec<u32>,
-    /// The operator chose it (`정리`); otherwise the setting `auto` did, and
-    /// a setting moved to `ask` stops it.
-    by_operator: bool,
-}
-
-impl CleanupTicket {
-    pub(super) fn of(node: &MissionNode, by_operator: bool) -> Self {
-        Self {
-            finished_at_unix_ms: node.finished_at_unix_ms,
-            prs: node.prs.clone(),
-            by_operator,
-        }
-    }
-
-    /// Whether `node` still has the finish the cleanup was decided on.
-    fn same_finish(&self, node: &MissionNode) -> bool {
-        node.status == NodeStatus::Done
-            && node.finished_at_unix_ms == self.finished_at_unix_ms
-            && node.prs == self.prs
-    }
-}
-
 fn hide_event(now: u64, node: &str, mark: &HideMark) -> MissionEvent {
     let mut event = MissionEvent::new(now, EventKind::Hide).node(node);
     event.hide = Some(mark.action);
     event.pr = mark.pr;
     event.why = mark.why;
+    event.bytes = mark.bytes;
     event
 }
 
@@ -477,7 +451,7 @@ impl Runtime {
                 continue;
             }
             // A closed mission's Conductor has finished with it: what its
-            // cleanup raises goes to the operator at once.
+            // worktree check raises goes to the operator at once.
             let present = mission.status.open() && self.conductor_present(&mission.conductor.actor);
             let mission = &mut self.missions.book.missions[index];
             let mut events = Vec::new();
@@ -545,39 +519,6 @@ impl Runtime {
         )
     }
 
-    /// Whether the cleanup of `key` started on `ticket` is still due (B20):
-    /// the node finished the same time on the same pull requests, and
-    /// what decides a cleanup holds on the facts as they are now.
-    fn cleanup_still_due(&self, id: &str, key: &str, ticket: &CleanupTicket) -> bool {
-        let Some(mission) = self.missions.book.get(id) else {
-            return false;
-        };
-        let Some(at) = mission.nodes.iter().position(|node| node.key == key) else {
-            return false;
-        };
-        let node = &mission.nodes[at];
-        if CleanupTicket::of(node, ticket.by_operator) != *ticket {
-            return false;
-        }
-        let ledger = self.delivery_state().ok();
-        let sleeping = self.mission_sleeping(mission, ledger.as_deref());
-        let facts = self.health_facts(mission, ledger.as_deref(), &sleeping);
-        (ticket.by_operator || facts.cleanup == crate::missions::WorktreeCleanup::Auto)
-            && crate::mission_health::cleanup_due(mission, node, &facts.nodes[at], &facts)
-    }
-
-    /// Whether node `at` of `mission` could be cleaned now once its
-    /// `cleanup_ask` is settled (B20): the operator's `정리` is refused,
-    /// and the ask stays, while it could not.
-    fn cleanup_due_once_asked(&self, mission: &Mission, at: usize) -> bool {
-        let mut settled = mission.clone();
-        settled.nodes[at].attention = None;
-        let ledger = self.delivery_state().ok();
-        let sleeping = self.mission_sleeping(&settled, ledger.as_deref());
-        let facts = self.health_facts(&settled, ledger.as_deref(), &sleeping);
-        crate::mission_health::cleanup_due(&settled, &settled.nodes[at], &facts.nodes[at], &facts)
-    }
-
     fn health_facts<'a>(
         &'a self,
         mission: &Mission,
@@ -640,7 +581,11 @@ impl Runtime {
             pulls,
             nodes,
             device_stale: self.mission_stale(mission),
-            cleanup: self.snapshot.ui_state.conductor_settings.worktree_cleanup,
+            clear_cache: self
+                .snapshot
+                .ui_state
+                .conductor_settings
+                .build_cache_cleanup,
         }
     }
 
@@ -699,14 +644,7 @@ impl Runtime {
                 } => {
                     changed |= self.hide_wake(id, node, pr, why, head, now, &mut events);
                 }
-                Act::Cleanup { node } => {
-                    let by_operator = self
-                        .missions
-                        .book
-                        .get(id)
-                        .is_some_and(|mission| mission.nodes[node].cleanup_accepted);
-                    self.start_node_cleanup(id, node, by_operator);
-                }
+                Act::ClearCache { node } => self.start_cache_clear(id, node),
                 Act::Close => close = true,
             }
         }
@@ -739,11 +677,6 @@ impl Runtime {
         let Some(mission) = self.missions.book.get(id) else {
             return false;
         };
-        // A worktree being removed now is attached to once its removal
-        // ended; the evaluation after it attaches the follow-up (B20).
-        if self.node_cleanup_committed(id, &mission.nodes[at].key) {
-            return false;
-        }
         // A closed mission opens again with the follow-up (B8, B18).
         if matches!(
             mission.status,
@@ -779,6 +712,7 @@ impl Runtime {
             action: HideAction::Attached,
             pr: Some(pr),
             why: None,
+            bytes: None,
             at_unix_ms: now,
         };
         let mut done = super::mission_events::node_events(&before, node, now);
@@ -838,6 +772,7 @@ impl Runtime {
             action: HideAction::Done,
             pr: node.current_pr(),
             why: None,
+            bytes: None,
             at_unix_ms: now,
         };
         let mut done = super::mission_events::node_events(&before, node, now);
@@ -937,6 +872,7 @@ impl Runtime {
             action: HideAction::Woke,
             pr: Some(pr),
             why: Some(why),
+            bytes: None,
             at_unix_ms: now,
         };
         let mut event = hide_event(now, &key, &mark);
@@ -1216,11 +1152,6 @@ impl Runtime {
                 }
             }
             OperatorAction::Resume => {
-                // A worktree being removed now is worked in again once its
-                // removal ended (B20).
-                if self.node_cleanup_committed(&payload.mission, &payload.node) {
-                    return Err("mission_cleanup_running".into());
-                }
                 next.status = NodeStatus::Working;
                 next.finished_at_unix_ms = None;
                 next.in_main = None;
@@ -1238,32 +1169,7 @@ impl Runtime {
                     super::missions::note_seen(&mut next, seen);
                 }
             }
-            OperatorAction::Leave => {
-                if attention.as_ref().is_some_and(|attention| {
-                    matches!(
-                        attention.reason,
-                        AttentionReason::WorktreeDirty | AttentionReason::CleanupAsk
-                    )
-                }) {
-                    next.worktree = Some(WorktreeFate::Left);
-                }
-            }
-            OperatorAction::Cleanup => {
-                if !attention
-                    .as_ref()
-                    .is_some_and(|attention| attention.reason == AttentionReason::CleanupAsk)
-                {
-                    return Err("mission_attention_moved".into());
-                }
-                // A worker back at work, a follow-up pull request or a
-                // device that does not answer keeps the ask standing.
-                if !self.cleanup_due_once_asked(mission, at) {
-                    return Err("mission_cleanup_not_due".into());
-                }
-                // Kept until the cleanup ran: one that waits for room or is
-                // withdrawn is started again on the next evaluation.
-                next.cleanup_accepted = true;
-            }
+            OperatorAction::Leave => {}
         }
         if payload.action != OperatorAction::Done {
             let mut event = MissionEvent::new(now, EventKind::Resolved).node(&next.key);
@@ -1310,84 +1216,48 @@ impl Runtime {
             );
         }
         self.record_mission_events(&payload.mission, events);
-        if payload.action == OperatorAction::Cleanup {
-            self.start_node_cleanup(&payload.mission, at, true);
-        }
         self.flush_mission_wakes();
         Ok(true)
     }
 
-    /// Starts removing node `at`'s worktree off the lock (B20, B21), at
-    /// most `CLEANUP_LIMIT` at once; one already being removed is not
-    /// started again.
-    pub(super) fn start_node_cleanup(&mut self, id: &str, at: usize, by_operator: bool) {
+    /// Deletes node `at`'s build cache off the lock (B20), at most
+    /// `CACHE_CLEAR_LIMIT` at once; one being deleted is not started again,
+    /// and one past the cap is started by an evaluation after one ends.
+    pub(super) fn start_cache_clear(&mut self, id: &str, at: usize) {
         let Some(mission) = self.missions.book.get(id) else {
             return;
         };
         let node = &mission.nodes[at];
         let key = (id.to_owned(), node.key.clone());
-        if self.missions.cleaning.contains_key(&key) {
+        if self.missions.clearing.contains(&key)
+            || self.missions.clearing.len() >= CACHE_CLEAR_LIMIT
+        {
             return;
         }
-        // Past the cap the node waits; an accepted `정리` is kept on it and
-        // the evaluation after a running cleanup ends starts it (B20).
-        if self.missions.cleaning.len() >= CLEANUP_LIMIT {
-            crate::diagnostic!(json!({
-                "component": "missions", "kind": "mission.cleanup_waits",
-                "mission": id, "node": key.1, "cap": CLEANUP_LIMIT,
-            }));
-            return;
-        }
-        // The cleanup is bound to the node's finish it was decided on: a
-        // follow-up pull request, a person's resume or a stale device in
-        // between withdraws it (B16, B29).
-        let ticket = CleanupTicket::of(node, by_operator);
-        if !self.cleanup_still_due(id, &key.1, &ticket) {
-            return;
-        }
-        let (Some(branch), Some(agent)) = (node.branch.clone(), node.agent_id.clone()) else {
+        let Some(branch) = node.branch.clone() else {
             return;
         };
-        // The heads the merged pull requests carried: a worktree at any
-        // other commit holds work no merge has.
-        let merged: Vec<String> = node
-            .pr_seen
-            .iter()
-            .filter(|seen| seen.merged)
-            .filter_map(|seen| seen.head.clone())
-            .collect();
+        let round = node.round;
         let root = mission.project.clone();
         let device = mission.device_id.clone();
         let Some(context) = self.worker_context.clone() else {
             return;
         };
-        let own = self
-            .delivery_state()
-            .ok()
-            .and_then(|ledger| {
-                ledger
-                    .agents
-                    .iter()
-                    .find(|record| record.id == agent)
-                    .map(|record| record.pane.clone())
-            })
-            .into_iter()
-            .collect::<Vec<_>>();
         let (Some(engine), Ok(link)) = (self.delivery_engine(&device), self.node_link(&device))
         else {
             crate::diagnostic!(json!({
-                "component": "missions", "kind": "mission.cleanup_unreachable",
+                "component": "missions", "kind": "mission.cache_unreachable",
                 "mission": id, "node": key.1,
             }));
             return;
         };
-        self.missions.cleaning.insert(key.clone(), false);
+        self.missions.clearing.insert(key.clone());
         let done = key.clone();
         let spawned = std::thread::Builder::new()
-            .name("hide-mission-cleanup".to_owned())
+            .name("hide-mission-cache".to_owned())
             .spawn(move || {
-                // A cleanup that panics must not leave its node held, or it
-                // could never work again.
+                // A deletion that panics must not hold its place, or the
+                // node's cache could never be deleted again.
                 struct Ending(std::sync::Weak<std::sync::Mutex<Runtime>>, (String, String));
                 impl Drop for Ending {
                     fn drop(&mut self) {
@@ -1396,155 +1266,112 @@ impl Runtime {
                         {
                             let mut guard =
                                 runtime.lock().unwrap_or_else(|poison| poison.into_inner());
-                            guard.missions.cleaning.remove(&self.1);
+                            guard.missions.clearing.remove(&self.1);
                         }
                     }
                 }
                 let _ending = Ending(context.runtime.clone(), done.clone());
-                // Asked once under the lock right before the first effect;
-                // passing it holds the node's finish until the removal ends,
-                // so nothing between it and the folder going can take the
-                // node back to work. A runtime that ended wants nothing
-                // removed.
-                let commit = || {
-                    context.runtime.upgrade().is_some_and(|runtime| {
-                        runtime
-                            .lock()
-                            .unwrap_or_else(|poison| poison.into_inner())
-                            .commit_node_cleanup(&done, &ticket)
-                    })
-                };
-                let outcome = crate::worktree_control::retire_worktree(
+                let outcome = super::mission_worktree::clear_build_cache(
                     engine.as_ref(),
                     link.as_ref(),
                     &root,
                     &branch,
-                    &own,
-                    Some(merged.as_slice()),
-                    &commit,
                 );
                 let Some(runtime) = context.runtime.upgrade() else {
                     return;
                 };
                 let mut guard = runtime.lock().unwrap_or_else(|poison| poison.into_inner());
-                guard.node_cleanup_done(&done.0, &done.1, &ticket, outcome);
+                guard.cache_clear_done(&done.0, &done.1, round, outcome);
                 drop(guard);
                 context.notifier.notify();
             });
         if let Err(error) = spawned {
-            self.missions.cleaning.remove(&key);
+            self.missions.clearing.remove(&key);
             crate::diagnostic!(json!({
-                "component": "missions", "kind": "mission.cleanup_not_started",
+                "component": "missions", "kind": "mission.cache_not_started",
                 "message": error.to_string(),
             }));
         }
     }
 
-    /// The cleanup of `key` asks to touch the worktree (B20): whether it is
-    /// still due on `ticket`; when it is, the node keeps its finish until
-    /// the cleanup ends (`node_cleanup_committed`).
-    pub(super) fn commit_node_cleanup(
-        &mut self,
-        key: &(String, String),
-        ticket: &CleanupTicket,
-    ) -> bool {
-        if !self.missions.cleaning.contains_key(key)
-            || !self.cleanup_still_due(&key.0, &key.1, ticket)
-        {
-            return false;
-        }
-        self.missions.cleaning.insert(key.clone(), true);
-        true
-    }
-
-    /// Whether node `key` of mission `id` has a cleanup touching its
-    /// worktree now: its finish holds until the cleanup ends, so a resume,
-    /// a follow-up pull request or a Conductor's move waits for it (B20).
-    pub(super) fn node_cleanup_committed(&self, id: &str, key: &str) -> bool {
-        self.missions
-            .cleaning
-            .get(&(id.to_owned(), key.to_owned()))
-            .copied()
-            .unwrap_or(false)
-    }
-
-    /// Records what a cleanup came to (B20, B21): removed is Hide's own
-    /// line on the node; kept for what it holds is raised to the Conductor;
-    /// a failure goes to the log only and the worktree stays. A result for
-    /// a finish the node no longer has is logged and kept off it.
-    pub(super) fn node_cleanup_done(
+    /// Records what deleting a node's build cache came to (B20, B21): what
+    /// it freed is Hide's own line on the node, and a failure goes to the
+    /// log only. A worktree being worked in is tried again by a later
+    /// evaluation; a result for a finish the node no longer has is logged
+    /// and kept off it.
+    pub(super) fn cache_clear_done(
         &mut self,
         id: &str,
         key: &str,
-        ticket: &CleanupTicket,
-        outcome: Result<crate::worktree_control::Retirement, String>,
+        round: u32,
+        outcome: Result<super::mission_worktree::Cleared, String>,
     ) {
-        use crate::worktree_control::Retirement;
+        use super::mission_worktree::Cleared;
         self.missions
-            .cleaning
+            .clearing
             .remove(&(id.to_owned(), key.to_owned()));
+        // The next evaluation starts a node that waited past the cap, and
+        // tries a busy one again.
+        self.missions.health_made = HealthMadeFrom::default();
         let now = super::memory::now_ms();
+        let cell = match &outcome {
+            Ok(Cleared::Cell(cell)) => Some(cell),
+            _ => None,
+        };
+        crate::diagnostic!(json!({
+            "component": "missions", "kind": "mission.cache_cleared",
+            "mission": id, "node": key,
+            "outcome": match &outcome {
+                Ok(Cleared::Gone) => "gone",
+                Ok(Cleared::ProjectFolder) => "project_folder",
+                Ok(Cleared::Busy) => "busy",
+                Ok(Cleared::Cell(cell)) => cell.outcome,
+                Err(_) => "failed",
+            },
+            "reason": outcome.as_ref().err(),
+            "bytes": cell.map(|cell| cell.bytes),
+            "reason_code": cell.and_then(|cell| cell.reason_code),
+        }));
+        let freed = match &outcome {
+            Ok(Cleared::Busy) => return,
+            Ok(Cleared::Cell(cell)) if cell.outcome == "removed" && cell.bytes > 0 => {
+                Some(cell.bytes)
+            }
+            _ => None,
+        };
         let Some(mission) = self.missions.book.get_mut(id) else {
             return;
         };
         let Some(at) = mission.nodes.iter().position(|node| node.key == key) else {
             return;
         };
-        if !matches!(outcome, Ok(Retirement::Withdrawn)) && !ticket.same_finish(&mission.nodes[at])
-        {
+        let node = &mission.nodes[at];
+        if node.round != round || !crate::mission_health::cache_due(mission, node) {
             crate::diagnostic!(json!({
-                "component": "missions", "kind": "mission.worktree_cleanup_stale",
+                "component": "missions", "kind": "mission.cache_clear_stale",
                 "mission": id, "node": key,
             }));
             return;
         }
-        let (fate, raised) = match &outcome {
-            // Its last check found the node moved before anything was
-            // touched: no fate, so its next finish is cleaned on its own
-            // facts, and an accepted `정리` still standing starts it again.
-            Ok(Retirement::Withdrawn) => {
-                crate::diagnostic!(json!({
-                    "component": "missions", "kind": "mission.worktree_cleanup",
-                    "mission": id, "node": key, "outcome": "withdrawn",
-                }));
-                return;
-            }
-            Ok(Retirement::Removed | Retirement::Gone) => (WorktreeFate::Removed, Vec::new()),
-            Ok(Retirement::Kept(reason)) if reason.holds_work() => (
-                WorktreeFate::Kept,
-                raise(mission, key, AttentionReason::WorktreeDirty, None, now),
-            ),
-            Ok(Retirement::Kept(_)) => (WorktreeFate::Kept, Vec::new()),
-            Err(_) => (WorktreeFate::Failed, Vec::new()),
-        };
-        crate::diagnostic!(json!({
-            "component": "missions", "kind": "mission.worktree_cleanup",
-            "mission": id, "node": key,
-            "outcome": match &outcome {
-                Ok(retirement) => retirement.code(),
-                Err(_) => "failed",
-            },
-            "reason": outcome.as_ref().err(),
-        }));
         let node = &mut mission.nodes[at];
-        node.worktree = Some(fate);
-        node.cleanup_accepted = false;
-        let mut events = raised;
-        if fate == WorktreeFate::Removed {
+        // Tried once per finish, whatever it came to (B21).
+        node.cache_cleared = true;
+        let mut events = Vec::new();
+        if let Some(bytes) = freed {
             let mark = HideMark {
-                action: HideAction::Cleaned,
+                action: HideAction::CacheCleared,
                 pr: None,
                 why: None,
+                bytes: Some(bytes),
                 at_unix_ms: now,
             };
             let mut event = hide_event(now, key, &mark);
-            event.id = Some(act_key(node, "cleaned"));
+            event.id = Some(act_key(node, "cache"));
             events.push(event);
             node.hide = Some(mark);
         }
         mission.updated_at_unix_ms = now;
         self.record_mission_events(id, events);
-        self.flush_mission_wakes();
     }
 
     /// Takes the worker wakes whose letter was refused out of the record

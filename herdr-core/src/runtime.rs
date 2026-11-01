@@ -59,6 +59,7 @@ pub(crate) mod mission_events;
 mod mission_health;
 pub(crate) mod mission_landing;
 mod mission_outside;
+pub(crate) mod mission_worktree;
 pub(crate) mod missions;
 mod op_timing;
 mod operations;

@@ -4875,7 +4875,7 @@ fn a_present_conductor_is_taken_over_once_with_the_operators_handover() {
         "mission_conducted"
     );
     // One the operator settles first is no reason either.
-    raise(&mut runtime, AttentionReason::CleanupAsk, Some(1));
+    raise(&mut runtime, AttentionReason::ConductorFailed, Some(1));
     assert!(!runtime.mission_handover_event("mission-1", token));
     // Ten minutes unanswered reached the operator, but a take without the
     // operator's handover is still refused (B15).
@@ -5001,15 +5001,15 @@ fn a_reopened_mission_whose_node_worked_and_finished_again_closes_again() {
     assert_ne!(mission_status(&runtime), MissionStatus::Running);
 }
 
-/// PRD mission-node-simple B20: a cleanup that passed its last check holds
-/// the node's finish until it ends, so a resume waits for it rather than
-/// working in a folder being removed; one that did not pass withdraws and
-/// touches nothing, and its result lands only on the finish it was for.
+/// PRD mission-node-simple B20, B21, B27: what deleting a done node's
+/// build cache freed is Hide's line on the node once; a worktree at work is
+/// tried again later; a result for a finish the node has left does not land,
+/// and past the cap a node waits.
 #[test]
-fn a_cleanup_past_its_last_check_holds_the_node_until_it_ends() {
-    use crate::missions::{OperatorAction, WorktreeFate};
-    use crate::runtime::mission_health::MissionAttentionPayload;
-    use crate::worktree_control::Retirement;
+fn a_build_cache_result_lands_once_and_only_on_the_finish_it_was_for() {
+    use crate::mission_events::EventKind;
+    use crate::missions::HideAction;
+    use crate::runtime::mission_worktree::Cleared;
     let fixture = conducting();
     let mut runtime = fixture.runtime.lock().unwrap();
     command(
@@ -5022,101 +5022,62 @@ fn a_cleanup_past_its_last_check_holds_the_node_until_it_ends() {
     let mission = runtime.missions.book.get_mut("mission-1").unwrap();
     mission.status = MissionStatus::Running;
     mission.nodes[0].status = NodeStatus::Done;
-    mission.nodes[0].finished_at_unix_ms = Some(10);
-    mission.nodes[0].prs = vec![7];
-    let key = ("mission-1".to_owned(), "fix".to_owned());
-    let ticket = crate::runtime::mission_health::CleanupTicket::of(
-        &runtime.missions.book.get("mission-1").unwrap().nodes[0],
-        true,
-    );
-    let resume = |runtime: &mut Runtime| {
-        runtime.mission_attention_act(
-            &MissionAttentionPayload {
-                mission: "mission-1".into(),
-                node: "fix".into(),
-                action: OperatorAction::Resume,
-                since_unix_ms: None,
-            },
-            20,
-        )
+    mission.nodes[0].branch = Some("fix/bug".into());
+    let freed = |bytes: u64| {
+        Ok(Cleared::Cell(crate::worktree_cleanup::CellResult {
+            path: "/work/fix".into(),
+            layer: "build_cache",
+            outcome: "removed",
+            bytes,
+            folders: 1,
+            reason_code: None,
+            reason: None,
+        }))
     };
-    // The removal passed its last check and waits for the panes to close.
-    runtime.missions.cleaning.insert(key.clone(), true);
-    assert!(runtime.node_cleanup_committed("mission-1", "fix"));
+    let cache_events = |runtime: &Runtime| {
+        runtime.missions.events.get("mission-1").map_or(0, |log| {
+            log.events
+                .iter()
+                .filter(|event| event.kind == EventKind::Hide)
+                .count()
+        })
+    };
+    // Busy: nothing is recorded and the finish is tried again.
+    runtime.cache_clear_done("mission-1", "fix", 0, Ok(Cleared::Busy));
+    assert!(!runtime.missions.book.get("mission-1").unwrap().nodes[0].cache_cleared);
+    runtime.cache_clear_done("mission-1", "fix", 0, freed(4096));
+    let node = &runtime.missions.book.get("mission-1").unwrap().nodes[0];
+    assert!(node.cache_cleared);
+    let mark = node.hide.clone().unwrap();
     assert_eq!(
-        resume(&mut runtime),
-        Err("mission_cleanup_running".to_owned())
+        (mark.action, mark.bytes),
+        (HideAction::CacheCleared, Some(4096))
     );
-    let conductor = command(
-        &mut runtime,
-        "sender",
-        json!({"op": "node", "node": "fix", "patch": {"status": "working"}}),
-    );
-    assert_eq!(conductor.unwrap_err(), "mission_cleanup_running");
-    // The removal ends: its result lands on the finish it was for, and the
-    // node can work again.
-    runtime.node_cleanup_done(&key.0, &key.1, &ticket, Ok(Retirement::Removed));
-    assert!(!runtime.node_cleanup_committed("mission-1", "fix"));
+    assert_eq!(cache_events(&runtime), 1);
+    // The same result again lands nowhere.
+    runtime.cache_clear_done("mission-1", "fix", 0, freed(4096));
+    assert_eq!(cache_events(&runtime), 1);
+    // Back to work: a result of the earlier finish is kept off the node.
+    let node = &mut runtime.missions.book.get_mut("mission-1").unwrap().nodes[0];
+    node.back_to_work();
+    node.status = NodeStatus::Working;
+    runtime.cache_clear_done("mission-1", "fix", 0, freed(8192));
     let node = &runtime.missions.book.get("mission-1").unwrap().nodes[0];
-    assert_eq!(node.worktree, Some(WorktreeFate::Removed));
-    assert!(resume(&mut runtime).is_ok());
-    // A cleanup of a finish the node has left: its last check refuses it,
-    // and a result for it does not land on the node's new state.
-    runtime.missions.cleaning.insert(key.clone(), false);
-    assert!(!runtime.commit_node_cleanup(&key, &ticket));
-    runtime.node_cleanup_done(&key.0, &key.1, &ticket, Ok(Retirement::Removed));
-    let node = &runtime.missions.book.get("mission-1").unwrap().nodes[0];
-    assert_eq!(node.status, NodeStatus::Working);
-    assert!(runtime.missions.cleaning.is_empty());
-}
-
-/// PRD mission-node-simple B20: the operator's `정리` is kept until the
-/// cleanup ran: one that waits for room starts on a later evaluation, and
-/// a node that went back to work and finished again is asked again.
-#[test]
-fn an_accepted_cleanup_waits_for_room_and_a_new_finish_is_asked_again() {
-    use crate::missions::{AttentionReason, cause_key};
-    let fixture = conducting();
-    let mut runtime = fixture.runtime.lock().unwrap();
-    command(
-        &mut runtime,
-        "sender",
-        json!({"op": "create", "title": "Fix the bug"}),
-    )
-    .unwrap();
-    command(&mut runtime, "sender", criteria_plan()).unwrap();
-    let mission = runtime.missions.book.get_mut("mission-1").unwrap();
-    let node = &mut mission.nodes[0];
-    // Asked and accepted: the ask is settled, the choice kept.
-    assert!(node.note_handled(cause_key(AttentionReason::CleanupAsk, None, None)));
-    node.cleanup_accepted = true;
-    let mission = mission.clone();
-    // Two cleanups already run: the third waits rather than starting.
+    assert!(!node.cache_cleared);
+    assert_eq!(node.hide.as_ref().and_then(|mark| mark.bytes), Some(4096));
+    // Two deletions already run: the third waits rather than starting.
+    let node = &mut runtime.missions.book.get_mut("mission-1").unwrap().nodes[0];
+    node.status = NodeStatus::Done;
     runtime
         .missions
-        .cleaning
-        .insert(("other".into(), "a".into()), false);
-    runtime
-        .missions
-        .cleaning
-        .insert(("other".into(), "b".into()), false);
-    runtime.start_node_cleanup("mission-1", 0, true);
+        .clearing
+        .extend([("other".into(), "a".into()), ("other".into(), "b".into())]);
+    runtime.start_cache_clear("mission-1", 0);
     assert!(
         !runtime
             .missions
-            .cleaning
-            .contains_key(&("mission-1".into(), "fix".into()))
-    );
-    assert!(runtime.missions.book.get("mission-1").unwrap().nodes[0].cleanup_accepted);
-    // Back to work, the choice goes with the finish it was for, and the
-    // next finish may be asked again.
-    let mut node = mission.nodes[0].clone();
-    node.back_to_work();
-    assert!(!node.cleanup_accepted);
-    assert!(
-        !node
-            .handled
-            .contains(&cause_key(AttentionReason::CleanupAsk, None, None))
+            .clearing
+            .contains(&("mission-1".into(), "fix".into()))
     );
 }
 

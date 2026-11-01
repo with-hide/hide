@@ -990,9 +990,9 @@ pub(super) struct ConductorSettingsSetPayload {
     pub(super) default_strength: Option<crate::missions::Strength>,
     #[serde(default)]
     pub(super) other_vendor: Option<bool>,
-    /// `끝난 worktree 정리` (PRD mission-node-simple D-14).
+    /// `끝난 작업의 빌드 캐시 자동 삭제` (PRD mission-node-simple D-14).
     #[serde(default)]
-    pub(super) worktree_cleanup: Option<crate::missions::WorktreeCleanup>,
+    pub(super) build_cache_cleanup: Option<bool>,
 }
 
 /// `mission_answer`: the operator's answer from a mission's decision banner
@@ -4129,8 +4129,8 @@ impl Runtime {
                 if let Some(other_vendor) = payload.other_vendor {
                     settings.other_vendor = other_vendor;
                 }
-                if let Some(cleanup) = payload.worktree_cleanup {
-                    settings.worktree_cleanup = cleanup;
+                if let Some(clear) = payload.build_cache_cleanup {
+                    settings.build_cache_cleanup = clear;
                 }
                 self.set_conductor_settings(settings)
             }

@@ -321,7 +321,6 @@ fn mission(
             plan: None,
             attention: None,
             hide: None,
-            worktree: None,
         }],
         merge_order: Vec::new(),
         landing_order: Vec::new(),

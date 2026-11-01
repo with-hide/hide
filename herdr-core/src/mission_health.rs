@@ -6,17 +6,16 @@
 //! Certain and reversible work is answered as an act Hide does: a node done
 //! when its pull requests and its lines are, a follow-up pull request of the
 //! node's branch attached, a sleeping worker woken about its pull request,
-//! the mission closed once every node finished, and a done node's merged
-//! worktree cleaned. Anything unclear is raised: a merge with a line missing
+//! the mission closed once every node finished, and a done node's build
+//! cache deleted. Anything unclear is raised: a merge with a line missing
 //! or failed, a worker that ended with work left, a pull request closed with
-//! no other open, one the worker opened that no node holds, a worktree that
-//! holds work. Nothing that rests on GitHub is answered while its list is
+//! no other open, one the worker opened that no node holds. Nothing that rests on GitHub is answered while its list is
 //! stale (B24), and nothing at all while the mission's device does not
 //! answer (B29).
 
 use crate::missions::{
     AttentionReason, Delivery, FixReason, Mission, MissionNode, MissionScope, MissionStatus,
-    NodeKind, NodeStatus, WorktreeCleanup, cause_key,
+    NodeKind, NodeStatus, cause_key,
 };
 use crate::model::{
     GithubProjectSnapshot, MergeState, PullRequestBadge, PullRequestChecks, PullRequestSnapshot,
@@ -50,7 +49,8 @@ pub(crate) struct Facts<'a> {
     pub nodes: Vec<NodeFacts>,
     /// The mission's device does not answer.
     pub device_stale: bool,
-    pub cleanup: WorktreeCleanup,
+    /// `끝난 작업의 빌드 캐시 자동 삭제` is on (D-14).
+    pub clear_cache: bool,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -74,8 +74,9 @@ pub(crate) enum Act {
         why: FixReason,
         head: Option<String>,
     },
-    /// The done node's worktree is removed (B20).
-    Cleanup { node: usize },
+    /// The done node's build cache is deleted, once per finish (B20). Its
+    /// worktree is never removed.
+    ClearCache { node: usize },
     /// Every node finished: the mission closes (B18).
     Close,
 }
@@ -101,8 +102,10 @@ pub(crate) fn evaluate(mission: &Mission, facts: &Facts) -> Vec<Act> {
             // mission again with it (B8).
             attach_acts(mission, at, node, pulls, &mut acts);
         }
-        // A done node's worktree is cleaned after its mission closed too.
-        cleanup_acts(mission, at, node, fact, facts, &mut acts);
+        // A done node's build cache goes after its mission closed too.
+        if facts.clear_cache {
+            cache_acts(mission, at, node, &mut acts);
+        }
     }
     // A node Hide finishes in this pass has nothing left to raise.
     let done: Vec<usize> = acts
@@ -339,92 +342,31 @@ fn pr_less_done(mission: &Mission, node: &MissionNode, fact: &NodeFacts) -> bool
         }
 }
 
-/// A done node's merged worktree is cleaned, or the operator asked first
-/// (B20); one tried once is not tried again.
-fn cleanup_acts(
-    mission: &Mission,
-    at: usize,
-    node: &MissionNode,
-    fact: &NodeFacts,
-    facts: &Facts,
-    acts: &mut Vec<Act>,
-) {
+/// A done node's build cache is deleted once per finish (B20).
+fn cache_acts(mission: &Mission, at: usize, node: &MissionNode, acts: &mut Vec<Act>) {
     // A follow-up pull request this pass attaches makes the node work
     // again: its worktree is the follow-up's (B8).
     if acts
         .iter()
         .any(|act| matches!(act, Act::Attach { node, .. } if *node == at))
-        || !cleanup_due(mission, node, fact, facts)
+        || !cache_due(mission, node)
     {
         return;
     }
-    // The operator's `정리` for this finish stands until it ran (B20).
-    if node.cleanup_accepted {
-        acts.push(Act::Cleanup { node: at });
-        return;
-    }
-    match facts.cleanup {
-        WorktreeCleanup::Auto => acts.push(Act::Cleanup { node: at }),
-        WorktreeCleanup::Ask => {
-            if !raised_before(node, AttentionReason::CleanupAsk, None, None) {
-                acts.push(Act::Raise {
-                    node: at,
-                    reason: AttentionReason::CleanupAsk,
-                    pr: None,
-                    agent: None,
-                });
-            }
-        }
-    }
+    acts.push(Act::ClearCache { node: at });
 }
 
-/// Whether `node`'s worktree may be removed now (B20), asked when a
-/// cleanup is chosen and again right before it closes a pane or removes
-/// the folder: the node is done with every pull request it holds settled
-/// and one merged, nothing waits on it, its worker does not run, no open
-/// pull request of its branch would take it back to work, and the facts
-/// are fresh.
-pub(crate) fn cleanup_due(
-    mission: &Mission,
-    node: &MissionNode,
-    fact: &NodeFacts,
-    facts: &Facts,
-) -> bool {
-    // A worker still running may be mid-turn or on the operator's screen;
-    // its worktree waits until it sleeps or ends.
-    if facts.device_stale
-        || !matches!(
-            mission.status,
-            MissionStatus::Running | MissionStatus::MergeWait | MissionStatus::Done
-        )
-        || node.status != NodeStatus::Done
-        || fact.worker == Some(WorkerLife::Running)
-        || node.worktree.is_some()
-        || node.agent_id.is_none()
-        || node.prs.is_empty()
-        || node.attention.is_some()
-    {
-        return false;
-    }
-    let (Some(pulls), Some(branch)) = (facts.pulls, node.branch.as_deref()) else {
-        return false;
-    };
-    let merged = node.prs.iter().any(|number| {
-        find(pulls, *number).is_some_and(|pull| pull.badge == PullRequestBadge::Merged)
-    }) && node
-        .prs
-        .iter()
-        .all(|number| find(pulls, *number).is_some_and(|pull| pull.badge.is_settled()));
-    merged && !follow_up(mission, pulls, branch)
-}
-
-/// Whether an open pull request of `branch` that no node holds would join
-/// the node of that branch (B8).
-fn follow_up(mission: &Mission, pulls: &GithubProjectSnapshot, branch: &str) -> bool {
-    pulls
-        .pull_requests
-        .iter()
-        .any(|pull| joins(mission, pull, branch))
+/// Whether `node`'s build cache is due its deletion for this finish: the
+/// node is done, its branch is known, and this finish has not deleted it
+/// yet. Whether its worktree is busy right now is read off the lock, right
+/// before anything is deleted.
+pub(crate) fn cache_due(mission: &Mission, node: &MissionNode) -> bool {
+    matches!(
+        mission.status,
+        MissionStatus::Running | MissionStatus::MergeWait | MissionStatus::Done
+    ) && node.status == NodeStatus::Done
+        && !node.cache_cleared
+        && node.branch.is_some()
 }
 
 /// Whether `pull` is a follow-up of the node on `branch`: of that branch,
@@ -450,7 +392,7 @@ fn closes(mission: &Mission, acts: &[Act]) -> bool {
             .reopened_on
             .as_ref()
             .is_none_or(|marks| *marks != mission.node_marks())
-        && acts.iter().all(|act| matches!(act, Act::Cleanup { .. }))
+        && acts.iter().all(|act| matches!(act, Act::ClearCache { .. }))
         && mission.nodes.iter().all(|node| {
             node.status.finished()
                 && node
@@ -472,14 +414,7 @@ fn still_holds(
 ) -> bool {
     // A refused close waits on the close itself, which only the next
     // close settles (B19).
-    if node.status.finished()
-        && !matches!(
-            attention.reason,
-            AttentionReason::WorktreeDirty
-                | AttentionReason::CleanupAsk
-                | AttentionReason::CloseRefused
-        )
-    {
+    if node.status.finished() && attention.reason != AttentionReason::CloseRefused {
         return false;
     }
     match attention.reason {
@@ -516,10 +451,7 @@ fn still_holds(
                         .is_some_and(|pull| !pull.badge.is_settled())
                 })
         }
-        AttentionReason::WorktreeDirty
-        | AttentionReason::CleanupAsk
-        | AttentionReason::ConductorFailed
-        | AttentionReason::CloseRefused => true,
+        AttentionReason::ConductorFailed | AttentionReason::CloseRefused => true,
     }
 }
 
@@ -661,7 +593,7 @@ mod tests {
             pulls,
             nodes,
             device_stale: false,
-            cleanup: WorktreeCleanup::Auto,
+            clear_cache: true,
         }
     }
 
@@ -689,7 +621,7 @@ mod tests {
         // The close waits for the pass after the done landed.
         m.nodes[0].status = NodeStatus::Done;
         let acts = evaluate(&m, &facts(Some(&pulls), vec![worker(WorkerLife::Asleep)]));
-        assert_eq!(acts, [Act::Cleanup { node: 0 }, Act::Close]);
+        assert_eq!(acts, [Act::ClearCache { node: 0 }, Act::Close]);
         // A person took it back to work: Hide does not finish it again on
         // the same pull request.
         m.nodes[0].status = NodeStatus::Working;
@@ -925,43 +857,33 @@ mod tests {
         );
     }
 
-    /// B20: a done node's merged worktree is cleaned, or the operator is
-    /// asked first when the Conductor set it so; one with a cause raised
-    /// is left alone.
+    /// B20: a done node's build cache is deleted once per finish while the
+    /// setting is on, whatever its pull requests and worker.
     #[test]
-    fn a_done_nodes_merged_worktree_is_cleaned_or_asked_about() {
+    fn a_done_nodes_build_cache_is_deleted_once_per_finish() {
         let mut m = running(&["a"]);
         m.status = MissionStatus::Done;
         m.nodes[0].status = NodeStatus::Done;
         m.nodes[0].prs = vec![7];
-        let pulls = listed(vec![pull(7, "feat/a", PullRequestBadge::Merged)]);
-        let ended = || vec![worker(WorkerLife::Ended)];
-        assert_eq!(
-            evaluate(&m, &facts(Some(&pulls), ended())),
-            [Act::Cleanup { node: 0 }]
-        );
+        let open = listed(vec![pull(7, "feat/a", PullRequestBadge::Open)]);
+        for life in [WorkerLife::Running, WorkerLife::Asleep, WorkerLife::Ended] {
+            assert_eq!(
+                evaluate(&m, &facts(Some(&open), vec![worker(life)])),
+                [Act::ClearCache { node: 0 }]
+            );
+        }
+        let mut off = facts(Some(&open), vec![worker(WorkerLife::Ended)]);
+        off.clear_cache = false;
+        assert!(evaluate(&m, &off).is_empty());
+        m.nodes[0].cache_cleared = true;
+        assert!(evaluate(&m, &facts(Some(&open), vec![worker(WorkerLife::Ended)])).is_empty());
+        m.nodes[0].cache_cleared = false;
+        m.nodes[0].status = NodeStatus::Working;
+        m.status = MissionStatus::Running;
         assert!(
-            evaluate(&m, &facts(Some(&pulls), vec![worker(WorkerLife::Running)])).is_empty(),
-            "a running worker's worktree waits"
+            !evaluate(&m, &facts(Some(&open), vec![worker(WorkerLife::Running)]))
+                .contains(&Act::ClearCache { node: 0 })
         );
-        let mut ask = facts(Some(&pulls), ended());
-        ask.cleanup = WorktreeCleanup::Ask;
-        assert_eq!(
-            evaluate(&m, &ask),
-            [Act::Raise {
-                node: 0,
-                reason: AttentionReason::CleanupAsk,
-                pr: None,
-                agent: None,
-            }]
-        );
-        // The operator's `정리` for this finish answers a cleanup rather than
-        // asking again, while the setting stays at ask (B20).
-        m.nodes[0].cleanup_accepted = true;
-        assert_eq!(evaluate(&m, &ask), [Act::Cleanup { node: 0 }]);
-        m.nodes[0].cleanup_accepted = false;
-        m.nodes[0].attention = Some(attention(AttentionReason::WorktreeDirty, None));
-        assert!(evaluate(&m, &facts(Some(&pulls), ended())).is_empty());
     }
 
     /// D-06: only a pull request with nothing for its worker to do waits on
@@ -979,35 +901,30 @@ mod tests {
     }
 
     /// B8, B20: an open follow-up pull request of a done node's branch
-    /// takes the node back to work in the same pass, and its worktree is
-    /// not cleaned there, also once the mission closed.
+    /// takes the node back to work in the same pass, and its build cache is
+    /// not deleted there, also once the mission closed.
     #[test]
-    fn a_follow_up_pull_request_keeps_a_done_nodes_worktree() {
+    fn a_follow_up_pull_request_keeps_a_done_nodes_build_cache() {
         let mut m = running(&["a"]);
         m.nodes[0].status = NodeStatus::Done;
         m.nodes[0].prs = vec![7];
         let merged = listed(vec![pull(7, "feat/a", PullRequestBadge::Merged)]);
         let asleep = || vec![worker(WorkerLife::Asleep)];
-        assert!(evaluate(&m, &facts(Some(&merged), asleep())).contains(&Act::Cleanup { node: 0 }));
+        assert!(
+            evaluate(&m, &facts(Some(&merged), asleep())).contains(&Act::ClearCache { node: 0 })
+        );
         let follow = listed(vec![
             pull(7, "feat/a", PullRequestBadge::Merged),
             pull(9, "feat/a", PullRequestBadge::Open),
         ]);
         let acts = evaluate(&m, &facts(Some(&follow), asleep()));
         assert!(acts.contains(&Act::Attach { node: 0, pr: 9 }), "{acts:?}");
-        assert!(!acts.contains(&Act::Cleanup { node: 0 }), "{acts:?}");
+        assert!(!acts.contains(&Act::ClearCache { node: 0 }), "{acts:?}");
         m.status = MissionStatus::Done;
         assert_eq!(
             evaluate(&m, &facts(Some(&follow), asleep())),
             [Act::Attach { node: 0, pr: 9 }]
         );
-        let follow_facts = facts(Some(&follow), asleep());
-        assert!(!cleanup_due(
-            &m,
-            &m.nodes[0],
-            &follow_facts.nodes[0],
-            &follow_facts
-        ));
     }
 
     /// B19: a refused close stands over the next evaluations and the close
@@ -1018,6 +935,7 @@ mod tests {
         m.nodes[0].status = NodeStatus::Done;
         m.nodes[0].prs = vec![7];
         m.nodes[0].attention = Some(attention(AttentionReason::CloseRefused, None));
+        m.nodes[0].cache_cleared = true;
         let pulls = listed(vec![pull(7, "feat/a", PullRequestBadge::Merged)]);
         for _ in 0..2 {
             assert_eq!(

@@ -48,7 +48,7 @@ const MINUTE = 60_000;
 const no = (n: number) => `#${n}`;
 
 function node(key: string, title: string, extra: Partial<MissionNode>): MissionNode {
-  return { key, title, kind: "change", depends_on: [], status: "planned", blocked: null, delivery: "pr", worker: null, agent_id: null, pane_id: null, machine: null, pr: null, base_pr: null, branch: null, pr_state: null, pr_url: null, stage: null, attempts: 0, line: null, change: null, review: null, criteria: [], criteria_met: 0, criteria_skipped: 0, external: null, unread: false, reopened: 0, started_at_unix_ms: null, finished_at_unix_ms: null, commit: null, landing: null, verdict: null, checks: null, attention: null, hide: null, worktree: null, ...extra, prs: extra.prs ?? (extra.pr != null ? [{ number: extra.pr, state: extra.pr_state ?? null, url: extra.pr_url ?? null }] : []) };
+  return { key, title, kind: "change", depends_on: [], status: "planned", blocked: null, delivery: "pr", worker: null, agent_id: null, pane_id: null, machine: null, pr: null, base_pr: null, branch: null, pr_state: null, pr_url: null, stage: null, attempts: 0, line: null, change: null, review: null, criteria: [], criteria_met: 0, criteria_skipped: 0, external: null, unread: false, reopened: 0, started_at_unix_ms: null, finished_at_unix_ms: null, commit: null, landing: null, verdict: null, checks: null, attention: null, hide: null, ...extra, prs: extra.prs ?? (extra.pr != null ? [{ number: extra.pr, state: extra.pr_state ?? null, url: extra.pr_url ?? null }] : []) };
 }
 
 /** Where a node is on its way to main, as the core would publish it (`herdr-core/src/runtime/mission_landing.rs`). */
@@ -136,7 +136,7 @@ function plan(state: string, now: number): MissionNode[] {
   const review = (minutes: number) => ({ status: "working" as const, started_at_unix_ms: ago(minutes) });
   return [
     node("cause", `${no(1487)} 원인 조사`, { kind: "research", delivery: null, worker: opus("xhigh"), ...done(44, 24), line: "reopen 때 셀 초기화가 먼저 돎", ...finish(own(1, "원인을 재현 단계와 함께 적는다")) }),
-    node("fix-1481", `이슈 ${no(1481)} 수정`, { worker: astra("high"), ...done(40, 14), pr: 1501, pr_state: "mergeable", landing: MERGE_LEFT, stage: 3, hide: { action: "done", at_unix_ms: ago(26) }, ...finish(own(1, "빈 목록에서도 필터가 남는다"), line("check", "check", "pass"), ci("pass")) }),
+    node("fix-1481", `이슈 ${no(1481)} 수정`, { worker: astra("high"), ...done(40, 14), pr: 1501, pr_state: "mergeable", landing: MERGE_LEFT, stage: 3, hide: state === "no-conductor" ? { action: "cache_cleared", bytes: 1_288_490_189, at_unix_ms: ago(25) } : { action: "done", at_unix_ms: ago(26) }, ...finish(own(1, "빈 목록에서도 필터가 남는다"), line("check", "check", "pass"), ci("pass")) }),
     node("fix-1490", `이슈 ${no(1490)} 수정`, {
       worker: astra("medium"), pr: 1505, stage: 3, change: `${no(1483)}은 ${no(1490)}과 같은 원인이라 합침`,
       ...(stack ? { ...done(40, 9), pr_state: "mergeable" as const, landing: MERGE_LEFT } : decision ? { status: "working" as const, started_at_unix_ms: ago(30), pr_state: "failed" as const, attempts: 2, line: "CI 실패 · 시도 2/2", hide: { action: "woke" as const, pr: 1505, why: "ci_failed" as const, at_unix_ms: ago(3) } } : { ...review(30), pr_state: "pending" as const }),
@@ -144,14 +144,14 @@ function plan(state: string, now: number): MissionNode[] {
     }),
     node("api", "API 추가", { worker: astra("high"), ...done(40, 17), pr: 1503, pr_state: state === "no-conductor" ? "merged" : stack ? "mergeable" : "merged", landing: stack && state !== "no-conductor" ? MERGE_LEFT : MERGED, stage: 4, ...finish(own(1, "목록 API가 페이지를 나눠 준다"), ci("pass")),
       // Merged with a line left unrecorded and no Conductor to ask: it waits on the operator (PRD mission-node-simple B13, B14).
-      ...(state === "no-conductor" ? { status: "working" as const, finished_at_unix_ms: null, landing: null, criteria_met: 0, criteria: [own(1, "목록 API가 페이지를 나눠 준다", "open"), ci("pass")], attention: { reason: "merged_unproven" as const, pr: 1503, to: "operator" as const, since_unix_ms: ago(6) } } : {}) }),
+      ...(state === "no-conductor" ? { status: "working" as const, finished_at_unix_ms: null, landing: null, criteria_met: 0, criteria: [own(1, "목록 API가 페이지를 나눠 준다", "open"), ci("pass")], attention: { reason: "merged_unproven" as const, pr: 1503, to: "operator" as const, since_unix_ms: ago(6), on_row: false } } : {}) }),
     node("fix-1487", `${no(1487)} 수정`, {
       depends_on: ["cause"], worker: astra("medium"), pane_id: FIX_PANE, pr: 1506, stage: 3, reopened: stack ? 0 : 1,
       ...(stack ? { ...done(30, 12), pr_state: "mergeable" as const, landing: MERGE_LEFT } : { ...working(5), pr_state: "pending" as const, line: "replay 19/31" }),
       ...finish(own(1, "reopen 뒤에도 셀이 남는다"), own(2, "실제 세션 50개 replay", "skipped", { skip: { reason: "기록된 세션이 31개뿐" } }), ...(stack ? [] : [line("d1", "defect", "open", { text: "다시 열면 첫 셀만 비어 있다", found_by: "check-1487" })]), ci(stack ? "pass" : "open")),
     }),
     node("check-1487", `${no(1487)} 실제 앱 확인`, { kind: "verify", delivery: null, depends_on: ["fix-1487"], worker: sonnet, ...(stack ? done(16, 6) : {}), line: stack ? "5개 항목 통과" : null, ...finish(line("verify", "verify", stack ? "pass" : "open", { rule: "all", checkers: [checker(sonnet, stack ? "pass" : "open")] })) }),
-    node("outside", "바깥: isolated 앱 실행기 정리", { kind: "external", delivery: null, external: { pr: 1232 }, status: decision ? "working" : stack ? "done" : "planned", pr: 1232, landing: stack ? OUTSIDE_LANDED : null, attention: decision ? { reason: "pr_closed", pr: 1232, to: "conductor", since_unix_ms: ago(4) } : null }),
+    node("outside", "바깥: isolated 앱 실행기 정리", { kind: "external", delivery: null, external: { pr: 1232 }, status: decision ? "working" : stack ? "done" : "planned", pr: 1232, landing: stack ? OUTSIDE_LANDED : null, attention: decision ? { reason: "pr_closed", pr: 1232, to: "conductor", since_unix_ms: ago(4), on_row: false } : null }),
     decision
       ? node("screen", "API 쓰는 화면", { depends_on: ["api", "outside"], worker: astra("high"), status: "working", started_at_unix_ms: ago(21), pr: 1504, base_pr: 1503, pr_state: "pending", stage: 3, review: "리뷰 전 · CI 통과 뒤 시작", ...finish(own(1, "새 API로 목록을 그린다", "open"), ci("open")) })
       : node("screen", "API 쓰는 화면", { depends_on: ["api", "outside"], worker: astra("high"), pane_id: stack ? null : SCREEN_PANE, ...(stack ? done(33, 33) : working(12)), status: stack ? "done" : "working", pr: 1504, base_pr: 1503, pr_state: state === "no-conductor" ? "pending" : stack ? "mergeable" : "pending", stage: state === "no-conductor" ? 2 : 3, landing: stack ? MERGE_LEFT : null, line: state === "no-conductor" ? "옮기기 필요" : null, ...finish(own(1, "새 API로 목록을 그린다", stack ? "pass" : "open"), ci(stack ? "pass" : "open")) }),
@@ -201,7 +201,7 @@ function history(mission: Mission, now: number): MissionEvent[] {
       events.push({ at_unix_ms: failedAt + MINUTE, kind: "node", node: one.key, status: "working" });
     } else events.push({ at_unix_ms: begun, kind: "node", node: one.key, status: "working" });
     if (one.pr != null) events.push({ at_unix_ms: begun + (end - begun) * 0.4, kind: "pr_opened", node: one.key, pr: one.pr });
-    if (one.hide) events.push({ at_unix_ms: one.hide.at_unix_ms, kind: "hide", node: one.key, hide: one.hide.action, ...(one.hide.pr != null ? { pr: one.hide.pr } : {}), ...(one.hide.why ? { why: one.hide.why } : {}) });
+    if (one.hide) events.push({ at_unix_ms: one.hide.at_unix_ms, kind: "hide", node: one.key, hide: one.hide.action, ...(one.hide.pr != null ? { pr: one.hide.pr } : {}), ...(one.hide.why ? { why: one.hide.why } : {}), ...(one.hide.bytes != null ? { bytes: one.hide.bytes } : {}) });
     if (one.attention) events.push({ at_unix_ms: one.attention.since_unix_ms, kind: one.attention.to === "operator" ? "raised_to_operator" : "raised", node: one.key, reason: one.attention.reason, ...(one.attention.pr != null ? { pr: one.attention.pr } : {}) });
     if (one.finished_at_unix_ms != null && one.status === "done") {
       events.push({ at_unix_ms: one.finished_at_unix_ms, kind: "node", node: one.key, status: one.status });
@@ -268,7 +268,7 @@ export function missionFixture(shown: string, now: number): { mission: Mission; 
       { agent: "claude", model: "Sonnet 5.5", effort: "low", purpose: "리뷰, 문서" },
       { agent: "pi", effort: null, purpose: "짧은 조사" },
       { agent: "grok", effort: null, purpose: "" },
-    ], default_strength: "normal", other_vendor: true } },
+    ], default_strength: "normal", other_vendor: true, build_cache_cleanup: true } },
   } as unknown as SnapshotRest;
   return { mission, rest };
 }

@@ -21,7 +21,7 @@ import { groupMissions, CLOSED_SHOWN, missionEntry, projectMissions, shownMissio
 import { attentionReasonText, liveNodes, missionCells, missionCounts, type TurnItem } from "./missions";
 import { allAgents, agentsByPane } from "./paneAgents";
 import { frontProject } from "./projectStatus";
-import { CandidateAdd, CandidateRows, CapControl, CleanupControl, ConductorError, OtherVendorControl, ScopeControl, StrengthControl, useConductorEdit } from "./settings/ConductorControls";
+import { CandidateAdd, CandidateRows, BuildCacheControl, CapControl, ConductorError, OtherVendorControl, ScopeControl, StrengthControl, useConductorEdit } from "./settings/ConductorControls";
 import type { Mission, MissionNode, Workspace } from "./snapshot";
 import { useShellStore } from "./store";
 import { useUiStore } from "./ui";
@@ -338,7 +338,7 @@ function DefaultsSummary({ actions }: { actions: Actions }) {
       <Fact label={t("missionTool.cap")} value={t("missionTool.capValue", { count: settings.concurrency })} />
       <Fact label={t("missionTool.scope")} value={t(`mission.scope.${settings.default_scope}`)} />
       <Fact label={t("missionTool.verify")} value={verify} />
-      <Fact label={t("conductor.cleanup")} value={t(`conductor.cleanup.${settings.worktree_cleanup}`)} />
+      <Fact label={t("conductor.buildCache")} value={t(settings.build_cache_cleanup ? "conductor.buildCache.on" : "conductor.buildCache.off")} />
     </section>
   );
 }
@@ -365,7 +365,7 @@ function Defaults({ actions }: { actions: Actions }) {
       <p className="text-muted-foreground" data-mission-defaults-applies="true">{t("missionTool.applies")}</p>
       <Setting label={t("conductor.cap")}><CapControl settings={settings} send={send} /></Setting>
       <Setting label={t("conductor.scope")} stacked><ScopeControl settings={settings} send={send} /></Setting>
-      <Setting label={t("conductor.cleanup")}><CleanupControl settings={settings} send={send} /></Setting>
+      <Setting label={t("conductor.buildCache")}><BuildCacheControl settings={settings} send={send} /></Setting>
       <Setting label={t("conductor.strength")} stacked><StrengthControl settings={settings} send={send} /></Setting>
       <Setting label={t("conductor.otherVendor")}><OtherVendorControl settings={settings} send={send} /></Setting>
       <ConductorError error={error} />

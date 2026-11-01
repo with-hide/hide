@@ -6,11 +6,13 @@
 
 import type { TFunction } from "i18next";
 import type { MessageKey } from "./i18n/catalogs";
+import { formatBytes } from "./i18n/format";
+import type { InterfaceLanguage } from "./i18n/locale";
 import { PROVIDER_KINDS, type ProviderKind } from "./agentPicker";
 import { agentsByPane } from "./paneAgents";
 import { orderByDependencies } from "./projectBoard";
 import { resumeProvider } from "./linkPanel";
-import type { AgentRow, AgentStartChoice, Mission, MissionAttention, MissionAttentionReason, MissionChecker, MissionCriterion, MissionWorker, MissionEvent, MissionEventsSnapshot, MissionLandingAction, MissionNode, MissionNodePr, MissionOperatorAction, MissionVerdict, RowMark, SnapshotRest } from "./snapshot";
+import type { AgentRow, AgentStartChoice, Mission, MissionAttention, MissionAttentionReason, MissionChecker, MissionCriterion, MissionWorker, MissionEvent, MissionEventsSnapshot, MissionHideAction, MissionLandingAction, MissionNode, MissionNodePr, MissionOperatorAction, MissionVerdict, RowMark, SnapshotRest } from "./snapshot";
 
 export function missionOf(rest: SnapshotRest | null | undefined, id: string): Mission | null {
   return rest?.missions?.items.find((mission) => mission.id === id) ?? null;
@@ -622,7 +624,12 @@ export function missionEventsOf(rest: SnapshotRest | null | undefined, missionId
 }
 
 /** An event in words (B20, B31): what happened, and the one line it carried. */
-export function eventWords(event: MissionEvent, t: TFunction<"translation">): { what: string; line: string | null } {
+/** What Hide did, in words: the pull request it was about, or the size a deleted build cache freed (`빌드 캐시 1.2 GB 지움`, B20). */
+function hideAction(action: MissionHideAction, pr: number | null, bytes: number | null, t: TFunction<"translation">, language: InterfaceLanguage): string {
+  return t(`mission.hide.${action}`, { pr: prWords(pr, t), size: bytes === null ? "" : formatBytes(language, bytes) });
+}
+
+export function eventWords(event: MissionEvent, t: TFunction<"translation">, language: InterfaceLanguage): { what: string; line: string | null } {
   const line = event.line ?? null;
   switch (event.kind) {
     case "planned":
@@ -658,7 +665,7 @@ export function eventWords(event: MissionEvent, t: TFunction<"translation">): { 
     case "strength":
       return { what: t("mission.event.strength", { strength: event.strength ? t(`mission.strength.${event.strength}`) : "" }), line };
     case "hide":
-      return { what: event.hide ? t("mission.hide.mark", { what: t(`mission.hide.${event.hide}`, { pr: prWords(event.pr ?? null, t) }) }) : t("mission.hide.title"), line: event.why ? `${prWords(event.pr ?? null, t)} ${t(`mission.fix.${event.why}`)}` : line };
+      return { what: event.hide ? t("mission.hide.mark", { what: hideAction(event.hide, event.pr ?? null, event.bytes ?? null, t, language) }) : t("mission.hide.title"), line: event.why ? `${prWords(event.pr ?? null, t)} ${t(`mission.fix.${event.why}`)}` : line };
     case "hide_closed":
       return { what: t("mission.hide.mark", { what: t("mission.hide.closed") }), line };
     case "raised":
@@ -697,6 +704,31 @@ export function openAttention(mission: Mission, node: MissionNode): MissionAtten
   return mission.status === "cancelled" || node.status === "dropped" ? null : node.attention;
 }
 
+/**
+ * A mission waiting on the operator that no Needs You row carries (PRD
+ * mission-node-simple D-19, B14): no Conductor holds it and no worker of the
+ * node stands, so the mission itself is the item, its oldest such node first
+ * and `more` for the rest.
+ */
+export type MissionAsk = { mission: Mission; node: MissionNode; attention: MissionAttention; more: number };
+
+/** The missions on `deviceId` that are their own Needs You item, oldest first, as the core marks them (`on_row`). */
+export function missionAsks(missions: readonly Mission[], deviceId: string): MissionAsk[] {
+  const asks: MissionAsk[] = [];
+  for (const mission of missions) {
+    if (mission.device_id !== deviceId) continue;
+    const waiting = mission.nodes
+      .flatMap((node) => {
+        const attention = openAttention(mission, node);
+        return attention?.to === "operator" && !attention.on_row ? [{ node, attention }] : [];
+      })
+      .sort((a, b) => a.attention.since_unix_ms - b.attention.since_unix_ms);
+    const first = waiting[0];
+    if (first) asks.push({ mission, node: first.node, attention: first.attention, more: waiting.length - 1 });
+  }
+  return asks.sort((a, b) => a.attention.since_unix_ms - b.attention.since_unix_ms);
+}
+
 /** A node's `!` with who looks and why: `! 나 · <reason>`, as the card's hover and accessible name say it. */
 export function attentionWords(node: MissionNode, t: TFunction<"translation">): { who: string; why: string } | null {
   const attention = node.attention;
@@ -709,10 +741,10 @@ export function attentionWords(node: MissionNode, t: TFunction<"translation">): 
  * `깨움 · PR #12 CI 실패`, `PR #13 붙임`, `worktree 정리함`. The card's mark
  * says it on hover and the panel reads it; null when Hide did nothing.
  */
-export function hideWords(mission: Mission, node: MissionNode, t: TFunction<"translation">): string | null {
+export function hideWords(mission: Mission, node: MissionNode, t: TFunction<"translation">, language: InterfaceLanguage): string | null {
   const mark = node.hide;
   if (!mark) return null;
-  const what = t(`mission.hide.${mark.action}`, { pr: prWords(mark.pr ?? null, t) });
+  const what = hideAction(mark.action, mark.pr ?? null, mark.bytes ?? null, t, language);
   if (mark.action === "woke") return mark.why ? `${what} · ${prWords(mark.pr ?? null, t)} ${t(`mission.fix.${mark.why}`)}` : what;
   if (mark.action !== "done") return what;
   const tally = criteriaTally(mission, node);
@@ -738,16 +770,16 @@ export function lineOutrun(node: MissionNode, events: readonly MissionEvent[] | 
 
 /**
  * The operator's choices for a node that waits on someone to look, by why
- * (PRD mission-node-simple B15, B20, B26): each is one `mission_attention`
- * event, and `terminal` brings the worker's pane forward. A mission no
+ * (PRD mission-node-simple B15, B26): each is one `mission_attention`
+ * event. A mission no
  * Conductor holds, or whose Conductor left a raise unanswered for ten
  * minutes (`conductorUnanswered`), offers 이어받기 on its Conductor row just
  * above.
  */
-export type AttentionChoice = MissionOperatorAction | "terminal";
+export type AttentionChoice = MissionOperatorAction;
 
-/** The reasons only the operator settles, which reach them at once rather than after the Conductor's ten minutes (D-05, B20, B26). */
-const OPERATOR_FIRST: readonly MissionAttentionReason[] = ["cleanup_ask", "conductor_failed"];
+/** The reasons only the operator settles, which reach them at once rather than after the Conductor's ten minutes (D-05, B26). */
+const OPERATOR_FIRST: readonly MissionAttentionReason[] = ["conductor_failed"];
 
 /**
  * Whether a Conductor that holds the mission let a raise reach the operator
@@ -774,10 +806,6 @@ export function attentionChoices(reason: MissionAttentionReason): AttentionChoic
       return ["drop"];
     case "unplanned_pr":
       return ["attach", "leave"];
-    case "worktree_dirty":
-      return ["terminal", "leave"];
-    case "cleanup_ask":
-      return ["cleanup", "leave"];
     case "conductor_failed":
       return ["resume", "drop"];
   }

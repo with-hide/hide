@@ -1467,6 +1467,81 @@ fn empty_cells(
     results
 }
 
+/// Deletes the build cache of one checkout, a mission node's that finished
+/// (PRD mission-node-simple B20): measured now, then emptied as a chosen
+/// cell is, each folder judged again and the checkout read as idle right
+/// before it moves (`in_use_now`), and the moved folders deleted. Nothing
+/// else in the checkout is touched and no pane closes.
+pub(crate) fn clear_build_cache(
+    node: &dyn NodeLink,
+    repository: &Path,
+    checkout: &Path,
+    in_use_now: impl FnMut(&Path) -> Result<Option<InUse>, String>,
+) -> CellResult {
+    let path = checkout.to_string_lossy().into_owned();
+    let measured = disk::read(
+        node,
+        &disk::DiskRequest {
+            paths: vec![checkout.to_path_buf()],
+            ..Default::default()
+        },
+    );
+    let folders: Vec<LayerFolder> = measured
+        .into_iter()
+        .flat_map(|row| row.folders)
+        .filter(|folder| folder.layer == Layer::BuildCache)
+        .collect();
+    if folders.is_empty() {
+        return cell_result(&path, Layer::BuildCache, "skipped", 0, 0, None);
+    }
+    let common = common_dir(node, repository);
+    let folders = HashMap::from([(checkout.to_path_buf(), folders)]);
+    let run = CellRun {
+        node,
+        id: 0,
+        workspace_id: "",
+        common: &common,
+        folders: &folders,
+    };
+    let mut moved = BTreeSet::new();
+    let cell = CellChoice {
+        path: path.clone(),
+        layer: Layer::BuildCache,
+    };
+    let result = empty_cells(&run, &[cell], in_use_now, &mut moved, |_| {})
+        .pop()
+        .unwrap_or_else(|| cell_result(&path, Layer::BuildCache, "skipped", 0, 0, None));
+    if !moved.is_empty() {
+        drain_trash(node, &common, &moved, 0);
+    }
+    result
+}
+
+/// Deletes the folders a run set aside in `common`'s trash, waiting up to
+/// `DELETE_WAIT`; how many are left to delete in the background.
+fn drain_trash(node: &dyn NodeLink, common: &Path, ours: &BTreeSet<PathBuf>, id: u64) -> usize {
+    let call = Call::DrainTrash {
+        common: common.to_string_lossy().into_owned(),
+        ours: ours
+            .iter()
+            .map(|entry| entry.to_string_lossy().into_owned())
+            .collect(),
+        wait_ms: u64::try_from(DELETE_WAIT.as_millis()).unwrap_or(u64::MAX),
+    };
+    match call_as::<usize>(node, call, DELETE_WAIT + NODE_TIMEOUT) {
+        Ok(remaining) => remaining,
+        Err(error) => {
+            crate::diagnostic!(serde_json::json!({
+                "component": "cleanup",
+                "kind": "trash.drain_failed",
+                "cleanup_id": id,
+                "error": error.to_string(),
+            }));
+            ours.len()
+        }
+    }
+}
+
 /// Each folder's verdict from the checkout's node, in order, spending what is
 /// left of the run's look through folders; a node that cannot be asked
 /// leaves every folder unverified.
@@ -1769,26 +1844,7 @@ pub fn spawn_confirm(
             );
             // The folders left their checkouts at once; the volume only has
             // its space back once they are deleted.
-            let call = Call::DrainTrash {
-                common: common.to_string_lossy().into_owned(),
-                ours: ours
-                    .iter()
-                    .map(|entry| entry.to_string_lossy().into_owned())
-                    .collect(),
-                wait_ms: u64::try_from(DELETE_WAIT.as_millis()).unwrap_or(u64::MAX),
-            };
-            let remaining = match call_as::<usize>(node, call, DELETE_WAIT + NODE_TIMEOUT) {
-                Ok(remaining) => remaining,
-                Err(error) => {
-                    crate::diagnostic!(serde_json::json!({
-                        "component": "cleanup",
-                        "kind": "trash.drain_failed",
-                        "cleanup_id": id,
-                        "error": error.to_string(),
-                    }));
-                    ours.len()
-                }
-            };
+            let remaining = drain_trash(node, &common, &ours, id);
             if remaining > 0 {
                 answer.message = Some(format!(
                     "{remaining} removed folders are still being deleted in the background"

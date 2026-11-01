@@ -233,8 +233,6 @@ function Made({ mission, node }: { mission: Mission; node: MissionNode }) {
       </span>,
     ]);
   }
-  // What became of a done node's worktree (B20); a removal that failed is the log's, not the screen's (B21).
-  if (node.worktree && node.worktree !== "failed") rows.push([t("mission.panel.worktree"), <span key="worktree" data-panel-worktree={node.worktree}>{t(`mission.worktree.${node.worktree}`)}</span>]);
   if (rows.length === 0) return null;
   return (
     <Part title={t("mission.panel.result")} part="result">
@@ -445,7 +443,7 @@ function HideRecord({ mission, node, events }: { mission: Mission; node: Mission
   const { t, i18n } = useInterfaceTranslation();
   const language = requireInterfaceLanguage(i18n.language);
   const own = events?.filter((event) => event.node === node.key && HIDE_KINDS.has(event.kind)) ?? [];
-  const mark = hideWords(mission, node, t);
+  const mark = hideWords(mission, node, t, language);
   if (own.length === 0 && !mark) return null;
   const time = (at: number) => formatDateTime(language, at, { month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit" });
   return (
@@ -453,7 +451,7 @@ function HideRecord({ mission, node, events }: { mission: Mission; node: Mission
       {own.length > 0 ? (
         <ol className="grid grid-cols-[auto_minmax(0,1fr)] gap-x-md gap-y-xxs text-caption" data-panel-hide-events={own.length}>
           {own.map((event, index) => {
-            const words = eventWords(event, t);
+            const words = eventWords(event, t, language);
             return (
               <li key={index} className="contents" data-panel-hide-event={event.kind}>
                 <span className="text-muted-foreground tabular-nums">{time(event.at_unix_ms)}</span>
@@ -492,7 +490,7 @@ function Events({ node, events }: { node: MissionNode; events: MissionEvent[] | 
       {open ? (
         <ol className="grid grid-cols-[auto_minmax(0,1fr)] gap-x-md gap-y-xxs text-caption" data-flow-events={own.length}>
           {own.map((event, index) => {
-            const words = eventWords(event, t);
+            const words = eventWords(event, t, language);
             return (
               <li key={index} className="contents" data-panel-event={event.kind}>
                 <span className="text-muted-foreground tabular-nums">{time(event.at_unix_ms)}</span>

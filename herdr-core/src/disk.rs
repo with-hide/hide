@@ -105,7 +105,7 @@ impl DiskReader {
     }
 }
 
-#[cfg(test)]
+/// Measures every requested root on `node` at once, off any lock.
 pub(crate) fn read(node: &dyn NodeLink, request: &DiskRequest) -> Vec<DiskUsageSnapshot> {
     read_with(node, request, |_| true)
 }

@@ -9419,17 +9419,12 @@ mod wire_enum_tests {
             }
             assert_wire(&contract, "mission_event_kind", &kinds);
             checked.insert("mission_event_kind");
-            use crate::missions::{
-                AttentionReason, FixReason, HideAction, OperatorAction, WorktreeCleanup,
-                WorktreeFate,
-            };
+            use crate::missions::{AttentionReason, FixReason, HideAction, OperatorAction};
             let reasons = [
                 AttentionReason::MergedUnproven,
                 AttentionReason::WorkerEnded,
                 AttentionReason::PrClosed,
                 AttentionReason::UnplannedPr,
-                AttentionReason::WorktreeDirty,
-                AttentionReason::CleanupAsk,
                 AttentionReason::ConductorFailed,
                 AttentionReason::WakeRefused,
                 AttentionReason::CloseRefused,
@@ -9440,8 +9435,6 @@ mod wire_enum_tests {
                     | AttentionReason::WorkerEnded
                     | AttentionReason::PrClosed
                     | AttentionReason::UnplannedPr
-                    | AttentionReason::WorktreeDirty
-                    | AttentionReason::CleanupAsk
                     | AttentionReason::ConductorFailed
                     | AttentionReason::WakeRefused
                     | AttentionReason::CloseRefused => {}
@@ -9462,14 +9455,14 @@ mod wire_enum_tests {
                 HideAction::Done,
                 HideAction::Attached,
                 HideAction::Woke,
-                HideAction::Cleaned,
+                HideAction::CacheCleared,
             ];
             for variant in actions {
                 match variant {
                     HideAction::Done
                     | HideAction::Attached
                     | HideAction::Woke
-                    | HideAction::Cleaned => {}
+                    | HideAction::CacheCleared => {}
                 }
             }
             assert_wire(&contract, "mission_hide_action", &actions);
@@ -9486,36 +9479,11 @@ mod wire_enum_tests {
             }
             assert_wire(&contract, "mission_fix_reason", &fixes);
             checked.insert("mission_fix_reason");
-            let fates = [
-                WorktreeFate::Removed,
-                WorktreeFate::Kept,
-                WorktreeFate::Failed,
-                WorktreeFate::Left,
-            ];
-            for variant in fates {
-                match variant {
-                    WorktreeFate::Removed
-                    | WorktreeFate::Kept
-                    | WorktreeFate::Failed
-                    | WorktreeFate::Left => {}
-                }
-            }
-            assert_wire(&contract, "mission_worktree_fate", &fates);
-            checked.insert("mission_worktree_fate");
-            let cleanups = [WorktreeCleanup::Auto, WorktreeCleanup::Ask];
-            for variant in cleanups {
-                match variant {
-                    WorktreeCleanup::Auto | WorktreeCleanup::Ask => {}
-                }
-            }
-            assert_wire(&contract, "mission_worktree_cleanup", &cleanups);
-            checked.insert("mission_worktree_cleanup");
             let chosen = [
                 OperatorAction::Done,
                 OperatorAction::Drop,
                 OperatorAction::Attach,
                 OperatorAction::Leave,
-                OperatorAction::Cleanup,
                 OperatorAction::Resume,
             ];
             for variant in chosen {
@@ -9524,7 +9492,6 @@ mod wire_enum_tests {
                     | OperatorAction::Drop
                     | OperatorAction::Attach
                     | OperatorAction::Leave
-                    | OperatorAction::Cleanup
                     | OperatorAction::Resume => {}
                 }
             }

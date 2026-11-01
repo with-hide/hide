@@ -2,7 +2,7 @@ import type { Actions } from "../actions";
 import { Group, Row } from "../components/settings-rows";
 import { useInterfaceTranslation } from "../i18n/client";
 import type { MissionStrength } from "../snapshot";
-import { CandidateAdd, CandidateRows, CapControl, CleanupControl, ConductorError, OtherVendorControl, ScopeControl, StrengthControl, useConductorEdit } from "./ConductorControls";
+import { CandidateAdd, CandidateRows, BuildCacheControl, CapControl, ConductorError, OtherVendorControl, ScopeControl, StrengthControl, useConductorEdit } from "./ConductorControls";
 
 // Settings › Conductor (PRD software-factory-conductor D-31, B48, B49): how
 // many agents a mission runs at once, how far a mission goes when it does not
@@ -24,8 +24,8 @@ export function ConductorTab({ actions }: { actions: Actions }) {
         <Row label={<RowLabel title={t("conductor.scope")} hint={t("conductor.scopeHint")} />}>
           <ScopeControl settings={settings} send={send} />
         </Row>
-        <Row label={<RowLabel title={t("conductor.cleanup")} hint={t("conductor.cleanupHint")} />}>
-          <CleanupControl settings={settings} send={send} />
+        <Row label={<RowLabel title={t("conductor.buildCache")} hint={t("conductor.buildCacheHint")} />}>
+          <BuildCacheControl settings={settings} send={send} />
         </Row>
       </Group>
       <ConductorError error={error} />

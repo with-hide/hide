@@ -4,7 +4,7 @@ import { describe, expect, it } from "vitest";
 import { STRENGTHS } from "./conductorSettings";
 import { english } from "./i18n/catalogs";
 import { initializeInterfaceI18n } from "./i18n/instance";
-import { attentionChoices, attentionWords, cardLine, checkerState, eventWords, hideWords, lineOutrun, nodeResumable, summaryGroups, liveNodes, conductorState, missionResultCounts, reportLine, chipWords, conductedBy, criteriaTally, launchSession, runWords, criterionName, missionHeadCells, criterionNote, defectEdges, firstPlans, kindWord, landingLeft, mainCommit, nodeLanded, missionCells, missionOfPane, missionResults, missionTally, missionTone, missionWorkLine, neighbours, nodeLook, nodeResult, nodeTimes, nodeTone, paneChipWords, missionCounts, nodeLine, nodeMark, workerAsleep, conductorUnanswered, conductorResume, stackWaiting, stageWord, takeOverPrompt, takeOverProvider, turnItems } from "./missions";
+import { attentionChoices, attentionWords, missionAsks, cardLine, checkerState, eventWords, hideWords, lineOutrun, nodeResumable, summaryGroups, liveNodes, conductorState, missionResultCounts, reportLine, chipWords, conductedBy, criteriaTally, launchSession, runWords, criterionName, missionHeadCells, criterionNote, defectEdges, firstPlans, kindWord, landingLeft, mainCommit, nodeLanded, missionCells, missionOfPane, missionResults, missionTally, missionTone, missionWorkLine, neighbours, nodeLook, nodeResult, nodeTimes, nodeTone, paneChipWords, missionCounts, nodeLine, nodeMark, workerAsleep, conductorUnanswered, conductorResume, stackWaiting, stageWord, takeOverPrompt, takeOverProvider, turnItems } from "./missions";
 import type { AgentRow, Mission, MissionAttention, MissionCriterion, MissionEvent, MissionLanding, MissionNode, SnapshotRest } from "./snapshot";
 
 // What the map and the Conductor row read from a mission (PRD
@@ -15,7 +15,7 @@ const t = initializeInterfaceI18n("en").getFixedT(null, "translation");
 const contract = JSON.parse(fs.readFileSync(path.resolve(__dirname, "../../contracts/snapshot-wire-enums.json"), "utf8"));
 
 function node(key: string, extra: Partial<MissionNode> = {}): MissionNode {
-  return { key, title: key, kind: "change", depends_on: [], status: "planned", blocked: null, delivery: "pr", worker: null, agent_id: null, pane_id: null, machine: null, pr: null, base_pr: null, branch: null, pr_state: null, pr_url: null, stage: null, attempts: 0, line: null, change: null, review: null, criteria: [], criteria_met: 0, criteria_skipped: 0, external: null, unread: false, reopened: 0, started_at_unix_ms: null, finished_at_unix_ms: null, commit: null, landing: null, verdict: null, checks: null, attention: null, hide: null, worktree: null, ...extra, prs: extra.prs ?? (extra.pr != null ? [{ number: extra.pr, state: extra.pr_state ?? null, url: extra.pr_url ?? null }] : []) };
+  return { key, title: key, kind: "change", depends_on: [], status: "planned", blocked: null, delivery: "pr", worker: null, agent_id: null, pane_id: null, machine: null, pr: null, base_pr: null, branch: null, pr_state: null, pr_url: null, stage: null, attempts: 0, line: null, change: null, review: null, criteria: [], criteria_met: 0, criteria_skipped: 0, external: null, unread: false, reopened: 0, started_at_unix_ms: null, finished_at_unix_ms: null, commit: null, landing: null, verdict: null, checks: null, attention: null, hide: null, ...extra, prs: extra.prs ?? (extra.pr != null ? [{ number: extra.pr, state: extra.pr_state ?? null, url: extra.pr_url ?? null }] : []) };
 }
 
 function mission(id: string, extra: Partial<Mission> = {}): Mission {
@@ -154,14 +154,14 @@ describe("the Conductor pane's chip (PRD mission-pane-chip B2, B10)", () => {
   });
 });
 
-const raised = (to: "conductor" | "operator", reason: MissionAttention["reason"] = "worker_ended", pr: number | null = null): MissionAttention => ({ reason, pr, to, since_unix_ms: 10 });
+const raised = (to: "conductor" | "operator", reason: MissionAttention["reason"] = "worker_ended", pr: number | null = null): MissionAttention => ({ reason, pr, to, since_unix_ms: 10, on_row: false });
 
 describe("a node's state colour (PRD mission-node-simple D-01, D-02, B5)", () => {
   it("reads each status as waiting, in progress or done, a node someone has to look at in the decision colour, a blocked node waiting and a cancelled mission's unfinished node cancelled", () => {
     const m = mission("m");
     const tones = (["planned", "working", "done", "dropped"] as const).map((status) => nodeTone(m, node("n", { status })));
     expect(tones).toEqual(["waiting", "working", "done", "dropped"]);
-    expect([nodeTone(m, node("n", { status: "working", attention: raised("conductor") })), nodeTone(m, node("n", { status: "done", attention: raised("operator", "cleanup_ask") }))]).toEqual(["hold", "hold"]);
+    expect([nodeTone(m, node("n", { status: "working", attention: raised("conductor") })), nodeTone(m, node("n", { status: "done", attention: raised("operator", "conductor_failed") }))]).toEqual(["hold", "hold"]);
     expect(nodeTone(m, node("n", { blocked: "upstream_dropped" }))).toBe("waiting");
     const cancelled = mission("m", { status: "cancelled" });
     expect(["done", "working", "planned"].map((status) => nodeTone(cancelled, node("n", { status: status as MissionNode["status"], attention: raised("operator") })))).toEqual(["done", "cancelled", "cancelled"]);
@@ -176,7 +176,7 @@ describe("a node's state colour (PRD mission-node-simple D-01, D-02, B5)", () =>
     const m = mission("m", { nodes: [node("spec", { status: "done", kind: "research", delivery: null }), node("api", { status: "done", pr: 3, pr_state: "merged" }), node("ui", { status: "done", pr: 4, pr_state: "mergeable", depends_on: ["api"] }), node("out", { kind: "external", delivery: null, external: { pr: 9 } }), node("old", { status: "dropped" })] });
     expect(missionHeadCells(m)).toEqual(["done", "done", "external", "done"]);
     // A node someone has to look at is the decision colour's cell whatever its shape (PRD mission-node-simple B5).
-    expect(missionHeadCells(mission("m", { nodes: [node("a", { status: "done", attention: raised("conductor", "worktree_dirty") }), node("b", { status: "working" })] }))).toEqual(["attention", "working"]);
+    expect(missionHeadCells(mission("m", { nodes: [node("a", { status: "done", attention: raised("conductor", "close_refused") }), node("b", { status: "working" })] }))).toEqual(["attention", "working"]);
   });
 
   it("colours a mission's own chip by its decision, else its state", () => {
@@ -482,9 +482,8 @@ describe("a finished mission's results and the map's summary (PRD mission-tool B
 
   it("offers 이어받기 of a Conductor still there only once a raise it was asked first reached the operator, and never resumes its live conversation", () => {
     const asked = (to: "conductor" | "operator", reason: MissionAttention["reason"]) => mission("m", { nodes: [node("n", { status: "working", attention: raised(to, reason, 12) })] });
-    // A raise the Conductor still has (B14) or one only the operator settles (B20, B26) is no sign it stopped answering.
+    // A raise the Conductor still has (B14) or one only the operator settles (B26) is no sign it stopped answering.
     expect(conductorUnanswered(asked("conductor", "pr_closed"))).toBe(false);
-    expect(conductorUnanswered(asked("operator", "cleanup_ask"))).toBe(false);
     expect(conductorUnanswered(asked("operator", "conductor_failed"))).toBe(false);
     // Ten minutes unanswered moved it to the operator (D-05, B15).
     expect(conductorUnanswered(asked("operator", "pr_closed"))).toBe(true);
@@ -508,29 +507,40 @@ describe("a node that waits on someone, and what Hide did (PRD mission-node-simp
     for (const action of contract.mission_operator_action) expect(english).toHaveProperty(`mission.operator.${action}`);
     for (const action of contract.mission_hide_action) expect(english).toHaveProperty(`mission.hide.${action}`);
     for (const why of contract.mission_fix_reason) expect(english).toHaveProperty(`mission.fix.${why}`);
-    for (const kind of contract.mission_event_kind as MissionEvent["kind"][]) expect(eventWords({ at_unix_ms: 1, kind, node: "n" }, t).what).not.toBe("");
+    for (const kind of contract.mission_event_kind as MissionEvent["kind"][]) expect(eventWords({ at_unix_ms: 1, kind, node: "n" }, t, "en").what).not.toBe("");
     expect(attentionWords(node("n", { attention: raised("conductor", "pr_closed", 12) }), t)).toEqual({ who: "Conductor", why: "PR #12 closed without a merge" });
     expect(attentionWords(node("n"), t)).toBeNull();
   });
 
-  it("offers the choices each reason takes, the worktree's terminal where it is the operator's to look at", () => {
+  it("makes a mission its own Needs You item only while no row carries what waits on the operator, its oldest node first (PRD mission-node-simple D-19, B14)", () => {
+    const waiting = (since: number, onRow: boolean): MissionAttention => ({ ...raised("operator", "pr_closed", 7), since_unix_ms: since, on_row: onRow });
+    const orphan = mission("a", { nodes: [node("late", { status: "working", attention: waiting(30, false) }), node("early", { status: "working", attention: waiting(20, false) })] });
+    const carried = mission("b", { nodes: [node("n", { status: "working", attention: waiting(10, true) })] });
+    const conductors = mission("c", { nodes: [node("n", { status: "working", attention: raised("conductor") })] });
+    const elsewhere = mission("d", { device_id: "mini", nodes: [node("n", { status: "working", attention: waiting(5, false) })] });
+    const cancelled = mission("e", { status: "cancelled", nodes: [node("n", { status: "working", attention: waiting(5, false) })] });
+    const asks = missionAsks([orphan, carried, conductors, elsewhere, cancelled], "mac");
+    expect(asks.map((ask) => [ask.mission.id, ask.node.key, ask.more])).toEqual([["a", "early", 1]]);
+    expect(missionAsks([elsewhere], "mini").map((ask) => ask.mission.id)).toEqual(["d"]);
+  });
+
+  it("offers the choices each reason takes", () => {
     expect(attentionChoices("merged_unproven")).toEqual(["done"]);
     expect(attentionChoices("worker_ended")).toEqual(["drop"]);
     expect(attentionChoices("unplanned_pr")).toEqual(["attach", "leave"]);
-    expect(attentionChoices("worktree_dirty")).toEqual(["terminal", "leave"]);
-    expect(attentionChoices("cleanup_ask")).toEqual(["cleanup", "leave"]);
     expect(attentionChoices("conductor_failed")).toEqual(["resume", "drop"]);
   });
 
   it("says what Hide did last and why", () => {
     const lines = { criteria: [line("c1", "own", { state: "pass" }), line("c2", "own", { state: "pass" }), line("ci", "ci", { state: "skipped" })], criteria_met: 3, criteria_skipped: 1 };
     const merged = node("n", { status: "done", ...lines, prs: [{ number: 11, state: "merged", url: null }, { number: 12, state: "merged", url: null }], hide: { action: "done", at_unix_ms: 5 } });
-    expect(hideWords(mission("m"), merged, t)).toBe("Marked done · merged + criteria 3/3");
-    expect(hideWords(mission("m"), { ...merged, prs: [{ number: 11, state: "mergeable", url: null }] }, t)).toBe("Marked done · PR ready + criteria 3/3");
-    expect(hideWords(mission("m"), node("n", { hide: { action: "woke", pr: 12, why: "ci_failed", at_unix_ms: 5 } }), t)).toBe("Woke the worker · PR #12 CI failed");
-    expect(hideWords(mission("m"), node("n", { hide: { action: "attached", pr: 13, at_unix_ms: 5 } }), t)).toBe("Attached PR #13");
-    expect(hideWords(mission("m"), node("n", { hide: { action: "cleaned", at_unix_ms: 5 } }), t)).toBe("Removed the worktree");
-    expect(hideWords(mission("m"), node("n"), t)).toBeNull();
+    expect(hideWords(mission("m"), merged, t, "en")).toBe("Marked done · merged + criteria 3/3");
+    expect(hideWords(mission("m"), { ...merged, prs: [{ number: 11, state: "mergeable", url: null }] }, t, "en")).toBe("Marked done · PR ready + criteria 3/3");
+    expect(hideWords(mission("m"), node("n", { hide: { action: "woke", pr: 12, why: "ci_failed", at_unix_ms: 5 } }), t, "en")).toBe("Woke the worker · PR #12 CI failed");
+    expect(hideWords(mission("m"), node("n", { hide: { action: "attached", pr: 13, at_unix_ms: 5 } }), t, "en")).toBe("Attached PR #13");
+    expect(hideWords(mission("m"), node("n", { hide: { action: "cache_cleared", bytes: 3 * 1024 ** 3, at_unix_ms: 5 } }), t, "en")).toBe("Deleted the build cache · 3.0 GB");
+    expect(eventWords({ at_unix_ms: 5, kind: "hide", node: "n", hide: "cache_cleared", bytes: 512 * 1024 ** 2 }, t, "en").what).toBe("Hide · Deleted the build cache · 512 MB");
+    expect(hideWords(mission("m"), node("n"), t, "en")).toBeNull();
   });
 
   it("dims the Conductor's line once Hide acted or raised after it was written", () => {
@@ -545,7 +555,7 @@ describe("a node that waits on someone, and what Hide did (PRD mission-node-simp
   });
 
   it("groups the summary as needs a look, in progress and done, and lets a done or dropped node work again outside a cancelled mission", () => {
-    const m = mission("m", { nodes: [node("a", { status: "done" }), node("b", { status: "working" }), node("c", { status: "done", attention: raised("operator", "cleanup_ask") }), node("d"), node("e", { status: "dropped" })] });
+    const m = mission("m", { nodes: [node("a", { status: "done" }), node("b", { status: "working" }), node("c", { status: "done", attention: raised("operator", "conductor_failed") }), node("d"), node("e", { status: "dropped" })] });
     const groups = summaryGroups(m);
     expect([groups.attention, groups.working, groups.done].map((nodes) => nodes.map((one) => one.key))).toEqual([["c"], ["b"], ["a"]]);
     expect([nodeResumable(m, m.nodes[0]!), nodeResumable(m, m.nodes[4]!), nodeResumable(m, m.nodes[1]!)]).toEqual([true, true, false]);

@@ -805,8 +805,6 @@ export interface AgentNotice {
             | "worker_ended"
             | "pr_closed"
             | "unplanned_pr"
-            | "worktree_dirty"
-            | "cleanup_ask"
             | "conductor_failed"
             | "wake_refused"
             | "close_refused";

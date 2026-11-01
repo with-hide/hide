@@ -210,8 +210,6 @@ pub struct NodeView {
     pub attention: Option<AttentionView>,
     /// What Hide itself did to the node last (D-07, D-15).
     pub hide: Option<crate::missions::HideMark>,
-    /// What became of the done node's worktree (D-14).
-    pub worktree: Option<crate::missions::WorktreeFate>,
 }
 
 /// One of a node's pull requests as its card draws it.
@@ -238,6 +236,10 @@ pub struct AttentionView {
     pub to: AttentionTo,
     /// When it reached whom it waits on now.
     pub since_unix_ms: u64,
+    /// Waiting on the operator, a Needs You row carries it: its Conductor's
+    /// or its worker's. Without one the mission itself is the Needs You
+    /// item (PRD mission-node-simple D-19, B14).
+    pub on_row: bool,
 }
 
 /// A spawn admitted as one of a mission's workers: its cap is checked in
@@ -310,12 +312,11 @@ pub(crate) struct MissionRuntime {
     pub(super) sleep_marks: Vec<super::agent_sleep::missions::SleepMark>,
     /// What the last health evaluation read (PRD mission-node-simple D-08).
     pub(super) health_made: super::mission_health::HealthMadeFrom,
-    /// The done nodes whose worktree is being removed now, by mission and
-    /// node, and whether the removal passed its last check and touches the
-    /// worktree now (B20): from then until it ends, the node keeps its
-    /// finish. Memory only: a restart tries a node whose fate was not saved
-    /// again.
-    pub(super) cleaning: HashMap<(String, String), bool>,
+    /// The done nodes whose build cache is being deleted now, by mission
+    /// and node (B20). It holds nothing of the node: a node that works again
+    /// meanwhile has the result kept off it. Memory only: a restart deletes
+    /// again for a node whose result was not saved.
+    pub(super) clearing: std::collections::HashSet<(String, String)>,
     /// The projects, by device and path, a worker's letter or a Conductor's
     /// node change asked to read again (D-09, B23), kept until that read is
     /// asked. Memory only: a restart reads every project anew.
@@ -425,7 +426,6 @@ fn wake_body(mission: &Mission, wake: &PendingWake) -> String {
                 Some(crate::missions::OperatorAction::Drop) => "dropped it from the mission",
                 Some(crate::missions::OperatorAction::Attach) => "attached the pull request to it",
                 Some(crate::missions::OperatorAction::Leave) => "left it as it is",
-                Some(crate::missions::OperatorAction::Cleanup) => "removed its worktree",
                 Some(crate::missions::OperatorAction::Resume) => "set it to work again",
                 None => "settled it",
             };
@@ -488,10 +488,6 @@ fn attention_words(
             format!("its worker opened {pr}, which no node holds"),
             "attach it with `hide mission node --pr`, or leave it",
         ),
-        Some(Reason::WorktreeDirty) => (
-            "its worktree holds uncommitted changes or commits no merged PR has".to_owned(),
-            "have them pushed or let the operator decide",
-        ),
         Some(Reason::WakeRefused) => (
             format!("Hide could not wake its sleeping worker about {pr}"),
             "wake or start the worker yourself",
@@ -500,7 +496,7 @@ fn attention_words(
             "Hide could not close the mission with every node finished".to_owned(),
             "check the node's lines and close the mission",
         ),
-        Some(Reason::CleanupAsk | Reason::ConductorFailed) | None => (
+        Some(Reason::ConductorFailed) | None => (
             "the operator is asked to look".to_owned(),
             "nothing unless the operator asks",
         ),
@@ -1096,13 +1092,6 @@ impl Runtime {
                 // by Hide on the pull requests it holds now.
                 // The mark names the pull requests it held when it was taken
                 // back, so one named in the same command finishes it again.
-                // A node whose worktree is being removed now keeps its
-                // finish and its pull requests until the removal ends (B20).
-                if (next.status != bound.status || subject_moved)
-                    && self.node_cleanup_committed(&id, &bound.key)
-                {
-                    return Err("mission_cleanup_running".into());
-                }
                 if current.nodes[index].status.finished() && next.status == NodeStatus::Working {
                     next.resumed = Some(current.nodes[index].resumed_cause());
                     next.back_to_work();
@@ -2262,9 +2251,10 @@ impl Runtime {
                         since_unix_ms: attention
                             .operator_at_unix_ms
                             .unwrap_or(attention.since_unix_ms),
+                        on_row: attention.operator_at_unix_ms.is_some()
+                            && self.mission_attention_has_row(ledger, mission, node),
                     }),
                     hide: node.hide.clone(),
-                    worktree: node.worktree,
                 }
             })
             .collect();
@@ -2450,12 +2440,16 @@ impl Runtime {
         {
             return;
         }
+        // A closed mission whose node waits on the operator is drawn again
+        // with the rows, which decide where it shows in Needs You (B14).
+        let kept_closed =
+            |mission: &Mission| closed_kept && !mission.status.open() && !operator_waits(mission);
         let made: Vec<&Mission> = self
             .missions
             .book
             .missions
             .iter()
-            .filter(|mission| !closed_kept || mission.status.open())
+            .filter(|mission| !kept_closed(mission))
             .collect();
         let agents = worker_records(ledger.as_deref(), made.iter().copied());
         let items = self
@@ -2464,7 +2458,7 @@ impl Runtime {
             .missions
             .iter()
             .map(|mission| {
-                let kept = (closed_kept && !mission.status.open())
+                let kept = kept_closed(mission)
                     .then(|| {
                         self.snapshot
                             .missions
@@ -2501,6 +2495,15 @@ impl Runtime {
             made: true,
         };
     }
+}
+
+/// Whether a node of `mission` waits on the operator.
+fn operator_waits(mission: &Mission) -> bool {
+    mission.nodes.iter().any(|node| {
+        node.attention
+            .as_ref()
+            .is_some_and(|attention| attention.operator_at_unix_ms.is_some())
+    })
 }
 
 /// The registrations of the workers `missions` name, read in one pass.
