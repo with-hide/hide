@@ -63,6 +63,10 @@ test("an agent's open the operator has not looked at waits on its row until the 
     await expect(mark).not.toHaveAttribute("data-agent-status-mark", "look");
 
     // The pane header's eye is the same press as the row: it brings the View to look at forward.
+    // The documents fold first, since the lane over the panes would take the click meant for the other pane.
+    const documents = page.locator('[data-lane-tool="documents"]');
+    await documents.click();
+    await expect(documents).toHaveAttribute("aria-pressed", "false");
     await page.locator(`[data-pane-view="${other}"] .xterm-screen`).click();
     await expect(page.locator(`[data-pane-view="${other}"]`)).toHaveAttribute("data-focused", "true");
     await hide(["file", "open", "plan.md"]);
