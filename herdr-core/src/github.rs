@@ -3063,6 +3063,47 @@ fn is_open(pull_request: &PullRequestSnapshot) -> bool {
     !pull_request.badge.is_settled()
 }
 
+/// The pull request `branch` opened in `repository` itself, as the catalog
+/// lists it: the one `pinned` by number, else one opened at or after
+/// `opened_since` (any time for `None`), an open one first and then the
+/// latest. A fork's branch of the same name, or a pull request whose address
+/// names another repository or number, is never it.
+pub(crate) fn branch_pull_request<'a>(
+    catalog: &'a GithubProjectSnapshot,
+    repository: &str,
+    branch: &str,
+    pinned: Option<u64>,
+    opened_since: Option<u64>,
+) -> Option<&'a PullRequestSnapshot> {
+    catalog
+        .pull_requests
+        .iter()
+        .filter(|pull| {
+            pull.url
+                .strip_prefix("https://github.com/")
+                .and_then(|path| path.split_once("/pull/"))
+                .is_some_and(|(actual_repository, number)| {
+                    actual_repository.eq_ignore_ascii_case(repository)
+                        && number == pull.number.to_string()
+                })
+        })
+        .filter(|pull| !pull.cross_repository && pull.head_branch == branch)
+        .filter(|pull| match (pinned, opened_since) {
+            (Some(number), _) => u64::from(pull.number) == number,
+            (None, Some(since)) => pull.created_at_unix_ms.is_some_and(|at| at >= since),
+            (None, None) => true,
+        })
+        .max_by_key(|pull| {
+            (
+                matches!(
+                    pull.badge,
+                    PullRequestBadge::Open | PullRequestBadge::Review
+                ),
+                pull.number,
+            )
+        })
+}
+
 /// `gh` timestamps are RFC 3339 in UTC (`2026-09-03T04:15:00Z`). Only the
 /// instant is needed - the card renders "N minutes ago" from it - so this
 /// converts without pulling in a date library for one format.

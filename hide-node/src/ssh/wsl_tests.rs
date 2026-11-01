@@ -310,25 +310,6 @@ fn a_child_link_ends_its_child_and_ends_with_it() {
 }
 
 #[test]
-fn a_call_past_the_cap_waits_until_its_deadline_and_one_that_ends_frees_a_slot() {
-    let gate: &'static CallGate = Box::leak(Box::new(CallGate {
-        running: Mutex::new(0),
-        freed: std::sync::Condvar::new(),
-    }));
-    let mut held: Vec<_> = (0..MAX_CALLS)
-        .map(|_| gate.admit(Instant::now()).expect("a free slot"))
-        .collect();
-    let asked = Instant::now();
-    assert!(
-        gate.admit(asked + Duration::from_millis(50)).is_none(),
-        "a call past the cap was admitted"
-    );
-    assert!(asked.elapsed() >= Duration::from_millis(50));
-    held.pop();
-    assert!(gate.admit(Instant::now()).is_some());
-}
-
-#[test]
 fn a_write_blocked_on_a_child_that_stopped_reading_does_not_hold_its_end() {
     let mut command = std::process::Command::new("sh");
     command

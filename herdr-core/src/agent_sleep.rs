@@ -308,6 +308,7 @@ impl SleepRecord {
             record: None,
             hook: None,
             telemetry_stale: false,
+            terminal_failed: false,
             launch_pending: false,
             id: Some(
                 self.agent_name

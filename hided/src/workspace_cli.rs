@@ -673,6 +673,28 @@ pub fn request_pane(
     })
 }
 
+/// `hide workspace remove`: the core removes the worktree as the delete
+/// dialog does and answers once the removal has ended, which can take as
+/// long as the host's recheck and removal; the daemon's own wait ends first.
+pub fn request_worktree_remove(
+    credential: &mut Credential,
+    command: &herdr_core::worktree_command::WorktreeRemove,
+) -> Result<Value, String> {
+    credential.run(|path, after| {
+        let reference = read_reference(path)?;
+        let request_id = fresh_request_id()?;
+        run_exchange_within(
+            path,
+            &reference,
+            json!({"type":"worktree_remove","request_id":request_id,"command":command}),
+            &request_id,
+            true,
+            herdr_core::worktree_command::REMOVE_WAIT + Duration::from_secs(20),
+            after,
+        )
+    })
+}
+
 /// `hide agent sleep` (`agent_sleep`) and `hide agent archive`
 /// (`agent_archive`): the core's own action on a registered agent.
 pub fn request_agent_action(

@@ -53,6 +53,10 @@ pub struct TypedInput {
     pub attempts: u8,
     /// When the last typing was reserved.
     pub typed_at_unix_ms: u64,
+    /// When the first typing was reserved, 0 on a record an earlier build
+    /// wrote: an agent's record of any typing is written after this.
+    #[serde(default, skip_serializing_if = "is_zero_ms")]
+    pub first_typed_at_unix_ms: u64,
     /// When the agent's own record of the input arrived; it ends the input
     /// whichever typing it records.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -62,6 +66,18 @@ pub struct TypedInput {
     pub noticed: u8,
     #[serde(default, skip_serializing_if = "is_zero_ms")]
     pub noticed_at_unix_ms: u64,
+}
+
+impl TypedInput {
+    /// When the first typing was reserved; the last one on a record that does
+    /// not know it, which is never earlier than the first.
+    pub(crate) fn first_typed_at(&self) -> u64 {
+        if self.first_typed_at_unix_ms == 0 {
+            self.typed_at_unix_ms
+        } else {
+            self.first_typed_at_unix_ms
+        }
+    }
 }
 
 fn is_zero(value: &u8) -> bool {

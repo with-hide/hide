@@ -13,7 +13,7 @@ import { useInterfaceTranslation } from "./i18n/client";
 import { formatDateTime } from "./i18n/format";
 import { requireInterfaceLanguage } from "./i18n/locale";
 import { cn } from "./lib/utils";
-import { CheckerRow, lookWord, markWord, RunText, useNodeTimes, useRunWords, useWorkerRow } from "./missionParts";
+import { CheckerRow, lookWord, markWord, RunText, useNodeRun, useNodeTimes, useWorkerRow } from "./missionParts";
 import {
   attentionWords,
   cardLine,
@@ -52,7 +52,7 @@ import { useShellStore } from "./store";
 export function MissionNodePanel({ mission, node, events, end, onSelect, onClose, actions }: { mission: Mission; node: MissionNode; events: MissionEvent[] | null; end: number; onSelect: (key: string) => void; onClose: () => void; actions: Actions }) {
   const { t } = useInterfaceTranslation();
   const look = nodeLook(mission, node);
-  const worker = useRunWords(mission, node.pane_id, node.machine, node.worker);
+  const worker = useNodeRun(mission, node);
   const times = useNodeTimes(mission, node, events, end);
   const facts = [
     ...(times?.took ? [t("mission.elapsed.total", { elapsed: times.took })] : []),
@@ -81,7 +81,7 @@ export function MissionNodePanel({ mission, node, events, end, onSelect, onClose
           {worker ? (
             <>
               <span aria-hidden="true">·</span>
-              <span className="flex min-w-0 items-center gap-xxs"><AgentMark kind={node.worker?.agent} /><RunText run={worker} /></span>
+              <span className="flex min-w-0 items-center gap-xxs">{worker.agent ? <AgentMark kind={worker.agent} /> : null}<RunText run={worker.run} /></span>
             </>
           ) : null}
           {life ? (

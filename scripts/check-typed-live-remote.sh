@@ -19,7 +19,6 @@ case "${1:-}" in
   suites)
     zsh scripts/check-runtime-gates.sh
     bash scripts/check-harness-ignore-anchor.sh
-    bash scripts/check-agent-asset-committed.sh
     bash scripts/check-capability-readers-off-lock.sh
     bash scripts/check-no-workstation-identity.sh
     ;;

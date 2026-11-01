@@ -1,6 +1,6 @@
 //! The contract of the commands other tools call (`hide agent`, `ps`,
 //! `request`, `inbox`, `watch`, `mission`, `device`, `pane`, `workspace
-//! purpose`): each command's words, arguments and options, where its
+//! purpose`, `workspace remove`): each command's words, arguments and options, where its
 //! answer sits in the line it prints, and the JSON Schema of that answer.
 //!
 //! The table below is what the CLI admits: a verb or a flag of these topics
@@ -641,6 +641,41 @@ pub const COMMANDS: &[Spec] = &[
             "purpose_invalid",
             "purpose_too_long",
             "purpose_no_workspace",
+        ],
+    },
+    // The delete dialog's removal: --force accepts every loss the deletion
+    // gate names, --delete-branch takes the local branch with the folder.
+    Spec {
+        words: &["workspace", "remove"],
+        arguments: &[Arg {
+            name: "path",
+            value: Text,
+            required: true,
+            value_with: None,
+        }],
+        repeats: None,
+        needs_one_of: &[],
+        options: &[switch("--delete-branch"), switch("--force")],
+        rest: None,
+        answers: &["worktree_removed"],
+        refusals: &[
+            "worktree_remove_unknown",
+            "worktree_remove_blocked",
+            "worktree_remove_needs_force",
+            "worktree_remove_branch_unmerged",
+            "worktree_remove_branch_kept",
+            "worktree_remove_agent_working",
+            "worktree_remove_own_checkout",
+            "worktree_remove_busy",
+            "worktree_remove_unavailable",
+            "worktree_remove_stopped",
+            "worktree_remove_still_running",
+            "worktree_remove_pane_appeared",
+            "worktree_remove_changed",
+            "worktree_remove_close_failed",
+            "worktree_remove_host_failed",
+            "worktree_remove_result_unknown",
+            "worktree_remove_pending",
         ],
     },
     // --force types the letter into the recipient's input now, even while
@@ -1342,6 +1377,9 @@ fn answers() -> Value {
     for (name, schema) in herdr_core::pane_command::answer_schemas() {
         map.insert(name.into(), schema);
     }
+    for (name, schema) in herdr_core::worktree_command::answer_schemas() {
+        map.insert(name.into(), schema);
+    }
     answers
 }
 
@@ -1482,7 +1520,8 @@ mod tests {
                 | CommandKind::AgentSleep { .. }
                 | CommandKind::AgentArchive { .. }
                 | CommandKind::Device(_)
-                | CommandKind::Pane(_))
+                | CommandKind::Pane(_)
+                | CommandKind::WorkspaceRemove(_))
         )
     }
 

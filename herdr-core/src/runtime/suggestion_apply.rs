@@ -13,6 +13,7 @@
 //! Spawning and GitHub writes run on a worker thread; under the lock this
 //! module only reads the catalog and the ledger and hands moves over.
 
+use super::branch_decision::{self, ReadyReading, TRACK_INTERVAL_MS};
 use super::memory_promotion::{
     CatalogVerdict, HideSpawn, HomeAttempt, HomePull, PromotionStart, START_GRACE_MS,
     START_SLACK_MS, UNSEEN, base36, catalog_verdict, never_started, spawn_hide_agent,
@@ -23,18 +24,12 @@ use crate::model::{PullRequestBadge, PullRequestChecks, PullRequestSnapshot};
 use crate::node::NodeId;
 use crate::suggestions::apply::{ApplyBrief, ApplyOrder, FollowedAttempt, issue_text};
 use crate::suggestions::ledger::PrRef;
-use crate::suggestions::lifecycle::{
-    AttemptMove, AttemptPhase, AttemptPurpose, BranchFileSummary, BranchSummary,
-};
+use crate::suggestions::lifecycle::{AttemptMove, AttemptPhase, AttemptPurpose};
 use crate::suggestions::notebook::{LineId, Outcome};
 use crate::suggestions::policy;
 use crate::suggestions::watch::WatchedLine;
 use crate::suggestions::worker::{Command, LineAction, ProjectRef};
 use serde_json::json;
-
-/// How often followed attempts are checked on the coordinator's tick; a
-/// GitHub answer checks them at once.
-const TRACK_INTERVAL_MS: u64 = 60_000;
 
 /// One attempt: the Project, the line and the attempt's start.
 type AttemptKey = (String, u64, u64);
@@ -1431,42 +1426,23 @@ fn branch_change(
     base: &str,
     facts: hide_node_link::branch::BranchFacts,
 ) -> Option<AttemptMove> {
-    if phase == AttemptPhase::Ready && facts.merged == Some(true) {
-        return Some(AttemptMove::Merged {
-            pr: None,
-            at_unix_ms: unix_milliseconds(),
-            base: Some(base.to_owned()),
-            merge_commit: None,
-        });
-    }
-    if !facts.exists {
-        return match (phase, facts.merged) {
-            (AttemptPhase::Ready, Some(false)) => Some(AttemptMove::Discarded),
-            (AttemptPhase::Ready, _) => None,
-            _ => Some(AttemptMove::Failed("no_change".into())),
+    if phase == AttemptPhase::Ready {
+        return match branch_decision::read_ready(base, &facts) {
+            ReadyReading::Merged => Some(AttemptMove::Merged {
+                pr: None,
+                at_unix_ms: unix_milliseconds(),
+                base: Some(base.to_owned()),
+                merge_commit: None,
+            }),
+            ReadyReading::Discarded => Some(AttemptMove::Discarded),
+            ReadyReading::Ready(summary) => Some(AttemptMove::Ready(summary)),
+            ReadyReading::Unchanged => None,
         };
     }
-    let Some(tip) = facts.tip.clone().filter(|_| facts.ahead > 0) else {
-        return (phase != AttemptPhase::Ready).then(|| AttemptMove::Failed("no_change".into()));
-    };
-    Some(AttemptMove::Ready(BranchSummary {
-        base: base.to_owned(),
-        tip,
-        ahead: facts.ahead,
-        files: facts
-            .files
-            .into_iter()
-            .map(|file| BranchFileSummary {
-                path: file.path,
-                added: file.added,
-                removed: file.removed,
-                binary: file.binary,
-            })
-            .collect(),
-        files_total: facts.files_total,
-        added: facts.added,
-        removed: facts.removed,
-    }))
+    Some(branch_decision::summary(base, &facts).map_or_else(
+        || AttemptMove::Failed("no_change".into()),
+        AttemptMove::Ready,
+    ))
 }
 
 /// Keeps a move on the local copy, so the next check does not hand the
@@ -1504,31 +1480,13 @@ fn attempt_pull_request<'a>(
     attempt: &FollowedAttempt,
     repository: Option<&str>,
 ) -> Option<&'a PullRequestSnapshot> {
-    let repository = repository?;
-    let since = attempt.started_at_unix_ms.saturating_sub(START_SLACK_MS);
-    catalog
-        .pull_requests
-        .iter()
-        .filter(|pull| {
-            pull.url
-                .strip_prefix("https://github.com/")
-                .and_then(|path| path.split_once("/pull/"))
-                .is_some_and(|(actual, _)| actual.eq_ignore_ascii_case(repository))
-        })
-        .filter(|pull| !pull.cross_repository && pull.head_branch == attempt.branch)
-        .filter(|pull| match &attempt.pr {
-            Some(pr) => pull.number == pr.number,
-            None => pull.created_at_unix_ms.is_some_and(|at| at >= since),
-        })
-        .max_by_key(|pull| {
-            (
-                matches!(
-                    pull.badge,
-                    PullRequestBadge::Open | PullRequestBadge::Review
-                ),
-                pull.number,
-            )
-        })
+    crate::github::branch_pull_request(
+        catalog,
+        repository?,
+        &attempt.branch,
+        attempt.pr.as_ref().map(|pr| u64::from(pr.number)),
+        Some(attempt.started_at_unix_ms.saturating_sub(START_SLACK_MS)),
+    )
 }
 
 /// The move a pull request's state asks for, if any (B11, B12, D-29): a

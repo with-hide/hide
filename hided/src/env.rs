@@ -60,7 +60,9 @@ pub const HIDE_BUILD_ORDER_OVERRIDE: &str = "HIDE_BUILD_ORDER_OVERRIDE";
 /// key's other conditions ([`fixture_home`]).
 pub const FIXTURE_HOME_MARKER: &str = hide_kit::layout::FIXTURE_HOME_MARKER;
 /// Development only: whether this daemon's node runs pane holders
-/// ([`hide_node::terminal::holder::SWITCH`] owns the contract).
+/// ([`hide_node::terminal::holder::SWITCH`] owns the contract). Deleted in
+/// bundle 4, the switch release, once the new engine is the default
+/// (docs/ARCHITECTURE.md, The pane holder).
 pub const HIDE_DEV_PANE_HOLDER: &str = hide_node::terminal::holder::SWITCH;
 
 pub const REGISTRY: &[EnvKey] = &[

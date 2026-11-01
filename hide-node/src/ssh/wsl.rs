@@ -23,6 +23,8 @@
 //! distribution ([`Wake`]) runs anything in one that is off (D-11).
 
 use std::path::PathBuf;
+
+use crate::ssh::gate::Gate;
 use std::process::{Command, Stdio};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -184,7 +186,7 @@ impl WslDevice {
     /// Whether the distribution runs now; asking starts nothing.
     fn running(&self) -> Result<bool, String> {
         let _admitted = CALLS
-            .admit(Instant::now() + CALL_ADMISSION)
+            .admit(Instant::now() + CALL_ADMISSION, None)
             .ok_or_else(|| {
                 format!(
                     "WSL is busy with {MAX_CALLS} other calls from Hide; its state was not read"
@@ -210,41 +212,7 @@ impl WslDevice {
 }
 
 /// [`MAX_CALLS`], shared by every distribution of this process.
-static CALLS: CallGate = CallGate {
-    running: Mutex::new(0),
-    freed: std::sync::Condvar::new(),
-};
-
-struct CallGate {
-    running: Mutex<usize>,
-    freed: std::sync::Condvar,
-}
-
-/// One admitted call; its end frees the gate's slot.
-struct CallSlot(&'static CallGate);
-
-impl CallGate {
-    fn admit(&'static self, deadline: Instant) -> Option<CallSlot> {
-        let mut running = lock_recover(&self.running);
-        while *running >= MAX_CALLS {
-            let left = deadline.checked_duration_since(Instant::now())?;
-            running = self
-                .freed
-                .wait_timeout(running, left)
-                .map(|(guard, _)| guard)
-                .unwrap_or_else(|poisoned| poisoned.into_inner().0);
-        }
-        *running += 1;
-        Some(CallSlot(self))
-    }
-}
-
-impl Drop for CallSlot {
-    fn drop(&mut self) {
-        *lock_recover(&self.0.running) -= 1;
-        self.0.freed.notify_one();
-    }
-}
+static CALLS: Gate = Gate::new(MAX_CALLS);
 
 /// The identity a consent binds on a distribution: its default Linux user,
 /// its name and the id WSL gave it when it was installed, so installing it
@@ -412,7 +380,7 @@ impl DialedTransport for WslDevice {
         // The slot is held until the helper has started in place of the
         // start script.
         let admitted = CALLS
-            .admit(Instant::now() + CALL_ADMISSION)
+            .admit(Instant::now() + CALL_ADMISSION, None)
             .ok_or_else(|| {
                 EstablishError::Helper(format!(
                     "WSL is busy with {MAX_CALLS} other calls from Hide; the connection was not started"

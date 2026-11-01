@@ -99,6 +99,7 @@ pub mod workspace;
 pub mod workspace_control;
 pub mod workspace_views;
 pub(crate) mod worktree_cleanup;
+pub mod worktree_command;
 mod worktree_control;
 mod worktrees;
 mod zoneinfo;

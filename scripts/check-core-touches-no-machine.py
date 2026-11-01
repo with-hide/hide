@@ -16,6 +16,9 @@ import pathlib
 import re
 import sys
 
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
+import rust_scan  # noqa: E402
+
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 CORE = ROOT / "herdr-core" / "src"
 
@@ -156,84 +159,18 @@ FIXTURES = {
 
 def test_only(path: pathlib.Path) -> bool:
     tree = next(root for root in scanned() if path.is_relative_to(root))
-    relative = path.relative_to(tree).as_posix()
-    name = path.name
-    return (
-        name == "tests.rs"
-        or name.endswith("_tests.rs")
-        or "/tests/" in f"/{relative}"
-    )
-
-
-def blank(match: re.Match) -> str:
-    return re.sub(r"[^\n]", " ", match.group(0))
-
-
-def strip_comments_and_literals(text: str) -> str:
-    """Blanks comments, string literals and character literals, keeping
-    line numbers, so a brace in a string cannot end an item early and a path
-    in a message is not code."""
-    pattern = re.compile(
-        r"/\*.*?\*/"
-        r"|//[^\n]*"
-        r"|b?'(?:\\(?:x[0-9a-fA-F]{2}|u\{[0-9a-fA-F]{1,6}\}|.)|[^'\\\n])'"
-        r"|(?<![A-Za-z0-9_])b?r(#*)\".*?\"\1"
-        r"|b?\"(?:\\.|[^\"\\])*\"",
-        re.S,
-    )
-    return pattern.sub(blank, text)
+    return rust_scan.test_file(path.relative_to(tree).as_posix())
 
 
 def test_modules() -> set:
-    """Module files a parent declares behind `#[cfg(test)]` (or a cfg that
-    requires test), which only a test build compiles."""
-    found = set()
-    declaration = re.compile(
-        r"#\[cfg\((?:all\()?test\b[^\]]*\]\s*(?:#\[[^\]]*\]\s*)*(?:pub(?:\([^)]*\))?\s+)?mod\s+(\w+)\s*;"
-    )
-    for parent in (path for tree in scanned() for path in tree.rglob("*.rs")):
-        text = strip_comments_and_literals(parent.read_text())
-        directory = parent.parent if parent.name in ("lib.rs", "mod.rs", "main.rs") else parent.with_suffix("")
-        for match in declaration.finditer(text):
-            name = match.group(1)
-            for candidate in (directory / f"{name}.rs", directory / name / "mod.rs"):
-                if candidate.exists():
-                    found.add(candidate.relative_to(ROOT).as_posix())
-    return found
-
-
-def strip_test_items(text: str) -> str:
-    """Blanks every item behind `#[cfg(test)]`, keeping line numbers."""
-    out = list(text)
-    for match in re.finditer(r"#\[cfg\((all\()?test\b[^\]]*\]", text):
-        start = match.start()
-        position = match.end()
-        depth = 0
-        end = None
-        while position < len(text):
-            char = text[position]
-            if char == "{":
-                depth += 1
-            elif char == "}":
-                depth -= 1
-                if depth == 0:
-                    end = position + 1
-                    break
-            elif char == ";" and depth == 0:
-                end = position + 1
-                break
-            position += 1
-        if end is None:
-            continue
-        for index in range(start, end):
-            if out[index] != "\n":
-                out[index] = " "
-    return "".join(out)
+    """Module files a parent declares behind `#[cfg(test)]`, which only a
+    test build compiles."""
+    return rust_scan.test_modules(ROOT, scanned())
 
 
 def findings(path: pathlib.Path) -> list:
     relative = path.relative_to(ROOT).as_posix()
-    text = strip_test_items(strip_comments_and_literals(path.read_text()))
+    text = rust_scan.strip_test_items(rust_scan.strip(path.read_text()))
     found = []
     for number, line in enumerate(text.splitlines(), 1):
         for pattern, advice in BANNED:

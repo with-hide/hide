@@ -6,7 +6,6 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(super) struct PaneInput {
-    failed_terminal_id: Option<String>,
     id: String,
     label: Option<String>,
     identity: Option<String>,
@@ -16,7 +15,6 @@ pub(super) struct PaneInput {
 impl From<&PaneSnapshot> for PaneInput {
     fn from(p: &PaneSnapshot) -> Self {
         Self {
-            failed_terminal_id: p.failed_terminal_id.clone(),
             id: p.id.clone(),
             label: p.herdr_label.clone(),
             identity: p.identity_label.clone(),
@@ -149,14 +147,7 @@ fn subtree(
             pane_id: a.pane_id.clone(),
             depth: 0,
             target: true,
-            state: if inside
-                .iter()
-                .any(|pane| pane.id == a.pane_id && pane.failed_terminal_id.is_some())
-            {
-                "quiet"
-            } else {
-                a.state.subtree
-            },
+            state: a.state.subtree,
         });
         visit(
             a,
@@ -208,12 +199,10 @@ fn consequence(
     let mut decision = Decision::Close;
     for pane in panes {
         let agent = host.iter().find(|a| a.pane_id == pane.id);
-        let unknown = pane.failed_terminal_id.is_none()
-            && (pane.requires_close_status_check
-                || agent.is_some_and(|a| a.requires_close_status_check));
-        let confirmation = pane.failed_terminal_id.is_none()
-            && (pane.requires_close_confirmation
-                || agent.is_some_and(|a| a.requires_close_confirmation));
+        let unknown = pane.requires_close_status_check
+            || agent.is_some_and(|a| a.requires_close_status_check);
+        let confirmation = pane.requires_close_confirmation
+            || agent.is_some_and(|a| a.requires_close_confirmation);
         let label = pane.herdr_label.as_deref().unwrap_or(&pane.id);
         if unknown && !matches!(decision, Decision::StatusUnknown { .. }) {
             decision = Decision::StatusUnknown {

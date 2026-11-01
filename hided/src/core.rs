@@ -80,6 +80,17 @@ enum Command {
         command: herdr_core::pane_command::PaneCommand,
         reply: Sender<Result<herdr_core::pane_command::Prepared, String>>,
     },
+    WorktreeRemove {
+        device_id: String,
+        pane_id: String,
+        expected: Context,
+        command: herdr_core::worktree_command::WorktreeRemove,
+        reply: Sender<Result<u64, String>>,
+    },
+    WorktreeRemovalAnswer {
+        id: u64,
+        reply: Sender<Option<Result<serde_json::Value, String>>>,
+    },
     Mission {
         device_id: String,
         pane_id: String,
@@ -406,6 +417,53 @@ impl CoreHandle {
             })
             .map_err(|_| "pane_unavailable".to_owned())?;
         result.recv().map_err(|_| "pane_unavailable".to_owned())?
+    }
+
+    /// `hide workspace remove`: starts the removal on the owner thread,
+    /// then reads its record there again on each change the core announces,
+    /// until it ends. The wait runs on the caller's blocking task, which is
+    /// inside the daemon's runtime, and holds no lock between reads; a
+    /// removal that outlasts it keeps running, and the same command waits
+    /// for it again.
+    pub fn worktree_remove(
+        &self,
+        device: &str,
+        pane: &str,
+        expected: &Context,
+        command: herdr_core::worktree_command::WorktreeRemove,
+    ) -> Result<serde_json::Value, String> {
+        let unavailable = || "worktree_remove_worker_unavailable".to_owned();
+        // Subscribed before the start, so the change that ends the removal
+        // cannot land between a read and the wait for the next one.
+        let mut changes = self.notify.subscribe();
+        let runtime = tokio::runtime::Handle::try_current().map_err(|_| unavailable())?;
+        let (reply, result) = mpsc::channel();
+        self.commands
+            .send(Command::WorktreeRemove {
+                device_id: device.to_owned(),
+                pane_id: pane.to_owned(),
+                expected: expected.clone(),
+                command,
+                reply,
+            })
+            .map_err(|_| unavailable())?;
+        let id = result.recv().map_err(|_| unavailable())??;
+        let deadline = std::time::Instant::now() + herdr_core::worktree_command::REMOVE_WAIT;
+        loop {
+            let (reply, result) = mpsc::channel();
+            self.commands
+                .send(Command::WorktreeRemovalAnswer { id, reply })
+                .map_err(|_| unavailable())?;
+            if let Some(answer) = result.recv().map_err(|_| unavailable())? {
+                return answer;
+            }
+            let remaining = deadline.saturating_duration_since(std::time::Instant::now());
+            match runtime.block_on(tokio::time::timeout(remaining, changes.recv())) {
+                Err(_) => return Err("worktree_remove_pending".to_owned()),
+                Ok(Ok(()) | Err(broadcast::error::RecvError::Lagged(_))) => {}
+                Ok(Err(broadcast::error::RecvError::Closed)) => return Err(unavailable()),
+            }
+        }
     }
 
     /// Runs a Conductor's `hide mission` command on the owner thread.
@@ -1350,6 +1408,18 @@ fn owner_loop(
             } => {
                 let _ =
                     reply.send(core.prepare_pane_command(&device_id, &pane_id, &expected, command));
+            }
+            Command::WorktreeRemove {
+                device_id,
+                pane_id,
+                expected,
+                command,
+                reply,
+            } => {
+                let _ = reply.send(core.worktree_remove(&device_id, &pane_id, &expected, &command));
+            }
+            Command::WorktreeRemovalAnswer { id, reply } => {
+                let _ = reply.send(core.worktree_removal_answer(id));
             }
             Command::Mission {
                 device_id,

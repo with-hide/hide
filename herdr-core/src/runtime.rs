@@ -40,10 +40,12 @@ mod events;
 mod fetch;
 mod first_run;
 mod github_poll;
+mod gone_worktrees;
 pub(crate) mod group_starts;
 mod guardrails;
 mod herdr_profiles;
 mod herdr_takeover;
+mod hide_notes;
 mod home;
 mod hosts;
 mod inbound;
@@ -110,6 +112,7 @@ mod view_feedback;
 mod view_sessions;
 mod workspace_control;
 mod workspace_view;
+mod worktree_command;
 
 pub(crate) use fetch::{FetchJob, RemoteCheck};
 pub use hosts::WorkspaceRemoteRoute;
@@ -1970,6 +1973,10 @@ pub struct Runtime {
     /// reports Herdr's confirmation, so a repeat for the same project while
     /// that runs is a quiet no-op rather than a second round of closes.
     workspace_removals_in_flight: HashSet<String>,
+    /// Gone linked worktrees of this machine whose panes a close was started
+    /// for, by checkout path: one close per sighting, forgotten once the row
+    /// no longer stands gone with panes (`gone_worktrees.rs`).
+    gone_worktree_closes: BTreeSet<String>,
     next_task_operation_id: u64,
     next_repository_clone_id: u64,
     /// The clone `snapshot.repository_clone` reports, while its worker runs.
@@ -2602,6 +2609,7 @@ impl Runtime {
             next_worktree_removal_id: 0,
             unlisted_worktree_removal: None,
             workspace_removals_in_flight: HashSet::new(),
+            gone_worktree_closes: BTreeSet::new(),
             next_task_operation_id: 0,
             next_repository_clone_id: 0,
             repository_clone_job: None,
