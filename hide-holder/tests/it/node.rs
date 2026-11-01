@@ -950,7 +950,11 @@ fn a_starting_node_removes_the_old_version_folders_nothing_runs_from() {
     let current = source();
     let current_name =
         hide_kit::holders::version_name(crate::support::current_version(), &current).unwrap();
-    drop(folder.home.prepare(crate::support::current_version(), &current));
+    drop(
+        folder
+            .home
+            .prepare(crate::support::current_version(), &current),
+    );
 
     // An older build's folder a pane still runs from, by its record.
     let older = folder.home.prepare(0, &current);
@@ -1001,7 +1005,10 @@ fn a_starting_node_removes_the_old_version_folders_nothing_runs_from() {
         );
     }
     assert_eq!(
-        reports.wait_state("o1", "unsupported").exit_category.as_deref(),
+        reports
+            .wait_state("o1", "unsupported")
+            .exit_category
+            .as_deref(),
         Some("unsupported_holder_version")
     );
     assert!(holder.process.is_running(), "the older holder was ended");
@@ -1046,7 +1053,10 @@ fn a_node_logs_the_answers_its_holder_refused_with_the_pane_and_keeps_the_sessio
     let deadline = Instant::now() + HANG_LIMIT;
     while !text_of(&text).contains("asked") {
         let left = deadline.saturating_duration_since(Instant::now());
-        match frames.recv_timeout(left).expect("the burst's end was never drawn") {
+        match frames
+            .recv_timeout(left)
+            .expect("the burst's end was never drawn")
+        {
             SessionEvent::Frame { bytes, .. } => text.extend_from_slice(&bytes),
             SessionEvent::Ended { category, message } => {
                 panic!("the session ended ({category}): {message}")

@@ -93,17 +93,20 @@ fn manifest_digest(raw: &[u8]) -> String {
 /// The version `zig` says it is; `wanted` is the version the pins name, said
 /// when no Zig is there.
 fn zig_version(zig: &Path, wanted: &str) -> String {
-    let output = Command::new(zig).arg("version").output().unwrap_or_else(|err| {
-        if err.kind() == std::io::ErrorKind::NotFound {
-            panic!(
-                "hide-vt needs Zig {wanted}, and Zig was not found at {}. hide-vt builds \
+    let output = Command::new(zig)
+        .arg("version")
+        .output()
+        .unwrap_or_else(|err| {
+            if err.kind() == std::io::ErrorKind::NotFound {
+                panic!(
+                    "hide-vt needs Zig {wanted}, and Zig was not found at {}. hide-vt builds \
                  libghostty-vt with the Zig its prepared build inputs hold; run `{PREPARE}` once \
                  where the network is reachable, or set ZIG to a Zig {wanted} binary",
-                zig.display()
-            );
-        }
-        panic!("could not run {} version: {err}", zig.display());
-    });
+                    zig.display()
+                );
+            }
+            panic!("could not run {} version: {err}", zig.display());
+        });
     assert!(
         output.status.success(),
         "{} version failed: {}",

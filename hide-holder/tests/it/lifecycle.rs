@@ -197,7 +197,11 @@ fn a_program_that_exits_on_its_own_takes_what_it_left_with_it() {
         .into_iter()
         .filter_map(Running::of)
         .collect();
-    assert_eq!(left.len(), 2, "the program and its child run before it exits");
+    assert_eq!(
+        left.len(),
+        2,
+        "the program and its child run before it exits"
+    );
     std::fs::write(&go, b"go").unwrap();
     // The program may exit before a connection is made, or while one opens,
     // which is then told why; what is left of its tree is ended either way.

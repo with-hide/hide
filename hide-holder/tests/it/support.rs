@@ -11,8 +11,8 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use hide_holder_protocol::{
-    Answer, Ask, Capability, ClientMessage, Closed, Fragment, HolderMessage, MAX_READ_LINES, Notice,
-    OpenError, PROTOCOL_VERSION, Welcome, read_holder, write_client,
+    Answer, Ask, Capability, ClientMessage, Closed, Fragment, HolderMessage, MAX_READ_LINES,
+    Notice, OpenError, PROTOCOL_VERSION, Welcome, read_holder, write_client,
 };
 use hide_kit::holders::{Reservation, Source};
 use hide_platform::ipc::LocalStream;
@@ -310,8 +310,7 @@ impl Holder {
     /// A connection that accepts `accepts`, as a node of a later build does.
     pub fn open_accepting(&self, accepts: Vec<Capability>) -> Connection {
         let (stream, welcome) =
-            hide_holder_protocol::open(&self.socket, accepts, Instant::now() + HANG_LIMIT)
-                .unwrap();
+            hide_holder_protocol::open(&self.socket, accepts, Instant::now() + HANG_LIMIT).unwrap();
         Connection::new(stream, welcome, &self.socket)
     }
 

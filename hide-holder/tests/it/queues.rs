@@ -86,7 +86,10 @@ fn input_past_its_bound_closes_the_connection_that_sent_it_and_the_pane_runs_on(
     // 17 chunks of 64 KiB are past the 1 MiB that may wait; the holder may
     // close the stream before the last is written.
     for _ in 0..17 {
-        if connection.send(ClientMessage::Input(chunk.clone())).is_err() {
+        if connection
+            .send(ClientMessage::Input(chunk.clone()))
+            .is_err()
+        {
             break;
         }
     }
@@ -94,7 +97,10 @@ fn input_past_its_bound_closes_the_connection_that_sent_it_and_the_pane_runs_on(
     assert_eq!(closed.reason, CloseReason::InputQueueFull, "{closed:?}");
     assert!(closed.detail.contains("1048576"), "{closed:?}");
     assert_eq!(holder.logged("holder.input_queue_full"), 1);
-    assert!(holder.process.is_running(), "the pane ended with its connection");
+    assert!(
+        holder.process.is_running(),
+        "the pane ended with its connection"
+    );
     // The pane is there for the next connection.
     std::fs::write(&release, b"").unwrap();
     let mut again = holder.open();
@@ -123,9 +129,8 @@ fn answers_past_their_bound_are_refused_and_told_to_a_node_that_accepts_notices(
     // Refused, not waited for: the questions' end was read and drawn.
     connection.wait_for_text("asked");
 
-    let is_resumed = |notice: &hide_holder_protocol::Notice| {
-        notice.reason == NoticeReason::AnswersResumed
-    };
+    let is_resumed =
+        |notice: &hide_holder_protocol::Notice| notice.reason == NoticeReason::AnswersResumed;
     ask_until_resumed(&script, &mut connection, &release, |connection| {
         connection.notices.iter().any(is_resumed)
     });

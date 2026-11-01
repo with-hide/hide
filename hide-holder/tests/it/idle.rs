@@ -105,7 +105,11 @@ fn ran(before: &BTreeMap<u64, u64>, after: &BTreeMap<u64, u64>) -> u64 {
             None => 1,
         };
     }
-    total + after.keys().filter(|thread| !before.contains_key(thread)).count() as u64
+    total
+        + after
+            .keys()
+            .filter(|thread| !before.contains_key(thread))
+            .count() as u64
 }
 
 /// How long the holder must have run nothing for the work an event started

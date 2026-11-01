@@ -554,11 +554,9 @@ impl Holders {
     ) -> Result<LocalTerminals, String> {
         let holders = match holders {
             None => None,
-            Some((folders, source)) => Some(Arc::new(Self::open(
-                folders,
-                source,
-                Arc::clone(&reports),
-            )?)),
+            Some((folders, source)) => {
+                Some(Arc::new(Self::open(folders, source, Arc::clone(&reports))?))
+            }
         };
         let attacher = match &holders {
             Some(holders) => holders.attacher(herdr),
