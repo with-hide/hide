@@ -1183,16 +1183,23 @@ fn local_engine(
             "{} runs the core's own engine, which takes no Herdr socket",
             crate::env::HIDE_DEV_PANE_HOLDER
         )),
-        (Some(holders), None) => EngineHandle::own(
-            Arc::new(LocalPanes::new(
-                holders,
-                Arc::clone(service),
-                hide_node::terminal::engine_panes::interactive_shell(),
-            )),
-            state_dir.to_path_buf(),
-            core_home(options)?,
-        )
-        .map(Some),
+        (Some(holders), None) => {
+            let home = core_home(options)?;
+            // The engine's folders and Git are this machine's, read by a node
+            // answering for the core's home as the core's own node does.
+            let node = Arc::new(hide_node::Local::new(Some(home.clone())));
+            EngineHandle::own(
+                Arc::new(LocalPanes::new(
+                    holders,
+                    Arc::clone(service),
+                    hide_node::terminal::engine_panes::interactive_shell(),
+                )),
+                node,
+                state_dir.to_path_buf(),
+                home,
+            )
+            .map(Some)
+        }
         (None, Some(socket)) => Ok(Some(EngineHandle::herdr(hide_node::herdr(
             std::path::Path::new(socket),
         )))),

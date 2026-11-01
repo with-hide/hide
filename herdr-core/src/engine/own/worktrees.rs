@@ -11,46 +11,35 @@
 //! and opened in a workspace bound to it; a checkout made anywhere else, a
 //! Herdr worktree under `~/.herdr/worktrees` included, is opened where it is
 //! and never moved, since the agents working in it, their resume records and
-//! the folder trust entries name that path. Git runs on this machine
-//! (`hide_host::worktrees::git`), the machine this engine runs.
+//! the folder trust entries name that path. The core touches no machine
+//! (PRD core-host-node D-21): the node of the machine the panes run on reads
+//! each repository and runs its Git.
 
 use std::path::{Path, PathBuf};
+use std::time::Duration;
+
+use hide_node_link::cleanup::{CleanRemoval, RepositoryDirs};
+use hide_node_link::git::GitCommand;
+use hide_node_link::protocol::Call;
+use hide_node_link::worktrees::Registered;
 
 use super::topology::{Bound, Pane};
 use super::{Answer, Env, OwnEngine};
 use crate::engine::{CreatedWorktree, EngineError, OpenedWorktree};
+use crate::node_access::{LinkError, call_as, link_failure_code};
+
+/// How long a read of a repository waits for the node.
+const READ_WAIT: Duration = Duration::from_secs(30);
+/// How long a new worktree or a removal waits: the node's own bound for a
+/// change of a checkout (`git_run::CHANGE_DEADLINE`, ten minutes), and a
+/// little more.
+const CHANGE_WAIT: Duration = Duration::from_secs(10 * 60 + 30);
 
 fn refused(code: &str, message: String) -> EngineError {
     EngineError::Refused {
         code: code.to_owned(),
         message,
     }
-}
-
-fn git(cwd: &Path, arguments: &[&str]) -> Answer<String> {
-    hide_host::worktrees::git(cwd, arguments).map_err(|why| {
-        refused(
-            "git_failed",
-            format!("git {} in {}: {why}", arguments.join(" "), cwd.display()),
-        )
-    })
-}
-
-/// A path Git prints on one line, without the line's end.
-fn git_path(cwd: &Path, arguments: &[&str]) -> Answer<PathBuf> {
-    let printed = git(cwd, arguments)?;
-    let path = printed.trim_end_matches(['\r', '\n']);
-    if path.is_empty() {
-        return Err(refused(
-            "git_failed",
-            format!(
-                "git {} in {} printed no path",
-                arguments.join(" "),
-                cwd.display()
-            ),
-        ));
-    }
-    Ok(PathBuf::from(path))
 }
 
 fn native(path: &str) -> Answer<PathBuf> {
@@ -62,6 +51,11 @@ fn wire(path: &Path) -> Answer<String> {
     hide_platform::path::to_wire(path).map_err(|error| {
         EngineError::Request(format!("{} has no wire spelling: {error}", path.display()))
     })
+}
+
+/// A path as the node spelled it, in the engine's wire spelling.
+fn rewired(path: &str) -> Answer<String> {
+    wire(Path::new(path))
 }
 
 /// A branch as a folder name: its letters and digits in lower case, every
@@ -86,15 +80,11 @@ pub(super) fn path_slug(branch: &str) -> String {
     }
 }
 
-/// The repository a checkout at `path` belongs to, and the checkout's own
-/// top folder, in the binding's terms.
-fn binding(path: &Path) -> Answer<Bound> {
-    let common = git_path(
-        path,
-        &["rev-parse", "--path-format=absolute", "--git-common-dir"],
-    )?;
-    let top = git_path(path, &["rev-parse", "--show-toplevel"])?;
-    // A repository's shared folder is its main checkout's `.git`.
+/// The binding of the checkout `dirs` names: its repository, read from the
+/// shared Git folder, which is the main checkout's `.git`, and whether it is
+/// a linked worktree, whose own Git folder is not the shared one.
+fn bound(path: &str, dirs: RepositoryDirs) -> Answer<Bound> {
+    let common = PathBuf::from(&dirs.common_dir);
     let root = match common.file_name() {
         Some(name) if name == ".git" => {
             common.parent().map(Path::to_path_buf).ok_or_else(|| {
@@ -107,12 +97,9 @@ fn binding(path: &Path) -> Answer<Bound> {
         _ => {
             return Err(refused(
                 "not_a_checkout",
-                format!("{} belongs to a bare repository", path.display()),
+                format!("{path} belongs to a bare repository"),
             ));
         }
-    };
-    let same = |left: &Path, right: &Path| {
-        std::fs::canonicalize(left).ok() == std::fs::canonicalize(right).ok()
     };
     Ok(Bound {
         repo_key: wire(&common)?,
@@ -120,13 +107,40 @@ fn binding(path: &Path) -> Answer<Bound> {
             .file_name()
             .map(|name| name.to_string_lossy().into_owned())
             .unwrap_or_default(),
-        linked: !same(&top, &root),
+        linked: dirs.git_dir != dirs.common_dir,
         repo_root: wire(&root)?,
-        checkout_path: wire(&top)?,
+        checkout_path: rewired(&dirs.root)?,
     })
 }
 
 impl OwnEngine<'_> {
+    /// `call` answered by the node of this engine's machine, its failure
+    /// named by `what`.
+    fn ask<T: serde::de::DeserializeOwned>(
+        &self,
+        what: &str,
+        call: Call,
+        wait: Duration,
+    ) -> Answer<T> {
+        let node = self.node()?;
+        call_as(node.as_ref(), call, wait)
+            .map_err(|error| refused(&link_failure_code(&error), format!("{what}: {error}")))
+    }
+
+    /// The binding of the checkout that holds `path`.
+    fn binding(&self, path: &str) -> Answer<Bound> {
+        let dirs: Option<RepositoryDirs> = self.ask(
+            &format!("reading the repository of {path}"),
+            Call::Repository {
+                path: path.to_owned(),
+            },
+            READ_WAIT,
+        )?;
+        let dirs = dirs
+            .ok_or_else(|| refused("not_a_checkout", format!("{path} is in no Git repository")))?;
+        bound(path, dirs)
+    }
+
     /// A new worktree of the repository at `cwd` on `branch` (made from
     /// `base` when the branch is new), at `path` or in Hide's worktree
     /// folder, opened in a new workspace bound to it.
@@ -140,41 +154,60 @@ impl OwnEngine<'_> {
         path: Option<&str>,
         focus: bool,
     ) -> Answer<CreatedWorktree> {
-        let cwd = native(cwd)?;
-        let repository = binding(&cwd)?;
-        let root = native(&repository.repo_root)?;
+        let repository = self.binding(cwd)?;
         let place = match path {
-            Some(path) => native(path)?,
+            Some(path) => path.to_owned(),
             None => {
                 let home = self.home()?;
-                hide_kit::layout::engine_worktree(&home, &repository.repo_name, &path_slug(branch))
+                wire(&hide_kit::layout::engine_worktree(
+                    &home,
+                    &repository.repo_name,
+                    &path_slug(branch),
+                ))?
             }
         };
-        if let Some(parent) = place.parent() {
-            std::fs::create_dir_all(parent).map_err(|error| {
-                refused(
-                    "worktree_folder_failed",
-                    format!("{} could not be made: {error}", parent.display()),
-                )
-            })?;
-        }
-        let place_arg = place.to_string_lossy().into_owned();
-        let exists = !git(&root, &["branch", "--list", branch])?.trim().is_empty();
-        if exists {
-            git(&root, &["worktree", "add", &place_arg, branch])?;
-        } else {
-            let mut arguments = vec!["worktree", "add", "-b", branch, &place_arg];
-            if let Some(base) = base {
-                arguments.push(base);
+        // As the core reads a branch elsewhere: a refusal is a branch that is
+        // not there, which `worktree add -b` then makes or names Git's reason.
+        let exists = match self.node()?.call(
+            Call::Git {
+                root: repository.repo_root.clone(),
+                command: GitCommand::HasLocalBranch {
+                    branch: branch.to_owned(),
+                },
+            },
+            READ_WAIT,
+        ) {
+            Ok(_) => true,
+            Err(LinkError::Refused(_)) => false,
+            Err(error) => {
+                return Err(refused(
+                    &link_failure_code(&error),
+                    format!("reading whether {branch} is a branch: {error}"),
+                ));
             }
-            git(&root, &arguments)?;
-        }
-        let bound = binding(&place)?;
+        };
+        let _: String = self.ask(
+            &format!("adding the worktree {place}"),
+            Call::Git {
+                root: repository.repo_root.clone(),
+                command: GitCommand::WorktreeAdd {
+                    path: place.clone(),
+                    branch: branch.to_owned(),
+                    new_branch: !exists,
+                    base: base.filter(|_| !exists).map(str::to_owned),
+                },
+            },
+            CHANGE_WAIT,
+        )?;
+        let bound = self.binding(&place)?;
         let label = label.map_or_else(
             || {
-                place
-                    .file_name()
-                    .map(|name| name.to_string_lossy().into_owned())
+                native(&bound.checkout_path)
+                    .ok()
+                    .and_then(|path| {
+                        path.file_name()
+                            .map(|name| name.to_string_lossy().into_owned())
+                    })
                     .unwrap_or_default()
             },
             str::to_owned,
@@ -193,12 +226,17 @@ impl OwnEngine<'_> {
 
     /// Where the repository at `cwd` has `branch` checked out, if anywhere.
     pub(super) fn listed_worktree(&self, cwd: &str, branch: &str) -> Answer<Option<String>> {
-        let cwd = native(cwd)?;
-        let listed = git(&cwd, &["worktree", "list", "--porcelain"])?;
-        hide_host::worktrees::parse_worktree_list(&listed)
+        let listed: Vec<Registered> = self.ask(
+            &format!("listing the worktrees of {cwd}"),
+            Call::WorktreesRegistered {
+                root: cwd.to_owned(),
+            },
+            READ_WAIT,
+        )?;
+        listed
             .into_iter()
             .find(|worktree| worktree.branch.as_deref() == Some(branch))
-            .map(|worktree| wire(&worktree.path))
+            .map(|worktree| rewired(&worktree.path))
             .transpose()
     }
 
@@ -210,7 +248,7 @@ impl OwnEngine<'_> {
         _repository_root: &str,
         focus: bool,
     ) -> Answer<OpenedWorktree> {
-        let bound = binding(&native(path)?)?;
+        let bound = self.binding(path)?;
         if let Some(open) = self.topology().bound_to(&bound.checkout_path) {
             if focus {
                 self.topology().focus_tab(&open.tab)?;
@@ -242,7 +280,7 @@ impl OwnEngine<'_> {
     }
 
     /// Ends the workspace's panes, closes it, and removes the worktree it
-    /// was bound to, which Git refuses while it holds changes.
+    /// was bound to without force, which Git refuses while it holds changes.
     pub(super) fn drop_worktree(&self, workspace: &str) -> Answer<()> {
         let bound = self.topology().bound(workspace)?.ok_or_else(|| {
             refused(
@@ -264,12 +302,32 @@ impl OwnEngine<'_> {
             Err(error) => return Err(error),
         }
         self.changed();
-        let checkout = bound.checkout_path.clone();
-        git(
-            &native(&bound.repo_root)?,
-            &["worktree", "remove", &native(&checkout)?.to_string_lossy()],
-        )
-        .map(|_| ())
+        let removal: CleanRemoval = self.ask(
+            &format!("removing the worktree {}", bound.checkout_path),
+            Call::WorktreeRemoveClean {
+                root: bound.repo_root.clone(),
+                checkout: bound.checkout_path.clone(),
+                common: bound.repo_key.clone(),
+            },
+            CHANGE_WAIT,
+        )?;
+        if !removal.outcome.removed {
+            return Err(refused("worktree_kept", removal.outcome.message));
+        }
+        // The folder left its checkout at once; the node deletes it from the
+        // repository's trash, as a cleanup's removal does.
+        if !removal.trashed.is_empty() {
+            let _: usize = self.ask(
+                &format!("deleting the removed worktree {}", bound.checkout_path),
+                Call::DrainTrash {
+                    common: bound.repo_key,
+                    ours: removal.trashed,
+                    wait_ms: 0,
+                },
+                CHANGE_WAIT,
+            )?;
+        }
+        Ok(())
     }
 
     /// A new workspace in `checkout` named `label`, bound to `bound`.

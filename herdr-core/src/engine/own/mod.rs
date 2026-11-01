@@ -26,6 +26,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard, OnceLock, PoisonError};
 use std::time::Duration;
 
+use hide_node_link::NodeLink;
 use hide_node_link::holders::{HolderError, HolderStart, PaneHolders};
 
 use super::keys::PaneKey;
@@ -73,12 +74,15 @@ const UNKNOWN_SOURCE: &str = "unknown_read_source";
 
 /// Where a daemon's engine keeps its session and finds its home: the
 /// state folder its saved session lives in (`hide_kit::layout::
-/// engine_session`), and the home a restored pane whose folder is gone opens
-/// in and new worktrees go under.
-#[derive(Clone, Debug)]
+/// engine_session`), the home a restored pane whose folder is gone opens in
+/// and new worktrees go under, and the node of the machine its panes run on,
+/// which reads that machine's folders and runs its Git, since the core
+/// touches no machine (PRD core-host-node D-21).
+#[derive(Clone)]
 pub(crate) struct Place {
     pub(crate) state_dir: PathBuf,
     pub(crate) home: PathBuf,
+    pub(crate) node: Arc<dyn NodeLink>,
 }
 
 /// The engine and whatever it holds, shared by every gated view of it.
@@ -276,6 +280,18 @@ impl OwnEngine<'_> {
     /// What marks the restore finished.
     fn restore_gate(&self) -> Arc<Restored> {
         Arc::clone(&self.shared.restored)
+    }
+
+    /// The node of this engine's machine.
+    fn node(&self) -> Result<&Arc<dyn NodeLink>, EngineError> {
+        self.shared
+            .place
+            .as_ref()
+            .map(|place| &place.node)
+            .ok_or_else(|| EngineError::Refused {
+                code: "no_node".to_owned(),
+                message: "this engine was given no node to reach its machine".to_owned(),
+            })
     }
 
     /// The home this engine opens worktrees and lost folders under.
@@ -1467,10 +1483,13 @@ mod tests {
         let _ = quiet;
     }
 
+    /// A daemon's place under `root`, its machine read by a real node.
     fn place(root: &std::path::Path) -> Place {
+        let home = root.join("home");
         Place {
             state_dir: root.join("state"),
-            home: root.join("home"),
+            node: Arc::new(hide_node::Local::new(Some(home.clone()))),
+            home,
         }
     }
 

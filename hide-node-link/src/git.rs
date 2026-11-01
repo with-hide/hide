@@ -226,6 +226,17 @@ pub enum GitCommand {
         branch: String,
         key: BranchConfigKey,
     },
+    /// Adds a worktree at the absolute `path`, whose missing folders Git
+    /// makes, on `branch`: made from `base` (HEAD when none) when
+    /// `new_branch`, else the branch as it is. The core's own engine makes
+    /// its worktrees this way (PRD engine-bundle-3-core-owns D-28).
+    WorktreeAdd {
+        path: String,
+        branch: String,
+        new_branch: bool,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        base: Option<String>,
+    },
 }
 
 impl GitCommand {
@@ -346,6 +357,29 @@ impl GitCommand {
                 "--",
                 &format!("branch.{}.{}", branch_name(branch)?, key.name()),
             ]),
+            Self::WorktreeAdd {
+                path,
+                branch,
+                new_branch,
+                base,
+            } => {
+                let path = worktree_path(path)?;
+                let branch = branch_name(branch)?;
+                match (new_branch, base) {
+                    (true, Some(base)) => owned(&[
+                        "worktree",
+                        "add",
+                        "-b",
+                        branch,
+                        "--",
+                        path,
+                        revision_name(base)?,
+                    ]),
+                    (true, None) => owned(&["worktree", "add", "-b", branch, "--", path]),
+                    (false, None) => owned(&["worktree", "add", "--", path, branch]),
+                    (false, Some(_)) => Err("base_without_new_branch".into()),
+                }
+            }
         }
     }
 }
@@ -369,6 +403,15 @@ pub fn repository_path(path: &str) -> Result<&str, String> {
         || path.contains('\0')
     {
         return Err("invalid_repository_path".into());
+    }
+    Ok(path)
+}
+
+/// The folder a new worktree goes in: absolute on the node's machine, and
+/// no NUL.
+fn worktree_path(path: &str) -> Result<&str, String> {
+    if !std::path::Path::new(path).is_absolute() || path.contains('\0') {
+        return Err("invalid_worktree_path".into());
     }
     Ok(path)
 }
@@ -527,6 +570,50 @@ mod tests {
             .last()
             .map(String::as_str),
             Some("--")
+        );
+    }
+
+    /// A new worktree names an absolute folder after `--` and a branch git
+    /// cannot read as an option; a base goes only with a new branch.
+    #[test]
+    fn a_worktree_is_added_at_an_absolute_folder_on_a_branch_that_is_no_option() {
+        let add = |path: &str, branch: &str, new_branch: bool, base: Option<&str>| {
+            GitCommand::WorktreeAdd {
+                path: path.into(),
+                branch: branch.into(),
+                new_branch,
+                base: base.map(str::to_owned),
+            }
+            .args()
+        };
+        let place = if cfg!(windows) { "C:/w/-x" } else { "/w/-x" };
+        assert_eq!(
+            add(place, "feat/x", true, Some("main")).unwrap(),
+            ["worktree", "add", "-b", "feat/x", "--", place, "main"]
+        );
+        assert_eq!(
+            add(place, "feat/x", true, None).unwrap(),
+            ["worktree", "add", "-b", "feat/x", "--", place]
+        );
+        assert_eq!(
+            add(place, "feat/x", false, None).unwrap(),
+            ["worktree", "add", "--", place, "feat/x"]
+        );
+        assert!(
+            add("w/x", "feat/x", true, None).is_err(),
+            "a relative folder"
+        );
+        assert!(
+            add(place, "-b", true, None).is_err(),
+            "a branch read as an option"
+        );
+        assert!(
+            add(place, "feat/x", true, Some("--orphan")).is_err(),
+            "a base read as an option"
+        );
+        assert!(
+            add(place, "feat/x", false, Some("main")).is_err(),
+            "a base for a branch that is there"
         );
     }
 }

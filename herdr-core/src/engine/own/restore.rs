@@ -75,11 +75,10 @@ pub(super) fn start(engine: OwnEngine<'static>, saved: BTreeSet<String>) -> Resu
         .map_err(|error| format!("the session restore thread could not start: {error}"))
 }
 
-/// One saved pane to start again, with where and why.
+/// One saved pane to start again: its id and the folder it was saved in.
 struct Restart {
     pane: String,
     cwd: String,
-    notice: Option<String>,
 }
 
 impl OwnEngine<'static> {
@@ -119,7 +118,10 @@ impl OwnEngine<'static> {
             let restarts: Vec<Restart> = topology
                 .panes()
                 .filter(|(id, _)| saved.contains(*id) && !present.contains(id))
-                .map(|(id, pane)| restart(id, pane, home.as_deref()))
+                .map(|(id, pane)| Restart {
+                    pane: id.to_owned(),
+                    cwd: pane.cwd.clone(),
+                })
                 .collect();
             let orphans: Vec<String> = recovery
                 .present
@@ -129,7 +131,7 @@ impl OwnEngine<'static> {
                 .collect();
             (restarts, orphans)
         };
-        let failures = self.start_restarts(&restarts);
+        let failures = self.start_restarts(&restarts, home.as_deref());
         let closed: Vec<String> = {
             let mut topology = self.topology();
             let failed: BTreeSet<&str> = failures.iter().map(|(pane, _)| pane.as_str()).collect();
@@ -176,9 +178,10 @@ impl OwnEngine<'static> {
         self.changed();
     }
 
-    /// Starts every pane of `restarts`, [`STARTS_AT_ONCE`] at a time: the
-    /// panes that could not start, with why.
-    fn start_restarts(&self, restarts: &[Restart]) -> Vec<(String, String)> {
+    /// Starts every pane of `restarts`, [`STARTS_AT_ONCE`] at a time, each
+    /// in its folder or in `home` when the folder is gone: the panes that
+    /// could not start, with why.
+    fn start_restarts(&self, restarts: &[Restart], home: Option<&Path>) -> Vec<(String, String)> {
         let next = Mutex::new(restarts.iter());
         let failures = Mutex::new(Vec::new());
         std::thread::scope(|scope| {
@@ -192,12 +195,13 @@ impl OwnEngine<'static> {
                         else {
                             break;
                         };
+                        let (cwd, notice) = self.start_folder(&restart.cwd, home);
                         if let Err(error) = self.start_pane(
                             &restart.pane,
                             None,
-                            &restart.cwd,
+                            &cwd,
                             Env::new(),
-                            restart.notice.as_deref(),
+                            notice.as_deref(),
                         ) {
                             crate::diagnostic!(serde_json::json!({
                                 "component": "own_engine",
@@ -219,6 +223,25 @@ impl OwnEngine<'static> {
             .unwrap_or_else(std::sync::PoisonError::into_inner)
     }
 
+    /// Where a saved pane whose folder was `cwd` starts again: there, or in
+    /// `home` with a line saying why when the node finds no folder there. A
+    /// node that cannot answer reads as a folder that is gone
+    /// (`node_access::is_directory`), so the shell opens where it can.
+    fn start_folder(&self, cwd: &str, home: Option<&Path>) -> (String, Option<String>) {
+        let exists = self
+            .node()
+            .is_ok_and(|node| crate::node_access::is_directory(node.as_ref(), cwd));
+        match home.and_then(|home| hide_platform::path::to_wire(home).ok()) {
+            Some(home_cwd) if !exists => (
+                home_cwd,
+                Some(format!(
+                    "hide: the folder {cwd} is gone, so this shell opened in your home folder."
+                )),
+            ),
+            _ => (cwd.to_owned(), None),
+        }
+    }
+
     /// Every saved pane, when the node never said which run: none is
     /// started over a holder that may still run.
     fn mark_unrestored(&self, saved: &BTreeSet<String>, why: &str) {
@@ -231,29 +254,5 @@ impl OwnEngine<'static> {
             }
         }
         self.changed();
-    }
-}
-
-/// How the saved pane `pane` starts again: in its folder, or in `home` with
-/// a line saying why when the folder is gone.
-fn restart(id: &str, pane: &Pane, home: Option<&Path>) -> Restart {
-    let exists = hide_platform::path::from_wire(&pane.cwd)
-        .ok()
-        .is_some_and(|path| path.is_dir());
-    let home_cwd = home.and_then(|home| hide_platform::path::to_wire(home).ok());
-    match (exists, home_cwd) {
-        (false, Some(home_cwd)) => Restart {
-            pane: id.to_owned(),
-            notice: Some(format!(
-                "hide: the folder {} is gone, so this shell opened in your home folder.",
-                pane.cwd
-            )),
-            cwd: home_cwd,
-        },
-        _ => Restart {
-            pane: id.to_owned(),
-            cwd: pane.cwd.clone(),
-            notice: None,
-        },
     }
 }
