@@ -33,6 +33,8 @@ pub enum CommandKind {
         id: String,
         actor: Option<String>,
     },
+    /// `hide workspace remove <path> [--delete-branch] [--force]`.
+    WorkspaceRemove(crate::worktree_cli::RemoveCli),
     /// `hide agent archive <id> [--actor <id>]`.
     AgentArchive {
         id: String,
@@ -180,7 +182,9 @@ fn topic_usage(topic: &str) -> Option<String> {
         "diff" => DIFF_USAGE.to_owned(),
         "view" => VIEW_USAGE.to_owned(),
         "pane" => usage(crate::pane_cli::USAGE),
-        "workspace" => usage("hide workspace info\nhide workspace purpose <text>"),
+        "workspace" => usage(
+            "hide workspace info\nhide workspace purpose <text>\nhide workspace remove <path> [--delete-branch] [--force]",
+        ),
         "status" => "usage: hide status [--json]".to_owned(),
         "stop" => "usage: hide stop".to_owned(),
         "open" => OPEN_USAGE.to_owned(),
@@ -418,6 +422,14 @@ pub fn parse_args(args: &[String]) -> Result<CommandKind, String> {
                     .map(CommandKind::Pane)
                     .map_err(|reason| wrong(reason, crate::pane_cli::USAGE))
             }
+            Some("remove") => {
+                crate::cli_contract::admit(&args[1..]).map_err(|refusal| {
+                    format!("{refusal}\n{}", usage(crate::worktree_cli::USAGE))
+                })?;
+                crate::worktree_cli::parse(&args[3..])
+                    .map(CommandKind::WorkspaceRemove)
+                    .map_err(|reason| wrong(reason, crate::worktree_cli::USAGE))
+            }
             Some("status") => match (iter.next().map(String::as_str), iter.next()) {
                 (Some("--hook"), None) => Ok(CommandKind::StatusHook),
                 _ => Err("usage: hide workspace status --hook < report".to_owned()),
@@ -427,7 +439,10 @@ pub fn parse_args(args: &[String]) -> Result<CommandKind, String> {
                 (Some("--hook"), None) => Ok(CommandKind::WorkspaceHookInfo),
                 _ => Err("usage: hide workspace info [--hook]".to_owned()),
             },
-            _ => Err("usage: hide workspace info | purpose <text>".to_owned()),
+            _ => Err(
+                "usage: hide workspace info | purpose <text> | remove <path> [--delete-branch] [--force]"
+                    .to_owned(),
+            ),
         },
         Some("file") => parse_open(iter, true),
         Some("diff") => parse_open(iter, false),
@@ -797,6 +812,7 @@ pub fn run(kind: CommandKind) -> Result<(), String> {
                     | CommandKind::AgentArchive { .. }
                     | CommandKind::Device(_)
                     | CommandKind::Pane(_)
+                    | CommandKind::WorkspaceRemove(_)
                     | CommandKind::WorkspaceInfo
                     | CommandKind::WorkspaceHookInfo
                     | CommandKind::ObservationHook { .. }
@@ -833,6 +849,7 @@ pub fn run(kind: CommandKind) -> Result<(), String> {
         CommandKind::AgentArchive { id, actor } => crate::agent_cli::run_archive(&env, id, actor),
         CommandKind::Device(cli) => crate::device_cli::run(&env, &cli),
         CommandKind::Pane(cli) => crate::pane_cli::run(&env, cli),
+        CommandKind::WorkspaceRemove(cli) => crate::worktree_cli::run(&env, cli),
         CommandKind::Delivery(command) => {
             if matches!(&command, herdr_core::delivery::Command::Agents { .. }) {
                 crate::agent_cli::run(&env, command)

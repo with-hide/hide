@@ -51,4 +51,23 @@ if git grep -nE -- 'remove_worktree\(' "$cleanup" | grep -vqF -- ', false)'; the
     fail "the Overview cleanup must call remove_worktree without force"
 fi
 
-echo "Worktree removal forces only an accepted discard; the Overview cleanup never forces"
+# An agent-facing procedure removes a checkout Hide shows through `hide
+# workspace remove`, which closes its Herdr panes before Git removes the
+# folder; a raw `git worktree remove` leaves them open on a folder that is
+# gone. A procedure that shows the raw command to run (a line of a fenced
+# block, or the `git worktree remove <path>` form) fails here. Prose may still
+# name the raw command, as the rule itself does.
+procedures=$(git ls-files -- AGENTS.md CONTRIBUTING.md hided/assets/guide.md '.claude/skills/*.md' '.claude/skills/**/*.md')
+for file in $procedures; do
+    found=$(awk '
+        /^[[:space:]]*```/ { fenced = !fenced; next }
+        fenced && /^[[:space:]]*(\$[[:space:]]*)?git worktree remove/ { print FILENAME ":" NR ": " $0 }
+        /git worktree remove <[a-z]/ { print FILENAME ":" NR ": " $0 }
+    ' "$file")
+    if [ -n "$found" ]; then
+        echo "$found" >&2
+        fail "an agent procedure must remove a Hide checkout with hide workspace remove, not git worktree remove"
+    fi
+done
+
+echo "Worktree removal forces only an accepted discard; the Overview cleanup never forces; procedures remove through hide workspace remove"

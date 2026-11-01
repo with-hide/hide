@@ -917,6 +917,22 @@ The daemon admits the caller's pane and checkout on the core's owner thread (`Ru
 - Every refusal is one line, `{"ok":false,"error":{"code","message"}}`, whose message is the next step, with a non-zero exit; a limit is checked by the CLI before it asks the daemon and by the daemon again.
 - They work the same on macOS, Linux and Windows: each step is an engine call, and the command line is typed into whatever shell the pane runs.
 
+## Removing a worktree: `hide workspace remove`
+
+`hide workspace remove <path> [--delete-branch] [--force]` removes a linked worktree of the caller's machine the way the delete dialog does ([UI_BEHAVIOR.md](UI_BEHAVIOR.md)): it closes the checkout's panes in Herdr first, so Herdr's workspace for it closes with them, and then Git removes the folder.
+A plain `git worktree remove` deletes the folder and leaves that workspace and its panes open, and after a Herdr restart they come back with a directory that is gone; an agent removes a checkout Hide shows with this command instead (`.claude/skills/merge-green/SKILL.md`, step 5), and keeps `git worktree remove` for a temporary worktree Hide never opened, such as `scripts/premerge-check.py`'s.
+
+- It is the dialog's own removal, not a second one: the runtime admits the caller under its lock (`Runtime::worktree_remove_command`), answers the dialog's questions from the command's switches, and starts the same `remove_worktree` path with its deletion gate, the host's recheck, the pane close and Git (`Runtime::start_git_worktree_removal`, [ARCHITECTURE.md](ARCHITECTURE.md)).
+  The daemon then waits on the removal's record until it ends (`herdr_core::worktree_command::answer`) and answers `{"removed","repository","branch","branch_result"}`, where `branch_result` is `kept`, `deleted` or `remains` (Git refused to delete it).
+- The path is resolved from the working directory and followed through links when the folder exists, so it names the folder Git lists; a folder already gone is named as written, and a row whose folder Git no longer lists, which only its panes keep, is closed the same way, which is how a workspace a raw `git worktree remove` left behind is cleaned up.
+- Without `--force`, work the folder would lose (uncommitted or untracked files, a worktree or an ignored repository inside it, a status Git could not read) is refused `worktree_remove_needs_force`, naming what would be lost; `--force` accepts it, as ticking Discard does, and Git removes with `--force`.
+- `--delete-branch` takes the local branch with the folder; a branch with commits its base lacks is refused `worktree_remove_branch_unmerged` unless `--force` also accepts that loss (`git branch -D`), and a base or unnamed branch is refused `worktree_remove_branch_kept`.
+- An agent still working, starting, waiting, or asking a question or an approval in the worktree is refused `worktree_remove_agent_working` with its name; a finished, idle or stopped agent's pane closes with the worktree, as the dialog closes it.
+- The main checkout and a locked worktree are refused `worktree_remove_blocked`, the caller's own checkout `worktree_remove_own_checkout`, and another removal in progress `worktree_remove_busy`; nothing is closed for any refusal, and none of them reaches the operator's screen.
+- A removal that stopped partway answers how it ended, as the dialog's notice does: the host's reason (`worktree_remove_stopped`), programs still running in the folder after its panes closed (`worktree_remove_still_running`, with their names and pids), a pane that appeared or a worktree that changed while its panes closed, a close Herdr did not confirm, a host that could not be asked, or a result that never came.
+- Running the same command again converges: a removal of that path still running is waited for rather than started twice, and one that already ended answers its end; the daemon waits at most 280 s (`REMOVE_WAIT`), past the host's own bounds, and a removal that outlasts it answers `worktree_remove_pending` and keeps running.
+- On a connected device the path is that device's, its Herdr closes the panes and its helper rechecks and removes, as the dialog does there; the command needs no open shell and works the same on macOS, Linux and Windows.
+
 ## What runs now: `hide ps`
 
 `hide ps` prints every live pane and the agent in it as one tree: project, checkout, tab, then pane, with each delegated agent under the agent that delegated it.

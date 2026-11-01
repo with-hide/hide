@@ -1536,6 +1536,9 @@ enum ScopedRequest {
     /// `hide <path>`: a folder of the caller's machine opened as a project
     /// (`project_open`).
     ProjectOpen(String),
+    /// `hide workspace remove`: the delete dialog's removal of a worktree,
+    /// run by the core, which needs no shell.
+    WorktreeRemove(herdr_core::worktree_command::WorktreeRemove),
 }
 
 impl ScopedRequest {
@@ -1557,6 +1560,7 @@ impl ScopedRequest {
                 | Self::Device(..)
                 | Self::Pane(..)
                 | Self::ProjectOpen(..)
+                | Self::WorktreeRemove(..)
         )
     }
 }
@@ -1713,6 +1717,14 @@ async fn scoped_client_loop(
                         >(value["command"].clone())
                         .ok()
                         .map(ScopedRequest::Pane),
+                        Some("worktree_remove") => {
+                            serde_json::from_value::<herdr_core::worktree_command::WorktreeRemove>(
+                                value["command"].clone(),
+                            )
+                            .ok()
+                            .filter(herdr_core::worktree_command::WorktreeRemove::valid)
+                            .map(ScopedRequest::WorktreeRemove)
+                        }
                         Some("project_open") => value["path"]
                             .as_str()
                             .filter(|path| herdr_core::project_open::valid_path(path))
@@ -1883,6 +1895,15 @@ async fn scoped_client_loop(
                                     &path,
                                     &command_request_id,
                                 )?,
+                                ScopedRequest::WorktreeRemove(command) => {
+                                    core.worktree_remove(&cap.context.device_id, &cap.pane_id, &cap.context, command)
+                                        .map_err(|reason| {
+                                            let code = herdr_core::coordination::split_refusal(&reason).0;
+                                            let next = herdr_core::worktree_command::next_action(code)
+                                                .unwrap_or_else(|| crate::server::delivery_next_action(code));
+                                            (reason, next)
+                                        })?
+                                }
                                 ScopedRequest::Pane(command) => {
                                     let refusal = |reason: String| {
                                         let code = herdr_core::coordination::split_refusal(&reason).0;

@@ -112,6 +112,7 @@ mod view_feedback;
 mod view_sessions;
 mod workspace_control;
 mod workspace_view;
+mod worktree_command;
 
 pub(crate) use fetch::{FetchJob, RemoteCheck};
 pub use hosts::WorkspaceRemoteRoute;

@@ -45,16 +45,17 @@ Run `merge-order.py` again before the next merge, because each merge changes the
 
 ## 5. Remove the merged worktree
 
-After `gh pr view <number> --json state` says `MERGED`, find the worktree whose branch is the pull request's head branch:
+After `gh pr view <number> --json state` says `MERGED`, find the worktree whose branch is the pull request's head branch, and remove it through Hide, which closes its Herdr workspace and panes before Git removes the folder:
 
 ```sh
 git worktree list --porcelain
-git worktree remove <path>
-git branch -D <branch>
+hide workspace remove <path> --delete-branch
 ```
 
-Use `git worktree remove` without `--force`: when it refuses for uncommitted or untracked files, leave the worktree and name it in the report.
-Leave it too when it is the root checkout, your own working directory, or an agent is still running in it (`hide agent list`).
+Never use a raw `git worktree remove` for it: Git deletes the folder and leaves the checkout's Herdr workspace open, which comes back after a Herdr restart pointing at a directory that is gone.
+Run it without `--force`: when it refuses (`worktree_remove_needs_force` for uncommitted or untracked files, `worktree_remove_branch_unmerged` for a branch with commits the base lacks, `worktree_remove_agent_working` for an agent still at work there), leave the worktree and name it and the refusal in the report.
+It refuses the root checkout and your own working directory by itself.
+`scripts/premerge-check.py`'s own temporary `premerge-*` worktrees are not Hide's and the script removes them itself.
 
 ## 6. Watch main and report
 
