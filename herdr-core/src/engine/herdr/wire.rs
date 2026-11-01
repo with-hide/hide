@@ -1979,6 +1979,15 @@ pub(crate) fn pane_rows_params(pane_id: &str, lines: u32) -> Result<Value, Strin
 }
 
 /// One Herdr key-combo string sent to a pane.
+/// Text put into a pane as one paste, with no key after it.
+pub(crate) fn pane_paste_params(pane_id: &str, text: &str) -> Result<Value, String> {
+    params(req::PaneSendInputParams {
+        pane_id: pane_id.into(),
+        text: Some(text.into()),
+        keys: Vec::new(),
+    })
+}
+
 pub(crate) fn pane_key_params(pane_id: &str, key: &str) -> Result<Value, String> {
     params(req::PaneSendInputParams {
         pane_id: pane_id.into(),

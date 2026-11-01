@@ -37,6 +37,130 @@ pub struct AgentView {
     pub watch: Option<Watch>,
 }
 
+/// `hide agent show`: the registration and what its agent is doing now.
+#[derive(Serialize, JsonSchema)]
+pub struct AgentShow {
+    #[serde(flatten)]
+    pub agent: AgentView,
+    pub state: AgentState,
+}
+
+/// What an agent is doing now, as the sidebar, `hide agent list` and `hide
+/// ps` read it from the core, for a parent deciding what to do about a child.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, JsonSchema)]
+pub struct AgentState {
+    pub activity: Activity,
+    /// Where the agent is in its life, as `runtime` says; null for a spawn
+    /// whose agent never registered.
+    pub lifecycle: Option<Runtime>,
+    /// When the core last read the agent's state; the state holds until a
+    /// later read changes it. Absent when the core has never read it.
+    pub observed_at_unix_ms: Option<u64>,
+    /// What the agent waits on: null only when the core knows it waits on
+    /// nothing, `cause: unknown` when it cannot tell.
+    pub waiting: Option<Waiting>,
+    /// Input Hide typed into the agent that the agent has not recorded.
+    pub pending_inputs: Vec<PendingInput>,
+}
+
+/// Whether the agent is running a turn. A state the core cannot read now,
+/// a stale read or a device that does not answer, is `unknown`, never
+/// `stopped`.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum Activity {
+    Working,
+    Stopped,
+    Unknown,
+}
+
+/// What an agent waits on, by the core's own cause.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, JsonSchema)]
+pub struct Waiting {
+    pub cause: WaitCause,
+    /// Who can answer: `operator`, or the registration id of the agent
+    /// that should (a delegated child's parent). Absent when unknown.
+    pub on: Option<String>,
+    pub since_unix_ms: Option<u64>,
+    /// The letter the wait is about.
+    pub letter_id: Option<String>,
+    /// The spawn whose brief the wait is about.
+    pub spawn_id: Option<String>,
+    /// A short line saying what is asked, when the core has one. Copy for a
+    /// reader, never a reason to act: `cause` is.
+    pub text: Option<String>,
+}
+
+/// The causes an agent waits by: its own demand (docs/status-model.md, Where
+/// each axis comes from), a question the core laid on its row, or one of the
+/// escalation causes (Delegated escalation).
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum WaitCause {
+    Unknown,
+    Question,
+    Approval,
+    Blocked,
+    PlanReview,
+    MissionDecision,
+    MissionAttention,
+    InputUnconfirmed,
+    Draft,
+    ParentBlocked,
+    BellExhausted,
+    Undelivered,
+    ObserverUnconfirmed,
+}
+
+/// One input Hide typed that the agent has not recorded
+/// (docs/delivery.md, Input an agent did not take).
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, JsonSchema)]
+pub struct PendingInput {
+    pub kind: crate::delivery::typed::InputKind,
+    pub spawn_id: Option<String>,
+    pub request_id: Option<String>,
+    pub attempts: u8,
+    pub max_attempts: u8,
+    pub phase: InputPhase,
+    pub typed_at_unix_ms: u64,
+    /// When its parent or sender was told it is unconfirmed.
+    pub noticed_at_unix_ms: Option<u64>,
+}
+
+/// Where one typed input stands: typed and its record not yet owed or
+/// arrived, owed and missing, or missing with no typing left.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum InputPhase {
+    AwaitingRecord,
+    Unconfirmed,
+    Exhausted,
+}
+
+/// `hide agent show <spawn id or intent>` for a spawn whose agent has not
+/// registered: the spawn and its pane's state.
+#[derive(Serialize, JsonSchema)]
+pub struct SpawnShow {
+    pub spawn: SpawnRef,
+    pub state: AgentState,
+}
+
+/// A spawn, by its stable id, and the pane it made.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, JsonSchema)]
+pub struct SpawnRef {
+    pub id: String,
+    pub intent: String,
+    pub name: String,
+    pub kind: String,
+    /// The device the child is on when it is not the caller's own.
+    pub machine: Option<String>,
+    /// The pane as `hide pane send` takes it; absent until the spawn made
+    /// one.
+    pub pane: Option<String>,
+    /// The child's registration id once it registered.
+    pub child: Option<String>,
+}
+
 // Where the registration's agent is in its life, which every answer reads
 // from one decision (`coordination::life`): running, put to sleep by Hide
 // (waking, or not reopened, included), or ended.
@@ -209,6 +333,8 @@ pub struct Stopped {
 pub fn answer_schemas() -> Value {
     let mut schemas = json!({
         "agent": schemars::schema_for!(AgentView),
+        "agent_show": schemars::schema_for!(AgentShow),
+        "spawn_show": schemars::schema_for!(SpawnShow),
         "agent_list": schemars::schema_for!(AgentList),
         "agent_register_check": schemars::schema_for!(RegisterCheck),
         "ps": schemars::schema_for!(Ps),

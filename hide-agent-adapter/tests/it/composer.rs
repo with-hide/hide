@@ -350,3 +350,26 @@ fn omp_holds_a_brief_left_unsubmitted_by_its_first_line() {
     assert!(composer.holds(&held, brief));
     assert!(!composer.holds(&held, "Another brief.\nJOURNEY-31FD51C1"));
 }
+
+/// `hide pane send --paste` goes only to an agent the composer cell
+/// measured taking a paste whole: every measured agent on every system but
+/// Grok on Windows, which sends a paste partway (docs/INSTALL.md).
+#[test]
+fn every_measured_agent_takes_one_paste_except_grok_on_windows() {
+    for agent in [
+        AgentId::ClaudeCode,
+        AgentId::Codex,
+        AgentId::OpenCode,
+        AgentId::Pi,
+        AgentId::Omp,
+        AgentId::Antigravity,
+    ] {
+        assert!(
+            agent.takes_one_paste(false) && agent.takes_one_paste(true),
+            "{agent:?}"
+        );
+    }
+    assert!(AgentId::Grok.takes_one_paste(false));
+    assert!(!AgentId::Grok.takes_one_paste(true));
+    assert!(!AgentId::Cursor.takes_one_paste(false));
+}
