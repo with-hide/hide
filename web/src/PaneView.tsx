@@ -16,7 +16,7 @@ import { AgentRecordTitle } from "./components/agent-record-title";
 import { AgentMark } from "./AgentMark";
 import { agentProductName } from "./agentAdapters";
 import { PaneLetterButton } from "./components/letter-mark";
-import { StatusMark } from "./components/status-mark";
+import { LookButton, StatusMark } from "./components/status-mark";
 import { Button } from "./components/ui/button";
 import { Hint } from "./components/ui/tooltip";
 import { PaneDeskReturn } from "./DeskScreen";
@@ -201,6 +201,7 @@ export const PaneView = memo(function PaneView({
   const dispatch = actions.dispatch;
   const title = paneTitle(pane);
   const recordAgent = agentsByPane(usePaneAgents()).get(paneId);
+  const look = markSymbol === "look" ? recordAgent?.look ?? null : null;
   const move = usePaneMove();
   const moving = move?.mutationBlocked(pane.id) ?? false;
   const titleContent = <span data-pane-move-title="true" className="flex min-w-0 items-center">{recordAgent && recordAgent.identity_label === title ? <AgentRecordTitle agent={recordAgent} /> : <span className="min-w-0 truncate">{title}</span>}</span>;
@@ -386,6 +387,8 @@ export const PaneView = memo(function PaneView({
           </span>
         </Hint>
         <AncestorPath pane={pane} actions={actions} />
+        {/* The eye is the press that opens what it asks to look at, so it sits beside the record button rather than in it. */}
+        {look ? <LookButton label={markWords(t, { mark: "look", status_code: markStatus ?? "idle", look })} onLook={() => actions.openAgent(paneId, look)} data-pane-status-mark="look" /> : null}
         {agentKind ? (
           <PaneRecordButton
             paneId={paneId}
@@ -394,7 +397,7 @@ export const PaneView = memo(function PaneView({
             actions={actions}
             plain={
               <>
-                {markSymbol ? <StatusMark mark={markSymbol} label={markStatus ? markWords(t, { mark: markSymbol, status_code: markStatus }) : undefined} className={markTone} data-pane-status-mark={markSymbol} /> : null}
+                {markSymbol && !look ? <StatusMark mark={markSymbol} label={markStatus ? markWords(t, { mark: markSymbol, status_code: markStatus }) : undefined} className={markTone} data-pane-status-mark={markSymbol} /> : null}
                 <Hint label={agentProductName(agentKind)}><span data-pane-move-excluded="true" className="flex shrink-0"><AgentMark kind={agentKind} /></span></Hint>
                 <Hint label={`${title}\n${agentProductName(agentKind)}`} reveals>
                   <span data-pane-move-title="true" className="flex min-w-0 flex-1 items-center">{titleContent}<span className="sr-only">, {agentProductName(agentKind)}</span></span>
@@ -402,7 +405,7 @@ export const PaneView = memo(function PaneView({
               </>
             }
           >
-            {markSymbol ? <StatusMark mark={markSymbol} className={markTone} data-pane-status-mark={markSymbol} /> : null}
+            {markSymbol && !look ? <StatusMark mark={markSymbol} className={markTone} data-pane-status-mark={markSymbol} /> : null}
             {/* The logo names its product as the plain head's does (agent-mark-quiet B4, B6); the button's own name already says it. */}
             <span data-pane-move-excluded="true" className="flex shrink-0" role="img" aria-label={agentProductName(agentKind)}><AgentMark kind={agentKind} /></span>
             {titleContent}

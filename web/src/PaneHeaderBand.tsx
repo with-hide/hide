@@ -347,7 +347,8 @@ function usePaneChildren(paneId: string, agents: AgentRow[]): { children: PaneCh
 
 /**
  * The status mark, logo and title of an agent pane's head as one button once
- * the pane's session is known (PRD overview-device-tasks B22-B24): it shows
+ * the pane's session is known (PRD overview-device-tasks B22-B24), except a
+ * 볼 것 mark, which is a button of its own beside it (`LookButton`): it shows
  * that session's record in the lane, and a press on the record already shown
  * goes back to the list. A shell, or an agent whose session is not known yet,
  * keeps the plain head. The press never takes the keyboard from the terminal.
@@ -358,8 +359,8 @@ export function PaneRecordButton({ paneId, title, product, actions, children, pl
   // Only this machine's id, so the head redraws on its own pane's changes rather than on every snapshot.
   const session = agent ? sessionOfAgent(agent) : null;
   if (!session) return <>{plain}</>;
-  // The mark's words ride the button's name, which the mark sits inside (status-marks B36).
-  const words = agent ? [markWords(t, agent), recordWords(t, agent), agent.record_summary].filter(Boolean).join(" · ") : null;
+  // The mark's words ride the button's name, which the mark sits inside (status-marks B36); the 볼 것 eye sits outside and names itself.
+  const words = agent ? [agent.mark === "look" && agent.look ? null : markWords(t, agent), recordWords(t, agent), agent.record_summary].filter(Boolean).join(" · ") : null;
   return (
     // The button names the agent as the plain head does, then what a press
     // does. The pointer opens nothing here: the turn card opens from the
