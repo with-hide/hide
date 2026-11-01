@@ -417,6 +417,7 @@ A test whose assertion requires a pipe to have no readers creates and closes tha
 `windows-wsl` (the [WSL device lane](#wsl-device-lane)) is planned for a change to a crate the WSL link crosses (`WSL_CRATES`: `hide-platform`, `hide-node`, `hide-node-link`, `hide-host`), to the node command or to its test, and not for a crate that only consumes them: the core's decisions about a WSL device are unit tests in `herdr-core/src/runtime/tests/wsl_devices.rs`.
 Every lane is a job whose `if:` asks the plan, and `verify` passes only when every planned lane succeeded and every other lane was skipped.
 A planned lane that was skipped, failed or cancelled fails `verify`, so a wrong `if:` shows up as a red check rather than a lane quietly left out.
+The table names the lanes a path reaches; on a pull request the macOS jobs among them run only when it changes a macOS path, which [Where the macOS runners went](#where-the-macos-runners-went) owns.
 
 | Change | Lanes |
 | --- | --- |
@@ -442,7 +443,7 @@ A planned lane that was skipped, failed or cancelled fails `verify`, so a wrong 
 | Any `.github/workflows/` or `.github/actions/` change, or `scripts/ci-plan.py` | every lane, including `package` and `agent-clis`; a CI definition must exercise all its decisions |
 | `scripts/` the lanes call (`verify-*.sh`, `ci-flaky-report.py`, ...), the Herdr pin and schema and any contract `READERS` does not name, any `package.json`, lockfile, the workspace `Cargo.toml`, a type change, and any path no row above names | every lane but `package`, which only the package inputs add |
 
-The macOS choices below are data in `MACOS_LANE_INPUTS`, rather than additional job conditions.
+The macOS choices below are data in `MACOS_LANE_INPUTS`, rather than additional job conditions; on a pull request they apply only when it changes a macOS path.
 Registered desktop unit tests keep `checks` and `windows-check`; they do not select a macOS lane even when their names overlap an updater or package glob.
 Markdown under web/desktop e2e is policy-only in both planning and green-run reuse.
 Added, modified and deleted paths use the same coverage rules; unknown inputs and unsafe comparisons still broaden the plan.
@@ -511,32 +512,44 @@ This applies the merge policy's reasoning to the run itself ([CONTRIBUTING.md](.
 `ReuseGreenRun` and `LastGreenRun` in `scripts/tests/test_ci_plan.py` check the conditions, the fallbacks and the record.
 ### Where the macOS runners went
 
-The organization runs 20 jobs at once and five of them on macOS, so a pull request asks for a macOS runner only for what one proves:
+The organization runs 20 jobs at once and five of them on macOS, shared by every pull request of every repository, so a pull request takes a macOS runner only when it changes a macOS path (operator decision 2026-11-01).
+`MACOS_PATHS` and `MACOS_CODE` in `scripts/ci-plan.py` are that one list, each entry with the macOS job that alone proves it:
 
-| macOS job | Runs in a pull request | Otherwise guarded by |
-| --- | --- | --- |
-| `desktop e2e` (the Electron app, two shards) | a change to the app's own code: `desktop/`, the web shell, the `web/e2e` helpers, and a full plan | A crate change: main's push run, which plans every lane, and the nightly; nothing else it skips is code the app runs (a `web/e2e` spec, the phone page, documentation) |
-| `os contract (macOS)` | a change to `hide-platform` or `hide-herdr-client`, and a full plan | The nightly's `verify` call, which plans every lane and so runs all three legs |
-| `compile (macos)` and `package (macos)` (the packaged app) | a change to what goes into a package (`PACKAGE_PATHS`), not a full plan without one; a cold native release build in `compile (macos)`, beside the two Linux device helper builds described in [BUILD.md](BUILD.md#device-helper-release-bundles), then the packaged app's specs in `package (macos)` once both are done, one macOS runner at a time | The nightly's `package.yml` call on main, which found issue #412 a day after its cause merged; no other job starts the packaged app (its signed bundle, host, daemon and Herdr) |
-| the web `@platform` tests on macOS | never (no lane) | The same tests run in every pull request on Linux (`web-e2e` runs the whole suite) and on Windows (`windows-e2e`); the nightly runs them on macOS in `web e2e (macOS full)` |
-| the remote mailbox lane on macOS | never | The nightly's `remote mailbox (macOS)` job; a pull request runs the lane on Linux, and the Mac-only parts of the fixture (codesign of the staged binaries, the system's `sshd`, the macOS Herdr asset) are checked there |
-| the performance lane | never | The nightly's `performance (macOS)` job; a pull request's performance claim is still a matched local comparison ([PERFORMANCE_TESTING.md](PERFORMANCE_TESTING.md#the-nightly-performance-lane)) |
+| macOS path | The macOS job that proves it |
+| --- | --- |
+| A `hide-platform` file that holds `target_os = "macos"` code, or a deleted `hide-platform` file | Each system's form of the process, host, local stream, file and launchd login-item code is written there: `os contract (macOS)` runs its contract tests and a login agent on a real launchd, and `omp SDK (macos)` the SDK boundary on it. A file with no macOS code (the WSL listing, the Windows listeners, path spelling) is proved on Linux and Windows. |
+| `desktop/src/main/windowChrome.ts`, `menu.ts`, `notificationPermission.ts`, `editor.ts` and `updater.ts` | The desktop host's macOS forms (the title bar under the traffic lights, the app menu's macOS items, the notification permission, VS Code found by its bundle, the update from the zip), which only the macOS `desktop e2e` runs. |
+| `desktop/scripts/macos-*.mjs`, `package.mjs` and `installers.mjs`, `desktop/resources/entitlements/`, `desktop/resources/hide.icns`, `desktop/native/` | The packaged macOS app with its signing, entitlements, icon and Swift helper, which only `compile (macos)` and `package (macos)` build and start. |
+| `hide-vt/build.rs`, `hide-vt/build-inputs.json` | The macOS target and the macOS Zig and inputs of hide-vt's build, which `vt (macos)` builds. |
+| `contracts/herdr-bundle.json` | The pinned macOS Herdr asset, which only macOS jobs run. |
+| `pr.yml`, the workflows it calls for a macOS job (`desktop-e2e.yml`, `os-contract.yml`, `vt.yml`, `holder-restart.yml`, `omp-contract.yml`, `package.yml`), `.github/actions/` and `scripts/ci-plan.py` | The CI that defines and chooses those jobs, which a change to it must show still runs. |
 
-When `HIDE_MACOS_CI_RUNNER` is set, `vt (macos)`, `omp SDK (macos)` and `compile (macos)` run on the operator's Mac mini instead and take none of those five ([BUILD.md](BUILD.md#the-mac-mini-ci-runner)); the jobs above that start the app stay on them.
-A change to `herdr-core` or `hided` alone, outside `hided/build.rs` and `hided/src/cli.rs`, therefore starts no macOS lane.
+Such a pull request runs the macOS jobs its paths plan, as before: the macOS-only lanes `desktop-e2e` and `os-contract-macos` (`MACOS_ONLY_LANES`), and the macOS legs of `vt`, `holder-restart`, `omp-contract` and `package` (`MACOS_LEG_LANES`), which `pr.yml` adds through the plan's `macos` output.
+Every other pull request plans neither: the plan leaves the macOS-only lanes out, `verify` requires them skipped as it does any unplanned lane, and the others run their Linux and Windows legs.
+A web shell change, a desktop change outside the files above, a crate change and a desktop e2e spec therefore start no macOS job.
+A plan that cannot list the changed paths, or meets a change that is not an add, modify or delete, runs the macOS jobs, since it cannot show they are not needed.
+Main's push run and the nightly's `verify` call plan every lane with every macOS leg; the nightly also runs the macOS web `@platform` tests, the remote mailbox lane on macOS and the performance lane, which no `pr.yml` run starts.
+`MacosOnPullRequests` in `scripts/tests/test_ci_plan.py` checks the rule, the list against the tracked files and the legs `pr.yml` passes.
+
+The reason is the queue, measured by the merge lead over the last 40 green `pr.yml` runs, 2026-10-31 to 11-01, from each job's start and end times:
+
+- The 20 pull request runs that ran macOS jobs took a median 36 minutes (23 to 69); the same runs would have ended at a median 23 (17 to 27) without their macOS jobs.
+- A macOS job was the last to end in 24 of the 40 runs, a Windows job in 6 and a Linux job in 10.
+- The macOS jobs' own run time is short (desktop e2e 15 to 17 minutes, os contract 2, package 3 to 4, vt 5, omp 2); the rest was waiting for a runner, up to 48 minutes for a desktop e2e shard, 53 for the os contract and 36 to 42 for `package (macos)`.
+- Main's push runs took a median 55 minutes, which would be 26 without macOS.
+- When CI is quiet, the floor is Windows `package` and `windows e2e` at about 25 minutes.
+- Moving the screenless macOS jobs to the Mac mini ([BUILD.md](BUILD.md#the-mac-mini-ci-runner)) helped little, because the jobs that waited need a screen or a login session and stayed hosted.
+
+The accepted risk is a pull request that breaks only macOS merging green, with main's push run, or the next nightly for its macOS-only jobs, the first to show it.
+It happened before, when a web shell or crate change left `desktop e2e` out until issue #1288: #1106 (the session record, `session-work-ledger.spec.ts`) and #1147 (the file tree a lane close keeps, `right-lane.spec.ts`) kept main red 92 and 103 minutes on 2026-10-15, and of 400 failed runs from 2026-10-05 to 2026-10-27, 33 failed only in the macOS desktop suite.
+So a main push run that fails only in macOS jobs does not stop merges; it is fixed before the next release, whose tagged commit's main `verify` must pass, macOS included ([CONTRIBUTING.md](../CONTRIBUTING.md#when-mains-push-run-fails)).
+A pull request that wants its desktop specs run on macOS before it merges can run `gh workflow run nightly.yml --ref <branch> -f lane=macos`.
+The desktop `@platform` tests run on Windows in a pull request (`windows-desktop`, about six minutes) and on Linux only in the nightly.
+
 The remote mailbox lane includes `hided/tests/it/device_bootstrap.rs`: through the system `ssh` it installs the real helper and pin into a private account with no Herdr server, checks terminal startup after the kit, and removes the helper and ends the link before asking the surviving server for its session.
 Its second journey checks that a compatible running server connects its terminal services before the automatic kit pass.
 Both journeys confirm their private server and SSH exits before passing, including the server bootstrap detached from its helper.
 Its Herdr handoff tests also move a device server on the older Herdr 0.8.2 protocol with its pane still running.
-What only macOS shows for such a change (the desktop suite, the OS contract's macOS leg, the web `@platform` tests and the remote mailbox lane on macOS) is found by main's push run for the desktop suite and by the next nightly for the rest, which opens a `nightly-failure` issue when it fails; the cost is that delay.
-Until issue #1288 a web shell or crate change left `desktop e2e` out, and a desktop spec that asserted what the change did failed first on main's full run: #1106 (the session record, `session-work-ledger.spec.ts`) and #1147 (the file tree a lane close keeps, `right-lane.spec.ts`) kept main red 92 and 103 minutes on 2026-10-15.
-Such macOS failures still stop unrelated merges under [the main failure policy](../CONTRIBUTING.md#when-mains-push-run-fails); its development exception is limited to existing Windows-only failures.
-A web shell change keeps `desktop e2e`, which is what would have caught #1106.
-A crate change gives it up: on 2026-10-27, across 43 runs, a macOS job waited a median 13.1 minutes for a runner (90th percentile 40.3), and crate-only pull requests, 37% of pull request runs, took a median 40 minutes, against about 20 without the macOS jobs.
-The accepted risk is #1147's: a crate-only change that breaks a desktop spec turns main red until its push run fails and someone fixes it, with every merge waiting under the main failure policy.
-Of 400 failed runs from 2026-10-05 to 2026-10-27, the 33 that failed only in the macOS desktop suite all also changed `web/src`, `desktop/` or a shared path, which still plan it; none changed crates alone.
-Main's push run is the safety net for it.
-The desktop `@platform` tests run on Windows in a pull request (`windows-desktop`, about six minutes, on a Windows runner rather than a macOS one) and on Linux only in the nightly.
 
 ### WSL device lane
 
@@ -626,7 +639,7 @@ A run that plans every lane a pull request can plan starts at most 41 jobs, eigh
 | `windows e2e` | 1 | the reusable workflow no longer starts a `plan` job that only fanned the shard numbers out; a matrix picks its list by index |
 | `windows desktop` | 1 | the desktop `@platform` tests on Windows, the one job that starts the Electron app there in a pull request; it keeps the window it drew as the run's artifact |
 | `web e2e` (Linux) | 8 | parallel daemon and web shell builds, with the daemon job also downloading the zsh packages, and six shards dealt by recorded durations: six were cut to four in 2026-10-05 after queues at the 20-job limit, returned to six as the suite grew, and six now meet the 720-second budget using the refreshed twenty-run median ([Balancing the e2e shards](#balancing-the-e2e-shards)) |
-| `os contract` (Linux, Windows), `os contract (macOS)` | 3 | one job per system, the macOS leg planned only for its two crates |
+| `os contract` (Linux, Windows), `os contract (macOS)` | 3 | one job per system, the macOS leg planned only for its two crates and a macOS path |
 | `agy contract` (Windows) | 1 | agy's hook block, trust, conversations and Hide AI backend, and the real agy reading Hide's block, where the hook commands and install folder differ; `rust` runs the same tests on Linux and the nightly runs all three systems |
 | `omp SDK contract` (Linux, macOS, Windows) | 3 | both supported exact npm SDK versions on Bun 1.3.14, with synthetic stored login and localhost inference; the native SQLite, Bun runtime and package resolution need each system |
 | `agent journey` (Linux, Windows) | 2 | the journey on the compiled Claude and Codex stand-ins on Linux and its Windows forms (process jobs, private files, pane commands) on Windows, planned for the journey's code, its contract, the stand-ins and a crate's product code (about 4.4 minutes on Linux and half a minute on Windows, the median of 22 pull request runs to 2026-10-30); the nightly and a release run every system with the fake model lane ([VERIFICATION.md](VERIFICATION.md#agent-journey)) |
@@ -636,7 +649,8 @@ A run that plans every lane a pull request can plan starts at most 41 jobs, eigh
 | `desktop e2e` | 2 | the only macOS lane of the desktop app's own changes, in two shards that build in place, because the whole suite outgrew one job's step cap ([Balancing the e2e shards](#balancing-the-e2e-shards)) |
 | `package` (Windows, Linux, macOS) | 3 | `package.yml`'s jobs, planned only for what goes into a package; before the lane its Windows and Linux jobs ran on the same paths outside `verify` |
 
-The common runs are smaller: a `herdr-core` or `hided` change starts 20 jobs with none on macOS, a web shell change 15 with two on macOS, a desktop-only change 7 with two on macOS (8 for `desktop/src/main`, which adds `windows check`), a `hide-platform` change 26 with two on macOS, a `hide-kit` or `hide-agent-hooks` change 24 with one on macOS (`package`), and a documentation change 3, as does a push that reuses the pull request's last green run.
+The common runs are smaller: a `herdr-core` or `hided` change starts 20 jobs, a web shell change 13, a desktop-only change 5 (6 for `desktop/src/main`, which adds `windows check`), a `hide-platform` change 24, a `hide-kit` or `hide-agent-hooks` change 23, all with none on macOS, and a documentation change 3, as does a push that reuses the pull request's last green run.
+A macOS path adds its macOS jobs: a change to a macOS file of `desktop/src/main` starts 8 jobs with two on macOS, and one to `hide-platform`'s macOS code 26 with two.
 The median wall time and the share of runs whose Linux shards waited more than 10 minutes come from a measurement of the pull request runs after a change merges, taken the way issue #561 took its baseline; they are not in this guide because a pull request cannot prove them.
 The `plan` job's summary lists each lane with the paths that chose it.
 

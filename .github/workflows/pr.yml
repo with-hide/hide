@@ -34,19 +34,23 @@
 # jobs at once and five of them on macOS across every repository, and on
 # 2026-09-28 one run held all five for 26 minutes, so a second pull request
 # waited up to 70 minutes before its lanes started. A pull request therefore
-# asks for a macOS runner only for what a macOS runner alone proves: `desktop
-# e2e` for a change to the app's own code (the desktop host and the web shell,
-# issue #1288), `os contract (macos)` for a change to `hide-platform` or
-# `hide-herdr-client`, `vt (macos)` for a change to hide-vt's Zig build, and `package`'s macOS job for a change to what goes into
-# a package, the one job that starts the packaged app such a change builds.
+# takes a macOS runner only when it changes a macOS path (`scripts/ci-plan.py`,
+# MACOS_PATHS and MACOS_CODE: the macOS forms of `hide-platform` and the
+# desktop host, the packaged macOS app's scripts and resources, hide-vt's Zig
+# build, the Herdr pin and the CI that defines these jobs; operator decision
+# 2026-11-01, docs/TESTING.md, Where the macOS runners went). Such a pull
+# request runs the macOS jobs its paths plan: `desktop e2e`, `os
+# contract (macos)`, and the macOS legs of `vt`, `holder restart`, `omp SDK`
+# and `package` (`plan`'s `macos` output). Every other pull request, a web shell change
+# included, runs none, and main's push run and the nightly run them all; a
+# macOS-only failure there does not stop merges but is fixed before the next
+# release (CONTRIBUTING.md, When main's push run fails).
 # `vt`, `omp SDK` and `compile (macos)`, which need no screen, keychain or
 # login session, run on the operator's Mac mini instead when the repository
 # variable HIDE_MACOS_CI_RUNNER names it, except for a fork's pull request
 # (`plan`'s `self-hosted-macos` output; docs/BUILD.md, The Mac mini CI runner).
-# Core and daemon changes add no macOS job: main's push run runs `desktop e2e`
-# for them (#1147, which broke a desktop spec from herdr-core alone, is the
-# accepted risk), and `nightly.yml` the macOS web `@platform` tests, the macOS
-# mailbox lane and the rest of the OS contract.
+# `nightly.yml` runs the macOS web `@platform` tests, the macOS mailbox lane
+# and the performance lane, which no `pr.yml` run starts.
 # Everything else runs on Linux: the Rust suite, the unit suites, the invariant
 # checks, the whole web end-to-end, dealt out to six shards by `web-e2e.yml`,
 # and the remote mailbox lane over private SSH (`remote-mailbox`).
@@ -122,6 +126,11 @@ jobs:
       lanes: ${{ steps.plan.outputs.lanes }}
       full: ${{ steps.plan.outputs.full }}
       rust-packages: ${{ steps.plan.outputs.rust-packages }}
+      # Whether this run takes a macOS runner: `true` for main's push run, the
+      # nightly and a pull request that changes a macOS path
+      # (`scripts/ci-plan.py`, MACOS_PATHS); otherwise the plan leaves the
+      # macOS-only lanes out and the lanes below run without their macOS leg.
+      macos: ${{ steps.plan.outputs.macos }}
       # Where `vt`, `omp SDK contract` and `compile (macos)` run their macOS
       # job: the repository variable HIDE_MACOS_CI_RUNNER, a JSON `runs-on`
       # value naming the Mac mini's CI runner (docs/BUILD.md, The CI runner
@@ -675,8 +684,9 @@ jobs:
     permissions:
       contents: read
 
-  # Its macOS leg, for a change to `hide-platform` or `hide-herdr-client` (and
-  # a full plan); the nightly runs it for every other change.
+  # Its macOS leg, for a pull request that changes `hide-platform`'s macOS
+  # code or another macOS path, and every full plan of main's push run and
+  # the nightly.
   os-contract-macos:
     name: os contract (macOS)
     needs: plan
@@ -689,8 +699,9 @@ jobs:
     permissions:
       contents: read
 
-  # The terminal parser on all three systems, for a change to hide-vt or the
-  # scripts that prepare and check its Zig build (see vt.yml).
+  # The terminal parser on each system, for a change to hide-vt or the
+  # scripts that prepare and check its Zig build (see vt.yml); its macOS leg
+  # only when `plan` says the run takes macOS.
   vt:
     name: vt
     needs: plan
@@ -699,22 +710,22 @@ jobs:
     secrets:
       HIDE_ISSUES_APP_KEY: ${{ secrets.HIDE_ISSUES_APP_KEY }}
     with:
-      systems: '["linux","macos","windows"]'
+      systems: ${{ needs.plan.outputs.macos == 'true' && '["linux","macos","windows"]' || '["linux","windows"]' }}
       macos-runner: ${{ needs.plan.outputs.self-hosted-macos }}
     permissions:
       contents: read
 
-  # Every pinned agent CLI in a pane holder across a node restart, on all
-  # three systems, for a change to the holder, the node's holder code, the
-  # pins or the lane's scripts (see holder-restart.yml); the nightly runs it
-  # every night.
+  # Every pinned agent CLI in a pane holder across a node restart, on each
+  # system, for a change to the holder, the node's holder code, the pins or
+  # the lane's scripts (see holder-restart.yml), its macOS leg only when
+  # `plan` says the run takes macOS; the nightly runs it every night.
   holder-restart:
     name: holder restart
     needs: plan
     if: contains(fromJSON(needs.plan.outputs.lanes), 'holder-restart')
     uses: ./.github/workflows/holder-restart.yml
     with:
-      systems: '["linux","macos","windows"]'
+      systems: ${{ needs.plan.outputs.macos == 'true' && '["linux","macos","windows"]' || '["linux","windows"]' }}
     permissions:
       contents: read
 
@@ -728,7 +739,7 @@ jobs:
     if: contains(fromJSON(needs.plan.outputs.lanes), 'omp-contract')
     uses: ./.github/workflows/omp-contract.yml
     with:
-      systems: '["linux","macos","windows"]'
+      systems: ${{ needs.plan.outputs.macos == 'true' && '["linux","macos","windows"]' || '["linux","windows"]' }}
       macos-runner: ${{ needs.plan.outputs.self-hosted-macos }}
     permissions:
       contents: read
@@ -774,9 +785,9 @@ jobs:
       contents: read
 
   # The Electron app on macOS, the system it is written against: the whole
-  # suite, for a change to the desktop host or the web shell, and in every
-  # full plan (main's push run, the nightly), which is where a crate change
-  # meets it.
+  # suite, for a pull request that changes the desktop host or the web shell
+  # and a macOS path, and in every full plan of main's push run and the
+  # nightly, which is where every other change meets it.
   desktop-e2e:
     name: desktop e2e
     needs: plan
@@ -845,7 +856,7 @@ jobs:
     with:
       # A pull request's package reports a version no release uses.
       version: 0.0.0-ci.${{ github.run_number }}
-      include-macos: true
+      include-macos: ${{ needs.plan.outputs.macos == 'true' }}
       macos-compile-runner: ${{ needs.plan.outputs.self-hosted-macos }}
       web-typechecked: ${{ contains(fromJSON(needs.plan.outputs.lanes), 'checks') }}
       # A pull request checks the package, not the optimizer; main's push run

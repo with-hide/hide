@@ -211,8 +211,13 @@ Each merge changes the counts, so run the script again before the next merge; th
 
 ### When main's push run fails
 
-When main's push run fails, merge nothing else until main is green again, except the change that makes it green or an unrelated development change under the Windows exception below.
+When main's push run fails, merge nothing else until main is green again, except the change that makes it green, an unrelated development change under the Windows exception below, or any change while only macOS jobs failed (below).
 Revert the merge the failure points to in a pull request of its own (`git revert -m 1 <merge commit>`), then land the change again from the latest main in a new pull request; fix forward instead only when the fix is smaller than the revert and ready now.
+
+A main push run that fails only in macOS jobs does not stop merges.
+Pull requests run no macOS job unless they change a macOS path (operator decision 2026-11-01; [docs/TESTING.md](docs/TESTING.md#where-the-macos-runners-went) owns the paths and the measurement behind it), so main's push run and the nightly are where a macOS-only break first shows, and the operator accepted that it does.
+The failed jobs must all be macOS jobs (`desktop e2e`, `os contract (macOS)`, or a `(macos)` leg of `vt`, `omp SDK` or `package`) and checks that only aggregate their results; a Linux or Windows job failing in the same run keeps the freeze.
+Whoever merges records the failed run and opens a development issue for it in with-hide/hide-private, and the fix, a revert or a forward fix as above, lands before the next release, whose tagged commit's main `verify` must pass, macOS included.
 
 During development, an existing Windows-only failure need not stop unrelated pull requests when all of these hold:
 
@@ -222,8 +227,8 @@ During development, an existing Windows-only failure need not stop unrelated pul
 
 Windows checks keep running, and their failures remain failures for the owner to resolve.
 Whoever merges still watches main's containing push run; a new failure must meet these same conditions for unrelated merges to continue.
-Before a stable or preview release, the exact tagged commit's full push/main `verify` must pass, Windows included, and all [release gates](#releases) must pass.
-The development exception grants no release waiver; the existing release workflow enforces that boundary.
+Before a stable or preview release, the exact tagged commit's full push/main `verify` must pass, Windows and macOS included, and all [release gates](#releases) must pass.
+Neither the Windows exception nor the macOS rule grants a release waiver; the existing release workflow enforces that boundary.
 
 GitHub's merge queue was turned on 2026-10-05 and off again the next day: with the organization's 20 concurrent jobs, a pull request waited a median 47.6 minutes from ready to merged, of which 12.6 were its own runs.
 Its ruleset is kept disabled and `verify` no longer runs on a merge group.
