@@ -819,6 +819,7 @@ impl Runtime {
         self.resync_navigator_focus();
         self.rebuild_tab_strips();
         self.refresh_agent_scopes();
+        self.close_gone_worktrees();
         previous != self.snapshot.navigator || previous_card != self.snapshot.card
     }
     /// Puts one strip entry at a new place in its checkout's strip.

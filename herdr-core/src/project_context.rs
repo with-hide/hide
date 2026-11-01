@@ -411,7 +411,7 @@ pub(crate) fn refresh_device_folds(
 
 /// The checkout holds a tab the operator named, which stays on its line
 /// with or without agents (docs/UI_BEHAVIOR.md, Sidebar hierarchy).
-fn holds_named_tab(checkout: &CheckoutSnapshot) -> bool {
+pub(crate) fn holds_named_tab(checkout: &CheckoutSnapshot) -> bool {
     checkout
         .tabs
         .iter()
