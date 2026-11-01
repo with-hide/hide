@@ -92,9 +92,11 @@ enum Asked {
 /// A question the core asks, and when it was asked.
 type CoreAsk = (Asked, u64, AskSubject);
 
-/// What laying a core question changed on a row: the question it put
-/// there, what it asks, and the demand the row had before.
+/// What laying a core question changed on a row: whom the questions laid
+/// there were asked of, the question it put there, what it asks, and the
+/// demand the row had before.
 struct Laid {
+    asked: Asked,
     turn: hide_session::turns::UserTurnFact,
     subject: AskSubject,
     demand: String,
@@ -916,10 +918,11 @@ impl Runtime {
                 Asked::Session(asked) => session.as_ref() == Some(asked),
                 Asked::Pane(pane) => *pane == agent.pane_id,
             });
-            let Some((_, since, subject)) = mine.next() else {
+            let Some((asked, since, subject)) = mine.next() else {
                 continue;
             };
-            let (since, subject, more) = (*since, subject.clone(), mine.count());
+            let (asked, since, subject, more) =
+                (asked.clone(), *since, subject.clone(), mine.count());
             // The question holds the row as a native one does; it carries
             // no words, only its subject.
             let turn = hide_session::turns::UserTurnFact {
@@ -929,6 +932,7 @@ impl Runtime {
             self.plans.laid.insert(
                 agent.pane_id.clone(),
                 Laid {
+                    asked,
                     turn: turn.clone(),
                     subject: subject.clone(),
                     demand: std::mem::replace(&mut agent.demand, "question".to_owned()),
@@ -1058,14 +1062,25 @@ impl Runtime {
         })
     }
 
-    /// Whether a Needs You row stands for a node's attention.
+    /// Whether a node's attention is on a Needs You row shown now: laid on
+    /// the Conductor's or the worker's row, first or counted behind its
+    /// first question. A row that works, or holds its own question, carries
+    /// none, and a registration with no row shown carries none, so the
+    /// mission is its own Needs You item then (PRD mission-node-simple B14).
     pub(super) fn mission_attention_has_row(
         &self,
         ledger: Option<&crate::delivery::ledger::Ledger>,
         mission: &crate::missions::Mission,
         node: &crate::missions::MissionNode,
     ) -> bool {
-        self.mission_attention_row(ledger, mission, node).is_some()
+        self.mission_attention_row(ledger, mission, node)
+            .is_some_and(|asked| self.plans.laid.values().any(|laid| laid.asked == asked))
+    }
+
+    /// The rows that carry a core question now, which decide where a
+    /// mission's attention shows: an input of the mission views.
+    pub(super) fn laid_panes(&self) -> Vec<String> {
+        self.plans.laid.keys().cloned().collect()
     }
 
     /// `plan` as the screen draws it from `pane`, each handed step's child

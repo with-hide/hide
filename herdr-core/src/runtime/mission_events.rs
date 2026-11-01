@@ -690,7 +690,7 @@ impl Runtime {
 
     /// The doorbell's thread changed what a mission shows; a command's
     /// change is announced by the event that made it.
-    fn announce_missions(&self) {
+    pub(super) fn announce_missions(&self) {
         if let Some(context) = &self.worker_context {
             context.notifier.notify();
         }

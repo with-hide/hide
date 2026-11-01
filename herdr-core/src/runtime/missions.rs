@@ -344,6 +344,9 @@ struct ViewsMadeFrom {
     until: u64,
     /// The missions' workers Hide holds asleep, which their cards read.
     sleeping: crate::coordination::Sleeping,
+    /// The rows carrying a core question, which decide whether a node's
+    /// attention is on a row (`on_row`).
+    laid: Vec<String>,
     made: bool,
 }
 
@@ -2419,6 +2422,7 @@ impl Runtime {
         let sleeping = self.sleeping_registrations(std::iter::once(()).flat_map(|()| {
             worker_records(ledger.as_deref(), self.missions.book.missions.iter()).into_values()
         }));
+        let laid = self.laid_panes();
         let before = &self.missions.views;
         let same_ledger = match (&before.ledger, &ledger) {
             (Some(weak), Some(ledger)) => std::ptr::eq(weak.as_ptr(), Arc::as_ptr(ledger)),
@@ -2430,7 +2434,8 @@ impl Runtime {
             && before.plans_edit == self.plans.edit
             && before.github_edit == self.missions.github_edit
             && before.stale == stale
-            && before.sleeping == sleeping;
+            && before.sleeping == sleeping
+            && before.laid == laid;
         if closed_kept
             && same_ledger
             && before.present == present
@@ -2492,6 +2497,7 @@ impl Runtime {
             unreadable,
             until,
             sleeping,
+            laid,
             made: true,
         };
     }

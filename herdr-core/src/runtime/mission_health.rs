@@ -1499,6 +1499,11 @@ impl Runtime {
     /// for the next pass past the cap.
     pub(crate) fn claim_mission_notices(&mut self) -> Vec<crate::delivery::worker::HumanNotice> {
         use crate::delivery::worker::{HumanNotice, HumanNoticeKind};
+        // Whether a row carries a raise is what is laid on the rows, so the
+        // questions are laid as they stand before any is judged unshown.
+        if self.refresh_plan_reviews() {
+            self.announce_missions();
+        }
         let ledger = self.delivery_state().ok();
         let mut claims = Vec::new();
         for (at, mission) in self.missions.book.missions.iter().enumerate() {

@@ -4609,6 +4609,7 @@ fn a_raise_with_no_row_to_lay_it_on_is_told_to_the_operator_once() {
     use crate::missions::AttentionReason;
     let fixture = conducting();
     let mut runtime = fixture.runtime.lock().unwrap();
+    runtime.snapshot.navigator.agents = vec![conductor_row()];
     running(&mut runtime);
     let now = crate::runtime::unix_milliseconds();
     let mission = runtime.missions.book.get_mut("mission-1").unwrap();
@@ -4635,6 +4636,7 @@ fn a_raise_with_no_row_to_lay_it_on_is_told_to_the_operator_once() {
     assert!(runtime.claim_mission_notices().is_empty());
 
     runtime.delivery_observations.remove("sender");
+    runtime.snapshot.navigator.agents.clear();
     let notices = runtime.claim_mission_notices();
     assert_eq!(
         notices
@@ -4665,6 +4667,7 @@ fn a_mission_no_row_carries_is_counted_in_its_devices_needs_you() {
     use crate::missions::AttentionReason;
     let fixture = conducting();
     let mut runtime = fixture.runtime.lock().unwrap();
+    runtime.snapshot.navigator.agents = vec![conductor_row()];
     running(&mut runtime);
     let now = crate::runtime::unix_milliseconds();
     let mission = runtime.missions.book.get_mut("mission-1").unwrap();
@@ -4713,15 +4716,117 @@ fn a_mission_no_row_carries_is_counted_in_its_devices_needs_you() {
     let (asks, overview, needs_you, on_device) = counted(&mut runtime);
     assert!(asks.is_empty(), "the Conductor's row carries it: {asks:?}");
     runtime.delivery_observations.remove("sender");
+    runtime.snapshot.navigator.agents.clear();
     let (asks, after_overview, after_needs_you, after_device) = counted(&mut runtime);
     assert_eq!(asks, ["mission-1"]);
-    assert_eq!(after_overview, overview + 1);
-    assert_eq!(after_needs_you, needs_you + 1);
+    // One item either way: the Conductor's row while it carried the raise,
+    // the mission once no row does.
+    assert_eq!((overview, needs_you), (1, 1));
+    assert_eq!((after_overview, after_needs_you), (1, 1));
     let (before, after) = (on_device.unwrap(), after_device.unwrap());
-    assert_eq!(after.0, ["mission-1"]);
-    assert_eq!((after.1, after.2), (before.1 + 1, before.2 + 1));
+    assert_eq!((before.1, before.2), (1, 1));
+    assert_eq!(after, (vec!["mission-1".to_owned()], 1, 1));
     // Counted once however often it is published.
     assert_eq!(counted(&mut runtime).1, after_overview);
+}
+
+/// PRD mission-node-simple B14, review 4 P1-2: a raise that reached the
+/// operator is on a row only while a row shown now carries it. A resting
+/// Conductor's row does; a working Conductor's row, a worker whose
+/// registration stands with no row shown, and no row at all do not, and
+/// then the mission is its device's own Needs You item and the operator is
+/// told by notice.
+#[test]
+fn a_raise_is_on_a_row_only_while_a_row_shown_carries_it() {
+    use crate::missions::AttentionReason;
+    let fixture = conducting();
+    let mut runtime = fixture.runtime.lock().unwrap();
+    runtime.snapshot.navigator.agents = vec![conductor_row()];
+    running(&mut runtime);
+    let now = crate::runtime::unix_milliseconds();
+    let mission = runtime.missions.book.get_mut("mission-1").unwrap();
+    assert!(
+        !crate::runtime::mission_health::raise(
+            mission,
+            "fix",
+            AttentionReason::PrClosed,
+            Some(7),
+            now
+        )
+        .is_empty()
+    );
+    runtime.save_missions();
+    runtime.raise_to_operator(now + 10 * 60 * 1000);
+    let shown = |runtime: &mut Runtime| {
+        runtime.snapshot_delta_payload(0);
+        let on_row = node_view(runtime, "fix").attention.map(|attention| attention.on_row);
+        let device = runtime
+            .snapshot
+            .navigator
+            .devices
+            .iter()
+            .find(|device| device.id == crate::node::TEST_NODE)
+            .unwrap();
+        (on_row, device.agent_scope.mission_asks.clone())
+    };
+
+    // A resting Conductor's row carries it.
+    assert_eq!(shown(&mut runtime), (Some(true), vec![]));
+    assert_eq!(
+        runtime.snapshot.navigator.agents[0].ask_subject,
+        Some(crate::model::AskSubject::MissionAttention {
+            node: "Fix it".into(),
+            reason: AttentionReason::PrClosed,
+        })
+    );
+    assert!(runtime.claim_mission_notices().is_empty());
+
+    // A working Conductor's row shows its work and carries nothing.
+    let mut working = vec![conductor_row()];
+    working[0].activity = "working".into();
+    runtime.lay_plan_reviews(crate::node::TEST_NODE, &mut working);
+    runtime.snapshot.navigator.agents = working;
+    assert_eq!(shown(&mut runtime), (Some(false), vec!["mission-1".to_owned()]));
+    assert_eq!(runtime.claim_mission_notices().len(), 1, "told once");
+
+    // The Conductor gone, a worker whose registration stands with no row
+    // shown carries nothing either.
+    let mut actor = runtime.delivery_observations["sender"].actor.clone();
+    actor.pane_id = "recipient".into();
+    runtime.delivery_observations.remove("sender");
+    runtime.snapshot.navigator.agents.clear();
+    let mut ledger = crate::delivery::ledger::Ledger::default();
+    ledger.agents.push(crate::coordination::AgentRecord {
+        id: "agent-2".into(),
+        name: Some("recipient".into()),
+        machine: crate::node::TEST_NODE.into(),
+        host_scope: "scope".into(),
+        native_machine: "fixture-machine".into(),
+        session: "recipient-session".into(),
+        instance: "recipient".into(),
+        pane: "recipient".into(),
+        parent: None,
+        origin: None,
+        project: None,
+        actor,
+        ended: false,
+        terminal_id: None,
+        forked: false,
+    });
+    runtime.delivery_ledger = Ok(Arc::new(ledger));
+    let mission = runtime.missions.book.get_mut("mission-1").unwrap();
+    mission
+        .nodes
+        .iter_mut()
+        .find(|node| node.key == "fix")
+        .unwrap()
+        .agent_id = Some("agent-2".into());
+    runtime.save_missions();
+    assert_eq!(shown(&mut runtime), (Some(false), vec!["mission-1".to_owned()]));
+
+    // With no registration either, it stays the mission's own item.
+    runtime.delivery_ledger = Ok(Arc::new(crate::delivery::ledger::Ledger::default()));
+    assert_eq!(shown(&mut runtime), (Some(false), vec!["mission-1".to_owned()]));
 }
 
 /// The fix node of `running_criteria_mission`, its pull request 7 merged
