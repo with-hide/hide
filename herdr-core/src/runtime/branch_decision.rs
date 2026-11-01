@@ -12,6 +12,7 @@
 use super::memory_promotion::{Retire, agents_listed, panes_in, retire_attempt, worktree_path};
 use crate::node::NodeId;
 use crate::node_access::{LinkError, NodeLink};
+use crate::suggestions::lifecycle::{BranchFileSummary, BranchSummary};
 use hide_node_link::branch::{
     BaseSyncOutcome, BranchFacts, DiscardOutcome, MergeOutcome, MergePushOutcome, MergeStep,
 };
@@ -419,6 +420,59 @@ pub(super) fn log(place: &BranchPlace, subject: &str, kind: &str, outcome: &str)
         "component": "branch_decision", "kind": kind,
         "project_id": place.project_id, "subject": subject, "outcome": outcome,
     }));
+}
+
+/// What a branch holds against its base, when it holds anything: a branch
+/// that exists with commits of its own.
+pub(super) fn summary(base: &str, facts: &BranchFacts) -> Option<BranchSummary> {
+    let tip = facts
+        .tip
+        .clone()
+        .filter(|_| facts.exists && facts.ahead > 0)?;
+    Some(BranchSummary {
+        base: base.to_owned(),
+        tip,
+        ahead: facts.ahead,
+        files: facts
+            .files
+            .iter()
+            .map(|file| BranchFileSummary {
+                path: file.path.clone(),
+                added: file.added,
+                removed: file.removed,
+                binary: file.binary,
+            })
+            .collect(),
+        files_total: facts.files_total,
+        added: facts.added,
+        removed: facts.removed,
+    })
+}
+
+/// What a read of a branch left ready for the operator says (D-08, B5,
+/// B13): its commit reached the base, however it got there; it is gone
+/// unmerged; it still holds work, measured again; or nothing settled.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(super) enum ReadyReading {
+    Merged,
+    Discarded,
+    Ready(BranchSummary),
+    Unchanged,
+}
+
+/// Reads a ready branch's facts. A branch gone with its merge unknown is
+/// left as it is, since the next read may say.
+pub(super) fn read_ready(base: &str, facts: &BranchFacts) -> ReadyReading {
+    if facts.merged == Some(true) {
+        return ReadyReading::Merged;
+    }
+    if !facts.exists {
+        return match facts.merged {
+            Some(false) => ReadyReading::Discarded,
+            _ => ReadyReading::Unchanged,
+        };
+    }
+    summary(base, facts).map_or(ReadyReading::Unchanged, ReadyReading::Ready)
 }
 
 /// Whether a Project's agent stopped its turn: Herdr says its stop finished

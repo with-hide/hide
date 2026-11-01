@@ -7,11 +7,11 @@
 //! tracker (`memory_promotion::track_promotions`) reads each waiting batch
 //! here, off the lock, and the operator's decisions run here on a worker.
 
-use super::branch_decision::{self, BranchPlace};
+use super::branch_decision::{self, BranchPlace, ReadyReading};
 use super::memory_promotion::{PromotionStart, Retire};
 use super::*;
 use crate::node::NodeId;
-use crate::suggestions::lifecycle::{AttemptPurpose, BranchFileSummary, BranchSummary};
+use crate::suggestions::lifecycle::{AttemptPurpose, BranchSummary};
 use hide_memory::{BatchPurpose, MemoryStore, Promotion, PromotionState};
 use hide_node_link::branch::BranchFacts;
 use serde_json::json;
@@ -127,7 +127,7 @@ fn read_stopped(
     read: &mut BatchesRead,
 ) -> Result<bool, String> {
     let mut moved = false;
-    let summary = summary(&place.base, &facts);
+    let summary = branch_decision::summary(&place.base, &facts);
     let placed = check
         .cards
         .iter()
@@ -269,67 +269,41 @@ fn read_ready(
         }
         Ok(moved)
     };
-    if facts.merged == Some(true) {
-        let moved = settle(PromotionState::Merged, store)?;
-        log_batch(check, "promotion.batch_merged", "merged");
-        read.merged.push((
-            retire_of(place),
-            check
-                .cards
-                .iter()
-                .filter_map(|(_, promotion)| promotion.agent_id.clone())
-                .collect(),
-        ));
-        return Ok(moved);
-    }
-    if !facts.exists {
-        if facts.merged == Some(false) {
+    match branch_decision::read_ready(&place.base, &facts) {
+        ReadyReading::Merged => {
+            let moved = settle(PromotionState::Merged, store)?;
+            log_batch(check, "promotion.batch_merged", "merged");
+            read.merged.push((
+                retire_of(place),
+                check
+                    .cards
+                    .iter()
+                    .filter_map(|(_, promotion)| promotion.agent_id.clone())
+                    .collect(),
+            ));
+            Ok(moved)
+        }
+        ReadyReading::Discarded => {
             log_batch(check, "promotion.batch_discarded", "deleted");
-            return settle(PromotionState::Dismissed, store);
+            settle(PromotionState::Dismissed, store)
         }
-        return Ok(false);
-    }
-    if let Some(summary) = summary(&place.base, &facts) {
-        if check.tip.as_deref() != Some(summary.tip.as_str()) {
-            store
-                .set_promotion_batch_branch(
-                    &check.project_id,
-                    &check.branch,
-                    check.purpose,
-                    Some(&summary.tip),
-                )
-                .map_err(|error| error.to_string())?;
+        ReadyReading::Ready(summary) => {
+            if check.tip.as_deref() != Some(summary.tip.as_str()) {
+                store
+                    .set_promotion_batch_branch(
+                        &check.project_id,
+                        &check.branch,
+                        check.purpose,
+                        Some(&summary.tip),
+                    )
+                    .map_err(|error| error.to_string())?;
+            }
+            read.facts
+                .push(((check.project_id.clone(), check.branch.clone()), summary));
+            Ok(false)
         }
-        read.facts
-            .push(((check.project_id.clone(), check.branch.clone()), summary));
+        ReadyReading::Unchanged => Ok(false),
     }
-    Ok(false)
-}
-
-/// What a branch holds, when it holds anything.
-fn summary(base: &str, facts: &BranchFacts) -> Option<BranchSummary> {
-    let tip = facts
-        .tip
-        .clone()
-        .filter(|_| facts.exists && facts.ahead > 0)?;
-    Some(BranchSummary {
-        base: base.to_owned(),
-        tip,
-        ahead: facts.ahead,
-        files: facts
-            .files
-            .iter()
-            .map(|file| BranchFileSummary {
-                path: file.path.clone(),
-                added: file.added,
-                removed: file.removed,
-                binary: file.binary,
-            })
-            .collect(),
-        files_total: facts.files_total,
-        added: facts.added,
-        removed: facts.removed,
-    })
 }
 
 fn retire_of(place: &BranchPlace) -> Retire {

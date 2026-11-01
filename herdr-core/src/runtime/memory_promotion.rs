@@ -21,9 +21,10 @@ use crate::node::NodeId;
 use hide_memory::{MemoryLifecycle, MemoryStore, Promotion, PromotionState};
 use serde_json::json;
 
-/// How often a running promotion's agent is checked; a pull request is
-/// followed on each GitHub answer instead.
-const TRACK_INTERVAL_MS: u64 = 60_000;
+/// How often a running promotion's agent, and a 제안 line's followed
+/// attempt, is checked on the coordinator's tick; a pull request is followed
+/// on each GitHub answer instead.
+pub(super) const TRACK_INTERVAL_MS: u64 = 60_000;
 /// How long a promotion may stay running with no agent: past it the start
 /// was cut short (Hide quit between writing the state and the spawn). It
 /// outlasts the spawn's own answer, which takes up to two starts, each held
@@ -810,36 +811,13 @@ fn branch_pull_request<'a>(
     branch: &str,
     since: Option<u64>,
 ) -> Option<&'a PullRequestSnapshot> {
-    let repository = promotion.repository.as_deref()?;
-    let mut on_branch = project
-        .pull_requests
-        .iter()
-        .filter(|pull| {
-            pull.url
-                .strip_prefix("https://github.com/")
-                .and_then(|path| path.split_once("/pull/"))
-                .is_some_and(|(actual_repository, number)| {
-                    actual_repository.eq_ignore_ascii_case(repository)
-                        && number == pull.number.to_string()
-                })
-        })
-        .filter(|pull| !pull.cross_repository && pull.head_branch == branch)
-        .filter(|pull| match (promotion.pr_number, since) {
-            (Some(number), _) => u64::from(pull.number) == number,
-            (None, Some(started)) => pull.created_at_unix_ms.is_some_and(|at| at >= started),
-            (None, None) => true,
-        })
-        .collect::<Vec<_>>();
-    on_branch.sort_by_key(|pull| {
-        (
-            matches!(
-                pull.badge,
-                PullRequestBadge::Open | PullRequestBadge::Review
-            ),
-            pull.number,
-        )
-    });
-    on_branch.last().copied()
+    crate::github::branch_pull_request(
+        project,
+        promotion.repository.as_deref()?,
+        branch,
+        promotion.pr_number,
+        since,
+    )
 }
 
 /// What the PR catalog's answer for a repository says of a missing pull
