@@ -25,7 +25,8 @@ It generates `web/src/tokens.css` and `web/src/generated/accents.ts`; do not edi
 3. Keep proposals and run evidence under ignored `agents/runs/<slug>/`.
    For a feature PRD with a visual change, prepare a temporary design alongside the PRD and use the approved proposal as the implementation reference.
    Do not commit scratch boards, captures, browser profiles or review transcripts.
-4. Update the owning behavior guide and relevant gallery scene with the implementation.
+4. Before the rest of the flow is built, draw the proposal's scenes in the relevant gallery scene from production components, so a human reviews the UI early.
+   Apply that review's feedback in the same change, and update the owning behavior guide with the implementation.
    Gallery names, counts, paths and content are invented fixtures, never operator data.
 5. Run the static checks below and the behavior checks the change touches.
 6. Review actual captures and include a representative image in the pull request, following [CONTRIBUTING.md](../CONTRIBUTING.md).
@@ -36,7 +37,7 @@ Compare the chosen proposal with the production gallery or an isolated running c
 Check Light and Dark, a narrow width, long Korean text and the largest supported text size where applicable.
 Inspect empty, loading, failed, selected, hover and focused states that the change can produce.
 Check wrapping, overlap, sideways overflow, stable columns, keyboard focus and legibility.
-A gallery proves its own components and synthetic state, not native integration or a daemon transition.
+A gallery proves its own components and synthetic state, not a real user flow, an agent's ACP exchange, native integration or a daemon transition.
 Use an isolated candidate for those claims, following [VERIFICATION.md](VERIFICATION.md) and the applicable runtime guide.
 Never operate the installed app or the operator's server for QA without authorization.
 
