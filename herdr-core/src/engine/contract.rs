@@ -183,7 +183,9 @@ fn lays_out(engine: &dyn Engine, workspace: &str, tab: &str, pane: &str, folder:
         "a resize inside the limits moves the split"
     );
     assert!(rect(engine, pane).height > before.height);
-    engine.swap_panes(WAIT, pane, &lower).expect("the panes swap");
+    engine
+        .swap_panes(WAIT, pane, &lower)
+        .expect("the panes swap");
     assert!(rect(engine, pane).y > rect(engine, &lower).y);
 
     // An exported tab applied again comes back in its shape.
