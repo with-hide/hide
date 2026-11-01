@@ -4696,13 +4696,14 @@ pub fn mount(seat: &crate::seat::SeatParts, state: AppState) -> tokio::task::Joi
             last_client_gone: Arc::clone(&state.last_client_gone),
             shutdown,
             // The core's own engine is this process's, so it answers while
-            // the daemon runs and keeps nothing alive (PRD
-            // engine-bundle-3-core-owns D-10 gives it its own rule).
+            // the daemon runs and keeps nothing alive; its panes do (PRD
+            // engine-bundle-3-core-owns D-10).
             herdr: state
                 .core
                 .engine()
                 .filter(|engine| engine.own_scope().is_none())
                 .cloned(),
+            panes: state.core.pane_holders().cloned(),
         },
         // Mobile on with a phone paired: the phone may come back at any
         // time and push has to keep going (PRD D-10). The idle clock starts
@@ -4722,11 +4723,15 @@ pub(crate) struct Idle {
     pub shutdown: crate::ending::Ending,
     /// This machine's engine; `None` when the daemon runs without one.
     pub herdr: Option<herdr_core::engine::EngineHandle>,
+    /// The pane holders of the core's own engine, whose panes keep the
+    /// daemon alive while one may still run; `None` for Herdr.
+    pub panes: Option<Arc<hide_node::terminal::holder::Holders>>,
 }
 
 /// Ends the daemon once it had no screen for `idle_secs` while `held` was
-/// false and its Herdr server could not be reached; never with
-/// `keep_alive`. Aborted by its owner when the daemon stops another way.
+/// false, its Herdr server could not be reached and no pane of the core's
+/// own engine could still run; never with `keep_alive`. Aborted by its
+/// owner when the daemon stops another way.
 pub(crate) fn watch_idle(
     idle: Idle,
     held: impl Fn() -> bool + Send + 'static,
@@ -4737,6 +4742,8 @@ pub(crate) fn watch_idle(
         }
         let mut herdr_probed: Option<Instant> = None;
         let mut herdr_up = false;
+        let mut panes_probed: Option<Instant> = None;
+        let mut panes_live = false;
         loop {
             tokio::time::sleep(Duration::from_secs(1)).await;
             if idle.clients.load(Ordering::SeqCst) != 0 {
@@ -4761,7 +4768,21 @@ pub(crate) fn watch_idle(
                     .await
                     .unwrap_or(false);
             }
-            if herdr_up {
+            // The core's own engine's panes run in holders that outlive the
+            // daemon, and the daemon is what keeps their letters and states
+            // going, so it lives while one may still run. A record that
+            // cannot be read is counted as running (`Panes::live`), and a
+            // failed count keeps the daemon: ending it would leave panes
+            // with no core.
+            if let Some(panes) = idle.panes.clone()
+                && panes_probed.is_none_or(|at| at.elapsed() >= PANES_PROBE_INTERVAL)
+            {
+                panes_probed = Some(Instant::now());
+                panes_live = tokio::task::spawn_blocking(move || panes_running(&panes))
+                    .await
+                    .unwrap_or(true);
+            }
+            if herdr_up || panes_live {
                 *idle.last_client_gone.lock().expect("client timestamp") = Instant::now();
                 continue;
             }
@@ -4777,6 +4798,27 @@ pub(crate) fn watch_idle(
 /// How often an idle daemon asks whether its Herdr server is still there.
 const HERDR_PROBE_INTERVAL: Duration = Duration::from_secs(30);
 const HERDR_PROBE_TIMEOUT: Duration = Duration::from_secs(2);
+
+/// How often an idle daemon of the core's own engine counts its panes.
+const PANES_PROBE_INTERVAL: Duration = Duration::from_secs(5);
+
+/// Whether a pane of the core's own engine may still run.
+fn panes_running(panes: &hide_node::terminal::holder::Holders) -> bool {
+    match panes.live_panes() {
+        Ok(count) => count > 0,
+        Err(message) => {
+            eprintln!(
+                "{}",
+                json!({
+                    "component": "hided",
+                    "kind": "idle.panes_uncounted",
+                    "message": message,
+                })
+            );
+            true
+        }
+    }
+}
 
 /// Whether the engine answers; a refusal is an answer.
 pub(crate) fn herdr_reachable(engine: &herdr_core::engine::EngineHandle) -> bool {
