@@ -5,6 +5,7 @@
 //! its log). The local measurement watches 60 s (docs/PERFORMANCE_TESTING.md,
 //! The pane holder's path); this is the short form every system's CI runs.
 
+use std::collections::BTreeMap;
 use std::time::{Duration, Instant};
 
 use crate::support::{Home, current_version, print_ok, shell, source, start_ready};
@@ -14,15 +15,38 @@ use hide_holder_protocol::ClientMessage;
 /// this length shows as a count above zero.
 const WATCHED: Duration = Duration::from_secs(10);
 
-/// What the kernel counts each time a process of `pid` runs: on Linux its
-/// threads' context switches, on macOS its wakeups from idle and from
-/// interrupts, on Windows the processor cycles its threads used.
-fn runs(pid: u32) -> u64 {
+/// What the kernel counts each time the process `pid` runs, by thread where
+/// the kernel counts by thread: on Linux each thread's context switches, by
+/// thread id; on macOS the process's wakeups from idle and from interrupts,
+/// and on Windows the processor cycles its threads used, each under 0.
+///
+/// A thread that ends is work the holder did, so it is part of the state
+/// read here, never an error: on Linux the count of a thread that ended
+/// leaves the sum with it, and a thread can end between listing the
+/// process's threads and reading one (with-hide/hide-private#409), which
+/// reads as the thread gone. In an idle holder the threads that end are
+/// `connection-opening`, once the hello it read is handed to the holder, and
+/// `connection-reader` and `connection-writer`, once the connection is
+/// closed (a release); the PTY's reader and writer, the program's waiter and
+/// the listener live as long as the pane.
+fn runs(pid: u32) -> BTreeMap<u64, u64> {
     #[cfg(target_os = "linux")]
     {
-        let mut total = 0;
+        let mut threads = BTreeMap::new();
         for task in std::fs::read_dir(format!("/proc/{pid}/task")).unwrap() {
-            let status = std::fs::read_to_string(task.unwrap().path().join("status")).unwrap();
+            let task = match task {
+                Ok(task) => task,
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+                Err(error) => panic!("the holder's threads could not be listed: {error}"),
+            };
+            let status = match std::fs::read_to_string(task.path().join("status")) {
+                Ok(status) => status,
+                // The thread ended since the listing.
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+                Err(error) => panic!("{} could not be read: {error}", task.path().display()),
+            };
+            let tid: u64 = task.file_name().to_string_lossy().parse().unwrap();
+            let mut total = 0;
             for line in status.lines() {
                 if let Some(count) = line
                     .strip_prefix("voluntary_ctxt_switches:")
@@ -31,8 +55,9 @@ fn runs(pid: u32) -> u64 {
                     total += count.trim().parse::<u64>().unwrap();
                 }
             }
+            threads.insert(tid, total);
         }
-        total
+        threads
     }
     #[cfg(target_os = "macos")]
     {
@@ -47,7 +72,7 @@ fn runs(pid: u32) -> u64 {
             )
         };
         assert_eq!(asked, 0, "{}", std::io::Error::last_os_error());
-        info.ri_pkg_idle_wkups + info.ri_interrupt_wkups
+        BTreeMap::from([(0, info.ri_pkg_idle_wkups + info.ri_interrupt_wkups)])
     }
     #[cfg(windows)]
     {
@@ -65,9 +90,22 @@ fn runs(pid: u32) -> u64 {
             let error = std::io::Error::last_os_error();
             CloseHandle(process);
             assert_ne!(asked, 0, "{error}");
-            cycles
+            BTreeMap::from([(0, cycles)])
         }
     }
+}
+
+/// What the holder ran between `before` and `after`: what each thread that
+/// lived through both ran, and one for each thread that ended or started.
+fn ran(before: &BTreeMap<u64, u64>, after: &BTreeMap<u64, u64>) -> u64 {
+    let mut total = 0;
+    for (thread, count) in before {
+        total += match after.get(thread) {
+            Some(later) => later - count,
+            None => 1,
+        };
+    }
+    total + after.keys().filter(|thread| !before.contains_key(thread)).count() as u64
 }
 
 /// How long the holder must have run nothing for the work an event started
@@ -109,7 +147,7 @@ fn quiet(pid: u32) {
 fn watched(pid: u32) -> u64 {
     let before = runs(pid);
     settle(WATCHED);
-    runs(pid) - before
+    ran(&before, &runs(pid))
 }
 
 #[test]
