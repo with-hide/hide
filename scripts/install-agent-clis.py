@@ -17,7 +17,11 @@ the pin in a pull request before a lane measures it. So does a CLI whose
 (contracts/agent-journey.json, `full_access_flag`, each option's name):
 Settings › Agents adds it
 to every start Hide makes, and a CLI that does not know it would refuse to
-start.
+start. Codex takes its full access as `-c` configuration overrides, which it
+accepts with any key, a misspelled one included, and then starts with its
+defaults (read-only, asking), so its help proves nothing: the lane runs it
+with the adapter's full-access words in an empty HOME instead and requires
+the access they give in the prompt input it renders (`FULL_ACCESS_PROOF`).
 """
 
 import argparse
@@ -32,6 +36,7 @@ import shutil
 import subprocess
 import sys
 import tarfile
+import tempfile
 import urllib.request
 
 CHECKOUT = Path(__file__).resolve().parents[1]
@@ -177,6 +182,49 @@ def answered(program):
     return (result.stdout + result.stderr).strip().splitlines()[0][:120] if result.stdout + result.stderr else ""
 
 
+# What a CLI renders with its full-access words given, and what that must
+# say, for a CLI whose help cannot prove them. Codex 0.166.0 renders these two
+# lines with `-c approval_policy=never -c sandbox_mode=danger-full-access`
+# and its bypass flag alike, and drops the first for a misspelled key
+# (measured 2026-11-01).
+FULL_ACCESS_PROOF = {
+    "codex": (["debug", "prompt-input"],
+              ["Approval policy is currently never", "`sandbox_mode` is `danger-full-access`"]),
+}
+
+
+def full_access_words(kind):
+    """The words a full-access start of `kind` adds, from the generated web
+    contract (contracts/agent-adapters.json), which carries each option's
+    values where the journey contract carries only its name."""
+    rows = json.loads((CHECKOUT / "contracts/agent-adapters.json").read_text())
+    for row in rows:
+        if row.get("program") == kind:
+            return [word for option in row.get("full_access") or [] for word in option]
+    raise SystemExit(f"{kind}: contracts/agent-adapters.json has no row for it")
+
+
+def rendered(program, words, command):
+    """What `program` prints for `command` with `words` before it, in an
+    empty HOME, so no configuration of the runner's decides the access."""
+    with tempfile.TemporaryDirectory() as home:
+        env = {**os.environ, "HOME": home, "USERPROFILE": home, "CODEX_HOME": str(Path(home) / ".codex"),
+               "XDG_CONFIG_HOME": str(Path(home) / ".config")}
+        Path(env["CODEX_HOME"]).mkdir()
+        result = subprocess.run([str(program), *words, *command], capture_output=True, text=True,
+                                timeout=120, stdin=subprocess.DEVNULL, env=env, cwd=home)
+    return result.stdout + result.stderr
+
+
+def unproved(kind, program):
+    """The lines the CLI's full-access render lacks; none for a CLI without a proof."""
+    if kind not in FULL_ACCESS_PROOF:
+        return []
+    command, lines = FULL_ACCESS_PROOF[kind]
+    text = rendered(program, full_access_words(kind), command)
+    return [line for line in lines if line not in text]
+
+
 def full_access_flags():
     """Each started agent's full-access arguments by its Herdr kind, from the
     generated adapter contract."""
@@ -241,10 +289,17 @@ def main(argv=None):
         if not matches(rows[kind]["version"], version):
             mismatches.append(f"{kind} answered {version!r}, {TABLE.name} pins {rows[kind]['version']}")
         flags = access.get(kind, [])
-        missing = unknown_flags(flags, helped(program)) if flags else []
-        if missing:
-            mismatches.append(f"{kind} {version}: --help lists no {', '.join(missing)}, "
-                              "which its adapter declares as full access")
+        if kind in FULL_ACCESS_PROOF:
+            lacking = unproved(kind, program)
+            if lacking:
+                mismatches.append(f"{kind} {version}: its adapter's full-access words "
+                                  f"{' '.join(full_access_words(kind))} do not give full access: "
+                                  f"its {' '.join(FULL_ACCESS_PROOF[kind][0])} lacks {'; '.join(lacking)}")
+        else:
+            missing = unknown_flags(flags, helped(program)) if flags else []
+            if missing:
+                mismatches.append(f"{kind} {version}: --help lists no {', '.join(missing)}, "
+                                  "which its adapter declares as full access")
         lines.append(f"{kind}={program}")
     print(f"::notice title=agent CLIs::{', '.join(notes)}")
     if mismatches:

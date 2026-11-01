@@ -4589,7 +4589,7 @@ mod tests {
                 "--",
                 true,
                 Some("fixture-model"),
-                &["--dangerously-bypass-approvals-and-sandbox"],
+                &crate::agent_permission::CODEX_FULL_ACCESS[..],
             ),
             (
                 "grok",

@@ -158,7 +158,10 @@
     "program": "codex",
     "full_access": [
       [
-        "--dangerously-bypass-approvals-and-sandbox"
+        "-c",
+        "approval_policy=never",
+        "-c",
+        "sandbox_mode=danger-full-access"
       ]
     ],
     "hook_kind": "hook"

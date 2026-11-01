@@ -382,6 +382,21 @@ impl LaunchDialect {
     /// whose preselected answer exits, so its start also carries the setting
     /// that skips only that warning, as `--settings` JSON: nothing is written
     /// to its own files, and a brief typed at the start reaches the prompt.
+    ///
+    /// The operator's shell alias of the program may add the same option
+    /// again, since the pinned Herdr types the program's bare name, so each
+    /// full-access option is one its CLI accepts twice (measured 2026-11-01 in
+    /// an empty HOME with the option given twice): Claude Code 2.1.316, agy
+    /// 1.4.12, OpenCode 2.0.29 and omp 18.7.0 start.
+    /// Codex 0.166.0 refuses `--dangerously-bypass-approvals-and-sandbox`
+    /// twice ("cannot be used multiple times"), and `-a never -s
+    /// danger-full-access` twice or beside that flag, so it takes the two
+    /// `-c` overrides that flag sets: Codex accepts them repeated and beside
+    /// the flag, and its `/status` shows "Full Access" and the prompt input
+    /// `codex debug prompt-input` renders is the same as the flag's. Grok
+    /// 1.0.70 refuses `--always-approve` twice and `--permission-mode` twice,
+    /// and has no option that does the same and may be repeated, so an alias
+    /// that adds `--always-approve` stops a Grok start (docs/INSTALL.md).
     pub const fn options(self) -> LaunchOptions {
         match self {
             Self::Antigravity => LaunchOptions {
@@ -407,8 +422,15 @@ impl LaunchDialect {
                 model: &["--model", "{}"],
                 effort: &["-c", "model_reasoning_effort={}"],
                 efforts: &["minimal", "low", "medium", "high", "xhigh"],
+                // `--dangerously-bypass-approvals-and-sandbox` sets these
+                // two, but Codex refuses it twice; a repeated `-c` is
+                // accepted, beside that flag too (see above). One option,
+                // both overrides, so Settings › Agents shows the sandbox too.
                 full_access: FullAccess::Options(&[&[
-                    "--dangerously-bypass-approvals-and-sandbox",
+                    "-c",
+                    "approval_policy=never",
+                    "-c",
+                    "sandbox_mode=danger-full-access",
                 ]]),
             },
             Self::Grok => LaunchOptions {
@@ -562,8 +584,9 @@ pub struct LaunchOptions {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum FullAccess {
     /// The options that turn its questions off, each as its words with the
-    /// option's name first: the flag its `--help` names, then any option the
-    /// CLI needs so that it does not stop to confirm that flag.
+    /// option's name first: the words its `--help` names for that (Codex's
+    /// two `-c` overrides are one option), then any option the CLI needs so
+    /// that it does not stop to confirm them.
     Options(&'static [&'static [&'static str]]),
     /// The CLI asks no permission question, so there is nothing to turn off.
     NotAsked,
