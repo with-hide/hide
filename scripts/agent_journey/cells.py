@@ -232,6 +232,14 @@ def busy_letter_verdict(shown, read, session, held, token):
     return PASS, "delivered after the held turn, which kept its answer; " + verdict[1]
 
 
+def composer_check(records, agent):
+    """The core's last passed composer check of `agent` among its log
+    `records` (`composer.version_checked` read empty), or None."""
+    passed = [record for record in records if record.get("kind") == "composer.version_checked"
+              and record.get("agent") == agent and record.get("verdict") == "empty"]
+    return passed[-1] if passed else None
+
+
 def menu_letter_verdict(shown, read, session, token, after):
     """A letter sent while a picker of the agent's own was open is delivered
     after one bell and answered from `after` on: a bell line the picker took

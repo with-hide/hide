@@ -392,6 +392,15 @@ class InputRung(unittest.TestCase):
         self.assertEqual(cells.rung_verdict(self.CLAUDE, typed), (cells.PASS, "carried by typed"))
 
 
+class ComposerCheck(unittest.TestCase):
+    def test_only_a_passed_check_of_the_agent_settles_the_menu_cell(self):
+        missed = {"kind": "composer.version_checked", "agent": "codex", "verdict": "not_empty"}
+        other = {"kind": "composer.version_checked", "agent": "claude-code", "verdict": "empty"}
+        passed = {"kind": "composer.version_checked", "agent": "codex", "verdict": "empty", "version": "0.163.0"}
+        self.assertIsNone(cells.composer_check([missed, other], "codex"))
+        self.assertEqual(cells.composer_check([missed, passed, other], "codex"), passed)
+
+
 class BusyAndMenuLetters(unittest.TestCase):
     def read(self, *texts):
         return {"session": "s", "events": [{"role": role, "text": text} for role, text in texts]}

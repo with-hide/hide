@@ -60,6 +60,13 @@ PICKER_SECONDS = 10
 # The picker the operator opens with a slash command, in every agent the
 # menu cell is declared for.
 PICKER_COMMAND = "/model"
+# How long the menu cell waits for Hide to have checked the agent's composer
+# before it opens the picker: the core checks a version once the pane has
+# rested `INPUT_QUIET_MS` (30 s) after a turn its prompt hook saw, on a pass
+# at most every 5 s (herdr-core/src/delivery/composer.rs). Without that
+# check a letter held on the closed picker has nothing to release it until
+# the next turn.
+COMPOSER_CHECK_SECONDS = 60
 # The cells each measured by a module of its own, judging what Hide shows.
 MEASURES = {module.CELL: module.measure for module in (kit, memory, composer, fork, title, usage)}
 # The steps of one agent's journey in order, each from the state the last
@@ -466,6 +473,12 @@ class Journey:
     def rungs_since(self, mark):
         """The core's input ladder lines for this pane written after `mark`
         (cells.RUNG_KINDS); a log the core rotated meanwhile is read whole."""
+        return [record for record in self.core_lines(mark) if record.get("kind") in cells.RUNG_KINDS
+                and self.pane in (record.get("pane_id"), record.get("raw_pane_id"))]
+
+    def core_lines(self, mark=0):
+        """The core's log records written after `mark`; a log the core
+        rotated meanwhile is read whole."""
         path = self.runtime.state / "Logs" / "core.jsonl"
         try:
             with open(path, "rb") as stream:
@@ -480,10 +493,20 @@ class Journey:
                 record = json.loads(line)
             except ValueError:
                 continue
-            if (isinstance(record, dict) and record.get("kind") in cells.RUNG_KINDS
-                    and self.pane in (record.get("pane_id"), record.get("raw_pane_id"))):
+            if isinstance(record, dict):
                 found.append(record)
         return found
+
+    def composer_checked(self):
+        """Wait, up to COMPOSER_CHECK_SECONDS, until Hide has passed the
+        composer check of this agent's version; the check record, or None."""
+        end = time.monotonic() + COMPOSER_CHECK_SECONDS
+        while True:
+            check = cells.composer_check(self.core_lines(), self.id)
+            if check is not None or time.monotonic() >= end:
+                return check
+            if self.runtime.owner.cancelled.wait(2):
+                raise ProcessError("run_cancelled")
 
     def send_now(self, intent, value, record):
         """`hide request send --now` of a letter whose second line is `value`;
@@ -543,6 +566,16 @@ class Journey:
             return
         record = {"shown": []}
         self.record["letter_menu"] = record
+        # A letter held on the picker is released when Hide reads the
+        # composer empty after it closes, which Hide does only for a version
+        # whose composer it has checked; the cell starts from that settled
+        # pane, never from whatever moment the cell before it ended on.
+        record["composer_check"] = self.composer_checked()
+        if record["composer_check"] is None:
+            self.settle("letter_menu", (cells.FAIL, "Hide had not checked this version's composer within "
+                                        f"{COMPOSER_CHECK_SECONDS} s at rest, so no letter held on the picker "
+                                        "could be released"), self.evidence("letter_menu", record))
+            return
         value = record["token"] = token()
         before = len(self.conversation().get("events", []))
         since = self.daemon.mark(self.pane)
@@ -570,6 +603,9 @@ class Journey:
         shown = self.shown(letter, record, lambda shown: shown.get("state") == "delivered", CONFIRM_SECONDS)
         record["read"] = {**read, "events": read.get("events", [])[before:]} if "events" in read else read
         record["rungs"] = self.rungs_since(log)
+        if shown.get("state") != "delivered":
+            # A letter left pending would ring into the cells after this one.
+            record["cancelled"] = self.controller.hide(["request", "cancel", letter])
         verdict = cells.with_turn(cells.menu_letter_verdict(shown, read, self.session, value, before), turn)
         self.settle("letter_menu", self.with_rung(verdict, record["rungs"]), self.evidence("letter_menu", record))
 
