@@ -62,6 +62,12 @@ pub struct TypedInput {
     pub noticed: u8,
     #[serde(default, skip_serializing_if = "is_zero_ms")]
     pub noticed_at_unix_ms: u64,
+    /// The input rode the agent's start as its prompt argument
+    /// (`AgentApi::LaunchPrompt`): the CLI holds it through its own start
+    /// screens, so it is never typed or typed again, and until the agent's
+    /// record of it appears it is not yet taken (`delivery::ladder`).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub launch: bool,
 }
 
 fn is_zero(value: &u8) -> bool {
@@ -196,6 +202,7 @@ pub(crate) fn notice_body(
     pane: &str,
     letter: Option<&str>,
     source: Result<(), &str>,
+    launch: bool,
 ) -> String {
     let what = match (kind, letter) {
         (InputKind::Brief, _) => "its brief".to_owned(),
@@ -209,6 +216,15 @@ pub(crate) fn notice_body(
                  consent, and the operator sets how much agents may approve in Settings > Agents. \
                  Leave a login to the operator.";
     match source {
+        // The agent's start holds a launch prompt through its own screens
+        // and submits it after them, so nothing types it again.
+        Ok(()) if launch => format!(
+            "{agent} has not taken {what} yet: read its screen with `hide pane read {pane}`.\n\
+             Its start holds the brief and submits it once its screen is answered; \
+             `hide agent show` names what it waits on. Answer the screen with \
+             `hide pane send {pane} --key <name>` (esc, enter, up, down, tab, ...) or with text \
+             and `--enter`; Hide never types the brief, so answering cannot send it twice.\n{trust}"
+        ),
         Ok(()) => format!(
             "{agent} has not confirmed {what}: read its screen with `hide pane read {pane}`.\n\
              Something on its screen may have taken the typed text; `hide agent show` names what \

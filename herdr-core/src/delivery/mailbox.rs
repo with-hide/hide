@@ -223,6 +223,7 @@ pub(crate) fn send(
         forced: false,
         tool_handovers: 0,
         bell_typed_at_unix_ms: None,
+        bell_received: false,
         input_noticed: 0,
         input_noticed_at_unix_ms: 0,
         // A letter to a machine with a clock waits on that clock from now;

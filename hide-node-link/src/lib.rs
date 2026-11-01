@@ -26,6 +26,7 @@ pub mod gh;
 pub mod git;
 pub mod home;
 pub mod index;
+pub mod input;
 pub mod link;
 pub mod list;
 pub mod mutate;

@@ -4,6 +4,7 @@ use crate::delivery::{
     Actor,
     worker::{Authority, Client, Effect},
 };
+use crate::delivery::ladder::{Delivered, InputTarget, Prepared};
 use crate::engine::{Engine, EngineError, Wait};
 use crate::runtime::delivery::CoordinationContext;
 use crate::session_sync::ProjectedAgent;
@@ -356,34 +357,84 @@ fn brief_refused(spawn: &str, pane: &str, kind: &str, detail: String) -> String 
     "brief_not_submitted".to_owned()
 }
 
-/// Types `brief` into `pane` through Herdr's `agent.prompt`, the one
-/// submission path the doorbell uses too. Its typing was reserved first
-/// (`Mutation::BriefTyping`), and success only means the text reached the
-/// pane: the agent's own record confirms it (`delivery::typed`). A
-/// submission Herdr refuses is `brief_not_submitted`.
-pub(crate) fn type_brief(
-    engine: &dyn Engine,
-    spawn: &str,
-    pane: &str,
-    brief: &str,
-) -> Result<(), String> {
-    match engine.prompt_agent(Wait::Each(Duration::from_secs(10)), pane, brief) {
-        Ok(()) => {}
-        Err(EngineError::Request(message)) => return Err(message),
-        Err(error) => {
-            return Err(brief_refused(
-                spawn,
-                pane,
-                "brief.prompt_refused",
-                error.to_string(),
-            ));
+/// The words a fresh start of `kind` adds to carry `brief` as its prompt
+/// argument (`AgentApi::LaunchPrompt`), or `None` where the brief is sent
+/// once the agent runs: an agent that does not hold a launch prompt through
+/// its start screens, native arguments that already give one, or a brief
+/// the command line cannot carry (`worktree_control::prompt_argument`).
+fn launch_prompt(kind: &str, args: &[String], brief: &str) -> Option<[String; 2]> {
+    let row = hide_agent_adapter::adapter(kind).filter(|row| row.launch_prompt())?;
+    let flag = row.start?.prompt_flag();
+    if args.iter().any(|arg| arg == flag || arg == "--") {
+        return None;
+    }
+    match crate::worktree_control::prompt_argument(brief) {
+        Ok(argument) => Some([flag.to_owned(), argument]),
+        Err(detail) => {
+            crate::diagnostic!(json!({
+                "component": "spawn", "kind": "brief.launch_refused", "agent_kind": kind,
+                "detail": detail,
+            }));
+            None
         }
     }
+}
+
+/// The input ladder's route for a spawn's brief (`delivery::ladder`),
+/// decided before a typing is reserved. While the agent's own way in waits
+/// for the session its hook has not reported, the brief waits too, up to
+/// `BRIEF_READY_WAIT` from `since`; past it the spawn is
+/// `brief_not_submitted` with nothing sent, and the same command tries
+/// again.
+#[allow(clippy::disallowed_methods)] // a production wait on the agent's own report, bounded by the deadline
+pub(crate) fn brief_route(
+    target: impl Fn() -> Result<InputTarget, String>,
+    spawn: &str,
+    pane: &str,
+    since: Instant,
+) -> Result<(InputTarget, Prepared), String> {
+    let deadline = since + super::BRIEF_READY_WAIT;
+    loop {
+        let target = target()?;
+        match crate::delivery::ladder::prepare(&target) {
+            Ok(prepared) => return Ok((target, prepared)),
+            Err(cause) if Instant::now() >= deadline => {
+                return Err(brief_refused(spawn, pane, "brief.not_yet", cause.to_owned()));
+            }
+            Err(_) => std::thread::sleep(Duration::from_millis(250)),
+        }
+    }
+}
+
+/// Sends `brief` down its prepared route, the one submission path the
+/// doorbell uses too. Its typing was reserved first (`Mutation::BriefTyping`).
+/// `Ok(true)` is the agent's own answer that it took the brief; `Ok(false)`
+/// a send whose record confirms it (`delivery::typed`). A send that sent
+/// nothing, or lost its answer, is `brief_not_submitted`, and the typing it
+/// reserved stays spent.
+pub(crate) fn send_brief(
+    engine: &dyn Engine,
+    (target, prepared): (&InputTarget, Prepared),
+    spawn: &str,
+    brief: &str,
+) -> Result<bool, String> {
+    let received = match prepared.deliver(engine, target, brief) {
+        Delivered::Received => true,
+        Delivered::Unconfirmed { lost: None } => false,
+        Delivered::Unconfirmed { lost: Some(code) } | Delivered::NotYet(code) => {
+            return Err(brief_refused(
+                spawn,
+                &target.raw_pane_id,
+                "brief.prompt_refused",
+                code.to_owned(),
+            ));
+        }
+    };
     crate::diagnostic!(json!({
-        "component": "spawn", "kind": "brief.submitted", "spawn": spawn, "pane_id": pane,
-        "bytes": brief.len(),
+        "component": "spawn", "kind": "brief.submitted", "spawn": spawn,
+        "pane_id": target.raw_pane_id, "bytes": brief.len(), "received": received,
     }));
-    Ok(())
+    Ok(received)
 }
 
 /// The actor of `agent` on `device`; `on_node` when that device is the core's
@@ -1226,6 +1277,35 @@ fn spawn(
                 }));
             }
             close_unstarted_attempts(engine.as_ref(), &*state(client)?, &reserved, &observed);
+            let mut start_args = with_permission(kind, &permissions, start_args);
+            // A fresh start carries the brief as its prompt argument where
+            // the agent holds that through its own start screens
+            // (`AgentApi::LaunchPrompt`): saved first, so a start typed again
+            // carries it again and nothing ever types it.
+            let launched = reserved.brief.as_deref().filter(|_| {
+                !reserved.briefed
+                    || reserved
+                        .brief_input
+                        .as_ref()
+                        .is_some_and(|input| input.launch)
+            });
+            if let Some(prompt) = launched.and_then(|brief| launch_prompt(kind, &start_args, brief))
+            {
+                reserved = serde_json::from_value(mutate(
+                    client,
+                    authority,
+                    actor,
+                    Mutation::BriefLaunched {
+                        id: reserved.id.clone(),
+                    },
+                )?)
+                .map_err(|_| "spawn_unavailable")?;
+                start_args.extend(prompt);
+                crate::diagnostic!(json!({
+                    "component": "spawn", "kind": "brief.launched", "spawn": reserved.id,
+                    "pane_id": pane,
+                }));
+            }
             crate::live::start_agent(
                 engine.as_ref(),
                 node.as_deref(),
@@ -1234,7 +1314,7 @@ fn spawn(
                 shell,
                 name,
                 kind,
-                with_permission(kind, &permissions, start_args),
+                start_args,
                 codex_daemon,
             )?;
             reserved = serde_json::from_value(mutate(
@@ -1264,8 +1344,24 @@ fn spawn(
                     }));
                 }
             }
+            let since = Instant::now();
             brief_ready(engine.as_ref(), &reserved.id, pane, name)?;
-            // Saved before it is typed, so a typing a crash interrupts is
+            let pane_key = if on_node {
+                pane.to_owned()
+            } else {
+                crate::address::scoped_pane_id(&child_device, pane)
+            };
+            let route = brief_route(
+                || {
+                    let runtime = client.runtime.upgrade().ok_or("delivery_unavailable")?;
+                    let guard = runtime.lock().map_err(|_| "delivery_unavailable")?;
+                    Ok(guard.input_target_for(&pane_key, pane, kind, &child_device, None))
+                },
+                &reserved.id,
+                pane,
+                since,
+            )?;
+            // Saved before it is sent, so a send a crash interrupts is
             // counted and never repeated blindly (engineering #11).
             reserved = serde_json::from_value(
                 mutate(
@@ -1285,7 +1381,7 @@ fn spawn(
                 })?,
             )
             .map_err(|_| "spawn_unavailable")?;
-            type_brief(engine.as_ref(), &reserved.id, pane, &brief)?;
+            let received = send_brief(engine.as_ref(), (&route.0, route.1), &reserved.id, &brief)?;
             reserved = serde_json::from_value(mutate(
                 client,
                 authority,
@@ -1295,6 +1391,16 @@ fn spawn(
                 },
             )?)
             .map_err(|_| "spawn_unavailable")?;
+            if received {
+                // The agent's own way in answered that it took the brief:
+                // no record of it is owed (`delivery::ladder`). Hide's own
+                // identity records it, as it records every confirmation.
+                if let Some(runtime) = client.runtime.upgrade()
+                    && let Ok(guard) = runtime.lock()
+                {
+                    guard.post_brief_confirmed(&reserved.id, "channel");
+                }
+            }
         }
         // The child's pane keeps its launch choice for the restarts Hide
         // makes of it, under the id the core knows the pane by and the name

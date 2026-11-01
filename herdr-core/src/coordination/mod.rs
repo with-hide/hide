@@ -642,6 +642,13 @@ pub(crate) enum Mutation {
     BriefTyping {
         id: String,
     },
+    /// The spawn's brief rides its start as the start's prompt argument
+    /// (`AgentApi::LaunchPrompt`), saved before the start is typed: the
+    /// brief counts as submitted, its one sending is spent, and it is never
+    /// typed or typed again (`delivery::ladder`).
+    BriefLaunched {
+        id: String,
+    },
     /// The agent recorded the brief: its prompt hook's digest, or the user
     /// message in its session file. Hide's own identity reports it.
     BriefConfirmed {
@@ -1430,6 +1437,38 @@ pub(crate) fn apply(
             }
             input.attempts += 1;
             input.typed_at_unix_ms = now;
+            Ok(json!(record))
+        }
+        Mutation::BriefLaunched { id } => {
+            let parent = ledger
+                .spawns
+                .iter()
+                .find(|record| &record.id == id)
+                .ok_or("spawn_unavailable")?
+                .parent
+                .clone();
+            if !resolve_actor(ledger, &parent).is_some_and(|parent| parent.same_identity(caller)) {
+                return Err("parent_authority_required".into());
+            }
+            let record = ledger
+                .spawns
+                .iter_mut()
+                .find(|record| &record.id == id)
+                .ok_or("spawn_unavailable")?;
+            if record.pane.is_none() || record.brief.is_none() {
+                return Err("spawn_incomplete".into());
+            }
+            let input = record.brief_input.get_or_insert_with(Default::default);
+            if input.attempts > 0 && !input.launch {
+                // Typed once already: a start may not carry it as well.
+                return Err("brief_typed".into());
+            }
+            if !input.launch {
+                input.attempts = 1;
+                input.typed_at_unix_ms = now;
+                input.launch = true;
+            }
+            record.briefed = true;
             Ok(json!(record))
         }
         Mutation::BriefConfirmed { id } => {

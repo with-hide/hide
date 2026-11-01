@@ -333,6 +333,8 @@ pub(crate) enum Effect {
         id: String,
         recipient: Actor,
         sent: bool,
+        /// The recipient's own way in answered that it took the bell.
+        received: bool,
     },
     /// A forced letter whose recipient's composer showed text when the
     /// doorbell was about to type it: it stays, as an ordinary letter.
@@ -771,6 +773,7 @@ fn apply(ledger: &mut Ledger, request: &Request, now: u64) -> Result<(Value, boo
             id,
             recipient,
             sent,
+            received,
         } => {
             if let Some(letter) = ledger.letters.iter_mut().find(|letter| {
                 letter.id == *id
@@ -780,6 +783,7 @@ fn apply(ledger: &mut Ledger, request: &Request, now: u64) -> Result<(Value, boo
                 if *sent {
                     letter.bell_sent = true;
                     letter.bell_typed_at_unix_ms = Some(now);
+                    letter.bell_received = *received;
                 } else {
                     letter.bell_errors = letter.bell_errors.saturating_add(1).min(3);
                 }

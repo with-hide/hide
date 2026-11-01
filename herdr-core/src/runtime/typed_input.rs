@@ -15,6 +15,25 @@ use crate::model::AskSubject;
 use super::Runtime;
 use super::delivery::Observation;
 
+/// The texts a spawn's brief is recorded as: the brief, and for a brief that
+/// rode the start's prompt argument the argument too, whose line breaks are
+/// U+2028 (`worktree_control::prompt_argument`): Codex 0.166.0 and agy
+/// 1.4.12 record that form, Claude Code 2.1.316 the brief's own line breaks
+/// (measured 2026-11-01).
+fn brief_forms(spawn: &SpawnRecord) -> Vec<std::borrow::Cow<'_, str>> {
+    let Some(brief) = spawn.brief.as_deref() else {
+        return Vec::new();
+    };
+    let mut forms = vec![std::borrow::Cow::Borrowed(brief)];
+    if spawn.brief_input.as_ref().is_some_and(|input| input.launch)
+        && let Ok(argument) = crate::worktree_control::prompt_argument(brief)
+        && argument != brief
+    {
+        forms.push(std::borrow::Cow::Owned(argument));
+    }
+    forms
+}
+
 /// Which typed input a piece of work is about.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum InputKey {
@@ -121,9 +140,9 @@ impl Runtime {
                 .is_some_and(|input| input.confirmed_at_unix_ms.is_none())
                 && self.spawn_pane_id(spawn).as_deref() == Some(pane_id)
                 && self.spawn_observation(spawn).is_some()
-                && spawn.brief.as_deref().is_some_and(|brief| {
-                    hide_agent_hooks::delivery::matches_prompt_digest(brief, digest)
-                })
+                && brief_forms(spawn)
+                    .iter()
+                    .any(|brief| hide_agent_hooks::delivery::matches_prompt_digest(brief, digest))
         }) else {
             return;
         };
@@ -131,7 +150,7 @@ impl Runtime {
     }
 
     /// Queues the store's record that the brief of spawn `id` was taken.
-    fn post_brief_confirmed(&self, id: &str, by: &'static str) {
+    pub(crate) fn post_brief_confirmed(&self, id: &str, by: &'static str) {
         let posted =
             self.hide_delivery(typed::INPUT_ROLE)
                 .and_then(|(client, authority, actor)| {
@@ -191,19 +210,25 @@ impl Runtime {
             // A message that ends with the brief is its record too: what the
             // composer held before the typing stays in front of it. The row
             // keeps the newest request's words, cut past 8 KiB.
+            let forms = brief_forms(spawn);
             if self
                 .row_facts_of(&observation.actor.pane_id)
                 .is_some_and(|facts| {
-                    facts.prompt_digests.iter().any(|digest| {
-                        hide_agent_hooks::delivery::matches_prompt_digest(brief, digest)
-                    }) || facts
-                        .operator_request
-                        .iter()
-                        .chain(&facts.other_request)
-                        .any(|request| {
-                            !request.cut
-                                && hide_agent_hooks::delivery::ends_with_typed(&request.text, brief)
-                        })
+                    forms.iter().any(|brief| {
+                        facts.prompt_digests.iter().any(|digest| {
+                            hide_agent_hooks::delivery::matches_prompt_digest(brief, digest)
+                        }) || facts
+                            .operator_request
+                            .iter()
+                            .chain(&facts.other_request)
+                            .any(|request| {
+                                !request.cut
+                                    && hide_agent_hooks::delivery::ends_with_typed(
+                                        &request.text,
+                                        brief,
+                                    )
+                            })
+                    })
                 })
             {
                 work.push(InputWork {
@@ -286,14 +311,19 @@ impl Runtime {
                         &observation.actor.pane_id,
                         None,
                         source,
+                        input.launch,
                     ),
                     attempt: input.attempts,
                     target,
                 });
             // The composer is read at rest only: what a working agent draws
             // there is its own.
-            let resubmit =
-                (spawn.briefed && typed::composer_readable(observation, now)).then(|| Resubmit {
+            // A launch prompt is held by the agent's start and never typed
+            // again, so answering its screen cannot send it twice.
+            let resubmit = (spawn.briefed
+                && !input.launch
+                && typed::composer_readable(observation, now))
+            .then(|| Resubmit {
                     brief: brief.clone(),
                     attempts: input.attempts,
                     left: input.attempts < typed::INPUT_ATTEMPTS,
@@ -364,6 +394,7 @@ impl Runtime {
                         &observation.actor.pane_id,
                         Some(&letter.id),
                         self.input_source(&letter.recipient.kind, &observation.actor.pane_id),
+                        false,
                     ),
                     attempt: input.attempts,
                     target,
@@ -496,7 +527,7 @@ impl Runtime {
 
     /// The pane's children projection, which carries its Not connected
     /// judgement, on this machine or a device.
-    fn pane_children_of(&self, pane_id: &str) -> Option<&crate::model::PaneChildrenSnapshot> {
+    pub(super) fn pane_children_of(&self, pane_id: &str) -> Option<&crate::model::PaneChildrenSnapshot> {
         self.snapshot
             .navigator
             .workspaces

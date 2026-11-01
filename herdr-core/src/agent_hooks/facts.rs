@@ -74,6 +74,13 @@ struct SessionFact {
     /// its approval (a refusal in the dialog sends no hook event).
     #[serde(skip)]
     waiting_seq: Option<u64>,
+    /// The session's own messaging channel, as its SessionStart hook
+    /// received it: the input ladder's address for a Claude Code session
+    /// (`delivery::ladder`). It holds a token, so it is never saved: after a
+    /// restart the session has none until it starts again, and its input is
+    /// typed.
+    #[serde(skip)]
+    messaging: Option<hide_node_link::panes::MessagingChannel>,
 }
 
 /// The most open approvals one session reports; the hook keeps the same
@@ -96,6 +103,14 @@ struct PaneFacts {
     /// started again in the same pane).
     #[serde(skip)]
     reported_since_herdr: bool,
+}
+
+/// What a pane's current session reported, for the input ladder
+/// ([`HookFacts::reported_session`]).
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct ReportedSession {
+    pub session: Option<String>,
+    pub messaging: Option<hide_node_link::panes::MessagingChannel>,
 }
 
 #[derive(Deserialize, Serialize)]
@@ -224,6 +239,7 @@ impl HookFacts {
                 turn_seq: None,
                 waiting: Vec::new(),
                 waiting_seq: None,
+                messaging: None,
             },
         };
         facts.reported_since_herdr = true;
@@ -239,6 +255,7 @@ impl HookFacts {
             // A resumed or compacted session has no turn running yet.
             fact.turn = None;
             fact.waiting.clear();
+            fact.messaging.clone_from(&report.messaging);
         }
         if let Some(waiting) = &report.waiting
             && *waiting != fact.waiting
@@ -344,6 +361,32 @@ impl HookFacts {
         tokens
     }
 
+    /// What the session that speaks for `pane`'s agent of `runtime`
+    /// reported, chosen as a projection chooses it ([`bound`]), with
+    /// `lineage` the digest of the session Herdr names for the agent
+    /// (`engine::tokens::session_digest`, the actor's `session`): its id and
+    /// its messaging channel. `None` while no session of that runtime
+    /// reported there, so a nested session the pane's agent started never
+    /// answers for it.
+    pub(crate) fn reported_session(
+        &self,
+        pane: &str,
+        runtime: &str,
+        lineage: Option<&str>,
+    ) -> Option<ReportedSession> {
+        let facts = self.panes.get(pane)?;
+        let names = lineage.map(|lineage| {
+            move |kept: &str| {
+                crate::engine::tokens::session_digest(kept).as_deref() == Some(lineage)
+            }
+        });
+        let fact = &facts.sessions[bound_by(facts, runtime, names)?];
+        Some(ReportedSession {
+            session: fact.session.clone(),
+            messaging: fact.messaging.clone(),
+        })
+    }
+
     fn save(&self) {
         if let Some(file) = &self.file {
             file.save(self.panes.clone());
@@ -424,11 +467,27 @@ fn close_answered_waits(fact: &mut SessionFact, agent: &SessionAgentPayload) {
 /// there.
 fn bound<'a>(facts: &'a mut PaneFacts, agent: &SessionAgentPayload) -> Option<&'a mut SessionFact> {
     let runtime = hide_agent_adapter::adapter(agent.agent.as_deref()?)?.id;
-    let reported = herdr_session(agent);
+    let at = bound_at(facts, runtime, herdr_session(agent))?;
+    facts.sessions.get_mut(at)
+}
+
+/// Where in `facts` the session that speaks for the pane's agent of
+/// `runtime` is ([`bound`]), with `reported` the session id Herdr names.
+fn bound_at(facts: &PaneFacts, runtime: &str, reported: Option<&str>) -> Option<usize> {
+    bound_by(facts, runtime, reported.map(|reported| move |kept: &str| kept == reported))
+}
+
+/// [`bound_at`] with `names` saying whether a kept session id is the one
+/// Herdr names, when Herdr names one.
+fn bound_by(
+    facts: &PaneFacts,
+    runtime: &str,
+    names: Option<impl Fn(&str) -> bool>,
+) -> Option<usize> {
     let named = facts.sessions.iter().rposition(|fact| {
         fact.runtime == runtime
-            && match (reported, fact.session.as_deref()) {
-                (Some(reported), Some(kept)) => reported == kept,
+            && match (&names, fact.session.as_deref()) {
+                (Some(names), Some(kept)) => names(kept),
                 _ => true,
             }
     });
@@ -443,7 +502,7 @@ fn bound<'a>(facts: &'a mut PaneFacts, agent: &SessionAgentPayload) -> Option<&'
             })
             .flatten()
     })?;
-    facts.sessions.get_mut(at)
+    Some(at)
 }
 
 /// A pane's facts from the records its hooks kept: no turn, which no record
@@ -468,6 +527,7 @@ fn seeded_facts(records: Vec<hide_agent_hooks::counters::SessionRecord>) -> Pane
             turn_seq: None,
             waiting: Vec::new(),
             waiting_seq: None,
+            messaging: None,
         })
         .collect();
     PaneFacts {
@@ -512,6 +572,7 @@ mod tests {
             counts: None,
             session_start: false,
             waiting: None,
+            messaging: None,
         }
     }
 

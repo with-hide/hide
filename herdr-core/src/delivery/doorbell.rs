@@ -100,6 +100,9 @@ pub(crate) enum Hold {
     /// The letter was confirmed, cancelled, expired or reserved after the
     /// verdict.
     Letter,
+    /// The recipient's own way in needs the session its hook has not
+    /// reported yet (`ladder::Delivered::NotYet`).
+    NotYet,
     /// Three reservations consumed and this pane is eligible for another bell.
     Exhausted,
     /// The core waits for its move's link before it types into any pane
@@ -135,6 +138,7 @@ impl Hold {
             Self::Exhausted => "attempts_exhausted",
             Self::CorePending => "core_pending",
             Self::ComposerUnread => "composer_unconfirmed",
+            Self::NotYet => crate::delivery::ladder::SESSION_UNREPORTED,
         }
     }
 }
@@ -415,8 +419,12 @@ pub(crate) struct Doorbell {
 }
 
 /// How one attempt ended without failing.
+#[derive(Clone, Copy, PartialEq, Eq)]
 enum Outcome {
     Rung,
+    /// The recipient's own way in answered that it took the line
+    /// (`ladder::Delivered::Received`).
+    Received,
     Held(Hold),
     Stopped,
 }
@@ -580,7 +588,7 @@ impl Doorbell {
                 (&line, &sender, &letter.kind),
                 stop,
             ) {
-                Ok(Outcome::Rung) => {
+                Ok(outcome @ (Outcome::Rung | Outcome::Received)) => {
                     self.held.remove(&letter.id);
                     self.tried.remove(&letter.id);
                     self.rung.insert(
@@ -590,7 +598,14 @@ impl Doorbell {
                             letter: letter.id.clone(),
                         },
                     );
-                    record(client, &letter.id, &observed, true);
+                    record(
+                        client,
+                        &letter.id,
+                        &observed,
+                        Rang::Sent {
+                            received: outcome == Outcome::Received,
+                        },
+                    );
                 }
                 Ok(Outcome::Held(reason)) => {
                     self.hold(&letter.id, pane, reason);
@@ -612,7 +627,7 @@ impl Doorbell {
                     };
                     crate::diagnostic!(json!({"component":"delivery","kind":"doorbell.failed",
                         "letter_id":letter.id,"pane_id":pane,"code":code,"maybe_typed":typed}));
-                    record(client, &letter.id, &observed, false);
+                    record(client, &letter.id, &observed, Rang::Failed);
                     // A failed prompt may still have typed the bell, so it
                     // waits for the pane to move rather than for a timer
                     // that could type it twice. A failure before the prompt
@@ -699,7 +714,7 @@ impl Doorbell {
             }
             *count += 1;
             match type_answer(owner, engine.as_ref(), &work, &observed, stop) {
-                Ok(Outcome::Rung) => {
+                Ok(Outcome::Rung | Outcome::Received) => {
                     self.answer_tried.remove(&work.mission);
                     self.answer_held.remove(&work.mission);
                     if let Ok(mut guard) = owner.lock() {
@@ -1026,6 +1041,19 @@ fn resubmit_brief(
     if !resubmit.left {
         return Err("attempts_spent");
     }
+    // A brief typed again goes down the ladder like any input; its route is
+    // decided before a typing is spent.
+    let route = match action {
+        Resubmitted::Entered => None,
+        Resubmitted::Retyped => {
+            let target = owner
+                .lock()
+                .map_err(|_| "pane_unavailable")?
+                .input_target(observed);
+            let prepared = super::ladder::prepare(&target)?;
+            Some((target, prepared))
+        }
+    };
     let (client, authority, actor) = delivery;
     client
         .submit(
@@ -1044,17 +1072,22 @@ fn resubmit_brief(
             "brief_attempts_spent" => "attempts_spent",
             _ => "reservation_failed",
         })?;
-    match action {
-        Resubmitted::Entered => engine
+    match route {
+        None => engine
             .send_keys(Wait::Small(RPC_TIMEOUT), &observed.raw_pane_id, &["Enter"])
             .map_err(|_| "prompt_failed")?,
-        Resubmitted::Retyped => crate::coordination::executor::type_brief(
-            engine.as_ref(),
-            id,
-            &observed.raw_pane_id,
-            &resubmit.brief,
-        )
-        .map_err(|_| "prompt_failed")?,
+        Some((target, prepared)) => {
+            let received = crate::coordination::executor::send_brief(
+                engine.as_ref(),
+                (&target, prepared),
+                id,
+                &resubmit.brief,
+            )
+            .map_err(|_| "prompt_failed")?;
+            if received {
+                record_brief(owner, id, "channel");
+            }
+        }
     }
     crate::diagnostic!(json!({"component":"delivery",
         "kind": if action == Resubmitted::Entered { "input.entered" } else { "input.retyped" },
@@ -1132,12 +1165,20 @@ fn defer(client: &Client, letter: &Letter, reason: &str) {
     }
 }
 
-fn record(client: &Client, id: &str, observed: &Observation, sent: bool) {
+/// What one bell did, for the store.
+#[derive(Clone, Copy)]
+enum Rang {
+    Sent { received: bool },
+    Failed,
+}
+
+fn record(client: &Client, id: &str, observed: &Observation, rang: Rang) {
     if let Err(code) = client.submit(
         Effect::Bell {
             id: id.to_owned(),
             recipient: observed.actor.clone(),
-            sent,
+            sent: matches!(rang, Rang::Sent { .. }),
+            received: matches!(rang, Rang::Sent { received: true }),
         },
         Duration::from_secs(5),
     ) {
@@ -1228,6 +1269,15 @@ fn deliver(
     if let Err(reason) = native_current(engine, observed).map_err(SendFailure::NotTyped)? {
         return Ok(Outcome::Held(reason));
     }
+    // The ladder's route is decided before a bell is spent: an agent whose
+    // own way in waits for its session spends nothing and is tried again.
+    let target = owner
+        .lock()
+        .map_err(|_| SendFailure::NotTyped("runtime_unavailable"))?
+        .input_target(observed);
+    let Ok(prepared) = super::ladder::prepare(&target) else {
+        return Ok(Outcome::Held(Hold::NotYet));
+    };
     let reservation = client
         .submit(
             Effect::BellAttempt {
@@ -1279,9 +1329,16 @@ fn deliver(
         .lock()
         .map_err(|_| SendFailure::NotTyped("runtime_unavailable"))?
         .record_bell(&observed.actor.pane_id, line, (sender, kind));
-    prompt(engine, &observed.raw_pane_id, line)?;
-    // Arrival is not intake. Only a flushed prompt-hook confirmation clears it.
-    Ok(Outcome::Rung)
+    // Arrival is not intake. Only a flushed prompt-hook confirmation clears
+    // it, even where the agent's own way in took the line.
+    match prepared.deliver(engine, &target, line) {
+        super::ladder::Delivered::Received => Ok(Outcome::Received),
+        super::ladder::Delivered::Unconfirmed { lost: None } => Ok(Outcome::Rung),
+        super::ladder::Delivered::Unconfirmed { lost: Some(code) } => {
+            Err(SendFailure::MaybeTyped(code))
+        }
+        super::ladder::Delivered::NotYet(code) => Err(SendFailure::NotTyped(code)),
+    }
 }
 
 /// Types one answer, after the same last checks a bell makes: Herdr still

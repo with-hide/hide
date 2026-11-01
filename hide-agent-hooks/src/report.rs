@@ -63,6 +63,44 @@ pub struct HookStatusReport {
     /// turn says. Absent for an event that says nothing of them.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub waiting: Option<Vec<String>>,
+    /// The session's own messaging socket and its token, as the agent
+    /// handed them to its SessionStart hook (Claude Code's
+    /// `CLAUDE_CODE_MESSAGING_SOCKET` and `CLAUDE_CODE_MESSAGING_TOKEN`):
+    /// the address the core's input ladder hands the session a letter
+    /// through (`docs/delivery.md`, The input ladder). Sent at a session
+    /// start only, and never written to a file or a log.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub messaging: Option<MessagingChannel>,
+}
+
+/// A session's messaging socket and the token that opens it. Its `Debug`
+/// leaves the token out, so no log carries it.
+#[derive(Clone, Eq, PartialEq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct MessagingChannel {
+    pub socket: String,
+    pub token: String,
+}
+
+impl std::fmt::Debug for MessagingChannel {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("MessagingChannel")
+            .field("socket", &self.socket)
+            .finish_non_exhaustive()
+    }
+}
+
+impl MessagingChannel {
+    /// The channel a Claude Code session hands its hooks in their
+    /// environment, when it hands both parts.
+    pub fn from_environment() -> Option<Self> {
+        let read = |name: &str| std::env::var(name).ok().filter(|value| !value.is_empty());
+        Some(Self {
+            socket: read("CLAUDE_CODE_MESSAGING_SOCKET")?,
+            token: read("CLAUDE_CODE_MESSAGING_TOKEN")?,
+        })
+    }
 }
 
 /// Where a session's turn stands, as its hook saw it.
@@ -225,6 +263,7 @@ mod tests {
             }),
             session_start: false,
             waiting: None,
+            messaging: None,
         };
         assert_eq!(
             serde_json::to_value(&report).unwrap(),
@@ -254,6 +293,7 @@ mod tests {
                 counts: None,
                 session_start: false,
                 waiting: None,
+                messaging: None,
             },
             started + REPORT_TIMEOUT,
         );

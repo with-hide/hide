@@ -1845,6 +1845,65 @@ impl Runtime {
             .is_some_and(|observation| observation.actor.same_identity(actor))
     }
 
+    /// Where the input ladder hands `observed`'s agent its input
+    /// (`delivery::ladder`): what the pane's session reported through Hide's
+    /// own hook and the node of its machine, owned, so the send runs off the
+    /// lock. A session that has not reported is pending only while nothing
+    /// says its hooks are not connected; one whose pane reads Not connected
+    /// has no address, and its input is typed.
+    pub(crate) fn input_target(&self, observed: &Observation) -> crate::delivery::ladder::InputTarget {
+        self.input_target_for(
+            &observed.actor.pane_id,
+            &observed.raw_pane_id,
+            &observed.actor.kind,
+            &observed.actor.device_id,
+            observed.actor.session.as_deref(),
+        )
+    }
+
+    /// [`Self::input_target`] for a pane the core keys as `pane_id` and its
+    /// Herdr names `raw_pane_id`, running `kind` on `device`, with `lineage`
+    /// the digest of the session Herdr names there when it names one.
+    pub(crate) fn input_target_for(
+        &self,
+        pane_id: &str,
+        raw_pane_id: &str,
+        kind: &str,
+        device: &str,
+        lineage: Option<&str>,
+    ) -> crate::delivery::ladder::InputTarget {
+        use crate::delivery::ladder::{InputTarget, SessionAddress};
+        let reported = hide_agent_adapter::adapter(kind).and_then(|row| {
+            self.hook_facts
+                .lock()
+                .ok()?
+                .reported_session(pane_id, row.id, lineage)
+        });
+        let address = match reported {
+            Some(reported) => SessionAddress::Known {
+                session: reported.session,
+                messaging: reported.messaging,
+            },
+            None if self
+                .pane_children_of(pane_id)
+                .and_then(|children| children.connection.as_ref())
+                .is_some_and(|connection| !connection.connected) =>
+            {
+                SessionAddress::Known {
+                    session: None,
+                    messaging: None,
+                }
+            }
+            None => SessionAddress::Pending,
+        };
+        InputTarget {
+            kind: kind.to_owned(),
+            raw_pane_id: raw_pane_id.to_owned(),
+            address,
+            node: self.linked_node(device).ok().map(|(_, node)| node),
+        }
+    }
+
     pub(crate) fn delivery_engine(&self, device: &str) -> Option<crate::engine::SharedEngine> {
         if self.node == device {
             self.live.as_ref().map(|live| live.engine.clone())
