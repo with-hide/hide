@@ -188,6 +188,24 @@ impl Outbox {
         self.wake.notify_one();
     }
 
+    /// Queues `notice`, folded into the one of its reason still waiting, so
+    /// a writer that does not keep up holds at most one notice per reason
+    /// however often answers are refused and resumed. The folded notice goes
+    /// last, so the last one sent says what holds now.
+    fn notice(&self, notice: Notice) {
+        let mut pending = self.pending();
+        let waiting = pending.messages.iter().position(
+            |message| matches!(message, HolderMessage::Notice(queued) if queued.reason == notice.reason),
+        );
+        let notice = match waiting.and_then(|index| pending.messages.remove(index)) {
+            Some(HolderMessage::Notice(queued)) => fold(queued, notice),
+            _ => notice,
+        };
+        pending.messages.push_back(HolderMessage::Notice(notice));
+        drop(pending);
+        self.wake.notify_one();
+    }
+
     fn changed(&self) {
         let mut pending = self.pending();
         pending.changed = true;
@@ -542,7 +560,7 @@ impl Holder {
                     if let Some(connection) = &self.current
                         && connection.notices
                     {
-                        connection.outbox.send(HolderMessage::Notice(notice));
+                        connection.outbox.notice(notice);
                     }
                 }
             }
@@ -1019,6 +1037,22 @@ struct Answers {
     log: Log,
 }
 
+/// `queued` and the `newer` notice of its reason as one: their counts and
+/// bytes added, said in the newer one's words, a resumption's from its sum.
+fn fold(queued: Notice, newer: Notice) -> Notice {
+    let count = queued.count.saturating_add(newer.count);
+    let bytes = queued.bytes.saturating_add(newer.bytes);
+    let detail = match newer.reason {
+        NoticeReason::AnswersResumed => resumed_detail(count, bytes),
+        _ => newer.detail,
+    };
+    Notice::new(newer.reason, count, bytes, detail)
+}
+
+fn resumed_detail(count: u64, bytes: u64) -> String {
+    format!("{count} answers ({bytes} bytes) were refused while the program did not read them")
+}
+
 impl Answers {
     fn send(&self, answers: Vec<u8>) {
         if answers.is_empty() {
@@ -1065,7 +1099,7 @@ impl Answers {
                 NoticeReason::AnswersResumed,
                 count,
                 bytes,
-                format!("{count} answers ({bytes} bytes) were refused while the program did not read them"),
+                resumed_detail(count, bytes),
             ));
         }
         drop(refused);
@@ -1630,5 +1664,51 @@ fn hello_reason(error: &FrameError) -> CloseReason {
         }
         FrameError::TooLarge(_) => CloseReason::FrameTooLarge,
         _ => CloseReason::HelloInvalid,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn notices(outbox: &Outbox) -> Vec<Notice> {
+        outbox
+            .pending()
+            .messages
+            .iter()
+            .map(|message| match message {
+                HolderMessage::Notice(notice) => notice.clone(),
+                other => panic!("not a notice: {other:?}"),
+            })
+            .collect()
+    }
+
+    /// A writer that does not keep up while answers are refused and resumed
+    /// a thousand times holds one notice of each reason, the counts added
+    /// and the newest reason last.
+    #[test]
+    fn refusals_and_resumptions_a_writer_has_not_sent_fold_into_one_of_each() {
+        let outbox = Outbox::default();
+        for _ in 0..1000 {
+            outbox.notice(Notice::new(NoticeReason::AnswersRefused, 1, 10, "refused"));
+            outbox.notice(Notice::new(NoticeReason::AnswersResumed, 3, 30, "resumed"));
+        }
+        let held = notices(&outbox);
+        assert_eq!(held.len(), 2, "{held:?}");
+        assert_eq!(held[0].reason, NoticeReason::AnswersRefused);
+        assert_eq!((held[0].count, held[0].bytes), (1000, 10_000));
+        assert_eq!(held[1].reason, NoticeReason::AnswersResumed);
+        assert_eq!((held[1].count, held[1].bytes), (3000, 30_000));
+        assert!(
+            held[1].detail.starts_with("3000 answers (30000 bytes)"),
+            "{held:?}"
+        );
+
+        // A refusal after them goes last: the program refuses answers now.
+        outbox.notice(Notice::new(NoticeReason::AnswersRefused, 1, 10, "refused"));
+        let held = notices(&outbox);
+        assert_eq!(held.len(), 2, "{held:?}");
+        assert_eq!(held[1].reason, NoticeReason::AnswersRefused);
+        assert_eq!(held[1].count, 1001);
     }
 }
