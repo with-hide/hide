@@ -325,6 +325,29 @@ impl Holder {
     pub fn log_text(&self) -> String {
         std::fs::read_to_string(&self.log).unwrap_or_default()
     }
+
+    /// How many lines of `event` the holder's log holds.
+    pub fn logged(&self, event: &str) -> usize {
+        self.log_text()
+            .matches(&format!("\"event\":\"{event}\""))
+            .count()
+    }
+
+    /// Waits until the holder's log holds `count` lines of `event`, taking
+    /// what `connection` is sent meanwhile, so its writer is never held on a
+    /// full connection.
+    pub fn wait_logged(&self, event: &str, count: usize, connection: &mut Connection) {
+        let started = Instant::now();
+        while self.logged(event) < count {
+            assert!(
+                started.elapsed() < HANG_LIMIT,
+                "the holder never logged {event} {count} times; its log:\n{}",
+                self.log_text()
+            );
+            connection.drain();
+            connection.take(Duration::from_millis(50));
+        }
+    }
 }
 
 impl Drop for Holder {

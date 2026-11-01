@@ -20,6 +20,7 @@
 //! fragments and never a queue, and no connection means no drawing at all
 //! (PRD engine-bundle-2-pane-holder D-7, D-9).
 
+use std::cell::Cell;
 use std::collections::VecDeque;
 use std::io::{Read, Write as _};
 use std::path::PathBuf;
@@ -64,6 +65,17 @@ const WRITE_LIMIT: Duration = Duration::from_secs(5);
 /// The least time between two fragments a connection is sent, as Herdr
 /// draws at most once per frame of a 60 Hz screen.
 const MIN_FRAGMENT_INTERVAL: Duration = Duration::from_millis(16);
+
+/// How long a connection's screen stays still after a fragment before the
+/// writer gives the allocator's freed pages back to the system, once, until
+/// the next fragment ([`hide_platform::memory::return_freed`]).
+const RETURN_FREED_AFTER: Duration = Duration::from_secs(1);
+
+/// The program output, past what a screen or two of a redraw takes, after
+/// which a connection's next return of freed pages is logged; a
+/// connection's first return is logged too, and every other return is not,
+/// so a pane that redraws a line every second or two does not fill its log.
+const LOGGED_RETURN_BYTES: u64 = 1024 * 1024;
 
 /// The most answer bytes waiting for the program to take them; past it an
 /// answer is dropped and logged, and the program's output goes on being read
@@ -568,6 +580,9 @@ impl Holder {
                 pane: screen.then(|| self.pane.clone()),
                 epochs: self.epochs.clone(),
                 events: self.sender.clone(),
+                log: self.log.clone(),
+                returned: Cell::new(false),
+                fed: Cell::new(0),
             };
             let shutdown = stream.shutdown_handle();
             move || writer.serve(writer_stream, &shutdown, &written_tx)
@@ -1073,6 +1088,12 @@ struct ScreenWriter {
     pane: Option<Arc<Mutex<Pane>>>,
     epochs: Arc<AtomicU64>,
     events: Sender<Event>,
+    log: Log,
+    /// Whether this connection's writer has given freed pages back yet, and
+    /// the pane's output fed (`Pane::fed`) when it last did: which returns
+    /// are logged (`LOGGED_RETURN_BYTES`).
+    returned: Cell<bool>,
+    fed: Cell<u64>,
 }
 
 enum Job {
@@ -1089,8 +1110,11 @@ impl ScreenWriter {
         // The screen version seen while the program held synchronized
         // output, and until when it may.
         let mut held: Option<(u64, Instant)> = None;
+        // Whether a fragment went out since the freed pages were last given
+        // back: a flood leaves the allocator holding what it freed.
+        let mut drew = false;
         loop {
-            let job = self.next_job(next, held);
+            let job = self.next_job(next, held, &mut drew);
             let message = match job {
                 Job::Send(message) => message,
                 Job::Draw { full } => {
@@ -1120,6 +1144,7 @@ impl ScreenWriter {
                         }
                     };
                     held = None;
+                    drew = true;
                     let size = Size {
                         rows: frame.rows,
                         cols: frame.cols,
@@ -1163,8 +1188,10 @@ impl ScreenWriter {
     }
 
     /// Waits for a message to send, or for the screen to have changed by the
-    /// time it may be drawn again.
-    fn next_job(&self, next: Instant, held: Option<(u64, Instant)>) -> Job {
+    /// time it may be drawn again. Once the screen has stayed still for
+    /// `RETURN_FREED_AFTER` after a fragment (`drew`), it gives the freed
+    /// pages back and waits with no bound; nothing wakes an idle writer.
+    fn next_job(&self, next: Instant, held: Option<(u64, Instant)>, drew: &mut bool) -> Job {
         let mut pending = self.outbox.pending();
         loop {
             if let Some(message) = pending.messages.pop_front() {
@@ -1199,11 +1226,53 @@ impl ScreenWriter {
                 continue;
             }
             pending.waits_for_change = true;
+            if *drew {
+                let (guard, waited) = self
+                    .outbox
+                    .wake
+                    .wait_timeout(pending, RETURN_FREED_AFTER)
+                    .unwrap_or_else(PoisonError::into_inner);
+                pending = guard;
+                if waited.timed_out() && !pending.changed && pending.messages.is_empty() {
+                    *drew = false;
+                    drop(pending);
+                    self.return_freed();
+                    pending = self.outbox.pending();
+                }
+                continue;
+            }
             pending = self
                 .outbox
                 .wake
                 .wait(pending)
                 .unwrap_or_else(PoisonError::into_inner);
+        }
+    }
+
+    fn return_freed(&self) {
+        match hide_platform::memory::return_freed() {
+            Ok(()) => {
+                let fed = self.pane.as_ref().map_or(0, |pane| {
+                    pane.lock().unwrap_or_else(PoisonError::into_inner).fed()
+                });
+                let output = fed.saturating_sub(self.fed.replace(fed));
+                if !self.returned.replace(true) || output >= LOGGED_RETURN_BYTES {
+                    self.log.event(
+                        "holder.memory_returned",
+                        &[
+                            ("generation", self.generation.into()),
+                            ("output_bytes", output.into()),
+                        ],
+                    );
+                }
+            }
+            // A C library with no such call (musl, which no build of this
+            // repository targets) keeps what it freed.
+            Err(error) if error.kind() == std::io::ErrorKind::Unsupported => {}
+            Err(error) => self.log.event(
+                "holder.memory_return_failed",
+                &[("error", error.to_string().into())],
+            ),
         }
     }
 }
