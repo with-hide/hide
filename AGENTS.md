@@ -6,6 +6,7 @@ Do not apply superseded architecture decisions, old milestone reports, or old PR
 Update the owning guide and its active references in the same change as the behavior; keep run evidence outside `docs/`.
 Before changing browser displays, read `docs/BROWSER_DISPLAYS.md` for who owns a page, the `file:` address boundary, and native display verification.
 Before calling a change verified, read `docs/VERIFICATION.md` for which check proves the claim, the traps that made a check prove nothing, and the native QA tools that can address a candidate app without reaching the operator's.
+Before reviewing a change, yours before you open its pull request or anyone else's, read `docs/CODE_REVIEW.md` for the perspectives every review covers (correctness, fragmentation, simplicity, module boundaries, ownership and limits, tests), how a finding is graded, and which grades block a merge.
 Before writing or changing a test, read `docs/TESTING.md` for which layer to test at, how to build its fixture, the writing rules that keep it deterministic, the flaky policy, and, for the kind of test you write, its [Playwright e2e](docs/TESTING.md#writing-a-playwright-e2e-test) or [Rust](docs/TESTING.md#writing-a-rust-test) section.
 
 ## Repository Layout
