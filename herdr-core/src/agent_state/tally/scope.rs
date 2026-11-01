@@ -133,6 +133,13 @@ pub struct Scope {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub git_mark: Option<&'static str>,
     pub raised: Vec<Raised>,
+    /// The missions that are their own Needs You item on a device's scope:
+    /// a node waits on the operator and no Conductor or worker row carries
+    /// it (PRD mission-node-simple D-19, B14), oldest first. Each is counted
+    /// in `overview_needs_you` and `groups.needs_you`, so the Overview, the
+    /// device rail and the sidebar's Needs You read one number.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub mission_asks: Vec<String>,
     pub owners: BTreeMap<String, String>,
     pub badge_total: usize,
     pub rows: Vec<RowRef>,
@@ -596,6 +603,10 @@ pub(crate) struct Cache {
     /// The projects whose 흘린 것 was past its cap on the last projection,
     /// so a crossing is logged once.
     strays_over: HashSet<(String, String)>,
+    /// Each device's missions that are their own Needs You item, as the
+    /// mission views last marked them; laid on the device scopes and the
+    /// overall one at every apply, never into the cached output.
+    mission_asks: BTreeMap<String, Vec<String>>,
 }
 
 #[derive(Default)]
@@ -1178,19 +1189,35 @@ impl Cache {
         }
     }
 
+    /// Takes each device's missions that are their own Needs You item, laid
+    /// on the scopes at the next refresh; true when they moved, so the
+    /// caller refreshes (the output may predate the catalog, so this never
+    /// applies on its own).
+    pub(crate) fn note_mission_asks(&mut self, asks: BTreeMap<String, Vec<String>>) -> bool {
+        if self.mission_asks == asks {
+            return false;
+        }
+        self.mission_asks = asks;
+        true
+    }
+
     fn apply(&self, snapshot: &mut crate::model::Snapshot) -> bool {
-        let mut changed = snapshot.navigator.agent_scope != self.output.overall;
-        snapshot
-            .navigator
-            .agent_scope
-            .clone_from(&self.output.overall);
+        let mut overall = self.output.overall.clone();
+        for asks in self.mission_asks.values() {
+            with_mission_asks(&mut overall, asks);
+        }
+        let mut changed = snapshot.navigator.agent_scope != overall;
+        snapshot.navigator.agent_scope = overall;
         for device in &mut snapshot.navigator.devices {
-            let next = self
+            let mut next = self
                 .output
                 .devices
                 .get(&device.id)
                 .cloned()
                 .unwrap_or_default();
+            if let Some(asks) = self.mission_asks.get(&device.id) {
+                with_mission_asks(&mut next, asks);
+            }
             changed |= device.agent_scope != next;
             device.agent_scope = next;
         }
@@ -1227,6 +1254,15 @@ impl Cache {
         }
         changed
     }
+}
+
+/// Counts a device's missions that are their own Needs You item with its
+/// agents that are, so every surface that reads the scope's Needs You
+/// number reads them too.
+fn with_mission_asks(scope: &mut Scope, asks: &[String]) {
+    scope.overview_needs_you += asks.len();
+    scope.groups.needs_you += asks.len();
+    scope.mission_asks.extend(asks.iter().cloned());
 }
 
 /// A physical source occurrence. Pane identity alone cannot distinguish

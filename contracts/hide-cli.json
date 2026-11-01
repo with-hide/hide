@@ -766,6 +766,7 @@
                         "blocked",
                         "plan_review",
                         "mission_decision",
+                        "mission_attention",
                         "input_unconfirmed",
                         "draft",
                         "parent_blocked",
@@ -2372,6 +2373,7 @@
                         "blocked",
                         "plan_review",
                         "mission_decision",
+                        "mission_attention",
                         "input_unconfirmed",
                         "draft",
                         "parent_blocked",
@@ -4041,13 +4043,8 @@
                     "value": {
                         "type": "one_of",
                         "values": [
-                            "planned",
                             "working",
-                            "waiting",
-                            "review",
-                            "held",
                             "done",
-                            "failed",
                             "dropped"
                         ]
                     }
@@ -4708,7 +4705,16 @@
                 }
             ],
             "command": "mission take",
-            "options": [],
+            "options": [
+                {
+                    "name": "--handover",
+                    "required": false,
+                    "requires": [],
+                    "value": {
+                        "type": "text"
+                    }
+                }
+            ],
             "refusals": [
                 "mission_conducted",
                 "mission_cancelled",
@@ -4935,7 +4941,7 @@
             "rest": null
         }
     ],
-    "digest": "sha256:9e1c5513ab797bb47f68f03c09de15a619523070129dca1212266a021a0b144b",
+    "digest": "sha256:e2b2766197ea2610625457648691270613a6e6b069e5ed302db9052b922cdd8c",
     "envelopes": {
         "agent": {
             "answer": "value",

@@ -8,12 +8,12 @@
 // closing the lane (PRD mission-map-git-criteria B25, B28, B30, B31), and
 // Settings › Conductor keeps the cap the next `hide mission settings` reads.
 
-import { expect, test } from "@playwright/test";
+import { expect, test, type Page } from "@playwright/test";
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { agentPane, type HideAnswer } from "./agent-pane";
-import { startHerdr } from "./herdr-fixture";
+import { startHerdr, type HerdrFixture } from "./herdr-fixture";
 import { startHided, type Daemon } from "./hided-fixture";
 import { enterWorkspace, placedBoxes, screenshot } from "./wire";
 
@@ -37,35 +37,55 @@ const PLAN = {
   check: "true",
   nodes: [
     // Every node names its own finish line (PRD mission-map-git-criteria B1).
-    { key: "cause", title: "원인 조사", kind: "research", criteria: ["원인을 한 줄로 적는다"] },
+    // A long Korean title, so the narrow window below has something to keep inside its card (PRD mission-node-simple B30).
+    { key: "cause", title: "원인 조사: 재시작 뒤 미션 지도가 마지막 노드를 다시 그리지 않는 이유를 기록에서 찾는다", kind: "research", criteria: ["원인을 한 줄로 적는다"] },
     { key: "api", title: "API 추가", kind: "change", delivery: "pr", criteria: ["엔드포인트가 응답한다"], worker: { agent: "claude", model: "opus" } },
     { key: "screen", title: "API 쓰는 화면", kind: "change", delivery: "pr", criteria: ["화면이 API 값을 보인다"], depends_on: ["api"] },
   ],
 };
+
+/**
+ * A repository Project, since a mission belongs to one, with the Conductor's
+ * agent pane in it and the shell open on it. A daemon that started is stopped
+ * when the pane fails to come up.
+ */
+async function conductorRepo(page: Page, herdr: HerdrFixture, label: string): Promise<{ daemon: Daemon; conductor: Hide; pane: string }> {
+  const repoDir = path.join(herdr.root, "missions-repo");
+  fs.mkdirSync(repoDir);
+  const repo = fs.realpathSync(repoDir);
+  for (const args of [["init", "-q", "-b", "main"], ["-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid", "commit", "-q", "--allow-empty", "-m", "baseline"]]) {
+    const git = spawnSync("git", ["-C", repo, ...args], { encoding: "utf8" });
+    expect(git.status, git.stderr).toBe(0);
+  }
+  const created = herdr.run(["workspace", "create", "--cwd", repo, "--label", "missions-repo", "--env", `PATH=${herdr.fixturePath}`, "--focus"]) as { result: { root_pane: { pane_id: string } } };
+  const daemon = await startHided(herdr, label);
+  try {
+    const pane = created.result.root_pane.pane_id;
+    const conductor = await agentPane(herdr, daemon.stateDir, pane);
+    await page.goto(`${daemon.origin}/#token=${daemon.token}`);
+    await enterWorkspace(page, "missions-repo");
+    return { daemon, conductor, pane };
+  } catch (error) {
+    daemon.stop();
+    throw error;
+  }
+}
+
+/** The core reads this machine's projects just after it starts; until then it answers that it is still reading. */
+async function createMission(conductor: Hide) {
+  await expect.poll(async () => (await conductor(["mission", "create", "--title", "이슈 정리"])).out, { timeout: 20_000 }).toContain('"ok":true');
+}
 
 test("the Conductor's first plan shows on its pane, the map follows the record, and the Conductor settings keep the cap", async ({ page }) => {
   await page.setViewportSize({ width: 1600, height: 1000 });
   const herdr = await startHerdr({ agents: false });
   let daemon: Daemon | null = null;
   try {
-    // A mission belongs to a repository Project, so the Conductor runs in one.
-    const repoDir = path.join(herdr.root, "missions-repo");
-    fs.mkdirSync(repoDir);
-    const repo = fs.realpathSync(repoDir);
-    for (const args of [["init", "-q", "-b", "main"], ["-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid", "commit", "-q", "--allow-empty", "-m", "baseline"]]) {
-      const git = spawnSync("git", ["-C", repo, ...args], { encoding: "utf8" });
-      expect(git.status, git.stderr).toBe(0);
-    }
-    const created = herdr.run(["workspace", "create", "--cwd", repo, "--label", "missions-repo", "--env", `PATH=${herdr.fixturePath}`, "--focus"]) as { result: { root_pane: { pane_id: string } } };
-    daemon = await startHided(herdr, "mission-map");
-    const pane = created.result.root_pane.pane_id;
-    const conductor = await agentPane(herdr, daemon.stateDir, pane);
-    await page.goto(`${daemon.origin}/#token=${daemon.token}`);
-    await enterWorkspace(page, "missions-repo");
+    const opened = await conductorRepo(page, herdr, "mission-map");
+    daemon = opened.daemon;
+    const { conductor, pane } = opened;
     const map = page.locator('aside[data-detail="mission"]');
-
-    // The core reads this machine's projects just after it starts; until then it answers that it is still reading.
-    await expect.poll(async () => (await conductor(["mission", "create", "--title", "이슈 정리"])).out, { timeout: 20_000 }).toContain('"ok":true');
+    await createMission(conductor);
     // A mission without a plan opens nothing; its pane's chip says it is being planned.
     await expect(page.locator("[data-workspace-screen]")).toBeVisible();
     await expect(map).toHaveCount(0);
@@ -107,8 +127,6 @@ test("the Conductor's first plan shows on its pane, the map follows the record, 
     await expect(node).toHaveAttribute("data-node-status", "working");
     // Where a moving node is now is the summary's, beside the map, not the card's (PRD mission-tool B16, B19).
     await expect(map.locator('[data-mission-summary-line="api"]')).toHaveText("엔드포인트 작성 중");
-    // Its finish lines are counted on the card: the one the plan gave and the mission's check command, none passed yet.
-    await expect(node.locator("[data-node-criteria]")).toHaveAttribute("data-node-criteria", "0/2");
     await mission(conductor, ["mission", "decide", "--line", "화면 PR 방식 선택"]);
     // The decision is the operator's turn, above the map.
     await expect(map.locator('[data-mission-turn] [data-mission-banner="decision"]')).toContainText("화면 PR 방식 선택");
@@ -116,6 +134,8 @@ test("the Conductor's first plan shows on its pane, the map follows the record, 
     await node.click();
     const panel = map.locator('[data-mission-panel="api"] [data-mission-detail="api"]');
     await expect(panel).toBeVisible();
+    // Its finish lines are counted in the panel, not on the card (mission-node-simple B4): the one the plan gave and the mission's check command, none passed yet.
+    await expect(panel.locator('[data-panel-part="criteria"] h4')).toHaveText(/ · 0\/2$/);
     await expect(panel.locator("[data-panel-meta] [data-run]")).toHaveAttribute("title", "opus (planned)");
     await panel.locator("[data-panel-events-toggle]").click();
     await expect(panel.locator('[data-panel-event="node"]').first()).toBeVisible();
@@ -153,6 +173,37 @@ test("the Conductor's first plan shows on its pane, the map follows the record, 
     await page.getByRole("option", { name: "6", exact: true }).click();
     await expect(sheet.locator("[data-conductor-cap]")).toHaveAttribute("data-conductor-cap", "6");
     await expect.poll(async () => JSON.stringify((await mission(conductor, ["mission", "settings"])).result)).toContain('"concurrency":6');
+  } finally {
+    daemon?.stop();
+    herdr.stop();
+  }
+});
+
+test("a narrow window keeps every card's words inside it, a long title ending in an ellipsis (PRD mission-node-simple B30)", async ({ page }) => {
+  await page.setViewportSize({ width: 900, height: 1000 });
+  const herdr = await startHerdr({ agents: false });
+  let daemon: Daemon | null = null;
+  try {
+    const opened = await conductorRepo(page, herdr, "mission-map-narrow");
+    daemon = opened.daemon;
+    await createMission(opened.conductor);
+    await mission(opened.conductor, ["mission", "plan", "--json", JSON.stringify(PLAN)]);
+    await page.locator("[data-pane-mission-chip]").click();
+    const map = page.locator('aside[data-detail="mission"]');
+    await expect(map).toBeVisible();
+    await expect(map.locator("[data-mission-node]")).toHaveCount(3);
+    const spills = await map.locator("[data-mission-node]").evaluateAll((cards) =>
+      cards.flatMap((card) => {
+        const box = card.getBoundingClientRect();
+        const title = card.querySelector<HTMLElement>("[title]");
+        const out = card.scrollWidth > card.clientWidth + 1 || (title !== null && title.getBoundingClientRect().right > box.right + 1);
+        return out ? [card.getAttribute("data-mission-node")] : [];
+      }),
+    );
+    expect(spills).toEqual([]);
+    // The long title is cut, not wrapped or spilled: its whole is on hover and in the card's name.
+    expect(await map.locator('[data-mission-node="cause"] [title]').evaluate((title) => title.scrollWidth > title.clientWidth)).toBe(true);
+    await screenshot(page, "mission-map-narrow");
   } finally {
     daemon?.stop();
     herdr.stop();

@@ -390,8 +390,9 @@ impl Core {
             let missions =
                 crate::missions::MissionStore::new(hide_kit::layout::missions(directory));
             let restored = missions.restore();
-            let events = crate::mission_events::MissionEventStore::new(
+            let events = crate::mission_events::MissionEventStore::with_book(
                 hide_kit::layout::mission_events(directory),
+                missions.path().to_path_buf(),
             );
             let logs = match &restored {
                 crate::missions::Restored::Read(book) => {

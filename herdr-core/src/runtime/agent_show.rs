@@ -286,6 +286,13 @@ fn waiting(
                 waiting.text = Some(line.chars().take(TEXT_CHARS).collect());
                 waiting
             }
+            // A mission node that waits on the operator, laid on this row:
+            // the node's title is what to look at.
+            AskSubject::MissionAttention { node, .. } => {
+                let mut waiting = Waiting::on(WaitCause::MissionAttention, None, None);
+                waiting.text = Some(node.chars().take(TEXT_CHARS).collect());
+                waiting
+            }
             AskSubject::InputUnconfirmed { .. } => {
                 let mut waiting = Waiting::on(WaitCause::InputUnconfirmed, None, None);
                 waiting.spawn_id = pending.iter().find_map(|(input, _)| input.spawn_id.clone());

@@ -24,6 +24,7 @@ import { cn } from "./lib/utils";
 import { agentNumber, sidebarAgentNumbers } from "./numbering";
 import { checkoutAgentRows, type BoardRow } from "./projectBoard";
 import { FoldLane, SidebarAgentRow, type AgentRowMenu, type SidebarTreeSlot } from "./components/sidebar-agent-row";
+import { SidebarMissionRow, useMissionAsks } from "./components/sidebar-mission-row";
 import { TreeRails } from "./components/agent-tree";
 import { sidebarTreeLines } from "./sidebarTree";
 import { moveSidebarKey, sidebarNamedGroups, sidebarTabGroups, type SidebarCollection, type SidebarTabGroup } from "./sidebarTabs";
@@ -433,9 +434,10 @@ function ProjectList({ actions }: { actions: Actions }) {
   const catalogText = useShellStore((s) => catalogLineOf(s.rest, t)?.text ?? null);
   const catalogLine = catalogState && catalogText ? { state: catalogState, text: catalogText } : null;
   const raisedOpen = useUiStore((s) => s.raisedOpen);
+  const asks = useMissionAsks(frontId);
   const rows = useMemo(
-    () => projectRows(workspaces, { inactive_projects: inactiveFold, no_agent_projects: noAgentsFold }, listedAgents, frontScope, raisedOpen),
-    [workspaces, inactiveFold, noAgentsFold, listedAgents, frontScope, raisedOpen],
+    () => projectRows(workspaces, { inactive_projects: inactiveFold, no_agent_projects: noAgentsFold }, listedAgents, frontScope, raisedOpen, asks),
+    [workspaces, inactiveFold, noAgentsFold, listedAgents, frontScope, raisedOpen, asks],
   );
   // The device's Needs You and Done come first, then the projects in their sections; Working and Seen are the Agents tab's.
   const raised = useMemo(() => rows.filter((row) => row.kind === "raised"), [rows]);
@@ -666,9 +668,12 @@ function RaisedSection({ row, context }: { row: Extract<ProjectRow, { kind: "rai
   return (
     <li data-raised-group={row.group}>
       <div className="px-sm pt-sm pb-xxs text-micro font-medium text-muted-foreground" data-section={row.group} id={`raised-group-${row.group}`}>
-        {agentGroupTitle(row.group, t)} · {row.agents.length + row.more.length}
+        {agentGroupTitle(row.group, t)} · {row.missions.length + row.agents.length + row.more.length}
       </div>
       <ul aria-labelledby={`raised-group-${row.group}`}>
+        {row.missions.map((ask) => (
+          <SidebarMissionRow key={`mission:${ask.mission.id}`} ask={ask} inset={PROJECT_COLUMN} actions={context.actions} />
+        ))}
         {row.agents.map((listed) => (
           <RaisedAgentRow key={`${listed.device ?? ""}:${listed.agent.id}`} listed={listed} context={context} />
         ))}

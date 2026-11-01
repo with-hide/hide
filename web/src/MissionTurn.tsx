@@ -1,22 +1,23 @@
 import { useMemo, type ReactNode } from "react";
 import type { Actions } from "./actions";
-import { MissionNodeMark } from "./components/mission-node-mark";
+import { AttentionChoices } from "./components/mission-attention";
 import { MissionPrMark } from "./components/mission-pr";
 import { StatusMark } from "./components/status-mark";
 import { Button } from "./components/ui/button";
 import { useInterfaceTranslation } from "./i18n/client";
 import { DecisionBanner } from "./MissionDecision";
-import { turnItems, type TurnItem } from "./missions";
+import { attentionReasonText, turnItems, type TurnItem } from "./missions";
 import { allAgents, agentsByPane } from "./paneAgents";
 import type { Mission, MissionNode } from "./snapshot";
 import { useShellStore } from "./store";
 
 // What only the operator can do in a mission now, above its map (PRD
-// mission-map-git-criteria D-03, D-18, B18, B20, B25): the Conductor's
-// decision, answered here as it always was, a worker the core raised past its
-// Conductor, an outside pull request closed without its merge, the order to
-// merge or join what waits for main, and a mission no Conductor holds. Work
-// an agent carries is not here, and with nothing to do the section is gone.
+// mission-map-git-criteria D-03, D-18, B18, B20, B25; PRD mission-node-simple
+// B14, B15): the Conductor's decision, answered here as it always was, a node
+// the core raised to the operator with the choices its reason takes, a worker
+// the core raised past its Conductor, the order to merge or join what waits
+// for main, and a mission no Conductor holds. Work an agent carries is not
+// here, and with nothing to do the section is gone.
 
 export function MissionTurn({ mission, device, actions, onSelect }: { mission: Mission; device: string | null; actions: Actions; onSelect: (key: string) => void }) {
   const { t } = useInterfaceTranslation();
@@ -56,15 +57,20 @@ function Item({ item, mission, device, actions, onSelect }: { item: TurnItem; mi
           {item.node.pane_id ? <Button size="sm" variant="ghost" onClick={() => actions.openAgent(item.node.pane_id!)} data-mission-turn-terminal="true">{t("mission.toTerminal")}</Button> : null}
         </Row>
       );
-    case "outside_closed":
+    case "attention": {
+      const why = attentionReasonText(item.attention.reason, item.attention.pr, t);
       return (
-        <Row data-mission-turn-item="outside_closed">
-          <MissionNodeMark look="failed" label={t("mission.look.failed")} />
-          <NodeChip node={item.node} onSelect={onSelect} />
-          <span className="min-w-0 flex-1 truncate text-body">{t("mission.outside.closed")}</span>
-          {conversation}
-        </Row>
+        // The choices wrap under the line in a narrow slot rather than overflow it (B30).
+        <div className="flex min-w-0 flex-wrap items-center gap-x-sm gap-y-xxs" data-mission-turn-item="attention" data-mission-turn-reason={item.attention.reason}>
+          <span className="flex min-w-0 flex-1 basis-(--size-flow-title) items-center gap-sm">
+            <span aria-hidden="true" className="shrink-0 font-semibold text-mission-hold">!</span>
+            <NodeChip node={item.node} onSelect={onSelect} />
+            <span className="min-w-0 flex-1 truncate text-body" title={why}>{why}</span>
+          </span>
+          <AttentionChoices key={`${item.node.key}-${item.attention.since_unix_ms}`} mission={mission} node={item.node} attention={item.attention} actions={actions} />
+        </div>
       );
+    }
     case "landing":
       return (
         <Row data-mission-turn-item={item.git ? "join" : "merge"}>
@@ -89,6 +95,7 @@ function Row({ children, ...data }: { children: ReactNode } & Record<`data-${str
 
 /** A node named in 내 차례, which picks it on the map (B25): its title, with its pull request's mark when it has one (PRD mission-tool B18). */
 function NodeChip({ node, onSelect }: { node: MissionNode; onSelect: (key: string) => void }) {
+  // The pull request a node waits on now is its last one (D-10).
   const pr = node.pr ?? (node.external && "pr" in node.external ? node.external.pr : null);
   return (
     <button type="button" onClick={() => onSelect(node.key)} title={node.title} className="flex min-w-0 max-w-(--size-flow-title) shrink items-center gap-xxs rounded-xs bg-muted px-xs text-caption outline-none hover:bg-accent focus-visible:ring-1 focus-visible:ring-ring" data-mission-turn-node={node.key}>

@@ -36,7 +36,7 @@ import { frontDeviceId, localDeviceId, railShown } from "./devices";
 import { machineName, windowDeviceId } from "./screenMachine";
 import { allAgents, boardProjects } from "./navigation";
 import { cardOfItem } from "./overviewTasks";
-import { missionOfPane, takeOverPrompt, takeOverProvider } from "./missions";
+import { conductorUnanswered, missionOfPane, takeOverPrompt, takeOverProvider } from "./missions";
 import { planOfPane } from "./plans";
 import { backlogIntent } from "./overviewBacklog";
 import { MISSED_FOLD, sessionOfAgent, workKey } from "./sessionWork";
@@ -152,7 +152,12 @@ export function laneCalled(event: Parameters<DispatchFn>[0]): boolean {
  * paste goes through `clipboard`, the system one unless the screen gives its
  * own (the practice window keeps its copies off the operator's clipboard).
  */
+/** Takeover starts whose handover token a confirmation may still ask for. */
+const HANDOVER_TOKENS_KEPT = 8;
+
 export function createActions(send: DispatchFn, clipboard?: Clipboard) {
+  /** The handover token each takeover start was made with, by its request id, so a confirmation of that start names the same one. */
+  const handoverTokens = new Map<string, string>();
   const dispatch: DispatchFn = (event) => {
     if (laneCalled(event)) {
       // A stacked lane draws the column the call is for (PRD lane-two-columns B19).
@@ -1876,16 +1881,51 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
     endMission(missionId: string) {
       dispatch({ schema_version: 2, kind: "mission_end", payload: { mission: missionId } });
     },
+    /** 다시 열기 on a closed mission's map (PRD mission-node-simple B18): the operator's reopen, as the Conductor's `hide mission reopen`. */
+    reopenMission(missionId: string) {
+      dispatch({ schema_version: 2, kind: "mission_reopen", payload: { mission: missionId } });
+    },
+
+    /**
+     * The operator's choice for a mission node that waits on someone to look,
+     * or 다시 진행 on a done or dropped one (PRD mission-node-simple B15, B16,
+     * B20): the core settles the node, tells the Conductor what changed, and
+     * reopens a closed mission a resumed node belongs to. `since` names the
+     * raise the choice was made on, so a choice that arrives after the raise
+     * went is refused rather than applied to a node that no longer waits.
+     */
+    settleMissionNode(missionId: string, node: string, action: import("./snapshot").MissionOperatorAction, since?: number) {
+      dispatch({ schema_version: 2, kind: "mission_attention", payload: { mission: missionId, node, action, ...(since === undefined ? {} : { since_unix_ms: since }) } });
+    },
     takeOverMission(missionId: string, request?: { requestId: string; confirmOnly: boolean }) {
       const mission = rest()?.missions?.items.find((row) => row.id === missionId);
       if (!mission) return diagnostic(`mission_take: no mission ${missionId}`);
       const provider = takeOverProvider(mission, rest()?.ui_state?.agent_start);
+      // A Conductor still there is handed over once, to the session this start makes (PRD mission-node-simple B15): the core keeps the token, and only this prompt names it. A confirmation of the same start keeps its token.
+      let handover: string | undefined;
+      const key = request?.requestId ?? "";
+      if (request?.confirmOnly) {
+        // A confirmation is the start's last use of its token.
+        handover = handoverTokens.get(key);
+        handoverTokens.delete(key);
+      } else if (conductorUnanswered(mission)) {
+        handover = globalThis.crypto.randomUUID();
+        if (key) {
+          handoverTokens.set(key, handover);
+          // Starts that were never confirmed leave at most a few behind.
+          for (const old of handoverTokens.keys()) {
+            if (handoverTokens.size <= HANDOVER_TOKENS_KEPT) break;
+            handoverTokens.delete(old);
+          }
+        }
+        dispatch({ schema_version: 2, kind: "mission_handover", payload: { mission: missionId, token: handover } });
+      }
       this.startAgent({
         target: { checkoutPath: mission.checkout_path },
         ...(mission.device_id !== localDeviceId(rest()) ? { deviceId: mission.device_id } : {}),
         provider,
         model: rest()?.ui_state?.agent_start?.models?.[provider] ?? null,
-        prompt: takeOverPrompt(mission),
+        prompt: takeOverPrompt(mission, handover),
         ...request,
       });
     },
