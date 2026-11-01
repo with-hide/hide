@@ -24,7 +24,7 @@ use herdr_core::workspace_control::{
 };
 use herdr_core::{Core, CoreOptions};
 use hide_node::terminal::device::DeviceSink;
-use hide_node::terminal::engine_panes::LocalPanes;
+use hide_node::terminal::engine_panes::{LocalPanes, PaneShell};
 use hide_node::terminal::holder::{Holders, LocalTerminals};
 use hide_node::terminal::router::Router;
 use hide_node::terminal::{
@@ -1231,10 +1231,15 @@ fn local_engine(
             let definitions = hide_kit::agent_definitions::read(&home)
                 .unwrap_or_else(|_| hide_agent_adapter::definition::Catalog::read(Vec::new()));
             EngineHandle::own(
+                // A pane with no program of its own runs the account's shell
+                // with Hide's integration, as the node prepares it for a tab.
                 Arc::new(LocalPanes::new(
                     holders,
                     Arc::clone(service),
-                    hide_node::terminal::engine_panes::interactive_shell(),
+                    PaneShell::Account {
+                        home: home.clone(),
+                        user: hide_host::shell_integration::UserShell::of_process(),
+                    },
                 )),
                 node,
                 state_dir.to_path_buf(),

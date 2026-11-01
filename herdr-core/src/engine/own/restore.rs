@@ -407,11 +407,16 @@ impl OwnEngine<'static> {
     /// once its shell is ready; one that cannot be typed leaves its pane a
     /// shell and logs why.
     pub(super) fn resume_agents(&self, resumes: &[Resume]) {
+        // A restarted pane runs the shell a pane with no program runs: it
+        // marks its first prompt when that is the integration's, and the
+        // resume waits for the mark as a start into a tab the core just
+        // opened with it does.
+        let shell = ShellStart::of_tab(true, self.shared.holders.shell_launch().as_ref());
         for resume in resumes {
             if self.check().is_err() {
                 return;
             }
-            match self.resume_agent(resume) {
+            match self.resume_agent(resume, shell.clone()) {
                 Ok(()) => crate::diagnostic!(serde_json::json!({
                     "component": "own_engine",
                     "kind": "agent.resumed",
@@ -431,12 +436,9 @@ impl OwnEngine<'static> {
     }
 
     /// Waits for `resume`'s pane's shell as every start into a shell waits
-    /// for it, then records the agent as started and types its resume. A
-    /// restarted pane runs the machine's shell with no integration, as a
-    /// pane Herdr restores does, so it marks no prompt: it is ready when it
-    /// holds the terminal alone, as the core waits for the shell of any pane
-    /// it did not just open (`ShellStart::Plain`).
-    fn resume_agent(&self, resume: &Resume) -> Result<(), String> {
+    /// for it, as `shell` says it has finished starting, then records the
+    /// agent as started and types its resume.
+    fn resume_agent(&self, resume: &Resume, shell: ShellStart) -> Result<(), String> {
         // The longest of the shells' lines, as a start is bounded.
         let longest = [Shell::Posix, Shell::PowerShell]
             .into_iter()
@@ -450,7 +452,7 @@ impl OwnEngine<'static> {
             node,
             &format!("restore:{}", resume.pane),
             &resume.pane,
-            ShellStart::Plain,
+            shell,
             longest,
         )
         .map_err(|error| match error {

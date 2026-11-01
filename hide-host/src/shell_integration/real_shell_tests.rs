@@ -302,3 +302,40 @@ fn outside_herdr_each_shell_marks_its_first_prompt_on_its_screen_once() {
         assert!(!screen.contains(SCREEN_MARK), "{bin:?}: {screen:?}");
     }
 }
+
+/// Outside Herdr each shell says its folder on its screen (OSC 7) as it
+/// starts and after a `cd`, a `%` in a name spelled `%25`, for the pane's
+/// holder; in a Herdr pane, which reads the folder from the process, it says
+/// nothing of it.
+#[test]
+#[ignore = "needs zsh, bash and fish: set HIDE_TEST_ZSH_BIN, HIDE_TEST_BASH_BIN and HIDE_TEST_FISH_BIN and run with --ignored"]
+fn outside_herdr_each_shell_says_its_folder_on_its_screen() {
+    let home = tempfile::tempdir().unwrap();
+    let home = home.path().canonicalize().unwrap();
+    std::fs::create_dir(home.join("a b%c")).unwrap();
+    let said = |folder: String| format!("\u{1b}]7;file://{folder}\u{7}");
+    for variable in [
+        "HIDE_TEST_ZSH_BIN",
+        "HIDE_TEST_BASH_BIN",
+        "HIDE_TEST_FISH_BIN",
+    ] {
+        let bin = shell(variable);
+        let launch = install(&home.join("hide"), &user(&bin, None))
+            .unwrap()
+            .unwrap();
+        let mut args: Vec<&str> = launch.command[1..].iter().map(String::as_str).collect();
+        args.push("-i");
+        let after = "cd 'a b%c'\necho after >> \"$HOME/log\"\nexit\n";
+        let (_, screen) = run_in(Pane::Own, &bin, &args, &home, &launch.env, after);
+        assert!(
+            screen.contains(&said(home.display().to_string())),
+            "{variable}: {screen:?}"
+        );
+        assert!(
+            screen.contains(&said(format!("{}/a b%25c", home.display()))),
+            "{variable}: {screen:?}"
+        );
+        let (_, screen) = run_in(Pane::Herdr, &bin, &args, &home, &launch.env, after);
+        assert!(!screen.contains("\u{1b}]7;"), "{variable}: {screen:?}");
+    }
+}

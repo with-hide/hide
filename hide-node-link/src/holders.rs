@@ -229,6 +229,13 @@ pub trait PaneHolders: Send + Sync {
     /// service. Asked again for a pane that lives, it answers that pane and
     /// starts no second holder.
     fn start(&self, start: &HolderStart) -> Result<(), HolderError>;
+    /// How a pane started with no program runs its shell, when it runs one
+    /// with Hide's shell integration, which marks its first prompt on its
+    /// screen: what a start into such a pane waits for. `None` for a shell
+    /// that marks nothing.
+    fn shell_launch(&self) -> Option<crate::protocol::ShellLaunch> {
+        None
+    }
     /// Ends the pane, its program and everything it started, then its
     /// holder.
     fn terminate(&self, pane: &str) -> Result<(), HolderError>;

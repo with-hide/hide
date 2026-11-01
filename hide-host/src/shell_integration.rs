@@ -67,9 +67,10 @@ const BASH: [(&str, &str); 2] = [
         include_str!("shell_integration/interactive.bash"),
     ),
 ];
-/// fish's `-C` command, run after its configuration.
+/// fish's `-C` command, run after its configuration: the first prompt's
+/// mark, and outside a Herdr pane the folder (OSC 7) now and at each change.
 #[cfg(unix)]
-const FISH_MARK: &str = "if set -q HERDR_BIN_PATH HERDR_PANE_ID; $HERDR_BIN_PATH pane report-metadata $HERDR_PANE_ID --source hide:shell --token hide_prompt=1 >/dev/null 2>&1; else; printf '\\e]133;A\\a'; end";
+const FISH_MARK: &str = "if set -q HERDR_BIN_PATH HERDR_PANE_ID; $HERDR_BIN_PATH pane report-metadata $HERDR_PANE_ID --source hide:shell --token hide_prompt=1 >/dev/null 2>&1; else; function __hide_cwd --on-variable PWD; string match -q -r '[[:cntrl:]]' -- $PWD; or printf '\\e]7;file://%s\\a' (string replace -a % %25 -- $PWD); end; __hide_cwd; printf '\\e]133;A\\a'; end";
 /// Windows PowerShell's `-Command`, run after the user's profile: Herdr
 /// 0.9.3's own prompt wrapper for its PowerShell panes
 /// (`WINDOWS_POWERSHELL_SHELL_INTEGRATION_COMMAND` in its `src/pane.rs`),
