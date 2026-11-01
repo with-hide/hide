@@ -81,7 +81,7 @@ export function RightLaneScene({ theme, scale, content, state }: SceneParams & {
     for (const project of scene.rest.navigator!.workspaces!) for (const row of project.checkouts) if (row !== checkout) row.tabs = [];
     checkout.tabs = checkout.tabs.slice(0, 1);
     const root = checkout.path;
-    const file = (relative: string, label: string, id: string): EditorTabSnapshot => ({ id, workspace_id: workspace.id, checkout_id: checkout.id, path: `${root}/${relative}`, label, kind: "file", diff_committed: null, markdown_live: true, wrap: true, dirty: false, preview: false });
+    const file = (relative: string, label: string, id: string): EditorTabSnapshot => ({ id, device_id: workspace.device_id, workspace_id: workspace.id, checkout_id: checkout.id, path: `${root}/${relative}`, label, kind: "file", diff_committed: null, markdown_live: true, wrap: true, dirty: false, preview: false });
     const tabs = [file("docs/설정검토.md", "설정검토.md", "t1"), file("docs/작업계획.md", "작업계획.md", "t2")];
     const display = (tab: EditorTabSnapshot, id: string): ViewDisplaySnapshot => ({ id, tab_id: tab.id, path: tab.path, label: tab.label, kind: "file", committed: null, preview: false, state: "open", reason: null });
     const displays = lane.documents ? [display(tabs[0]!, "d1"), display(tabs[1]!, "d2")] : [];

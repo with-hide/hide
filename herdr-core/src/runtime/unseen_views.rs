@@ -389,7 +389,7 @@ impl Runtime {
 
 /// The machine a row runs on: a device's rows carry its prefix.
 fn agent_device(runtime: &Runtime, agent: &SidebarAgentSnapshot) -> String {
-    super::agent_sleep::pane_device(&agent.pane_id)
+    crate::address::pane_device(&agent.pane_id)
         .unwrap_or(runtime.node.as_str())
         .to_owned()
 }

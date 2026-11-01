@@ -26,6 +26,12 @@ const LAUNCH = "/checkouts";
 const PANE_VARIABLES = ["HERDR_ENV", "HERDR_PANE_ID", "HERDR_SOCKET_PATH"];
 const pane = (id) => ({ HERDR_ENV: "1", HERDR_PANE_ID: id, HERDR_SOCKET_PATH: "/tmp/herdr-fixture.sock" });
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+// The global instruction guard's corpus, which the helper's guard is run on too (`src/global_guard.rs`), with
+// `{state}` as this account's state folder.
+const CORPUS = JSON.parse(readFileSync(new URL("../fixtures/global-guard-corpus.json", import.meta.url), "utf8")).cases.map(
+  (entry) => ({ ...entry, text: entry.text.replaceAll("{state}", path.join(homedir(), ".hide", "state")) }),
+);
+const NAMED = CORPUS.filter((entry) => entry.named).length;
 
 /** Writes the guardrails policy the core would publish, with `rules` on the fixture project. */
 function policy(rules) {
@@ -435,10 +441,18 @@ test("with no terminal for the session the server half only guards a protected p
   assert.equal(await host.tool("ses_a", "shell", { command: "herdr agent start --kind claude" }), null);
   await sleep(100);
   assert.deepEqual(calls(), []);
-  // With no protection on, a call naming the Hide global instruction still asks the helper (D-07).
-  assert.equal(await host.tool("ses_a", "shell", { command: "echo x >> ~/.hide/state/global-instruction.md" }), "Not run: guarded");
-  const [global] = await until("tool");
-  assert.equal(global.input.guard_only, true);
+  // With no protection on, every call of the guard's corpus that names the Hide global instruction still asks the
+  // helper, and no other call does (D-07).
+  for (const entry of CORPUS) {
+    const [tool, input] =
+      entry.tool === "shell"
+        ? ["shell", { command: entry.text }]
+        : [entry.tool, { path: entry.text, ...(entry.tool === "write" ? { content: "x" } : {}) }];
+    assert.equal(await host.tool("ses_a", tool, input), entry.named ? "Not run: guarded" : null, entry.text);
+  }
+  const asked = await until("tool", NAMED);
+  assert.equal(asked.length, NAMED);
+  assert.ok(asked.every((call) => call.input.guard_only === true));
   rmSync(LOG, { force: true });
 
   policy({ files: true, paths: [".env"] });

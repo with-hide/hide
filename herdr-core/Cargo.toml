@@ -12,6 +12,7 @@ hide-agent-adapter = { path = "../hide-agent-adapter" }
 anyhow = "=1.0.104"
 hide-agent-hooks = { path = "../hide-agent-hooks" }
 hide-kit = { path = "../hide-kit" }
+hide-shell = { path = "../hide-shell" }
 hide-ai = { path = "../hide-ai" }
 hide-desk = { path = "../hide-desk" }
 hide-herdr-client = { path = "../hide-herdr-client" }

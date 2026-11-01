@@ -48,15 +48,6 @@ pub fn adapter_id(runtime: AgentRuntime) -> &'static str {
     runtime.id()
 }
 
-/// The prefix every pane id on a remote target carries.
-///
-/// It is the same rule the read-record ledger scopes itself by. A remote pane
-/// is judged against its own device's kit, never this Mac's hook files
-/// (`Runtime::derive_device_session`).
-pub fn is_remote_pane(pane_id: &str) -> bool {
-    pane_id.starts_with("remote:")
-}
-
 /// A device's hook for `dialect`, in the terms the pane judgement reads,
 /// from what the device's kit last reported (PRD device-parity D-21). On a
 /// device where Hide has certainly installed nothing (`declined`: never
@@ -282,11 +273,5 @@ mod tests {
         assert_eq!(runtime_of("Codex"), Some(AgentRuntime::Codex));
         assert_eq!(runtime_of("unknown"), None);
         assert_eq!(runtime_of(""), None);
-    }
-
-    #[test]
-    fn a_remote_pane_is_recognised_by_the_same_prefix_the_read_ledger_uses() {
-        assert!(is_remote_pane("remote:mini/w1:pA"));
-        assert!(!is_remote_pane("w1:pA"));
     }
 }

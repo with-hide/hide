@@ -218,6 +218,19 @@ pub const KEYS: &[(&str, &str, Mechanism, Moves)] = &[
         Mechanism::Rewritten,
         Moves::OwnPath("expanded_paths"),
     ),
+    // Each agent's 권한 by machine, beside this machine's own.
+    (
+        CORE_STATE,
+        "/device_agent_permissions/{key}",
+        Mechanism::Owned,
+        Moves::OwnPath("agent_permissions"),
+    ),
+    (
+        CORE_STATE,
+        "/agent_permissions/{key}",
+        Mechanism::Owned,
+        Moves::OwnPath("device_agent_permissions"),
+    ),
     (
         CORE_STATE,
         "/selected_pane_id",
@@ -1740,6 +1753,11 @@ mod tests {
             .tap_insert(
                 "stray_dismissals",
                 json!({"workspace:a:checkout:1": {"head": "aaa", "at_unix_ms": 1}}),
+            )
+            .tap_insert("agent_permissions", json!({"codex": {"mode": "ask"}}))
+            .tap_insert(
+                "device_agent_permissions",
+                json!({"mini": {"claude-code": {"mode": "ask"}}}),
             ),
         );
         write(

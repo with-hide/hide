@@ -2,7 +2,7 @@ import { emptyScope, legacyRest } from "../test/legacyAgentScope";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createActions } from "./actions";
 import { initializeInterfaceI18n } from "./i18n/instance";
-import { deviceCatalogLine, herdrPaneId, remoteTabView, remoteTargetOfPane, remoteView, supportsRemotePurpose } from "./remote";
+import { deviceCatalogLine, remoteTabView, remoteTargetOfPane, remoteView, supportsRemotePurpose } from "./remote";
 import { queueBuffer, tabBufferKey } from "./buffers";
 import type { Device, EditorSnapshot, RemoteSession, RemoteStatus, SnapshotRest, Tab, Workspace } from "./snapshot";
 import { useShellStore, type DaemonInfo } from "./store";
@@ -19,7 +19,7 @@ const LOCAL_PANE = "w1:p1";
 const PANE_A = "remote:studio:pane:w9:p1";
 const PANE_B = "remote:studio:pane:w9:p2";
 
-function tab(id: string, paneIds: string[], working: string[] = []): Tab {
+function tab(id: string, paneIds: string[], working: string[] = [], device = "studio"): Tab {
   return {
     id,
     workspace_id: null,
@@ -29,6 +29,8 @@ function tab(id: string, paneIds: string[], working: string[] = []): Tab {
     delegated: false,
     panes: paneIds.map((paneId) => ({
       id: paneId,
+      device_id: device,
+      device_pane_id: paneId,
       herdr_label: paneId,
       terminal_title: null,
       cwd: "/home/remote/app",
@@ -124,7 +126,7 @@ function rest(focusedDevice: string, state = "connected"): SnapshotRest {
               exists: true,
               has_panes: true,
               pull_request: null,
-              tabs: [tab("w1:t1", [LOCAL_PANE])],
+              tabs: [tab("w1:t1", [LOCAL_PANE], [], "local")],
               active_tab_id: "w1:t1",
               strip: [],
               next_tab_label: "2",
@@ -210,17 +212,24 @@ describe("remote view", () => {
     expect(beside.focusedPaneId).toBeNull();
   });
 
-  it("names a pane's host by its scoped id and never a similar target", () => {
-    const value: SnapshotRest = { status: { remote: [{ target_id: "studio", state: "connected", message: null, herdr_version: null }, { target_id: "studio2", state: "connected", message: null, herdr_version: null }] } };
+  it("names a pane's host by the device its published row names, never by the id's spelling", () => {
+    const onDevice = (device: string, paneIds: string[]): RemoteSession => {
+      const host = session();
+      return { ...host, workspaces: [{ ...host.workspaces[0]!, checkouts: [{ ...host.workspaces[0]!.checkouts[0]!, tabs: [tab(`remote:${device}:tab:w1:t1`, paneIds, [], device)] }] }], agents: [] };
+    };
+    const value: SnapshotRest = {
+      status: {
+        remote: [
+          { target_id: "studio", state: "connected", message: null, herdr_version: null, session: onDevice("studio", [PANE_A]) },
+          { target_id: "studio2", state: "connected", message: null, herdr_version: null, session: onDevice("studio2", ["remote:studio2:pane:w1:p1"]) },
+        ],
+      },
+    };
     expect(remoteTargetOfPane(value, PANE_A)).toBe("studio");
     expect(remoteTargetOfPane(value, "remote:studio2:pane:w1:p1")).toBe("studio2");
     expect(remoteTargetOfPane(value, LOCAL_PANE)).toBeNull();
-  });
-
-  it("copies a pane by the id its own Herdr knows it by, without the device scope", () => {
-    expect(herdrPaneId("w9J:p52")).toBe("w9J:p52");
-    expect(herdrPaneId("remote:mini:pane:w9J:p52")).toBe("w9J:p52");
-    expect(herdrPaneId("remote:studio2:pane:w1:pB")).toBe("w1:pB");
+    // A pane no device publishes is no device's, whatever its id spells.
+    expect(remoteTargetOfPane(value, "remote:studio:pane:w9:p9")).toBeNull();
   });
 
   it("stores a remote purpose only from Herdr 0.9.1", () => {
@@ -379,7 +388,7 @@ describe("removing a device (S5.5 B26, B44)", () => {
     seed(rest("studio"));
     useShellStore.setState({
       daemon: { host_id: "host-a" } as unknown as DaemonInfo,
-      editor: { tabs: [{ id: TAB, checkout_id: "remote:studio:checkout:w9", path: "/home/remote/app/a.ts" }] } as unknown as EditorSnapshot,
+      editor: { tabs: [{ id: TAB, device_id: "studio", checkout_id: "remote:studio:checkout:w9", path: "/home/remote/app/a.ts" }] } as unknown as EditorSnapshot,
       bufferWarnings: new Set<string>(),
     });
   };
@@ -406,7 +415,7 @@ describe("removing a device (S5.5 B26, B44)", () => {
 
 describe("an exported draft and a device removal (S5.5 B26, B44)", () => {
   it("releases the hold for the exact text exported, and holds again after a newer edit", () => {
-    const tabs = [{ id: "t", checkout_id: "remote:studio:checkout:w9", path: "/home/remote/app/a.ts" }];
+    const tabs = [{ id: "t", device_id: "studio", path: "/home/remote/app/a.ts" }];
     const unstored = new Set(["t"]);
     let current = "typed";
     const exported = new Map([["t", "typed"]]);

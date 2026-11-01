@@ -456,10 +456,10 @@ impl Runtime {
 
     /// Drops reads still running for checkouts under `scope` (a removed
     /// device's `remote:<id>:`), so a late answer opens no tab for it.
-    pub(super) fn forget_device_opens(&mut self, scope: &str) {
+    pub(super) fn forget_device_opens(&mut self, device_id: &str) {
         let before = self.document_opens.len();
         self.document_opens
-            .retain(|_, open| !open.checkout_id.starts_with(scope));
+            .retain(|_, open| crate::address::device_of(&open.checkout_id) != Some(device_id));
         if self.document_opens.len() != before {
             self.sync_opening_snapshot();
         }

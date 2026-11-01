@@ -134,7 +134,7 @@ pub(super) fn staged_tab(
         if local {
             id.to_owned()
         } else {
-            crate::session_sync::remote_tab_id(device, id)
+            crate::address::scoped_tab_id(device, id)
         }
     };
     view.agent_starts.values().any(|start| {
@@ -443,7 +443,7 @@ impl Runtime {
         let tab_id = intent.live_tab_id.clone();
         let source_tab = |id: Option<String>| -> Result<Option<String>, String> {
             match id {
-                Some(id) if !local => remote_tab_source_id(device, &id)
+                Some(id) if !local => crate::address::tab_of(&id, device)
                     .map(|id| Some(id.to_owned()))
                     .ok_or_else(|| "The tab belongs to another device. Refresh and retry.".into()),
                 id => Ok(id),
@@ -988,12 +988,12 @@ impl Runtime {
         let tab = if local {
             tab.to_owned()
         } else {
-            crate::session_sync::remote_tab_id(&active.workspace.0, tab)
+            crate::address::scoped_tab_id(&active.workspace.0, tab)
         };
         let pane = if local {
             pane.to_owned()
         } else {
-            operations::remote_pane_id(&active.workspace.0, pane)
+            crate::address::scoped_pane_id(&active.workspace.0, pane)
         };
         let seen = !self
             .provisional_tabs

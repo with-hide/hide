@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { movingTab, movePaneReason, paneEdge, selectedMovePane } from "./paneMove";
 import type { AsyncOperation, PaneRow, Tab, TerminalPane } from "./snapshot";
 
-const pane: PaneRow = { id: "w1:p1", herdr_label: "shell", terminal_title: null, cwd: "/fixture", status_code: "idle", requires_close_confirmation: false, requires_close_status_check: false, identity_label: null };
+const pane: PaneRow = { id: "w1:p1", device_id: "local", device_pane_id: "w1:p1", herdr_label: "shell", terminal_title: null, cwd: "/fixture", status_code: "idle", requires_close_confirmation: false, requires_close_status_check: false, identity_label: null };
 const operation = (phase: string): AsyncOperation => ({ id: "request", kind: "pane.move", target_id: pane.id, scope_id: "source", related_scope_ids: ["source", "target"], phase, stage: "move", message: null, retryable: phase === "failed" });
 const transport = (state: string): TerminalPane => ({ pane_id: pane.id, closed: false, exit_code: null, transport_state: state, transport_message: null });
 

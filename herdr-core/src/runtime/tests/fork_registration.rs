@@ -197,7 +197,8 @@ fn a_fork_whose_session_arrives_late_registers_as_the_operators_root_from_its_so
         })
     });
     // `hide agent list` shows it as a root from the source.
-    let listed = crate::coordination::agent_view(fork, &ledger);
+    let listed =
+        crate::coordination::agent_view(fork, &ledger, &crate::coordination::Sleeping::NONE);
     let listed = serde_json::to_value(listed).unwrap();
     assert_eq!(
         (listed["parent"].clone(), listed["origin"].clone()),

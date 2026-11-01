@@ -1,13 +1,10 @@
 import type { BoardProject } from "./projectBoard";
-import { localDeviceId, type AgentRow, type Checkout, type Workspace, type MissedWork, type SessionRecord, type SessionWorkSummary, type SnapshotRest, type WorkRequest, type WorkSession } from "./snapshot";
+import type { AgentRow, Checkout, Workspace, MissedWork, SessionRecord, SessionWorkSummary, WorkRequest, WorkSession } from "./snapshot";
 
 export const workKey = (session: WorkSession) => `${session.device_id}\0${session.agent}\0${session.session_id}`;
-export function sessionOfAgent(agent: AgentRow, rest: SnapshotRest | null): WorkSession | null {
-  return sessionOfAgentOn(agent, localDeviceId(rest));
-}
-/** The same, given this machine's id, for a caller that should not read the whole snapshot. */
-export function sessionOfAgentOn(agent: AgentRow, localId: string): WorkSession | null {
-  return agent.session_id ? { device_id: agent.device_id ?? localId, agent: agent.agent_kind, session_id: agent.session_id } : null;
+/** The session an agent row runs, named on the machine the core says the row is on. */
+export function sessionOfAgent(agent: AgentRow): WorkSession | null {
+  return agent.session_id ? { device_id: agent.device_id, agent: agent.agent_kind, session_id: agent.session_id } : null;
 }
 export function recordTitle(record: Pick<SessionRecord, "title" | "manual_title" | "native_title" | "fallback_title">, summaries: boolean): string {
   return record.manual_title ?? (summaries ? record.title : record.native_title ?? record.fallback_title);
@@ -72,10 +69,10 @@ export type SessionPlace = { project: Workspace; checkout: Checkout | null; agen
  * checkout or project path that holds its working folder. Null when no
  * registered project of that device holds it.
  */
-export function sessionPlace(projects: readonly BoardProject[], session: WorkSession, cwd: string | null, rest: SnapshotRest | null): SessionPlace | null {
+export function sessionPlace(projects: readonly BoardProject[], session: WorkSession, cwd: string | null): SessionPlace | null {
   const own = projects.filter(({ workspace }) => workspace.device_id === session.device_id);
   for (const { workspace, agents } of own) {
-    const agent = agents.find((row) => row.agent_kind === session.agent && row.session_id === session.session_id && (row.device_id ?? localDeviceId(rest)) === session.device_id);
+    const agent = agents.find((row) => row.agent_kind === session.agent && row.session_id === session.session_id && row.device_id === session.device_id);
     const member = agent ? workspace.agent_scope.members.find((row) => row.pane_id === agent.pane_id) : undefined;
     if (!agent || !member) continue;
     return { project: workspace, checkout: workspace.checkouts.find((row) => row.id === member.checkout_id) ?? null, agent };

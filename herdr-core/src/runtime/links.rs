@@ -952,11 +952,8 @@ impl Runtime {
             .map(|agent| (agent.pane_id.as_str(), agent))
             .collect::<HashMap<_, _>>();
         let wire_name = |agent: &SidebarAgentSnapshot, device: &str| {
-            let pane = if device == self.node.as_str() {
-                agent.pane_id.clone()
-            } else {
-                format!("remote:{device}:pane:{}", agent.pane_id)
-            };
+            // A device row already carries its scoped id, which stands as it is.
+            let pane = crate::address::named_pane_id(self.node.as_str(), device, &agent.pane_id);
             match (
                 self.delivery_observations.get(&pane),
                 self.delivery_ledger.as_ref(),

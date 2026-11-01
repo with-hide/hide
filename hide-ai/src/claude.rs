@@ -46,10 +46,6 @@ use crate::{
 /// thinking took 56 to 81 s. Measured 2026-10-02 on claude 2.1.287.
 pub const DEFAULT_MODEL: &str = "sonnet";
 
-/// The reasoning efforts `--effort` takes (claude 2.1.294 `--help`). A picked
-/// effort is the caller asking for thinking, so it replaces [`THINKING_OFF`].
-pub const EFFORTS: &[&str] = &["low", "medium", "high", "xhigh", "max"];
-
 /// The variable and value that turn thinking off for a model turn.
 ///
 /// Print mode thinks by default, and a background answer is a short JSON

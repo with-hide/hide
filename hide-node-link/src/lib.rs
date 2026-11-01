@@ -9,6 +9,7 @@
 //! shapes are still those of `hide-session` and `hide-kit`, named here for
 //! their types only.
 
+pub mod address;
 pub mod ai;
 pub mod attachments;
 pub mod branch;

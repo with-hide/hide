@@ -9,6 +9,8 @@ import type { AgentRow, PaneRow } from "./snapshot";
 function pane(id: string, extra: Partial<PaneRow> = {}): PaneRow {
   return {
     id,
+    device_id: "local",
+    device_pane_id: id,
     herdr_label: id,
     terminal_title: null,
     cwd: "/",

@@ -106,18 +106,6 @@ pub struct PlansSnapshot {
     pub items: Vec<PlanView>,
 }
 
-/// Whether a row's pane id names `pane`, which a registration may hold
-/// raw (`w1:p2`) and a device's rows hold qualified
-/// (`remote:<device>:pane:w1:p2`).
-fn same_pane(row: &str, pane: &str) -> bool {
-    let raw = |id: &str| {
-        id.rsplit_once(":pane:")
-            .map_or(id, |(_, raw)| raw)
-            .to_owned()
-    };
-    row == pane || raw(row) == raw(pane)
-}
-
 /// The identity a row's session is saved under.
 fn row_session(device: &str, agent: &SidebarAgentSnapshot) -> Option<SessionIdentity> {
     Some(SessionIdentity {
@@ -223,7 +211,9 @@ impl Runtime {
     fn caller_session(&self, device: &str, pane: &str, actor: &Actor) -> Option<SessionIdentity> {
         self.machine_agents(device)
             .iter()
-            .find(|agent| same_pane(&agent.pane_id, pane))
+            .find(|agent| {
+                crate::address::same_pane(self.node.as_str(), device, &agent.pane_id, pane)
+            })
             .and_then(|agent| row_session(device, agent))
             .or_else(|| {
                 Some(SessionIdentity {
@@ -337,11 +327,7 @@ impl Runtime {
         let Caller::Pane(pane) = Caller::parse(caller) else {
             return Err("agent_pane_required".into());
         };
-        let pane = if device == self.node.as_str() || pane.starts_with("remote:") {
-            pane.to_owned()
-        } else {
-            format!("remote:{device}:pane:{pane}")
-        };
+        let pane = crate::address::named_pane_id(self.node.as_str(), device, pane);
         let actor = self
             .delivery_observations
             .get(&pane)
@@ -630,11 +616,7 @@ impl Runtime {
         let Caller::Pane(pane) = Caller::parse(caller) else {
             return None;
         };
-        let pane = if device == self.node.as_str() || pane.starts_with("remote:") {
-            pane.to_owned()
-        } else {
-            format!("remote:{device}:pane:{pane}")
-        };
+        let pane = crate::address::named_pane_id(self.node.as_str(), device, pane);
         let actor = &self.delivery_observations.get(&pane)?.actor;
         let session = self.caller_session(device, &pane, actor)?;
         Some(self.plan_context_of(device, actor, &session))
@@ -1044,9 +1026,14 @@ impl Runtime {
         };
         let row = (!record.ended)
             .then(|| {
-                self.machine_agents(&record.machine)
-                    .iter()
-                    .find(|row| same_pane(&row.pane_id, &record.actor.pane_id))
+                self.machine_agents(&record.machine).iter().find(|row| {
+                    crate::address::same_pane(
+                        self.node.as_str(),
+                        &record.machine,
+                        &row.pane_id,
+                        &record.actor.pane_id,
+                    )
+                })
             })
             .flatten();
         let session = row
@@ -1513,10 +1500,9 @@ impl Runtime {
     /// The plan of the worker in `pane` on `machine`, for a mission node's
     /// card and detail (D-17, D-18).
     pub(super) fn worker_plan(&self, machine: &str, pane: &str) -> Option<PlanView> {
-        let agent = self
-            .machine_agents(machine)
-            .iter()
-            .find(|agent| same_pane(&agent.pane_id, pane))?;
+        let agent = self.machine_agents(machine).iter().find(|agent| {
+            crate::address::same_pane(self.node.as_str(), machine, &agent.pane_id, pane)
+        })?;
         let session = row_session(machine, agent)?;
         Some(self.plan_view(self.plans.book.get(&session)?, &agent.pane_id))
     }

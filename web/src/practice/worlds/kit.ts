@@ -264,6 +264,8 @@ export function agent({ elapsed, ...spec }: Partial<AgentRow> & Pick<AgentRow, "
     demand: "none",
     activity: "idle",
     changed_at_unix_ms: changed,
+    device_id: "local",
+    device_pane_id: spec.pane_id,
     ...spec,
   };
 }
@@ -355,7 +357,7 @@ function deskCheckout(model: DeskModel, place: PracticePlace, scope: AgentScope,
   const pane = (paneId: string) => {
     const row = model.panes.find((one) => one.id === paneId)!;
     return {
-      id: paneId, herdr_label: null, terminal_title: row.agent ? null : row.title, cwd: path, status_code: "idle" as const,
+      id: paneId, device_id: "local", device_pane_id: paneId, herdr_label: null, terminal_title: row.agent ? null : row.title, cwd: path, status_code: "idle" as const,
       requires_close_confirmation: false, requires_close_status_check: false, identity_label: row.title,
     };
   };

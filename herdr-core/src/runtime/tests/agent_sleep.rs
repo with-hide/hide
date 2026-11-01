@@ -674,9 +674,20 @@ fn durable_dormant_journey_in(kind: &'static str, interference: &'static str, op
                 },
                 "11111111-2222-3333-4444-555555555555",
             ];
+            // No saved 권한: each CLI's full-access option (its help,
+            // read 2026-11-01) goes before the choice.
+            let access: &[&str] = match kind {
+                "claude" => &crate::agent_permission::CLAUDE_FULL_ACCESS,
+                "codex" => &["--dangerously-bypass-approvals-and-sandbox"],
+                "opencode" => &["--auto"],
+                "omp" => &["--auto-approve"],
+                "grok" => &["--always-approve"],
+                "agy" => &["--dangerously-skip-permissions"],
+                _ => &[],
+            };
             assert_eq!(
                 params["args"],
-                serde_json::json!([resume.as_slice(), launch_words].concat())
+                serde_json::json!([resume.as_slice(), access, launch_words].concat())
             );
             effects.send("start").unwrap();
             serde_json::json!({"type":"agent_started","argv":[],"agent":{

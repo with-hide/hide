@@ -505,7 +505,11 @@ fn retired_coordinator_preserves_handoff_origin_and_its_manual_watch() {
     test.assert_preserved(&before);
     let persisted = test.commit_pending();
     assert_eq!(persisted.agents, test.ledger.agents);
-    let handoff = crate::coordination::view(&persisted.agents[1], &persisted);
+    let handoff = crate::coordination::view(
+        &persisted.agents[1],
+        &persisted,
+        &crate::coordination::Sleeping::NONE,
+    );
     assert!(handoff["parent"].is_null());
     assert_eq!(handoff["origin"], "agent-1");
     assert_eq!(persisted.watches.len(), 2);

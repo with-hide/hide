@@ -493,10 +493,7 @@ pub mod phone {
 
         /// The pane id Herdr knows on the device that owns it.
         pub fn herdr_pane_id(&self) -> &str {
-            let prefix = format!("remote:{}:pane:", self.device_id);
-            self.pane_id
-                .strip_prefix(prefix.as_str())
-                .unwrap_or(&self.pane_id)
+            crate::address::pane_of(&self.pane_id, &self.device_id).unwrap_or(&self.pane_id)
         }
     }
 

@@ -140,6 +140,8 @@ pub struct ForkRequest {
     /// The model and effort the source was started with, which the fork
     /// starts with after its resume arguments.
     pub launch: hide_agent_adapter::LaunchChoice,
+    /// The machine's 권한 for the agent as the fork was asked for.
+    pub(crate) permission: crate::agent_permission::AgentPermission,
 }
 
 /// Herdr's own rule for an agent name, quoted from the error it answers with:
@@ -331,6 +333,7 @@ mod tests {
             tab_label: Some("Tab 2".to_owned()),
             placement: ForkPlacement::Tab,
             launch: Default::default(),
+            permission: Default::default(),
         }
     }
 

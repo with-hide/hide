@@ -54,7 +54,7 @@ use hide_node_link::device::SignInReply;
 use crate::screen_sign_in::{NotOwner, Shown};
 use hide_node_link::terminal::{
     KeyTarget, MAX_PANE_ID_BYTES, TerminalDown, TerminalLine, TerminalNode, TerminalUp,
-    decode_base64, device_pane_prefix, encode_base64,
+    decode_base64, encode_base64,
 };
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -177,7 +177,7 @@ impl NodeDaemon {
         updates: Option<crate::node_role::Updates>,
     ) -> Result<Self, String> {
         let hub = TerminalHub::new();
-        let own_prefix = device_pane_prefix(&identity.node);
+        let own_node = identity.node.clone();
         let screen_node = identity.node.clone();
         let core_node = placement.node.clone();
         let core_alias: Arc<str> = placement.alias.as_str().into();
@@ -192,7 +192,7 @@ impl NodeDaemon {
             identity,
             Arc::new(OwnPanes {
                 hub: Arc::clone(&hub),
-                prefix: own_prefix.clone(),
+                node: own_node.clone(),
             }),
             Some(Arc::clone(&browser)),
             Some(roots_follow(Arc::clone(&boundary))),
@@ -200,7 +200,7 @@ impl NodeDaemon {
         )?);
         let live = role.live();
         let follow = browser.spawn_follow(live.clone());
-        let terminals = Arc::new(ScreenTerminals::new(own_prefix.clone(), live.clone()));
+        let terminals = Arc::new(ScreenTerminals::new(own_node, live.clone()));
         let relay = tokio::spawn(keep_terminals_relay(
             live.clone(),
             Arc::clone(&hub),

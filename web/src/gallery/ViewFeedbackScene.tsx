@@ -113,7 +113,7 @@ export function ViewFeedbackScene({ theme, scale, content, state }: SceneParams 
     const main = opener("a1");
     const other = opener("a2");
 
-    const tab = (id: string, relative: string, kind: EditorTabSnapshot["kind"]): EditorTabSnapshot => ({ id, workspace_id: workspace.id, checkout_id: checkout.id, path: `${root}/${relative}`, label: relative.split("/").pop()!, kind, diff_committed: kind === "diff" ? false : null, markdown_live: true, wrap: false, dirty: false, preview: false });
+    const tab = (id: string, relative: string, kind: EditorTabSnapshot["kind"]): EditorTabSnapshot => ({ id, device_id: workspace.device_id, workspace_id: workspace.id, checkout_id: checkout.id, path: `${root}/${relative}`, label: relative.split("/").pop()!, kind, diff_committed: kind === "diff" ? false : null, markdown_live: true, wrap: false, dirty: false, preview: false });
     const tabs = [tab("t2", "src/LoginForm.tsx", "diff"), tab("t3", "docs/onboarding.pdf", "file"), tab("t4", "README.md", "file")];
     const sent = state === "sent";
     const comments: ViewComment[] = sent

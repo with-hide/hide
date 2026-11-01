@@ -315,7 +315,7 @@ const DEVICE: &str = "geometry-device";
 fn remote_setup() -> (Runtime, FakeHerdr, u64, String, String) {
     let (mut runtime, herdr, task) = setup();
     let tab = format!("remote:{DEVICE}:tab:{TAB}");
-    let pane_id = remote_pane_id(DEVICE, PANE);
+    let pane_id = crate::address::scoped_pane_id(DEVICE, PANE);
     let workspace_id = format!("remote:{DEVICE}:workspace:w-order");
     let mut owned = checkout(
         &workspace_id,
@@ -324,7 +324,7 @@ fn remote_setup() -> (Runtime, FakeHerdr, u64, String, String) {
         Some(pane(&pane_id, PATH)),
     );
     owned.tabs[0].id = Some(tab.clone());
-    let other_pane = remote_pane_id(DEVICE, "w-order:p2");
+    let other_pane = crate::address::scoped_pane_id(DEVICE, "w-order:p2");
     owned.tabs[0].panes.push(pane(&other_pane, PATH));
     let mut project = workspace(&workspace_id, "Geometry", PATH, vec![owned]);
     project.device_id = DEVICE.into();

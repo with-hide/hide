@@ -1,3 +1,4 @@
+import { MoonIcon } from "lucide-react";
 import type { NodeLook } from "../missions";
 import { cn } from "../lib/utils";
 import { Hint } from "./ui/tooltip";
@@ -8,21 +9,26 @@ import { Hint } from "./ui/tooltip";
 // disc, so the two read apart without the card's tag. An
 // outside node still watching is a dotted ring, its `↗` drawn beside its
 // number on the card in every state. The hover and the accessible name say
-// the same state word.
+// the same state word. A node whose worker Hide put to sleep wears the
+// sleeping row's grey moon, as its worker's row does.
 
 export function MissionNodeMark({ look, label, className }: { look: NodeLook; label: string; className?: string }) {
   return (
     <Hint label={label}>
       <span role="img" aria-label={label} data-node-mark={look} className={cn("inline-flex size-(--size-agent-mark) shrink-0 items-center justify-center", className)}>
-        <svg viewBox="0 0 12 12" className={cn("size-full", look === "working" && "motion-safe:animate-spin")} aria-hidden="true">
-          <Shape look={look} />
-        </svg>
+        {look === "asleep" ? (
+          <MoonIcon className="size-full text-muted-foreground" aria-hidden="true" />
+        ) : (
+          <svg viewBox="0 0 12 12" className={cn("size-full", look === "working" && "motion-safe:animate-spin")} aria-hidden="true">
+            <Shape look={look} />
+          </svg>
+        )}
       </span>
     </Hint>
   );
 }
 
-function Shape({ look }: { look: NodeLook }) {
+function Shape({ look }: { look: Exclude<NodeLook, "asleep"> }) {
   switch (look) {
     case "waiting":
       return <circle cx="6" cy="6" r="4.6" fill="none" strokeWidth="1.3" strokeDasharray="1.8 1.6" className="stroke-muted-foreground" />;

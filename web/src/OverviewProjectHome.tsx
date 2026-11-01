@@ -12,7 +12,7 @@ import { useInterfaceTranslation } from "./i18n/client";
 import { scopeAgents } from "./overviewLens";
 import type { BoardProject } from "./projectBoard";
 import { ProjectPanel } from "./ProjectsTab";
-import { sessionOfAgentOn } from "./sessionWork";
+import { sessionOfAgent } from "./sessionWork";
 import { useUiStore, type MainView } from "./ui";
 
 /** A project's facts and retained controls beside its actual checkouts and sessions. */
@@ -38,7 +38,7 @@ export function OverviewProjectHome({ project, deviceId, actions }: { project: B
           <h2 className="mb-sm text-subhead font-semibold">{t("overviewRedesign.sessions")} <span className="font-mono text-caption text-muted-foreground">{sessions.length}</span></h2>
           {sessions.length === 0 ? <p className="text-caption text-muted-foreground">{t("overviewRedesign.noSessions")}</p> : <ul>
             {sessions.map(({ agent, checkout }) => {
-              const session = sessionOfAgentOn(agent, workspace.device_id);
+              const session = sessionOfAgent(agent);
               return <li key={agent.pane_id} className="border-b border-border py-sm">
                 <button type="button" disabled={!session} aria-label={rowAccessibleName(t, agent, null)} className="flex w-full min-w-0 items-start gap-sm rounded-xs text-left outline-none hover:bg-accent focus-visible:ring-1 focus-visible:ring-ring disabled:cursor-default" onClick={() => { if (session) useUiStore.getState().setOverview({ panel: { kind: "record", session } }); }} data-project-home-session={agent.pane_id}>
                   <StatusMark mark={agent.mark} label={statusText(t, agent.status_code)} className="mt-xxs" /><AgentMark kind={agent.agent_kind} />

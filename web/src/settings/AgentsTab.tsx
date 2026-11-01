@@ -130,6 +130,7 @@ function MachineAgents({ machine, actions }: { machine: AgentMachine; actions: A
               <AgentRow key={agent.id} device={device} agent={agent} actions={actions} onAct={act} />
             ))}
           </Group>
+          {machine.installed.length > 0 ? <PermissionScope /> : null}
           {checkFailed ? (
             <Note tone="error" data-agents-check-failed={checkFailed}>
               {t("agents.checkFailed", { reason: t(checkFailedReason(checkFailed)) })}
@@ -152,5 +153,31 @@ function MachineAgents({ machine, actions }: { machine: AgentMachine; actions: A
         </>
       ) : null}
     </div>
+  );
+}
+
+/**
+ * When an agent's 권한 applies, under the installed agents and in full view:
+ * every start Hide makes, and never an agent the operator types into a
+ * terminal, which follows the CLI's own configuration.
+ */
+function PermissionScope() {
+  const { t } = useInterfaceTranslation();
+  return (
+    <section className="mb-lg flex flex-col gap-xs" data-agents-permission-scope="true">
+      <h4 className="text-body font-semibold text-subtle-foreground">{t("agents.permission.scopeTitle")}</h4>
+      <p className="flex gap-sm text-body text-foreground">
+        <span aria-hidden="true" className="font-mono text-success">✓</span>
+        <span>
+          <span className="font-semibold">{t("agents.permission.scopeHide")}</span> · {t("agents.permission.scopeHideWhen")}
+        </span>
+      </p>
+      <p className="flex gap-sm text-body text-foreground">
+        <span aria-hidden="true" className="font-mono text-muted-foreground">✕</span>
+        <span>
+          <span className="font-semibold">{t("agents.permission.scopeTyped")}</span> · {t("agents.permission.scopeTypedWhen")}
+        </span>
+      </p>
+    </section>
   );
 }

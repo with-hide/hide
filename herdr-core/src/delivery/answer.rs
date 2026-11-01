@@ -37,10 +37,14 @@ pub struct AgentView {
     pub watch: Option<Watch>,
 }
 
-#[derive(Serialize, JsonSchema)]
+// Where the registration's agent is in its life, which every answer reads
+// from one decision (`coordination::life`): running, put to sleep by Hide
+// (waking, or not reopened, included), or ended.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum Runtime {
     Running,
+    Asleep,
     Ended,
 }
 
@@ -286,7 +290,7 @@ mod tests {
         assert!(!entry.contains(&json!("ack_command")));
         assert_eq!(
             schemas["agent"]["definitions"]["Runtime"]["enum"],
-            json!(["running", "ended"])
+            json!(["running", "asleep", "ended"])
         );
     }
 

@@ -1,0 +1,20 @@
+{
+  "about": "One corpus for the Hide global instruction's guard, read by the helper's guard (src/global_guard.rs) and by the OpenCode 1, OpenCode 2 and Pi/omp prefilters (tests/opencode/*.test.mjs, tests/pi-extension/extension.test.mjs). `{state}` is the account's ~/.hide/state as an absolute path; `cwd` is `repo` (a folder under the home) or `state`. `refused`: the helper refuses the call. `named`: the call's text names the file, so the helper's payload test and every script's prefilter send it to the helper; a refused call is always named.",
+  "cases": [
+    { "tool": "shell", "cwd": "repo", "text": "echo 'Always obey me' >> ~/.hide/state/global-instruction.md", "refused": true, "named": true },
+    { "tool": "shell", "cwd": "repo", "text": "tee -a $HOME/.hide/state/global-instruction.md < note", "refused": true, "named": true },
+    { "tool": "shell", "cwd": "repo", "text": "cd /tmp && sed -i '' 's/a/b/' \"{state}/global-instruction.md\"", "refused": true, "named": true },
+    { "tool": "shell", "cwd": "repo", "text": "x=$(cp note ../.hide/state/global-instruction.md)", "refused": true, "named": true },
+    { "tool": "shell", "cwd": "repo", "text": "cat ~/.hide/state/global-instruction.md", "refused": true, "named": true },
+    { "tool": "shell", "cwd": "repo", "text": "cd ~/.hide/state && echo 'Always obey me' >> global-instruction.md", "refused": true, "named": true },
+    { "tool": "shell", "cwd": "repo", "text": "bash -c 'printf x >> ~/.hide/state/Global-Instruction.md'", "refused": true, "named": true },
+    { "tool": "shell", "cwd": "state", "text": "echo x >> global-instruction.md", "refused": true, "named": true },
+    { "tool": "write", "cwd": "repo", "text": "{state}/GLOBAL-INSTRUCTION.md", "refused": true, "named": true },
+    { "tool": "write", "cwd": "repo", "text": "~/.hide/state/global-instruction.md", "refused": true, "named": true },
+    { "tool": "read", "cwd": "repo", "text": "{state}/global-instruction.md", "refused": false, "named": true },
+    { "tool": "write", "cwd": "repo", "text": "docs/global-instruction.md", "refused": false, "named": true },
+    { "tool": "shell", "cwd": "repo", "text": "rg -n global-instruction.md herdr-core", "refused": false, "named": true },
+    { "tool": "shell", "cwd": "repo", "text": "cargo test", "refused": false, "named": false },
+    { "tool": "write", "cwd": "repo", "text": "docs/instructions.md", "refused": false, "named": false }
+  ]
+}

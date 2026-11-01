@@ -1,4 +1,4 @@
-import { herdrPaneId, remoteTargetOfPane } from "./remote";
+import { remoteTargetOfPane } from "./remote";
 import { DRAG_CHIP_CLASS, holdShellDrag } from "./shellDrag";
 import { localDeviceId, type AgentRow, type SnapshotRest } from "./snapshot";
 
@@ -19,9 +19,8 @@ function oneLine(text: string, limit: number): string {
   return flat.length > limit ? `${flat.slice(0, limit - 1).join("")}…` : flat.join("");
 }
 
-/** The reference text for a pane: its name, its Herdr pane id, and the task it does when one is known. */
-export function referenceText(name: string, paneId: string, task?: string | null): string {
-  const id = herdrPaneId(paneId);
+/** The reference text for a pane: its name, the id its own machine gives the pane, and the task it does when one is known. */
+export function referenceText(name: string, id: string, task?: string | null): string {
   const named = oneLine(name, TASK_LIMIT);
   const doing = task ? oneLine(task, TASK_LIMIT) : "";
   const detail = [`pane ${id}`, doing && doing !== named ? doing : ""].filter(Boolean).join(" · ");
@@ -29,8 +28,8 @@ export function referenceText(name: string, paneId: string, task?: string | null
 }
 
 /** An agent's reference: the name Herdr knows it by, else its kind, then its task label. */
-export function agentReference(agent: Pick<AgentRow, "pane_id" | "herdr_name" | "agent_kind" | "identity_label">): string {
-  return referenceText(agent.herdr_name || agent.agent_kind, agent.pane_id, agent.identity_label);
+export function agentReference(agent: Pick<AgentRow, "pane_id" | "device_pane_id" | "herdr_name" | "agent_kind" | "identity_label">): string {
+  return referenceText(agent.herdr_name || agent.agent_kind, agent.device_pane_id, agent.identity_label);
 }
 
 /** The device a pane belongs to: its remote target, else this machine. */

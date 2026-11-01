@@ -647,8 +647,6 @@ pub fn demand_of(agent: &SidebarAgentSnapshot) -> AgentDemand {
 
 /// The prefix every pane id on a remote target carries. A pane id without it
 /// belongs to the local Herdr server.
-const REMOTE_PANE_ID_PREFIX: &str = "remote:";
-
 /// Which slice of the read record ledger a pass is allowed to prune.
 ///
 /// The ledger holds records for several Herdr servers. A pass that pruned
@@ -664,7 +662,7 @@ pub enum ReadRecordScope<'a> {
     /// are left alone.
     Local,
     /// The caller holds one remote target's full pane topology. The argument
-    /// is that target's pane id prefix, and only records under it are dropped.
+    /// is that target's device id, and only records of its panes are dropped.
     Remote(&'a str),
 }
 
@@ -673,8 +671,8 @@ impl ReadRecordScope<'_> {
     pub(crate) fn owns(self, pane_id: &str) -> bool {
         match self {
             Self::Retain => false,
-            Self::Local => !pane_id.starts_with(REMOTE_PANE_ID_PREFIX),
-            Self::Remote(prefix) => pane_id.starts_with(prefix),
+            Self::Local => !crate::address::is_device_scoped(pane_id),
+            Self::Remote(device) => crate::address::is_pane_of(pane_id, device),
         }
     }
 }

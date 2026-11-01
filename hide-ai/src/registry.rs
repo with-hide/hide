@@ -1,17 +1,21 @@
 //! The agents Hide AI can name, and how each one's backend is built.
 //!
-//! A provider is one row here: its stable id, the name a person reads, the
-//! agent id the logos and the kit key it by, and the model it is asked for
-//! when nobody chose one.
+//! Which agents are providers, in which order, under which persisted id, with
+//! which name and reasoning efforts, is each agent's declaration
+//! (`hide_agent_adapter::AgentAdapter::ai`, `label`, `efforts`); an agent
+//! that is not a provider declares why. This file binds a declared provider
+//! to what only Hide AI decides: the model it is asked for when nobody chose
+//! one ([`BINDINGS`]) and its backend ([`build_backend`]).
 //! Where its CLI is found is not kept here: that is `hide_platform::programs`,
-//! the one search the install kit uses too. Nothing else in the
-//! workspace keeps a list of them; settings, the router and the core's
-//! Settings reader all iterate this one, in this order (D-06, D-18): Claude
-//! Code, Codex, Grok, OpenCode, Pi, Oh My Pi, Antigravity.
+//! the one search the install kit uses too. Settings, the router and the
+//! core's Settings reader all iterate [`PROVIDERS`], in the declarations'
+//! order (D-06, D-18): Claude Code, Codex, Grok, OpenCode, Pi, omp,
+//! Antigravity.
 //!
-//! The id is a string the registry owns, not a closed enum, so a file written
-//! by a newer Hide that names an agent this build does not know is read, and
-//! the entry is ignored, instead of making the whole file unreadable.
+//! The id is a string the declaration owns, not a closed enum, so a file
+//! written by a newer Hide that names an agent this build does not know is
+//! read, and the entry is ignored, instead of making the whole file
+//! unreadable.
 
 use std::fmt;
 use std::sync::Arc;
@@ -19,11 +23,13 @@ use std::sync::Arc;
 use serde::de::{self, Deserializer};
 use serde::{Deserialize, Serialize, Serializer};
 
+use hide_agent_adapter::{ADAPTERS, AgentAdapter, usage::Support};
+
 use crate::{AiBackend, AiLogSink};
 
 /// Stable provider name; also the log field value and the settings key.
 ///
-/// Only the registry makes one, so every value is a registered agent.
+/// Only the registry makes one, so every value is a declared provider.
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub struct ProviderId(&'static str);
 
@@ -42,10 +48,10 @@ impl ProviderId {
         self.0
     }
 
-    /// The provider's name as a person reads it. The shell renders this
-    /// rather than capitalising `as_str` itself.
+    /// The provider's name as a person reads it: its agent's declared label.
+    /// The shell renders this rather than capitalising `as_str` itself.
     pub fn label(self) -> &'static str {
-        self.descriptor().label
+        self.adapter().label
     }
 
     /// The registered provider with this id, `None` for an id this build does
@@ -55,33 +61,42 @@ impl ProviderId {
     }
 
     /// The provider that runs the install kit's agent `agent` (its adapter
-    /// id, [`ProviderDescriptor::agent`]), `None` for an agent Hide AI does
-    /// not run. The ids differ where the kit and Herdr name an agent apart,
-    /// as `antigravity` and `agy` do.
+    /// id, [`ProviderId::agent`]), `None` for an agent Hide AI does not run.
+    /// The ids differ where Hide AI's settings name an agent apart, as
+    /// `claude` and `claude-code` do.
     pub fn for_agent(agent: &str) -> Option<Self> {
         PROVIDERS
             .iter()
             .copied()
-            .find(|provider| provider.descriptor().agent == agent)
+            .find(|provider| provider.agent() == agent)
     }
 
-    pub fn descriptor(self) -> &'static ProviderDescriptor {
-        DESCRIPTORS
+    /// The agent's declaration this provider was made from.
+    pub fn adapter(self) -> &'static AgentAdapter {
+        ADAPTERS
             .iter()
-            .find(|descriptor| descriptor.id == self)
-            .expect("every ProviderId constant has a descriptor")
+            .find(|row| matches!(row.ai, Support::Supported(ai) if ai.id == self.0))
+            .expect("every ProviderId is a declared provider")
+    }
+
+    /// The agent's id in the install kit's adapter table, which is how the
+    /// shell joins "this agent is on and installed" to "Hide AI can use it".
+    pub fn agent(self) -> &'static str {
+        self.adapter().id
     }
 
     /// The model this provider is asked for when the operator chose none:
     /// the backend's own constant, or [`CLI_DEFAULT_MODEL`] for an agent whose
     /// default is its own CLI's (D-18).
     pub fn default_model(self) -> &'static str {
-        self.descriptor().default_model
+        self.binding().default_model
     }
 
-    /// The reasoning efforts a request may pick for this agent.
+    /// The reasoning efforts a request may pick for this agent: the menu its
+    /// declaration offers every start (`hide_agent_adapter::LaunchDialect::options`);
+    /// empty means the agent takes none and only its CLI default runs.
     pub fn efforts(self) -> &'static [&'static str] {
-        self.descriptor().efforts
+        self.adapter().efforts()
     }
 }
 
@@ -108,115 +123,142 @@ impl<'de> Deserialize<'de> for ProviderId {
 /// its own default (D-18, B36).
 pub const CLI_DEFAULT_MODEL: &str = "";
 
-/// Every provider a choice can name, in the fixed order they are offered.
+const fn provider_count() -> usize {
+    let mut count = 0;
+    let mut index = 0;
+    while index < ADAPTERS.len() {
+        if matches!(ADAPTERS[index].ai, Support::Supported(_)) {
+            count += 1;
+        }
+        index += 1;
+    }
+    count
+}
+
+const fn providers() -> [ProviderId; provider_count()] {
+    let mut result = [ProviderId(""); provider_count()];
+    let mut source = 0;
+    let mut destination = 0;
+    while source < ADAPTERS.len() {
+        if let Support::Supported(ai) = ADAPTERS[source].ai {
+            result[destination] = ProviderId(ai.id);
+            destination += 1;
+        }
+        source += 1;
+    }
+    result
+}
+
+const DECLARED: [ProviderId; provider_count()] = providers();
+
+/// Every provider a choice can name, in the fixed order they are offered:
+/// each agent that declares a Hide AI provider, in the declarations' order.
 ///
 /// The Settings picker, the first-run default and the Add menu all use this
 /// order; the router's own order is the operator's choice followed by the
 /// fallback list, never this one.
-pub const PROVIDERS: &[ProviderId] = &[
-    ProviderId::CLAUDE,
-    ProviderId::CODEX,
-    ProviderId::GROK,
-    ProviderId::OPENCODE,
-    ProviderId::PI,
-    ProviderId::OMP,
-    ProviderId::ANTIGRAVITY,
-];
+pub const PROVIDERS: &[ProviderId] = &DECLARED;
 
-/// What the registry knows about one provider besides its backend.
-#[derive(Debug)]
-pub struct ProviderDescriptor {
-    pub id: ProviderId,
-    pub label: &'static str,
-    /// The id of the same agent in the install kit's adapter table, which is
-    /// how the shell joins "this agent is on and installed" to "Hide AI can
-    /// use it".
-    pub agent: &'static str,
-    pub default_model: &'static str,
-    /// The reasoning efforts a request may pick for this agent; empty means
-    /// the agent takes none and only its CLI default runs.
-    pub efforts: &'static [&'static str],
+/// The backend that runs a declared provider whose declaration lets Hide AI
+/// send it requests.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum Backend {
+    Claude,
+    Codex,
+    Grok,
+    Pi,
+    Omp,
+    Antigravity,
 }
 
-const DESCRIPTORS: &[ProviderDescriptor] = &[
-    ProviderDescriptor {
-        id: ProviderId::CLAUDE,
-        label: "Claude Code",
-        agent: "claude-code",
+/// What only Hide AI decides for one declared provider: the model it is
+/// asked for when nobody chose one, and its backend, `None` exactly when its
+/// declaration refuses requests (`AiProvider::requests`). A provider declared
+/// without its row, or with a backend its declaration does not allow, fails
+/// `every_declared_provider_is_bound_and_nothing_else_is`.
+struct Binding {
+    provider: ProviderId,
+    default_model: &'static str,
+    backend: Option<Backend>,
+}
+
+const BINDINGS: &[Binding] = &[
+    Binding {
+        provider: ProviderId::CLAUDE,
         default_model: crate::claude::DEFAULT_MODEL,
-        efforts: crate::claude::EFFORTS,
+        backend: Some(Backend::Claude),
     },
-    ProviderDescriptor {
-        id: ProviderId::CODEX,
-        label: "Codex",
-        agent: "codex",
+    Binding {
+        provider: ProviderId::CODEX,
         default_model: crate::codex::DEFAULT_MODEL,
-        efforts: crate::codex::EFFORTS,
+        backend: Some(Backend::Codex),
     },
-    ProviderDescriptor {
-        id: ProviderId::GROK,
-        label: "Grok",
-        agent: "grok",
+    Binding {
+        provider: ProviderId::GROK,
         default_model: CLI_DEFAULT_MODEL,
-        efforts: &[],
+        backend: Some(Backend::Grok),
     },
-    ProviderDescriptor {
-        id: ProviderId::OPENCODE,
-        label: "OpenCode",
-        agent: "opencode",
+    Binding {
+        provider: ProviderId::OPENCODE,
         default_model: CLI_DEFAULT_MODEL,
-        efforts: &[],
+        backend: None,
     },
-    ProviderDescriptor {
-        id: ProviderId::PI,
-        label: "Pi",
-        agent: "pi",
+    Binding {
+        provider: ProviderId::PI,
         default_model: CLI_DEFAULT_MODEL,
-        efforts: &[],
+        backend: Some(Backend::Pi),
     },
-    ProviderDescriptor {
-        id: ProviderId::OMP,
-        label: "Oh My Pi",
-        agent: "omp",
+    Binding {
+        provider: ProviderId::OMP,
         default_model: crate::omp::DEFAULT_MODEL,
-        efforts: &[],
+        backend: Some(Backend::Omp),
     },
-    ProviderDescriptor {
-        id: ProviderId::ANTIGRAVITY,
-        label: "Antigravity",
-        agent: "antigravity",
+    Binding {
+        provider: ProviderId::ANTIGRAVITY,
         default_model: CLI_DEFAULT_MODEL,
-        efforts: &[],
+        backend: Some(Backend::Antigravity),
     },
 ];
 
+impl ProviderId {
+    fn binding(self) -> &'static Binding {
+        BINDINGS
+            .iter()
+            .find(|binding| binding.provider == self)
+            .expect("every declared provider has a binding")
+    }
+}
+
 /// Builds the backend for one registered provider, configured with the model
-/// the operator chose for it. This is the only place a backend is chosen by
-/// provider, so a new agent is a row above and an arm here.
+/// the operator chose for it. This is the only place a backend is chosen, by
+/// the provider's binding: a provider whose declaration refuses requests gets
+/// the backend that refuses them with its reason.
 pub fn build_backend(
     provider: ProviderId,
     model: &str,
     sink: Arc<dyn AiLogSink>,
 ) -> Arc<dyn AiBackend> {
-    match provider {
-        ProviderId::CLAUDE => Arc::new(crate::ClaudeCliBackend::new(crate::ClaudeConfig {
+    let Some(backend) = provider.binding().backend else {
+        return Arc::new(crate::UnprovenReadOnlyBackend::new(provider));
+    };
+    match backend {
+        Backend::Claude => Arc::new(crate::ClaudeCliBackend::new(crate::ClaudeConfig {
             model: model.to_owned(),
             ..crate::ClaudeConfig::default()
         })),
-        ProviderId::CODEX => Arc::new(crate::CodexAppServerBackend::new(
+        Backend::Codex => Arc::new(crate::CodexAppServerBackend::new(
             crate::CodexConfig {
                 model: model.to_owned(),
                 ..crate::CodexConfig::default()
             },
             sink,
         )),
-        ProviderId::GROK => Arc::new(crate::GrokCliBackend::new(crate::TextCliConfig::new(model))),
-        ProviderId::PI => Arc::new(crate::PiCliBackend::new(crate::TextCliConfig::new(model))),
-        ProviderId::OMP => Arc::new(crate::OmpSdkBackend::new(crate::OmpConfig::new(model))),
-        ProviderId::ANTIGRAVITY => Arc::new(crate::AntigravityCliBackend::new(
+        Backend::Grok => Arc::new(crate::GrokCliBackend::new(crate::TextCliConfig::new(model))),
+        Backend::Pi => Arc::new(crate::PiCliBackend::new(crate::TextCliConfig::new(model))),
+        Backend::Omp => Arc::new(crate::OmpSdkBackend::new(crate::OmpConfig::new(model))),
+        Backend::Antigravity => Arc::new(crate::AntigravityCliBackend::new(
             crate::TextCliConfig::new(model),
         )),
-        other => Arc::new(crate::UnprovenReadOnlyBackend::new(other)),
     }
 }
 
@@ -243,7 +285,7 @@ mod tests {
                 "Grok",
                 "OpenCode",
                 "Pi",
-                "Oh My Pi",
+                "omp",
                 "Antigravity"
             ]
         );
@@ -265,9 +307,70 @@ mod tests {
     }
 
     #[test]
-    fn every_provider_has_a_descriptor_whose_id_matches() {
+    fn every_declared_provider_is_bound_and_nothing_else_is() {
+        let mut bound: Vec<_> = BINDINGS.iter().map(|binding| binding.provider).collect();
+        let mut declared = PROVIDERS.to_vec();
+        bound.sort();
+        declared.sort();
+        assert_eq!(
+            bound, declared,
+            "each agent declaring a Hide AI provider needs its row in BINDINGS"
+        );
         for provider in PROVIDERS {
-            assert_eq!(provider.descriptor().id, *provider);
+            let Support::Supported(ai) = provider.adapter().ai else {
+                panic!("{provider} is listed without a declared provider");
+            };
+            assert_eq!(ai.id, provider.as_str());
+            assert_eq!(ProviderId::for_agent(provider.agent()), Some(*provider));
+            assert_eq!(
+                provider.binding().backend.is_some(),
+                matches!(ai.requests, Support::Supported(())),
+                "{provider}: a backend exactly when its declaration lets Hide AI send it requests"
+            );
         }
+    }
+
+    /// What a caller sees of a provider whose declaration refuses requests,
+    /// without starting anything: listed, unsupported with the reason the
+    /// shell has a sentence for, and refusing a request.
+    #[test]
+    fn a_provider_whose_declaration_refuses_requests_is_listed_and_refuses_them() {
+        let refused: Vec<_> = PROVIDERS
+            .iter()
+            .copied()
+            .filter(|provider| provider.binding().backend.is_none())
+            .collect();
+        assert_eq!(refused, [ProviderId::OPENCODE]);
+        for provider in refused {
+            let backend = build_backend(provider, CLI_DEFAULT_MODEL, Arc::new(crate::NoopLogSink));
+            assert_eq!(backend.id(), provider);
+            assert_eq!(
+                backend.availability(),
+                crate::Availability::Unsupported {
+                    reason: crate::unproven::CANNOT_GUARANTEE_READ_ONLY.to_owned()
+                }
+            );
+        }
+    }
+
+    #[test]
+    fn a_request_picks_from_the_efforts_every_start_of_the_agent_offers() {
+        for provider in PROVIDERS {
+            let adapter = provider.adapter();
+            assert_eq!(
+                provider.efforts(),
+                adapter
+                    .start
+                    .map_or(&[][..], |start| start.options().efforts)
+            );
+        }
+        assert_eq!(
+            ProviderId::CODEX.efforts(),
+            ["minimal", "low", "medium", "high", "xhigh"]
+        );
+        assert_eq!(
+            ProviderId::CLAUDE.efforts(),
+            ["low", "medium", "high", "xhigh", "max"]
+        );
     }
 }

@@ -5,6 +5,7 @@ import { Group, Note, Row } from "../components/settings-rows";
 import { useInterfaceTranslation } from "../i18n/client";
 import { SLEEP_AFTER_CHOICES, sleepAfterChoice, sleepAfterLabel, sleepingCount } from "../settings";
 import { useShellStore } from "../store";
+import { localDeviceId } from "../snapshot";
 import { coreErrorText } from "../coreError";
 import { useErrorSince } from "../errorSince";
 
@@ -15,7 +16,7 @@ import { useErrorSince } from "../errorSince";
 export function IdleAgentsGroup({ actions }: { actions: Actions }) {
   const { t } = useInterfaceTranslation();
   const choice = useShellStore((s) => sleepAfterChoice(s.rest?.ui_state?.agent_sleep_after_hours));
-  const sleeping = useShellStore((s) => sleepingCount(s.rest?.navigator?.agents));
+  const sleeping = useShellStore((s) => sleepingCount(s.rest?.navigator?.agents, localDeviceId(s.rest)));
   const [changedAt, setChangedAt] = useState<number | null>(null);
   const error = useErrorSince(changedAt, ["agent_sleep."]);
   return (

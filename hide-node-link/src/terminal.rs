@@ -366,7 +366,7 @@ pub trait ReportSink: Send + Sync {
 
 /// Every node's terminals behind one [`TerminalNode`], as the core and the
 /// screen reach them: this machine's panes by their own ids, a device's by
-/// the ids the core scopes to it ([`device_pane_id`]).
+/// the ids the core scopes to it ([`crate::address::PaneAddress`]).
 pub trait TerminalRoutes: TerminalNode {
     /// The device's node took its link: its panes' terminals go there.
     fn install_device(&self, device: &str, node: Arc<dyn TerminalNode>);
@@ -377,32 +377,6 @@ pub trait TerminalRoutes: TerminalNode {
     /// node speaks an older protocol, or its terminal service did not
     /// start): its panes say so until a link with terminals is installed.
     fn terminals_unstarted(&self, device: &str, reason: &str);
-}
-
-/// The id the core gives pane `pane` of `device`.
-pub fn device_pane_id(device: &str, pane: &str) -> String {
-    format!("{}{pane}", device_pane_prefix(device))
-}
-
-/// What every pane id of `device` starts with.
-pub fn device_pane_prefix(device: &str) -> String {
-    format!("remote:{device}:pane:")
-}
-
-/// The device and its own id for a pane id the core scoped to a device
-/// ([`device_pane_id`]). The split is at the first `:pane:`, which is the
-/// separator because no device id holds `:` ([`device_id_is_unambiguous`]).
-pub fn split_device_pane_id(pane: &str) -> Option<(&str, &str)> {
-    pane.strip_prefix("remote:")?.split_once(":pane:")
-}
-
-/// Whether `device` can name a device. An id holding `:` could hold `:pane:`
-/// or end in `:pane`, and then `remote:a:pane:pane:w1` or
-/// `remote:a:pane:b:pane:w1` would read as a pane of `a`, so one device
-/// could speak for another's pane; the core registers and connects no such
-/// device. Without `:` the first `:pane:` always follows the device id.
-pub fn device_id_is_unambiguous(device: &str) -> bool {
-    !device.contains(':')
 }
 
 impl TerminalReport {
@@ -548,24 +522,6 @@ impl TerminalControl {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    /// Every id a device may hold splits back into itself and its pane,
-    /// whatever the pane is named, and the ids that could not are refused.
-    #[test]
-    fn a_scoped_pane_id_splits_back_into_its_device_and_pane() {
-        for device in ["mini", "a", "studio-2", "x_pane"] {
-            assert!(device_id_is_unambiguous(device), "{device}");
-            for pane in ["w1:p1", "pane:w1", "b:pane:w1"] {
-                assert_eq!(
-                    split_device_pane_id(&device_pane_id(device, pane)),
-                    Some((device, pane))
-                );
-            }
-        }
-        for device in ["a:pane", "a:pane:b", "a:", ":x", "a:b"] {
-            assert!(!device_id_is_unambiguous(device), "{device}");
-        }
-    }
 
     #[test]
     fn a_control_line_names_its_operation_and_omits_absent_fields() {

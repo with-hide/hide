@@ -316,8 +316,9 @@ pub struct Paths<'a> {
     pub capability: &'a Path,
     /// Desk's own `CODEX_HOME` (`hide_kit::layout::desk_codex_home`).
     pub codex_home: &'a Path,
-    /// The operator's own Codex sign-in ([`crate::codex::operator_sign_in`]).
-    pub codex_sign_in: &'a Path,
+    /// The operator's own Codex sign-in ([`crate::codex::operator_sign_in`]),
+    /// or why it has none.
+    pub codex_sign_in: Result<&'a Path, &'a str>,
 }
 
 /// The program, arguments and environment one Desk process starts with.
@@ -389,10 +390,10 @@ pub fn launch(adapter: AdapterId, paths: &Paths<'_>, nonce: &str) -> Result<Laun
             env.push(("INITIAL_AGENT_MODE".into(), "read-only".into()));
             env.push(crate::codex::home_variable(paths.codex_home));
             files.extend(crate::codex::files(paths.codex_home));
-            links.push(crate::codex::sign_in_link(
-                paths.codex_sign_in,
-                paths.codex_home,
-            ));
+            let sign_in = paths
+                .codex_sign_in
+                .map_err(|reason| format!("Codex's sign-in cannot be found: {reason}"))?;
+            links.push(crate::codex::sign_in_link(sign_in, paths.codex_home));
         }
         AgentId::Pi => {
             let extension = paths.desk.join("pi-desk.js");
@@ -558,7 +559,7 @@ mod tests {
             desk,
             capability: Path::new("/state/pane-capabilities/desk.json"),
             codex_home: home,
-            codex_sign_in: Path::new("/home/me/.codex/auth.json"),
+            codex_sign_in: Ok(Path::new("/home/me/.codex/auth.json")),
         }
     }
 

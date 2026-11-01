@@ -131,7 +131,7 @@ impl Runtime {
     /// terminal and the native session of the agent in it. A pane Hide holds
     /// no terminal for stands for none.
     pub(super) fn session_scope_of_pane(&self, pane_id: &str) -> Option<SessionScope> {
-        let device = super::agent_sleep::pane_device(pane_id)
+        let device = crate::address::pane_device(pane_id)
             .unwrap_or(self.node.as_str())
             .to_owned();
         let terminal_id = self

@@ -3,6 +3,9 @@
 // exercising renderers of the new wire shape. Never import this in live code.
 import type { AgentRow, AgentState, RowMark, StatusTone } from "../src/snapshot";
 
+/** The machine a fixture row is on when it names none. */
+export const LOCAL = "local";
+
 type Input = Omit<Partial<AgentRow>, "state"> & { state?: AgentState };
 export function legacyAgentRow(agent: Input): AgentRow {
   const asking = ["question", "approval", "error"].includes(agent.demand ?? "none");
@@ -21,7 +24,10 @@ export function legacyAgentRow(agent: Input): AgentRow {
   const mode = asking ? "request" : agent.wait ? "waiting" : agent.unread ? "news" : "quiet";
   const verb = agent.request?.verb ?? (agent.group === "working" ? "working" : "idle");
   const todo = ["answer", "blocked", "fix", "review", "stopped", "result"].includes(verb);
-  return { ...agent, mark, state: {
+  // The core names a row's machine and own pane id on every row; a fixture
+  // row is the `local` machine's unless it names another, and a device
+  // fixture that reads the own id names it.
+  return { ...agent, device_id: agent.device_id ?? LOCAL, device_pane_id: agent.device_pane_id ?? agent.pane_id, mark, state: {
     attention, needs_you: needs, root: !agent.delegated,
     title_emphasized: !(agent.delegated && !attention) && (attention || Boolean(agent.emphasized)),
     selection_emphasizes_title: !agent.delegated || attention,

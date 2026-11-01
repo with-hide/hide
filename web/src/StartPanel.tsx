@@ -54,7 +54,7 @@ function useStartAnswer() {
       // A start's core result owns selection and ordered Herdr focus.
       // Opening it again here would undo a newer visit made while it waited;
       // only a device's worktree is opened from the page once listed.
-      if (answer.paneId && requestKind === "worktree_create") followStartedPane(answer.paneId);
+      if (answer.paneId && requestKind === "worktree_create") followStartedPane(answer.paneId, answer.deviceId);
       if (answer.agentPhase === "failed") panel.fail(agentFailure(answer.agentReason, answer.agentLine));
       else panel.finish(answer.agentPhase === "starting" ? answer.taskId : null);
       return true;

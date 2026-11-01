@@ -33,7 +33,8 @@ async function disableAgentSummaries(page: Page): Promise<void> {
   await expect(page.locator("[data-settings]")).toHaveCount(0);
 }
 
-for (const [kind, id, initialTitle, resumeFlag] of [["pi", PI_ID, PI_TITLE, "--session"], ["omp", OMP_ID, OMP_TITLE, "--resume"], ["grok", GROK_ID, GROK_TITLE, "--resume"]] as const) {
+// The last column is the option the default 전부 허용 adds to every restart; Pi never asks and has none.
+for (const [kind, id, initialTitle, resumeFlag, fullAccess] of [["pi", PI_ID, PI_TITLE, "--session", []], ["omp", OMP_ID, OMP_TITLE, "--resume", ["--auto-approve"]], ["grok", GROK_ID, GROK_TITLE, "--resume", ["--always-approve"]]] as const) {
 test(`${kind} native title and durable sleep wake the exact conversation in a fresh pane`, async ({ page }) => {
   let agents: QuestionRow[] = [];
   page.on("websocket", (socket) => socket.on("framereceived", (frame) => {
@@ -110,7 +111,7 @@ test(`${kind} native title and durable sleep wake the exact conversation in a fr
       fresh = agents.find(agent => agent.agent === kind && agent.pane_id !== sourcePane)?.pane_id ?? "";
       return fresh;
     }, { timeout: 30_000 }).not.toBe("");
-    await expect.poll(() => fs.readFileSync(path.join(herdr.root, `${kind}-launches.jsonl`), "utf8").trim().split("\n").map(line => JSON.parse(line) as string[])).toContainEqual([resumeFlag, id]);
+    await expect.poll(() => fs.readFileSync(path.join(herdr.root, `${kind}-launches.jsonl`), "utf8").trim().split("\n").map(line => JSON.parse(line) as string[])).toContainEqual([resumeFlag, id, ...fullAccess]);
     reportNativeWriter(herdr, kind, fresh, session);
     await expect(sleeping).toHaveCount(0, { timeout: 30_000 });
     await expect(page.locator(`nav[data-sidebar] [data-pane="${fresh}"]`)).toContainText(title);
@@ -294,7 +295,7 @@ test("OpenCode's root session titles its row, waits on its question and wakes by
     };
     const prior = digest();
     await sleeping.getByRole("button", { name: "Wake agent" }).click();
-    await expect.poll(launches, { timeout: 30_000 }).toContainEqual(["-s", OPENCODE_ID]);
+    await expect.poll(launches, { timeout: 30_000 }).toContainEqual(["-s", OPENCODE_ID, "--auto"]);
     type Listed = { result: { agents: { pane_id: string; agent: string }[] } };
     let fresh = "";
     await expect.poll(() => {

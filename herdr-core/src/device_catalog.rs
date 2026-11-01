@@ -125,15 +125,19 @@ pub(crate) fn catalog_state(
 }
 
 pub(crate) fn project_id(target: &str, root: &Path) -> String {
-    format!("remote:{target}:{}", hide_project::project_id(target, root))
+    crate::address::scoped_project_id(target, &hide_project::project_id(target, root))
 }
 
 /// The id of the checkout at `path` on `target`: its folder, never a Herdr
 /// workspace, so it survives every workspace that opens or closes there.
 pub(crate) fn checkout_id(target: &str, path: &str) -> String {
-    format!(
-        "remote:{target}:checkout:{:016x}",
-        crate::workspace::fnv1a(path.trim_end_matches('/').as_bytes())
+    crate::address::scoped_id(
+        target,
+        crate::address::Kind::Checkout,
+        &format!(
+            "{:016x}",
+            crate::workspace::fnv1a(path.trim_end_matches('/').as_bytes())
+        ),
     )
 }
 
@@ -543,7 +547,6 @@ pub(crate) fn legacy_checkout_ids<'a>(
     registrations: &[crate::model::WorkspaceRegistration],
     saved: impl IntoIterator<Item = &'a String>,
 ) -> BTreeMap<String, String> {
-    let prefix = format!("remote:{target}:checkout:");
     let grouped_holding = |tab_id: &str| {
         grouped
             .workspaces
@@ -564,9 +567,15 @@ pub(crate) fn legacy_checkout_ids<'a>(
                 .iter()
                 .find(|registration| registration.device_id == target && registration.id == project)
                 .map(|registration| checkout_id(target, &registration.path))
-        } else if let Some(rest) = id.strip_prefix(&prefix) {
+        } else if let Some(rest) =
+            crate::address::Scoped::strip(id, target, crate::address::Kind::Checkout)
+        {
             match rest.split_once('#') {
-                Some((_, hash)) => Some(format!("{prefix}{hash}")),
+                Some((_, hash)) => Some(crate::address::scoped_id(
+                    target,
+                    crate::address::Kind::Checkout,
+                    hash,
+                )),
                 None => raw
                     .workspaces
                     .iter()

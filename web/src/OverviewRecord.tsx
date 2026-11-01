@@ -10,8 +10,8 @@ import { boardProjects } from "./navigation";
 import { cardOfPane, everyAgent } from "./overviewTasks";
 import { machineName } from "./screenMachine";
 import { SessionRecord, type RecordFrame } from "./SessionRecord";
-import { sessionOfAgentOn, workKey } from "./sessionWork";
-import { localDeviceId, type AgentRow, type WorkSession } from "./snapshot";
+import { sessionOfAgent, workKey } from "./sessionWork";
+import type { AgentRow, WorkSession } from "./snapshot";
 import { useShellStore } from "./store";
 import { useUiStore, type OverviewPanel } from "./ui";
 
@@ -29,7 +29,7 @@ export function TaskRecordPanel({ panel, rows, actions }: { panel: Extract<Overv
   const agents = useShellStore((s) => s.agents);
   const everyRow = useMemo(() => (rows.size > 0 ? rows : everyAgent(rest, agents)), [rows, rest, agents]);
   const agent = [...everyRow.values()].find((row) => {
-    const current = sessionOfAgentOn(row, localDeviceId(rest));
+    const current = sessionOfAgent(row);
     return current !== null && workKey(current) === workKey(panel.session);
   }) ?? null;
   const session = panel.session;

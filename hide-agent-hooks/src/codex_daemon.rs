@@ -24,6 +24,8 @@ use std::sync::atomic::AtomicBool;
 use std::time::Duration;
 
 use hide_platform::process::{Finished, RunFailure, run_to_end};
+
+use crate::runtime::AgentRuntime;
 use hide_platform::programs::Program;
 
 /// The feature `codex features` names the shared daemon by.
@@ -184,7 +186,9 @@ fn daemon_answer(codex: &Program, home: &Path, stop: &AtomicBool) -> Result<Answ
             &finished,
             &finished.stderr,
         );
-        let socket = home.join(".codex").join(CONTROL_SOCKET);
+        let socket = AgentRuntime::Codex
+            .home_directory(home)
+            .join(CONTROL_SOCKET);
         return Ok(match std::fs::symlink_metadata(&socket) {
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => Answer::Down(answer),
             Ok(_) => Answer::Unsure(format!(
@@ -319,7 +323,7 @@ fn run(
     command
         .args(args)
         .env("HOME", home)
-        .env("CODEX_HOME", home.join(".codex"))
+        .env("CODEX_HOME", AgentRuntime::Codex.home_directory(home))
         .env("PATH", codex.search());
     let name = format!("codex {}", args.join(" "));
     run_to_end(&mut command, deadline, stop).map_err(|failure| match failure {

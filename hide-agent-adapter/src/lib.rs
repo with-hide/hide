@@ -6,6 +6,8 @@
 
 pub mod composer;
 mod declarations;
+mod home;
+pub use home::{HomeScope, HomeUnresolved, antigravity_app_data};
 mod journey;
 pub mod usage;
 pub use declarations::ADAPTERS;
@@ -348,34 +350,85 @@ impl LaunchDialect {
     /// the `--model` that the help of Grok 1.0.52, Pi 1.0.4, omp 18.7.0 and
     /// Cursor CLI 2026.10.14 lists (read 2026-10-18; their efforts are not
     /// declared yet). OpenCode 2.0.29's lists no model option, so it takes
-    /// neither.
+    /// neither. The effort menus are also the ones Hide AI offers
+    /// (`AgentAdapter::efforts`): Claude Code's print mode takes the same
+    /// `--effort` (claude 2.1.294 `--help`), and Codex app-server's
+    /// `turn/start` the same `ReasoningEffort` (codex-cli 0.160.1,
+    /// `codex app-server generate-json-schema`).
+    ///
+    /// `full_access` is the option that starts the agent without asking
+    /// before each tool call, which Settings › Agents adds to every start and
+    /// restart Hide makes unless the operator chose otherwise for the agent
+    /// on that machine. Every dialect declares it, an empty one as
+    /// `NotAsked`, so a new dialect cannot leave it out; each flag was read
+    /// from the CLI's `--help` on 2026-11-01 (Claude Code 2.1.316, Codex
+    /// 0.166.0, Cursor CLI 2026.10.14, agy 1.4.12, OpenCode 2.0.29, Grok
+    /// 1.0.70, omp 18.7.0), and the `agent CLIs` lane reads it again from the
+    /// pinned version's help on every system. Claude Code 2.1.316 stops a
+    /// start with that flag at a one-time "Bypass Permissions mode" warning
+    /// whose preselected answer exits, so its start also carries the setting
+    /// that skips only that warning, as `--settings` JSON: nothing is written
+    /// to its own files, and a brief typed at the start reaches the prompt.
     pub const fn options(self) -> LaunchOptions {
         match self {
             Self::Antigravity => LaunchOptions {
                 model: &["--model", "{}"],
                 effort: &[],
                 efforts: &[],
+                full_access: FullAccess::Options(&[&["--dangerously-skip-permissions"]]),
             },
             Self::Claude => LaunchOptions {
                 model: &["--model", "{}"],
                 effort: &["--effort", "{}"],
                 efforts: &["low", "medium", "high", "xhigh", "max"],
+                full_access: FullAccess::Options(&[
+                    &["--dangerously-skip-permissions"],
+                    &[
+                        "--settings",
+                        r#"{"skipDangerousModePermissionPrompt":true}"#,
+                    ],
+                ]),
             },
             // `-m` is the short form; every agent spells a model `--model`.
             Self::Codex => LaunchOptions {
                 model: &["--model", "{}"],
                 effort: &["-c", "model_reasoning_effort={}"],
                 efforts: &["minimal", "low", "medium", "high", "xhigh"],
+                full_access: FullAccess::Options(&[&[
+                    "--dangerously-bypass-approvals-and-sandbox",
+                ]]),
             },
-            Self::Grok | Self::Pi | Self::Omp | Self::Cursor => LaunchOptions {
+            Self::Grok => LaunchOptions {
                 model: &["--model", "{}"],
                 effort: &[],
                 efforts: &[],
+                full_access: FullAccess::Options(&[&["--always-approve"]]),
+            },
+            // Pi 1.0.4 asks before no tool call; its `--approve` trusts
+            // project-local files and is not a permission switch.
+            Self::Pi => LaunchOptions {
+                model: &["--model", "{}"],
+                effort: &[],
+                efforts: &[],
+                full_access: FullAccess::NotAsked,
+            },
+            Self::Omp => LaunchOptions {
+                model: &["--model", "{}"],
+                effort: &[],
+                efforts: &[],
+                full_access: FullAccess::Options(&[&["--auto-approve"]]),
+            },
+            Self::Cursor => LaunchOptions {
+                model: &["--model", "{}"],
+                effort: &[],
+                efforts: &[],
+                full_access: FullAccess::Options(&[&["--force"]]),
             },
             Self::OpenCode => LaunchOptions {
                 model: &[],
                 effort: &[],
                 efforts: &[],
+                full_access: FullAccess::Options(&[&["--auto"]]),
             },
         }
     }
@@ -489,6 +542,44 @@ pub struct LaunchOptions {
     pub model: &'static [&'static str],
     pub effort: &'static [&'static str],
     pub efforts: &'static [&'static str],
+    pub full_access: FullAccess,
+}
+
+/// How a CLI is started without asking before each tool call.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum FullAccess {
+    /// The options that turn its questions off, each as its words with the
+    /// option's name first: the flag its `--help` names, then any option the
+    /// CLI needs so that it does not stop to confirm that flag.
+    Options(&'static [&'static [&'static str]]),
+    /// The CLI asks no permission question, so there is nothing to turn off.
+    NotAsked,
+}
+
+impl FullAccess {
+    /// Each option a full-access start adds, as its words; none for `NotAsked`.
+    pub const fn options(self) -> &'static [&'static [&'static str]] {
+        match self {
+            Self::Options(options) => options,
+            Self::NotAsked => &[],
+        }
+    }
+
+    /// The words a full-access start adds, in order.
+    pub fn arguments(self) -> Vec<&'static str> {
+        self.options()
+            .iter()
+            .flat_map(|option| option.iter().copied())
+            .collect()
+    }
+
+    /// Each option's name, which the CLI's `--help` lists.
+    pub fn names(self) -> Vec<&'static str> {
+        self.options()
+            .iter()
+            .filter_map(|option| option.first().copied())
+            .collect()
+    }
 }
 
 /// The one check of a model name, wherever a start or a restart takes one.
@@ -609,6 +700,18 @@ impl HerdrIntegration {
     }
 }
 
+/// The agent as a Hide AI provider (`hide-ai`, registry).
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct AiProvider {
+    /// The provider id Hide AI's settings persist, kept apart from the
+    /// adapter id because files an earlier Hide wrote carry it (`claude`).
+    pub id: &'static str,
+    /// Whether Hide AI may send the agent a request: only once a call to it
+    /// is proven read-only (`docs/AI_PROVIDERS.md`, D-15). An agent without
+    /// that proof is still listed, and refuses every request with why.
+    pub requests: Capability<()>,
+}
+
 /// A submission hook may observe a prompt even when its output is discarded.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct PromptHook {
@@ -703,6 +806,14 @@ pub struct AgentAdapter {
     pub observation: ObservationSupport,
     pub guidance: Capability<ContextRoute>,
     pub herdr: HerdrIntegration,
+    /// The variable that moves the agent's own folder away from
+    /// [`HerdrIntegration::folder`] when the operator runs it (Codex's
+    /// `CODEX_HOME`), read only through [`AgentAdapter::home`]; `None` for an
+    /// agent whose folder Hide reads at its default place alone.
+    pub home_variable: Option<&'static str>,
+    /// How Hide AI runs the agent for background features, or why it does
+    /// not: `hide-ai`'s registry lists exactly the agents that declare one.
+    pub ai: Capability<AiProvider>,
     pub default_on: bool,
     pub prompt_hook: Option<PromptHook>,
     pub spawn_guard: Option<HookDialect>,
@@ -827,6 +938,16 @@ impl Feature {
 }
 
 impl AgentAdapter {
+    /// The reasoning efforts the agent takes: the one menu a start, a
+    /// restart and Hide AI offer ([`LaunchDialect::options`]); empty for an
+    /// agent Hide does not start.
+    pub const fn efforts(&self) -> &'static [&'static str] {
+        match self.start {
+            Some(dialect) => dialect.options().efforts,
+            None => &[],
+        }
+    }
+
     pub const fn supports(&self, feature: Feature) -> bool {
         match feature {
             Feature::Skill | Feature::HerdrIntegration => true,

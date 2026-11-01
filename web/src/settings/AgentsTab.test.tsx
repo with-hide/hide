@@ -132,7 +132,7 @@ it("shows a status only for an agent that is on: Ready, how many sessions run, a
   expect(q('[data-agent-status="local:claude-code:sessions"]')?.textContent).toContain("2 sessions");
   expect(q('[data-agent-status="local:codex:ready"]')?.textContent).toContain("Ready");
   // A count is all a row says about sessions: no list to open and no pane to go to.
-  expect(q('[data-agent-row="local:claude-code:on"] button:not([role="switch"])')).toBeNull();
+  expect(q('[data-agent-row="local:claude-code:on"] button:not([role="switch"]):not([data-agent-permission-select])')).toBeNull();
   expect(text()).not.toContain("connected");
   // Partial: the chip only, on or off, never a count.
   expect(q('[data-agent-partial="grok"]')).not.toBeNull();
@@ -346,5 +346,49 @@ it("lists the three skills Hide installs, each with its mark, what it is for and
   expect(q('[data-agents-skill="hide-plan"]')?.textContent).toBe("hide-planPut up a plan, get it reviewed and keep it current · hide plan help");
   expect(q('[data-agents-skill="hide-conductor"] svg')?.getAttribute("class")).toContain("lucide-waypoints");
   expect(q('[data-agents-skill="hide-plan"] svg')?.getAttribute("class")).toContain("lucide-list-checks");
+  await unmount();
+});
+
+it("shows each installed agent's permission with the command Hide runs, full access by default, and says when it applies", async () => {
+  const set = [agent("claude-code"), agent("codex"), agent("opencode"), agent("pi")];
+  const { q, text, unmount } = await mount(state([device("local", { kit: kit(set) })]));
+  // The flag each CLI's --help names (read 2026-11-01), after its program.
+  expect(q('[data-agent-permission-command="local:claude-code"]')?.textContent).toBe("claude --dangerously-skip-permissions");
+  expect(q('[data-agent-permission-command="local:codex"]')?.textContent).toBe("codex --dangerously-bypass-approvals-and-sandbox");
+  expect(q('[data-agent-permission-command="local:opencode"]')?.textContent).toBe("opencode --auto");
+  expect(q('[data-agent-permission-select="local:claude-code"]')?.textContent).toContain("Allow everything");
+  // Pi asks nothing, so it offers no choice.
+  expect(q('[data-agent-permission="local:pi:not-asked"]')?.textContent).toContain("Never asks");
+  expect(q('[data-agent-permission-select="local:pi"]')).toBeNull();
+  expect(q("[data-agents-permission-scope]")).not.toBeNull();
+  expect(text()).toContain("When Hide starts it");
+  expect(text()).toContain("When you type it yourself");
+  await unmount();
+});
+
+it("reads each machine's own permission, adds nothing for Ask every time, and saves typed options once on Enter", async () => {
+  const next = state([device("local", { kit: kit([agent("claude-code"), agent("codex")]) }), device("studio", { kit: kit([agent("claude-code")]) })]);
+  next.rest.ui_state = {
+    agent_permissions: { "claude-code": { mode: "ask" }, codex: { mode: "custom", text: "--full-auto", options: ["--full-auto"] } },
+    device_agent_permissions: {},
+  } as never;
+  const { q, events, unmount } = await mount(next);
+  expect(q('[data-agent-permission-command="local:claude-code"]')?.textContent).toBe("claude");
+  expect(q('[data-agent-permission="local:claude-code:ask"]')).not.toBeNull();
+  const input = q('[data-agent-permission-input="local:codex"]') as HTMLInputElement;
+  expect(input.value).toBe("--full-auto");
+  expect(input.parentElement?.textContent).toContain("codex");
+  const type = async (value: string) => {
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(input, value);
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+  };
+  await type("--full-auto --search");
+  await act(async () => { input.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true })); });
+  await act(async () => { input.dispatchEvent(new FocusEvent("focusout", { bubbles: true })); });
+  expect(sent(events, "agent_permission_set").map((event) => event.payload)).toEqual([
+    { device_id: "local", agent: "codex", mode: "custom", text: "--full-auto --search" },
+  ]);
   await unmount();
 });

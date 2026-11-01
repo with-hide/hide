@@ -37,7 +37,7 @@ pub use omp::{OmpConfig, OmpSdkBackend};
 pub use pi::PiCliBackend;
 pub use process::ProcessMeasurement;
 pub use program::resolve_binary;
-pub use registry::{CLI_DEFAULT_MODEL, PROVIDERS, ProviderDescriptor, ProviderId, build_backend};
+pub use registry::{CLI_DEFAULT_MODEL, PROVIDERS, ProviderId, build_backend};
 pub use router::{AiRouter, Degraded, ProviderState, ProviderStatus, RouterConfig};
 pub use settings::{AiSettings, FallbackEntry, FallbackRefusal};
 pub use text_cli::TextCliConfig;

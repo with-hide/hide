@@ -10,6 +10,7 @@ pub(crate) mod agent_choice;
 mod agent_close;
 mod agent_groups;
 mod agent_hook_status;
+mod agent_permission;
 mod agent_sleep;
 mod agents;
 mod attachments;
@@ -795,28 +796,6 @@ impl ViewFocusSlot {
     }
 }
 
-fn remote_tab_source_id<'a>(target_id: &str, projected_id: &'a str) -> Option<&'a str> {
-    projected_id
-        .strip_prefix(&format!("remote:{target_id}:tab:"))
-        .filter(|tab_id| !tab_id.trim().is_empty())
-}
-
-/// The prefix every pane id belonging to one remote target carries. It is
-/// both the terminal-pane ownership test and the read record ledger's scope
-/// for that target, so the two cannot disagree about which panes are its own.
-fn remote_pane_id_prefix(target_id: &str) -> String {
-    format!("remote:{target_id}:pane:")
-}
-
-/// Whether a pane id is one the core scoped to a remote target
-/// (`operations::remote_pane_id`), whichever target it was; a Herdr pane id on
-/// this machine never takes that form.
-fn is_remote_scoped_pane_id(pane_id: &str) -> bool {
-    pane_id
-        .strip_prefix("remote:")
-        .is_some_and(|rest| rest.contains(":pane:"))
-}
-
 /// Copies each pane's status word and close-confirmation answer from the agent
 /// rows that carry the read axis.
 ///
@@ -1026,12 +1005,6 @@ fn prune_pane_text_scales(
     let before = scales.len();
     scales.retain(|pane_id, _| !scope.owns(pane_id) || live.contains(pane_id.as_str()));
     scales.len() != before
-}
-
-fn remote_pane_source_id<'a>(target_id: &str, projected_id: &'a str) -> Option<&'a str> {
-    projected_id
-        .strip_prefix(&remote_pane_id_prefix(target_id))
-        .filter(|pane_id| !pane_id.trim().is_empty())
 }
 
 /// Every pane `session` lists, and the panes on screen: while its machine
@@ -1245,6 +1218,11 @@ pub struct Runtime {
     /// `None` when the process has no usable HOME, which every connect then
     /// reports rather than guessing a path.
     home_path: Option<PathBuf>,
+    /// Codex's folder as Codex reads it, from the environment report
+    /// (`hide_agent_adapter::AgentAdapter::home`, read scope): where the
+    /// operator's own Codex instructions are. `None` without a home or with a
+    /// `CODEX_HOME` Hide cannot place.
+    codex_home: Option<PathBuf>,
     /// The SSH client and coordinator of each registered device that is
     /// connected or connecting, keyed by device id. Removing a device drops
     /// its entry; the coordinator handle moves to `retired_remote_syncs`.
@@ -1979,6 +1957,10 @@ pub struct Runtime {
     /// Identifies one delete handshake across core, Herdr and the shell.
     /// A repeated callback for an older request cannot authorize a newer one.
     next_worktree_removal_id: u64,
+    /// The removal, by id, of a linked worktree whose folder is gone and that
+    /// Git no longer lists: there is nothing for Git to remove, so it closes
+    /// the panes that keep the row and finishes without asking the host.
+    unlisted_worktree_removal: Option<u64>,
     /// Registered projects whose panes a `Remove project…` is closing on a
     /// worker thread. The registration is only removed once the worker
     /// reports Herdr's confirmation, so a repeat for the same project while
@@ -2120,6 +2102,10 @@ impl Runtime {
             &crate::model::WorktreeCatalogSnapshot::default(),
             &catalog_paths,
         );
+        crate::project_settings::apply_names(
+            &snapshot.ui_state.project_settings,
+            &mut snapshot.navigator.workspaces,
+        );
         let diagnostics: Vec<(&str, &str)> = match disposition {
             persistence::LoadDisposition::Loaded => Vec::new(),
             persistence::LoadDisposition::Unrecognized(fields) => fields
@@ -2164,6 +2150,10 @@ impl Runtime {
                     persistence::UnrecognizedField::ConductorSettings => (
                         "ui_state.conductor_settings_unknown",
                         "The stored Settings > Conductor was not recognized; the defaults were used",
+                    ),
+                    persistence::UnrecognizedField::AgentPermissions => (
+                        "ui_state.agent_permissions_unknown",
+                        "An agent's stored permission choice was not recognized; it asks each time",
                     ),
                 })
                 .collect(),
@@ -2326,6 +2316,7 @@ impl Runtime {
             file_roots: None,
             state_path,
             home_path: environment.home_path,
+            codex_home: environment.codex_home,
             remote_connections: HashMap::new(),
             inbound_arrivals: HashMap::new(),
             retired_remote_syncs: Vec::new(),
@@ -2604,6 +2595,7 @@ impl Runtime {
             worktree_removals: 0,
             removed_worktrees: Vec::new(),
             next_worktree_removal_id: 0,
+            unlisted_worktree_removal: None,
             workspace_removals_in_flight: HashSet::new(),
             next_task_operation_id: 0,
             next_repository_clone_id: 0,
@@ -2979,6 +2971,8 @@ fn project_layout_panes(
                 .unwrap_or_else(|| fallback_cwd.to_owned());
             let ports = crate::ports::attributed_ports(&cwd, listening_ports);
             PaneSnapshot {
+                device_id: Default::default(),
+                device_pane_id: Default::default(),
                 start_claim: source.and_then(|source| {
                     source
                         .start_claim

@@ -15,7 +15,7 @@ import { formatDateTime } from "./i18n/format";
 import { requireInterfaceLanguage } from "./i18n/locale";
 import { useInterfaceTranslation } from "./i18n/client";
 import { cn } from "./lib/utils";
-import { holdsRequest, requestRuns, recordTitle, recordTree, requestPreview, sessionOfAgentOn, sessionPlace, settledOutput, workKey } from "./sessionWork";
+import { holdsRequest, requestRuns, recordTitle, recordTree, requestPreview, sessionOfAgent, sessionPlace, settledOutput, workKey } from "./sessionWork";
 import { galleryTiles } from "./galleryTiles";
 import { RecordGallery } from "./RecordGallery";
 import { requestWords, senderName, turnResponse } from "./PaneTurnCard";
@@ -153,7 +153,7 @@ function RecordPlace({ record, actions }: { record: RecordValue; actions: Action
   const agents = useShellStore((state) => state.agents);
   const projects = useMemo(() => boardProjects(rest, agents), [rest, agents]);
   const rows = useMemo(() => everyAgent(rest, agents), [rest, agents]);
-  const place = useMemo(() => sessionPlace(projects, record.session, record.cwd, rest), [projects, record.session, record.cwd, rest]);
+  const place = useMemo(() => sessionPlace(projects, record.session, record.cwd), [projects, record.session, record.cwd]);
   const card = place?.agent ? cardOfPane(projects, place.agent.pane_id) : null;
   const root = card && place?.agent?.pane_id === card.card.root ? card.card : null;
   const device = machineName(rest?.navigator?.devices, record.session.device_id, t);
@@ -180,7 +180,7 @@ function RecordPlace({ record, actions }: { record: RecordValue; actions: Action
 function useRecordAgent(record: RecordValue): AgentRow | null {
   const rest = useShellStore((state) => state.rest);
   const agents = useShellStore((state) => state.agents);
-  return useMemo(() => sessionPlace(boardProjects(rest, agents), record.session, record.cwd, rest)?.agent ?? null, [rest, agents, record.session, record.cwd]);
+  return useMemo(() => sessionPlace(boardProjects(rest, agents), record.session, record.cwd)?.agent ?? null, [rest, agents, record.session, record.cwd]);
 }
 
 /** Uses the same device, checkout and native resume boundary as a PR's session line. */
@@ -681,7 +681,7 @@ function ChildRows({ parent, summaries, onOpen, actions }: { parent: RecordValue
   return <ol className="min-w-0" data-record-children={parent.children.length}>
     {parent.children.slice(0, visible).map((child) => {
       const key = workKey(child.session);
-      const live = rows.find((row) => { const session = sessionOfAgentOn(row, localDeviceId(rest)); return session && workKey(session) === key; }) ?? null;
+      const live = rows.find((row) => { const session = sessionOfAgent(row); return session && workKey(session) === key; }) ?? null;
       const held = live ? null : archivedMemberOf(rest, child.session);
       const away = held ? held.row.members[held.index]!.resume : null;
       const end = summaries ? child.status?.end ?? null : null;
@@ -729,7 +729,7 @@ function MissedLine({ missed, session, cwd, actions, className }: { missed: Miss
   const agents = useShellStore((state) => state.agents);
   const connected = deviceConnected(rest, session.device_id);
   const project = useMemo(() => {
-    const place = sessionPlace(boardProjects(rest, agents, session.device_id), session, cwd, rest);
+    const place = sessionPlace(boardProjects(rest, agents, session.device_id), session, cwd);
     // A device the core dials keeps no backlog (B46).
     return place && readsHere(place.project, rest?.navigator?.devices) && place.project.tasks?.source ? place.project : null;
   }, [rest, agents, session, cwd]);

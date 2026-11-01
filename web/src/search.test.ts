@@ -157,8 +157,9 @@ describe("an agent by its pane's Herdr id", () => {
   // Ids as `herdr pane list` prints them; mini's pane is that device's own, scoped by the core.
   const withIds = (local: string[], mini: string) => {
     const rest = structuredClone(TWO_DEVICES);
-    rest.navigator!.agents = local.map((pane, index) => (legacyAgentRow({ ...REST.navigator!.agents![0]!, id: `a${index}`, pane_id: pane, identity_label: `Agent ${index}` })));
+    rest.navigator!.agents = local.map((pane, index) => (legacyAgentRow({ ...REST.navigator!.agents![0]!, id: `a${index}`, pane_id: pane, device_pane_id: pane, identity_label: `Agent ${index}` })));
     rest.status!.remote![0]!.session!.agents![0]!.pane_id = `remote:mini:pane:${mini}`;
+    rest.status!.remote![0]!.session!.agents![0]!.device_pane_id = mini;
     return searchEntries(rest, t);
   };
   const ranked = (entries: SearchEntry[], query: string) => filterEntries(entries, query).map((entry) => entry.id);

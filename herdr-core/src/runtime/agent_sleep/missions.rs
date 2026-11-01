@@ -11,8 +11,8 @@ use std::collections::{HashMap, HashSet};
 use serde_json::json;
 
 use super::super::Runtime;
+use super::MAX_ENDS_IN_FLIGHT;
 use super::letters::Stage;
-use super::{MAX_ENDS_IN_FLIGHT, pane_device};
 use crate::agent_sleep::{SleepMachine, SleepPhase};
 use crate::missions::{Mission, MissionBook, MissionNode};
 use crate::model::AgentActionRefusal;
@@ -244,7 +244,7 @@ impl Runtime {
             return Verdict::Drop("asleep");
         }
         let pane = &actor.pane_id;
-        let device = pane_device(pane);
+        let device = crate::address::pane_device(pane);
         let machine = self.sleep_machine_of_pane(pane);
         if machine == SleepMachine::Device
             || device.is_none() && actor.device_id != self.node.as_str()

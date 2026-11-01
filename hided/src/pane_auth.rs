@@ -21,6 +21,7 @@ use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::time::{Duration, Instant};
 
+use herdr_core::address;
 use herdr_core::engine::EngineHandle;
 use herdr_core::workspace_control::{Caller, Context, Query, checkout_caller_id};
 use hide_node::pane_proof::{PaneIdentity, caller_directory, descends_from, process_start};
@@ -92,8 +93,8 @@ impl Capability {
     /// translated; arbitrary hints still reach the core's conflict check.
     pub(crate) fn canonical_hint(&self, hint: Option<String>) -> Option<String> {
         hint.map(|hint| {
-            let qualified = if self.remote.is_some() && !hint.starts_with("remote:") {
-                format!("remote:{}:pane:{hint}", self.context.device_id)
+            let qualified = if self.remote.is_some() && !address::is_device_scoped(&hint) {
+                address::scoped_pane_id(&self.context.device_id, &hint)
             } else {
                 hint.clone()
             };
@@ -623,7 +624,7 @@ impl Registry {
                                 &remote.source_pane_id,
                                 Instant::now() + PANE_INSPECT_TIMEOUT,
                             )?;
-                        let pane = format!("remote:{}:pane:{current}", cap.context.device_id);
+                        let pane = address::scoped_pane_id(&cap.context.device_id, &current);
                         let context = core
                             .workspace_query(&cap.context.device_id, &pane, Query::Info)
                             .map_err(|_| "pane_not_connected")?
@@ -874,7 +875,7 @@ pub fn attest_remote(
     if device_id.is_empty() || source_pane_id.is_empty() || source_pane_id.len() > 256 {
         return Err("invalid_request");
     }
-    let mut pane_id = format!("remote:{device_id}:pane:{source_pane_id}");
+    let mut pane_id = address::scoped_pane_id(device_id, source_pane_id);
     let context = match core.workspace_query(device_id, &pane_id, Query::Info) {
         Ok(actual) => actual.context,
         Err(_) => {
@@ -883,14 +884,14 @@ pub fn attest_remote(
                 .map_err(|_| "remote_unavailable")?
                 .ok_or("pane_not_connected")?
                 .current_pane(source_pane_id, Instant::now() + PANE_INSPECT_TIMEOUT)?;
-            pane_id = format!("remote:{device_id}:pane:{current}");
+            pane_id = address::scoped_pane_id(device_id, &current);
             core.workspace_query(device_id, &pane_id, Query::Info)
                 .map_err(|_| "pane_not_connected")?
                 .context
         }
     };
     Ok(Attestation {
-        pane_id: format!("remote:{device_id}:pane:{source_pane_id}"),
+        pane_id: address::scoped_pane_id(device_id, source_pane_id),
         context,
         binding: Binding::Pane {
             terminal_id: identity.terminal_id.clone(),

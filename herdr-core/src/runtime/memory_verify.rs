@@ -10,7 +10,9 @@
 //! instruction files from the account this process runs as.
 
 use std::collections::BTreeSet;
-use std::path::Path;
+use std::path::PathBuf;
+
+use hide_agent_adapter::{AgentId, HomeScope};
 
 use hide_ai::{AiError, AiRequest, AiRouter, CancelToken};
 use hide_memory::{
@@ -398,32 +400,60 @@ pub(super) fn repository_sources(
     documents
 }
 
+/// The folders on this machine that hold the operator's own instruction
+/// files: the account's home, and Codex's folder as Codex reads it (the
+/// environment's answer from `hide_agent_adapter::AgentAdapter::home`, read
+/// scope), `None` when its `CODEX_HOME` cannot be placed.
+#[derive(Clone, Debug)]
+pub(super) struct OperatorHome {
+    pub(super) home: PathBuf,
+    pub(super) codex: Option<PathBuf>,
+}
+
 /// The operator's own instruction files, which agents read in every
 /// repository, through the node of the account this core runs as. A file that
 /// is not there is skipped, and one with the text of a file already read (a
 /// link to it) is not read twice.
-fn global_sources(node: &dyn NodeLink, home: Option<&Path>) -> Vec<Source> {
-    let Some(home) = home else {
+fn global_sources(node: &dyn NodeLink, home: Option<&OperatorHome>) -> Vec<Source> {
+    let Some(OperatorHome { home, codex }) = home else {
         return Vec::new();
     };
+    let claude = AgentId::ClaudeCode
+        .adapter()
+        .home(Some(home), None, HomeScope::Read)
+        .ok();
+    // The name an agent knows each by, never the account's folder.
+    let codex_name =
+        if codex.as_deref() == Some(AgentId::Codex.adapter().install_home(home).as_path()) {
+            "~/.codex/AGENTS.md"
+        } else {
+            "$CODEX_HOME/AGENTS.md"
+        };
     let mut documents: Vec<Source> = Vec::new();
-    for (folder, name) in [
-        (".claude", "CLAUDE.md"),
-        (".codex", "AGENTS.md"),
-        (".config/agents", "AGENTS.md"),
+    for (folder, name, known_as) in [
+        (claude, "CLAUDE.md", "~/.claude/CLAUDE.md"),
+        (codex.clone(), "AGENTS.md", codex_name),
+        // The account's shared agent instructions, no one agent's folder.
+        (
+            Some(home.join(".config").join("agents")),
+            "AGENTS.md",
+            "~/.config/agents/AGENTS.md",
+        ),
     ] {
         if documents.len() >= GLOBAL_LIMIT {
             break;
         }
-        let root = home.join(folder).to_string_lossy().into_owned();
+        let Some(folder) = folder else {
+            continue;
+        };
+        let root = folder.to_string_lossy().into_owned();
         let Some(mut found) = source(node, &root, name) else {
             continue;
         };
         if documents.iter().any(|known| known.text == found.text) {
             continue;
         }
-        // The name an agent knows it by, never the account's folder.
-        found.path = format!("~/{folder}/{name}");
+        found.path = known_as.to_owned();
         documents.push(found);
     }
     documents
@@ -445,7 +475,7 @@ pub(super) fn check_before_suggestion(
     language: hide_ai::OutputLanguage,
     project_id: &str,
     root: &str,
-    home: Option<&Path>,
+    home: Option<&OperatorHome>,
     cancel: &CancelToken,
     admit: Admit<'_>,
     progress: &mut dyn FnMut(CheckProgress),

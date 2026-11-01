@@ -49,6 +49,17 @@ fn state(client: &Client) -> Result<Arc<crate::delivery::ledger::Ledger>, String
         .map_err(|_| "delivery_unavailable")?
         .delivery_state()
 }
+/// The ledger with the registrations Hide holds asleep, read under one
+/// hold of the runtime's lock so the two agree.
+fn registrations(
+    client: &Client,
+) -> Result<(Arc<crate::delivery::ledger::Ledger>, super::Sleeping), String> {
+    let runtime = client.runtime.upgrade().ok_or("delivery_unavailable")?;
+    let runtime = runtime.lock().map_err(|_| "delivery_unavailable")?;
+    let ledger = runtime.delivery_state()?;
+    let sleeping = runtime.sleeping_registrations(&ledger.agents);
+    Ok((ledger, sleeping))
+}
 fn mutate(
     client: &Client,
     authority: &Authority,
@@ -219,7 +230,7 @@ fn actor_for(agent: &ProjectedAgent, device: &str, on_node: bool) -> Result<Acto
         pane_id: if on_node {
             agent.pane_id.clone()
         } else {
-            format!("remote:{device}:pane:{}", agent.pane_id)
+            crate::address::scoped_pane_id(device, &agent.pane_id)
         },
         // Herdr's own identifier for the agent: its name, else its pane. It
         // keys the pane, never labels it (`AgentRecord::wire_name`).
@@ -281,27 +292,27 @@ pub(crate) fn run(
 ) -> Result<Value, String> {
     match command {
         Command::List => {
-            let ledger = state(&client)?;
+            let (ledger, sleeping) = registrations(&client)?;
             Ok(json!(crate::delivery::answer::AgentList {
                 items: ledger
                     .agents
                     .iter()
-                    .map(|record| super::agent_view(record, &ledger))
+                    .map(|record| super::agent_view(record, &ledger, &sleeping))
                     .collect(),
             }))
         }
         Command::Show { id } if id == super::HERE => {
-            let ledger = state(&client)?;
-            Ok(view(super::here(&ledger, &actor)?, &ledger))
+            let (ledger, sleeping) = registrations(&client)?;
+            Ok(view(super::here(&ledger, &actor)?, &ledger, &sleeping))
         }
         Command::Show { id } => {
-            let ledger = state(&client)?;
+            let (ledger, sleeping) = registrations(&client)?;
             let record = ledger
                 .agents
                 .iter()
                 .find(|record| record.id == id)
                 .ok_or("agent_unavailable")?;
-            Ok(view(record, &ledger))
+            Ok(view(record, &ledger, &sleeping))
         }
         Command::End {
             id,
@@ -598,9 +609,10 @@ fn spawn(
         return Err("invalid_agent_name".into());
     }
     // The choice goes before the native arguments, which may end with the
-    // first prompt after `--`.
+    // first prompt after `--`; the machine's permission choice goes before
+    // both once the child's machine is known.
     let mut start_args =
-        crate::runtime::agent_choice::launch_arguments(kind, launch).map_err(|detail| {
+        crate::runtime::agent_choice::choice_arguments(kind, launch).map_err(|detail| {
             crate::diagnostic!(json!({
                 "component": "spawn", "kind": "spawn.invalid_launch_choice", "intent": intent,
                 "agent_kind": kind, "detail": detail,
@@ -764,7 +776,7 @@ fn spawn(
     let mut reserved: SpawnRecord =
         serde_json::from_value(reserved).map_err(|_| "spawn_unavailable")?;
     if reserved.completed {
-        let ledger = state(client)?;
+        let (ledger, sleeping) = registrations(client)?;
         return Ok(view(
             ledger
                 .agents
@@ -772,6 +784,7 @@ fn spawn(
                 .find(|record| Some(&record.id) == reserved.child.as_ref())
                 .ok_or("child_unavailable")?,
             &ledger,
+            &sleeping,
         ));
     }
     // Everything the child needs happens on its own device; only the parent's
@@ -785,6 +798,7 @@ fn spawn(
         host_scope,
         machine: native_machine,
         codex: codex_daemon,
+        permissions,
         on_node,
         node,
     } = context(client, &child_device).map_err(|reason| {
@@ -1068,7 +1082,7 @@ fn spawn(
                 shell,
                 name,
                 kind,
-                start_args,
+                with_permission(kind, &permissions, start_args),
                 codex_daemon,
             )?;
             reserved = serde_json::from_value(mutate(
@@ -1139,7 +1153,7 @@ fn spawn(
             let pane_id = if on_node {
                 pane.to_owned()
             } else {
-                crate::session_sync::remote_pane_id(&child_device, pane)
+                crate::address::scoped_pane_id(&child_device, pane)
             };
             runtime
                 .lock()
@@ -1219,7 +1233,7 @@ fn spawn(
         )?;
         // The receipt-driven lineage worker alone owns naming. Keeping it
         // out of this path also keeps completed replay entirely offline.
-        let ledger = state(client)?;
+        let (ledger, sleeping) = registrations(client)?;
         Ok(view(
             ledger
                 .agents
@@ -1227,6 +1241,7 @@ fn spawn(
                 .find(|record| record.id == child_id)
                 .ok_or("child_unavailable")?,
             &ledger,
+            &sleeping,
         ))
     })();
     // Nothing after this creates anything, so a device that has gone quiet
@@ -1276,9 +1291,7 @@ fn beside_target(
     if actor.code_owned() || checkout.is_empty() {
         return Err(refused("beside_needs_agent_pane"));
     }
-    let pane = actor
-        .pane_id
-        .strip_prefix(&format!("remote:{}:pane:", actor.device_id))
+    let pane = crate::address::pane_of(&actor.pane_id, &actor.device_id)
         .unwrap_or(&actor.pane_id)
         .to_owned();
     let Some((repo, branch, path)) = target else {
@@ -1674,8 +1687,64 @@ fn made_by_spawn<'a>(
     existing != repo && workspaces.any(|workspace| workspace == label)
 }
 
+/// A spawn's arguments behind the permission choice of the machine it
+/// starts on (`agent_permission`). A full-access option the spawn's own
+/// native arguments already name is not given twice, with its value if it
+/// has one: a CLI may refuse an option given twice (clap does for Codex's),
+/// and the operator who wrote it meant theirs. Typed options go as typed.
+fn with_permission(
+    kind: &str,
+    permissions: &crate::agent_permission::AgentPermissions,
+    args: Vec<String>,
+) -> Vec<String> {
+    use crate::agent_permission::AgentPermission;
+    let permission = crate::agent_permission::of(permissions, kind);
+    let mut start: Vec<String> = match &permission {
+        AgentPermission::Full => {
+            let named = |name: &str| {
+                args.iter()
+                    .take_while(|arg| arg.as_str() != "--")
+                    .any(|arg| arg == name)
+            };
+            crate::agent_permission::full_access(kind)
+                .iter()
+                .filter(|option| option.first().is_none_or(|name| !named(name)))
+                .flat_map(|option| option.iter().map(|word| (*word).to_owned()))
+                .collect()
+        }
+        _ => crate::agent_permission::arguments(kind, &permission),
+    };
+    start.extend(args);
+    start
+}
+
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn a_full_access_option_the_spawn_names_itself_is_left_to_the_spawn_with_its_value() {
+        let full = crate::agent_permission::CLAUDE_FULL_ACCESS;
+        let start = |native: &[&str]| {
+            super::with_permission(
+                "claude",
+                &Default::default(),
+                native.iter().map(|arg| (*arg).to_owned()).collect(),
+            )
+        };
+        assert_eq!(start(&["--", "go"]), [&full[..], &["--", "go"]].concat());
+        // The spawn's own settings replace Hide's whole option, never only
+        // its name, which would leave Hide's value standing alone.
+        assert_eq!(
+            start(&["--settings", "/x.json", "--", "go"]),
+            [full[0], "--settings", "/x.json", "--", "go"]
+        );
+        assert_eq!(start(&[full[0]]), [full[1], full[2], full[0]]);
+        // A word after `--` is the prompt, not an option.
+        assert_eq!(
+            start(&["--", "--settings"]),
+            [&full[..], &["--", "--settings"]].concat()
+        );
+    }
+
     #[test]
     fn only_a_worktree_the_spawn_made_counts_as_made_by_it() {
         let label = "hide:spawn-1";

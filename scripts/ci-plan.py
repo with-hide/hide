@@ -64,7 +64,8 @@ LANES = (
 # nothing else: main's push runs leave it out, the nightly calls
 # `package.yml` itself and a release builds its own. `agent-clis` installs
 # every pinned agent CLI on Linux and Windows for a change to
-# the pin table or its installer and nothing else, since no other path
+# the pin table, its installer or the adapter contract whose full-access
+# flags it finds in each CLI's help, and nothing else, since no other path
 # reaches what it installs; the nightly's and a release's journey install
 # every CLI too. `holder-restart` installs every pinned CLI too and runs each
 # in a pane holder across a node restart on all three systems, for a change to
@@ -378,7 +379,9 @@ NAMED_LANES = (
     ("scripts/agent_journey/*", JOURNEY_LANES),
     ("scripts/agent-journey-check.py", JOURNEY_LANES),
     ("scripts/agent-journey-lane.py", JOURNEY_LANES),
-    ("contracts/agent-journey.json", JOURNEY_LANES | HOLDER_RESTART_LANES),
+    # The installer finds each declared full-access flag in its CLI's help,
+    # and the holder restart lane reads the agent table.
+    ("contracts/agent-journey.json", JOURNEY_LANES | AGENT_CLI_LANES | HOLDER_RESTART_LANES),
     ("web/e2e/*", WEB_E2E_LANES),
     ("desktop/e2e/*", DESKTOP_E2E_LANES),
     ("web/playwright.config.ts", {"checks", "web-e2e", "windows-e2e"}),

@@ -71,7 +71,7 @@ function lineageParents(agents: readonly GraphAgent[]): ReadonlyMap<string, Grap
     const pane = child.agent.lineage_parent_pane_id;
     if (!pane) continue;
     const exact = byPane.get(pane);
-    const parent = exact === null && !pane.startsWith("remote:") ? byDevicePane.get(JSON.stringify([child.deviceId, pane])) : exact;
+    const parent = exact === null ? byDevicePane.get(JSON.stringify([child.deviceId, pane])) : exact;
     if (parent && parent.id !== child.id) parents.set(child.id, parent);
   }
   return parents;
@@ -119,8 +119,7 @@ function projectSessions(projects: readonly BoardProject[], metadata: OverviewGr
   return projects.map((project) => {
     const id = graphProjectId(project);
     const agents = scopeAgents([project]).flatMap((row): GraphAgent[] => {
-      const remoteDevice = row.agent.pane_id.startsWith("remote:") ? row.agent.pane_id.slice(7).split(":pane:")[0] : null;
-      const deviceId = row.agent.device_id ?? remoteDevice ?? row.project.device_id;
+      const deviceId = row.agent.device_id;
       const session = proof.get(JSON.stringify([deviceId, row.agent.pane_id]));
       const digest = session?.session_digest ?? null;
       const agentId = graphSessionId(deviceId, row.agent.pane_id, digest ?? row.agent.session_id ?? null);

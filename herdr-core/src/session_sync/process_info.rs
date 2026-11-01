@@ -95,7 +95,7 @@ impl ProcessReader {
             .iter()
             .filter(|layout| {
                 let id = target
-                    .map(|target| replica::remote_tab_id(target, &layout.tab_id))
+                    .map(|target| crate::address::scoped_tab_id(target, &layout.tab_id))
                     .unwrap_or_else(|| layout.tab_id.clone());
                 tabs.contains(&id)
             })

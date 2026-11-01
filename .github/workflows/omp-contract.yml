@@ -7,12 +7,16 @@ on:
       systems:
         type: string
         required: true
+      macos-runner:
+        description: The macOS job's `runs-on` as JSON (docs/BUILD.md, The Mac mini CI runner); empty for GitHub's macos-15.
+        type: string
+        default: ''
 permissions:
   contents: read
 jobs:
   contract:
     name: omp SDK (${{ matrix.system }})
-    runs-on: ${{ fromJSON('{"linux":"ubuntu-latest","macos":"macos-15","windows":"windows-latest"}')[matrix.system] }}
+    runs-on: ${{ matrix.system == 'macos' && fromJSON(inputs.macos-runner || '"macos-15"') || fromJSON('{"linux":"ubuntu-latest","windows":"windows-latest"}')[matrix.system] }}
     timeout-minutes: 25
     strategy:
       fail-fast: false

@@ -1,3 +1,4 @@
+import { LOCAL } from "./legacyAgentRow";
 import { legacyWork } from "./legacyRequestWork";
 import { legacyRelations } from "./legacyRelations";
 import * as beforeClose from "./legacyClose";
@@ -147,6 +148,13 @@ export function requestGroups(rows: readonly RequestRow[]) { return drawRequestG
 
 export function legacyRest(rest: SnapshotRest, agents: AgentRow[]): SnapshotRest {
   const localId = rest.navigator?.devices?.find((d) => d.kind !== "remote")?.id ?? "";
+  // The core names each row's machine by the session it publishes the row in.
+  // A fixture row left on the default machine is the snapshot's own machine's,
+  // and every row a device's session holds is that device's.
+  const onLocal = (rows: readonly AgentRow[] | undefined) => { for (const row of rows ?? []) if (row.device_id === undefined || row.device_id === LOCAL) row.device_id = localId; };
+  onLocal(agents);
+  onLocal(rest.navigator?.agents);
+  for (const remote of rest.status?.remote ?? []) for (const row of remote.session?.agents ?? []) row.device_id = remote.target_id;
   const projects = (rest.navigator?.workspaces ?? []).map((p) => legacyProject(p, agents));
   const remotes = (rest.status?.remote ?? []).map((r) => ({ ...r, session: r.session ? { ...r.session, workspaces: (r.session.workspaces ?? []).map((p) => legacyProject(p, r.session!.agents ?? [])) } : r.session }));
   const deviceScopes = new Map<string, AgentScope>();

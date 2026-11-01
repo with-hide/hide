@@ -48,8 +48,8 @@ export function sleepAfterChoice(hours: unknown): string {
 }
 
 /** How many of this machine's agents sleep now (B3); another device's rows never sleep. */
-export function sleepingCount(agents: readonly AgentRow[] | undefined): number {
-  return (agents ?? []).filter((agent) => agent.sleep && !agent.pane_id.startsWith("remote:")).length;
+export function sleepingCount(agents: readonly AgentRow[] | undefined, localId: string): number {
+  return (agents ?? []).filter((agent) => agent.sleep && agent.device_id === localId).length;
 }
 
 /** What `gh` answered across this Mac's Git projects, General's GitHub row. */
@@ -511,15 +511,14 @@ export function deviceIdFor(alias: string, existing: readonly string[]): string 
 export function deviceRemovalLines(
   deviceId: string,
   registrations: readonly { device_id: string }[],
-  tabs: readonly { id: string; checkout_id: string; dirty: boolean }[],
+  tabs: readonly { id: string; device_id: string; dirty: boolean }[],
   drafts: readonly { device: string | null }[],
   /** Tabs whose draft is not stored here and leaves only as the file the operator exported (B44). */
   onlyExported: (tabId: string) => boolean,
   t: Translate,
 ): string[] {
-  const scope = `remote:${deviceId}:`;
   const projects = registrations.filter((row) => row.device_id === deviceId).length;
-  const own = tabs.filter((tab) => tab.checkout_id.startsWith(scope));
+  const own = tabs.filter((tab) => tab.device_id === deviceId);
   const exportedOnly = own.filter((tab) => tab.dirty && onlyExported(tab.id)).length;
   const unsaved = own.filter((tab) => tab.dirty).length - exportedOnly + drafts.filter((draft) => draft.device === deviceId).length;
   const lines: string[] = [];
@@ -539,12 +538,11 @@ export function deviceRemovalLines(
  */
 export function unstoredDeviceDrafts(
   deviceId: string,
-  tabs: readonly { id: string; checkout_id: string; path: string }[],
+  tabs: readonly { id: string; device_id: string; path: string }[],
   unstored: ReadonlySet<string>,
   exported: (tabId: string) => boolean = () => false,
 ): string[] {
-  const scope = `remote:${deviceId}:`;
-  return tabs.filter((tab) => tab.checkout_id.startsWith(scope) && unstored.has(tab.id) && !exported(tab.id)).map((tab) => tab.path);
+  return tabs.filter((tab) => tab.device_id === deviceId && unstored.has(tab.id) && !exported(tab.id)).map((tab) => tab.path);
 }
 
 /**

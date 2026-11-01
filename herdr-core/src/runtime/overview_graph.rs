@@ -40,12 +40,7 @@ impl Runtime {
         };
         for agent in &self.snapshot.navigator.agents {
             // Navigator rows include device-qualified cross-device descendants.
-            let device = agent
-                .pane_id
-                .strip_prefix("remote:")
-                .and_then(|rest| rest.split_once(":pane:"))
-                .map(|(device, _)| device)
-                .unwrap_or(self.node.as_str());
+            let device = crate::address::pane_device(&agent.pane_id).unwrap_or(self.node.as_str());
             add(agent, device);
         }
         for remote in &self.snapshot.status.remote {

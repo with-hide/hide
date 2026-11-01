@@ -74,6 +74,15 @@ fn process(name: &str) -> Option<OsString> {
     std::env::var_os(name)
 }
 
+/// The raw value of a variable this process was started with, `None` when
+/// unset: the capture for a caller that judges a variable it does not own
+/// here, such as an agent's own folder variable
+/// (`hide_agent_adapter::AgentAdapter::home`), which decides what the value
+/// means.
+pub fn variable(name: &str) -> Option<OsString> {
+    process(name)
+}
+
 /// The account's home folder.
 pub fn home_dir() -> io::Result<PathBuf> {
     home_dir_from(&process)

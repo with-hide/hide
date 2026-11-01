@@ -1,7 +1,7 @@
 // The record restores the exact retained native conversation after its pane closes.
 import { expect, test } from "@playwright/test";
 import { spawnSync } from "node:child_process";
-import { labelAgent, startHerdr, type HerdrFixture } from "./herdr-fixture";
+import { CLAUDE_FULL_ACCESS_LINE, labelAgent, startHerdr, type HerdrFixture } from "./herdr-fixture";
 import { startHided, type Daemon } from "./hided-fixture";
 import { enterWorkspace } from "./wire";
 
@@ -13,7 +13,7 @@ function resumedPane(herdr: HerdrFixture, session: string): string | null {
     const read = spawnSync(herdr.bin, ["pane", "process-info", "--pane", pane_id], { env: herdr.env, encoding: "utf8", timeout: 10_000 });
     if (read.status !== 0) continue;
     const info = JSON.parse(read.stdout) as { result: { process_info: { foreground_processes: { argv?: string[] }[] } } };
-    if (info.result.process_info.foreground_processes.some(process => process.argv?.join(" ") === `claude --resume ${session}`)) return pane_id;
+    if (info.result.process_info.foreground_processes.some(process => process.argv?.join(" ") === `claude --resume ${session} ${CLAUDE_FULL_ACCESS_LINE}`)) return pane_id;
   }
   return null;
 }

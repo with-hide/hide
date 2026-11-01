@@ -290,7 +290,7 @@ export function usePaneMenu(pane: PaneRow, title: string, actions: Actions) {
       case "copy_reference": {
         const state = useShellStore.getState();
         const agent = agentsByPane(allAgents(state.agents, state.rest?.status?.remote)).get(pane.id);
-        return actions.copyText(agent ? agentReference(agent) : referenceText(title, pane.id), "pane reference");
+        return actions.copyText(agent ? agentReference(agent) : referenceText(title, pane.device_pane_id), "pane reference");
       }
       case "close_pane":
         return actions.closePane(pane.id);

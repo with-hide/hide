@@ -252,8 +252,8 @@ class Selection(unittest.TestCase):
     def test_an_adapter_change_tests_its_real_consumers_and_compiles_on_windows(self):
         # These consumers follow the workspace manifests, independently of the planner.
         consumers = [
-            "herdr-core", "hide-agent-adapter", "hide-agent-hooks", "hide-desk", "hide-holder", "hide-host", "hide-kit",
-            "hide-node", "hide-node-link", "hide-session", "hided",
+            "herdr-core", "hide-agent-adapter", "hide-agent-hooks", "hide-ai", "hide-desk", "hide-holder", "hide-host",
+            "hide-kit", "hide-memory", "hide-node", "hide-node-link", "hide-session", "hided",
         ]
         for path in ("hide-agent-adapter/src/lib.rs", "hide-agent-adapter/Cargo.toml"):
             with self.subTest(path=path):
@@ -598,10 +598,12 @@ class NamedPaths(unittest.TestCase):
         for path in ("scripts/agent_journey/cells.py", "scripts/agent-journey-check.py", "scripts/agent-journey-lane.py"):
             with self.subTest(path=path):
                 self.assertEqual(self.lanes(path), {"policy", "agent-journey"})
-        # The holder restart lane reads the agent table and the fake model's
-        # helpers too.
-        for path in ("contracts/agent-journey.json", "scripts/agent_journey/fake_model.py",
-                     "scripts/agent_journey/fake_lane.py"):
+        # The installer finds the contract's full-access flags in each CLI's
+        # help, and the holder restart lane reads the agent table too.
+        self.assertEqual(self.lanes("contracts/agent-journey.json"),
+                         {"policy", "agent-journey", "agent-clis", "holder-restart"})
+        # The holder restart lane reads the fake model's helpers.
+        for path in ("scripts/agent_journey/fake_model.py", "scripts/agent_journey/fake_lane.py"):
             with self.subTest(path=path):
                 self.assertEqual(self.lanes(path), {"policy", "agent-journey", "holder-restart"})
         for path in ("web/e2e/shims/claude-shim.c", "web/e2e/shims/live-check.h", "web/e2e/shims/spawn-provider.c"):

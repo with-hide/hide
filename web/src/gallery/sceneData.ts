@@ -100,6 +100,8 @@ export function agent({ elapsed, ...spec }: AgentSpec): AgentRow {
     demand: "none",
     activity: "idle",
     changed_at_unix_ms: changed,
+    device_id: "local",
+    device_pane_id: spec.pane_id,
     ...spec,
   };
 }
@@ -179,9 +181,16 @@ export function checkout(spec: CheckoutSpec, nowSeconds: number): Checkout {
   };
 }
 
+/** A checkout of the gallery's device: the core names its panes' machine on each row. */
+function onMini(checkout: Checkout): Checkout {
+  return { ...checkout, tabs: checkout.tabs.map((tab) => ({ ...tab, panes: tab.panes.map((row) => ({ ...row, device_id: "mini" })) })) };
+}
+
 function pane(id: string) {
   return {
     id,
+    device_id: "local",
+    device_pane_id: id,
     herdr_label: null,
     terminal_title: null,
     cwd: ROOT,
@@ -511,7 +520,7 @@ function deviceWorld(content: SceneContent, workspaces: Workspace[], now: number
     label,
     path: `/srv/${label}`,
     device_id: "mini",
-    checkouts: [{ ...checkout({ id: `${id}:main`, workspace: id, branch: "main", primary: true, age: 300, panes }, now), workspace_id: id }],
+    checkouts: [onMini({ ...checkout({ id: `${id}:main`, workspace: id, branch: "main", primary: true, age: 300, panes }, now), workspace_id: id })],
   });
   const miniWorkspaces = [
     // Busy, the extra agents run in web too, so its Projects list raises them past the Needs You cap.
@@ -538,7 +547,7 @@ function deviceWorld(content: SceneContent, workspaces: Workspace[], now: number
         herdr_version: "0.9.1",
         session: {
           workspaces: miniWorkspaces,
-          agents: busy ? [...REMOTE_AGENTS[content], ...BUSY_AGENTS] : REMOTE_AGENTS[content],
+          agents: (busy ? [...REMOTE_AGENTS[content], ...BUSY_AGENTS] : REMOTE_AGENTS[content]).map((row) => ({ ...row, device_id: "mini" })),
           active_tab_ids: {},
           focused_workspace_id: "remote:mini:workspace:web",
           focused_checkout_id: "remote:mini:workspace:web:main",

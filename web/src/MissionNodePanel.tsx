@@ -369,7 +369,7 @@ function Ways({ mission, node, actions }: { mission: Mission; node: MissionNode;
   const row = useWorkerRow(node);
   // Derived outside the selector: it builds a new session each call, which a selector must not return.
   const rest = useShellStore((s) => s.rest);
-  const session = useMemo(() => (row ? sessionOfAgent(row, rest) : null), [row, rest]);
+  const session = useMemo(() => (row ? sessionOfAgent(row) : null), [row, rest]);
   if (node.kind === "external") return null;
   return (
     <div className="flex flex-wrap gap-xs" data-panel-part="ways">

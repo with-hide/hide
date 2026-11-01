@@ -210,7 +210,7 @@ impl Runtime {
     }
 
     fn pane_opener(&self, pane_id: &str) -> Result<Opener, &'static str> {
-        let device = super::agent_sleep::pane_device(pane_id)
+        let device = crate::address::pane_device(pane_id)
             .unwrap_or(self.node.as_str())
             .to_owned();
         let agent = self
@@ -1084,7 +1084,7 @@ impl Runtime {
                 "Hide is still sending earlier comments. Try again in a moment.".into(),
             ));
         }
-        let device = super::agent_sleep::pane_device(target_pane)
+        let device = crate::address::pane_device(target_pane)
             .unwrap_or(self.node.as_str())
             .to_owned();
         let recipient = match self.linked_node(&device) {

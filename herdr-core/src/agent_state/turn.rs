@@ -1239,6 +1239,7 @@ mod row_tests {
             title: pane.into(),
             agent_kind: "codex".into(),
             open_pane_id: pane.into(),
+            open_device_id: None,
             since_unix_ms: since,
             unreceived_by: None,
             path: Vec::new(),

@@ -45,7 +45,7 @@ it.each([
   scope.closes["p"] = { decision: { action: "close" }, subtree: null, subtree_all: null, stop_work: { rows: [], unknown: null } };
   const checkout: Checkout = {
     id: "c", workspace_id: "w", path: "/repo", label: "repo", branch: null, purpose: null, is_worktree: false, exists: true, has_panes: true, pull_request: null, agent_scope: scope, next_tab_label: "Tab 2",
-    tabs: [{ id: "t", workspace_id: "w", checkout_id: "c", label: "Tab 1", empty: false, delegated: false, panes: [{ id: "p", cwd: "/repo", herdr_label: null, terminal_title: null, identity_label: null, status_code: "idle", requires_close_confirmation: false, requires_close_status_check: false }] }], active_tab_id: "t", strip: [],
+    tabs: [{ id: "t", workspace_id: "w", checkout_id: "c", label: "Tab 1", empty: false, delegated: false, panes: [{ id: "p", device_id: "local", device_pane_id: "p", cwd: "/repo", herdr_label: null, terminal_title: null, identity_label: null, status_code: "idle", requires_close_confirmation: false, requires_close_status_check: false }] }], active_tab_id: "t", strip: [],
   };
   const rest: SnapshotRest = {
     navigator: { focused_device_id: "local", focused_checkout_id: "c", focused_workspace_id: "w", agent_scope: scope, devices: [], workspaces: [{ id: "w", label: "repo", device_id: "local", path: "/repo", registered: true, temporary: false, pinned: false, inactive_checkouts: { expanded: false, checkout_ids: [] }, agent_scope: scope, checkouts: [checkout] }] },

@@ -38,6 +38,7 @@ describe("the answer to one start request", () => {
       phase: "ready",
       taskId: 7,
       paneId: "p1",
+      deviceId: null,
       agentPhase: "starting",
       agentReason: null,
       agentLine: null,

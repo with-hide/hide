@@ -21,9 +21,10 @@ use std::collections::{BTreeSet, HashMap, HashSet};
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::{Duration, Instant};
 
+use hide_node_link::address::{PaneAddress, scoped_pane_id};
 use hide_node_link::terminal::{
     GridSize, KeyTarget, PaneTerminalState, ReportSink, TerminalControl, TerminalNode,
-    TerminalReport, TerminalRoutes, device_pane_id, split_device_pane_id,
+    TerminalReport, TerminalRoutes,
 };
 use serde_json::json;
 
@@ -251,7 +252,10 @@ impl Router {
 
     /// The device a scoped pane id names, and the device's own id for it.
     fn device_of(pane: &str) -> Option<(&str, &str)> {
-        split_device_pane_id(pane)
+        match PaneAddress::parse(pane) {
+            Ok(PaneAddress::Device { device, pane }) => Some((device, pane)),
+            _ => None,
+        }
     }
 
     fn route(&self, pane: &str) -> Route {
@@ -638,7 +642,7 @@ impl TerminalRoutes for Router {
 
 impl DeviceSink for Router {
     fn output(&self, device: &str, pane: &str, bytes: &[u8], full: bool) {
-        let scoped = device_pane_id(device, pane);
+        let scoped = scoped_pane_id(device, pane);
         {
             let mut routes = lock(&self.routes);
             let due = routes.due();
@@ -665,7 +669,7 @@ impl DeviceSink for Router {
 
     fn report(&self, device: &str, mut report: TerminalReport) {
         if let Some(pane) = report.pane_mut() {
-            *pane = device_pane_id(device, pane);
+            *pane = scoped_pane_id(device, pane);
         }
         let mut routes = lock(&self.routes);
         let now = Instant::now();

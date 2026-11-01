@@ -114,27 +114,28 @@ export function remoteTabView(session: RemoteSession, view: RemoteView, tabId: s
   return { ...view, tab, layout, focusedPaneId: null };
 }
 
-/**
- * The target a pane id belongs to, read from the core's connection rows: a
- * remote pane id is `remote:<target>:pane:<id>` for a target the core knows.
- * Null means the pane is this machine's.
- */
-export function remoteTargetOfPane(rest: SnapshotRest | null, paneId: string): string | null {
-  for (const status of rest?.status?.remote ?? []) {
-    if (paneId.startsWith(`remote:${status.target_id}:pane:`)) return status.target_id;
-  }
-  return null;
-}
+const paneDevices = new WeakMap<readonly RemoteStatus[], Map<string, string>>();
 
 /**
- * The id the pane's own Herdr knows it by (`w9J:p52`): what `herdr pane read`
- * and `$HERDR_PANE_ID` name on that device. The core scopes a device's pane
- * as `remote:<target>:pane:<id>`, the same split its label and Codex keys use.
+ * The device a pane belongs to, read from the device the core names on the
+ * pane's own rows in that device's session; the shell never splits a pane id.
+ * Null means the pane is no connected device's: this machine's.
  */
-export function herdrPaneId(paneId: string): string {
-  if (!paneId.startsWith("remote:")) return paneId;
-  const at = paneId.indexOf(":pane:", "remote:".length);
-  return at === -1 ? paneId : paneId.slice(at + ":pane:".length);
+export function remoteTargetOfPane(rest: SnapshotRest | null, paneId: string): string | null {
+  const remote = rest?.status?.remote;
+  if (!remote) return null;
+  let devices = paneDevices.get(remote);
+  if (!devices) {
+    devices = new Map();
+    for (const status of remote) {
+      const session = status.session;
+      if (!session) continue;
+      for (const agent of session.agents) devices.set(agent.pane_id, agent.device_id);
+      for (const workspace of session.workspaces) for (const checkout of workspace.checkouts) for (const tab of checkout.tabs) for (const pane of tab.panes) devices.set(pane.id, pane.device_id);
+    }
+    paneDevices.set(remote, devices);
+  }
+  return devices.get(paneId) ?? null;
 }
 
 /** The agents the sidebar lists: the selected host's, or this machine's. */

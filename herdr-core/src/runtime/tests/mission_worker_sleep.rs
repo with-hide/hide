@@ -775,3 +775,184 @@ fn a_child_still_ending_its_sleep_holds_its_place_against_a_waking_letter() {
         crate::coordination::refusal("plan_delegate_full", "3")
     );
 }
+
+/// One life in every answer: a registered agent Hide put to sleep reads
+/// `asleep` with no connection in `hide agent show`, `hide agent list` and
+/// `hide ps` alike; while its end still runs, and again once Herdr lists an
+/// agent in its pane, it reads `running`; an ended registration reads
+/// `ended`, not asleep, even while its pane keeps the sleep record.
+#[test]
+fn every_answer_reads_a_sleeping_agent_asleep_and_running_once_it_wakes() {
+    use crate::delivery::answer::PsState;
+    let root = tempfile::tempdir().unwrap();
+    let (mut runtime, _views) = views(sleepers(&[WORKER]));
+    show(&mut runtime, session("w-order:t1", None));
+    let context = runtime
+        .workspace_control_query(crate::node::TEST_NODE, LEAD, Query::Info)
+        .unwrap()
+        .context;
+    let runtime = Arc::new(Mutex::new(runtime));
+    let (_worker, client) = crate::delivery::worker::Worker::store(
+        Arc::downgrade(&runtime),
+        crate::handle::ChangeNotifier::noop(),
+        root.path().join("ledger.json"),
+    )
+    .unwrap();
+    runtime.lock().unwrap().install_delivery_client(client);
+    let ask = |command| {
+        let prepared = runtime
+            .lock()
+            .unwrap()
+            .prepare_delivery(
+                crate::node::TEST_NODE,
+                LEAD,
+                &context,
+                None,
+                crate::delivery::Command::Agents { command },
+            )
+            .unwrap();
+        prepared.run(std::time::Duration::from_secs(10)).unwrap()
+    };
+    // What each answer says of the worker: show's and list's runtime and
+    // connection, and the state `hide ps` gives it.
+    let read = || {
+        let shown = ask(crate::coordination::Command::Show {
+            id: "agent-2".into(),
+        });
+        let list = ask(crate::coordination::Command::List);
+        let listed = list["items"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|item| item["id"] == "agent-2")
+            .unwrap();
+        assert_eq!(
+            (&shown["runtime"], &shown["connection"]),
+            (&listed["runtime"], &listed["connection"])
+        );
+        let ps = runtime
+            .lock()
+            .unwrap()
+            .ps_rows(crate::node::TEST_NODE, LEAD)
+            .unwrap()
+            .answer(true);
+        let state = ps
+            .panes
+            .iter()
+            .filter_map(|pane| pane.agent.as_ref())
+            .chain(&ps.agents)
+            .find(|agent| agent.id.as_deref() == Some("agent-2"))
+            .map(|agent| agent.state);
+        (
+            shown["runtime"].as_str().unwrap().to_owned(),
+            shown["connection"].as_str().unwrap().to_owned(),
+            state,
+        )
+    };
+    let lives = |runtime: &Arc<Mutex<Runtime>>, phase: Option<SleepPhase>, session| {
+        let mut guard = runtime.lock().unwrap();
+        if let Some(phase) = phase {
+            guard
+                .snapshot
+                .ui_state
+                .agent_sleep
+                .records
+                .get_mut(WORKER)
+                .unwrap()
+                .phase = phase;
+        }
+        show(&mut guard, session);
+    };
+    assert_eq!(
+        read(),
+        (
+            "asleep".into(),
+            "disconnected".into(),
+            Some(PsState::Asleep)
+        )
+    );
+    // Waking, or a wake that failed, is still not running.
+    for phase in [SleepPhase::Waking, SleepPhase::Failed] {
+        lives(&runtime, Some(phase), session("w-order:t1", None));
+        assert_eq!(
+            read(),
+            (
+                "asleep".into(),
+                "disconnected".into(),
+                Some(PsState::Asleep)
+            ),
+            "{phase:?}"
+        );
+    }
+    // The end still runs: so does the agent.
+    lives(
+        &runtime,
+        Some(SleepPhase::Ending),
+        session("w-order:t1", None),
+    );
+    let (life, connection, state) = read();
+    assert_eq!(
+        (life.as_str(), connection.as_str()),
+        ("running", "connected")
+    );
+    assert_ne!(state, Some(PsState::Asleep));
+    // Asleep again, then woken: Herdr lists an agent in the pane.
+    lives(
+        &runtime,
+        Some(SleepPhase::Sleeping),
+        session("w-order:t1", None),
+    );
+    assert_eq!(read().0, "asleep");
+    lives(&runtime, None, session("w-order:t1", Some("working")));
+    assert_eq!(phase(&runtime.lock().unwrap(), WORKER), None);
+    assert_eq!(
+        read(),
+        ("running".into(), "connected".into(), Some(PsState::Going))
+    );
+    // Ended while its pane keeps a sleep record: ended, not asleep.
+    {
+        let mut guard = runtime.lock().unwrap();
+        guard
+            .snapshot
+            .ui_state
+            .agent_sleep
+            .records
+            .insert(WORKER.into(), record(WORKER));
+        let mut ledger = (*guard.delivery_state().unwrap()).clone();
+        ledger
+            .agents
+            .iter_mut()
+            .find(|record| record.id == "agent-2")
+            .unwrap()
+            .ended = true;
+        guard.publish_delivery(Arc::new(ledger), true);
+        show(&mut guard, session("w-order:t1", None));
+    }
+    assert_eq!(
+        read(),
+        ("ended".into(), "disconnected".into(), Some(PsState::Ended))
+    );
+}
+
+/// A mission's node carries its worker's life from the same decision as
+/// `hide agent show`: running, asleep once Hide puts it to sleep with nothing
+/// else moving, and running again once it wakes.
+#[test]
+fn a_mission_node_reads_its_workers_sleep() {
+    use crate::delivery::answer::Runtime as Life;
+    let mut runtime = mission_runtime();
+    let life = |runtime: &mut Runtime| {
+        runtime.refresh_missions();
+        runtime.snapshot.missions.items[0].nodes[0].agent_runtime
+    };
+    assert_eq!(life(&mut runtime), Some(Life::Running));
+    runtime
+        .snapshot
+        .ui_state
+        .agent_sleep
+        .records
+        .insert(WORKER.into(), record(WORKER));
+    assert_eq!(life(&mut runtime), Some(Life::Asleep));
+    runtime.snapshot.ui_state.agent_sleep.records.remove(WORKER);
+    assert_eq!(life(&mut runtime), Some(Life::Running));
+}

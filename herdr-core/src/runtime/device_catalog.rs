@@ -39,6 +39,10 @@ impl Runtime {
             &self.snapshot.ui_state.workspace_registrations,
             facts,
         );
+        crate::project_settings::apply_names(
+            &self.snapshot.ui_state.project_settings,
+            &mut session.workspaces,
+        );
         let reports_own_facts = self
             .link_origin(target)
             .is_some_and(LinkOrigin::reports_own_facts);
@@ -173,10 +177,10 @@ impl Runtime {
         let update_of = |kind: &str| crate::agent_hooks::kit_update(&kit, kind);
         let none = std::collections::BTreeSet::new();
         let unreadable = |pane: &str| {
-            let key = if pane.starts_with("remote:") {
+            let key = if crate::address::is_device_scoped(pane) {
                 pane.to_owned()
             } else {
-                format!("{}{pane}", super::remote_pane_id_prefix(target))
+                crate::address::scoped_pane_id(target, pane)
             };
             self.delivery_observations
                 .get(&key)

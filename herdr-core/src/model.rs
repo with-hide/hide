@@ -1480,6 +1480,23 @@ pub enum AskSubject {
     },
 }
 
+/// A published value the core derives from other fields of its row before
+/// every snapshot (`Runtime::stamp_row_addresses`). Equality ignores it,
+/// because the fields it is derived from are compared already: a freshly
+/// projected row, not yet stamped, is the same row as the stamped one it
+/// replaces, so no comparison reads a stamp as a change.
+#[derive(Clone, Debug, Default, Serialize)]
+#[serde(transparent)]
+pub struct Derived<T>(pub T);
+
+impl<T> PartialEq for Derived<T> {
+    fn eq(&self, _: &Self) -> bool {
+        true
+    }
+}
+
+impl<T> Eq for Derived<T> {}
+
 /// An agent's state on four independent lifecycle axes, plus the values the shell draws
 /// from them.
 ///
@@ -1491,6 +1508,13 @@ pub enum AskSubject {
 /// rule 4).
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct SidebarAgentSnapshot {
+    /// The machine the row's pane is on (the core's own node id, or a
+    /// device's) and the id that machine gives the pane (`w1:p2`), read from
+    /// `pane_id` by the one address owner (`crate::address`) before every
+    /// snapshot (`Runtime::stamp_row_addresses`), so no reader splits the
+    /// pane id itself.
+    pub device_id: Derived<String>,
+    pub device_pane_id: Derived<String>,
     /// Display provenance only; independent of hook health and GitHub reads.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub record_connection: Option<crate::labels::record::RecordConnection>,
@@ -2646,6 +2670,10 @@ pub struct TabSnapshot {
 
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct PaneSnapshot {
+    /// The machine the pane is on and the id that machine gives it, as on
+    /// an agent row ([`SidebarAgentSnapshot::device_id`]).
+    pub device_id: Derived<String>,
+    pub device_pane_id: Derived<String>,
     /// Exact creation descriptor used only for start reconciliation, never a title.
     #[serde(skip_serializing)]
     pub start_claim: Option<String>,
@@ -3138,6 +3166,9 @@ pub struct EditorOpeningSnapshot {
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct EditorTabSnapshot {
     pub id: String,
+    /// The machine the tab's checkout is on, read from `checkout_id` by the
+    /// one address owner before every snapshot (`stamp_row_addresses`).
+    pub device_id: Derived<String>,
     pub workspace_id: String,
     pub checkout_id: String,
     pub path: String,
@@ -4569,6 +4600,15 @@ pub struct UiStateSnapshot {
     /// (PRD software-factory-conductor D-31).
     #[serde(default)]
     pub conductor_settings: crate::missions::ConductorSettings,
+    /// Settings › Agents › 권한 for this machine's agents, by adapter id: an
+    /// agent with no entry starts with full access (`agent_permission`).
+    #[serde(default)]
+    pub agent_permissions: crate::agent_permission::AgentPermissions,
+    /// The same for each registered device's agents, by device id; this
+    /// machine's are `agent_permissions`, swapped as `expanded_paths` is when
+    /// the core moves (`node_migration::reown::OWN_PATHS`).
+    #[serde(default)]
+    pub device_agent_permissions: BTreeMap<String, crate::agent_permission::AgentPermissions>,
     /// The agent kind and each kind's model the operator last started with,
     /// from any start surface (PRD home-device-rail D-18, D-20): the next
     /// start anywhere preselects them.
@@ -5381,6 +5421,8 @@ impl Default for UiStateSnapshot {
             project_issue_sources: BTreeMap::new(),
             issue_settings: IssueSettingsSnapshot::default(),
             conductor_settings: crate::missions::ConductorSettings::default(),
+            agent_permissions: BTreeMap::new(),
+            device_agent_permissions: BTreeMap::new(),
             agent_start: AgentStartChoice::default(),
             agent_sleep: crate::agent_sleep::AgentSleepStore::default(),
             session_archive: crate::session_archive::SessionArchive::default(),
@@ -7080,7 +7122,7 @@ impl BackgroundAiProviderSnapshot {
         Self {
             id: provider.as_str().to_owned(),
             label: provider.label().to_owned(),
-            agent: provider.descriptor().agent.to_owned(),
+            agent: provider.agent().to_owned(),
             state: "unread".to_owned(),
             headline: "Not checked yet".to_owned(),
             installed: true,
