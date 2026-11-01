@@ -34,9 +34,9 @@ Hide changed it: each file says what changed, and
 vendor/portable-pty/PATCHES.md lists every change.
 
 The Windows pane holder runs Microsoft's ConPTY runtime
-(Microsoft.Windows.Console.ConPTY 1.24.260710001: conpty.dll and
-OpenConsole.exe), the one the pinned Herdr release ships beside herdr.exe,
-unchanged and checked against its sha256 before it is loaded; it is not
-copied into this repository.
+(Microsoft.Windows.Console.ConPTY 1.24.260710001 from nuget.org:
+conpty.dll and OpenConsole.exe), unchanged and checked against its sha256
+before it is loaded; contracts/conpty.json pins it, the Windows app package
+carries it in holder-conpty, and it is not copied into this repository.
 Copyright (c) Microsoft Corporation.
 Licensed under the MIT License.

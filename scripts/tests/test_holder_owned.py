@@ -114,12 +114,12 @@ class EndsWhatItStarted(unittest.TestCase):
         owned.remove(root)
         state = root / "h/state"
         owned.records(state)
-        node = module.Node(self.node, root / "h", state, None, root / "node.log", owned)
+        node = module.Node(self.node, root / "h", state, root / "node.log", owned)
         record = node.ask("start", pane="p", program=[], cwd=str(root), env={}, rows=1, cols=1)["record"]
         first = {"pid": node.process.pid, "started": holder_owned.started(node.process.pid)}
         node.kill()
         with self.assertRaises(module.Failed):
-            module.Node(self.failing, root / "h", state, None, root / "node.log", owned)
+            module.Node(self.failing, root / "h", state, root / "node.log", owned)
         self.assertTrue(holder_owned.runs(record["holder"]["pid"], record["holder"]["started"]),
                         "the holder should outlive its node, as a real one does")
         # The cell's own end, after the failed restart: the killed node is
@@ -144,7 +144,7 @@ class EndsWhatItStarted(unittest.TestCase):
             owned.records(root / "h/state")
             node = None
             try:
-                node = lane.Node({str(self.node)!r}, root / "h", root / "h/state", None, root / "node.log", owned)
+                node = lane.Node({str(self.node)!r}, root / "h", root / "h/state", root / "node.log", owned)
                 record = node.ask("start", pane="p", program=[], cwd=str(root), env={{}}, rows=1, cols=1)["record"]
                 record["node"] = {{"pid": node.process.pid, "started": holder_owned.started(node.process.pid)}}
                 print(json.dumps(record), flush=True)

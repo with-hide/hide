@@ -215,7 +215,10 @@ The example is declared `test = false` in `hide-node/Cargo.toml`, so `cargo test
 
 The pane holder opens its PTY with `portable-pty` 0.9.0 as Herdr v0.9.5 vendors it, with Herdr's four patches and Hide's own changes, in `vendor/portable-pty` ([PATCHES.md](../vendor/portable-pty/PATCHES.md) lists its origin and every change).
 The root manifest's `[patch.crates-io]` puts that copy in place of the published crate for the whole workspace; it is not a member, so the workspace's Clippy and tests do not cover it, and the holder's tests are what check it.
-Its Windows side loads only the pinned ConPTY runtime beside the holder (the `conpty/` folder the pinned Herdr release ships beside `herdr.exe`, Microsoft's `Microsoft.Windows.Console.ConPTY`), which this repository does not carry: the holder's tests on Windows read it from the folder `HIDE_HOLDER_CONPTY` names, and the vt lane fetches it with `scripts/fetch-herdr-runtime.ps1`.
+Its Windows side loads only the pinned ConPTY runtime beside the holder, which this repository does not carry: Microsoft's `Microsoft.Windows.Console.ConPTY` package from nuget.org, at the version, package sha256 and file sha256s `contracts/conpty.json` pins.
+`scripts/fetch-conpty.py` downloads it, refuses a package or a file of any other digest, and makes the runtime folder (`conpty.dll`, `x64/OpenConsole.exe`, `arm64/OpenConsole.exe` and the file list `conpty-files.json`) in a cache keyed by the package digest, with `--out <folder>` copying it to a folder of its own; `CONPTY_FILES` in `vendor/portable-pty/src/win/psuedocon.rs` pins the same file digests, and `scripts/tests/test_fetch_conpty.py` fails when the two disagree.
+A node finds the runtime in `holder-conpty` beside its own program (`hide_kit::holders::CONPTY_SOURCE`), apart from the `conpty/` folder Herdr's own Windows asset ships beside `herdr.exe`; the holder's tests on Windows read it from the folder `HIDE_HOLDER_CONPTY` names, and the vt lane fetches it with `scripts/fetch-conpty.py`.
+A newer ConPTY moves `contracts/conpty.json` and `CONPTY_FILES` together.
 A change there plans the same lanes as a change to `hide-holder` (`scripts/ci-plan.py`).
 
 ## Two entrypoints

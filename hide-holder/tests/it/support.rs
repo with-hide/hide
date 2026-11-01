@@ -66,8 +66,8 @@ pub fn source() -> Source {
     let conpty = if cfg!(windows) {
         let folder = std::env::var_os(CONPTY_VARIABLE).unwrap_or_else(|| {
             panic!(
-                "{CONPTY_VARIABLE} must name the pinned ConPTY runtime folder (the conpty folder \
-                 beside the pinned Herdr's herdr.exe; scripts/fetch-herdr-runtime.ps1 fetches it)"
+                "{CONPTY_VARIABLE} must name the pinned ConPTY runtime folder \
+                 (scripts/fetch-conpty.py fetches it from its NuGet pin, contracts/conpty.json)"
             )
         });
         Some(PathBuf::from(folder))

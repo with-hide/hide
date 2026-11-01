@@ -494,29 +494,19 @@ impl Holders {
     }
 
     /// The local node's holder program: the one beside this program, and on
-    /// Windows the pinned ConPTY runtime beside the node's Herdr.
-    pub fn local_source(herdr_bin: Option<&Path>) -> Result<Source, String> {
+    /// Windows the pinned ConPTY runtime in the folder beside it the app
+    /// package puts it in ([`hide_kit::holders::CONPTY_SOURCE`],
+    /// `scripts/fetch-conpty.py`). No Herdr is asked for either, so a node
+    /// runs its holders where no Herdr is.
+    pub fn local_source() -> Result<Source, String> {
         let program = std::env::current_exe()
             .map_err(|error| format!("this program could not be found: {error}"))?;
         let dir = program
             .parent()
             .ok_or_else(|| format!("{} has no folder", program.display()))?;
-        let conpty = if cfg!(windows) {
-            let herdr = herdr_bin.ok_or(
-                "the pinned ConPTY runtime is found beside Herdr, and no Herdr is configured",
-            )?;
-            Some(
-                herdr
-                    .parent()
-                    .ok_or_else(|| format!("{} has no folder", herdr.display()))?
-                    .join(hide_kit::holders::CONPTY),
-            )
-        } else {
-            None
-        };
         Ok(Source {
             program: dir.join(hide_kit::holders::program_name()),
-            conpty,
+            conpty: cfg!(windows).then(|| dir.join(hide_kit::holders::CONPTY_SOURCE)),
         })
     }
 
@@ -532,14 +522,13 @@ impl Holders {
     /// measure is how the daemon is built.
     pub fn start_local(
         holders: Option<HolderFolders<'_>>,
-        herdr_bin: Option<&Path>,
         herdr: Box<dyn Attacher>,
         outputs: Arc<dyn super::OutputSink>,
         reports: Arc<dyn ReportSink>,
     ) -> Result<LocalTerminals, String> {
         let holders = match holders {
             None => None,
-            Some(folders) => Some((folders, Self::local_source(herdr_bin)?)),
+            Some(folders) => Some((folders, Self::local_source()?)),
         };
         Self::start_from(holders, herdr, outputs, reports)
     }

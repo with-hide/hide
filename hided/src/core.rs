@@ -1093,8 +1093,8 @@ impl Drop for CoreHandle {
 /// This machine's terminal service: Herdr's sessions, and the pane holders
 /// when the development switch (`crate::env::HIDE_DEV_PANE_HOLDER`) is on,
 /// over the state folder's records, the holder beside this program, and on
-/// Windows the ConPTY runtime beside the configured Herdr
-/// (`Holders::start_local`, which the node's measuring tools start too).
+/// Windows the pinned ConPTY runtime beside it (`Holders::start_local`,
+/// which the node's measuring tools start too).
 fn local_terminals(
     options: &CoreOptions,
     outputs: Arc<dyn OutputSink>,
@@ -1121,7 +1121,6 @@ fn local_terminals(
         folders
             .as_ref()
             .map(|(home, state_dir)| HolderFolders { home, state_dir }),
-        options.herdr_bin_path.as_deref().map(std::path::Path::new),
         local_attacher(options),
         outputs,
         reports,
